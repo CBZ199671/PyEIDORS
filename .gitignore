@@ -1,0 +1,53 @@
+# Python bytecode and cache directories
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Testing and coverage
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.pytest_cache/
+.nox/
+
+# Type checking
+.mypy_cache/
+.pyre/
+.pytype/
+
+# Jupyter Notebook checkpoints
+.ipynb_checkpoints/
+
+# IDE and editor settings
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Logs and local configuration
+*.log
+*.env
+.env.*
+
+# macOS and Windows
+.DS_Store
+Thumbs.db
+
+# Local AI tooling
+.claude/
