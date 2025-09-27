@@ -6,12 +6,15 @@ PyEidors简化系统测试
 
 import numpy as np
 import sys
-import os
 import time
 from pathlib import Path
 
-# 添加源码路径
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+TEST_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = TEST_DIR.parents[1]
+SRC_PATH = PROJECT_ROOT / 'src'
+
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 def create_mock_mesh(n_elec=16):
     """创建一个简单的mock网格对象用于测试"""

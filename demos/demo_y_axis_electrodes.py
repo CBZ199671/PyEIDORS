@@ -7,10 +7,14 @@ import numpy as np
 import matplotlib.pyplot as plt
 from math import pi, cos, sin
 import sys
-import os
+from pathlib import Path
 
-# 添加模块路径
-sys.path.insert(0, '/root/shared/src')
+DEMO_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = DEMO_DIR.parent
+SRC_PATH = PROJECT_ROOT / 'src'
+
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 # 设置中文字体支持
 try:
@@ -102,7 +106,8 @@ def demo_y_axis_electrodes():
         ax.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('/root/shared/demos/y_axis_electrode_demo.png', dpi=150, bbox_inches='tight')
+    output_path = DEMO_DIR / 'y_axis_electrode_demo.png'
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     
     print("✅ y轴电极位置演示完成，保存为 y_axis_electrode_demo.png")
@@ -207,7 +212,8 @@ def demo_before_after_comparison():
     ax2.grid(True, alpha=0.3)
     
     plt.tight_layout()
-    plt.savefig('/root/shared/demos/electrode_position_comparison.png', dpi=150, bbox_inches='tight')
+    output_path = DEMO_DIR / 'electrode_position_comparison.png'
+    plt.savefig(output_path, dpi=150, bbox_inches='tight')
     plt.close()
     
     print("✅ 修改前后对比演示完成，保存为 electrode_position_comparison.png")

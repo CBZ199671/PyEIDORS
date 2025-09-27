@@ -5,11 +5,15 @@
 
 import numpy as np
 import sys
-import os
+from pathlib import Path
 from math import pi, cos, sin
 
-# 添加模块路径
-sys.path.insert(0, '/root/shared/src')
+TEST_DIR = Path(__file__).resolve().parent
+PROJECT_ROOT = TEST_DIR.parents[1]
+SRC_PATH = PROJECT_ROOT / 'src'
+
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 def verify_electrode_center():
     """验证电极中心位置"""

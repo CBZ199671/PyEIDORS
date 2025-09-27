@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import matplotlib.tri as tri
 from typing import Optional, Tuple, Any, Union
 import logging
+import os
+import sys
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +23,12 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
+try:
+    from pyeidors.utils.chinese_font_config import configure_chinese_font
+except ModuleNotFoundError:
+    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..')))
+    from pyeidors.utils.chinese_font_config import configure_chinese_font
+
 
 class EITVisualizer:
     """EIT可视化器 - 提供多种EIT相关的可视化功能"""
@@ -35,8 +43,9 @@ class EITVisualizer:
         """
         if not MATPLOTLIB_AVAILABLE:
             raise ImportError("matplotlib不可用，无法进行可视化")
-        
+
         self.figsize = figsize
+        configure_chinese_font()
         try:
             plt.style.use(style)
         except:
