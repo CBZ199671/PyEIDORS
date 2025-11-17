@@ -60,7 +60,8 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         # 4. 计算雅可比矩阵
         jacobian = self._assemble_jacobian_efficient(grad_u_all, adjoint_fields)
         
-        return jacobian
+        scale = float(getattr(self.fwd_model.pattern_manager.config, "amplitude", 1.0))
+        return jacobian * scale
     
     def _calculate_traditional(self, sigma: Function) -> np.ndarray:
         """传统雅可比计算方法 - 与原代码兼容"""

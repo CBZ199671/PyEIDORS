@@ -16,6 +16,9 @@ class PatternConfig:
     use_meas_current: bool = False
     use_meas_current_next: int = 0
     rotate_meas: bool = True
+    stim_direction: str = 'ccw'  # 'ccw' or 'cw'
+    meas_direction: str = 'ccw'
+    stim_first_positive: bool = False
 
 
 @dataclass

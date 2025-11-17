@@ -1,10 +1,13 @@
 """平滑性正则化"""
 
+from typing import Optional
+
 import numpy as np
 from scipy.sparse import csr_matrix
-from fenics import cells, edges
+from fenics import cells, edges, Function
 
 from .base_regularization import BaseRegularization
+from ..jacobian.direct_jacobian import DirectJacobianCalculator
 
 
 class SmoothnessRegularization(BaseRegularization):
@@ -81,3 +84,36 @@ class TotalVariationRegularization(BaseRegularization):
         # 构建加权拉普拉斯矩阵
         # 简化实现...
         return self.alpha * np.diag(weights)
+
+
+class NOSERRegularization(BaseRegularization):
+    """NOSER正则化 - 对角矩阵基于 J^T J 的对角线"""
+
+    def __init__(
+        self,
+        fwd_model,
+        jacobian_calculator: DirectJacobianCalculator,
+        base_conductivity: float = 1.0,
+        alpha: float = 1.0,
+    ):
+        super().__init__(fwd_model)
+        self.alpha = alpha
+        self.base_conductivity = base_conductivity
+        self._jacobian_calculator = jacobian_calculator
+        self._baseline_diag: Optional[np.ndarray] = None
+
+    def _compute_baseline_diag(self) -> np.ndarray:
+        V_sigma = self.fwd_model.V_sigma
+        sigma_fn = Function(V_sigma)
+        sigma_fn.vector()[:] = self.base_conductivity
+
+        # DirectJacobianCalculator expects a Function
+        jac = self._jacobian_calculator.calculate(sigma_fn)
+        diag_entries = np.sum(jac * jac, axis=0)
+        diag_entries = np.maximum(diag_entries, 1e-12)
+        return diag_entries
+
+    def create_matrix(self) -> np.ndarray:
+        if self._baseline_diag is None:
+            self._baseline_diag = self._compute_baseline_diag()
+        return self.alpha * np.diag(self._baseline_diag)

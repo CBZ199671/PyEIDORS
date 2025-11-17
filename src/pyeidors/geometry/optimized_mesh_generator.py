@@ -107,7 +107,7 @@ class OptimizedMeshGenerator:
         self.electrodes = electrodes
         self.mesh_data = {}
     
-    def generate(self, output_dir: Optional[Path] = None) -> object:
+    def generate(self, output_dir: Optional[Path] = None, mesh_name: Optional[str] = None) -> object:
         """
         生成网格
         
@@ -124,8 +124,12 @@ class OptimizedMeshGenerator:
             output_dir.mkdir(exist_ok=True)
         
         # 生成唯一的网格文件名
-        timestamp = int(time.time() * 1e6) % 1000000
-        mesh_file = output_dir / f"mesh_{timestamp}.msh"
+        if mesh_name is None:
+            timestamp = int(time.time() * 1e6) % 1000000
+            mesh_base = f"mesh_{timestamp}"
+        else:
+            mesh_base = mesh_name
+        mesh_file = output_dir / f"{mesh_base}.msh"
         
         logger.info(f"开始生成EIT网格: {mesh_file.stem}")
         
@@ -489,7 +493,8 @@ def create_eit_mesh(n_elec: int = 16,
                    radius: float = 1.0, 
                    refinement: int = 6,
                    electrode_coverage: float = 0.5,
-                   output_dir: str = None) -> object:
+                   output_dir: str = None,
+                   mesh_name: Optional[str] = None) -> object:
     """
     便捷函数：创建标准EIT网格
     
@@ -520,7 +525,59 @@ def create_eit_mesh(n_elec: int = 16,
     
     # 生成网格
     generator = OptimizedMeshGenerator(mesh_config, electrode_config)
-    return generator.generate(output_dir=Path(output_dir) if output_dir else None)
+    return generator.generate(output_dir=Path(output_dir) if output_dir else None, mesh_name=mesh_name)
+
+
+def _format_float(value: float) -> str:
+    return f"{value:.6f}".rstrip('0').rstrip('.').replace('.', 'p')
+
+
+def _build_cache_name(n_elec: int, radius: float, refinement: int, electrode_coverage: float) -> str:
+    radius_str = _format_float(radius)
+    coverage_str = _format_float(electrode_coverage)
+    return f"mesh_{n_elec}e_r{radius_str}_ref{refinement}_cov{coverage_str}"
+
+
+def _load_cached_mesh(mesh_dir: Path, mesh_name: str):
+    if not FENICS_AVAILABLE:
+        return None
+
+    domain_file = mesh_dir / f"{mesh_name}_domain.xdmf"
+    boundaries_file = mesh_dir / f"{mesh_name}_boundaries.xdmf"
+    association_file = mesh_dir / f"{mesh_name}_association_table.ini"
+
+    if not (domain_file.exists() and boundaries_file.exists() and association_file.exists()):
+        return None
+
+    mesh = Mesh()
+    with XDMFFile(str(domain_file)) as infile:
+        infile.read(mesh)
+
+    boundaries_mvc = MeshValueCollection("size_t", mesh, 1)
+    try:
+        with XDMFFile(str(boundaries_file)) as infile:
+            try:
+                infile.read(boundaries_mvc, 'boundaries')
+            except RuntimeError:
+                infile.read(boundaries_mvc)
+        boundaries_mf = MeshFunctionSizet(mesh, boundaries_mvc)
+    except Exception:
+        boundaries_mf = MeshFunction("size_t", mesh, 1, 0)
+
+    from configparser import ConfigParser
+    config = ConfigParser()
+    config.read(association_file)
+    association_table = {}
+    for section in config.sections():
+        for key, value in config[section].items():
+            try:
+                association_table[key] = int(value)
+            except ValueError:
+                association_table[key] = value
+
+    mesh.boundaries_mf = boundaries_mf
+    mesh.association_table = association_table
+    return mesh
 
 
 def load_or_create_mesh(mesh_dir: str = "eit_meshes", 
@@ -539,14 +596,30 @@ def load_or_create_mesh(mesh_dir: str = "eit_meshes",
     返回:
         网格对象
     """
-    if mesh_name is not None:
-        # 尝试加载现有网格
-        try:
-            from .mesh_loader import MeshLoader
-            loader = MeshLoader(mesh_dir)
-            return loader.load_fenics_mesh(mesh_name)
-        except Exception as e:
-            logger.warning(f"加载网格失败: {e}, 将创建新网格")
-    
-    # 创建新网格
-    return create_eit_mesh(n_elec=n_elec, output_dir=mesh_dir, **kwargs)
+    mesh_dir_path = Path(mesh_dir)
+    mesh_dir_path.mkdir(parents=True, exist_ok=True)
+
+    params = dict(kwargs)
+    radius = params.pop("radius", 1.0)
+    refinement = params.pop("refinement", 6)
+    electrode_coverage = params.pop("electrode_coverage", 0.5)
+
+    cache_name = mesh_name or _build_cache_name(n_elec, radius, refinement, electrode_coverage)
+
+    cached_mesh = _load_cached_mesh(mesh_dir_path, cache_name)
+    if cached_mesh is not None:
+        logger.info(f"加载缓存网格: {cache_name}")
+        return cached_mesh
+
+    logger.info(f"未找到缓存网格，正在生成: {cache_name}")
+    if params:
+        logger.debug(f"未使用的网格参数: {params}")
+
+    return create_eit_mesh(
+        n_elec=n_elec,
+        radius=radius,
+        refinement=refinement,
+        electrode_coverage=electrode_coverage,
+        output_dir=str(mesh_dir_path),
+        mesh_name=cache_name,
+    )

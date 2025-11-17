@@ -11,6 +11,8 @@ class StimMeasPatternManager:
         self.n_elec = config.n_elec
         self.n_rings = config.n_rings
         self.tn_elec = self.n_elec * self.n_rings
+        self.stim_direction = 1 if self.config.stim_direction.lower() == 'ccw' else -1
+        self.meas_direction = 1 if self.config.meas_direction.lower() == 'ccw' else -1
         
         self._parse_patterns()
         self._generate_patterns()
@@ -28,7 +30,13 @@ class StimMeasPatternManager:
         else:
             self.inj_electrodes = self.config.stim_pattern
             
-        self.inj_weights = np.array([-1, 1]) if len(self.inj_electrodes) == 2 else np.array([1])
+        if len(self.inj_electrodes) == 2:
+            if self.config.stim_first_positive:
+                self.inj_weights = np.array([1, -1])
+            else:
+                self.inj_weights = np.array([-1, 1])
+        else:
+            self.inj_weights = np.array([1])
         
         # 测量模式解析
         if isinstance(self.config.meas_pattern, str):
@@ -55,7 +63,7 @@ class StimMeasPatternManager:
                 # 激励向量
                 stim_vec = np.zeros(self.tn_elec)
                 for i, inj_elec in enumerate(self.inj_electrodes):
-                    idx = (inj_elec + elec) % self.n_elec + ring * self.n_elec
+                    idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
                     stim_vec[idx] = self.config.amplitude * self.inj_weights[i]
                 
                 # 测量矩阵
@@ -110,7 +118,7 @@ class StimMeasPatternManager:
     
     def _make_meas_matrix(self, elec: int, ring: int) -> np.ndarray:
         meas_list = []
-        offset = elec if self.config.rotate_meas else 0
+        offset = self.meas_direction * elec if self.config.rotate_meas else 0
         
         for meas_idx in range(self.tn_elec):
             meas_vec = np.zeros(self.tn_elec)
@@ -128,7 +136,7 @@ class StimMeasPatternManager:
     def _filter_measurements(self, meas_mat: np.ndarray, elec: int, ring: int) -> np.ndarray:
         stim_indices = []
         for inj_elec in self.inj_electrodes:
-            idx = (inj_elec + elec) % self.n_elec + ring * self.n_elec
+            idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
             stim_indices.append(idx)
         
         if self.config.use_meas_current_next > 0:

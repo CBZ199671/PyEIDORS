@@ -11,7 +11,11 @@ class BaseRegularization(ABC):
     def __init__(self, fwd_model):
         self.fwd_model = fwd_model
         self.mesh = fwd_model.mesh
-        self.n_elements = len(fwd_model.fwd_model.V_sigma if hasattr(fwd_model, 'fwd_model') else fwd_model.V_sigma)
+        V_sigma = fwd_model.fwd_model.V_sigma if hasattr(fwd_model, 'fwd_model') else fwd_model.V_sigma
+        try:
+            self.n_elements = V_sigma.dim()
+        except AttributeError:
+            self.n_elements = len(V_sigma)
     
     @abstractmethod
     def create_matrix(self) -> np.ndarray:

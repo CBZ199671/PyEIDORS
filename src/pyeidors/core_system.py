@@ -11,7 +11,12 @@ from .data.structures import EITData, EITImage, PatternConfig, MeshConfig
 from .forward.eit_forward_model import EITForwardModel
 from .inverse.solvers.gauss_newton import ModularGaussNewtonReconstructor
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
-from .inverse.regularization.smoothness import SmoothnessRegularization
+from .inverse.regularization.smoothness import SmoothnessRegularization, NOSERRegularization, TikhonovRegularization
+from .inverse import (
+    perform_absolute_reconstruction,
+    perform_difference_reconstruction,
+    ReconstructionResult,
+)
 from .electrodes.patterns import StimMeasPatternManager
 from .geometry.mesh_loader import MeshLoader
 from .geometry.simple_mesh_generator import create_simple_eit_mesh
@@ -27,12 +32,17 @@ class EITSystem:
     - 数据处理和可视化
     """
     
-    def __init__(self, 
-                 n_elec: int = 16,
-                 pattern_config: Optional[PatternConfig] = None,
-                 mesh_config: Optional[MeshConfig] = None,
-                 contact_impedance: Optional[np.ndarray] = None,
-                 **kwargs):
+    def __init__(
+        self,
+        n_elec: int = 16,
+        pattern_config: Optional[PatternConfig] = None,
+        mesh_config: Optional[MeshConfig] = None,
+        contact_impedance: Optional[np.ndarray] = None,
+        base_conductivity: float = 1.0,
+        regularization_type: str = "noser",
+        regularization_alpha: float = 1.0,
+        **kwargs,
+    ):
         """
         初始化EIT系统
         
@@ -63,6 +73,10 @@ class EITSystem:
         if contact_impedance is None:
             contact_impedance = np.ones(n_elec) * 0.01
         self.contact_impedance = contact_impedance
+
+        self.base_conductivity = base_conductivity
+        self.regularization_type = regularization_type.lower()
+        self.regularization_alpha = regularization_alpha
         
         # 初始化组件
         self.mesh = None
@@ -109,7 +123,17 @@ class EITSystem:
         
         # 初始化重建器
         jacobian_calculator = DirectJacobianCalculator(self.fwd_model)
-        regularization = SmoothnessRegularization(self.fwd_model)
+        if self.regularization_type == "noser":
+            regularization = NOSERRegularization(
+                self.fwd_model,
+                jacobian_calculator,
+                base_conductivity=self.base_conductivity,
+                alpha=self.regularization_alpha,
+            )
+        elif self.regularization_type == "tikhonov":
+            regularization = TikhonovRegularization(self.fwd_model, alpha=self.regularization_alpha)
+        else:
+            regularization = SmoothnessRegularization(self.fwd_model, alpha=self.regularization_alpha)
         
         self.reconstructor = ModularGaussNewtonReconstructor(
             fwd_model=self.fwd_model,
@@ -176,19 +200,59 @@ class EITSystem:
         result = self.reconstructor.reconstruct(diff_data, initial_guess)
         
         return result
+
+    def absolute_reconstruct(
+        self,
+        measurement_data: EITData,
+        baseline_image: Optional[EITImage] = None,
+        initial_image: Optional[EITImage] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ReconstructionResult:
+        """执行绝对成像重建的便捷入口。"""
+
+        if baseline_image is None and self._is_initialized:
+            baseline_image = self.create_homogeneous_image()
+
+        return perform_absolute_reconstruction(
+            eit_system=self,
+            measurement_data=measurement_data,
+            baseline_image=baseline_image,
+            initial_image=initial_image,
+            metadata=metadata,
+        )
+
+    def difference_reconstruct(
+        self,
+        measurement_data: EITData,
+        reference_data: EITData,
+        initial_image: Optional[EITImage] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> ReconstructionResult:
+        """执行差分成像重建的便捷入口。"""
+
+        return perform_difference_reconstruction(
+            eit_system=self,
+            measurement_data=measurement_data,
+            reference_data=reference_data,
+            initial_image=initial_image,
+            metadata=metadata,
+        )
         
-    def create_homogeneous_image(self, conductivity: float = 1.0) -> EITImage:
+    def create_homogeneous_image(self, conductivity: Optional[float] = None) -> EITImage:
         """创建均匀导电率图像
         
         参数:
             conductivity: 导电率值
-            
+        
         返回:
             均匀导电率图像
         """
         if not self._is_initialized:
             raise RuntimeError("系统未初始化，请先调用setup()方法")
-        
+
+        if conductivity is None:
+            conductivity = self.base_conductivity
+
         n_elements = len(Function(self.fwd_model.V_sigma).vector()[:])
         elem_data = np.ones(n_elements) * conductivity
         

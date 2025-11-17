@@ -4,8 +4,11 @@
 为matplotlib设置中文字体支持
 """
 
-import matplotlib.pyplot as plt
 import logging
+from pathlib import Path
+
+import matplotlib.pyplot as plt
+from matplotlib import font_manager
 
 logger = logging.getLogger(__name__)
 
@@ -17,6 +20,14 @@ def configure_chinese_font():
     """
     try:
         # 设置中文字体支持 - 尝试常见的中文字体
+        # 优先确保文泉驿字体已注册（Docker镜像内提供）
+        wqy_path = Path('/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc')
+        if wqy_path.exists():
+            try:
+                font_manager.fontManager.addfont(str(wqy_path))
+            except Exception as add_err:  # pragma: no cover - 注册失败时记录日志
+                logger.warning("无法注册文泉驿字体: %s", add_err)
+
         chinese_fonts = [
             'WenQuanYi Zen Hei',    # 文泉驿正黑
             'Noto Sans CJK SC',     # Google Noto字体
@@ -24,9 +35,9 @@ def configure_chinese_font():
             'Microsoft YaHei',      # 微软雅黑
             'DejaVu Sans'           # 备选英文字体
         ]
-        
+
         plt.rcParams['font.sans-serif'] = chinese_fonts
-        plt.rcParams['font.family'] = 'sans-serif'
+        plt.rcParams['font.family'] = ['WenQuanYi Zen Hei']
         
         # 解决负号'-'显示为方块的问题
         plt.rcParams['axes.unicode_minus'] = False

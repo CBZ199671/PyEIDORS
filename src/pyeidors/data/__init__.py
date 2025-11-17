@@ -8,6 +8,7 @@ from .structures import (
     ElectrodePosition
 )
 from .synthetic_data import create_synthetic_data, create_custom_phantom
+from .measurement_dataset import MeasurementDataset
 
 __all__ = [
     'PatternConfig',
@@ -16,5 +17,6 @@ __all__ = [
     'MeshConfig',
     'ElectrodePosition',
     'create_synthetic_data',
-    'create_custom_phantom'
+    'create_custom_phantom',
+    'MeasurementDataset'
 ]

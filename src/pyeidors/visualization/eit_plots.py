@@ -45,11 +45,11 @@ class EITVisualizer:
             raise ImportError("matplotlib不可用，无法进行可视化")
 
         self.figsize = figsize
-        configure_chinese_font()
         try:
             plt.style.use(style)
         except:
             logger.warning(f"样式 {style} 不可用，使用默认样式")
+        configure_chinese_font()
     
     def plot_mesh(self, mesh, title: str = "网格结构", 
                   show_electrodes: bool = True, save_path: Optional[str] = None) -> plt.Figure:
@@ -91,13 +91,17 @@ class EITVisualizer:
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            bbox = None if minimal else 'tight'
+            plt.savefig(save_path, dpi=300, bbox_inches=bbox)
         
         return fig
     
     def plot_conductivity(self, mesh, conductivity: Union[Function, np.ndarray], 
-                         title: str = "导电率分布", colormap: str = 'viridis',
-                         save_path: Optional[str] = None) -> plt.Figure:
+                         title: Optional[str] = "导电率分布", colormap: str = 'viridis',
+                         save_path: Optional[str] = None,
+                         vmin: Optional[float] = None,
+                         vmax: Optional[float] = None,
+                         minimal: bool = False) -> plt.Figure:
         """
         绘制导电率分布
         
@@ -112,6 +116,7 @@ class EITVisualizer:
             matplotlib图像对象
         """
         fig, ax = plt.subplots(figsize=self.figsize)
+        fig.patch.set_facecolor('white')
         
         # 处理不同类型的导电率输入
         if isinstance(conductivity, Function):
@@ -134,19 +139,59 @@ class EITVisualizer:
             node_values = conductivity_values
         
         # 绘制导电率分布
-        im = ax.tripcolor(triangulation, node_values, cmap=colormap, shading='gouraud')
+        im = ax.tripcolor(
+            triangulation,
+            node_values,
+            cmap=colormap,
+            shading='gouraud',
+            vmin=vmin,
+            vmax=vmax,
+        )
         
         # 添加颜色条
         cbar = plt.colorbar(im, ax=ax, shrink=0.8)
-        cbar.set_label('导电率 (S/m)', fontsize=12)
+        try:
+            cbar.formatter.set_scientific(False)
+            cbar.formatter.set_useOffset(False)
+            cbar.update_ticks()
+        except AttributeError:
+            pass
+        if minimal:
+            cbar.set_label('')
+        else:
+            cbar.set_label('导电率 (S/m)', fontsize=12)
         
         # 绘制网格轮廓
-        ax.triplot(triangulation, 'k-', alpha=0.2, linewidth=0.3)
+        if not minimal:
+            ax.triplot(triangulation, 'k-', alpha=0.2, linewidth=0.3)
         
+        x_min, x_max = coordinates[:, 0].min(), coordinates[:, 0].max()
+        y_min, y_max = coordinates[:, 1].min(), coordinates[:, 1].max()
+        center_x = 0.5 * (x_min + x_max)
+        center_y = 0.5 * (y_min + y_max)
+        half_span = 0.5 * max(x_max - x_min, y_max - y_min)
+        pad = 0.05 * half_span if half_span > 0 else 0.0
+        limit = half_span + pad
+        ax.set_xlim(center_x - limit, center_x + limit)
+        ax.set_ylim(center_y - limit, center_y + limit)
         ax.set_aspect('equal')
-        ax.set_title(title, fontsize=14, fontweight='bold')
-        ax.set_xlabel('X坐标')
-        ax.set_ylabel('Y坐标')
+        
+        if minimal:
+            ax.set_xticks([])
+            ax.set_yticks([])
+            ax.set_xlabel('')
+            ax.set_ylabel('')
+            if title:
+                ax.set_title('')
+            ax.set_facecolor('white')
+            for spine in ax.spines.values():
+                spine.set_visible(False)
+        else:
+            if title:
+                ax.set_title(title, fontsize=14, fontweight='bold')
+            ax.set_xlabel('X坐标')
+            ax.set_ylabel('Y坐标')
+            ax.grid(True, alpha=0.2)
         
         plt.tight_layout()
         
