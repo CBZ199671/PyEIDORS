@@ -56,3 +56,9 @@ Thumbs.db
 data/measurements/
 eit_meshes/
 results/
+
+# Local analysis / papers / temp exports
+compare_with_Eidors/
+SoftwareX-PyEidors-Paper/
+temp_abs_result/
+tank_cols.png
