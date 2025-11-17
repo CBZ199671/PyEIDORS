@@ -7,7 +7,7 @@
 src/
 ├── pyeidors/                    # 主要包目录
 │   ├── core_system.py          # 核心EIT系统类
-│   ├── data/                   # 数据结构和生成器
+│   ├── data/                   # 数据结构、合成/实测数据工具
 │   ├── electrodes/             # 电极和激励模式
 │   ├── forward/                # 前向问题求解
 │   ├── inverse/                # 逆问题重建
@@ -64,6 +64,7 @@ results/
 reports/
 ├── OPTIMIZED_MESH_GENERATOR_REPORT.md  # 优化网格报告 ⭐
 ├── FINAL_PROJECT_SUMMARY.md           # 项目总结报告
+├── source/measurement_data_spec.md    # 实测数据格式规范
 └── ...
 ```
 
@@ -82,6 +83,8 @@ data/                          # 项目数据
 
 configs/                      # 配置文件 (待添加)
 scripts/                      # 实用脚本
+├── run_absolute_reconstruction.py          # 绝对成像重建入口
+├── run_difference_reconstruction.py        # 差分成像重建入口
 archived/                     # 归档文件
 ├── README_FINAL.md           # 旧版文档
 └── ...
