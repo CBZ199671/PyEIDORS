@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shlex
+import sys
 from pathlib import Path
 from typing import Optional, Sequence, Dict, Any, Tuple
 
@@ -187,6 +189,41 @@ def parse_args() -> argparse.Namespace:
         help="高斯牛顿最大迭代次数（仅在未选择 mode 时生效）",
     )
     parser.add_argument(
+        "--max-step",
+        type=float,
+        default=None,
+        help="线搜索的最大步长（覆盖重建器的 max_step，默认 1.0）",
+    )
+    parser.add_argument(
+        "--line-search-steps",
+        type=int,
+        default=None,
+        help="线搜索的步数（覆盖重建器的 line_search_steps，默认 8）",
+    )
+    parser.add_argument(
+        "--min-step",
+        type=float,
+        default=None,
+        help="线搜索最小步长下限（避免步长被压到0，默认0.1）",
+    )
+    parser.add_argument(
+        "--scaling-factor",
+        type=float,
+        default=1.0,
+        help="全链路缩放因子k，应用于预测和雅可比，同时λ×k^2，便于与测量量纲对齐",
+    )
+    parser.add_argument(
+        "--step-schedule",
+        type=float,
+        nargs="+",
+        help="自定义每次迭代的固定步长序列，启用后跳过线搜索（例如: 5 1 0.5 0.2 0.1）",
+    )
+    parser.add_argument(
+        "--regularization-param",
+        type=float,
+        help="覆盖默认的正则化参数 λ（若未指定，则使用 mode 或默认值）",
+    )
+    parser.add_argument(
         "--contact-impedance",
         type=float,
         default=1e-5,
@@ -201,6 +238,56 @@ def parse_args() -> argparse.Namespace:
         "--weight-strategy",
         choices=["none", "baseline", "scaled_baseline", "difference"],
         help="覆盖默认的测量加权策略",
+    )
+    parser.add_argument(
+        "--measurement-scale",
+        type=float,
+        default=1.0,
+        help="全局缩放实测数据的系数（<1 缩小实测，>1 放大量测），用于模型/硬件量纲对齐",
+    )
+    parser.add_argument(
+        "--auto-measurement-scale",
+        action="store_true",
+        help="根据校准帧与均匀前向解，自动估计测量缩放系数并应用到所有帧",
+    )
+    parser.add_argument(
+        "--auto-trim-percent",
+        type=float,
+        default=5.0,
+        help="自动缩放时，去掉两端百分比后取均值(默认5%%)以抑制极端值",
+    )
+    parser.add_argument(
+        "--auto-scale-min",
+        type=float,
+        default=1e-6,
+        help="自动缩放系数的下限，避免过度缩小/放大",
+    )
+    parser.add_argument(
+        "--auto-scale-max",
+        type=float,
+        default=1e6,
+        help="自动缩放系数的上限，避免过度缩小/放大",
+    )
+    parser.add_argument(
+        "--auto-model-scale",
+        action="store_true",
+        help="自动估计模型输出缩放系数 (scale*pred - meas)，用于提升模型幅值匹配测量",
+    )
+    parser.add_argument(
+        "--model-scale",
+        type=float,
+        default=1.0,
+        help="手工设置模型输出缩放系数（>1 放大模型预测），与 auto-model-scale 互斥",
+    )
+    parser.add_argument(
+        "--fit-scale-baseline",
+        action="store_true",
+        help="使用均匀场与目标帧的裁剪均值对齐测量尺度（单一缩放源，替代 auto_measurement_scale）",
+    )
+    parser.add_argument(
+        "--raw-gn",
+        action="store_true",
+        help="开启最简管线：禁用极性对齐、测量缩放/自动缩放、线性校准、测量权重和扩展线搜索，仅保留核心 GN",
     )
     parser.add_argument(
         "--polarity-mode",
@@ -289,6 +376,17 @@ def ensure_output_dir(path: Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
 
 
+def trimmed_mean(arr: np.ndarray, trim_percent: float) -> float:
+    trim = max(0.0, min(50.0, float(trim_percent)))
+    if trim <= 0:
+        return float(np.mean(arr))
+    low, high = np.percentile(arr, [trim, 100 - trim])
+    mask = (arr >= low) & (arr <= high)
+    if not mask.any():
+        return float(np.mean(arr))
+    return float(np.mean(arr[mask]))
+
+
 def _apply_physical_scale(
     measured: np.ndarray,
     simulated: np.ndarray,
@@ -298,6 +396,10 @@ def _apply_physical_scale(
     scale = metadata.get("calibration_scale")
     bias = metadata.get("calibration_bias", 0.0)
     if scale is None or abs(scale) < 1e-18:
+        return measured, simulated, residual, None, bias
+    # 防止异常放大导致绘图轴爆炸：若尺度过大/非有限则放弃还原物理标尺
+    if not np.isfinite(scale) or abs(scale) > 1e5:
+        LOGGER.warning("校准尺度过大(%.3e)或非有限，跳过物理标尺绘图", scale)
         return measured, simulated, residual, None, bias
 
     measured_phys = measured * scale + bias
@@ -326,6 +428,11 @@ def save_outputs(result, output_dir: Path, visualizer) -> None:
         result.residual,
         result.metadata,
     )
+    # 如果没有校准尺度但存在模型缩放，则仅对预测侧应用 model_scale，保持残差一致
+    model_scale_meta = result.metadata.get("model_scale", 1.0)
+    if scale is None and abs(model_scale_meta - 1.0) > 1e-9:
+        simulated_plot = simulated_plot * model_scale_meta
+        residual_plot = simulated_plot - measured_plot
 
     indices = np.arange(len(measured_plot))
     fig, ax = plt.subplots(figsize=visualizer.figsize)
@@ -365,7 +472,21 @@ def main() -> None:
     args = parse_args()
     setup_logging(args.log_level)
 
+    if args.raw_gn:
+        # 最简模式：禁用所有缩放/权重/校准/极性对齐/线搜索扩展
+        args.measurement_scale = 1.0
+        args.auto_measurement_scale = False
+        args.calibration_frame = -1
+        args.weight_strategy = "none"
+        args.max_step = 1.0
+        args.line_search_steps = 1
+        args.polarity_mode = "none"
+
     dataset = load_dataset(args)
+    model_scale = args.model_scale
+    if args.measurement_scale != 1.0:
+        LOGGER.info("应用 measurement_scale=%.3g 缩放测量数据", args.measurement_scale)
+        dataset.measurements = dataset.measurements * float(args.measurement_scale)
 
     if args.target_frame >= dataset.measurements.shape[0]:
         raise IndexError(f"target_frame 超出范围 (available: 0~{dataset.measurements.shape[0]-1})")
@@ -395,10 +516,34 @@ def main() -> None:
     else:
         if hasattr(eit_system.reconstructor, "max_iterations"):
             eit_system.reconstructor.max_iterations = args.max_iterations
+    if args.max_step is not None and hasattr(eit_system.reconstructor, "max_step"):
+        LOGGER.info("设置线搜索最大步长 max_step=%.3g", args.max_step)
+        eit_system.reconstructor.max_step = float(args.max_step)
+    if args.line_search_steps is not None and hasattr(
+        eit_system.reconstructor, "line_search_steps"
+    ):
+        LOGGER.info("设置线搜索步数 line_search_steps=%d", args.line_search_steps)
+        eit_system.reconstructor.line_search_steps = int(args.line_search_steps)
+    if args.min_step is not None and hasattr(eit_system.reconstructor, "min_step"):
+        LOGGER.info("设置线搜索最小步长 min_step=%.3g", args.min_step)
+        eit_system.reconstructor.min_step = float(args.min_step)
+    if args.step_schedule:
+        LOGGER.info("使用自定义步长序列 (跳过线搜索): %s", args.step_schedule)
+        eit_system.reconstructor.step_schedule = list(args.step_schedule)
+    if args.scaling_factor != 1.0 and hasattr(eit_system.reconstructor, "scaling_factor"):
+        LOGGER.info("设置全链路缩放因子 k=%.3g (同步缩放预测/雅可比，λ按k^2放大)", args.scaling_factor)
+        eit_system.reconstructor.scaling_factor = float(args.scaling_factor)
+    if args.regularization_param is not None:
+        LOGGER.info("设置正则化参数 λ=%.3e", args.regularization_param)
+        eit_system.reconstructor.regularization_param = float(args.regularization_param)
     if args.weight_strategy:
         LOGGER.info("覆盖测量权重策略: %s", args.weight_strategy)
         eit_system.reconstructor.measurement_weight_strategy = args.weight_strategy
         eit_system.reconstructor.use_measurement_weights = args.weight_strategy != "none"
+    # 模型输出缩放（scale*pred - meas），用于拉升模型幅值
+    if hasattr(eit_system.reconstructor, "model_scale") and model_scale != 1.0:
+        LOGGER.info("设置模型输出缩放 model_scale=%.3g", model_scale)
+        eit_system.reconstructor.model_scale = model_scale
 
     baseline_image = eit_system.create_homogeneous_image()
     baseline_data = eit_system.forward_solve(baseline_image)
@@ -406,6 +551,65 @@ def main() -> None:
     flipped_frames = align_measurement_polarity(
         dataset, baseline_data.meas, args.polarity_mode, LOGGER
     )
+
+    # 单一缩放源：优先 fit_scale_baseline，其次 auto_measurement_scale，互斥于手工 measurement_scale !=1 或 auto_model_scale
+    if args.fit_scale_baseline and args.measurement_scale == 1.0 and not args.auto_model_scale:
+        meas = np.abs(dataset.measurements[args.target_frame])
+        pred = np.abs(baseline_data.meas)
+        meas_mean = trimmed_mean(meas, args.auto_trim_percent)
+        pred_mean = trimmed_mean(pred, args.auto_trim_percent)
+        if pred_mean > 0 and meas_mean > 0:
+            scale = pred_mean / meas_mean
+            scale = float(np.clip(scale, args.auto_scale_min, args.auto_scale_max))
+            LOGGER.info("fit_scale_baseline: meas_mean=%.3e, pred_mean=%.3e, scale=%.3g", meas_mean, pred_mean, scale)
+            dataset.measurements = dataset.measurements * scale
+            dataset.metadata["fit_scale_baseline"] = scale
+        else:
+            LOGGER.warning("fit_scale_baseline 失败（均值为零），跳过。")
+    elif args.auto_measurement_scale:
+        if args.measurement_scale != 1.0 or args.auto_model_scale:
+            LOGGER.warning(
+                "检测到 measurement_scale 或 auto_model_scale 已设置，跳过 auto_measurement_scale 以避免多重缩放"
+            )
+        else:
+            meas = np.abs(dataset.measurements[args.target_frame])
+            pred = np.abs(baseline_data.meas)
+            meas_mean = trimmed_mean(meas, args.auto_trim_percent)
+            pred_mean = trimmed_mean(pred, args.auto_trim_percent)
+            if pred_mean > 0 and meas_mean > 0:
+                auto_scale = pred_mean / meas_mean
+                auto_scale = float(np.clip(auto_scale, args.auto_scale_min, args.auto_scale_max))
+                LOGGER.info(
+                    "自动测量缩放系数 auto_measurement_scale=%.3g (trim=%.1f%%，应用于所有帧)",
+                    auto_scale,
+                    args.auto_trim_percent,
+                )
+                dataset.measurements = dataset.measurements * auto_scale
+                dataset.metadata["auto_measurement_scale"] = auto_scale
+            else:
+                LOGGER.warning("自动测量缩放失败（均值为零），跳过。")
+
+    # 自动/手工模型输出缩放：scale*pred - meas，提升模型幅值
+    if args.auto_model_scale:
+        trim = max(0.0, min(50.0, float(args.auto_trim_percent)))
+        meas_abs = np.abs(dataset.measurements[args.target_frame])
+        pred_abs = np.abs(baseline_data.meas)
+        if trim > 0:
+            low, high = np.percentile(meas_abs, [trim, 100 - trim])
+            mask_meas = (meas_abs >= low) & (meas_abs <= high)
+            low_p, high_p = np.percentile(pred_abs, [trim, 100 - trim])
+            mask_pred = (pred_abs >= low_p) & (pred_abs <= high_p)
+        else:
+            mask_meas = np.ones_like(meas_abs, dtype=bool)
+            mask_pred = np.ones_like(pred_abs, dtype=bool)
+        meas_mean = meas_abs[mask_meas].mean() if mask_meas.any() else 0.0
+        pred_mean = pred_abs[mask_pred].mean() if mask_pred.any() else 0.0
+        if pred_mean > 0 and meas_mean > 0:
+            model_scale = meas_mean / pred_mean
+            model_scale = float(np.clip(model_scale, args.auto_scale_min, args.auto_scale_max))
+            LOGGER.info("自动模型缩放系数 auto_model_scale=%.3g (trim=%.1f%%)", model_scale, trim)
+        else:
+            LOGGER.warning("自动模型缩放失败（均值为零），使用1.0")
 
     calibration_metadata: Dict[str, Any] = {}
 
@@ -421,7 +625,7 @@ def main() -> None:
         dataset.measurements = (dataset.measurements - bias) / scale
         calibration_metadata = {"calibration_scale": scale, "calibration_bias": bias}
     else:
-        LOGGER.info("跳过尺度校准")
+        LOGGER.info("跳过尺度校准（未应用 scale/bias）")
 
     measurement_data = dataset.to_eit_data(args.target_frame, data_type="real")
     metadata = {"target_idx": args.target_frame, **calibration_metadata}
@@ -429,6 +633,8 @@ def main() -> None:
         metadata["mode"] = args.mode
     if args.weight_strategy:
         metadata["weight_strategy"] = args.weight_strategy
+    if model_scale != 1.0:
+        metadata["model_scale"] = model_scale
     metadata["polarity_mode"] = args.polarity_mode
     if flipped_frames:
         metadata["flipped_frames"] = flipped_frames
@@ -447,6 +653,12 @@ def main() -> None:
     else:
         output_dir = args.output_dir / dataset_name
     save_outputs(result, output_dir, create_visualizer())
+
+    # Save the command used to run this script
+    cmd = " ".join(shlex.quote(arg) for arg in sys.argv)
+    with (output_dir / "command.txt").open("w") as f:
+        f.write(cmd + "\n")
+
     LOGGER.info("绝对成像完成，结果输出到: %s", output_dir)
 
 

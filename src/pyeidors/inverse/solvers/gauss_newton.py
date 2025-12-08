@@ -29,7 +29,9 @@ class ModularGaussNewtonReconstructor:
                  weight_floor: float = 1e-9,
                  measurement_weight_strategy: str = "none",
                  max_step: float = 1.0,
-                 negate_jacobian: bool = True):
+                 min_step: float = 0.1,
+                 negate_jacobian: bool = True,
+                 scaling_factor: float = 1.0):
         """
         初始化模块化高斯牛顿重建器
         
@@ -54,6 +56,11 @@ class ModularGaussNewtonReconstructor:
         self._measured_vector: Optional[np.ndarray] = None
         self.negate_jacobian = negate_jacobian
         self.max_step = max_step
+        self.min_step = min_step
+        self.model_scale: float = 1.0
+        self.step_schedule: Optional[list[float]] = None
+        # 全链路缩放因子（用于同时放大预测/雅可比和调整正则）
+        self.scaling_factor = scaling_factor
         
         # 设置计算设备
         if device.startswith('cuda') and torch.cuda.is_available():
@@ -120,6 +127,8 @@ class ModularGaussNewtonReconstructor:
             R_np = self.regularization.get_regularization_matrix()
             self.R_torch = torch.from_numpy(R_np).to(self.device, dtype=self._torch_dtype)
         
+        model_scale = getattr(self, "model_scale", 1.0)
+
         # 初始化导电率分布
         if initial_conductivity is None:
             initial_conductivity = 1.0
@@ -130,6 +139,9 @@ class ModularGaussNewtonReconstructor:
         # 记录收敛历史
         residual_history = []
         sigma_change_history = []
+        k_scale = float(self.scaling_factor)
+        if self.verbose:
+            print(f"[INFO] scaling_factor k={k_scale:.3e}, lambda={self.regularization_param:.3e}")
         
         if self.verbose:
             print(f"\n开始模块化高斯牛顿重建...")
@@ -144,6 +156,10 @@ class ModularGaussNewtonReconstructor:
                 
                 # 2. 计算残差
                 data_sim_torch = torch.from_numpy(data_simulated.meas).to(self.device, dtype=self._torch_dtype)
+                if model_scale != 1.0:
+                    data_sim_torch = data_sim_torch * model_scale
+                if k_scale != 1.0:
+                    data_sim_torch = data_sim_torch * k_scale
                 residual_torch = data_sim_torch - meas_torch
                 if self._meas_weight_sqrt is not None:
                     weighted_residual_torch = residual_torch * self._meas_weight_sqrt
@@ -152,6 +168,7 @@ class ModularGaussNewtonReconstructor:
                     weighted_residual_torch = residual_torch
                     residual_norm_weighted = torch.norm(weighted_residual_torch).item()
                 residual_norm = torch.norm(residual_torch).item()
+                residual_max = torch.max(torch.abs(residual_torch)).item()
                 residual_history.append(residual_norm)
                 
                 # 3. 使用模块化雅可比计算器
@@ -160,6 +177,10 @@ class ModularGaussNewtonReconstructor:
                 )
                 if self.negate_jacobian:
                     measurement_jacobian_np = -measurement_jacobian_np
+                if model_scale != 1.0:
+                    measurement_jacobian_np = measurement_jacobian_np * model_scale
+                if k_scale != 1.0:
+                    measurement_jacobian_np = measurement_jacobian_np * k_scale
                 J_torch = torch.from_numpy(measurement_jacobian_np).to(self.device, dtype=self._torch_dtype)
                 if self._meas_weight_sqrt is not None:
                     J_weighted = J_torch * self._meas_weight_sqrt.unsqueeze(1)
@@ -170,8 +191,22 @@ class ModularGaussNewtonReconstructor:
                 JTJ = torch.mm(J_weighted.t(), J_weighted)
                 JTr = torch.mv(J_weighted.t(), weighted_residual_torch)
                 
-                A = JTJ + self.regularization_param * self.R_torch
+                lambda_eff = self.regularization_param * (k_scale ** 2)
+                A = JTJ + lambda_eff * self.R_torch
                 b = -JTr
+                if self.verbose and iteration == 0:
+                    jtr_norm = torch.norm(JTr).item()
+                    meas_norm = torch.norm(meas_torch).item()
+                    meas_max = torch.max(torch.abs(meas_torch)).item()
+                    pred_norm = torch.norm(data_sim_torch).item()
+                    pred_max = torch.max(torch.abs(data_sim_torch)).item()
+                    print(
+                        f"[DEBUG i0] model_scale={model_scale:.3e}, "
+                        f"meas_norm={meas_norm:.3e}, pred_norm={pred_norm:.3e}, "
+                        f"meas_max={meas_max:.3e}, pred_max={pred_max:.3e}, "
+                        f"res_norm={residual_norm:.3e}, res_max={residual_max:.3e}, "
+                        f"JTr_norm={jtr_norm:.3e}"
+                    )
                 
                 # 5. 求解线性系统
                 try:
@@ -179,15 +214,32 @@ class ModularGaussNewtonReconstructor:
                 except RuntimeError:
                     A_regularized = JTJ + (self.regularization_param * 10) * self.R_torch
                     delta_sigma_torch = torch.linalg.solve(A_regularized, b)
-                
+                delta_norm = torch.norm(delta_sigma_torch).item()
+
                 # 6. 线搜索
-                optimal_step_size = self._line_search_torch(
-                    sigma_current,
-                    delta_sigma_torch,
-                    meas_torch,
-                    residual_norm_weighted,
-                    self._meas_weight_sqrt,
-                )
+                if self.step_schedule is not None and iteration < len(self.step_schedule):
+                    optimal_step_size = float(self.step_schedule[iteration])
+                else:
+                    optimal_step_size = self._line_search_torch(
+                        sigma_current,
+                        delta_sigma_torch,
+                        meas_torch,
+                        residual_norm_weighted,
+                        self._meas_weight_sqrt,
+                    )
+                    if self.min_step is not None and optimal_step_size < self.min_step:
+                        optimal_step_size = self.min_step
+                if self.verbose:
+                    jtr_norm = torch.norm(JTr).item()
+                    desc = (
+                        f"[DEBUG i{iteration}] "
+                        f"model_scale={model_scale:.3e}, "
+                        f"meas_norm={meas_norm:.3e}, pred_norm={pred_norm:.3e}, "
+                        f"meas_max={meas_max:.3e}, pred_max={pred_max:.3e}, "
+                        f"res_norm={residual_norm:.3e}, res_max={residual_max:.3e}, "
+                        f"JTr_norm={jtr_norm:.3e}, delta_norm={delta_norm:.3e}, step={optimal_step_size:.3e}, lambda_eff={lambda_eff:.3e}, k={k_scale:.3e}"
+                    )
+                    print(desc)
                 
                 # 7. 更新导电率
                 sigma_old_values = sigma_current.vector()[:].copy()
@@ -309,50 +361,38 @@ class ModularGaussNewtonReconstructor:
         current_weighted_residual,
         weight_vector=None,
     ):
-        """线搜索算法，支持测量加权残差。"""
-        coarse_steps = np.array([1.0, 0.75, 0.5, 0.25, 0.125], dtype=float)
-        coarse_steps *= self.max_step
-        coarse_steps = coarse_steps[coarse_steps > 0]
-        fine_steps = self.max_step * (10.0 ** (-np.arange(1, self.line_search_steps + 1, dtype=float)))
-        merged = np.unique(np.concatenate([coarse_steps, fine_steps]))
-        step_candidates = torch.from_numpy(merged[::-1].copy()).to(self.device, dtype=self._torch_dtype)
-
-        best_step = 0.0
-        best_residual = current_weighted_residual
-        improved = False
-        
+        """单调回溯线搜索：尝试 max_step, max_step/2, ... 直至 min_step。"""
+        step = float(self.max_step)
         delta_sigma_np = delta_sigma_torch.cpu().numpy()
-        
-        for step_size in step_candidates:
-            try:
-                sigma_test = sigma_current.copy(deepcopy=True)
-                sigma_test.vector()[:] += step_size.item() * delta_sigma_np
-                
-                if self.clip_values is not None:
-                    sigma_test.vector()[:] = np.clip(
-                        sigma_test.vector()[:], self.clip_values[0], self.clip_values[1]
-                    )
-                
-                img_test = EITImage(elem_data=sigma_test.vector()[:], fwd_model=self.fwd_model)
-                data_test, _ = self.fwd_model.fwd_solve(img_test)
-                
-                data_test_torch = torch.from_numpy(data_test.meas).to(self.device, dtype=self._torch_dtype)
-                residual_torch = data_test_torch - meas_target_torch
-                if weight_vector is not None:
-                    residual_norm = torch.norm(residual_torch * weight_vector).item()
-                else:
-                    residual_norm = torch.norm(residual_torch).item()
-                
-                improvement_tol = max(best_residual * 1e-6, 1e-12)
-                if residual_norm < best_residual - improvement_tol:
-                    best_residual = residual_norm
-                    best_step = step_size.item()
-                    improved = True
-                    
-            except Exception:
-                continue
-        
-        return best_step if improved else 0.0
+        best_residual = current_weighted_residual
+        best_step = 0.0
+
+        for _ in range(max(1, self.line_search_steps)):
+            sigma_test = sigma_current.copy(deepcopy=True)
+            sigma_test.vector()[:] += step * delta_sigma_np
+            if self.clip_values is not None:
+                sigma_test.vector()[:] = np.clip(sigma_test.vector()[:], self.clip_values[0], self.clip_values[1])
+
+            img_test = EITImage(elem_data=sigma_test.vector()[:], fwd_model=self.fwd_model)
+            data_test, _ = self.fwd_model.fwd_solve(img_test)
+            data_test_torch = torch.from_numpy(data_test.meas).to(self.device, dtype=self._torch_dtype)
+            residual_torch = data_test_torch - meas_target_torch
+            if weight_vector is not None:
+                residual_norm = torch.norm(residual_torch * weight_vector).item()
+            else:
+                residual_norm = torch.norm(residual_torch).item()
+
+            improvement_tol = max(best_residual * 1e-6, 1e-12)
+            if residual_norm < best_residual - improvement_tol:
+                best_residual = residual_norm
+                best_step = step
+                break
+
+            step *= 0.5
+            if step < self.min_step:
+                break
+
+        return float(best_step if best_step > 0 else self.min_step)
     
     def set_regularization(self, regularization):
         """动态设置正则化方法"""

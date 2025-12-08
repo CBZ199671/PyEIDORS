@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import shlex
+import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence, Tuple
@@ -23,8 +25,8 @@ from scipy.interpolate import interp1d
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = REPO_ROOT / "src"
-if str(SRC_PATH) not in __import__("sys").path:
-    __import__("sys").path.insert(0, str(SRC_PATH))
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 from pyeidors.core_system import EITSystem
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
@@ -190,6 +192,80 @@ def compute_predicted_difference(
     sim_data, _ = system.fwd_model.fwd_solve(image)
     calibrated = apply_calibration(sim_data.meas, scale, bias)
     return compute_difference_vector(calibrated, reference_vector, mode)
+
+
+def align_measurement_polarity(measurements: np.ndarray, baseline_vector: np.ndarray) -> list[int]:
+    """根据均匀场方向统一每帧极性，返回被翻转的帧索引。"""
+    baseline = np.asarray(baseline_vector, dtype=float)
+    if np.linalg.norm(baseline) < np.finfo(float).eps:
+        return []
+    flipped: list[int] = []
+    for idx in range(measurements.shape[0]):
+        frame = measurements[idx]
+        if float(np.dot(frame, baseline)) < 0:
+            measurements[idx] = -frame
+            flipped.append(idx)
+    return flipped
+
+
+def remove_outliers(frames: np.ndarray, sigma: float) -> np.ndarray:
+    """按帧截断超过 sigma 倍标准差的异常值。"""
+    if sigma <= 0:
+        return frames
+    cleaned = frames.copy()
+    eps = np.finfo(float).eps
+    for idx in range(cleaned.shape[0]):
+        frame = cleaned[idx]
+        mean = float(np.mean(frame))
+        std = float(np.std(frame))
+        if std < eps:
+            continue
+        limit = sigma * std
+        low = mean - limit
+        high = mean + limit
+        np.clip(frame, low, high, out=frame)
+    return cleaned
+
+
+def smooth_frames(frames: np.ndarray, window: int) -> np.ndarray:
+    """对每帧做简单移动平均平滑。"""
+    if window <= 1:
+        return frames
+    win = int(max(1, window))
+    if win % 2 == 0:
+        win += 1
+    pad = win // 2
+    kernel = np.ones(win, dtype=float) / win
+    smoothed = np.empty_like(frames)
+    for idx in range(frames.shape[0]):
+        frame = frames[idx]
+        extended = np.pad(frame, pad_width=pad, mode="edge")
+        smoothed[idx] = np.convolve(extended, kernel, mode="valid")
+    return smoothed
+
+
+def match_frame_statistics(original: np.ndarray, processed: np.ndarray) -> np.ndarray:
+    """将处理后的帧缩放/平移回原始的平均值和标准差。"""
+    if original.shape != processed.shape:
+        raise ValueError("original 和 processed 大小不一致")
+    restored = processed.copy()
+    eps = np.finfo(float).eps
+    for idx in range(restored.shape[0]):
+        orig = original[idx]
+        proc = restored[idx]
+        orig_mean = float(np.mean(orig))
+        orig_std = float(np.std(orig))
+        proc_mean = float(np.mean(proc))
+        proc_std = float(np.std(proc))
+        if proc_std < eps:
+            if orig_std >= eps:
+                restored[idx] = orig
+            else:
+                restored[idx] = orig_mean
+            continue
+        scale = orig_std / proc_std if orig_std >= eps else 0.0
+        restored[idx] = (proc - proc_mean) * scale + orig_mean
+    return restored
 
 
 def solve_single_step_delta(
@@ -489,6 +565,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stim-first-negative", dest="stim_first_positive", action="store_false", help="指定激励对的第一个电极注入负向电流")
     parser.add_argument("--save-measured-diff", action="store_true", help="保存测量得到的差分向量 (target-reference) 以便与其他软件对比。")
     parser.add_argument("--dump-linear-system", action="store_true", help="保存最终求解使用的雅可比/权重/线性系统 (npz) 以便对照 MATLAB。")
+    parser.add_argument("--outlier-sigma", type=float, default=0.0, help="按帧截断超过 sigma 倍标准差的异常值 (<=0 表示禁用)")
+    parser.add_argument("--smooth-window", type=int, default=1, help="移动平均平滑窗口大小 (<=1 表示禁用)")
 
     return parser.parse_args()
 
@@ -623,6 +701,20 @@ def main() -> None:
     if args.pattern_amplitude is not None:
         dataset.pattern_config.amplitude = float(args.pattern_amplitude)
 
+    preprocess_info = {
+        "outlier_sigma": args.outlier_sigma,
+        "smooth_window": args.smooth_window,
+    }
+    raw_measurements = dataset.measurements.copy()
+    measurements_pre = raw_measurements.copy()
+    if args.outlier_sigma > 0:
+        measurements_pre = remove_outliers(measurements_pre, args.outlier_sigma)
+    if args.smooth_window > 1:
+        measurements_pre = smooth_frames(measurements_pre, args.smooth_window)
+    if args.outlier_sigma > 0 or args.smooth_window > 1:
+        measurements_pre = match_frame_statistics(raw_measurements, measurements_pre)
+    dataset.measurements = measurements_pre
+
     ref_idx = args.reference_frame
     tgt_idx = args.target_frame
     if not 0 <= ref_idx < dataset.measurements.shape[0]:
@@ -649,6 +741,18 @@ def main() -> None:
     system.reconstructor.negate_jacobian = (args.negate_jacobian == "true")
     baseline_image = system.create_homogeneous_image()
     baseline_data = system.forward_solve(baseline_image)
+
+    baseline_alignment_vec = baseline_data.meas.copy()
+    baseline_norm_raw = float(np.linalg.norm(baseline_alignment_vec))
+    if baseline_norm_raw < np.finfo(float).eps:
+        polarity_flips = []
+        print("极性校正：基线幅值过小，已跳过。")
+    else:
+        polarity_flips = align_measurement_polarity(dataset.measurements, baseline_alignment_vec)
+        if polarity_flips:
+            print(f"极性校正：翻转帧索引 {polarity_flips}")
+        else:
+            print("极性校正：所有帧已与均匀场方向一致。")
 
     if args.strict_eidors:
         scale = 1.0
@@ -679,12 +783,11 @@ def main() -> None:
         frame_signs = None
         if args.target_amplitude:
             measurements, amp_factor = rescale_measurements(measurements, orig_amp, args.target_amplitude)
-            dataset.measurements = measurements
     else:
         measurements, amp_factor = rescale_measurements(measurements, orig_amp, args.target_amplitude)
         template_frame = measurements[ref_idx].copy()
         measurements, frame_signs = normalize_frame_signs(measurements, args.frame_sign_mode, template_frame)
-        dataset.measurements = measurements
+    dataset.measurements = measurements
     ref_sign = sign_value(args.reference_sign)
     tgt_sign = sign_value(args.target_sign)
     measurements[ref_idx] *= ref_sign
@@ -756,6 +859,8 @@ def main() -> None:
     dataset_name = args.csv.stem if args.csv else args.npz.stem
     output_dir = args.output_dir / dataset_name
     output_dir.mkdir(parents=True, exist_ok=True)
+    cmdline = "python " + " ".join(shlex.quote(a) for a in sys.argv)
+    (output_dir / "command.txt").write_text(cmdline + "\n", encoding="utf-8")
 
     if args.save_measured_diff:
         np.savetxt(output_dir / "measured_difference.csv", measured_diff, delimiter=",")
@@ -788,6 +893,11 @@ def main() -> None:
             "target": args.target_sign,
             "swapped": swapped,
         },
+        "polarity_alignment": {
+            "flipped_indices": polarity_flips,
+            "baseline_norm": baseline_norm_raw,
+        },
+        "preprocess": preprocess_info,
     }
     save_conductivity_figures(recon_image, baseline_image, output_dir, args.figure_dpi, metadata)
 
@@ -818,6 +928,11 @@ def main() -> None:
             "bias": post_bias,
         },
         "strict_eidors": args.strict_eidors,
+        "polarity_alignment": {
+            "flipped_indices": polarity_flips,
+            "baseline_norm": baseline_norm_raw,
+        },
+        "preprocess": preprocess_info,
     })
     (output_dir / "metrics.json").write_text(json.dumps({"difference": metrics}, indent=2))
 

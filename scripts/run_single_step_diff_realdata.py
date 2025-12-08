@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
-from typing import Optional
-
 import numpy as np
 import matplotlib.pyplot as plt
+from scipy.optimize import minimize_scalar
+import yaml
 
 import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -59,22 +59,48 @@ def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
     return node_vals
 
 
+def load_metadata(metadata_path: Path) -> dict[str, float | int | str]:
+    with metadata_path.open("r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+    if not isinstance(data, dict):
+        raise ValueError(f"metadata {metadata_path} 不是 YAML 字典")
+    return data
+
+
 def main(
     csv: Path,
     lam: float,
     use_part: str,
     output: Path,
     mesh_name: str = "mesh_102070",
+    metadata: Path | None = None,
+    pattern_amplitude: float | None = None,
     contact_impedance: float = 1e-6,
+    measurement_gain: float = 10.0,
+    step_size_calib: bool = False,
+    step_size_min: float = 1e-3,
+    step_size_max: float = 1e1,
+    step_size_maxiter: int = 50,
 ):
     vh, vi = load_csv(csv, use_part=use_part)
+    if measurement_gain <= 0:
+        raise ValueError("measurement_gain must be positive")
+    vh = vh / measurement_gain
+    vi = vi / measurement_gain
+
+    stim_amplitude = pattern_amplitude
+    if stim_amplitude is None and metadata is not None:
+        meta = load_metadata(metadata)
+        stim_amplitude = float(meta.get("amplitude", 1.0))
+    if stim_amplitude is None:
+        stim_amplitude = 1.0
 
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name=mesh_name, n_elec=16)
     pattern_cfg = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        amplitude=stim_amplitude,
         use_meas_current=False,
         rotate_meas=True,
     )
@@ -102,10 +128,32 @@ def main(
     except Exception:
         delta_sigma = np.linalg.lstsq(A, b, rcond=None)[0]
 
-    sigma_est = sigma_bg + delta_sigma
-    img_est = EITImage(elem_data=sigma_est, fwd_model=fwd_model)
-
     pred_vh, _ = fwd_model.fwd_solve(img_bg)
+
+    alpha = 1.0
+    if step_size_calib:
+        def _objective(scale: float) -> float:
+            sigma_try = sigma_bg + scale * delta_sigma
+            img_try = EITImage(elem_data=sigma_try, fwd_model=fwd_model)
+            pred_vi_try, _ = fwd_model.fwd_solve(img_try)
+            pred_diff_try = pred_vi_try.meas - pred_vh.meas
+            residual = pred_diff_try - dv
+            return float(np.mean(residual ** 2))
+
+        result = minimize_scalar(
+            _objective,
+            bounds=(step_size_min, step_size_max),
+            method="bounded",
+            options={"maxiter": int(max(1, step_size_maxiter))},
+        )
+        if result.success:
+            alpha = float(result.x)
+            print(f"Step-size calibration: alpha={alpha:.3g}, diff residual={result.fun:.3e}")
+        else:
+            print("Step-size calibration失败，恢复 alpha=1.0")
+
+    sigma_est = sigma_bg + alpha * delta_sigma
+    img_est = EITImage(elem_data=sigma_est, fwd_model=fwd_model)
     pred_vi, _ = fwd_model.fwd_solve(img_est)
     pred_diff = pred_vi.meas - pred_vh.meas
     meas_diff = dv
@@ -179,6 +227,9 @@ def main(
         pred_vi=pred_vi.meas,
         lambda_=lam,
         rmse_abs=rmse_abs,
+        step_size_alpha=alpha,
+        pattern_amplitude=stim_amplitude,
+        measurement_gain=measurement_gain,
     )
     print(f"RMSE(abs)={rmse_abs:.5f}")
     print("Saved to", output)
@@ -190,5 +241,26 @@ if __name__ == "__main__":
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", dest="use_part", choices=["real", "imag", "mag"], default="real", help="which part to reconstruct")
     parser.add_argument("--output", type=Path, default=Path("results/tank/single_step_cli"), help="output directory")
+    parser.add_argument("--metadata", type=Path, help="YAML metadata describing stimulation amplitude, etc.")
+    parser.add_argument("--pattern-amplitude", type=float, default=None, help="override stimulation amplitude (A)")
+    parser.add_argument("--contact-impedance", type=float, default=1e-6, help="contact impedance (Ω·m²)")
+    parser.add_argument("--measurement-gain", type=float, default=10.0, help="Divide measured voltages by this amplifier gain")
+    parser.add_argument("--step-size-calibration", action="store_true", help="Enable 1-D step-size search on delta_sigma")
+    parser.add_argument("--step-size-min", type=float, default=1e-3, help="Lower bound for step-size calibration")
+    parser.add_argument("--step-size-max", type=float, default=1e1, help="Upper bound for step-size calibration")
+    parser.add_argument("--step-size-maxiter", type=int, default=50, help="Max iterations for bounded optimizer")
     args = parser.parse_args()
-    main(csv=args.csv, lam=args.lam, use_part=args.use_part, output=args.output)
+    main(
+        csv=args.csv,
+        lam=args.lam,
+        use_part=args.use_part,
+        output=args.output,
+        metadata=args.metadata,
+        pattern_amplitude=args.pattern_amplitude,
+        contact_impedance=args.contact_impedance,
+        measurement_gain=args.measurement_gain,
+        step_size_calib=args.step_size_calibration,
+        step_size_min=args.step_size_min,
+        step_size_max=args.step_size_max,
+        step_size_maxiter=args.step_size_maxiter,
+    )
