@@ -295,22 +295,7 @@ class ModularGaussNewtonReconstructor:
                     )
                     if self.min_step is not None and optimal_step_size < self.min_step:
                         optimal_step_size = self.min_step
-                if self.verbose:
-                    rel_res_w_str = (
-                        f"{rel_residual_weighted:.3e}" if rel_residual_weighted is not None else "n/a"
-                    )
-                    res_drop_str = f"{res_drop:.3e}" if res_drop is not None else "nan"
-                    desc = (
-                        f"[DEBUG i{iteration}] "
-                        f"res={residual_norm:.3e} (rel={rel_residual:.3e}), "
-                        f"wres={residual_norm_weighted:.3e} (rel={rel_res_w_str}), "
-                        f"meas_norm={meas_norm:.3e}, pred_norm={pred_norm:.3e}, "
-                        f"meas_max={meas_max:.3e}, pred_max={pred_max:.3e}, "
-                        f"JTr_norm={jtr_norm:.3e}, delta_norm={delta_norm:.3e}, "
-                        f"step={optimal_step_size:.3e}, lambda_eff={lambda_eff:.3e}, "
-                        f"res_drop={res_drop_str}"
-                    )
-                    print(desc)
+
                 
                 # 7. 更新导电率
                 sigma_old_values = sigma_current.vector()[:].copy()
@@ -377,8 +362,8 @@ class ModularGaussNewtonReconstructor:
                 
                 # 更新进度条
                 if self.verbose:
-                    pbar.set_description(
-                        f"残差: {residual_norm:.2e} | 目标: {total_objective:.2e} (测量={meas_misfit:.2e}, 先验={prior_misfit:.2e}) | 相对变化: {relative_change:.2e} | 步长: {optimal_step_size:.3f}"
+                    pbar.set_postfix_str(
+                        f"残差={residual_norm:.2e}, 步长={optimal_step_size:.3f}, Δσ={relative_change:.2e}"
                     )
                     pbar.update(1)
         
@@ -584,18 +569,8 @@ class ModularGaussNewtonReconstructor:
         # EIDORS 风格的 perturb 自适应调整
         self._update_perturb_eidors_style(chosen_step, perturb, mlist, valid_idx)
         
-        if self.verbose:
-            valid_results = [(perturb[i], mlist[i]) for i in valid_idx if i > 0]
-            hist_str = "; ".join([f"{s:.3e}:{r:.3e}" for s, r in valid_results[:6]])
-            print(
-                f"[DEBUG line_search] retry={retry}, α:[obj] = {hist_str} | "
-                f"best α={chosen_step:.3e}, obj={best_objective:.3e}, obj@0={mlist[0]:.3e}"
-            )
-        
         # EIDORS 风格递归重试：如果 alpha=0 是最优，尝试新的 perturb
         if chosen_step == 0 and retry < 5:
-            if self.verbose:
-                print(f"    [line_search] retry#{retry+1} (alpha=0 selected, trying new perturbations)")
             return self._line_search_torch(
                 sigma_current, delta_sigma_torch, meas_target_torch,
                 current_weighted_residual, weight_vector, prior_torch, lambda_eff,
@@ -678,10 +653,6 @@ class ModularGaussNewtonReconstructor:
             
             perturb = np.concatenate([[0], 10 ** log_p])
             
-            if self.verbose:
-                print(f"    [calc_perturb] alpha range adjusted: min={min_alpha:.3e}, max={max_alpha:.3e}")
-                print(f"    [calc_perturb] perturb = {perturb}")
-        
         return perturb
     
     def _update_perturb_eidors_style(
@@ -698,22 +669,15 @@ class ModularGaussNewtonReconstructor:
         if chosen_step == 0:  # bad step: alpha=0 is best
             if len(goodi) > 1 and mlist[0] * 1.05 < mlist[goodi[-1]]:
                 # 解发散了，缩小搜索范围
-                if self.verbose:
-                    print("      [perturb] reducing /10: solution diverged")
                 self._line_search_perturb = self._line_search_perturb / 10
             elif perturb[-1] > 1.0 - 1e-9:
                 # 已经在 alpha=1 附近，放弃
-                if self.verbose:
-                    print("      [perturb] already at alpha=1.0, giving up expansion")
+                pass
             elif perturb[-1] * 10 > 1.0 - 1e-9:
                 # 扩大但限制在 1.0
-                if self.verbose:
-                    print("      [perturb] expanding (limit alpha=1.0)")
                 self._line_search_perturb = self._line_search_perturb / perturb[-1]
             else:
                 # 扩大搜索范围
-                if self.verbose:
-                    print("      [perturb] expanding x10: perturbations too small")
                 self._line_search_perturb = self._line_search_perturb * 10
         else:  # good step
             # 检查是否有明显改进
@@ -721,8 +685,6 @@ class ModularGaussNewtonReconstructor:
             
             if all_similar and perturb[-1] * 10 < 1.0 + 1e-9:
                 # 改进不大，扩大范围
-                if self.verbose:
-                    print("      [perturb] expand x10: little progress")
                 self._line_search_perturb = self._line_search_perturb * 10
             else:
                 # 以最优点为中心重新调整
@@ -733,8 +695,6 @@ class ModularGaussNewtonReconstructor:
                     if new_perturb[-1] > 1.0 - 1e-9:
                         new_perturb = new_perturb / new_perturb[-1]
                     self._line_search_perturb = new_perturb
-                    if self.verbose:
-                        print(f"      [perturb] recentered around alpha={chosen_step:.3e}")
         
         # EIDORS 风格: 添加 1% 随机扰动，避免卡在局部
         jiggle = np.exp(np.random.randn(len(self._line_search_perturb)) * 0.01)
