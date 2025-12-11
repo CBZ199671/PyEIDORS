@@ -212,10 +212,10 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run single-step diff reconstruction on tank CSV data")
     parser.add_argument("--csv", type=Path, required=True, help="4-column CSV: ref_re, ref_im, tgt_re, tgt_im")
+    parser.add_argument("--metadata", type=Path, required=True, help="YAML metadata describing stimulation amplitude, etc.")
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", dest="use_part", choices=["real", "imag", "mag"], default="real", help="which part to reconstruct")
     parser.add_argument("--output", type=Path, required=True, help="output directory")
-    parser.add_argument("--metadata", type=Path, help="YAML metadata describing stimulation amplitude, etc.")
     parser.add_argument("--pattern-amplitude", type=float, default=None, help="override stimulation amplitude (A)")
     parser.add_argument("--contact-impedance", type=float, default=1e-6, help="contact impedance (Ω·m²)")
     parser.add_argument("--measurement-gain", type=float, default=10.0, help="Divide measured voltages by this amplifier gain")
