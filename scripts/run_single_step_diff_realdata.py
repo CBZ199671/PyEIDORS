@@ -33,7 +33,7 @@ from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
 
 # 使用公共模块
-from common.io_utils import load_csv_measurements, load_metadata
+from common.io_utils import load_csv_measurements
 from common.mesh_utils import cell_to_node
 
 
@@ -43,7 +43,6 @@ def main(
     use_part: str,
     output: Path,
     mesh_name: str = "mesh_102070",
-    metadata: Path | None = None,
     pattern_amplitude: float | None = None,
     contact_impedance: float = 1e-6,
     measurement_gain: float = 10.0,
@@ -56,18 +55,14 @@ def main(
     # 使用公共模块加载数据
     vh, vi = load_csv_measurements(csv, use_part=use_part, measurement_gain=measurement_gain)
 
-    # 激励电流幅度的选择：
-    # - 如果用户指定了 --pattern-amplitude，使用用户值
-    # - 如果提供了 --metadata，从中读取真实激励电流（得到真实物理量纲的 Δσ）
-    # - 否则使用归一化幅度 1.0（Δσ 是相对值，不反映真实物理量纲）
-    stim_amplitude = pattern_amplitude
-    if stim_amplitude is None and metadata is not None:
-        meta = load_metadata(metadata)
-        stim_amplitude = float(meta.get("amplitude", 1.0))
-        print(f"[INFO] Using amplitude={stim_amplitude:.2e} from metadata (physical units)")
-    if stim_amplitude is None:
-        stim_amplitude = 1.0
-        print(f"[INFO] Using normalized amplitude=1.0 (Δσ is relative, not physical units)")
+    # EIDORS 风格差分成像：使用归一化激励电流 (1.0)
+    # - 差分成像是单步重建，结果是相对电导率变化
+    # - 关注空间分布形状，不追求精确的物理量纲
+    # - 如果需要物理单位的电导率，应使用迭代的绝对成像
+    # 
+    # 如果用户显式指定 --pattern-amplitude，则使用用户值
+    stim_amplitude = pattern_amplitude if pattern_amplitude is not None else 1.0
+    print(f"[INFO] Diff imaging: amplitude={stim_amplitude:.2e} (EIDORS-style, relative Δσ)")
 
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name=mesh_name, n_elec=16)
     pattern_cfg = PatternConfig(
@@ -219,7 +214,6 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run single-step diff reconstruction on tank CSV data")
     parser.add_argument("--csv", type=Path, required=True, help="4-column CSV: ref_re, ref_im, tgt_re, tgt_im")
-    parser.add_argument("--metadata", type=Path, help="YAML metadata (optional for diff imaging)")
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", dest="use_part", choices=["real", "imag", "mag"], default="real", help="which part to reconstruct")
     parser.add_argument("--output", type=Path, required=True, help="output directory")
@@ -237,7 +231,6 @@ if __name__ == "__main__":
         lam=args.lam,
         use_part=args.use_part,
         output=args.output,
-        metadata=args.metadata,
         pattern_amplitude=args.pattern_amplitude,
         contact_impedance=args.contact_impedance,
         measurement_gain=args.measurement_gain,
