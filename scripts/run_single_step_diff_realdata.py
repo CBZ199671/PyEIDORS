@@ -56,12 +56,18 @@ def main(
     # 使用公共模块加载数据
     vh, vi = load_csv_measurements(csv, use_part=use_part, measurement_gain=measurement_gain)
 
+    # 激励电流幅度的选择：
+    # - 如果用户指定了 --pattern-amplitude，使用用户值
+    # - 如果提供了 --metadata，从中读取真实激励电流（得到真实物理量纲的 Δσ）
+    # - 否则使用归一化幅度 1.0（Δσ 是相对值，不反映真实物理量纲）
     stim_amplitude = pattern_amplitude
     if stim_amplitude is None and metadata is not None:
         meta = load_metadata(metadata)
         stim_amplitude = float(meta.get("amplitude", 1.0))
+        print(f"[INFO] Using amplitude={stim_amplitude:.2e} from metadata (physical units)")
     if stim_amplitude is None:
         stim_amplitude = 1.0
+        print(f"[INFO] Using normalized amplitude=1.0 (Δσ is relative, not physical units)")
 
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name=mesh_name, n_elec=16)
     pattern_cfg = PatternConfig(
@@ -88,6 +94,7 @@ def main(
         raise RuntimeError(f"数据长度 {dv.shape[0]} 与雅可比行数 {J.shape[0]} 不一致")
 
     # EIDORS 风格的 NOSER 正则化：exponent=0.5
+    # NOSER: R = diag(J'J)^0.5，已经与 J'J 量级匹配
     reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=background_sigma, alpha=1.0, exponent=0.5)
     R = reg.get_regularization_matrix()
 
@@ -212,7 +219,7 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run single-step diff reconstruction on tank CSV data")
     parser.add_argument("--csv", type=Path, required=True, help="4-column CSV: ref_re, ref_im, tgt_re, tgt_im")
-    parser.add_argument("--metadata", type=Path, required=True, help="YAML metadata describing stimulation amplitude, etc.")
+    parser.add_argument("--metadata", type=Path, help="YAML metadata (optional for diff imaging)")
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", dest="use_part", choices=["real", "imag", "mag"], default="real", help="which part to reconstruct")
     parser.add_argument("--output", type=Path, required=True, help="output directory")

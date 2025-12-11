@@ -108,12 +108,22 @@ class NOSERRegularization(BaseRegularization):
         alpha: float = 1.0,
         exponent: float = 0.5,
         floor: float = 1e-12,
+        adaptive_floor: bool = True,
+        floor_fraction: float = 1e-6,
     ):
+        """
+        参数:
+            floor: 绝对 floor 值（当 adaptive_floor=False 时使用）
+            adaptive_floor: 如果为 True，floor 会自适应到 J'J 的量级
+            floor_fraction: 自适应 floor = max(diag(J'J)) × floor_fraction
+        """
         super().__init__(fwd_model)
         self.alpha = alpha
         self.base_conductivity = base_conductivity
         self.exponent = exponent
         self.floor = floor
+        self.adaptive_floor = adaptive_floor
+        self.floor_fraction = floor_fraction
         self._jacobian_calculator = jacobian_calculator
         self._baseline_diag: Optional[np.ndarray] = None
 
@@ -126,8 +136,16 @@ class NOSERRegularization(BaseRegularization):
         jac = self._jacobian_calculator.calculate(sigma_fn)
         # EIDORS: diag_col = sum(J.^2, 1)'  (列向量)
         diag_entries = np.sum(jac * jac, axis=0)
+        
         # 应用 floor 避免数值问题
-        diag_entries = np.maximum(diag_entries, self.floor)
+        if self.adaptive_floor:
+            # 自适应 floor：基于 J'J 最大值的一个小比例
+            adaptive_floor_value = np.max(diag_entries) * self.floor_fraction
+            effective_floor = max(adaptive_floor_value, 1e-100)  # 绝对最小值防止全零
+        else:
+            effective_floor = self.floor
+        
+        diag_entries = np.maximum(diag_entries, effective_floor)
         return diag_entries
 
     def create_matrix(self) -> np.ndarray:
