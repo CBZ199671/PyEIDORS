@@ -20,15 +20,14 @@ import matplotlib.pyplot as plt
 from fenics import Function
 import numpy as np
 
-try:
-    import yaml  # type: ignore
-except ImportError as exc:  # pragma: no cover
-    raise ImportError("运行该脚本需要 PyYAML，请先安装: pip install pyyaml") from exc
-
+import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = REPO_ROOT / "src"
-if str(SRC_PATH) not in __import__("sys").path:
-    __import__("sys").path.insert(0, str(SRC_PATH))
+SCRIPTS_PATH = REPO_ROOT / "scripts"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+if str(SCRIPTS_PATH) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_PATH))
 
 from pyeidors.core_system import EITSystem  # noqa: E402
 from pyeidors.data.measurement_dataset import MeasurementDataset  # noqa: E402
@@ -36,6 +35,9 @@ from pyeidors.data.structures import PatternConfig  # noqa: E402
 from pyeidors.data.structures import EITData, EITImage  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
 from pyeidors.visualization import EITVisualizer  # noqa: E402
+
+# 使用公共模块
+from common.io_utils import load_metadata, load_single_frame
 
 
 def parse_args() -> argparse.Namespace:
@@ -46,13 +48,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--csv",
         type=Path,
-        default=REPO_ROOT / "data" / "measurements" / "tank" / "2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv",
+        required=True,
         help="包含 4 列 (vh_real, vh_imag, vi_real, vi_imag) 的测量 CSV",
     )
     parser.add_argument(
         "--metadata",
         type=Path,
-        default=REPO_ROOT / "data" / "measurements" / "tank" / "2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml",
+        required=True,
         help="与 CSV 对应的 YAML 元数据",
     )
     parser.add_argument(
@@ -64,7 +66,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=REPO_ROOT / "results" / "gn_absolute_eidors_style",
+        required=True,
         help="结果输出目录",
     )
     parser.add_argument(
@@ -113,24 +115,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_metadata(path: Path) -> dict:
-    with path.open("r", encoding="utf-8") as fh:
-        if path.suffix.lower() in {".yaml", ".yml"}:
-            return yaml.safe_load(fh)
-        if path.suffix.lower() == ".json":
-            return json.load(fh)
-        raise ValueError("metadata 仅支持 YAML/JSON")
-
-
 def load_measurement_vector(csv_path: Path, col_idx: int, measurement_gain: float = 1.0) -> np.ndarray:
-    raw = np.loadtxt(csv_path, delimiter=",")
-    if raw.ndim != 2 or raw.shape[1] <= col_idx:
-        raise ValueError(f"CSV 形状 {raw.shape} 无法提取列 {col_idx}")
-    # 形状: (n_meas, ) -> (1, n_meas) 以便 MeasurementDataset 接收
-    frame = raw[:, col_idx].astype(float)
-    # 除以测量增益得到实际电压
-    if measurement_gain != 1.0:
-        frame = frame / measurement_gain
+    """从 CSV 加载单帧数据并转换为 (1, n_meas) 形状。"""
+    frame = load_single_frame(csv_path, col_idx, measurement_gain)
     return frame.reshape(1, -1)
 
 

@@ -15,13 +15,15 @@ from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
-import yaml
 
 import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = REPO_ROOT / "src"
+SCRIPTS_PATH = REPO_ROOT / "scripts"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
+if str(SCRIPTS_PATH) not in sys.path:
+    sys.path.insert(0, str(SCRIPTS_PATH))
 
 from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
@@ -30,41 +32,9 @@ from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobia
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
 
-
-def load_csv(csv_path: Path, use_part: str = "real") -> tuple[np.ndarray, np.ndarray]:
-    """加载 4 列 CSV: ref_re, ref_im, tgt_re, tgt_im."""
-    arr = np.loadtxt(csv_path, delimiter=",")
-    if arr.shape[1] < 4:
-        raise ValueError("期望 4 列: ref_re, ref_im, tgt_re, tgt_im")
-    ref_re, ref_im, tgt_re, tgt_im = arr.T
-    if use_part == "real":
-        return ref_re, tgt_re
-    elif use_part == "imag":
-        return ref_im, tgt_im
-    elif use_part == "mag":
-        return np.abs(ref_re + 1j * ref_im), np.abs(tgt_re + 1j * tgt_im)
-    else:
-        raise ValueError(f"未知 use_part={use_part}")
-
-
-def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
-    node_vals = np.zeros(mesh.num_vertices())
-    counts = np.zeros(mesh.num_vertices())
-    for ci, cell in enumerate(mesh.cells()):
-        for v in cell:
-            node_vals[v] += cell_values[ci]
-            counts[v] += 1
-    counts[counts == 0] = 1
-    node_vals /= counts
-    return node_vals
-
-
-def load_metadata(metadata_path: Path) -> dict[str, float | int | str]:
-    with metadata_path.open("r", encoding="utf-8") as f:
-        data = yaml.safe_load(f)
-    if not isinstance(data, dict):
-        raise ValueError(f"metadata {metadata_path} 不是 YAML 字典")
-    return data
+# 使用公共模块
+from common.io_utils import load_csv_measurements, load_metadata
+from common.mesh_utils import cell_to_node
 
 
 def main(
@@ -83,11 +53,8 @@ def main(
     step_size_maxiter: int = 50,
     background_sigma: float = 1.0,
 ):
-    vh, vi = load_csv(csv, use_part=use_part)
-    if measurement_gain <= 0:
-        raise ValueError("measurement_gain must be positive")
-    vh = vh / measurement_gain
-    vi = vi / measurement_gain
+    # 使用公共模块加载数据
+    vh, vi = load_csv_measurements(csv, use_part=use_part, measurement_gain=measurement_gain)
 
     stim_amplitude = pattern_amplitude
     if stim_amplitude is None and metadata is not None:
@@ -247,7 +214,7 @@ if __name__ == "__main__":
     parser.add_argument("--csv", type=Path, required=True, help="4-column CSV: ref_re, ref_im, tgt_re, tgt_im")
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", dest="use_part", choices=["real", "imag", "mag"], default="real", help="which part to reconstruct")
-    parser.add_argument("--output", type=Path, default=Path("results/tank/single_step_cli"), help="output directory")
+    parser.add_argument("--output", type=Path, required=True, help="output directory")
     parser.add_argument("--metadata", type=Path, help="YAML metadata describing stimulation amplitude, etc.")
     parser.add_argument("--pattern-amplitude", type=float, default=None, help="override stimulation amplitude (A)")
     parser.add_argument("--contact-impedance", type=float, default=1e-6, help="contact impedance (Ω·m²)")
