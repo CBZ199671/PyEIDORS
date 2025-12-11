@@ -9,6 +9,7 @@ import logging
 import shlex
 import sys
 from pathlib import Path
+import dataclasses
 from typing import Optional, Sequence, Dict, Any, Tuple
 
 import numpy as np
@@ -28,6 +29,7 @@ if str(SRC_PATH) not in __import__("sys").path:
 from pyeidors.core_system import EITSystem
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.data.measurement_dataset import MeasurementDataset
+from pyeidors.electrodes.patterns import StimMeasPatternManager
 from pyeidors.visualization import create_visualizer
 
 LOGGER = logging.getLogger("absolute_reconstruction")
@@ -81,6 +83,8 @@ def apply_mode_preset(reconstructor, mode: str) -> None:
         reconstructor.negate_jacobian = preset.get("negate_jacobian", True)
     if hasattr(reconstructor, "max_step"):
         reconstructor.max_step = preset.get("max_step", 1.0)
+    if hasattr(reconstructor, "min_step"):
+        reconstructor.min_step = preset.get("min_step", 0.1)
 
 
 def align_measurement_polarity(
@@ -207,12 +211,6 @@ def parse_args() -> argparse.Namespace:
         help="线搜索最小步长下限（避免步长被压到0，默认0.1）",
     )
     parser.add_argument(
-        "--scaling-factor",
-        type=float,
-        default=1.0,
-        help="全链路缩放因子k，应用于预测和雅可比，同时λ×k^2，便于与测量量纲对齐",
-    )
-    parser.add_argument(
         "--step-schedule",
         type=float,
         nargs="+",
@@ -269,17 +267,6 @@ def parse_args() -> argparse.Namespace:
         help="自动缩放系数的上限，避免过度缩小/放大",
     )
     parser.add_argument(
-        "--auto-model-scale",
-        action="store_true",
-        help="自动估计模型输出缩放系数 (scale*pred - meas)，用于提升模型幅值匹配测量",
-    )
-    parser.add_argument(
-        "--model-scale",
-        type=float,
-        default=1.0,
-        help="手工设置模型输出缩放系数（>1 放大模型预测），与 auto-model-scale 互斥",
-    )
-    parser.add_argument(
         "--fit-scale-baseline",
         action="store_true",
         help="使用均匀场与目标帧的裁剪均值对齐测量尺度（单一缩放源，替代 auto_measurement_scale）",
@@ -300,6 +287,29 @@ def parse_args() -> argparse.Namespace:
         default="INFO",
         choices=["DEBUG", "INFO", "WARNING", "ERROR"],
         help="日志级别",
+    )
+    parser.add_argument(
+        "--convergence-tol",
+        type=float,
+        default=1e-4,
+        help="收敛判据：导电率相对变化低于该阈值则提前停止",
+    )
+    parser.add_argument(
+        "--min-iterations",
+        type=int,
+        default=1,
+        help="至少执行的迭代步数（防止过早收敛）",
+    )
+    parser.add_argument(
+        "--stim-scale",
+        type=float,
+        default=1.0,
+        help="激励电流缩放因子（放大/缩小前向模型的激励电流），用于拉齐模型与实测的量纲",
+    )
+    parser.add_argument(
+        "--auto-stim-scale",
+        action="store_true",
+        help="自动估计激励电流缩放，使均匀场预测幅值与实测目标帧量纲对齐（固定桶/电极尺寸，只调电流幅值）",
     )
 
     return parser.parse_args()
@@ -413,6 +423,9 @@ def save_outputs(result, output_dir: Path, visualizer) -> None:
     mesh = result.conductivity_image.fwd_model.mesh
 
     display_values = result.metadata.get("display_values", result.conductivity)
+    rescale_factor = float(result.metadata.get("conductivity_rescale_factor", 1.0))
+    if rescale_factor != 0 and abs(rescale_factor - 1.0) > 1e-9:
+        display_values = display_values / rescale_factor
     fig_cond = visualizer.plot_conductivity(
         mesh,
         display_values,
@@ -428,11 +441,6 @@ def save_outputs(result, output_dir: Path, visualizer) -> None:
         result.residual,
         result.metadata,
     )
-    # 如果没有校准尺度但存在模型缩放，则仅对预测侧应用 model_scale，保持残差一致
-    model_scale_meta = result.metadata.get("model_scale", 1.0)
-    if scale is None and abs(model_scale_meta - 1.0) > 1e-9:
-        simulated_plot = simulated_plot * model_scale_meta
-        residual_plot = simulated_plot - measured_plot
 
     indices = np.arange(len(measured_plot))
     fig, ax = plt.subplots(figsize=visualizer.figsize)
@@ -483,7 +491,6 @@ def main() -> None:
         args.polarity_mode = "none"
 
     dataset = load_dataset(args)
-    model_scale = args.model_scale
     if args.measurement_scale != 1.0:
         LOGGER.info("应用 measurement_scale=%.3g 缩放测量数据", args.measurement_scale)
         dataset.measurements = dataset.measurements * float(args.measurement_scale)
@@ -493,18 +500,69 @@ def main() -> None:
 
     LOGGER.info("构建 EITSystem 并初始化")
     contact_impedance = np.full(dataset.n_elec, float(args.contact_impedance))
-    eit_system = EITSystem(
-        n_elec=dataset.n_elec,
-        pattern_config=dataset.pattern_config,
-        contact_impedance=contact_impedance,
-    )
 
+    # 预加载网格以避免重复加载
     mesh = load_or_create_mesh(
         mesh_dir=str(args.mesh_dir),
         n_elec=dataset.n_elec,
         refinement=max(args.refinement, 4),
         radius=args.mesh_radius,
         electrode_coverage=args.electrode_coverage,
+    )
+
+    stim_scale_applied = float(args.stim_scale)
+    stim_scale_source = "manual"
+
+    if args.auto_stim_scale and abs(args.stim_scale - 1.0) > 1e-9:
+        LOGGER.warning("检测到 --stim-scale 已设置，跳过 --auto-stim-scale 以避免冲突。")
+        args.auto_stim_scale = False
+
+    # 自动估计激励缩放：用均匀场预测幅值与目标帧实测对齐（只调电流）
+    if args.auto_stim_scale:
+        temp_system = EITSystem(
+            n_elec=dataset.n_elec,
+            pattern_config=dataset.pattern_config,
+            contact_impedance=contact_impedance,
+        )
+        temp_system.setup(mesh=mesh)
+        baseline_temp = temp_system.forward_solve(temp_system.create_homogeneous_image())
+        meas_abs = np.abs(dataset.measurements[args.target_frame])
+        pred_abs = np.abs(baseline_temp.meas)
+        meas_mean = trimmed_mean(meas_abs, args.auto_trim_percent)
+        pred_mean = trimmed_mean(pred_abs, args.auto_trim_percent)
+        if pred_mean > 0:
+            stim_scale_applied = float(np.clip(meas_mean / pred_mean, args.auto_scale_min, args.auto_scale_max))
+            stim_scale_source = "auto"
+            LOGGER.info(
+                "auto_stim_scale: meas_mean=%.3e, pred_mean=%.3e, stim_scale=%.3g",
+                meas_mean,
+                pred_mean,
+                stim_scale_applied,
+            )
+        else:
+            LOGGER.warning("auto_stim_scale 失败（pred_mean=0），使用 1.0")
+            stim_scale_applied = 1.0
+
+    # 可选：放大激励电流以对齐模型/测量量纲
+    if stim_scale_applied != 1.0:
+        old_amp = float(dataset.pattern_config.amplitude)
+        new_amp = old_amp * float(stim_scale_applied)
+        LOGGER.info(
+            "%s 激励缩放 stim_scale=%.3g: amplitude %.3e -> %.3e",
+            "应用" if stim_scale_source == "manual" else "自动估计",
+            stim_scale_applied,
+            old_amp,
+            new_amp,
+        )
+        dataset.pattern_config = dataclasses.replace(dataset.pattern_config, amplitude=new_amp)
+        # 重新生成 stim_matrix 以反映新的激励电流
+        pattern_manager = StimMeasPatternManager(dataset.pattern_config)
+        dataset.stim_matrix = pattern_manager.stim_matrix.copy()
+
+    eit_system = EITSystem(
+        n_elec=dataset.n_elec,
+        pattern_config=dataset.pattern_config,
+        contact_impedance=contact_impedance,
     )
     eit_system.setup(mesh=mesh)
 
@@ -530,9 +588,6 @@ def main() -> None:
     if args.step_schedule:
         LOGGER.info("使用自定义步长序列 (跳过线搜索): %s", args.step_schedule)
         eit_system.reconstructor.step_schedule = list(args.step_schedule)
-    if args.scaling_factor != 1.0 and hasattr(eit_system.reconstructor, "scaling_factor"):
-        LOGGER.info("设置全链路缩放因子 k=%.3g (同步缩放预测/雅可比，λ按k^2放大)", args.scaling_factor)
-        eit_system.reconstructor.scaling_factor = float(args.scaling_factor)
     if args.regularization_param is not None:
         LOGGER.info("设置正则化参数 λ=%.3e", args.regularization_param)
         eit_system.reconstructor.regularization_param = float(args.regularization_param)
@@ -540,10 +595,10 @@ def main() -> None:
         LOGGER.info("覆盖测量权重策略: %s", args.weight_strategy)
         eit_system.reconstructor.measurement_weight_strategy = args.weight_strategy
         eit_system.reconstructor.use_measurement_weights = args.weight_strategy != "none"
-    # 模型输出缩放（scale*pred - meas），用于拉升模型幅值
-    if hasattr(eit_system.reconstructor, "model_scale") and model_scale != 1.0:
-        LOGGER.info("设置模型输出缩放 model_scale=%.3g", model_scale)
-        eit_system.reconstructor.model_scale = model_scale
+    if hasattr(eit_system.reconstructor, "convergence_tol"):
+        eit_system.reconstructor.convergence_tol = float(args.convergence_tol)
+    if hasattr(eit_system.reconstructor, "min_iterations"):
+        eit_system.reconstructor.min_iterations = int(args.min_iterations)
 
     baseline_image = eit_system.create_homogeneous_image()
     baseline_data = eit_system.forward_solve(baseline_image)
@@ -552,8 +607,8 @@ def main() -> None:
         dataset, baseline_data.meas, args.polarity_mode, LOGGER
     )
 
-    # 单一缩放源：优先 fit_scale_baseline，其次 auto_measurement_scale，互斥于手工 measurement_scale !=1 或 auto_model_scale
-    if args.fit_scale_baseline and args.measurement_scale == 1.0 and not args.auto_model_scale:
+    # 单一缩放源：优先 fit_scale_baseline，其次 auto_measurement_scale
+    if args.fit_scale_baseline and args.measurement_scale == 1.0:
         meas = np.abs(dataset.measurements[args.target_frame])
         pred = np.abs(baseline_data.meas)
         meas_mean = trimmed_mean(meas, args.auto_trim_percent)
@@ -567,9 +622,9 @@ def main() -> None:
         else:
             LOGGER.warning("fit_scale_baseline 失败（均值为零），跳过。")
     elif args.auto_measurement_scale:
-        if args.measurement_scale != 1.0 or args.auto_model_scale:
+        if args.measurement_scale != 1.0:
             LOGGER.warning(
-                "检测到 measurement_scale 或 auto_model_scale 已设置，跳过 auto_measurement_scale 以避免多重缩放"
+                "检测到 measurement_scale 已设置，跳过 auto_measurement_scale 以避免多重缩放"
             )
         else:
             meas = np.abs(dataset.measurements[args.target_frame])
@@ -588,28 +643,6 @@ def main() -> None:
                 dataset.metadata["auto_measurement_scale"] = auto_scale
             else:
                 LOGGER.warning("自动测量缩放失败（均值为零），跳过。")
-
-    # 自动/手工模型输出缩放：scale*pred - meas，提升模型幅值
-    if args.auto_model_scale:
-        trim = max(0.0, min(50.0, float(args.auto_trim_percent)))
-        meas_abs = np.abs(dataset.measurements[args.target_frame])
-        pred_abs = np.abs(baseline_data.meas)
-        if trim > 0:
-            low, high = np.percentile(meas_abs, [trim, 100 - trim])
-            mask_meas = (meas_abs >= low) & (meas_abs <= high)
-            low_p, high_p = np.percentile(pred_abs, [trim, 100 - trim])
-            mask_pred = (pred_abs >= low_p) & (pred_abs <= high_p)
-        else:
-            mask_meas = np.ones_like(meas_abs, dtype=bool)
-            mask_pred = np.ones_like(pred_abs, dtype=bool)
-        meas_mean = meas_abs[mask_meas].mean() if mask_meas.any() else 0.0
-        pred_mean = pred_abs[mask_pred].mean() if mask_pred.any() else 0.0
-        if pred_mean > 0 and meas_mean > 0:
-            model_scale = meas_mean / pred_mean
-            model_scale = float(np.clip(model_scale, args.auto_scale_min, args.auto_scale_max))
-            LOGGER.info("自动模型缩放系数 auto_model_scale=%.3g (trim=%.1f%%)", model_scale, trim)
-        else:
-            LOGGER.warning("自动模型缩放失败（均值为零），使用1.0")
 
     calibration_metadata: Dict[str, Any] = {}
 
@@ -633,8 +666,10 @@ def main() -> None:
         metadata["mode"] = args.mode
     if args.weight_strategy:
         metadata["weight_strategy"] = args.weight_strategy
-    if model_scale != 1.0:
-        metadata["model_scale"] = model_scale
+    metadata["stim_scale"] = stim_scale_applied
+    metadata["stim_scale_source"] = stim_scale_source
+    # 导电率物理值需除以激励放大系数
+    metadata["conductivity_rescale_factor"] = stim_scale_applied if stim_scale_applied != 0 else 1.0
     metadata["polarity_mode"] = args.polarity_mode
     if flipped_frames:
         metadata["flipped_frames"] = flipped_frames
@@ -644,6 +679,16 @@ def main() -> None:
         baseline_image=baseline_image,
         metadata=metadata,
     )
+
+    # 将导电率除以激励缩放因子，使结果回到采集等效量纲
+    if stim_scale_applied != 1.0:
+        cond_scale = stim_scale_applied
+        if hasattr(result, "conductivity"):
+            result.conductivity = np.asarray(result.conductivity) / cond_scale
+        if hasattr(result, "conductivity_image") and hasattr(result.conductivity_image, "elem_data"):
+            result.conductivity_image.elem_data = result.conductivity_image.elem_data / cond_scale
+        result.metadata["conductivity_scaled_by"] = 1.0 / cond_scale
+        result.metadata["stim_scale_used"] = stim_scale_applied
 
     dataset_name = args.csv.stem if args.csv else args.npz.stem
     if args.mode:

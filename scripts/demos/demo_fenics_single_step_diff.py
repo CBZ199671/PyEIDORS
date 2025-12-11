@@ -111,8 +111,8 @@ def main() -> None:
     J = jac_calc.calculate(sigma_fun_bg, method="efficient")  # shape: n_meas x n_elem
     # EIDORS 符号约定已内嵌在 EidorsStyleAdjointJacobian 中，无需额外取反。
 
-    # W = I (未加权)，先验用 NOSER
-    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0)
+    # W = I (未加权)，先验用 NOSER，exponent=0.5 (EIDORS 默认)
+    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0, exponent=0.5)
     R = reg.get_regularization_matrix()  # already numpy, shape (n_elem, n_elem)
     lam = 1e-2  # 你可调整
 

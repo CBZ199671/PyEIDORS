@@ -87,7 +87,18 @@ class TotalVariationRegularization(BaseRegularization):
 
 
 class NOSERRegularization(BaseRegularization):
-    """NOSER正则化 - 对角矩阵基于 J^T J 的对角线"""
+    """NOSER正则化 - 对角矩阵基于 J^T J 的对角线
+    
+    EIDORS 风格实现: Reg = diag(sum(J.^2, 1)).^exponent
+    
+    参数:
+        fwd_model: 前向模型
+        jacobian_calculator: 雅可比计算器
+        base_conductivity: 用于计算基线雅可比的导电率
+        alpha: 正则化系数
+        exponent: NOSER 指数 (EIDORS 默认为 0.5)
+        floor: 对角线元素的最小值，避免数值问题
+    """
 
     def __init__(
         self,
@@ -95,10 +106,14 @@ class NOSERRegularization(BaseRegularization):
         jacobian_calculator: DirectJacobianCalculator,
         base_conductivity: float = 1.0,
         alpha: float = 1.0,
+        exponent: float = 0.5,
+        floor: float = 1e-12,
     ):
         super().__init__(fwd_model)
         self.alpha = alpha
         self.base_conductivity = base_conductivity
+        self.exponent = exponent
+        self.floor = floor
         self._jacobian_calculator = jacobian_calculator
         self._baseline_diag: Optional[np.ndarray] = None
 
@@ -109,11 +124,19 @@ class NOSERRegularization(BaseRegularization):
 
         # DirectJacobianCalculator expects a Function
         jac = self._jacobian_calculator.calculate(sigma_fn)
+        # EIDORS: diag_col = sum(J.^2, 1)'  (列向量)
         diag_entries = np.sum(jac * jac, axis=0)
-        diag_entries = np.maximum(diag_entries, 1e-12)
+        # 应用 floor 避免数值问题
+        diag_entries = np.maximum(diag_entries, self.floor)
         return diag_entries
 
     def create_matrix(self) -> np.ndarray:
+        """创建 NOSER 正则化矩阵
+        
+        EIDORS: Reg = spdiags(diag_col.^exponent, 0, n, n)
+        """
         if self._baseline_diag is None:
             self._baseline_diag = self._compute_baseline_diag()
-        return self.alpha * np.diag(self._baseline_diag)
+        # 应用 EIDORS 风格的 exponent
+        scaled_diag = self._baseline_diag ** self.exponent
+        return self.alpha * np.diag(scaled_diag)

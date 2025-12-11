@@ -41,6 +41,8 @@ class EITSystem:
         base_conductivity: float = 1.0,
         regularization_type: str = "noser",
         regularization_alpha: float = 1.0,
+        noser_exponent: float = 0.5,
+        noser_floor: float = 1e-12,
         **kwargs,
     ):
         """
@@ -51,6 +53,11 @@ class EITSystem:
             pattern_config: 激励测量模式配置
             mesh_config: 网格配置
             contact_impedance: 接触阻抗
+            base_conductivity: 基线导电率
+            regularization_type: 正则化类型 ("noser", "tikhonov", "smoothness")
+            regularization_alpha: 正则化系数
+            noser_exponent: NOSER 正则化的指数 (EIDORS 默认 0.5)
+            noser_floor: NOSER 对角线元素的最小值
             **kwargs: 其他配置参数
         """
         self.n_elec = n_elec
@@ -77,6 +84,8 @@ class EITSystem:
         self.base_conductivity = base_conductivity
         self.regularization_type = regularization_type.lower()
         self.regularization_alpha = regularization_alpha
+        self.noser_exponent = noser_exponent
+        self.noser_floor = noser_floor
         
         # 初始化组件
         self.mesh = None
@@ -129,6 +138,8 @@ class EITSystem:
                 jacobian_calculator,
                 base_conductivity=self.base_conductivity,
                 alpha=self.regularization_alpha,
+                exponent=self.noser_exponent,
+                floor=self.noser_floor,
             )
         elif self.regularization_type == "tikhonov":
             regularization = TikhonovRegularization(self.fwd_model, alpha=self.regularization_alpha)

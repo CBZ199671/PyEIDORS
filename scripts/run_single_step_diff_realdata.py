@@ -81,6 +81,7 @@ def main(
     step_size_min: float = 1e-3,
     step_size_max: float = 1e1,
     step_size_maxiter: int = 50,
+    background_sigma: float = 1.0,
 ):
     vh, vi = load_csv(csv, use_part=use_part)
     if measurement_gain <= 0:
@@ -108,8 +109,9 @@ def main(
     fwd_model = EITForwardModel(n_elec=16, pattern_config=pattern_cfg, z=z_contact, mesh=mesh)
 
     n_elem = len(fwd_model.V_sigma.dofmap().dofs())
-    sigma_bg = np.ones(n_elem)
+    sigma_bg = np.full(n_elem, background_sigma)
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
+    print(f"Background conductivity: {background_sigma}")
 
     jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
     J = jac_calc.calculate_from_image(img_bg)
@@ -118,7 +120,8 @@ def main(
     if dv.shape[0] != J.shape[0]:
         raise RuntimeError(f"数据长度 {dv.shape[0]} 与雅可比行数 {J.shape[0]} 不一致")
 
-    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0)
+    # EIDORS 风格的 NOSER 正则化：exponent=0.5
+    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=background_sigma, alpha=1.0, exponent=0.5)
     R = reg.get_regularization_matrix()
 
     A = J.T @ J + lam * R
@@ -174,6 +177,9 @@ def main(
     plt.close(fig)
 
     # 差分对比
+    # 计算相关系数
+    corr_diff = np.corrcoef(meas_diff, pred_diff)[0, 1]
+    
     fig = plt.figure(figsize=(12, 5))
     idx = np.arange(len(meas_diff))
     ax = fig.add_subplot(1, 2, 1)
@@ -185,14 +191,15 @@ def main(
     ax.set_ylabel("Voltage")
     ax.set_title("Diff comparison")
     ax2 = fig.add_subplot(1, 2, 2)
-    ax2.scatter(meas_diff, pred_diff, s=10, alpha=0.7)
+    ax2.scatter(meas_diff, pred_diff, s=15, alpha=0.7, c='steelblue')
     vmin = min(meas_diff.min(), pred_diff.min())
     vmax = max(meas_diff.max(), pred_diff.max())
-    ax2.plot([vmin, vmax], [vmin, vmax], "k--")
+    ax2.plot([vmin, vmax], [vmin, vmax], "k--", lw=1.5)
     ax2.set_xlabel("Measured diff")
     ax2.set_ylabel("Predicted diff")
     ax2.grid(alpha=0.3)
-    ax2.set_title("Scatter")
+    ax2.set_title(f"Scatter (r = {corr_diff:.4f})")
+    ax2.set_aspect('equal', adjustable='box')
     fig.tight_layout()
     fig.savefig(output / "diff_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
@@ -249,6 +256,7 @@ if __name__ == "__main__":
     parser.add_argument("--step-size-min", type=float, default=1e-3, help="Lower bound for step-size calibration")
     parser.add_argument("--step-size-max", type=float, default=1e1, help="Upper bound for step-size calibration")
     parser.add_argument("--step-size-maxiter", type=int, default=50, help="Max iterations for bounded optimizer")
+    parser.add_argument("--background-sigma", type=float, default=1.0, help="Background conductivity (S/m)")
     args = parser.parse_args()
     main(
         csv=args.csv,
@@ -263,4 +271,5 @@ if __name__ == "__main__":
         step_size_min=args.step_size_min,
         step_size_max=args.step_size_max,
         step_size_maxiter=args.step_size_maxiter,
+        background_sigma=args.background_sigma,
     )
