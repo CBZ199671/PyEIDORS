@@ -481,11 +481,15 @@ class ModularGaussNewtonReconstructor:
         weight_vector=None,
         prior_torch=None,
         lambda_eff=None,
+        retry: int = 0,
     ):
-        """EIDORS 风格的线搜索 (line_search_onm2 简化版)
+        """EIDORS 风格的线搜索 (line_search_onm2 完整移植)
         
-        EIDORS 使用多点采样 + 多项式拟合来寻找最优步长。
-        这里实现一个简化版本：多点采样 + 选择最小残差点。
+        完整实现 EIDORS 的线搜索逻辑，包括：
+        1. 数值稳定性检查 (calc_perturb)
+        2. 多点采样 + 选择最小残差
+        3. 自适应调整搜索范围
+        4. 递归重试机制 (最多5次)
         
         目标函数: residual = 0.5*dv'*W*dv + 0.5*de'*(λ²RtR)*de
         
@@ -497,29 +501,28 @@ class ModularGaussNewtonReconstructor:
             weight_vector: 测量权重 (sqrt(W))
             prior_torch: 先验导电率 (用于计算 de)
             lambda_eff: 有效正则化参数 λ²
+            retry: 当前重试次数 (内部使用)
         """
         delta_sigma_np = delta_sigma_torch.cpu().numpy()
         current_residual = float(current_weighted_residual)
+        x = sigma_current.vector()[:].copy()
         
-        # EIDORS 风格的采样点 (对数分布)
-        # 默认: [0, 1/16, 1/8, 1/4, 1/2, 1] * max_step
+        # 初始化 perturb (EIDORS 默认采样点)
         if not hasattr(self, '_line_search_perturb') or self._line_search_perturb is None:
             base_perturb = np.array([0, 1/16, 1/8, 1/4, 1/2, 1])
             self._line_search_perturb = base_perturb * self.max_step
         
-        perturb = self._line_search_perturb.copy()
+        # 计算数值稳定的搜索范围 (类似 EIDORS calc_perturb)
+        perturb = self._calc_perturb_limits(x, delta_sigma_np)
         
-        # 确保 perturb[0] = 0
-        if perturb[0] != 0:
-            perturb = np.concatenate([[0], perturb])
-        
-        x = sigma_current.vector()[:].copy()
+        # 多点采样评估目标函数
         mlist = np.full(len(perturb), np.nan)
+        dv0 = None  # 保存 alpha=0 时的 dv，用于后续
         
         for i, alpha in enumerate(perturb):
             if i == 0:
                 # alpha=0 时直接使用当前残差
-                mlist[i] = current_residual ** 2 * 0.5  # 转换为目标函数值
+                mlist[i] = current_residual ** 2 * 0.5
                 continue
             
             # 计算新的导电率
@@ -558,53 +561,188 @@ class ModularGaussNewtonReconstructor:
             # 完整目标函数
             total_objective = meas_misfit + prior_misfit
             
-            # 检查数值有效性
+            # 检查数值有效性 (EIDORS: NaN/Inf -> +Inf)
             if np.isnan(total_objective) or np.isinf(total_objective):
                 mlist[i] = np.inf
             else:
                 mlist[i] = total_objective
             
-            # 早停：如果目标函数暴涨，跳过后续点
+            # 早停：如果目标函数暴涨，跳过后续点 (EIDORS 风格)
             if mlist[i] / mlist[0] > 1e10:
                 break
         
-        # 选择最小值
+        # 选择最优步长
         valid_idx = np.where(np.isfinite(mlist))[0]
         if len(valid_idx) == 0:
-            # 所有点都无效，返回最小步长
-            chosen_step = self.min_step
-            best_objective = current_residual ** 2 * 0.5
+            chosen_step = 0.0
+            best_objective = mlist[0] if np.isfinite(mlist[0]) else np.inf
         else:
             best_idx = valid_idx[np.argmin(mlist[valid_idx])]
             chosen_step = perturb[best_idx]
             best_objective = mlist[best_idx]
         
-        # 如果最优是 alpha=0（没有改进），尝试更小的步长
-        if chosen_step == 0 and len(valid_idx) > 1:
-            # 缩小搜索范围
-            self._line_search_perturb = self._line_search_perturb / 10
-            if self._line_search_perturb[-1] < self.min_step:
-                self._line_search_perturb = None  # 重置
-            chosen_step = self.min_step
-        elif chosen_step >= perturb[-1] - 1e-10:
-            # 最优在边界，可能需要扩大搜索范围
-            if perturb[-1] < 1.0 - 1e-10:
-                self._line_search_perturb = np.minimum(self._line_search_perturb * 2, 1.0)
-        else:
-            # 以最优点为中心重新调整搜索范围
-            if chosen_step > 0:
-                scale = chosen_step / perturb[-1] * 2
-                self._line_search_perturb = np.minimum(self._line_search_perturb * scale, 1.0)
+        # EIDORS 风格的 perturb 自适应调整
+        self._update_perturb_eidors_style(chosen_step, perturb, mlist, valid_idx)
         
         if self.verbose:
             valid_results = [(perturb[i], mlist[i]) for i in valid_idx if i > 0]
             hist_str = "; ".join([f"{s:.3e}:{r:.3e}" for s, r in valid_results[:6]])
             print(
-                f"[DEBUG line_search] α:[obj] = {hist_str} | "
+                f"[DEBUG line_search] retry={retry}, α:[obj] = {hist_str} | "
                 f"best α={chosen_step:.3e}, obj={best_objective:.3e}, obj@0={mlist[0]:.3e}"
             )
         
-        return float(max(chosen_step, self.min_step))
+        # EIDORS 风格递归重试：如果 alpha=0 是最优，尝试新的 perturb
+        if chosen_step == 0 and retry < 5:
+            if self.verbose:
+                print(f"    [line_search] retry#{retry+1} (alpha=0 selected, trying new perturbations)")
+            return self._line_search_torch(
+                sigma_current, delta_sigma_torch, meas_target_torch,
+                current_weighted_residual, weight_vector, prior_torch, lambda_eff,
+                retry=retry + 1
+            )
+        
+        # 返回步长 (允许返回 0，由调用方决定如何处理)
+        return float(chosen_step)
+    
+    def _calc_perturb_limits(self, x: np.ndarray, dx: np.ndarray) -> np.ndarray:
+        """计算数值稳定的搜索范围 (类似 EIDORS calc_perturb)
+        
+        检查浮点数精度限制，避免数值溢出。
+        
+        参数:
+            x: 当前导电率值
+            dx: 搜索方向
+        
+        返回:
+            perturb: 经过数值稳定性调整的采样点数组
+        """
+        perturb = self._line_search_perturb.copy()
+        
+        # 确保 perturb[0] = 0
+        if perturb[0] != 0:
+            perturb = np.concatenate([[0], perturb])
+        
+        # 计算 alpha 的数值稳定上限
+        # 避免 x + alpha*dx 溢出或变为非法值
+        eps_machine = np.finfo(np.float64).eps
+        
+        # 上限: 防止溢出到 inf
+        realmax = np.finfo(np.float64).max / 2
+        with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
+            # (realmax - x) / dx for dx > 0
+            au_pos = (realmax - x) / dx
+            au_pos[dx <= 0] = np.inf
+            au_pos[~np.isfinite(au_pos)] = np.inf
+            
+            # (-realmax - x) / dx for dx < 0
+            au_neg = (-realmax - x) / dx
+            au_neg[dx >= 0] = np.inf
+            au_neg[~np.isfinite(au_neg)] = np.inf
+            
+            max_alpha = min(np.min(au_pos), np.min(au_neg))
+        
+        # 下限: 防止步长太小以至于没有变化
+        with np.errstate(divide='ignore', invalid='ignore'):
+            al = eps_machine * np.abs(x) / np.abs(dx)
+            al[~np.isfinite(al)] = 0
+            min_alpha = np.max(al) if len(al) > 0 else 0
+        
+        # 限制 max_alpha 不超过 1.0 (完整牛顿步)
+        max_alpha = min(max_alpha, 1.0)
+        
+        # 如果 perturb 超出范围，在对数空间重新缩放 (EIDORS 风格)
+        if perturb[-1] > max_alpha or (len(perturb) > 1 and perturb[1] < min_alpha):
+            # 过滤掉 0 和太小的值
+            p_nonzero = perturb[perturb > eps_machine]
+            if len(p_nonzero) == 0:
+                # fallback
+                return np.array([0, max_alpha / 4, max_alpha / 2, max_alpha])
+            
+            # 在对数空间重新缩放
+            log_p = np.log10(p_nonzero)
+            log_max = np.log10(max_alpha) if max_alpha > eps_machine else -10
+            log_min = np.log10(min_alpha) if min_alpha > eps_machine else -100
+            
+            # 缩放到有效范围
+            p_range = log_p[-1] - log_p[0] if len(log_p) > 1 else 1
+            target_range = log_max - log_min
+            
+            if p_range > target_range and target_range > 0:
+                log_p = log_p * (target_range / p_range)
+            
+            if log_p[-1] > log_max:
+                log_p = log_p - (log_p[-1] - log_max)
+            elif log_p[0] < log_min:
+                log_p = log_p + (log_min - log_p[0])
+            
+            perturb = np.concatenate([[0], 10 ** log_p])
+            
+            if self.verbose:
+                print(f"    [calc_perturb] alpha range adjusted: min={min_alpha:.3e}, max={max_alpha:.3e}")
+                print(f"    [calc_perturb] perturb = {perturb}")
+        
+        return perturb
+    
+    def _update_perturb_eidors_style(
+        self, chosen_step: float, perturb: np.ndarray, 
+        mlist: np.ndarray, valid_idx: np.ndarray
+    ) -> None:
+        """EIDORS 风格的 perturb 自适应调整
+        
+        根据本次线搜索结果调整下次的搜索范围。
+        """
+        goodi = valid_idx
+        dtol = self.convergence_tol  # 用作判断阈值
+        
+        if chosen_step == 0:  # bad step: alpha=0 is best
+            if len(goodi) > 1 and mlist[0] * 1.05 < mlist[goodi[-1]]:
+                # 解发散了，缩小搜索范围
+                if self.verbose:
+                    print("      [perturb] reducing /10: solution diverged")
+                self._line_search_perturb = self._line_search_perturb / 10
+            elif perturb[-1] > 1.0 - 1e-9:
+                # 已经在 alpha=1 附近，放弃
+                if self.verbose:
+                    print("      [perturb] already at alpha=1.0, giving up expansion")
+            elif perturb[-1] * 10 > 1.0 - 1e-9:
+                # 扩大但限制在 1.0
+                if self.verbose:
+                    print("      [perturb] expanding (limit alpha=1.0)")
+                self._line_search_perturb = self._line_search_perturb / perturb[-1]
+            else:
+                # 扩大搜索范围
+                if self.verbose:
+                    print("      [perturb] expanding x10: perturbations too small")
+                self._line_search_perturb = self._line_search_perturb * 10
+        else:  # good step
+            # 检查是否有明显改进
+            all_similar = len(goodi) > 0 and np.all(mlist[goodi] / mlist[0] - 1 > -10 * dtol)
+            
+            if all_similar and perturb[-1] * 10 < 1.0 + 1e-9:
+                # 改进不大，扩大范围
+                if self.verbose:
+                    print("      [perturb] expand x10: little progress")
+                self._line_search_perturb = self._line_search_perturb * 10
+            else:
+                # 以最优点为中心重新调整
+                if chosen_step > 0 and perturb[-1] > 0:
+                    scale = (chosen_step / perturb[-1]) * 2
+                    new_perturb = self._line_search_perturb * scale
+                    # 限制在 1.0 以内
+                    if new_perturb[-1] > 1.0 - 1e-9:
+                        new_perturb = new_perturb / new_perturb[-1]
+                    self._line_search_perturb = new_perturb
+                    if self.verbose:
+                        print(f"      [perturb] recentered around alpha={chosen_step:.3e}")
+        
+        # EIDORS 风格: 添加 1% 随机扰动，避免卡在局部
+        jiggle = np.exp(np.random.randn(len(self._line_search_perturb)) * 0.01)
+        self._line_search_perturb = self._line_search_perturb * jiggle
+        
+        # 确保不超过 1.0
+        if self._line_search_perturb[-1] > 1.0 - 1e-9:
+            self._line_search_perturb = self._line_search_perturb / self._line_search_perturb[-1]
     
     def set_regularization(self, regularization):
         """动态设置正则化方法"""
