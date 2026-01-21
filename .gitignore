@@ -75,6 +75,7 @@ docs/repro_cli_reference.md
 compare_with_Eidors/
 reports/
 archived/
+scripts/archived/
 
 # Generated experiment artifacts
 # Measurements (private by default; allowlist paper/demo inputs below)

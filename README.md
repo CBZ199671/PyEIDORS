@@ -14,6 +14,7 @@ A FEniCS-based Electrical Impedance Tomography (EIT) forward and inverse problem
 - Repository layout and code map: `FILE_ORGANIZATION.md`
 - Measurement data format: `docs/MEASUREMENT_DATA_SPEC.md`
 - Electrode positioning convention: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
+- Docker usage and publishing notes: `docs/DOCKER.md`
 
 ## System Architecture Overview
 
@@ -124,6 +125,31 @@ The following installation is based on the official FEniCS image. You can also u
 
 ## Docker Environment Setup
 
+### Option A (recommended): use the prebuilt image
+
+The recommended workflow is to use a prebuilt Docker image that already contains FEniCS, CUQIpy, and PyTorch.
+See `docs/DOCKER.md` for the most up-to-date commands.
+
+```bash
+docker pull ghcr.io/cbz199671/pyeidors-env:latest
+
+docker run -ti \
+  --gpus all \
+  --shm-size=24g \
+  --ipc=host \
+  --ulimit memlock=-1 \
+  --ulimit stack=67108864 \
+  --network=host \
+  --cpus=20 \
+  --memory=28g \
+  -v "$(pwd):/workspace" \
+  -w /workspace \
+  --name pyeidors \
+  ghcr.io/cbz199671/pyeidors-env:latest
+```
+
+### Option B: start from the official FEniCS image (manual installation)
+
 ```bash
 # Start container
 docker run -ti \
@@ -140,8 +166,8 @@ docker run -ti \
   --name pyeidors \
   ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
 
-# (Optional) Install Chinese font dependencies
-apt-get update && apt-get install ttf-wqy-zenhei
+# (Optional) Install CJK font dependencies
+apt-get update && apt-get install -y fonts-wqy-zenhei
 
 # Install CUQIpy and CUQIpy-FEniCS
 pip install cuqipy cuqipy-fenics
