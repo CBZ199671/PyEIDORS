@@ -37,7 +37,7 @@ from pyeidors.inverse import (
     SparseBayesianReconstructor,
 )
 from pyeidors.visualization import create_visualizer
-from scripts.common.io_utils import align_frames_polarity  # type: ignore
+from common.io_utils import align_frames_polarity
 
 LOGGER = logging.getLogger("sparse_bayes_reconstruction")
 
@@ -73,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--csv", type=Path, required=True, help="CSV measurement file")
     parser.add_argument("--metadata", type=Path, help="Optional metadata YAML/JSON file")
+    parser.add_argument(
+        "--measurement-gain",
+        type=float,
+        default=10.0,
+        help="Measurement amplifier gain; CSV values are divided by this value",
+    )
     parser.add_argument(
         "--mode",
         choices=["absolute", "difference", "both"],
@@ -152,6 +158,12 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=1e-5,
         help="Per-electrode contact impedance (Ω·m²); default matches common EIDORS setups",
+    )
+    parser.add_argument(
+        "--background-sigma",
+        type=float,
+        default=1.0,
+        help="Background conductivity used for the homogeneous baseline image",
     )
     parser.add_argument(
         "--prior-scale",
@@ -598,6 +610,8 @@ def main() -> None:
     raw_measurements = np.loadtxt(args.csv, delimiter=",", dtype=float)
     if raw_measurements.ndim == 1:
         raw_measurements = raw_measurements[:, np.newaxis]
+    if args.measurement_gain and args.measurement_gain != 1.0:
+        raw_measurements = raw_measurements / float(args.measurement_gain)
 
     metadata = load_metadata(args.metadata)
     LOGGER.info("Dataset summary: n_meas=%d, n_cols=%d", raw_measurements.shape[0], raw_measurements.shape[1])
@@ -621,6 +635,7 @@ def main() -> None:
         n_elec=pattern_config.n_elec,
         pattern_config=pattern_config,
         contact_impedance=contact_impedance,
+        base_conductivity=float(args.background_sigma),
     )
 
     mesh = load_or_create_mesh(
