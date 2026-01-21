@@ -127,11 +127,13 @@ The following installation is based on the official FEniCS image. You can also u
 
 ### Option A (recommended): use the prebuilt image
 
-The recommended workflow is to use a prebuilt Docker image that already contains FEniCS, CUQIpy, and PyTorch.
+The recommended workflow is to use the prebuilt Docker image published on GHCR. It already contains FEniCS, CUQIpy, and PyTorch.
 See `docs/DOCKER.md` for the most up-to-date commands.
 
 ```bash
 docker pull ghcr.io/cbz199671/pyeidors-env:latest
+# Or pin to a released environment tag:
+# docker pull ghcr.io/cbz199671/pyeidors-env:v1.0
 
 docker run -ti \
   -v "$(pwd):/root/shared" \
@@ -143,6 +145,7 @@ docker run -ti \
 Notes:
 
 - The `-v ...:/root/shared` path should point to your local clone of this repository.
+- On Windows, install WSL2 + Docker Desktop (WSL2 backend) first; see `docs/DOCKER.md`.
 - For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
 - Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
 - If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
