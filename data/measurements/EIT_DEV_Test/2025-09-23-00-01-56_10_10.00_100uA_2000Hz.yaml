@@ -1,0 +1,11 @@
+n_elec: 16
+stim_pattern: "{ad}"
+meas_pattern: "{ad}"
+amplitude: 0.0001
+use_meas_current: false
+use_meas_current_next: 0
+rotate_meas: true
+# n_frames: number of frames in the CSV (each frame uses 2 columns: real + imag; 4 columns = 2 frames)
+n_frames: 2
+sampling_rate_hz: 2000.0
+notes: "EIT_DEV_Test absolute sample, 100 µA at 2000 Hz, reference 200 Hz"

@@ -1,4 +1,4 @@
-"""绝对成像流程封装。"""
+"""Absolute imaging workflow wrapper."""
 
 from __future__ import annotations
 
@@ -26,19 +26,19 @@ def perform_absolute_reconstruction(
     initial_image: Optional[EITImage] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> ReconstructionResult:
-    """执行绝对成像。
+    """Perform absolute imaging.
 
-    参数:
-        eit_system: 已完成 setup 的 `EITSystem` 实例。
-        measurement_data: 当前帧测量数据 (`EITData`)，通常来自实测或仿真。
-        baseline_image: 均匀导电率图像，用于生成前向基线及显示差值。
-                        若未提供则自动使用 `create_homogeneous_image()`。
-        initial_image: 求解初始化猜测，缺省使用 `baseline_image`。
-        metadata: 附加信息（帧索引、频率等），会原样存入结果。
+    Args:
+        eit_system: Initialized `EITSystem` instance (setup() must have been called).
+        measurement_data: Current frame measurement data (`EITData`), typically from real or simulated data.
+        baseline_image: Homogeneous conductivity image, used for forward baseline and displaying difference.
+                        If not provided, `create_homogeneous_image()` is used automatically.
+        initial_image: Initial guess for solver, defaults to `baseline_image`.
+        metadata: Additional info (frame index, frequency, etc.), stored as-is in result.
     """
 
     if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem 尚未初始化，请先调用 setup()。")
+        raise RuntimeError("EITSystem not initialized, please call setup() first.")
 
     if baseline_image is None:
         baseline_image = eit_system.create_homogeneous_image()

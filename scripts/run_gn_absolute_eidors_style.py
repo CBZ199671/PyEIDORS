@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""按 EIDORS 参数风格执行一次 GN 绝对成像。
+"""Run Gauss-Newton absolute imaging with EIDORS-style parameters.
 
-要点：
-- 只用 CSV 第三列（零基索引 2）作为目标帧实部。
-- 激励/测量模式与幅值来自配套 YAML 元数据。
-- 网格：16 电极，圆柱半径 0.03 m，z_contact=1e-5，默认细化 12。
-- 正则：NOSER，λ=0.02；GN 最大 15 次迭代，带回溯线搜索。
-- 初始导电率：0.001 S/m。
+Key points:
+- Uses only CSV column 3 (zero-based index 2) as target frame real part.
+- Stimulation/measurement patterns and amplitude from companion YAML metadata.
+- Mesh: 16 electrodes, cylinder radius 0.03 m, z_contact=1e-5, default refinement 12.
+- Regularization: NOSER, lambda=0.02; GN max 15 iterations with backtracking line search.
+- Initial conductivity: 0.001 S/m.
 """
 
 from __future__ import annotations
@@ -36,119 +36,119 @@ from pyeidors.data.structures import EITData, EITImage  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
 from pyeidors.visualization import EITVisualizer  # noqa: E402
 
-# 使用公共模块
+# Use common modules
 from common.io_utils import load_metadata, load_single_frame
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="基于 PyEidors 的 GN 绝对成像（EIDORS 风格参数）",
+        description="PyEidors GN absolute imaging (EIDORS-style parameters)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "--csv",
         type=Path,
         required=True,
-        help="包含 4 列 (vh_real, vh_imag, vi_real, vi_imag) 的测量 CSV",
+        help="Measurement CSV with 4 columns (vh_real, vh_imag, vi_real, vi_imag)",
     )
     parser.add_argument(
         "--metadata",
         type=Path,
         required=True,
-        help="与 CSV 对应的 YAML 元数据",
+        help="YAML metadata file corresponding to CSV",
     )
     parser.add_argument(
         "--use-col",
         type=int,
         default=2,
-        help="选择哪一列作为绝对重建输入（零基），默认第三列即 vi 实部",
+        help="Column index for absolute reconstruction (zero-based), default: column 3 (vi real)",
     )
     parser.add_argument(
         "--output-dir",
         type=Path,
         required=True,
-        help="结果输出目录",
+        help="Output directory for results",
     )
     parser.add_argument(
         "--mesh-radius",
         type=float,
         default=0.03,
-        help="圆柱半径 (m)",
+        help="Cylinder radius (m)",
     )
     parser.add_argument(
         "--refinement",
         type=int,
         default=12,
-        help="网格细化级别，传递给 load_or_create_mesh",
+        help="Mesh refinement level, passed to load_or_create_mesh",
     )
     parser.add_argument(
         "--measurement-gain",
         type=float,
         default=10.0,
-        help="测量放大器增益，CSV 中的电压会除以此值",
+        help="Measurement amplifier gain, CSV voltages are divided by this value",
     )
     parser.add_argument(
         "--background-sigma",
         type=float,
         default=0.001,
-        help="初始/背景导电率 (S/m)",
+        help="Initial/background conductivity (S/m)",
     )
     parser.add_argument(
         "--lambda",
         dest="lambda_",
         type=float,
         default=0.02,
-        help="正则化参数 λ",
+        help="Regularization parameter lambda",
     )
     parser.add_argument(
         "--max-iter",
         type=int,
         default=15,
-        help="GN 最大迭代次数",
+        help="GN maximum iterations",
     )
     parser.add_argument(
         "--contact-impedance",
         type=float,
         default=1e-5,
-        help="接触阻抗 (Ω·m²)",
+        help="Contact impedance (ohm*m^2)",
     )
     return parser.parse_args()
 
 
 def load_measurement_vector(csv_path: Path, col_idx: int, measurement_gain: float = 1.0) -> np.ndarray:
-    """从 CSV 加载单帧数据并转换为 (1, n_meas) 形状。"""
+    """Load single frame from CSV and convert to (1, n_meas) shape."""
     frame = load_single_frame(csv_path, col_idx, measurement_gain)
     return frame.reshape(1, -1)
 
 
 def build_dataset(measurements: np.ndarray, metadata: dict) -> MeasurementDataset:
-    # 确保元数据字段齐全
+    # Ensure metadata has required fields
     required = ["n_elec", "stim_pattern", "meas_pattern"]
     for key in required:
         if key not in metadata:
-            raise KeyError(f"metadata 缺少必需字段: {key}")
+            raise KeyError(f"metadata missing required field: {key}")
     meta = dict(metadata)
     meta.setdefault("n_frames", int(measurements.shape[0]))
     return MeasurementDataset.from_metadata(measurements, meta)
 
 
 def configure_reconstructor(system: EITSystem, lambda_: float = 0.02, max_iter: int = 15, background_sigma: float = 0.001) -> None:
-    """把 GN 参数调成接近 EIDORS 样式。"""
+    """Configure GN parameters to EIDORS style."""
     recon = system.reconstructor
     recon.max_iterations = max_iter
-    recon.regularization_param = lambda_  # λ
+    recon.regularization_param = lambda_
     recon.line_search_steps = 12
-    # 步长限制
+    # Step size limits
     recon.max_step = 1.0
-    recon.min_step = 1e-6  # 允许非常小的步长
+    recon.min_step = 1e-6  # Allow very small step sizes
     recon.convergence_tol = 1e-5
     recon.negate_jacobian = True
     recon.use_measurement_weights = True
     recon.measurement_weight_strategy = "scaled_baseline"
-    # 避免导电率跌落过低导致电压爆掉
+    # Prevent conductivity from dropping too low causing voltage explosion
     recon.clip_values = (background_sigma * 0.1, background_sigma * 100)
     recon.min_iterations = 1
-    # EIDORS 风格：使用先验误差项
+    # EIDORS style: use prior error term
     recon.use_prior_term = True
 
 
@@ -167,19 +167,19 @@ def run_reconstruction(
 ) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    print(f"[INFO] CSV 数据文件: {csv_path}")
-    print(f"[INFO] YAML 元数据文件: {metadata_path}")
+    print(f"[INFO] CSV data file: {csv_path}")
+    print(f"[INFO] YAML metadata file: {metadata_path}")
     metadata = load_metadata(metadata_path)
     measurements = load_measurement_vector(csv_path, col_idx, measurement_gain=measurement_gain)
     dataset = build_dataset(measurements, metadata)
     print(f"[INFO] Background sigma: {background_sigma}, lambda: {lambda_}, measurement_gain: {measurement_gain}")
     print(f"[INFO] Measurement range: [{measurements.min():.6e}, {measurements.max():.6e}]")
 
-    # 用元数据构造 PatternConfig，保持激励/测量与采集一致
+    # Build PatternConfig from metadata to match acquisition settings
     pattern_config = dataset.pattern_config
     n_elec = pattern_config.n_elec
 
-    # 生成/加载网格
+    # Generate/load mesh
     mesh = load_or_create_mesh(
         mesh_dir=str(REPO_ROOT / "eit_meshes"),
         mesh_name=None,
@@ -189,7 +189,7 @@ def run_reconstruction(
         electrode_coverage=float(metadata.get("electrode_coverage", 0.5)),
     )
 
-    # EIT 系统配置：接触阻抗，NOSER 正则
+    # EIT system configuration: contact impedance, NOSER regularization
     z_contact = np.ones(n_elec) * contact_impedance
     system = EITSystem(
         n_elec=n_elec,
@@ -198,21 +198,29 @@ def run_reconstruction(
         base_conductivity=background_sigma,
         regularization_type="noser",
         regularization_alpha=1.0,
-        noser_exponent=0.5,  # EIDORS 风格
+        noser_exponent=0.5,  # EIDORS style
     )
     system.setup(mesh=mesh)
     configure_reconstructor(system, lambda_=lambda_, max_iter=max_iter, background_sigma=background_sigma)
 
-    # 准备测量数据和初值
+    # Prepare measurement data and initial values
     eit_data: EITData = dataset.to_eit_data(frame_index=0, data_type="real")
-    
-    # 基线前向对比（仅用于信息输出，不做缩放）
+
+    # Baseline forward comparison (for information output only, no scaling)
     base_img = system.create_homogeneous_image(conductivity=background_sigma)
     base_forward, _ = system.fwd_model.fwd_solve(base_img)
+
+    # Polarity correction (normal U/inverted U detection)
+    from common.io_utils import align_measurement_polarity
+    corrected_meas, was_flipped = align_measurement_polarity(eit_data.meas, base_forward.meas)
+    if was_flipped:
+        print("[INFO] Polarity correction: measurement data flipped (inverted U-shape detected)")
+        eit_data.meas = corrected_meas
+
     print(f"[INFO] Measured voltage range: [{eit_data.meas.min():.6e}, {eit_data.meas.max():.6e}]")
     print(f"[INFO] Model prediction range: [{base_forward.meas.min():.6e}, {base_forward.meas.max():.6e}]")
-    scale_ratio = eit_data.meas.max() / (base_forward.meas.max() + 1e-12)
-    print(f"[INFO] Meas/Model ratio: {scale_ratio:.2f} (如果远离1，请调整背景电导率或激励电流)")
+    scale_ratio = np.abs(eit_data.meas).max() / (np.abs(base_forward.meas).max() + 1e-12)
+    print(f"[INFO] Meas/Model ratio: {scale_ratio:.2f} (if far from 1, adjust background conductivity or stimulation current)")
     
     n_elements = len(Function(system.fwd_model.V_sigma).vector()[:])
     initial_sigma = np.full(n_elements, background_sigma, dtype=float)
@@ -225,53 +233,54 @@ def run_reconstruction(
     conductivity_fn = recon_result["conductivity"]
     conductivity_vec = conductivity_fn.vector()[:]
 
-    # 前向预测用于曲线对比
+    # Forward prediction for curve comparison
     sim_data, _ = system.fwd_model.fwd_solve(EITImage(elem_data=conductivity_vec, fwd_model=system.fwd_model))
     measured_vec = eit_data.meas
     predicted_vec = sim_data.meas
 
-    # 可视化
+    # Visualization
     visualizer = EITVisualizer(style="seaborn", figsize=(10, 8))
     fig_cond = visualizer.plot_conductivity(
         mesh,
         conductivity_fn,
-        title="GN 绝对成像导电率分布",
+        title="GN Absolute Imaging Conductivity Distribution",
         colormap="viridis",
+        show_electrodes=True,
     )
     fig_cond.savefig(output_dir / "conductivity.png", dpi=300, bbox_inches="tight")
 
-    # 计算相关系数
+    # Compute correlation coefficient
     corr = np.corrcoef(measured_vec, predicted_vec)[0, 1]
-    
+
     fig_cmp, axes = plt.subplots(1, 2, figsize=(14, 5))
-    
-    # 左图：曲线对比
+
+    # Left plot: curve comparison
     ax = axes[0]
-    ax.plot(measured_vec, "b.-", label="实测", markersize=3)
-    ax.plot(predicted_vec, "r--", label="预测")
-    ax.set_xlabel("测量点索引")
-    ax.set_ylabel("电压 (V)")
-    ax.set_title("边界电压对比")
+    ax.plot(measured_vec, "b.-", label="Measured", markersize=3)
+    ax.plot(predicted_vec, "r--", label="Predicted")
+    ax.set_xlabel("Measurement index")
+    ax.set_ylabel("Voltage (V)")
+    ax.set_title("Boundary Voltage Comparison")
     ax.grid(True, alpha=0.3)
     ax.legend()
-    
-    # 右图：散点图 + 相关系数
+
+    # Right plot: scatter plot + correlation coefficient
     ax2 = axes[1]
     ax2.scatter(measured_vec, predicted_vec, s=15, alpha=0.7, c='steelblue')
     vmin = min(np.min(measured_vec), np.min(predicted_vec))
     vmax = max(np.max(measured_vec), np.max(predicted_vec))
     ax2.plot([vmin, vmax], [vmin, vmax], 'k--', lw=1.5, label='y=x')
-    ax2.set_xlabel("实测电压 (V)")
-    ax2.set_ylabel("预测电压 (V)")
-    ax2.set_title(f"散点拟合 (相关系数 r = {corr:.4f})")
+    ax2.set_xlabel("Measured Voltage (V)")
+    ax2.set_ylabel("Predicted Voltage (V)")
+    ax2.set_title(f"Scatter Plot (r = {corr:.4f})")
     ax2.grid(True, alpha=0.3)
     ax2.legend()
     ax2.set_aspect('equal', adjustable='box')
-    
+
     fig_cmp.tight_layout()
     fig_cmp.savefig(output_dir / "prediction_vs_measurement.png", dpi=300, bbox_inches="tight")
 
-    # 保存关键数值
+    # Save key numerical data
     np.savez(
         output_dir / "result_arrays.npz",
         conductivity=conductivity_vec,
@@ -303,9 +312,9 @@ def run_reconstruction(
             indent=2,
         )
 
-    print(f"[OK] 完成 GN 绝对成像，结果已写入: {output_dir}")
-    print(f"导电率图: {output_dir/'conductivity.png'}")
-    print(f"预测 vs 实测: {output_dir/'prediction_vs_measurement.png'}")
+    print(f"[OK] GN absolute imaging complete, results saved to: {output_dir}")
+    print(f"Conductivity image: {output_dir/'conductivity.png'}")
+    print(f"Prediction vs Measurement: {output_dir/'prediction_vs_measurement.png'}")
 
 
 def main() -> None:

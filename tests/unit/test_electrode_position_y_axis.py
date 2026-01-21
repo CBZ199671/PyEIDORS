@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-测试电极默认位置在y轴正半轴
+Test electrode default position on positive Y-axis.
 """
 
 import numpy as np
@@ -17,135 +17,135 @@ if str(SRC_PATH) not in sys.path:
 
 
 def test_electrode_y_axis_start():
-    """测试电极默认初始位置在y轴正半轴"""
-    print("🔧 测试电极y轴初始位置...")
-    
+    """Test electrode default starting position on positive Y-axis."""
+    print("🔧 Testing electrode Y-axis starting position...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import ElectrodePosition
-        
+
         elec_pos = ElectrodePosition(L=16, coverage=0.5, rotation=0.0)
         positions = elec_pos.positions
         first_electrode_start, first_electrode_end = positions[0]
         first_electrode_center = (first_electrode_start + first_electrode_end) / 2
         expected_center = pi / 2
-        
-        print(f"   第一个电极中心角度: {first_electrode_center:.6f} rad ({first_electrode_center*180/pi:.3f}°)")
-        print(f"   期望角度: {expected_center:.6f} rad ({expected_center*180/pi:.3f}°)")
-        
+
+        print(f"   First electrode center angle: {first_electrode_center:.6f} rad ({first_electrode_center*180/pi:.3f}°)")
+        print(f"   Expected angle: {expected_center:.6f} rad ({expected_center*180/pi:.3f}°)")
+
         angle_diff = abs(first_electrode_center - expected_center)
-        assert angle_diff < 1e-10, f"第一个电极中心应该精确在y轴正半轴: 差值{angle_diff}"
-        
+        assert angle_diff < 1e-10, f"First electrode center should be exactly on positive Y-axis: diff {angle_diff}"
+
         x_center = cos(first_electrode_center)
         y_center = sin(first_electrode_center)
-        print(f"   第一个电极中心坐标: ({x_center:.4f}, {y_center:.4f})")
-        assert abs(x_center) < 1e-10, f"x坐标应该精确为0: {x_center}"
-        assert abs(y_center - 1.0) < 1e-10, f"y坐标应该精确为1: {y_center}"
-        
-        print("✅ 电极y轴初始位置测试通过")
+        print(f"   First electrode center coordinates: ({x_center:.4f}, {y_center:.4f})")
+        assert abs(x_center) < 1e-10, f"x coordinate should be exactly 0: {x_center}"
+        assert abs(y_center - 1.0) < 1e-10, f"y coordinate should be exactly 1: {y_center}"
+
+        print("✅ Electrode Y-axis starting position test passed")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 电极y轴初始位置测试失败: {e}")
+        print(f"❌ Electrode Y-axis starting position test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 
 def test_electrode_sequence():
-    """测试电极按逆时针顺序排列"""
-    print("🔧 测试电极逆时针顺序...")
-    
+    """Test electrodes arranged in counter-clockwise order."""
+    print("🔧 Testing electrode counter-clockwise order...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import ElectrodePosition
-        
+
         elec_pos = ElectrodePosition(L=8, coverage=0.5, rotation=0.0)
         positions = elec_pos.positions
         centers = []
         for start, end in positions:
             centers.append((start + end) / 2)
-        
-        print("   电极中心角度:")
+
+        print("   Electrode center angles:")
         for i, center in enumerate(centers):
             degree = center * 180 / pi
             x, y = cos(center), sin(center)
-            print(f"     电极{i+1}: {center:.4f} rad ({degree:.1f}°) -> ({x:.3f}, {y:.3f})")
-        
+            print(f"     Electrode {i+1}: {center:.4f} rad ({degree:.1f}°) -> ({x:.3f}, {y:.3f})")
+
         for i in range(1, len(centers)):
             if centers[i] < centers[i - 1]:
                 centers[i] += 2 * pi
-            assert centers[i] > centers[i - 1], f"电极{i+1}角度小于电极{i}: {centers[i]} < {centers[i-1]}"
-        
+            assert centers[i] > centers[i - 1], f"Electrode {i+1} angle less than electrode {i}: {centers[i]} < {centers[i-1]}"
+
         first_center = centers[0]
         expected_first = pi / 2
-        assert abs(first_center - expected_first) < 0.2, f"第一个电极不在顶部: {first_center}"
-        
-        print("✅ 电极逆时针顺序测试通过")
+        assert abs(first_center - expected_first) < 0.2, f"First electrode not at top: {first_center}"
+
+        print("✅ Electrode counter-clockwise order test passed")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 电极逆时针顺序测试失败: {e}")
+        print(f"❌ Electrode counter-clockwise order test failed: {e}")
         return False
 
 
 def test_rotation_effect():
-    """测试旋转参数的效果"""
-    print("🔧 测试旋转参数效果...")
-    
+    """Test rotation parameter effect."""
+    print("🔧 Testing rotation parameter effect...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import ElectrodePosition
-        
+
         elec_pos_no_rot = ElectrodePosition(L=8, coverage=0.5, rotation=0.0)
         elec_pos_rot = ElectrodePosition(L=8, coverage=0.5, rotation=pi / 4)
-        
+
         center_no_rot = (elec_pos_no_rot.positions[0][0] + elec_pos_no_rot.positions[0][1]) / 2
         center_rot = (elec_pos_rot.positions[0][0] + elec_pos_rot.positions[0][1]) / 2
         expected_diff = pi / 4
         actual_diff = center_rot - center_no_rot
-        
-        print(f"   无旋转第一个电极中心: {center_no_rot:.4f} rad ({center_no_rot*180/pi:.1f}°)")
-        print(f"   旋转后第一个电极中心: {center_rot:.4f} rad ({center_rot*180/pi:.1f}°)")
-        print(f"   角度差: {actual_diff:.4f} rad ({actual_diff*180/pi:.1f}°)")
-        
-        assert abs(actual_diff - expected_diff) < 0.01, f"旋转效果不正确: {actual_diff} vs {expected_diff}"
-        
-        print("✅ 旋转参数效果测试通过")
+
+        print(f"   No rotation first electrode center: {center_no_rot:.4f} rad ({center_no_rot*180/pi:.1f}°)")
+        print(f"   Rotated first electrode center: {center_rot:.4f} rad ({center_rot*180/pi:.1f}°)")
+        print(f"   Angle difference: {actual_diff:.4f} rad ({actual_diff*180/pi:.1f}°)")
+
+        assert abs(actual_diff - expected_diff) < 0.01, f"Rotation effect incorrect: {actual_diff} vs {expected_diff}"
+
+        print("✅ Rotation parameter effect test passed")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 旋转参数效果测试失败: {e}")
+        print(f"❌ Rotation parameter effect test failed: {e}")
         return False
 
 
 def run_all_tests():
-    """运行所有测试"""
-    print("🚀 开始测试电极y轴初始位置...")
+    """Run all tests."""
+    print("🚀 Starting electrode Y-axis starting position tests...")
     print("=" * 50)
-    
+
     tests = [
-        ("电极y轴初始位置", test_electrode_y_axis_start),
-        ("电极逆时针顺序", test_electrode_sequence),
-        ("旋转参数效果", test_rotation_effect),
+        ("Electrode Y-axis Starting Position", test_electrode_y_axis_start),
+        ("Electrode Counter-clockwise Order", test_electrode_sequence),
+        ("Rotation Parameter Effect", test_rotation_effect),
     ]
-    
+
     passed = 0
     total = len(tests)
-    
+
     for test_name, test_func in tests:
-        print(f"\n📋 运行测试: {test_name}")
+        print(f"\n📋 Running test: {test_name}")
         try:
             if test_func():
                 passed += 1
         except Exception as e:
-            print(f"❌ 测试异常: {test_name} - {e}")
-    
+            print(f"❌ Test exception: {test_name} - {e}")
+
     print("\n" + "=" * 50)
-    print(f"📊 测试完成: {passed}/{total} 通过 ({passed/total*100:.1f}%)")
-    
+    print(f"📊 Tests complete: {passed}/{total} passed ({passed/total*100:.1f}%)")
+
     if passed == total:
-        print("🎉 所有测试通过！")
+        print("🎉 All tests passed!")
     else:
-        print(f"⚠️  {total - passed} 个测试失败")
-    
+        print(f"⚠️  {total - passed} test(s) failed")
+
     return passed == total
 
 

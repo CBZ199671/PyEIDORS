@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""对实测差分 CSV 数据做高斯牛顿单步重构（EIDORS 风格雅可比）。
+"""Gauss-Newton single-step reconstruction on real diff CSV data (EIDORS-style Jacobian).
 
-用法示例：
+Usage example:
     python scripts/run_single_step_diff_realdata.py \
         --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
         --lambda 0.1 \
@@ -13,6 +13,14 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import numpy as np
+import matplotlib as mpl
+mpl.rcParams.update(
+    {
+        "axes.unicode_minus": False,
+        "font.family": "DejaVu Sans",
+        "mathtext.fontset": "dejavusans",
+    }
+)
 import matplotlib.pyplot as plt
 from scipy.optimize import minimize_scalar
 
@@ -32,8 +40,8 @@ from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobia
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
 
-# 使用公共模块
-from common.io_utils import load_csv_measurements
+# Use common modules
+from common.io_utils import load_csv_measurements, align_frames_polarity
 from common.mesh_utils import cell_to_node
 
 
@@ -42,7 +50,7 @@ def main(
     lam: float,
     use_part: str,
     output: Path,
-    mesh_name: str = "mesh_102070",
+    mesh_name: str = "mesh_16e_r0p025_ref10_cov0p5",
     pattern_amplitude: float | None = None,
     contact_impedance: float = 1e-6,
     measurement_gain: float = 10.0,
@@ -51,20 +59,24 @@ def main(
     step_size_max: float = 1e1,
     step_size_maxiter: int = 50,
     background_sigma: float = 1.0,
+    colormap: str = "viridis",
+    colorbar_scientific: bool = False,
+    colorbar_format: str | None = None,
+    transparent: bool = False,
 ):
-    # 使用公共模块加载数据
+    # Load data using common module
     vh, vi = load_csv_measurements(csv, use_part=use_part, measurement_gain=measurement_gain)
 
-    # EIDORS 风格差分成像：使用归一化激励电流 (1.0)
-    # - 差分成像是单步重建，结果是相对电导率变化
-    # - 关注空间分布形状，不追求精确的物理量纲
-    # - 如果需要物理单位的电导率，应使用迭代的绝对成像
-    # 
-    # 如果用户显式指定 --pattern-amplitude，则使用用户值
+    # EIDORS-style diff imaging: use normalized stimulation current (1.0)
+    # - Diff imaging is single-step reconstruction, result is relative conductivity change
+    # - Focus on spatial distribution shape, not precise physical units
+    # - For physically meaningful conductivity, use iterative absolute imaging
+    #
+    # If user explicitly specifies --pattern-amplitude, use that value
     stim_amplitude = pattern_amplitude if pattern_amplitude is not None else 1.0
     print(f"[INFO] Diff imaging: amplitude={stim_amplitude:.2e} (EIDORS-style, relative Δσ)")
 
-    mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name=mesh_name, n_elec=16)
+    mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name=mesh_name, n_elec=16, radius=0.025)
     pattern_cfg = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
@@ -81,15 +93,23 @@ def main(
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
     print(f"Background conductivity: {background_sigma}")
 
+    # Baseline forward for polarity detection (normal/inverted U-shape)
+    base_forward, _ = fwd_model.fwd_solve(img_bg)
+    vh_vi = np.vstack([vh, vi])
+    vh_vi_aligned, flipped = align_frames_polarity(vh_vi, base_forward.meas)
+    vh, vi = vh_vi_aligned
+    if flipped:
+        print(f"[INFO] Polarity correction: flipped frame indices {flipped}")
+
     jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
     J = jac_calc.calculate_from_image(img_bg)
 
     dv = vi - vh
     if dv.shape[0] != J.shape[0]:
-        raise RuntimeError(f"数据长度 {dv.shape[0]} 与雅可比行数 {J.shape[0]} 不一致")
+        raise RuntimeError(f"Data length {dv.shape[0]} does not match Jacobian rows {J.shape[0]}")
 
-    # EIDORS 风格的 NOSER 正则化：exponent=0.5
-    # NOSER: R = diag(J'J)^0.5，已经与 J'J 量级匹配
+    # EIDORS-style NOSER regularization: exponent=0.5
+    # NOSER: R = diag(J'J)^0.5, already matches J'J magnitude
     reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=background_sigma, alpha=1.0, exponent=0.5)
     R = reg.get_regularization_matrix()
 
@@ -122,9 +142,10 @@ def main(
             alpha = float(result.x)
             print(f"Step-size calibration: alpha={alpha:.3g}, diff residual={result.fun:.3e}")
         else:
-            print("Step-size calibration失败，恢复 alpha=1.0")
+            print("Step-size calibration failed, reverting to alpha=1.0")
 
     sigma_est = sigma_bg + alpha * delta_sigma
+    delta_sigma_scaled = alpha * delta_sigma
     img_est = EITImage(elem_data=sigma_est, fwd_model=fwd_model)
     pred_vi, _ = fwd_model.fwd_solve(img_est)
     pred_diff = pred_vi.meas - pred_vh.meas
@@ -135,18 +156,36 @@ def main(
 
     output.mkdir(parents=True, exist_ok=True)
 
-    # 重构图
+    # Reconstruction plot
     viz = create_visualizer()
-    if len(sigma_est) == mesh.num_cells():
-        node_vals = cell_to_node(mesh, sigma_est)
+    if len(delta_sigma_scaled) == mesh.num_cells():
+        node_vals = cell_to_node(mesh, delta_sigma_scaled)
     else:
-        node_vals = sigma_est
-    fig = viz.plot_conductivity(mesh, node_vals, title=f"Reconstruction (lam={lam})", minimal=True)
-    fig.savefig(output / "reconstruction.png", dpi=300, bbox_inches="tight")
+        node_vals = delta_sigma_scaled
+    eidors_style = colormap.lower() in {"eidors_diff", "eidors-diff"}
+    format_mode = colorbar_format or ("scientific" if colorbar_scientific else "plain")
+    fig = viz.plot_conductivity(
+        mesh,
+        node_vals,
+        title=f"Reconstruction Δσ (lam={lam})",
+        colormap=colormap,
+        minimal=not eidors_style,
+        show_electrodes=True,
+        scientific_notation=colorbar_scientific,
+        colorbar_format=format_mode,
+        transparent=transparent,
+    )
+    fig.savefig(
+        output / "reconstruction.png",
+        dpi=300,
+        bbox_inches="tight",
+        pad_inches=0.15,
+        transparent=transparent,
+    )
     plt.close(fig)
 
-    # 差分对比
-    # 计算相关系数
+    # Diff comparison
+    # Compute correlation coefficient
     corr_diff = np.corrcoef(meas_diff, pred_diff)[0, 1]
     
     fig = plt.figure(figsize=(12, 5))
@@ -173,7 +212,7 @@ def main(
     fig.savefig(output / "diff_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig)
 
-    # 绝对值对比
+    # Absolute value comparison
     fig = plt.figure(figsize=(10, 4))
     ax1 = fig.add_subplot(1, 2, 1)
     ax1.scatter(vi, pred_vi.meas, s=10, alpha=0.7)
@@ -197,6 +236,8 @@ def main(
     np.savez(
         output / "outputs.npz",
         sigma_est=sigma_est,
+        delta_sigma=delta_sigma_scaled,
+        sigma_bg=sigma_bg,
         dv=meas_diff,
         pred_diff=pred_diff,
         vi=vi,
@@ -225,6 +266,12 @@ if __name__ == "__main__":
     parser.add_argument("--step-size-max", type=float, default=1e1, help="Upper bound for step-size calibration")
     parser.add_argument("--step-size-maxiter", type=int, default=50, help="Max iterations for bounded optimizer")
     parser.add_argument("--background-sigma", type=float, default=1.0, help="Background conductivity (S/m)")
+    parser.add_argument("--colormap", type=str, default="viridis", help="Colormap for reconstruction (e.g., viridis, eidors_diff)")
+    parser.add_argument("--colorbar-scientific", action="store_true", help="Use scientific notation on colorbar")
+    parser.add_argument("--colorbar-format", type=str, default=None,
+                        choices=["plain", "scientific", "matlab_short"],
+                        help="Colorbar format rule")
+    parser.add_argument("--transparent", action="store_true", help="Save reconstruction with transparent background")
     args = parser.parse_args()
     main(
         csv=args.csv,
@@ -239,4 +286,8 @@ if __name__ == "__main__":
         step_size_max=args.step_size_max,
         step_size_maxiter=args.step_size_maxiter,
         background_sigma=args.background_sigma,
+        colormap=args.colormap,
+        colorbar_scientific=args.colorbar_scientific,
+        colorbar_format=args.colorbar_format,
+        transparent=args.transparent,
     )

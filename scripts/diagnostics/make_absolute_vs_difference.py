@@ -11,15 +11,15 @@ diff_path = ROOT / 'difference' / 'reconstruction.png'
 
 images = [
     ("(a) Ground truth", truth_path),
-    ("(b) PyEidors absolute reconstruction", abs_path),
-    ("(c) PyEidors difference reconstruction", diff_path),
+    ("(b) PyEIDORS absolute reconstruction", abs_path),
+    ("(c) PyEIDORS difference reconstruction", diff_path),
 ]
 
 fig, axes = plt.subplots(1, len(images), figsize=(15, 4))
 for ax, (title, path) in zip(axes, images):
     img = Image.open(path).convert('RGB')
     ax.imshow(img)
-    ax.set_title(title, fontsize=12)
+    ax.set_title(title, fontsize=22, fontweight='bold')
     ax.axis('off')
 
 fig.tight_layout()

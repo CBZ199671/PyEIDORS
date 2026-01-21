@@ -1,0 +1,45 @@
+{
+  "difference": {
+    "rmse": 7.675140248488742e-05,
+    "mae": 6.432804188350614e-05,
+    "max_abs_error": 0.00014701302780468703,
+    "relative_error_pct": 235.27816549212076,
+    "correlation": 0.991490405090638
+  },
+  "n_measurements": 208,
+  "metadata": {
+    "n_elec": 16,
+    "phantom": {
+      "center": [
+        0.3,
+        0.2
+      ],
+      "radius": 0.2,
+      "contrast": 1.5
+    }
+  },
+  "calibration": {
+    "scale": 1.0,
+    "bias": 0.0
+  },
+  "difference_solver": "single-step",
+  "difference_metadata": {
+    "solver": "single-step",
+    "step_size": 1.2843771309456193,
+    "jacobian_method": "efficient",
+    "measurement_weight_strategy": "baseline",
+    "hyperparameter": 0.01,
+    "noser_exponent": 0.5,
+    "conductivity_bounds": [
+      1e-06,
+      10.0
+    ],
+    "delta_norm": 2.9039481424601292,
+    "weight_stats": {
+      "min": 0.00015173823611508232,
+      "max": 0.008279617021886594,
+      "median": 0.0003215818377358847
+    },
+    "rmse": 7.675140248488742e-05
+  }
+}

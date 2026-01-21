@@ -1,4 +1,4 @@
-"""平滑性正则化"""
+"""Smoothness Regularization."""
 
 from typing import Optional
 
@@ -11,93 +11,97 @@ from ..jacobian.direct_jacobian import DirectJacobianCalculator
 
 
 class SmoothnessRegularization(BaseRegularization):
-    """平滑性正则化 - 基于拉普拉斯算子"""
-    
+    """Smoothness Regularization - Based on Laplacian operator."""
+
     def __init__(self, fwd_model, alpha: float = 1.0):
         super().__init__(fwd_model)
         self.alpha = alpha
-    
+
     def create_matrix(self) -> np.ndarray:
-        """创建平滑性正则化矩阵"""
+        """Create smoothness regularization matrix."""
         n_cells = self.mesh.num_cells()
-        
-        # 构建拉普拉斯算子
+
+        # Build Laplacian operator
         rows, cols, data = [], [], []
         row_idx = 0
-        
-        # 基于网格拓扑构建拉普拉斯算子
+
+        # Build Laplacian based on mesh topology
         for edge in edges(self.mesh):
             adjacent_cells = []
             for cell in cells(edge):
                 adjacent_cells.append(cell.index())
-            
+
             if len(adjacent_cells) == 2:
                 cell1, cell2 = adjacent_cells
                 rows.extend([row_idx, row_idx])
                 cols.extend([cell1, cell2])
                 data.extend([1.0, -1.0])
                 row_idx += 1
-        
-        # 构建差分矩阵
+
+        # Build difference matrix
         L = csr_matrix((data, (rows, cols)), shape=(row_idx, n_cells))
-        
-        # 返回 L^T * L * alpha
+
+        # Return L^T * L * alpha
         regularization_matrix = self.alpha * (L.T @ L).toarray()
-        
+
         return regularization_matrix
 
 
 class TikhonovRegularization(BaseRegularization):
-    """Tikhonov正则化"""
-    
+    """Tikhonov Regularization."""
+
     def __init__(self, fwd_model, alpha: float = 1.0):
         super().__init__(fwd_model)
         self.alpha = alpha
-    
+
     def create_matrix(self) -> np.ndarray:
-        """创建Tikhonov正则化矩阵（单位矩阵）"""
+        """Create Tikhonov regularization matrix (identity matrix)."""
         n_elements = self.n_elements
         return self.alpha * np.eye(n_elements)
 
 
 class TotalVariationRegularization(BaseRegularization):
-    """全变分正则化"""
-    
+    """Total Variation Regularization."""
+
     def __init__(self, fwd_model, alpha: float = 1.0, epsilon: float = 1e-6):
         super().__init__(fwd_model)
         self.alpha = alpha
         self.epsilon = epsilon
-    
+
     def create_matrix(self) -> np.ndarray:
-        """创建全变分正则化矩阵（近似）"""
-        # 全变分正则化通常是非线性的，这里提供线性近似
-        # 在实际使用中可能需要在求解过程中更新
+        """Create total variation regularization matrix (approximation).
+
+        Total variation regularization is typically nonlinear; this provides
+        a linear approximation. May need to be updated during the solve.
+        """
         return self.alpha * np.eye(self.n_elements)
-    
+
     def create_nonlinear_term(self, sigma_current: np.ndarray) -> np.ndarray:
-        """创建非线性TV项（可在求解器中调用）"""
-        # 实现基于当前解的TV正则化项
-        # 这是一个简化版本，实际实现会更复杂
+        """Create nonlinear TV term (can be called from solver).
+
+        Implements TV regularization term based on current solution.
+        This is a simplified version; actual implementation would be more complex.
+        """
         grad_magnitude = np.abs(np.gradient(sigma_current))
         weights = 1.0 / (grad_magnitude + self.epsilon)
-        
-        # 构建加权拉普拉斯矩阵
-        # 简化实现...
+
+        # Build weighted Laplacian matrix
+        # Simplified implementation...
         return self.alpha * np.diag(weights)
 
 
 class NOSERRegularization(BaseRegularization):
-    """NOSER正则化 - 对角矩阵基于 J^T J 的对角线
-    
-    EIDORS 风格实现: Reg = diag(sum(J.^2, 1)).^exponent
-    
-    参数:
-        fwd_model: 前向模型
-        jacobian_calculator: 雅可比计算器
-        base_conductivity: 用于计算基线雅可比的导电率
-        alpha: 正则化系数
-        exponent: NOSER 指数 (EIDORS 默认为 0.5)
-        floor: 对角线元素的最小值，避免数值问题
+    """NOSER Regularization - Diagonal matrix based on J^T J diagonal.
+
+    EIDORS-style implementation: Reg = diag(sum(J.^2, 1)).^exponent
+
+    Args:
+        fwd_model: Forward model.
+        jacobian_calculator: Jacobian calculator.
+        base_conductivity: Conductivity for baseline Jacobian computation.
+        alpha: Regularization coefficient.
+        exponent: NOSER exponent (EIDORS default: 0.5).
+        floor: Minimum value for diagonal elements to avoid numerical issues.
     """
 
     def __init__(
@@ -111,11 +115,12 @@ class NOSERRegularization(BaseRegularization):
         adaptive_floor: bool = True,
         floor_fraction: float = 1e-6,
     ):
-        """
-        参数:
-            floor: 绝对 floor 值（当 adaptive_floor=False 时使用）
-            adaptive_floor: 如果为 True，floor 会自适应到 J'J 的量级
-            floor_fraction: 自适应 floor = max(diag(J'J)) × floor_fraction
+        """Initialize NOSER regularization.
+
+        Args:
+            floor: Absolute floor value (used when adaptive_floor=False).
+            adaptive_floor: If True, floor adapts to J'J magnitude.
+            floor_fraction: Adaptive floor = max(diag(J'J)) × floor_fraction.
         """
         super().__init__(fwd_model)
         self.alpha = alpha
@@ -134,27 +139,27 @@ class NOSERRegularization(BaseRegularization):
 
         # DirectJacobianCalculator expects a Function
         jac = self._jacobian_calculator.calculate(sigma_fn)
-        # EIDORS: diag_col = sum(J.^2, 1)'  (列向量)
+        # EIDORS: diag_col = sum(J.^2, 1)'  (column vector)
         diag_entries = np.sum(jac * jac, axis=0)
-        
-        # 应用 floor 避免数值问题
+
+        # Apply floor to avoid numerical issues
         if self.adaptive_floor:
-            # 自适应 floor：基于 J'J 最大值的一个小比例
+            # Adaptive floor: small fraction of J'J maximum
             adaptive_floor_value = np.max(diag_entries) * self.floor_fraction
-            effective_floor = max(adaptive_floor_value, 1e-100)  # 绝对最小值防止全零
+            effective_floor = max(adaptive_floor_value, 1e-100)  # Absolute minimum to prevent all-zeros
         else:
             effective_floor = self.floor
-        
+
         diag_entries = np.maximum(diag_entries, effective_floor)
         return diag_entries
 
     def create_matrix(self) -> np.ndarray:
-        """创建 NOSER 正则化矩阵
-        
+        """Create NOSER regularization matrix.
+
         EIDORS: Reg = spdiags(diag_col.^exponent, 0, n, n)
         """
         if self._baseline_diag is None:
             self._baseline_diag = self._compute_baseline_diag()
-        # 应用 EIDORS 风格的 exponent
+        # Apply EIDORS-style exponent
         scaled_diag = self._baseline_diag ** self.exponent
         return self.alpha * np.diag(scaled_diag)

@@ -4,8 +4,8 @@ from ..data.structures import PatternConfig
 
 
 class StimMeasPatternManager:
-    """激励和测量模式管理器"""
-    
+    """Stimulation and measurement pattern manager."""
+
     def __init__(self, config: PatternConfig):
         self.config = config
         self.n_elec = config.n_elec
@@ -19,7 +19,7 @@ class StimMeasPatternManager:
         self._compute_measurement_selector()
     
     def _parse_patterns(self):
-        # 激励模式解析
+        # Parse stimulation pattern
         if isinstance(self.config.stim_pattern, str):
             if self.config.stim_pattern == '{ad}':
                 self.inj_electrodes = [0, 1]
@@ -38,7 +38,7 @@ class StimMeasPatternManager:
         else:
             self.inj_weights = np.array([1])
         
-        # 测量模式解析
+        # Parse measurement pattern
         if isinstance(self.config.meas_pattern, str):
             if self.config.meas_pattern == '{ad}':
                 self.meas_electrodes = [0, 1]
@@ -60,13 +60,13 @@ class StimMeasPatternManager:
         
         for ring in range(self.n_rings):
             for elec in range(self.n_elec):
-                # 激励向量
+                # Stimulation vector
                 stim_vec = np.zeros(self.tn_elec)
                 for i, inj_elec in enumerate(self.inj_electrodes):
                     idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
                     stim_vec[idx] = self.config.amplitude * self.inj_weights[i]
-                
-                # 测量矩阵
+
+                # Measurement matrix
                 meas_mat = self._make_meas_matrix(elec, ring)
                 
                 if not self.config.use_meas_current:

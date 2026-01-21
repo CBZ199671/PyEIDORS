@@ -1,1 +1,0 @@
-docker cp "C:\Users\huolo\.codex\auth.json" pyeidors:/root/.codex/auth.json

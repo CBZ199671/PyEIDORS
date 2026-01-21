@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""基准对比：旧版 DirectJacobian vs 新版 EidorsStyleAdjointJacobian（CPU/torch）。
+"""Benchmark comparison: legacy DirectJacobian vs new EidorsStyleAdjointJacobian (CPU/torch).
 
-输出：
-- 计算耗时
-- 矩阵形状
-- 相对误差（对齐符号后）
+Output:
+- Computation time
+- Matrix shape
+- Relative error (after sign alignment)
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ def benchmark():
     sigma = np.ones(n_elem, dtype=float)
     img = EITImage(elem_data=sigma, fwd_model=fwd_model)
 
-    # DirectJacobian (原实现)
+    # DirectJacobian (original implementation)
     direct_calc = DirectJacobianCalculator(fwd_model)
     t0 = time.perf_counter()
     J_direct = direct_calc.calculate_from_image(img, method="efficient")
@@ -51,13 +51,13 @@ def benchmark():
     J_adj_cpu = adj_cpu.calculate_from_image(img)
     t_adj_cpu = time.perf_counter() - t0
 
-    # EidorsStyle adjoint torch（若 GPU 可用则在 GPU）
+    # EidorsStyle adjoint torch (uses GPU if available)
     adj_torch = EidorsStyleAdjointJacobian(fwd_model, use_torch=True)
     t0 = time.perf_counter()
     J_adj_torch = adj_torch.calculate_from_image(img)
     t_adj_torch = time.perf_counter() - t0
 
-    # 对齐符号：DirectJacobian 默认正号，EIDORS 风格带负号
+    # Align signs: DirectJacobian has positive sign by default, EIDORS style has negative sign
     J_direct_aligned = -J_direct
 
     def rel_err(A, B):
@@ -67,12 +67,12 @@ def benchmark():
     err_direct_vs_cpu = rel_err(J_direct_aligned, J_adj_cpu)
     err_cpu_vs_torch = rel_err(J_adj_cpu, J_adj_torch)
 
-    print("形状: ", J_direct.shape)
-    print(f"DirectJacobian 耗时: {t_direct:.4f}s")
-    print(f"EidorsStyle adjoint CPU 耗时: {t_adj_cpu:.4f}s")
-    print(f"EidorsStyle adjoint Torch 耗时: {t_adj_torch:.4f}s")
-    print(f"Direct(取负) vs EidorsStyle CPU 相对误差: {err_direct_vs_cpu:.3e}")
-    print(f"EidorsStyle CPU vs Torch 相对误差: {err_cpu_vs_torch:.3e}")
+    print("Shape: ", J_direct.shape)
+    print(f"DirectJacobian time: {t_direct:.4f}s")
+    print(f"EidorsStyle adjoint CPU time: {t_adj_cpu:.4f}s")
+    print(f"EidorsStyle adjoint Torch time: {t_adj_torch:.4f}s")
+    print(f"Direct(negated) vs EidorsStyle CPU relative error: {err_direct_vs_cpu:.3e}")
+    print(f"EidorsStyle CPU vs Torch relative error: {err_cpu_vs_torch:.3e}")
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-"""EIDORS风格的伴随法雅可比计算器（含符号约定），可选Torch加速。"""
+"""EIDORS-style adjoint method Jacobian calculator with sign convention, optional Torch acceleration."""
 
 from __future__ import annotations
 
@@ -11,12 +11,12 @@ from .base_jacobian import BaseJacobianCalculator
 
 
 class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
-    """按 EIDORS 伴随法实现的雅可比计算器。
+    """EIDORS-style adjoint method Jacobian calculator.
 
-    特点：
-      - 使用测量模式转置作为伴随-current，单次因子分解，批量求解；
-      - 符号约定与 EIDORS 一致（dV/dσ 为负，因此最终雅可比内置负号）；
-      - 可选 torch 加速敏感度积累（仅在 CPU/GPU 上做向量化累加）。
+    Features:
+      - Uses measurement pattern transpose as adjoint current, single factorization, batch solve;
+      - Sign convention consistent with EIDORS (dV/dσ is negative, so Jacobian has built-in negative sign);
+      - Optional torch acceleration for sensitivity accumulation (vectorized accumulation on CPU/GPU).
     """
 
     def __init__(self, fwd_model, use_torch: bool = False, device: Optional[str] = None):
@@ -32,7 +32,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         self.mesh = self.fwd_model.mesh
         self.V = self.fwd_model.V
         self.V_sigma = self.fwd_model.V_sigma
-        # 单元面积/体积
+        # Cell area/volume
         v = self.fwd_model.DG0_Test if hasattr(self.fwd_model, "DG0_Test") else None
         if v is None:
             from fenics import TestFunction, FunctionSpace, assemble, dx
@@ -41,28 +41,28 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             self.cell_areas = assemble(v * dx).get_local()
         else:
             self.cell_areas = self.fwd_model.cell_areas
-        # 方便 Torch
+        # For Torch convenience
         if self.use_torch:
             self.cell_areas_t = torch.from_numpy(self.cell_areas).to(self.torch_device, dtype=torch.float64)
 
     def calculate(self, sigma: Function, **kwargs) -> np.ndarray:
-        """计算测量雅可比矩阵（形状：n_meas x n_elem）。"""
-        # 1) 正解
+        """Calculate measurement Jacobian matrix (shape: n_meas x n_elem)."""
+        # 1) Forward solve
         u_all, _ = self.fwd_model.forward_solve(sigma)
         grad_u_all = self._compute_field_gradients(u_all)
 
-        # 2) 伴随场（测量模式转置为电流）
+        # 2) Adjoint field (measurement pattern transpose as current)
         meas_curr = self._measurement_to_current_patterns()
         adj_fields, _ = self.fwd_model.forward_solve(sigma, meas_curr)
         grad_adj_all = self._compute_field_gradients(adj_fields)
 
-        # 3) 组装 J，符号为负（dV/dσ<0）
+        # 3) Assemble J, sign is negative (dV/dσ < 0)
         if self.use_torch:
             J = self._assemble_torch(grad_u_all, grad_adj_all)
         else:
             J = self._assemble_numpy(grad_u_all, grad_adj_all)
 
-        # 刺激幅值缩放
+        # Stimulation amplitude scaling
         try:
             amp = float(getattr(self.fwd_model.pattern_manager.config, "amplitude", 1.0))
         except Exception:
@@ -70,7 +70,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         return J * amp
 
     def _compute_field_gradients(self, field_solutions):
-        """把节点解转换为单元梯度。"""
+        """Convert nodal solutions to cell gradients."""
         gradients = []
         for field in field_solutions:
             u_fun = Function(self.V)
@@ -83,7 +83,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         return gradients
 
     def _measurement_to_current_patterns(self) -> np.ndarray:
-        """将测量矩阵转置为伴随电流模式（与 EIDORS 伴随法对应）。"""
+        """Transpose measurement matrix to adjoint current patterns (EIDORS adjoint method)."""
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elec = self.fwd_model.n_elec
         current_patterns = np.zeros((n_elec, n_meas))

@@ -1,40 +1,16 @@
-# requirements-lock.txt
 #
-# 此文件用于精确复现 pyeidors 的开发和测试环境。
-# 它包含了在 FEniCS Docker 镜像基础上，额外安装的所有包的精确版本。
+# Pinned Python dependencies used in our Docker-based development environment.
+#
+# NOTE: This lock file does NOT include FEniCS/DOLFIN (provided by the Docker image).
+#
 
-# 下载并激活容器
-docker run -ti `
-  --gpus all `
-  --shm-size=24g `
-  --ipc=host `
-  --ulimit memlock=-1 `
-  --ulimit stack=67108864 `
-  --network=host `
-  --cpus=20 `
-  --memory=28g `
-  -v "D:\workspace\PyEIDORS:/root/shared" `
-  -w /root/shared `
-  --name pyeidors `
-  ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
-
-
-####手动安装############
-#可选(用于中文显示)
-apt-get update
-apt-get install ttf-wqy-zenhei
-#安装cuqi
-pip install cuqipy
-
-#安装CUQIpy-FEniCS
-pip install cuqipy-fenics
-
-# 创建并激活虚拟环境
-python3 -m venv /opt/final_venv --system-site-packages
-source /opt/final_venv/bin/activate
-
-# 安装pytorch和其他依赖
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
+numpy==1.26.4
+scipy==1.12.0
+matplotlib==3.5.3
+pandas==2.3.0
+h5py==3.11.0
+pyyaml==5.4.1
+meshio==5.3.4
+gmsh==4.11.1
 
 

@@ -1,4 +1,4 @@
-"""PyEidors电极系统模块"""
+"""PyEidors electrode system module"""
 
 from .patterns import StimMeasPatternManager
 

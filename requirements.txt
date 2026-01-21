@@ -1,35 +1,22 @@
-# 下载并激活容器
-docker run -ti `
-  --gpus all `
-  --shm-size=24g `
-  --ipc=host `
-  --ulimit memlock=-1 `
-  --ulimit stack=67108864 `
-  --network=host `
-  --cpus=20 `
-  --memory=28g `
-  -v "D:\workspace\PyEIDORS:/root/shared" `
-  -w /root/shared `
-  --name pyeidors `
-  ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
+#
+# Minimal Python dependencies for running PyEidors.
+#
+# Recommended workflow:
+#   - Use the FEniCS Docker image listed in `README.md`
+#   - Install this project with `pip install -e .` (see `pyproject.toml`)
+#
+# NOTE: FEniCS/DOLFIN is provided by the Docker image and is not listed here.
+#
 
+numpy~=1.26.4
+scipy~=1.12.0
+matplotlib~=3.5.0
+pandas~=2.3.0
+h5py~=3.11.0
+pyyaml~=5.4.1
 
-####手动安装############
-#安装字体
-apt-get update
-apt-get install ttf-wqy-zenhei
-#安装cuqi
-pip install cuqipy
-
-#安装CUQIpy-FEniCS
-pip install cuqipy-fenics
-
-# 创建并激活虚拟环境
-python3 -m venv /opt/final_venv --system-site-packages
-source /opt/final_venv/bin/activate
-
-# 安装pytorch和其他依赖
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-
+# Mesh tooling (needed when generating meshes via Gmsh/meshio)
+meshio>=5.3.4
+gmsh>=4.11.1
 
 

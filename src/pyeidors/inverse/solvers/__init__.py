@@ -1,4 +1,4 @@
-"""PyEidors逆问题求解器模块"""
+"""PyEidors inverse problem solver module"""
 
 from .gauss_newton import ModularGaussNewtonReconstructor
 from .sparse_bayesian import SparseBayesianReconstructor, SparseBayesianConfig

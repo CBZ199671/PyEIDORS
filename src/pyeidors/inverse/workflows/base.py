@@ -1,4 +1,4 @@
-"""成像流程通用工具。"""
+"""Imaging workflow common utilities."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from ...data.structures import EITImage
 
 @dataclass
 class ReconstructionResult:
-    """封装差分/绝对成像的统一输出。"""
+    """Unified output encapsulation for difference/absolute imaging."""
 
     mode: str
     conductivity: np.ndarray
@@ -39,7 +39,7 @@ class ReconstructionResult:
         return float(np.mean(self.residual ** 2))
 
     def to_dict(self) -> Dict[str, Any]:
-        """转换为字典，方便与旧脚本兼容。"""
+        """Convert to dictionary for compatibility with legacy scripts."""
 
         data = {
             "mode": self.mode,
@@ -61,7 +61,7 @@ def resolve_reconstruction_output(
     reconstruction: Any,
     fwd_model,
 ) -> Tuple[EITImage, np.ndarray, Optional[Sequence[float]], Optional[Sequence[float]]]:
-    """从求解器输出中提取导电率图像与历史记录。"""
+    """Extract conductivity image and history from solver output."""
 
     if isinstance(reconstruction, dict):
         conductivity_field = reconstruction.get("conductivity")
@@ -79,7 +79,7 @@ def resolve_reconstruction_output(
         conductivity_values = conductivity_field
         conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
     else:
-        raise TypeError("无法识别的重建结果类型: 期待 FEniCS Function 或 numpy 数组")
+        raise TypeError("Unrecognized reconstruction result type: expected FEniCS Function or numpy array")
 
     return conductivity_image, conductivity_values, residual_history, sigma_history
 
@@ -88,7 +88,7 @@ def compute_residuals(
     measured_vector: np.ndarray,
     simulated_vector: np.ndarray,
 ) -> Tuple[np.ndarray, float, float, float]:
-    """计算残差向量及基本指标。"""
+    """Compute residual vector and basic metrics."""
 
     residual_vector = simulated_vector - measured_vector
     l2_error = float(np.linalg.norm(residual_vector))

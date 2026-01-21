@@ -1,4 +1,4 @@
-"""PyEidors可视化模块"""
+"""PyEidors visualization module"""
 
 from .eit_plots import EITVisualizer, create_visualizer
 

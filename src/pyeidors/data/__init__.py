@@ -1,4 +1,4 @@
-"""PyEidors数据处理模块"""
+"""PyEidors data processing module"""
 
 from .structures import (
     PatternConfig,

@@ -80,9 +80,9 @@ def main():
     parser.add_argument("--strict-eidors", action="store_true")
     parser.add_argument("--step-size-calibration", action="store_true")
     parser.add_argument("--output-root", type=Path, required=True)
-    parser.add_argument("--stim-direction", choices=["ccw", "cw"], help="覆盖激励方向并传递给单步求解脚本")
-    parser.add_argument("--meas-direction", choices=["ccw", "cw"], help="覆盖测量方向并传递给单步求解脚本")
-    parser.add_argument("--stim-first", choices=["positive", "negative"], help="设置激励对第一个电极的正负顺序")
+    parser.add_argument("--stim-direction", choices=["ccw", "cw"], help="Override stimulation direction")
+    parser.add_argument("--meas-direction", choices=["ccw", "cw"], help="Override measurement direction")
+    parser.add_argument("--stim-first", choices=["positive", "negative"], help="Set polarity order for first electrode")
     args = parser.parse_args()
 
     args.output_root.mkdir(parents=True, exist_ok=True)

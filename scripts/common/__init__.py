@@ -1,6 +1,6 @@
-"""PyEidors 脚本公共模块。
+"""PyEidors scripts common module.
 
-提供脚本间共享的工具函数，避免代码重复。
+Provides shared utility functions across scripts to avoid code duplication.
 """
 
 from .io_utils import (

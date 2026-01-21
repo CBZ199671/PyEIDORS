@@ -360,9 +360,9 @@ def save_conductivity_figures(system: EITSystem,
     output_dir.mkdir(parents=True, exist_ok=True)
     visualizer = create_visualizer()
     fig_gt = visualizer.plot_conductivity(system.mesh, ground_truth.elem_data,
-                                          title=None, minimal=True)
+                                          title=None, minimal=True, show_electrodes=True)
     fig_rec = visualizer.plot_conductivity(system.mesh, reconstruction.elem_data,
-                                           title=None, minimal=True)
+                                           title=None, minimal=True, show_electrodes=True)
     fig_gt.savefig(output_dir / "phantom_ground_truth.png", dpi=dpi)
     fig_rec.savefig(output_dir / "reconstruction.png", dpi=dpi)
 

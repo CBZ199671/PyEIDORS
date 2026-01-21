@@ -20,8 +20,11 @@ except ImportError as exc:  # pragma: no cover
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_PATH = REPO_ROOT / "src"
+SCRIPTS_PATH = REPO_ROOT / "scripts"
 if str(SRC_PATH) not in __import__("sys").path:
     __import__("sys").path.insert(0, str(SRC_PATH))
+if str(SCRIPTS_PATH) not in __import__("sys").path:
+    __import__("sys").path.insert(0, str(SCRIPTS_PATH))
 
 from pyeidors.core_system import EITSystem
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
@@ -34,6 +37,7 @@ from pyeidors.inverse import (
     SparseBayesianReconstructor,
 )
 from pyeidors.visualization import create_visualizer
+from scripts.common.io_utils import align_frames_polarity  # type: ignore
 
 LOGGER = logging.getLogger("sparse_bayes_reconstruction")
 
@@ -207,7 +211,7 @@ def parse_args() -> argparse.Namespace:
         "--gpu-dtype",
         type=str,
         default="float32",
-        help="GPU 张量数据类型，可选 float16/float32/float64",
+        help="GPU tensor data type: float16/float32/float64",
     )
     parser.add_argument(
         "--block-iterations",
@@ -631,6 +635,31 @@ def main() -> None:
 
     baseline_image = eit_system.create_homogeneous_image()
     baseline_data = eit_system.forward_solve(baseline_image)
+    baseline_vector = baseline_data.meas
+
+    # Polarity correction: align columns (absolute, reference, target, calibration) to normal U-shape
+    cols_to_align = set()
+    if mode_absolute:
+        cols_to_align.add(args.absolute_col)
+    if mode_difference:
+        cols_to_align.update({args.reference_col, args.target_col})
+    calib_col = (
+        args.calibration_col
+        if args.calibration_col >= 0
+        else (args.absolute_col if mode_absolute else args.reference_col)
+    )
+    cols_to_align.add(calib_col)
+
+    flipped_cols: list[int] = []
+    if cols_to_align:
+        col_list = list(cols_to_align)
+        selected = np.vstack([raw_measurements[:, c] for c in col_list])
+        aligned, flipped_idx = align_frames_polarity(selected, baseline_vector)
+        for i, c in enumerate(col_list):
+            raw_measurements[:, c] = aligned[i]
+        flipped_cols = [col_list[i] for i in flipped_idx]
+        if flipped_cols:
+            LOGGER.info("Polarity alignment: flipped columns %s", flipped_cols)
 
     config = SparseBayesianConfig(
         cache_jacobian=args.jacobian_cache,

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-实际网格生成测试
-测试真实的GMsh网格生成和FEniCS转换
+Real mesh generation test.
+Tests real GMsh mesh generation and FEniCS conversion.
 """
 
 import numpy as np
@@ -18,88 +18,88 @@ SRC_PATH = PROJECT_ROOT / 'src'
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-# 配置日志
+# Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def test_real_mesh_generation():
-    """测试真实的网格生成"""
-    print("🔧 测试真实网格生成...")
-    
+    """Test real mesh generation."""
+    print("🔧 Testing real mesh generation...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import (
             OptimizedMeshGenerator, OptimizedMeshConfig, ElectrodePosition,
             create_eit_mesh
         )
-        
-        # 创建临时目录
+
+        # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
-            # 测试简单配置
+
+            # Test simple configuration
             config = OptimizedMeshConfig(
                 radius=1.0,
-                refinement=4,  # 较小的细化级别以加快测试
+                refinement=4,  # Smaller refinement level for faster testing
                 electrode_vertices=4,
                 gap_vertices=1
             )
-            electrodes = ElectrodePosition(L=8, coverage=0.5)  # 8电极简化测试
-            
-            # 创建生成器
+            electrodes = ElectrodePosition(L=8, coverage=0.5)  # 8 electrodes for simplified test
+
+            # Create generator
             generator = OptimizedMeshGenerator(config, electrodes)
-            
-            # 生成网格
+
+            # Generate mesh
             mesh_result = generator.generate(output_dir=temp_path)
-            
-            # 验证结果
+
+            # Verify result
             if isinstance(mesh_result, dict):
-                # 返回的是网格信息字典
-                print("✅ 生成了网格信息字典")
+                # Returned mesh info dictionary
+                print("✅ Generated mesh info dictionary")
                 assert 'n_electrodes' in mesh_result
                 assert mesh_result['n_electrodes'] == 8
                 assert 'radius' in mesh_result
                 assert mesh_result['radius'] == 1.0
-                
+
             else:
-                # 返回的是FEniCS网格对象
-                print("✅ 生成了FEniCS网格对象")
+                # Returned FEniCS mesh object
+                print("✅ Generated FEniCS mesh object")
                 assert hasattr(mesh_result, 'num_vertices')
                 assert hasattr(mesh_result, 'num_cells')
-                print(f"   顶点数: {mesh_result.num_vertices()}")
-                print(f"   单元数: {mesh_result.num_cells()}")
-            
-            # 检查输出文件
+                print(f"   Vertices: {mesh_result.num_vertices()}")
+                print(f"   Cells: {mesh_result.num_cells()}")
+
+            # Check output files
             msh_files = list(temp_path.glob("*.msh"))
-            assert len(msh_files) >= 1, "应该生成至少一个.msh文件"
-            print(f"✅ 生成了 {len(msh_files)} 个网格文件")
-            
-            # 检查XDMF文件
+            assert len(msh_files) >= 1, "Should generate at least one .msh file"
+            print(f"✅ Generated {len(msh_files)} mesh file(s)")
+
+            # Check XDMF files
             xdmf_files = list(temp_path.glob("*.xdmf"))
             if xdmf_files:
-                print(f"✅ 生成了 {len(xdmf_files)} 个XDMF文件")
-            
+                print(f"✅ Generated {len(xdmf_files)} XDMF file(s)")
+
             return True
-            
+
     except ImportError as e:
-        print(f"⚠️  依赖不可用，跳过真实网格生成测试: {e}")
+        print(f"⚠️  Dependency not available, skipping real mesh generation test: {e}")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 真实网格生成测试失败: {e}")
+        print(f"❌ Real mesh generation test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 def test_convenience_function():
-    """测试便捷函数的真实调用"""
-    print("🔧 测试便捷函数真实调用...")
-    
+    """Test convenience function real invocation."""
+    print("🔧 Testing convenience function real invocation...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import create_eit_mesh
-        
-        # 创建临时目录
+
+        # Create temporary directory
         with tempfile.TemporaryDirectory() as temp_dir:
-            # 使用便捷函数
+            # Use convenience function
             mesh_result = create_eit_mesh(
                 n_elec=8,
                 radius=1.0,
@@ -107,189 +107,189 @@ def test_convenience_function():
                 electrode_coverage=0.5,
                 output_dir=temp_dir
             )
-            
-            # 验证结果
+
+            # Verify result
             if isinstance(mesh_result, dict):
-                print("✅ 便捷函数生成了网格信息字典")
+                print("✅ Convenience function generated mesh info dictionary")
                 assert 'n_electrodes' in mesh_result
                 assert mesh_result['n_electrodes'] == 8
             else:
-                print("✅ 便捷函数生成了FEniCS网格对象")
+                print("✅ Convenience function generated FEniCS mesh object")
                 assert hasattr(mesh_result, 'num_vertices')
                 assert hasattr(mesh_result, 'num_cells')
-            
-            # 检查输出文件
+
+            # Check output files
             output_path = Path(temp_dir)
             msh_files = list(output_path.glob("*.msh"))
-            assert len(msh_files) >= 1, "应该生成至少一个.msh文件"
-            
+            assert len(msh_files) >= 1, "Should generate at least one .msh file"
+
             return True
-            
+
     except ImportError as e:
-        print(f"⚠️  依赖不可用，跳过便捷函数测试: {e}")
+        print(f"⚠️  Dependency not available, skipping convenience function test: {e}")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 便捷函数测试失败: {e}")
+        print(f"❌ Convenience function test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 def test_mesh_converter():
-    """测试网格转换器"""
-    print("🔧 测试网格转换器...")
-    
+    """Test mesh converter."""
+    print("🔧 Testing mesh converter...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import (
             OptimizedMeshConverter, OptimizedMeshGenerator,
             OptimizedMeshConfig, ElectrodePosition
         )
-        
-        # 首先生成一个网格文件
+
+        # First generate a mesh file
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_path = Path(temp_dir)
-            
-            # 生成网格
+
+            # Generate mesh
             config = OptimizedMeshConfig(radius=1.0, refinement=3)
             electrodes = ElectrodePosition(L=8, coverage=0.5)
             generator = OptimizedMeshGenerator(config, electrodes)
-            
-            # 创建网格文件
+
+            # Create mesh file
             mesh_result = generator.generate(output_dir=temp_path)
-            
-            # 找到生成的.msh文件
+
+            # Find generated .msh file
             msh_files = list(temp_path.glob("*.msh"))
             if msh_files:
                 msh_file = msh_files[0]
-                print(f"✅ 找到网格文件: {msh_file.name}")
-                
-                # 测试转换器
+                print(f"✅ Found mesh file: {msh_file.name}")
+
+                # Test converter
                 converter = OptimizedMeshConverter(str(msh_file), str(temp_path))
-                
-                # 尝试转换
+
+                # Try conversion
                 try:
                     mesh, boundaries_mf, assoc_table = converter.convert()
-                    print("✅ 网格转换成功")
-                    
-                    # 验证结果
+                    print("✅ Mesh conversion successful")
+
+                    # Verify result
                     if hasattr(mesh, 'num_vertices'):
-                        print(f"   转换后顶点数: {mesh.num_vertices()}")
-                        print(f"   转换后单元数: {mesh.num_cells()}")
-                    
+                        print(f"   Converted vertices: {mesh.num_vertices()}")
+                        print(f"   Converted cells: {mesh.num_cells()}")
+
                     if assoc_table:
-                        print(f"   关联表项数: {len(assoc_table)}")
-                        
+                        print(f"   Association table entries: {len(assoc_table)}")
+
                 except Exception as e:
-                    print(f"⚠️  转换过程中出现问题: {e}")
-                    # 检查是否至少生成了XDMF文件
+                    print(f"⚠️  Issue during conversion: {e}")
+                    # Check if at least XDMF files were generated
                     xdmf_files = list(temp_path.glob("*.xdmf"))
                     if xdmf_files:
-                        print(f"✅ 生成了 {len(xdmf_files)} 个XDMF文件")
-                    
+                        print(f"✅ Generated {len(xdmf_files)} XDMF file(s)")
+
                     ini_files = list(temp_path.glob("*.ini"))
                     if ini_files:
-                        print(f"✅ 生成了 {len(ini_files)} 个关联表文件")
-                        
+                        print(f"✅ Generated {len(ini_files)} association table file(s)")
+
                 return True
             else:
-                print("⚠️  没有找到网格文件，跳过转换器测试")
+                print("⚠️  No mesh file found, skipping converter test")
                 return True
-                
+
     except ImportError as e:
-        print(f"⚠️  依赖不可用，跳过网格转换器测试: {e}")
+        print(f"⚠️  Dependency not available, skipping mesh converter test: {e}")
         return True
-        
+
     except Exception as e:
-        print(f"❌ 网格转换器测试失败: {e}")
+        print(f"❌ Mesh converter test failed: {e}")
         import traceback
         traceback.print_exc()
         return False
 
 def test_electrode_geometry():
-    """测试电极几何计算"""
-    print("🔧 测试电极几何计算...")
-    
+    """Test electrode geometry calculation."""
+    print("🔧 Testing electrode geometry calculation...")
+
     try:
         from pyeidors.geometry.optimized_mesh_generator import ElectrodePosition
-        
-        # 测试16电极标准配置
+
+        # Test 16-electrode standard configuration
         elec_pos = ElectrodePosition(L=16, coverage=0.5)
         positions = elec_pos.positions
-        
-        # 验证角度分布
+
+        # Verify angle distribution
         total_coverage = 0
         for start, end in positions:
             if end > start:
                 total_coverage += (end - start)
             else:
                 total_coverage += (end + 2*np.pi - start)
-        
+
         expected_coverage = 2 * np.pi * 0.5
         assert abs(total_coverage - expected_coverage) < 1e-10
-        
-        print(f"✅ 电极总覆盖角度正确: {total_coverage:.4f} rad")
-        
-        # 测试对称性
+
+        print(f"✅ Total electrode coverage angle correct: {total_coverage:.4f} rad")
+
+        # Test symmetry
         elec_pos_sym = ElectrodePosition(L=8, coverage=0.5)
         pos_sym = elec_pos_sym.positions
-        
-        # 验证相邻电极间距相等
+
+        # Verify adjacent electrode gaps are equal
         gaps = []
         for i in range(len(pos_sym)):
             end_current = pos_sym[i][1]
             start_next = pos_sym[(i+1) % len(pos_sym)][0]
-            
+
             if start_next > end_current:
                 gap = start_next - end_current
             else:
                 gap = start_next + 2*np.pi - end_current
             gaps.append(gap)
-        
-        # 检查间距是否相等
+
+        # Check if gaps are equal
         gap_std = np.std(gaps)
-        assert gap_std < 1e-10, f"间距不相等，标准差: {gap_std}"
-        
-        print(f"✅ 电极间距分布均匀: {np.mean(gaps):.4f} rad")
-        
+        assert gap_std < 1e-10, f"Gaps not equal, std: {gap_std}"
+
+        print(f"✅ Electrode gap distribution uniform: {np.mean(gaps):.4f} rad")
+
         return True
-        
+
     except Exception as e:
-        print(f"❌ 电极几何计算测试失败: {e}")
+        print(f"❌ Electrode geometry calculation test failed: {e}")
         return False
 
 def run_all_tests():
-    """运行所有实际测试"""
-    print("🚀 开始运行实际网格生成测试...")
+    """Run all real tests."""
+    print("🚀 Starting real mesh generation tests...")
     print("=" * 50)
-    
+
     tests = [
-        ("电极几何计算", test_electrode_geometry),
-        ("真实网格生成", test_real_mesh_generation),
-        ("便捷函数真实调用", test_convenience_function),
-        ("网格转换器", test_mesh_converter),
+        ("Electrode Geometry Calculation", test_electrode_geometry),
+        ("Real Mesh Generation", test_real_mesh_generation),
+        ("Convenience Function Real Invocation", test_convenience_function),
+        ("Mesh Converter", test_mesh_converter),
     ]
-    
+
     passed = 0
     total = len(tests)
-    
+
     for test_name, test_func in tests:
-        print(f"\n📋 运行测试: {test_name}")
+        print(f"\n📋 Running test: {test_name}")
         try:
             if test_func():
                 passed += 1
             else:
-                print(f"❌ 测试失败: {test_name}")
+                print(f"❌ Test failed: {test_name}")
         except Exception as e:
-            print(f"❌ 测试异常: {test_name} - {e}")
-    
+            print(f"❌ Test exception: {test_name} - {e}")
+
     print("\n" + "=" * 50)
-    print(f"📊 测试完成: {passed}/{total} 通过 ({passed/total*100:.1f}%)")
-    
+    print(f"📊 Tests complete: {passed}/{total} passed ({passed/total*100:.1f}%)")
+
     if passed == total:
-        print("🎉 所有测试通过！")
+        print("🎉 All tests passed!")
     else:
-        print(f"⚠️  {total - passed} 个测试失败")
-    
+        print(f"⚠️  {total - passed} test(s) failed")
+
     return passed == total
 
 if __name__ == "__main__":

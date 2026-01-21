@@ -1,4 +1,4 @@
-"""网格相关工具函数。"""
+"""Mesh-related utility functions."""
 
 from __future__ import annotations
 
@@ -6,36 +6,36 @@ import numpy as np
 
 
 def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
-    """将单元值转换为节点值（通过平均相邻单元）。
-    
+    """Convert cell values to node values by averaging adjacent cells.
+
     Args:
-        mesh: FEniCS 网格对象
-        cell_values: 每个单元的值，形状 (num_cells,)
-        
+        mesh: FEniCS mesh object.
+        cell_values: Values for each cell, shape (num_cells,).
+
     Returns:
-        每个节点的值，形状 (num_vertices,)
+        Values for each node, shape (num_vertices,).
     """
     node_vals = np.zeros(mesh.num_vertices())
     counts = np.zeros(mesh.num_vertices())
-    
+
     for ci, cell in enumerate(mesh.cells()):
         for v in cell:
             node_vals[v] += cell_values[ci]
             counts[v] += 1
-    
-    counts[counts == 0] = 1  # 避免除零
+
+    counts[counts == 0] = 1  # Avoid division by zero
     node_vals /= counts
     return node_vals
 
 
 def get_mesh_info(mesh) -> dict:
-    """获取网格基本信息。
-    
+    """Get basic mesh information.
+
     Args:
-        mesh: FEniCS 网格对象
-        
+        mesh: FEniCS mesh object.
+
     Returns:
-        包含网格信息的字典
+        Dictionary containing mesh information.
     """
     return {
         "num_cells": mesh.num_cells(),

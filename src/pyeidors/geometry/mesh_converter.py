@@ -1,4 +1,4 @@
-"""网格格式转换器"""
+"""Mesh format converter."""
 
 import numpy as np
 import meshio
@@ -7,10 +7,10 @@ from configparser import ConfigParser
 from typing import Dict, Tuple, Any
 import logging
 
-# 设置日志
+# Set up logging
 logger = logging.getLogger(__name__)
 
-# 检查FEniCS可用性
+# Check FEniCS availability
 try:
     from fenics import Mesh
     from dolfin import XDMFFile, MeshValueCollection
@@ -18,46 +18,46 @@ try:
     FENICS_AVAILABLE = True
 except ImportError:
     FENICS_AVAILABLE = False
-    logger.warning("FEniCS/dolfin不可用")
+    logger.warning("FEniCS/dolfin not available")
 
 
 class MeshConverter:
-    """网格格式转换器"""
-    
+    """Mesh format converter."""
+
     def __init__(self, mesh_file: str, output_dir: str):
         self.mesh_file = mesh_file
         self.output_dir = output_dir
         self.prefix = Path(mesh_file).stem
-    
+
     def convert(self) -> Tuple[Any, Any, Dict[str, int]]:
-        """转换MSH到FEniCS格式"""
+        """Convert MSH to FEniCS format."""
         if not FENICS_AVAILABLE:
-            raise ImportError("FEniCS不可用，无法转换网格")
-            
-        # 读取MSH文件
+            raise ImportError("FEniCS not available, cannot convert mesh")
+
+        # Read MSH file
         msh = meshio.read(self.mesh_file)
-        
-        # 导出XDMF文件
+
+        # Export XDMF files
         self._export_domain(msh)
         self._export_boundaries(msh)
         association_table = self._export_association_table(msh)
-        
-        # 导入到FEniCS
+
+        # Import to FEniCS
         return self._import_fenics_mesh(association_table)
-    
+
     def _export_domain(self, msh):
-        """导出域XDMF文件"""
+        """Export domain XDMF file."""
         cell_type = "triangle"
-        
-        # 提取域单元
+
+        # Extract domain cells
         cells = [cell for cell in msh.cells if cell.type == cell_type]
         if not cells:
-            raise ValueError("未找到域物理组")
-        
+            raise ValueError("Domain physical group not found")
+
         data = np.concatenate([cell.data for cell in cells])
         domain_cells = [meshio.CellBlock(cell_type=cell_type, data=data)]
-        
-        # 提取单元数据
+
+        # Extract cell data
         cell_data = {
             "subdomains": [
                 np.concatenate([
@@ -67,31 +67,31 @@ class MeshConverter:
                 ])
             ]
         }
-        
-        # 创建域网格
+
+        # Create domain mesh
         domain = meshio.Mesh(
             points=msh.points[:, :2],
             cells=domain_cells,
             cell_data=cell_data
         )
-        
-        # 导出XDMF
+
+        # Export XDMF
         meshio.write(f"{self.output_dir}/{self.prefix}_domain.xdmf", domain)
-    
+
     def _export_boundaries(self, msh):
-        """导出边界XDMF文件"""
+        """Export boundary XDMF file."""
         cell_type = "line"
-        
-        # 提取边界单元
+
+        # Extract boundary cells
         cells = [cell for cell in msh.cells if cell.type == cell_type]
         if not cells:
-            logger.warning("未找到边界物理组")
+            logger.warning("Boundary physical group not found")
             return
-        
+
         data = np.concatenate([cell.data for cell in cells])
         boundary_cells = [meshio.CellBlock(cell_type=cell_type, data=data)]
-        
-        # 提取单元数据
+
+        # Extract cell data
         cell_data = {
             "boundaries": [
                 np.concatenate([
@@ -101,24 +101,24 @@ class MeshConverter:
                 ])
             ]
         }
-        
-        # 创建边界网格
+
+        # Create boundary mesh
         boundaries = meshio.Mesh(
             points=msh.points[:, :2],
             cells=boundary_cells,
             cell_data=cell_data
         )
-        
-        # 导出XDMF
+
+        # Export XDMF
         meshio.write(f"{self.output_dir}/{self.prefix}_boundaries.xdmf", boundaries)
-    
+
     def _export_association_table(self, msh) -> Dict[str, int]:
-        """导出关联表"""
+        """Export association table."""
         association_table = {}
-        
+
         try:
             for label, arrays in msh.cell_sets.items():
-                # 查找非空数组
+                # Find non-empty array
                 for i, array in enumerate(arrays):
                     if array.size != 0 and label != "gmsh:bounding_entities":
                         if i < len(msh.cell_data["gmsh:physical"]):
@@ -126,31 +126,31 @@ class MeshConverter:
                             association_table[label] = int(value)
                         break
         except Exception as e:
-            logger.warning(f"处理关联表时出错: {e}")
-        
-        # 保存关联表
+            logger.warning(f"Error processing association table: {e}")
+
+        # Save association table
         config = ConfigParser()
         config["ASSOCIATION TABLE"] = {k: str(v) for k, v in association_table.items()}
-        
+
         with open(f"{self.output_dir}/{self.prefix}_association_table.ini", 'w') as f:
             config.write(f)
-        
+
         return association_table
-    
+
     def _import_fenics_mesh(self, association_table: Dict[str, int]) -> Tuple[Any, Any, Dict[str, int]]:
-        """导入FEniCS网格"""
+        """Import FEniCS mesh."""
         if not FENICS_AVAILABLE:
-            raise ImportError("FEniCS/dolfin不可用")
-        
-        # 导入域
+            raise ImportError("FEniCS/dolfin not available")
+
+        # Import domain
         mesh = Mesh()
         with XDMFFile(f"{self.output_dir}/{self.prefix}_domain.xdmf") as infile:
             infile.read(mesh)
-        
-        # 导入边界
+
+        # Import boundaries
         boundaries_mvc = MeshValueCollection("size_t", mesh, dim=1)
         with XDMFFile(f"{self.output_dir}/{self.prefix}_boundaries.xdmf") as infile:
             infile.read(boundaries_mvc, 'boundaries')
         boundaries_mf = MeshFunctionSizet(mesh, boundaries_mvc)
-        
+
         return mesh, boundaries_mf, association_table

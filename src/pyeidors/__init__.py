@@ -1,13 +1,13 @@
-"""PyEidors - Python版本的EIDORS电阻抗成像系统
+"""PyEIDORS - Python implementation of EIDORS for Electrical Impedance Tomography.
 
-基于FEniCS、PyTorch和CUQIpy的模块化EIT系统
-在Docker容器环境中运行，提供GPU加速和贝叶斯推断功能
+A modular EIT system based on FEniCS, PyTorch, and CUQIpy.
+Runs in Docker container environment with GPU acceleration and Bayesian inference support.
 """
 
 __version__ = "0.1.0"
 __author__ = "Your Name"
 
-# 检查关键依赖
+# Check critical dependencies
 try:
     import fenics
     _FENICS_AVAILABLE = True
@@ -28,12 +28,12 @@ try:
 except ImportError:
     _CUQI_AVAILABLE = False
 
-# 主要接口
+# Main interface
 from .core_system import EITSystem
 
-# 环境信息
+# Environment info
 def check_environment():
-    """检查运行环境"""
+    """Check runtime environment and available dependencies."""
     info = {
         'fenics_available': _FENICS_AVAILABLE,
         'torch_available': _TORCH_AVAILABLE,

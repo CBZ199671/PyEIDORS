@@ -1,4 +1,4 @@
-"""差分成像流程封装。"""
+"""Difference imaging workflow wrapper."""
 
 from __future__ import annotations
 
@@ -24,18 +24,18 @@ def perform_difference_reconstruction(
     initial_image: Optional[EITImage] = None,
     metadata: Optional[Dict[str, Any]] = None,
 ) -> ReconstructionResult:
-    """执行差分成像。
+    """Perform difference imaging.
 
-    参数:
-        eit_system: 已 setup 的 `EITSystem`。
-        measurement_data: 目标帧 `EITData`。
-        reference_data: 参考帧 `EITData`。
-        initial_image: 初始导电率图像，可选。
-        metadata: 附加信息（帧索引等）。
+    Args:
+        eit_system: Initialized `EITSystem` (setup() must have been called).
+        measurement_data: Target frame `EITData`.
+        reference_data: Reference frame `EITData`.
+        initial_image: Initial conductivity image (optional).
+        metadata: Additional info (frame index, etc.).
     """
 
     if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem 尚未初始化，请先调用 setup()。")
+        raise RuntimeError("EITSystem not initialized, please call setup() first.")
 
     initial_guess = (
         initial_image.elem_data if initial_image is not None else None

@@ -1,4 +1,4 @@
-"""PyEidors正则化模块"""
+"""PyEidors regularization module"""
 
 from .base_regularization import BaseRegularization
 from .smoothness import (

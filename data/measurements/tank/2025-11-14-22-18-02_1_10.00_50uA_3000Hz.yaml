@@ -1,0 +1,13 @@
+n_elec: 16
+stim_pattern: "{ad}"
+meas_pattern: "{ad}"
+amplitude: 5e-05
+use_meas_current: false
+use_meas_current_next: 0
+rotate_meas: true
+# n_frames: number of frames in the CSV (each frame uses 2 columns: real + imag; 4 columns = 2 frames)
+n_frames: 2
+stim_direction: "cw"
+meas_direction: "cw"
+sampling_rate_hz: 3000.0
+notes: "Tank measurement, 50 uA at 3 kHz"

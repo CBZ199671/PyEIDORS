@@ -1,4 +1,4 @@
-"""PyEidors几何建模模块"""
+"""PyEidors geometry modeling module"""
 
 from .mesh_generator import MeshGenerator
 from .mesh_converter import MeshConverter

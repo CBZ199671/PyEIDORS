@@ -1,6 +1,7 @@
-"""EIT 成像流程封装。
+"""EIT imaging workflow wrapper.
 
-该子包提供差分成像与绝对成像的高层辅助函数，避免在上层应用中混淆两种模式。
+This subpackage provides high-level helper functions for difference and absolute imaging,
+avoiding confusion between the two modes in higher-level applications.
 """
 
 from .absolute import perform_absolute_reconstruction

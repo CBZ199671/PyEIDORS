@@ -1,4 +1,4 @@
-"""模块化的PyTorch加速高斯牛顿EIT重建器"""
+"""Modular PyTorch-accelerated Gauss-Newton EIT Reconstructor."""
 
 import numpy as np
 import torch
@@ -12,21 +12,21 @@ from ..regularization.smoothness import SmoothnessRegularization
 
 
 class ModularGaussNewtonReconstructor:
-    """模块化的PyTorch加速高斯牛顿EIT重建器
-    
-    实现 EIDORS 风格的 Gauss-Newton 迭代算法：
-    
-    更新公式: dx = -(J'WJ + λ²RtR)⁻¹ (J'W·dv + λ²RtR·de)
-    
-    其中:
-        dv = 测量误差 = f(σ) - y_measured
-        de = 先验误差 = σ - σ_prior
-        W  = 测量逆协方差矩阵
-        RtR = 空间正则化矩阵
-        λ  = 超参数
+    """Modular PyTorch-accelerated Gauss-Newton EIT Reconstructor.
+
+    Implements EIDORS-style Gauss-Newton iterative algorithm:
+
+    Update formula: dx = -(J'WJ + λ²RtR)⁻¹ (J'W·dv + λ²RtR·de)
+
+    Where:
+        dv = measurement error = f(σ) - y_measured
+        de = prior error = σ - σ_prior
+        W  = measurement inverse covariance matrix
+        RtR = spatial regularization matrix
+        λ  = hyperparameter
     """
-    
-    def __init__(self, 
+
+    def __init__(self,
                  fwd_model,
                  jacobian_calculator=None,
                  regularization=None,
@@ -45,15 +45,14 @@ class ModularGaussNewtonReconstructor:
                  negate_jacobian: bool = True,
                  min_iterations: int = 1,
                  use_prior_term: bool = True):
-        """
-        初始化模块化高斯牛顿重建器
-        
-        参数:
-            fwd_model: 前向模型
-            jacobian_calculator: 雅可比计算器（可选）
-            regularization: 正则化对象（可选）
-            use_prior_term: 是否在更新中包含先验误差项 λ²RtR·de (EIDORS 风格)
-            其他参数同之前版本
+        """Initialize the modular Gauss-Newton reconstructor.
+
+        Args:
+            fwd_model: Forward model.
+            jacobian_calculator: Jacobian calculator (optional).
+            regularization: Regularization object (optional).
+            use_prior_term: Whether to include prior error term λ²RtR·de (EIDORS style).
+            Other parameters same as previous version.
         """
         self.fwd_model = fwd_model
         self.max_iterations = max_iterations
@@ -73,9 +72,9 @@ class ModularGaussNewtonReconstructor:
         self.min_step = min_step
         self.step_schedule: Optional[list[float]] = None
         self.min_iterations = int(max(1, min_iterations))
-        # EIDORS 风格: 是否使用先验误差项 λ²RtR·de
+        # EIDORS style: whether to use prior error term λ²RtR·de
         self.use_prior_term = use_prior_term
-        # 先验导电率 (用于计算 de = σ - σ_prior)
+        # Prior conductivity (for computing de = σ - σ_prior)
         self._prior_data: Optional[np.ndarray] = None
         if self.verbose:
             print(
@@ -83,76 +82,76 @@ class ModularGaussNewtonReconstructor:
                 f"use_prior_term={self.use_prior_term}"
             )
         
-        # 设置计算设备
+        # Set compute device
         if device.startswith('cuda') and torch.cuda.is_available():
             self.device = torch.device(device)
             if self.verbose:
-                print(f"使用GPU: {torch.cuda.get_device_name(self.device)}")
+                print(f"Using GPU: {torch.cuda.get_device_name(self.device)}")
         else:
             self.device = torch.device('cpu')
             if self.verbose:
-                print("使用CPU计算")
+                print("Using CPU for computation")
 
         self._torch_dtype = torch.float64
-        
-        # 设置雅可比计算器
+
+        # Set Jacobian calculator
         if jacobian_calculator is None:
             self.jacobian_calculator = DirectJacobianCalculator(fwd_model)
         else:
             self.jacobian_calculator = jacobian_calculator
-        
-        # 设置正则化
+
+        # Set regularization
         if regularization is None:
             self.regularization = SmoothnessRegularization(fwd_model, alpha=1.0)
         else:
             self.regularization = regularization
-        
+
         self.n_elements = len(Function(fwd_model.V_sigma).vector()[:])
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
-        
-        # 预计算正则化矩阵
+
+        # Pre-compute regularization matrix
         self.R_torch = None
-        
+
         if self.verbose:
-            print(f"模块化PyTorch高斯牛顿重建器初始化:")
-            print(f"  元素数: {self.n_elements}")
-            print(f"  测量数: {self.n_measurements}")
-            print(f"  雅可比计算器: {type(self.jacobian_calculator).__name__}")
-            print(f"  正则化方法: {type(self.regularization).__name__}")
-            print(f"  计算设备: {self.device}")
+            print(f"Modular PyTorch Gauss-Newton Reconstructor initialized:")
+            print(f"  Elements: {self.n_elements}")
+            print(f"  Measurements: {self.n_measurements}")
+            print(f"  Jacobian calculator: {type(self.jacobian_calculator).__name__}")
+            print(f"  Regularization: {type(self.regularization).__name__}")
+            print(f"  Device: {self.device}")
     
-    def reconstruct(self, 
+    def reconstruct(self,
                    measured_data: Union[object, np.ndarray],
                    initial_conductivity: float = 1.0,
                    jacobian_method: str = 'efficient',
                    prior_data: Optional[np.ndarray] = None):
-        """执行模块化的高斯牛顿重建
-        
-        参数:
-            measured_data: 测量数据
-            initial_conductivity: 初始导电率 (标量或数组)
-            jacobian_method: 雅可比计算方法
-            prior_data: 先验导电率分布 (用于计算 de = σ - σ_prior)
-                        如果为 None，则使用 initial_conductivity
+        """Execute modular Gauss-Newton reconstruction.
+
+        Args:
+            measured_data: Measurement data.
+            initial_conductivity: Initial conductivity (scalar or array).
+            jacobian_method: Jacobian computation method.
+            prior_data: Prior conductivity distribution (for computing de = σ - σ_prior).
+                        If None, uses initial_conductivity.
         """
 
         self._meas_weight_sqrt = None
         self._baseline_measurement = None
-        
-        # 处理输入数据
+
+        # Process input data
         if hasattr(measured_data, 'meas'):
             meas_vector = measured_data.meas
         else:
             meas_vector = measured_data.flatten()
-        
+
         if len(meas_vector) != self.n_measurements:
-            raise ValueError(f"测量数据长度不匹配: {len(meas_vector)} vs {self.n_measurements}")
-        
-        # 转换测量数据到目标设备
+            raise ValueError(f"Measurement data length mismatch: {len(meas_vector)} vs {self.n_measurements}")
+
+        # Convert measurement data to target device
         meas_torch = torch.from_numpy(meas_vector).to(self.device, dtype=self._torch_dtype)
         self._measured_vector = meas_vector.copy()
-        
-        # 获取正则化矩阵
+
+        # Get regularization matrix
         if self.R_torch is None:
             R_np = self.regularization.get_regularization_matrix()
             self.R_torch = torch.from_numpy(R_np).to(self.device, dtype=self._torch_dtype)
@@ -165,7 +164,7 @@ class ModularGaussNewtonReconstructor:
 
         model_scale = getattr(self, "model_scale", 1.0)
 
-        # 初始化导电率分布
+        # Initialize conductivity distribution
         if initial_conductivity is None:
             initial_conductivity = 1.0
         sigma_current = Function(self.fwd_model.V_sigma)
@@ -175,7 +174,7 @@ class ModularGaussNewtonReconstructor:
             sigma_current.vector()[:] = np.asarray(initial_conductivity).flatten()
         self._ensure_measurement_weights(sigma_current)
         
-        # 设置先验数据 (用于 EIDORS 风格的 de = σ - σ_prior)
+        # Set prior data (for EIDORS-style de = σ - σ_prior)
         if prior_data is not None:
             self._prior_data = np.asarray(prior_data).flatten()
         elif np.isscalar(initial_conductivity):
@@ -184,26 +183,30 @@ class ModularGaussNewtonReconstructor:
             self._prior_data = np.asarray(initial_conductivity).flatten()
         prior_torch = torch.from_numpy(self._prior_data).to(self.device, dtype=self._torch_dtype)
         
-        # 记录收敛历史
+        # Record convergence history
         residual_history = []
         sigma_change_history = []
         iteration_logs = []
+
+        # Early stopping: consecutive rollback counter
+        consecutive_rollbacks = 0
+        max_consecutive_rollbacks = 5  # Terminate after 5 consecutive rollbacks
         
         if self.verbose:
             print(f"[INFO] lambda={self.regularization_param:.3e}")
-            print(f"\n开始模块化高斯牛顿重建...")
-            print(f"使用雅可比方法: {jacobian_method}")
+            print(f"\nStarting modular Gauss-Newton reconstruction...")
+            print(f"Using Jacobian method: {jacobian_method}")
 
         prev_residual = None
 
         with tqdm(total=self.max_iterations, disable=not self.verbose) as pbar:
             for iteration in range(self.max_iterations):
                 
-                # 1. 前向求解
+                # 1. Forward solve
                 img_current = EITImage(elem_data=sigma_current.vector()[:], fwd_model=self.fwd_model)
                 data_simulated, _ = self.fwd_model.fwd_solve(img_current)
-                
-                # 2. 计算残差 (dv = f(σ) - y_meas)
+
+                # 2. Compute residual (dv = f(σ) - y_meas)
                 data_sim_torch = torch.from_numpy(data_simulated.meas).to(self.device, dtype=self._torch_dtype)
                 residual_torch = data_sim_torch - meas_torch  # dv
                 if self._meas_weight_sqrt is not None:
@@ -215,7 +218,7 @@ class ModularGaussNewtonReconstructor:
                 residual_norm = torch.norm(residual_torch).item()
                 residual_max = torch.max(torch.abs(residual_torch)).item()
                 
-                # 计算 EIDORS 风格的完整目标函数: 0.5*dv'*W*dv + 0.5*de'*λ²RtR*de
+                # Compute EIDORS-style full objective: 0.5*dv'*W*dv + 0.5*de'*λ²RtR*de
                 sigma_vec_torch = torch.from_numpy(sigma_current.vector()[:]).to(
                     self.device, dtype=self._torch_dtype
                 )
@@ -230,7 +233,7 @@ class ModularGaussNewtonReconstructor:
                 residual_history.append(residual_norm)
                 res_drop = None if prev_residual is None else prev_residual - residual_norm
                 
-                # 3. 使用模块化雅可比计算器
+                # 3. Use modular Jacobian calculator
                 measurement_jacobian_np = self.jacobian_calculator.calculate(
                     sigma_current, method=jacobian_method
                 )
@@ -242,14 +245,14 @@ class ModularGaussNewtonReconstructor:
                 else:
                     J_weighted = J_torch
                 
-                # 4. 构建高斯牛顿系统
-                # EIDORS 风格: dx = -(J'WJ + λ²RtR)⁻¹ (J'W·dv + λ²RtR·de)
+                # 4. Build Gauss-Newton system
+                # EIDORS style: dx = -(J'WJ + λ²RtR)⁻¹ (J'W·dv + λ²RtR·de)
                 JTJ = torch.mm(J_weighted.t(), J_weighted)
                 JTr = torch.mv(J_weighted.t(), weighted_residual_torch)
                 
                 lambda_eff = self.regularization_param
                 
-                # 计算先验误差项 de = σ_current - σ_prior
+                # Compute prior error term de = σ_current - σ_prior
                 sigma_current_torch = torch.from_numpy(sigma_current.vector()[:]).to(
                     self.device, dtype=self._torch_dtype
                 )
@@ -257,7 +260,7 @@ class ModularGaussNewtonReconstructor:
                 
                 A = JTJ + lambda_eff * self.R_torch
                 
-                # EIDORS 风格的完整 RHS: -(J'W·dv + λ²RtR·de)
+                # EIDORS-style full RHS: -(J'W·dv + λ²RtR·de)
                 if self.use_prior_term:
                     RtR_de = torch.mv(self.R_torch, de_torch)
                     b = -(JTr + lambda_eff * RtR_de)
@@ -272,7 +275,7 @@ class ModularGaussNewtonReconstructor:
                     residual_norm_weighted / (meas_weighted_norm + 1e-12) if meas_weighted_norm else None
                 )
 
-                # 5. 求解线性系统
+                # 5. Solve linear system
                 try:
                     delta_sigma_torch = torch.linalg.solve(A, b)
                 except RuntimeError:
@@ -280,7 +283,7 @@ class ModularGaussNewtonReconstructor:
                     delta_sigma_torch = torch.linalg.solve(A_regularized, b)
                 delta_norm = torch.norm(delta_sigma_torch).item()
 
-                # 6. 线搜索 (EIDORS 风格: 使用完整目标函数)
+                # 6. Line search (EIDORS style: using full objective function)
                 if self.step_schedule is not None and iteration < len(self.step_schedule):
                     optimal_step_size = float(self.step_schedule[iteration])
                 else:
@@ -297,35 +300,44 @@ class ModularGaussNewtonReconstructor:
                         optimal_step_size = self.min_step
 
                 
-                # 7. 更新导电率
+                # 7. Update conductivity
                 sigma_old_values = sigma_current.vector()[:].copy()
                 delta_sigma_np = delta_sigma_torch.cpu().numpy()
                 sigma_current.vector()[:] += optimal_step_size * delta_sigma_np
                 
-                # 8. 应用约束
+                # 8. Apply constraints
                 if self.clip_values is not None:
                     sigma_current.vector()[:] = np.clip(
                         sigma_current.vector()[:], self.clip_values[0], self.clip_values[1]
                     )
                 
-                # 9. 检查收敛
+                # 9. Check convergence
                 sigma_new_torch = torch.from_numpy(sigma_current.vector()[:]).to(self.device, dtype=self._torch_dtype)
                 sigma_old_torch = torch.from_numpy(sigma_old_values).to(self.device, dtype=self._torch_dtype)
                 
                 sigma_change = torch.norm(sigma_new_torch - sigma_old_torch).item()
                 relative_change = sigma_change / (torch.norm(sigma_new_torch).item() + 1e-12)
 
-                # 如果残差上升，则回退到上一步（模仿 EIDORS 的 bad step rollback）
+                # If residual increases, rollback to previous step (mimics EIDORS bad step rollback)
                 if prev_residual is not None and residual_norm > prev_residual:
+                    consecutive_rollbacks += 1
                     if self.verbose:
                         print(
                             f"[WARN] residual increased ({residual_norm:.3e} > {prev_residual:.3e}), "
-                            "rolling back step"
+                            f"rolling back step ({consecutive_rollbacks}/{max_consecutive_rollbacks})"
                         )
                     sigma_current.vector()[:] = sigma_old_values
                     residual_history[-1] = prev_residual
                     sigma_change_history[-1] = 0.0
+
+                    # Early stop: terminate if too many consecutive rollbacks
+                    if consecutive_rollbacks >= max_consecutive_rollbacks:
+                        if self.verbose:
+                            print(f"[STOP] {max_consecutive_rollbacks} consecutive rollbacks, terminating early")
+                        break
                     continue
+                else:
+                    consecutive_rollbacks = 0  # Successful update, reset counter
                 sigma_change_history.append(relative_change)
 
                 iteration_logs.append(
@@ -346,7 +358,7 @@ class ModularGaussNewtonReconstructor:
                         "lambda_eff": lambda_eff,
                         "relative_change": relative_change,
                         "res_drop": res_drop,
-                        # EIDORS 风格的目标函数分解
+                        # EIDORS-style objective function decomposition
                         "meas_misfit": meas_misfit,
                         "prior_misfit": prior_misfit,
                         "total_objective": total_objective,
@@ -356,18 +368,18 @@ class ModularGaussNewtonReconstructor:
                 
                 if relative_change < self.convergence_tol:
                     if self.verbose:
-                        print(f"\n收敛达到! 迭代 {iteration}, 相对变化: {relative_change:.2e}")
+                        print(f"\nConverged! Iteration {iteration}, relative change: {relative_change:.2e}")
                     if iteration + 1 >= self.min_iterations:
                         break
-                
-                # 更新进度条
+
+                # Update progress bar
                 if self.verbose:
                     pbar.set_postfix_str(
-                        f"残差={residual_norm:.2e}, 步长={optimal_step_size:.3f}, Δσ={relative_change:.2e}"
+                        f"residual={residual_norm:.2e}, step={optimal_step_size:.3f}, Δσ={relative_change:.2e}"
                     )
                     pbar.update(1)
         
-        # 构建结果
+        # Build results
         results = {
             'conductivity': sigma_current,
             'residual_history': residual_history,
@@ -386,16 +398,16 @@ class ModularGaussNewtonReconstructor:
             results['measurement_weight'] = (self._meas_weight_sqrt.detach().cpu().numpy() ** 2)
         
         if self.verbose:
-            print(f"\n重建完成:")
-            print(f"  迭代次数: {results['iterations']}")
-            print(f"  最终残差: {results['final_residual']:.2e}")
-            print(f"  雅可比方法: {jacobian_method}")
-            print(f"  正则化类型: {results['regularization_type']}")
+            print(f"\nReconstruction complete:")
+            print(f"  Iterations: {results['iterations']}")
+            print(f"  Final residual: {results['final_residual']:.2e}")
+            print(f"  Jacobian method: {jacobian_method}")
+            print(f"  Regularization type: {results['regularization_type']}")
         
         return results
     
     def _ensure_measurement_weights(self, sigma_function: Function) -> None:
-        """基于基线前向解计算测量加权系数（EIDORS `calc_meas_icov` 的简化版本）。"""
+        """Compute measurement weights based on baseline forward solution (simplified EIDORS `calc_meas_icov`)."""
         strategy = self.measurement_weight_strategy
         if not self.use_measurement_weights or strategy == "none":
             self._meas_weight_sqrt = None
@@ -434,7 +446,7 @@ class ModularGaussNewtonReconstructor:
             )
 
     def _scale_baseline_to_measured(self, baseline_vector: np.ndarray) -> np.ndarray:
-        """线性拉伸基线测量以匹配当前实测，供权重估计使用。"""
+        """Linearly scale baseline measurements to match actual measurements for weight estimation."""
         if self._measured_vector is None:
             return baseline_vector
 
@@ -450,7 +462,7 @@ class ModularGaussNewtonReconstructor:
         return scale * baseline_vector + bias
 
     def _difference_with_baseline(self, baseline_vector: np.ndarray) -> np.ndarray:
-        """模仿 EIDORS 的差分归一化：使用与基线差值的幅度来构造权重。"""
+        """Mimic EIDORS difference normalization: use difference magnitude from baseline for weights."""
         if self._measured_vector is None:
             return baseline_vector
         diff = self._measured_vector - baseline_vector
@@ -468,95 +480,95 @@ class ModularGaussNewtonReconstructor:
         lambda_eff=None,
         retry: int = 0,
     ):
-        """EIDORS 风格的线搜索 (line_search_onm2 完整移植)
-        
-        完整实现 EIDORS 的线搜索逻辑，包括：
-        1. 数值稳定性检查 (calc_perturb)
-        2. 多点采样 + 选择最小残差
-        3. 自适应调整搜索范围
-        4. 递归重试机制 (最多5次)
-        
-        目标函数: residual = 0.5*dv'*W*dv + 0.5*de'*(λ²RtR)*de
-        
-        参数:
-            sigma_current: 当前导电率 (FEniCS Function)
-            delta_sigma_torch: 搜索方向
-            meas_target_torch: 目标测量值
-            current_weighted_residual: 当前加权残差
-            weight_vector: 测量权重 (sqrt(W))
-            prior_torch: 先验导电率 (用于计算 de)
-            lambda_eff: 有效正则化参数 λ²
-            retry: 当前重试次数 (内部使用)
+        """EIDORS-style line search (full port of line_search_onm2).
+
+        Full implementation of EIDORS line search logic including:
+        1. Numerical stability check (calc_perturb)
+        2. Multi-point sampling + select minimum residual
+        3. Adaptive search range adjustment
+        4. Recursive retry mechanism (up to 5 times)
+
+        Objective function: residual = 0.5*dv'*W*dv + 0.5*de'*(λ²RtR)*de
+
+        Args:
+            sigma_current: Current conductivity (FEniCS Function).
+            delta_sigma_torch: Search direction.
+            meas_target_torch: Target measurement values.
+            current_weighted_residual: Current weighted residual.
+            weight_vector: Measurement weights (sqrt(W)).
+            prior_torch: Prior conductivity (for computing de).
+            lambda_eff: Effective regularization parameter λ².
+            retry: Current retry count (internal use).
         """
         delta_sigma_np = delta_sigma_torch.cpu().numpy()
         current_residual = float(current_weighted_residual)
         x = sigma_current.vector()[:].copy()
         
-        # 初始化 perturb (EIDORS 默认采样点)
+        # Initialize perturb (EIDORS default sample points)
         if not hasattr(self, '_line_search_perturb') or self._line_search_perturb is None:
             base_perturb = np.array([0, 1/16, 1/8, 1/4, 1/2, 1])
             self._line_search_perturb = base_perturb * self.max_step
-        
-        # 计算数值稳定的搜索范围 (类似 EIDORS calc_perturb)
+
+        # Compute numerically stable search range (similar to EIDORS calc_perturb)
         perturb = self._calc_perturb_limits(x, delta_sigma_np)
-        
-        # 多点采样评估目标函数
+
+        # Multi-point sampling to evaluate objective function
         mlist = np.full(len(perturb), np.nan)
-        dv0 = None  # 保存 alpha=0 时的 dv，用于后续
+        dv0 = None  # Store dv at alpha=0 for later use
         
         for i, alpha in enumerate(perturb):
             if i == 0:
-                # alpha=0 时直接使用当前残差
+                # At alpha=0, use current residual directly
                 mlist[i] = current_residual ** 2 * 0.5
                 continue
-            
-            # 计算新的导电率
+
+            # Compute new conductivity
             sigma_test_np = x + alpha * delta_sigma_np
             if self.clip_values is not None:
                 sigma_test_np = np.clip(sigma_test_np, self.clip_values[0], self.clip_values[1])
-            
-            # 前向求解
+
+            # Forward solve
             img_test = EITImage(elem_data=sigma_test_np, fwd_model=self.fwd_model)
             try:
                 data_test, _ = self.fwd_model.fwd_solve(img_test)
             except Exception:
                 mlist[i] = np.inf
                 continue
-            
+
             data_test_torch = torch.from_numpy(data_test.meas).to(self.device, dtype=self._torch_dtype)
-            
-            # 计算 dv (测量误差)
+
+            # Compute dv (measurement error)
             dv_torch = data_test_torch - meas_target_torch
             if weight_vector is not None:
                 weighted_dv = dv_torch * weight_vector
             else:
                 weighted_dv = dv_torch
-            
-            # 测量误差项: 0.5 * dv' * W * dv
+
+            # Measurement misfit term: 0.5 * dv' * W * dv
             meas_misfit = 0.5 * torch.dot(weighted_dv, weighted_dv).item()
-            
-            # 先验误差项: 0.5 * de' * (λ²RtR) * de
+
+            # Prior misfit term: 0.5 * de' * (λ²RtR) * de
             prior_misfit = 0.0
             if self.use_prior_term and prior_torch is not None and lambda_eff is not None:
                 sigma_test_torch = torch.from_numpy(sigma_test_np).to(self.device, dtype=self._torch_dtype)
                 de_torch = sigma_test_torch - prior_torch
                 RtR_de = torch.mv(self.R_torch, de_torch)
                 prior_misfit = 0.5 * lambda_eff * torch.dot(de_torch, RtR_de).item()
-            
-            # 完整目标函数
+
+            # Full objective function
             total_objective = meas_misfit + prior_misfit
-            
-            # 检查数值有效性 (EIDORS: NaN/Inf -> +Inf)
+
+            # Check numerical validity (EIDORS: NaN/Inf -> +Inf)
             if np.isnan(total_objective) or np.isinf(total_objective):
                 mlist[i] = np.inf
             else:
                 mlist[i] = total_objective
-            
-            # 早停：如果目标函数暴涨，跳过后续点 (EIDORS 风格)
+
+            # Early stop: if objective explodes, skip remaining points (EIDORS style)
             if mlist[i] / mlist[0] > 1e10:
                 break
-        
-        # 选择最优步长
+
+        # Select optimal step size
         valid_idx = np.where(np.isfinite(mlist))[0]
         if len(valid_idx) == 0:
             chosen_step = 0.0
@@ -565,81 +577,81 @@ class ModularGaussNewtonReconstructor:
             best_idx = valid_idx[np.argmin(mlist[valid_idx])]
             chosen_step = perturb[best_idx]
             best_objective = mlist[best_idx]
-        
-        # EIDORS 风格的 perturb 自适应调整
+
+        # EIDORS-style adaptive perturb adjustment
         self._update_perturb_eidors_style(chosen_step, perturb, mlist, valid_idx)
-        
-        # EIDORS 风格递归重试：如果 alpha=0 是最优，尝试新的 perturb
+
+        # EIDORS-style recursive retry: if alpha=0 is optimal, try new perturb
         if chosen_step == 0 and retry < 5:
             return self._line_search_torch(
                 sigma_current, delta_sigma_torch, meas_target_torch,
                 current_weighted_residual, weight_vector, prior_torch, lambda_eff,
                 retry=retry + 1
             )
-        
-        # 返回步长 (允许返回 0，由调用方决定如何处理)
+
+        # Return step size (allow returning 0, caller decides how to handle)
         return float(chosen_step)
     
     def _calc_perturb_limits(self, x: np.ndarray, dx: np.ndarray) -> np.ndarray:
-        """计算数值稳定的搜索范围 (类似 EIDORS calc_perturb)
-        
-        检查浮点数精度限制，避免数值溢出。
-        
-        参数:
-            x: 当前导电率值
-            dx: 搜索方向
-        
-        返回:
-            perturb: 经过数值稳定性调整的采样点数组
+        """Compute numerically stable search range (similar to EIDORS calc_perturb).
+
+        Checks floating-point precision limits to avoid numerical overflow.
+
+        Args:
+            x: Current conductivity values.
+            dx: Search direction.
+
+        Returns:
+            perturb: Sample point array adjusted for numerical stability.
         """
         perturb = self._line_search_perturb.copy()
-        
-        # 确保 perturb[0] = 0
+
+        # Ensure perturb[0] = 0
         if perturb[0] != 0:
             perturb = np.concatenate([[0], perturb])
-        
-        # 计算 alpha 的数值稳定上限
-        # 避免 x + alpha*dx 溢出或变为非法值
+
+        # Compute numerically stable upper limit for alpha
+        # Prevent x + alpha*dx from overflowing or becoming invalid
         eps_machine = np.finfo(np.float64).eps
         
-        # 上限: 防止溢出到 inf
+        # Upper limit: prevent overflow to inf
         realmax = np.finfo(np.float64).max / 2
         with np.errstate(divide='ignore', invalid='ignore', over='ignore'):
             # (realmax - x) / dx for dx > 0
             au_pos = (realmax - x) / dx
             au_pos[dx <= 0] = np.inf
             au_pos[~np.isfinite(au_pos)] = np.inf
-            
+
             # (-realmax - x) / dx for dx < 0
             au_neg = (-realmax - x) / dx
             au_neg[dx >= 0] = np.inf
             au_neg[~np.isfinite(au_neg)] = np.inf
-            
+
             max_alpha = min(np.min(au_pos), np.min(au_neg))
-        
-        # 下限: 防止步长太小以至于没有变化
+
+        # Lower limit: prevent step size too small to make a change
         with np.errstate(divide='ignore', invalid='ignore'):
             al = eps_machine * np.abs(x) / np.abs(dx)
             al[~np.isfinite(al)] = 0
             min_alpha = np.max(al) if len(al) > 0 else 0
-        
-        # 限制 max_alpha 不超过 1.0 (完整牛顿步)
+
+        # Limit max_alpha to 1.0 (full Newton step)
         max_alpha = min(max_alpha, 1.0)
-        
-        # 如果 perturb 超出范围，在对数空间重新缩放 (EIDORS 风格)
+
+        # If perturb exceeds range, rescale in log space (EIDORS style)
         if perturb[-1] > max_alpha or (len(perturb) > 1 and perturb[1] < min_alpha):
-            # 过滤掉 0 和太小的值
+            # Filter out 0 and too-small values
             p_nonzero = perturb[perturb > eps_machine]
             if len(p_nonzero) == 0:
-                # fallback
+                # Fallback
                 return np.array([0, max_alpha / 4, max_alpha / 2, max_alpha])
-            
-            # 在对数空间重新缩放
+
+            # Rescale in log space
             log_p = np.log10(p_nonzero)
             log_max = np.log10(max_alpha) if max_alpha > eps_machine else -10
             log_min = np.log10(min_alpha) if min_alpha > eps_machine else -100
-            
-            # 缩放到有效范围
+
+            # Scale to valid range
             p_range = log_p[-1] - log_p[0] if len(log_p) > 1 else 1
             target_range = log_max - log_min
             
@@ -656,65 +668,65 @@ class ModularGaussNewtonReconstructor:
         return perturb
     
     def _update_perturb_eidors_style(
-        self, chosen_step: float, perturb: np.ndarray, 
+        self, chosen_step: float, perturb: np.ndarray,
         mlist: np.ndarray, valid_idx: np.ndarray
     ) -> None:
-        """EIDORS 风格的 perturb 自适应调整
-        
-        根据本次线搜索结果调整下次的搜索范围。
+        """EIDORS-style adaptive perturb adjustment.
+
+        Adjusts search range for next iteration based on current line search results.
         """
         goodi = valid_idx
-        dtol = self.convergence_tol  # 用作判断阈值
-        
+        dtol = self.convergence_tol  # Used as threshold
+
         if chosen_step == 0:  # bad step: alpha=0 is best
             if len(goodi) > 1 and mlist[0] * 1.05 < mlist[goodi[-1]]:
-                # 解发散了，缩小搜索范围
+                # Solution is diverging, shrink search range
                 self._line_search_perturb = self._line_search_perturb / 10
             elif perturb[-1] > 1.0 - 1e-9:
-                # 已经在 alpha=1 附近，放弃
+                # Already near alpha=1, give up
                 pass
             elif perturb[-1] * 10 > 1.0 - 1e-9:
-                # 扩大但限制在 1.0
+                # Expand but limit to 1.0
                 self._line_search_perturb = self._line_search_perturb / perturb[-1]
             else:
-                # 扩大搜索范围
+                # Expand search range
                 self._line_search_perturb = self._line_search_perturb * 10
         else:  # good step
-            # 检查是否有明显改进
+            # Check if there's significant improvement
             all_similar = len(goodi) > 0 and np.all(mlist[goodi] / mlist[0] - 1 > -10 * dtol)
-            
+
             if all_similar and perturb[-1] * 10 < 1.0 + 1e-9:
-                # 改进不大，扩大范围
+                # Little improvement, expand range
                 self._line_search_perturb = self._line_search_perturb * 10
             else:
-                # 以最优点为中心重新调整
+                # Re-center around optimal point
                 if chosen_step > 0 and perturb[-1] > 0:
                     scale = (chosen_step / perturb[-1]) * 2
                     new_perturb = self._line_search_perturb * scale
-                    # 限制在 1.0 以内
+                    # Limit to 1.0
                     if new_perturb[-1] > 1.0 - 1e-9:
                         new_perturb = new_perturb / new_perturb[-1]
                     self._line_search_perturb = new_perturb
-        
-        # EIDORS 风格: 添加 1% 随机扰动，避免卡在局部
+
+        # EIDORS style: add 1% random jitter to avoid getting stuck locally
         jiggle = np.exp(np.random.randn(len(self._line_search_perturb)) * 0.01)
         self._line_search_perturb = self._line_search_perturb * jiggle
-        
-        # 确保不超过 1.0
+
+        # Ensure not exceeding 1.0
         if self._line_search_perturb[-1] > 1.0 - 1e-9:
             self._line_search_perturb = self._line_search_perturb / self._line_search_perturb[-1]
     
     def set_regularization(self, regularization):
-        """动态设置正则化方法"""
+        """Dynamically set regularization method."""
         self.regularization = regularization
-        self.R_torch = None  # 重置缓存
-        
+        self.R_torch = None  # Reset cache
+
         if self.verbose:
-            print(f"正则化方法更新为: {type(regularization).__name__}")
-    
+            print(f"Regularization updated to: {type(regularization).__name__}")
+
     def set_jacobian_calculator(self, jacobian_calculator):
-        """动态设置雅可比计算器"""
+        """Dynamically set Jacobian calculator."""
         self.jacobian_calculator = jacobian_calculator
-        
+
         if self.verbose:
-            print(f"雅可比计算器更新为: {type(jacobian_calculator).__name__}")
+            print(f"Jacobian calculator updated to: {type(jacobian_calculator).__name__}")
