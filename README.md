@@ -146,6 +146,7 @@ Notes:
 - For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
 - Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
 - If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
+- If you downloaded an offline image archive (e.g., `pyeidors-ultra22.tar.zst`), see `docs/DOCKER.md` (Option B) for `docker load` instructions.
 
 ### Option B: start from the official FEniCS image (manual installation)
 

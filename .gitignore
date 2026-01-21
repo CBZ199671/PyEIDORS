@@ -128,3 +128,9 @@ jitfailure-*/
 SoftwareX-PyEidors-Paper/
 temp_abs_result/
 tank_cols.png
+
+# Local Docker image archives (never commit)
+*.tar
+*.tar.*
+*.zst
+pyeidors-*.tar.zst

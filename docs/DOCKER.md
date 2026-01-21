@@ -47,7 +47,86 @@ The `-v <host_path>:/root/shared` host path should point to your local clone of 
 - Windows PowerShell: `-v "${PWD}:/root/shared"`
 - Windows cmd.exe: `-v "%cd%:/root/shared"`
 
-## Option B: build the image locally from `Dockerfile`
+## Option B: use an offline image archive (`docker load`)
+
+If you distribute a “frozen” image as a compressed archive (for example `pyeidors-ultra22.tar.zst`),
+users can load it locally without building or pulling from a registry.
+
+Do not commit image archives into this Git repository. Publish them as Release assets or host them externally.
+
+### Windows prerequisites (recommended)
+
+1. Install WSL2 and an Ubuntu distribution (Ubuntu 22.04 LTS recommended).
+2. Install Docker Desktop and enable the WSL2 backend + WSL integration.
+3. (GPU only) Ensure your NVIDIA driver supports WSL2 + Docker GPU.
+
+### Load the image (recommended inside WSL2)
+
+Install `zstd` in WSL2:
+
+```bash
+sudo apt-get update && sudo apt-get install -y zstd
+```
+
+From the directory that contains `pyeidors-ultra22.tar.zst`, load the image:
+
+```bash
+zstd -d -c pyeidors-ultra22.tar.zst | docker load
+```
+
+If your machine has limited RAM, use a two-step load:
+
+```bash
+zstd -d pyeidors-ultra22.tar.zst -o pyeidors-ultra22.tar
+docker load -i pyeidors-ultra22.tar
+rm -f pyeidors-ultra22.tar
+```
+
+### Run the container
+
+Minimal (portable) command:
+
+```bash
+docker run -it --rm \
+  -v "$(pwd):/root/shared" \
+  -w /root/shared \
+  --name pyeidors \
+  pyeidors:latest \
+  bash
+```
+
+Keep a container running (WSL2/Linux):
+
+```bash
+docker run -d \
+  --name pyeidors \
+  --restart unless-stopped \
+  -v "$(pwd):/root/shared" \
+  -w /root/shared \
+  pyeidors:latest \
+  sleep infinity
+```
+
+Windows PowerShell example (equivalent to the command above):
+
+```powershell
+docker run -d `
+  --name pyeidors `
+  --restart unless-stopped `
+  -v "${PWD}:/root/shared" `
+  -w /root/shared `
+  pyeidors:latest `
+  sleep infinity
+```
+
+Optional performance flags (add only if needed / supported on your platform):
+
+- GPU: `--gpus all`
+- Shared memory: `--shm-size=2g` (or larger), and on Linux optionally `--ipc=host`
+- Resource limits: `--cpus=<n> --memory=<size>`
+- Host networking: `--network=host` (Linux-only; not supported on all platforms)
+
+## Option C: build the image locally from `Dockerfile`
 
 ```bash
 docker build -t pyeidors-env:local .
@@ -67,6 +146,27 @@ Notes:
 
 - You must make the resulting package public in GitHub Packages if you want unauthenticated pulls.
 - A typical naming scheme is `ghcr.io/cbz199671/pyeidors-env:<git-tag>` plus `:latest`.
+
+### Publishing an offline archive (maintainers)
+
+If you need to publish a `docker load` archive, create it on your machine:
+
+```bash
+docker save pyeidors:latest | zstd -19 -T0 -o pyeidors-ultra22.tar.zst
+sha256sum pyeidors-ultra22.tar.zst > pyeidors-ultra22.tar.zst.sha256
+```
+
+If the archive is larger than the hosting per-file limit, split it into parts:
+
+```bash
+split -b 1900M pyeidors-ultra22.tar.zst pyeidors-ultra22.tar.zst.part-
+```
+
+Users can reassemble it with:
+
+```bash
+cat pyeidors-ultra22.tar.zst.part-* > pyeidors-ultra22.tar.zst
+```
 
 ## Notes
 
