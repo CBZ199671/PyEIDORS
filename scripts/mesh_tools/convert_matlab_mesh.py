@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MATLAB fmdl mesh to PyEidors mesh JSON and NPZ formats."""
+"""Convert MATLAB fmdl mesh to PyEIDORS mesh JSON and NPZ formats."""
 
 from __future__ import annotations
 

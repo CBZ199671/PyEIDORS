@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyEidors Comprehensive Test Suite
+PyEIDORS Comprehensive Test Suite
 Runs all available tests including basic module tests, functional tests, and performance tests.
 """
 
@@ -94,7 +94,7 @@ class TestRunner:
         total_time = time.time() - self.start_time
 
         print(f"\n{'='*80}")
-        print("🏆 PyEidors Test Suite Complete")
+        print("🏆 PyEIDORS Test Suite Complete")
         print(f"{'='*80}")
 
         print(f"\n📊 Test Results:")
@@ -155,7 +155,7 @@ class TestRunner:
 
 def main():
     """Main function."""
-    print("🚀 Starting PyEidors Comprehensive Test Suite")
+    print("🚀 Starting PyEIDORS Comprehensive Test Suite")
     print(f"Python version: {sys.version}")
     print(f"Working directory: {os.getcwd()}")
 
@@ -193,7 +193,7 @@ def create_test_report(results):
     report_file = output_dir / "test_report.md"
 
     with open(report_file, 'w', encoding='utf-8') as f:
-        f.write("# PyEidors Test Report\n\n")
+        f.write("# PyEIDORS Test Report\n\n")
         f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
         f.write("## Test Results\n\n")

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyEidors Module Test Script
+PyEIDORS Module Test Script
 Tests basic functionality of each module.
 """
 
@@ -180,7 +180,7 @@ def test_pattern_manager():
 
 def run_all_tests():
     """Run all tests."""
-    print("=== PyEidors Module Test Started ===")
+    print("=== PyEIDORS Module Test Started ===")
 
     tests = [
         test_imports,

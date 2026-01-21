@@ -1,6 +1,6 @@
 """EIT-specific PDE adapter for CUQIpy-FEniCS.
 
-This module exposes the forward model used in PyEidors as a CUQI-compatible
+This module exposes the forward model used in PyEIDORS as a CUQI-compatible
 PDE object so that it can be wrapped by ``cuqipy_fenics.testproblem.PDEModel``.
 It bridges the existing ``EITForwardModel`` (which already relies on FEniCS)
 with the higher-level CUQI abstractions, reducing the amount of bespoke glue
@@ -31,7 +31,7 @@ class EITGeometryInfo:
 
 
 class EITPDE(cuqi.pde.PDE):
-    """Wrap the PyEidors forward model as a CUQI PDE.
+    """Wrap the PyEIDORS forward model as a CUQI PDE.
 
     The implementation delegates the assembly/solve steps to the existing
     :class:`EITForwardModel` while exposing the observation and Jacobian

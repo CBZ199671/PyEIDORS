@@ -42,7 +42,7 @@ from common.io_utils import load_metadata, load_single_frame
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="PyEidors GN absolute imaging (EIDORS-style parameters)",
+        description="PyEIDORS GN absolute imaging (EIDORS-style parameters)",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(

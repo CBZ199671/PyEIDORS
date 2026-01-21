@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PyEidors Modular Test"""
+"""PyEIDORS Modular Test"""
 
 import numpy as np
 
@@ -131,7 +131,7 @@ def test_basic_workflow():
 
 def main():
     """Run all tests."""
-    print("🎯 PyEidors Modular Test")
+    print("🎯 PyEIDORS Modular Test")
     print("=" * 50)
 
     # Test imports
@@ -144,7 +144,7 @@ def main():
         print("\n❌ Workflow test failed")
         return
 
-    print("\n🎉 All tests passed! PyEidors modular refactoring successful!")
+    print("\n🎉 All tests passed! PyEIDORS modular refactoring successful!")
 
 
 if __name__ == "__main__":

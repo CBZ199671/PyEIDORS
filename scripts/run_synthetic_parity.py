@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Generate synthetic EIT data and compare PyEidors predictions against references.
+"""Generate synthetic EIT data and compare PyEIDORS predictions against references.
 
 This script serves two roles:
   1. Create a ground-truth phantom, run forward simulations and store the
      resulting voltage measurements for later reuse (e.g., inside EIDORS).
-  2. Reconstruct the phantom with PyEidors (absolute and/or difference modes)
+  2. Reconstruct the phantom with PyEIDORS (absolute and/or difference modes)
      and report voltage/residual metrics, optionally comparing against a set of
      reference voltages exported from another tool.
 
@@ -99,7 +99,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--figure-dpi", type=int, default=300,
                         help="DPI used when saving matplotlib figures.")
     parser.add_argument("--difference-solver", choices=["gauss-newton", "single-step"], default="gauss-newton",
-                        help="Select PyEidors' iterative GN solver or an EIDORS-style single-step solve.")
+                        help="Select PyEIDORS' iterative GN solver or an EIDORS-style single-step solve.")
     parser.add_argument("--difference-max-iterations", type=int, default=None,
                         help="Override the Gauss–Newton iteration count when using the iterative solver.")
     parser.add_argument("--difference-hyperparameter", type=float, default=1e-2,
@@ -115,7 +115,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--single-step-jacobian-method", choices=["efficient", "traditional"], default="efficient",
                         help="Jacobian calculator mode for the single-step solver.")
     parser.add_argument("--single-step-negate-jacobian", action="store_true",
-                        help="Match PyEidors' sign convention by negating the Jacobian before solving.")
+                        help="Match PyEIDORS' sign convention by negating the Jacobian before solving.")
     parser.add_argument("--conductivity-bounds", type=float, nargs=2, metavar=("MIN", "MAX"),
                         default=(1e-6, 10.0),
                         help="Bounds enforced on reconstructed conductivities in single-step mode.")

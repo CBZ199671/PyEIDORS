@@ -1,4 +1,4 @@
-"""PyEidors forward problem solver module"""
+"""PyEIDORS forward problem solver module"""
 
 from .eit_forward_model import EITForwardModel
 

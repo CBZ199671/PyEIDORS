@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "pyeidors"
 version = "0.1.0"
-description = "PyEidors - A FEniCS-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
+description = "PyEIDORS - A FEniCS-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "GPL-3.0-only"}

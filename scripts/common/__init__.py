@@ -1,4 +1,4 @@
-"""PyEidors scripts common module.
+"""PyEIDORS scripts common module.
 
 Provides shared utility functions across scripts to avoid code duplication.
 """

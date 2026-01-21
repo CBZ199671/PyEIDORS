@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyEidors Simplified System Test
+PyEIDORS Simplified System Test
 Bypasses mesh loading issues using mock mesh for functional testing.
 """
 
@@ -85,7 +85,7 @@ def create_mock_mesh(n_elec=16):
 
 def test_eit_system_with_mock_mesh():
     """Test EIT system functionality using mock mesh."""
-    print("=== PyEidors Simplified System Test (Using Mock Mesh) ===\n")
+    print("=== PyEIDORS Simplified System Test (Using Mock Mesh) ===\n")
 
     try:
         # 1. Import and environment check

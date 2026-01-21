@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyEidors Basic Usage Example
+PyEIDORS Basic Usage Example
 Demonstrates how to use the modular EIT system for forward solving and inverse reconstruction.
 """
 
@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 def basic_usage_example():
     """Basic usage example."""
-    print("=== PyEidors Basic Usage Example ===")
+    print("=== PyEIDORS Basic Usage Example ===")
 
     # Import required modules
     from pyeidors import EITSystem, check_environment
@@ -76,7 +76,7 @@ def basic_usage_example():
 
 def show_module_structure():
     """Show module structure."""
-    print("=== PyEidors Module Structure ===")
+    print("=== PyEIDORS Module Structure ===")
 
     structure = {
         "pyeidors/": {
@@ -127,7 +127,7 @@ def show_module_structure():
 
 def show_key_features():
     """Show key features."""
-    print("=== PyEidors Key Features ===")
+    print("=== PyEIDORS Key Features ===")
 
     features = [
         "🔧 Modular Design",

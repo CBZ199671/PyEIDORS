@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-Compare MATLAB-exported and PyEidors-generated linear systems for single-step GN.
+Compare MATLAB-exported and PyEIDORS-generated linear systems for single-step GN.
 
 This helper loads:
   * MATLAB's `eidors_linear_system.mat` (v7.3 HDF5) containing A, b, J, dv, …
-  * PyEidors's `linear_system.npz` generated via --dump-linear-system
+  * PyEIDORS's `linear_system.npz` generated via --dump-linear-system
   * A measured difference vector (e.g., eit_difference_reconstruction.csv column 0)
 
 It solves each system, projects back to measurement space, and reports RMSE/correlation
@@ -107,7 +107,7 @@ def main() -> None:
     if args.pyeidors_npz:
         pred, delta = solve_pyeidors_system(args.pyeidors_npz)
         stats = analyze_solution("pyeidors", measured, pred)
-        print(f"[PyEidors] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}")
+        print(f"[PyEIDORS] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}")
         if args.output_dir:
             np.savetxt(args.output_dir / "pyeidors_predicted.csv", pred, delimiter=",")
             np.savetxt(args.output_dir / "pyeidors_delta.csv", delta, delimiter=",")

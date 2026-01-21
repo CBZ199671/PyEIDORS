@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-PyEidors Complete System End-to-End Test
+PyEIDORS Complete System End-to-End Test
 Tests the complete EIT forward/inverse solving workflow including mesh loading,
 forward solving, inverse reconstruction, and visualization.
 """
@@ -20,7 +20,7 @@ if str(SRC_PATH) not in sys.path:
 
 def test_complete_eit_workflow():
     """Test complete EIT workflow."""
-    print("=== PyEidors Complete System End-to-End Test ===\n")
+    print("=== PyEIDORS Complete System End-to-End Test ===\n")
 
     try:
         # 1. Import modules and check environment
@@ -257,7 +257,7 @@ def test_module_integration():
     return success_count == len(modules_to_test)
 
 if __name__ == "__main__":
-    print("Starting PyEidors complete system test...\n")
+    print("Starting PyEIDORS complete system test...\n")
 
     # Module integration test
     integration_success = test_module_integration()
@@ -268,7 +268,7 @@ if __name__ == "__main__":
         workflow_success = test_complete_eit_workflow()
 
         if workflow_success:
-            print("\n🏆 All tests passed successfully! PyEidors system is working properly.")
+            print("\n🏆 All tests passed successfully! PyEIDORS system is working properly.")
             sys.exit(0)
         else:
             print("\n⚠️  Workflow test not fully successful, but basic functionality available.")

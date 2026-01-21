@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MATLAB mesh.npz + electrodes.json into XDMF cache usable by PyEidors."""
+"""Convert MATLAB mesh.npz + electrodes.json into XDMF cache usable by PyEIDORS."""
 
 from __future__ import annotations
 

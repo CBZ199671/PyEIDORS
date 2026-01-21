@@ -1,5 +1,5 @@
 #
-# Minimal Python dependencies for running PyEidors.
+# Minimal Python dependencies for running PyEIDORS.
 #
 # Recommended workflow:
 #   - Use the FEniCS Docker image listed in `README.md`
@@ -18,5 +18,4 @@ pyyaml~=5.4.1
 # Mesh tooling (needed when generating meshes via Gmsh/meshio)
 meshio>=5.3.4
 gmsh>=4.11.1
-
 

@@ -1,4 +1,4 @@
-"""PyEidors Jacobian calculation module"""
+"""PyEIDORS Jacobian calculation module"""
 
 from .base_jacobian import BaseJacobianCalculator
 from .direct_jacobian import DirectJacobianCalculator
