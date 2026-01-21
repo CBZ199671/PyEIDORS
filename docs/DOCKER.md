@@ -1,6 +1,6 @@
 # Docker usage
 
-PyEidors is developed and tested inside Docker. The recommended workflow is to use a prebuilt image that already contains:
+PyEIDORS is developed and tested inside Docker. The recommended workflow is to use a prebuilt image that already contains:
 
 - FEniCS (from `ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30`)
 - CUQIpy + CUQIpy-FEniCS

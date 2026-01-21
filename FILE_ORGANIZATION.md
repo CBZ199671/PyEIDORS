@@ -1,4 +1,4 @@
-# PyEidors Project Layout
+# PyEIDORS Project Layout
 
 This document is intended for code readers and contributors. For end-user setup and quick demos, start with `README.md`.
 

@@ -1,4 +1,4 @@
-# PyEidors
+# PyEIDORS
 
 A FEniCS-based Electrical Impedance Tomography (EIT) forward and inverse problem solving system, providing a Pythonic implementation similar to EIDORS with PyTorch acceleration.
 
@@ -48,7 +48,7 @@ For a file-level map of the codebase, see `FILE_ORGANIZATION.md`.
 
 ## Quickstart
 
-1. Start the Docker container (see below).
+1. Start the Docker container (see [Docker Environment Setup](#docker-environment-setup)).
 2. Install the package inside the container:
    - `pip install -e .`
 3. Run a synthetic demo (paper parity example):
@@ -60,7 +60,7 @@ The repository includes pre-generated demo outputs under `results/` (see the `CO
 
 ### Synthetic Simulation Comparison
 
-When comparing PyEidors with existing MATLAB/EIDORS workflows, use the new script to automatically generate simulation data and compute error statistics:
+When comparing PyEIDORS with existing MATLAB/EIDORS workflows, use the new script to automatically generate simulation data and compute error statistics:
 
 ```bash
 python scripts/run_synthetic_parity.py \
@@ -72,7 +72,7 @@ The script will:
 
 - Run forward simulation with given circular phantom parameters, saving baseline/anomaly boundary voltages;
 - Execute absolute and difference imaging reconstruction sequentially, outputting residuals, RMSE, correlation coefficients, and other metrics (`metrics.json`);
-- Optionally load EIDORS-generated voltage vectors via `--eidors-csv path/to/voltages.csv` to automatically compute differences with PyEidors.
+- Optionally load EIDORS-generated voltage vectors via `--eidors-csv path/to/voltages.csv` to automatically compute differences with PyEIDORS.
 
 The output JSON, CSV, and generated reconstruction images (`results/simulation_parity/run01/...`) can be directly used for simulation experiment placeholder figures in papers.
 
