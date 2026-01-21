@@ -101,6 +101,9 @@ python scripts/run_sparse_bayesian_reconstruction.py \
   --contact-impedance 1e-5 --difference-calibration after
 ```
 
+The repository also includes a pre-generated tank sparse Bayesian demo under:
+`results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0/` (see `COMMAND.md` inside).
+
 Results are written to `results/sparse_bayesian/` by default. For a full list of options, run `python scripts/run_sparse_bayesian_reconstruction.py --help`.
 
 ## Data, Visualization, and Testing

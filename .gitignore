@@ -113,6 +113,8 @@ results/tank_final_results/**
 !results/tank_final_results/difference_imaging_lam1.5/**
 !results/tank_final_results/difference_imaging_physical_bg0008_lam0.9/
 !results/tank_final_results/difference_imaging_physical_bg0008_lam0.9/**
+!results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0/
+!results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0/**
 
 !results/simulation_parity/
 results/simulation_parity/**

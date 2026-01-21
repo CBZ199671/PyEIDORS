@@ -1,0 +1,6 @@
+mode=difference
+L2=9.120708653229482
+relative_error=2082.1799954732774
+mse=0.3999390689283419
+likelihood_noise_std=4.6445017914120845e-06
+prior_scale=0.05
