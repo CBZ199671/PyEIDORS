@@ -1,41 +1,36 @@
 FROM ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
 
-ARG DEBIAN_FRONTEND=noninteractive
-ARG INSTALL_CJK_FONTS=0
+# Build a PyEIDORS-ready environment on top of the official FEniCS+Gmsh image.
+#
+# This image is intended to be used by mounting the repository into /root/shared,
+# so you can iterate on code without rebuilding the image.
 
-ENV PIP_NO_CACHE_DIR=1
-ENV PYTHONUNBUFFERED=1
+ENV DEBIAN_FRONTEND=noninteractive
+WORKDIR /root/shared
 
-ENV VIRTUAL_ENV=/opt/pyeidors_venv
-ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+# Install CJK fonts (optional, but useful for plots with Chinese labels).
+# Note: different base images may use different package names; try both.
+RUN apt-get update && \
+    (apt-get install -y --no-install-recommends fonts-wqy-zenhei || apt-get install -y --no-install-recommends ttf-wqy-zenhei) && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
-# Create a stable runtime environment on top of the official FEniCS image.
-# This image is intended to be used by mounting the repository into /workspace.
-RUN apt-get update \
-  && apt-get install -y --no-install-recommends python3-venv \
-  && if [ "${INSTALL_CJK_FONTS}" = "1" ]; then apt-get install -y --no-install-recommends fonts-wqy-zenhei; fi \
-  && rm -rf /var/lib/apt/lists/*
+# Install CUQIpy packages and the uv package manager.
+RUN pip install --no-cache-dir cuqipy cuqipy-fenics uv
 
-RUN python3 -m venv "${VIRTUAL_ENV}" --system-site-packages \
-  && pip install --upgrade pip setuptools wheel
+# Create a virtual environment using system site packages (FEniCS is provided by the base image).
+RUN uv venv /opt/final_venv --system-site-packages
 
-COPY requirements-lock.txt /tmp/requirements-lock.txt
-RUN pip install -r /tmp/requirements-lock.txt
+ENV VIRTUAL_ENV=/opt/final_venv
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
-ARG CUQIPY_VERSION=1.3.0
-ARG CUQIPY_FENICS_VERSION=0.8.0
-RUN pip install "CUQIpy==${CUQIPY_VERSION}" "CUQIpy-FEniCS==${CUQIPY_FENICS_VERSION}"
+# Install GPU-enabled PyTorch (cu128).
+RUN uv pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
 
-# GPU-enabled PyTorch by default (cu128). For CPU-only builds, override TORCH_INDEX_URL.
-ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cu128
-ARG TORCH_VERSION=2.7.1
-ARG TORCHVISION_VERSION=0.22.1
-ARG TORCHAUDIO_VERSION=2.7.1
-RUN pip install --extra-index-url "${TORCH_INDEX_URL}" \
-  "torch==${TORCH_VERSION}" "torchvision==${TORCHVISION_VERSION}" "torchaudio==${TORCHAUDIO_VERSION}"
+# Remove numpy from the venv to avoid potential conflicts with the base image numpy.
+RUN uv pip uninstall -y numpy || true
 
-WORKDIR /workspace
-ENV PYTHONPATH="/workspace/src:${PYTHONPATH}"
+# Auto-activate the venv in interactive shells.
+RUN echo "source /opt/final_venv/bin/activate" >> /root/.bashrc
 
-CMD ["bash"]
-
+CMD ["/bin/bash"]

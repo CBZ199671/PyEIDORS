@@ -142,8 +142,8 @@ docker run -ti \
   --network=host \
   --cpus=20 \
   --memory=28g \
-  -v "$(pwd):/workspace" \
-  -w /workspace \
+  -v "$(pwd):/root/shared" \
+  -w /root/shared \
   --name pyeidors \
   ghcr.io/cbz199671/pyeidors-env:latest
 ```

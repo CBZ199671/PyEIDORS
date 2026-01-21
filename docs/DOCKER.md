@@ -27,13 +27,13 @@ docker run -ti \
   --ulimit stack=67108864 \
   --cpus=20 \
   --memory=28g \
-  -v "$(pwd):/workspace" \
-  -w /workspace \
+  -v "$(pwd):/root/shared" \
+  -w /root/shared \
   --name pyeidors \
   ghcr.io/cbz199671/pyeidors-env:latest
 ```
 
-Inside the container you can run scripts directly. `PYTHONPATH` is set to `/workspace/src` so you do not need `pip install -e .` for basic usage.
+Inside the container you can run scripts directly. For editable installs, run `pip install -e .`.
 
 ## Option B: build the image locally from `Dockerfile`
 
@@ -56,3 +56,7 @@ Notes:
 - You must make the resulting package public in GitHub Packages if you want unauthenticated pulls.
 - A typical naming scheme is `ghcr.io/cbz199671/pyeidors-env:<git-tag>` plus `:latest`.
 
+## Notes
+
+- The image is large. Do not upload exported tarballs (from `docker save`) to Git.
+- FEniCS is provided by the base image. This Dockerfile focuses on freezing the Python stack (CUQIpy, uv, PyTorch) and convenience defaults.
