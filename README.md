@@ -134,34 +134,25 @@ See `docs/DOCKER.md` for the most up-to-date commands.
 docker pull ghcr.io/cbz199671/pyeidors-env:latest
 
 docker run -ti \
-  --gpus all \
-  --shm-size=24g \
-  --ipc=host \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  --network=host \
-  --cpus=20 \
-  --memory=28g \
   -v "$(pwd):/root/shared" \
   -w /root/shared \
   --name pyeidors \
   ghcr.io/cbz199671/pyeidors-env:latest
 ```
 
+Notes:
+
+- The `-v ...:/root/shared` path should point to your local clone of this repository.
+- For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
+- Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
+- If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
+
 ### Option B: start from the official FEniCS image (manual installation)
 
 ```bash
 # Start container
 docker run -ti \
-  --gpus all \
-  --shm-size=24g \
-  --ipc=host \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  --network=host \
-  --cpus=20 \
-  --memory=28g \
-  -v "D:\workspace\PyEIDORS:/root/shared" \
+  -v "$(pwd):/root/shared" \
   -w /root/shared \
   --name pyeidors \
   ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30

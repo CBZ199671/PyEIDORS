@@ -20,13 +20,6 @@ docker pull ghcr.io/cbz199671/pyeidors-env:latest
 
 ```bash
 docker run -ti \
-  --gpus all \
-  --shm-size=24g \
-  --ipc=host \
-  --ulimit memlock=-1 \
-  --ulimit stack=67108864 \
-  --cpus=20 \
-  --memory=28g \
   -v "$(pwd):/root/shared" \
   -w /root/shared \
   --name pyeidors \
@@ -34,6 +27,25 @@ docker run -ti \
 ```
 
 Inside the container you can run scripts directly. For editable installs, run `pip install -e .`.
+
+### Runtime flags (tuning)
+
+Docker has no fully automatic “fit to my hardware” mode for these flags, but the default behavior is already adaptive:
+if you omit `--cpus` and `--memory`, Docker can use the available host resources (subject to Docker Desktop limits).
+
+Use the following flags only when needed:
+
+- **GPU**: `--gpus all` (requires NVIDIA Container Toolkit / Docker Desktop GPU support).
+- **Shared memory**: if you see `/dev/shm` errors, add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
+- **Limit resources** (optional): use `--cpus=<n>` and/or `--memory=<size>` to cap usage on smaller machines.
+
+### Mount path (Windows / Linux)
+
+The `-v <host_path>:/root/shared` host path should point to your local clone of this repository.
+
+- Linux/macOS (bash): `-v "$(pwd):/root/shared"`
+- Windows PowerShell: `-v "${PWD}:/root/shared"`
+- Windows cmd.exe: `-v "%cd%:/root/shared"`
 
 ## Option B: build the image locally from `Dockerfile`
 
