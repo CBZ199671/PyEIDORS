@@ -181,7 +181,10 @@ For a file-level map of the codebase, see `FILE_ORGANIZATION.md`.
 ## Performance Benchmarks
 
 End-to-end **single-step difference reconstruction** timing (Warm Start).
-PyEIDORS' **measurement-space solve** (solve in measurement space with $J R^{-1} J^T$) significantly outperforms the standard parameter-space solve ($J^T J$) on dense meshes, while remaining algebraically equivalent under the NOSER prior.
+PyEIDORS' **measurement-space solve** is derived via Woodbury to avoid forming the large n&times;n system (n = mesh elements). The standard form solves
+(J<sup>T</sup>J + &lambda;R) &delta; = J<sup>T</sup>d (parameter space), while the measurement-space form solves
+(J R<sup>-1</sup> J<sup>T</sup> + &lambda;I) y = d and then &delta; = R<sup>-1</sup> J<sup>T</sup> y.
+Here m = number of measurements, so the inner solve is m&times;m (typically 208), which is much smaller than n&times;n for dense meshes. With NOSER, R is diagonal, so R<sup>-1</sup> is just elementwise inversion, keeping the solution algebraically equivalent but far cheaper in memory and runtime.
 
 <p align="center">
   <img src="pictures/benchmark_difference_runtime.png" alt="PyEIDORS baseline difference benchmark" width="900" />
