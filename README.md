@@ -44,6 +44,11 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
    docker run -ti -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
    ```
 
+   If you have an NVIDIA GPU with CUDA set up, add `--gpus all`:
+   ```bash
+   docker run -ti --gpus all -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
+   ```
+
    If you use a different local path, replace `$(pwd)` with your full folder path. The `-v` flag binds your local repo into `/root/shared` inside the container.
 
 3. **Install the Package**:
@@ -107,7 +112,7 @@ Comparison of conductivity reconstructions and voltage predictions between PyEID
   <img src="pictures/Fig.%205.%20compare_tank.png" alt="Tank data validation" width="900" />
 </p>
 
-Verification using tank measurement data. PyEIDORS (b, c) demonstrates consistent performance with MATLAB/EIDORS benchmarks (d, e).
+Verification using tank measurement data. PyEIDORS (b, c) demonstrates consistent performance with MATLAB/EIDORS benchmarks (d, e). Panels (f, g) show the original EIDORS reconstructions before affine alignment.
 
 Parameter settings for the forward modeling and inverse solution corresponding to the tank comparison panels:
 
@@ -176,7 +181,7 @@ For a file-level map of the codebase, see `FILE_ORGANIZATION.md`.
 ## Performance Benchmarks
 
 End-to-end **single-step difference reconstruction** timing (Warm Start).
-PyEIDORS' **measurement-space solve** ($J R^{-1} J^T$) significantly outperforms the standard parameter-space solve ($J^T J$) on dense meshes.
+PyEIDORS' **measurement-space solve** (solve in measurement space with $J R^{-1} J^T$) significantly outperforms the standard parameter-space solve ($J^T J$) on dense meshes, while remaining algebraically equivalent under the NOSER prior.
 
 <p align="center">
   <img src="pictures/benchmark_difference_runtime.png" alt="PyEIDORS baseline difference benchmark" width="900" />
@@ -194,6 +199,10 @@ For reference, we include the EIDORS timing curve (cold vs cached). EIDORS cachi
 Bench scripts:
 - PyEIDORS: `python scripts/benchmarks/benchmark_difference_runtime.py`
 - EIDORS: `compare_with_Eidors/benchmark_jacobian_runtime.m` (set `benchmark_mode = 'difference'`)
+
+Accuracy check (parameter-space vs measurement-space, refinement=12):
+- `delta_rel=8.66e-09`, `rmse_param=4.503e-01`, `rmse_meas=4.503e-01`, `pred_rel=5.10e-10`
+- Reproduce with: `python scripts/benchmarks/benchmark_difference_runtime.py --refinements 12 --compare-solvers --single-step-space measurement`
 
 | Elements | Baseline (s) | Measurement-Space (s) | Speedup |
 |---:|---:|---:|---:|
@@ -291,6 +300,7 @@ Notes:
 - For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
 - Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
 - If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
+- If you omit `--gpus all`, PyTorch will run on CPU; it will not error unless a script explicitly forces CUDA.
 - If you downloaded an offline image archive (e.g., `pyeidors-ultra22.tar.zst`), see `docs/DOCKER.md` for `docker load` instructions.
 
 ### Option B: Manual Build
