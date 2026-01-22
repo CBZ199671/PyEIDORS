@@ -8,11 +8,13 @@ This script serves two roles:
      and report voltage/residual metrics, optionally comparing against a set of
      reference voltages exported from another tool.
 
-Example usage (difference mode only):
+Example usage (paper-matching absolute + difference):
 
     python scripts/run_synthetic_parity.py \
       --output-root results/simulation_parity/run01 \
-      --mode both \
+      --mode both --save-forward-csv \
+      --difference-solver single-step --step-size-calibration \
+      --gn-regularization 1e-11 \
       --phantom-center 0.3 0.2 --phantom-radius 0.2 --phantom-contrast 1.5
 
 Example usage comparing against EIDORS voltages:
@@ -39,7 +41,7 @@ from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITData, EITImage, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
-from pyeidors.visualization import create_visualizer
+from pyeidors.visualization import EITVisualizer, create_visualizer
 
 
 @dataclass
@@ -98,6 +100,43 @@ def parse_args() -> argparse.Namespace:
                         help="Whether to save synthetic voltages (baseline & phantom) to CSV.")
     parser.add_argument("--figure-dpi", type=int, default=300,
                         help="DPI used when saving matplotlib figures.")
+    parser.add_argument("--gn-max-iterations", type=int, default=None,
+                        help="Override Gauss-Newton max iterations (absolute + GN difference).")
+    parser.add_argument("--gn-min-iterations", type=int, default=None,
+                        help="Override Gauss-Newton minimum iterations.")
+    parser.add_argument("--gn-convergence-tol", type=float, default=None,
+                        help="Override Gauss-Newton convergence tolerance.")
+    parser.add_argument("--gn-regularization", type=float, default=None,
+                        help="Override Gauss-Newton regularization strength (lambda).")
+    parser.add_argument("--gn-max-step", type=float, default=None,
+                        help="Override Gauss-Newton line search maximum step.")
+    parser.add_argument("--gn-min-step", type=float, default=None,
+                        help="Override Gauss-Newton line search minimum step (set 0 to allow tiny steps).")
+    parser.add_argument("--gn-clip-values", type=float, nargs=2, metavar=("MIN", "MAX"), default=None,
+                        help="Override Gauss-Newton conductivity clipping bounds.")
+    prior_group = parser.add_mutually_exclusive_group()
+    prior_group.add_argument("--gn-use-prior-term", action="store_true",
+                             help="Force Gauss-Newton to include the prior term.")
+    prior_group.add_argument("--gn-no-prior-term", action="store_true",
+                             help="Disable Gauss-Newton prior term.")
+    parser.add_argument("--absolute-save-frames", action="store_true",
+                        help="Save per-iteration conductivity frames for the absolute reconstruction.")
+    parser.add_argument("--absolute-frames-subdir", type=str, default="absolute/iterations",
+                        help="Subdirectory under --output-root to store iteration frames (default: absolute/iterations).")
+    parser.add_argument("--absolute-make-gif", action="store_true",
+                        help="Create an animated GIF from the saved absolute iteration frames.")
+    parser.add_argument("--absolute-gif-path", type=Path, default=None,
+                        help="Output path for the GIF (defaults to absolute/reconstruction_iterations.gif under --output-root).")
+    parser.add_argument("--gif-fps", type=float, default=4.0,
+                        help="Frames per second for the generated GIF.")
+    parser.add_argument("--gif-max-frames", type=int, default=None,
+                        help="Optional cap on the number of frames included in the GIF.")
+    parser.add_argument("--absolute-frame-dpi", type=int, default=150,
+                        help="DPI used when saving iteration frames (lower reduces GIF size).")
+    parser.add_argument("--absolute-frame-vmin", type=float, default=None,
+                        help="Color scale minimum for iteration frames (default: min(background, phantom_contrast)).")
+    parser.add_argument("--absolute-frame-vmax", type=float, default=None,
+                        help="Color scale maximum for iteration frames (default: max(background, phantom_contrast)).")
     parser.add_argument("--difference-solver", choices=["gauss-newton", "single-step"], default="gauss-newton",
                         help="Select PyEIDORS' iterative GN solver or an EIDORS-style single-step solve.")
     parser.add_argument("--difference-max-iterations", type=int, default=None,
@@ -116,6 +155,8 @@ def parse_args() -> argparse.Namespace:
                         help="Jacobian calculator mode for the single-step solver.")
     parser.add_argument("--single-step-negate-jacobian", action="store_true",
                         help="Match PyEIDORS' sign convention by negating the Jacobian before solving.")
+    parser.add_argument("--single-step-space", choices=["parameter", "measurement"], default="measurement",
+                        help="Solve single-step in parameter space (J^T J) or measurement space (J J^T).")
     parser.add_argument("--conductivity-bounds", type=float, nargs=2, metavar=("MIN", "MAX"),
                         default=(1e-6, 10.0),
                         help="Bounds enforced on reconstructed conductivities in single-step mode.")
@@ -267,16 +308,27 @@ def solve_single_step_delta(system: EITSystem,
     diag_entries = np.sum(jacobian_weighted ** 2, axis=0)
     diag_entries = np.maximum(diag_entries, args.noser_floor)
     noser_diag = diag_entries ** args.noser_exponent
-    RtR = np.diag(noser_diag)
-
     hp = max(args.difference_hyperparameter, 0.0)
-    lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
-    rhs = jacobian_weighted.T @ dv_weighted
-
-    try:
-        delta = np.linalg.solve(lhs, rhs)
-    except np.linalg.LinAlgError:
-        delta, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+    if args.single_step_space == "measurement":
+        inv_noser = 1.0 / noser_diag
+        jw_scaled = jacobian_weighted * inv_noser[None, :]
+        lhs = jw_scaled @ jacobian_weighted.T
+        if hp > 0:
+            lhs = lhs + (hp ** 2) * np.eye(lhs.shape[0])
+        rhs = dv_weighted
+        try:
+            y = np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            y, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        delta = inv_noser * (jacobian_weighted.T @ y)
+    else:
+        RtR = np.diag(noser_diag)
+        lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
+        rhs = jacobian_weighted.T @ dv_weighted
+        try:
+            delta = np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            delta, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
 
     return delta, weights
 
@@ -336,6 +388,7 @@ def run_single_step_difference(system: EITSystem,
     metadata: Dict[str, object] = {
         "step_size": step_size,
         "jacobian_method": args.single_step_jacobian_method,
+        "solver_space": args.single_step_space,
         "measurement_weight_strategy": args.meas_weight_strategy,
         "hyperparameter": args.difference_hyperparameter,
         "noser_exponent": args.noser_exponent,
@@ -365,6 +418,114 @@ def save_conductivity_figures(system: EITSystem,
                                            title=None, minimal=True, show_electrodes=True)
     fig_gt.savefig(output_dir / "phantom_ground_truth.png", dpi=dpi)
     fig_rec.savefig(output_dir / "reconstruction.png", dpi=dpi)
+    plt.close(fig_gt)
+    plt.close(fig_rec)
+
+
+def apply_gn_overrides(reconstructor: Optional[object], args: argparse.Namespace) -> None:
+    if reconstructor is None:
+        return
+    if args.gn_max_iterations is not None:
+        reconstructor.max_iterations = args.gn_max_iterations
+    if args.gn_min_iterations is not None:
+        reconstructor.min_iterations = args.gn_min_iterations
+    if args.gn_convergence_tol is not None:
+        reconstructor.convergence_tol = args.gn_convergence_tol
+    if args.gn_regularization is not None:
+        reconstructor.regularization_param = args.gn_regularization
+    if args.gn_max_step is not None:
+        reconstructor.max_step = args.gn_max_step
+    if args.gn_min_step is not None:
+        reconstructor.min_step = args.gn_min_step
+    if args.gn_clip_values is not None:
+        reconstructor.clip_values = tuple(args.gn_clip_values)
+    if args.gn_use_prior_term:
+        reconstructor.use_prior_term = True
+    if args.gn_no_prior_term:
+        reconstructor.use_prior_term = False
+
+
+def save_absolute_iteration_frames(
+    system: EITSystem,
+    conductivity_history: List[np.ndarray],
+    output_dir: Path,
+    dpi: int,
+    vmin: Optional[float],
+    vmax: Optional[float],
+) -> List[Path]:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    visualizer = EITVisualizer(figsize=(7, 5))
+    frame_paths: List[Path] = []
+
+    for idx, conductivity in enumerate(conductivity_history):
+        fig = visualizer.plot_conductivity(
+            system.mesh,
+            conductivity,
+            title=None,
+            minimal=True,
+            show_electrodes=True,
+            vmin=vmin,
+            vmax=vmax,
+        )
+        try:
+            ax = fig.axes[0]
+            ax.text(
+                0.02,
+                0.98,
+                f"iter {idx:03d}",
+                transform=ax.transAxes,
+                ha="left",
+                va="top",
+                fontsize=14,
+                fontweight="bold",
+                color="white",
+                bbox={"facecolor": "black", "alpha": 0.45, "edgecolor": "none", "pad": 3},
+            )
+        except Exception:
+            pass
+
+        frame_path = output_dir / f"iter_{idx:03d}.png"
+        fig.savefig(frame_path, dpi=dpi, bbox_inches="tight")
+        plt.close(fig)
+        frame_paths.append(frame_path)
+
+    return frame_paths
+
+
+def write_gif_from_png_frames(
+    frame_paths: List[Path],
+    output_path: Path,
+    fps: float,
+    max_frames: Optional[int] = None,
+) -> None:
+    from PIL import Image
+
+    if not frame_paths:
+        raise ValueError("No frames provided for GIF creation.")
+
+    selected = frame_paths
+    if max_frames is not None and max_frames > 0 and len(frame_paths) > max_frames:
+        stride = max(1, len(frame_paths) // max_frames)
+        selected = frame_paths[::stride]
+        if selected[-1] != frame_paths[-1]:
+            selected.append(frame_paths[-1])
+
+    duration_ms = int(round(1000.0 / max(float(fps), 1e-6)))
+    frames = []
+    for path in selected:
+        with Image.open(path) as img:
+            frame = img.convert("P", palette=Image.ADAPTIVE)
+            frames.append(frame.copy())
+
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    frames[0].save(
+        output_path,
+        save_all=True,
+        append_images=frames[1:],
+        duration=duration_ms,
+        loop=0,
+        optimize=True,
+    )
 
 
 def save_voltage_comparison(measured: np.ndarray,
@@ -406,12 +567,13 @@ def main() -> None:
 
     system, _ = setup_eit_system(args)
     reconstructor = getattr(system, "reconstructor", None)
+    base_max_iterations = None
     if reconstructor is not None:
         reconstructor.measurement_weight_strategy = args.meas_weight_strategy
         reconstructor.use_measurement_weights = args.meas_weight_strategy != "none"
         reconstructor.weight_floor = args.meas_weight_floor
-        if args.difference_max_iterations is not None:
-            reconstructor.max_iterations = args.difference_max_iterations
+        apply_gn_overrides(reconstructor, args)
+        base_max_iterations = reconstructor.max_iterations
 
     homogeneous = system.create_homogeneous_image(conductivity=args.background)
     phantom_img = make_phantom_image(system, args)
@@ -466,6 +628,8 @@ def main() -> None:
             )
             diff_meta.update(solver_meta)
         else:
+            if reconstructor is not None and args.difference_max_iterations is not None:
+                reconstructor.max_iterations = args.difference_max_iterations
             result = system.difference_reconstruct(meas_phantom, meas_homogeneous)
             recon_image = result.conductivity_image
             predicted_diff = simulate_calibrated_difference(
@@ -476,6 +640,8 @@ def main() -> None:
                 "iterations": len(history),
                 "final_residual": history[-1] if history else None,
             })
+            if reconstructor is not None and base_max_iterations is not None:
+                reconstructor.max_iterations = base_max_iterations
 
         metrics["difference"] = compute_metrics(diff_vector, predicted_diff)
         diff_meta["rmse"] = metrics["difference"].rmse
@@ -493,16 +659,54 @@ def main() -> None:
         extra_payload["difference_metadata"] = diff_meta
 
     if args.mode in {"absolute", "both"}:
-        abs_result = system.absolute_reconstruct(meas_phantom, baseline_image=homogeneous)
-        metrics["absolute"] = compute_metrics(meas_phantom.meas, abs_result.simulated)
-        recon_image = abs_result.conductivity_image
+        want_frames = bool(args.absolute_save_frames or args.absolute_make_gif)
+        abs_raw = system.reconstructor.reconstruct(
+            measured_data=meas_phantom,
+            initial_conductivity=homogeneous.elem_data,
+            record_conductivity_history=want_frames,
+        )
+        sigma_fn = abs_raw["conductivity"]
+        recon_image = EITImage(elem_data=sigma_fn.vector()[:], fwd_model=system.fwd_model)
+        sim_abs, _ = system.fwd_model.fwd_solve(recon_image)
+        metrics["absolute"] = compute_metrics(meas_phantom.meas, sim_abs.meas)
+
+        if want_frames:
+            conductivity_history = abs_raw.get("conductivity_history") or []
+            vmin = args.absolute_frame_vmin
+            vmax = args.absolute_frame_vmax
+            if vmin is None:
+                vmin = float(min(args.background, args.phantom_contrast))
+            if vmax is None:
+                vmax = float(max(args.background, args.phantom_contrast))
+            frames_dir = output_dir / args.absolute_frames_subdir
+            frame_paths = save_absolute_iteration_frames(
+                system=system,
+                conductivity_history=conductivity_history,
+                output_dir=frames_dir,
+                dpi=args.absolute_frame_dpi,
+                vmin=vmin,
+                vmax=vmax,
+            )
+            if args.absolute_make_gif:
+                gif_path = args.absolute_gif_path
+                if gif_path is None:
+                    gif_path = Path("absolute") / "reconstruction_iterations.gif"
+                if not gif_path.is_absolute():
+                    gif_path = output_dir / gif_path
+                write_gif_from_png_frames(
+                    frame_paths=frame_paths,
+                    output_path=gif_path,
+                    fps=args.gif_fps,
+                    max_frames=args.gif_max_frames,
+                )
+
         save_conductivity_figures(system, phantom_img, recon_image,
                                   output_dir / "absolute", args.figure_dpi)
         np.savetxt(output_dir / "absolute" / "predicted_absolute.csv",
-                   abs_result.simulated, delimiter=",")
+                   sim_abs.meas, delimiter=",")
         save_voltage_comparison(
             measured=meas_phantom.meas,
-            predicted=abs_result.simulated,
+            predicted=sim_abs.meas,
             output_path=output_dir / "absolute" / "voltage_comparison.png",
             title="Absolute reconstruction voltages",
             dpi=args.figure_dpi,

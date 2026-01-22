@@ -7,7 +7,7 @@ name = "pyeidors"
 version = "0.1.0"
 description = "PyEIDORS - A FEniCS-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 license = {text = "GPL-3.0-only"}
 authors = [
     {name = "BingZhou Chen", email = "b20223080651@cau.edu.cn"},

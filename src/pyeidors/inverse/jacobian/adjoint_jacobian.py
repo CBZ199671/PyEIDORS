@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-from typing import Optional, List
+from typing import Optional, List, Union
 from fenics import Function
 
 from .base_jacobian import BaseJacobianCalculator
@@ -19,14 +19,36 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
       - Optional torch acceleration for sensitivity accumulation (vectorized accumulation on CPU/GPU).
     """
 
-    def __init__(self, fwd_model, use_torch: bool = False, device: Optional[str] = None):
+    def __init__(
+        self,
+        fwd_model,
+        use_torch: bool = False,
+        device: Optional[str] = None,
+        torch_dtype: Optional[Union[str, torch.dtype]] = None,
+        torch_batch_all: bool = False,
+    ):
         super().__init__(fwd_model)
         self.use_torch = use_torch
+        self.torch_batch_all = torch_batch_all
+        self.torch_dtype = self._resolve_torch_dtype(torch_dtype)
         if device is None:
             self.torch_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         else:
             self.torch_device = torch.device(device)
         self._setup()
+
+    @staticmethod
+    def _resolve_torch_dtype(dtype: Optional[Union[str, torch.dtype]]) -> torch.dtype:
+        if dtype is None:
+            return torch.float64
+        if isinstance(dtype, torch.dtype):
+            return dtype
+        dtype_str = str(dtype).lower()
+        if dtype_str in {"float32", "fp32", "f32", "torch.float32"}:
+            return torch.float32
+        if dtype_str in {"float64", "fp64", "f64", "double", "torch.float64"}:
+            return torch.float64
+        raise ValueError(f"Unsupported torch dtype: {dtype}")
 
     def _setup(self):
         self.mesh = self.fwd_model.mesh
@@ -43,7 +65,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             self.cell_areas = self.fwd_model.cell_areas
         # For Torch convenience
         if self.use_torch:
-            self.cell_areas_t = torch.from_numpy(self.cell_areas).to(self.torch_device, dtype=torch.float64)
+            self.cell_areas_t = torch.from_numpy(self.cell_areas).to(self.torch_device, dtype=self.torch_dtype)
 
     def calculate(self, sigma: Function, **kwargs) -> np.ndarray:
         """Calculate measurement Jacobian matrix (shape: n_meas x n_elem)."""
@@ -112,17 +134,40 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         return J
 
     def _assemble_torch(self, grad_u_all: List[np.ndarray], grad_adj_all: List[np.ndarray]) -> np.ndarray:
+        if self.torch_batch_all:
+            return self._assemble_torch_all(grad_u_all, grad_adj_all)
+
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
-        J_t = torch.zeros((n_meas, n_elem), device=self.torch_device, dtype=torch.float64)
+        J_t = torch.zeros((n_meas, n_elem), device=self.torch_device, dtype=self.torch_dtype)
 
         meas_idx = 0
         for stim_idx, grad_u in enumerate(grad_u_all):
             n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
-            grad_u_t = torch.from_numpy(grad_u).to(self.torch_device, dtype=torch.float64)
-            for k in range(n_meas_this):
-                adj_grad_t = torch.from_numpy(grad_adj_all[meas_idx + k]).to(self.torch_device, dtype=torch.float64)
-                sensitivity = -(grad_u_t * adj_grad_t).sum(dim=1) * self.cell_areas_t
-                J_t[meas_idx + k, :] = sensitivity
+            grad_u_t = torch.from_numpy(grad_u).to(self.torch_device, dtype=self.torch_dtype)
+            adj_block = np.stack(grad_adj_all[meas_idx: meas_idx + n_meas_this], axis=0)
+            adj_block_t = torch.from_numpy(adj_block).to(self.torch_device, dtype=self.torch_dtype)
+            # Batch assemble per stimulation to reduce host/device transfers.
+            sensitivity = -(adj_block_t * grad_u_t.unsqueeze(0)).sum(dim=2) * self.cell_areas_t
+            J_t[meas_idx: meas_idx + n_meas_this, :] = sensitivity
             meas_idx += n_meas_this
         return J_t.cpu().numpy()
+
+    def _assemble_torch_all(self, grad_u_all: List[np.ndarray], grad_adj_all: List[np.ndarray]) -> np.ndarray:
+        n_meas = self.fwd_model.pattern_manager.n_meas_total
+        n_elem = len(self.cell_areas)
+        np_dtype = np.float32 if self.torch_dtype == torch.float32 else np.float64
+
+        adj_block = np.stack(grad_adj_all, axis=0).astype(np_dtype, copy=False)
+        grad_u_block = np.zeros((n_meas, n_elem, adj_block.shape[2]), dtype=np_dtype)
+
+        meas_idx = 0
+        for stim_idx, grad_u in enumerate(grad_u_all):
+            n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
+            grad_u_block[meas_idx: meas_idx + n_meas_this] = grad_u.astype(np_dtype, copy=False)
+            meas_idx += n_meas_this
+
+        grad_u_t = torch.from_numpy(grad_u_block).to(self.torch_device, dtype=self.torch_dtype)
+        adj_block_t = torch.from_numpy(adj_block).to(self.torch_device, dtype=self.torch_dtype)
+        sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * self.cell_areas_t
+        return sensitivity.cpu().numpy()

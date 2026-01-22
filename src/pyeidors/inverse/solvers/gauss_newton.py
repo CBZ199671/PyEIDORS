@@ -124,7 +124,9 @@ class ModularGaussNewtonReconstructor:
                    measured_data: Union[object, np.ndarray],
                    initial_conductivity: float = 1.0,
                    jacobian_method: str = 'efficient',
-                   prior_data: Optional[np.ndarray] = None):
+                   prior_data: Optional[np.ndarray] = None,
+                   record_conductivity_history: bool = False,
+                   conductivity_history_stride: int = 1):
         """Execute modular Gauss-Newton reconstruction.
 
         Args:
@@ -133,6 +135,8 @@ class ModularGaussNewtonReconstructor:
             jacobian_method: Jacobian computation method.
             prior_data: Prior conductivity distribution (for computing de = σ - σ_prior).
                         If None, uses initial_conductivity.
+            record_conductivity_history: Whether to store conductivity snapshots per iteration.
+            conductivity_history_stride: Store every N accepted iterations when history recording is enabled.
         """
 
         self._meas_weight_sqrt = None
@@ -187,6 +191,10 @@ class ModularGaussNewtonReconstructor:
         residual_history = []
         sigma_change_history = []
         iteration_logs = []
+        conductivity_history = []
+        history_stride = max(1, int(conductivity_history_stride))
+        if record_conductivity_history:
+            conductivity_history.append(sigma_current.vector()[:].copy())
 
         # Early stopping: consecutive rollback counter
         consecutive_rollbacks = 0
@@ -339,6 +347,8 @@ class ModularGaussNewtonReconstructor:
                 else:
                     consecutive_rollbacks = 0  # Successful update, reset counter
                 sigma_change_history.append(relative_change)
+                if record_conductivity_history and (iteration + 1) % history_stride == 0:
+                    conductivity_history.append(sigma_current.vector()[:].copy())
 
                 iteration_logs.append(
                     {
@@ -392,6 +402,8 @@ class ModularGaussNewtonReconstructor:
             'regularization_type': type(self.regularization).__name__,
             'iteration_logs': iteration_logs,
         }
+        if record_conductivity_history:
+            results["conductivity_history"] = conductivity_history
         if self._baseline_measurement is not None:
             results['baseline_measurement'] = self._baseline_measurement.copy()
         if self._meas_weight_sqrt is not None:
