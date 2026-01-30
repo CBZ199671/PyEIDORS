@@ -4,8 +4,8 @@ A modular EIT system based on FEniCS, PyTorch, and CUQIpy.
 Runs in Docker container environment with GPU acceleration and Bayesian inference support.
 """
 
-__version__ = "0.1.0"
-__author__ = "Your Name"
+__version__ = "1.0.0"
+__author__ = "BingZhou Chen"
 
 # Check critical dependencies
 try:
