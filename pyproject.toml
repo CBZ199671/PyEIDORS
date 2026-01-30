@@ -4,11 +4,11 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyeidors"
-version = "0.1.0"
+version = "1.0.0"
 description = "PyEIDORS - A FEniCS-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
 readme = "README.md"
 requires-python = ">=3.10"
-license = {text = "GPL-3.0-only"}
+license = {text = "MIT"}
 authors = [
     {name = "BingZhou Chen", email = "b20223080651@cau.edu.cn"},
 ]
@@ -16,7 +16,7 @@ keywords = ["EIT", "EIDORS", "FEniCS", "inverse problems", "medical imaging", "p
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: GNU General Public License v3 (GPLv3)",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
     "Topic :: Scientific/Engineering :: Medical Science Apps.",
     "Topic :: Scientific/Engineering :: Physics",

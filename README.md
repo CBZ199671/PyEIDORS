@@ -5,7 +5,7 @@
 </p>
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-![License](https://img.shields.io/badge/license-GPL--3.0--only-green)
+![License](https://img.shields.io/badge/license-MIT-green)
 ![Backend](https://img.shields.io/badge/backend-FEniCS-orange)
 ![Accel](https://img.shields.io/badge/accel-PyTorch-red)
 
