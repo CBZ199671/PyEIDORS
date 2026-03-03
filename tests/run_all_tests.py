@@ -224,7 +224,7 @@ def create_test_report(results):
         try:
             import pyeidors
             env = pyeidors.check_environment()
-            f.write(f"- FEniCS: {'✅' if env['fenics_available'] else '❌'}\n")
+            f.write(f"- DOLFINx: {'✅' if env['dolfinx_available'] else '❌'}\n")
             f.write(f"- PyTorch: {'✅' if env['torch_available'] else '❌'}\n")
             f.write(f"- CUDA: {'✅' if env['cuda_available'] else '❌'}\n")
             f.write(f"- CUQIpy: {'✅' if env['cuqi_available'] else '❌'}\n")

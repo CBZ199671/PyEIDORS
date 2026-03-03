@@ -1,151 +1,48 @@
-#!/usr/bin/env python3
-"""PyEIDORS Modular Test"""
+"""Jacobian and regularization unit/integration checks."""
+
+from __future__ import annotations
 
 import numpy as np
+from dolfinx import fem
 
-def test_imports():
-    """Test all module imports."""
-    print("🧪 Testing module imports...")
-
-    try:
-        from pyeidors.data.structures import MeshConfig, ElectrodePosition, PatternConfig
-        print("✅ Data structures module import successful")
-    except Exception as e:
-        print(f"❌ Data structures module import failed: {e}")
-        return False
-
-    try:
-        from pyeidors.electrodes.patterns import StimMeasPatternManager
-        print("✅ Electrode patterns module import successful")
-    except Exception as e:
-        print(f"❌ Electrode patterns module import failed: {e}")
-        return False
-
-    try:
-        from pyeidors.geometry.mesh_generator import MeshGenerator
-        print("✅ Mesh generation module import successful")
-    except Exception as e:
-        print(f"❌ Mesh generation module import failed: {e}")
-        return False
-
-    try:
-        from pyeidors.forward.eit_forward_model import EITForwardModel
-        print("✅ Forward model module import successful")
-    except Exception as e:
-        print(f"❌ Forward model module import failed: {e}")
-        return False
-
-    try:
-        from pyeidors.inverse.solvers.gauss_newton import StandardGaussNewtonReconstructor
-        print("✅ Inverse solver module import successful")
-    except Exception as e:
-        print(f"❌ Inverse solver module import failed: {e}")
-        return False
-
-    try:
-        from pyeidors.data.synthetic_data import create_synthetic_data
-        print("✅ Synthetic data module import successful")
-    except Exception as e:
-        print(f"❌ Synthetic data module import failed: {e}")
-        return False
-
-    return True
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
+from pyeidors.inverse.regularization.smoothness import (
+    NOSERRegularization,
+    SmoothnessRegularization,
+    TikhonovRegularization,
+)
 
 
-def test_basic_workflow():
-    """Test basic workflow."""
-    print("\n🔧 Testing basic workflow...")
-
-    try:
-        # Import required modules
-        from pyeidors.data.structures import MeshConfig, ElectrodePosition, PatternConfig
-        from pyeidors.geometry.mesh_generator import MeshGenerator
-        from pyeidors.electrodes.patterns import StimMeasPatternManager
-        from pyeidors.forward.eit_forward_model import EITForwardModel
-        from pyeidors.inverse.solvers.gauss_newton import StandardGaussNewtonReconstructor
-        from pyeidors.data.synthetic_data import create_synthetic_data
-
-        # 1. Create configuration
-        n_elec = 16
-        mesh_config = MeshConfig(radius=1.0, refinement=6, electrode_vertices=4)
-        electrode_config = ElectrodePosition(L=n_elec, coverage=0.5)
-        pattern_config = PatternConfig(
-            n_elec=n_elec,
-            stim_pattern='{ad}',
-            meas_pattern='{ad}',
-            amplitude=1.0,
-            use_meas_current=False
-        )
-
-        print("✅ Configuration created successfully")
-
-        # 2. Generate mesh
-        generator = MeshGenerator(mesh_config, electrode_config)
-        mesh = generator.generate()
-
-        print(f"✅ Mesh generated successfully: {mesh.num_cells()} cells")
-
-        # 3. Create stimulation/measurement pattern manager
-        pattern_manager = StimMeasPatternManager(pattern_config)
-
-        print(f"✅ Pattern manager created successfully: {pattern_manager.n_stim} stimulations, {pattern_manager.n_meas_total} measurements")
-
-        # 4. Create forward model
-        z = np.full(n_elec, 1e-6)  # Contact impedance
-        fwd_model = EITForwardModel(n_elec, pattern_config, z, mesh)
-
-        print("✅ Forward model created successfully")
-
-        # 5. Generate synthetic data
-        synthetic_data = create_synthetic_data(
-            fwd_model=fwd_model,
-            inclusion_conductivity=2.5,
-            background_conductivity=1.0,
-            noise_level=0.02,
-            center=(-0.3, 0.1),
-            radius=0.3
-        )
-
-        print(f"✅ Synthetic data generated successfully: SNR = {synthetic_data['snr_db']:.1f} dB")
-
-        # 6. Create reconstructor (but don't run reconstruction to save time)
-        reconstructor = StandardGaussNewtonReconstructor(
-            fwd_model=fwd_model,
-            max_iterations=5,  # Reduced iterations to save time
-            convergence_tol=1e-3,
-            regularization_param=0.01,
-            verbose=False
-        )
-
-        print("✅ Reconstructor created successfully")
-
-        print("✅ Basic workflow test complete!")
-        return True
-
-    except Exception as e:
-        print(f"❌ Basic workflow test failed: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+def _baseline_sigma(system):
+    sigma = fem.Function(system.fwd_model.V_sigma)
+    sigma.x.array[:] = 1.0
+    return sigma
 
 
-def main():
-    """Run all tests."""
-    print("🎯 PyEIDORS Modular Test")
-    print("=" * 50)
+def test_direct_and_adjoint_jacobian_shapes(eit_system):
+    sigma = _baseline_sigma(eit_system)
+    direct = DirectJacobianCalculator(eit_system.fwd_model)
+    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
 
-    # Test imports
-    if not test_imports():
-        print("\n❌ Import test failed, please check module structure")
-        return
+    j_direct = direct.calculate(sigma)
+    j_adjoint = adjoint.calculate(sigma)
 
-    # Test basic workflow
-    if not test_basic_workflow():
-        print("\n❌ Workflow test failed")
-        return
-
-    print("\n🎉 All tests passed! PyEIDORS modular refactoring successful!")
+    assert j_direct.shape == j_adjoint.shape
+    assert j_direct.shape[0] == eit_system.fwd_model.pattern_manager.n_meas_total
+    assert j_direct.shape[1] == sigma.x.array.size
+    assert np.isfinite(j_direct).all()
+    assert np.isfinite(j_adjoint).all()
 
 
-if __name__ == "__main__":
-    main()
+def test_regularization_matrix_shapes(eit_system):
+    sigma = _baseline_sigma(eit_system)
+    jac = DirectJacobianCalculator(eit_system.fwd_model)
+
+    noser = NOSERRegularization(eit_system.fwd_model, jacobian_calculator=jac, base_conductivity=1.0)
+    smooth = SmoothnessRegularization(eit_system.fwd_model, alpha=0.5)
+    tik = TikhonovRegularization(eit_system.fwd_model, alpha=0.25)
+
+    for mat in (noser.get_regularization_matrix(), smooth.get_regularization_matrix(), tik.get_regularization_matrix()):
+        assert mat.shape[0] == mat.shape[1] == sigma.x.array.size
+        assert np.isfinite(mat).all()

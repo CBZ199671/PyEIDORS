@@ -42,13 +42,12 @@ def test_electrode_y_axis_start():
         assert abs(y_center - 1.0) < 1e-10, f"y coordinate should be exactly 1: {y_center}"
 
         print("✅ Electrode Y-axis starting position test passed")
-        return True
 
     except Exception as e:
         print(f"❌ Electrode Y-axis starting position test failed: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise AssertionError(f"Electrode Y-axis starting position test failed: {e}") from e
 
 
 def test_electrode_sequence():
@@ -80,11 +79,10 @@ def test_electrode_sequence():
         assert abs(first_center - expected_first) < 0.2, f"First electrode not at top: {first_center}"
 
         print("✅ Electrode counter-clockwise order test passed")
-        return True
 
     except Exception as e:
         print(f"❌ Electrode counter-clockwise order test failed: {e}")
-        return False
+        raise AssertionError(f"Electrode counter-clockwise order test failed: {e}") from e
 
 
 def test_rotation_effect():
@@ -109,11 +107,10 @@ def test_rotation_effect():
         assert abs(actual_diff - expected_diff) < 0.01, f"Rotation effect incorrect: {actual_diff} vs {expected_diff}"
 
         print("✅ Rotation parameter effect test passed")
-        return True
 
     except Exception as e:
         print(f"❌ Rotation parameter effect test failed: {e}")
-        return False
+        raise AssertionError(f"Rotation parameter effect test failed: {e}") from e
 
 
 def run_all_tests():
@@ -133,7 +130,7 @@ def run_all_tests():
     for test_name, test_func in tests:
         print(f"\n📋 Running test: {test_name}")
         try:
-            if test_func():
+            if test_func() is not False:
                 passed += 1
         except Exception as e:
             print(f"❌ Test exception: {test_name} - {e}")
