@@ -1,0 +1,116 @@
+name: CI Matrix
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - master
+
+jobs:
+  lint-guard:
+    name: Legacy Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Run hard-cut legacy guard
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c \
+            python scripts/ci/legacy_guard.py
+
+  tests-core:
+    name: Core Tests (${{ matrix.os }})
+    needs: lint-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Install package and run full pytest (coverage gate)
+        env:
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+          OMP_NUM_THREADS: "1"
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
+            uv pip install --python .venv/bin/python --no-deps -e .
+            python -m pytest -q \
+              --cov=src/pyeidors \
+              --cov-report=xml:coverage.xml \
+              --cov-report=html:htmlcov \
+              --cov-report=term-missing \
+              --cov-fail-under=80 | tee pytest.log
+          '
+
+      - name: Upload core artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: core-${{ matrix.os }}
+          path: |
+            coverage.xml
+            htmlcov
+            pytest.log
+          if-no-files-found: warn
+
+  tests-gmsh:
+    name: Gmsh Mandatory (${{ matrix.os }})
+    needs: lint-guard
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Run gmsh mandatory test suite
+        env:
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+          OMP_NUM_THREADS: "1"
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
+            uv pip install --python .venv/bin/python --no-deps -e .
+            python -m pytest -q \
+              tests/integration/test_gmsh_mandatory.py \
+              tests/unit/test_mesh_pipeline_extended.py \
+              tests/unit/test_mesh_generation.py \
+              tests/unit/test_real_mesh_generation.py | tee pytest-gmsh.log
+          '
+
+      - name: Upload gmsh artifacts
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: gmsh-${{ matrix.os }}
+          path: |
+            pytest-gmsh.log
+          if-no-files-found: warn
