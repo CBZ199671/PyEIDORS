@@ -1,0 +1,35 @@
+--- a/test/unit/fem/test_function.py
++++ b/test/unit/fem/test_function.py
+@@ -6,6 +6,7 @@
+ """Unit tests for the Function class"""
+ 
+ import importlib
++import importlib.util
+ 
+ from mpi4py import MPI
+ 
+@@ -176,7 +177,7 @@
+ 
+ 
+ @pytest.mark.parametrize("dtype,cdtype", [(np.float32, "float"), (np.float64, "double")])
+-def test_cffi_expression(dtype, cdtype):
++def test_cffi_expression(dtype, cdtype, tmp_path):
+     mesh = create_unit_cube(MPI.COMM_WORLD, 3, 3, 3, dtype=dtype)
+     V = functionspace(mesh, ("Lagrange", 1))
+ 
+@@ -196,10 +197,13 @@
+     ffi = cffi.FFI()
+     ffi.set_source(module, code_c)
+     ffi.cdef(code_h)
+-    ffi.compile()
++    module_path = ffi.compile(tmpdir=str(tmp_path))
+ 
+     # Import the compiled kernel
+-    kernel_mod = importlib.import_module(module)
++    spec = importlib.util.spec_from_file_location(module, module_path)
++    assert spec is not None and spec.loader is not None
++    kernel_mod = importlib.util.module_from_spec(spec)
++    spec.loader.exec_module(kernel_mod)
+     ffi, lib = kernel_mod.ffi, kernel_mod.lib
+ 
+     # Get pointer to the compiled function
