@@ -8,7 +8,7 @@ import numpy as np
 import ufl
 from mpi4py import MPI
 from scipy.sparse import csr_matrix, lil_matrix
-from scipy.sparse.linalg import factorized
+from scipy.sparse.linalg import splu
 from dolfinx import fem
 import dolfinx.fem.petsc as fem_petsc
 
@@ -20,7 +20,14 @@ from ..femx import create_ds_measure
 class EITForwardModel:
     """EIT Forward Model - Complete Electrode Model assembly and solve."""
 
-    def __init__(self, n_elec: int, pattern_config: PatternConfig, z: np.ndarray, mesh: EITMesh):
+    def __init__(
+        self,
+        n_elec: int,
+        pattern_config: PatternConfig,
+        z: np.ndarray,
+        mesh: EITMesh,
+        linear_backend: str = "scipy",
+    ):
         self.n_elec = n_elec
         self.z = np.asarray(z)
         if not isinstance(mesh, EITMesh):
@@ -40,6 +47,7 @@ class EITForwardModel:
             )
 
         self.pattern_manager = StimMeasPatternManager(pattern_config)
+        self.linear_backend = linear_backend.lower()
 
         self.facet_tags = mesh.facet_tags
         self.association_table = mesh.association_table
@@ -61,6 +69,30 @@ class EITForwardModel:
         self.phi = ufl.TestFunction(self.V)
 
         self.M = self._assemble_electrode_matrix()
+
+    def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
+        """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
+        if current_patterns is None:
+            matrix = np.asarray(self.pattern_manager.stim_matrix, dtype=float)
+        else:
+            matrix = np.asarray(current_patterns, dtype=float)
+            if matrix.ndim != 2:
+                raise ValueError("current_patterns must be a 2D array")
+            if matrix.shape[1] == self.n_elec:
+                pass
+            elif matrix.shape[0] == self.n_elec:
+                matrix = matrix.T
+            else:
+                raise ValueError(
+                    "current_patterns shape mismatch. Expected (n_patterns, n_elec) "
+                    f"or (n_elec, n_patterns), got {matrix.shape}"
+                )
+
+        if matrix.shape[1] != self.n_elec:
+            raise ValueError(
+                f"Pattern width mismatch: expected {self.n_elec}, got {matrix.shape[1]}"
+            )
+        return matrix
 
     def _resolve_electrode_tags(self):
         """Extract boundary tags sorted by electrode index from association table."""
@@ -171,31 +203,30 @@ class EITForwardModel:
 
     def forward_solve(self, sigma: fem.Function, current_patterns=None):
         """Forward solve for given conductivity and stimulation patterns."""
+        if self.linear_backend == "petsc":
+            raise NotImplementedError(
+                "linear_backend='petsc' is reserved for future acceleration. "
+                "Use linear_backend='scipy' in the current phase."
+            )
+        if self.linear_backend != "scipy":
+            raise ValueError(f"Unsupported linear_backend: {self.linear_backend}")
 
-        M_complete = self.create_full_matrix(sigma).tocsc()
-        solver = factorized(M_complete)
+        pattern_matrix = self._resolve_pattern_matrix(current_patterns)
+        n_patterns = pattern_matrix.shape[0]
+        system_matrix = self.create_full_matrix(sigma).tocsc()
+        lu = splu(system_matrix)
 
-        if current_patterns is None:
-            stim_matrix = self.pattern_manager.stim_matrix
-            n_patterns = self.pattern_manager.n_stim
-            pattern_reader = lambda i, j: stim_matrix[i, j]
-        else:
-            n_patterns = current_patterns.shape[1]
-            pattern_reader = lambda i, j: current_patterns[j, i]
+        rhs_matrix = np.zeros((self.dofs + self.n_elec + 1, n_patterns), dtype=float)
+        rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
+        sol_matrix = lu.solve(rhs_matrix)
 
-        u_all = []
-        U_all = np.zeros((n_patterns, self.n_elec), dtype=float)
-
-        for i in range(n_patterns):
-            rhs = np.zeros(self.dofs + self.n_elec + 1, dtype=float)
-            for j in range(self.n_elec):
-                rhs[self.dofs + j] = pattern_reader(i, j)
-
-            sol = solver(rhs)
-            u_all.append(sol[: self.dofs])
-            U_all[i, :] = sol[self.dofs : -1]
-
-        return u_all, U_all
+        potential_block = np.asarray(sol_matrix[: self.dofs, :], dtype=float)
+        electrode_block = np.asarray(
+            sol_matrix[self.dofs : self.dofs + self.n_elec, :].T,
+            dtype=float,
+        )
+        u_all = [potential_block[:, i].copy() for i in range(n_patterns)]
+        return u_all, electrode_block
 
     def fwd_solve(self, img: EITImage):
         """Forward solve interface for ``EITImage``."""

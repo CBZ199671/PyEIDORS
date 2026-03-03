@@ -16,6 +16,7 @@ class StimMeasPatternManager:
         
         self._parse_patterns()
         self._generate_patterns()
+        self._build_measurement_projection()
         self._compute_measurement_selector()
     
     def _parse_patterns(self):
@@ -102,6 +103,17 @@ class StimMeasPatternManager:
             selector.append(frame_selector)
         
         self.meas_selector = np.concatenate(selector)
+
+    def _build_measurement_projection(self) -> None:
+        """Build a dense projection matrix to avoid per-pattern matmul loops."""
+        projection = np.zeros((self.n_meas_total, self.n_stim * self.tn_elec), dtype=float)
+        for i, (start_idx, meas_mat) in enumerate(zip(self.meas_start_indices, self.meas_matrices)):
+            n_meas = meas_mat.shape[0]
+            row_slice = slice(start_idx, start_idx + n_meas)
+            col_start = i * self.tn_elec
+            col_slice = slice(col_start, col_start + self.tn_elec)
+            projection[row_slice, col_slice] = meas_mat
+        self._meas_projection = projection
     
     def _create_meas_hash(self, meas_mat: np.ndarray) -> np.ndarray:
         if meas_mat.size == 0:
@@ -156,10 +168,10 @@ class StimMeasPatternManager:
         return self.stim_matrix
     
     def apply_meas_pattern(self, electrode_voltages: np.ndarray) -> np.ndarray:
-        measurements = np.zeros(self.n_meas_total)
-        
-        for i, (start_idx, meas_mat) in enumerate(zip(self.meas_start_indices, self.meas_matrices)):
-            n_meas = meas_mat.shape[0]
-            measurements[start_idx:start_idx + n_meas] = meas_mat @ electrode_voltages[i]
-        
-        return measurements
+        voltages = np.asarray(electrode_voltages, dtype=float)
+        if voltages.shape != (self.n_stim, self.tn_elec):
+            raise ValueError(
+                "electrode_voltages shape mismatch: "
+                f"expected {(self.n_stim, self.tn_elec)}, got {voltages.shape}"
+            )
+        return self._meas_projection @ voltages.reshape(-1)
