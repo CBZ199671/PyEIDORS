@@ -1,26 +1,31 @@
-"""PyEIDORS Core System Module.
+"""PyEIDORS Core System Module."""
 
-This is the main interface for the EIT system, integrating forward modeling,
-inverse problem solvers, and data processing functionality.
-"""
+from __future__ import annotations
+
+import logging
+from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from typing import Optional, Union, Dict, Any
 from dolfinx import fem
 
-from .data.structures import EITData, EITImage, EITMesh, PatternConfig, MeshConfig
+from .data.structures import EITData, EITImage, EITMesh, MeshConfig, PatternConfig
 from .forward.eit_forward_model import EITForwardModel
-from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
-from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
-from .inverse.regularization.smoothness import SmoothnessRegularization, NOSERRegularization, TikhonovRegularization
-from .inverse import (
-    perform_absolute_reconstruction,
-    perform_difference_reconstruction,
-    ReconstructionResult,
-)
-from .electrodes.patterns import StimMeasPatternManager
 from .geometry.mesh_loader import MeshLoader
 from .geometry.simple_mesh_generator import create_simple_eit_mesh
+from .inverse import (
+    ReconstructionResult,
+    perform_absolute_reconstruction,
+    perform_difference_reconstruction,
+)
+from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
+from .inverse.regularization.smoothness import (
+    NOSERRegularization,
+    SmoothnessRegularization,
+    TikhonovRegularization,
+)
+from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
+
+logger = logging.getLogger(__name__)
 
 
 class EITSystem:
@@ -60,15 +65,16 @@ class EITSystem:
             noser_floor: Minimum value for NOSER diagonal elements.
             **kwargs: Additional configuration parameters.
         """
+        _ = kwargs
         self.n_elec = n_elec
 
         # Set default configuration
         if pattern_config is None:
             pattern_config = PatternConfig(
                 n_elec=n_elec,
-                stim_pattern='{ad}',
-                meas_pattern='{ad}',
-                amplitude=1.0
+                stim_pattern="{ad}",
+                meas_pattern="{ad}",
+                amplitude=1.0,
             )
         self.pattern_config = pattern_config
 
@@ -93,49 +99,98 @@ class EITSystem:
         self.reconstructor = None
         self._is_initialized = False
 
-    def setup(self, mesh=None):
-        """Set up the EIT system.
+    def setup(
+        self,
+        mesh: Optional[EITMesh] = None,
+        *,
+        mesh_source: Optional[str] = None,
+        mesh_dir: str = "eit_meshes",
+        mesh_name: Optional[str] = None,
+        radius: Optional[float] = None,
+        mesh_size: Optional[float] = None,
+    ) -> None:
+        """Set up the EIT system with an explicit mesh source.
 
-        Args:
-            mesh: Optional external mesh. If not provided, will attempt to load or generate one.
+        Allowed paths:
+        - `setup(mesh=eit_mesh)` for a pre-built :class:`EITMesh`.
+        - `setup(mesh_source="cache", ...)` to load from `.msh` cache.
+        - `setup(mesh_source="generated", ...)` to generate a mesh.
         """
-        # Set up mesh
         if mesh is not None:
-            if not isinstance(mesh, EITMesh):
-                raise TypeError("EITSystem.setup expects an EITMesh instance")
-            self.mesh = mesh
-        else:
-            # First try to load existing mesh
-            try:
-                mesh_loader = MeshLoader()
-                self.mesh = mesh_loader.get_default_mesh()
-                print(f"Loaded existing mesh: {self.mesh.get_info()}")
-            except Exception as load_error:
-                # If loading fails, try to generate new mesh
-                print(f"Failed to load existing mesh: {load_error}")
-                print("Generating new EIT mesh...")
-                try:
-                    self.mesh = create_simple_eit_mesh(
-                        n_elec=self.n_elec,
-                        radius=1.0,
-                        mesh_size=0.1
-                    )
-                    print(f"New mesh generated successfully: {self.mesh.get_info()}")
-                except Exception as gen_error:
-                    raise RuntimeError(f"Unable to generate mesh: {gen_error}. Please check Gmsh installation or provide a mesh object.")
+            self.setup_with_mesh(mesh)
+            return
 
-        # Initialize forward model
+        if mesh_source == "cache":
+            self.setup_from_cache(mesh_dir=mesh_dir, mesh_name=mesh_name)
+            return
+        if mesh_source == "generated":
+            self.setup_generated_mesh(radius=radius, mesh_size=mesh_size)
+            return
+
+        raise ValueError(
+            "EITSystem.setup now requires an explicit mesh source. "
+            "Use one of: setup(mesh=...), setup(mesh_source='cache', ...), "
+            "or setup(mesh_source='generated', ...)."
+        )
+
+    def setup_with_mesh(self, mesh: EITMesh) -> None:
+        """Initialise with a provided :class:`EITMesh`."""
+        if not isinstance(mesh, EITMesh):
+            raise TypeError("EITSystem.setup_with_mesh expects an EITMesh instance")
+        self.mesh = mesh
+        self._initialize_components()
+
+    def setup_from_cache(self, mesh_dir: str = "eit_meshes", mesh_name: Optional[str] = None) -> None:
+        """Initialise from a cached `.msh` mesh."""
+        loader = MeshLoader(mesh_dir=mesh_dir)
+        selected = loader.load_mesh(mesh_name) if mesh_name else loader.get_default_mesh()
+        logger.info("Loaded cached mesh from %s (mesh_name=%s)", mesh_dir, mesh_name)
+        self.setup_with_mesh(selected)
+
+    def setup_generated_mesh(
+        self,
+        *,
+        radius: Optional[float] = None,
+        mesh_size: Optional[float] = None,
+    ) -> None:
+        """Initialise from a newly generated mesh."""
+        resolved_radius = self.mesh_config.radius if radius is None else float(radius)
+        resolved_mesh_size = self.mesh_config.mesh_size if mesh_size is None else float(mesh_size)
+        generated = create_simple_eit_mesh(
+            n_elec=self.n_elec,
+            radius=resolved_radius,
+            mesh_size=resolved_mesh_size,
+        )
+        logger.info(
+            "Generated mesh on demand (n_elec=%d, radius=%s, mesh_size=%s)",
+            self.n_elec,
+            resolved_radius,
+            resolved_mesh_size,
+        )
+        self.setup_with_mesh(generated)
+
+    def _initialize_components(self) -> None:
+        if self.mesh is None:
+            raise RuntimeError("Cannot initialize EITSystem without mesh")
+
         self.fwd_model = EITForwardModel(
             n_elec=self.n_elec,
             pattern_config=self.pattern_config,
             z=self.contact_impedance,
-            mesh=self.mesh
+            mesh=self.mesh,
         )
-
-        # Initialize reconstructor
         jacobian_calculator = DirectJacobianCalculator(self.fwd_model)
+        regularization = self._build_regularization(jacobian_calculator)
+        self.reconstructor = GaussNewtonReconstructor(
+            fwd_model=self.fwd_model,
+            jacobian_calculator=jacobian_calculator,
+            regularization=regularization,
+        )
+        self._is_initialized = True
+
+    def _build_regularization(self, jacobian_calculator):
         if self.regularization_type == "noser":
-            regularization = NOSERRegularization(
+            return NOSERRegularization(
                 self.fwd_model,
                 jacobian_calculator,
                 base_conductivity=self.base_conductivity,
@@ -143,18 +198,18 @@ class EITSystem:
                 exponent=self.noser_exponent,
                 floor=self.noser_floor,
             )
-        elif self.regularization_type == "tikhonov":
-            regularization = TikhonovRegularization(self.fwd_model, alpha=self.regularization_alpha)
-        else:
-            regularization = SmoothnessRegularization(self.fwd_model, alpha=self.regularization_alpha)
-        
-        self.reconstructor = GaussNewtonReconstructor(
-            fwd_model=self.fwd_model,
-            jacobian_calculator=jacobian_calculator,
-            regularization=regularization
+        if self.regularization_type == "tikhonov":
+            return TikhonovRegularization(self.fwd_model, alpha=self.regularization_alpha)
+        if self.regularization_type == "smoothness":
+            return SmoothnessRegularization(self.fwd_model, alpha=self.regularization_alpha)
+        raise ValueError(
+            f"Unsupported regularization_type={self.regularization_type!r}. "
+            "Expected one of: 'noser', 'tikhonov', 'smoothness'."
         )
-        
-        self._is_initialized = True
+
+    def _require_initialized(self) -> None:
+        if not self._is_initialized:
+            raise RuntimeError("System not initialized. Please call setup(...) first.")
 
     def forward_solve(self, conductivity: Union[np.ndarray, fem.Function, EITImage]) -> EITData:
         """Perform forward solve.
@@ -165,12 +220,13 @@ class EITSystem:
         Returns:
             EIT measurement data.
         """
-        if not self._is_initialized:
-            raise RuntimeError("System not initialized. Please call setup() first.")
+        self._require_initialized()
 
         # Handle different conductivity input types
         if isinstance(conductivity, np.ndarray):
             img = EITImage(elem_data=conductivity, fwd_model=self.fwd_model)
+        elif isinstance(conductivity, fem.Function):
+            img = EITImage(elem_data=conductivity.x.array.copy(), fwd_model=self.fwd_model)
         elif isinstance(conductivity, EITImage):
             img = conductivity
         else:
@@ -180,9 +236,12 @@ class EITSystem:
         data, _ = self.fwd_model.fwd_solve(img)
         return data
 
-    def inverse_solve(self, data: EITData,
-                     reference_data: Optional[EITData] = None,
-                     initial_guess: Optional[np.ndarray] = None) -> EITImage:
+    def inverse_solve(
+        self,
+        data: EITData,
+        reference_data: Optional[EITData] = None,
+        initial_guess: Optional[np.ndarray] = None,
+    ):
         """Perform inverse reconstruction.
 
         Args:
@@ -193,8 +252,7 @@ class EITSystem:
         Returns:
             Reconstructed conductivity distribution.
         """
-        if not self._is_initialized:
-            raise RuntimeError("System not initialized. Please call setup() first.")
+        self._require_initialized()
 
         # Handle difference measurements
         if reference_data is not None:
@@ -204,7 +262,7 @@ class EITSystem:
                 n_elec=data.n_elec,
                 n_stim=data.n_stim,
                 n_meas=data.n_meas,
-                type='difference'
+                type="difference",
             )
         else:
             diff_data = data
@@ -250,7 +308,7 @@ class EITSystem:
             initial_image=initial_image,
             metadata=metadata,
         )
-        
+
     def create_homogeneous_image(self, conductivity: Optional[float] = None) -> EITImage:
         """Create a homogeneous conductivity image.
 
@@ -260,21 +318,22 @@ class EITSystem:
         Returns:
             Homogeneous conductivity image.
         """
-        if not self._is_initialized:
-            raise RuntimeError("System not initialized. Please call setup() first.")
+        self._require_initialized()
 
         if conductivity is None:
             conductivity = self.base_conductivity
 
         n_elements = int(fem.Function(self.fwd_model.V_sigma).x.array.size)
         elem_data = np.ones(n_elements) * conductivity
-        
         return EITImage(elem_data=elem_data, fwd_model=self.fwd_model)
 
-    def add_phantom(self, base_conductivity: float = 1.0,
-                   phantom_conductivity: float = 2.0,
-                   phantom_center: tuple = (0.3, 0.3),
-                   phantom_radius: float = 0.2) -> EITImage:
+    def add_phantom(
+        self,
+        base_conductivity: float = 1.0,
+        phantom_conductivity: float = 2.0,
+        phantom_center: tuple = (0.3, 0.3),
+        phantom_radius: float = 0.2,
+    ) -> EITImage:
         """Add a circular phantom.
 
         Args:
@@ -286,8 +345,7 @@ class EITSystem:
         Returns:
             Conductivity image with phantom.
         """
-        if not self._is_initialized:
-            raise RuntimeError("System not initialized. Please call setup() first.")
+        self._require_initialized()
 
         # Get mesh centroid coordinates
         V_sigma = self.fwd_model.V_sigma
@@ -299,10 +357,10 @@ class EITSystem:
         # Add circular phantom
         for i, coord in enumerate(dof_coordinates):
             x, y = coord[0], coord[1]
-            distance = np.sqrt((x - phantom_center[0])**2 + (y - phantom_center[1])**2)
+            distance = np.sqrt((x - phantom_center[0]) ** 2 + (y - phantom_center[1]) ** 2)
             if distance <= phantom_radius:
                 elem_data[i] = phantom_conductivity
-        
+
         return EITImage(elem_data=elem_data, fwd_model=self.fwd_model)
 
     def get_system_info(self) -> Dict[str, Any]:
@@ -312,18 +370,20 @@ class EITSystem:
             Dictionary containing system configuration information.
         """
         info = {
-            'n_elec': self.n_elec,
-            'pattern_config': self.pattern_config,
-            'mesh_config': self.mesh_config,
-            'initialized': self._is_initialized
+            "n_elec": self.n_elec,
+            "pattern_config": self.pattern_config,
+            "mesh_config": self.mesh_config,
+            "initialized": self._is_initialized,
         }
-        
+
         if self._is_initialized:
-            info.update({
-                'n_elements': int(fem.Function(self.fwd_model.V_sigma).x.array.size),
-                'n_nodes': int(fem.Function(self.fwd_model.V).x.array.size),
-                'n_measurements': self.fwd_model.pattern_manager.n_meas_total,
-                'n_stimulation_patterns': self.fwd_model.pattern_manager.n_stim
-            })
-        
+            info.update(
+                {
+                    "n_elements": int(fem.Function(self.fwd_model.V_sigma).x.array.size),
+                    "n_nodes": int(fem.Function(self.fwd_model.V).x.array.size),
+                    "n_measurements": self.fwd_model.pattern_manager.n_meas_total,
+                    "n_stimulation_patterns": self.fwd_model.pattern_manager.n_stim,
+                }
+            )
+
         return info
