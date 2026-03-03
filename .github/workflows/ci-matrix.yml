@@ -58,7 +58,7 @@ jobs:
               --cov-report=xml:coverage.xml \
               --cov-report=html:htmlcov \
               --cov-report=term-missing \
-              --cov-fail-under=80 | tee pytest.log
+              --cov-fail-under=85 | tee pytest.log
           '
 
       - name: Upload core artifacts
@@ -113,4 +113,89 @@ jobs:
           name: gmsh-${{ matrix.os }}
           path: |
             pytest-gmsh.log
+          if-no-files-found: warn
+
+  perf-guard-linux:
+    name: Perf Guard (Linux, Blocking)
+    needs: tests-core
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Run baseline/optimized snapshots and perf guard
+        env:
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+          OMP_NUM_THREADS: "1"
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
+            uv pip install --python .venv/bin/python --no-deps -e .
+            python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
+            python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+            python scripts/ci/perf_guard.py \
+              --baseline test_results/perf/baseline.json \
+              --optimized test_results/perf/optimized.json \
+              --report test_results/perf/comparison.md \
+              --min-improvement 0.10 \
+              --max-regression 0.05
+          '
+
+      - name: Upload perf artifacts (linux)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-linux
+          path: |
+            test_results/perf/baseline.json
+            test_results/perf/optimized.json
+            test_results/perf/comparison.md
+          if-no-files-found: warn
+
+  perf-guard-macos:
+    name: Perf Guard (macOS, Record)
+    needs: tests-core
+    runs-on: macos-14
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Nix
+        uses: DeterminateSystems/nix-installer-action@v16
+
+      - name: Enable Nix cache
+        uses: DeterminateSystems/magic-nix-cache-action@v9
+
+      - name: Run baseline/optimized snapshots and perf guard
+        env:
+          KMP_DUPLICATE_LIB_OK: "TRUE"
+          OMP_NUM_THREADS: "1"
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
+            uv pip install --python .venv/bin/python --no-deps -e .
+            python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
+            python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+            python scripts/ci/perf_guard.py \
+              --baseline test_results/perf/baseline.json \
+              --optimized test_results/perf/optimized.json \
+              --report test_results/perf/comparison.md \
+              --min-improvement 0.10 \
+              --max-regression 0.05
+          '
+
+      - name: Upload perf artifacts (macOS)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-macos
+          path: |
+            test_results/perf/baseline.json
+            test_results/perf/optimized.json
+            test_results/perf/comparison.md
           if-no-files-found: warn

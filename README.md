@@ -46,6 +46,15 @@ Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
 
 > Hard-cut note: the runtime is now **FEniCSx-only** in `src/pyeidors/**`. Legacy DOLFIN compatibility aliases are removed.
 
+### Phase-2 API Notes (Breaking)
+
+- `EITSystem.setup()` no longer auto-falls back from cache loading to generation.
+- Use explicit setup paths:
+  - `system.setup(mesh=eit_mesh)`
+  - `system.setup(mesh_source="cache", mesh_dir="eit_meshes", mesh_name="mesh_...")`
+  - `system.setup(mesh_source="generated", radius=1.0, mesh_size=0.1)`
+- Solver APIs now return typed `SolverOutput` objects (not ad-hoc dictionaries).
+
 ---
 
 ## Gallery & Validation
@@ -184,6 +193,11 @@ Bench scripts:
 Accuracy check (parameter-space vs measurement-space, refinement=12):
 - `delta_rel=8.66e-09`, `rmse_param=4.503e-01`, `rmse_meas=4.503e-01`, `pred_rel=5.10e-10`
 - Reproduce with: `python scripts/benchmarks/benchmark_difference_runtime.py --refinements 12 --compare-solvers --single-step-space measurement`
+
+CI perf gating compares:
+- baseline profile: parameter-space / iterative options
+- optimized profile: measurement-space / single-step options
+- thresholds: median improvement `>=10%`, worst-case regression `<=5%`
 
 | Elements | Baseline (s) | Measurement-Space (s) | Speedup |
 |---:|---:|---:|---:|

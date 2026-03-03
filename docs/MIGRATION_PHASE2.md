@@ -12,6 +12,8 @@ This document lists the intentional breaking changes introduced by the Phase-2 m
 | Mesh object behavior | dynamic monkey-patched mesh attributes | explicit `EITMesh` dataclass container |
 | Function array access | `Function.vector()` compatibility layer | `Function.x.array` and `femx.function_get_array()` helpers |
 | Demo script names | `demo_fenics_*` | `demo_dolfinx_*` |
+| System setup | implicit mesh fallback inside `EITSystem.setup()` | explicit `setup(mesh=...)` / `setup(mesh_source='cache'|'generated', ...)` |
+| Solver return contract | ad-hoc `dict`/`Function` mixed outputs | typed `SolverOutput` for GN/Sparse solvers |
 
 ## Runtime Behavior Changes
 
@@ -20,7 +22,8 @@ This document lists the intentional breaking changes introduced by the Phase-2 m
 3. CI enforces:
    - legacy token guard (`scripts/ci/legacy_guard.py`)
    - mandatory gmsh test path
-   - coverage gate `--cov-fail-under=80`
+   - coverage gate `--cov-fail-under=85`
+   - perf guard (`scripts/ci/perf_snapshot.py` + `scripts/ci/perf_guard.py`)
 
 ## Upgrade Checklist
 
@@ -30,5 +33,19 @@ This document lists the intentional breaking changes introduced by the Phase-2 m
 4. Run full validation locally:
 
 ```bash
-nix develop -c bash -lc 'python -m pytest -q --cov=src/pyeidors --cov-fail-under=80'
+nix develop -c bash -lc 'python -m pytest -q --cov=src/pyeidors --cov-fail-under=85'
+```
+
+### Performance Guard Locally
+
+```bash
+nix develop -c bash -lc '
+  python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
+  python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+  python scripts/ci/perf_guard.py \
+    --baseline test_results/perf/baseline.json \
+    --optimized test_results/perf/optimized.json \
+    --report test_results/perf/comparison.md \
+    --min-improvement 0.10 --max-regression 0.05
+'
 ```
