@@ -11,6 +11,7 @@ from .base import (
     resolve_reconstruction_output,
     compute_residuals,
 )
+from ..contracts import SolverOutput
 from ..solvers.sparse_bayesian import (
     SparseBayesianConfig,
     SparseBayesianReconstructor,
@@ -61,12 +62,17 @@ def perform_sparse_absolute_reconstruction(
         prior_scale=prior_scale,
         metadata=metadata,
     )
+    if not isinstance(solver_output, SolverOutput):
+        raise TypeError(
+            "SparseBayesianReconstructor must return SolverOutput. "
+            f"Received {type(solver_output).__name__}."
+        )
 
     conductivity_image, conductivity_values, residual_history, sigma_history = (
         resolve_reconstruction_output(solver_output, eit_system.fwd_model)
     )
 
-    simulated_vector = solver_output.get("simulated_measurement")
+    simulated_vector = solver_output.simulated_measurement
     if simulated_vector is None:
         simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
         simulated_vector = simulated_data.meas
@@ -78,13 +84,13 @@ def perform_sparse_absolute_reconstruction(
         "baseline_used": baseline_image.elem_data.copy(),
         "display_values": conductivity_values,
         "solver": "sparse_bayesian",
-        "likelihood_noise_std": solver_output.get("likelihood_noise_std"),
-        "prior_scale": solver_output.get("prior_scale"),
+        "likelihood_noise_std": solver_output.likelihood_noise_std,
+        "prior_scale": solver_output.prior_scale,
     }
     if metadata:
         result_metadata.update(metadata)
-    if "metadata" in solver_output:
-        result_metadata.update(solver_output["metadata"])
+    if solver_output.metadata:
+        result_metadata.update(solver_output.metadata)
 
     return ReconstructionResult(
         mode="absolute",
@@ -126,12 +132,17 @@ def perform_sparse_difference_reconstruction(
         prior_scale=prior_scale,
         metadata=metadata,
     )
+    if not isinstance(solver_output, SolverOutput):
+        raise TypeError(
+            "SparseBayesianReconstructor must return SolverOutput. "
+            f"Received {type(solver_output).__name__}."
+        )
 
     conductivity_image, conductivity_values, residual_history, sigma_history = (
         resolve_reconstruction_output(solver_output, eit_system.fwd_model)
     )
 
-    simulated_vector = solver_output.get("simulated_measurement")
+    simulated_vector = solver_output.simulated_measurement
     if simulated_vector is None:
         simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
         simulated_vector = simulated_data.meas
@@ -144,13 +155,13 @@ def perform_sparse_difference_reconstruction(
         "reference_measured": reference_data.meas.copy(),
         "display_values": conductivity_values,
         "solver": "sparse_bayesian",
-        "likelihood_noise_std": solver_output.get("likelihood_noise_std"),
-        "prior_scale": solver_output.get("prior_scale"),
+        "likelihood_noise_std": solver_output.likelihood_noise_std,
+        "prior_scale": solver_output.prior_scale,
     }
     if metadata:
         result_metadata.update(metadata)
-    if "metadata" in solver_output:
-        result_metadata.update(solver_output["metadata"])
+    if solver_output.metadata:
+        result_metadata.update(solver_output.metadata)
 
     return ReconstructionResult(
         mode="difference",

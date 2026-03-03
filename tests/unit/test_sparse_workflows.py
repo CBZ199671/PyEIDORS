@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 
 from pyeidors.data.structures import EITData
+from pyeidors.inverse.contracts import SolverOutput
 from pyeidors.inverse.solvers import eit_pde as eit_pde_module
 from pyeidors.inverse.workflows.sparse_bayesian import (
     perform_sparse_absolute_reconstruction,
@@ -19,13 +20,17 @@ class _DummySparseReconstructor:
         self._simulated = simulated
 
     def reconstruct(self, **kwargs):
-        return {
-            "conductivity": self._conductivity.copy(),
-            "simulated_measurement": self._simulated.copy(),
-            "likelihood_noise_std": 1e-3,
-            "prior_scale": 5e-2,
-            "metadata": {"dummy": True},
-        }
+        return SolverOutput(
+            conductivity=self._conductivity.copy(),
+            simulated_measurement=self._simulated.copy(),
+            likelihood_noise_std=1e-3,
+            prior_scale=5e-2,
+            metadata={"dummy": True},
+            iterations=1,
+            converged=True,
+            final_residual=0.0,
+            final_relative_change=0.0,
+        )
 
 
 def test_sparse_absolute_wrapper_without_cuqi(eit_system):

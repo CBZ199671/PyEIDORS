@@ -7,6 +7,7 @@ from dolfinx import fem
 
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
+from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
 from ..regularization.smoothness import SmoothnessRegularization
 
@@ -148,7 +149,7 @@ class GaussNewtonReconstructor:
                    jacobian_method: str = 'efficient',
                    prior_data: Optional[np.ndarray] = None,
                    record_conductivity_history: bool = False,
-                   conductivity_history_stride: int = 1):
+                   conductivity_history_stride: int = 1) -> SolverOutput:
         """Execute modular Gauss-Newton reconstruction.
 
         Args:
@@ -419,31 +420,36 @@ class GaussNewtonReconstructor:
                     pbar.update(1)
         
         # Build results
-        results = {
-            'conductivity': sigma_current,
-            'residual_history': residual_history,
-            'sigma_change_history': sigma_change_history,
-            'iterations': len(residual_history),
-            'converged': relative_change < self.convergence_tol,
-            'final_residual': residual_history[-1],
-            'final_relative_change': relative_change,
-            'jacobian_method': jacobian_method,
-            'regularization_type': type(self.regularization).__name__,
-            'iteration_logs': iteration_logs,
-        }
-        if record_conductivity_history:
-            results["conductivity_history"] = conductivity_history
-        if self._baseline_measurement is not None:
-            results['baseline_measurement'] = self._baseline_measurement.copy()
-        if self._meas_weight_sqrt is not None:
-            results['measurement_weight'] = (self._meas_weight_sqrt.detach().cpu().numpy() ** 2)
+        results = SolverOutput(
+            conductivity=sigma_current,
+            residual_history=residual_history,
+            sigma_change_history=sigma_change_history,
+            iterations=len(residual_history),
+            converged=relative_change < self.convergence_tol,
+            final_residual=residual_history[-1],
+            final_relative_change=relative_change,
+            jacobian_method=jacobian_method,
+            regularization_type=type(self.regularization).__name__,
+            iteration_logs=iteration_logs,
+            conductivity_history=conductivity_history if record_conductivity_history else None,
+            baseline_measurement=(
+                self._baseline_measurement.copy()
+                if self._baseline_measurement is not None
+                else None
+            ),
+            measurement_weight=(
+                self._meas_weight_sqrt.detach().cpu().numpy() ** 2
+                if self._meas_weight_sqrt is not None
+                else None
+            ),
+        )
         
         if self.verbose:
             print(f"\nReconstruction complete:")
-            print(f"  Iterations: {results['iterations']}")
-            print(f"  Final residual: {results['final_residual']:.2e}")
+            print(f"  Iterations: {results.iterations}")
+            print(f"  Final residual: {results.final_residual:.2e}")
             print(f"  Jacobian method: {jacobian_method}")
-            print(f"  Regularization type: {results['regularization_type']}")
+            print(f"  Regularization type: {results.regularization_type}")
         
         return results
     

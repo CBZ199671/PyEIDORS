@@ -114,12 +114,13 @@ def test_reconstruct_and_history_recording(eit_system, monkeypatch):
         conductivity_history_stride=1,
     )
 
-    assert "conductivity" in result
-    assert result["iterations"] >= 1
-    assert len(result["residual_history"]) >= 1
-    assert "conductivity_history" in result
-    assert result["conductivity_history"][0].shape[0] == n_elem
-    assert np.isfinite(result["final_residual"])
+    assert result.conductivity is not None
+    assert result.iterations >= 1
+    assert result.residual_history is not None
+    assert len(result.residual_history) >= 1
+    assert result.conductivity_history is not None
+    assert result.conductivity_history[0].shape[0] == n_elem
+    assert np.isfinite(result.final_residual)
     assert fwd_model._call_count > 1
 
 
@@ -146,9 +147,9 @@ def test_measurement_weight_strategies_and_baseline_storage(eit_system, monkeypa
             initial_conductivity=1.0,
             jacobian_method="efficient",
         )
-        assert "measurement_weight" in out
-        assert "baseline_measurement" in out
-        assert out["measurement_weight"].shape[0] == reconstructor.n_measurements
+        assert out.measurement_weight is not None
+        assert out.baseline_measurement is not None
+        assert out.measurement_weight.shape[0] == reconstructor.n_measurements
 
 
 def test_scale_and_difference_helpers(eit_system):
@@ -245,8 +246,8 @@ def test_reconstruct_rollback_early_stop(eit_system, monkeypatch):
         measured_data=SimpleNamespace(meas=measured),
         initial_conductivity=1.0,
     )
-    assert result["iterations"] < reconstructor.max_iterations
-    assert np.isfinite(result["final_residual"])
+    assert result.iterations < reconstructor.max_iterations
+    assert np.isfinite(result.final_residual)
 
 
 def test_setters_invalidate_or_replace_components(eit_system):

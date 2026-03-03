@@ -6,6 +6,7 @@ import numpy as np
 from dolfinx import fem
 
 from pyeidors.data.structures import EITImage
+from pyeidors.inverse.contracts import SolverOutput
 
 
 def test_system_setup_and_forward(eit_system):
@@ -38,15 +39,19 @@ def test_difference_inverse_smoke(eit_system, monkeypatch):
     def _fake_reconstruct(*args, **kwargs):
         conductivity = fem.Function(eit_system.fwd_model.V_sigma)
         conductivity.x.array[:] = 1.0
-        return {
-            "conductivity": conductivity,
-            "residual_history": [1.0, 0.5],
-            "sigma_change_history": [0.1, 0.05],
-        }
+        return SolverOutput(
+            conductivity=conductivity,
+            residual_history=[1.0, 0.5],
+            sigma_change_history=[0.1, 0.05],
+            iterations=2,
+            converged=True,
+            final_residual=0.5,
+            final_relative_change=0.05,
+        )
 
     monkeypatch.setattr(eit_system.reconstructor, "reconstruct", _fake_reconstruct)
     result = eit_system.inverse_solve(data=target, reference_data=background)
-    conductivity_fn = result["conductivity"]
+    conductivity_fn = result.conductivity
     conductivity = conductivity_fn.x.array
     assert conductivity.size == eit_system.get_system_info()["n_elements"]
     assert np.isfinite(conductivity).all()

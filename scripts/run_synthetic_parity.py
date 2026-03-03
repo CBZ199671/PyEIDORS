@@ -666,13 +666,13 @@ def main() -> None:
             initial_conductivity=homogeneous.elem_data,
             record_conductivity_history=want_frames,
         )
-        sigma_fn = abs_raw["conductivity"]
+        sigma_fn = abs_raw.conductivity
         recon_image = EITImage(elem_data=function_get_array(sigma_fn).copy(), fwd_model=system.fwd_model)
         sim_abs, _ = system.fwd_model.fwd_solve(recon_image)
         metrics["absolute"] = compute_metrics(meas_phantom.meas, sim_abs.meas)
 
         if want_frames:
-            conductivity_history = abs_raw.get("conductivity_history") or []
+            conductivity_history = abs_raw.conductivity_history or []
             vmin = args.absolute_frame_vmin
             vmax = args.absolute_frame_vmax
             if vmin is None:

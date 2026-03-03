@@ -112,7 +112,7 @@ def main() -> None:
     recon = system.reconstructor.reconstruct(
         data_true, initial_conductivity=1.0, jacobian_method="efficient"
     )
-    sigma_est = function_get_array(recon["conductivity"]).copy()
+    sigma_est = function_get_array(recon.conductivity).copy()
     img_est = EITImage(elem_data=sigma_est, fwd_model=system.fwd_model)
     data_est, _ = system.fwd_model.fwd_solve(img_est)
 
@@ -124,7 +124,7 @@ def main() -> None:
         "meas_rmse": meas_rmse,
         "sigma_rmse": sigma_rmse,
         "sigma_mae": sigma_mae,
-        "residual_final": float(recon["final_residual"]),
+        "residual_final": float(recon.final_residual),
     }
 
     # 7) Save results

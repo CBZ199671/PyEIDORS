@@ -6,17 +6,22 @@ import numpy as np
 from dolfinx import fem
 
 from pyeidors.inverse import perform_absolute_reconstruction, perform_difference_reconstruction
+from pyeidors.inverse.contracts import SolverOutput
 
 
 def _patch_solver(monkeypatch, eit_system):
     def _fake_reconstruct(*args, **kwargs):
         conductivity = fem.Function(eit_system.fwd_model.V_sigma)
         conductivity.x.array[:] = 1.0
-        return {
-            "conductivity": conductivity,
-            "residual_history": [0.5],
-            "sigma_change_history": [0.1],
-        }
+        return SolverOutput(
+            conductivity=conductivity,
+            residual_history=[0.5],
+            sigma_change_history=[0.1],
+            iterations=1,
+            converged=True,
+            final_residual=0.5,
+            final_relative_change=0.1,
+        )
 
     monkeypatch.setattr(eit_system.reconstructor, "reconstruct", _fake_reconstruct)
 

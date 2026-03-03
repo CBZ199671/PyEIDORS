@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, Tuple, Dict, Any
+from typing import Any, Dict, Optional, Sequence, Tuple
 
 import numpy as np
 
 from ...data.structures import EITImage
 from ...femx import function_get_array
+from ..contracts import SolverOutput
 
 
 @dataclass
@@ -59,30 +60,33 @@ class ReconstructionResult:
 
 
 def resolve_reconstruction_output(
-    reconstruction: Any,
-    fwd_model,
+    reconstruction: SolverOutput,
+    fwd_model: Any,
 ) -> Tuple[EITImage, np.ndarray, Optional[Sequence[float]], Optional[Sequence[float]]]:
-    """Extract conductivity image and history from solver output."""
+    """Extract conductivity image and history from typed solver output."""
+    if not isinstance(reconstruction, SolverOutput):
+        raise TypeError(
+            "Expected SolverOutput from inverse solver. "
+            f"Received {type(reconstruction).__name__}."
+        )
 
-    if isinstance(reconstruction, dict):
-        conductivity_field = reconstruction.get("conductivity")
-        residual_history = reconstruction.get("residual_history")
-        sigma_history = reconstruction.get("sigma_change_history")
-    else:
-        conductivity_field = getattr(reconstruction, "elem_data", reconstruction)
-        residual_history = None
-        sigma_history = None
-
+    conductivity_field = reconstruction.conductivity
     if hasattr(conductivity_field, "x") and hasattr(conductivity_field.x, "array"):
         conductivity_values = function_get_array(conductivity_field).copy()
-        conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
     elif isinstance(conductivity_field, np.ndarray):
-        conductivity_values = conductivity_field
-        conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
+        conductivity_values = conductivity_field.copy()
     else:
-        raise TypeError("Unrecognized reconstruction result type: expected DOLFINx Function or numpy array")
+        raise TypeError(
+            "SolverOutput.conductivity must be a DOLFINx Function or numpy array."
+        )
 
-    return conductivity_image, conductivity_values, residual_history, sigma_history
+    conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
+    return (
+        conductivity_image,
+        conductivity_values,
+        reconstruction.residual_history,
+        reconstruction.sigma_change_history,
+    )
 
 
 def compute_residuals(

@@ -231,7 +231,7 @@ def run_reconstruction(
         initial_conductivity=initial_sigma,
         jacobian_method="efficient",
     )
-    conductivity_fn = recon_result["conductivity"]
+    conductivity_fn = recon_result.conductivity
     conductivity_vec = function_get_array(conductivity_fn).copy()
 
     # Forward prediction for curve comparison

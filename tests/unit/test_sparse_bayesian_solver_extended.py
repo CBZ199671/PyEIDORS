@@ -131,11 +131,11 @@ def test_reconstruct_absolute_and_difference_modes(eit_system):
         metadata={"case": "difference"},
     )
 
-    assert absolute["mode"] == "absolute"
-    assert difference["mode"] == "difference"
-    assert absolute["conductivity"].x.array.size == n_elem
-    assert difference["metadata"]["case"] == "difference"
-    assert np.isfinite(absolute["final_residual"])
+    assert absolute.metadata["mode"] == "absolute"
+    assert difference.metadata["mode"] == "difference"
+    assert absolute.conductivity.x.array.size == n_elem
+    assert difference.metadata["case"] == "difference"
+    assert np.isfinite(absolute.final_residual)
 
 
 def test_forward_measurement_and_jacobian_cache(eit_system):

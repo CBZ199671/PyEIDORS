@@ -16,6 +16,7 @@ from dolfinx import fem
 
 from ...data.structures import EITData, EITImage
 from ...femx import function_set_array
+from ..contracts import SolverOutput
 from .eit_pde import create_pde_model, EITPDE
 
 try:  # pragma: no cover - optional dependency guard
@@ -101,7 +102,7 @@ class SparseBayesianReconstructor:
         prior_scale: Optional[float] = None,
         clip_values: Optional[Tuple[float, float]] = None,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    ) -> SolverOutput:
         """Compute a sparse Bayesian reconstruction."""
 
         mode = "difference" if reference_data is not None else "absolute"
@@ -144,9 +145,11 @@ class SparseBayesianReconstructor:
 
         residual_vector = predicted_vector - data_vector
 
-        output: Dict[str, Any] = {
-            "mode": mode,
-            "conductivity": conductivity_function,
+        merged_metadata: Dict[str, Any] = {"mode": mode}
+        if metadata:
+            merged_metadata.update(metadata)
+
+        diagnostics: Dict[str, Any] = {
             "delta_sigma": map_delta,
             "baseline_conductivity": baseline_values,
             "posterior_map": map_delta,
@@ -154,27 +157,27 @@ class SparseBayesianReconstructor:
             "observed_data": data_vector,
             "predicted_data": predicted_vector,
             "residual_vector": residual_vector,
-            "simulated_measurement": simulated_vector,
-            "baseline_measurement": baseline_meas,
             "target_measurement": target_vector,
-            "likelihood_noise_std": noise_sigma,
-            "prior_scale": prior_scale,
             "clip_bounds": clip_bounds,
-            "iterations": 1,
-            "converged": True,
-            "final_residual": float(np.linalg.norm(residual_vector)),
-            "final_relative_change": float(
-                np.linalg.norm(map_delta) / (np.linalg.norm(conductivity_values) + 1e-12)
-            ),
         }
 
-        if metadata:
-            output.setdefault("metadata", {}).update(metadata)
-
-        output.setdefault("residual_history", None)
-        output.setdefault("sigma_change_history", None)
-
-        return output
+        return SolverOutput(
+            conductivity=conductivity_function,
+            residual_history=None,
+            sigma_change_history=None,
+            iterations=1,
+            converged=True,
+            final_residual=float(np.linalg.norm(residual_vector)),
+            final_relative_change=float(
+                np.linalg.norm(map_delta) / (np.linalg.norm(conductivity_values) + 1e-12)
+            ),
+            simulated_measurement=simulated_vector,
+            baseline_measurement=baseline_meas,
+            likelihood_noise_std=noise_sigma,
+            prior_scale=prior_scale,
+            metadata=merged_metadata,
+            diagnostics=diagnostics,
+        )
 
     # ------------------------------------------------------------------
     # Internal helpers

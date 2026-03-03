@@ -131,7 +131,7 @@ def run_test():
         reference_data=reference_data,
         initial_guess=None,
     )
-    recon_sigma = function_get_array(recon_result["conductivity"]).copy()
+    recon_sigma = function_get_array(recon_result.conductivity).copy()
 
     true_sigma = phantom_img.elem_data
     rel_err = np.linalg.norm(recon_sigma - true_sigma) / np.linalg.norm(true_sigma)

@@ -17,6 +17,7 @@ from .inverse import (
     perform_absolute_reconstruction,
     perform_difference_reconstruction,
 )
+from .inverse.contracts import SolverOutput
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from .inverse.regularization.smoothness import (
     NOSERRegularization,
@@ -241,7 +242,7 @@ class EITSystem:
         data: EITData,
         reference_data: Optional[EITData] = None,
         initial_guess: Optional[np.ndarray] = None,
-    ):
+    ) -> SolverOutput:
         """Perform inverse reconstruction.
 
         Args:
