@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from pyeidors.data.structures import EITData, EITImage
-from pyeidors.inverse.solvers import sparse_bayesian as sparse_module
+from pyeidors.inverse.solvers import sparse_bayesian_engine as sparse_module
 
 
 class _FakeMapResult:
