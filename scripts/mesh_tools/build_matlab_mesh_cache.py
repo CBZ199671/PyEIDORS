@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MATLAB mesh.npz + electrodes.json into XDMF cache usable by PyEIDORS."""
+"""Convert MATLAB mesh.npz + electrodes.json into .msh cache usable by PyEIDORS."""
 
 from __future__ import annotations
 
@@ -7,89 +7,116 @@ import argparse
 import json
 from configparser import ConfigParser
 from pathlib import Path
-from typing import Dict, List, Sequence
+from typing import Dict, Iterable, List, Sequence, Tuple
 
+import meshio
 import numpy as np
-from dolfin import Mesh, MeshEditor, MeshFunction, facets, XDMFFile, Point
 
 
-def build_mesh(nodes: np.ndarray, elements: np.ndarray) -> Mesh:
-    mesh = Mesh()
-    editor = MeshEditor()
-    editor.open(mesh, "triangle", 2, 2)
-    editor.init_vertices(len(nodes))
-    editor.init_cells(len(elements))
-    for idx, (x, y) in enumerate(nodes):
-        editor.add_vertex(idx, Point(float(x), float(y), 0.0))
-    for idx, conn in enumerate(elements):
-        editor.add_cell(idx, conn.astype(int))
-    editor.close()
-    mesh.init(1, 2)
-    return mesh
+def _sorted_edge(a: int, b: int) -> Tuple[int, int]:
+    return (a, b) if a < b else (b, a)
 
 
-def build_boundary_markers(mesh: Mesh, electrodes: Sequence[Dict[str, object]], nodes: np.ndarray) -> MeshFunction:
-    marker = MeshFunction("size_t", mesh, 1, 0)
-    marker.set_all(1)
-    marker_array = marker.array()
+def _boundary_edges(elements: np.ndarray) -> np.ndarray:
+    edge_counts: Dict[Tuple[int, int], int] = {}
+    for tri in elements:
+        a, b, c = (int(tri[0]), int(tri[1]), int(tri[2]))
+        for edge in (_sorted_edge(a, b), _sorted_edge(b, c), _sorted_edge(c, a)):
+            edge_counts[edge] = edge_counts.get(edge, 0) + 1
+    boundary = [edge for edge, count in edge_counts.items() if count == 1]
+    return np.asarray(boundary, dtype=np.int32)
+
+
+def _mean_angle(coords: np.ndarray, center: np.ndarray) -> float:
+    angles = np.arctan2(coords[:, 1] - center[1], coords[:, 0] - center[0])
+    return float(np.arctan2(np.mean(np.sin(angles)), np.mean(np.cos(angles))))
+
+
+def _wrap_diff(a: float, b: float) -> float:
+    diff = a - b
+    while diff <= -np.pi:
+        diff += 2 * np.pi
+    while diff > np.pi:
+        diff -= 2 * np.pi
+    return abs(diff)
+
+
+def _nearest_electrode(angle: float, electrode_angles: np.ndarray, order: np.ndarray) -> int:
+    diffs = [_wrap_diff(angle, a) for a in electrode_angles]
+    return int(order[int(np.argmin(diffs))])
+
+
+def build_boundary_tags(
+    nodes: np.ndarray, boundary_edges: np.ndarray, electrodes: Sequence[Dict[str, object]]
+) -> np.ndarray:
     center = nodes.mean(axis=0)
-
-    def avg_angle(coords: np.ndarray) -> float:
-        ang = np.arctan2(coords[:, 1] - center[1], coords[:, 0] - center[0])
-        return float(np.arctan2(np.mean(np.sin(ang)), np.mean(np.cos(ang))))
-
-    electrode_angles = []
-    for idx, elec in enumerate(electrodes):
-        node_indices = [int(i) for i in elec["node_indices"] if i >= 0]
+    electrode_angles: List[float] = []
+    for idx, electrode in enumerate(electrodes):
+        node_indices = [int(i) for i in electrode["node_indices"] if int(i) >= 0]
         if node_indices:
-            coords = nodes[node_indices]
-            electrode_angles.append(avg_angle(coords))
+            angle = _mean_angle(nodes[node_indices], center)
         else:
-            electrode_angles.append(-np.pi + idx * 1e-3)
+            angle = -np.pi + idx * 1e-3
+        electrode_angles.append(angle)
 
-    order = np.argsort(electrode_angles)
-    ordered_angles = np.array(electrode_angles)[order]
+    order = np.argsort(np.asarray(electrode_angles))
+    sorted_angles = np.asarray(electrode_angles)[order]
 
-    def angle_diff(a: float, b: float) -> float:
-        diff = a - b
-        while diff <= -np.pi:
-            diff += 2 * np.pi
-        while diff > np.pi:
-            diff -= 2 * np.pi
-        return abs(diff)
-
-    def nearest_electrode(angle: float) -> int:
-        diffs = [angle_diff(angle, a) for a in ordered_angles]
-        idx = int(np.argmin(diffs))
-        return int(order[idx])
-
-    for facet in facets(mesh):
-        if not facet.exterior():
-            continue
-        verts = facet.entities(0)
-        coords = nodes[verts]
-        angle = avg_angle(coords)
-        elec_idx = nearest_electrode(angle)
-        marker_array[facet.index()] = elec_idx + 2
-
-    return marker
+    tags = np.zeros(boundary_edges.shape[0], dtype=np.int32)
+    for i, edge in enumerate(boundary_edges):
+        midpoint = nodes[np.asarray(edge, dtype=np.int32)].mean(axis=0, keepdims=True)
+        angle = _mean_angle(midpoint, center)
+        elec_idx = _nearest_electrode(angle, sorted_angles, order)
+        tags[i] = elec_idx + 2  # domain=1, electrodes start at 2
+    return tags
 
 
-def write_cache(mesh: Mesh, boundary_markers: MeshFunction, out_dir: Path, name: str, n_electrodes: int) -> None:
+def _build_meshio_points(nodes_xy: np.ndarray) -> np.ndarray:
+    if nodes_xy.shape[1] == 3:
+        return nodes_xy.astype(float)
+    points = np.zeros((nodes_xy.shape[0], 3), dtype=float)
+    points[:, : nodes_xy.shape[1]] = nodes_xy
+    return points
+
+
+def write_cache(
+    nodes: np.ndarray,
+    elements: np.ndarray,
+    boundary_edges: np.ndarray,
+    boundary_tags: np.ndarray,
+    out_dir: Path,
+    name: str,
+    n_electrodes: int,
+) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-    domain_file = out_dir / f"{name}_domain.xdmf"
-    boundaries_file = out_dir / f"{name}_boundaries.xdmf"
+    msh_file = out_dir / f"{name}.msh"
     assoc_file = out_dir / f"{name}_association_table.ini"
 
-    with XDMFFile(str(domain_file)) as fh:
-        fh.write(mesh)
-    with XDMFFile(str(boundaries_file)) as fh:
-        fh.write(boundary_markers)
+    points = _build_meshio_points(nodes)
+    tri_tags = np.full(elements.shape[0], 1, dtype=np.int32)
+
+    field_data = {"domain": np.array([1, 2], dtype=np.int32)}
+    for idx in range(n_electrodes):
+        field_data[f"electrode_{idx + 1}"] = np.array([idx + 2, 1], dtype=np.int32)
+
+    mesh = meshio.Mesh(
+        points=points,
+        cells=[
+            ("triangle", elements.astype(np.int32)),
+            ("line", boundary_edges.astype(np.int32)),
+        ],
+        cell_data={
+            "gmsh:physical": [tri_tags, boundary_tags.astype(np.int32)],
+            "gmsh:geometrical": [tri_tags, boundary_tags.astype(np.int32)],
+        },
+        field_data=field_data,
+    )
+    meshio.write(msh_file, mesh, file_format="gmsh22")
 
     cfg = ConfigParser()
     cfg["ASSOCIATION TABLE"] = {"domain": "1"}
     for idx in range(n_electrodes):
-        cfg["ASSOCIATION TABLE"][f"electrode_{idx+1}"] = str(idx + 2)
+        cfg["ASSOCIATION TABLE"][f"electrode_{idx + 1}"] = str(idx + 2)
     with assoc_file.open("w", encoding="utf-8") as fh:
         cfg.write(fh)
 
@@ -103,16 +130,16 @@ def main() -> None:
     args = parser.parse_args()
 
     data = np.load(args.mesh_npz)
-    nodes = data["nodes"]
-    elements = data["elements"].astype(int) - 1  # Convert to 0-based
+    nodes = np.asarray(data["nodes"], dtype=float)
+    elements = np.asarray(data["elements"], dtype=np.int32) - 1  # MATLAB -> 0-based
 
     electrodes = json.loads(args.electrodes_json.read_text(encoding="utf-8"))
-    for elec in electrodes:
-        elec["node_indices"] = [int(i) - 1 for i in elec["node_indices"]]
+    for electrode in electrodes:
+        electrode["node_indices"] = [int(i) - 1 for i in electrode["node_indices"]]
 
-    mesh = build_mesh(nodes, elements)
-    boundaries = build_boundary_markers(mesh, electrodes, nodes)
-    write_cache(mesh, boundaries, args.out_dir, args.mesh_name, len(electrodes))
+    boundary_edges = _boundary_edges(elements)
+    boundary_tags = build_boundary_tags(nodes, boundary_edges, electrodes)
+    write_cache(nodes, elements, boundary_edges, boundary_tags, args.out_dir, args.mesh_name, len(electrodes))
 
 
 if __name__ == "__main__":

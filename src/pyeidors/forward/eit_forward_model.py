@@ -1,70 +1,79 @@
-"""EIT Forward Model - Based on Complete Electrode Model."""
+"""EIT Forward Model based on the Complete Electrode Model (CEM)."""
+
+from __future__ import annotations
+
+import warnings
 
 import numpy as np
-import warnings
+import ufl
+from mpi4py import MPI
 from scipy.sparse import csr_matrix, lil_matrix
 from scipy.sparse.linalg import factorized
+from dolfinx import fem
+import dolfinx.fem.petsc as fem_petsc
 
-# FEniCS imports
-from fenics import *
-from dolfin import as_backend_type
-
-from ..data.structures import PatternConfig, EITData, EITImage
+from ..data.structures import EITData, EITImage, EITMesh, PatternConfig
 from ..electrodes.patterns import StimMeasPatternManager
+from ..femx import create_ds_measure
 
 
 class EITForwardModel:
-    """EIT Forward Model - Based on Complete Electrode Model."""
+    """EIT Forward Model - Complete Electrode Model assembly and solve."""
 
-    def __init__(self, n_elec: int, pattern_config: PatternConfig, z: np.ndarray, mesh):
+    def __init__(self, n_elec: int, pattern_config: PatternConfig, z: np.ndarray, mesh: EITMesh):
         self.n_elec = n_elec
-        self.z = np.array(z)
-        self.mesh = mesh
+        self.z = np.asarray(z)
+        if not isinstance(mesh, EITMesh):
+            raise TypeError("EITForwardModel expects an EITMesh instance")
+        self.eit_mesh = mesh
+        self.mesh = mesh.mesh
+
+        if self.mesh.comm.size != 1:
+            raise RuntimeError(
+                "PyEIDORS phase-2 migration currently supports MPI size=1 only. "
+                "Use single-rank execution in this stage."
+            )
 
         if self.z.size != self.n_elec:
-            raise ValueError(f"Contact impedance length ({self.z.size}) does not match electrode count ({self.n_elec})")
+            raise ValueError(
+                f"Contact impedance length ({self.z.size}) does not match electrode count ({self.n_elec})"
+            )
 
-        # Create stimulation/measurement pattern manager
         self.pattern_manager = StimMeasPatternManager(pattern_config)
 
-        # Set up boundary conditions
-        self.boundaries_mf = mesh.boundaries_mf
+        self.facet_tags = mesh.facet_tags
         self.association_table = mesh.association_table
-        if self.boundaries_mf is None:
-            raise ValueError("Mesh lacks electrode boundary markers, cannot assemble CEM")
-        self.ds_electrodes = Measure("ds", domain=mesh, subdomain_data=self.boundaries_mf)
+        if self.facet_tags is None:
+            raise ValueError("EITMesh lacks electrode facet tags, cannot assemble CEM")
 
-        # Resolve electrode boundary tags from association table and compute electrode lengths
+        self.ds_electrodes = create_ds_measure(self.mesh, self.facet_tags)
+
         self.electrode_tags = self._resolve_electrode_tags()
         self.electrode_lengths = self._compute_electrode_lengths()
 
-        # Create function spaces
-        self.V = FunctionSpace(mesh, "Lagrange", 1)  # Potential
-        self.V_sigma = FunctionSpace(mesh, "DG", 0)  # Conductivity
+        self.V = fem.functionspace(self.mesh, ("Lagrange", 1))
+        self.V_sigma = fem.functionspace(self.mesh, ("DG", 0))
 
-        # Get degrees of freedom count
-        u_sol = Function(self.V)
-        self.dofs = u_sol.vector().size()
+        dofmap = self.V.dofmap.index_map
+        self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
 
-        # Define variational forms
-        self.u = TrialFunction(self.V)
-        self.phi = TestFunction(self.V)
+        self.u = ufl.TrialFunction(self.V)
+        self.phi = ufl.TestFunction(self.V)
 
-        # Assemble system matrix
         self.M = self._assemble_electrode_matrix()
 
     def _resolve_electrode_tags(self):
         """Extract boundary tags sorted by electrode index from association table."""
+
         electrode_map = {}
 
         if isinstance(self.association_table, dict):
-            # Prefer "electrode_i" style keys
             for key, val in self.association_table.items():
                 try:
                     tag_val = int(val)
                 except (TypeError, ValueError):
                     continue
-                
+
                 if isinstance(key, str):
                     key_lower = key.lower()
                     if key_lower == "electrodes" and isinstance(val, dict):
@@ -75,13 +84,10 @@ class EITForwardModel:
                                 continue
                         continue
                     if key_lower.startswith("electrode"):
-                        try:
-                            idx = int(key_lower.split('_')[-1])
-                            electrode_map[idx] = tag_val
-                        except ValueError:
-                            continue
+                        idx_str = key_lower.split("_")[-1]
+                        if idx_str.isdigit():
+                            electrode_map[int(idx_str)] = tag_val
 
-        # Fallback for legacy numeric keys (assign electrode indices by sorted tag values)
         if len(electrode_map) < self.n_elec and isinstance(self.association_table, dict):
             candidates = []
             for key, val in self.association_table.items():
@@ -104,113 +110,109 @@ class EITForwardModel:
         return [electrode_map[i] for i in range(1, self.n_elec + 1)]
 
     def _compute_electrode_lengths(self):
-        """Compute boundary measure (length or area) for each electrode."""
+        """Compute boundary measure (length in 2D) for each electrode."""
+
         lengths = {}
+        one = fem.Constant(self.mesh, 1.0)
         for tag in self.electrode_tags:
-            length = assemble(1 * self.ds_electrodes(tag))
-            lengths[tag] = length
+            length_local = fem.assemble_scalar(fem.form(one * self.ds_electrodes(tag)))
+            length = self.mesh.comm.allreduce(length_local, op=MPI.SUM)
+            lengths[tag] = float(length)
             if np.isclose(length, 0.0):
-                warnings.warn(f"Electrode boundary tag {tag} has zero measure, check mesh markers", RuntimeWarning)
+                warnings.warn(
+                    f"Electrode boundary tag {tag} has zero measure, check mesh markers",
+                    RuntimeWarning,
+                )
         return lengths
 
-    def _assemble_electrode_matrix(self):
-        """Assemble electrode-related system matrix."""
-        b = 0
-        for i, electrode_tag in enumerate(self.electrode_tags):
-            b += 1 / self.z[i] * inner(self.u, self.phi) * self.ds_electrodes(electrode_tag)
+    @staticmethod
+    def _petsc_to_csr(mat) -> csr_matrix:
+        indptr, indices, values = mat.getValuesCSR()
+        shape = mat.getSize()
+        return csr_matrix((values, indices, indptr), shape=shape)
 
-        B = assemble(b)
-        
-        row, col, val = as_backend_type(B).mat().getValuesCSR()
-        M = csr_matrix((val, col, row))
-        
+    def _assemble_electrode_matrix(self):
+        b_form = 0
+        for i, electrode_tag in enumerate(self.electrode_tags):
+            b_form += (1.0 / self.z[i]) * ufl.inner(self.u, self.phi) * self.ds_electrodes(electrode_tag)
+
+        B = fem_petsc.assemble_matrix(fem.form(b_form))
+        B.assemble()
+        M = self._petsc_to_csr(B)
+
         M.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
         M_lil = lil_matrix(M)
 
         for i, electrode_tag in enumerate(self.electrode_tags):
-            c = -1 / self.z[i] * self.phi * self.ds_electrodes(electrode_tag)
-            C_i = assemble(c).get_local()
-            M_lil[self.dofs + i, :self.dofs] = C_i
-            M_lil[:self.dofs, self.dofs + i] = C_i
-            
+            c_form = (-1.0 / self.z[i]) * self.phi * self.ds_electrodes(electrode_tag)
+            C_vec = fem_petsc.assemble_vector(fem.form(c_form))
+            C_vec.assemble()
+            C_i = np.asarray(C_vec.array, dtype=float)
+
+            M_lil[self.dofs + i, : self.dofs] = C_i
+            M_lil[: self.dofs, self.dofs + i] = C_i
+
             electrode_len = self.electrode_lengths.get(electrode_tag, 0.0)
-            M_lil[self.dofs + i, self.dofs + i] = 1 / self.z[i] * electrode_len
-            M_lil[self.dofs + self.n_elec, self.dofs + i] = 1
-            M_lil[self.dofs + i, self.dofs + self.n_elec] = 1
+            M_lil[self.dofs + i, self.dofs + i] = (1.0 / self.z[i]) * electrode_len
+            M_lil[self.dofs + self.n_elec, self.dofs + i] = 1.0
+            M_lil[self.dofs + i, self.dofs + self.n_elec] = 1.0
 
         return csr_matrix(M_lil)
 
-    def create_full_matrix(self, sigma: Function):
-        """Build complete system matrix including conductivity."""
-        a = inner(sigma * grad(self.u), grad(self.phi)) * dx
-        A = assemble(a)
-        
-        row, col, val = as_backend_type(A).mat().getValuesCSR()
-        scipy_A = csr_matrix((val, col, row))
-        scipy_A.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
+    def create_full_matrix(self, sigma: fem.Function):
+        """Build complete system matrix including conductivity term."""
 
+        a_form = ufl.inner(sigma * ufl.grad(self.u), ufl.grad(self.phi)) * ufl.dx
+        A = fem_petsc.assemble_matrix(fem.form(a_form))
+        A.assemble()
+        scipy_A = self._petsc_to_csr(A)
+        scipy_A.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
         return scipy_A + self.M
 
-    def forward_solve(self, sigma: Function, current_patterns=None):
-        """Forward solve."""
+    def forward_solve(self, sigma: fem.Function, current_patterns=None):
+        """Forward solve for given conductivity and stimulation patterns."""
+
+        M_complete = self.create_full_matrix(sigma).tocsc()
+        solver = factorized(M_complete)
+
         if current_patterns is None:
-            # Use default stimulation pattern
-            M_complete = self.create_full_matrix(sigma).tocsc()
-            solver = factorized(M_complete)
-            
-            u_all = []
-            U_all = np.zeros((self.pattern_manager.n_stim, self.n_elec))
-            
             stim_matrix = self.pattern_manager.stim_matrix
-            
-            for i in range(self.pattern_manager.n_stim):
-                rhs = np.zeros(self.dofs + self.n_elec + 1)
-                for j in range(self.n_elec):
-                    rhs[self.dofs + j] = stim_matrix[i, j]
-                
-                sol = solver(rhs)
-                u_all.append(sol[:self.dofs])
-                U_all[i, :] = sol[self.dofs:-1]
-            
-            return u_all, U_all
+            n_patterns = self.pattern_manager.n_stim
+            pattern_reader = lambda i, j: stim_matrix[i, j]
         else:
-            # Use specified current patterns
-            M_complete = self.create_full_matrix(sigma).tocsc()
-            solver = factorized(M_complete)
-            
             n_patterns = current_patterns.shape[1]
-            u_all = []
-            U_all = np.zeros((n_patterns, self.n_elec))
-            
-            for i in range(n_patterns):
-                rhs = np.zeros(self.dofs + self.n_elec + 1)
-                for j in range(self.n_elec):
-                    rhs[self.dofs + j] = current_patterns[j, i]
-                
-                sol = solver(rhs)
-                u_all.append(sol[:self.dofs])
-                U_all[i, :] = sol[self.dofs:-1]
-            
-            return u_all, U_all
+            pattern_reader = lambda i, j: current_patterns[j, i]
+
+        u_all = []
+        U_all = np.zeros((n_patterns, self.n_elec), dtype=float)
+
+        for i in range(n_patterns):
+            rhs = np.zeros(self.dofs + self.n_elec + 1, dtype=float)
+            for j in range(self.n_elec):
+                rhs[self.dofs + j] = pattern_reader(i, j)
+
+            sol = solver(rhs)
+            u_all.append(sol[: self.dofs])
+            U_all[i, :] = sol[self.dofs : -1]
+
+        return u_all, U_all
 
     def fwd_solve(self, img: EITImage):
-        """Forward solve interface."""
-        sigma = Function(self.V_sigma)
-        sigma.vector()[:] = img.get_conductivity()
+        """Forward solve interface for ``EITImage``."""
+
+        sigma = fem.Function(self.V_sigma)
+        sigma.x.array[:] = img.get_conductivity()
 
         u_all, U_all = self.forward_solve(sigma)
-
-        # Apply measurement pattern
         meas = self.pattern_manager.apply_meas_pattern(U_all)
 
-        # Create EIT data object
         data = EITData(
             meas=meas,
             stim_pattern=self.pattern_manager.stim_matrix,
             n_elec=self.n_elec,
             n_stim=self.pattern_manager.n_stim,
             n_meas=self.pattern_manager.n_meas_total,
-            type='simulated'
+            type="simulated",
         )
-        
+
         return data, U_all

@@ -1,42 +1,36 @@
-"""Optimized mesh generator."""
+"""EIT mesh generator based on Gmsh + DOLFINx native import."""
 
-import numpy as np
-import gmsh
-import meshio
+from __future__ import annotations
+
+import logging
 import tempfile
 import time
-from pathlib import Path
-from math import pi, cos, sin
-from typing import Optional, Dict, Any, Union, Tuple
 from contextlib import contextmanager
-import logging
+from math import cos, pi, sin
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
-from ..data.structures import MeshConfig, ElectrodePosition
-from .mesh_converter import MeshConverter
+import gmsh
+import numpy as np
+from mpi4py import MPI
+from dolfinx.io import gmsh as gmshio
 
-# Set up logging
+from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
+from ..femx import build_eit_mesh
+
 logger = logging.getLogger(__name__)
-
-# Check FEniCS availability
-try:
-    from fenics import Mesh
-    FENICS_AVAILABLE = True
-except ImportError:
-    FENICS_AVAILABLE = False
-    logger.warning("FEniCS not available, can only generate raw mesh files")
 
 
 class MeshGenerator:
-    """Optimized mesh generator."""
+    """Generate EIT meshes with electrode physical groups."""
 
     def __init__(self, config: MeshConfig, electrodes: ElectrodePosition):
         self.config = config
         self.electrodes = electrodes
-        self.mesh_data = {}
+        self.mesh_data: Dict[str, Any] = {}
 
     @contextmanager
     def gmsh_context(self, model_name: str = "EIT_Mesh"):
-        """GMsh context manager."""
         gmsh.initialize()
         gmsh.model.add(model_name)
         try:
@@ -44,46 +38,72 @@ class MeshGenerator:
         finally:
             gmsh.finalize()
 
-    def generate(self, output_dir: Optional[Path] = None,
-                 use_fenics: bool = True) -> Union[Mesh, Dict[str, Any]]:
+    def generate(
+        self,
+        output_dir: Optional[Path] = None,
+        return_metadata: bool = False,
+        save_msh: bool = True,
+        mesh_name: Optional[str] = None,
+    ) -> Union[EITMesh, Dict[str, Any]]:
         """Generate mesh.
 
         Args:
-            output_dir: Output directory.
-            use_fenics: Whether to convert to FEniCS format.
-
-        Returns:
-            FEniCS Mesh object or mesh data dictionary.
+            output_dir: Directory for optional ``.msh`` output.
+            return_metadata: If True, return metadata dict including generated EITMesh.
+            save_msh: Whether to persist a ``.msh`` file.
+            mesh_name: Optional base name for generated files.
         """
+
         if output_dir is None:
             output_dir = Path(tempfile.mkdtemp())
         else:
             output_dir = Path(output_dir)
-            output_dir.mkdir(exist_ok=True)
+            output_dir.mkdir(parents=True, exist_ok=True)
 
-        mesh_file = output_dir / f"mesh_{int(time.time() * 1e6) % 1000000}.msh"
+        if mesh_name is None:
+            mesh_name = f"mesh_{int(time.time() * 1e6) % 1000000}"
+        mesh_file = output_dir / f"{mesh_name}.msh"
 
-        with self.gmsh_context():
+        with self.gmsh_context(model_name=mesh_name):
             self._create_geometry()
             self._set_physical_groups()
             self._generate_mesh()
-            gmsh.write(str(mesh_file))
 
-            # Save electrode vertex data
+            if save_msh:
+                gmsh.write(str(mesh_file))
+
             self._extract_electrode_vertices()
+            mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2)
 
-        if use_fenics and FENICS_AVAILABLE:
-            return self._convert_to_fenics(mesh_file, output_dir)
-        else:
-            return {
-                'mesh_file': mesh_file,
-                'radius': self.config.radius,
-                'electrodes': self.electrodes,
-                'vertex_data': self.mesh_data.get('electrode_vertices', [])
-            }
+        association_table = {
+            name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
+        }
+
+        electrode_vertices = [np.asarray(v, dtype=float) for v in self.mesh_data.get("electrode_vertices", [])]
+        mesh = build_eit_mesh(
+            mesh_data.mesh,
+            facet_tags=mesh_data.facet_tags,
+            cell_tags=mesh_data.cell_tags,
+            association_table=association_table,
+            physical_groups=mesh_data.physical_groups,
+            radius=self.config.radius,
+            mesh_file=str(mesh_file) if save_msh else None,
+            electrode_vertices=electrode_vertices,
+        )
+
+        if not return_metadata:
+            return mesh
+
+        return {
+            "mesh": mesh,
+            "mesh_file": mesh.mesh_file,
+            "association_table": association_table,
+            "radius": self.config.radius,
+            "electrodes": self.electrodes,
+            "vertex_data": self.mesh_data.get("electrode_vertices", []),
+        }
 
     def _create_geometry(self):
-        """Create geometry."""
         positions = self.electrodes.positions
         n_in = self.config.electrode_vertices
         n_out = self.config.gap_vertices
@@ -92,11 +112,9 @@ class MeshGenerator:
         boundary_points = []
         electrode_ranges = []
 
-        # Create boundary points
         for i, (start, end) in enumerate(positions):
             start_idx = len(boundary_points)
 
-            # Electrode points
             for theta in np.linspace(start, end, n_in):
                 x, y = r * cos(theta), r * sin(theta)
                 tag = gmsh.model.occ.addPoint(x, y, 0.0)
@@ -104,7 +122,6 @@ class MeshGenerator:
 
             electrode_ranges.append((start_idx, len(boundary_points) - 1))
 
-            # Gap points
             if i < len(positions) - 1:
                 gap_start = end
                 gap_end = positions[i + 1][0]
@@ -118,45 +135,42 @@ class MeshGenerator:
                 tag = gmsh.model.occ.addPoint(x, y, 0.0)
                 boundary_points.append(tag)
 
-        # Create boundary lines
         lines = []
         for i in range(len(boundary_points)):
             next_i = (i + 1) % len(boundary_points)
             line = gmsh.model.occ.addLine(boundary_points[i], boundary_points[next_i])
             lines.append(line)
 
-        # Create surface
         loop = gmsh.model.occ.addCurveLoop(lines)
         surface = gmsh.model.occ.addPlaneSurface([loop])
 
-        # Add internal control points
-        mesh_size_center = 0.095
-        cp_distance = 0.1
+        mesh_size_center = 0.095 * r
+        cp_distance = 0.1 * r
         center_points = [
             gmsh.model.occ.addPoint(x, y, 0.0, meshSize=mesh_size_center)
-            for x, y in [(-cp_distance, cp_distance), (cp_distance, cp_distance),
-                         (-cp_distance, -cp_distance), (cp_distance, -cp_distance)]
+            for x, y in [
+                (-cp_distance, cp_distance),
+                (cp_distance, cp_distance),
+                (-cp_distance, -cp_distance),
+                (cp_distance, -cp_distance),
+            ]
         ]
 
         gmsh.model.occ.synchronize()
         gmsh.model.mesh.embed(0, center_points, 2, surface)
 
-        # Save data
-        self.mesh_data['boundary_points'] = boundary_points
-        self.mesh_data['electrode_ranges'] = electrode_ranges
-        self.mesh_data['lines'] = lines
-        self.mesh_data['surface'] = surface
+        self.mesh_data["boundary_points"] = boundary_points
+        self.mesh_data["electrode_ranges"] = electrode_ranges
+        self.mesh_data["lines"] = lines
+        self.mesh_data["surface"] = surface
 
     def _set_physical_groups(self):
-        """Set physical groups."""
-        surface = self.mesh_data['surface']
-        lines = self.mesh_data['lines']
-        electrode_ranges = self.mesh_data['electrode_ranges']
+        surface = self.mesh_data["surface"]
+        lines = self.mesh_data["lines"]
+        electrode_ranges = self.mesh_data["electrode_ranges"]
 
-        # Domain
         gmsh.model.addPhysicalGroup(2, [surface], 1, name="domain")
 
-        # Electrodes
         electrode_lines = []
         for i, (start, end) in enumerate(electrode_ranges):
             lines_for_electrode = []
@@ -165,22 +179,18 @@ class MeshGenerator:
                 lines_for_electrode.append(lines[line_idx])
 
             if lines_for_electrode:
-                gmsh.model.addPhysicalGroup(1, lines_for_electrode, i + 2,
-                                          name=f"electrode_{i+1}")
+                gmsh.model.addPhysicalGroup(1, lines_for_electrode, i + 2, name=f"electrode_{i + 1}")
                 electrode_lines.extend(lines_for_electrode)
 
-        # Gaps
         gap_lines = [line for line in lines if line not in electrode_lines]
         if gap_lines:
             gmsh.model.addPhysicalGroup(1, gap_lines, self.electrodes.L + 2, name="gaps")
 
     def _generate_mesh(self):
-        """Generate mesh."""
         gmsh.model.mesh.setSize(gmsh.model.getEntities(0), self.config.mesh_size)
         gmsh.model.mesh.generate(2)
 
     def _extract_electrode_vertices(self):
-        """Extract electrode vertex coordinates."""
         positions = self.electrodes.positions
         r = self.config.radius
         n_in = self.config.electrode_vertices
@@ -192,18 +202,4 @@ class MeshGenerator:
                 vertices.append([r * cos(theta), r * sin(theta)])
             electrode_vertices.append(vertices)
 
-        self.mesh_data['electrode_vertices'] = electrode_vertices
-
-    def _convert_to_fenics(self, mesh_file: Path, output_dir: Path):
-        """Convert to FEniCS mesh."""
-        converter = MeshConverter(str(mesh_file), str(output_dir))
-        mesh, boundaries_mf, association_table = converter.convert()
-
-        # Add compatibility attributes
-        mesh.radius = self.config.radius
-        mesh.vertex_elec = self.mesh_data.get('electrode_vertices', [])
-        mesh.electrodes = self.electrodes
-        mesh.boundaries_mf = boundaries_mf
-        mesh.association_table = association_table
-
-        return mesh
+        self.mesh_data["electrode_vertices"] = electrode_vertices

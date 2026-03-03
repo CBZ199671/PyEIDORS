@@ -13,7 +13,9 @@ from typing import Dict, List, Tuple
 
 import matplotlib.pyplot as plt
 import numpy as np
-from fenics import Measure, assemble
+import ufl
+from dolfinx import fem
+from mpi4py import MPI
 
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 
@@ -22,12 +24,22 @@ def collect_electrode_segments(mesh, tags: List[int]) -> Dict[int, List[np.ndarr
     """Collect boundary segment coordinates for each electrode tag."""
     coords = mesh.coordinates()
     segments: Dict[int, List[np.ndarray]] = {tag: [] for tag in tags}
-    from dolfin import facets  # Import local iterator for compatibility with older FEniCS API
+    facet_tags = getattr(mesh, "facet_tags", None)
+    if facet_tags is None:
+        return segments
 
-    for facet in facets(mesh):
-        tag = mesh.boundaries_mf[facet.index()]
+    mesh_obj = mesh.mesh if hasattr(mesh, "mesh") else mesh
+    tdim = mesh_obj.topology.dim
+    fdim = tdim - 1
+    mesh_obj.topology.create_connectivity(fdim, 0)
+    f2v = mesh_obj.topology.connectivity(fdim, 0)
+    if f2v is None:
+        return segments
+
+    for facet_idx, tag_value in zip(facet_tags.indices, facet_tags.values):
+        tag = int(tag_value)
         if tag in segments:
-            vs = facet.entities(0)
+            vs = f2v.links(int(facet_idx))
             seg_xy = coords[vs][:, :2]  # Use only first two dimensions
             segments[tag].append(seg_xy)
     return segments
@@ -95,10 +107,13 @@ def main():
     )
 
     # Get electrode tags and lengths
-    if not hasattr(mesh, "boundaries_mf") or mesh.boundaries_mf is None:
-        raise RuntimeError("Mesh lacks boundaries_mf, cannot visualize electrode tags")
+    if getattr(mesh, "facet_tags", None) is None:
+        raise RuntimeError("Mesh lacks facet_tags, cannot visualize electrode tags")
 
-    ds = Measure("ds", domain=mesh, subdomain_data=mesh.boundaries_mf)
+    mesh_obj = mesh.mesh if hasattr(mesh, "mesh") else mesh
+    facet_tags = mesh.facet_tags
+    ds = ufl.Measure("ds", domain=mesh_obj, subdomain_data=facet_tags)
+    one = fem.Constant(mesh_obj, 1.0)
     assoc = mesh.association_table
 
     # Prefer filtering by "electrode_*" key names, ignoring gaps/domain
@@ -118,7 +133,10 @@ def main():
                 electrode_tags.append(v)
 
     electrode_tags = sorted(set(electrode_tags))
-    lengths = {tag: float(assemble(1 * ds(tag))) for tag in electrode_tags}
+    lengths = {
+        tag: float(mesh.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        for tag in electrode_tags
+    }
 
     print("Electrode tags:", electrode_tags)
     print("Lengths:", [lengths[t] for t in electrode_tags])
