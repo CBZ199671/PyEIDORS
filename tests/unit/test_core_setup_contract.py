@@ -73,3 +73,50 @@ def test_setup_with_mesh_type_guard():
     system = _new_system()
     with pytest.raises(TypeError, match="expects an EITMesh"):
         system.setup_with_mesh(object())  # type: ignore[arg-type]
+
+
+def test_setup_from_cache_calls_loader_paths(monkeypatch):
+    system = _new_system()
+    captured = {}
+
+    class _FakeLoader:
+        def __init__(self, mesh_dir: str):
+            captured["mesh_dir"] = mesh_dir
+
+        def load_mesh(self, mesh_name: str):
+            return f"mesh:{mesh_name}"
+
+        def get_default_mesh(self):
+            return "mesh:default"
+
+    monkeypatch.setattr("pyeidors.core_system.MeshLoader", _FakeLoader)
+    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: captured.__setitem__("mesh", mesh))
+
+    system.setup_from_cache(mesh_dir="cache_dir", mesh_name="foo")
+    assert captured["mesh_dir"] == "cache_dir"
+    assert captured["mesh"] == "mesh:foo"
+
+    system.setup_from_cache(mesh_dir="cache_dir", mesh_name=None)
+    assert captured["mesh"] == "mesh:default"
+
+
+def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
+    system = _new_system()
+    system.mesh_config.radius = 1.23
+    system.mesh_config.mesh_size = 0.07
+
+    generated_calls = []
+    monkeypatch.setattr(
+        "pyeidors.core_system.create_simple_eit_mesh",
+        lambda **kwargs: generated_calls.append(kwargs) or "generated-mesh",
+    )
+    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+
+    system.setup_generated_mesh()
+    system.setup_generated_mesh(radius=2.0, mesh_size=0.05)
+
+    assert generated_calls[0]["radius"] == 1.23
+    assert generated_calls[0]["mesh_size"] == 0.07
+    assert generated_calls[1]["mesh"] == "generated-mesh"
+    assert generated_calls[2]["radius"] == 2.0
+    assert generated_calls[2]["mesh_size"] == 0.05
