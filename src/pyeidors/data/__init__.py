@@ -4,6 +4,7 @@ from .structures import (
     PatternConfig,
     EITData, 
     EITImage,
+    EITMesh,
     MeshConfig,
     ElectrodePosition
 )
@@ -14,6 +15,7 @@ __all__ = [
     'PatternConfig',
     'EITData',
     'EITImage', 
+    'EITMesh',
     'MeshConfig',
     'ElectrodePosition',
     'create_synthetic_data',

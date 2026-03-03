@@ -1,8 +1,14 @@
 """PyEIDORS Data Structure Definitions."""
 
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+
 import numpy as np
-from dataclasses import dataclass
-from typing import Optional, List, Tuple, Union, Any
+
+if TYPE_CHECKING:
+    from dolfinx.mesh import Mesh, MeshTags
 
 
 @dataclass
@@ -79,3 +85,76 @@ class ElectrodePosition:
             positions.append((start_angle, end_angle))
 
         return cls(L=n_elec, positions=positions)
+
+
+@dataclass
+class EITMesh:
+    """Strongly-typed mesh container for the DOLFINx-only runtime."""
+
+    mesh: "Mesh"
+    facet_tags: "MeshTags"
+    cell_tags: Optional["MeshTags"] = None
+    association_table: dict[str, int] = field(default_factory=dict)
+    physical_groups: dict[str, Any] = field(default_factory=dict)
+    radius: float = 0.0
+    mesh_file: Optional[str] = None
+    electrode_vertices: Optional[list[np.ndarray]] = None
+
+    @property
+    def comm(self):
+        return self.mesh.comm
+
+    @property
+    def geometry(self):
+        return self.mesh.geometry
+
+    @property
+    def topology(self):
+        return self.mesh.topology
+
+    def coordinates(self) -> np.ndarray:
+        """Return geometry coordinates with shape ``(n_points, gdim)``."""
+        return self.mesh.geometry.x[:, : self.mesh.geometry.dim]
+
+    def num_vertices(self) -> int:
+        index_map = self.mesh.topology.index_map(0)
+        return int(index_map.size_local if index_map is not None else 0)
+
+    def num_cells(self) -> int:
+        tdim = self.mesh.topology.dim
+        index_map = self.mesh.topology.index_map(tdim)
+        return int(index_map.size_local if index_map is not None else 0)
+
+    def cells(self) -> np.ndarray:
+        """Return local cell-to-vertex connectivity."""
+        tdim = self.mesh.topology.dim
+        self.mesh.topology.create_connectivity(tdim, 0)
+        c2v = self.mesh.topology.connectivity(tdim, 0)
+        if c2v is None:
+            return np.empty((0, 0), dtype=np.int32)
+
+        n_cells = self.num_cells()
+        if n_cells == 0:
+            return np.empty((0, 0), dtype=np.int32)
+
+        first = c2v.links(0)
+        verts_per_cell = len(first)
+        data = np.zeros((n_cells, verts_per_cell), dtype=np.int32)
+        data[0] = first
+        for idx in range(1, n_cells):
+            data[idx] = c2v.links(idx)
+        return data
+
+    def get_info(self) -> dict[str, Any]:
+        coords = self.coordinates()
+        center = coords.mean(axis=0) if coords.size else np.zeros((self.mesh.geometry.dim,))
+        n_elec = len([k for k in self.association_table if isinstance(k, str) and k.lower().startswith("electrode")])
+        return {
+            "num_vertices": self.num_vertices(),
+            "num_cells": self.num_cells(),
+            "num_electrodes": n_elec,
+            "radius": float(self.radius),
+            "center": center.tolist(),
+            "association_table": dict(self.association_table),
+            "mesh_file": self.mesh_file,
+        }
