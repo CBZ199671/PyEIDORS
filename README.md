@@ -24,49 +24,27 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 ## Quick Start
 
-0. **Install Docker (required)**:
-   - **Windows**: install WSL2 first, then install Docker Desktop (WSL2 backend).
-   - **macOS/Linux**: install Docker Desktop (or Docker Engine on Linux).
-   - After installation, open a terminal and verify:
-     ```bash
-     docker --version
-     ```
+PyEIDORS Phase 1 uses **Nix + uv** as the primary development path for FEniCSx:
 
-1. **Download this repository and enter the folder**:
-   ```bash
-   git clone https://github.com/CBZ199671/PyEIDORS.git
-   cd PyEIDORS
-   ```
-   You can move the `PyEIDORS` folder anywhere you like; just make sure you run commands inside it.
+```bash
+git clone https://github.com/CBZ199671/PyEIDORS.git
+cd PyEIDORS
+nix develop
+uv pip install --python .venv/bin/python --no-deps -e .
+python -c "import dolfinx, basix, ufl; print(dolfinx.__version__)"
+```
 
-2. **Start the Docker Environment** (this mounts the current folder into the container):
-   ```bash
-   docker run -ti -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
-   ```
+Then run a quick workflow check:
 
-   If you have an NVIDIA GPU with CUDA set up, add `--gpus all`:
-   ```bash
-   docker run -ti --gpus all -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
-   ```
+```bash
+python scripts/run_synthetic_parity.py --output-root results/simulation_parity/run03 --mode both --difference-solver single-step --gn-regularization 1e-11
+```
 
-   If you use a different local path, replace `$(pwd)` with your full folder path. The `-v` flag binds your local repo into `/root/shared` inside the container.
+For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
 
-3. **Install the Package**:
-   ```bash
-   pip install -e .
-   ```
+Legacy Docker instructions are available in `docs/DOCKER.md`.
 
-4. **Run a Synthetic Demo** (Paper parity example):
-   ```bash
-   python scripts/run_synthetic_parity.py --output-root results/simulation_parity/run03 --mode both --difference-solver single-step --gn-regularization 1e-11
-   ```
-
-5. **Run a Real-Data Demo** (Tank difference imaging):
-   ```bash
-   python scripts/run_single_step_diff_realdata.py --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv --background-sigma 0.008 --lambda 0.9
-   ```
-
-The repository includes pre-generated demo outputs under `results/` (see the `COMMAND.md` files inside each demo directory).
+> Phase boundary note: environment readiness in Phase 1 does **not** mean core `fenics/dolfin` API usage in `src/pyeidors/**` has been migrated to `dolfinx`.
 
 ---
 
@@ -275,64 +253,13 @@ Results are written to `results/sparse_bayesian/` by default. For a full list of
 ## Documentation
 
 - **File Structure**: `FILE_ORGANIZATION.md`
+- **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
-- **Docker Notes**: `docs/DOCKER.md`
+- **Docker Notes (Legacy path)**: `docs/DOCKER.md`
 
-## Docker Environment Setup
+## Environment Note
 
-The recommended workflow is to use the prebuilt Docker image. It already contains FEniCS, CUQIpy, and PyTorch. See `docs/DOCKER.md` for the most up-to-date commands.
+The primary maintained developer workflow is **Nix + uv** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
 
-### Option A: Prebuilt Image (Recommended)
-
-```bash
-docker pull ghcr.io/cbz199671/pyeidors-env:latest
-
-docker run -ti \
-  -v "$(pwd):/root/shared" \
-  -w /root/shared \
-  --name pyeidors \
-  ghcr.io/cbz199671/pyeidors-env:latest
-```
-*Note: Add `--gpus all` for GPU support.*
-
-Notes:
-
-- The `-v ...:/root/shared` path should point to your local clone of this repository.
-- On Windows, install WSL2 + Docker Desktop (WSL2 backend) first; see `docs/DOCKER.md`.
-- For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
-- Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
-- If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
-- If you omit `--gpus all`, PyTorch will run on CPU; it will not error unless a script explicitly forces CUDA.
-- If you downloaded an offline image archive (e.g., `pyeidors-ultra22.tar.zst`), see `docs/DOCKER.md` for `docker load` instructions.
-
-### Option B: Manual Build
-
-```bash
-# Start container
-docker run -ti \
-  -v "$(pwd):/root/shared" \
-  -w /root/shared \
-  --name pyeidors \
-  ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
-
-# (Optional) Install CJK font dependencies
-apt-get update && apt-get install -y fonts-wqy-zenhei
-
-# Install CUQIpy and CUQIpy-FEniCS
-pip install cuqipy cuqipy-fenics
-
-# Create virtual environment
-python3 -m venv /opt/final_venv --system-site-packages
-source /opt/final_venv/bin/activate
-
-# Install PyTorch
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
-```
-
-## Environment Components
-- **FEniCS**: 2024-05-30 (Official Image)
-- **CUQIpy**: 1.3.0
-- **CUQIpy-FEniCS**: 0.8.0
-- **PyTorch**: 2.7.1+cu128
-- **Python**: 3.10+
+Docker instructions are kept as a legacy/optional path in `docs/DOCKER.md` for historical reproducibility and older workflows.

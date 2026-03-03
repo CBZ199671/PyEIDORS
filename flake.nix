@@ -23,6 +23,13 @@
           pkgs = import nixpkgs { inherit system; };
           python = pkgs.python3;
           py = python.pkgs;
+          fenicsDolfinx = py."fenics-dolfinx".overridePythonAttrs (
+            old: {
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ py.cmake ];
+              doCheck = false;
+              doInstallCheck = false;
+            }
+          );
         in
         {
           default = pkgs.mkShell {
@@ -36,7 +43,7 @@
               pkgs.cmake
               pkgs.ninja
 
-              py."fenics-dolfinx"
+              fenicsDolfinx
               py."fenics-basix"
               py."fenics-ffcx"
               py."fenics-ufl"
@@ -63,7 +70,74 @@
               export PYTHONNOUSERSITE=1
               export HDF5_DIR="${pkgs.hdf5}"
 
+              if [ "$(uname -s)" = "Darwin" ]; then
+                mapfile -t _darwin_linker_fix < <("$UV_PYTHON" - <<'PY'
+import pathlib
+import shlex
+import sysconfig
+
+
+def sanitize_flags(raw: str) -> tuple[str, int]:
+    tokens = shlex.split(raw)
+    keep: list[str] = []
+    removed = 0
+    i = 0
+    while i < len(tokens):
+        token = tokens[i]
+        if token == "-L" and i + 1 < len(tokens):
+            candidate = tokens[i + 1]
+            if pathlib.Path(candidate).is_dir():
+                keep.extend([token, candidate])
+            else:
+                removed += 1
+            i += 2
+            continue
+        if token.startswith("-L") and len(token) > 2:
+            candidate = token[2:]
+            if pathlib.Path(candidate).is_dir():
+                keep.append(token)
+            else:
+                removed += 1
+            i += 1
+            continue
+        keep.append(token)
+        i += 1
+    return shlex.join(keep), removed
+
+
+ldflags_clean, ldflags_removed = sanitize_flags(sysconfig.get_config_var("LDFLAGS") or "")
+ldshared_clean, ldshared_removed = sanitize_flags(sysconfig.get_config_var("LDSHARED") or "")
+
+print(ldflags_clean)
+print(ldshared_clean)
+print(ldflags_removed + ldshared_removed)
+PY
+                )
+
+                export LDFLAGS="''${_darwin_linker_fix[0]}"
+                export LDSHARED="''${_darwin_linker_fix[1]}"
+                if [ "''${_darwin_linker_fix[2]}" -gt 0 ]; then
+                  echo "[nix+uv] Darwin linker flags sanitized: removed ''${_darwin_linker_fix[2]} invalid -L entries."
+                fi
+              fi
+
+              nix_python_mm="$("$UV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
+
+              recreate_venv=0
               if [ ! -d .venv ]; then
+                recreate_venv=1
+              elif [ -x .venv/bin/python ]; then
+                venv_python_mm="$(.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
+                if [ -z "$venv_python_mm" ] || [ "$venv_python_mm" != "$nix_python_mm" ]; then
+                  echo "[nix+uv] Rebuilding .venv because Python version changed (.venv=$venv_python_mm, nix=$nix_python_mm)."
+                  recreate_venv=1
+                fi
+              else
+                recreate_venv=1
+              fi
+
+              if [ "$recreate_venv" -eq 1 ]; then
+                rm -rf .venv
                 echo "[nix+uv] Creating .venv with access to Nix site-packages..."
                 uv venv --python "$UV_PYTHON" --system-site-packages
               fi

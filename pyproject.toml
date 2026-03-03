@@ -25,15 +25,23 @@ classifiers = [
 ]
 
 dependencies = [
-    "numpy~=1.26.4",      # Compatible with numpy 1.26.x
-    "scipy~=1.12.0",       # Compatible with scipy 1.12.x
-    "matplotlib~=3.5.0",   # Compatible with matplotlib 3.5.x
-    "pandas~=2.3.0",
-    "h5py~=3.11.0",
-    "pyyaml~=5.4.1",       # FEniCS 2019.2.0.dev0 depends on PyYAML 5.4.1
+    "numpy>=1.26,<3",
+    "scipy>=1.12",
+    "matplotlib>=3.8",
+    "pandas>=2.0",
+    "h5py>=3.11",
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
+# FEniCSx note:
+# - DOLFINx/Basix/UFL/FFCx are provided by the Nix devShell (see flake.nix).
+# - This extra only adds Python-level companions and does not install DOLFINx itself.
+fenicsx = [
+    "mpi4py>=3.1",
+    "meshio>=5.3",
+    "gmsh>=4.11",
+]
 torch = [
     "torch~=2.10.0",        # PyTorch and related packages
     "torchvision~=0.25.0",
