@@ -6,17 +6,17 @@
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Backend](https://img.shields.io/badge/backend-FEniCS-orange)
+![Backend](https://img.shields.io/badge/backend-FEniCSx%20(DOLFINx)-orange)
 ![Accel](https://img.shields.io/badge/accel-PyTorch-red)
 
-A Python-first EIT framework with a FEniCS Complete Electrode Model (CEM) backend and PyTorch acceleration, designed to be familiar to EIDORS users while enabling modern GPU/differentiable workflows.
+A Python-first EIT framework with a FEniCSx (DOLFINx) Complete Electrode Model (CEM) backend and PyTorch acceleration, designed to be familiar to EIDORS users while enabling modern GPU/differentiable workflows.
 
 SoftwareX manuscript in preparation; citation info will be added after acceptance.
 
 ## Why PyEIDORS
 
 - **Numerical Consistency**: Matches EIDORS-style workflows with verified simulation parity.
-- **Modern Architecture**: Hybrid FEniCS (FEM) + PyTorch (Inverse/Accel) design.
+- **Modern Architecture**: Hybrid FEniCSx (FEM) + PyTorch (Inverse/Accel) design.
 - **Modular & Extensible**: `EITSystem` coordinator makes it easy to replace geometry, forward models, or solvers.
 - **Research Ready**: End-to-end scripts for absolute & difference reconstruction, real-time mesh generation, and benchmarking.
 
@@ -24,7 +24,7 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 ## Quick Start
 
-PyEIDORS Phase 1 uses **Nix + uv** as the primary development path for FEniCSx:
+PyEIDORS uses **Nix + uv** as the primary development path for FEniCSx:
 
 ```bash
 git clone https://github.com/CBZ199671/PyEIDORS.git
@@ -42,18 +42,18 @@ python scripts/run_synthetic_parity.py --output-root results/simulation_parity/r
 
 For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
 
-Legacy Docker instructions are available in `docs/DOCKER.md`.
+Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
 
-> Phase boundary note: environment readiness in Phase 1 does **not** mean core `fenics/dolfin` API usage in `src/pyeidors/**` has been migrated to `dolfinx`.
+> Hard-cut note: the runtime is now **FEniCSx-only** in `src/pyeidors/**`. Legacy DOLFIN compatibility aliases are removed.
 
 ---
 
 ## Gallery & Validation
 
-### Modern Architecture: FEniCS + PyTorch
+### Modern Architecture: FEniCSx + PyTorch
 
 <p align="center">
-  <img src="pictures/Fig.%201.%20pyeidors_architecture.png" alt="Architecture: FEniCS + PyTorch" width="900" />
+  <img src="pictures/Fig.%201.%20pyeidors_architecture.png" alt="Architecture: FEniCSx + PyTorch" width="900" />
 </p>
 
 ### Gauss-Newton Absolute Reconstruction
@@ -139,13 +139,13 @@ Highlights:
 
 - Designed for research and engineering practice, covering the complete pipeline of mesh generation, forward modeling, Jacobian computation, regularization, and Gauss-Newton reconstruction.
 - Modular design with `EITSystem` as the core coordinator for geometry, forward, and inverse problem components.
-- Supports GMsh+meshio+FEniCS mesh workflow, with built-in stimulation/measurement pattern manager, synthetic data generation, and visualization tools.
+- Supports Gmsh + DOLFINx native mesh workflow, with built-in stimulation/measurement pattern manager, synthetic data generation, and visualization tools.
 - Provides examples, tests, and reports to help verify electrode layouts, mesh quality, and end-to-end reconstruction pipelines.
 
 ### Key Components
 
 - **Geometry**: GMsh-based mesh generation (`mesh_generator.py`) and cached loading (`mesh_loader.py`).
-- **Forward Model**: Complete Electrode Model (CEM) implemented in FEniCS (`eit_forward_model.py`).
+- **Forward Model**: Complete Electrode Model (CEM) implemented in FEniCSx (`eit_forward_model.py`).
 - **Inverse Solver**:
     - Adaptive Gauss-Newton (PyTorch-accelerated).
     - EIDORS-style single-step difference imaging.
@@ -254,12 +254,13 @@ Results are written to `results/sparse_bayesian/` by default. For a full list of
 
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
+- **Phase-2 Migration Guide**: `docs/MIGRATION_PHASE2.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
-- **Docker Notes (Legacy path)**: `docs/DOCKER.md`
+- **Docker Notes (Legacy archive)**: `docs/archive/DOCKER_LEGACY.md`
 
 ## Environment Note
 
 The primary maintained developer workflow is **Nix + uv** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
 
-Docker instructions are kept as a legacy/optional path in `docs/DOCKER.md` for historical reproducibility and older workflows.
+Docker content is archived for historical reproducibility in `docs/archive/DOCKER_LEGACY.md`.

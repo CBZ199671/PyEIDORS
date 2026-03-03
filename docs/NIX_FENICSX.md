@@ -1,6 +1,6 @@
 # PyEIDORS: Nix + uv FEniCSx environment
 
-This document defines the Phase 1 environment setup for running PyEIDORS with FEniCSx on macOS (including Apple Silicon) and Linux, without Docker and without Conda.
+This document defines the maintained environment setup for running PyEIDORS with FEniCSx on macOS (including Apple Silicon) and Linux, without Docker and without Conda.
 
 ## Strategy
 
@@ -41,7 +41,7 @@ Before changing `flake.lock`, run a probe first and only upgrade if the
 critical upstream test still passes on Darwin:
 
 ```bash
-python scripts/diagnostics/probe_nixpkgs_fenicsx.py \
+python scripts/diagnostics/probe_nixpkgs_dolfinx.py \
   --window 2 \
   --max-candidates 5 \
   --stop-on-pass \
@@ -52,7 +52,7 @@ For targeted probing of known FEniCSx/PETSc touch points, provide explicit
 revisions:
 
 ```bash
-python scripts/diagnostics/probe_nixpkgs_fenicsx.py \
+python scripts/diagnostics/probe_nixpkgs_dolfinx.py \
   --revisions-file .codex_logs/nixpkgs_probe/path_candidates_near_locked.txt \
   --stop-on-pass \
   --update-lock
@@ -185,9 +185,14 @@ uv pip install --python .venv/bin/python --no-deps -e .
 
 ### 3) `import pyeidors` fails while `import dolfinx` works
 
-This can be expected in Phase 1. Core code still imports legacy `fenics/dolfin` APIs and must be migrated in Phase 2.
+This is not expected after the Phase-2 hard cutover. Check for stale local editable installs and reinstall:
+
+```bash
+uv pip install --python .venv/bin/python --no-deps -e .
+```
 
 ## Scope boundary
 
-- Phase 1 in this document: environment and dependency correction only.
-- Environment readiness does not mean the PDE code has been migrated to dolfinx.
+- This document covers the supported runtime path: **FEniCSx-only** + Nix + uv.
+- Legacy Docker notes are archived under `docs/archive/DOCKER_LEGACY.md`.
+- Breaking API/name changes from the hard cutover are listed in `docs/MIGRATION_PHASE2.md`.
