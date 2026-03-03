@@ -3,15 +3,37 @@
 import numpy as np
 import torch
 from typing import Tuple, Optional, Union
-from tqdm import tqdm
-from fenics import Function
+from dolfinx import fem
 
 from ...data.structures import EITImage
+from ...femx import function_get_array, function_set_array
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
 from ..regularization.smoothness import SmoothnessRegularization
 
+try:
+    from tqdm import tqdm
+except ImportError:  # pragma: no cover - optional dependency fallback
+    class _NoOpTqdm:
+        def __init__(self, *args, **kwargs):
+            pass
 
-class ModularGaussNewtonReconstructor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc_val, exc_tb):
+            return False
+
+        def update(self, n: int = 1):
+            pass
+
+        def set_postfix_str(self, s: str):
+            pass
+
+    def tqdm(*args, **kwargs):  # type: ignore[override]
+        return _NoOpTqdm(*args, **kwargs)
+
+
+class GaussNewtonReconstructor:
     """Modular PyTorch-accelerated Gauss-Newton EIT Reconstructor.
 
     Implements EIDORS-style Gauss-Newton iterative algorithm:
@@ -106,7 +128,7 @@ class ModularGaussNewtonReconstructor:
         else:
             self.regularization = regularization
 
-        self.n_elements = len(Function(fwd_model.V_sigma).vector()[:])
+        self.n_elements = int(fem.Function(fwd_model.V_sigma).x.array.size)
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
 
         # Pre-compute regularization matrix
@@ -171,11 +193,11 @@ class ModularGaussNewtonReconstructor:
         # Initialize conductivity distribution
         if initial_conductivity is None:
             initial_conductivity = 1.0
-        sigma_current = Function(self.fwd_model.V_sigma)
+        sigma_current = fem.Function(self.fwd_model.V_sigma)
         if np.isscalar(initial_conductivity):
-            sigma_current.vector()[:] = initial_conductivity
+            function_set_array(sigma_current, np.full(self.n_elements, float(initial_conductivity), dtype=float))
         else:
-            sigma_current.vector()[:] = np.asarray(initial_conductivity).flatten()
+            function_set_array(sigma_current, np.asarray(initial_conductivity).flatten())
         self._ensure_measurement_weights(sigma_current)
         
         # Set prior data (for EIDORS-style de = σ - σ_prior)
@@ -194,7 +216,7 @@ class ModularGaussNewtonReconstructor:
         conductivity_history = []
         history_stride = max(1, int(conductivity_history_stride))
         if record_conductivity_history:
-            conductivity_history.append(sigma_current.vector()[:].copy())
+            conductivity_history.append(function_get_array(sigma_current).copy())
 
         # Early stopping: consecutive rollback counter
         consecutive_rollbacks = 0
@@ -211,7 +233,7 @@ class ModularGaussNewtonReconstructor:
             for iteration in range(self.max_iterations):
                 
                 # 1. Forward solve
-                img_current = EITImage(elem_data=sigma_current.vector()[:], fwd_model=self.fwd_model)
+                img_current = EITImage(elem_data=function_get_array(sigma_current), fwd_model=self.fwd_model)
                 data_simulated, _ = self.fwd_model.fwd_solve(img_current)
 
                 # 2. Compute residual (dv = f(σ) - y_meas)
@@ -227,7 +249,7 @@ class ModularGaussNewtonReconstructor:
                 residual_max = torch.max(torch.abs(residual_torch)).item()
                 
                 # Compute EIDORS-style full objective: 0.5*dv'*W*dv + 0.5*de'*λ²RtR*de
-                sigma_vec_torch = torch.from_numpy(sigma_current.vector()[:]).to(
+                sigma_vec_torch = torch.from_numpy(function_get_array(sigma_current)).to(
                     self.device, dtype=self._torch_dtype
                 )
                 de_current = sigma_vec_torch - prior_torch  # de = σ - σ_prior
@@ -261,7 +283,7 @@ class ModularGaussNewtonReconstructor:
                 lambda_eff = self.regularization_param
                 
                 # Compute prior error term de = σ_current - σ_prior
-                sigma_current_torch = torch.from_numpy(sigma_current.vector()[:]).to(
+                sigma_current_torch = torch.from_numpy(function_get_array(sigma_current)).to(
                     self.device, dtype=self._torch_dtype
                 )
                 de_torch = sigma_current_torch - prior_torch
@@ -309,18 +331,25 @@ class ModularGaussNewtonReconstructor:
 
                 
                 # 7. Update conductivity
-                sigma_old_values = sigma_current.vector()[:].copy()
+                sigma_old_values = function_get_array(sigma_current).copy()
                 delta_sigma_np = delta_sigma_torch.cpu().numpy()
-                sigma_current.vector()[:] += optimal_step_size * delta_sigma_np
+                function_get_array(sigma_current)[:] += optimal_step_size * delta_sigma_np
                 
                 # 8. Apply constraints
                 if self.clip_values is not None:
-                    sigma_current.vector()[:] = np.clip(
-                        sigma_current.vector()[:], self.clip_values[0], self.clip_values[1]
+                    function_set_array(
+                        sigma_current,
+                        np.clip(
+                            function_get_array(sigma_current),
+                            self.clip_values[0],
+                            self.clip_values[1],
+                        ),
                     )
                 
                 # 9. Check convergence
-                sigma_new_torch = torch.from_numpy(sigma_current.vector()[:]).to(self.device, dtype=self._torch_dtype)
+                sigma_new_torch = torch.from_numpy(function_get_array(sigma_current)).to(
+                    self.device, dtype=self._torch_dtype
+                )
                 sigma_old_torch = torch.from_numpy(sigma_old_values).to(self.device, dtype=self._torch_dtype)
                 
                 sigma_change = torch.norm(sigma_new_torch - sigma_old_torch).item()
@@ -334,7 +363,7 @@ class ModularGaussNewtonReconstructor:
                             f"[WARN] residual increased ({residual_norm:.3e} > {prev_residual:.3e}), "
                             f"rolling back step ({consecutive_rollbacks}/{max_consecutive_rollbacks})"
                         )
-                    sigma_current.vector()[:] = sigma_old_values
+                    function_set_array(sigma_current, sigma_old_values)
                     residual_history[-1] = prev_residual
                     sigma_change_history[-1] = 0.0
 
@@ -348,7 +377,7 @@ class ModularGaussNewtonReconstructor:
                     consecutive_rollbacks = 0  # Successful update, reset counter
                 sigma_change_history.append(relative_change)
                 if record_conductivity_history and (iteration + 1) % history_stride == 0:
-                    conductivity_history.append(sigma_current.vector()[:].copy())
+                    conductivity_history.append(function_get_array(sigma_current).copy())
 
                 iteration_logs.append(
                     {
@@ -418,7 +447,7 @@ class ModularGaussNewtonReconstructor:
         
         return results
     
-    def _ensure_measurement_weights(self, sigma_function: Function) -> None:
+    def _ensure_measurement_weights(self, sigma_function: fem.Function) -> None:
         """Compute measurement weights based on baseline forward solution (simplified EIDORS `calc_meas_icov`)."""
         strategy = self.measurement_weight_strategy
         if not self.use_measurement_weights or strategy == "none":
@@ -426,7 +455,7 @@ class ModularGaussNewtonReconstructor:
             self._baseline_measurement = None
             return
 
-        img = EITImage(elem_data=sigma_function.vector()[:], fwd_model=self.fwd_model)
+        img = EITImage(elem_data=function_get_array(sigma_function), fwd_model=self.fwd_model)
         baseline_data, _ = self.fwd_model.fwd_solve(img)
         baseline_vector = baseline_data.meas.astype(np.float64)
         self._baseline_measurement = baseline_vector.copy()
@@ -503,7 +532,7 @@ class ModularGaussNewtonReconstructor:
         Objective function: residual = 0.5*dv'*W*dv + 0.5*de'*(λ²RtR)*de
 
         Args:
-            sigma_current: Current conductivity (FEniCS Function).
+            sigma_current: Current conductivity (DOLFINx Function).
             delta_sigma_torch: Search direction.
             meas_target_torch: Target measurement values.
             current_weighted_residual: Current weighted residual.
@@ -514,7 +543,7 @@ class ModularGaussNewtonReconstructor:
         """
         delta_sigma_np = delta_sigma_torch.cpu().numpy()
         current_residual = float(current_weighted_residual)
-        x = sigma_current.vector()[:].copy()
+        x = function_get_array(sigma_current).copy()
         
         # Initialize perturb (EIDORS default sample points)
         if not hasattr(self, '_line_search_perturb') or self._line_search_perturb is None:

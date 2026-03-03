@@ -8,6 +8,7 @@ from typing import Optional, Sequence, Tuple, Dict, Any
 import numpy as np
 
 from ...data.structures import EITImage
+from ...femx import function_get_array
 
 
 @dataclass
@@ -72,14 +73,14 @@ def resolve_reconstruction_output(
         residual_history = None
         sigma_history = None
 
-    if hasattr(conductivity_field, "vector"):
-        conductivity_values = conductivity_field.vector()[:]
+    if hasattr(conductivity_field, "x") and hasattr(conductivity_field.x, "array"):
+        conductivity_values = function_get_array(conductivity_field).copy()
         conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
     elif isinstance(conductivity_field, np.ndarray):
         conductivity_values = conductivity_field
         conductivity_image = EITImage(elem_data=conductivity_values, fwd_model=fwd_model)
     else:
-        raise TypeError("Unrecognized reconstruction result type: expected FEniCS Function or numpy array")
+        raise TypeError("Unrecognized reconstruction result type: expected DOLFINx Function or numpy array")
 
     return conductivity_image, conductivity_values, residual_history, sigma_history
 

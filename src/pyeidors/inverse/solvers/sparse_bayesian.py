@@ -1,7 +1,7 @@
 """Sparse Bayesian EIT reconstructor powered by CUQIpy.
 
 This module provides sparse Bayesian inversion utilities that operate on top of
-CUQIpy and FEniCS. It offers both direct MAP optimisation (delegating to
+CUQIpy and FEniCSx/DOLFINx. It offers both direct MAP optimisation (delegating to
 CUQIpy) and lightweight linearised alternatives (FISTA/IRLS) that can operate
 in a truncated SVD subspace for speed.
 """
@@ -12,9 +12,10 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, List
 
 import numpy as np
-from fenics import Function
+from dolfinx import fem
 
 from ...data.structures import EITData, EITImage
+from ...femx import function_set_array
 from .eit_pde import create_pde_model, EITPDE
 
 try:  # pragma: no cover - optional dependency guard
@@ -64,7 +65,7 @@ class SparseBayesianReconstructor:
         if not _CUQI_AVAILABLE:  # pragma: no cover
             raise ImportError(
                 "CUQIpy is required for SparseBayesianReconstructor. "
-                "Please install cuqipy and cuqipy-fenics."
+                "Please install cuqipy."
             )
 
         self.eit_system = eit_system
@@ -130,8 +131,8 @@ class SparseBayesianReconstructor:
         if clip_bounds is not None:
             conductivity_values = np.clip(conductivity_values, clip_bounds[0], clip_bounds[1])
 
-        conductivity_function = Function(self.fwd_model.V_sigma)
-        conductivity_function.vector()[:] = conductivity_values
+        conductivity_function = fem.Function(self.fwd_model.V_sigma)
+        function_set_array(conductivity_function, conductivity_values)
 
         reconstructed_image = EITImage(elem_data=conductivity_values, fwd_model=self.fwd_model)
         simulated_vector = self._forward_measurement(conductivity_values)
@@ -321,10 +322,11 @@ class SparseBayesianReconstructor:
             warm_start[mask] = numerator[mask] / s_k[mask]
         elif warm_start is None and self.config.use_linear_warm_start and basis is None and not hierarchy:
             U, s, Vt = np.linalg.svd(linear_matrix, full_matrices=False)
-            warm_start = Vt.T @ (U.T @ data_vector)
+            coeff = U.T @ data_vector
             mask = s > 1e-12
-            warm_start[mask] /= s[mask]
-            warm_start[~mask] = 0.0
+            coeff[mask] /= s[mask]
+            coeff[~mask] = 0.0
+            warm_start = Vt.T @ coeff
 
         solver_type = self.config.solver.lower()
         if hierarchy and solver_type in {"fista", "irls"}:

@@ -1,8 +1,11 @@
 """EIT Jacobian matrix calculator base class."""
 
-import numpy as np
+from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from fenics import Function
+
+import numpy as np
+from dolfinx import fem
 
 from ...data.structures import EITImage
 
@@ -12,23 +15,14 @@ class BaseJacobianCalculator(ABC):
 
     def __init__(self, fwd_model):
         self.fwd_model = fwd_model
-        self.n_elements = len(Function(fwd_model.V_sigma).vector()[:])
+        self.n_elements = int(fem.Function(fwd_model.V_sigma).x.array.size)
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
 
     @abstractmethod
-    def calculate(self, sigma: Function, **kwargs) -> np.ndarray:
-        """Calculate Jacobian matrix.
-
-        Args:
-            sigma: Current conductivity distribution.
-
-        Returns:
-            Jacobian matrix (n_measurements x n_elements).
-        """
-        pass
+    def calculate(self, sigma: fem.Function, **kwargs) -> np.ndarray:
+        """Calculate Jacobian matrix."""
 
     def calculate_from_image(self, img: EITImage, **kwargs) -> np.ndarray:
-        """Calculate Jacobian matrix from EIT image."""
-        sigma = Function(self.fwd_model.V_sigma)
-        sigma.vector()[:] = img.get_conductivity()
+        sigma = fem.Function(self.fwd_model.V_sigma)
+        sigma.x.array[:] = img.get_conductivity()
         return self.calculate(sigma, **kwargs)

@@ -1,6 +1,6 @@
 """PyEIDORS inverse problem solver module."""
 
-from .solvers.gauss_newton import ModularGaussNewtonReconstructor
+from .solvers.gauss_newton import GaussNewtonReconstructor
 from .solvers.sparse_bayesian import SparseBayesianReconstructor, SparseBayesianConfig
 from .workflows import (
     perform_absolute_reconstruction,
@@ -11,7 +11,7 @@ from .workflows import (
 )
 
 __all__ = [
-    "ModularGaussNewtonReconstructor",
+    "GaussNewtonReconstructor",
     "SparseBayesianReconstructor",
     "SparseBayesianConfig",
     "perform_absolute_reconstruction",
