@@ -35,9 +35,9 @@ dependencies = [
 
 [project.optional-dependencies]
 torch = [
-    "torch~=2.7.1",        # PyTorch and related packages
-    "torchvision~=0.22.1", 
-    "torchaudio~=2.7.1",
+    "torch~=2.10.0",        # PyTorch and related packages
+    "torchvision~=0.25.0",
+    "torchaudio~=2.10.0",
 ]
 cuqi = [
     "CUQIpy~=1.3.0",
