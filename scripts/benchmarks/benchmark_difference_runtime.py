@@ -14,7 +14,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
-from fenics import Function
+from dolfinx import fem
 from scipy.optimize import minimize_scalar
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -25,6 +25,7 @@ if str(SRC_PATH) not in sys.path:
 from pyeidors import EITSystem
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITImage, PatternConfig
+from pyeidors.femx import function_get_array, function_set_array, mesh_num_vertices
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 
@@ -140,8 +141,8 @@ def solve_single_step_delta(fwd_model,
                             args: argparse.Namespace,
                             solver_space: Optional[str] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
     jacobian_calculator = DirectJacobianCalculator(fwd_model)
-    sigma_fn = Function(fwd_model.V_sigma)
-    sigma_fn.vector()[:] = baseline_image.elem_data
+    sigma_fn = fem.Function(fwd_model.V_sigma)
+    function_set_array(sigma_fn, baseline_image.elem_data)
     jacobian = jacobian_calculator.calculate(sigma_fn, method=args.jacobian_method)
     if args.negate_jacobian:
         jacobian = -jacobian
@@ -283,7 +284,7 @@ def main() -> None:
                 "conductivity": args.phantom_contrast,
             }],
         )
-        phantom_image = EITImage(elem_data=sigma.vector()[:], fwd_model=system.fwd_model)
+        phantom_image = EITImage(elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model)
 
         baseline_meas, _ = system.fwd_model.fwd_solve(baseline_image)
         target_meas, _ = system.fwd_model.fwd_solve(phantom_image)
@@ -308,8 +309,8 @@ def main() -> None:
                 times.append(time.perf_counter() - t0)
             warm_time = float(np.median(times))
 
-        n_elements = len(system.fwd_model.V_sigma.dofmap().dofs())
-        n_nodes = int(mesh.num_vertices())
+        n_elements = int(fem.Function(system.fwd_model.V_sigma).x.array.size)
+        n_nodes = mesh_num_vertices(mesh)
         rows.append({
             "refinement": refinement,
             "nodes": n_nodes,

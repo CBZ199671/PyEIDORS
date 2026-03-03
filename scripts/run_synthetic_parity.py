@@ -32,13 +32,14 @@ from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
-from fenics import Function
+from dolfinx import fem
 from scipy.optimize import minimize_scalar
 import matplotlib.pyplot as plt
 
 from pyeidors import EITSystem
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITData, EITImage, PatternConfig
+from pyeidors.femx import function_get_array, function_set_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.visualization import EITVisualizer, create_visualizer
@@ -207,7 +208,7 @@ def make_phantom_image(system: EITSystem, args: argparse.Namespace) -> EITImage:
     sigma = create_custom_phantom(system.fwd_model,
                                   background_conductivity=args.background,
                                   anomalies=anomalies)
-    return EITImage(elem_data=sigma.vector()[:], fwd_model=system.fwd_model)
+    return EITImage(elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model)
 
 
 def compute_metrics(measured: np.ndarray, predicted: np.ndarray) -> Metrics:
@@ -285,8 +286,8 @@ def solve_single_step_delta(system: EITSystem,
     if jacobian_calculator is None:
         jacobian_calculator = DirectJacobianCalculator(system.fwd_model)
 
-    sigma_fn = Function(system.fwd_model.V_sigma)
-    sigma_fn.vector()[:] = baseline_image.elem_data
+    sigma_fn = fem.Function(system.fwd_model.V_sigma)
+    function_set_array(sigma_fn, baseline_image.elem_data)
     jacobian = jacobian_calculator.calculate(sigma_fn, method=args.single_step_jacobian_method)
     negate = args.single_step_negate_jacobian
     recon_negate = getattr(getattr(system, "reconstructor", None), "negate_jacobian", False)
@@ -666,7 +667,7 @@ def main() -> None:
             record_conductivity_history=want_frames,
         )
         sigma_fn = abs_raw["conductivity"]
-        recon_image = EITImage(elem_data=sigma_fn.vector()[:], fwd_model=system.fwd_model)
+        recon_image = EITImage(elem_data=function_get_array(sigma_fn).copy(), fwd_model=system.fwd_model)
         sim_abs, _ = system.fwd_model.fwd_solve(recon_image)
         metrics["absolute"] = compute_metrics(meas_phantom.meas, sim_abs.meas)
 

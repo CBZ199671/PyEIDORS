@@ -128,7 +128,7 @@ def parse_args() -> argparse.Namespace:
         "--mesh-dir",
         type=Path,
         default=REPO_ROOT / "eit_meshes",
-        help="Directory containing (or receiving) FEniCS meshes",
+        help="Directory containing (or receiving) FEniCSx/DOLFINx mesh caches",
     )
     parser.add_argument(
         "--mesh-name",

@@ -251,7 +251,7 @@ def _prepare_shared_context(
     z_contact = np.full(n_elec, contact_impedance, dtype=float)
     fwd_model = EITForwardModel(n_elec=n_elec, pattern_config=pattern_cfg, z=z_contact, mesh=mesh)
 
-    n_elem = len(fwd_model.V_sigma.dofmap().dofs())
+    n_elem = int(fwd_model.V_sigma.dofmap.index_map.size_local * fwd_model.V_sigma.dofmap.index_map_bs)
     sigma_bg = np.full(n_elem, background_sigma)
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
     print(f"[INFO] Background conductivity: {background_sigma}")

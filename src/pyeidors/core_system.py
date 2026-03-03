@@ -6,11 +6,11 @@ inverse problem solvers, and data processing functionality.
 
 import numpy as np
 from typing import Optional, Union, Dict, Any
-from fenics import Function
+from dolfinx import fem
 
-from .data.structures import EITData, EITImage, PatternConfig, MeshConfig
+from .data.structures import EITData, EITImage, EITMesh, PatternConfig, MeshConfig
 from .forward.eit_forward_model import EITForwardModel
-from .inverse.solvers.gauss_newton import ModularGaussNewtonReconstructor
+from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from .inverse.regularization.smoothness import SmoothnessRegularization, NOSERRegularization, TikhonovRegularization
 from .inverse import (
@@ -101,6 +101,8 @@ class EITSystem:
         """
         # Set up mesh
         if mesh is not None:
+            if not isinstance(mesh, EITMesh):
+                raise TypeError("EITSystem.setup expects an EITMesh instance")
             self.mesh = mesh
         else:
             # First try to load existing mesh
@@ -146,7 +148,7 @@ class EITSystem:
         else:
             regularization = SmoothnessRegularization(self.fwd_model, alpha=self.regularization_alpha)
         
-        self.reconstructor = ModularGaussNewtonReconstructor(
+        self.reconstructor = GaussNewtonReconstructor(
             fwd_model=self.fwd_model,
             jacobian_calculator=jacobian_calculator,
             regularization=regularization
@@ -154,7 +156,7 @@ class EITSystem:
         
         self._is_initialized = True
 
-    def forward_solve(self, conductivity: Union[np.ndarray, Function, EITImage]) -> EITData:
+    def forward_solve(self, conductivity: Union[np.ndarray, fem.Function, EITImage]) -> EITData:
         """Perform forward solve.
 
         Args:
@@ -264,7 +266,7 @@ class EITSystem:
         if conductivity is None:
             conductivity = self.base_conductivity
 
-        n_elements = len(Function(self.fwd_model.V_sigma).vector()[:])
+        n_elements = int(fem.Function(self.fwd_model.V_sigma).x.array.size)
         elem_data = np.ones(n_elements) * conductivity
         
         return EITImage(elem_data=elem_data, fwd_model=self.fwd_model)
@@ -318,8 +320,8 @@ class EITSystem:
         
         if self._is_initialized:
             info.update({
-                'n_elements': len(Function(self.fwd_model.V_sigma).vector()[:]),
-                'n_nodes': self.fwd_model.V.dim(),
+                'n_elements': int(fem.Function(self.fwd_model.V_sigma).x.array.size),
+                'n_nodes': int(fem.Function(self.fwd_model.V).x.array.size),
                 'n_measurements': self.fwd_model.pattern_manager.n_meas_total,
                 'n_stimulation_patterns': self.fwd_model.pattern_manager.n_stim
             })

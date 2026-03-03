@@ -9,14 +9,19 @@ from typing import Optional, Tuple, Any, Union, Dict, List
 import logging
 import os
 import sys
+import ufl
+from dolfinx import fem
+from mpi4py import MPI
+
+from ..femx import mesh_cell_vertices, mesh_coordinates, mesh_num_cells, mesh_num_vertices
 
 logger = logging.getLogger(__name__)
 
 # Check optional dependencies
 try:
-    from fenics import Function, plot as fenics_plot, Measure, assemble
+    Function = fem.Function
     FENICS_AVAILABLE = True
-except ImportError:
+except Exception:
     FENICS_AVAILABLE = False
 
 try:
@@ -57,7 +62,7 @@ class EITVisualizer:
         """Plot mesh structure.
 
         Args:
-            mesh: FEniCS mesh object.
+            mesh: DOLFINx mesh (or EITMesh wrapper).
             title: Figure title.
             show_electrodes: Whether to show electrode positions.
             save_path: Save path (optional).
@@ -68,8 +73,8 @@ class EITVisualizer:
         fig, ax = plt.subplots(figsize=self.figsize)
 
         # Get mesh coordinates and connectivity
-        coordinates = mesh.coordinates()
-        cells = mesh.cells()
+        coordinates = self._coordinates(mesh)
+        cells = self._cells(mesh)
 
         # Create triangulation
         triangulation = tri.Triangulation(coordinates[:, 0], coordinates[:, 1], cells)
@@ -79,8 +84,10 @@ class EITVisualizer:
         ax.scatter(coordinates[:, 0], coordinates[:, 1], s=1, c='blue', alpha=0.6)
 
         # If electrode info available, plot electrode positions
-        if show_electrodes and hasattr(mesh, 'vertex_elec') and mesh.vertex_elec:
-            self._plot_electrodes(ax, mesh.vertex_elec)
+        if show_electrodes:
+            electrode_vertices = getattr(mesh, "electrode_vertices", None)
+            if electrode_vertices:
+                self._plot_electrodes(ax, electrode_vertices)
 
         ax.set_aspect('equal')
         ax.set_title(title, fontsize=14, fontweight='bold')
@@ -91,8 +98,7 @@ class EITVisualizer:
         plt.tight_layout()
 
         if save_path:
-            bbox = None if minimal else 'tight'
-            plt.savefig(save_path, dpi=300, bbox_inches=bbox)
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
 
         return fig
 
@@ -109,7 +115,7 @@ class EITVisualizer:
         """Plot conductivity distribution.
 
         Args:
-            mesh: FEniCS mesh object.
+            mesh: DOLFINx mesh (or EITMesh wrapper).
             conductivity: Conductivity distribution (Function object or numpy array).
             title: Figure title.
             colormap: Color map (e.g., 'viridis' or 'eidors_diff').
@@ -127,19 +133,19 @@ class EITVisualizer:
 
         # Handle different conductivity input types
         if isinstance(conductivity, Function):
-            conductivity_values = conductivity.vector()[:]
+            conductivity_values = conductivity.x.array
         else:
             conductivity_values = np.array(conductivity)
 
         # Get mesh info
-        coordinates = mesh.coordinates()
-        cells = mesh.cells()
+        coordinates = self._coordinates(mesh)
+        cells = self._cells(mesh)
 
         # Create triangulation
         triangulation = tri.Triangulation(coordinates[:, 0], coordinates[:, 1], cells)
 
         # If conductivity is cell values, interpolate to nodes
-        if len(conductivity_values) == mesh.num_cells():
+        if len(conductivity_values) == self._num_cells(mesh):
             # Interpolate cell center values to nodes
             node_values = self._interpolate_cell_to_node(mesh, conductivity_values)
         else:
@@ -213,7 +219,7 @@ class EITVisualizer:
             for label in ax.get_xticklabels() + ax.get_yticklabels():
                 label.set_fontweight("bold")
 
-        if show_electrodes and hasattr(mesh, "boundaries_mf") and mesh.boundaries_mf is not None:
+        if show_electrodes and getattr(mesh, "facet_tags", None) is not None:
             try:
                 self._overlay_electrode_labels(ax, mesh)
             except Exception as exc:  # Don't interrupt main flow due to visualization failure
@@ -283,7 +289,7 @@ class EITVisualizer:
         """Plot comparison between true and reconstructed distributions.
 
         Args:
-            mesh: FEniCS mesh object.
+            mesh: DOLFINx mesh (or EITMesh wrapper).
             true_conductivity: True conductivity distribution.
             reconstructed_conductivity: Reconstructed conductivity distribution.
             title: Figure title.
@@ -296,47 +302,56 @@ class EITVisualizer:
 
         # Process input data
         if isinstance(true_conductivity, Function):
-            true_values = true_conductivity.vector()[:]
+            true_values = true_conductivity.x.array
         else:
             true_values = np.array(true_conductivity)
 
         if isinstance(reconstructed_conductivity, Function):
-            recon_values = reconstructed_conductivity.vector()[:]
+            recon_values = reconstructed_conductivity.x.array
         else:
             recon_values = np.array(reconstructed_conductivity)
 
         # Get mesh info
-        coordinates = mesh.coordinates()
-        cells = mesh.cells()
+        coordinates = self._coordinates(mesh)
+        cells = self._cells(mesh)
         triangulation = tri.Triangulation(coordinates[:, 0], coordinates[:, 1], cells)
 
         # Determine color range
-        vmin = min(np.min(true_values), np.min(recon_values))
-        vmax = max(np.max(true_values), np.max(recon_values))
+        if len(true_values) == self._num_cells(mesh):
+            true_plot_values = self._interpolate_cell_to_node(mesh, true_values)
+        else:
+            true_plot_values = true_values
+        if len(recon_values) == self._num_cells(mesh):
+            recon_plot_values = self._interpolate_cell_to_node(mesh, recon_values)
+        else:
+            recon_plot_values = recon_values
+
+        vmin = min(np.min(true_plot_values), np.min(recon_plot_values))
+        vmax = max(np.max(true_plot_values), np.max(recon_plot_values))
 
         # Plot true distribution
-        im1 = axes[0].tripcolor(triangulation, true_values, cmap='viridis',
+        im1 = axes[0].tripcolor(triangulation, true_plot_values, cmap='viridis',
                                vmin=vmin, vmax=vmax, shading='gouraud')
         axes[0].set_title('True Distribution', fontweight='bold')
         axes[0].set_aspect('equal')
         plt.colorbar(im1, ax=axes[0], shrink=0.8)
 
         # Plot reconstructed distribution
-        im2 = axes[1].tripcolor(triangulation, recon_values, cmap='viridis',
+        im2 = axes[1].tripcolor(triangulation, recon_plot_values, cmap='viridis',
                                vmin=vmin, vmax=vmax, shading='gouraud')
         axes[1].set_title('Reconstructed Distribution', fontweight='bold')
         axes[1].set_aspect('equal')
         plt.colorbar(im2, ax=axes[1], shrink=0.8)
 
         # Plot error distribution
-        error = np.abs(true_values - recon_values)
+        error = np.abs(true_plot_values - recon_plot_values)
         im3 = axes[2].tripcolor(triangulation, error, cmap='hot', shading='gouraud')
         axes[2].set_title('Absolute Error', fontweight='bold')
         axes[2].set_aspect('equal')
         plt.colorbar(im3, ax=axes[2], shrink=0.8)
 
         # Calculate reconstruction error metric
-        relative_error = np.linalg.norm(error) / np.linalg.norm(true_values)
+        relative_error = np.linalg.norm(error) / np.linalg.norm(true_plot_values)
 
         fig.suptitle(f'{title} (Relative Error: {relative_error:.4f})', fontsize=16, fontweight='bold')
         plt.tight_layout()
@@ -349,20 +364,27 @@ class EITVisualizer:
     def _plot_electrodes(self, ax, electrode_vertices):
         """Plot electrode positions."""
         for i, electrode in enumerate(electrode_vertices):
-            if electrode:  # Check if electrode has vertices
-                electrode_array = np.array(electrode)
-                ax.plot(electrode_array[:, 0], electrode_array[:, 1], 'ro-',
-                       markersize=6, linewidth=2, label=f'Electrode {i+1}' if i < 5 else "")
+            electrode_array = np.asarray(electrode)
+            if electrode_array.size == 0:
+                continue
+            ax.plot(
+                electrode_array[:, 0],
+                electrode_array[:, 1],
+                "ro-",
+                markersize=6,
+                linewidth=2,
+                label=f"Electrode {i+1}" if i < 5 else "",
+            )
 
         if len(electrode_vertices) <= 5:
             ax.legend()
 
     def _interpolate_cell_to_node(self, mesh, cell_values):
         """Interpolate cell center values to nodes."""
-        node_values = np.zeros(mesh.num_vertices())
-        node_counts = np.zeros(mesh.num_vertices())
+        node_values = np.zeros(self._num_vertices(mesh))
+        node_counts = np.zeros(self._num_vertices(mesh))
 
-        for cell_idx, cell in enumerate(mesh.cells()):
+        for cell_idx, cell in enumerate(self._cells(mesh)):
             for vertex_idx in cell:
                 node_values[vertex_idx] += cell_values[cell_idx]
                 node_counts[vertex_idx] += 1
@@ -502,13 +524,8 @@ class EITVisualizer:
         cbar.update_ticks()
 
     def _overlay_electrode_labels(self, ax, mesh, label_outset: float = 0.08):
-        """Overlay electrode numbers and lengths on conductivity plot based on boundaries_mf."""
-        try:
-            from dolfin import facets  # Delayed import to avoid errors in non-FEniCS environments
-        except Exception as exc:
-            raise RuntimeError(f"Cannot import dolfin.facets: {exc}")
-
-        coords = mesh.coordinates()
+        """Overlay electrode numbers and lengths on conductivity plot based on facet tags."""
+        coords = self._coordinates(mesh)
         center = coords.mean(axis=0)
         radius = np.max(np.linalg.norm(coords - center, axis=1)) + 1e-12
 
@@ -517,17 +534,33 @@ class EITVisualizer:
         if not tags:
             raise RuntimeError("No electrode tags parsed from association_table")
 
+        facet_tags = getattr(mesh, "facet_tags", None)
+        if facet_tags is None:
+            raise RuntimeError("Mesh has no facet tags")
+
         # Collect all vertex coordinates for each tag and compute centroid and length
         tag_points: Dict[int, List[np.ndarray]] = {t: [] for t in tags}
-        for facet in facets(mesh):
-            tag = mesh.boundaries_mf[facet.index()]
-            if tag in tag_points:
-                vs = facet.entities(0)
-                tag_points[tag].append(coords[vs][:, :2])
+        mesh_obj = self._raw_mesh(mesh)
+        tdim = mesh_obj.topology.dim
+        fdim = tdim - 1
+        mesh_obj.topology.create_connectivity(fdim, 0)
+        f2v = mesh_obj.topology.connectivity(fdim, 0)
+        if f2v is None:
+            raise RuntimeError("Cannot read facet->vertex connectivity")
+
+        for facet_idx, tag in zip(facet_tags.indices, facet_tags.values):
+            tag_int = int(tag)
+            if tag_int in tag_points:
+                vertices = f2v.links(int(facet_idx))
+                tag_points[tag_int].append(coords[vertices][:, :2])
 
         # Compute measures
-        ds = Measure("ds", domain=mesh, subdomain_data=mesh.boundaries_mf)
-        lengths = {tag: float(assemble(1 * ds(tag))) for tag in tags}
+        ds = ufl.Measure("ds", domain=mesh_obj, subdomain_data=facet_tags)
+        one = fem.Constant(mesh_obj, 1.0)
+        lengths = {
+            tag: float(mesh_obj.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+            for tag in tags
+        }
 
         for idx, tag in enumerate(tags, start=1):
             if not tag_points[tag]:
@@ -574,6 +607,30 @@ class EITVisualizer:
                 tags.append(tag_val)
         tags = sorted(set(tags))
         return tags
+
+    @staticmethod
+    def _raw_mesh(mesh):
+        return mesh.mesh if hasattr(mesh, "mesh") else mesh
+
+    def _coordinates(self, mesh) -> np.ndarray:
+        if hasattr(mesh, "coordinates"):
+            return mesh.coordinates()
+        return mesh_coordinates(self._raw_mesh(mesh))
+
+    def _cells(self, mesh) -> np.ndarray:
+        if hasattr(mesh, "cells"):
+            return mesh.cells()
+        return mesh_cell_vertices(self._raw_mesh(mesh))
+
+    def _num_cells(self, mesh) -> int:
+        if hasattr(mesh, "num_cells"):
+            return int(mesh.num_cells())
+        return mesh_num_cells(self._raw_mesh(mesh))
+
+    def _num_vertices(self, mesh) -> int:
+        if hasattr(mesh, "num_vertices"):
+            return int(mesh.num_vertices())
+        return mesh_num_vertices(self._raw_mesh(mesh))
     
     def plot_convergence(self, iterations, errors, title: str = "Convergence Curve",
                         save_path: Optional[str] = None) -> plt.Figure:

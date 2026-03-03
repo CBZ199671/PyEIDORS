@@ -1,16 +1,15 @@
 #!/usr/bin/env python3
-"""Single-step difference Gauss-Newton (one linear solve) example using FEniCS mesh.
+"""Minimal demo: Random target placement on DOLFINx mesh for EIT forward/inverse simulation.
 
 Workflow:
-1) Load cached 16-electrode circular domain mesh (eit_meshes/mesh_102070*).
-2) Adjacent drive/measurement, contact impedance 1e-6.
-3) Randomly place a circular anomaly, generate baseline/target measurements.
-4) Compute Jacobian at baseline conductivity, directly solve one linear system
-   delta_sigma = (J^T W J + lambda R) \ (J^T W dv), no iteration.
-5) Save conductivity comparison and measurement comparison plots.
+1) Load cached 16-electrode circular domain mesh (eit_meshes/mesh_102070*), avoiding gmsh dependency.
+2) Construct adjacent drive/measurement patterns, contact impedance matching MATLAB example (1e-6).
+3) Generate random circular anomaly (random position, radius, contrast), forward solve for baseline/target voltages.
+4) Use modular Gauss-Newton reconstruction (NOSER regularization, default settings) to estimate conductivity.
+5) Compute simple metrics against ground truth/measurements, write results to results/demo_random_dolfinx/*.npz.
 
 Run:
-    python scripts/demo_fenics_single_step_diff.py
+    python scripts/demos/demo_dolfinx_random_sim.py
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from __future__ import annotations
 import math
 import sys
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Tuple
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -28,17 +27,12 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-import torch
-from fenics import Function, FunctionSpace
-
+from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.data.synthetic_data import create_custom_phantom
+from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
-from pyeidors.forward.eit_forward_model import EITForwardModel
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
-from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
-
 
 def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
     """Interpolate cell values to nodes by averaging, for plotting convenience."""
@@ -54,20 +48,26 @@ def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
 
 
 def make_random_anomaly(rng: np.random.Generator) -> Dict:
+    """Randomly generate a circular anomaly description."""
+    # Radius in [0.08, 0.18], center distance from origin <= 0.5
     radius = float(rng.uniform(0.08, 0.18))
     angle = float(rng.uniform(0, 2 * math.pi))
     dist = float(rng.uniform(0.0, 0.5))
     center = (dist * math.cos(angle), dist * math.sin(angle))
+    # Contrast: increase or decrease conductivity
     contrast = float(rng.uniform(1.5, 3.0))
-    if rng.random() < 0.35:  # 35% chance for low conductivity
+    if rng.random() < 0.35:  # 35% chance to make resistive (low conductivity)
         contrast = float(rng.uniform(0.2, 0.8))
     return {"center": center, "radius": radius, "conductivity": contrast}
 
 
 def main() -> None:
     rng = np.random.default_rng(20241116)
-    # 1) Mesh and patterns
+
+    # 1) Load cached mesh (16 electrodes), avoiding gmsh dependency
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16)
+
+    # 2) Build system (adjacent drive/measurement, amplitude 1; contact impedance 1e-6)
     pattern_cfg = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
@@ -77,70 +77,76 @@ def main() -> None:
         rotate_meas=True,
     )
     contact_impedance = np.full(16, 1e-6, dtype=float)
-    fwd_model = EITForwardModel(
+
+    system = EITSystem(
         n_elec=16,
         pattern_config=pattern_cfg,
-        z=contact_impedance,
-        mesh=mesh,
+        contact_impedance=contact_impedance,
+        base_conductivity=1.0,
+        regularization_type="noser",
+        regularization_alpha=1.0,
     )
+    system.setup(mesh=mesh)
 
-    n_elem = len(Function(fwd_model.V_sigma).vector()[:])
+    n_elem = int(system.fwd_model.V_sigma.dofmap.index_map.size_local * system.fwd_model.V_sigma.dofmap.index_map_bs)
 
-    # 2) Baseline and random anomaly
+    # 3) Construct baseline and random anomaly
     sigma_bg = np.ones(n_elem, dtype=float)
     anomaly = make_random_anomaly(rng)
     sigma_true_fn = create_custom_phantom(
-        fwd_model,
+        system.fwd_model,
         background_conductivity=1.0,
         anomalies=[anomaly],
     )
-    sigma_true = sigma_true_fn.vector()[:]
+    sigma_true = function_get_array(sigma_true_fn).copy()
 
-    img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
-    img_true = EITImage(elem_data=sigma_true, fwd_model=fwd_model)
+    img_bg = EITImage(elem_data=sigma_bg, fwd_model=system.fwd_model)
+    img_true = EITImage(elem_data=sigma_true, fwd_model=system.fwd_model)
 
-    # 3) Forward: baseline / target
-    data_bg, _ = fwd_model.fwd_solve(img_bg)
-    data_true, _ = fwd_model.fwd_solve(img_true)
-    dv = data_true.meas - data_bg.meas  # unnormalized difference
+    # 4) Forward solve: baseline and target
+    data_bg, _ = system.fwd_model.fwd_solve(img_bg)
+    data_true, _ = system.fwd_model.fwd_solve(img_true)
+    diff_meas = data_true.meas - data_bg.meas
 
-    # 4) Single-step difference: J, prior, one linear solve
-    jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
-    sigma_fun_bg = Function(fwd_model.V_sigma)
-    sigma_fun_bg.vector()[:] = sigma_bg
-    J = jac_calc.calculate(sigma_fun_bg, method="efficient")  # shape: n_meas x n_elem
-    # EIDORS sign convention is built into EidorsStyleAdjointJacobian, no extra negation needed.
+    # 5) Single-step Gauss-Newton reconstruction (absolute reconstruction, initial conductivity=1)
+    recon = system.reconstructor.reconstruct(
+        data_true, initial_conductivity=1.0, jacobian_method="efficient"
+    )
+    sigma_est = function_get_array(recon["conductivity"]).copy()
+    img_est = EITImage(elem_data=sigma_est, fwd_model=system.fwd_model)
+    data_est, _ = system.fwd_model.fwd_solve(img_est)
 
-    # W = I (unweighted), prior uses NOSER, exponent=0.5 (EIDORS default)
-    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0, exponent=0.5)
-    R = reg.get_regularization_matrix()  # already numpy, shape (n_elem, n_elem)
-    lam = 1e-2  # adjustable
-
-    JTJ = J.T @ J
-    RHS = J.T @ dv
-    A = JTJ + lam * R
-
-    delta_sigma = np.linalg.solve(A, RHS)
-    sigma_est = sigma_bg + delta_sigma
-
-    img_est = EITImage(elem_data=sigma_est, fwd_model=fwd_model)
-    data_est, _ = fwd_model.fwd_solve(img_est)
-
-    # 5) Metrics
+    # 6) Error metrics
     meas_rmse = float(np.sqrt(np.mean((data_est.meas - data_true.meas) ** 2)))
     sigma_rmse = float(np.sqrt(np.mean((sigma_est - sigma_true) ** 2)))
     sigma_mae = float(np.mean(np.abs(sigma_est - sigma_true)))
-    metrics = {
+    metrics: Dict[str, float] = {
         "meas_rmse": meas_rmse,
         "sigma_rmse": sigma_rmse,
         "sigma_mae": sigma_mae,
-        "lambda": lam,
+        "residual_final": float(recon["final_residual"]),
     }
 
-    # 6) Visualization
-    out_dir = Path("results/demo_single_step_diff")
+    # 7) Save results
+    out_dir = Path("results/demo_random_dolfinx")
     out_dir.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        out_dir / "simulation_outputs.npz",
+        sigma_bg=sigma_bg,
+        sigma_true=sigma_true,
+        sigma_est=sigma_est,
+        anomaly_center=np.array(anomaly["center"]),
+        anomaly_radius=anomaly["radius"],
+        anomaly_conductivity=anomaly["conductivity"],
+        meas_bg=data_bg.meas,
+        meas_true=data_true.meas,
+        meas_est=data_est.meas,
+        diff_meas=diff_meas,
+        metrics=np.array(list(metrics.values())),
+        metric_names=np.array(list(metrics.keys())),
+    )
 
+    # 8) Visualization: ground truth vs reconstructed conductivity, measurement comparison
     viz = create_visualizer()
     sigma_true_nodes = cell_to_node(mesh, sigma_true) if len(sigma_true) == mesh.num_cells() else sigma_true
     sigma_est_nodes = cell_to_node(mesh, sigma_est) if len(sigma_est) == mesh.num_cells() else sigma_est
@@ -148,11 +154,12 @@ def main() -> None:
         mesh,
         sigma_true_nodes,
         sigma_est_nodes,
-        title="Single-Step Difference: Ground Truth vs Reconstructed Conductivity"
+        title="Ground Truth vs Reconstructed Conductivity"
     )
     fig_cmp.savefig(out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cmp)
 
+    # Boundary voltage comparison: true target vs reconstructed prediction (in measurement space)
     fig_v = plt.figure(figsize=(10, 4))
     ax1 = fig_v.add_subplot(1, 2, 1)
     ax1.scatter(data_true.meas, data_est.meas, s=14, alpha=0.7, label="Predicted vs Ground Truth")
@@ -175,31 +182,14 @@ def main() -> None:
     ax2.legend()
     ax2.grid(alpha=0.3)
 
-    fig_v.suptitle("Single-Step Difference: Target/Predicted Boundary Voltage Comparison", fontsize=13, fontweight="bold")
+    fig_v.suptitle("Target/Predicted Boundary Voltage Comparison", fontsize=13, fontweight="bold")
     fig_v.tight_layout()
     fig_v.savefig(out_dir / "voltage_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig_v)
 
-    # Save data
-    np.savez(
-        out_dir / "single_step_outputs.npz",
-        sigma_bg=sigma_bg,
-        sigma_true=sigma_true,
-        sigma_est=sigma_est,
-        anomaly_center=np.array(anomaly["center"]),
-        anomaly_radius=anomaly["radius"],
-        anomaly_conductivity=anomaly["conductivity"],
-        meas_bg=data_bg.meas,
-        meas_true=data_true.meas,
-        meas_est=data_est.meas,
-        dv=dv,
-        metrics=np.array(list(metrics.values())),
-        metric_names=np.array(list(metrics.keys())),
-    )
-
     print("Random anomaly:", anomaly)
     print("Metrics:", metrics)
-    print(f"Results saved to {out_dir / 'single_step_outputs.npz'}")
+    print(f"Results saved to {out_dir / 'simulation_outputs.npz'}")
     print(f"Conductivity comparison: {out_dir / 'conductivity_comparison.png'}")
     print(f"Voltage comparison: {out_dir / 'voltage_comparison.png'}")
 

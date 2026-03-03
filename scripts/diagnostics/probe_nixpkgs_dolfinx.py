@@ -5,7 +5,7 @@ The script tests one upstream DOLFINx pytest target across a small commit window
 around the currently locked nixpkgs revision and records reproducible logs.
 
 Typical usage from repo root:
-  python scripts/diagnostics/probe_nixpkgs_fenicsx.py --window 2 --update-lock
+  python scripts/diagnostics/probe_nixpkgs_dolfinx.py --window 2 --update-lock
 """
 
 from __future__ import annotations

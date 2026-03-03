@@ -3,74 +3,88 @@
 16-electrode Complete Electrode Model (CEM) end-to-end simulation and reconstruction test script.
 
 Steps:
-1) Create a mesh on unit square boundary with 16 uniformly distributed electrodes and boundary markers.
+1) Create a unit-square mesh and tag 16 boundary electrodes.
 2) Construct EITSystem (using contact impedance and adjacent stimulation/measurement patterns).
 3) Generate homogeneous reference and phantom with circular inclusion, perform forward solve.
 4) Use difference reconstruction (Gauss-Newton + NOSER) to estimate conductivity.
 5) Print electrode measures, measurement ranges, reconstruction range and relative error for quick CEM verification.
 """
 
+from __future__ import annotations
+
 import numpy as np
-from fenics import MeshFunction, SubDomain, UnitSquareMesh, Measure, near, assemble
+import ufl
+from dolfinx import fem, mesh as dmesh
+from mpi4py import MPI
 
 from pyeidors import EITSystem
 from pyeidors.data.structures import PatternConfig
+from pyeidors.femx import build_eit_mesh, function_get_array
+
+
+def _edge_parameter(points: np.ndarray) -> np.ndarray:
+    """Map boundary points to parameter t in [0, 4) on square perimeter."""
+    x = points[:, 0]
+    y = points[:, 1]
+    eps = 1e-10
+
+    t = np.zeros_like(x)
+    left = np.isclose(x, 0.0, atol=eps)
+    top = (~left) & np.isclose(y, 1.0, atol=eps)
+    right = (~left) & (~top) & np.isclose(x, 1.0, atol=eps)
+    bottom = (~left) & (~top) & (~right) & np.isclose(y, 0.0, atol=eps)
+
+    t[left] = y[left]
+    t[top] = 1.0 + x[top]
+    t[right] = 2.0 + (1.0 - y[right])
+    t[bottom] = 3.0 + (1.0 - x[bottom])
+    return np.clip(t, 0.0, 4.0 - eps)
 
 
 def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
-    """
-    Create a mesh on unit square with 16 uniformly distributed electrode markers.
-    Boundary parameter t in [0, 4): bottom 3->4, left 0->1, top 1->2, right 2->3.
-    """
-    mesh = UnitSquareMesh(nx, ny)
-    facet_function = MeshFunction("size_t", mesh, mesh.topology().dim() - 1, 0)
+    """Create a unit-square mesh with 16 tagged electrodes on the exterior boundary."""
+    square_mesh = dmesh.create_unit_square(MPI.COMM_WORLD, nx, ny)
+    tdim = square_mesh.topology.dim
+    fdim = tdim - 1
+
+    # Exterior facets
+    boundary_facets = dmesh.locate_entities_boundary(
+        square_mesh, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
+    ).astype(np.int32)
+
+    # Compute facet centroids using facet->vertex connectivity
+    square_mesh.topology.create_connectivity(fdim, 0)
+    f2v = square_mesh.topology.connectivity(fdim, 0)
+    if f2v is None:
+        raise RuntimeError("Failed to build facet->vertex connectivity")
+    coords = square_mesh.geometry.x[:, :2]
+    centroids = np.zeros((boundary_facets.size, 2), dtype=float)
+    for i, facet in enumerate(boundary_facets):
+        vertices = f2v.links(int(facet))
+        centroids[i, :] = coords[vertices].mean(axis=0)
 
     seg_len = 4.0 / n_elec
-    eps = 1e-10
+    tags = (np.floor(_edge_parameter(centroids) / seg_len).astype(np.int32) + 2).astype(np.int32)
 
-    class ElectrodeMarker(SubDomain):
-        def __init__(self, seg_idx: int):
-            super().__init__()
-            self.seg_idx = seg_idx
+    # meshtags require sorted entity indices
+    order = np.argsort(boundary_facets)
+    boundary_facets = boundary_facets[order]
+    tags = tags[order]
+    facet_tags = dmesh.meshtags(square_mesh, fdim, boundary_facets, tags)
 
-        def inside(self, x, on_boundary):
-            if not on_boundary:
-                return False
-
-            if near(x[0], 0.0):
-                t = x[1]
-            elif near(x[1], 1.0):
-                t = 1.0 + x[0]
-            elif near(x[0], 1.0):
-                t = 2.0 + (1.0 - x[1])
-            elif near(x[1], 0.0):
-                t = 3.0 + (1.0 - x[0])
-            else:
-                return False
-
-            t = min(max(t, 0.0), 4.0 - eps)
-            idx = int(t / seg_len)
-            return idx == self.seg_idx
-
-    association_table = {}
-    for i in range(n_elec):
-        tag = i + 2  # Convention: domain is 1, electrodes start from 2
-        ElectrodeMarker(i).mark(facet_function, tag)
-        association_table[f"electrode_{i + 1}"] = tag
-
-    # Attach EIT-required attributes
-    mesh.boundaries_mf = facet_function
-    mesh.association_table = association_table
-    mesh.n_electrodes = n_elec
-
-    return mesh
+    association_table = {f"electrode_{i + 1}": i + 2 for i in range(n_elec)}
+    eit_mesh = build_eit_mesh(
+        square_mesh,
+        facet_tags=facet_tags,
+        association_table=association_table,
+    )
+    return eit_mesh
 
 
 def run_test():
     n_elec = 16
     mesh = create_square_eit_mesh(n_elec=n_elec, nx=64, ny=64)
 
-    # Use adjacent stimulation/measurement, current amplitude 1mA (adjustable)
     pattern_config = PatternConfig(
         n_elec=n_elec,
         stim_pattern="{ad}",
@@ -78,7 +92,6 @@ def run_test():
         amplitude=1.0,
     )
 
-    # Contact impedance 1e-5 ohm*m^2
     contact_impedance = np.ones(n_elec) * 1e-5
 
     eit_system = EITSystem(
@@ -91,12 +104,14 @@ def run_test():
     )
     eit_system.setup(mesh=mesh)
 
-    # Check electrode boundary measures
-    ds = Measure("ds", domain=mesh, subdomain_data=mesh.boundaries_mf)
-    electrode_measures = [assemble(1 * ds(tag)) for tag in range(2, 2 + n_elec)]
+    ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
+    one = fem.Constant(mesh.mesh, 1.0)
+    electrode_measures = [
+        float(mesh.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        for tag in range(2, 2 + n_elec)
+    ]
     print(f"Electrode boundary measures min/max: {min(electrode_measures):.6f} / {max(electrode_measures):.6f}")
 
-    # Reference and phantom
     reference_img = eit_system.create_homogeneous_image(conductivity=1.0)
     reference_data = eit_system.forward_solve(reference_img)
 
@@ -111,15 +126,13 @@ def run_test():
     print(f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]")
     print(f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]")
 
-    # Difference reconstruction
     recon_result = eit_system.inverse_solve(
         data=phantom_data,
         reference_data=reference_data,
         initial_guess=None,
     )
-    recon_sigma = recon_result["conductivity"].vector()[:]
+    recon_sigma = function_get_array(recon_result["conductivity"]).copy()
 
-    # Error metrics
     true_sigma = phantom_img.elem_data
     rel_err = np.linalg.norm(recon_sigma - true_sigma) / np.linalg.norm(true_sigma)
 

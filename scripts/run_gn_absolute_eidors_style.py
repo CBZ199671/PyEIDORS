@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Sequence
 
 import matplotlib.pyplot as plt
-from fenics import Function
 import numpy as np
+from dolfinx import fem
 
 import sys
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,6 +33,7 @@ from pyeidors.core_system import EITSystem  # noqa: E402
 from pyeidors.data.measurement_dataset import MeasurementDataset  # noqa: E402
 from pyeidors.data.structures import PatternConfig  # noqa: E402
 from pyeidors.data.structures import EITData, EITImage  # noqa: E402
+from pyeidors.femx import function_get_array  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
 from pyeidors.visualization import EITVisualizer  # noqa: E402
 
@@ -222,7 +223,7 @@ def run_reconstruction(
     scale_ratio = np.abs(eit_data.meas).max() / (np.abs(base_forward.meas).max() + 1e-12)
     print(f"[INFO] Meas/Model ratio: {scale_ratio:.2f} (if far from 1, adjust background conductivity or stimulation current)")
     
-    n_elements = len(Function(system.fwd_model.V_sigma).vector()[:])
+    n_elements = int(fem.Function(system.fwd_model.V_sigma).x.array.size)
     initial_sigma = np.full(n_elements, background_sigma, dtype=float)
 
     recon_result = system.reconstructor.reconstruct(
@@ -231,7 +232,7 @@ def run_reconstruction(
         jacobian_method="efficient",
     )
     conductivity_fn = recon_result["conductivity"]
-    conductivity_vec = conductivity_fn.vector()[:]
+    conductivity_vec = function_get_array(conductivity_fn).copy()
 
     # Forward prediction for curve comparison
     sim_data, _ = system.fwd_model.fwd_solve(EITImage(elem_data=conductivity_vec, fwd_model=system.fwd_model))

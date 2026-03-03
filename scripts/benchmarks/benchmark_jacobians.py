@@ -35,7 +35,7 @@ def benchmark():
     contact_impedance = np.full(16, 1e-6, dtype=float)
     fwd_model = EITForwardModel(n_elec=16, pattern_config=pattern_cfg, z=contact_impedance, mesh=mesh)
 
-    n_elem = len(fwd_model.V_sigma.dofmap().dofs())
+    n_elem = int(fwd_model.V_sigma.dofmap.index_map.size_local * fwd_model.V_sigma.dofmap.index_map_bs)
     sigma = np.ones(n_elem, dtype=float)
     img = EITImage(elem_data=sigma, fwd_model=fwd_model)
 
