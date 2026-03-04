@@ -7,7 +7,7 @@ name = "pyeidors"
 version = "1.0.0"
 description = "PyEIDORS - A FEniCSx-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13,<3.14"
 license = {text = "MIT"}
 authors = [
     {name = "BingZhou Chen", email = "b20223080651@cau.edu.cn"},
@@ -48,7 +48,7 @@ torch = [
     "torchaudio~=2.10.0",
 ]
 cuqi = [
-    "CUQIpy~=1.3.0",
+    "CUQIpy~=1.5.0",
 ]
 # Development dependencies
 dev = [
@@ -107,7 +107,7 @@ testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "-v --cov=src/pyeidors --cov-report=html --cov-report=term-missing --cov-fail-under=85"
+addopts = "-v --cov=src/pyeidors --cov-report=html --cov-report=term-missing --cov-fail-under=87"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require GPU",

@@ -1,0 +1,39 @@
+{
+  "schema_version": 1,
+  "project": "pyeidors",
+  "profile": {
+    "extras": [
+      "torch",
+      "cuqi",
+      "dev"
+    ],
+    "sync_flags": [
+      "--frozen"
+    ],
+    "lock_check": "uv lock --check"
+  },
+  "platform": {
+    "id": "macos-aarch64",
+    "system": "darwin",
+    "machine": "arm64"
+  },
+  "python": {
+    "version": "3.13.8",
+    "implementation": "CPython"
+  },
+  "locks": {
+    "nixpkgs_rev": "b665e98e4cb439b95f8faee197c76c6578197e55",
+    "flake_lock_sha256": "a9c2141abfb46e5987b3014ee87f62e19b9503e8d53e60c16872613d3a66eb3e",
+    "uv_lock_sha256": "34d4e6844f503802b4782e7bceedba11d4bae3b01e98e7bbf59dc027cab755cf",
+    "pyproject_sha256": "c6a2f11e26b219c484ea5a3ba2186cfe64672d4e7cdba3e54776f1755e6da8b8"
+  },
+  "packages": {
+    "dolfinx": "0.10.0.post1",
+    "torch": "2.10.0",
+    "cuqi": "1.5.0",
+    "numpy": "2.2.0",
+    "scipy": "1.17.1",
+    "pyeidors": "1.0.0"
+  },
+  "generated_at_utc": "2026-03-04T09:26:54.751122+00:00"
+}

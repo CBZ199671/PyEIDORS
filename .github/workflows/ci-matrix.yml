@@ -52,7 +52,10 @@ jobs:
           OMP_NUM_THREADS: "1"
         run: |
           nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
-            uv pip install --python .venv/bin/python --no-deps -e .
+            scripts/env/sync_locked_env.sh --repair
+            scripts/env/sync_locked_env.sh --check
+            python scripts/env/verify_env_manifest.py
+            python -c "import dolfinx, torch, cuqi, pyeidors"
             python -m pytest -q \
               --cov=src/pyeidors \
               --cov-report=xml:coverage.xml \
@@ -98,7 +101,10 @@ jobs:
           OMP_NUM_THREADS: "1"
         run: |
           nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
-            uv pip install --python .venv/bin/python --no-deps -e .
+            scripts/env/sync_locked_env.sh --repair
+            scripts/env/sync_locked_env.sh --check
+            python scripts/env/verify_env_manifest.py
+            python -c "import dolfinx, torch, cuqi, pyeidors"
             python -m pytest -q \
               tests/integration/test_gmsh_mandatory.py \
               tests/unit/test_mesh_pipeline_extended.py \
@@ -135,14 +141,17 @@ jobs:
           OMP_NUM_THREADS: "1"
         run: |
           nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
-            uv pip install --python .venv/bin/python --no-deps -e .
-            python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
-            python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+            scripts/env/sync_locked_env.sh --repair
+            scripts/env/sync_locked_env.sh --check
+            python scripts/env/verify_env_manifest.py
+            python -c "import dolfinx, torch, cuqi, pyeidors"
+            python scripts/ci/perf_snapshot.py --mode baseline --repeat 5 --output test_results/perf/baseline.json
+            python scripts/ci/perf_snapshot.py --mode optimized --repeat 5 --output test_results/perf/optimized.json
             python scripts/ci/perf_guard.py \
               --baseline test_results/perf/baseline.json \
               --optimized test_results/perf/optimized.json \
               --report test_results/perf/comparison.md \
-              --min-improvement 0.10 \
+              --min-improvement 0.50 \
               --max-regression 0.05
           '
 
@@ -178,14 +187,17 @@ jobs:
           OMP_NUM_THREADS: "1"
         run: |
           nix --extra-experimental-features "nix-command flakes" develop -c bash -lc '
-            uv pip install --python .venv/bin/python --no-deps -e .
-            python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
-            python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+            scripts/env/sync_locked_env.sh --repair
+            scripts/env/sync_locked_env.sh --check
+            python scripts/env/verify_env_manifest.py
+            python -c "import dolfinx, torch, cuqi, pyeidors"
+            python scripts/ci/perf_snapshot.py --mode baseline --repeat 5 --output test_results/perf/baseline.json
+            python scripts/ci/perf_snapshot.py --mode optimized --repeat 5 --output test_results/perf/optimized.json
             python scripts/ci/perf_guard.py \
               --baseline test_results/perf/baseline.json \
               --optimized test_results/perf/optimized.json \
               --report test_results/perf/comparison.md \
-              --min-improvement 0.10 \
+              --min-improvement 0.50 \
               --max-regression 0.05
           '
 

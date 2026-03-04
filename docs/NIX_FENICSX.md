@@ -4,9 +4,13 @@ This document defines the maintained environment setup for running PyEIDORS with
 
 ## Strategy
 
-- Nix provides the system and scientific stack (DOLFINx, Basix, UFL, FFCx, MPI).
-- uv manages the project virtual environment and editable install.
-- We avoid pip-based DOLFINx installation.
+PyEIDORS uses a two-layer lock strategy bound to this repository:
+
+- System layer: `flake.lock` pins Nix packages (including DOLFINx/FEniCSx stack).
+- Python layer: `uv.lock` pins Python packages, synchronized by `uv`.
+- Python major/minor is fixed to `3.13` in the dev shell contract.
+- Standard profile extras are fixed as: `torch`, `cuqi`, `dev`.
+- Official entrypoint is `nix develop` (non-Nix path is not guaranteed 1:1 reproducible).
 
 ## Facts checked on 2026-03-02
 
@@ -127,28 +131,20 @@ nix develop
 The `shellHook` in `flake.nix` will:
 
 1. Set uv to use Nix-provided Python.
-2. Create `.venv` on first run.
+2. Create `.venv` on first run (or rebuild when Python major/minor changes).
 3. Use `--system-site-packages` so `.venv` can import Nix-provided DOLFINx packages.
 4. Activate `.venv` automatically.
-
-Then install PyEIDORS in editable mode:
-
-```bash
-uv pip install --python .venv/bin/python --no-deps -e .
-```
-
-Why `--no-deps`:
-
-- Nix already pins the scientific stack.
-- This prevents pip from replacing Nix-managed FEniCSx dependencies.
+5. Run `scripts/env/sync_locked_env.sh --check`.
+6. If drift is detected, auto-run `scripts/env/sync_locked_env.sh --repair`.
+7. Fail fast if repair still fails, with explicit manual recovery command.
 
 ## Validation commands
 
 ```bash
-python -c "import dolfinx, basix, ufl; print('dolfinx', dolfinx.__version__)"
-python -c "from mpi4py import MPI; print('mpi4py size=', MPI.COMM_WORLD.size)"
-python -c "import gmsh; print('gmsh', gmsh.__version__)"
-pytest tests/unit/test_cache.py -v
+scripts/env/sync_locked_env.sh --print-profile
+scripts/env/sync_locked_env.sh --check
+python scripts/env/verify_env_manifest.py
+python -c "import dolfinx, torch, cuqi, numpy, scipy, pyeidors"
 ```
 
 Upstream FEniCSx regression guard (Darwin):
@@ -180,16 +176,53 @@ nix flake update
 ```bash
 rm -rf .venv
 nix develop
-uv pip install --python .venv/bin/python --no-deps -e .
+scripts/env/sync_locked_env.sh --repair
 ```
 
 ### 3) `import pyeidors` fails while `import dolfinx` works
 
-This is not expected after the Phase-2 hard cutover. Check for stale local editable installs and reinstall:
+This is not expected after lock sync. Re-run:
 
 ```bash
-uv pip install --python .venv/bin/python --no-deps -e .
+scripts/env/sync_locked_env.sh --repair
+python scripts/env/verify_env_manifest.py
 ```
+
+### 4) Lock drift (`uv.lock` / profile mismatch)
+
+Symptoms:
+
+- `scripts/env/sync_locked_env.sh --check` fails.
+- `python scripts/env/verify_env_manifest.py` reports mismatch keys.
+
+Fix:
+
+```bash
+scripts/env/sync_locked_env.sh --repair
+python scripts/env/verify_env_manifest.py
+```
+
+### 5) Network/index issue during sync
+
+`--repair` may fail due to network/index transient failures. Keep the original error and retry once with your local proxy wrapper for that failing command only (do not enable global proxy permanently).
+
+## Environment Upgrade Flow (Mandatory)
+
+When changing environment inputs, keep this order:
+
+1. Update `flake.lock` (if needed).
+2. Update `uv.lock` in Nix shell (`uv lock --python .venv/bin/python --upgrade`).
+3. Re-export manifests:
+   - `python scripts/env/export_env_manifest.py --output env/manifests/macos-aarch64.lock.json --platform-id macos-aarch64`
+   - `python scripts/env/export_env_manifest.py --output env/manifests/linux-x86_64.lock.json --platform-id linux-x86_64`
+4. Verify:
+   - `scripts/env/sync_locked_env.sh --check`
+   - `python scripts/env/verify_env_manifest.py`
+
+Rules:
+
+- Do not do ad-hoc `pip install` without writing back to lock files.
+- Any PR touching `pyproject.toml`, `flake.nix`, or `uv.lock` must update manifests and pass CI env guard.
 
 ## Scope boundary
 

@@ -15,8 +15,10 @@ dist/
 # Virtual environments
 .venv/
 venv/
-env/
-ENV/
+
+# Keep repository env scripts/manifests tracked:
+# - scripts/env/*
+# - env/manifests/*.json
 
 # Testing and coverage
 .coverage

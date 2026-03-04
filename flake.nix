@@ -21,7 +21,7 @@
         system:
         let
           pkgs = import nixpkgs { inherit system; };
-          python = pkgs.python3;
+          python = pkgs.python313;
           py = python.pkgs;
           fenicsDolfinx = py."fenics-dolfinx".overridePythonAttrs (
             old: {
@@ -42,6 +42,8 @@
               pkgs.pkg-config
               pkgs.cmake
               pkgs.ninja
+              pkgs.gfortran
+              pkgs.openblas
 
               fenicsDolfinx
               py."fenics-basix"
@@ -144,10 +146,38 @@ PY
 
               source .venv/bin/activate
 
-              echo "[nix+uv] Dev shell ready. First-time install:"
-              echo "  uv pip install --python .venv/bin/python --no-deps -e ."
-              echo "[nix+uv] Verify FEniCSx:"
-              echo "  python -c \"import dolfinx, ufl, basix; print(dolfinx.__version__)\""
+              venv_site="$(".venv/bin/python" - <<'PY'
+import site
+paths = site.getsitepackages()
+print(paths[0] if paths else "")
+PY
+)"
+              if [ -n "$venv_site" ]; then
+                case ":''${PYTHONPATH:-}:" in
+                  *":$venv_site:"*) ;;
+                  *)
+                    export PYTHONPATH="$venv_site''${PYTHONPATH:+:$PYTHONPATH}"
+                    ;;
+                esac
+              fi
+
+              if [ -x scripts/env/sync_locked_env.sh ]; then
+                echo "[nix+uv] Checking locked Python environment profile (torch+cuqi+dev)..."
+                if ! scripts/env/sync_locked_env.sh --check; then
+                  echo "[nix+uv] Drift detected. Attempting automatic repair..."
+                  if ! scripts/env/sync_locked_env.sh --repair; then
+                    echo "[nix+uv] ERROR: environment repair failed."
+                    echo "[nix+uv] Manual repair command: scripts/env/sync_locked_env.sh --repair"
+                    exit 1
+                  fi
+                fi
+              else
+                echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
+              fi
+
+              echo "[nix+uv] Dev shell ready."
+              echo "[nix+uv] Verify stack quickly:"
+              echo "  python -c \"import dolfinx, torch, cuqi, pyeidors; print(dolfinx.__version__)\""
             '';
           };
         }
