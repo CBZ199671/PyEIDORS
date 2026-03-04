@@ -127,3 +127,52 @@ def test_cache_manager_off_scope_and_invalidation_paths(tmp_path: Path):
     manager.clear(scope="disk")
     stats_after_disk_clear = manager.stats()
     assert stats_after_disk_clear["disk_items"] == 0
+
+
+def test_cache_manager_semantic_helpers_and_name_controls(tmp_path: Path):
+    manager = CacheManager(
+        scope="both",
+        cache_dir=tmp_path / "semantic-cache",
+        policy=CachePolicy(process_max_bytes=8 * 1024**2, disk_max_bytes=8 * 1024**2),
+    )
+    calls = {"count": 0}
+
+    def _compute():
+        calls["count"] += 1
+        return {"value": 42}
+
+    payload = {"model": {"n_elec": 16}, "sigma_hash": "abc"}
+    value1, lookup1 = manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name="inv_solve_diff_GN_one_step",
+        namespace="difference",
+        cache_obj=payload,
+        payload={"mode": "measurement"},
+        compute_fn=_compute,
+        persist=True,
+    )
+    value2, lookup2 = manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name="inv_solve_diff_GN_one_step",
+        namespace="difference",
+        cache_obj=payload,
+        payload={"mode": "measurement"},
+        compute_fn=_compute,
+        persist=True,
+    )
+
+    assert value1 == {"value": 42}
+    assert value2 == {"value": 42}
+    assert lookup1.hit is False
+    assert lookup2.hit is True
+    assert calls["count"] == 1
+
+    collected = manager.collect_recent(
+        names=["inv_solve_diff_GN_one_step"],
+        limit_per_name=1,
+        namespace="difference",
+    )
+    assert collected["inv_solve_diff_GN_one_step"]
+
+    removed = manager.clear_name("inv_solve_diff_GN_one_step", namespace="difference")
+    assert removed >= 1

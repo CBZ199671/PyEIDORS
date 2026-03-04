@@ -74,11 +74,15 @@ dataset = MeasurementDataset.from_metadata(
     data_type="real"
 )
 
-# Generate EITData for inverse problem
+# Generate EITData for inverse problem (default: read-only shared view)
 eit_data = dataset.to_eit_data(frame_index=0)
+# If a writable buffer is required:
+eit_data_copy = dataset.to_eit_data(frame_index=0, copy_policy="copy")
 ```
 
 `MeasurementDataset` automatically creates `PatternConfig` and `StimMeasPatternManager` based on metadata, validating measurement array shape and channel count. Mismatches raise exceptions with contextual information for easier debugging during data preprocessing.
+
+`MeasurementDataset.to_eit_data` defaults to `copy_policy="view"` to reduce memory copies in reconstruction pipelines. Returned arrays are read-only views. If downstream code requires in-place edits, explicitly request `copy_policy="copy"` or call `.copy()` on the relevant array.
 
 ## 5. Managing Multi-Frame Data
 
@@ -86,6 +90,7 @@ When `n_frames > 1`, indicating multiple complete excitation cycles were acquire
 
 - Use `MeasurementDataset.iter_frames()` to generate `EITData` frame by frame;
 - Or explicitly specify `frame_index` in `to_eit_data`.
+- `iter_frames(copy_policy="view")` is default and keeps shared read-only memory.
 
 This is particularly important for time-series reconstruction (e.g., difference or time-difference analysis).
 

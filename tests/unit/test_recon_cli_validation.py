@@ -100,3 +100,29 @@ def test_sparse_frame_allows_reference_index(tmp_path: Path):
     )
     assert out.returncode == 0
     assert '"case_name": "tar"' in out.stdout
+
+
+def test_cli_accepts_cache_controls_in_dry_run(tmp_path: Path):
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text("1,2,3,4\n", encoding="utf-8")
+
+    out = _run_cli(
+        [
+            "--method",
+            "gn-difference",
+            "--csv",
+            str(csv_path),
+            "--output-root",
+            str(tmp_path / "out"),
+            "--cache-scope",
+            "both",
+            "--cache-dir",
+            str(tmp_path / ".pyeidors_cache"),
+            "--cache-clear-name",
+            "calc_jacobian",
+            "--cache-clear-name",
+            "inv_solve_diff_GN_one_step",
+            "--dry-run",
+        ]
+    )
+    assert out.returncode == 0

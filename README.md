@@ -220,7 +220,7 @@ Here m = number of measurements, so the inner solve is m&times;m (typically 208)
   <img src="pictures/benchmark_difference_runtime_measurement_6_24.png" alt="PyEIDORS measurement-space difference benchmark" width="900" />
 </p>
 
-For reference, we include the EIDORS timing curve (cold vs cached). EIDORS caching is extremely strong; the cold (no cache) curve is the fairer comparison point. PyEIDORS caching is currently limited and does not yet match EIDORS' cache behavior.
+For reference, we include the EIDORS timing curve (cold vs cached). EIDORS caching is extremely strong; the cold (no cache) curve is the fairer comparison point. PyEIDORS now includes EIDORS-style semantic caching for Jacobian and single-step operators (process + disk), so repeated difference reconstructions on an unchanged background can reuse heavy kernels across runs.
 
 <p align="center">
   <img src="pictures/benchmark_difference_runtime_eidors.png" alt="EIDORS difference benchmark" width="900" />
@@ -229,10 +229,12 @@ For reference, we include the EIDORS timing curve (cold vs cached). EIDORS cachi
 Bench scripts:
 - PyEIDORS: `python scripts/benchmarks/benchmark_difference_runtime.py`
 - EIDORS: `compare_with_Eidors/benchmark_jacobian_runtime.m` (set `benchmark_mode = 'difference'`)
+- Pipeline profiler (time + peak memory by stage): `python scripts/benchmarks/profile_reconstruction_pipeline.py`
 
 Accuracy check (parameter-space vs measurement-space, refinement=12):
 - `delta_rel=8.66e-09`, `rmse_param=4.503e-01`, `rmse_meas=4.503e-01`, `pred_rel=5.10e-10`
 - Reproduce with: `python scripts/benchmarks/benchmark_difference_runtime.py --refinements 12 --compare-solvers --single-step-space measurement`
+- Optional memory stats for difference benchmark CSV: add `--memory-stats`.
 
 CI perf gating compares:
 - baseline profile: parameter-space / iterative options
@@ -245,6 +247,9 @@ Phase-2 hard refactor upgrades this gate to:
 
 Cache architecture and tuning guide:
 - `docs/CACHE_ARCHITECTURE.md`
+- cache CLI utility:
+  - `python scripts/cache/cache_ctl.py status`
+  - `python scripts/cache/cache_ctl.py clear-name --name inv_solve_diff_GN_one_step`
 
 | Elements | Baseline (s) | Measurement-Space (s) | Speedup |
 |---:|---:|---:|---:|
@@ -286,10 +291,12 @@ python scripts/run_reconstruction_unified.py \
   --metadata data/measurements/sample.yaml \
   --reference-col 0 \
   --target-col 2 \
+  --cache-scope both \
+  --cache-dir .pyeidors_cache/v2 \
   --output-root results/real_measurements
 ```
 
-The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
+The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. With unchanged background conductivity, Jacobian and single-step operator are reused from cache on later runs. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
 
 ### 3. Sparse Bayesian Learning
 Run the advanced sparse Bayesian solver (supports GPU):
@@ -315,6 +322,7 @@ Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full
 
 - Synthetic data: `create_synthetic_data` supports setting noise level, anomaly position and conductivity, returning clean/noisy data with SNR metrics.
 - Real measurement data: `MeasurementDataset` helper class builds `EITData` from normalized measurement matrices and metadata, see `docs/MEASUREMENT_DATA_SPEC.md`.
+  - `to_eit_data()` now defaults to read-only shared views (`copy_policy="view"`) to reduce memory copies; use `copy_policy="copy"` when writable arrays are required.
 - Visualization: `EITVisualizer` includes built-in plotting for mesh, conductivity, measurements, reconstruction comparison, and convergence curves, with PNG report output.
 - Testing: `tests/unit/test_complete_eit_system.py` provides end-to-end pipeline validation, `tests/unit/test_optimized_mesh_generator.py` covers geometry and electrode layout.
 - Examples: `examples/basic_usage.py` demonstrates module structure, environment checking, and system initialization steps.
