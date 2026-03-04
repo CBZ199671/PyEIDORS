@@ -2,11 +2,8 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
 from pyeidors.geometry.mesh_loader import MeshLoader
+from tests.utils import run_python
 
 
 def test_load_or_create_mesh_prefers_cached_msh(gmsh_mesh_artifacts):
@@ -20,13 +17,7 @@ mesh = load_or_create_mesh(
 assert mesh.mesh_file == {str(gmsh_mesh_artifacts["msh_file"])!r}
 assert mesh.num_cells() > 0
 """
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "OMP_NUM_THREADS": "1"},
-    )
+    proc = run_python(code)
     assert proc.returncode == 0, proc.stderr
 
 

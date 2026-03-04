@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Backward-compatible Chinese font configuration helpers.
+"""Chinese font configuration helpers.
 
 New code should prefer ``configure_plot_fonts`` from
 ``pyeidors.utils.plot_font_i18n``.
@@ -13,7 +13,7 @@ from .plot_font_i18n import PlotFontConfigResult, configure_plot_fonts
 
 
 def configure_chinese_font() -> PlotFontConfigResult:
-    """Compatibility wrapper that requests Chinese plotting mode.
+    """Wrapper that requests Chinese plotting mode.
 
     Returns:
         PlotFontConfigResult with requested/effective language and selected fonts.

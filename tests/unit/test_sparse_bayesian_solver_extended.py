@@ -101,7 +101,7 @@ def test_reconstruct_absolute_and_difference_modes(eit_system):
     observed = np.linspace(-0.1, 0.2, n_meas)
 
     rec._prepare_jacobian = lambda baseline_values: jacobian.copy()
-    rec._forward_measurement = lambda values: jacobian @ np.asarray(values, dtype=float)
+    rec._forward_measurement = lambda values: np.dot(jacobian, np.asarray(values, dtype=float))
     rec._solve_sparse_map = lambda J, d, n, p: np.full(n_elem, 0.05, dtype=float)
     rec._estimate_noise_level = lambda dv: 1e-3
 

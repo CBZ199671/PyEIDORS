@@ -8,13 +8,18 @@ from typing import Optional, Tuple
 import numpy as np
 from dolfinx import fem
 
+from ...utils.cuqi_imports import suppress_known_cuqi_import_warnings
+from ...utils.numeric_ops import safe_dot
+
 try:
-    import cuqi.pde as cuqi_pde
+    with suppress_known_cuqi_import_warnings():
+        import cuqi.pde as cuqi_pde
 except ImportError:  # pragma: no cover
     cuqi_pde = None
 
 try:
-    from cuqi.model import PDEModel
+    with suppress_known_cuqi_import_warnings():
+        from cuqi.model import PDEModel
 except ImportError:  # pragma: no cover
     PDEModel = None  # type: ignore[assignment]
 
@@ -55,19 +60,23 @@ class EITPDE(_PDEBase):
         self._cached_jacobian: Optional[np.ndarray] = None
         self._cached_sigma_vector: Optional[np.ndarray] = None
 
-    def assemble(self, parameter) -> None:
-        param_array = np.asarray(parameter, dtype=float).ravel()
+    def _validate_parameter_size(self, param_array: np.ndarray) -> None:
         expected = int(self._sigma_function.x.array.size)
         if param_array.size != expected:
             raise ValueError(
                 f"Parameter length mismatch: got {param_array.size}, expected {expected}"
             )
 
+    def _set_sigma(self, param_array: np.ndarray) -> None:
         self._sigma_function.x.array[:] = param_array
         self._current_image = EITImage(elem_data=param_array, fwd_model=self._fwd_model)
-
         self._cached_sigma_vector = param_array.copy()
         self._cached_jacobian = None
+
+    def assemble(self, parameter) -> None:
+        param_array = np.asarray(parameter, dtype=float).ravel()
+        self._validate_parameter_size(param_array)
+        self._set_sigma(param_array)
 
     def solve(self) -> Tuple[object, dict]:
         if self._current_image is None:
@@ -76,11 +85,15 @@ class EITPDE(_PDEBase):
         data, potentials = self._fwd_model.fwd_solve(self._current_image)
         return data, {"potentials": potentials}
 
-    def observe(self, solution) -> np.ndarray:
-        data = solution[0] if isinstance(solution, tuple) else solution
+    @staticmethod
+    def _extract_meas(data) -> np.ndarray:
         if hasattr(data, "meas"):
             return np.asarray(data.meas, dtype=float)
         return np.asarray(data, dtype=float)
+
+    def observe(self, solution) -> np.ndarray:
+        data = solution[0] if isinstance(solution, tuple) else solution
+        return self._extract_meas(data)
 
     def _ensure_sigma(self, wrt: np.ndarray) -> fem.Function:
         wrt_array = np.asarray(wrt, dtype=float).ravel()
@@ -97,21 +110,27 @@ class EITPDE(_PDEBase):
         sigma = self._ensure_sigma(wrt)
         jacobian = self._jacobian_calculator.calculate(sigma)
         direction_vec = np.asarray(direction, dtype=float).ravel()
-        return jacobian.T @ direction_vec
+        return safe_dot(jacobian.T, direction_vec, "EITPDE.gradient_wrt_parameter")
 
-    def jacobian_wrt_parameter(self, wrt):
-        wrt_array = np.asarray(wrt, dtype=float).ravel()
-        if (
+    def _is_cached(self, wrt_array: np.ndarray) -> bool:
+        return (
             self._cached_jacobian is not None
             and self._cached_sigma_vector is not None
             and np.allclose(self._cached_sigma_vector, wrt_array, atol=1e-14, rtol=1e-12)
-        ):
+        )
+
+    def _set_cache(self, wrt_array: np.ndarray, jacobian: np.ndarray) -> None:
+        self._cached_sigma_vector = wrt_array.copy()
+        self._cached_jacobian = jacobian
+
+    def jacobian_wrt_parameter(self, wrt):
+        wrt_array = np.asarray(wrt, dtype=float).ravel()
+        if self._is_cached(wrt_array):
             return self._cached_jacobian
 
         sigma = self._ensure_sigma(wrt_array)
         jacobian = self._jacobian_calculator.calculate(sigma)
-        self._cached_sigma_vector = wrt_array.copy()
-        self._cached_jacobian = jacobian
+        self._set_cache(wrt_array, jacobian)
         return jacobian
 
     @property

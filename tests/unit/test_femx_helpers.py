@@ -1,4 +1,4 @@
-"""Coverage tests for femx compatibility helpers."""
+"""Coverage tests for femx helper functions."""
 
 from __future__ import annotations
 

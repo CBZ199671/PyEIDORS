@@ -90,6 +90,252 @@ def _require_scalar_finite(name: str, value: float, iteration: int | None = None
     )
 
 
+def _extract_measured_vector(measured_data) -> np.ndarray:
+    if hasattr(measured_data, "meas"):
+        return measured_data.meas
+    return measured_data.flatten()
+
+
+def _init_sigma_function(
+    reconstructor,
+    initial_conductivity,
+) -> tuple[fem.Function, float | np.ndarray]:
+    if initial_conductivity is None:
+        initial_conductivity = 1.0
+    sigma_current = fem.Function(reconstructor.fwd_model.V_sigma)
+    if np.isscalar(initial_conductivity):
+        function_set_array(
+            sigma_current,
+            np.full(reconstructor.n_elements, float(initial_conductivity), dtype=float),
+        )
+    else:
+        function_set_array(
+            sigma_current, np.asarray(initial_conductivity).flatten()
+        )
+    return sigma_current, initial_conductivity
+
+
+def _prepare_prior(
+    reconstructor,
+    prior_data: Optional[np.ndarray],
+    initial_conductivity: float | np.ndarray,
+) -> torch.Tensor:
+    if prior_data is not None:
+        reconstructor._prior_data = np.asarray(prior_data).flatten()
+    elif np.isscalar(initial_conductivity):
+        reconstructor._prior_data = np.full(reconstructor.n_elements, initial_conductivity)
+    else:
+        reconstructor._prior_data = np.asarray(initial_conductivity).flatten()
+    return torch.from_numpy(reconstructor._prior_data).to(
+        reconstructor.device,
+        dtype=reconstructor._torch_dtype,
+    )
+
+
+def _compute_residuals(
+    reconstructor,
+    simulated_meas: np.ndarray,
+    meas_torch: torch.Tensor,
+    iteration: int,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    float,
+    float,
+    float,
+]:
+    data_sim_torch = torch.from_numpy(simulated_meas).to(
+        reconstructor.device,
+        dtype=reconstructor._torch_dtype,
+    )
+    residual_torch = data_sim_torch - meas_torch
+    if reconstructor._meas_weight_sqrt is not None:
+        weighted_residual_torch = residual_torch * reconstructor._meas_weight_sqrt
+    else:
+        weighted_residual_torch = residual_torch
+
+    residual_norm_weighted = torch.norm(weighted_residual_torch).item()
+    residual_norm = torch.norm(residual_torch).item()
+    residual_max = torch.max(torch.abs(residual_torch)).item()
+    _require_scalar_finite("residual_norm_weighted", residual_norm_weighted, iteration)
+    _require_scalar_finite("residual_norm", residual_norm, iteration)
+    _require_scalar_finite("residual_max", residual_max, iteration)
+    return (
+        data_sim_torch,
+        residual_torch,
+        weighted_residual_torch,
+        residual_norm_weighted,
+        residual_norm,
+        residual_max,
+    )
+
+
+def _compute_objective(
+    reconstructor,
+    weighted_residual_torch: torch.Tensor,
+    de_current: torch.Tensor,
+    lambda_eff: float,
+    iteration: int,
+) -> tuple[float, float, float, torch.Tensor]:
+    meas_misfit = 0.5 * torch.dot(weighted_residual_torch, weighted_residual_torch).item()
+    RtR_de = torch.mv(reconstructor.R_torch, de_current)
+    prior_misfit = 0.5 * lambda_eff * torch.dot(de_current, RtR_de).item()
+    total_objective = meas_misfit + prior_misfit
+    _require_scalar_finite("meas_misfit", meas_misfit, iteration)
+    _require_scalar_finite("prior_misfit", prior_misfit, iteration)
+    _require_scalar_finite("total_objective", total_objective, iteration)
+    return meas_misfit, prior_misfit, total_objective, RtR_de
+
+
+def _build_linear_system(
+    reconstructor,
+    JTJ: torch.Tensor,
+    JTr: torch.Tensor,
+    de_torch: torch.Tensor,
+    lambda_eff: float,
+    iteration: int,
+    RtR_de: torch.Tensor | None = None,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    A = JTJ + lambda_eff * reconstructor.R_torch
+    if reconstructor.use_prior_term:
+        if RtR_de is None:
+            RtR_de = torch.mv(reconstructor.R_torch, de_torch)
+        b = -(JTr + lambda_eff * RtR_de)
+    else:
+        b = -JTr
+    _require_finite("A", A, iteration)
+    _require_finite("b", b, iteration)
+    return A, b
+
+
+def _solve_linear_system(
+    reconstructor,
+    A: torch.Tensor,
+    b: torch.Tensor,
+    JTJ: torch.Tensor,
+    iteration: int,
+) -> tuple[torch.Tensor, float]:
+    try:
+        delta_sigma_torch = torch.linalg.solve(A, b)
+    except RuntimeError:
+        A_regularized = JTJ + (reconstructor.regularization_param * 10) * reconstructor.R_torch
+        _require_finite("A_regularized", A_regularized, iteration)
+        delta_sigma_torch = torch.linalg.solve(A_regularized, b)
+    _require_finite("delta_sigma_torch", delta_sigma_torch, iteration)
+    delta_norm = torch.norm(delta_sigma_torch).item()
+    _require_scalar_finite("delta_norm", delta_norm, iteration)
+    return delta_sigma_torch, delta_norm
+
+
+def _select_step_size(
+    reconstructor,
+    iteration: int,
+    sigma_current: fem.Function,
+    delta_sigma_torch: torch.Tensor,
+    meas_torch: torch.Tensor,
+    residual_norm_weighted: float,
+    prior_torch: torch.Tensor,
+    lambda_eff: float,
+) -> float:
+    if reconstructor.step_schedule is not None and iteration < len(reconstructor.step_schedule):
+        optimal_step_size = float(reconstructor.step_schedule[iteration])
+    else:
+        optimal_step_size = reconstructor._line_search_torch(
+            sigma_current,
+            delta_sigma_torch,
+            meas_torch,
+            residual_norm_weighted,
+            reconstructor._meas_weight_sqrt,
+            prior_torch=prior_torch,
+            lambda_eff=lambda_eff,
+        )
+        if reconstructor.min_step is not None and optimal_step_size < reconstructor.min_step:
+            optimal_step_size = reconstructor.min_step
+    _require_scalar_finite("optimal_step_size", optimal_step_size, iteration)
+    return optimal_step_size
+
+
+def _maybe_rollback(
+    reconstructor,
+    sigma_current: fem.Function,
+    sigma_old_values: np.ndarray,
+    residual_norm: float,
+    prev_residual: Optional[float],
+    residual_history: list[float],
+    sigma_change_history: list[float],
+    consecutive_rollbacks: int,
+    max_consecutive_rollbacks: int,
+) -> tuple[bool, bool, int]:
+    if prev_residual is None or residual_norm <= prev_residual:
+        return False, False, consecutive_rollbacks
+
+    consecutive_rollbacks += 1
+    if reconstructor.verbose:
+        print(
+            f"[WARN] residual increased ({residual_norm:.3e} > {prev_residual:.3e}), "
+            f"rolling back step ({consecutive_rollbacks}/{max_consecutive_rollbacks})"
+        )
+    function_set_array(sigma_current, sigma_old_values)
+    residual_history[-1] = prev_residual
+    sigma_change_history[-1] = 0.0
+
+    if consecutive_rollbacks >= max_consecutive_rollbacks:
+        if reconstructor.verbose:
+            print(f"[STOP] {max_consecutive_rollbacks} consecutive rollbacks, terminating early")
+        return True, True, consecutive_rollbacks
+
+    return True, False, consecutive_rollbacks
+
+
+def _record_iteration_log(
+    iteration_logs: list[dict],
+    *,
+    iteration: int,
+    residual_norm: float,
+    residual_norm_weighted: float,
+    rel_residual: float,
+    rel_residual_weighted: float | None,
+    residual_max: float,
+    meas_norm: float,
+    pred_norm: float,
+    meas_max: float,
+    pred_max: float,
+    jtr_norm: float,
+    delta_norm: float,
+    optimal_step_size: float,
+    lambda_eff: float,
+    relative_change: float,
+    res_drop: float | None,
+    meas_misfit: float,
+    prior_misfit: float,
+    total_objective: float,
+) -> None:
+    iteration_logs.append(
+        {
+            "iteration": iteration,
+            "residual": residual_norm,
+            "residual_weighted": residual_norm_weighted,
+            "relative_residual": rel_residual,
+            "relative_residual_weighted": rel_residual_weighted,
+            "residual_max": residual_max,
+            "meas_norm": meas_norm,
+            "pred_norm": pred_norm,
+            "meas_max": meas_max,
+            "pred_max": pred_max,
+            "JTr_norm": jtr_norm,
+            "delta_norm": delta_norm,
+            "step": optimal_step_size,
+            "lambda_eff": lambda_eff,
+            "relative_change": relative_change,
+            "res_drop": res_drop,
+            "meas_misfit": meas_misfit,
+            "prior_misfit": prior_misfit,
+            "total_objective": total_objective,
+        }
+    )
+
+
 def run_reconstruction(
     reconstructor,
     measured_data: Union[object, np.ndarray],
@@ -103,10 +349,7 @@ def run_reconstruction(
     reconstructor._meas_weight_sqrt = None
     reconstructor._baseline_measurement = None
 
-    if hasattr(measured_data, "meas"):
-        meas_vector = measured_data.meas
-    else:
-        meas_vector = measured_data.flatten()
+    meas_vector = _extract_measured_vector(measured_data)
 
     if len(meas_vector) != reconstructor.n_measurements:
         raise ValueError(
@@ -124,32 +367,16 @@ def run_reconstruction(
     _require_scalar_finite("meas_max", meas_max)
     meas_weighted_norm = None
 
-    if initial_conductivity is None:
-        initial_conductivity = 1.0
-    sigma_current = fem.Function(reconstructor.fwd_model.V_sigma)
-    if np.isscalar(initial_conductivity):
-        function_set_array(
-            sigma_current,
-            np.full(reconstructor.n_elements, float(initial_conductivity), dtype=float),
-        )
-    else:
-        function_set_array(sigma_current, np.asarray(initial_conductivity).flatten())
+    sigma_current, initial_conductivity = _init_sigma_function(
+        reconstructor, initial_conductivity
+    )
     reconstructor._ensure_measurement_weights(sigma_current)
 
     if reconstructor._meas_weight_sqrt is not None:
         meas_weighted_norm = torch.norm(meas_torch * reconstructor._meas_weight_sqrt).item()
         _require_scalar_finite("meas_weighted_norm", meas_weighted_norm)
 
-    if prior_data is not None:
-        reconstructor._prior_data = np.asarray(prior_data).flatten()
-    elif np.isscalar(initial_conductivity):
-        reconstructor._prior_data = np.full(reconstructor.n_elements, initial_conductivity)
-    else:
-        reconstructor._prior_data = np.asarray(initial_conductivity).flatten()
-    prior_torch = torch.from_numpy(reconstructor._prior_data).to(
-        reconstructor.device,
-        dtype=reconstructor._torch_dtype,
-    )
+    prior_torch = _prepare_prior(reconstructor, prior_data, initial_conductivity)
 
     residual_history = []
     sigma_change_history = []
@@ -178,36 +405,33 @@ def run_reconstruction(
             data_simulated, _ = reconstructor.fwd_model.fwd_solve(img_current)
             _require_finite("data_simulated.meas", data_simulated.meas, iteration)
 
-            data_sim_torch = torch.from_numpy(data_simulated.meas).to(
-                reconstructor.device,
-                dtype=reconstructor._torch_dtype,
+            lambda_eff = reconstructor.regularization_param
+            (
+                data_sim_torch,
+                residual_torch,
+                weighted_residual_torch,
+                residual_norm_weighted,
+                residual_norm,
+                residual_max,
+            ) = _compute_residuals(
+                reconstructor,
+                data_simulated.meas,
+                meas_torch,
+                iteration,
             )
-            residual_torch = data_sim_torch - meas_torch
-            if reconstructor._meas_weight_sqrt is not None:
-                weighted_residual_torch = residual_torch * reconstructor._meas_weight_sqrt
-            else:
-                weighted_residual_torch = residual_torch
-
-            residual_norm_weighted = torch.norm(weighted_residual_torch).item()
-            residual_norm = torch.norm(residual_torch).item()
-            residual_max = torch.max(torch.abs(residual_torch)).item()
-            _require_scalar_finite("residual_norm_weighted", residual_norm_weighted, iteration)
-            _require_scalar_finite("residual_norm", residual_norm, iteration)
-            _require_scalar_finite("residual_max", residual_max, iteration)
 
             sigma_vec_torch = torch.from_numpy(sigma_array).to(
                 reconstructor.device,
                 dtype=reconstructor._torch_dtype,
             )
             de_current = sigma_vec_torch - prior_torch
-            meas_misfit = 0.5 * torch.dot(weighted_residual_torch, weighted_residual_torch).item()
-            lambda_eff = reconstructor.regularization_param
-            RtR_de = torch.mv(reconstructor.R_torch, de_current)
-            prior_misfit = 0.5 * lambda_eff * torch.dot(de_current, RtR_de).item()
-            total_objective = meas_misfit + prior_misfit
-            _require_scalar_finite("meas_misfit", meas_misfit, iteration)
-            _require_scalar_finite("prior_misfit", prior_misfit, iteration)
-            _require_scalar_finite("total_objective", total_objective, iteration)
+            meas_misfit, prior_misfit, total_objective, RtR_de = _compute_objective(
+                reconstructor,
+                weighted_residual_torch,
+                de_current,
+                lambda_eff,
+                iteration,
+            )
 
             residual_history.append(residual_norm)
             res_drop = None if prev_residual is None else prev_residual - residual_norm
@@ -231,19 +455,16 @@ def run_reconstruction(
             JTJ = torch.mm(J_weighted.t(), J_weighted)
             JTr = torch.mv(J_weighted.t(), weighted_residual_torch)
 
-            sigma_current_torch = torch.from_numpy(sigma_array).to(
-                reconstructor.device,
-                dtype=reconstructor._torch_dtype,
+            de_torch = de_current
+            A, b = _build_linear_system(
+                reconstructor,
+                JTJ,
+                JTr,
+                de_torch,
+                lambda_eff,
+                iteration,
+                RtR_de=RtR_de,
             )
-            de_torch = sigma_current_torch - prior_torch
-            A = JTJ + lambda_eff * reconstructor.R_torch
-            if reconstructor.use_prior_term:
-                RtR_de = torch.mv(reconstructor.R_torch, de_torch)
-                b = -(JTr + lambda_eff * RtR_de)
-            else:
-                b = -JTr
-            _require_finite("A", A, iteration)
-            _require_finite("b", b, iteration)
 
             pred_norm = torch.norm(data_sim_torch).item()
             pred_max = torch.max(torch.abs(data_sim_torch)).item()
@@ -261,31 +482,24 @@ def run_reconstruction(
             if rel_residual_weighted is not None:
                 _require_scalar_finite("rel_residual_weighted", rel_residual_weighted, iteration)
 
-            try:
-                delta_sigma_torch = torch.linalg.solve(A, b)
-            except RuntimeError:
-                A_regularized = JTJ + (reconstructor.regularization_param * 10) * reconstructor.R_torch
-                _require_finite("A_regularized", A_regularized, iteration)
-                delta_sigma_torch = torch.linalg.solve(A_regularized, b)
-            _require_finite("delta_sigma_torch", delta_sigma_torch, iteration)
-            delta_norm = torch.norm(delta_sigma_torch).item()
-            _require_scalar_finite("delta_norm", delta_norm, iteration)
+            delta_sigma_torch, delta_norm = _solve_linear_system(
+                reconstructor,
+                A,
+                b,
+                JTJ,
+                iteration,
+            )
 
-            if reconstructor.step_schedule is not None and iteration < len(reconstructor.step_schedule):
-                optimal_step_size = float(reconstructor.step_schedule[iteration])
-            else:
-                optimal_step_size = reconstructor._line_search_torch(
-                    sigma_current,
-                    delta_sigma_torch,
-                    meas_torch,
-                    residual_norm_weighted,
-                    reconstructor._meas_weight_sqrt,
-                    prior_torch=prior_torch,
-                    lambda_eff=lambda_eff,
-                )
-                if reconstructor.min_step is not None and optimal_step_size < reconstructor.min_step:
-                    optimal_step_size = reconstructor.min_step
-            _require_scalar_finite("optimal_step_size", optimal_step_size, iteration)
+            optimal_step_size = _select_step_size(
+                reconstructor,
+                iteration,
+                sigma_current,
+                delta_sigma_torch,
+                meas_torch,
+                residual_norm_weighted,
+                prior_torch,
+                lambda_eff,
+            )
 
             sigma_old_values = sigma_array.copy()
             sigma_array[:] += optimal_step_size * delta_sigma_torch.cpu().numpy()
@@ -313,20 +527,19 @@ def run_reconstruction(
             _require_scalar_finite("sigma_change", sigma_change, iteration)
             _require_scalar_finite("relative_change", relative_change, iteration)
 
-            if prev_residual is not None and residual_norm > prev_residual:
-                consecutive_rollbacks += 1
-                if reconstructor.verbose:
-                    print(
-                        f"[WARN] residual increased ({residual_norm:.3e} > {prev_residual:.3e}), "
-                        f"rolling back step ({consecutive_rollbacks}/{max_consecutive_rollbacks})"
-                    )
-                function_set_array(sigma_current, sigma_old_values)
-                residual_history[-1] = prev_residual
-                sigma_change_history[-1] = 0.0
-
-                if consecutive_rollbacks >= max_consecutive_rollbacks:
-                    if reconstructor.verbose:
-                        print(f"[STOP] {max_consecutive_rollbacks} consecutive rollbacks, terminating early")
+            rolled_back, should_stop, consecutive_rollbacks = _maybe_rollback(
+                reconstructor,
+                sigma_current,
+                sigma_old_values,
+                residual_norm,
+                prev_residual,
+                residual_history,
+                sigma_change_history,
+                consecutive_rollbacks,
+                max_consecutive_rollbacks,
+            )
+            if rolled_back:
+                if should_stop:
                     break
                 continue
 
@@ -335,28 +548,27 @@ def run_reconstruction(
             if record_conductivity_history and (iteration + 1) % history_stride == 0:
                 conductivity_history.append(function_get_array(sigma_current).copy())
 
-            iteration_logs.append(
-                {
-                    "iteration": iteration,
-                    "residual": residual_norm,
-                    "residual_weighted": residual_norm_weighted,
-                    "relative_residual": rel_residual,
-                    "relative_residual_weighted": rel_residual_weighted,
-                    "residual_max": residual_max,
-                    "meas_norm": meas_norm,
-                    "pred_norm": pred_norm,
-                    "meas_max": meas_max,
-                    "pred_max": pred_max,
-                    "JTr_norm": jtr_norm,
-                    "delta_norm": delta_norm,
-                    "step": optimal_step_size,
-                    "lambda_eff": lambda_eff,
-                    "relative_change": relative_change,
-                    "res_drop": res_drop,
-                    "meas_misfit": meas_misfit,
-                    "prior_misfit": prior_misfit,
-                    "total_objective": total_objective,
-                }
+            _record_iteration_log(
+                iteration_logs,
+                iteration=iteration,
+                residual_norm=residual_norm,
+                residual_norm_weighted=residual_norm_weighted,
+                rel_residual=rel_residual,
+                rel_residual_weighted=rel_residual_weighted,
+                residual_max=residual_max,
+                meas_norm=meas_norm,
+                pred_norm=pred_norm,
+                meas_max=meas_max,
+                pred_max=pred_max,
+                jtr_norm=jtr_norm,
+                delta_norm=delta_norm,
+                optimal_step_size=optimal_step_size,
+                lambda_eff=lambda_eff,
+                relative_change=relative_change,
+                res_drop=res_drop,
+                meas_misfit=meas_misfit,
+                prior_misfit=prior_misfit,
+                total_objective=total_objective,
             )
             prev_residual = residual_norm
 

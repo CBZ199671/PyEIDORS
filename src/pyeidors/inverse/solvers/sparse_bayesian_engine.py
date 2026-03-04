@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...data.structures import EITData, EITImage
+from ...utils.cuqi_imports import suppress_known_cuqi_import_warnings
 from .sparse_bayesian_backends import SparseBayesianBackendMixin
 from .eit_pde import EITPDE, create_pde_model
 from .sparse_projection import (
@@ -17,9 +18,10 @@ from .sparse_projection import (
 from .sparse_runtime import run_sparse_reconstruction
 
 try:  # pragma: no cover - optional dependency guard
-    from cuqi.distribution import Gaussian, SmoothedLaplace
-    from cuqi.model import LinearModel
-    from cuqi.problem import BayesianProblem
+    with suppress_known_cuqi_import_warnings():
+        from cuqi.distribution import Gaussian, SmoothedLaplace
+        from cuqi.model import LinearModel
+        from cuqi.problem import BayesianProblem
 
     _CUQI_AVAILABLE = True
 except ImportError:  # pragma: no cover

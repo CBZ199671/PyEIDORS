@@ -55,9 +55,9 @@ python scripts/run_cem_16e_square_test.py --skip-inverse
 
 For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
 
-Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
+Historical Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
 
-> Hard-cut note: the runtime is now **FEniCSx-only** in `src/pyeidors/**`. Legacy DOLFIN compatibility aliases are removed.
+> Hard-cut note: the runtime is now **FEniCSx-only** in `src/pyeidors/**`. DOLFIN aliases are removed.
 
 ### Phase-2 API Notes (Breaking)
 
@@ -189,7 +189,7 @@ PyEIDORS now uses explicit drive semantics instead of a single ambiguous amplitu
 
 In `line_current_density` mode, physical electrode length is computed from mesh boundary integration and `geometry_scale_to_m`, with optional explicit override via `electrode_length_m_override`.
 
-Migration details and old/new field mapping: `docs/MIGRATION_CURRENT_UNITS.md`.
+Current drive semantics and metadata fields are defined in `docs/MEASUREMENT_DATA_SPEC.md`.
 
 ### Key Components
 
@@ -325,10 +325,9 @@ Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full
 
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
-- **Phase-2 Migration Guide**: `docs/MIGRATION_PHASE2.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
-- **Docker Notes (Legacy archive)**: `docs/archive/DOCKER_LEGACY.md`
+- **Docker Notes (Historical archive)**: `docs/archive/DOCKER_LEGACY.md`
 
 ## Environment Note
 

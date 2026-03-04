@@ -41,7 +41,7 @@ class ReconstructionResult:
         return float(np.mean(self.residual ** 2))
 
     def to_dict(self) -> Dict[str, Any]:
-        """Convert to dictionary for compatibility with legacy scripts."""
+        """Convert to dictionary for script-facing serialization."""
 
         data = {
             "mode": self.mode,

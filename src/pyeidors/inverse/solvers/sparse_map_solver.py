@@ -6,6 +6,109 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
+from ...utils.numeric_ops import safe_dot
+
+
+def _resolve_projection(reconstructor, jacobian: np.ndarray):
+    linear_matrix = jacobian
+    target_dim = reconstructor.n_elements
+    basis = None
+    U_k = None
+    s_k = None
+
+    if reconstructor.config.subspace_rank:
+        desired_rank = int(reconstructor.config.subspace_rank)
+        max_rank = min(jacobian.shape)
+        if desired_rank < max_rank:
+            if (
+                reconstructor._cached_basis is None
+                or reconstructor._cached_reduced_matrix is None
+                or reconstructor._cached_U is None
+                or reconstructor._cached_singular is None
+            ):
+                basis, reduced, U_k, s_k = reconstructor._compute_projection(
+                    linear_matrix, desired_rank
+                )
+                reconstructor._cached_basis = basis
+                reconstructor._cached_reduced_matrix = reduced
+                reconstructor._cached_U = U_k
+                reconstructor._cached_singular = s_k
+            else:
+                basis = reconstructor._cached_basis
+                reduced = reconstructor._cached_reduced_matrix
+                U_k = reconstructor._cached_U
+                s_k = reconstructor._cached_singular
+            linear_matrix = reduced
+            target_dim = linear_matrix.shape[1]
+
+    return linear_matrix, target_dim, basis, U_k, s_k
+
+
+def _coarse_warm_start(
+    basis: Optional[np.ndarray],
+    coarse_init: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    if coarse_init is None:
+        return None
+    if basis is None:
+        return coarse_init
+    return safe_dot(basis.T, coarse_init, "solve_sparse_map.warm_start_subspace")
+
+
+def _linear_warm_start_subspace(
+    U_k: np.ndarray,
+    s_k: np.ndarray,
+    data_vector: np.ndarray,
+) -> np.ndarray:
+    numerator = safe_dot(U_k.T, data_vector, "solve_sparse_map.linear_warm_start_numerator")
+    warm_start = np.zeros_like(numerator)
+    mask = s_k > 1e-12
+    warm_start[mask] = numerator[mask] / s_k[mask]
+    return warm_start
+
+
+def _linear_warm_start_fullspace(
+    linear_matrix: np.ndarray,
+    data_vector: np.ndarray,
+) -> np.ndarray:
+    U, s, Vt = np.linalg.svd(linear_matrix, full_matrices=False)
+    coeff = safe_dot(U.T, data_vector, "solve_sparse_map.fullspace_coeff")
+    mask = s > 1e-12
+    coeff[mask] /= s[mask]
+    coeff[~mask] = 0.0
+    return safe_dot(Vt.T, coeff, "solve_sparse_map.fullspace_warm_start")
+
+
+def _resolve_warm_start(
+    *,
+    reconstructor,
+    basis: Optional[np.ndarray],
+    coarse_init: Optional[np.ndarray],
+    data_vector: np.ndarray,
+    hierarchy: List[Tuple[int, List[np.ndarray]]],
+    linear_matrix: np.ndarray,
+    U_k: Optional[np.ndarray],
+    s_k: Optional[np.ndarray],
+) -> Optional[np.ndarray]:
+    warm_start = _coarse_warm_start(basis, coarse_init)
+    if warm_start is not None or not reconstructor.config.use_linear_warm_start:
+        return warm_start
+
+    if basis is not None and U_k is not None and s_k is not None:
+        return _linear_warm_start_subspace(U_k, s_k, data_vector)
+
+    if basis is None and not hierarchy:
+        return _linear_warm_start_fullspace(linear_matrix, data_vector)
+
+    return None
+
+
+def _resolve_solver_type(config, hierarchy: List[Tuple[int, List[np.ndarray]]]) -> str:
+    solver_type = str(config.solver).lower()
+    if hierarchy and solver_type in {"fista", "irls"}:
+        return "map"
+    return solver_type
+
 
 def solve_sparse_map(
     reconstructor,
@@ -29,68 +132,27 @@ def solve_sparse_map(
             coarse_init,
         )
 
-    linear_matrix = jacobian
-    target_dim = reconstructor.n_elements
-    basis = None
-    U_k = None
-    s_k = None
-
-    if reconstructor.config.subspace_rank:
-        desired_rank = int(reconstructor.config.subspace_rank)
-        max_rank = min(jacobian.shape)
-        if desired_rank < max_rank:
-            if (
-                reconstructor._cached_basis is None
-                or reconstructor._cached_reduced_matrix is None
-                or reconstructor._cached_U is None
-                or reconstructor._cached_singular is None
-            ):
-                basis, reduced, U_k, s_k = reconstructor._compute_projection(linear_matrix, desired_rank)
-                reconstructor._cached_basis = basis
-                reconstructor._cached_reduced_matrix = reduced
-                reconstructor._cached_U = U_k
-                reconstructor._cached_singular = s_k
-            else:
-                basis = reconstructor._cached_basis
-                reduced = reconstructor._cached_reduced_matrix
-                U_k = reconstructor._cached_U
-                s_k = reconstructor._cached_singular
-            linear_matrix = reduced
-            target_dim = linear_matrix.shape[1]
+    linear_matrix, target_dim, basis, U_k, s_k = _resolve_projection(
+        reconstructor, jacobian
+    )
 
     model = reconstructor._linear_model(linear_matrix)
     x = reconstructor._sparse_prior(target_dim, prior_scale)
     y = reconstructor._gaussian_likelihood(model @ x, noise_sigma)
     problem = reconstructor._bayesian_problem(y, x).set_data(y=data_vector)
 
-    warm_start = None
-    if basis is not None and coarse_init is not None:
-        warm_start = basis.T @ coarse_init
-    elif basis is None and coarse_init is not None:
-        warm_start = coarse_init
+    warm_start = _resolve_warm_start(
+        reconstructor=reconstructor,
+        basis=basis,
+        coarse_init=coarse_init,
+        data_vector=data_vector,
+        hierarchy=hierarchy,
+        linear_matrix=linear_matrix,
+        U_k=U_k,
+        s_k=s_k,
+    )
 
-    if (
-        warm_start is None
-        and reconstructor.config.use_linear_warm_start
-        and basis is not None
-        and U_k is not None
-        and s_k is not None
-    ):
-        numerator = U_k.T @ data_vector
-        warm_start = np.zeros_like(numerator)
-        mask = s_k > 1e-12
-        warm_start[mask] = numerator[mask] / s_k[mask]
-    elif warm_start is None and reconstructor.config.use_linear_warm_start and basis is None and not hierarchy:
-        U, s, Vt = np.linalg.svd(linear_matrix, full_matrices=False)
-        coeff = U.T @ data_vector
-        mask = s > 1e-12
-        coeff[mask] /= s[mask]
-        coeff[~mask] = 0.0
-        warm_start = Vt.T @ coeff
-
-    solver_type = reconstructor.config.solver.lower()
-    if hierarchy and solver_type in {"fista", "irls"}:
-        solver_type = "map"
+    solver_type = _resolve_solver_type(reconstructor.config, hierarchy)
     if solver_type == "map":
         map_numpy = reconstructor._solve_with_cuqi_map(problem, warm_start)
     elif solver_type == "fista":
@@ -112,7 +174,11 @@ def solve_sparse_map(
     else:
         raise ValueError(f"Unknown solver type: {reconstructor.config.solver}")
 
-    solution_param = basis @ map_numpy if basis is not None else map_numpy
+    solution_param = (
+        safe_dot(basis, map_numpy, "solve_sparse_map.solution_projection")
+        if basis is not None
+        else map_numpy
+    )
     solution_param = multilevel_correction(
         reconstructor,
         jacobian,
@@ -184,8 +250,11 @@ def multilevel_correction(
     tol = max(float(reconstructor.config.refinement_gradient_tol), 0.0)
 
     for _ in range(iterations):
-        residual = jacobian @ result - data_vector
-        grad = inv_noise_var * (jacobian.T @ residual) + lambda_reg * result
+        residual = safe_dot(jacobian, result, "multilevel_correction.residual") - data_vector
+        grad = (
+            inv_noise_var * safe_dot(jacobian.T, residual, "multilevel_correction.grad")
+            + lambda_reg * result
+        )
         max_update = 0.0
 
         for size, groups in hierarchy:
@@ -202,7 +271,8 @@ def multilevel_correction(
             if tol > 0.0 and np.linalg.norm(coarse_grad, ord=np.inf) <= tol:
                 continue
 
-            H = inv_noise_var * (A_c.T @ A_c) + lambda_reg * np.diag(group_sizes)
+            hessian = safe_dot(A_c.T, A_c, "multilevel_correction.hessian")
+            H = inv_noise_var * hessian + lambda_reg * np.diag(group_sizes)
             rhs = -coarse_grad
             try:
                 delta = np.linalg.solve(H, rhs)
@@ -218,8 +288,11 @@ def multilevel_correction(
             for g_idx, idx in enumerate(groups):
                 result[idx] += delta[g_idx]
 
-            residual += A_c @ delta
-            grad = inv_noise_var * (jacobian.T @ residual) + lambda_reg * result
+            residual += safe_dot(A_c, delta, "multilevel_correction.residual_update")
+            grad = (
+                inv_noise_var * safe_dot(jacobian.T, residual, "multilevel_correction.grad_update")
+                + lambda_reg * result
+            )
 
         if tol > 0.0 and max_update <= tol:
             break
@@ -247,7 +320,7 @@ def block_refinement(
     inv_noise_var = 1.0 / max(noise_sigma * noise_sigma, 1e-18)
     tol = max(float(reconstructor.config.refinement_gradient_tol), 0.0)
     result = solution.copy()
-    residual = jacobian @ result - data_vector
+    residual = safe_dot(jacobian, result, "block_refinement.residual") - data_vector
 
     for _ in range(iterations):
         updated = False
@@ -256,7 +329,10 @@ def block_refinement(
 
         while passes < max_passes:
             passes += 1
-            grad = inv_noise_var * (jacobian.T @ residual) + lambda_reg * result
+            grad = (
+                inv_noise_var * safe_dot(jacobian.T, residual, "block_refinement.grad")
+                + lambda_reg * result
+            )
             blocks: List[Tuple[float, int, int]] = []
 
             for start in range(0, n, block_size):
@@ -280,8 +356,10 @@ def block_refinement(
                 if J_block.size == 0:
                     continue
 
-                M = inv_noise_var * (J_block.T @ J_block) + lambda_reg * np.eye(stop - start)
-                rhs = -inv_noise_var * (J_block.T @ residual) - lambda_reg * result[idx]
+                block_hessian = safe_dot(J_block.T, J_block, "block_refinement.block_hessian")
+                M = inv_noise_var * block_hessian + lambda_reg * np.eye(stop - start)
+                block_residual = safe_dot(J_block.T, residual, "block_refinement.block_residual")
+                rhs = -inv_noise_var * block_residual - lambda_reg * result[idx]
                 try:
                     delta = np.linalg.solve(M, rhs)
                 except np.linalg.LinAlgError:
@@ -293,7 +371,7 @@ def block_refinement(
                     continue
 
                 result[idx] += delta
-                residual += J_block @ delta
+                residual += safe_dot(J_block, delta, "block_refinement.residual_update")
                 updated = True
                 block_used = True
                 break

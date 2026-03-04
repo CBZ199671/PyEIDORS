@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark comparison: legacy DirectJacobian vs new EidorsStyleAdjointJacobian (CPU/torch).
+"""Benchmark comparison: DirectJacobian vs EidorsStyleAdjointJacobian (CPU/torch).
 
 Output:
 - Computation time

@@ -64,6 +64,20 @@ run_import_checks() {
   "$PYTHON_BIN" - <<'PY'
 import importlib
 import sys
+import warnings
+
+warnings.filterwarnings(
+    action="ignore",
+    category=UserWarning,
+    message=r"pkg_resources is deprecated as an API",
+    module=r"(pkg_resources(\..*)?|setuptools\._vendor\.pkg_resources(\..*)?|cuqi(\..*)?)",
+)
+warnings.filterwarnings(
+    action="ignore",
+    category=PendingDeprecationWarning,
+    message=r"Importing from numpy\.matlib is deprecated",
+    module=r"(numpy\.matlib(\..*)?|cuqi(\..*)?)",
+)
 
 required = ["dolfinx", "torch", "cuqi", "numpy", "scipy", "pyeidors"]
 missing = []

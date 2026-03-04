@@ -39,7 +39,7 @@ To maintain consistency with `PatternConfig` and `StimMeasPatternManager` intern
 | `sampling_rate_hz` | `float` | `1000.0` | (Optional) Sampling frequency for logging and tracking. |
 | `notes` | `str` | `"Experiment #1, 20uA"` | (Optional) Additional notes. |
 
-> Note: These fields correspond to all required information in `PatternConfig`, allowing direct reconstruction of the same excitation/measurement patterns upon loading. Additional hardware-related parameters may be added to `metadata`, but the meanings of the above fields should not be modified. The legacy field `amplitude` has been removed.
+> Note: These fields correspond to all required information in `PatternConfig`, allowing direct reconstruction of the same excitation/measurement patterns upon loading. Additional hardware-related parameters may be added to `metadata`, but the meanings of the above fields should not be modified. The obsolete field `amplitude` is unsupported.
 
 ## 3. Measurement Matrix Ordering
 

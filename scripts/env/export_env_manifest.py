@@ -10,6 +10,7 @@ import importlib.metadata as ilm
 import json
 import platform
 import sys
+import warnings
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -24,6 +25,23 @@ PLATFORM_MAP = {
     "linux-x86_64": ("linux", "x86_64"),
     "linux-aarch64": ("linux", "aarch64"),
 }
+
+
+def apply_known_cuqi_warning_filters() -> None:
+    """Suppress known CUQI import warnings while collecting manifest info."""
+
+    warnings.filterwarnings(
+        action="ignore",
+        category=UserWarning,
+        message=r"pkg_resources is deprecated as an API",
+        module=r"(pkg_resources(\..*)?|setuptools\._vendor\.pkg_resources(\..*)?|cuqi(\..*)?)",
+    )
+    warnings.filterwarnings(
+        action="ignore",
+        category=PendingDeprecationWarning,
+        message=r"Importing from numpy\.matlib is deprecated",
+        module=r"(numpy\.matlib(\..*)?|cuqi(\..*)?)",
+    )
 
 
 def repo_root() -> Path:
@@ -71,6 +89,7 @@ def platform_details(platform_id: Optional[str] = None) -> Dict[str, str]:
 
 
 def package_version(module_name: str, dist_name: Optional[str] = None) -> str:
+    apply_known_cuqi_warning_filters()
     mod = importlib.import_module(module_name)
     version = getattr(mod, "__version__", None)
     if isinstance(version, str) and version:

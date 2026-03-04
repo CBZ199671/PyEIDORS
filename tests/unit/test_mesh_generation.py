@@ -2,15 +2,12 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
 import numpy as np
 from dolfinx import mesh as dmesh
 from mpi4py import MPI
 
 from pyeidors.femx import build_eit_mesh, cell_midpoints, mesh_cell_vertices, mesh_coordinates
+from tests.utils import run_python
 
 
 def test_gmsh_generated_files_exist(gmsh_mesh_artifacts):
@@ -28,13 +25,7 @@ assert mesh.num_vertices() > 0
 assert len(mesh.association_table) >= 8
 print(mesh.mesh_file)
 """
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "OMP_NUM_THREADS": "1"},
-    )
+    proc = run_python(code)
     assert proc.returncode == 0, proc.stderr
 
 
@@ -50,13 +41,7 @@ assert mesh.num_cells() > 0
 assert facet_tags is not None
 assert set(association.keys()) >= {{\"domain\", \"gaps\"}}
 """
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "OMP_NUM_THREADS": "1"},
-    )
+    proc = run_python(code)
     assert proc.returncode == 0, proc.stderr
 
 

@@ -42,7 +42,7 @@ def _build_pde_stub(eit_system):
 
     def _fake_fwd_solve(image):
         sigma = np.asarray(image.elem_data, dtype=float).ravel()
-        meas = np.eye(n_meas, n_elem) @ sigma
+        meas = np.dot(np.eye(n_meas, n_elem), sigma)
         return SimpleNamespace(meas=meas), {"U": np.zeros((1, 1))}
 
     pde._fwd_model.fwd_solve = _fake_fwd_solve

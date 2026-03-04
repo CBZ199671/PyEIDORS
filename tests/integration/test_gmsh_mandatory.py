@@ -6,11 +6,9 @@ abort on one platform does not crash the whole pytest worker.
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
 from pathlib import Path
 
+from tests.utils import run_python
 
 def test_gmsh_create_eit_mesh_subprocess(tmp_path):
     mesh_dir = tmp_path / "gmsh_subprocess"
@@ -32,13 +30,7 @@ assert mesh.num_vertices() > 0
 print(mesh.mesh_file)
 """
 
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "OMP_NUM_THREADS": "1"},
-    )
+    proc = run_python(code)
     assert proc.returncode == 0, f"gmsh subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
 
     msh_file = mesh_dir / f"{mesh_name}.msh"

@@ -227,5 +227,4 @@ Rules:
 ## Scope boundary
 
 - This document covers the supported runtime path: **FEniCSx-only** + Nix + uv.
-- Legacy Docker notes are archived under `docs/archive/DOCKER_LEGACY.md`.
-- Breaking API/name changes from the hard cutover are listed in `docs/MIGRATION_PHASE2.md`.
+- Historical Docker notes are archived under `docs/archive/DOCKER_LEGACY.md`.

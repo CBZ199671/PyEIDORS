@@ -7,7 +7,7 @@ This document describes the electrode positioning convention used in PyEIDORS, w
 ### Default Behavior
 - **First electrode center**: Precisely at Y-axis positive direction (90°)
 - **Numbering order**: Counter-clockwise
-- **Compatible**: Works with any number of electrodes (8, 16, 32, ...)
+- **Scalable**: Works with any number of electrodes (8, 16, 32, ...)
 
 ### Algorithm Implementation
 
@@ -95,7 +95,7 @@ This convention provides several benefits:
 1. **Intuitive**: First electrode at "top" (12 o'clock position)
 2. **Medical standard**: Consistent with medical EIT device conventions
 3. **Mathematical clarity**: Aligns with standard polar coordinate conventions
-4. **Backward compatible**: `rotation` parameter allows adjustment if needed
+4. **Flexible orientation**: `rotation` parameter allows adjustment if needed
 
 ## Migration from X-axis Convention
 

@@ -1,6 +1,6 @@
 """FEM helpers for the DOLFINx-only runtime."""
 
-from .compat import (
+from .helpers import (
     build_eit_mesh,
     cell_midpoints,
     create_ds_measure,

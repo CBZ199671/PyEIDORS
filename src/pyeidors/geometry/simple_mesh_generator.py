@@ -36,7 +36,7 @@ class SimpleEITMeshGenerator:
 
         Args:
             output_dir: Output directory for ``.msh`` cache.
-            save_files: Kept for compatibility. Mesh cache is always written.
+            save_files: Retained for API stability. Mesh cache is always written.
         """
 
         if not save_files:

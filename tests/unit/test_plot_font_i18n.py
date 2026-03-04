@@ -49,7 +49,7 @@ def test_configure_plot_fonts_keep_chinese_when_available(monkeypatch):
     assert result.selected_fonts[0] == "PingFang SC"
 
 
-def test_chinese_font_config_keeps_backward_compat(monkeypatch):
+def test_chinese_font_config_wrapper_behavior(monkeypatch):
     expected = PlotFontConfigResult(
         requested_language="zh",
         effective_language="en",

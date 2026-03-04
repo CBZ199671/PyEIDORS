@@ -2,10 +2,6 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import sys
-
 import numpy as np
 import pytest
 
@@ -14,6 +10,7 @@ from pyeidors.geometry.optimized_mesh_generator import (
     OptimizedMeshConfig,
     _build_cache_name,
 )
+from tests.utils import run_python
 
 
 def test_electrode_position_validation_and_order():
@@ -51,11 +48,5 @@ assert mesh.num_cells() > 0
 assert facet_tags is not None
 assert "domain" in association
 """
-    proc = subprocess.run(
-        [sys.executable, "-c", code],
-        capture_output=True,
-        text=True,
-        check=False,
-        env={**os.environ, "KMP_DUPLICATE_LIB_OK": "TRUE", "OMP_NUM_THREADS": "1"},
-    )
+    proc = run_python(code)
     assert proc.returncode == 0, proc.stderr

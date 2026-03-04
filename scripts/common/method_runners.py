@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 import json
-import tempfile
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
-from . import legacy_gn_absolute
-from . import legacy_gn_difference_batch
-from . import legacy_sparse_bayesian
-from .case_loader import load_frame_csv, load_paired_frames
-from .io_utils import align_frames_polarity, align_measurement_polarity
+from . import gn_absolute_runner
+from . import gn_difference_runner
+from . import sparse_bayes_runner
+from .case_loader import (
+    load_absolute_frame_from_paired_csv,
+    load_frame_csv,
+    load_paired_frames,
+)
+from .io_utils import align_frames_polarity, align_measurement_polarity, load_metadata
 from .recon_cli_models import (
     CaseResult,
     InputMode,
@@ -70,6 +73,7 @@ def run_gn_absolute_cases(
         raise ValueError("gn-absolute requires --metadata")
 
     output_root.mkdir(parents=True, exist_ok=True)
+    metadata = load_metadata(args.metadata)
     results: List[CaseResult] = []
 
     for case in cases:
@@ -89,52 +93,34 @@ def run_gn_absolute_cases(
             col_idx = int(args.absolute_col)
 
             if case.input_mode == InputMode.FRAME:
-                target_frame = load_frame_csv(
+                measurement = load_frame_csv(
                     csv_path,
                     measurement_gain=float(args.measurement_gain),
                     layout=str(args.frame_layout),
                     use_part=str(args.use_part),
                 )
-                # Keep legacy absolute runner unchanged by mapping frame data
-                # into the expected 4-column CSV representation.
-                with tempfile.TemporaryDirectory(prefix="pyeidors_abs_") as tmp_dir:
-                    temp_csv = Path(tmp_dir) / f"{case.case_name}.csv"
-                    payload = np.column_stack(
-                        [
-                            np.zeros_like(target_frame),
-                            np.zeros_like(target_frame),
-                            target_frame,
-                            np.zeros_like(target_frame),
-                        ]
-                    )
-                    np.savetxt(temp_csv, payload, delimiter=",")
-                    legacy_gn_absolute.run_reconstruction(
-                        csv_path=temp_csv,
-                        metadata_path=args.metadata,
-                        col_idx=2,
-                        output_dir=output_dir,
-                        mesh_radius=_default(args.mesh_radius, 0.03),
-                        refinement=int(args.refinement if args.refinement is not None else 12),
-                        measurement_gain=1.0,
-                        background_sigma=_default(args.background_sigma, 0.001),
-                        lambda_=_default(args.lam, 0.02),
-                        max_iter=int(args.max_iter if args.max_iter is not None else 15),
-                        contact_impedance=_default(args.contact_impedance, 1e-5),
-                    )
             else:
-                legacy_gn_absolute.run_reconstruction(
-                    csv_path=csv_path,
-                    metadata_path=args.metadata,
+                measurement = load_absolute_frame_from_paired_csv(
+                    csv_path,
                     col_idx=col_idx,
-                    output_dir=output_dir,
-                    mesh_radius=_default(args.mesh_radius, 0.03),
-                    refinement=int(args.refinement if args.refinement is not None else 12),
                     measurement_gain=float(args.measurement_gain),
-                    background_sigma=_default(args.background_sigma, 0.001),
-                    lambda_=_default(args.lam, 0.02),
-                    max_iter=int(args.max_iter if args.max_iter is not None else 15),
-                    contact_impedance=_default(args.contact_impedance, 1e-5),
                 )
+
+            gn_absolute_runner.run_absolute_reconstruction(
+                measurement=measurement,
+                metadata=metadata,
+                csv_path=csv_path,
+                metadata_path=args.metadata,
+                col_idx=col_idx,
+                output_dir=output_dir,
+                mesh_radius=_default(args.mesh_radius, 0.03),
+                refinement=int(args.refinement if args.refinement is not None else 12),
+                measurement_gain=float(args.measurement_gain),
+                background_sigma=_default(args.background_sigma, 0.001),
+                lambda_=_default(args.lam, 0.02),
+                max_iter=int(args.max_iter if args.max_iter is not None else 15),
+                contact_impedance=_default(args.contact_impedance, 1e-5),
+            )
 
             metrics = _safe_load_metrics(output_dir)
             results.append(
@@ -168,9 +154,9 @@ def run_gn_difference_cases(
 ) -> List[CaseResult]:
     """Run GN single-step difference reconstruction for each case."""
     output_root.mkdir(parents=True, exist_ok=True)
-    ctx = legacy_gn_difference_batch._prepare_shared_context(
+    ctx = gn_difference_runner.build_shared_context(
         mesh_dir=str(args.mesh_dir),
-        mesh_name=str(args.mesh_name),
+        mesh_name=str(args.mesh_name) if args.mesh_name is not None else None,
         n_elec=int(args.n_elec),
         radius=_default(args.radius, 0.025),
         drive_value=args.drive_value,
@@ -241,7 +227,7 @@ def run_gn_difference_cases(
                 )
                 vi, _ = align_measurement_polarity(vi, ctx["base_meas"])
 
-            rmse_abs = legacy_gn_difference_batch._process_frames(
+            rmse_abs = gn_difference_runner.process_frames(
                 vh=vh,
                 vi=vi,
                 output_dir=output_dir,
@@ -310,8 +296,8 @@ def run_sparse_bayes_difference_cases(
     """Run sparse Bayesian difference reconstruction for each case."""
     output_root.mkdir(parents=True, exist_ok=True)
 
-    metadata = legacy_sparse_bayesian.load_metadata(args.metadata)
-    pattern_config = legacy_sparse_bayesian.PatternConfig(
+    metadata = sparse_bayes_runner.load_metadata(args.metadata)
+    pattern_config = sparse_bayes_runner.PatternConfig(
         n_elec=int(metadata["n_elec"]),
         stim_pattern=metadata.get("stim_pattern", "{ad}"),
         meas_pattern=metadata.get("meas_pattern", "{ad}"),
@@ -328,13 +314,13 @@ def run_sparse_bayes_difference_cases(
         pattern_config.n_elec,
         _default(args.contact_impedance, 1e-5),
     )
-    eit_system = legacy_sparse_bayesian.EITSystem(
+    eit_system = sparse_bayes_runner.EITSystem(
         n_elec=pattern_config.n_elec,
         pattern_config=pattern_config,
         contact_impedance=contact_impedance,
         base_conductivity=_default(args.background_sigma, 1.0),
     )
-    mesh = legacy_sparse_bayesian.load_or_create_mesh(
+    mesh = sparse_bayes_runner.load_or_create_mesh(
         mesh_dir=str(args.mesh_dir),
         n_elec=pattern_config.n_elec,
         refinement=max(int(args.refinement if args.refinement is not None else 12), 4),
@@ -348,7 +334,7 @@ def run_sparse_bayes_difference_cases(
     baseline_data = eit_system.forward_solve(baseline_image)
     baseline_vector = baseline_data.meas
 
-    config = legacy_sparse_bayesian.SparseBayesianConfig(
+    config = sparse_bayes_runner.SparseBayesianConfig(
         cache_jacobian=bool(args.jacobian_cache),
         subspace_rank=args.subspace_rank,
         use_linear_warm_start=bool(args.linear_warm_start),
@@ -365,7 +351,7 @@ def run_sparse_bayes_difference_cases(
         coarse_iterations=int(args.coarse_iterations),
         coarse_relaxation=float(args.coarse_relaxation),
     )
-    reconstructor = legacy_sparse_bayesian.SparseBayesianReconstructor(
+    reconstructor = sparse_bayes_runner.SparseBayesianReconstructor(
         eit_system=eit_system,
         config=config,
     )
@@ -382,9 +368,9 @@ def run_sparse_bayes_difference_cases(
     reference_cache: Dict[str, np.ndarray] = {}
     results: List[CaseResult] = []
 
-    original_save = legacy_sparse_bayesian.save_result_outputs
+    original_save = sparse_bayes_runner.save_result_outputs
     if args.no_plots:
-        legacy_sparse_bayesian.save_result_outputs = _save_sparse_outputs_no_plots
+        sparse_bayes_runner.save_result_outputs = _save_sparse_outputs_no_plots
 
     try:
         for case in cases:
@@ -419,14 +405,14 @@ def run_sparse_bayes_difference_cases(
                     cols_to_align = [args.reference_col, args.target_col, calib_col]
                     unique_cols = list(dict.fromkeys(cols_to_align))
                     selected = np.vstack([raw_measurements[:, c] for c in unique_cols])
-                    aligned, _ = legacy_sparse_bayesian.align_frames_polarity(
+                    aligned, _ = align_frames_polarity(
                         selected,
                         baseline_vector,
                     )
                     for idx, column in enumerate(unique_cols):
                         raw_measurements[:, column] = aligned[idx]
 
-                    diff_measurements = legacy_sparse_bayesian.select_frames(
+                    diff_measurements = sparse_bayes_runner.select_frames(
                         raw_measurements,
                         [args.reference_col, args.target_col],
                     )
@@ -467,7 +453,7 @@ def run_sparse_bayes_difference_cases(
                     )
                     diff_measurements = np.vstack([ref_frame, target_frame])
 
-                diff_dataset = legacy_sparse_bayesian.measurement_to_dataset(
+                diff_dataset = sparse_bayes_runner.measurement_to_dataset(
                     diff_measurements,
                     dict(metadata),
                 )
@@ -479,13 +465,13 @@ def run_sparse_bayes_difference_cases(
 
                 pre_calibration: Optional[Dict[str, float]] = None
                 if args.difference_calibration == "before":
-                    pre_calibration = legacy_sparse_bayesian.calibrate_measurements(
+                    pre_calibration = sparse_bayes_runner.calibrate_measurements(
                         diff_dataset,
                         baseline_vector,
                         frame_index=calibration_frame,
                     )
 
-                info = legacy_sparse_bayesian.run_difference_pipeline(
+                info = sparse_bayes_runner.run_difference_pipeline(
                     eit_system,
                     diff_dataset,
                     baseline_image,
@@ -518,7 +504,7 @@ def run_sparse_bayes_difference_cases(
                     )
                 )
     finally:
-        legacy_sparse_bayesian.save_result_outputs = original_save
+        sparse_bayes_runner.save_result_outputs = original_save
 
     return results
 

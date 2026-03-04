@@ -9,7 +9,7 @@ on:
 
 jobs:
   lint-guard:
-    name: Legacy Guard
+    name: FEniCSx Hardcut Guard
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -21,10 +21,10 @@ jobs:
       - name: Enable Nix cache
         uses: DeterminateSystems/magic-nix-cache-action@v9
 
-      - name: Run hard-cut legacy guard
+      - name: Run FEniCSx hard-cut guard
         run: |
           nix --extra-experimental-features "nix-command flakes" develop -c \
-            python scripts/ci/legacy_guard.py
+            python scripts/ci/fenicsx_hardcut_guard.py
 
   tests-core:
     name: Core Tests (${{ matrix.os }})

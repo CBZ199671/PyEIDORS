@@ -15,10 +15,10 @@ def test_environment_schema_is_dolfinx_only():
     assert "mps_available" in env
 
 
-def test_legacy_solver_alias_removed():
-    legacy_name = "Standard" + "GaussNewtonReconstructor"
+def test_removed_solver_alias_is_unavailable():
+    removed_name = "Standard" + "GaussNewtonReconstructor"
     with pytest.raises((ImportError, KeyError, AttributeError)):
-        __import__("pyeidors.inverse.solvers", fromlist=[legacy_name]).__dict__[legacy_name]
+        __import__("pyeidors.inverse.solvers", fromlist=[removed_name]).__dict__[removed_name]
 
 
 def test_public_inverse_solver_name():

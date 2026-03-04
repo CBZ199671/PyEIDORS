@@ -60,7 +60,7 @@ class _LinearForwardModel:
             meas = self._seq[self._call_count - 1]
         else:
             sigma = np.asarray(image.elem_data, dtype=float).ravel()
-            meas = self._jacobian @ sigma + self._bias
+            meas = np.dot(self._jacobian, sigma) + self._bias
         return SimpleNamespace(meas=np.asarray(meas, dtype=float)), None
 
 
@@ -104,7 +104,7 @@ def test_reconstruct_and_history_recording(eit_system, monkeypatch):
     reconstructor, fwd_model, jacobian = _make_solver(eit_system, n_meas=10)
     n_elem = jacobian.shape[1]
     sigma_true = np.linspace(0.9, 1.1, n_elem)
-    measured = jacobian @ sigma_true + 0.01
+    measured = np.dot(jacobian, sigma_true) + 0.01
 
     result = reconstructor.reconstruct(
         measured_data=SimpleNamespace(meas=measured),
@@ -141,7 +141,7 @@ def test_measurement_weight_strategies_and_baseline_storage(eit_system, monkeypa
         reconstructor, _, jacobian = _make_solver(eit_system, n_meas=7)
         reconstructor.measurement_weight_strategy = strategy
         reconstructor.use_measurement_weights = True
-        measured = jacobian @ np.ones(jacobian.shape[1], dtype=float)
+        measured = np.dot(jacobian, np.ones(jacobian.shape[1], dtype=float))
         out = reconstructor.reconstruct(
             measured_data=SimpleNamespace(meas=measured),
             initial_conductivity=1.0,
@@ -177,7 +177,7 @@ def test_line_search_and_perturb_updates(eit_system):
     sigma_current.x.array[:] = 1.0
     reconstructor.R_torch = torch.eye(n_elem, dtype=torch.float64)
 
-    target = torch.from_numpy(jacobian @ np.ones(n_elem, dtype=float)).to(dtype=torch.float64)
+    target = torch.from_numpy(np.dot(jacobian, np.ones(n_elem, dtype=float))).to(dtype=torch.float64)
     delta = torch.from_numpy(np.full(n_elem, -0.05, dtype=float)).to(dtype=torch.float64)
     prior = torch.from_numpy(np.ones(n_elem, dtype=float)).to(dtype=torch.float64)
 
@@ -234,7 +234,7 @@ def test_reconstruct_rollback_early_stop(eit_system, monkeypatch):
     monkeypatch.setattr(torch.linalg, "solve", _safe_torch_solve)
     reconstructor, fwd_model, jacobian = _make_solver(eit_system, n_meas=8)
     n_elem = jacobian.shape[1]
-    measured = jacobian @ np.ones(n_elem, dtype=float)
+    measured = np.dot(jacobian, np.ones(n_elem, dtype=float))
 
     good = measured.copy()
     bad = measured + 10.0

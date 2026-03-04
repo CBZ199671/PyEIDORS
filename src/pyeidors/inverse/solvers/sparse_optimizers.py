@@ -6,7 +6,28 @@ from typing import Optional
 
 import numpy as np
 
+from ...utils.numeric_ops import safe_dot
 from .sparse_projection import estimate_lipschitz_constant
+
+
+def _resolve_gpu_context(config):
+    if not config.use_gpu:
+        return None
+    try:
+        import torch  # type: ignore
+    except ImportError:  # pragma: no cover
+        return None
+    if not torch.cuda.is_available():
+        return None
+
+    gpu_dtype = str(config.gpu_dtype).lower()
+    if gpu_dtype == "float64":
+        dtype = torch.float64
+    elif gpu_dtype in {"float16", "half"}:
+        dtype = torch.float16
+    else:
+        dtype = torch.float32
+    return torch, torch.device("cuda"), dtype
 
 
 def solve_fista(
@@ -28,29 +49,9 @@ def solve_fista(
     t = 1.0
     L = estimate_lipschitz_constant(A)
 
-    use_gpu = config.use_gpu
-    device = None
-    torch = None
-    if use_gpu:
-        try:
-            import torch  # type: ignore
-
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-            else:
-                device = None
-                use_gpu = False
-        except ImportError:  # pragma: no cover
-            use_gpu = False
-
-    if use_gpu and device is not None:
-        gpu_dtype = str(config.gpu_dtype).lower()
-        if gpu_dtype == "float64":
-            dtype = torch.float64
-        elif gpu_dtype in {"float16", "half"}:
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
+    gpu_ctx = _resolve_gpu_context(config)
+    if gpu_ctx is not None:
+        torch, device, dtype = gpu_ctx
         A_t = torch.tensor(A, device=device, dtype=dtype, copy=False)
         b_t = torch.tensor(b, device=device, dtype=dtype, copy=False)
         x_t = torch.tensor(x, device=device, dtype=dtype, copy=False)
@@ -75,7 +76,8 @@ def solve_fista(
         return x_t.detach().cpu().double().numpy()
 
     for _ in range(config.linear_max_iterations):
-        grad = A.T @ (A @ y - b)
+        residual = safe_dot(A, y, "solve_fista.residual") - b
+        grad = safe_dot(A.T, residual, "solve_fista.gradient")
         z = y - grad / L
         x_new = np.sign(z) * np.maximum(np.abs(z) - lambda_reg / L, 0.0)
 
@@ -106,29 +108,9 @@ def solve_irls(
     n = A.shape[1]
     x = warm_start.copy() if warm_start is not None else np.zeros(n, dtype=float)
 
-    use_gpu = config.use_gpu
-    device = None
-    torch = None
-    if use_gpu:
-        try:
-            import torch  # type: ignore
-
-            if torch.cuda.is_available():
-                device = torch.device("cuda")
-            else:
-                device = None
-                use_gpu = False
-        except ImportError:  # pragma: no cover
-            use_gpu = False
-
-    if use_gpu and device is not None:
-        gpu_dtype = str(config.gpu_dtype).lower()
-        if gpu_dtype == "float64":
-            dtype = torch.float64
-        elif gpu_dtype in {"float16", "half"}:
-            dtype = torch.float16
-        else:
-            dtype = torch.float32
+    gpu_ctx = _resolve_gpu_context(config)
+    if gpu_ctx is not None:
+        torch, device, dtype = gpu_ctx
         A_t = torch.tensor(A, device=device, dtype=dtype, copy=False)
         b_t = torch.tensor(b, device=device, dtype=dtype, copy=False)
         x_t = torch.tensor(x, device=device, dtype=dtype, copy=False)
@@ -153,10 +135,12 @@ def solve_irls(
 
         return x_t.detach().cpu().double().numpy()
 
+    ata = safe_dot(A.T, A, "solve_irls.ata")
+    atb = safe_dot(A.T, b, "solve_irls.atb")
     for _ in range(config.linear_max_iterations):
         weights = 1.0 / np.sqrt(x * x + config.smoothing_beta)
-        M = A.T @ A + lambda_reg * np.diag(weights)
-        rhs = A.T @ b
+        M = ata + lambda_reg * np.diag(weights)
+        rhs = atb
         try:
             x_new = np.linalg.solve(M, rhs)
         except np.linalg.LinAlgError:

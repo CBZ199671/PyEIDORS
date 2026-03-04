@@ -5,6 +5,8 @@ A modular EIT system based on DOLFINx, PyTorch, and CUQIpy.
 
 from __future__ import annotations
 
+from .utils.cuqi_imports import suppress_known_cuqi_import_warnings
+
 __version__ = "1.0.0"
 __author__ = "BingZhou Chen"
 
@@ -28,7 +30,8 @@ except ImportError:
     _MPS_AVAILABLE = False
 
 try:
-    import cuqi  # noqa: F401
+    with suppress_known_cuqi_import_warnings():
+        import cuqi  # noqa: F401
 
     _CUQI_AVAILABLE = True
 except ImportError:
