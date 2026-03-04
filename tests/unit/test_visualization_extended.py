@@ -130,3 +130,20 @@ def test_visualizer_save_dir(tmp_path):
     out = tmp_path / "nested" / "plot.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     assert Path(out).parent.exists()
+
+
+def test_visualizer_language_switch_and_priority(monkeypatch):
+    monkeypatch.setenv("PYEIDORS_PLOT_LANG", "zh")
+    zh_viz = EITVisualizer(style="default")
+    assert zh_viz.requested_language == "zh"
+
+    en_viz = EITVisualizer(style="default", language="en")
+    assert en_viz.requested_language == "en"
+    assert en_viz._text("measurement_title") == "Measurement Data"
+
+
+def test_visualizer_custom_title_not_overwritten(eit_system):
+    viz = EITVisualizer(style="default", language="zh")
+    custom_title = "CUSTOM-TITLE"
+    fig = viz.plot_measurements(np.array([0.1, 0.2, 0.3]), title=custom_title)
+    assert fig._suptitle.get_text() == custom_title

@@ -40,8 +40,8 @@ def render_mesh(viz, mesh, title: str, show_electrodes: bool, save_path: Optiona
 
     ax.set_aspect("equal")
     ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.set_xlabel("X")
-    ax.set_ylabel("Y")
+    ax.set_xlabel(viz._text("axis_x"))
+    ax.set_ylabel(viz._text("axis_y"))
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     if save_path:
@@ -105,7 +105,7 @@ def render_conductivity(
     if minimal:
         cbar.set_label("")
     else:
-        cbar.set_label("Conductivity (S/m)", fontsize=18, fontweight="bold")
+        cbar.set_label(viz._text("conductivity_label"), fontsize=18, fontweight="bold")
 
     if eidors_style:
         ax.triplot(triangulation, "k-", alpha=0.6, linewidth=0.4)
@@ -136,8 +136,8 @@ def render_conductivity(
     else:
         if title:
             ax.set_title(title, fontsize=22, fontweight="bold")
-        ax.set_xlabel("X", fontsize=18, fontweight="bold")
-        ax.set_ylabel("Y", fontsize=18, fontweight="bold")
+        ax.set_xlabel(viz._text("axis_x"), fontsize=18, fontweight="bold")
+        ax.set_ylabel(viz._text("axis_y"), fontsize=18, fontweight="bold")
         ax.grid(True, alpha=0.2)
         ax.tick_params(labelsize=16, width=1.5)
         for label in ax.get_xticklabels() + ax.get_yticklabels():
@@ -160,21 +160,27 @@ def render_measurements(viz, data, title: str, save_path: Optional[str]):
     measurements = data.meas if hasattr(data, "meas") else np.asarray(data)
 
     ax1.plot(measurements, "b-", linewidth=1.5, alpha=0.8)
-    ax1.set_title("Measurement Sequence", fontweight="bold")
-    ax1.set_xlabel("Measurement Index")
-    ax1.set_ylabel("Voltage (V)")
+    ax1.set_title(viz._text("measurement_sequence"), fontweight="bold")
+    ax1.set_xlabel(viz._text("measurement_index"))
+    ax1.set_ylabel(viz._text("voltage"))
     ax1.grid(True, alpha=0.3)
 
     ax2.hist(measurements, bins=50, density=True, alpha=0.7, color="skyblue", edgecolor="black")
-    ax2.set_title("Measurement Distribution", fontweight="bold")
-    ax2.set_xlabel("Voltage (V)")
-    ax2.set_ylabel("Probability Density")
+    ax2.set_title(viz._text("measurement_distribution"), fontweight="bold")
+    ax2.set_xlabel(viz._text("voltage"))
+    ax2.set_ylabel(viz._text("probability_density"))
     ax2.grid(True, alpha=0.3)
 
     mean_val = np.mean(measurements)
     std_val = np.std(measurements)
-    ax2.axvline(mean_val, color="red", linestyle="--", label=f"Mean: {mean_val:.4f}")
-    ax2.axvline(mean_val + std_val, color="orange", linestyle="--", alpha=0.7, label=f"±Std: {std_val:.4f}")
+    ax2.axvline(mean_val, color="red", linestyle="--", label=viz._text("mean", value=mean_val))
+    ax2.axvline(
+        mean_val + std_val,
+        color="orange",
+        linestyle="--",
+        alpha=0.7,
+        label=viz._text("std", value=std_val),
+    )
     ax2.axvline(mean_val - std_val, color="orange", linestyle="--", alpha=0.7)
     ax2.legend()
 
@@ -212,35 +218,39 @@ def render_reconstruction_comparison(
     vmin, vmax = min(np.min(true_plot_values), np.min(recon_plot_values)), max(np.max(true_plot_values), np.max(recon_plot_values))
 
     im1 = axes[0].tripcolor(triangulation, true_plot_values, cmap="viridis", vmin=vmin, vmax=vmax, shading="gouraud")
-    axes[0].set_title("True Distribution", fontweight="bold")
+    axes[0].set_title(viz._text("true_distribution"), fontweight="bold")
     axes[0].set_aspect("equal")
     plt.colorbar(im1, ax=axes[0], shrink=0.8)
 
     im2 = axes[1].tripcolor(triangulation, recon_plot_values, cmap="viridis", vmin=vmin, vmax=vmax, shading="gouraud")
-    axes[1].set_title("Reconstructed Distribution", fontweight="bold")
+    axes[1].set_title(viz._text("reconstructed_distribution"), fontweight="bold")
     axes[1].set_aspect("equal")
     plt.colorbar(im2, ax=axes[1], shrink=0.8)
 
     error = np.abs(true_plot_values - recon_plot_values)
     im3 = axes[2].tripcolor(triangulation, error, cmap="hot", shading="gouraud")
-    axes[2].set_title("Absolute Error", fontweight="bold")
+    axes[2].set_title(viz._text("absolute_error"), fontweight="bold")
     axes[2].set_aspect("equal")
     plt.colorbar(im3, ax=axes[2], shrink=0.8)
 
     relative_error = np.linalg.norm(error) / np.linalg.norm(true_plot_values)
-    fig.suptitle(f"{title} (Relative Error: {relative_error:.4f})", fontsize=16, fontweight="bold")
+    fig.suptitle(
+        f"{title} ({viz._text('relative_error', value=relative_error)})",
+        fontsize=16,
+        fontweight="bold",
+    )
     plt.tight_layout()
     if save_path:
         plt.savefig(save_path, dpi=300, bbox_inches="tight")
     return fig
 
 
-def render_convergence(iterations, errors, title: str, save_path: Optional[str]):
+def render_convergence(viz, iterations, errors, title: str, save_path: Optional[str]):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.semilogy(iterations, errors, "b-o", linewidth=2, markersize=6)
     ax.set_title(title, fontsize=14, fontweight="bold")
-    ax.set_xlabel("Iteration")
-    ax.set_ylabel("Error (log scale)")
+    ax.set_xlabel(viz._text("iteration"))
+    ax.set_ylabel(viz._text("error_log"))
     ax.grid(True, alpha=0.3)
     plt.tight_layout()
     if save_path:

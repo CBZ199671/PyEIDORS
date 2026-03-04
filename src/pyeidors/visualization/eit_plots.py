@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
-import sys
 from typing import Any, Optional, Tuple, Union
 
 import matplotlib.pyplot as plt
@@ -28,6 +26,7 @@ from .eit_plot_helpers import (
     resolve_colormap,
     resolve_eidors_diff_limits,
 )
+from ..utils.plot_font_i18n import configure_plot_fonts, get_plot_texts, resolve_plot_language
 from .eit_plot_renderers import (
     render_conductivity,
     render_convergence,
@@ -51,41 +50,44 @@ try:
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
 
-try:
-    from pyeidors.utils.chinese_font_config import configure_chinese_font
-except ModuleNotFoundError:
-    sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
-    from pyeidors.utils.chinese_font_config import configure_chinese_font
-
-
 class EITVisualizer:
     """Visualize mesh, conductivity and measurement diagnostics."""
 
-    def __init__(self, style: str = "seaborn", figsize: Tuple[int, int] = (12, 8)):
+    def __init__(
+        self,
+        style: str = "seaborn",
+        figsize: Tuple[int, int] = (12, 8),
+        language: Optional[str] = None,
+    ):
         if not MATPLOTLIB_AVAILABLE:
             raise ImportError("matplotlib not available, cannot perform visualization")
         self.figsize = figsize
         self._logger = logger
+        self.requested_language = resolve_plot_language(language)
         try:
             plt.style.use(style)
         except Exception:
             logger.warning("Style %s not available, using default style", style)
-        configure_chinese_font()
+        font_result = configure_plot_fonts(self.requested_language)
+        self.language = font_result.effective_language
+        self.selected_fonts = font_result.selected_fonts
+        self._texts = get_plot_texts(self.language)
 
     def plot_mesh(
         self,
         mesh,
-        title: str = "Mesh Structure",
+        title: Optional[str] = None,
         show_electrodes: bool = True,
         save_path: Optional[str] = None,
     ) -> plt.Figure:
-        return render_mesh(self, mesh, title=title, show_electrodes=show_electrodes, save_path=save_path)
+        resolved_title = self._text("mesh_title") if title is None else title
+        return render_mesh(self, mesh, title=resolved_title, show_electrodes=show_electrodes, save_path=save_path)
 
     def plot_conductivity(
         self,
         mesh,
         conductivity: Union[Function, np.ndarray],
-        title: Optional[str] = "Conductivity Distribution",
+        title: Optional[str] = None,
         colormap: str = "viridis",
         save_path: Optional[str] = None,
         vmin: Optional[float] = None,
@@ -96,11 +98,12 @@ class EITVisualizer:
         colorbar_format: Optional[str] = None,
         transparent: bool = False,
     ) -> plt.Figure:
+        resolved_title = self._text("conductivity_title") if title is None else title
         return render_conductivity(
             self,
             mesh,
             conductivity,
-            title,
+            resolved_title,
             colormap,
             save_path,
             vmin,
@@ -115,25 +118,27 @@ class EITVisualizer:
     def plot_measurements(
         self,
         data,
-        title: str = "Measurement Data",
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> plt.Figure:
-        return render_measurements(self, data, title=title, save_path=save_path)
+        resolved_title = self._text("measurement_title") if title is None else title
+        return render_measurements(self, data, title=resolved_title, save_path=save_path)
 
     def plot_reconstruction_comparison(
         self,
         mesh,
         true_conductivity,
         reconstructed_conductivity,
-        title: str = "Reconstruction Comparison",
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> plt.Figure:
+        resolved_title = self._text("recon_comparison") if title is None else title
         return render_reconstruction_comparison(
             self,
             mesh,
             true_conductivity,
             reconstructed_conductivity,
-            title,
+            resolved_title,
             save_path,
         )
 
@@ -141,10 +146,17 @@ class EITVisualizer:
         self,
         iterations,
         errors,
-        title: str = "Convergence Curve",
+        title: Optional[str] = None,
         save_path: Optional[str] = None,
     ) -> plt.Figure:
-        return render_convergence(iterations, errors, title=title, save_path=save_path)
+        resolved_title = self._text("convergence") if title is None else title
+        return render_convergence(self, iterations, errors, title=resolved_title, save_path=save_path)
+
+    def _text(self, key: str, **kwargs) -> str:
+        template = self._texts.get(key, key)
+        if kwargs:
+            return template.format(**kwargs)
+        return template
 
     # Compatibility wrappers used by tests/diagnostics.
     def _plot_electrodes(self, ax, electrode_vertices):
@@ -200,5 +212,5 @@ class EITVisualizer:
         return num_vertices(mesh)
 
 
-def create_visualizer(style: str = "seaborn") -> EITVisualizer:
-    return EITVisualizer(style=style)
+def create_visualizer(style: str = "seaborn", language: Optional[str] = None) -> EITVisualizer:
+    return EITVisualizer(style=style, language=language)

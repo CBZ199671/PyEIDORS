@@ -55,6 +55,15 @@ Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
   - `system.setup(mesh_source="generated", radius=1.0, mesh_size=0.1)`
 - Solver APIs now return typed `SolverOutput` objects (not ad-hoc dictionaries).
 
+### Plot Language & Font Control
+
+- Default plotting language is English (`en`) for cross-platform stability.
+- Switch language at runtime:
+  - Constructor argument: `EITVisualizer(language="zh")`
+  - Environment variable: `PYEIDORS_PLOT_LANG=zh` (`en|zh|auto`)
+- Priority: explicit constructor argument > `PYEIDORS_PLOT_LANG` > default `en`.
+- In Chinese mode, if no Chinese-capable font exists on the machine, PyEIDORS falls back to English-safe fonts automatically (single warning, no warning spam).
+
 ---
 
 ## Gallery & Validation
