@@ -27,7 +27,10 @@ To maintain consistency with `PatternConfig` and `StimMeasPatternManager` intern
 | `n_elec` | `int` | `16` | Number of electrodes. |
 | `stim_pattern` | `str \| List[int]` | `"{ad}"` | Excitation pattern. Supports PyEIDORS shorthand notation or explicit electrode index lists. |
 | `meas_pattern` | `str \| List[int]` | `"{ad}"` | Measurement pattern. |
-| `amplitude` | `float` | `0.02` | Excitation current amplitude in Amperes. |
+| `drive_mode` | `str` | `"line_current_density"` | Drive semantics. Supported: `"line_current_density"`, `"total_current"`, `"normalized"`. |
+| `drive_value` | `float` | `0.02` | Excitation magnitude associated with `drive_mode` (`A/m`, `A`, or normalized). |
+| `geometry_scale_to_m` | `float` | `1.0` | Geometry scale to meters (`m=1.0`, `cm=0.01`, `mm=0.001`). |
+| `electrode_length_m_override` | `float \| List[float]` | `null` | Optional physical electrode length(s) in meters. |
 | `use_meas_current` | `bool` | `false` | Corresponds to `PatternConfig.use_meas_current`. |
 | `use_meas_current_next` | `int` | `0` | Corresponds to `PatternConfig.use_meas_current_next`. |
 | `rotate_meas` | `bool` | `true` | Whether measurements rotate with excitation. |
@@ -36,7 +39,7 @@ To maintain consistency with `PatternConfig` and `StimMeasPatternManager` intern
 | `sampling_rate_hz` | `float` | `1000.0` | (Optional) Sampling frequency for logging and tracking. |
 | `notes` | `str` | `"Experiment #1, 20uA"` | (Optional) Additional notes. |
 
-> Note: These fields correspond to all required information in `PatternConfig`, allowing direct reconstruction of the same excitation/measurement patterns upon loading. Additional hardware-related parameters may be added to `metadata`, but the meanings of the above fields should not be modified.
+> Note: These fields correspond to all required information in `PatternConfig`, allowing direct reconstruction of the same excitation/measurement patterns upon loading. Additional hardware-related parameters may be added to `metadata`, but the meanings of the above fields should not be modified. The legacy field `amplitude` has been removed.
 
 ## 3. Measurement Matrix Ordering
 
@@ -91,10 +94,10 @@ This is particularly important for time-series reconstruction (e.g., difference 
 For traceability, the recommended naming format is:
 
 ```
-YYYY-MM-DD-HH-MM-SS_<run_id>_<amplitude>_<current>_<frequency>
+YYYY-MM-DD-HH-MM-SS_<run_id>_<drive_mode>_<drive_value>_<frequency>
 ```
 
-Example: `2025-06-29-20-00-52_1_10.00_20uA_1000Hz`
+Example: `2025-06-29-20-00-52_1_lineCurrentDensity_5e-5Apm_1000Hz`
 
 - Matching `.csv` and `.yaml/.json` files should appear in pairs;
 - For `.npz` format, use this naming scheme as the filename prefix.
@@ -109,14 +112,18 @@ This specification allows the project to maintain a single stable interface, sig
 
 ## 8. End-to-End Example Script
 
-After preparing standardized data, run `scripts/run_single_step_diff_realdata.py` for a difference reconstruction workflow:
+After preparing standardized data, run `scripts/run_reconstruction_unified.py` for a difference reconstruction workflow:
 
 ```bash
-python scripts/run_single_step_diff_realdata.py \
+python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
   --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
   --metadata data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml \
+  --reference-col 0 \
+  --target-col 2 \
   --lambda 1.0 \
-  --output results/demo_output
+  --output-root results/demo_output
 ```
 
 This script will:

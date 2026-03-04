@@ -20,7 +20,10 @@ def _metadata_for(pattern_cfg: PatternConfig, n_frames: int | None = None):
         "n_rings": pattern_cfg.n_rings,
         "stim_pattern": pattern_cfg.stim_pattern,
         "meas_pattern": pattern_cfg.meas_pattern,
-        "amplitude": pattern_cfg.amplitude,
+        "drive_mode": pattern_cfg.drive_mode,
+        "drive_value": pattern_cfg.drive_value,
+        "geometry_scale_to_m": pattern_cfg.geometry_scale_to_m,
+        "electrode_length_m_override": pattern_cfg.electrode_length_m_override,
         "use_meas_current": pattern_cfg.use_meas_current,
         "use_meas_current_next": pattern_cfg.use_meas_current_next,
         "rotate_meas": pattern_cfg.rotate_meas,
@@ -88,6 +91,11 @@ def test_measurement_dataset_validation_errors():
             np.zeros((1, pattern_mgr.n_meas_total)),
             {"n_elec": 16},
         )
+
+    legacy_metadata = dict(metadata)
+    legacy_metadata["amplitude"] = 1.0
+    with pytest.raises(ValueError, match="amplitude"):
+        MeasurementDataset.from_metadata(np.zeros((1, pattern_mgr.n_meas_total)), legacy_metadata)
 
     dataset = MeasurementDataset.from_metadata(
         np.zeros((1, pattern_mgr.n_meas_total)),

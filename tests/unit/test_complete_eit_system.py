@@ -15,6 +15,7 @@ def test_system_setup_and_forward(eit_system):
     assert info["n_elec"] == 16
     assert info["n_elements"] > 0
     assert info["n_measurements"] > 0
+    assert "cache_stats" in info
 
     image = eit_system.create_homogeneous_image(conductivity=1.0)
     data = eit_system.forward_solve(image)
@@ -22,6 +23,9 @@ def test_system_setup_and_forward(eit_system):
     assert data.n_elec == 16
     assert data.n_meas == info["n_measurements"]
     assert np.isfinite(data.meas).all()
+    stats = eit_system.get_cache_stats()
+    assert "total_hits" in stats
+    eit_system.clear_cache(scope="process")
 
 
 def test_difference_inverse_smoke(eit_system, monkeypatch):

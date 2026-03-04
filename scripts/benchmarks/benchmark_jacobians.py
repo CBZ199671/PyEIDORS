@@ -30,7 +30,14 @@ from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobia
 def benchmark():
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16)
     pattern_cfg = PatternConfig(
-        n_elec=16, stim_pattern="{ad}", meas_pattern="{ad}", amplitude=1.0, use_meas_current=False, rotate_meas=True
+        n_elec=16,
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
+        use_meas_current=False,
+        rotate_meas=True,
     )
     contact_impedance = np.full(16, 1e-6, dtype=float)
     fwd_model = EITForwardModel(n_elec=16, pattern_config=pattern_cfg, z=contact_impedance, mesh=mesh)

@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import sys
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from dolfinx import fem
 from scipy.optimize import minimize_scalar
+from scipy.linalg import lu_factor, lu_solve
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
@@ -23,11 +25,50 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from pyeidors import EITSystem
+from pyeidors.cache import hash_array
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array, mesh_num_vertices
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
+
+
+def _solve_with_cached_factor(
+    system: EITSystem,
+    lhs: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    payload: dict,
+    persist: bool,
+) -> np.ndarray:
+    """Solve linear system with optional factorization cache."""
+
+    cache_manager = getattr(system, "cache_manager", None)
+    if cache_manager is None or not cache_manager.enabled:
+        try:
+            return np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            out, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+            return out
+
+    def _factorize():
+        try:
+            lu, piv = lu_factor(lhs)
+            return {"method": "lu", "lu": lu, "piv": piv}
+        except np.linalg.LinAlgError:
+            return {"method": "lstsq", "lhs": lhs}
+
+    factor, _ = cache_manager.get_or_compute(
+        artifact="single_step_operator",
+        payload=payload,
+        compute_fn=_factorize,
+        persist=persist,
+        cost=8.0,
+    )
+    if factor["method"] == "lu":
+        return np.asarray(lu_solve((factor["lu"], factor["piv"]), rhs), dtype=float)
+    out, *_ = np.linalg.lstsq(factor["lhs"], rhs, rcond=None)
+    return np.asarray(out, dtype=float)
 
 
 def parse_args() -> argparse.Namespace:
@@ -103,7 +144,9 @@ def build_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
         rotate_meas=True,
     )
 
@@ -140,6 +183,7 @@ def solve_single_step_delta(fwd_model,
                             raw_baseline: np.ndarray,
                             args: argparse.Namespace,
                             solver_space: Optional[str] = None) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    system = getattr(fwd_model, "_eit_system_ref", None)
     jacobian_calculator = DirectJacobianCalculator(fwd_model)
     sigma_fn = fem.Function(fwd_model.V_sigma)
     function_set_array(sigma_fn, baseline_image.elem_data)
@@ -164,6 +208,8 @@ def solve_single_step_delta(fwd_model,
 
     hp = max(args.difference_hyperparameter, 0.0)
     solver_choice = solver_space or args.single_step_space
+    jac_hash = hash_array(np.ascontiguousarray(jacobian_weighted, dtype=np.float64))
+    noser_hash = hashlib.sha256(np.ascontiguousarray(noser_diag, dtype=np.float64).tobytes()).hexdigest()
     if solver_choice == "measurement":
         inv_noser = 1.0 / noser_diag
         jw_scaled = jacobian_weighted * inv_noser[None, :]
@@ -171,19 +217,39 @@ def solve_single_step_delta(fwd_model,
         if hp > 0:
             lhs = lhs + (hp ** 2) * np.eye(lhs.shape[0])
         rhs = dv_weighted
-        try:
-            y = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            y, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        payload = {
+            "space": "measurement",
+            "hp": float(hp),
+            "jac_hash": jac_hash,
+            "noser_hash": noser_hash,
+            "shape": lhs.shape,
+        }
+        if system is None:
+            try:
+                y = np.linalg.solve(lhs, rhs)
+            except np.linalg.LinAlgError:
+                y, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        else:
+            y = _solve_with_cached_factor(system, lhs, rhs, payload=payload, persist=True)
         delta = inv_noser * (jacobian_weighted.T @ y)
     else:
         RtR = np.diag(noser_diag)
         lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
         rhs = jacobian_weighted.T @ dv_weighted
-        try:
-            delta = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            delta, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        payload = {
+            "space": "parameter",
+            "hp": float(hp),
+            "jac_hash": jac_hash,
+            "noser_hash": noser_hash,
+            "shape": lhs.shape,
+        }
+        if system is None:
+            try:
+                delta = np.linalg.solve(lhs, rhs)
+            except np.linalg.LinAlgError:
+                delta, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        else:
+            delta = _solve_with_cached_factor(system, lhs, rhs, payload=payload, persist=False)
 
     return delta, weights
 
@@ -273,6 +339,7 @@ def main() -> None:
             electrode_coverage=args.electrode_coverage,
         )
         system.setup(mesh=mesh)
+        setattr(system.fwd_model, "_eit_system_ref", system)
 
         baseline_image = system.create_homogeneous_image(conductivity=args.background)
         sigma = create_custom_phantom(

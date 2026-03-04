@@ -6,7 +6,9 @@ import numpy as np
 import ufl
 from dolfinx import fem
 import dolfinx.fem.petsc as fem_petsc
+import hashlib
 
+from ...femx import function_get_array
 from .base_jacobian import BaseJacobianCalculator
 
 
@@ -32,11 +34,37 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self.cell_areas = np.asarray(areas_vec.array, dtype=float)
 
     def calculate(self, sigma: fem.Function, method: str = "efficient", **kwargs) -> np.ndarray:
-        if method == "efficient":
-            return self._calculate_efficient(sigma)
-        if method == "traditional":
-            return self._calculate_traditional(sigma)
-        raise ValueError(f"Unknown method: {method}")
+        if method not in {"efficient", "traditional"}:
+            raise ValueError(f"Unknown method: {method}")
+
+        cache_manager = getattr(self.fwd_model, "cache_manager", None)
+        if cache_manager is None or not cache_manager.enabled:
+            return self._calculate_efficient(sigma) if method == "efficient" else self._calculate_traditional(sigma)
+
+        sigma_values = np.ascontiguousarray(function_get_array(sigma), dtype=np.float64)
+        payload = {
+            "method": method,
+            "sigma_hash": hashlib.sha256(sigma_values.tobytes()).hexdigest(),
+            "n_meas": self.fwd_model.pattern_manager.n_meas_total,
+            "n_elem": len(self.cell_areas),
+            "backend": self.fwd_model.linear_backend,
+            "fwd_model_id": int(id(self.fwd_model)),
+        }
+        jacobian, lookup = cache_manager.get_or_compute(
+            artifact="jacobian",
+            payload=payload,
+            compute_fn=(lambda: self._calculate_efficient(sigma))
+            if method == "efficient"
+            else (lambda: self._calculate_traditional(sigma)),
+            persist=True,
+            cost=12.0,
+        )
+        setattr(
+            self,
+            "_last_cache_lookup",
+            {"hit": lookup.hit, "layer": lookup.layer, "artifact": lookup.artifact, "key": lookup.key},
+        )
+        return jacobian
 
     def _calculate_efficient(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)
@@ -44,9 +72,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
 
         adjoint_fields = self._compute_adjoint_fields_efficient(sigma)
         jacobian = self._assemble_jacobian_efficient(grad_u_all, adjoint_fields)
-
-        scale = float(getattr(self.fwd_model.pattern_manager.config, "amplitude", 1.0))
-        return jacobian * scale
+        return jacobian
 
     def _calculate_traditional(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)

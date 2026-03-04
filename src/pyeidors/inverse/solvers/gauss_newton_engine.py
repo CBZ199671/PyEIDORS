@@ -67,6 +67,8 @@ class GaussNewtonReconstructor:
         negate_jacobian: bool = True,
         min_iterations: int = 1,
         use_prior_term: bool = True,
+        cache_manager=None,
+        performance_mode: str = "aggressive",
     ):
         self.fwd_model = fwd_model
         self.max_iterations = max_iterations
@@ -89,6 +91,13 @@ class GaussNewtonReconstructor:
         self._baseline_measurement: Optional[np.ndarray] = None
         self._measured_vector: Optional[np.ndarray] = None
         self._line_search_perturb: Optional[np.ndarray] = None
+        self.cache_manager = cache_manager
+        self.performance_mode = str(performance_mode).strip().lower()
+        if self.performance_mode not in {"safe", "aggressive"}:
+            raise ValueError(
+                f"Unsupported performance_mode={performance_mode!r}. "
+                "Expected one of: 'safe', 'aggressive'."
+            )
 
         self.device = resolve_torch_device(device, verbose=self.verbose)
         self._torch_dtype = torch.float64

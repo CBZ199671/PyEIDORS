@@ -71,6 +71,10 @@ def collect_system_info(eit_system) -> Dict[str, Any]:
         "n_elec": eit_system.n_elec,
         "pattern_config": eit_system.pattern_config,
         "mesh_config": eit_system.mesh_config,
+        "performance_mode": getattr(eit_system, "performance_mode", "aggressive"),
+        "linear_backend": getattr(eit_system, "linear_backend", "scipy"),
+        "cache_scope": getattr(eit_system, "cache_scope", "off"),
+        "cache_stats": eit_system.get_cache_stats() if hasattr(eit_system, "get_cache_stats") else {},
         "initialized": eit_system._is_initialized,
     }
     if not eit_system._is_initialized:

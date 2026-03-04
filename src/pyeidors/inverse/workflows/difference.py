@@ -62,6 +62,7 @@ def perform_difference_reconstruction(
     result_metadata: Dict[str, Any] = {
         "reference_measured": reference_data.meas,
         "display_values": conductivity_values,
+        "solver_diagnostics": reconstruction.diagnostics,
     }
     if metadata:
         result_metadata.update(metadata)

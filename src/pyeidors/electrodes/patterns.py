@@ -1,23 +1,60 @@
 import numpy as np
-from typing import List, Union
+from typing import List, Optional, Union
 from ..data.structures import PatternConfig
+from ..physics.current_drive import (
+    build_stim_currents,
+    validate_drive_config,
+)
 
 
 class StimMeasPatternManager:
     """Stimulation and measurement pattern manager."""
 
-    def __init__(self, config: PatternConfig):
+    def __init__(
+        self,
+        config: PatternConfig,
+        electrode_lengths_m: Optional[np.ndarray] = None,
+        mesh_tdim: Optional[int] = None,
+    ):
         self.config = config
         self.n_elec = config.n_elec
         self.n_rings = config.n_rings
         self.tn_elec = self.n_elec * self.n_rings
         self.stim_direction = 1 if self.config.stim_direction.lower() == 'ccw' else -1
         self.meas_direction = 1 if self.config.meas_direction.lower() == 'ccw' else -1
+        self.drive_mode = validate_drive_config(
+            drive_mode=self.config.drive_mode,
+            drive_value=self.config.drive_value,
+            geometry_scale_to_m=self.config.geometry_scale_to_m,
+            mesh_tdim=mesh_tdim,
+        )
+        self.drive_value = float(self.config.drive_value)
+        self._electrode_lengths_m = self._resolve_electrode_lengths(electrode_lengths_m)
         
         self._parse_patterns()
         self._generate_patterns()
         self._build_measurement_projection()
         self._compute_measurement_selector()
+
+    def _resolve_electrode_lengths(self, electrode_lengths_m: Optional[np.ndarray]) -> Optional[np.ndarray]:
+        if electrode_lengths_m is None:
+            if self.drive_mode == "line_current_density":
+                # Allow pattern construction without mesh in metadata-only paths.
+                return np.ones(self.tn_elec, dtype=float)
+            return None
+
+        lengths = np.asarray(electrode_lengths_m, dtype=float).reshape(-1)
+        if lengths.size == self.n_elec and self.n_rings > 1:
+            lengths = np.tile(lengths, self.n_rings)
+        if lengths.size != self.tn_elec:
+            raise ValueError(
+                "electrode_lengths_m size mismatch: "
+                f"expected {self.tn_elec}, got {lengths.size}."
+            )
+        if np.any(lengths <= 0.0):
+            bad = int(np.nonzero(lengths <= 0.0)[0][0])
+            raise ValueError(f"electrode_lengths_m[{bad}] must be positive, got {lengths[bad]!r}.")
+        return lengths
     
     def _parse_patterns(self):
         # Parse stimulation pattern
@@ -63,9 +100,20 @@ class StimMeasPatternManager:
             for elec in range(self.n_elec):
                 # Stimulation vector
                 stim_vec = np.zeros(self.tn_elec)
+                inj_indices = []
                 for i, inj_elec in enumerate(self.inj_electrodes):
                     idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
-                    stim_vec[idx] = self.config.amplitude * self.inj_weights[i]
+                    inj_indices.append(idx)
+
+                stim_currents = build_stim_currents(
+                    drive_mode=self.drive_mode,
+                    drive_value=self.drive_value,
+                    inj_indices=inj_indices,
+                    inj_weights=self.inj_weights,
+                    electrode_lengths_m=self._electrode_lengths_m,
+                )
+                for idx, current in zip(inj_indices, stim_currents):
+                    stim_vec[idx] = current
 
                 # Measurement matrix
                 meas_mat = self._make_meas_matrix(elec, ring)

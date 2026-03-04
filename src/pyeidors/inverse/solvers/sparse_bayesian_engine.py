@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
@@ -137,7 +138,27 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
         ):
             return self._cached_jacobian
 
-        jacobian = self._eit_pde.jacobian_wrt_parameter(baseline_values)
+        cache_manager = getattr(self.eit_system, "cache_manager", None)
+        if cache_manager is not None and cache_manager.enabled and self.config.cache_jacobian:
+            baseline = np.ascontiguousarray(baseline_values, dtype=np.float64)
+            payload = {
+                "solver": "sparse_bayesian",
+                "baseline_hash": hashlib.sha256(baseline.tobytes()).hexdigest(),
+                "n_elements": self.n_elements,
+                "n_measurements": self.n_measurements,
+                "subspace_rank": self.config.subspace_rank,
+                "coarse_levels": tuple(self.config.coarse_levels or ()),
+                "pde_object_id": int(id(self._eit_pde)),
+            }
+            jacobian, _ = cache_manager.get_or_compute(
+                artifact="jacobian",
+                payload=payload,
+                compute_fn=lambda: self._eit_pde.jacobian_wrt_parameter(baseline_values),
+                persist=True,
+                cost=10.0,
+            )
+        else:
+            jacobian = self._eit_pde.jacobian_wrt_parameter(baseline_values)
 
         if self.config.cache_jacobian:
             self._cached_jacobian = jacobian
@@ -160,8 +181,29 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
         return noise_sigma
 
     def _build_coarse_hierarchy(self) -> List[Tuple[int, List[np.ndarray]]]:
-        return build_coarse_hierarchy(
-            config=self.config,
-            n_elements=self.n_elements,
-            cache=self._coarse_levels_cache,
+        cache_manager = getattr(self.eit_system, "cache_manager", None)
+        if cache_manager is None or not cache_manager.enabled:
+            return build_coarse_hierarchy(
+                config=self.config,
+                n_elements=self.n_elements,
+                cache=self._coarse_levels_cache,
+            )
+
+        payload = {
+            "solver": "sparse_bayesian",
+            "n_elements": self.n_elements,
+            "coarse_group_size": self.config.coarse_group_size,
+            "coarse_levels": tuple(self.config.coarse_levels or ()),
+        }
+        hierarchy, _ = cache_manager.get_or_compute(
+            artifact="sparse_basis",
+            payload=payload,
+            compute_fn=lambda: build_coarse_hierarchy(
+                config=self.config,
+                n_elements=self.n_elements,
+                cache=self._coarse_levels_cache,
+            ),
+            persist=True,
+            cost=8.0,
         )
+        return hierarchy

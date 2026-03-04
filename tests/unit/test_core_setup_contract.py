@@ -14,7 +14,9 @@ def _new_system() -> EITSystem:
         n_elec=16,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
         use_meas_current=False,
         rotate_meas=True,
     )

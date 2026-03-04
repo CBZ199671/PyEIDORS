@@ -7,6 +7,8 @@ import pytest
 from dolfinx import fem
 from scipy.sparse.linalg import splu
 
+from pyeidors.forward import EITForwardModel
+
 
 def test_measurement_projection_matches_manual_loop(eit_system):
     manager = eit_system.fwd_model.pattern_manager
@@ -42,3 +44,39 @@ def test_forward_solve_vectorized_matches_per_pattern_solve(eit_system):
         manual_voltages[i, :] = sol[model.dofs : model.dofs + model.n_elec]
 
     np.testing.assert_allclose(electrode_voltages, manual_voltages, atol=1e-10, rtol=1e-10)
+
+
+def test_forward_backends_match(eit_mesh):
+    from pyeidors.data.structures import PatternConfig
+
+    pattern = PatternConfig(
+        n_elec=16,
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
+        use_meas_current=False,
+        rotate_meas=True,
+    )
+    z = np.full(16, 1e-5, dtype=float)
+    model_petsc = EITForwardModel(
+        n_elec=16,
+        pattern_config=pattern,
+        z=z,
+        mesh=eit_mesh,
+        linear_backend="petsc",
+    )
+    model_scipy = EITForwardModel(
+        n_elec=16,
+        pattern_config=pattern,
+        z=z,
+        mesh=eit_mesh,
+        linear_backend="scipy",
+    )
+
+    sigma = fem.Function(model_petsc.V_sigma)
+    sigma.x.array[:] = 1.0
+    _, u_petsc = model_petsc.forward_solve(sigma)
+    _, u_scipy = model_scipy.forward_solve(sigma)
+    np.testing.assert_allclose(u_petsc, u_scipy, atol=1e-9, rtol=1e-9)

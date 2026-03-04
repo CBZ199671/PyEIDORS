@@ -49,11 +49,15 @@ tank_final_results/
 
 ### Command
 ```bash
-python scripts/run_gn_absolute_eidors_style.py \
+python scripts/run_reconstruction_unified.py \
+  --method gn-absolute \
+  --input-mode paired \
+  --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
+  --metadata data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml \
   --background-sigma 0.002 \
   --lambda 0.5 \
-  --output-dir results/tank_final_results/absolute_imaging \
-  --max-iter 20
+  --max-iter 20 \
+  --output-root results/tank_final_results
 ```
 
 ### Key parameters
@@ -76,11 +80,15 @@ python scripts/run_gn_absolute_eidors_style.py \
 
 ### Command
 ```bash
-python scripts/run_single_step_diff_realdata.py \
+python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
   --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
+  --reference-col 0 \
+  --target-col 2 \
   --background-sigma 0.008 \
   --lambda 0.9 \
-  --output results/tank_final_results/difference_imaging
+  --output-root results/tank_final_results
 ```
 
 ### Key parameters

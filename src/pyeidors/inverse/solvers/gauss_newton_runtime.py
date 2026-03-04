@@ -315,6 +315,16 @@ def run_reconstruction(
                 )
                 pbar.update(1)
 
+    cache_stats = {}
+    if getattr(reconstructor, "cache_manager", None) is not None:
+        cache_stats = reconstructor.cache_manager.stats()
+    backend_info = {
+        "linear_backend": getattr(reconstructor.fwd_model, "linear_backend", "unknown"),
+        "performance_mode": getattr(reconstructor, "performance_mode", "aggressive"),
+        "forward_cache_lookup": getattr(reconstructor.fwd_model, "_last_cache_lookup", {}),
+        "jacobian_cache_lookup": getattr(reconstructor.jacobian_calculator, "_last_cache_lookup", {}),
+    }
+
     results = SolverOutput(
         conductivity=sigma_current,
         residual_history=residual_history,
@@ -337,6 +347,12 @@ def run_reconstruction(
             if reconstructor._meas_weight_sqrt is not None
             else None
         ),
+        diagnostics={
+            "cache_hits": cache_stats.get("total_hits", 0),
+            "cache_misses": cache_stats.get("total_misses", 0),
+            "cache_stats": cache_stats,
+            "backend_info": backend_info,
+        },
     )
 
     if reconstructor.verbose:

@@ -71,6 +71,20 @@ def run_sparse_reconstruction(
         "target_measurement": target_vector,
         "clip_bounds": clip_bounds,
     }
+    cache_stats = {}
+    if getattr(reconstructor.eit_system, "cache_manager", None) is not None:
+        cache_stats = reconstructor.eit_system.cache_manager.stats()
+    diagnostics.update(
+        {
+            "cache_hits": cache_stats.get("total_hits", 0),
+            "cache_misses": cache_stats.get("total_misses", 0),
+            "cache_stats": cache_stats,
+            "backend_info": {
+                "linear_backend": getattr(reconstructor.fwd_model, "linear_backend", "unknown"),
+                "performance_mode": getattr(reconstructor.eit_system, "performance_mode", "aggressive"),
+            },
+        }
+    )
 
     return SolverOutput(
         conductivity=conductivity_function,

@@ -75,7 +75,9 @@ def eit_system(eit_mesh):
         n_elec=16,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
         use_meas_current=False,
         rotate_meas=True,
     )
@@ -85,6 +87,7 @@ def eit_system(eit_mesh):
         contact_impedance=np.full(16, 1e-5, dtype=float),
         regularization_type="noser",
         regularization_alpha=1.0,
+        cache_scope="off",
     )
     system.setup(mesh=eit_mesh)
     # Keep tests fast while still exercising full GN pipeline.

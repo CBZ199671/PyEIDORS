@@ -20,7 +20,7 @@ def basic_usage_example():
     # Check environment
     print("1. Environment Check")
     env = check_environment()
-    print(f"   FEniCS available: {env['fenics_available']}")
+    print(f"   DOLFINx available: {env['dolfinx_available']}")
     print(f"   PyTorch available: {env['torch_available']}")
     print(f"   CUDA available: {env['cuda_available']}")
     if env['torch_available']:
@@ -37,7 +37,9 @@ def basic_usage_example():
         n_elec=n_elec,
         stim_pattern='{ad}',  # Adjacent stimulation pattern
         meas_pattern='{ad}',  # Adjacent measurement pattern
-        amplitude=1.0         # Stimulation current amplitude
+        drive_mode='normalized',
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
     )
 
     # Mesh configuration

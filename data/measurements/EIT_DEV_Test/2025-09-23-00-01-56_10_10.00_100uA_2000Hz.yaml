@@ -1,7 +1,9 @@
 n_elec: 16
 stim_pattern: "{ad}"
 meas_pattern: "{ad}"
-amplitude: 0.0001
+drive_mode: "total_current"
+drive_value: 0.0001
+geometry_scale_to_m: 1.0
 use_meas_current: false
 use_meas_current_next: 0
 rotate_meas: true

@@ -15,7 +15,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--baseline", type=Path, required=True, help="Baseline metrics JSON.")
     parser.add_argument("--optimized", type=Path, required=True, help="Optimized metrics JSON.")
     parser.add_argument("--report", type=Path, required=True, help="Markdown report output path.")
-    parser.add_argument("--min-improvement", type=float, default=0.10, help="Required median improvement ratio.")
+    parser.add_argument(
+        "--min-improvement",
+        type=float,
+        default=0.50,
+        help="Required median improvement ratio ((baseline-optimized)/baseline). 0.50 == 2x speedup.",
+    )
     parser.add_argument("--max-regression", type=float, default=0.05, help="Allowed worst-case regression ratio.")
     return parser.parse_args()
 
@@ -52,6 +57,7 @@ def _render_report(
         "# Performance Guard Report",
         "",
         f"- Median improvement: `{median_improvement:.2%}`",
+        f"- Median speedup: `{(1.0 / max(1e-12, 1.0 - median_improvement)):.2f}x`",
         f"- Worst regression: `{worst_regression:.2%}`",
         "",
         "| Case | Baseline (s) | Optimized (s) | Improvement |",

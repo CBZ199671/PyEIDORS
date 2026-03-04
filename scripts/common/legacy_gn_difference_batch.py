@@ -28,7 +28,7 @@ from scipy.linalg import lu_factor, lu_solve
 
 import sys
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
 SCRIPTS_PATH = REPO_ROOT / "scripts"
 if str(SRC_PATH) not in sys.path:
@@ -226,13 +226,13 @@ def _prepare_shared_context(
     mesh_name: str,
     n_elec: int,
     radius: float,
-    pattern_amplitude: Optional[float],
+    drive_value: Optional[float],
     contact_impedance: float,
     background_sigma: float,
     lam: float,
 ) -> dict:
-    stim_amplitude = pattern_amplitude if pattern_amplitude is not None else 1.0
-    print(f"[INFO] Diff imaging amplitude={stim_amplitude:.2e} (EIDORS-style, relative dSigma)")
+    stim_drive_value = drive_value if drive_value is not None else 1.0
+    print(f"[INFO] Diff imaging drive_mode=normalized, drive_value={stim_drive_value:.2e}")
 
     mesh = load_or_create_mesh(
         mesh_dir=mesh_dir,
@@ -244,7 +244,9 @@ def _prepare_shared_context(
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=stim_amplitude,
+        drive_mode="normalized",
+        drive_value=stim_drive_value,
+        geometry_scale_to_m=1.0,
         use_meas_current=False,
         rotate_meas=True,
     )
@@ -286,7 +288,7 @@ def _prepare_shared_context(
         "Jt": Jt,
         "A": A,
         "solver": solver,
-        "stim_amplitude": stim_amplitude,
+        "stim_drive_value": stim_drive_value,
     }
 
 
@@ -460,7 +462,7 @@ def _process_frames(
         lambda_=lam,
         rmse_abs=rmse_abs,
         step_size_alpha=alpha,
-        pattern_amplitude=ctx["stim_amplitude"],
+        drive_value=ctx["stim_drive_value"],
         measurement_gain=measurement_gain,
     )
     return rmse_abs
@@ -543,7 +545,7 @@ def _parse_args() -> argparse.Namespace:
 
     parser.add_argument("--lambda", dest="lam", type=float, default=0.1, help="regularization lambda")
     parser.add_argument("--use-part", choices=["real", "imag", "mag"], default="real")
-    parser.add_argument("--pattern-amplitude", type=float, default=None, help="override stimulation amplitude (A)")
+    parser.add_argument("--drive-value", type=float, default=None, help="override stimulation drive value (normalized mode)")
     parser.add_argument(
         "--contact-impedance",
         type=float,
@@ -621,7 +623,7 @@ def main() -> None:
         mesh_name=args.mesh_name,
         n_elec=args.n_elec,
         radius=args.radius,
-        pattern_amplitude=args.pattern_amplitude,
+        drive_value=args.drive_value,
         contact_impedance=args.contact_impedance,
         background_sigma=args.background_sigma,
         lam=args.lam,

@@ -3,7 +3,7 @@
 
 Key points:
 - Uses only CSV column 3 (zero-based index 2) as target frame real part.
-- Stimulation/measurement patterns and amplitude from companion YAML metadata.
+- Stimulation/measurement patterns and drive config from companion YAML metadata.
 - Mesh: 16 electrodes, cylinder radius 0.03 m, z_contact=1e-5, default refinement 12.
 - Regularization: NOSER, lambda=0.02; GN max 15 iterations with backtracking line search.
 - Initial conductivity: 0.001 S/m.
@@ -21,7 +21,7 @@ import numpy as np
 from dolfinx import fem
 
 import sys
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
 SCRIPTS_PATH = REPO_ROOT / "scripts"
 if str(SRC_PATH) not in sys.path:

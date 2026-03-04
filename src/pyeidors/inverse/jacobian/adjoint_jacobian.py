@@ -81,9 +81,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             J = self._assemble_torch(grad_u_all, grad_adj_all)
         else:
             J = self._assemble_numpy(grad_u_all, grad_adj_all)
-
-        amp = float(getattr(self.fwd_model.pattern_manager.config, "amplitude", 1.0))
-        return J * amp
+        return J
 
     def _compute_field_gradients(self, field_solutions):
         gradients = []

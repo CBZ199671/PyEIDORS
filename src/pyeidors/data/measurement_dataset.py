@@ -169,12 +169,24 @@ class MeasurementDataset:
         if missing:
             raise KeyError(f"metadata missing required fields: {', '.join(missing)}")
 
+        if "amplitude" in metadata:
+            raise ValueError(
+                "metadata field 'amplitude' has been removed. "
+                "Use explicit drive fields instead: "
+                "'drive_mode' ('line_current_density'|'total_current'|'normalized'), "
+                "'drive_value', and optional 'geometry_scale_to_m' / "
+                "'electrode_length_m_override'."
+            )
+
         return PatternConfig(
             n_elec=int(metadata["n_elec"]),
             n_rings=int(metadata.get("n_rings", 1)),
             stim_pattern=metadata.get("stim_pattern", "{ad}"),
             meas_pattern=metadata.get("meas_pattern", "{ad}"),
-            amplitude=float(metadata.get("amplitude", 1.0)),
+            drive_mode=str(metadata.get("drive_mode", "line_current_density")),
+            drive_value=float(metadata.get("drive_value", 1.0)),
+            geometry_scale_to_m=float(metadata.get("geometry_scale_to_m", 1.0)),
+            electrode_length_m_override=metadata.get("electrode_length_m_override"),
             use_meas_current=_parse_bool(metadata.get("use_meas_current"), False),
             use_meas_current_next=int(metadata.get("use_meas_current_next", 0)),
             rotate_meas=_parse_bool(metadata.get("rotate_meas"), True),

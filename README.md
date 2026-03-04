@@ -4,7 +4,7 @@
   <img src="pictures/Fig.%204.%20fig_absolute_vs_difference.png" alt="PyEIDORS banner" width="900" />
 </p>
 
-[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![Python](https://img.shields.io/badge/python-3.13-blue)](pyproject.toml)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Backend](https://img.shields.io/badge/backend-FEniCSx%20(DOLFINx)-orange)
 ![Accel](https://img.shields.io/badge/accel-PyTorch-red)
@@ -30,8 +30,9 @@ PyEIDORS uses **Nix + uv** as the primary development path for FEniCSx:
 git clone https://github.com/CBZ199671/PyEIDORS.git
 cd PyEIDORS
 nix develop
-uv pip install --python .venv/bin/python --no-deps -e .
-python -c "import dolfinx, basix, ufl; print(dolfinx.__version__)"
+scripts/env/sync_locked_env.sh --check
+python scripts/env/verify_env_manifest.py
+python -c "import dolfinx, torch, cuqi, pyeidors"
 ```
 
 Then run a quick workflow check:
@@ -54,6 +55,12 @@ Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
   - `system.setup(mesh_source="cache", mesh_dir="eit_meshes", mesh_name="mesh_...")`
   - `system.setup(mesh_source="generated", radius=1.0, mesh_size=0.1)`
 - Solver APIs now return typed `SolverOutput` objects (not ad-hoc dictionaries).
+- `EITSystem` now exposes cache controls for repeat runs:
+  - `cache_scope`: `"off" | "process" | "disk" | "both"` (default `"both"`)
+  - `cache_dir`: disk cache root (default `.pyeidors_cache/v2`)
+  - `system.get_cache_stats()` / `system.clear_cache(scope="both")`
+- Forward backend defaults to PETSc (`linear_backend="petsc"`), with SciPy fallback (`"scipy"`).
+- `performance_mode` now supports `"aggressive"` (default) and `"safe"`.
 
 ### Plot Language & Font Control
 
@@ -115,7 +122,7 @@ Parameter settings for the forward modeling and inverse solution corresponding t
 | Category | Parameter | b | c | d | e |
 |---|---|---:|---:|---:|---:|
 | Fwd. | Background conductivity (S/m) | 0.008 | 0.008 | 0.008 | 0.008 |
-| Fwd. | Stimulation amplitude | 1.0 | 5e-5 | 1.0 | 5e-5 |
+| Fwd. | Drive mode / value | normalized / 1.0 | line current density / 5e-5 A/m | normalized / 1.0 | line current density / 5e-5 A/m |
 | Fwd. | Measurement gain | 10 | 10 | 10 | 10 |
 | Fwd. | Contact impedance | 1e-6 | 1e-6 | 1e-6 | 1e-6 |
 | Fwd. | Mesh radius | 0.025 | 0.025 | 0.025 | 0.025 |
@@ -159,6 +166,18 @@ Highlights:
 - Modular design with `EITSystem` as the core coordinator for geometry, forward, and inverse problem components.
 - Supports Gmsh + DOLFINx native mesh workflow, with built-in stimulation/measurement pattern manager, synthetic data generation, and visualization tools.
 - Provides examples, tests, and reports to help verify electrode layouts, mesh quality, and end-to-end reconstruction pipelines.
+
+### Current Drive Semantics
+
+PyEIDORS now uses explicit drive semantics instead of a single ambiguous amplitude scalar:
+
+- `drive_mode="line_current_density"`: `drive_value` is in `A/m` (recommended for 2D physical modeling).
+- `drive_mode="total_current"`: `drive_value` is in `A`.
+- `drive_mode="normalized"`: dimensionless drive for algorithmic comparisons.
+
+In `line_current_density` mode, physical electrode length is computed from mesh boundary integration and `geometry_scale_to_m`, with optional explicit override via `electrode_length_m_override`.
+
+Migration details and old/new field mapping: `docs/MIGRATION_CURRENT_UNITS.md`.
 
 ### Key Components
 
@@ -208,6 +227,13 @@ CI perf gating compares:
 - optimized profile: measurement-space / single-step options
 - thresholds: median improvement `>=10%`, worst-case regression `<=5%`
 
+Phase-2 hard refactor upgrades this gate to:
+- median improvement `>=50%` (equivalent to median speedup `>=2x`)
+- worst-case regression `<=5%`
+
+Cache architecture and tuning guide:
+- `docs/CACHE_ARCHITECTURE.md`
+
 | Elements | Baseline (s) | Measurement-Space (s) | Speedup |
 |---:|---:|---:|---:|
 | 2,650 | 1.873 | 1.336 | **1.40×** |
@@ -241,10 +267,14 @@ The script will:
 After data normalization (see `docs/MEASUREMENT_DATA_SPEC.md`), run reconstruction:
 
 ```bash
-python scripts/run_real_measurement_reconstruction.py \
+python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
   --csv data/measurements/sample.csv \
   --metadata data/measurements/sample.yaml \
-  --use-cols 0 2
+  --reference-col 0 \
+  --target-col 2 \
+  --output-root results/real_measurements
 ```
 
 The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
@@ -253,15 +283,21 @@ The script validates the measurement matrix, builds `EITSystem`, and performs di
 Run the advanced sparse Bayesian solver (supports GPU):
 
 ```bash
-python scripts/run_sparse_bayesian_reconstruction.py \
+python scripts/run_reconstruction_unified.py \
+  --method sparse-bayes \
+  --input-mode paired \
   --csv data/measurements/sample.csv \
-  --mode both --solver fista --use-gpu
+  --metadata data/measurements/sample.yaml \
+  --reference-col 0 \
+  --target-col 2 \
+  --solver fista --use-gpu \
+  --output-root results/sparse_bayesian
 ```
 
 The repository also includes a pre-generated tank sparse Bayesian demo under:
 `results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0/` (see `COMMAND.md` inside).
 
-Results are written to `results/sparse_bayesian/` by default. For a full list of options, run `python scripts/run_sparse_bayesian_reconstruction.py --help`.
+Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full list of options, run `python scripts/run_reconstruction_unified.py --help`.
 
 ## Data, Visualization, and Testing
 
@@ -287,3 +323,31 @@ Results are written to `results/sparse_bayesian/` by default. For a full list of
 The primary maintained developer workflow is **Nix + uv** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
 
 Docker content is archived for historical reproducibility in `docs/archive/DOCKER_LEGACY.md`.
+
+### Locked Environment Contract (1:1 Repro)
+
+PyEIDORS now ships a locked two-layer environment contract:
+
+- System layer: `flake.lock` (Nix, including DOLFINx/FEniCSx stack).
+- Python layer: `uv.lock` + fixed profile extras `torch,cuqi,dev`.
+
+Entering `nix develop` automatically does:
+
+1. `.venv` bootstrap/rebuild (Python 3.13, system-site-packages enabled).
+2. `scripts/env/sync_locked_env.sh --check`.
+3. On drift, automatic `scripts/env/sync_locked_env.sh --repair`.
+4. Import sanity checks for `dolfinx, torch, cuqi, numpy, scipy, pyeidors`.
+
+Manual commands:
+
+```bash
+scripts/env/sync_locked_env.sh --print-profile
+scripts/env/sync_locked_env.sh --check
+scripts/env/sync_locked_env.sh --repair
+python scripts/env/verify_env_manifest.py
+```
+
+Platform lock manifests:
+
+- `env/manifests/macos-aarch64.lock.json`
+- `env/manifests/linux-x86_64.lock.json`

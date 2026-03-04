@@ -4,13 +4,16 @@ This directory contains one of the paper's tank difference-imaging results using
 
 ## Command
 ```bash
-cd /root/shared && python scripts/run_single_step_diff_realdata.py \
+cd /root/shared && python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
   --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
+  --reference-col 0 \
+  --target-col 2 \
   --background-sigma 0.008 \
   --lambda 0.9 \
-  --pattern-amplitude 5e-05 \
-  --output results/tank_final_results/difference_imaging_physical_bg0008_lam0.9
+  --output-root results/tank_final_results
 ```
 
 ## Notes
-- `--pattern-amplitude 5e-05` corresponds to 50 µA (physical drive current), used to match the voltage scale.
+- Drive mode/current comes from workflow defaults and input metadata handling in the unified runner.

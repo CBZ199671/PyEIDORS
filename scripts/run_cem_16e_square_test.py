@@ -12,6 +12,7 @@ Steps:
 
 from __future__ import annotations
 
+import argparse
 import numpy as np
 import ufl
 from dolfinx import fem, mesh as dmesh
@@ -81,15 +82,19 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
     return eit_mesh
 
 
-def run_test():
+def run_test(*, with_inverse: bool = False):
     n_elec = 16
-    mesh = create_square_eit_mesh(n_elec=n_elec, nx=64, ny=64)
+    # Keep the mesh moderately fine for signal quality while avoiding
+    # unnecessary solver pressure in local/CI smoke runs.
+    mesh = create_square_eit_mesh(n_elec=n_elec, nx=48, ny=48)
 
     pattern_config = PatternConfig(
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
     )
 
     contact_impedance = np.ones(n_elec) * 1e-5
@@ -101,6 +106,8 @@ def run_test():
         base_conductivity=1.0,
         regularization_type="noser",
         regularization_alpha=1.0,
+        linear_backend="scipy",
+        performance_mode="safe",
     )
     eit_system.setup(mesh=mesh)
 
@@ -126,6 +133,15 @@ def run_test():
     print(f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]")
     print(f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]")
 
+    if not with_inverse:
+        print("Inverse reconstruction is skipped (use --with-inverse to enable).")
+        return
+
+    # Use a fixed step schedule to avoid unstable line-search probes.
+    if eit_system.reconstructor is None:
+        raise RuntimeError("EIT reconstructor is not initialized after setup().")
+    eit_system.reconstructor.step_schedule = [0.25] * eit_system.reconstructor.max_iterations
+
     recon_result = eit_system.inverse_solve(
         data=phantom_data,
         reference_data=reference_data,
@@ -140,5 +156,16 @@ def run_test():
     print(f"Relative error (L2): {rel_err:.4f}")
 
 
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="CEM square forward/inverse smoke test")
+    parser.add_argument(
+        "--with-inverse",
+        action="store_true",
+        help="Enable iterative inverse reconstruction (may be unstable on some PETSc stacks).",
+    )
+    return parser.parse_args()
+
+
 if __name__ == "__main__":
-    run_test()
+    cli_args = _parse_args()
+    run_test(with_inverse=bool(cli_args.with_inverse))

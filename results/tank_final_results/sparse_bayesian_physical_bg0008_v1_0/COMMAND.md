@@ -6,10 +6,11 @@ This directory contains a sparse Bayesian (difference) reconstruction on the tan
 ## Command
 
 ```bash
-cd /root/shared && python scripts/run_sparse_bayesian_reconstruction.py \
+cd /root/shared && python scripts/run_reconstruction_unified.py \
+  --method sparse-bayes \
+  --input-mode paired \
   --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv \
   --metadata data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml \
-  --mode difference \
   --reference-col 0 \
   --target-col 2 \
   --difference-calibration after \
@@ -30,7 +31,7 @@ cd /root/shared && python scripts/run_sparse_bayesian_reconstruction.py \
   --solver fista \
   --use-gpu \
   --gpu-dtype float32 \
-  --output-root results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0
+  --output-root results/tank_final_results
 ```
 
 ## Notes
@@ -38,4 +39,3 @@ cd /root/shared && python scripts/run_sparse_bayesian_reconstruction.py \
 - Physical drive current is read from the metadata (`amplitude: 5e-05` for 50 µA).
 - The CSV is assumed to be amplifier-scaled; `--measurement-gain 10` converts it back to physical units.
 - This run uses `difference-calibration=after`, which calibrates the difference vector after subtraction.
-

@@ -5,13 +5,17 @@
 
 ## Command
 ```bash
-cd /root/shared && python scripts/run_single_step_diff_realdata.py \
+cd /root/shared && python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
   --csv data/measurements/EIT_DEV_Test/2025-09-23-00-01-56_10_10.00_100uA_2000Hz.csv \
+  --reference-col 0 \
+  --target-col 2 \
   --background-sigma 0.15 \
   --lambda 0.5 \
   --transparent \
   --step-size-calibration \
-  --output results/corn_stem_imaging/difference
+  --output-root results/corn_stem_imaging
 ```
 
 ## Parameters

@@ -67,12 +67,14 @@ def main() -> None:
     # 1) Load cached mesh (16 electrodes), avoiding gmsh dependency
     mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16)
 
-    # 2) Build system (adjacent drive/measurement, amplitude 1; contact impedance 1e-6)
+    # 2) Build system (adjacent drive/measurement, normalized drive=1; contact impedance 1e-6)
     pattern_cfg = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
         use_meas_current=False,
         rotate_meas=True,
     )

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import shutil
@@ -18,7 +19,7 @@ def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=["baseline", "optimized"], required=True)
     parser.add_argument("--output", type=Path, required=True)
-    parser.add_argument("--repeat", type=int, default=3)
+    parser.add_argument("--repeat", type=int, default=5)
     parser.add_argument("--work-dir", type=Path, default=Path("test_results/perf"))
     return parser.parse_args()
 
@@ -39,6 +40,20 @@ def _timed_case(
     value = float(median(samples))
     print(f"{name}: median {value:.4f}s from {len(samples)} run(s)")
     return value
+
+
+def _read_single_warm_metric(csv_path: Path) -> float:
+    with csv_path.open("r", encoding="utf-8", newline="") as f:
+        rows = list(csv.DictReader(f))
+    if len(rows) != 1:
+        raise RuntimeError(f"Expected exactly one warm row in {csv_path}, got {len(rows)}")
+    warm_raw = rows[0].get("warm_sec")
+    if warm_raw is None or warm_raw == "":
+        raise RuntimeError(f"Missing warm_sec in {csv_path}")
+    warm = float(warm_raw)
+    if warm <= 0:
+        raise RuntimeError(f"Non-positive warm_sec in {csv_path}: {warm}")
+    return warm
 
 
 def main() -> int:
@@ -66,13 +81,14 @@ def main() -> int:
         diff_solver = "measurement"
         parity_solver = "single-step"
 
+    diff_repeat = 20
     diff_cmd = [
         python,
         "scripts/benchmarks/benchmark_difference_runtime.py",
         "--refinements",
-        "8",
+        "9",
         "--repeat",
-        "1",
+        str(diff_repeat),
         "--measure-warm",
         "--single-step-space",
         diff_solver,
@@ -95,13 +111,17 @@ def main() -> int:
     if parity_solver == "gauss-newton":
         parity_cmd.extend(["--difference-max-iterations", "2"])
 
+    _timed_case(
+        "benchmark_difference_runtime (command)",
+        diff_cmd,
+        args.repeat,
+        env,
+    )
+    diff_metric = _read_single_warm_metric(diff_csv)
+    print(f"benchmark_difference_runtime (warm solve): {diff_metric:.4f}s")
+
     cases = {
-        "benchmark_difference_runtime": _timed_case(
-            "benchmark_difference_runtime",
-            diff_cmd,
-            args.repeat,
-            env,
-        ),
+        "benchmark_difference_runtime": diff_metric,
         "run_synthetic_parity": _timed_case(
             "run_synthetic_parity",
             parity_cmd,

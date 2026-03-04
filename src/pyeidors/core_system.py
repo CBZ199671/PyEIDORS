@@ -7,6 +7,7 @@ from typing import Any, Dict, Optional, Union
 
 import numpy as np
 
+from .cache import CacheManager, CachePolicy, CacheScope
 from .core_system_facade import CoreSystemFacadeMixin
 from .core_system_helpers import (
     conductivity_to_image,
@@ -24,6 +25,7 @@ from .inverse.regularization.smoothness import (
     TikhonovRegularization,
 )
 from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
+from .physics import UnitCheckReport, run_unit_consistency_checks
 
 logger = logging.getLogger(__name__)
 
@@ -42,6 +44,12 @@ class EITSystem(CoreSystemFacadeMixin):
         regularization_alpha: float = 1.0,
         noser_exponent: float = 0.5,
         noser_floor: float = 1e-12,
+        linear_backend: str = "petsc",
+        linear_backend_config: Optional[dict[str, Any]] = None,
+        performance_mode: str = "aggressive",
+        cache_scope: CacheScope = "both",
+        cache_dir: str = ".pyeidors_cache/v2",
+        cache_policy: Optional[CachePolicy] = None,
         **kwargs,
     ) -> None:
         _ = kwargs
@@ -50,7 +58,9 @@ class EITSystem(CoreSystemFacadeMixin):
             n_elec=n_elec,
             stim_pattern="{ad}",
             meas_pattern="{ad}",
-            amplitude=1.0,
+            drive_mode="line_current_density",
+            drive_value=1.0,
+            geometry_scale_to_m=1.0,
         )
         self.mesh_config = mesh_config or MeshConfig(radius=1.0, refinement=8)
         self.contact_impedance = (
@@ -64,6 +74,20 @@ class EITSystem(CoreSystemFacadeMixin):
         self.regularization_alpha = float(regularization_alpha)
         self.noser_exponent = float(noser_exponent)
         self.noser_floor = float(noser_floor)
+        self.linear_backend = str(linear_backend).strip().lower()
+        self.linear_backend_config = dict(linear_backend_config or {})
+        self.performance_mode = str(performance_mode).strip().lower()
+        if self.performance_mode not in {"safe", "aggressive"}:
+            raise ValueError(
+                f"Unsupported performance_mode={performance_mode!r}. "
+                "Expected one of: 'safe', 'aggressive'."
+            )
+        self.cache_scope: CacheScope = cache_scope
+        self.cache_manager = CacheManager(
+            scope=cache_scope,
+            cache_dir=cache_dir,
+            policy=cache_policy,
+        )
 
         self.mesh: Optional[EITMesh] = None
         self.fwd_model: Optional[EITForwardModel] = None
@@ -137,6 +161,10 @@ class EITSystem(CoreSystemFacadeMixin):
             pattern_config=self.pattern_config,
             z=self.contact_impedance,
             mesh=self.mesh,
+            linear_backend=self.linear_backend,
+            backend_config=self.linear_backend_config,
+            cache_manager=self.cache_manager,
+            performance_mode=self.performance_mode,
         )
         jacobian_calculator = DirectJacobianCalculator(self.fwd_model)
         regularization = self._build_regularization(jacobian_calculator)
@@ -144,6 +172,8 @@ class EITSystem(CoreSystemFacadeMixin):
             fwd_model=self.fwd_model,
             jacobian_calculator=jacobian_calculator,
             regularization=regularization,
+            cache_manager=self.cache_manager,
+            performance_mode=self.performance_mode,
         )
         self._is_initialized = True
 
@@ -185,3 +215,34 @@ class EITSystem(CoreSystemFacadeMixin):
         self._require_initialized()
         diff_data = difference_measurement(data, reference_data)
         return self.reconstructor.reconstruct(diff_data, initial_guess)
+
+    def run_unit_precheck(
+        self,
+        expected_domain_size_m: float | None = None,
+        strict: bool = True,
+    ) -> UnitCheckReport:
+        """Run unit consistency checks before experiments.
+
+        Args:
+            expected_domain_size_m: Optional expected physical size (max bbox extent).
+            strict: Raise ``ValueError`` if any blocking check fails.
+        """
+        self._require_initialized()
+        report = run_unit_consistency_checks(
+            self.fwd_model,
+            expected_domain_size_m=expected_domain_size_m,
+        )
+        if strict and report.has_errors:
+            details = " | ".join(report.summary_lines())
+            raise ValueError(f"Unit precheck failed: {details}")
+        return report
+
+    def get_cache_stats(self) -> dict[str, Any]:
+        """Return runtime cache hit/miss and footprint statistics."""
+
+        return self.cache_manager.stats()
+
+    def clear_cache(self, scope: CacheScope = "both") -> None:
+        """Clear cache entries for selected scope."""
+
+        self.cache_manager.clear(scope=scope)

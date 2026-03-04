@@ -18,7 +18,7 @@ try:
 except ImportError as exc:  # pragma: no cover
     raise ImportError("This script requires PyYAML. Install via: pip install pyyaml") from exc
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
 SCRIPTS_PATH = REPO_ROOT / "scripts"
 if str(SRC_PATH) not in __import__("sys").path:
@@ -45,7 +45,9 @@ DEFAULT_METADATA = {
     "n_elec": 16,
     "stim_pattern": "{ad}",
     "meas_pattern": "{ad}",
-    "amplitude": 1.0e-4,
+    "drive_mode": "line_current_density",
+    "drive_value": 1.0e-4,
+    "geometry_scale_to_m": 1.0,
     "use_meas_current": False,
     "use_meas_current_next": 0,
     "rotate_meas": True,
@@ -300,6 +302,11 @@ def load_metadata(path: Optional[Path]) -> Dict[str, any]:
 
     merged = dict(DEFAULT_METADATA)
     merged.update(metadata)
+    if "amplitude" in metadata:
+        raise ValueError(
+            "metadata field 'amplitude' is no longer supported. "
+            "Use 'drive_mode' and 'drive_value' instead."
+        )
     return merged
 
 
@@ -623,7 +630,10 @@ def main() -> None:
         n_elec=int(metadata["n_elec"]),
         stim_pattern=metadata.get("stim_pattern", "{ad}"),
         meas_pattern=metadata.get("meas_pattern", "{ad}"),
-        amplitude=float(metadata.get("amplitude", 1.0)),
+        drive_mode=str(metadata.get("drive_mode", "line_current_density")),
+        drive_value=float(metadata.get("drive_value", 1.0)),
+        geometry_scale_to_m=float(metadata.get("geometry_scale_to_m", 1.0)),
+        electrode_length_m_override=metadata.get("electrode_length_m_override"),
         use_meas_current=bool(metadata.get("use_meas_current", False)),
         use_meas_current_next=int(metadata.get("use_meas_current_next", 0)),
         rotate_meas=bool(metadata.get("rotate_meas", True)),

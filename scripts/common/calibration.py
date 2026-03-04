@@ -56,23 +56,23 @@ def apply_calibration(vector: np.ndarray, scale: float, bias: float) -> np.ndarr
 
 def normalize_measurements(
     measurements: np.ndarray,
-    target_amplitude: float | None = None,
-    source_amplitude: float = 1.0,
+    target_drive_value: float | None = None,
+    source_drive_value: float = 1.0,
 ) -> tuple[np.ndarray, float]:
-    """Normalize measurements to target amplitude.
+    """Normalize measurements to target drive value.
 
     Args:
         measurements: Measurement data.
-        target_amplitude: Target stimulation amplitude, None means no scaling.
-        source_amplitude: Original stimulation amplitude.
+        target_drive_value: Target stimulation drive value, None means no scaling.
+        source_drive_value: Original stimulation drive value.
 
     Returns:
         (normalized_measurements, scale_factor)
     """
-    if target_amplitude is None or target_amplitude <= 0:
+    if target_drive_value is None or target_drive_value <= 0:
         return measurements, 1.0
-    if source_amplitude <= 0:
-        raise ValueError("source_amplitude must be positive")
+    if source_drive_value <= 0:
+        raise ValueError("source_drive_value must be positive")
 
-    factor = target_amplitude / source_amplitude
+    factor = target_drive_value / source_drive_value
     return measurements * factor, factor

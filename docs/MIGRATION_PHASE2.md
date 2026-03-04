@@ -14,6 +14,8 @@ This document lists the intentional breaking changes introduced by the Phase-2 m
 | Demo script names | `demo_fenics_*` | `demo_dolfinx_*` |
 | System setup | implicit mesh fallback inside `EITSystem.setup()` | explicit `setup(mesh=...)` / `setup(mesh_source='cache'|'generated', ...)` |
 | Solver return contract | ad-hoc `dict`/`Function` mixed outputs | typed `SolverOutput` for GN/Sparse solvers |
+| Forward backend | SciPy-only practical path | PETSc default (`linear_backend='petsc'`) + SciPy fallback |
+| Cache architecture | ad-hoc script-level reuse | two-layer cache (`process` + `disk`) via `CacheManager` |
 
 ## Runtime Behavior Changes
 
@@ -24,6 +26,13 @@ This document lists the intentional breaking changes introduced by the Phase-2 m
    - mandatory gmsh test path
    - coverage gate `--cov-fail-under=85`
    - perf guard (`scripts/ci/perf_snapshot.py` + `scripts/ci/perf_guard.py`)
+4. New runtime knobs:
+   - `EITSystem(..., cache_scope='both', cache_dir='.pyeidors_cache/v2')`
+   - `EITSystem(..., performance_mode='aggressive'|'safe')`
+   - `EITSystem(..., linear_backend='petsc'|'scipy')`
+5. Cache runtime API:
+   - `system.get_cache_stats()`
+   - `system.clear_cache(scope='process'|'disk'|'both')`
 
 ## Upgrade Checklist
 
@@ -40,12 +49,15 @@ nix develop -c bash -lc 'python -m pytest -q --cov=src/pyeidors --cov-fail-under
 
 ```bash
 nix develop -c bash -lc '
-  python scripts/ci/perf_snapshot.py --mode baseline --repeat 3 --output test_results/perf/baseline.json
-  python scripts/ci/perf_snapshot.py --mode optimized --repeat 3 --output test_results/perf/optimized.json
+  python scripts/ci/perf_snapshot.py --mode baseline --repeat 5 --output test_results/perf/baseline.json
+  python scripts/ci/perf_snapshot.py --mode optimized --repeat 5 --output test_results/perf/optimized.json
   python scripts/ci/perf_guard.py \
     --baseline test_results/perf/baseline.json \
     --optimized test_results/perf/optimized.json \
     --report test_results/perf/comparison.md \
-    --min-improvement 0.10 --max-regression 0.05
+    --min-improvement 0.50 --max-regression 0.05
 '
 ```
+
+See also:
+- `docs/CACHE_ARCHITECTURE.md`

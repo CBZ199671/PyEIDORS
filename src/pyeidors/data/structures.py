@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
 
 import numpy as np
 
@@ -18,7 +18,10 @@ class PatternConfig:
     n_rings: int = 1
     stim_pattern: Union[str, List[int]] = '{ad}'
     meas_pattern: Union[str, List[int]] = '{ad}'
-    amplitude: float = 1.0
+    drive_mode: Literal["line_current_density", "total_current", "normalized"] = "line_current_density"
+    drive_value: float = 1.0
+    geometry_scale_to_m: float = 1.0
+    electrode_length_m_override: Optional[Union[float, List[float]]] = None
     use_meas_current: bool = False
     use_meas_current_next: int = 0
     rotate_meas: bool = True

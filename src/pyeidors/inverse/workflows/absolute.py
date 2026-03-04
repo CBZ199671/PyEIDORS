@@ -69,6 +69,7 @@ def perform_absolute_reconstruction(
     result_metadata: Dict[str, Any] = {
         "display_values": conductivity_values,
         "baseline_used": baseline_elem,
+        "solver_diagnostics": reconstruction.diagnostics,
     }
     if metadata:
         result_metadata.update(metadata)

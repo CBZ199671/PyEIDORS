@@ -26,6 +26,7 @@ Example usage comparing against EIDORS voltages:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -34,9 +35,11 @@ from typing import Dict, Iterable, List, Optional, Tuple
 import numpy as np
 from dolfinx import fem
 from scipy.optimize import minimize_scalar
+from scipy.linalg import lu_factor, lu_solve
 import matplotlib.pyplot as plt
 
 from pyeidors import EITSystem
+from pyeidors.cache import hash_array
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITData, EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array
@@ -182,7 +185,9 @@ def build_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
         rotate_meas=True,
     )
 
@@ -276,6 +281,42 @@ def build_measurement_weights(baseline_vector: np.ndarray,
     return weights
 
 
+def _solve_with_cached_factor(
+    system: EITSystem,
+    lhs: np.ndarray,
+    rhs: np.ndarray,
+    *,
+    payload: dict,
+    persist: bool,
+) -> np.ndarray:
+    cache_manager = getattr(system, "cache_manager", None)
+    if cache_manager is None or not cache_manager.enabled:
+        try:
+            return np.linalg.solve(lhs, rhs)
+        except np.linalg.LinAlgError:
+            out, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+            return out
+
+    def _factorize():
+        try:
+            lu, piv = lu_factor(lhs)
+            return {"method": "lu", "lu": lu, "piv": piv}
+        except np.linalg.LinAlgError:
+            return {"method": "lstsq", "lhs": lhs}
+
+    factor, _ = cache_manager.get_or_compute(
+        artifact="single_step_operator",
+        payload=payload,
+        compute_fn=_factorize,
+        persist=persist,
+        cost=8.0,
+    )
+    if factor["method"] == "lu":
+        return np.asarray(lu_solve((factor["lu"], factor["piv"]), rhs), dtype=float)
+    out, *_ = np.linalg.lstsq(factor["lhs"], rhs, rcond=None)
+    return np.asarray(out, dtype=float)
+
+
 def solve_single_step_delta(system: EITSystem,
                             baseline_image: EITImage,
                             raw_diff: np.ndarray,
@@ -310,6 +351,8 @@ def solve_single_step_delta(system: EITSystem,
     diag_entries = np.maximum(diag_entries, args.noser_floor)
     noser_diag = diag_entries ** args.noser_exponent
     hp = max(args.difference_hyperparameter, 0.0)
+    jac_hash = hash_array(np.ascontiguousarray(jacobian_weighted, dtype=np.float64))
+    noser_hash = hashlib.sha256(np.ascontiguousarray(noser_diag, dtype=np.float64).tobytes()).hexdigest()
     if args.single_step_space == "measurement":
         inv_noser = 1.0 / noser_diag
         jw_scaled = jacobian_weighted * inv_noser[None, :]
@@ -317,19 +360,37 @@ def solve_single_step_delta(system: EITSystem,
         if hp > 0:
             lhs = lhs + (hp ** 2) * np.eye(lhs.shape[0])
         rhs = dv_weighted
-        try:
-            y = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            y, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        y = _solve_with_cached_factor(
+            system,
+            lhs,
+            rhs,
+            payload={
+                "space": "measurement",
+                "hp": float(hp),
+                "jac_hash": jac_hash,
+                "noser_hash": noser_hash,
+                "shape": lhs.shape,
+            },
+            persist=True,
+        )
         delta = inv_noser * (jacobian_weighted.T @ y)
     else:
         RtR = np.diag(noser_diag)
         lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
         rhs = jacobian_weighted.T @ dv_weighted
-        try:
-            delta = np.linalg.solve(lhs, rhs)
-        except np.linalg.LinAlgError:
-            delta, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
+        delta = _solve_with_cached_factor(
+            system,
+            lhs,
+            rhs,
+            payload={
+                "space": "parameter",
+                "hp": float(hp),
+                "jac_hash": jac_hash,
+                "noser_hash": noser_hash,
+                "shape": lhs.shape,
+            },
+            persist=False,
+        )
 
     return delta, weights
 
