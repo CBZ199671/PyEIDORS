@@ -8,8 +8,10 @@ from __future__ import annotations
 import argparse
 import csv
 import hashlib
+import os
 import sys
 import time
+import tracemalloc
 from pathlib import Path
 from typing import List, Optional, Tuple
 
@@ -18,6 +20,10 @@ import matplotlib.pyplot as plt
 from dolfinx import fem
 from scipy.optimize import minimize_scalar
 from scipy.linalg import lu_factor, lu_solve
+
+# Keep runtime consistent with test environment on macOS mixed PETSc/Torch stack.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
@@ -136,6 +142,8 @@ def parse_args() -> argparse.Namespace:
                         help="CSV output path.")
     parser.add_argument("--plot-out", type=Path, default=None,
                         help="Optional plot output path.")
+    parser.add_argument("--memory-stats", action="store_true",
+                        help="Record peak memory (MiB) for timed single-step calls.")
     return parser.parse_args()
 
 
@@ -213,7 +221,7 @@ def solve_single_step_delta(fwd_model,
     if solver_choice == "measurement":
         inv_noser = 1.0 / noser_diag
         jw_scaled = jacobian_weighted * inv_noser[None, :]
-        lhs = jw_scaled @ jacobian_weighted.T
+        lhs = np.dot(jw_scaled, jacobian_weighted.T)
         if hp > 0:
             lhs = lhs + (hp ** 2) * np.eye(lhs.shape[0])
         rhs = dv_weighted
@@ -231,11 +239,11 @@ def solve_single_step_delta(fwd_model,
                 y, *_ = np.linalg.lstsq(lhs, rhs, rcond=None)
         else:
             y = _solve_with_cached_factor(system, lhs, rhs, payload=payload, persist=True)
-        delta = inv_noser * (jacobian_weighted.T @ y)
+        delta = inv_noser * np.dot(jacobian_weighted.T, y)
     else:
         RtR = np.diag(noser_diag)
-        lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
-        rhs = jacobian_weighted.T @ dv_weighted
+        lhs = np.dot(jacobian_weighted.T, jacobian_weighted) + (hp ** 2) * RtR
+        rhs = np.dot(jacobian_weighted.T, dv_weighted)
         payload = {
             "space": "parameter",
             "hp": float(hp),
@@ -313,6 +321,26 @@ def timed_single_step(system: EITSystem,
                                 delta, step_size, args.conductivity_bounds)
 
 
+def timed_single_step_with_stats(
+    system: EITSystem,
+    baseline_image: EITImage,
+    baseline_meas: np.ndarray,
+    target_meas: np.ndarray,
+    args: argparse.Namespace,
+) -> Tuple[float, Optional[float]]:
+    if args.memory_stats:
+        tracemalloc.start()
+    t0 = time.perf_counter()
+    timed_single_step(system, baseline_image, baseline_meas, target_meas, args)
+    elapsed = time.perf_counter() - t0
+    peak_mib = None
+    if args.memory_stats:
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        peak_mib = float(peak / (1024 * 1024))
+    return elapsed, peak_mib
+
+
 def main() -> None:
     args = parse_args()
     if not args.measure_cold and not args.measure_warm:
@@ -358,23 +386,37 @@ def main() -> None:
 
         cold_time: Optional[float] = None
         warm_time: Optional[float] = None
+        cold_peak_mib: Optional[float] = None
+        warm_peak_mib: Optional[float] = None
 
         if args.measure_cold:
-            t0 = time.perf_counter()
-            timed_single_step(system, baseline_image,
-                              baseline_meas.meas, target_meas.meas, args)
-            cold_time = time.perf_counter() - t0
+            cold_time, cold_peak_mib = timed_single_step_with_stats(
+                system,
+                baseline_image,
+                baseline_meas.meas,
+                target_meas.meas,
+                args,
+            )
 
         if args.measure_warm:
             timed_single_step(system, baseline_image,
                               baseline_meas.meas, target_meas.meas, args)
             times: List[float] = []
+            peaks: List[float] = []
             for _ in range(max(1, args.repeat)):
-                t0 = time.perf_counter()
-                timed_single_step(system, baseline_image,
-                                  baseline_meas.meas, target_meas.meas, args)
-                times.append(time.perf_counter() - t0)
+                elapsed, peak_mib = timed_single_step_with_stats(
+                    system,
+                    baseline_image,
+                    baseline_meas.meas,
+                    target_meas.meas,
+                    args,
+                )
+                times.append(elapsed)
+                if peak_mib is not None:
+                    peaks.append(peak_mib)
             warm_time = float(np.median(times))
+            if peaks:
+                warm_peak_mib = float(np.median(peaks))
 
         n_elements = int(fem.Function(system.fwd_model.V_sigma).x.array.size)
         n_nodes = mesh_num_vertices(mesh)
@@ -384,13 +426,19 @@ def main() -> None:
             "elements": n_elements,
             "cold_sec": cold_time,
             "warm_sec": warm_time,
+            "cold_peak_mib": cold_peak_mib,
+            "warm_peak_mib": warm_peak_mib,
         })
 
         line = f"ref={refinement} nodes={n_nodes} elems={n_elements}"
         if cold_time is not None:
             line += f" cold={cold_time:.4f}s"
+            if cold_peak_mib is not None:
+                line += f" cold_peak={cold_peak_mib:.2f}MiB"
         if warm_time is not None:
             line += f" warm={warm_time:.4f}s"
+            if warm_peak_mib is not None:
+                line += f" warm_peak={warm_peak_mib:.2f}MiB"
         print(line)
 
         if args.compare_solvers and refinement == compare_refinement:
@@ -444,7 +492,15 @@ def main() -> None:
     with args.csv_out.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
-            fieldnames=["refinement", "nodes", "elements", "cold_sec", "warm_sec"],
+            fieldnames=[
+                "refinement",
+                "nodes",
+                "elements",
+                "cold_sec",
+                "warm_sec",
+                "cold_peak_mib",
+                "warm_peak_mib",
+            ],
         )
         writer.writeheader()
         for row in rows:

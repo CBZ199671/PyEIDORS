@@ -122,6 +122,7 @@ class EITForwardModel:
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
         self.M = self._assemble_electrode_matrix()
+        self._M_petsc = None
 
     def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
         """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
@@ -248,14 +249,61 @@ class EITForwardModel:
 
         return csr_matrix(M_lil)
 
-    def create_full_matrix(self, sigma: fem.Function):
-        """Build complete system matrix including conductivity term."""
+    def _assemble_conductivity_matrix(self, sigma: fem.Function):
+        """Assemble the conductivity-dependent stiffness matrix in PETSc form."""
         a_form = ufl.inner(sigma * ufl.grad(self.u), ufl.grad(self.phi)) * ufl.dx
         A = fem_petsc.assemble_matrix(fem.form(a_form))
         A.assemble()
-        scipy_A = self._petsc_to_csr(A)
+        return A
+
+    def _create_full_matrix_scipy(self, sigma: fem.Function) -> csr_matrix:
+        """Build full system matrix for SciPy backend."""
+        scipy_A = self._petsc_to_csr(self._assemble_conductivity_matrix(sigma))
         scipy_A.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
         return scipy_A + self.M
+
+    def _get_electrode_matrix_petsc(self):
+        if PETSc is None:
+            raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
+        if self._M_petsc is None:
+            self._M_petsc = self._csr_to_petsc(self.M)
+        return self._M_petsc
+
+    def _expand_conductivity_csr_to_full(self, conductivity_mat):
+        indptr, indices, values = conductivity_mat.getValuesCSR()
+        full_size = self.dofs + self.n_elec + 1
+        full_indptr = np.empty(full_size + 1, dtype=np.int32)
+        local_indptr = np.asarray(indptr, dtype=np.int32)
+        full_indptr[: self.dofs + 1] = local_indptr
+        full_indptr[self.dofs + 1 :] = int(local_indptr[-1])
+        return PETSc.Mat().createAIJ(
+            size=(full_size, full_size),
+            csr=(
+                full_indptr,
+                np.asarray(indices, dtype=np.int32),
+                np.asarray(values, dtype=np.float64),
+            ),
+            comm=self.mesh.comm,
+        )
+
+    def _create_full_matrix_petsc(self, sigma: fem.Function):
+        """Build full system matrix for PETSc backend without SciPy round-trips."""
+        if PETSc is None:
+            raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
+        conductivity_mat = self._assemble_conductivity_matrix(sigma)
+        conductivity_augmented = self._expand_conductivity_csr_to_full(conductivity_mat)
+        conductivity_augmented.assemblyBegin()
+        conductivity_augmented.assemblyEnd()
+        full_matrix = self._get_electrode_matrix_petsc().copy()
+        full_matrix.axpy(1.0, conductivity_augmented, structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN)
+        full_matrix.assemblyBegin()
+        full_matrix.assemblyEnd()
+        conductivity_augmented.destroy()
+        return full_matrix
+
+    def create_full_matrix(self, sigma: fem.Function):
+        """Build complete system matrix including conductivity term."""
+        return self._create_full_matrix_scipy(sigma)
 
     def _sigma_fingerprint(self, sigma: fem.Function) -> str:
         values = np.ascontiguousarray(sigma.x.array, dtype=np.float64)
@@ -284,7 +332,6 @@ class EITForwardModel:
 
     def _solve_with_scipy(self, sigma: fem.Function, pattern_matrix: np.ndarray):
         n_patterns = pattern_matrix.shape[0]
-        system_matrix = self.create_full_matrix(sigma).tocsc()
         sigma_hash = self._sigma_fingerprint(sigma)
         payload = self._base_cache_payload(sigma_hash=sigma_hash, n_patterns=n_patterns)
         payload["solver"] = "splu"
@@ -293,7 +340,7 @@ class EITForwardModel:
             lu, lookup = self.cache_manager.get_or_compute(
                 artifact="forward_factor",
                 payload=payload,
-                compute_fn=lambda: splu(system_matrix),
+                compute_fn=lambda: splu(self._create_full_matrix_scipy(sigma).tocsc()),
                 persist=False,
                 cost=16.0,
             )
@@ -304,6 +351,7 @@ class EITForwardModel:
                 "artifact": lookup.artifact,
             }
         else:
+            system_matrix = self._create_full_matrix_scipy(sigma).tocsc()
             lu = splu(system_matrix)
             self._last_cache_lookup = {"hit": False, "layer": "disabled", "artifact": "forward_factor"}
 
@@ -312,10 +360,13 @@ class EITForwardModel:
         sol_matrix = lu.solve(rhs_matrix)
         return np.asarray(sol_matrix, dtype=float)
 
-    def _make_petsc_solver_bundle(self, system_matrix: csr_matrix):
+    def _make_petsc_solver_bundle(self, system_matrix):
         if PETSc is None:
             raise RuntimeError("petsc4py is required for linear_backend='petsc'")
-        A = self._csr_to_petsc(system_matrix)
+        if isinstance(system_matrix, csr_matrix):
+            A = self._csr_to_petsc(system_matrix)
+        else:
+            A = system_matrix
         ksp = PETSc.KSP().create(self.mesh.comm)
         ksp.setOperators(A)
         ksp.setType(self.backend_config.ksp_type)
@@ -349,7 +400,6 @@ class EITForwardModel:
 
     def _solve_with_petsc(self, sigma: fem.Function, pattern_matrix: np.ndarray):
         n_patterns = pattern_matrix.shape[0]
-        system_matrix = self.create_full_matrix(sigma).tocsr()
         sigma_hash = self._sigma_fingerprint(sigma)
         payload = self._base_cache_payload(sigma_hash=sigma_hash, n_patterns=n_patterns)
         payload["solver"] = "petsc-ksp"
@@ -358,7 +408,7 @@ class EITForwardModel:
             bundle, lookup = self.cache_manager.get_or_compute(
                 artifact="forward_factor",
                 payload=payload,
-                compute_fn=lambda: self._make_petsc_solver_bundle(system_matrix),
+                compute_fn=lambda: self._make_petsc_solver_bundle(self._create_full_matrix_petsc(sigma)),
                 persist=False,
                 cost=24.0,
             )
@@ -369,6 +419,7 @@ class EITForwardModel:
                 "artifact": lookup.artifact,
             }
         else:
+            system_matrix = self._create_full_matrix_petsc(sigma)
             bundle = self._make_petsc_solver_bundle(system_matrix)
             self._last_cache_lookup = {"hit": False, "layer": "disabled", "artifact": "forward_factor"}
 
@@ -378,9 +429,11 @@ class EITForwardModel:
         rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
 
         sol_matrix = np.zeros_like(rhs_matrix)
+        b = A.createVecRight()
         x = A.createVecRight()
+        b_array = b.getArray(readonly=False)
         for i in range(n_patterns):
-            b = PETSc.Vec().createWithArray(rhs_matrix[:, i], comm=self.mesh.comm)
+            b_array[:] = rhs_matrix[:, i]
             ksp.solve(b, x)
             if ksp.getConvergedReason() < 0:
                 # Keep PETSc as default path, but fail over to SciPy for singular/ill-conditioned
@@ -415,7 +468,12 @@ class EITForwardModel:
             sol_matrix[self.dofs : self.dofs + self.n_elec, :].T,
             dtype=float,
         )
-        u_all = [potential_block[:, i].copy() for i in range(n_patterns)]
+        u_views = []
+        for i in range(n_patterns):
+            column = potential_block[:, i]
+            column.setflags(write=False)
+            u_views.append(column)
+        u_all = tuple(u_views)
         return u_all, electrode_block
 
     def fwd_solve(self, img: EITImage):

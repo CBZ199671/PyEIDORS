@@ -60,6 +60,12 @@ class MeasurementDataset:
     metadata: Mapping[str, Any]
     data_type: str = "real"
 
+    def __post_init__(self) -> None:
+        self.measurements = self._as_read_only(np.asarray(self.measurements, dtype=float))
+        self.stim_matrix = self._as_read_only(np.asarray(self.stim_matrix, dtype=float))
+        self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
+        self.metadata = dict(self.metadata)
+
     # ---------------------------- Construction Interface ----------------------------
     @classmethod
     def from_metadata(
@@ -101,39 +107,74 @@ class MeasurementDataset:
         return cls(
             measurements=measurements_array,
             pattern_config=pattern_config,
-            stim_matrix=pattern_manager.stim_matrix.copy(),
+            stim_matrix=pattern_manager.stim_matrix,
             n_elec=pattern_config.n_elec,
             n_stim=pattern_manager.n_stim,
             n_meas_total=pattern_manager.n_meas_total,
             n_meas_per_stim=tuple(pattern_manager.n_meas_per_stim),
-            metadata=dict(metadata),
+            metadata=metadata,
             data_type=data_type,
         )
 
     # ---------------------------- Public API ----------------------------
-    def to_eit_data(self, frame_index: int = 0, data_type: Optional[str] = None) -> EITData:
+    def to_eit_data(
+        self,
+        frame_index: int = 0,
+        data_type: Optional[str] = None,
+        copy_policy: str = "view",
+    ) -> EITData:
         """Convert specified frame to ``EITData`` object.
 
         Args:
             frame_index: Selected frame index, defaults to first frame.
             data_type: Override default ``data_type``, e.g., ``"difference"``.
+            copy_policy: ``"view"`` for read-only shared memory, ``"copy"`` for independent arrays.
         """
 
+        if copy_policy not in {"view", "copy"}:
+            raise ValueError(
+                f"copy_policy must be 'view' or 'copy', got: {copy_policy!r}"
+            )
         frame = self._get_frame(frame_index)
+        stim_pattern = self.stim_matrix
+        if copy_policy == "copy":
+            frame = frame.copy()
+            stim_pattern = stim_pattern.copy()
         return EITData(
-            meas=frame.copy(),
-            stim_pattern=self.stim_matrix.copy(),
+            meas=frame,
+            stim_pattern=stim_pattern,
             n_elec=self.n_elec,
             n_stim=self.n_stim,
             n_meas=self.n_meas_total,
             type=data_type or self.data_type,
         )
 
-    def iter_frames(self, data_type: Optional[str] = None) -> Iterator[EITData]:
+    def iter_frames(
+        self,
+        data_type: Optional[str] = None,
+        copy_policy: str = "view",
+    ) -> Iterator[EITData]:
         """Generate ``EITData`` objects frame by frame."""
 
         for idx in range(self.measurements.shape[0]):
-            yield self.to_eit_data(frame_index=idx, data_type=data_type)
+            yield self.to_eit_data(
+                frame_index=idx,
+                data_type=data_type,
+                copy_policy=copy_policy,
+            )
+
+    def replace_measurements(
+        self,
+        measurements: Union[np.ndarray, Sequence[Sequence[float]]],
+    ) -> None:
+        """Replace measurement matrix while preserving shape and read-only contract."""
+        normalized = self._normalize_measurements(measurements)
+        if normalized.shape != self.measurements.shape:
+            raise ValueError(
+                "replacement measurements must preserve shape: "
+                f"expected {self.measurements.shape}, got {normalized.shape}"
+            )
+        self.measurements = self._as_read_only(normalized)
 
     def summary(self) -> Dict[str, Any]:
         """Return summary of measurement configuration and data dimensions."""
@@ -161,6 +202,12 @@ class MeasurementDataset:
                 f"got {array.ndim} dimensions"
             )
         return array
+
+    @staticmethod
+    def _as_read_only(array: np.ndarray) -> np.ndarray:
+        view = np.asarray(array)
+        view.setflags(write=False)
+        return view
 
     @staticmethod
     def _pattern_config_from_metadata(metadata: Mapping[str, Any]) -> PatternConfig:

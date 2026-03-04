@@ -9,6 +9,46 @@ from typing import Any, Dict, Iterable, List
 from .recon_cli_models import CaseResult, ReconstructionCase, ReconstructionMethod
 
 
+def _bump(counter: Dict[str, int], key: str) -> None:
+    counter[key] = counter.get(key, 0) + 1
+
+
+def _gather_cache_layers(metrics: Dict[str, Any], counter: Dict[str, int]) -> None:
+    lookups = metrics.get("cache_lookups")
+    if not isinstance(lookups, dict):
+        return
+    context = lookups.get("context")
+    if isinstance(context, dict):
+        for value in context.values():
+            if isinstance(value, dict):
+                layer = value.get("layer")
+                if isinstance(layer, str):
+                    _bump(counter, layer)
+            elif isinstance(value, str):
+                _bump(counter, value)
+    forward_factor = lookups.get("forward_factor")
+    if isinstance(forward_factor, dict):
+        layer = forward_factor.get("layer")
+        if isinstance(layer, str):
+            _bump(counter, layer)
+
+
+def _aggregate_cache_summary(results: List[CaseResult]) -> Dict[str, Any]:
+    layer_counts: Dict[str, int] = {}
+    latest_stats: Dict[str, Any] = {}
+    for result in results:
+        if not isinstance(result.metrics, dict):
+            continue
+        _gather_cache_layers(result.metrics, layer_counts)
+        cache_stats = result.metrics.get("cache_stats")
+        if isinstance(cache_stats, dict):
+            latest_stats = cache_stats
+    return {
+        "layer_hits": layer_counts,
+        "latest_cache_stats": latest_stats,
+    }
+
+
 def write_batch_summary(
     *,
     method: ReconstructionMethod,
@@ -34,6 +74,7 @@ def write_batch_summary(
         "failed": failed,
         "config": config,
         "results": [result.to_dict() for result in results],
+        "cache_summary": _aggregate_cache_summary(results),
     }
 
     summary_path = output_root / "batch_summary.json"

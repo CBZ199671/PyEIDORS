@@ -80,12 +80,12 @@ def calibrate_measurements(
     baseline_vector: np.ndarray,
     frame_index: int,
 ) -> Dict[str, float]:
-    ref_vector = dataset.measurements[frame_index].copy()
+    ref_vector = dataset.measurements[frame_index]
     scale, bias = compute_scale_bias(ref_vector, baseline_vector)
     LOGGER.info("Calibration parameters: scale=%.3e, bias=%.3e", scale, bias)
     if abs(scale) < 1e-18:
         scale = 1e-18 if scale >= 0 else -1e-18
-    dataset.measurements = (dataset.measurements - bias) / scale
+    dataset.replace_measurements((dataset.measurements - bias) / scale)
     return {"scale": scale, "bias": bias}
 
 
@@ -95,8 +95,8 @@ def clone_eit_data(
     data_type: Optional[str] = None,
 ) -> EITData:
     return EITData(
-        meas=new_meas.copy(),
-        stim_pattern=data.stim_pattern.copy(),
+        meas=np.asarray(new_meas, dtype=float),
+        stim_pattern=data.stim_pattern,
         n_elec=data.n_elec,
         n_stim=data.n_stim,
         n_meas=data.n_meas,
@@ -133,8 +133,16 @@ def run_difference_pipeline(
     calibration_mode: str,
     pre_calibration: Optional[Dict[str, float]] = None,
 ) -> Dict[str, Any]:
-    reference_data = dataset.to_eit_data(frame_index=0, data_type="reference")
-    target_data = dataset.to_eit_data(frame_index=1, data_type="measurement")
+    reference_data = dataset.to_eit_data(
+        frame_index=0,
+        data_type="reference",
+        copy_policy="view",
+    )
+    target_data = dataset.to_eit_data(
+        frame_index=1,
+        data_type="measurement",
+        copy_policy="view",
+    )
     metadata: Dict[str, Any] = {
         "target_idx": 1,
         "reference_idx": 0,

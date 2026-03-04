@@ -31,10 +31,11 @@ def line_search_torch(
 
     perturb = calc_perturb_limits(reconstructor, x, delta_sigma_np)
     mlist = np.full(len(perturb), np.nan)
+    baseline_objective = current_residual ** 2 * 0.5
 
     for i, alpha in enumerate(perturb):
         if i == 0:
-            mlist[i] = current_residual ** 2 * 0.5
+            mlist[i] = baseline_objective
             continue
 
         sigma_test_np = x + alpha * delta_sigma_np
@@ -72,7 +73,7 @@ def line_search_torch(
         else:
             mlist[i] = total_objective
 
-        if mlist[i] / mlist[0] > 1e10:
+        if baseline_objective > 0 and mlist[i] / baseline_objective > 1e10:
             break
 
     valid_idx = np.where(np.isfinite(mlist))[0]
@@ -172,7 +173,12 @@ def update_perturb_eidors_style(
         else:
             reconstructor._line_search_perturb = reconstructor._line_search_perturb * 10
     else:
-        all_similar = len(goodi) > 0 and np.all(mlist[goodi] / mlist[0] - 1 > -10 * dtol)
+        baseline_objective = float(mlist[0])
+        all_similar = (
+            len(goodi) > 0
+            and baseline_objective > 0
+            and np.all(mlist[goodi] / baseline_objective - 1 > -10 * dtol)
+        )
         if all_similar and perturb[-1] * 10 < 1.0 + 1e-9:
             reconstructor._line_search_perturb = reconstructor._line_search_perturb * 10
         elif chosen_step > 0 and perturb[-1] > 0:

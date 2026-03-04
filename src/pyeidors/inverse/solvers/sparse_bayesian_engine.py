@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 from ...data.structures import EITData, EITImage
+from ...cache.object_signature import (
+    backend_signature_from_forward_model,
+    model_signature_from_forward_model,
+    pattern_signature_from_forward_model,
+)
 from ...utils.cuqi_imports import suppress_known_cuqi_import_warnings
 from .sparse_bayesian_backends import SparseBayesianBackendMixin
 from .eit_pde import EITPDE, create_pde_model
@@ -150,10 +155,15 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
                 "n_measurements": self.n_measurements,
                 "subspace_rank": self.config.subspace_rank,
                 "coarse_levels": tuple(self.config.coarse_levels or ()),
-                "pde_object_id": int(id(self._eit_pde)),
+                "model_signature": model_signature_from_forward_model(self.fwd_model),
+                "pattern_signature": pattern_signature_from_forward_model(self.fwd_model),
+                "backend_signature": backend_signature_from_forward_model(self.fwd_model),
             }
-            jacobian, _ = cache_manager.get_or_compute(
+            jacobian, _ = cache_manager.get_or_compute_semantic(
                 artifact="jacobian",
+                name="calc_jacobian",
+                namespace="sparse",
+                cache_obj=payload,
                 payload=payload,
                 compute_fn=lambda: self._eit_pde.jacobian_wrt_parameter(baseline_values),
                 persist=True,
@@ -205,6 +215,8 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
                 n_elements=self.n_elements,
                 cache=self._coarse_levels_cache,
             ),
+            name="coarse_hierarchy",
+            namespace="sparse",
             persist=True,
             cost=8.0,
         )

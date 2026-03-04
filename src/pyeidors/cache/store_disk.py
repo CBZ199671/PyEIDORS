@@ -1,7 +1,8 @@
-"""Persistent disk cache store backed by sqlite index + object files."""
+"""Persistent disk cache store with score-aware eviction."""
 
 from __future__ import annotations
 
+from contextlib import contextmanager
 import gzip
 import os
 from pathlib import Path
@@ -11,11 +12,17 @@ import tempfile
 import threading
 import time
 from typing import Any
-from contextlib import contextmanager
+
+import numpy as np
+
+
+def _compute_score(*, effort: float, use_count: int, priority: float) -> float:
+    scaled_effort = max(float(effort), 1e-9)
+    return float(np.log10(scaled_effort * max(int(use_count), 1)) + float(priority))
 
 
 class DiskCacheStore:
-    """Persistent cache store with best-effort corruption recovery."""
+    """Persistent cache store backed by sqlite + object files."""
 
     def __init__(
         self,
@@ -62,16 +69,42 @@ class DiskCacheStore:
                 CREATE TABLE IF NOT EXISTS cache_entries (
                     cache_key TEXT PRIMARY KEY,
                     artifact TEXT NOT NULL,
+                    name TEXT NOT NULL DEFAULT '',
+                    namespace TEXT NOT NULL DEFAULT 'default',
                     file_path TEXT NOT NULL,
                     size_bytes INTEGER NOT NULL,
                     cost REAL NOT NULL,
+                    effort REAL NOT NULL DEFAULT 1.0,
+                    priority REAL NOT NULL DEFAULT 0.0,
+                    use_count INTEGER NOT NULL DEFAULT 1,
+                    score REAL NOT NULL DEFAULT 0.0,
                     created_at REAL NOT NULL,
                     last_access REAL NOT NULL,
                     ttl_seconds REAL
                 )
                 """
             )
+            self._ensure_schema_columns(conn)
             conn.commit()
+
+    def _ensure_schema_columns(self, conn: sqlite3.Connection) -> None:
+        existing = {
+            row[1]: row for row in conn.execute("PRAGMA table_info(cache_entries)").fetchall()
+        }
+        migrations = (
+            ("name", "ALTER TABLE cache_entries ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
+            (
+                "namespace",
+                "ALTER TABLE cache_entries ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'",
+            ),
+            ("effort", "ALTER TABLE cache_entries ADD COLUMN effort REAL NOT NULL DEFAULT 1.0"),
+            ("priority", "ALTER TABLE cache_entries ADD COLUMN priority REAL NOT NULL DEFAULT 0.0"),
+            ("use_count", "ALTER TABLE cache_entries ADD COLUMN use_count INTEGER NOT NULL DEFAULT 1"),
+            ("score", "ALTER TABLE cache_entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0"),
+        )
+        for column, statement in migrations:
+            if column not in existing:
+                conn.execute(statement)
 
     def _entry_path(self, artifact: str, key: str) -> Path:
         art_dir = self.objects_dir / artifact
@@ -101,19 +134,24 @@ class DiskCacheStore:
         with self._lock:
             with self._session() as conn:
                 row = conn.execute(
-                    "SELECT artifact, file_path, created_at, ttl_seconds FROM cache_entries WHERE cache_key = ?",
+                    """
+                    SELECT file_path, created_at, ttl_seconds, effort, priority, use_count
+                    FROM cache_entries WHERE cache_key = ?
+                    """,
                     (key,),
                 ).fetchone()
                 if row is None:
                     self.misses += 1
                     return None
-                artifact, file_path, created_at, ttl_seconds = row
+
+                file_path, created_at, ttl_seconds, effort, priority, use_count = row
                 file = Path(file_path)
                 if self._is_expired(float(created_at), ttl_seconds):
                     self._remove_entry(conn, key, file)
                     conn.commit()
                     self.misses += 1
                     return None
+
                 try:
                     payload = file.read_bytes()
                     value = self._deserialize(payload)
@@ -122,13 +160,23 @@ class DiskCacheStore:
                     conn.commit()
                     self.misses += 1
                     return None
+
+                updated_use_count = int(use_count) + 1
+                score = _compute_score(
+                    effort=float(effort),
+                    use_count=updated_use_count,
+                    priority=float(priority),
+                )
                 conn.execute(
-                    "UPDATE cache_entries SET last_access = ? WHERE cache_key = ?",
-                    (now, key),
+                    """
+                    UPDATE cache_entries
+                    SET last_access = ?, use_count = ?, score = ?
+                    WHERE cache_key = ?
+                    """,
+                    (now, updated_use_count, score, key),
                 )
                 conn.commit()
                 self.hits += 1
-                _ = artifact
                 return value
 
     def put(
@@ -139,6 +187,10 @@ class DiskCacheStore:
         artifact: str,
         cost: float,
         ttl_seconds: float | None = None,
+        name: str = "",
+        namespace: str = "default",
+        effort: float | None = None,
+        priority: float = 0.0,
     ) -> bool:
         if self.read_only:
             return False
@@ -156,23 +208,49 @@ class DiskCacheStore:
         os.replace(tmp, target)
         size = int(target.stat().st_size)
         now = time.time()
+        use_effort = float(cost if effort is None else effort)
+        score = _compute_score(effort=use_effort, use_count=1, priority=float(priority))
 
         with self._lock:
             with self._session() as conn:
                 conn.execute(
                     """
-                    INSERT INTO cache_entries(cache_key, artifact, file_path, size_bytes, cost, created_at, last_access, ttl_seconds)
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO cache_entries(
+                        cache_key, artifact, name, namespace, file_path, size_bytes, cost,
+                        effort, priority, use_count, score, created_at, last_access, ttl_seconds
+                    )
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(cache_key) DO UPDATE SET
                         artifact=excluded.artifact,
+                        name=excluded.name,
+                        namespace=excluded.namespace,
                         file_path=excluded.file_path,
                         size_bytes=excluded.size_bytes,
                         cost=excluded.cost,
+                        effort=excluded.effort,
+                        priority=excluded.priority,
+                        use_count=excluded.use_count,
+                        score=excluded.score,
                         created_at=excluded.created_at,
                         last_access=excluded.last_access,
                         ttl_seconds=excluded.ttl_seconds
                     """,
-                    (key, artifact, str(target), size, float(cost), now, now, ttl_seconds),
+                    (
+                        key,
+                        artifact,
+                        str(name),
+                        str(namespace),
+                        str(target),
+                        size,
+                        float(cost),
+                        use_effort,
+                        float(priority),
+                        1,
+                        score,
+                        now,
+                        now,
+                        ttl_seconds,
+                    ),
                 )
                 conn.commit()
                 self._evict_if_needed(conn)
@@ -188,12 +266,9 @@ class DiskCacheStore:
 
     def _evict_if_needed(self, conn: sqlite3.Connection) -> None:
         if self.max_bytes <= 0:
-            for _, file_path in conn.execute("SELECT cache_key, file_path FROM cache_entries").fetchall():
-                try:
-                    Path(file_path).unlink(missing_ok=True)
-                except Exception:
-                    pass
-            conn.execute("DELETE FROM cache_entries")
+            rows = conn.execute("SELECT cache_key, file_path FROM cache_entries").fetchall()
+            for key, file_path in rows:
+                self._remove_entry(conn, key, Path(file_path))
             return
 
         total_row = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries").fetchone()
@@ -201,7 +276,11 @@ class DiskCacheStore:
         if total <= self.max_bytes:
             return
         rows = conn.execute(
-            "SELECT cache_key, file_path, size_bytes FROM cache_entries ORDER BY cost ASC, last_access ASC"
+            """
+            SELECT cache_key, file_path, size_bytes
+            FROM cache_entries
+            ORDER BY score ASC, last_access ASC
+            """
         ).fetchall()
         for key, file_path, size in rows:
             self._remove_entry(conn, key, Path(file_path))
@@ -224,10 +303,125 @@ class DiskCacheStore:
                 conn.commit()
                 return len(rows)
 
+    def clear_name(self, name: str, namespace: str | None = None) -> int:
+        with self._lock:
+            with self._session() as conn:
+                if namespace is None:
+                    rows = conn.execute(
+                        "SELECT cache_key, file_path FROM cache_entries WHERE name = ?",
+                        (name,),
+                    ).fetchall()
+                else:
+                    rows = conn.execute(
+                        """
+                        SELECT cache_key, file_path
+                        FROM cache_entries
+                        WHERE name = ? AND namespace = ?
+                        """,
+                        (name, namespace),
+                    ).fetchall()
+                for key, file_path in rows:
+                    self._remove_entry(conn, key, Path(file_path))
+                conn.commit()
+                return len(rows)
+
+    def clear_max(self, max_bytes: int) -> int:
+        target = int(max(0, max_bytes))
+        with self._lock:
+            with self._session() as conn:
+                total_row = conn.execute(
+                    "SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries"
+                ).fetchone()
+                total = int(total_row[0] if total_row else 0)
+                if total <= target:
+                    return 0
+                rows = conn.execute(
+                    """
+                    SELECT cache_key, file_path, size_bytes
+                    FROM cache_entries
+                    ORDER BY score ASC, last_access ASC
+                    """
+                ).fetchall()
+                removed = 0
+                for key, file_path, size in rows:
+                    self._remove_entry(conn, key, Path(file_path))
+                    total -= int(size)
+                    removed += 1
+                    if total <= target:
+                        break
+                conn.commit()
+                return removed
+
+    def list_entries(
+        self,
+        *,
+        name: str | None = None,
+        namespace: str | None = None,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        query = """
+            SELECT
+                cache_key, artifact, name, namespace, size_bytes, cost, effort,
+                priority, use_count, score, created_at, last_access
+            FROM cache_entries
+        """
+        conditions: list[str] = []
+        params: list[Any] = []
+        if name is not None:
+            conditions.append("name = ?")
+            params.append(name)
+        if namespace is not None:
+            conditions.append("namespace = ?")
+            params.append(namespace)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
+        query += " ORDER BY last_access DESC"
+        if limit is not None and limit > 0:
+            query += " LIMIT ?"
+            params.append(int(limit))
+
+        with self._lock:
+            with self._session() as conn:
+                rows = conn.execute(query, tuple(params)).fetchall()
+        return [
+            {
+                "key": row[0],
+                "artifact": row[1],
+                "name": row[2],
+                "namespace": row[3],
+                "size_bytes": int(row[4]),
+                "cost": float(row[5]),
+                "effort": float(row[6]),
+                "priority": float(row[7]),
+                "use_count": int(row[8]),
+                "score": float(row[9]),
+                "created_at": float(row[10]),
+                "last_access": float(row[11]),
+                "layer": "disk",
+            }
+            for row in rows
+        ]
+
+    def collect_recent(
+        self,
+        *,
+        names: list[str],
+        limit_per_name: int = 1,
+        namespace: str | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
+        collected: dict[str, list[dict[str, Any]]] = {}
+        for name in names:
+            collected[name] = self.list_entries(
+                name=name,
+                namespace=namespace,
+                limit=max(1, int(limit_per_name)),
+            )
+        return collected
+
     def clear(self) -> None:
         self.invalidate(prefix="")
 
-    def stats(self) -> dict[str, int]:
+    def stats(self) -> dict[str, Any]:
         with self._lock:
             with self._session() as conn:
                 row = conn.execute(
@@ -235,10 +429,25 @@ class DiskCacheStore:
                 ).fetchone()
                 n_items = int(row[0] if row else 0)
                 n_bytes = int(row[1] if row else 0)
+                by_artifact = {
+                    str(item[0]): int(item[1])
+                    for item in conn.execute(
+                        "SELECT artifact, COUNT(*) FROM cache_entries GROUP BY artifact"
+                    ).fetchall()
+                }
+                by_namespace = {
+                    str(item[0]): int(item[1])
+                    for item in conn.execute(
+                        "SELECT namespace, COUNT(*) FROM cache_entries GROUP BY namespace"
+                    ).fetchall()
+                }
         return {
             "hits": self.hits,
             "misses": self.misses,
             "items": n_items,
             "bytes": n_bytes,
             "max_bytes": int(self.max_bytes),
+            "artifacts": by_artifact,
+            "namespaces": by_namespace,
         }
+

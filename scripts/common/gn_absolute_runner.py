@@ -68,6 +68,8 @@ def run_absolute_reconstruction(
     lambda_: float,
     max_iter: int,
     contact_impedance: float,
+    cache_scope: str = "both",
+    cache_dir: str = ".pyeidors_cache/v2",
 ) -> None:
     """Execute GN absolute reconstruction and save outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -105,6 +107,8 @@ def run_absolute_reconstruction(
         regularization_type="noser",
         regularization_alpha=1.0,
         noser_exponent=0.5,
+        cache_scope=cache_scope,
+        cache_dir=cache_dir,
     )
     system.setup(mesh=mesh)
     _configure_reconstructor(
@@ -114,7 +118,11 @@ def run_absolute_reconstruction(
         background_sigma=background_sigma,
     )
 
-    eit_data: EITData = dataset.to_eit_data(frame_index=0, data_type="real")
+    eit_data: EITData = dataset.to_eit_data(
+        frame_index=0,
+        data_type="real",
+        copy_policy="view",
+    )
     baseline_image = system.create_homogeneous_image(conductivity=background_sigma)
     base_forward, _ = system.fwd_model.fwd_solve(baseline_image)
 

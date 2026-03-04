@@ -8,6 +8,11 @@ from dolfinx import fem
 import dolfinx.fem.petsc as fem_petsc
 import hashlib
 
+from ...cache.object_signature import (
+    backend_signature_from_forward_model,
+    model_signature_from_forward_model,
+    pattern_signature_from_forward_model,
+)
 from ...femx import function_get_array
 from .base_jacobian import BaseJacobianCalculator
 
@@ -42,16 +47,23 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             return self._calculate_efficient(sigma) if method == "efficient" else self._calculate_traditional(sigma)
 
         sigma_values = np.ascontiguousarray(function_get_array(sigma), dtype=np.float64)
+        model_signature = model_signature_from_forward_model(self.fwd_model)
+        pattern_signature = pattern_signature_from_forward_model(self.fwd_model)
+        backend_signature = backend_signature_from_forward_model(self.fwd_model)
         payload = {
             "method": method,
             "sigma_hash": hashlib.sha256(sigma_values.tobytes()).hexdigest(),
             "n_meas": self.fwd_model.pattern_manager.n_meas_total,
             "n_elem": len(self.cell_areas),
-            "backend": self.fwd_model.linear_backend,
-            "fwd_model_id": int(id(self.fwd_model)),
+            "model_signature": model_signature,
+            "pattern_signature": pattern_signature,
+            "backend_signature": backend_signature,
         }
-        jacobian, lookup = cache_manager.get_or_compute(
+        jacobian, lookup = cache_manager.get_or_compute_semantic(
             artifact="jacobian",
+            name="calc_jacobian",
+            namespace="inverse",
+            cache_obj=payload,
             payload=payload,
             compute_fn=(lambda: self._calculate_efficient(sigma))
             if method == "efficient"

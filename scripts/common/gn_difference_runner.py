@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -11,10 +12,17 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 from scipy.optimize import minimize_scalar
 
+from pyeidors.cache import CacheManager, CachePolicy, hash_array
+from pyeidors.cache.object_signature import (
+    backend_signature_from_forward_model,
+    model_signature_from_forward_model,
+    pattern_signature_from_forward_model,
+)
 from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.utils.numeric_ops import safe_dot
 from pyeidors.visualization import create_visualizer
 
 from .mesh_utils import cell_to_node
@@ -58,6 +66,45 @@ def _make_linear_solver(A: np.ndarray) -> Optional[Callable[[np.ndarray], np.nda
         return lu_solve((lu, piv), b)
 
     return _solve
+
+
+def _build_operator_bundle(jacobian: np.ndarray, lam: float) -> dict:
+    reg_matrix = _build_noser_matrix(jacobian, exponent=0.5, alpha=1.0)
+    jacobian_t = jacobian.T
+    A = np.asarray(
+        safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
+        dtype=float,
+    ) + lam * reg_matrix
+    try:
+        lu, piv = lu_factor(A)
+        factor = {"method": "lu", "lu": lu, "piv": piv}
+    except Exception:
+        factor = {"method": "none"}
+    return {
+        "Jt": jacobian_t,
+        "A": A,
+        "reg_matrix": reg_matrix,
+        "factor": factor,
+    }
+
+
+def _solve_linear_from_bundle(bundle: dict, b: np.ndarray) -> np.ndarray:
+    factor = bundle.get("factor", {})
+    if factor.get("method") == "lu":
+        try:
+            return np.asarray(lu_solve((factor["lu"], factor["piv"]), b), dtype=float)
+        except Exception:
+            pass
+    return _solve_linear(bundle["A"], b, None)
+
+
+def _to_lookup_payload(lookup) -> dict[str, object]:
+    return {
+        "hit": bool(lookup.hit),
+        "layer": str(lookup.layer),
+        "artifact": str(lookup.artifact),
+        "key": str(lookup.key),
+    }
 
 
 def _solve_linear(
@@ -121,9 +168,21 @@ def build_shared_context(
     contact_impedance: float,
     background_sigma: float,
     lam: float,
+    cache_scope: str = "both",
+    cache_dir: str = ".pyeidors_cache/v2",
+    cache_clear_names: Optional[list[str]] = None,
 ) -> dict:
     stim_drive_value = drive_value if drive_value is not None else 1.0
     print(f"[INFO] Diff imaging drive_mode=normalized, drive_value={stim_drive_value:.2e}")
+
+    cache_manager = CacheManager(
+        scope=cache_scope,
+        cache_dir=cache_dir,
+        policy=CachePolicy(),
+    )
+    if cache_clear_names:
+        for name in cache_clear_names:
+            cache_manager.clear_name(name=name)
 
     mesh = load_or_create_mesh(
         mesh_dir=mesh_dir,
@@ -147,6 +206,7 @@ def build_shared_context(
         pattern_config=pattern_cfg,
         z=z_contact,
         mesh=mesh,
+        cache_manager=cache_manager,
     )
 
     n_elem = int(
@@ -167,16 +227,55 @@ def build_shared_context(
     n_meas_per_stim = unique_counts[0] if len(unique_counts) == 1 else None
 
     jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
-    jacobian = jac_calc.calculate_from_image(img_bg)
+    sigma_hash = hashlib.sha256(
+        np.ascontiguousarray(sigma_bg, dtype=np.float64).tobytes()
+    ).hexdigest()
+    jacobian_payload = {
+        "solver": "gn_difference",
+        "method": "adjoint",
+        "sigma_hash": sigma_hash,
+        "model_signature": model_signature_from_forward_model(fwd_model),
+        "pattern_signature": pattern_signature_from_forward_model(fwd_model),
+        "backend_signature": backend_signature_from_forward_model(fwd_model),
+    }
+    jacobian, jacobian_lookup = cache_manager.get_or_compute_semantic(
+        artifact="jacobian",
+        name="calc_jacobian",
+        namespace="difference",
+        cache_obj=jacobian_payload,
+        payload=jacobian_payload,
+        compute_fn=lambda: jac_calc.calculate_from_image(img_bg),
+        persist=True,
+        cost=12.0,
+        effort_seconds=8.0,
+    )
 
-    reg_matrix = _build_noser_matrix(jacobian, exponent=0.5, alpha=1.0)
-    jacobian_t = jacobian.T
-    A = jacobian_t @ jacobian + lam * reg_matrix
-    solver = _make_linear_solver(A)
+    operator_payload = {
+        "solver": "gn_difference",
+        "sigma_hash": sigma_hash,
+        "jacobian_hash": hash_array(np.ascontiguousarray(jacobian, dtype=np.float64)),
+        "lambda": float(lam),
+        "model_signature": jacobian_payload["model_signature"],
+        "pattern_signature": jacobian_payload["pattern_signature"],
+        "backend_signature": jacobian_payload["backend_signature"],
+    }
+    operator_bundle, operator_lookup = cache_manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name="inv_solve_diff_GN_one_step",
+        namespace="difference",
+        cache_obj=operator_payload,
+        payload=operator_payload,
+        compute_fn=lambda: _build_operator_bundle(jacobian, lam),
+        persist=True,
+        cost=16.0,
+        effort_seconds=10.0,
+    )
 
     return {
         "mesh": mesh,
         "fwd_model": fwd_model,
+        "cache_manager": cache_manager,
+        "cache_scope": cache_scope,
         "sigma_bg": sigma_bg,
         "img_bg": img_bg,
         "base_meas": base_meas,
@@ -184,10 +283,13 @@ def build_shared_context(
         "n_meas_total": n_meas_total,
         "n_meas_per_stim": n_meas_per_stim,
         "J": jacobian,
-        "Jt": jacobian_t,
-        "A": A,
-        "solver": solver,
+        "operator_bundle": operator_bundle,
         "stim_drive_value": stim_drive_value,
+        "cache_lookups": {
+            "jacobian": _to_lookup_payload(jacobian_lookup),
+            "single_step_operator": _to_lookup_payload(operator_lookup),
+            "forward_factor": dict(getattr(fwd_model, "_last_cache_lookup", {})),
+        },
     }
 
 
@@ -208,15 +310,18 @@ def process_frames(
     transparent: bool,
     write_plots: bool,
     measurement_gain: float,
-) -> float:
+) -> dict[str, object]:
     dv = vi - vh
     if dv.shape[0] != ctx["J"].shape[0]:
         raise RuntimeError(
             f"Data length {dv.shape[0]} does not match Jacobian rows {ctx['J'].shape[0]}"
         )
 
-    b = ctx["Jt"] @ dv
-    delta_sigma = _solve_linear(ctx["A"], b, ctx["solver"])
+    b = np.asarray(
+        safe_dot(ctx["operator_bundle"]["Jt"], dv, "gn_difference.operator.Jt_dv"),
+        dtype=float,
+    )
+    delta_sigma = _solve_linear_from_bundle(ctx["operator_bundle"], b)
 
     alpha = 1.0
     if step_size_calib:
@@ -333,4 +438,15 @@ def process_frames(
         drive_value=ctx["stim_drive_value"],
         measurement_gain=measurement_gain,
     )
-    return rmse_abs
+    cache_manager = ctx.get("cache_manager")
+    cache_stats = cache_manager.stats() if cache_manager is not None else {}
+    forward_lookup = dict(getattr(ctx["fwd_model"], "_last_cache_lookup", {}))
+    return {
+        "rmse_abs": rmse_abs,
+        "step_size_alpha": float(alpha),
+        "cache_lookups": {
+            "context": dict(ctx.get("cache_lookups", {})),
+            "forward_factor": forward_lookup,
+        },
+        "cache_stats": cache_stats,
+    }

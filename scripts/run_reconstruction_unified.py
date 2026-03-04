@@ -118,6 +118,24 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--coarse-relaxation", type=float, default=0.7)
     parser.add_argument("--jacobian-cache", action="store_true")
     parser.add_argument("--electrode-coverage", type=float, default=0.5)
+    parser.add_argument(
+        "--cache-scope",
+        choices=["off", "process", "both"],
+        default="both",
+        help="Cache scope for reconstruction kernels",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=REPO_ROOT / ".pyeidors_cache" / "v2",
+        help="Persistent cache directory",
+    )
+    parser.add_argument(
+        "--cache-clear-name",
+        action="append",
+        default=[],
+        help="Cache family name to clear before run (repeatable)",
+    )
 
     parser.add_argument(
         "--log-level",

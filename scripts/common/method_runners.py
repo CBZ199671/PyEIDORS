@@ -120,6 +120,8 @@ def run_gn_absolute_cases(
                 lambda_=_default(args.lam, 0.02),
                 max_iter=int(args.max_iter if args.max_iter is not None else 15),
                 contact_impedance=_default(args.contact_impedance, 1e-5),
+                cache_scope=str(getattr(args, "cache_scope", "both")),
+                cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
             )
 
             metrics = _safe_load_metrics(output_dir)
@@ -163,6 +165,9 @@ def run_gn_difference_cases(
         contact_impedance=_default(args.contact_impedance, 1e-6),
         background_sigma=_default(args.background_sigma, 1.0),
         lam=_default(args.lam, 0.1),
+        cache_scope=str(getattr(args, "cache_scope", "both")),
+        cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
+        cache_clear_names=list(getattr(args, "cache_clear_name", []) or []),
     )
 
     expected_len = int(ctx["n_meas_total"])
@@ -227,7 +232,7 @@ def run_gn_difference_cases(
                 )
                 vi, _ = align_measurement_polarity(vi, ctx["base_meas"])
 
-            rmse_abs = gn_difference_runner.process_frames(
+            diff_metrics = gn_difference_runner.process_frames(
                 vh=vh,
                 vi=vi,
                 output_dir=output_dir,
@@ -250,7 +255,7 @@ def run_gn_difference_cases(
                     case_name=case.case_name,
                     status="success",
                     output_dir=output_dir,
-                    metrics={"rmse_abs": float(rmse_abs)},
+                    metrics=diff_metrics,
                 )
             )
         except Exception as exc:  # pragma: no cover - surfaced by CLI tests
@@ -319,6 +324,8 @@ def run_sparse_bayes_difference_cases(
         pattern_config=pattern_config,
         contact_impedance=contact_impedance,
         base_conductivity=_default(args.background_sigma, 1.0),
+        cache_scope=str(getattr(args, "cache_scope", "both")),
+        cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
     )
     mesh = sparse_bayes_runner.load_or_create_mesh(
         mesh_dir=str(args.mesh_dir),
