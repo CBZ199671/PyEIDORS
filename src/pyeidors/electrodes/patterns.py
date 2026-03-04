@@ -222,4 +222,27 @@ class StimMeasPatternManager:
                 "electrode_voltages shape mismatch: "
                 f"expected {(self.n_stim, self.tn_elec)}, got {voltages.shape}"
             )
-        return self._meas_projection @ voltages.reshape(-1)
+        if not np.isfinite(voltages).all():
+            raise FloatingPointError(
+                "electrode_voltages contains non-finite values: "
+                f"{self._finite_summary(voltages)}"
+            )
+        with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
+            measured = self._meas_projection @ voltages.reshape(-1)
+        if not np.isfinite(measured).all():
+            raise FloatingPointError(
+                "Measurement projection produced non-finite values: "
+                f"{self._finite_summary(measured)}"
+            )
+        return measured
+
+    @staticmethod
+    def _finite_summary(values: np.ndarray) -> str:
+        finite = values[np.isfinite(values)]
+        if finite.size == 0:
+            return "finite_count=0"
+        return (
+            f"finite_count={finite.size} "
+            f"min={float(finite.min()):.6e} "
+            f"max={float(finite.max()):.6e}"
+        )

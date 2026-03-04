@@ -13,6 +13,14 @@ Steps:
 from __future__ import annotations
 
 import argparse
+import os
+import sys
+
+# Runtime stability guard for mixed PETSc/Torch execution on macOS.
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
 import numpy as np
 import ufl
 from dolfinx import fem, mesh as dmesh
@@ -21,6 +29,15 @@ from mpi4py import MPI
 from pyeidors import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.femx import build_eit_mesh, function_get_array
+
+try:  # pragma: no cover - thread cap is a runtime stability measure
+    import torch
+
+    torch.set_num_threads(1)
+    if hasattr(torch, "set_num_interop_threads"):
+        torch.set_num_interop_threads(1)
+except Exception:
+    pass
 
 
 def _edge_parameter(points: np.ndarray) -> np.ndarray:
@@ -82,7 +99,7 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
     return eit_mesh
 
 
-def run_test(*, with_inverse: bool = False):
+def run_test(*, skip_inverse: bool = False):
     n_elec = 16
     # Keep the mesh moderately fine for signal quality while avoiding
     # unnecessary solver pressure in local/CI smoke runs.
@@ -133,13 +150,21 @@ def run_test(*, with_inverse: bool = False):
     print(f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]")
     print(f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]")
 
-    if not with_inverse:
-        print("Inverse reconstruction is skipped (use --with-inverse to enable).")
+    if skip_inverse:
+        print("Inverse reconstruction is skipped (requested by --skip-inverse).")
         return
 
-    # Use a fixed step schedule to avoid unstable line-search probes.
+    if os.getenv("PYEIDORS_TEST_FORCE_CEM_FAIL", "0") == "1":
+        raise RuntimeError("Forced CEM failure via PYEIDORS_TEST_FORCE_CEM_FAIL.")
+
     if eit_system.reconstructor is None:
         raise RuntimeError("EIT reconstructor is not initialized after setup().")
+    try:
+        eit_system.reconstructor.ensure_regularization_ready()
+    except Exception as exc:
+        raise RuntimeError(f"regularization warmup failed in run_cem: {exc}") from exc
+
+    # Use a fixed step schedule for deterministic script behavior.
     eit_system.reconstructor.step_schedule = [0.25] * eit_system.reconstructor.max_iterations
 
     recon_result = eit_system.inverse_solve(
@@ -159,13 +184,21 @@ def run_test(*, with_inverse: bool = False):
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="CEM square forward/inverse smoke test")
     parser.add_argument(
-        "--with-inverse",
+        "--skip-inverse",
         action="store_true",
-        help="Enable iterative inverse reconstruction (may be unstable on some PETSc stacks).",
+        help="Skip inverse reconstruction and run forward checks only.",
     )
     return parser.parse_args()
 
 
+def main() -> None:
+    args = _parse_args()
+    try:
+        run_test(skip_inverse=bool(args.skip_inverse))
+    except Exception as exc:
+        print(f"[ERROR] CEM square test failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
+
+
 if __name__ == "__main__":
-    cli_args = _parse_args()
-    run_test(with_inverse=bool(cli_args.with_inverse))
+    main()

@@ -41,6 +41,18 @@ Then run a quick workflow check:
 python scripts/run_synthetic_parity.py --output-root results/simulation_parity/run03 --mode both --difference-solver single-step --gn-regularization 1e-11
 ```
 
+Strict CEM smoke (default includes inverse reconstruction and fails fast on numerical errors):
+
+```bash
+python scripts/run_cem_16e_square_test.py
+```
+
+Forward-only diagnostics (skip inverse explicitly):
+
+```bash
+python scripts/run_cem_16e_square_test.py --skip-inverse
+```
+
 For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
 
 Legacy Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.

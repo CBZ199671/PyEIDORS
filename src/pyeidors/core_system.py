@@ -214,6 +214,10 @@ class EITSystem(CoreSystemFacadeMixin):
     ) -> SolverOutput:
         self._require_initialized()
         diff_data = difference_measurement(data, reference_data)
+        try:
+            self.reconstructor.ensure_regularization_ready()
+        except Exception as exc:
+            raise RuntimeError(f"regularization warmup failed: {exc}") from exc
         return self.reconstructor.reconstruct(diff_data, initial_guess)
 
     def run_unit_precheck(

@@ -123,6 +123,41 @@ class GaussNewtonReconstructor:
     def _progress(self, total: int):
         return tqdm(total=total, disable=not self.verbose)
 
+    def ensure_regularization_ready(self) -> None:
+        """Build and validate the cached regularization tensor used by GN."""
+        expected_shape = (self.n_elements, self.n_elements)
+        if self.R_torch is not None:
+            if tuple(self.R_torch.shape) != expected_shape:
+                raise RuntimeError(
+                    "Regularization tensor shape mismatch: "
+                    f"expected {expected_shape}, got {tuple(self.R_torch.shape)}."
+                )
+            if not torch.isfinite(self.R_torch).all():
+                raise FloatingPointError("Regularization tensor contains non-finite values.")
+            return
+
+        matrix = np.asarray(self.regularization.get_regularization_matrix(), dtype=np.float64)
+        if matrix.shape != expected_shape:
+            raise RuntimeError(
+                "Regularization matrix shape mismatch: "
+                f"expected {expected_shape}, got {matrix.shape}."
+            )
+        if not np.isfinite(matrix).all():
+            finite = matrix[np.isfinite(matrix)]
+            min_val = float(finite.min()) if finite.size else float("nan")
+            max_val = float(finite.max()) if finite.size else float("nan")
+            raise FloatingPointError(
+                "Regularization matrix contains non-finite values: "
+                f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
+            )
+
+        self.R_torch = torch.from_numpy(matrix).to(
+            self.device,
+            dtype=self._torch_dtype,
+        )
+        if not torch.isfinite(self.R_torch).all():
+            raise FloatingPointError("Regularization tensor contains non-finite values after transfer.")
+
     def reconstruct(
         self,
         measured_data: Union[object, np.ndarray],
