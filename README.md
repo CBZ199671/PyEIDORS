@@ -220,7 +220,7 @@ Here m = number of measurements, so the inner solve is m&times;m (typically 208)
   <img src="pictures/benchmark_difference_runtime_measurement_6_24.png" alt="PyEIDORS measurement-space difference benchmark" width="900" />
 </p>
 
-For reference, we include the EIDORS timing curve (cold vs cached). EIDORS caching is extremely strong; the cold (no cache) curve is the fairer comparison point. PyEIDORS now includes EIDORS-style semantic caching for Jacobian and single-step operators (process + disk), so repeated difference reconstructions on an unchanged background can reuse heavy kernels across runs.
+For reference, we include the EIDORS timing curve (cold vs cached). EIDORS caching is extremely strong; the cold (no cache) curve is the fairer comparison point. PyEIDORS now includes EIDORS-style semantic caching for Jacobian and GN one-step operator families (`J/Jᵀ/NOSER/A/LU`, process + disk), so repeated difference reconstructions on an unchanged background can reuse heavy kernels across runs.
 
 <p align="center">
   <img src="pictures/benchmark_difference_runtime_eidors.png" alt="EIDORS difference benchmark" width="900" />
@@ -249,7 +249,19 @@ Cache architecture and tuning guide:
 - `docs/CACHE_ARCHITECTURE.md`
 - cache CLI utility:
   - `python scripts/cache/cache_ctl.py status`
+  - `python scripts/cache/cache_ctl.py status --name calc_jacobian --name inv_solve_diff_GN_one_step`
+  - `python scripts/cache/cache_ctl.py off --name calc_jacobian`
+  - `python scripts/cache/cache_ctl.py on --name calc_jacobian`
+  - `python scripts/cache/cache_ctl.py clear-old --timestamp <epoch-seconds>`
+  - `python scripts/cache/cache_ctl.py clear-new --timestamp <epoch-seconds>`
   - `python scripts/cache/cache_ctl.py clear-name --name inv_solve_diff_GN_one_step`
+  - `python scripts/cache/cache_ctl.py collect-recent --name inv_solve_diff_GN_one_step --with-values --output cache_snapshot.json`
+  - `python scripts/cache/cache_ctl.py install-to-cache --input cache_snapshot.json --target-layers both`
+
+Expected warm/cold behavior for GN difference:
+- first run on a new background is cold and computes `jacobian + operator family`.
+- later runs with unchanged background conductivity should hit cache at process/disk layer.
+- if `sigma_hash`, mesh signature, stimulation pattern, backend config, or cache schema changes, entries are invalidated and recomputed.
 
 | Elements | Baseline (s) | Measurement-Space (s) | Speedup |
 |---:|---:|---:|---:|

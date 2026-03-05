@@ -1,4 +1,4 @@
-"""Integration test for unified GN-difference warm-start cache behavior."""
+"""Integration test for EIDORS-style diff cache parity in unified pipeline."""
 
 from __future__ import annotations
 
@@ -38,17 +38,25 @@ def _build_ctx(cache_dir: Path) -> dict:
     )
 
 
-def test_warm_start_cache_and_numerical_consistency(tmp_path: Path):
+def test_unified_diff_cache_eidors_style_warm_start(tmp_path: Path):
     cache_dir = tmp_path / "cache"
+    cold_ctx = _build_ctx(cache_dir)
+    warm_ctx = _build_ctx(cache_dir)
 
-    ctx1 = _build_ctx(cache_dir)
-    vh = np.asarray(ctx1["base_meas"], dtype=float)
-    vi = vh * 1.002
-    metrics_cold = gn_difference_runner.process_frames(
+    assert cold_ctx["cache_lookups"]["jacobian"]["hit"] is False
+    assert warm_ctx["cache_lookups"]["jacobian"]["hit"] is True
+    for key in OPERATOR_CACHE_KEYS:
+        assert cold_ctx["cache_lookups"][key]["hit"] is False
+        assert warm_ctx["cache_lookups"][key]["hit"] is True
+
+    vh = np.asarray(cold_ctx["base_meas"], dtype=float)
+    vi = vh * 1.0015
+
+    cold_metrics = gn_difference_runner.process_frames(
         vh=vh,
         vi=vi,
         output_dir=tmp_path / "cold",
-        ctx=ctx1,
+        ctx=cold_ctx,
         step_size_calib=False,
         step_size_min=1e-3,
         step_size_max=1.0,
@@ -61,17 +69,11 @@ def test_warm_start_cache_and_numerical_consistency(tmp_path: Path):
         write_plots=False,
         measurement_gain=1.0,
     )
-
-    ctx2 = _build_ctx(cache_dir)
-    assert ctx2["cache_lookups"]["jacobian"]["hit"] is True
-    for key in OPERATOR_CACHE_KEYS:
-        assert ctx2["cache_lookups"][key]["hit"] is True
-
-    metrics_warm = gn_difference_runner.process_frames(
+    warm_metrics = gn_difference_runner.process_frames(
         vh=vh,
         vi=vi,
         output_dir=tmp_path / "warm",
-        ctx=ctx2,
+        ctx=warm_ctx,
         step_size_calib=False,
         step_size_min=1e-3,
         step_size_max=1.0,
@@ -85,5 +87,5 @@ def test_warm_start_cache_and_numerical_consistency(tmp_path: Path):
         measurement_gain=1.0,
     )
 
-    rmse_diff = abs(float(metrics_cold["rmse_abs"]) - float(metrics_warm["rmse_abs"]))
-    assert rmse_diff < 1e-10
+    rmse_gap = abs(float(cold_metrics["rmse_abs"]) - float(warm_metrics["rmse_abs"]))
+    assert rmse_gap < 1e-10

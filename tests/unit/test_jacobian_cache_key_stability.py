@@ -46,6 +46,7 @@ def test_jacobian_cache_hits_disk_without_object_identity(eit_mesh, tmp_path: Pa
     _ = calc_a.calculate(sigma_a, method="efficient")
     first_lookup = getattr(calc_a, "_last_cache_lookup", {})
     assert first_lookup.get("hit") is False
+    assert isinstance(first_lookup.get("key"), str)
 
     system_b = _build_system(eit_mesh, cache_dir)
     calc_b = DirectJacobianCalculator(system_b.fwd_model)
@@ -55,4 +56,4 @@ def test_jacobian_cache_hits_disk_without_object_identity(eit_mesh, tmp_path: Pa
     second_lookup = getattr(calc_b, "_last_cache_lookup", {})
     assert second_lookup.get("hit") is True
     assert second_lookup.get("layer") in {"disk", "process"}
-
+    assert second_lookup.get("key") == first_lookup.get("key")

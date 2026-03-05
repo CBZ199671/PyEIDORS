@@ -14,6 +14,13 @@ if str(SCRIPTS_PATH) not in sys.path:
 
 from common import gn_difference_runner
 
+OPERATOR_CACHE_KEYS = (
+    "operator_jt",
+    "operator_noser",
+    "operator_A",
+    "operator_lu",
+)
+
 
 def _build_ctx(cache_dir: Path, background_sigma: float) -> dict:
     return gn_difference_runner.build_shared_context(
@@ -36,17 +43,20 @@ def test_gn_difference_context_cache_hits_and_invalidates_with_background(tmp_pa
 
     cold_ctx = _build_ctx(cache_dir, background_sigma=1.0)
     assert cold_ctx["cache_lookups"]["jacobian"]["hit"] is False
-    assert cold_ctx["cache_lookups"]["single_step_operator"]["hit"] is False
+    for key in OPERATOR_CACHE_KEYS:
+        assert cold_ctx["cache_lookups"][key]["hit"] is False
 
     warm_ctx = _build_ctx(cache_dir, background_sigma=1.0)
     assert warm_ctx["cache_lookups"]["jacobian"]["hit"] is True
-    assert warm_ctx["cache_lookups"]["single_step_operator"]["hit"] is True
     assert warm_ctx["cache_lookups"]["jacobian"]["layer"] in {"disk", "process"}
-    assert warm_ctx["cache_lookups"]["single_step_operator"]["layer"] in {"disk", "process"}
+    for key in OPERATOR_CACHE_KEYS:
+        assert warm_ctx["cache_lookups"][key]["hit"] is True
+        assert warm_ctx["cache_lookups"][key]["layer"] in {"disk", "process"}
 
     changed_bg_ctx = _build_ctx(cache_dir, background_sigma=1.0005)
     assert changed_bg_ctx["cache_lookups"]["jacobian"]["hit"] is False
-    assert changed_bg_ctx["cache_lookups"]["single_step_operator"]["hit"] is False
+    for key in OPERATOR_CACHE_KEYS:
+        assert changed_bg_ctx["cache_lookups"][key]["hit"] is False
 
 
 def test_gn_difference_process_frames_reports_cache_metrics(tmp_path: Path):
@@ -77,4 +87,5 @@ def test_gn_difference_process_frames_reports_cache_metrics(tmp_path: Path):
     assert "rmse_abs" in metrics
     assert "cache_lookups" in metrics
     assert "cache_stats" in metrics
-
+    assert "cache_miss_reasons" in metrics
+    assert "cache_build_seconds" in metrics

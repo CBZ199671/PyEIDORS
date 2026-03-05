@@ -1,19 +1,24 @@
-# Cache Architecture (Phase-2 Hard Refactor)
+# Cache Architecture (EIDORS-Style Semantic Cache)
 
-PyEIDORS now uses a two-layer cache inspired by EIDORS `eidors_cache`, with semantic
-dependency signatures, deterministic invalidation, and score-aware eviction.
+PyEIDORS uses a two-layer cache inspired by EIDORS `eidors_cache`, with semantic
+dependency signatures, deterministic invalidation, and rank-aware eviction.
 
 ## Layers
 
 1. **L1 Process cache**
-   - In-memory score-aware store (`score = log10(effort * use_count) + priority`).
+   - In-memory rank-aware store.
+   - `score_eff = round(10*log10(effort * use_count)) + priority`
+   - `score_size = round(10*log10(size_bytes / 1024))`
+   - Eviction removes low-priority entries first via key:
+     - retention rank: `(-score_eff, score_size, -last_access)`
+     - eviction rank: `(score_eff, -score_size, last_access)`
    - Optimized for repeated solves in one Python process.
    - Default size budget: `3 GB`.
 
 2. **L2 Disk cache**
    - Persistent object store under `.pyeidors_cache/v2`.
    - sqlite index (`index.sqlite`) + object payload files.
-   - Maintains `name/namespace/effort/use_count/priority/score` metadata.
+   - Maintains `name/namespace/effort/use_count/priority/score_eff/score_size/score` metadata.
    - Default size budget: `20 GB`.
 
 ## Artifact kinds
@@ -51,6 +56,16 @@ Invalidate automatically by key mismatch when any of the following changes:
 - contact impedance
 - backend solver config
 - code fingerprint / cache schema
+- background conductivity (`sigma_hash`)
+- Jacobian payload hash
+- linear backend config changes (PETSc/SciPy solver options)
+
+Invalidate manually by management API:
+
+- `clear_name(name, namespace=None)`
+- `clear_max(max_bytes)`
+- `clear_old(timestamp)`
+- `clear_new(timestamp)`
 
 Manual invalidation:
 
@@ -62,7 +77,13 @@ Additional EIDORS-like operations:
 
 - `cache_manager.clear_name(name, namespace=None)`
 - `cache_manager.clear_max(max_bytes)`
-- `cache_manager.collect_recent(names=[...], limit_per_name=1)`
+- `cache_manager.clear_old(timestamp)`
+- `cache_manager.clear_new(timestamp)`
+- `cache_manager.collect_recent(names=[...], limit_per_name=1, include_value=False)`
+- `cache_manager.install_to_cache(snapshot, target_layers="both")`
+- `cache_manager.status(name=None)` / `cache_manager.set_enabled(on, name=None)`
+- `cache_manager.debug_status(name=None)` / `cache_manager.set_debug(on, name=None)`
+- `cache_manager.boost_priority(delta)`
 
 ## Runtime API
 
@@ -73,6 +94,7 @@ Additional EIDORS-like operations:
 
 Stats include hit/miss counters and process/disk footprint.
 Stats also include artifact and namespace breakdown for each layer.
+Stats also include global cache/debug status, disabled function names, and active priority boost.
 
 ## Corruption handling
 
@@ -92,11 +114,23 @@ If a disk payload is unreadable/corrupted:
 
 ## EIDORS Mapping
 
-- `eidors_cache(@func, cache_obj, fstr)`:
-  - PyEIDORS equivalent: `get_or_compute_semantic(..., name=fstr, cache_obj=...)`.
-- `clear_name`:
-  - PyEIDORS equivalent: `cache_manager.clear_name(...)`.
-- `clear_max`:
-  - PyEIDORS equivalent: `cache_manager.clear_max(...)`.
-- `effort/count/priority`:
-  - Stored on each entry and used by score-aware eviction in both process and disk layers.
+| EIDORS command | PyEIDORS equivalent |
+|---|---|
+| `eidors_cache(@func, {args}, opt.cache_obj, opt.fstr)` | `get_or_compute_semantic(..., name=fstr, cache_obj=...)` |
+| `clear_name` | `cache_manager.clear_name(name, namespace)` |
+| `clear_max` | `cache_manager.clear_max(max_bytes)` |
+| `clear_old` / `clear_new` | `cache_manager.clear_old(ts)` / `cache_manager.clear_new(ts)` |
+| `collect_recent` | `cache_manager.collect_recent(names, ..., include_value=True)` |
+| `install_to_cache` | `cache_manager.install_to_cache(snapshot, target_layers)` |
+| `on/off` (global or per function) | `cache_manager.set_enabled(on, name=None|func_name)` |
+| `debug_on/debug_off` | `cache_manager.set_debug(on, name=None|func_name)` |
+| `boost_priority` | `cache_manager.boost_priority(delta)` |
+
+For command-line operations, use:
+
+- `python scripts/cache/cache_ctl.py status`
+- `python scripts/cache/cache_ctl.py off --name calc_jacobian`
+- `python scripts/cache/cache_ctl.py on --name calc_jacobian`
+- `python scripts/cache/cache_ctl.py clear-old --timestamp <epoch-seconds>`
+- `python scripts/cache/cache_ctl.py collect-recent --name inv_solve_diff_GN_one_step --with-values --output snapshot.json`
+- `python scripts/cache/cache_ctl.py install-to-cache --input snapshot.json --target-layers both`
