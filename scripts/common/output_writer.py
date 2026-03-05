@@ -33,18 +33,42 @@ def _gather_cache_layers(metrics: Dict[str, Any], counter: Dict[str, int]) -> No
             _bump(counter, layer)
 
 
+def _gather_miss_reasons(metrics: Dict[str, Any], counter: Dict[str, int]) -> None:
+    reasons = metrics.get("cache_miss_reasons")
+    if not isinstance(reasons, dict):
+        return
+    for reason in reasons.values():
+        if isinstance(reason, str):
+            _bump(counter, reason)
+
+
+def _gather_build_seconds(metrics: Dict[str, Any], total: Dict[str, float]) -> None:
+    build = metrics.get("cache_build_seconds")
+    if not isinstance(build, dict):
+        return
+    for key, value in build.items():
+        if isinstance(key, str) and isinstance(value, (int, float)):
+            total[key] = total.get(key, 0.0) + float(value)
+
+
 def _aggregate_cache_summary(results: List[CaseResult]) -> Dict[str, Any]:
     layer_counts: Dict[str, int] = {}
+    miss_reasons: Dict[str, int] = {}
+    build_seconds: Dict[str, float] = {}
     latest_stats: Dict[str, Any] = {}
     for result in results:
         if not isinstance(result.metrics, dict):
             continue
         _gather_cache_layers(result.metrics, layer_counts)
+        _gather_miss_reasons(result.metrics, miss_reasons)
+        _gather_build_seconds(result.metrics, build_seconds)
         cache_stats = result.metrics.get("cache_stats")
         if isinstance(cache_stats, dict):
             latest_stats = cache_stats
     return {
         "layer_hits": layer_counts,
+        "miss_reasons": miss_reasons,
+        "build_seconds_total": build_seconds,
         "latest_cache_stats": latest_stats,
     }
 

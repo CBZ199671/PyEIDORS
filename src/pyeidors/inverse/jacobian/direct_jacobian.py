@@ -53,8 +53,6 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         payload = {
             "method": method,
             "sigma_hash": hashlib.sha256(sigma_values.tobytes()).hexdigest(),
-            "n_meas": self.fwd_model.pattern_manager.n_meas_total,
-            "n_elem": len(self.cell_areas),
             "model_signature": model_signature,
             "pattern_signature": pattern_signature,
             "backend_signature": backend_signature,

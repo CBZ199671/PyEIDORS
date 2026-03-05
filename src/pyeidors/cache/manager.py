@@ -28,6 +28,12 @@ class CacheManager:
         self.code_fingerprint = code_fingerprint
         self.cache_dir = Path(cache_dir)
 
+        self._cache_enable: float = 0.0 if scope == "off" else 1.0
+        self._cache_disabled_on: set[str] = set()
+        self._debug_enable: float = 0.0
+        self._debug_enabled_on: set[str] = set()
+        self._priority_boost: float = 0.0
+
         self._process = (
             ProcessCacheStore(self.policy.process_max_bytes)
             if scope in {"process", "both"}
@@ -47,7 +53,7 @@ class CacheManager:
 
     @property
     def enabled(self) -> bool:
-        return self.scope != "off"
+        return self.status() > 0.0
 
     def build_key(self, artifact: str, payload: dict[str, Any], namespace: str = "default") -> str:
         return build_cache_key(
@@ -59,6 +65,74 @@ class CacheManager:
                 namespace=namespace,
             )
         )
+
+    def status(self, name: str | None = None) -> float:
+        """Return cache enable status in EIDORS style: 0, 0.5, 1."""
+        if name is None:
+            return float(self._cache_enable)
+        if self._cache_enable == 0.0:
+            return 0.0
+        if self._cache_enable == 0.5 and name in self._cache_disabled_on:
+            return 0.0
+        return 1.0
+
+    def set_enabled(self, on: bool, name: str | None = None) -> float:
+        """Enable/disable cache globally or for a specific name."""
+        if name is None:
+            if on:
+                self._cache_enable = 1.0
+                self._cache_disabled_on.clear()
+            else:
+                self._cache_enable = 0.0
+                self._cache_disabled_on.clear()
+            return float(self._cache_enable)
+
+        if on:
+            self._cache_disabled_on.discard(name)
+            if not self._cache_disabled_on:
+                self._cache_enable = 1.0
+        else:
+            self._cache_enable = 0.5
+            self._cache_disabled_on.add(name)
+        return self.status(name)
+
+    def debug_status(self, name: str | None = None) -> float:
+        """Return debug status in EIDORS style: 0, 0.5, 1."""
+        if name is None:
+            return float(self._debug_enable)
+        if self._debug_enable == 1.0:
+            return 1.0
+        if self._debug_enable == 0.5 and name in self._debug_enabled_on:
+            return 1.0
+        return 0.0
+
+    def set_debug(self, on: bool, name: str | None = None) -> float:
+        """Enable/disable debug globally or for a specific name."""
+        if name is None:
+            self._debug_enable = 1.0 if on else 0.0
+            self._debug_enabled_on.clear()
+            return float(self._debug_enable)
+
+        if on:
+            self._debug_enable = 0.5
+            self._debug_enabled_on.add(name)
+        else:
+            self._debug_enabled_on.discard(name)
+            if self._debug_enable == 0.5 and not self._debug_enabled_on:
+                self._debug_enable = 0.0
+        return self.debug_status(name)
+
+    def boost_priority(self, delta: float = 0.0) -> float:
+        """Adjust global priority boost used by subsequent cache writes."""
+        self._priority_boost += float(delta)
+        return float(self._priority_boost)
+
+    def _is_enabled_for(self, name: str) -> bool:
+        if self.scope == "off":
+            return False
+        if self.status(name) <= 0.0:
+            return False
+        return self._process is not None or self._disk is not None
 
     def get_or_compute(
         self,
@@ -77,9 +151,12 @@ class CacheManager:
         """Retrieve from cache or compute and populate layers."""
 
         cache_key = self.build_key(artifact, payload, namespace=namespace)
-        if not self.enabled:
+        effective_name = name or artifact
+        if not self._is_enabled_for(effective_name):
             value = compute_fn()
             return value, CacheLookup(key=cache_key, hit=False, layer="disabled", artifact=artifact)
+
+        effective_priority = float(priority_boost) + float(self._priority_boost)
 
         if self._process is not None:
             value = self._process.get(cache_key)
@@ -96,10 +173,10 @@ class CacheManager:
                         value,
                         artifact=artifact,
                         cost=use_cost,
-                        name=name,
+                        name=effective_name,
                         namespace=namespace,
                         effort=effort_seconds,
-                        priority=priority_boost,
+                        priority=effective_priority,
                     )
                 return value, CacheLookup(key=cache_key, hit=True, layer="disk", artifact=artifact)
 
@@ -111,10 +188,10 @@ class CacheManager:
                 value,
                 artifact=artifact,
                 cost=use_cost,
-                name=name,
+                name=effective_name,
                 namespace=namespace,
                 effort=effort_seconds,
-                priority=priority_boost,
+                priority=effective_priority,
             )
         if persist and self._disk is not None:
             self._disk.put(
@@ -123,10 +200,10 @@ class CacheManager:
                 artifact=artifact,
                 cost=use_cost,
                 ttl_seconds=ttl_seconds,
-                name=name,
+                name=effective_name,
                 namespace=namespace,
                 effort=effort_seconds,
-                priority=priority_boost,
+                priority=effective_priority,
             )
         return value, CacheLookup(key=cache_key, hit=False, layer="compute", artifact=artifact)
 
@@ -197,33 +274,177 @@ class CacheManager:
             removed += self._disk.clear_max(max_bytes=max_bytes)
         return removed
 
+    def clear_old(self, timestamp: float) -> int:
+        removed = 0
+        if self._process is not None:
+            removed += self._process.clear_old(timestamp)
+        if self._disk is not None:
+            removed += self._disk.clear_old(timestamp)
+        return removed
+
+    def clear_new(self, timestamp: float) -> int:
+        removed = 0
+        if self._process is not None:
+            removed += self._process.clear_new(timestamp)
+        if self._disk is not None:
+            removed += self._disk.clear_new(timestamp)
+        return removed
+
+    def _entry_value_for_layer(self, key: str, layer: str) -> Any | None:
+        if layer == "process" and self._process is not None:
+            return self._process.get_value(key)
+        if layer == "disk" and self._disk is not None:
+            return self._disk.get_value(key)
+        return None
+
+    @staticmethod
+    def _snapshot_record(entry: dict[str, Any], value: Any | None) -> dict[str, Any]:
+        record = {
+            "id": entry.get("key"),
+            "key": entry.get("key"),
+            "name": entry.get("name"),
+            "layer": entry.get("layer"),
+            "meta": {
+                "artifact": entry.get("artifact"),
+                "namespace": entry.get("namespace"),
+                "size_bytes": entry.get("size_bytes"),
+                "cost": entry.get("cost"),
+                "effort": entry.get("effort"),
+                "priority": entry.get("priority"),
+                "use_count": entry.get("use_count"),
+                "score_eff": entry.get("score_eff", entry.get("score")),
+                "score_size": entry.get("score_size"),
+                "score": entry.get("score"),
+                "created_at": entry.get("created_at"),
+                "last_access": entry.get("last_access"),
+                "layer": entry.get("layer"),
+            },
+        }
+        if value is not None:
+            record["val"] = value
+        return record
+
     def collect_recent(
         self,
         *,
         names: list[str],
         limit_per_name: int = 1,
         namespace: str | None = None,
+        include_value: bool = False,
     ) -> dict[str, list[dict[str, Any]]]:
-        collected: dict[str, list[dict[str, Any]]] = {name: [] for name in names}
-        if self._process is not None:
-            for name in names:
-                entries = self._process.list_entries(
+        name_counts: dict[str, int] = {}
+        for name in names:
+            name_counts[name] = name_counts.get(name, 0) + 1
+
+        collected: dict[str, list[dict[str, Any]]] = {}
+        for name, repeats in name_counts.items():
+            required = max(int(limit_per_name), int(repeats), 1)
+            entries: list[dict[str, Any]] = []
+            if self._process is not None:
+                entries.extend(
+                    self._process.list_entries(
+                        name=name,
+                        namespace=namespace,
+                        limit=None,
+                    )
+                )
+            if self._disk is not None:
+                entries.extend(
+                    self._disk.list_entries(
+                        name=name,
+                        namespace=namespace,
+                        limit=None,
+                    )
+                )
+
+            entries.sort(key=lambda item: float(item.get("last_access", 0.0)), reverse=True)
+            selected: list[dict[str, Any]] = []
+            seen_keys: set[str] = set()
+            for entry in entries:
+                key = str(entry.get("key", ""))
+                if not key or key in seen_keys:
+                    continue
+                selected.append(entry)
+                seen_keys.add(key)
+                if len(selected) >= required:
+                    break
+            records: list[dict[str, Any]] = []
+            for entry in selected:
+                value = self._entry_value_for_layer(
+                    key=str(entry.get("key")),
+                    layer=str(entry.get("layer")),
+                ) if include_value else None
+                records.append(self._snapshot_record(entry, value))
+            collected[name] = records
+        return collected
+
+    def install_to_cache(self, snapshot: Any, target_layers: CacheScope = "both") -> int:
+        """Install exported cache snapshot entries back to cache stores."""
+
+        if target_layers not in {"process", "disk", "both"}:
+            raise ValueError("target_layers must be one of: process, disk, both")
+
+        if isinstance(snapshot, dict):
+            candidates = []
+            for value in snapshot.values():
+                if isinstance(value, list):
+                    candidates.extend(value)
+        elif isinstance(snapshot, list):
+            candidates = snapshot
+        else:
+            raise TypeError("snapshot must be dict[str, list] or list")
+
+        installed = 0
+        for item in candidates:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("val")
+            if value is None:
+                continue
+            key = item.get("key") or item.get("id")
+            if not isinstance(key, str) or not key:
+                continue
+            meta = item.get("meta")
+            if not isinstance(meta, dict):
+                meta = {}
+
+            artifact = str(meta.get("artifact") or "")
+            if not artifact:
+                continue
+            name = str(item.get("name") or meta.get("name") or artifact)
+            namespace = str(meta.get("namespace") or "default")
+            cost = float(meta.get("cost", self._resolve_cost(artifact, value, None)))
+            effort = meta.get("effort")
+            effort_value = float(effort) if effort is not None else None
+            priority = float(meta.get("priority", 0.0))
+
+            if target_layers in {"process", "both"} and self._process is not None:
+                self._process.put(
+                    key,
+                    value,
+                    artifact=artifact,
+                    cost=cost,
                     name=name,
                     namespace=namespace,
-                    limit=max(1, int(limit_per_name)),
+                    effort=effort_value,
+                    priority=priority,
                 )
-                collected[name].extend(entries)
-        if self._disk is not None:
-            disk_entries = self._disk.collect_recent(
-                names=names,
-                limit_per_name=max(1, int(limit_per_name)),
-                namespace=namespace,
-            )
-            for name in names:
-                collected[name].extend(disk_entries.get(name, []))
-                collected[name].sort(key=lambda item: item["last_access"], reverse=True)
-                collected[name] = collected[name][: max(1, int(limit_per_name))]
-        return collected
+                installed += 1
+            if target_layers in {"disk", "both"} and self._disk is not None:
+                ttl_seconds = meta.get("ttl_seconds")
+                self._disk.put(
+                    key,
+                    value,
+                    artifact=artifact,
+                    cost=cost,
+                    ttl_seconds=float(ttl_seconds) if ttl_seconds is not None else None,
+                    name=name,
+                    namespace=namespace,
+                    effort=effort_value,
+                    priority=priority,
+                )
+                installed += 1
+        return installed
 
     def list_entries(
         self,
@@ -235,11 +456,11 @@ class CacheManager:
         entries: list[dict[str, Any]] = []
         if self._process is not None:
             entries.extend(
-                self._process.list_entries(name=name, namespace=namespace, limit=limit)
+                self._process.list_entries(name=name, namespace=namespace, limit=None)
             )
         if self._disk is not None:
-            entries.extend(self._disk.list_entries(name=name, namespace=namespace, limit=limit))
-        entries.sort(key=lambda item: item["last_access"], reverse=True)
+            entries.extend(self._disk.list_entries(name=name, namespace=namespace, limit=None))
+        entries.sort(key=lambda item: float(item.get("last_access", 0.0)), reverse=True)
         if limit is not None and limit > 0:
             entries = entries[:limit]
         return entries
@@ -276,9 +497,13 @@ class CacheManager:
             disk_namespaces = dict(d.get("namespaces", {}))
 
         payload = stats.to_dict()
+        payload["cache_status"] = self.status()
+        payload["debug_status"] = self.debug_status()
+        payload["priority_boost"] = float(self._priority_boost)
+        payload["disabled_names"] = sorted(self._cache_disabled_on)
+        payload["debug_names"] = sorted(self._debug_enabled_on)
         payload["process_artifacts"] = process_artifacts
         payload["process_namespaces"] = process_namespaces
         payload["disk_artifacts"] = disk_artifacts
         payload["disk_namespaces"] = disk_namespaces
         return payload
-

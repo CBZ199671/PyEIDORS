@@ -1,4 +1,4 @@
-"""Persistent disk cache store with score-aware eviction."""
+"""Persistent disk cache store with EIDORS-style score-aware eviction."""
 
 from __future__ import annotations
 
@@ -16,9 +16,14 @@ from typing import Any
 import numpy as np
 
 
-def _compute_score(*, effort: float, use_count: int, priority: float) -> float:
+def _compute_score_eff(*, effort: float, use_count: int, priority: float) -> float:
     scaled_effort = max(float(effort), 1e-9)
-    return float(np.log10(scaled_effort * max(int(use_count), 1)) + float(priority))
+    return float(round(10.0 * np.log10(scaled_effort * max(int(use_count), 1))) + float(priority))
+
+
+def _compute_score_size(size_bytes: int) -> float:
+    scaled_size = max(int(size_bytes), 1)
+    return float(round(10.0 * np.log10(float(scaled_size) / 1024.0)))
 
 
 class DiskCacheStore:
@@ -77,6 +82,8 @@ class DiskCacheStore:
                     effort REAL NOT NULL DEFAULT 1.0,
                     priority REAL NOT NULL DEFAULT 0.0,
                     use_count INTEGER NOT NULL DEFAULT 1,
+                    score_eff REAL NOT NULL DEFAULT 0.0,
+                    score_size REAL NOT NULL DEFAULT 0.0,
                     score REAL NOT NULL DEFAULT 0.0,
                     created_at REAL NOT NULL,
                     last_access REAL NOT NULL,
@@ -100,6 +107,8 @@ class DiskCacheStore:
             ("effort", "ALTER TABLE cache_entries ADD COLUMN effort REAL NOT NULL DEFAULT 1.0"),
             ("priority", "ALTER TABLE cache_entries ADD COLUMN priority REAL NOT NULL DEFAULT 0.0"),
             ("use_count", "ALTER TABLE cache_entries ADD COLUMN use_count INTEGER NOT NULL DEFAULT 1"),
+            ("score_eff", "ALTER TABLE cache_entries ADD COLUMN score_eff REAL NOT NULL DEFAULT 0.0"),
+            ("score_size", "ALTER TABLE cache_entries ADD COLUMN score_size REAL NOT NULL DEFAULT 0.0"),
             ("score", "ALTER TABLE cache_entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0"),
         )
         for column, statement in migrations:
@@ -162,7 +171,7 @@ class DiskCacheStore:
                     return None
 
                 updated_use_count = int(use_count) + 1
-                score = _compute_score(
+                score_eff = _compute_score_eff(
                     effort=float(effort),
                     use_count=updated_use_count,
                     priority=float(priority),
@@ -170,10 +179,10 @@ class DiskCacheStore:
                 conn.execute(
                     """
                     UPDATE cache_entries
-                    SET last_access = ?, use_count = ?, score = ?
+                    SET last_access = ?, use_count = ?, score_eff = ?, score = ?
                     WHERE cache_key = ?
                     """,
-                    (now, updated_use_count, score, key),
+                    (now, updated_use_count, score_eff, score_eff, key),
                 )
                 conn.commit()
                 self.hits += 1
@@ -209,7 +218,12 @@ class DiskCacheStore:
         size = int(target.stat().st_size)
         now = time.time()
         use_effort = float(cost if effort is None else effort)
-        score = _compute_score(effort=use_effort, use_count=1, priority=float(priority))
+        score_eff = _compute_score_eff(
+            effort=use_effort,
+            use_count=1,
+            priority=float(priority),
+        )
+        score_size = _compute_score_size(size)
 
         with self._lock:
             with self._session() as conn:
@@ -217,9 +231,10 @@ class DiskCacheStore:
                     """
                     INSERT INTO cache_entries(
                         cache_key, artifact, name, namespace, file_path, size_bytes, cost,
-                        effort, priority, use_count, score, created_at, last_access, ttl_seconds
+                        effort, priority, use_count, score_eff, score_size, score,
+                        created_at, last_access, ttl_seconds
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(cache_key) DO UPDATE SET
                         artifact=excluded.artifact,
                         name=excluded.name,
@@ -230,6 +245,8 @@ class DiskCacheStore:
                         effort=excluded.effort,
                         priority=excluded.priority,
                         use_count=excluded.use_count,
+                        score_eff=excluded.score_eff,
+                        score_size=excluded.score_size,
                         score=excluded.score,
                         created_at=excluded.created_at,
                         last_access=excluded.last_access,
@@ -246,7 +263,9 @@ class DiskCacheStore:
                         use_effort,
                         float(priority),
                         1,
-                        score,
+                        score_eff,
+                        score_size,
+                        score_eff,
                         now,
                         now,
                         ttl_seconds,
@@ -279,7 +298,7 @@ class DiskCacheStore:
             """
             SELECT cache_key, file_path, size_bytes
             FROM cache_entries
-            ORDER BY score ASC, last_access ASC
+            ORDER BY score_eff ASC, score_size DESC, last_access ASC
             """
         ).fetchall()
         for key, file_path, size in rows:
@@ -339,7 +358,7 @@ class DiskCacheStore:
                     """
                     SELECT cache_key, file_path, size_bytes
                     FROM cache_entries
-                    ORDER BY score ASC, last_access ASC
+                    ORDER BY score_eff ASC, score_size DESC, last_access ASC
                     """
                 ).fetchall()
                 removed = 0
@@ -352,6 +371,56 @@ class DiskCacheStore:
                 conn.commit()
                 return removed
 
+    def clear_old(self, timestamp: float) -> int:
+        ts = float(timestamp)
+        with self._lock:
+            with self._session() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT cache_key, file_path
+                    FROM cache_entries
+                    WHERE last_access < ?
+                    """,
+                    (ts,),
+                ).fetchall()
+                for key, file_path in rows:
+                    self._remove_entry(conn, key, Path(file_path))
+                conn.commit()
+                return len(rows)
+
+    def clear_new(self, timestamp: float) -> int:
+        ts = float(timestamp)
+        with self._lock:
+            with self._session() as conn:
+                rows = conn.execute(
+                    """
+                    SELECT cache_key, file_path
+                    FROM cache_entries
+                    WHERE last_access > ?
+                    """,
+                    (ts,),
+                ).fetchall()
+                for key, file_path in rows:
+                    self._remove_entry(conn, key, Path(file_path))
+                conn.commit()
+                return len(rows)
+
+    def get_value(self, key: str) -> Any | None:
+        with self._lock:
+            with self._session() as conn:
+                row = conn.execute(
+                    "SELECT file_path FROM cache_entries WHERE cache_key = ?",
+                    (key,),
+                ).fetchone()
+                if row is None:
+                    return None
+                file_path = Path(row[0])
+        try:
+            payload = file_path.read_bytes()
+            return self._deserialize(payload)
+        except Exception:
+            return None
+
     def list_entries(
         self,
         *,
@@ -362,7 +431,7 @@ class DiskCacheStore:
         query = """
             SELECT
                 cache_key, artifact, name, namespace, size_bytes, cost, effort,
-                priority, use_count, score, created_at, last_access
+                priority, use_count, score_eff, score_size, score, created_at, last_access
             FROM cache_entries
         """
         conditions: list[str] = []
@@ -394,9 +463,11 @@ class DiskCacheStore:
                 "effort": float(row[6]),
                 "priority": float(row[7]),
                 "use_count": int(row[8]),
-                "score": float(row[9]),
-                "created_at": float(row[10]),
-                "last_access": float(row[11]),
+                "score_eff": float(row[9]),
+                "score_size": float(row[10]),
+                "score": float(row[11]),
+                "created_at": float(row[12]),
+                "last_access": float(row[13]),
                 "layer": "disk",
             }
             for row in rows
@@ -450,4 +521,3 @@ class DiskCacheStore:
             "artifacts": by_artifact,
             "namespaces": by_namespace,
         }
-

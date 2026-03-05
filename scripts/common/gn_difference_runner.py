@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
+import time
 from typing import Callable, Optional
 
 import matplotlib as mpl
@@ -34,6 +35,13 @@ mpl.rcParams.update(
         "mathtext.fontset": "dejavusans",
     }
 )
+
+CACHE_NAMESPACE_DIFFERENCE = "difference"
+CACHE_NAME_JACOBIAN = "calc_jacobian"
+CACHE_NAME_OPERATOR_JT = "gn_diff_operator_jt"
+CACHE_NAME_OPERATOR_NOSER = "gn_diff_operator_noser"
+CACHE_NAME_OPERATOR_A = "gn_diff_operator_system"
+CACHE_NAME_OPERATOR_LU = "gn_diff_operator_lu"
 
 
 def _build_noser_matrix(
@@ -68,24 +76,12 @@ def _make_linear_solver(A: np.ndarray) -> Optional[Callable[[np.ndarray], np.nda
     return _solve
 
 
-def _build_operator_bundle(jacobian: np.ndarray, lam: float) -> dict:
-    reg_matrix = _build_noser_matrix(jacobian, exponent=0.5, alpha=1.0)
-    jacobian_t = jacobian.T
-    A = np.asarray(
-        safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
-        dtype=float,
-    ) + lam * reg_matrix
+def _factorize_matrix(A: np.ndarray) -> dict:
     try:
         lu, piv = lu_factor(A)
-        factor = {"method": "lu", "lu": lu, "piv": piv}
+        return {"method": "lu", "lu": lu, "piv": piv}
     except Exception:
-        factor = {"method": "none"}
-    return {
-        "Jt": jacobian_t,
-        "A": A,
-        "reg_matrix": reg_matrix,
-        "factor": factor,
-    }
+        return {"method": "none"}
 
 
 def _solve_linear_from_bundle(bundle: dict, b: np.ndarray) -> np.ndarray:
@@ -105,6 +101,14 @@ def _to_lookup_payload(lookup) -> dict[str, object]:
         "artifact": str(lookup.artifact),
         "key": str(lookup.key),
     }
+
+
+def _lookup_miss_reason(lookup) -> str:
+    if bool(lookup.hit):
+        return "hit"
+    if str(lookup.layer) == "disabled":
+        return "cache_disabled"
+    return "cold_or_signature_miss"
 
 
 def _solve_linear(
@@ -238,19 +242,31 @@ def build_shared_context(
         "pattern_signature": pattern_signature_from_forward_model(fwd_model),
         "backend_signature": backend_signature_from_forward_model(fwd_model),
     }
+    build_seconds: dict[str, float] = {}
+
+    def _timed(name: str, fn: Callable[[], np.ndarray | dict]) -> np.ndarray | dict:
+        start = time.perf_counter()
+        value = fn()
+        build_seconds[name] = time.perf_counter() - start
+        return value
+
     jacobian, jacobian_lookup = cache_manager.get_or_compute_semantic(
         artifact="jacobian",
-        name="calc_jacobian",
-        namespace="difference",
+        name=CACHE_NAME_JACOBIAN,
+        namespace=CACHE_NAMESPACE_DIFFERENCE,
         cache_obj=jacobian_payload,
         payload=jacobian_payload,
-        compute_fn=lambda: jac_calc.calculate_from_image(img_bg),
+        compute_fn=lambda: _timed(
+            "jacobian",
+            lambda: jac_calc.calculate_from_image(img_bg),
+        ),
         persist=True,
         cost=12.0,
         effort_seconds=8.0,
     )
+    build_seconds.setdefault("jacobian", 0.0)
 
-    operator_payload = {
+    operator_payload_base = {
         "solver": "gn_difference",
         "sigma_hash": sigma_hash,
         "jacobian_hash": hash_array(np.ascontiguousarray(jacobian, dtype=np.float64)),
@@ -259,17 +275,85 @@ def build_shared_context(
         "pattern_signature": jacobian_payload["pattern_signature"],
         "backend_signature": jacobian_payload["backend_signature"],
     }
-    operator_bundle, operator_lookup = cache_manager.get_or_compute_semantic(
+
+    jacobian_t, j_t_lookup = cache_manager.get_or_compute_semantic(
         artifact="single_step_operator",
-        name="inv_solve_diff_GN_one_step",
-        namespace="difference",
-        cache_obj=operator_payload,
-        payload=operator_payload,
-        compute_fn=lambda: _build_operator_bundle(jacobian, lam),
+        name=CACHE_NAME_OPERATOR_JT,
+        namespace=CACHE_NAMESPACE_DIFFERENCE,
+        cache_obj={**operator_payload_base, "part": "Jt"},
+        payload={**operator_payload_base, "part": "Jt"},
+        compute_fn=lambda: _timed(
+            "operator_jt",
+            lambda: np.asarray(jacobian.T, dtype=float),
+        ),
         persist=True,
-        cost=16.0,
+        cost=4.0,
+        effort_seconds=2.0,
+    )
+    build_seconds.setdefault("operator_jt", 0.0)
+
+    reg_matrix, reg_lookup = cache_manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name=CACHE_NAME_OPERATOR_NOSER,
+        namespace=CACHE_NAMESPACE_DIFFERENCE,
+        cache_obj={**operator_payload_base, "part": "NOSER"},
+        payload={**operator_payload_base, "part": "NOSER"},
+        compute_fn=lambda: _timed(
+            "operator_noser",
+            lambda: _build_noser_matrix(jacobian, exponent=0.5, alpha=1.0),
+        ),
+        persist=True,
+        cost=5.0,
+        effort_seconds=3.0,
+    )
+    build_seconds.setdefault("operator_noser", 0.0)
+
+    A, a_lookup = cache_manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name=CACHE_NAME_OPERATOR_A,
+        namespace=CACHE_NAMESPACE_DIFFERENCE,
+        cache_obj={**operator_payload_base, "part": "A"},
+        payload={**operator_payload_base, "part": "A"},
+        compute_fn=lambda: _timed(
+            "operator_A",
+            lambda: np.asarray(
+                safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
+                dtype=float,
+            ) + lam * reg_matrix,
+        ),
+        persist=True,
+        cost=10.0,
+        effort_seconds=6.0,
+    )
+    build_seconds.setdefault("operator_A", 0.0)
+
+    factor_payload = {
+        **operator_payload_base,
+        "part": "LU",
+        "A_hash": hash_array(np.ascontiguousarray(A, dtype=np.float64)),
+    }
+    factor, factor_lookup = cache_manager.get_or_compute_semantic(
+        artifact="single_step_operator",
+        name=CACHE_NAME_OPERATOR_LU,
+        namespace=CACHE_NAMESPACE_DIFFERENCE,
+        cache_obj=factor_payload,
+        payload=factor_payload,
+        compute_fn=lambda: _timed(
+            "operator_lu",
+            lambda: _factorize_matrix(A),
+        ),
+        persist=True,
+        cost=12.0,
         effort_seconds=10.0,
     )
+    build_seconds.setdefault("operator_lu", 0.0)
+
+    operator_bundle = {
+        "Jt": np.asarray(jacobian_t, dtype=float),
+        "A": np.asarray(A, dtype=float),
+        "reg_matrix": np.asarray(reg_matrix, dtype=float),
+        "factor": factor if isinstance(factor, dict) else {"method": "none"},
+    }
 
     return {
         "mesh": mesh,
@@ -285,9 +369,20 @@ def build_shared_context(
         "J": jacobian,
         "operator_bundle": operator_bundle,
         "stim_drive_value": stim_drive_value,
+        "cache_build_seconds": dict(build_seconds),
+        "cache_miss_reasons": {
+            CACHE_NAME_JACOBIAN: _lookup_miss_reason(jacobian_lookup),
+            CACHE_NAME_OPERATOR_JT: _lookup_miss_reason(j_t_lookup),
+            CACHE_NAME_OPERATOR_NOSER: _lookup_miss_reason(reg_lookup),
+            CACHE_NAME_OPERATOR_A: _lookup_miss_reason(a_lookup),
+            CACHE_NAME_OPERATOR_LU: _lookup_miss_reason(factor_lookup),
+        },
         "cache_lookups": {
             "jacobian": _to_lookup_payload(jacobian_lookup),
-            "single_step_operator": _to_lookup_payload(operator_lookup),
+            "operator_jt": _to_lookup_payload(j_t_lookup),
+            "operator_noser": _to_lookup_payload(reg_lookup),
+            "operator_A": _to_lookup_payload(a_lookup),
+            "operator_lu": _to_lookup_payload(factor_lookup),
             "forward_factor": dict(getattr(fwd_model, "_last_cache_lookup", {})),
         },
     }
@@ -444,6 +539,8 @@ def process_frames(
     return {
         "rmse_abs": rmse_abs,
         "step_size_alpha": float(alpha),
+        "cache_build_seconds": dict(ctx.get("cache_build_seconds", {})),
+        "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
         "cache_lookups": {
             "context": dict(ctx.get("cache_lookups", {})),
             "forward_factor": forward_lookup,
