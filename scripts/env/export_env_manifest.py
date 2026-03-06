@@ -8,6 +8,7 @@ import hashlib
 import importlib
 import importlib.metadata as ilm
 import json
+import os
 import platform
 import sys
 import warnings
@@ -25,6 +26,10 @@ PLATFORM_MAP = {
     "linux-x86_64": ("linux", "x86_64"),
     "linux-aarch64": ("linux", "aarch64"),
 }
+
+
+class MissingRequiredPackagesError(RuntimeError):
+    """Raised when the locked runtime packages are not importable."""
 
 
 def apply_known_cuqi_warning_filters() -> None:
@@ -46,6 +51,13 @@ def apply_known_cuqi_warning_filters() -> None:
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
+
+
+def ensure_repo_src_on_path(root: Path) -> None:
+    src_path = root / "src"
+    src_str = str(src_path)
+    if src_path.is_dir() and src_str not in sys.path:
+        sys.path.insert(0, src_str)
 
 
 def sha256_file(path: Path) -> str:
@@ -75,17 +87,40 @@ def current_platform_id() -> str:
     return f"{system}-{machine}"
 
 
-def platform_details(platform_id: Optional[str] = None) -> Dict[str, str]:
+def runtime_context_kind() -> Optional[str]:
+    if platform.system().lower() != "linux":
+        return None
+
+    if os.environ.get("WSL_DISTRO_NAME"):
+        return "wsl2"
+
+    try:
+        version_text = Path("/proc/version").read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    return "wsl2" if "microsoft" in version_text.lower() else None
+
+
+def platform_details(platform_id: Optional[str] = None) -> Dict[str, Any]:
     selected_id = platform_id or current_platform_id()
     mapped = PLATFORM_MAP.get(selected_id)
+    runtime_kind = runtime_context_kind()
+
     if mapped is None:
-        return {
+        details: Dict[str, Any] = {
             "id": selected_id,
             "system": platform.system().lower(),
             "machine": platform.machine().lower(),
         }
-    system_name, machine_name = mapped
-    return {"id": selected_id, "system": system_name, "machine": machine_name}
+    else:
+        system_name, machine_name = mapped
+        details = {"id": selected_id, "system": system_name, "machine": machine_name}
+
+    if runtime_kind is not None:
+        details["runtime_context"] = {"kind": runtime_kind}
+
+    return details
 
 
 def package_version(module_name: str, dist_name: Optional[str] = None) -> str:
@@ -99,21 +134,41 @@ def package_version(module_name: str, dist_name: Optional[str] = None) -> str:
     return ilm.version(module_name)
 
 
+def collect_package_versions() -> Dict[str, str]:
+    required = (
+        ("dolfinx", None),
+        ("torch", None),
+        ("cuqi", "CUQIpy"),
+        ("numpy", None),
+        ("scipy", None),
+        ("pyeidors", None),
+    )
+    packages: Dict[str, str] = {}
+    missing: list[str] = []
+    for module_name, dist_name in required:
+        try:
+            packages[module_name] = package_version(module_name, dist_name)
+        except Exception as exc:
+            missing.append(f"{module_name}: {exc}")
+    if missing:
+        raise MissingRequiredPackagesError(
+            "missing required imports for locked manifest verification: "
+            + "; ".join(missing)
+            + ". Enter the supported dev shell with `nix develop` and retry."
+        )
+    return packages
+
+
 def build_manifest(root: Path, platform_id: Optional[str] = None) -> Dict[str, Any]:
     flake_lock = root / "flake.lock"
     uv_lock = root / "uv.lock"
     pyproject = root / "pyproject.toml"
 
+    ensure_repo_src_on_path(root)
+
     selected_platform = platform_details(platform_id)
 
-    packages = {
-        "dolfinx": package_version("dolfinx"),
-        "torch": package_version("torch"),
-        "cuqi": package_version("cuqi", "CUQIpy"),
-        "numpy": package_version("numpy"),
-        "scipy": package_version("scipy"),
-        "pyeidors": package_version("pyeidors"),
-    }
+    packages = collect_package_versions()
 
     return {
         "schema_version": 1,
@@ -163,6 +218,9 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except MissingRequiredPackagesError as exc:  # pragma: no cover
+        print(f"[env-manifest] ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     except Exception as exc:  # pragma: no cover
         print(f"[env-manifest] ERROR: {exc}", file=sys.stderr)
         raise

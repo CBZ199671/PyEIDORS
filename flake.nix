@@ -23,6 +23,8 @@
           pkgs = import nixpkgs { inherit system; };
           python = pkgs.python313;
           py = python.pkgs;
+          hasPy = name: builtins.hasAttr name py;
+          pyOpt = name: if hasPy name then [ (builtins.getAttr name py) ] else [ ];
           fenicsDolfinx = py."fenics-dolfinx".overridePythonAttrs (
             old: {
               nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ py.cmake ];
@@ -44,6 +46,7 @@
               pkgs.ninja
               pkgs.gfortran
               pkgs.openblas
+              pkgs.suitesparse
 
               fenicsDolfinx
               py."fenics-basix"
@@ -59,6 +62,7 @@
               py.pyyaml
               py.meshio
               py.gmsh
+            ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
               py.pytest
               py."pytest-cov"
               py.black
@@ -123,6 +127,10 @@ PY
                 fi
               fi
 
+              if [ "$(uname -s)" = "Linux" ]; then
+                export LD_LIBRARY_PATH="${pkgs.stdenv.cc.cc.lib}/lib:${pkgs.zlib}/lib''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+              fi
+
               nix_python_mm="$("$UV_PYTHON" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 
               recreate_venv=0
@@ -174,6 +182,33 @@ PY
               else
                 echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
               fi
+
+              perf_status="$("$UV_PYTHON" - <<'PY'
+import importlib
+
+status = {}
+for name in ("pyamg", "sksparse"):
+    try:
+        importlib.import_module(name)
+        status[name] = "available"
+    except Exception:
+        status[name] = "missing"
+
+cholmod = "missing"
+if status["sksparse"] == "available":
+    try:
+        from sksparse import cholmod as _cholmod  # noqa: F401
+        cholmod = "available"
+    except Exception:
+        cholmod = "missing"
+
+print(
+    f"[nix+uv] Performance extras status: "
+    f"pyamg={status['pyamg']}, sksparse={status['sksparse']}, cholmod={cholmod}"
+)
+PY
+)"
+              echo "$perf_status"
 
               echo "[nix+uv] Dev shell ready."
               echo "[nix+uv] Verify stack quickly:"

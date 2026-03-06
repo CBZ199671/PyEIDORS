@@ -108,6 +108,17 @@ def test_check_mode_reports_lock_drift(tmp_path: Path):
     assert "uv lock --python" in out.stderr
 
 
+def test_missing_project_python_emits_bootstrap_hint(tmp_path: Path):
+    repo, env = _build_fake_repo(tmp_path)
+    shutil.rmtree(repo / ".venv")
+
+    out = _run(repo, env, "--check")
+    assert out.returncode != 0
+    assert "python interpreter not found" in out.stderr
+    assert "Official bootstrap command: nix develop" in out.stderr
+    assert "docs/NIX_FENICSX.md" in out.stderr
+
+
 def test_repair_mode_fails_on_import_check_error(tmp_path: Path):
     repo, env = _build_fake_repo(tmp_path)
     env["PY_IMPORT_FAIL"] = "1"

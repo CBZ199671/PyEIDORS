@@ -35,6 +35,11 @@ python scripts/env/verify_env_manifest.py
 python -c "import dolfinx, torch, cuqi, pyeidors"
 ```
 
+WSL2 note: treat `nix develop` as the bootstrap step.
+In a fresh WSL2 shell, do not assume `.venv/bin/python` alone can load the full
+FEniCSx/Torch runtime; if you hit shared-library or import errors, re-enter the
+repository with `nix develop` and retry.
+
 Then run a quick workflow check:
 
 ```bash
@@ -352,6 +357,14 @@ Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full
 ## Environment Note
 
 The primary maintained developer workflow is **Nix + uv** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
+On WSL2, the locked Linux manifest may record `platform.runtime_context.kind = wsl2`
+as informational provenance; this documents the shell context that produced the
+manifest and is not a separate verification gate.
+Optional performance extras (`pyamg`, `scikit-sparse`) can be installed via:
+
+```bash
+ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
+```
 
 Docker content is archived for historical reproducibility in `docs/archive/DOCKER_LEGACY.md`.
 

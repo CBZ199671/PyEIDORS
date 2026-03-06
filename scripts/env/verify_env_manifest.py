@@ -9,7 +9,12 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
-from export_env_manifest import build_manifest, current_platform_id, repo_root
+from export_env_manifest import (
+    MissingRequiredPackagesError,
+    build_manifest,
+    current_platform_id,
+    repo_root,
+)
 
 
 def default_manifest_path(root: Path) -> Path:
@@ -135,6 +140,9 @@ def main() -> None:
 if __name__ == "__main__":
     try:
         main()
+    except MissingRequiredPackagesError as exc:  # pragma: no cover
+        print(f"[env-verify] ERROR: {exc}", file=sys.stderr)
+        raise SystemExit(1) from exc
     except Exception as exc:  # pragma: no cover
         print(f"[env-verify] ERROR: {exc}", file=sys.stderr)
         raise

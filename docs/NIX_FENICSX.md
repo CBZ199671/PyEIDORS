@@ -128,6 +128,19 @@ From the repository root:
 nix develop
 ```
 
+Important for WSL2 and other fresh shells:
+
+- `scripts/env/sync_locked_env.sh --check` is a validation command, not the bootstrap step.
+- If it reports `python interpreter not found: .venv/bin/python`, start with `nix develop`.
+- If `nix` itself is missing on WSL2, install Nix first; the repository does not support a 1:1 reproducible non-Nix bootstrap for DOLFINx.
+- If a plain WSL2 shell can `import pyeidors` but fails on `pyeidors.EITSystem` with NumPy/Torch/shared-library errors, that still counts as an unsupported runtime state; re-enter with `nix develop` before debugging deeper.
+- When the Linux manifest is exported from WSL2, it may record `platform.runtime_context.kind = wsl2` as informational provenance only; `verify_env_manifest.py` does not treat that field as a hard compatibility gate.
+- For a lightweight preflight before the full stack is present, you can still inspect package detection with:
+
+```bash
+PYTHONPATH=src python -c "import pyeidors; print(pyeidors.check_environment())"
+```
+
 The `shellHook` in `flake.nix` will:
 
 1. Set uv to use Nix-provided Python.
@@ -187,6 +200,23 @@ This is not expected after lock sync. Re-run:
 scripts/env/sync_locked_env.sh --repair
 python scripts/env/verify_env_manifest.py
 ```
+
+### 3b) Plain WSL2 shell hits `libstdc++.so.6` / NumPy / Torch import errors
+
+Symptoms:
+
+- `.venv/bin/python -c "import pyeidors; print(pyeidors.check_environment())"` works, but
+- `.venv/bin/python -c "import pyeidors; pyeidors.EITSystem"` fails with a shared-library or runtime import error.
+
+Fix:
+
+```bash
+nix develop
+scripts/env/sync_locked_env.sh --check
+python scripts/env/verify_env_manifest.py
+```
+
+This repository only treats the `nix develop` shell as the supported full-runtime entrypoint for WSL2/Linux.
 
 ### 4) Lock drift (`uv.lock` / profile mismatch)
 

@@ -1850,6 +1850,24 @@ wheels = [
 ]
 
 [[package]]
+name = "pyamg"
+version = "5.3.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/54/f1/e7f0466af00dc59b6592f03499a8ca1c839d5265a045d0b010b574f67143/pyamg-5.3.0.tar.gz", hash = "sha256:5323d0f1a4cd999be246a90d580c9e1e9b584b98887f6298d397611087ef860b", size = 4161140, upload-time = "2025-08-24T02:06:10.133Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/66/b9/705e5f5177d545114d8ae46245de6bb5b8e3e92d9886a31b7fa475762efd/pyamg-5.3.0-cp313-cp313-macosx_10_13_x86_64.whl", hash = "sha256:c8e70912b1f6fd02c2d40ca10f6e94cce24181a1baa029f084aee74600242686", size = 1852677, upload-time = "2025-08-24T02:05:59.084Z" },
+    { url = "https://files.pythonhosted.org/packages/48/39/9da477018dd8eee06f064eee3d9047089c0621b3bda63ee99f256b27b287/pyamg-5.3.0-cp313-cp313-macosx_11_0_arm64.whl", hash = "sha256:e8f771f1ad314534d14d6d8a47d289b191f081abdd1443c491ac93f6d3102be5", size = 1763803, upload-time = "2025-08-24T02:06:01.006Z" },
+    { url = "https://files.pythonhosted.org/packages/63/f3/c13ae1422434baeefe4d4f306a1cc77f024fe96d2abab3c212cfa1bf3ff8/pyamg-5.3.0-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5cc223c66a7aca06fba898eb5e8ede6bb7974a9ddf7b8a98f56143c829e63631", size = 1900343, upload-time = "2025-08-24T02:06:03.103Z" },
+    { url = "https://files.pythonhosted.org/packages/c9/86/13b27316cf5f984720b736b58d7a0d8bf94870b99a546a0137f53f36924c/pyamg-5.3.0-cp313-cp313-musllinux_1_2_x86_64.whl", hash = "sha256:fddf30940d422d97a24b6211e3405bf707688a94d0683780ae40073209c3aa6d", size = 2946401, upload-time = "2025-08-24T02:06:05.101Z" },
+    { url = "https://files.pythonhosted.org/packages/96/e2/ac14da5a3df18652f651788bf8eda9dcf99a485787ccb28add2fcd5d8eda/pyamg-5.3.0-cp313-cp313-win32.whl", hash = "sha256:6f7ea204aafc7e57a1900d47067430b059954d293a11025aea8616e5b6fba493", size = 1564120, upload-time = "2025-08-24T02:06:06.688Z" },
+    { url = "https://files.pythonhosted.org/packages/d5/b4/72f17561584b51d9c9ca121b5307699eb6aa8300c812a31c8b4ea4ad9d2a/pyamg-5.3.0-cp313-cp313-win_amd64.whl", hash = "sha256:3965844194dc15be5c9d7198086b58496c2833e40e60b1133ab340d24fac950c", size = 1681868, upload-time = "2025-08-24T02:06:08.388Z" },
+]
+
+[[package]]
 name = "pycodestyle"
 version = "2.14.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1902,6 +1920,10 @@ fenicsx = [
     { name = "meshio" },
     { name = "mpi4py" },
 ]
+performance = [
+    { name = "pyamg" },
+    { name = "scikit-sparse" },
+]
 torch = [
     { name = "torch" },
     { name = "torchaudio" },
@@ -1929,10 +1951,12 @@ requires-dist = [
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pandas", specifier = ">=2.0" },
     { name = "pre-commit", marker = "extra == 'dev'", specifier = ">=2.15.0" },
+    { name = "pyamg", marker = "extra == 'performance'", specifier = ">=5.2" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=6.2.0" },
     { name = "pytest-cov", marker = "extra == 'dev'", specifier = ">=3.0.0" },
     { name = "pyvista", marker = "extra == 'viz'", specifier = ">=0.37.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "scikit-sparse", marker = "extra == 'performance'", specifier = ">=0.4.12,<0.5" },
     { name = "scipy", specifier = ">=1.12" },
     { name = "sphinx", marker = "extra == 'docs'", specifier = ">=4.0.0" },
     { name = "sphinx-rtd-theme", marker = "extra == 'docs'", specifier = ">=1.0.0" },
@@ -1941,7 +1965,7 @@ requires-dist = [
     { name = "torchvision", marker = "extra == 'torch'", specifier = "~=0.25.0" },
     { name = "vtk", marker = "extra == 'viz'", specifier = ">=9.0.0" },
 ]
-provides-extras = ["fenicsx", "torch", "cuqi", "dev", "docs", "viz"]
+provides-extras = ["fenicsx", "torch", "cuqi", "performance", "dev", "docs", "viz"]
 
 [[package]]
 name = "pyface"
@@ -2274,6 +2298,16 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/f9/39/7e067bb06c31de48de3eb200f9fc7c58982a4d3db44b07e73963e10d3be9/rpds_py-0.30.0-cp313-cp313t-win32.whl", hash = "sha256:3d4a69de7a3e50ffc214ae16d79d8fbb0922972da0356dcf4d0fdca2878559c6", size = 211341, upload-time = "2025-11-30T20:23:24.449Z" },
     { url = "https://files.pythonhosted.org/packages/0a/4d/222ef0b46443cf4cf46764d9c630f3fe4abaa7245be9417e56e9f52b8f65/rpds_py-0.30.0-cp313-cp313t-win_amd64.whl", hash = "sha256:f14fc5df50a716f7ece6a80b6c78bb35ea2ca47c499e422aa4463455dd96d56d", size = 225768, upload-time = "2025-11-30T20:23:25.908Z" },
 ]
+
+[[package]]
+name = "scikit-sparse"
+version = "0.4.16"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/33/f2/b391faf6120b72b994b574caef9dac5ea2b7667de59fbd3c8336c07403b3/scikit_sparse-0.4.16.tar.gz", hash = "sha256:3baf49ac98ae8cc4357005af49a0df93a6a53f4e61708705da2942ea4fa61a56", size = 214435, upload-time = "2025-04-27T18:20:37.052Z" }
 
 [[package]]
 name = "scipy"

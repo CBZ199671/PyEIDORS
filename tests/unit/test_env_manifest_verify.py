@@ -29,6 +29,7 @@ def _manifest_base() -> dict:
             "id": "macos-aarch64",
             "system": "darwin",
             "machine": "arm64",
+            "runtime_context": {"kind": "native"},
         },
         "python": {
             "version": "3.13.2",
@@ -76,13 +77,22 @@ def test_default_manifest_path_uses_detected_platform(monkeypatch):
     assert path == Path("/repo/env/manifests/linux-x86_64.lock.json")
 
 
-def test_platform_details_uses_override_mapping():
+def test_platform_details_uses_override_mapping(monkeypatch):
+    monkeypatch.setattr(exporter, "runtime_context_kind", lambda: None)
     details = exporter.platform_details("linux-x86_64")
     assert details == {
         "id": "linux-x86_64",
         "system": "linux",
         "machine": "x86_64",
     }
+
+
+def test_compare_manifests_ignores_runtime_context_differences():
+    expected = _manifest_base()
+    actual = _manifest_base()
+    actual["platform"]["runtime_context"] = {"kind": "wsl2"}
+
+    assert verifier.compare_manifests(actual, expected) == []
 
 
 def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeypatch):
@@ -106,12 +116,14 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
         return versions[module_name]
 
     monkeypatch.setattr(exporter, "package_version", _fake_package_version)
+    monkeypatch.setattr(exporter, "runtime_context_kind", lambda: "wsl2")
 
-    manifest = exporter.build_manifest(tmp_path, platform_id="macos-aarch64")
+    manifest = exporter.build_manifest(tmp_path, platform_id="linux-x86_64")
     assert manifest["profile"]["extras"] == ["torch", "cuqi", "dev"]
     assert manifest["profile"]["sync_flags"] == ["--frozen"]
     assert manifest["profile"]["lock_check"] == "uv lock --check"
-    assert manifest["platform"]["id"] == "macos-aarch64"
-    assert manifest["platform"]["system"] == "darwin"
+    assert manifest["platform"]["id"] == "linux-x86_64"
+    assert manifest["platform"]["system"] == "linux"
+    assert manifest["platform"]["runtime_context"]["kind"] == "wsl2"
     assert manifest["locks"]["nixpkgs_rev"] == "deadbeef"
     assert manifest["packages"]["cuqi"] == "1.5.0"

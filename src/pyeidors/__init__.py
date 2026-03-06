@@ -5,6 +5,8 @@ A modular EIT system based on DOLFINx, PyTorch, and CUQIpy.
 
 from __future__ import annotations
 
+from typing import Any
+
 from .utils.cuqi_imports import suppress_known_cuqi_import_warnings
 
 __version__ = "1.0.0"
@@ -37,10 +39,6 @@ try:
 except ImportError:
     _CUQI_AVAILABLE = False
 
-# Main interface
-from .core_system import EITSystem
-
-
 # Environment info
 def check_environment():
     """Check runtime environment and available dependencies."""
@@ -57,6 +55,34 @@ def check_environment():
         info["cuda_device_count"] = torch.cuda.device_count() if _CUDA_AVAILABLE else 0
 
     return info
+
+
+def _runtime_import_error(exc: ImportError) -> ImportError:
+    detail = str(exc).strip()
+    suffix = f" Original import error: {detail}" if detail else ""
+    return ImportError(
+        "EITSystem requires the supported FEniCSx/DOLFINx runtime. "
+        "Run `nix develop` to enter the supported environment, then retry. "
+        "For setup details see docs/NIX_FENICSX.md."
+        + suffix
+    )
+
+
+def __getattr__(name: str) -> Any:
+    if name != "EITSystem":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    try:
+        from .core_system import EITSystem as _EITSystem
+    except ModuleNotFoundError as exc:
+        raise _runtime_import_error(exc) from exc
+    except ImportError as exc:
+        raise _runtime_import_error(exc) from exc
+    return _EITSystem
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | {"EITSystem"})
 
 
 __all__ = ["EITSystem", "check_environment", "__version__"]

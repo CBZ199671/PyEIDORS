@@ -50,6 +50,10 @@ torch = [
 cuqi = [
     "CUQIpy~=1.5.0",
 ]
+performance = [
+    "pyamg>=5.2",
+    "scikit-sparse>=0.4.12,<0.5",
+]
 # Development dependencies
 dev = [
     "pytest>=6.2.0", 
