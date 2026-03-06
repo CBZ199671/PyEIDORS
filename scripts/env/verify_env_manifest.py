@@ -13,12 +13,14 @@ from export_env_manifest import (
     MissingRequiredPackagesError,
     build_manifest,
     current_platform_id,
+    default_manifest_filename,
     repo_root,
+    resolve_profile_name,
 )
 
 
-def default_manifest_path(root: Path) -> Path:
-    return root / "env" / "manifests" / f"{current_platform_id()}.lock.json"
+def default_manifest_path(root: Path, *, profile_name: str | None = None) -> Path:
+    return root / "env" / "manifests" / default_manifest_filename(current_platform_id(), profile_name=profile_name)
 
 
 def load_manifest(path: Path) -> Dict[str, Any]:
@@ -54,6 +56,16 @@ def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[
         actual.get("profile", {}).get("lock_check"),
         expected.get("profile", {}).get("lock_check"),
     )
+
+    expected_profile_name = expected.get("profile", {}).get("name")
+    actual_profile_name = actual.get("profile", {}).get("name")
+    if expected_profile_name is not None or actual_profile_name is not None:
+        _cmp_field(
+            diffs,
+            "profile.name",
+            actual_profile_name,
+            expected_profile_name,
+        )
 
     _cmp_field(
         diffs,
@@ -107,7 +119,13 @@ def parse_args() -> argparse.Namespace:
         "--manifest",
         type=Path,
         default=None,
-        help="Path to manifest JSON (default: env/manifests/<platform>.lock.json)",
+        help="Path to manifest JSON (default: env/manifests/<platform>.lock.json or <platform>-<profile>.lock.json)",
+    )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Optional environment profile name (default: PYEIDORS_ENV_PROFILE or default)",
     )
     return parser.parse_args()
 
@@ -115,7 +133,8 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root = repo_root()
-    manifest_path = args.manifest if args.manifest is not None else default_manifest_path(root)
+    resolved_profile = resolve_profile_name(args.profile)
+    manifest_path = args.manifest if args.manifest is not None else default_manifest_path(root, profile_name=resolved_profile)
 
     if not manifest_path.exists():
         raise FileNotFoundError(
@@ -124,7 +143,7 @@ def main() -> None:
         )
 
     expected = load_manifest(manifest_path)
-    actual = build_manifest(root, platform_id=current_platform_id())
+    actual = build_manifest(root, platform_id=current_platform_id(), profile_name=resolved_profile)
     diffs = compare_manifests(actual, expected)
 
     if diffs:

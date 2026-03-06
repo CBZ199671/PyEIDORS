@@ -20,6 +20,8 @@ from typing import Any, Dict, Optional
 PROFILE_EXTRAS = ["torch", "cuqi", "dev"]
 PROFILE_SYNC_FLAGS = ["--frozen"]
 PROFILE_LOCK_CHECK = "uv lock --check"
+DEFAULT_PROFILE_NAME = "default"
+PROFILE_ENV_VAR = "PYEIDORS_ENV_PROFILE"
 PLATFORM_MAP = {
     "macos-aarch64": ("darwin", "arm64"),
     "macos-x86_64": ("darwin", "x86_64"),
@@ -86,6 +88,19 @@ def current_platform_id() -> str:
         return "linux-aarch64"
     return f"{system}-{machine}"
 
+
+
+
+def resolve_profile_name(profile_name: Optional[str] = None) -> str:
+    candidate = str(profile_name or os.environ.get(PROFILE_ENV_VAR, DEFAULT_PROFILE_NAME)).strip().lower()
+    return candidate or DEFAULT_PROFILE_NAME
+
+
+def default_manifest_filename(platform_id: str, *, profile_name: Optional[str] = None) -> str:
+    resolved_profile = resolve_profile_name(profile_name)
+    if resolved_profile == DEFAULT_PROFILE_NAME:
+        return f"{platform_id}.lock.json"
+    return f"{platform_id}-{resolved_profile}.lock.json"
 
 def runtime_context_kind() -> Optional[str]:
     if platform.system().lower() != "linux":
@@ -159,7 +174,7 @@ def collect_package_versions() -> Dict[str, str]:
     return packages
 
 
-def build_manifest(root: Path, platform_id: Optional[str] = None) -> Dict[str, Any]:
+def build_manifest(root: Path, platform_id: Optional[str] = None, profile_name: Optional[str] = None) -> Dict[str, Any]:
     flake_lock = root / "flake.lock"
     uv_lock = root / "uv.lock"
     pyproject = root / "pyproject.toml"
@@ -167,17 +182,22 @@ def build_manifest(root: Path, platform_id: Optional[str] = None) -> Dict[str, A
     ensure_repo_src_on_path(root)
 
     selected_platform = platform_details(platform_id)
+    resolved_profile = resolve_profile_name(profile_name)
 
     packages = collect_package_versions()
+
+    profile_payload = {
+        "extras": PROFILE_EXTRAS,
+        "sync_flags": PROFILE_SYNC_FLAGS,
+        "lock_check": PROFILE_LOCK_CHECK,
+    }
+    if resolved_profile != DEFAULT_PROFILE_NAME:
+        profile_payload["name"] = resolved_profile
 
     return {
         "schema_version": 1,
         "project": "pyeidors",
-        "profile": {
-            "extras": PROFILE_EXTRAS,
-            "sync_flags": PROFILE_SYNC_FLAGS,
-            "lock_check": PROFILE_LOCK_CHECK,
-        },
+        "profile": profile_payload,
         "platform": selected_platform,
         "python": {
             "version": platform.python_version(),
@@ -203,13 +223,19 @@ def parse_args() -> argparse.Namespace:
         default=None,
         help="Override platform id (default: detect from current runtime)",
     )
+    parser.add_argument(
+        "--profile",
+        type=str,
+        default=None,
+        help="Optional environment profile name (default: PYEIDORS_ENV_PROFILE or default)",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = parse_args()
     root = repo_root()
-    manifest = build_manifest(root, platform_id=args.platform_id)
+    manifest = build_manifest(root, platform_id=args.platform_id, profile_name=args.profile)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
     print(f"[env-manifest] wrote {args.output}")

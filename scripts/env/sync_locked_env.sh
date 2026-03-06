@@ -5,7 +5,8 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$ROOT_DIR"
 
 readonly EXPECTED_PY_MM="3.13"
-readonly PYTHON_BIN="${PYTHON_BIN:-.venv/bin/python}"
+readonly ACTIVE_VENV_DIR="${PYEIDORS_ACTIVE_VENV:-.venv}"
+readonly PYTHON_BIN="${PYTHON_BIN:-${ACTIVE_VENV_DIR}/bin/python}"
 readonly PROFILE_EXTRAS=(torch cuqi dev)
 readonly OPTIONAL_PERF_EXTRAS=(performance)
 
@@ -26,9 +27,9 @@ print_bootstrap_hint() {
 }
 
 print_profile() {
-  cat <<'EOF'
+  cat <<EOF
 PyEIDORS locked environment profile
-- Python interpreter: .venv/bin/python
+- Python interpreter: ${PYTHON_BIN}
 - Required Python major/minor: 3.13
 - uv sync flags: --frozen
 - Lock freshness gate: uv lock --check
@@ -64,6 +65,15 @@ ensure_python_version() {
 
 build_sync_cmd() {
   SYNC_CMD=(uv sync --python "$PYTHON_BIN" --frozen)
+
+  if [ -n "${VIRTUAL_ENV:-}" ]; then
+    active_real="$(cd "$VIRTUAL_ENV" 2>/dev/null && pwd || true)"
+    target_real="$(cd "$ACTIVE_VENV_DIR" 2>/dev/null && pwd || true)"
+    if [ -n "$active_real" ] && [ -n "$target_real" ] && [ "$active_real" = "$target_real" ]; then
+      SYNC_CMD+=(--active)
+    fi
+  fi
+
   for extra in "${PROFILE_EXTRAS[@]}"; do
     SYNC_CMD+=(--extra "$extra")
   done

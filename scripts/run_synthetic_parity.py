@@ -28,12 +28,18 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 from dolfinx import fem
+
+try:  # pragma: no cover - optional in lean environments
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
 from scipy.optimize import minimize_scalar
 from scipy.linalg import lu_factor, lu_solve
 import matplotlib.pyplot as plt
@@ -172,6 +178,14 @@ def parse_args() -> argparse.Namespace:
                         help="Upper bound for the step-size calibration interval.")
     parser.add_argument("--step-size-maxiter", type=int, default=50,
                         help="Maximum iterations passed to the bounded step-size optimizer.")
+    parser.add_argument("--petsc-device", choices=["auto", "cpu", "cuda"], default="auto",
+                        help="PETSc/DOLFINx FEM device policy.")
+    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
+                        help="Torch/GN inverse runtime device policy.")
+    parser.add_argument("--perf-report", type=Path, default=None,
+                        help="Optional JSON report path for repeated parity/performance runs.")
+    parser.add_argument("--repeat", type=int, default=1,
+                        help="Number of measured runs. When >1, one extra warmup run is performed first.")
     return parser.parse_args()
 
 
@@ -194,7 +208,12 @@ def build_pattern_config(n_elec: int) -> PatternConfig:
 
 def setup_eit_system(args: argparse.Namespace) -> Tuple[EITSystem, object]:
     pattern = build_pattern_config(args.n_elec)
-    eit_system = EITSystem(n_elec=args.n_elec, pattern_config=pattern)
+    eit_system = EITSystem(
+        n_elec=args.n_elec,
+        pattern_config=pattern,
+        petsc_device=str(args.petsc_device),
+        device=str(args.device),
+    )
     mesh = load_or_create_mesh(mesh_dir=str(args.mesh_dir), mesh_name=args.mesh_name,
                                n_elec=args.n_elec, refinement=args.refinement,
                                radius=args.mesh_radius, electrode_coverage=args.electrode_coverage)
@@ -623,9 +642,17 @@ def load_eidors_vector(path: Path, delimiter: str) -> np.ndarray:
     return data.reshape(-1)
 
 
-def main() -> None:
-    args = parse_args()
-    output_dir = ensure_output_dir(args.output_root)
+def _maybe_cuda_sync() -> None:
+    if torch is None or not hasattr(torch, "cuda") or not torch.cuda.is_available():
+        return
+    try:
+        torch.cuda.synchronize()
+    except Exception:
+        return
+
+
+def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: bool) -> dict[str, object]:
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     system, _ = setup_eit_system(args)
     reconstructor = getattr(system, "reconstructor", None)
@@ -640,22 +667,29 @@ def main() -> None:
     homogeneous = system.create_homogeneous_image(conductivity=args.background)
     phantom_img = make_phantom_image(system, args)
 
-    # Forward simulations
-    meas_homogeneous, _ = system.fwd_model.fwd_solve(homogeneous)
-    meas_phantom, _ = system.fwd_model.fwd_solve(phantom_img)
+    stage_timings: Dict[str, float] = {}
 
-    # Emulate measurement calibration (scale/bias) to stay consistent with real-data pipeline.
+    _maybe_cuda_sync()
+    t0 = time.perf_counter()
+    meas_homogeneous, _ = system.fwd_model.fwd_solve(homogeneous)
+    _maybe_cuda_sync()
+    stage_timings["forward_homogeneous"] = float(time.perf_counter() - t0)
+
+    _maybe_cuda_sync()
+    t0 = time.perf_counter()
+    meas_phantom, _ = system.fwd_model.fwd_solve(phantom_img)
+    _maybe_cuda_sync()
+    stage_timings["forward_phantom"] = float(time.perf_counter() - t0)
+
     scale, bias = compute_scale_bias(meas_homogeneous.meas, meas_homogeneous.meas)
     meas_h_calibrated = apply_calibration(meas_homogeneous.meas, scale, bias)
     meas_p_calibrated = apply_calibration(meas_phantom.meas, scale, bias)
     diff_vector = meas_p_calibrated - meas_h_calibrated
     raw_diff_vector = meas_phantom.meas - meas_homogeneous.meas
 
-    if args.save_forward_csv:
+    if persist_artifacts and args.save_forward_csv:
         header = "meas_homogeneous,meas_phantom,difference"
-        forward_matrix = np.column_stack([meas_homogeneous.meas,
-                                          meas_phantom.meas,
-                                          diff_vector])
+        forward_matrix = np.column_stack([meas_homogeneous.meas, meas_phantom.meas, diff_vector])
         np.savetxt(output_dir / "synthetic_forward_data.csv",
                    forward_matrix, delimiter=",", header=header, comments="")
 
@@ -674,8 +708,13 @@ def main() -> None:
         "difference_solver": args.difference_solver,
     }
 
+    difference_backend: Dict[str, object] = {}
+    absolute_backend: Dict[str, object] = {}
+
     if args.mode in {"difference", "both"}:
         diff_meta: Dict[str, object] = {"solver": args.difference_solver}
+        _maybe_cuda_sync()
+        t0 = time.perf_counter()
         if args.difference_solver == "single-step":
             recon_image, predicted_diff, solver_meta = run_single_step_difference(
                 system=system,
@@ -694,43 +733,49 @@ def main() -> None:
                 reconstructor.max_iterations = args.difference_max_iterations
             result = system.difference_reconstruct(meas_phantom, meas_homogeneous)
             recon_image = result.conductivity_image
-            predicted_diff = simulate_calibrated_difference(
-                system, recon_image, scale, bias, meas_h_calibrated
-            )
+            predicted_diff = simulate_calibrated_difference(system, recon_image, scale, bias, meas_h_calibrated)
             history = result.residual_history or []
             diff_meta.update({
                 "iterations": len(history),
                 "final_residual": history[-1] if history else None,
             })
+            difference_backend = dict((result.metadata or {}).get("solver_diagnostics", {}).get("backend_info", {}) or {})
             if reconstructor is not None and base_max_iterations is not None:
                 reconstructor.max_iterations = base_max_iterations
+        _maybe_cuda_sync()
+        stage_timings["difference_reconstruct"] = float(time.perf_counter() - t0)
 
         metrics["difference"] = compute_metrics(diff_vector, predicted_diff)
         diff_meta["rmse"] = metrics["difference"].rmse
-        save_conductivity_figures(system, phantom_img, recon_image,
-                                  output_dir / "difference", args.figure_dpi)
-        np.savetxt(output_dir / "difference" / "predicted_difference.csv",
-                   predicted_diff, delimiter=",")
-        save_voltage_comparison(
-            measured=diff_vector,
-            predicted=predicted_diff,
-            output_path=output_dir / "difference" / "voltage_comparison.png",
-            title="Difference reconstruction voltages",
-            dpi=args.figure_dpi,
-        )
+        if persist_artifacts:
+            save_conductivity_figures(system, phantom_img, recon_image, output_dir / "difference", args.figure_dpi)
+            np.savetxt(output_dir / "difference" / "predicted_difference.csv", predicted_diff, delimiter=",")
+            save_voltage_comparison(
+                measured=diff_vector,
+                predicted=predicted_diff,
+                output_path=output_dir / "difference" / "voltage_comparison.png",
+                title="Difference reconstruction voltages",
+                dpi=args.figure_dpi,
+            )
         extra_payload["difference_metadata"] = diff_meta
 
     if args.mode in {"absolute", "both"}:
-        want_frames = bool(args.absolute_save_frames or args.absolute_make_gif)
+        want_frames = bool(persist_artifacts and (args.absolute_save_frames or args.absolute_make_gif))
+        _maybe_cuda_sync()
+        t0 = time.perf_counter()
         abs_raw = system.reconstructor.reconstruct(
             measured_data=meas_phantom,
             initial_conductivity=homogeneous.elem_data,
             record_conductivity_history=want_frames,
         )
+        _maybe_cuda_sync()
+        stage_timings["absolute_reconstruct"] = float(time.perf_counter() - t0)
+
         sigma_fn = abs_raw.conductivity
         recon_image = EITImage(elem_data=function_get_array(sigma_fn).copy(), fwd_model=system.fwd_model)
         sim_abs, _ = system.fwd_model.fwd_solve(recon_image)
         metrics["absolute"] = compute_metrics(meas_phantom.meas, sim_abs.meas)
+        absolute_backend = dict(abs_raw.diagnostics.get("backend_info", {}) or {})
 
         if want_frames:
             conductivity_history = abs_raw.conductivity_history or []
@@ -762,24 +807,107 @@ def main() -> None:
                     max_frames=args.gif_max_frames,
                 )
 
-        save_conductivity_figures(system, phantom_img, recon_image,
-                                  output_dir / "absolute", args.figure_dpi)
-        np.savetxt(output_dir / "absolute" / "predicted_absolute.csv",
-                   sim_abs.meas, delimiter=",")
-        save_voltage_comparison(
-            measured=meas_phantom.meas,
-            predicted=sim_abs.meas,
-            output_path=output_dir / "absolute" / "voltage_comparison.png",
-            title="Absolute reconstruction voltages",
-            dpi=args.figure_dpi,
-        )
+        if persist_artifacts:
+            save_conductivity_figures(system, phantom_img, recon_image, output_dir / "absolute", args.figure_dpi)
+            np.savetxt(output_dir / "absolute" / "predicted_absolute.csv", sim_abs.meas, delimiter=",")
+            save_voltage_comparison(
+                measured=meas_phantom.meas,
+                predicted=sim_abs.meas,
+                output_path=output_dir / "absolute" / "voltage_comparison.png",
+                title="Absolute reconstruction voltages",
+                dpi=args.figure_dpi,
+            )
 
     if args.eidors_csv:
         reference_vector = load_eidors_vector(args.eidors_csv, args.csv_delimiter)
-        key = "eidors_reference"
-        extra_payload[key] = compute_metrics(diff_vector, reference_vector).to_dict()
+        extra_payload["eidors_reference"] = compute_metrics(diff_vector, reference_vector).to_dict()
 
-    save_metrics(metrics, output_dir / "metrics.json", extra=extra_payload)
+    petsc_backend_info = dict(getattr(system.fwd_model, "_petsc_backend_info", {}) or {})
+    preferred_backend = absolute_backend or difference_backend
+    execution_profile = str(preferred_backend.get("execution_profile") or (
+        "cuda" if str(petsc_backend_info.get("petsc_device_effective", "cpu")) == "cuda"
+        and str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
+        else (
+            "mixed" if str(petsc_backend_info.get("petsc_device_effective", "cpu")) == "cuda"
+            or str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
+            else "cpu"
+        )
+    ))
+
+    perf_summary = {
+        "petsc_device_requested": str(petsc_backend_info.get("petsc_device_requested", args.petsc_device)),
+        "petsc_device_effective": str(petsc_backend_info.get("petsc_device_effective", "cpu")),
+        "petsc_mat_type": petsc_backend_info.get("petsc_mat_type"),
+        "petsc_vec_type": petsc_backend_info.get("petsc_vec_type"),
+        "forward_mat_solve_effective": petsc_backend_info.get("forward_mat_solve_effective"),
+        "gpu_fallback_reason": petsc_backend_info.get("gpu_fallback_reason"),
+        "forward_factor_backend": petsc_backend_info.get("forward_factor_backend"),
+        "inverse_device_requested": str(getattr(reconstructor, "device_requested", args.device)) if reconstructor is not None else str(args.device),
+        "inverse_device_effective": str(getattr(reconstructor, "device_effective", "cpu")) if reconstructor is not None else "cpu",
+        "execution_profile": execution_profile,
+        "jacobian_block_backend": preferred_backend.get("jacobian_block_backend"),
+        "jacobian_backend_requested": preferred_backend.get("jacobian_backend_requested"),
+        "jacobian_backend_effective": preferred_backend.get("jacobian_backend_effective"),
+    }
+    extra_payload["perf_summary"] = perf_summary
+    extra_payload["stage_timings"] = stage_timings
+
+    if persist_artifacts:
+        save_metrics(metrics, output_dir / "metrics.json", extra=extra_payload)
+
+    return {
+        "metrics": {mode: value.to_dict() for mode, value in metrics.items()},
+        "stage_timings": stage_timings,
+        "perf_summary": perf_summary,
+        "extra": extra_payload,
+    }
+
+
+def main() -> None:
+    args = parse_args()
+    if int(args.repeat) <= 0:
+        raise ValueError("--repeat must be a positive integer.")
+    output_dir = ensure_output_dir(args.output_root)
+
+    warmup_runs = 1 if int(args.repeat) > 1 else 0
+    measured_runs: List[dict[str, object]] = []
+    total_runs = warmup_runs + int(args.repeat)
+    temp_root = output_dir / ".perf_runs"
+
+    for run_index in range(total_runs):
+        persist_artifacts = run_index == total_runs - 1
+        run_output_dir = output_dir if persist_artifacts else temp_root / f"run_{run_index:02d}"
+        payload = _run_once(args, run_output_dir, persist_artifacts=persist_artifacts)
+        if run_index >= warmup_runs:
+            measured_runs.append({"run_index": run_index - warmup_runs, **payload})
+
+    final_run = measured_runs[-1]
+    if args.perf_report is not None:
+        sorted_runs = sorted(
+            measured_runs,
+            key=lambda item: float(sum(item.get("stage_timings", {}).values())),
+        )
+        median_run = sorted_runs[len(sorted_runs) // 2]
+        report_payload = {
+            "config": {
+                "n_elec": int(args.n_elec),
+                "refinement": int(args.refinement),
+                "mesh_radius": float(args.mesh_radius),
+                "mode": str(args.mode),
+                "difference_solver": str(args.difference_solver),
+                "petsc_device": str(args.petsc_device),
+                "device": str(args.device),
+            },
+            "warmup_runs": int(warmup_runs),
+            "repeat": int(args.repeat),
+            "stage_timings": median_run.get("stage_timings", {}),
+            "perf_summary": median_run.get("perf_summary", {}),
+            "metrics": median_run.get("metrics", {}),
+            "runs": measured_runs if int(args.repeat) > 1 else [],
+        }
+        args.perf_report.parent.mkdir(parents=True, exist_ok=True)
+        args.perf_report.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+
     print(f"Synthetic parity results stored in {output_dir}")
 
 

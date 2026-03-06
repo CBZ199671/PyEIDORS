@@ -40,6 +40,10 @@ In a fresh WSL2 shell, do not assume `.venv/bin/python` alone can load the full
 FEniCSx/Torch runtime; if you hit shared-library or import errors, re-enter the
 repository with `nix develop` and retry.
 
+For the opt-in CUDA path on WSL2/NVIDIA, use `nix develop .#cuda`, verify the
+runtime with `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty`,
+and then enable FEM GPU routing with `--petsc-device auto|cuda`; for full GN CUDA runs also set inverse runtime `--device auto|cuda`.
+
 Then run a quick workflow check:
 
 ```bash
@@ -56,6 +60,13 @@ Forward-only diagnostics (skip inverse explicitly):
 
 ```bash
 python scripts/run_cem_16e_square_test.py --skip-inverse
+```
+
+3D CEM smoke (cylindrical, one-ring 16 electrodes):
+
+```bash
+python scripts/run_cem_16e_cylinder_3d_test.py
+python scripts/run_cem_16e_cylinder_3d_test.py --skip-inverse
 ```
 
 For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
@@ -315,6 +326,43 @@ python scripts/run_reconstruction_unified.py \
 
 The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. With unchanged background conductivity, Jacobian and single-step operator are reused from cache on later runs. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
 
+3D reconstruction uses the same unified CLI and supports `gn-difference` and `gn-absolute`.
+For 3D, `--solver-mode` defaults to `fast` (with `strict` as fallback):
+
+```bash
+python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
+  --csv data/measurements/sample.csv \
+  --output-root results/real_measurements_3d \
+  --mesh-dim 3 \
+  --radius 0.25 \
+  --mesh-height 0.2 \
+  --refinement 3 \
+  --solver-mode fast \
+  --linear-solver auto \
+  --jacobian-update-every 2 \
+  --jacobian-reuse-tol 1e-3 \
+  --line-search-mode fast \
+  --cache-scope both
+```
+
+To force strict parity mode for diagnostics:
+
+```bash
+python scripts/run_reconstruction_unified.py \
+  --method gn-absolute \
+  --input-mode paired \
+  --csv data/measurements/sample.csv \
+  --metadata data/measurements/sample.yaml \
+  --reference-col 0 \
+  --target-col 2 \
+  --mesh-dim 3 \
+  --solver-mode strict \
+  --line-search-mode full \
+  --output-root results/real_measurements_3d_strict
+```
+
 ### 3. Sparse Bayesian Learning
 Run the advanced sparse Bayesian solver (supports GPU):
 
@@ -335,6 +383,58 @@ The repository also includes a pre-generated tank sparse Bayesian demo under:
 
 Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full list of options, run `python scripts/run_reconstruction_unified.py --help`.
 
+### 4. 3D Performance Benchmark + Gate
+
+`D_combined` is the current recommended 3D fast profile for end-to-end runtime.
+It combines the low-risk optimizations that consistently helped total time or protected it from regression:
+
+- `fast_linear_path=auto`, which resolves to `woodbury` for diagonal regularization.
+- `jacobian_block_tune=auto`, which stabilizes Jacobian assembly cost on larger 3D meshes.
+- `preconditioner=auto`, which still allows `cholmod-precond` / `pcg` fallback where useful.
+
+`E_fused` (`rom/inexact/lowrank`) remains available, but it is now treated as experimental:
+
+- It can reduce inner-stage costs, especially Jacobian assembly.
+- It does not currently deliver stable end-to-end wins on the benchmark workloads.
+- Fallback order remains `fused -> current fast path (woodbury/pcg/cholmod-precond) -> strict`.
+
+Quick validation and full fair-compare are now interpreted against `D_combined` as the main delivery path:
+
+- `quick`: compares `A_baseline` vs `D_combined` to decide whether the full run is worth doing.
+- `full`: keeps `A/B/C/D/E`, but strict gate focuses on `B/C/D`; `E_fused` is informational/experimental.
+- `check_perf_gate.py` should be read stage-by-stage: if `D_combined` passes total/peak/Jacobian checks, the main 3D fast path is healthy even if `E_fused` remains mixed.
+
+```bash
+python scripts/benchmarks/benchmark_3d_runtime.py \
+  --solver-mode fast \
+  --linear-solver auto \
+  --perf-report reports/perf/latest.json
+
+python scripts/benchmarks/check_perf_gate.py \
+  --input reports/perf/latest.json \
+  --mode warn
+
+python scripts/benchmarks/benchmark_3d_fair_compare.py \
+  --benchmark-phase quick \
+  --output-json reports/perf/fair_compare_latest.json \
+  --output-md reports/perf/fair_compare_latest.md
+
+python scripts/benchmarks/benchmark_3d_fair_compare.py \
+  --benchmark-phase full \
+  --output-json reports/perf/fair_compare_latest.json \
+  --output-md reports/perf/fair_compare_latest.md
+```
+
+Latest local fair-compare summary (`2026-03-06`, Apple Silicon, single-thread BLAS/OMP):
+
+- `quick`: `A_baseline -> D_combined` passed by the linear-stage criterion (`absolute_linear` improved from about `0.155s` to `0.021s`) while total time stayed roughly flat (`16.35s -> 16.42s`).
+- `full ref=1`: `D_combined` uses `woodbury-diag`; `absolute_linear_speedup_x ~= 9.95`, `absolute_jacobian_assembly_speedup_x ~= 1.77`, `absolute_total_speedup_x ~= 0.997`.
+- `full ref=2`: `D_combined` uses `woodbury-diag`; `absolute_linear_speedup_x ~= 11.58`, `absolute_jacobian_assembly_speedup_x ~= 1.79`, `absolute_total_speedup_x ~= 1.017`.
+- `E_fused` is retained as experimental: it still shows useful stage-level gains, but only mixed end-to-end totals on the same workloads.
+
+For the current CPU封版 rationale and the historical migration blueprint, see `docs/WSL2_CUDA_HANDOFF.md`.
+For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
+
 ## Data, Visualization, and Testing
 
 - Synthetic data: `create_synthetic_data` supports setting noise level, anomaly position and conductivity, returning clean/noisy data with SNR metrics.
@@ -350,6 +450,7 @@ Results are written under `results/sparse_bayesian/<method>/<case>/`. For a full
 
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
+- **WSL2 CUDA Workflow**: `docs/WSL2_CUDA.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
 - **Docker Notes (Historical archive)**: `docs/archive/DOCKER_LEGACY.md`

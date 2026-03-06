@@ -8,6 +8,39 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 
 import numpy as np
 
+from pyeidors.perf import (
+    DEFAULT_ABSOLUTE_STARTUP_CACHE,
+    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_FORWARD_MAT_SOLVE,
+    DEFAULT_INEXACT_ETA0,
+    DEFAULT_INEXACT_ETA_MAX,
+    DEFAULT_INEXACT_ETA_MIN,
+    DEFAULT_INEXACT_FORCING,
+    DEFAULT_INEXACT_MODE,
+    DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+    DEFAULT_JACOBIAN_BLOCK_SIZE,
+    DEFAULT_JACOBIAN_BLOCK_TUNE,
+    DEFAULT_LINEAR_SOLVER,
+    DEFAULT_LOWRANK_ENERGY,
+    DEFAULT_LOWRANK_METHOD,
+    DEFAULT_LOWRANK_MODE,
+    DEFAULT_LOWRANK_RANK,
+    DEFAULT_PETSC_DEVICE,
+    DEFAULT_PRECONDITIONER,
+    DEFAULT_ROM_MODE,
+    DEFAULT_ROM_RANK_ADAPTIVE,
+    DEFAULT_ROM_RANK_GLOBAL,
+    DEFAULT_ROM_REFRESH_EVERY,
+    DEFAULT_ROM_SNAPSHOT_SOURCE,
+    normalize_petsc_device,
+    parse_block_size_candidates,
+    resolve_experimental_mode,
+    resolve_forward_mat_solve,
+    resolve_line_search_mode,
+    resolve_solver_mode,
+)
+
 from . import gn_absolute_runner
 from . import gn_difference_runner
 from . import sparse_bayes_runner
@@ -62,6 +95,54 @@ def _safe_load_metrics(output_dir: Path) -> Dict[str, Any]:
     return metrics
 
 
+def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
+    mesh_dim = int(getattr(args, "mesh_dim", 2))
+    solver_mode = resolve_solver_mode(getattr(args, "solver_mode", "auto"), mesh_dim=mesh_dim)
+    return {
+        "solver_mode": solver_mode,
+        "linear_solver": str(getattr(args, "linear_solver", DEFAULT_LINEAR_SOLVER)),
+        "jacobian_update_every": int(getattr(args, "jacobian_update_every", 1)),
+        "jacobian_reuse_tol": float(getattr(args, "jacobian_reuse_tol", 0.0)),
+        "line_search_mode": resolve_line_search_mode(getattr(args, "line_search_mode", "auto"), mesh_dim=mesh_dim),
+        "preconditioner": str(getattr(args, "preconditioner", DEFAULT_PRECONDITIONER)),
+        "fast_linear_path": str(getattr(args, "fast_linear_path", "auto")),
+        "rom_mode": resolve_experimental_mode(getattr(args, "rom_mode", DEFAULT_ROM_MODE)),
+        "rom_rank_global": int(getattr(args, "rom_rank_global", DEFAULT_ROM_RANK_GLOBAL)),
+        "rom_rank_adaptive": int(getattr(args, "rom_rank_adaptive", DEFAULT_ROM_RANK_ADAPTIVE)),
+        "rom_refresh_every": int(getattr(args, "rom_refresh_every", DEFAULT_ROM_REFRESH_EVERY)),
+        "rom_snapshot_source": str(getattr(args, "rom_snapshot_source", DEFAULT_ROM_SNAPSHOT_SOURCE)),
+        "inexact_mode": resolve_experimental_mode(getattr(args, "inexact_mode", DEFAULT_INEXACT_MODE)),
+        "inexact_forcing": str(getattr(args, "inexact_forcing", DEFAULT_INEXACT_FORCING)),
+        "inexact_eta0": float(getattr(args, "inexact_eta0", DEFAULT_INEXACT_ETA0)),
+        "inexact_eta_min": float(getattr(args, "inexact_eta_min", DEFAULT_INEXACT_ETA_MIN)),
+        "inexact_eta_max": float(getattr(args, "inexact_eta_max", DEFAULT_INEXACT_ETA_MAX)),
+        "lowrank_mode": resolve_experimental_mode(getattr(args, "lowrank_mode", DEFAULT_LOWRANK_MODE)),
+        "lowrank_rank": int(getattr(args, "lowrank_rank", DEFAULT_LOWRANK_RANK)),
+        "lowrank_method": str(getattr(args, "lowrank_method", DEFAULT_LOWRANK_METHOD)),
+        "lowrank_energy": float(getattr(args, "lowrank_energy", DEFAULT_LOWRANK_ENERGY)),
+        "absolute_startup_cache": str(getattr(args, "absolute_startup_cache", DEFAULT_ABSOLUTE_STARTUP_CACHE)).lower() != "off",
+        "forward_mat_solve": resolve_forward_mat_solve(
+            getattr(args, "forward_mat_solve", DEFAULT_FORWARD_MAT_SOLVE),
+            mesh_dim=mesh_dim,
+            solver_mode=solver_mode,
+        ),
+        "petsc_device": normalize_petsc_device(
+            getattr(args, "petsc_device", DEFAULT_PETSC_DEVICE),
+            default=DEFAULT_PETSC_DEVICE,
+        ),
+        "device": str(getattr(args, "device", "auto")).strip().lower() or "auto",
+        "cholmod_max_n": int(getattr(args, "cholmod_max_n", DEFAULT_CHOLMOD_MAX_N)),
+        "cholmod_max_memory_gib": float(
+            getattr(args, "cholmod_max_memory_gib", DEFAULT_CHOLMOD_MAX_MEMORY_GIB)
+        ),
+        "jacobian_block_tune": str(getattr(args, "jacobian_block_tune", DEFAULT_JACOBIAN_BLOCK_TUNE)),
+        "jacobian_block_size": int(getattr(args, "jacobian_block_size", DEFAULT_JACOBIAN_BLOCK_SIZE)),
+        "jacobian_block_candidates": parse_block_size_candidates(
+            getattr(args, "jacobian_block_candidates", DEFAULT_JACOBIAN_BLOCK_CANDIDATES)
+        ),
+    }
+
+
 def run_gn_absolute_cases(
     *,
     cases: Iterable[ReconstructionCase],
@@ -74,6 +155,7 @@ def run_gn_absolute_cases(
 
     output_root.mkdir(parents=True, exist_ok=True)
     metadata = load_metadata(args.metadata)
+    runtime_kwargs = _collect_absolute_runtime_kwargs(args)
     results: List[CaseResult] = []
 
     for case in cases:
@@ -115,6 +197,12 @@ def run_gn_absolute_cases(
                 output_dir=output_dir,
                 mesh_radius=_default(args.mesh_radius, 0.03),
                 refinement=int(args.refinement if args.refinement is not None else 12),
+                mesh_dim=int(getattr(args, "mesh_dim", 2)),
+                mesh_height=float(getattr(args, "mesh_height", 1.0)),
+                electrode_height_ratio=float(getattr(args, "electrode_height_ratio", 0.2)),
+                z_center=float(getattr(args, "z_center", 0.0)),
+                mesh_dir=Path(args.mesh_dir),
+                mesh_name=str(args.mesh_name) if args.mesh_name else None,
                 measurement_gain=float(args.measurement_gain),
                 background_sigma=_default(args.background_sigma, 0.001),
                 lambda_=_default(args.lam, 0.02),
@@ -122,6 +210,7 @@ def run_gn_absolute_cases(
                 contact_impedance=_default(args.contact_impedance, 1e-5),
                 cache_scope=str(getattr(args, "cache_scope", "both")),
                 cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
+                **runtime_kwargs,
             )
 
             metrics = _safe_load_metrics(output_dir)
@@ -146,8 +235,6 @@ def run_gn_absolute_cases(
             )
 
     return results
-
-
 def run_gn_difference_cases(
     *,
     cases: Iterable[ReconstructionCase],
@@ -156,9 +243,31 @@ def run_gn_difference_cases(
 ) -> List[CaseResult]:
     """Run GN single-step difference reconstruction for each case."""
     output_root.mkdir(parents=True, exist_ok=True)
+    mesh_dim = int(getattr(args, "mesh_dim", 2))
+    mesh_name = str(args.mesh_name) if args.mesh_name is not None else None
+    if mesh_dim == 3 and mesh_name == "mesh_16e_r0p025_ref10_cov0p5":
+        mesh_name = None
+    resolved_solver_mode = (
+        "fast"
+        if str(getattr(args, "solver_mode", "auto")) == "auto" and mesh_dim == 3
+        else str(getattr(args, "solver_mode", "strict"))
+    )
+    forward_mat_solve = str(getattr(args, "forward_mat_solve", "off"))
+    if forward_mat_solve == "auto" and not (mesh_dim == 3 and resolved_solver_mode == "fast"):
+        forward_mat_solve = "off"
+    petsc_device = normalize_petsc_device(
+        getattr(args, "petsc_device", DEFAULT_PETSC_DEVICE),
+        default=DEFAULT_PETSC_DEVICE,
+    )
+
     ctx = gn_difference_runner.build_shared_context(
         mesh_dir=str(args.mesh_dir),
-        mesh_name=str(args.mesh_name) if args.mesh_name is not None else None,
+        mesh_name=mesh_name,
+        mesh_dim=mesh_dim,
+        mesh_height=float(getattr(args, "mesh_height", 1.0)),
+        electrode_height_ratio=float(getattr(args, "electrode_height_ratio", 0.2)),
+        z_center=float(getattr(args, "z_center", 0.0)),
+        refinement=int(args.refinement) if args.refinement is not None else None,
         n_elec=int(args.n_elec),
         radius=_default(args.radius, 0.025),
         drive_value=args.drive_value,
@@ -168,6 +277,20 @@ def run_gn_difference_cases(
         cache_scope=str(getattr(args, "cache_scope", "both")),
         cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
         cache_clear_names=list(getattr(args, "cache_clear_name", []) or []),
+        solver_mode=resolved_solver_mode,
+        linear_solver=str(getattr(args, "linear_solver", "auto")),
+        preconditioner=str(getattr(args, "preconditioner", "auto")),
+        rom_mode=str(getattr(args, "rom_mode", "off")),
+        rom_rank_global=int(getattr(args, "rom_rank_global", 32)),
+        rom_rank_adaptive=int(getattr(args, "rom_rank_adaptive", 16)),
+        rom_snapshot_source=str(getattr(args, "rom_snapshot_source", "hybrid")),
+        lowrank_mode=str(getattr(args, "lowrank_mode", "off")),
+        lowrank_rank=int(getattr(args, "lowrank_rank", 16)),
+        lowrank_method=str(getattr(args, "lowrank_method", "tsvd")),
+        lowrank_energy=float(getattr(args, "lowrank_energy", 0.995)),
+        forward_mat_solve=forward_mat_solve,
+        petsc_device=petsc_device,
+        device=str(getattr(args, "device", "auto")).strip().lower() or "auto",
     )
 
     expected_len = int(ctx["n_meas_total"])

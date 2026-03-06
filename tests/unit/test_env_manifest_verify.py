@@ -102,6 +102,7 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
     )
     (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
 
     versions = {
         "dolfinx": "0.9.0",
@@ -127,3 +128,33 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
     assert manifest["platform"]["runtime_context"]["kind"] == "wsl2"
     assert manifest["locks"]["nixpkgs_rev"] == "deadbeef"
     assert manifest["packages"]["cuqi"] == "1.5.0"
+
+
+def test_default_manifest_path_uses_profile_suffix(monkeypatch):
+    monkeypatch.setattr(verifier, "current_platform_id", lambda: "linux-x86_64")
+    path = verifier.default_manifest_path(Path("/repo"), profile_name="cuda")
+    assert path == Path("/repo/env/manifests/linux-x86_64-cuda.lock.json")
+
+
+def test_build_manifest_adds_profile_name_for_nondefault(tmp_path: Path, monkeypatch):
+    (tmp_path / "flake.lock").write_text(
+        json.dumps({"nodes": {"nixpkgs": {"locked": {"rev": "deadbeef"}}}}),
+        encoding="utf-8",
+    )
+    (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
+
+    versions = {
+        "dolfinx": "0.9.0",
+        "torch": "2.10.0",
+        "cuqi": "1.5.0",
+        "numpy": "2.2.3",
+        "scipy": "1.16.2",
+        "pyeidors": "1.0.0",
+    }
+
+    monkeypatch.setattr(exporter, "package_version", lambda module_name, dist_name=None: versions[module_name])
+    monkeypatch.setattr(exporter, "runtime_context_kind", lambda: "wsl2")
+
+    manifest = exporter.build_manifest(tmp_path, platform_id="linux-x86_64", profile_name="cuda")
+    assert manifest["profile"]["name"] == "cuda"

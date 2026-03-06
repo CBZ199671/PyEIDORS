@@ -58,7 +58,11 @@ class EITImage:
 @dataclass
 class MeshConfig:
     """Mesh configuration parameters."""
+    dimension: int = 2
     radius: float = 1.0
+    height: float = 1.0
+    electrode_height_ratio: float = 0.2
+    z_center: float = 0.0
     refinement: int = 8
     electrode_vertices: int = 8
     gap_vertices: int = 4

@@ -135,6 +135,8 @@ Important for WSL2 and other fresh shells:
 - If `nix` itself is missing on WSL2, install Nix first; the repository does not support a 1:1 reproducible non-Nix bootstrap for DOLFINx.
 - If a plain WSL2 shell can `import pyeidors` but fails on `pyeidors.EITSystem` with NumPy/Torch/shared-library errors, that still counts as an unsupported runtime state; re-enter with `nix develop` before debugging deeper.
 - When the Linux manifest is exported from WSL2, it may record `platform.runtime_context.kind = wsl2` as informational provenance only; `verify_env_manifest.py` does not treat that field as a hard compatibility gate.
+- For CUDA on WSL2/NVIDIA, the only supported entry is `nix develop .#cuda`; do not treat the default CPU shell as a GPU runtime.
+- After entering `.#cuda`, run `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty` before enabling `--petsc-device auto|cuda` in benchmarks or CLI runs; use `--device auto|cuda` as the matching Torch/GN inverse runtime switch.
 - For a lightweight preflight before the full stack is present, you can still inspect package detection with:
 
 ```bash
@@ -151,6 +153,58 @@ The `shellHook` in `flake.nix` will:
 6. If drift is detected, auto-run `scripts/env/sync_locked_env.sh --repair`.
 7. Fail fast if repair still fails, with explicit manual recovery command.
 
+### Optional performance extras
+
+PyEIDORS keeps the default profile minimal (`torch`, `cuqi`, `dev`) and exposes
+optional acceleration extras through uv:
+
+- `pyamg>=5.2`
+- `scikit-sparse>=0.4.12`
+
+Enable them explicitly when needed:
+
+```bash
+ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
+```
+
+Verification:
+
+```bash
+python -c "import pyamg; print(pyamg.__version__)"
+python -c "import sksparse"
+python -c "from sksparse import cholmod; print('cholmod ok')"
+```
+
+For fair 3D benchmark comparisons, also pin the thread count so BLAS / OMP do not skew medians:
+
+```bash
+OMP_NUM_THREADS=1 \
+OPENBLAS_NUM_THREADS=1 \
+MKL_NUM_THREADS=1 \
+VECLIB_MAXIMUM_THREADS=1 \
+NUMEXPR_NUM_THREADS=1 \
+ENABLE_PERFORMANCE_EXTRAS=1 \
+/nix/var/nix/profiles/default/bin/nix --extra-experimental-features 'nix-command flakes' develop -c \
+uv run python scripts/benchmarks/benchmark_3d_fair_compare.py --benchmark-phase quick
+```
+
+Recommended interpretation for the fused 3D profiles:
+
+- `quick` now compares `A_baseline` against `D_combined`, because `D_combined` is the delivery profile for 3D fast mode.
+- `full` should be read together with `check_perf_gate.py`; strict gate now focuses on `B_cholmod_only`, `C_autotune_only`, and `D_combined`.
+- `E_fused` remains available for research runs (`rom_mode=on`, `inexact_mode=auto/on`, `lowrank_mode=auto/on`) but is no longer the primary performance gate target.
+- For the mac CPU封版 summary and historical migration handoff, see `docs/WSL2_CUDA_HANDOFF.md`.
+- For the active CUDA profile workflow, see `docs/WSL2_CUDA.md`.
+
+`sksparse` availability depends on SuiteSparse support in the current platform
+toolchain; absence is non-fatal and PyEIDORS will fall back to PETSc/SciPy paths.
+
+Nix note:
+
+- `flake.nix` now includes `pkgs.suitesparse` in the dev shell.
+- `shellHook` prints a one-line status for `pyamg/sksparse/cholmod` so you can
+  confirm acceleration capabilities immediately after `nix develop`.
+
 ## Validation commands
 
 ```bash
@@ -158,6 +212,14 @@ scripts/env/sync_locked_env.sh --print-profile
 scripts/env/sync_locked_env.sh --check
 python scripts/env/verify_env_manifest.py
 python -c "import dolfinx, torch, cuqi, numpy, scipy, pyeidors"
+```
+
+CUDA profile validation:
+
+```bash
+nix develop .#cuda
+python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty
+python scripts/env/verify_env_manifest.py --profile cuda
 ```
 
 Upstream FEniCSx regression guard (Darwin):

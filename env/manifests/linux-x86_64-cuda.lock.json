@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "project": "pyeidors",
+  "profile": {
+    "extras": [
+      "torch",
+      "cuqi",
+      "dev"
+    ],
+    "sync_flags": [
+      "--frozen"
+    ],
+    "lock_check": "uv lock --check",
+    "name": "cuda"
+  },
+  "platform": {
+    "id": "linux-x86_64",
+    "system": "linux",
+    "machine": "x86_64",
+    "runtime_context": {
+      "kind": "wsl2"
+    }
+  },
+  "python": {
+    "version": "3.13.8",
+    "implementation": "CPython"
+  },
+  "locks": {
+    "nixpkgs_rev": "b665e98e4cb439b95f8faee197c76c6578197e55",
+    "flake_lock_sha256": "a9c2141abfb46e5987b3014ee87f62e19b9503e8d53e60c16872613d3a66eb3e",
+    "uv_lock_sha256": "dafe8f22f4ba0fc782487f4fea2e15d984edcfb059dfaa988e6b9ac7e74e63dd",
+    "pyproject_sha256": "134258ec26f3bdc61f47beb6cfe5ae9c40bd06e98dcc9c601cbb10db8e15c773"
+  },
+  "packages": {
+    "dolfinx": "0.10.0.post1",
+    "torch": "2.10.0+cu128",
+    "cuqi": "1.5.0",
+    "numpy": "2.2.0",
+    "scipy": "1.17.1",
+    "pyeidors": "1.0.0"
+  },
+  "generated_at_utc": "2026-03-06T20:28:09.748249+00:00"
+}

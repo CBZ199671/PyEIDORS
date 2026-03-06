@@ -4,8 +4,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -17,10 +19,36 @@ if str(SRC_PATH) not in sys.path:
 if str(SCRIPTS_PATH) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_PATH))
 
-from common.case_discovery import build_cases, collect_csv_files
-from common.method_runners import get_method_runner
-from common.output_writer import format_dry_run, write_batch_summary
 from common.recon_cli_models import InputMode, ReconstructionMethod
+from pyeidors.perf import (
+    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_INEXACT_ETA0,
+    DEFAULT_INEXACT_ETA_MAX,
+    DEFAULT_INEXACT_ETA_MIN,
+    DEFAULT_INEXACT_FORCING,
+    DEFAULT_INEXACT_MODE,
+    DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+    DEFAULT_JACOBIAN_BLOCK_SIZE,
+    DEFAULT_JACOBIAN_BLOCK_TUNE,
+    DEFAULT_LOWRANK_ENERGY,
+    DEFAULT_LOWRANK_METHOD,
+    DEFAULT_LOWRANK_MODE,
+    DEFAULT_LOWRANK_RANK,
+    DEFAULT_PETSC_DEVICE,
+    DEFAULT_PRECONDITIONER,
+    DEFAULT_ROM_MODE,
+    DEFAULT_ROM_RANK_ADAPTIVE,
+    DEFAULT_ROM_RANK_GLOBAL,
+    DEFAULT_ROM_REFRESH_EVERY,
+    DEFAULT_ROM_SNAPSHOT_SOURCE,
+    normalize_petsc_device,
+    parse_block_size_candidates,
+    resolve_experimental_mode,
+    resolve_forward_mat_solve,
+    resolve_line_search_mode,
+    resolve_solver_mode,
+)
 
 LOGGER = logging.getLogger("reconstruction_unified")
 
@@ -80,6 +108,167 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument("--mesh-dir", type=Path, default=REPO_ROOT / "eit_meshes", help="Mesh cache directory")
     parser.add_argument("--mesh-name", type=str, default="mesh_16e_r0p025_ref10_cov0p5", help="Mesh cache name")
+    parser.add_argument("--mesh-dim", type=int, choices=[2, 3], default=2, help="Mesh geometric dimension")
+    parser.add_argument("--mesh-height", type=float, default=1.0, help="3D cylinder height")
+    parser.add_argument(
+        "--electrode-height-ratio",
+        type=float,
+        default=0.2,
+        help="3D electrode height ratio (reserved for mesh signature)",
+    )
+    parser.add_argument("--z-center", type=float, default=0.0, help="3D cylinder z-center")
+    parser.add_argument(
+        "--solver-mode",
+        choices=["auto", "strict", "fast"],
+        default="auto",
+        help="Solver mode (auto => 3D fast, 2D strict)",
+    )
+    parser.add_argument(
+        "--linear-solver",
+        choices=["auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"],
+        default="auto",
+        help="Linear solver backend for fast mode",
+    )
+    parser.add_argument(
+        "--preconditioner",
+        choices=["auto", "diag", "pyamg", "cholmod", "petsc-gamg"],
+        default=DEFAULT_PRECONDITIONER,
+        help="Preconditioner selection for fast iterative paths",
+    )
+    parser.add_argument(
+        "--fast-linear-path",
+        choices=["auto", "woodbury", "pcg", "cholmod-direct", "strict"],
+        default="auto",
+        help="Fast-mode linear path strategy (3D absolute/difference acceleration)",
+    )
+    parser.add_argument(
+        "--rom-mode",
+        choices=["off", "auto", "on"],
+        default=DEFAULT_ROM_MODE,
+        help="Experimental reduced-order model acceleration mode for 3D fast paths",
+    )
+    parser.add_argument("--rom-rank-global", type=int, default=DEFAULT_ROM_RANK_GLOBAL, help="Global POD basis rank cap")
+    parser.add_argument("--rom-rank-adaptive", type=int, default=DEFAULT_ROM_RANK_ADAPTIVE, help="Adaptive low-rank basis rank cap")
+    parser.add_argument("--rom-refresh-every", type=int, default=DEFAULT_ROM_REFRESH_EVERY, help="Adaptive ROM refresh interval")
+    parser.add_argument(
+        "--rom-snapshot-source",
+        choices=["cache", "synthetic", "hybrid"],
+        default=DEFAULT_ROM_SNAPSHOT_SOURCE,
+        help="Source policy for ROM snapshots",
+    )
+    parser.add_argument(
+        "--inexact-mode",
+        choices=["off", "auto", "on"],
+        default=DEFAULT_INEXACT_MODE,
+        help="Experimental inexact GN inner-solve control mode for 3D fast paths",
+    )
+    parser.add_argument(
+        "--inexact-forcing",
+        choices=["fixed", "eisenstat-walker"],
+        default=DEFAULT_INEXACT_FORCING,
+        help="Inexact GN forcing-term policy",
+    )
+    parser.add_argument("--inexact-eta0", type=float, default=DEFAULT_INEXACT_ETA0, help="Initial inexact forcing eta")
+    parser.add_argument("--inexact-eta-min", type=float, default=DEFAULT_INEXACT_ETA_MIN, help="Minimum inexact forcing eta")
+    parser.add_argument("--inexact-eta-max", type=float, default=DEFAULT_INEXACT_ETA_MAX, help="Maximum inexact forcing eta")
+    parser.add_argument(
+        "--lowrank-mode",
+        choices=["off", "auto", "on"],
+        default=DEFAULT_LOWRANK_MODE,
+        help="Experimental low-rank Jacobian subspace mode for fused acceleration",
+    )
+    parser.add_argument("--lowrank-rank", type=int, default=DEFAULT_LOWRANK_RANK, help="Low-rank subspace rank cap")
+    parser.add_argument(
+        "--lowrank-method",
+        choices=["tsvd", "randomized"],
+        default=DEFAULT_LOWRANK_METHOD,
+        help="Low-rank subspace extraction method",
+    )
+    parser.add_argument("--lowrank-energy", type=float, default=DEFAULT_LOWRANK_ENERGY, help="Energy threshold for low-rank subspace")
+    parser.add_argument(
+        "--cholmod-max-n",
+        type=int,
+        default=DEFAULT_CHOLMOD_MAX_N,
+        help="Max parameter size allowed for CHOLMOD fast path",
+    )
+    parser.add_argument(
+        "--cholmod-max-memory-gib",
+        type=float,
+        default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+        help="Estimated memory guard (GiB) for CHOLMOD fast path",
+    )
+    parser.add_argument(
+        "--jacobian-update-every",
+        type=int,
+        default=2,
+        help="Fast mode Jacobian refresh interval (absolute GN)",
+    )
+    parser.add_argument(
+        "--jacobian-reuse-tol",
+        type=float,
+        default=1e-3,
+        help="Fast mode Jacobian reuse tolerance",
+    )
+    parser.add_argument(
+        "--line-search-mode",
+        choices=["auto", "full", "fast"],
+        default="auto",
+        help="Line-search mode (auto => 3D fast uses fast)",
+    )
+    parser.add_argument(
+        "--jacobian-block-tune",
+        choices=["auto", "off"],
+        default="auto",
+        help="Auto-tune Jacobian element block size",
+    )
+    parser.add_argument(
+        "--jacobian-block-size",
+        type=int,
+        default=0,
+        help="Fixed Jacobian element block size (0 means auto)",
+    )
+    parser.add_argument(
+        "--jacobian-block-candidates",
+        type=str,
+        default="64,128,256,512",
+        help="Comma-separated candidate block sizes for auto-tuning",
+    )
+    parser.add_argument(
+        "--absolute-startup-cache",
+        choices=["on", "off"],
+        default="on",
+        help="Enable startup Jacobian cache for absolute fast mode",
+    )
+    parser.add_argument(
+        "--forward-mat-solve",
+        choices=["auto", "off", "on"],
+        default="auto",
+        help="Control PETSc matSolve multi-RHS path",
+    )
+    parser.add_argument(
+        "--petsc-device",
+        choices=["auto", "cpu", "cuda"],
+        default=DEFAULT_PETSC_DEVICE,
+        help="PETSc/DOLFINx FEM device policy for forward and adjoint solves",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="Torch/GN inverse runtime device policy",
+    )
+    parser.add_argument(
+        "--perf-report",
+        type=Path,
+        default=None,
+        help="Write lightweight performance report JSON after run",
+    )
+    parser.add_argument(
+        "--perf-gate",
+        choices=["off", "warn", "strict"],
+        default="warn",
+        help="Performance gate behavior when --perf-report is enabled",
+    )
     parser.add_argument("--n-elec", type=int, default=16, help="Number of electrodes (GN diff)")
     parser.add_argument("--radius", type=float, default=0.025, help="Mesh radius for GN diff")
     parser.add_argument("--drive-value", type=float, default=None, help="Drive value override (GN diff)")
@@ -172,6 +361,48 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
                     "Frame mode for difference/sparse requires --reference-csv or --reference-index."
                 )
 
+    mesh_dim = int(args.mesh_dim)
+    if mesh_dim == 3 and method == ReconstructionMethod.SPARSE_BAYES:
+        parser.error("3D mesh mode currently does not support --method sparse-bayes.")
+
+    args.solver_mode = resolve_solver_mode(args.solver_mode, mesh_dim=mesh_dim)
+    args.line_search_mode = resolve_line_search_mode(args.line_search_mode, mesh_dim=mesh_dim)
+    args.rom_mode = resolve_experimental_mode(args.rom_mode)
+    args.inexact_mode = resolve_experimental_mode(args.inexact_mode)
+    args.lowrank_mode = resolve_experimental_mode(args.lowrank_mode)
+    args.forward_mat_solve = resolve_forward_mat_solve(
+        args.forward_mat_solve,
+        mesh_dim=mesh_dim,
+        solver_mode=args.solver_mode,
+    )
+    args.petsc_device = normalize_petsc_device(args.petsc_device, default=DEFAULT_PETSC_DEVICE)
+    if int(args.cholmod_max_n) <= 0:
+        parser.error("--cholmod-max-n must be positive.")
+    if float(args.cholmod_max_memory_gib) <= 0:
+        parser.error("--cholmod-max-memory-gib must be positive.")
+    if int(args.rom_rank_global) <= 0:
+        parser.error("--rom-rank-global must be positive.")
+    if int(args.rom_rank_adaptive) < 0:
+        parser.error("--rom-rank-adaptive must be >= 0.")
+    if int(args.rom_refresh_every) <= 0:
+        parser.error("--rom-refresh-every must be positive.")
+    if float(args.inexact_eta0) <= 0:
+        parser.error("--inexact-eta0 must be positive.")
+    if float(args.inexact_eta_min) <= 0 or float(args.inexact_eta_max) <= 0:
+        parser.error("--inexact-eta-min/--inexact-eta-max must be positive.")
+    if float(args.inexact_eta_min) > float(args.inexact_eta_max):
+        parser.error("--inexact-eta-min must be <= --inexact-eta-max.")
+    if int(args.lowrank_rank) <= 0:
+        parser.error("--lowrank-rank must be positive.")
+    if not (0.0 < float(args.lowrank_energy) <= 1.0):
+        parser.error("--lowrank-energy must be in (0, 1].")
+    if int(args.jacobian_block_size) < 0:
+        parser.error("--jacobian-block-size must be >= 0.")
+    try:
+        args.jacobian_block_candidates = parse_block_size_candidates(args.jacobian_block_candidates)
+    except ValueError as exc:
+        parser.error(f"--jacobian-block-candidates {exc}")
+
 
 def _config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
     payload: Dict[str, Any] = {}
@@ -183,6 +414,54 @@ def _config_snapshot(args: argparse.Namespace) -> Dict[str, Any]:
         else:
             payload[key] = value
     return payload
+
+
+def _safe_float(value: Any) -> float | None:
+    if isinstance(value, (int, float)):
+        return float(value)
+    return None
+
+
+def _collect_perf_metrics(results) -> dict[str, Any]:
+    stage_totals: dict[str, float] = {}
+    cache_hit_layers: dict[str, int] = {}
+    for result in results:
+        metrics = getattr(result, "metrics", None)
+        if not isinstance(metrics, dict):
+            continue
+        stage = metrics.get("stage_timings")
+        if isinstance(stage, dict):
+            for key, value in stage.items():
+                numeric = _safe_float(value)
+                if numeric is None:
+                    continue
+                stage_totals[key] = stage_totals.get(key, 0.0) + numeric
+        lookups = metrics.get("cache_lookups")
+        if isinstance(lookups, dict):
+            context = lookups.get("context")
+            if isinstance(context, dict):
+                for value in context.values():
+                    if isinstance(value, dict):
+                        layer = value.get("layer")
+                        if isinstance(layer, str):
+                            cache_hit_layers[layer] = cache_hit_layers.get(layer, 0) + 1
+    return {
+        "stage_totals": stage_totals,
+        "cache_hit_layers": cache_hit_layers,
+    }
+
+
+def _write_perf_report(path: Path, *, method: ReconstructionMethod, summary_path: Path, results, args) -> dict[str, Any]:
+    report = {
+        "generated_at_utc": datetime.now(timezone.utc).isoformat(),
+        "method": method.value,
+        "summary_path": str(summary_path),
+        "perf_gate": str(args.perf_gate),
+        "metrics": _collect_perf_metrics(results),
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+    return report
 
 
 def run(argv: List[str] | None = None) -> int:
@@ -198,6 +477,9 @@ def run(argv: List[str] | None = None) -> int:
 
     method = ReconstructionMethod(args.method)
     input_mode = InputMode(args.input_mode)
+
+    from common.case_discovery import build_cases, collect_csv_files
+    from common.output_writer import format_dry_run
 
     input_files = collect_csv_files(
         input_dir=args.input_dir,
@@ -228,6 +510,9 @@ def run(argv: List[str] | None = None) -> int:
         print(format_dry_run(cases))
         return 0
 
+    from common.method_runners import get_method_runner
+    from common.output_writer import write_batch_summary
+
     if require_reference and input_mode == InputMode.FRAME and cases[0].reference_csv:
         method_output_root.mkdir(parents=True, exist_ok=True)
         (method_output_root / "reference_frame.txt").write_text(
@@ -245,6 +530,26 @@ def run(argv: List[str] | None = None) -> int:
         results=results,
         config=_config_snapshot(args),
     )
+
+    if args.perf_report is not None:
+        perf_report = _write_perf_report(
+            args.perf_report,
+            method=method,
+            summary_path=summary_path,
+            results=results,
+            args=args,
+        )
+        stage_totals = perf_report.get("metrics", {}).get("stage_totals", {})
+        linear_total = _safe_float(stage_totals.get("linear_solve"))
+        if linear_total is not None and linear_total > 0 and args.perf_gate in {"warn", "strict"}:
+            threshold = 120.0
+            if linear_total > threshold:
+                message = (
+                    f"performance gate exceeded: linear_solve total {linear_total:.3f}s > {threshold:.3f}s"
+                )
+                if args.perf_gate == "strict":
+                    raise RuntimeError(message)
+                LOGGER.warning(message)
 
     processed = sum(1 for result in results if result.status == "success")
     skipped = sum(1 for result in results if result.status == "skipped")

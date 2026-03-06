@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 from dolfinx import fem
+from scipy.sparse import isspmatrix
 
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
@@ -45,4 +46,7 @@ def test_regularization_matrix_shapes(eit_system):
 
     for mat in (noser.get_regularization_matrix(), smooth.get_regularization_matrix(), tik.get_regularization_matrix()):
         assert mat.shape[0] == mat.shape[1] == sigma.x.array.size
-        assert np.isfinite(mat).all()
+        if isspmatrix(mat):
+            assert np.isfinite(mat.data).all()
+        else:
+            assert np.isfinite(mat).all()

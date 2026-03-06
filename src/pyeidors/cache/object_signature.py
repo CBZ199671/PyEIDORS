@@ -77,6 +77,31 @@ def stable_signature_hash(cache_obj: Any) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+def rom_signature(
+    *,
+    rank_global: int,
+    rank_adaptive: int,
+    lowrank_rank: int,
+    lowrank_energy: float,
+    lowrank_method: str,
+    snapshot_source: str,
+    snapshot_hash: str,
+    refresh_every: int,
+) -> str:
+    """Return a stable signature hash for reduced-order model configuration."""
+    payload = {
+        "rank_global": int(rank_global),
+        "rank_adaptive": int(rank_adaptive),
+        "lowrank_rank": int(lowrank_rank),
+        "lowrank_energy": float(lowrank_energy),
+        "lowrank_method": str(lowrank_method),
+        "snapshot_source": str(snapshot_source),
+        "snapshot_hash": str(snapshot_hash),
+        "refresh_every": int(refresh_every),
+    }
+    return stable_signature_hash(payload)
+
+
 def pattern_signature_from_forward_model(fwd_model: Any) -> str:
     manager = fwd_model.pattern_manager
     payload = {
@@ -93,6 +118,21 @@ def pattern_signature_from_forward_model(fwd_model: Any) -> str:
 
 def backend_signature_from_forward_model(fwd_model: Any) -> str:
     config = fwd_model.backend_config
+    petsc_backend = getattr(fwd_model, "_petsc_backend_info", {}) or {}
+    petsc_device_effective = str(petsc_backend.get("petsc_device_effective", "cpu"))
+    petsc_mat_type = petsc_backend.get("petsc_mat_type")
+    petsc_vec_type = petsc_backend.get("petsc_vec_type")
+    if petsc_device_effective == "cpu" and (petsc_mat_type is None or petsc_vec_type is None):
+        stable_types_fn = getattr(fwd_model, "_stable_cpu_petsc_types", None)
+        stable_mat_type = None
+        stable_vec_type = None
+        if callable(stable_types_fn):
+            try:
+                stable_mat_type, stable_vec_type = stable_types_fn()
+            except Exception:
+                stable_mat_type, stable_vec_type = None, None
+        petsc_mat_type = petsc_mat_type or stable_mat_type or "cpu-default"
+        petsc_vec_type = petsc_vec_type or stable_vec_type or "cpu-default"
     payload = {
         "linear_backend": str(fwd_model.linear_backend),
         "performance_mode": str(getattr(fwd_model, "performance_mode", "aggressive")),
@@ -102,6 +142,13 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         "atol": float(config.atol),
         "max_it": int(config.max_it),
         "reuse_preconditioner": bool(config.reuse_preconditioner),
+        "mat_solve_mode": str(getattr(config, "mat_solve_mode", "off")),
+        "petsc_device": str(getattr(config, "petsc_device", "auto")),
+        "petsc_device_effective": petsc_device_effective,
+        "petsc_mat_type": petsc_mat_type,
+        "petsc_vec_type": petsc_vec_type,
+        "petsc_dense_mat_type": petsc_backend.get("petsc_dense_mat_type"),
+        "gpu_constraint_strategy": petsc_backend.get("gpu_constraint_strategy"),
     }
     return stable_signature_hash(payload)
 
@@ -113,32 +160,31 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
 
     mesh = getattr(fwd_model, "eit_mesh", None)
     if mesh is not None:
+        mesh_file = getattr(mesh, "mesh_file", None)
         mesh_payload: dict[str, Any] = {
-            "mesh_file": mesh.mesh_file,
-            "radius": float(mesh.radius),
-            "n_vertices": int(mesh.num_vertices()),
-            "n_cells": int(mesh.num_cells()),
             "association_table": dict(mesh.association_table),
+            "tdim": int(getattr(mesh.mesh.topology, "dim", 0)),
         }
-        try:
-            mesh_payload["coordinates"] = np.asarray(mesh.coordinates(), dtype=np.float64)
-            mesh_payload["cells"] = np.asarray(mesh.cells(), dtype=np.int32)
-        except Exception:
-            pass
+        if mesh_file:
+            try:
+                mesh_payload["mesh_file_hash"] = hash_path(mesh_file)
+            except Exception:
+                mesh_payload["mesh_file"] = str(mesh_file)
+        else:
+            try:
+                mesh_payload["coordinates"] = np.asarray(mesh.coordinates(), dtype=np.float64)
+                mesh_payload["cells"] = np.asarray(mesh.cells(), dtype=np.int32)
+            except Exception:
+                pass
     else:
         mesh_payload = {"mesh": "missing"}
 
     payload = {
         "n_elec": int(fwd_model.n_elec),
         "z": np.asarray(fwd_model.z, dtype=np.float64),
-        "electrode_tags": list(getattr(fwd_model, "electrode_tags", [])),
-        "electrode_lengths_m": np.asarray(
-            getattr(fwd_model, "electrode_lengths_m", []), dtype=np.float64
-        ),
         "geometry_scale_to_m": float(getattr(fwd_model, "geometry_scale_to_m", 1.0)),
         "mesh": mesh_payload,
     }
     signature = stable_signature_hash(payload)
     setattr(fwd_model, "_semantic_model_signature", signature)
     return signature
-

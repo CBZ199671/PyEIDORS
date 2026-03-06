@@ -132,3 +132,21 @@ def test_invalid_mode_returns_usage_error(tmp_path: Path):
     out = _run(repo, env, "--unknown")
     assert out.returncode == 2
     assert "Usage:" in out.stderr
+
+
+def test_check_mode_defaults_to_active_profile_venv(tmp_path: Path):
+    repo, env = _build_fake_repo(tmp_path)
+    cuda_python = repo / ".venv-cuda" / "bin" / "python"
+    cuda_python.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(repo / ".venv" / "bin" / "python", cuda_python)
+    cuda_python.chmod(cuda_python.stat().st_mode | stat.S_IXUSR)
+
+    env.pop("PYTHON_BIN", None)
+    env["PYEIDORS_ACTIVE_VENV"] = ".venv-cuda"
+    env["VIRTUAL_ENV"] = str(repo / ".venv-cuda")
+
+    out = _run(repo, env, "--check")
+    assert out.returncode == 0
+    uv_log = (repo / "uv.log").read_text(encoding="utf-8")
+    assert "--python .venv-cuda/bin/python" in uv_log
+    assert "--active" in uv_log

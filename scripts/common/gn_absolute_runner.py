@@ -15,6 +15,28 @@ from pyeidors.data.measurement_dataset import MeasurementDataset
 from pyeidors.data.structures import EITData, EITImage
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.perf.policy import (
+    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_INEXACT_ETA0,
+    DEFAULT_INEXACT_ETA_MAX,
+    DEFAULT_INEXACT_ETA_MIN,
+    DEFAULT_INEXACT_FORCING,
+    DEFAULT_INEXACT_MODE,
+    DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+    DEFAULT_JACOBIAN_BLOCK_SIZE,
+    DEFAULT_JACOBIAN_BLOCK_TUNE,
+    DEFAULT_LOWRANK_ENERGY,
+    DEFAULT_LOWRANK_METHOD,
+    DEFAULT_LOWRANK_MODE,
+    DEFAULT_LOWRANK_RANK,
+    DEFAULT_PRECONDITIONER,
+    DEFAULT_ROM_MODE,
+    DEFAULT_ROM_RANK_ADAPTIVE,
+    DEFAULT_ROM_RANK_GLOBAL,
+    DEFAULT_ROM_REFRESH_EVERY,
+    DEFAULT_ROM_SNAPSHOT_SOURCE,
+)
 from pyeidors.visualization import EITVisualizer
 
 from .io_utils import align_measurement_polarity
@@ -29,6 +51,30 @@ def _configure_reconstructor(
     lambda_: float,
     max_iter: int,
     background_sigma: float,
+    solver_mode: str,
+    linear_solver: str,
+    jacobian_update_every: int,
+    jacobian_reuse_tol: float,
+    line_search_mode: str,
+    preconditioner: str,
+    fast_linear_path: str,
+    rom_mode: str,
+    rom_rank_global: int,
+    rom_rank_adaptive: int,
+    rom_refresh_every: int,
+    rom_snapshot_source: str,
+    inexact_mode: str,
+    inexact_forcing: str,
+    inexact_eta0: float,
+    inexact_eta_min: float,
+    inexact_eta_max: float,
+    lowrank_mode: str,
+    lowrank_rank: int,
+    lowrank_method: str,
+    lowrank_energy: float,
+    absolute_startup_cache: bool,
+    cholmod_max_n: int,
+    cholmod_max_memory_gib: float,
 ) -> None:
     recon = system.reconstructor
     if recon is None:
@@ -46,6 +92,30 @@ def _configure_reconstructor(
     recon.clip_values = (background_sigma * 0.1, background_sigma * 100)
     recon.min_iterations = 1
     recon.use_prior_term = True
+    recon.solver_mode = str(solver_mode)
+    recon.linear_solver = str(linear_solver)
+    recon.jacobian_update_every = int(max(1, jacobian_update_every))
+    recon.jacobian_reuse_tol = float(max(0.0, jacobian_reuse_tol))
+    recon.line_search_mode = str(line_search_mode)
+    recon.preconditioner = str(preconditioner)
+    recon.fast_linear_path = str(fast_linear_path)
+    recon.rom_mode = str(rom_mode)
+    recon.rom_rank_global = int(max(1, rom_rank_global))
+    recon.rom_rank_adaptive = int(max(0, rom_rank_adaptive))
+    recon.rom_refresh_every = int(max(1, rom_refresh_every))
+    recon.rom_snapshot_source = str(rom_snapshot_source)
+    recon.inexact_mode = str(inexact_mode)
+    recon.inexact_forcing = str(inexact_forcing)
+    recon.inexact_eta0 = float(inexact_eta0)
+    recon.inexact_eta_min = float(inexact_eta_min)
+    recon.inexact_eta_max = float(inexact_eta_max)
+    recon.lowrank_mode = str(lowrank_mode)
+    recon.lowrank_rank = int(max(1, lowrank_rank))
+    recon.lowrank_method = str(lowrank_method)
+    recon.lowrank_energy = float(lowrank_energy)
+    recon.absolute_startup_cache = bool(absolute_startup_cache)
+    recon.cholmod_max_n = int(max(1, cholmod_max_n))
+    recon.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
 
 
 def _build_dataset(measurement: np.ndarray, metadata: Dict[str, Any]) -> MeasurementDataset:
@@ -63,6 +133,12 @@ def run_absolute_reconstruction(
     output_dir: Path,
     mesh_radius: float,
     refinement: int,
+    mesh_dim: int,
+    mesh_height: float,
+    electrode_height_ratio: float,
+    z_center: float,
+    mesh_dir: Path,
+    mesh_name: str | None,
     measurement_gain: float,
     background_sigma: float,
     lambda_: float,
@@ -70,6 +146,36 @@ def run_absolute_reconstruction(
     contact_impedance: float,
     cache_scope: str = "both",
     cache_dir: str = ".pyeidors_cache/v2",
+    solver_mode: str = "strict",
+    linear_solver: str = "auto",
+    jacobian_update_every: int = 1,
+    jacobian_reuse_tol: float = 0.0,
+    line_search_mode: str = "full",
+    preconditioner: str = DEFAULT_PRECONDITIONER,
+    fast_linear_path: str = "auto",
+    rom_mode: str = DEFAULT_ROM_MODE,
+    rom_rank_global: int = DEFAULT_ROM_RANK_GLOBAL,
+    rom_rank_adaptive: int = DEFAULT_ROM_RANK_ADAPTIVE,
+    rom_refresh_every: int = DEFAULT_ROM_REFRESH_EVERY,
+    rom_snapshot_source: str = DEFAULT_ROM_SNAPSHOT_SOURCE,
+    inexact_mode: str = DEFAULT_INEXACT_MODE,
+    inexact_forcing: str = DEFAULT_INEXACT_FORCING,
+    inexact_eta0: float = DEFAULT_INEXACT_ETA0,
+    inexact_eta_min: float = DEFAULT_INEXACT_ETA_MIN,
+    inexact_eta_max: float = DEFAULT_INEXACT_ETA_MAX,
+    lowrank_mode: str = DEFAULT_LOWRANK_MODE,
+    lowrank_rank: int = DEFAULT_LOWRANK_RANK,
+    lowrank_method: str = DEFAULT_LOWRANK_METHOD,
+    lowrank_energy: float = DEFAULT_LOWRANK_ENERGY,
+    absolute_startup_cache: bool = True,
+    forward_mat_solve: str = "off",
+    petsc_device: str = "auto",
+    device: str = "auto",
+    cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
+    cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
+    jacobian_block_size: int = DEFAULT_JACOBIAN_BLOCK_SIZE,
+    jacobian_block_candidates: list[int] | tuple[int, ...] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
 ) -> None:
     """Execute GN absolute reconstruction and save outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,14 +194,20 @@ def run_absolute_reconstruction(
 
     dataset = _build_dataset(measurement, metadata)
     pattern_config = dataset.pattern_config
+    if int(mesh_dim) == 3 and str(pattern_config.drive_mode) == "line_current_density":
+        pattern_config.drive_mode = "total_current"
     n_elec = pattern_config.n_elec
 
     mesh = load_or_create_mesh(
-        mesh_dir=str(DEFAULT_MESH_DIR),
-        mesh_name=None,
+        mesh_dir=str(mesh_dir),
+        mesh_name=mesh_name,
         n_elec=n_elec,
+        dimension=int(mesh_dim),
         radius=float(mesh_radius),
         refinement=int(refinement),
+        height=float(mesh_height),
+        electrode_height_ratio=float(electrode_height_ratio),
+        z_center=float(z_center),
         electrode_coverage=float(metadata.get("electrode_coverage", 0.5)),
     )
 
@@ -109,6 +221,36 @@ def run_absolute_reconstruction(
         noser_exponent=0.5,
         cache_scope=cache_scope,
         cache_dir=cache_dir,
+        solver_mode=solver_mode,
+        linear_solver=linear_solver,
+        jacobian_update_every=jacobian_update_every,
+        jacobian_reuse_tol=jacobian_reuse_tol,
+        line_search_mode=line_search_mode,
+        preconditioner=preconditioner,
+        fast_linear_path=fast_linear_path,
+        rom_mode=rom_mode,
+        rom_rank_global=int(max(1, rom_rank_global)),
+        rom_rank_adaptive=int(max(0, rom_rank_adaptive)),
+        rom_refresh_every=int(max(1, rom_refresh_every)),
+        rom_snapshot_source=str(rom_snapshot_source),
+        inexact_mode=str(inexact_mode),
+        inexact_forcing=str(inexact_forcing),
+        inexact_eta0=float(inexact_eta0),
+        inexact_eta_min=float(inexact_eta_min),
+        inexact_eta_max=float(inexact_eta_max),
+        lowrank_mode=str(lowrank_mode),
+        lowrank_rank=int(max(1, lowrank_rank)),
+        lowrank_method=str(lowrank_method),
+        lowrank_energy=float(lowrank_energy),
+        absolute_startup_cache=absolute_startup_cache,
+        cholmod_max_n=int(max(1, cholmod_max_n)),
+        cholmod_max_memory_gib=float(max(0.25, cholmod_max_memory_gib)),
+        jacobian_block_tune=str(jacobian_block_tune),
+        jacobian_block_size=int(max(0, jacobian_block_size)),
+        jacobian_block_candidates=tuple(int(v) for v in jacobian_block_candidates if int(v) > 0),
+        petsc_device=str(petsc_device),
+        device=str(device),
+        linear_backend_config={"mat_solve_mode": str(forward_mat_solve), "petsc_device": str(petsc_device)},
     )
     system.setup(mesh=mesh)
     _configure_reconstructor(
@@ -116,6 +258,30 @@ def run_absolute_reconstruction(
         lambda_=lambda_,
         max_iter=max_iter,
         background_sigma=background_sigma,
+        solver_mode=solver_mode,
+        linear_solver=linear_solver,
+        jacobian_update_every=jacobian_update_every,
+        jacobian_reuse_tol=jacobian_reuse_tol,
+        line_search_mode=line_search_mode,
+        preconditioner=preconditioner,
+        fast_linear_path=fast_linear_path,
+        rom_mode=rom_mode,
+        rom_rank_global=rom_rank_global,
+        rom_rank_adaptive=rom_rank_adaptive,
+        rom_refresh_every=rom_refresh_every,
+        rom_snapshot_source=rom_snapshot_source,
+        inexact_mode=inexact_mode,
+        inexact_forcing=inexact_forcing,
+        inexact_eta0=inexact_eta0,
+        inexact_eta_min=inexact_eta_min,
+        inexact_eta_max=inexact_eta_max,
+        lowrank_mode=lowrank_mode,
+        lowrank_rank=lowrank_rank,
+        lowrank_method=lowrank_method,
+        lowrank_energy=lowrank_energy,
+        absolute_startup_cache=absolute_startup_cache,
+        cholmod_max_n=cholmod_max_n,
+        cholmod_max_memory_gib=cholmod_max_memory_gib,
     )
 
     eit_data: EITData = dataset.to_eit_data(
@@ -231,6 +397,35 @@ def run_absolute_reconstruction(
         "contact_impedance": contact_impedance,
         "residual_history": list(recon_result.residual_history or []),
         "sigma_change_history": list(recon_result.sigma_change_history or []),
+        "solver_mode": solver_mode,
+        "linear_solver": linear_solver,
+        "line_search_mode": line_search_mode,
+        "preconditioner": preconditioner,
+        "fast_linear_path": fast_linear_path,
+        "rom_mode": rom_mode,
+        "rom_rank_global": int(rom_rank_global),
+        "rom_rank_adaptive": int(rom_rank_adaptive),
+        "rom_refresh_every": int(rom_refresh_every),
+        "rom_snapshot_source": rom_snapshot_source,
+        "inexact_mode": inexact_mode,
+        "inexact_forcing": inexact_forcing,
+        "inexact_eta0": float(inexact_eta0),
+        "inexact_eta_min": float(inexact_eta_min),
+        "inexact_eta_max": float(inexact_eta_max),
+        "lowrank_mode": lowrank_mode,
+        "lowrank_rank": int(lowrank_rank),
+        "lowrank_method": lowrank_method,
+        "lowrank_energy": float(lowrank_energy),
+        "absolute_startup_cache": bool(absolute_startup_cache),
+        "forward_mat_solve": forward_mat_solve,
+        "petsc_device": petsc_device,
+        "device": device,
+        "cholmod_max_n": int(cholmod_max_n),
+        "cholmod_max_memory_gib": float(cholmod_max_memory_gib),
+        "jacobian_block_tune": str(jacobian_block_tune),
+        "jacobian_block_size": int(jacobian_block_size),
+        "jacobian_block_candidates": [int(v) for v in jacobian_block_candidates],
+        "diagnostics": recon_result.diagnostics,
     }
     with (output_dir / "run_summary.json").open("w", encoding="utf-8") as fh:
         json.dump(summary_payload, fh, ensure_ascii=False, indent=2)

@@ -3,14 +3,49 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import json
+from time import perf_counter
 from typing import Optional, Union
 
 import numpy as np
 import torch
 from dolfinx import fem
+from scipy.sparse import isspmatrix
+from scipy.sparse.linalg import LinearOperator, cg, lsmr
+from scipy import sparse
+from scipy.linalg import cho_factor, cho_solve
+
+try:  # pragma: no cover - optional dependency
+    import pyamg
+except Exception:  # pragma: no cover
+    pyamg = None
+
+try:  # pragma: no cover - optional dependency
+    from sksparse.cholmod import cholesky as cholmod_cholesky
+except Exception:  # pragma: no cover
+    cholmod_cholesky = None
 
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
+from ...perf.capabilities import (
+    detect_performance_capabilities,
+    select_fast_linear_path,
+    select_fused_strategy,
+    select_preconditioner,
+)
+from ...cache.object_signature import (
+    backend_signature_from_forward_model,
+    model_signature_from_forward_model,
+    pattern_signature_from_forward_model,
+    rom_signature,
+)
+from ...utils.numeric_ops import safe_dot
+from ..reduced.inexact_controller import InexactController
+from ..reduced.lowrank_subspace import build_lowrank_subspace
+from ..reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
+from ..reduced.reduced_gn_step import build_reduced_operator, solve_reduced_step
+from ..reduced.snapshot_bank import SnapshotBank, select_snapshot_matrix
 from ..contracts import SolverOutput
 from .gauss_newton_weights import build_weight_reference
 
@@ -165,10 +200,986 @@ def _require_scalar_finite(name: str, value: float, iteration: int | None = None
     )
 
 
+def _apply_regularization_np(reconstructor, vector: np.ndarray) -> np.ndarray:
+    matrix = getattr(reconstructor, "R_matrix", None)
+    if matrix is None:
+        raise RuntimeError("Regularization matrix is not initialized.")
+
+    vec = np.asarray(vector, dtype=np.float64)
+    if isspmatrix(matrix):
+        return np.asarray(matrix.dot(vec), dtype=np.float64)
+    if isinstance(matrix, LinearOperator):
+        return np.asarray(matrix.matvec(vec), dtype=np.float64)
+    dense = np.asarray(matrix, dtype=np.float64)
+    return np.asarray(dense @ vec, dtype=np.float64)
+
+
+def _diag_preconditioner(reconstructor, J_weighted_np: np.ndarray, lambda_eff: float) -> np.ndarray:
+    diag_h = np.sum(J_weighted_np * J_weighted_np, axis=0).astype(np.float64)
+    reg_diag = getattr(reconstructor, "R_diag", None)
+    if reg_diag is not None and reg_diag.shape[0] == diag_h.shape[0]:
+        diag_h = diag_h + float(lambda_eff) * reg_diag
+    else:
+        diag_h = diag_h + float(lambda_eff)
+    diag_h = np.maximum(diag_h, 1e-12)
+    return np.asarray(diag_h, dtype=np.float64)
+
+
+def _solve_linear_system_fast(
+    reconstructor,
+    *,
+    J_weighted_np: np.ndarray,
+    weighted_residual_np: np.ndarray,
+    de_current_np: np.ndarray,
+    lambda_eff: float,
+    iteration: int,
+) -> tuple[np.ndarray, float, float]:
+    """Matrix-free fast solve with Woodbury/PCG fallback chain.
+
+    Solve ``(J'J + lambda*R) delta = -g`` without constructing a dense
+    ``n x n`` Hessian in automatic fast mode.
+    """
+    J_weighted_np = np.asarray(J_weighted_np, dtype=np.float64)
+    weighted_residual_np = np.asarray(weighted_residual_np, dtype=np.float64)
+    de_current_np = np.asarray(de_current_np, dtype=np.float64)
+
+    jtr = np.asarray(
+        safe_dot(J_weighted_np.T, weighted_residual_np, "gauss_newton.fast.jtr"),
+        dtype=np.float64,
+    )
+    rhs = -jtr
+    if reconstructor.use_prior_term:
+        rhs = rhs - float(lambda_eff) * _apply_regularization_np(reconstructor, de_current_np)
+    _require_finite("rhs_fast", rhs, iteration)
+
+    n_param = int(J_weighted_np.shape[1])
+    n_meas = int(J_weighted_np.shape[0])
+
+    def _matvec(v: np.ndarray) -> np.ndarray:
+        vv = np.asarray(v, dtype=np.float64)
+        projected = np.asarray(
+            safe_dot(J_weighted_np, vv, "gauss_newton.fast.hv.project"),
+            dtype=np.float64,
+        )
+        back_projected = np.asarray(
+            safe_dot(J_weighted_np.T, projected, "gauss_newton.fast.hv.back_project"),
+            dtype=np.float64,
+        )
+        return np.asarray(
+            back_projected + float(lambda_eff) * _apply_regularization_np(reconstructor, vv),
+            dtype=np.float64,
+        )
+
+    h_op = LinearOperator(
+        (n_param, n_param),
+        matvec=_matvec,
+        rmatvec=_matvec,
+        dtype=np.float64,
+    )
+
+    diag_precond = _diag_preconditioner(reconstructor, J_weighted_np, lambda_eff)
+    diag_inv_op = LinearOperator(
+        (n_param, n_param),
+        matvec=lambda x: np.asarray(x, dtype=np.float64) / diag_precond,
+        dtype=np.float64,
+    )
+
+    solver_mode = str(getattr(reconstructor, "linear_solver", "auto")).strip().lower()
+    preconditioner_mode = str(getattr(reconstructor, "preconditioner", "auto")).strip().lower()
+    capabilities = detect_performance_capabilities()
+    resolved_preconditioner = select_preconditioner(
+        preconditioner_mode,
+        capabilities=capabilities,
+    )
+    fast_linear_mode = str(getattr(reconstructor, "fast_linear_path", "auto")).strip().lower()
+
+    cg_rtol = 1e-8 if reconstructor.performance_mode == "aggressive" else 1e-10
+    cg_maxiter = max(200, min(2500, n_param))
+
+    fallback_reasons: list[str] = []
+    fast_linear_path_reason = "explicit"
+
+    def _add_fallback(reason: str | None) -> None:
+        if not reason:
+            return
+        token = str(reason).strip()
+        if token and token not in fallback_reasons:
+            fallback_reasons.append(token)
+
+    def _set_fast_meta(
+        *,
+        path: str,
+        resolved_precond: str,
+        reason: str | None = None,
+        selected_path: str,
+        path_reason: str,
+        extra: dict[str, object] | None = None,
+    ) -> None:
+        meta_payload: dict[str, object] = {
+            "path": path,
+            "resolved_preconditioner": resolved_precond,
+            "fallback_reason": reason,
+            "fast_linear_path_selected": selected_path,
+            "fast_linear_path_reason": path_reason,
+        }
+        if isinstance(extra, dict):
+            meta_payload.update(extra)
+        reconstructor._last_fast_linear_meta = meta_payload
+
+    def _regularization_signature() -> str:
+        reg = getattr(reconstructor, "R_matrix", None)
+        if reg is None:
+            return "none"
+        if isspmatrix(reg):
+            mat = reg.tocsr()
+            payload = {
+                "shape": list(mat.shape),
+                "indptr_hash": hashlib.sha256(
+                    np.ascontiguousarray(mat.indptr, dtype=np.int64).tobytes()
+                ).hexdigest(),
+                "indices_hash": hashlib.sha256(
+                    np.ascontiguousarray(mat.indices, dtype=np.int64).tobytes()
+                ).hexdigest(),
+                "data_hash": hashlib.sha256(
+                    np.ascontiguousarray(mat.data, dtype=np.float64).tobytes()
+                ).hexdigest(),
+            }
+            return hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+        if isinstance(reg, LinearOperator):
+            return f"linear_operator:{reg.shape[0]}x{reg.shape[1]}"
+        dense = np.ascontiguousarray(np.asarray(reg, dtype=np.float64))
+        return hashlib.sha256(dense.tobytes()).hexdigest()
+
+    def _regularization_meta() -> dict[str, object]:
+        cache = getattr(reconstructor, "_regularization_meta_cache", None)
+        reg = getattr(reconstructor, "R_matrix", None)
+        cache_token = (id(reg), n_param)
+        if isinstance(cache, dict) and cache.get("token") == cache_token:
+            return dict(cache["meta"])
+
+        meta = {
+            "is_diagonal": False,
+            "is_sparse_spd": False,
+            "diag_vector": None,
+        }
+        if reg is None:
+            pass
+        elif isspmatrix(reg):
+            reg_csr = reg.tocsr()
+            diag_vec = np.asarray(reg_csr.diagonal(), dtype=np.float64)
+            coo = reg_csr.tocoo(copy=False)
+            is_diag = bool(coo.nnz <= n_param and np.all(coo.row == coo.col))
+            symmetric = False
+            if reg_csr.shape[0] == reg_csr.shape[1]:
+                diff = reg_csr - reg_csr.T
+                symmetric = diff.nnz == 0 or np.max(np.abs(diff.data)) <= 1e-9
+            positive_diag = diag_vec.size == n_param and np.all(diag_vec > 0)
+            meta.update(
+                {
+                    "is_diagonal": is_diag,
+                    "is_sparse_spd": bool(symmetric and positive_diag),
+                    "diag_vector": diag_vec if diag_vec.size == n_param else None,
+                }
+            )
+        elif isinstance(reg, LinearOperator):
+            meta.update({"is_diagonal": False, "is_sparse_spd": False, "diag_vector": None})
+        else:
+            dense = np.asarray(reg, dtype=np.float64)
+            diag_vec = np.asarray(np.diag(dense), dtype=np.float64)
+            is_diag = bool(dense.ndim == 2 and dense.shape == (n_param, n_param))
+            if is_diag:
+                off_diag = dense - np.diag(diag_vec)
+                is_diag = bool(np.all(np.abs(off_diag) <= 1e-12))
+            symmetric = bool(dense.ndim == 2 and np.allclose(dense, dense.T, rtol=1e-8, atol=1e-12))
+            positive_diag = diag_vec.size == n_param and np.all(diag_vec > 0)
+            meta.update(
+                {
+                    "is_diagonal": is_diag,
+                    "is_sparse_spd": bool(symmetric and positive_diag),
+                    "diag_vector": diag_vec if diag_vec.size == n_param else None,
+                }
+            )
+
+        reconstructor._regularization_meta_cache = {"token": cache_token, "meta": meta}
+        return dict(meta)
+
+    def _solve_linear_system_fast_woodbury_diag(diag_vector: np.ndarray) -> np.ndarray:
+        diag_scaled = float(lambda_eff) * np.asarray(diag_vector, dtype=np.float64)
+        diag_scaled = np.maximum(diag_scaled, 1e-12)
+        inv_diag = 1.0 / diag_scaled
+
+        u = inv_diag * rhs
+        ja_inv = J_weighted_np * inv_diag[None, :]
+        small_rhs = np.asarray(
+            safe_dot(J_weighted_np, u, "gauss_newton.fast.woodbury.small_rhs"),
+            dtype=np.float64,
+        )
+        s_matrix = np.eye(n_meas, dtype=np.float64) + np.asarray(
+            safe_dot(ja_inv, J_weighted_np.T, "gauss_newton.fast.woodbury.small_system"),
+            dtype=np.float64,
+        )
+        s_matrix = 0.5 * (s_matrix + s_matrix.T)
+        jitter = 1e-12
+        factor, lower = cho_factor(
+            s_matrix + (jitter * np.eye(n_meas, dtype=np.float64)),
+            overwrite_a=False,
+            check_finite=False,
+        )
+        y = cho_solve((factor, lower), small_rhs, check_finite=False)
+        correction = inv_diag * np.asarray(
+            safe_dot(J_weighted_np.T, y, "gauss_newton.fast.woodbury.correction"),
+            dtype=np.float64,
+        )
+        return np.asarray(u - correction, dtype=np.float64)
+
+    def _build_cholmod_preconditioner_from_R() -> tuple[LinearOperator | None, str | None]:
+        if cholmod_cholesky is None:
+            return None, "cholmod_unavailable"
+
+        reg = getattr(reconstructor, "R_matrix", None)
+        if not isspmatrix(reg):
+            return None, "regularization_not_sparse"
+
+        max_n = int(getattr(reconstructor, "cholmod_max_n", 50000))
+        if max_n > 0 and n_param > max_n:
+            return None, "cholmod_n_limit"
+
+        reg_csc = reg.tocsc().astype(np.float64)
+        max_memory_gib = float(getattr(reconstructor, "cholmod_max_memory_gib", 4.0))
+        estimated_bytes = float(reg_csc.nnz) * 24.0 + float(n_param) * 64.0
+        if estimated_bytes > max_memory_gib * (1024.0**3):
+            return None, "cholmod_memory_limit"
+
+        shift = max(1e-12, abs(float(lambda_eff)) * 1e-12)
+        precond_matrix = (float(lambda_eff) * reg_csc) + sparse.identity(
+            n_param,
+            format="csc",
+            dtype=np.float64,
+        ) * shift
+
+        cache = getattr(reconstructor, "_cholmod_precond_factor_cache", None)
+        if cache is None:
+            cache = {}
+            reconstructor._cholmod_precond_factor_cache = cache
+        key_payload = {
+            "reg_signature": _regularization_signature(),
+            "lambda_eff": float(lambda_eff),
+            "n_param": int(n_param),
+            "max_n": int(max_n),
+            "max_memory_gib": float(max_memory_gib),
+        }
+        key = hashlib.sha256(
+            json.dumps(key_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+        factor = cache.get(key)
+        if factor is None:
+            try:
+                factor = cholmod_cholesky(precond_matrix)
+            except Exception as exc:  # pragma: no cover - guarded runtime fallback
+                return None, f"cholmod_precond_failed:{type(exc).__name__}"
+            cache[key] = factor
+
+        operator = LinearOperator(
+            (n_param, n_param),
+            matvec=lambda x: np.asarray(factor.solve_A(np.asarray(x, dtype=np.float64)), dtype=np.float64),
+            dtype=np.float64,
+        )
+        return operator, None
+
+    def _solve_pcg(precond_choice: str) -> tuple[np.ndarray | None, str, str, str | None]:
+        choice = str(precond_choice)
+        m_op: LinearOperator | None = None
+        path = "pcg-diag-precond"
+        fallback: str | None = None
+
+        if choice == "cholmod":
+            m_op, reason = _build_cholmod_preconditioner_from_R()
+            if m_op is None:
+                fallback = reason or "cholmod_precond_unavailable"
+                choice = "diag"
+            else:
+                path = "pcg-cholmod-precond"
+
+        if choice == "pyamg":
+            if pyamg is None:
+                fallback = "pyamg_unavailable"
+                choice = "diag"
+            else:
+                reg = getattr(reconstructor, "R_matrix", None)
+                if isspmatrix(reg):
+                    try:
+                        amg_mat = reg.tocsr().astype(np.float64)
+                        amg_mat = amg_mat + sparse.identity(amg_mat.shape[0], format="csr") * 1e-12
+                        ml = pyamg.smoothed_aggregation_solver(amg_mat)
+                        m_op = ml.aspreconditioner(cycle="V")
+                        path = "pcg-pyamg-precond"
+                    except Exception as exc:  # pragma: no cover - optional path
+                        fallback = f"pyamg_precond_failed:{type(exc).__name__}"
+                        choice = "diag"
+                else:
+                    fallback = "pyamg_requires_sparse_regularization"
+                    choice = "diag"
+
+        if choice in {"diag", "petsc-gamg"}:
+            m_op = diag_inv_op
+            path = "pcg-diag-precond"
+            if choice == "petsc-gamg":
+                fallback = "petsc_gamg_not_supported_in_matrix_free"
+
+        delta, info = cg(h_op, rhs, M=m_op, rtol=cg_rtol, maxiter=cg_maxiter)
+        if info != 0:
+            return None, path, choice, "pcg_not_converged"
+        return np.asarray(delta, dtype=np.float64), path, choice, fallback
+
+    def _solve_cholmod_direct_debug() -> tuple[np.ndarray | None, str | None]:
+        if cholmod_cholesky is None:
+            return None, "cholmod_unavailable"
+        reg = getattr(reconstructor, "R_matrix", None)
+        if not isspmatrix(reg):
+            return None, "regularization_not_sparse"
+        max_n = int(getattr(reconstructor, "cholmod_max_n", 50000))
+        if max_n > 0 and n_param > max_n:
+            return None, "cholmod_n_limit"
+        max_memory_gib = float(getattr(reconstructor, "cholmod_max_memory_gib", 4.0))
+        estimated_bytes = 2.5 * float(n_param) * float(n_param) * 8.0
+        if estimated_bytes > max_memory_gib * (1024.0**3):
+            return None, "cholmod_memory_limit"
+        try:
+            h_sparse = sparse.csc_matrix(
+                safe_dot(J_weighted_np.T, J_weighted_np, "gauss_newton.fast.cholmod_direct.jtj")
+            )
+            h_sparse = h_sparse + float(lambda_eff) * reg.tocsc()
+            factor = cholmod_cholesky(h_sparse)
+            return np.asarray(factor.solve_A(rhs), dtype=np.float64), None
+        except Exception as exc:  # pragma: no cover - guarded fallback
+            return None, f"cholmod_direct_failed:{type(exc).__name__}"
+
+    reg_meta = _regularization_meta()
+    regularization_is_diagonal = bool(reg_meta.get("is_diagonal", False))
+    regularization_is_sparse_spd = bool(reg_meta.get("is_sparse_spd", False))
+    mesh_dim = 2
+    if hasattr(reconstructor, "fwd_model"):
+        try:
+            mesh_dim = int(getattr(reconstructor.fwd_model.mesh.geometry, "dim", 2))
+        except Exception:
+            mesh_dim = 2
+    fused_strategy = select_fused_strategy(
+        solver_mode=str(getattr(reconstructor, "solver_mode", "strict")),
+        mesh_dim=mesh_dim,
+        n_param=n_param,
+        n_meas=n_meas,
+        rom_mode=str(getattr(reconstructor, "rom_mode", "auto")),
+        inexact_mode=str(getattr(reconstructor, "inexact_mode", "auto")),
+        lowrank_mode=str(getattr(reconstructor, "lowrank_mode", "auto")),
+        regularization_is_diagonal=regularization_is_diagonal,
+        capabilities=capabilities,
+    )
+
+    def _effective_feature_mode(mode_value: str) -> str:
+        mode_norm = str(mode_value).strip().lower()
+        if mode_norm in {"off", "on", "auto"}:
+            return mode_norm
+        return "off"
+
+    rom_mode_effective = _effective_feature_mode(str(getattr(reconstructor, "rom_mode", "auto")))
+    inexact_mode_effective = _effective_feature_mode(str(getattr(reconstructor, "inexact_mode", "auto")))
+    lowrank_mode_effective = _effective_feature_mode(str(getattr(reconstructor, "lowrank_mode", "auto")))
+
+    def _snapshot_bank() -> SnapshotBank:
+        bank = getattr(reconstructor, "_rom_snapshot_bank", None)
+        if not isinstance(bank, SnapshotBank):
+            bank = SnapshotBank(max_snapshots=32, normalize=True)
+            reconstructor._rom_snapshot_bank = bank
+        return bank
+
+    def _inexact_controller() -> InexactController:
+        controller = getattr(reconstructor, "_inexact_controller", None)
+        mode = str(getattr(reconstructor, "inexact_forcing", "eisenstat-walker"))
+        eta0 = float(getattr(reconstructor, "inexact_eta0", 0.2))
+        eta_min = float(getattr(reconstructor, "inexact_eta_min", 1e-3))
+        eta_max = float(getattr(reconstructor, "inexact_eta_max", 0.5))
+        token = (mode, eta0, eta_min, eta_max)
+        cached_token = getattr(reconstructor, "_inexact_controller_token", None)
+        if not isinstance(controller, InexactController) or cached_token != token:
+            controller = InexactController(
+                mode=mode,
+                eta0=eta0,
+                eta_min=eta_min,
+                eta_max=eta_max,
+            )
+            reconstructor._inexact_controller = controller
+            reconstructor._inexact_controller_token = token
+        return controller
+
+    def _synthetic_snapshots(diag_vector: np.ndarray | None) -> np.ndarray:
+        snapshots: list[np.ndarray] = []
+        snapshots.append(np.asarray(rhs, dtype=np.float64))
+        snapshots.append(np.asarray(de_current_np, dtype=np.float64))
+        grad_proxy = np.asarray(
+            safe_dot(J_weighted_np.T, weighted_residual_np, "gauss_newton.fused.grad_proxy"),
+            dtype=np.float64,
+        )
+        snapshots.append(grad_proxy)
+        if isinstance(diag_vector, np.ndarray) and diag_vector.shape[0] == n_param:
+            inv_diag = 1.0 / np.maximum(float(lambda_eff) * diag_vector, 1e-12)
+            snapshots.append(inv_diag * rhs)
+        for idx in range(min(6, n_meas)):
+            snapshots.append(np.asarray(J_weighted_np[idx, :], dtype=np.float64))
+        return np.ascontiguousarray(np.column_stack(snapshots), dtype=np.float64)
+
+    def _build_global_basis(diag_vector: np.ndarray | None) -> tuple[np.ndarray, str]:
+        source = str(getattr(reconstructor, "rom_snapshot_source", "hybrid")).strip().lower()
+        rank_global = int(max(1, getattr(reconstructor, "rom_rank_global", 32)))
+        synthetic = _synthetic_snapshots(diag_vector)
+        bank = _snapshot_bank()
+        bank.add(rhs)
+        bank.add(de_current_np)
+        cached_matrix = np.zeros((n_param, 0), dtype=np.float64)
+        cache_manager = getattr(reconstructor, "cache_manager", None)
+        lookup_layer = "compute"
+        if cache_manager is not None and bool(getattr(cache_manager, "enabled", False)):
+            snapshot_payload = {
+                "solver": "gn_absolute",
+                "artifact": "rom_snapshot_bank",
+                "model_signature": model_signature_from_forward_model(reconstructor.fwd_model),
+                "pattern_signature": pattern_signature_from_forward_model(reconstructor.fwd_model),
+                "backend_signature": backend_signature_from_forward_model(reconstructor.fwd_model),
+                "n_param": int(n_param),
+                "source": source,
+                "rank_global": int(rank_global),
+            }
+            cached_matrix, lookup = cache_manager.get_or_compute_semantic(
+                artifact="rom_snapshot_bank",
+                name="absolute_rom_snapshot_bank",
+                namespace="absolute",
+                cache_obj=snapshot_payload,
+                payload=snapshot_payload,
+                compute_fn=lambda: synthetic,
+                persist=True,
+                cost=2.0,
+                effort_seconds=0.5,
+            )
+            lookup_layer = str(getattr(lookup, "layer", "compute"))
+        snapshot_matrix = select_snapshot_matrix(
+            source,
+            n_param=n_param,
+            bank_matrix=bank.matrix(),
+            synthetic_matrix=synthetic,
+            cached_matrix=np.asarray(cached_matrix, dtype=np.float64),
+        )
+        if snapshot_matrix.shape[1] == 0:
+            return np.zeros((n_param, 0), dtype=np.float64), lookup_layer
+
+        basis_payload = {
+            "solver": "gn_absolute",
+            "artifact": "rom_global_basis",
+            "model_signature": model_signature_from_forward_model(reconstructor.fwd_model),
+            "pattern_signature": pattern_signature_from_forward_model(reconstructor.fwd_model),
+            "backend_signature": backend_signature_from_forward_model(reconstructor.fwd_model),
+            "snapshot_hash": hashlib.sha256(
+                np.ascontiguousarray(snapshot_matrix, dtype=np.float64).tobytes()
+            ).hexdigest(),
+            "rank_global": int(rank_global),
+            "source": source,
+        }
+        basis_payload["rom_signature"] = rom_signature(
+            rank_global=int(rank_global),
+            rank_adaptive=int(getattr(reconstructor, "rom_rank_adaptive", 16)),
+            lowrank_rank=int(getattr(reconstructor, "lowrank_rank", 16)),
+            lowrank_energy=float(getattr(reconstructor, "lowrank_energy", 0.995)),
+            lowrank_method=str(getattr(reconstructor, "lowrank_method", "tsvd")),
+            snapshot_source=source,
+            snapshot_hash=str(basis_payload["snapshot_hash"]),
+            refresh_every=int(getattr(reconstructor, "rom_refresh_every", 2)),
+        )
+        cache_manager = getattr(reconstructor, "cache_manager", None)
+        if cache_manager is not None and bool(getattr(cache_manager, "enabled", False)):
+            basis, lookup = cache_manager.get_or_compute_semantic(
+                artifact="rom_global_basis",
+                name="absolute_rom_global_basis",
+                namespace="absolute",
+                cache_obj=basis_payload,
+                payload=basis_payload,
+                compute_fn=lambda: compute_pod_basis(
+                    snapshot_matrix,
+                    rank=rank_global,
+                    energy=float(getattr(reconstructor, "lowrank_energy", 0.995)),
+                ),
+                persist=True,
+                cost=4.0,
+                effort_seconds=1.0,
+            )
+            lookup_layer = str(getattr(lookup, "layer", lookup_layer))
+            return np.asarray(basis, dtype=np.float64), lookup_layer
+
+        return (
+            compute_pod_basis(
+                snapshot_matrix,
+                rank=rank_global,
+                energy=float(getattr(reconstructor, "lowrank_energy", 0.995)),
+            ),
+            lookup_layer,
+        )
+
+    def _adaptive_basis() -> tuple[np.ndarray, str]:
+        refresh_every = int(max(1, getattr(reconstructor, "rom_refresh_every", 2)))
+        rank_adaptive = int(max(0, getattr(reconstructor, "rom_rank_adaptive", 16)))
+        lowrank_rank = int(max(1, getattr(reconstructor, "lowrank_rank", 16)))
+        lowrank_method = str(getattr(reconstructor, "lowrank_method", "tsvd")).strip().lower()
+        lowrank_energy = float(getattr(reconstructor, "lowrank_energy", 0.995))
+        if rank_adaptive <= 0:
+            return np.zeros((n_param, 0), dtype=np.float64), "disabled"
+
+        if (iteration % refresh_every) != 0:
+            cached_basis = getattr(reconstructor, "_rom_last_adaptive_basis", None)
+            if isinstance(cached_basis, np.ndarray) and cached_basis.shape[0] == n_param:
+                return np.asarray(cached_basis, dtype=np.float64), "reuse"
+
+        payload = {
+            "solver": "gn_absolute",
+            "artifact": "rom_adaptive_basis",
+            "jacobian_hash": hashlib.sha256(
+                np.ascontiguousarray(J_weighted_np, dtype=np.float64).tobytes()
+            ).hexdigest(),
+            "rank_adaptive": int(rank_adaptive),
+            "lowrank_rank": int(lowrank_rank),
+            "lowrank_method": str(lowrank_method),
+            "lowrank_energy": float(lowrank_energy),
+        }
+        cache_manager = getattr(reconstructor, "cache_manager", None)
+        if cache_manager is not None and bool(getattr(cache_manager, "enabled", False)):
+            basis, lookup = cache_manager.get_or_compute_semantic(
+                artifact="rom_adaptive_basis",
+                name="absolute_rom_adaptive_basis",
+                namespace="absolute",
+                cache_obj=payload,
+                payload=payload,
+                compute_fn=lambda: build_lowrank_subspace(
+                    J_weighted_np,
+                    rank=max(lowrank_rank, rank_adaptive),
+                    energy=lowrank_energy,
+                    method=lowrank_method,
+                )[0][:, :rank_adaptive],
+                persist=True,
+                cost=4.0,
+                effort_seconds=1.0,
+            )
+            basis_arr = np.asarray(basis, dtype=np.float64)
+            reconstructor._rom_last_adaptive_basis = basis_arr
+            return basis_arr, str(getattr(lookup, "layer", "compute"))
+
+        basis_arr = build_lowrank_subspace(
+            J_weighted_np,
+            rank=max(lowrank_rank, rank_adaptive),
+            energy=lowrank_energy,
+            method=lowrank_method,
+        )[0][:, :rank_adaptive]
+        basis_arr = np.asarray(basis_arr, dtype=np.float64)
+        reconstructor._rom_last_adaptive_basis = basis_arr
+        return basis_arr, "compute"
+
+    def _solve_linear_system_fused(diag_vector: np.ndarray | None) -> tuple[np.ndarray | None, dict[str, object]]:
+        if not bool(fused_strategy.get("enabled", False)):
+            return None, {"reason": "disabled"}
+        if rom_mode_effective == "off":
+            return None, {"reason": "rom_off"}
+        rom_mode_raw = str(getattr(reconstructor, "rom_mode", "auto")).strip().lower()
+        if n_param < 5000 and rom_mode_raw != "on":
+            return None, {"reason": "problem_too_small"}
+        residual_limit = float(max(0.05, getattr(reconstructor, "rom_residual_limit", 0.6)))
+
+        global_basis, global_source = _build_global_basis(diag_vector)
+        adaptive_basis = np.zeros((n_param, 0), dtype=np.float64)
+        adaptive_source = "disabled"
+        if lowrank_mode_effective != "off" and bool(fused_strategy.get("lowrank", False)):
+            adaptive_basis, adaptive_source = _adaptive_basis()
+
+        combined_basis = merge_orthonormal_bases(
+            global_basis,
+            adaptive_basis,
+            rank_cap=int(max(1, int(getattr(reconstructor, "rom_rank_global", 32)) + int(max(0, getattr(reconstructor, "rom_rank_adaptive", 16))))),
+        )
+        if combined_basis.size == 0 or combined_basis.shape[1] == 0:
+            return None, {"reason": "empty_basis"}
+
+        stage_attempts = []
+        stage_attempts.append(
+            {
+                "name": "rom+inexact+lowrank",
+                "use_lowrank": adaptive_basis.shape[1] > 0,
+                "use_inexact": inexact_mode_effective != "off" and bool(fused_strategy.get("inexact", False)),
+            }
+        )
+        stage_attempts.append(
+            {
+                "name": "rom+inexact",
+                "use_lowrank": False,
+                "use_inexact": inexact_mode_effective != "off" and bool(fused_strategy.get("inexact", False)),
+            }
+        )
+        stage_attempts.append({"name": "rom", "use_lowrank": False, "use_inexact": False})
+
+        errors: list[str] = []
+        for stage in stage_attempts:
+            if stage["name"] == "rom+inexact+lowrank" and adaptive_basis.shape[1] == 0:
+                continue
+            if stage["name"] == "rom+inexact" and not stage["use_inexact"]:
+                continue
+            stage_basis = merge_orthonormal_bases(
+                global_basis,
+                adaptive_basis if stage["use_lowrank"] else None,
+                rank_cap=int(max(1, combined_basis.shape[1])),
+            )
+            if stage_basis.shape[1] == 0:
+                errors.append(f"{stage['name']}:empty_basis")
+                continue
+            try:
+                op_payload = {
+                    "solver": "gn_absolute",
+                    "artifact": "rom_reduced_operator_absolute",
+                    "basis_hash": hashlib.sha256(
+                        np.ascontiguousarray(stage_basis, dtype=np.float64).tobytes()
+                    ).hexdigest(),
+                    "jacobian_hash": hashlib.sha256(
+                        np.ascontiguousarray(J_weighted_np, dtype=np.float64).tobytes()
+                    ).hexdigest(),
+                    "lambda_eff": float(lambda_eff),
+                    "reg_signature": _regularization_signature(),
+                    "stage": stage["name"],
+                }
+                cache_manager = getattr(reconstructor, "cache_manager", None)
+                if cache_manager is not None and bool(getattr(cache_manager, "enabled", False)):
+                    reduced_op, op_lookup = cache_manager.get_or_compute_semantic(
+                        artifact="rom_reduced_operator_absolute",
+                        name="absolute_rom_reduced_operator",
+                        namespace="absolute",
+                        cache_obj=op_payload,
+                        payload=op_payload,
+                        compute_fn=lambda: build_reduced_operator(
+                            jacobian=J_weighted_np,
+                            basis=stage_basis,
+                            regularization_apply=lambda vec: _apply_regularization_np(reconstructor, vec),
+                            lambda_eff=float(lambda_eff),
+                        ),
+                        persist=True,
+                        cost=6.0,
+                        effort_seconds=2.0,
+                    )
+                    op_source = str(getattr(op_lookup, "layer", "compute"))
+                else:
+                    reduced_op = build_reduced_operator(
+                        jacobian=J_weighted_np,
+                        basis=stage_basis,
+                        regularization_apply=lambda vec: _apply_regularization_np(reconstructor, vec),
+                        lambda_eff=float(lambda_eff),
+                    )
+                    op_source = "compute"
+
+                controller = _inexact_controller()
+                inexact_tol = None
+                if stage["use_inexact"]:
+                    inexact_tol = float(controller.suggest_eta())
+                delta_candidate, solve_info = solve_reduced_step(
+                    reduced_operator=reduced_op,
+                    rhs=rhs,
+                    inexact_tol=inexact_tol,
+                    maxiter=max(50, stage_basis.shape[1] * 4),
+                )
+                if not np.isfinite(delta_candidate).all():
+                    raise FloatingPointError("non_finite_delta")
+                full_residual = np.asarray(_matvec(delta_candidate) - rhs, dtype=np.float64)
+                full_residual_ratio = float(
+                    np.linalg.norm(full_residual) / max(np.linalg.norm(rhs), 1e-12)
+                )
+                if full_residual_ratio > residual_limit:
+                    raise RuntimeError("fused_residual_high")
+
+                linear_residual_ratio = float(solve_info.get("linear_residual_ratio", 0.0))
+                outer_prev_raw = getattr(reconstructor, "_outer_prev_residual", None)
+                outer_prev = float(outer_prev_raw) if isinstance(outer_prev_raw, (int, float)) else None
+                outer_curr = float(np.linalg.norm(weighted_residual_np))
+                if stage["use_inexact"]:
+                    controller.update(
+                        outer_prev=outer_prev,
+                        outer_curr=outer_curr,
+                        linear_residual_ratio=linear_residual_ratio,
+                        step_rejected=False,
+                        stalled=False,
+                    )
+                    if linear_residual_ratio > max(controller.eta * 1.5, 5e-2):
+                        reconstructor._force_jacobian_refresh = True
+
+                _snapshot_bank().add(delta_candidate)
+                meta = {
+                    "stage": stage["name"],
+                    "source": op_source,
+                    "global_source": global_source,
+                    "adaptive_source": adaptive_source,
+                    "global_rank": int(global_basis.shape[1]),
+                    "adaptive_rank": int(adaptive_basis.shape[1]),
+                    "rank_effective": int(stage_basis.shape[1]),
+                    "inexact_eta": float(_inexact_controller().eta),
+                    "inexact_eta_history": list(_inexact_controller().history[-12:]),
+                    "linear_residual_ratio": linear_residual_ratio,
+                    "full_linear_residual_ratio": full_residual_ratio,
+                    "degrade_reason": ";".join(errors) if errors else "",
+                    "fast_solver_path": f"fused-{stage['name']}",
+                }
+                return np.asarray(delta_candidate, dtype=np.float64), meta
+            except Exception as exc:
+                detail = str(exc).strip().replace(";", ",")
+                if detail:
+                    errors.append(f"{stage['name']}:{type(exc).__name__}:{detail}")
+                else:
+                    errors.append(f"{stage['name']}:{type(exc).__name__}")
+                continue
+
+        return None, {"reason": ";".join(errors) if errors else "fused_failed"}
+
+    selected_fast_path = select_fast_linear_path(
+        fast_linear_mode,
+        regularization_is_diagonal=regularization_is_diagonal,
+        regularization_is_sparse_spd=regularization_is_sparse_spd,
+        capabilities=capabilities,
+    )
+
+    if solver_mode == "cholmod" and fast_linear_mode == "auto":
+        selected_fast_path = "cholmod-direct"
+        fast_linear_path_reason = "auto:linear_solver_cholmod_direct"
+    elif solver_mode == "pyamg-cg":
+        selected_fast_path = "pcg"
+        resolved_preconditioner = "pyamg"
+        if fast_linear_mode == "auto":
+            fast_linear_path_reason = "auto:linear_solver_pyamg"
+
+    if fast_linear_mode == "auto":
+        if selected_fast_path == "woodbury":
+            fast_linear_path_reason = "auto:diagonal_regularization"
+        elif selected_fast_path == "pcg" and regularization_is_sparse_spd and capabilities.get("cholmod", False):
+            fast_linear_path_reason = "auto:sparse_spd_with_cholmod"
+        elif selected_fast_path == "pcg":
+            fast_linear_path_reason = "auto:matrix_free_pcg"
+        else:
+            fast_linear_path_reason = f"auto:{selected_fast_path}"
+
+    delta_np: np.ndarray | None = None
+    fast_solver_path = ""
+    fused_diag = reg_meta.get("diag_vector")
+    if bool(fused_strategy.get("enabled", False)):
+        if (
+            selected_fast_path == "woodbury"
+            and regularization_is_diagonal
+            and rom_mode_effective != "on"
+        ):
+            _add_fallback("fused_skipped:woodbury_optimal")
+        else:
+            fused_delta, fused_meta = _solve_linear_system_fused(
+                fused_diag if isinstance(fused_diag, np.ndarray) else None
+            )
+            if fused_delta is not None:
+                delta_np = np.asarray(fused_delta, dtype=np.float64)
+                fast_solver_path = str(fused_meta.get("fast_solver_path", "fused-rom"))
+                resolved_preconditioner = "reduced"
+                selected_fast_path = "fused"
+                fast_linear_path_reason = str(fused_strategy.get("reason", "fused_enabled"))
+                fused_reason = str(fused_meta.get("degrade_reason", "")).strip()
+                _set_fast_meta(
+                    path=fast_solver_path,
+                    resolved_precond=resolved_preconditioner,
+                    reason=fused_reason if fused_reason else None,
+                    selected_path=selected_fast_path,
+                    path_reason=fast_linear_path_reason,
+                    extra={
+                        "rom_enabled_effective": True,
+                        "rom_rank_effective": int(fused_meta.get("rank_effective", 0)),
+                        "lowrank_rank_effective": int(fused_meta.get("adaptive_rank", 0)),
+                        "inexact_eta": float(fused_meta.get("inexact_eta", 0.0)),
+                        "inexact_eta_history": fused_meta.get("inexact_eta_history", []),
+                        "degrade_stage": str(fused_meta.get("stage", "rom")),
+                        "degrade_reason": str(fused_meta.get("degrade_reason", "")),
+                        "effective_solver_path": fast_solver_path,
+                        "fused_meta": fused_meta,
+                    },
+                )
+            else:
+                _add_fallback(f"fused_failed:{fused_meta.get('reason', 'unknown')}")
+
+    if selected_fast_path == "strict" or solver_mode == "petsc-ksp":
+        _set_fast_meta(
+            path="strict-fallback",
+            resolved_precond=resolved_preconditioner,
+            reason="strict_requested",
+            selected_path=selected_fast_path,
+            path_reason=fast_linear_path_reason,
+        )
+        raise RuntimeError("fast_linear_path_requested_strict")
+
+    if solver_mode == "scipy-lsmr":
+        if delta_np is None:
+            delta_np = np.asarray(
+                lsmr(h_op, rhs, atol=cg_rtol, btol=cg_rtol, maxiter=cg_maxiter)[0],
+                dtype=np.float64,
+            )
+            fast_solver_path = "lsmr-direct"
+    else:
+        if delta_np is None and selected_fast_path == "woodbury":
+            diag_vector = reg_meta.get("diag_vector")
+            if isinstance(diag_vector, np.ndarray) and diag_vector.shape[0] == n_param:
+                try:
+                    delta_np = _solve_linear_system_fast_woodbury_diag(diag_vector)
+                    fast_solver_path = "woodbury-diag"
+                    resolved_preconditioner = "woodbury"
+                except Exception as exc:
+                    _add_fallback(f"woodbury_failed:{type(exc).__name__}")
+            else:
+                _add_fallback("woodbury_requires_diagonal_regularization")
+
+        if delta_np is None and selected_fast_path == "cholmod-direct":
+            delta_np, reason = _solve_cholmod_direct_debug()
+            if delta_np is not None:
+                fast_solver_path = "cholmod-direct"
+                resolved_preconditioner = "cholmod"
+            else:
+                _add_fallback(reason)
+
+        if delta_np is None:
+            pcg_delta, pcg_path, pcg_choice, pcg_reason = _solve_pcg(resolved_preconditioner)
+            resolved_preconditioner = pcg_choice
+            if pcg_reason:
+                _add_fallback(pcg_reason)
+            if pcg_delta is not None:
+                delta_np = pcg_delta
+                fast_solver_path = pcg_path
+
+        if delta_np is None:
+            try:
+                delta_np = np.asarray(
+                    lsmr(h_op, rhs, atol=1e-7, btol=1e-7, maxiter=cg_maxiter * 2)[0],
+                    dtype=np.float64,
+                )
+                fast_solver_path = "lsmr-fallback"
+            except Exception as exc:
+                _add_fallback(f"lsmr_failed:{type(exc).__name__}")
+                _set_fast_meta(
+                    path="strict-fallback",
+                    resolved_precond=resolved_preconditioner,
+                    reason=";".join(fallback_reasons) if fallback_reasons else "fast_linear_failed",
+                    selected_path=selected_fast_path,
+                    path_reason=fast_linear_path_reason,
+                )
+                raise RuntimeError("fast_linear_solver_failed") from exc
+
+    _require_finite("delta_sigma_fast", delta_np, iteration)
+    delta_norm = float(np.linalg.norm(delta_np))
+    _require_scalar_finite("delta_norm_fast", delta_norm, iteration)
+    jtr_norm = float(np.linalg.norm(jtr))
+    _require_scalar_finite("jtr_norm_fast", jtr_norm, iteration)
+
+    existing_meta = getattr(reconstructor, "_last_fast_linear_meta", {})
+    passthrough_extra = {}
+    if isinstance(existing_meta, dict):
+        for key, value in existing_meta.items():
+            if key not in {
+                "path",
+                "resolved_preconditioner",
+                "fallback_reason",
+                "fast_linear_path_selected",
+                "fast_linear_path_reason",
+            }:
+                passthrough_extra[key] = value
+
+    _set_fast_meta(
+        path=fast_solver_path,
+        resolved_precond=resolved_preconditioner,
+        reason=";".join(fallback_reasons) if fallback_reasons else None,
+        selected_path=selected_fast_path,
+        path_reason=fast_linear_path_reason,
+        extra=passthrough_extra,
+    )
+    return delta_np, delta_norm, jtr_norm
+
+
 def _extract_measured_vector(measured_data) -> np.ndarray:
     if hasattr(measured_data, "meas"):
         return measured_data.meas
     return measured_data.flatten()
+
+
+def _startup_cache_payload(reconstructor, sigma_array: np.ndarray, jacobian_method: str) -> dict[str, object]:
+    sigma_hash = hashlib.sha256(
+        np.ascontiguousarray(sigma_array, dtype=np.float64).tobytes()
+    ).hexdigest()
+    return {
+        "solver": "gn_absolute",
+        "mode": str(getattr(reconstructor, "solver_mode", "strict")),
+        "jacobian_method": str(jacobian_method),
+        "sigma_hash": sigma_hash,
+        "model_signature": model_signature_from_forward_model(reconstructor.fwd_model),
+        "pattern_signature": pattern_signature_from_forward_model(reconstructor.fwd_model),
+        "backend_signature": backend_signature_from_forward_model(reconstructor.fwd_model),
+        "solver_config": {
+            "linear_solver": str(getattr(reconstructor, "linear_solver", "auto")),
+            "preconditioner": str(getattr(reconstructor, "preconditioner", "auto")),
+            "line_search_mode": str(getattr(reconstructor, "line_search_mode", "full")),
+            "jacobian_update_every": int(getattr(reconstructor, "jacobian_update_every", 1)),
+            "jacobian_reuse_tol": float(getattr(reconstructor, "jacobian_reuse_tol", 0.0)),
+            "rom_mode": str(getattr(reconstructor, "rom_mode", "off")),
+            "rom_rank_global": int(getattr(reconstructor, "rom_rank_global", 32)),
+            "rom_rank_adaptive": int(getattr(reconstructor, "rom_rank_adaptive", 16)),
+            "rom_refresh_every": int(getattr(reconstructor, "rom_refresh_every", 2)),
+            "rom_snapshot_source": str(getattr(reconstructor, "rom_snapshot_source", "hybrid")),
+            "inexact_mode": str(getattr(reconstructor, "inexact_mode", "off")),
+            "inexact_forcing": str(getattr(reconstructor, "inexact_forcing", "eisenstat-walker")),
+            "inexact_eta0": float(getattr(reconstructor, "inexact_eta0", 0.2)),
+            "inexact_eta_min": float(getattr(reconstructor, "inexact_eta_min", 1e-3)),
+            "inexact_eta_max": float(getattr(reconstructor, "inexact_eta_max", 0.5)),
+            "lowrank_mode": str(getattr(reconstructor, "lowrank_mode", "off")),
+            "lowrank_rank": int(getattr(reconstructor, "lowrank_rank", 16)),
+            "lowrank_method": str(getattr(reconstructor, "lowrank_method", "tsvd")),
+            "lowrank_energy": float(getattr(reconstructor, "lowrank_energy", 0.995)),
+        },
+    }
+
+
+def _startup_cache_lookup(
+    reconstructor,
+    sigma_current: fem.Function,
+    jacobian_method: str,
+) -> tuple[np.ndarray | None, dict[str, object]]:
+    if (
+        reconstructor.solver_mode != "fast"
+        or not bool(getattr(reconstructor, "absolute_startup_cache", True))
+        or getattr(reconstructor, "cache_manager", None) is None
+    ):
+        return None, {"hit": False, "layer": "disabled", "artifact": "absolute_startup_jacobian"}
+
+    sigma_array = function_get_array(sigma_current)
+    payload = _startup_cache_payload(reconstructor, sigma_array, jacobian_method)
+    jacobian, lookup = reconstructor.cache_manager.get_or_compute_semantic(
+        artifact="absolute_startup_jacobian",
+        name="gn_absolute_startup_jacobian",
+        namespace="absolute",
+        cache_obj=payload,
+        payload=payload,
+        compute_fn=lambda: reconstructor.jacobian_calculator.calculate(
+            sigma_current,
+            method=jacobian_method,
+        ),
+        persist=True,
+        cost=10.0,
+        effort_seconds=6.0,
+    )
+    cached = np.asarray(jacobian, dtype=np.float64)
+    if reconstructor.negate_jacobian:
+        cached = -cached
+    return cached, {
+        "hit": bool(lookup.hit),
+        "layer": str(lookup.layer),
+        "artifact": str(lookup.artifact),
+        "key": str(lookup.key),
+    }
 
 
 def _init_sigma_function(
@@ -250,8 +1261,14 @@ def _compute_objective(
     iteration: int,
 ) -> tuple[float, float, float, torch.Tensor]:
     meas_misfit = 0.5 * torch.dot(weighted_residual_torch, weighted_residual_torch).item()
-    RtR_de = torch.mv(reconstructor.R_torch, de_current)
-    prior_misfit = 0.5 * lambda_eff * torch.dot(de_current, RtR_de).item()
+    if reconstructor.R_torch is not None:
+        RtR_de = torch.mv(reconstructor.R_torch, de_current)
+        prior_misfit = 0.5 * lambda_eff * torch.dot(de_current, RtR_de).item()
+    else:
+        de_np = de_current.detach().cpu().numpy()
+        rde_np = _apply_regularization_np(reconstructor, de_np)
+        prior_misfit = 0.5 * lambda_eff * float(np.dot(de_np, rde_np))
+        RtR_de = _to_runtime_tensor_cached(reconstructor, "RtR_de_fast", rde_np)
     total_objective = meas_misfit + prior_misfit
     _require_scalar_finite("meas_misfit", meas_misfit, iteration)
     _require_scalar_finite("prior_misfit", prior_misfit, iteration)
@@ -280,6 +1297,45 @@ def _build_linear_system(
     return A, b
 
 
+def _solve_linear_system_torch_cg(
+    A: torch.Tensor,
+    b: torch.Tensor,
+    *,
+    rtol: float = 1e-10,
+    atol: float = 1e-12,
+    max_iter: int | None = None,
+) -> torch.Tensor:
+    if max_iter is None:
+        max_iter = max(512, min(int(A.shape[0]) * 2, 4096))
+    x = torch.zeros_like(b)
+    r = b.clone()
+    diag = torch.diagonal(A)
+    safe_diag = torch.where(torch.abs(diag) > 1e-18, diag, torch.ones_like(diag))
+    z = r / safe_diag
+    p = z.clone()
+    rz_old = torch.dot(r, z)
+    b_norm = float(torch.linalg.vector_norm(b).item())
+    tol = max(float(atol), float(rtol) * max(b_norm, 1e-18))
+    for _ in range(int(max_iter)):
+        Ap = torch.mv(A, p)
+        denom = torch.dot(p, Ap)
+        if not torch.isfinite(denom) or torch.abs(denom) <= 1e-30:
+            break
+        alpha = rz_old / denom
+        x = x + alpha * p
+        r = r - alpha * Ap
+        if float(torch.linalg.vector_norm(r).item()) <= tol:
+            return x
+        z = r / safe_diag
+        rz_new = torch.dot(r, z)
+        if not torch.isfinite(rz_new):
+            break
+        beta = rz_new / rz_old
+        p = z + beta * p
+        rz_old = rz_new
+    raise RuntimeError("torch CG fallback did not converge")
+
+
 def _solve_linear_system(
     reconstructor,
     A: torch.Tensor,
@@ -289,10 +1345,31 @@ def _solve_linear_system(
 ) -> tuple[torch.Tensor, float]:
     try:
         delta_sigma_torch = torch.linalg.solve(A, b)
-    except RuntimeError:
-        A_regularized = JTJ + (reconstructor.regularization_param * 10) * reconstructor.R_torch
-        _require_finite("A_regularized", A_regularized, iteration)
-        delta_sigma_torch = torch.linalg.solve(A_regularized, b)
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        runtime_linalg_unavailable = any(
+            token in message for token in ("libtorch_cuda_linalg", "cusolver", "undefined symbol", "dlopen")
+        )
+        if runtime_linalg_unavailable and A.device.type == "cuda":
+            delta_sigma_torch = _solve_linear_system_torch_cg(
+                A,
+                b,
+                rtol=1e-12,
+                atol=1e-14,
+                max_iter=max(2048, min(int(A.shape[0]) * 4, 8192)),
+            )
+        else:
+            A_regularized = JTJ + (reconstructor.regularization_param * 10) * reconstructor.R_torch
+            _require_finite("A_regularized", A_regularized, iteration)
+            try:
+                delta_sigma_torch = torch.linalg.solve(A_regularized, b)
+            except RuntimeError:
+                delta_sigma_torch = _solve_linear_system_torch_cg(
+                    A_regularized if A_regularized.device.type == "cuda" else A,
+                    b,
+                    rtol=1e-10,
+                    atol=1e-12,
+                )
     _require_finite("delta_sigma_torch", delta_sigma_torch, iteration)
     delta_norm = torch.norm(delta_sigma_torch).item()
     _require_scalar_finite("delta_norm", delta_norm, iteration)
@@ -309,6 +1386,13 @@ def _select_step_size(
     prior_torch: torch.Tensor,
     lambda_eff: float,
 ) -> float:
+    if reconstructor.solver_mode == "fast" and reconstructor.line_search_mode == "fast":
+        quick_step = min(float(reconstructor.max_step), 1.0)
+        if reconstructor.min_step is not None:
+            quick_step = max(float(reconstructor.min_step), quick_step)
+        _require_scalar_finite("optimal_step_size", quick_step, iteration)
+        return quick_step
+
     if reconstructor.step_schedule is not None and iteration < len(reconstructor.step_schedule):
         optimal_step_size = float(reconstructor.step_schedule[iteration])
     else:
@@ -468,13 +1552,40 @@ def run_reconstruction(
     prev_residual = None
     relative_change = float("inf")
     reconstructor._runtime_tensor_cache = {}
+    reconstructor._force_jacobian_refresh = False
+    prev_jacobian_np: Optional[np.ndarray] = None
+    prev_jacobian_iter = -1
+    fast_fallback_reason: str | None = None
+    resolved_preconditioner: str | None = None
+    fast_solver_path: str | None = None
+    fast_linear_path_selected: str | None = None
+    fast_linear_path_reason: str | None = None
+    degrade_stage_counts: dict[str, int] = {}
+    effective_solver_path_counts: dict[str, int] = {}
+    inexact_eta_history: list[float] = []
+    rom_rank_effective: int = 0
+    lowrank_rank_effective: int = 0
+    rom_enabled_effective = False
+    timing_totals = {
+        "forward": 0.0,
+        "jacobian": 0.0,
+        "linear_solve": 0.0,
+        "line_search": 0.0,
+    }
+    startup_jacobian_np, startup_cache_lookup = _startup_cache_lookup(
+        reconstructor,
+        sigma_current,
+        jacobian_method,
+    )
 
     with reconstructor._progress(total=reconstructor.max_iterations) as pbar:
         for iteration in range(reconstructor.max_iterations):
             sigma_array = function_get_array(sigma_current)
             _require_finite("sigma_array", sigma_array, iteration)
             img_current = EITImage(elem_data=sigma_array, fwd_model=reconstructor.fwd_model)
+            forward_start = perf_counter()
             data_simulated, _ = reconstructor.fwd_model.fwd_solve(img_current)
+            timing_totals["forward"] += perf_counter() - forward_start
             _require_finite("data_simulated.meas", data_simulated.meas, iteration)
 
             lambda_eff = reconstructor.regularization_param
@@ -508,41 +1619,168 @@ def run_reconstruction(
 
             residual_history.append(residual_norm)
             res_drop = None if prev_residual is None else prev_residual - residual_norm
+            reconstructor._outer_prev_residual = prev_residual
 
-            measurement_jacobian_np = reconstructor.jacobian_calculator.calculate(
-                sigma_current,
-                method=jacobian_method,
+            jacobian_reused = False
+            reuse_tol = float(reconstructor.jacobian_reuse_tol)
+            large_fast_problem = reconstructor.solver_mode == "fast" and reconstructor.n_elements >= 5000
+            reuse_change_ok = float(relative_change) <= reuse_tol
+            if large_fast_problem:
+                # For large 3D runs, update cadence + residual trend already guard stability.
+                # Skipping per-iteration Jacobian rebuilds is the dominant speed lever.
+                reuse_change_ok = True
+            force_refresh = bool(getattr(reconstructor, "_force_jacobian_refresh", False))
+            if force_refresh:
+                reconstructor._force_jacobian_refresh = False
+            can_reuse = (
+                reconstructor.solver_mode == "fast"
+                and prev_jacobian_np is not None
+                and (iteration - prev_jacobian_iter) < max(1, reconstructor.jacobian_update_every)
+                and reuse_change_ok
+                and not force_refresh
+                and (
+                    prev_residual is None
+                    or residual_norm <= (float(prev_residual) * 1.05)
+                )
             )
-            if reconstructor.negate_jacobian:
-                measurement_jacobian_np = -measurement_jacobian_np
-            _require_finite("measurement_jacobian_np", measurement_jacobian_np, iteration)
-            J_torch = _to_runtime_tensor_cached(
-                reconstructor,
-                "measurement_jacobian",
-                measurement_jacobian_np,
-            )
-            if reconstructor._meas_weight_sqrt is not None:
-                J_weighted = J_torch * reconstructor._meas_weight_sqrt.unsqueeze(1)
+            if can_reuse:
+                measurement_jacobian_np = prev_jacobian_np
+                jacobian_reused = True
+            elif iteration == 0 and startup_jacobian_np is not None:
+                measurement_jacobian_np = np.asarray(startup_jacobian_np, dtype=np.float64)
+                prev_jacobian_np = measurement_jacobian_np
+                prev_jacobian_iter = iteration
             else:
-                J_weighted = J_torch
+                jacobian_start = perf_counter()
+                measurement_jacobian_np = reconstructor.jacobian_calculator.calculate(
+                    sigma_current,
+                    method=jacobian_method,
+                )
+                timing_totals["jacobian"] += perf_counter() - jacobian_start
+                if reconstructor.negate_jacobian:
+                    measurement_jacobian_np = -measurement_jacobian_np
+                _require_finite("measurement_jacobian_np", measurement_jacobian_np, iteration)
+                prev_jacobian_np = measurement_jacobian_np
+                prev_jacobian_iter = iteration
 
-            JTJ = torch.mm(J_weighted.t(), J_weighted)
-            JTr = torch.mv(J_weighted.t(), weighted_residual_torch)
+            if reconstructor._meas_weight_sqrt is not None:
+                meas_weight_np = reconstructor._meas_weight_sqrt.detach().cpu().numpy()
+                weighted_residual_np = residual_torch.detach().cpu().numpy() * meas_weight_np
+            else:
+                meas_weight_np = None
+                weighted_residual_np = residual_torch.detach().cpu().numpy()
 
-            de_torch = de_current
-            A, b = _build_linear_system(
-                reconstructor,
-                JTJ,
-                JTr,
-                de_torch,
-                lambda_eff,
-                iteration,
-                RtR_de=RtR_de,
-            )
+            def _solve_strict_path() -> tuple[torch.Tensor, float, float]:
+                J_torch_local = _to_runtime_tensor_cached(
+                    reconstructor,
+                    "measurement_jacobian",
+                    measurement_jacobian_np,
+                )
+                if reconstructor._meas_weight_sqrt is not None:
+                    J_weighted_local = J_torch_local * reconstructor._meas_weight_sqrt.unsqueeze(1)
+                else:
+                    J_weighted_local = J_torch_local
+
+                JTJ_local = torch.mm(J_weighted_local.t(), J_weighted_local)
+                JTr_local = torch.mv(J_weighted_local.t(), weighted_residual_torch)
+
+                de_torch_local = de_current
+                A_local, b_local = _build_linear_system(
+                    reconstructor,
+                    JTJ_local,
+                    JTr_local,
+                    de_torch_local,
+                    lambda_eff,
+                    iteration,
+                    RtR_de=RtR_de,
+                )
+                jtr_norm_local = torch.norm(JTr_local).item()
+                delta_sigma_torch_local, delta_norm_local = _solve_linear_system(
+                    reconstructor,
+                    A_local,
+                    b_local,
+                    JTJ_local,
+                    iteration,
+                )
+                return delta_sigma_torch_local, delta_norm_local, float(jtr_norm_local)
+
+            if reconstructor.solver_mode == "fast":
+                J_weighted_np = (
+                    measurement_jacobian_np * meas_weight_np[:, None]
+                    if meas_weight_np is not None
+                    else measurement_jacobian_np
+                )
+                de_current_np = de_current.detach().cpu().numpy()
+                linear_start = perf_counter()
+                try:
+                    delta_sigma_np, delta_norm, jtr_norm = _solve_linear_system_fast(
+                        reconstructor,
+                        J_weighted_np=J_weighted_np,
+                        weighted_residual_np=weighted_residual_np,
+                        de_current_np=de_current_np,
+                        lambda_eff=lambda_eff,
+                        iteration=iteration,
+                    )
+                    delta_sigma_torch = _to_runtime_tensor_cached(
+                        reconstructor,
+                        "delta_sigma_fast",
+                        delta_sigma_np,
+                    )
+                    fast_meta = getattr(reconstructor, "_last_fast_linear_meta", {})
+                    if isinstance(fast_meta, dict):
+                        path = fast_meta.get("path")
+                        if isinstance(path, str):
+                            fast_solver_path = path
+                        resolved = fast_meta.get("resolved_preconditioner")
+                        if isinstance(resolved, str):
+                            resolved_preconditioner = resolved
+                        reason = fast_meta.get("fallback_reason")
+                        if isinstance(reason, str) and reason:
+                            fast_fallback_reason = reason
+                        selected_path = fast_meta.get("fast_linear_path_selected")
+                        if isinstance(selected_path, str):
+                            fast_linear_path_selected = selected_path
+                        selected_reason = fast_meta.get("fast_linear_path_reason")
+                        if isinstance(selected_reason, str):
+                            fast_linear_path_reason = selected_reason
+                        degrade_stage = fast_meta.get("degrade_stage")
+                        if isinstance(degrade_stage, str) and degrade_stage:
+                            degrade_stage_counts[degrade_stage] = degrade_stage_counts.get(degrade_stage, 0) + 1
+                        effective_path = fast_meta.get("effective_solver_path")
+                        if isinstance(effective_path, str) and effective_path:
+                            effective_solver_path_counts[effective_path] = (
+                                effective_solver_path_counts.get(effective_path, 0) + 1
+                            )
+                        else:
+                            if isinstance(fast_solver_path, str) and fast_solver_path:
+                                effective_solver_path_counts[fast_solver_path] = (
+                                    effective_solver_path_counts.get(fast_solver_path, 0) + 1
+                                )
+                        eta_value = fast_meta.get("inexact_eta")
+                        if isinstance(eta_value, (int, float)):
+                            inexact_eta_history.append(float(eta_value))
+                        rank_effective = fast_meta.get("rom_rank_effective")
+                        if isinstance(rank_effective, int):
+                            rom_rank_effective = max(rom_rank_effective, int(rank_effective))
+                        lowrank_effective = fast_meta.get("lowrank_rank_effective")
+                        if isinstance(lowrank_effective, int):
+                            lowrank_rank_effective = max(lowrank_rank_effective, int(lowrank_effective))
+                        if bool(fast_meta.get("rom_enabled_effective", False)):
+                            rom_enabled_effective = True
+                except Exception as exc:
+                    fast_fallback_reason = f"fast_linear_solver_failed:{type(exc).__name__}"
+                    fast_solver_path = "strict-fallback"
+                    fast_linear_path_selected = "strict"
+                    fast_linear_path_reason = "fast_solver_exception"
+                    delta_sigma_torch, delta_norm, jtr_norm = _solve_strict_path()
+                timing_totals["linear_solve"] += perf_counter() - linear_start
+            else:
+                linear_start = perf_counter()
+                delta_sigma_torch, delta_norm, jtr_norm = _solve_strict_path()
+                timing_totals["linear_solve"] += perf_counter() - linear_start
 
             pred_norm = torch.norm(data_sim_torch).item()
             pred_max = torch.max(torch.abs(data_sim_torch)).item()
-            jtr_norm = torch.norm(JTr).item()
             rel_residual = residual_norm / (meas_norm + 1e-12)
             rel_residual_weighted = (
                 residual_norm_weighted / (meas_weighted_norm + 1e-12)
@@ -556,14 +1794,10 @@ def run_reconstruction(
             if rel_residual_weighted is not None:
                 _require_scalar_finite("rel_residual_weighted", rel_residual_weighted, iteration)
 
-            delta_sigma_torch, delta_norm = _solve_linear_system(
-                reconstructor,
-                A,
-                b,
-                JTJ,
-                iteration,
-            )
+            if reconstructor.verbose and jacobian_reused:
+                print(f"[INFO] iteration={iteration}: reused Jacobian (fast mode)")
 
+            line_search_start = perf_counter()
             optimal_step_size = _select_step_size(
                 reconstructor,
                 iteration,
@@ -574,6 +1808,7 @@ def run_reconstruction(
                 prior_torch,
                 lambda_eff,
             )
+            timing_totals["line_search"] += perf_counter() - line_search_start
 
             needs_snapshot = prev_residual is not None or reconstructor.clip_values is not None
             sigma_old_values = sigma_array.copy() if needs_snapshot else None
@@ -659,11 +1894,86 @@ def run_reconstruction(
     cache_stats = {}
     if getattr(reconstructor, "cache_manager", None) is not None:
         cache_stats = reconstructor.cache_manager.stats()
+    jacobian_block_tune_info = (
+        reconstructor.jacobian_calculator.block_tuning_info()
+        if hasattr(reconstructor.jacobian_calculator, "block_tuning_info")
+        else {}
+    )
+    petsc_backend_info = getattr(reconstructor.fwd_model, "_petsc_backend_info", {}) or {}
+    inverse_device_requested = str(getattr(reconstructor, "device_requested", "cpu"))
+    inverse_device_effective = str(getattr(reconstructor, "device_effective", str(getattr(reconstructor, "device", "cpu"))))
+    petsc_effective = str(petsc_backend_info.get("petsc_device_effective", "cpu"))
+    jacobian_block_backend = (
+        jacobian_block_tune_info.get("jacobian_block_backend")
+        if isinstance(jacobian_block_tune_info, dict)
+        else None
+    )
+    if petsc_effective == "cuda" and inverse_device_effective == "cuda" and jacobian_block_backend == "torch-cuda":
+        execution_profile = "cuda"
+    elif petsc_effective == "cuda" or inverse_device_effective == "cuda" or jacobian_block_backend == "torch-cuda":
+        execution_profile = "mixed"
+    else:
+        execution_profile = "cpu"
+
     backend_info = {
         "linear_backend": getattr(reconstructor.fwd_model, "linear_backend", "unknown"),
         "performance_mode": getattr(reconstructor, "performance_mode", "aggressive"),
+        "solver_mode": getattr(reconstructor, "solver_mode", "strict"),
+        "linear_solver": getattr(reconstructor, "linear_solver", "auto"),
+        "line_search_mode": getattr(reconstructor, "line_search_mode", "full"),
+        "preconditioner": getattr(reconstructor, "preconditioner", "auto"),
+        "resolved_preconditioner": resolved_preconditioner,
+        "rom_mode": getattr(reconstructor, "rom_mode", "off"),
+        "rom_snapshot_source": getattr(reconstructor, "rom_snapshot_source", "hybrid"),
+        "inexact_mode": getattr(reconstructor, "inexact_mode", "off"),
+        "inexact_forcing": getattr(reconstructor, "inexact_forcing", "eisenstat-walker"),
+        "lowrank_mode": getattr(reconstructor, "lowrank_mode", "off"),
+        "lowrank_method": getattr(reconstructor, "lowrank_method", "tsvd"),
+        "fast_solver_path": fast_solver_path,
+        "fast_linear_path_selected": fast_linear_path_selected,
+        "fast_linear_path_reason": fast_linear_path_reason,
+        "fallback_reason": fast_fallback_reason,
+        "fast_fallback_reason": fast_fallback_reason,
+        "rom_enabled_effective": bool(rom_enabled_effective),
+        "rom_rank_effective": int(rom_rank_effective),
+        "lowrank_rank_effective": int(lowrank_rank_effective),
+        "inexact_eta_history": inexact_eta_history[-32:],
+        "degrade_stage_counts": degrade_stage_counts,
+        "effective_solver_path_counts": effective_solver_path_counts,
+        "startup_cache_lookup": startup_cache_lookup,
         "forward_cache_lookup": getattr(reconstructor.fwd_model, "_last_cache_lookup", {}),
         "jacobian_cache_lookup": getattr(reconstructor.jacobian_calculator, "_last_cache_lookup", {}),
+        "petsc_device_requested": petsc_backend_info.get("petsc_device_requested", "auto"),
+        "petsc_device_effective": petsc_effective,
+        "petsc_mat_type": petsc_backend_info.get("petsc_mat_type"),
+        "petsc_vec_type": petsc_backend_info.get("petsc_vec_type"),
+        "forward_mat_solve_effective": petsc_backend_info.get("forward_mat_solve_effective"),
+        "gpu_fallback_reason": petsc_backend_info.get("gpu_fallback_reason"),
+        "forward_factor_backend": petsc_backend_info.get("forward_factor_backend"),
+        "inverse_device_requested": inverse_device_requested,
+        "inverse_device_effective": inverse_device_effective,
+        "inverse_device_fallback_reason": getattr(reconstructor, "device_fallback_reason", None),
+        "execution_profile": execution_profile,
+        "jacobian_backend_requested": jacobian_block_tune_info.get("jacobian_backend_requested")
+        if isinstance(jacobian_block_tune_info, dict)
+        else None,
+        "jacobian_backend_effective": jacobian_block_tune_info.get("jacobian_backend_effective")
+        if isinstance(jacobian_block_tune_info, dict)
+        else None,
+        "jacobian_block_backend": jacobian_block_backend,
+        "jacobian_transfer_estimate": jacobian_block_tune_info.get("jacobian_transfer_estimate")
+        if isinstance(jacobian_block_tune_info, dict)
+        else None,
+        "jacobian_cuda_threshold_hit": jacobian_block_tune_info.get("jacobian_cuda_threshold_hit")
+        if isinstance(jacobian_block_tune_info, dict)
+        else None,
+        "jacobian_block_tune": jacobian_block_tune_info,
+        "jacobian_assembly_elapsed_only": (
+            float(jacobian_block_tune_info.get("assembly_elapsed_only", 0.0))
+            if isinstance(jacobian_block_tune_info, dict)
+            else 0.0
+        ),
+        "timing_totals": timing_totals,
     }
 
     results = SolverOutput(
@@ -693,6 +2003,7 @@ def run_reconstruction(
             "cache_misses": cache_stats.get("total_misses", 0),
             "cache_stats": cache_stats,
             "backend_info": backend_info,
+            "timing": timing_totals,
         },
     )
 

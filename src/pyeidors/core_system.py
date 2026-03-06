@@ -16,6 +16,7 @@ from .core_system_helpers import (
 from .data.structures import EITData, EITImage, EITMesh, MeshConfig, PatternConfig
 from .forward.eit_forward_model import EITForwardModel
 from .geometry.mesh_loader import MeshLoader
+from .geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 from .geometry.simple_mesh_generator import create_simple_eit_mesh
 from .inverse.contracts import SolverOutput
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
@@ -25,7 +26,32 @@ from .inverse.regularization.smoothness import (
     TikhonovRegularization,
 )
 from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
+from .inverse.solvers.gauss_newton_device import normalize_runtime_device
 from .physics import UnitCheckReport, run_unit_consistency_checks
+from .perf.policy import (
+    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_INEXACT_ETA0,
+    DEFAULT_INEXACT_ETA_MAX,
+    DEFAULT_INEXACT_ETA_MIN,
+    DEFAULT_INEXACT_FORCING,
+    DEFAULT_INEXACT_MODE,
+    DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+    DEFAULT_JACOBIAN_BLOCK_SIZE,
+    DEFAULT_JACOBIAN_BLOCK_TUNE,
+    DEFAULT_LOWRANK_ENERGY,
+    DEFAULT_LOWRANK_METHOD,
+    DEFAULT_LOWRANK_MODE,
+    DEFAULT_LOWRANK_RANK,
+    DEFAULT_PETSC_DEVICE,
+    DEFAULT_PRECONDITIONER,
+    DEFAULT_ROM_MODE,
+    DEFAULT_ROM_RANK_ADAPTIVE,
+    DEFAULT_ROM_RANK_GLOBAL,
+    DEFAULT_ROM_REFRESH_EVERY,
+    DEFAULT_ROM_SNAPSHOT_SOURCE,
+    normalize_petsc_device,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +72,36 @@ class EITSystem(CoreSystemFacadeMixin):
         noser_floor: float = 1e-12,
         linear_backend: str = "petsc",
         linear_backend_config: Optional[dict[str, Any]] = None,
+        petsc_device: str = DEFAULT_PETSC_DEVICE,
+        device: str = "auto",
         performance_mode: str = "aggressive",
+        solver_mode: str = "strict",
+        linear_solver: str = "auto",
+        jacobian_update_every: int = 1,
+        jacobian_reuse_tol: float = 0.0,
+        line_search_mode: str = "full",
+        preconditioner: str = DEFAULT_PRECONDITIONER,
+        fast_linear_path: str = "auto",
+        rom_mode: str = DEFAULT_ROM_MODE,
+        rom_rank_global: int = DEFAULT_ROM_RANK_GLOBAL,
+        rom_rank_adaptive: int = DEFAULT_ROM_RANK_ADAPTIVE,
+        rom_refresh_every: int = DEFAULT_ROM_REFRESH_EVERY,
+        rom_snapshot_source: str = DEFAULT_ROM_SNAPSHOT_SOURCE,
+        inexact_mode: str = DEFAULT_INEXACT_MODE,
+        inexact_forcing: str = DEFAULT_INEXACT_FORCING,
+        inexact_eta0: float = DEFAULT_INEXACT_ETA0,
+        inexact_eta_min: float = DEFAULT_INEXACT_ETA_MIN,
+        inexact_eta_max: float = DEFAULT_INEXACT_ETA_MAX,
+        lowrank_mode: str = DEFAULT_LOWRANK_MODE,
+        lowrank_rank: int = DEFAULT_LOWRANK_RANK,
+        lowrank_method: str = DEFAULT_LOWRANK_METHOD,
+        lowrank_energy: float = DEFAULT_LOWRANK_ENERGY,
+        absolute_startup_cache: bool = True,
+        cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
+        cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+        jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
+        jacobian_block_size: int = DEFAULT_JACOBIAN_BLOCK_SIZE,
+        jacobian_block_candidates: tuple[int, ...] | list[int] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
         cache_scope: CacheScope = "both",
         cache_dir: str = ".pyeidors_cache/v2",
         cache_policy: Optional[CachePolicy] = None,
@@ -75,8 +130,45 @@ class EITSystem(CoreSystemFacadeMixin):
         self.noser_exponent = float(noser_exponent)
         self.noser_floor = float(noser_floor)
         self.linear_backend = str(linear_backend).strip().lower()
+        self.petsc_device = normalize_petsc_device(petsc_device, default=DEFAULT_PETSC_DEVICE)
+        self.device = normalize_runtime_device(device, default="auto")
         self.linear_backend_config = dict(linear_backend_config or {})
+        self.linear_backend_config["petsc_device"] = self.petsc_device
         self.performance_mode = str(performance_mode).strip().lower()
+        self.solver_mode = str(solver_mode).strip().lower()
+        self.linear_solver = str(linear_solver).strip().lower()
+        self.jacobian_update_every = int(max(1, jacobian_update_every))
+        self.jacobian_reuse_tol = float(max(0.0, jacobian_reuse_tol))
+        self.line_search_mode = str(line_search_mode).strip().lower()
+        self.preconditioner = str(preconditioner).strip().lower()
+        self.fast_linear_path = str(fast_linear_path).strip().lower()
+        self.rom_mode = str(rom_mode).strip().lower()
+        self.rom_rank_global = int(max(1, rom_rank_global))
+        self.rom_rank_adaptive = int(max(0, rom_rank_adaptive))
+        self.rom_refresh_every = int(max(1, rom_refresh_every))
+        self.rom_snapshot_source = str(rom_snapshot_source).strip().lower()
+        self.inexact_mode = str(inexact_mode).strip().lower()
+        self.inexact_forcing = str(inexact_forcing).strip().lower()
+        self.inexact_eta0 = float(inexact_eta0)
+        self.inexact_eta_min = float(inexact_eta_min)
+        self.inexact_eta_max = float(inexact_eta_max)
+        self.lowrank_mode = str(lowrank_mode).strip().lower()
+        self.lowrank_rank = int(max(1, lowrank_rank))
+        self.lowrank_method = str(lowrank_method).strip().lower()
+        self.lowrank_energy = float(lowrank_energy)
+        self.absolute_startup_cache = bool(absolute_startup_cache)
+        self.cholmod_max_n = int(max(1, cholmod_max_n))
+        self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
+        self.jacobian_block_tune = str(jacobian_block_tune).strip().lower()
+        if self.jacobian_block_tune not in {"auto", "off"}:
+            raise ValueError(
+                f"Unsupported jacobian_block_tune={jacobian_block_tune!r}. "
+                "Expected one of: 'auto', 'off'."
+            )
+        self.jacobian_block_size = int(max(0, jacobian_block_size))
+        self.jacobian_block_candidates = tuple(
+            sorted({int(v) for v in jacobian_block_candidates if int(v) > 0})
+        ) or (64, 128, 256, 512)
         if self.performance_mode not in {"safe", "aggressive"}:
             raise ValueError(
                 f"Unsupported performance_mode={performance_mode!r}. "
@@ -103,16 +195,30 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_name: Optional[str] = None,
         radius: Optional[float] = None,
         mesh_size: Optional[float] = None,
+        dimension: Optional[int] = None,
+        gdim: Optional[int] = None,
+        height: Optional[float] = None,
+        electrode_height_ratio: Optional[float] = None,
+        z_center: Optional[float] = None,
     ) -> None:
         """Set up the system with an explicit mesh source."""
         if mesh is not None:
             self.setup_with_mesh(mesh)
             return
         if mesh_source == "cache":
-            self.setup_from_cache(mesh_dir=mesh_dir, mesh_name=mesh_name)
+            resolved_gdim = int(gdim if gdim is not None else (dimension if dimension is not None else 2))
+            self.setup_from_cache(mesh_dir=mesh_dir, mesh_name=mesh_name, gdim=resolved_gdim)
             return
         if mesh_source == "generated":
-            self.setup_generated_mesh(radius=radius, mesh_size=mesh_size)
+            resolved_dim = int(dimension if dimension is not None else (gdim if gdim is not None else 2))
+            self.setup_generated_mesh(
+                radius=radius,
+                mesh_size=mesh_size,
+                dimension=resolved_dim,
+                height=height,
+                electrode_height_ratio=electrode_height_ratio,
+                z_center=z_center,
+            )
             return
         raise ValueError(
             "EITSystem.setup requires an explicit mesh source. "
@@ -126,10 +232,15 @@ class EITSystem(CoreSystemFacadeMixin):
         self.mesh = mesh
         self._initialize_components()
 
-    def setup_from_cache(self, mesh_dir: str = "eit_meshes", mesh_name: Optional[str] = None) -> None:
-        loader = MeshLoader(mesh_dir=mesh_dir)
+    def setup_from_cache(
+        self,
+        mesh_dir: str = "eit_meshes",
+        mesh_name: Optional[str] = None,
+        gdim: int = 2,
+    ) -> None:
+        loader = MeshLoader(mesh_dir=mesh_dir, gdim=gdim)
         selected = loader.load_mesh(mesh_name) if mesh_name else loader.get_default_mesh()
-        logger.info("Loaded cached mesh from %s (mesh_name=%s)", mesh_dir, mesh_name)
+        logger.info("Loaded cached mesh from %s (mesh_name=%s, gdim=%d)", mesh_dir, mesh_name, gdim)
         self.setup_with_mesh(selected)
 
     def setup_generated_mesh(
@@ -137,17 +248,46 @@ class EITSystem(CoreSystemFacadeMixin):
         *,
         radius: Optional[float] = None,
         mesh_size: Optional[float] = None,
+        dimension: int = 2,
+        height: Optional[float] = None,
+        electrode_height_ratio: Optional[float] = None,
+        z_center: Optional[float] = None,
     ) -> None:
+        if int(dimension) not in {2, 3}:
+            raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
+
         resolved_radius = self.mesh_config.radius if radius is None else float(radius)
         resolved_mesh_size = self.mesh_config.mesh_size if mesh_size is None else float(mesh_size)
-        generated = create_simple_eit_mesh(
-            n_elec=self.n_elec,
-            radius=resolved_radius,
-            mesh_size=resolved_mesh_size,
-        )
+        if int(dimension) == 2:
+            generated = create_simple_eit_mesh(
+                n_elec=self.n_elec,
+                radius=resolved_radius,
+                mesh_size=resolved_mesh_size,
+            )
+        else:
+            resolved_height = self.mesh_config.height if height is None else float(height)
+            resolved_ratio = (
+                self.mesh_config.electrode_height_ratio
+                if electrode_height_ratio is None
+                else float(electrode_height_ratio)
+            )
+            resolved_z = self.mesh_config.z_center if z_center is None else float(z_center)
+            resolved_refinement = max(
+                2,
+                int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
+            )
+            generated = create_cylinder_3d_eit_mesh(
+                n_elec=self.n_elec,
+                radius=resolved_radius,
+                height=resolved_height,
+                refinement=resolved_refinement,
+                electrode_height_ratio=resolved_ratio,
+                z_center=resolved_z,
+            )
         logger.info(
-            "Generated mesh on demand (n_elec=%d, radius=%s, mesh_size=%s)",
+            "Generated mesh on demand (n_elec=%d, dim=%d, radius=%s, mesh_size=%s)",
             self.n_elec,
+            int(dimension),
             resolved_radius,
             resolved_mesh_size,
         )
@@ -166,7 +306,13 @@ class EITSystem(CoreSystemFacadeMixin):
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
         )
-        jacobian_calculator = DirectJacobianCalculator(self.fwd_model)
+        jacobian_calculator = DirectJacobianCalculator(
+            self.fwd_model,
+            block_tune_mode=self.jacobian_block_tune,
+            block_size=self.jacobian_block_size,
+            block_candidates=self.jacobian_block_candidates,
+            runtime_device=self.device,
+        )
         regularization = self._build_regularization(jacobian_calculator)
         self.reconstructor = GaussNewtonReconstructor(
             fwd_model=self.fwd_model,
@@ -174,6 +320,31 @@ class EITSystem(CoreSystemFacadeMixin):
             regularization=regularization,
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
+            device=self.device,
+            solver_mode=self.solver_mode,
+            linear_solver=self.linear_solver,
+            jacobian_update_every=self.jacobian_update_every,
+            jacobian_reuse_tol=self.jacobian_reuse_tol,
+            line_search_mode=self.line_search_mode,
+            preconditioner=self.preconditioner,
+            fast_linear_path=self.fast_linear_path,
+            rom_mode=self.rom_mode,
+            rom_rank_global=self.rom_rank_global,
+            rom_rank_adaptive=self.rom_rank_adaptive,
+            rom_refresh_every=self.rom_refresh_every,
+            rom_snapshot_source=self.rom_snapshot_source,
+            inexact_mode=self.inexact_mode,
+            inexact_forcing=self.inexact_forcing,
+            inexact_eta0=self.inexact_eta0,
+            inexact_eta_min=self.inexact_eta_min,
+            inexact_eta_max=self.inexact_eta_max,
+            lowrank_mode=self.lowrank_mode,
+            lowrank_rank=self.lowrank_rank,
+            lowrank_method=self.lowrank_method,
+            lowrank_energy=self.lowrank_energy,
+            absolute_startup_cache=self.absolute_startup_cache,
+            cholmod_max_n=self.cholmod_max_n,
+            cholmod_max_memory_gib=self.cholmod_max_memory_gib,
         )
         self._is_initialized = True
 

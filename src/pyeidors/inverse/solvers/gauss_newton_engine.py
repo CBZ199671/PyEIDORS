@@ -7,10 +7,13 @@ from typing import Optional, Tuple, Union
 import numpy as np
 import torch
 from dolfinx import fem
+from scipy.sparse import isspmatrix
+from scipy.sparse.linalg import LinearOperator
 
 from ...femx import function_set_array
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
+from ..regularization.base_regularization import BaseRegularization
 from ..regularization.smoothness import SmoothnessRegularization
 from .gauss_newton_device import resolve_torch_device
 from .gauss_newton_line_search import (
@@ -20,6 +23,25 @@ from .gauss_newton_line_search import (
 )
 from .gauss_newton_runtime import ensure_measurement_weights, run_reconstruction
 from .gauss_newton_weights import difference_with_baseline, scale_baseline_to_measured
+from ...perf.policy import (
+    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_INEXACT_ETA0,
+    DEFAULT_INEXACT_ETA_MAX,
+    DEFAULT_INEXACT_ETA_MIN,
+    DEFAULT_INEXACT_FORCING,
+    DEFAULT_INEXACT_MODE,
+    DEFAULT_LOWRANK_ENERGY,
+    DEFAULT_LOWRANK_METHOD,
+    DEFAULT_LOWRANK_MODE,
+    DEFAULT_LOWRANK_RANK,
+    DEFAULT_PRECONDITIONER,
+    DEFAULT_ROM_MODE,
+    DEFAULT_ROM_RANK_ADAPTIVE,
+    DEFAULT_ROM_RANK_GLOBAL,
+    DEFAULT_ROM_REFRESH_EVERY,
+    DEFAULT_ROM_SNAPSHOT_SOURCE,
+)
 
 try:
     from tqdm import tqdm
@@ -57,7 +79,7 @@ class GaussNewtonReconstructor:
         regularization_param: float = 0.01,
         line_search_steps: int = 8,
         clip_values: Tuple[float, float] = (1e-6, 10.0),
-        device: str = "cuda:0",
+        device: str = "auto",
         verbose: bool = True,
         use_measurement_weights: bool = False,
         weight_floor: float = 1e-9,
@@ -69,6 +91,30 @@ class GaussNewtonReconstructor:
         use_prior_term: bool = True,
         cache_manager=None,
         performance_mode: str = "aggressive",
+        solver_mode: str = "strict",
+        linear_solver: str = "auto",
+        jacobian_update_every: int = 1,
+        jacobian_reuse_tol: float = 0.0,
+        line_search_mode: str = "full",
+        preconditioner: str = DEFAULT_PRECONDITIONER,
+        fast_linear_path: str = "auto",
+        rom_mode: str = DEFAULT_ROM_MODE,
+        rom_rank_global: int = DEFAULT_ROM_RANK_GLOBAL,
+        rom_rank_adaptive: int = DEFAULT_ROM_RANK_ADAPTIVE,
+        rom_refresh_every: int = DEFAULT_ROM_REFRESH_EVERY,
+        rom_snapshot_source: str = DEFAULT_ROM_SNAPSHOT_SOURCE,
+        inexact_mode: str = DEFAULT_INEXACT_MODE,
+        inexact_forcing: str = DEFAULT_INEXACT_FORCING,
+        inexact_eta0: float = DEFAULT_INEXACT_ETA0,
+        inexact_eta_min: float = DEFAULT_INEXACT_ETA_MIN,
+        inexact_eta_max: float = DEFAULT_INEXACT_ETA_MAX,
+        lowrank_mode: str = DEFAULT_LOWRANK_MODE,
+        lowrank_rank: int = DEFAULT_LOWRANK_RANK,
+        lowrank_method: str = DEFAULT_LOWRANK_METHOD,
+        lowrank_energy: float = DEFAULT_LOWRANK_ENERGY,
+        absolute_startup_cache: bool = True,
+        cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
+        cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     ):
         self.fwd_model = fwd_model
         self.max_iterations = max_iterations
@@ -93,20 +139,126 @@ class GaussNewtonReconstructor:
         self._line_search_perturb: Optional[np.ndarray] = None
         self.cache_manager = cache_manager
         self.performance_mode = str(performance_mode).strip().lower()
+        self.solver_mode = str(solver_mode).strip().lower()
+        self.linear_solver = str(linear_solver).strip().lower()
+        self.jacobian_update_every = int(max(1, jacobian_update_every))
+        self.jacobian_reuse_tol = float(max(0.0, jacobian_reuse_tol))
+        self.line_search_mode = str(line_search_mode).strip().lower()
+        self.preconditioner = str(preconditioner).strip().lower()
+        self.fast_linear_path = str(fast_linear_path).strip().lower()
+        self.rom_mode = str(rom_mode).strip().lower()
+        self.rom_rank_global = int(max(1, rom_rank_global))
+        self.rom_rank_adaptive = int(max(0, rom_rank_adaptive))
+        self.rom_refresh_every = int(max(1, rom_refresh_every))
+        self.rom_snapshot_source = str(rom_snapshot_source).strip().lower()
+        self.inexact_mode = str(inexact_mode).strip().lower()
+        self.inexact_forcing = str(inexact_forcing).strip().lower()
+        self.inexact_eta0 = float(inexact_eta0)
+        self.inexact_eta_min = float(inexact_eta_min)
+        self.inexact_eta_max = float(inexact_eta_max)
+        self.lowrank_mode = str(lowrank_mode).strip().lower()
+        self.lowrank_rank = int(max(1, lowrank_rank))
+        self.lowrank_method = str(lowrank_method).strip().lower()
+        self.lowrank_energy = float(lowrank_energy)
+        self.absolute_startup_cache = bool(absolute_startup_cache)
+        self.cholmod_max_n = int(max(1, cholmod_max_n))
+        self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
         if self.performance_mode not in {"safe", "aggressive"}:
             raise ValueError(
                 f"Unsupported performance_mode={performance_mode!r}. "
                 "Expected one of: 'safe', 'aggressive'."
             )
+        if self.solver_mode not in {"strict", "fast"}:
+            raise ValueError(
+                f"Unsupported solver_mode={solver_mode!r}. Expected one of: 'strict', 'fast'."
+            )
+        if self.linear_solver not in {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"}:
+            raise ValueError(
+                f"Unsupported linear_solver={linear_solver!r}. "
+                "Expected one of: 'auto', 'petsc-ksp', 'scipy-lsmr', 'pyamg-cg', 'cholmod'."
+            )
+        if self.line_search_mode not in {"full", "fast"}:
+            raise ValueError(
+                f"Unsupported line_search_mode={line_search_mode!r}. Expected one of: 'full', 'fast'."
+            )
+        if self.preconditioner not in {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"}:
+            raise ValueError(
+                f"Unsupported preconditioner={preconditioner!r}. "
+                "Expected one of: 'auto', 'diag', 'pyamg', 'cholmod', 'petsc-gamg'."
+            )
+        if self.fast_linear_path not in {"auto", "woodbury", "pcg", "cholmod-direct", "strict"}:
+            raise ValueError(
+                f"Unsupported fast_linear_path={fast_linear_path!r}. "
+                "Expected one of: 'auto', 'woodbury', 'pcg', 'cholmod-direct', 'strict'."
+            )
+        if self.rom_mode not in {"off", "auto", "on"}:
+            raise ValueError(
+                f"Unsupported rom_mode={rom_mode!r}. Expected one of: 'off', 'auto', 'on'."
+            )
+        if self.rom_snapshot_source not in {"cache", "synthetic", "hybrid"}:
+            raise ValueError(
+                "Unsupported rom_snapshot_source="
+                f"{rom_snapshot_source!r}. Expected one of: 'cache', 'synthetic', 'hybrid'."
+            )
+        if self.inexact_mode not in {"off", "auto", "on"}:
+            raise ValueError(
+                f"Unsupported inexact_mode={inexact_mode!r}. Expected one of: 'off', 'auto', 'on'."
+            )
+        if self.inexact_forcing not in {"fixed", "eisenstat-walker"}:
+            raise ValueError(
+                "Unsupported inexact_forcing="
+                f"{inexact_forcing!r}. Expected one of: 'fixed', 'eisenstat-walker'."
+            )
+        if self.lowrank_mode not in {"off", "auto", "on"}:
+            raise ValueError(
+                f"Unsupported lowrank_mode={lowrank_mode!r}. Expected one of: 'off', 'auto', 'on'."
+            )
+        if self.lowrank_method not in {"tsvd", "randomized"}:
+            raise ValueError(
+                f"Unsupported lowrank_method={lowrank_method!r}. "
+                "Expected one of: 'tsvd', 'randomized'."
+            )
+        if self.cholmod_max_n <= 0:
+            raise ValueError("cholmod_max_n must be positive.")
+        if self.cholmod_max_memory_gib <= 0.0:
+            raise ValueError("cholmod_max_memory_gib must be positive.")
+        if self.inexact_eta_min <= 0.0 or self.inexact_eta_max <= 0.0:
+            raise ValueError("inexact eta bounds must be positive.")
+        if self.inexact_eta_min > self.inexact_eta_max:
+            raise ValueError("inexact_eta_min must be <= inexact_eta_max.")
+        if not (0.0 < self.lowrank_energy <= 1.0):
+            raise ValueError("lowrank_energy must be in (0, 1].")
 
-        self.device = resolve_torch_device(device, verbose=self.verbose)
+        petsc_backend_info = getattr(self.fwd_model, "_petsc_backend_info", {}) or {}
+        petsc_device_effective = str(petsc_backend_info.get("petsc_device_effective", "cpu"))
+        device_resolution = resolve_torch_device(
+            device,
+            verbose=self.verbose,
+            petsc_device_effective=petsc_device_effective,
+        )
+        self.device_requested = str(device_resolution.requested)
+        self.device_effective = str(device_resolution.effective)
+        self.device_fallback_reason = device_resolution.fallback_reason
+        self.device = device_resolution.torch_device
         self._torch_dtype = torch.float64
-        self.jacobian_calculator = jacobian_calculator or DirectJacobianCalculator(fwd_model)
+        self.jacobian_calculator = jacobian_calculator or DirectJacobianCalculator(
+            fwd_model,
+            runtime_device=self.device_requested,
+        )
+        if hasattr(self.jacobian_calculator, "set_runtime_device"):
+            self.jacobian_calculator.set_runtime_device(
+                requested=self.device_requested,
+                effective=self.device_effective,
+                torch_device=self.device,
+            )
         self.regularization = regularization or SmoothnessRegularization(fwd_model, alpha=1.0)
 
         self.n_elements = int(fem.Function(fwd_model.V_sigma).x.array.size)
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
         self.R_torch = None
+        self.R_matrix = None
+        self.R_linear_operator: Optional[LinearOperator] = None
+        self.R_diag: Optional[np.ndarray] = None
 
         if self.verbose:
             print(
@@ -119,6 +271,23 @@ class GaussNewtonReconstructor:
             print(f"  Jacobian calculator: {type(self.jacobian_calculator).__name__}")
             print(f"  Regularization: {type(self.regularization).__name__}")
             print(f"  Device: {self.device}")
+            print(
+                f"  Solver mode: {self.solver_mode}, linear solver: {self.linear_solver}, "
+                f"line-search: {self.line_search_mode}, preconditioner: {self.preconditioner}, "
+                f"fast-linear-path: {self.fast_linear_path}"
+            )
+            print(
+                "  Fused reduced mode: "
+                f"rom={self.rom_mode} (rg={self.rom_rank_global}, ra={self.rom_rank_adaptive}, "
+                f"refresh={self.rom_refresh_every}, source={self.rom_snapshot_source}), "
+                f"inexact={self.inexact_mode} ({self.inexact_forcing}, eta0={self.inexact_eta0:.3g}), "
+                f"lowrank={self.lowrank_mode} ({self.lowrank_method}, rank={self.lowrank_rank}, "
+                f"energy={self.lowrank_energy:.3f})"
+            )
+            print(
+                f"  CHOLMOD guard: max_n={self.cholmod_max_n}, "
+                f"max_memory_gib={self.cholmod_max_memory_gib:.2f}"
+            )
 
     def _progress(self, total: int):
         return tqdm(total=total, disable=not self.verbose)
@@ -126,37 +295,88 @@ class GaussNewtonReconstructor:
     def ensure_regularization_ready(self) -> None:
         """Build and validate the cached regularization tensor used by GN."""
         expected_shape = (self.n_elements, self.n_elements)
-        if self.R_torch is not None:
-            if tuple(self.R_torch.shape) != expected_shape:
-                raise RuntimeError(
-                    "Regularization tensor shape mismatch: "
-                    f"expected {expected_shape}, got {tuple(self.R_torch.shape)}."
-                )
-            if not torch.isfinite(self.R_torch).all():
-                raise FloatingPointError("Regularization tensor contains non-finite values.")
+        needs_dense_tensor = self.solver_mode == "strict" or self.line_search_mode == "full"
+        cache_ready = (
+            self.R_matrix is not None
+            and self.R_linear_operator is not None
+            and (not needs_dense_tensor or self.R_torch is not None)
+        )
+        if cache_ready:
             return
 
-        matrix = np.asarray(self.regularization.get_regularization_matrix(), dtype=np.float64)
-        if matrix.shape != expected_shape:
+        matrix = self.regularization.get_regularization_matrix()
+        matrix_shape = tuple(getattr(matrix, "shape", ()))
+        if matrix_shape != expected_shape:
             raise RuntimeError(
                 "Regularization matrix shape mismatch: "
-                f"expected {expected_shape}, got {matrix.shape}."
+                f"expected {expected_shape}, got {matrix_shape}."
             )
-        if not np.isfinite(matrix).all():
-            finite = matrix[np.isfinite(matrix)]
+        self.R_matrix = matrix
+        as_linear_operator = getattr(self.regularization, "as_linear_operator", None)
+        if callable(as_linear_operator):
+            self.R_linear_operator = as_linear_operator(matrix, shape=expected_shape)
+        else:
+            self.R_linear_operator = BaseRegularization.as_linear_operator(matrix, shape=expected_shape)
+
+        if isspmatrix(matrix):
+            if matrix.nnz == 0:
+                raise FloatingPointError("Regularization sparse matrix is empty.")
+            if not np.isfinite(matrix.data).all():
+                finite = matrix.data[np.isfinite(matrix.data)]
+                min_val = float(finite.min()) if finite.size else float("nan")
+                max_val = float(finite.max()) if finite.size else float("nan")
+                raise FloatingPointError(
+                    "Regularization sparse matrix contains non-finite values: "
+                    f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
+                )
+            if matrix.format == "csr":
+                diag = matrix.diagonal()
+            else:
+                diag = matrix.tocsr().diagonal()
+            self.R_diag = np.asarray(diag, dtype=np.float64)
+            if needs_dense_tensor:
+                dense = matrix.toarray()
+                self.R_torch = torch.from_numpy(np.asarray(dense, dtype=np.float64)).to(
+                    self.device,
+                    dtype=self._torch_dtype,
+                )
+            else:
+                self.R_torch = None
+            return
+
+        if isinstance(matrix, LinearOperator):
+            probe = np.ones(self.n_elements, dtype=np.float64)
+            check = np.asarray(matrix.matvec(probe), dtype=np.float64)
+            if not np.isfinite(check).all():
+                raise FloatingPointError("Regularization LinearOperator produces non-finite values.")
+            self.R_diag = None
+            self.R_torch = None
+            if self.solver_mode == "strict":
+                raise RuntimeError(
+                    "solver_mode='strict' requires explicit dense/sparse regularization matrix, "
+                    "LinearOperator is not supported."
+                )
+            return
+
+        dense = np.asarray(matrix, dtype=np.float64)
+        if not np.isfinite(dense).all():
+            finite = dense[np.isfinite(dense)]
             min_val = float(finite.min()) if finite.size else float("nan")
             max_val = float(finite.max()) if finite.size else float("nan")
             raise FloatingPointError(
                 "Regularization matrix contains non-finite values: "
                 f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
             )
-
-        self.R_torch = torch.from_numpy(matrix).to(
-            self.device,
-            dtype=self._torch_dtype,
-        )
-        if not torch.isfinite(self.R_torch).all():
-            raise FloatingPointError("Regularization tensor contains non-finite values after transfer.")
+        self.R_diag = np.asarray(np.diag(dense), dtype=np.float64)
+        if needs_dense_tensor or not isinstance(matrix, LinearOperator):
+            self.R_torch = torch.from_numpy(dense).to(
+                self.device,
+                dtype=self._torch_dtype,
+            )
+            if not torch.isfinite(self.R_torch).all():
+                raise FloatingPointError("Regularization tensor contains non-finite values after transfer.")
+        else:
+            self.R_torch = None
 
     def reconstruct(
         self,
@@ -225,6 +445,9 @@ class GaussNewtonReconstructor:
     def set_regularization(self, regularization):
         self.regularization = regularization
         self.R_torch = None
+        self.R_matrix = None
+        self.R_linear_operator = None
+        self.R_diag = None
         if self.verbose:
             print(f"Regularization updated to: {type(regularization).__name__}")
 
