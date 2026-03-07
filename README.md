@@ -363,6 +363,10 @@ python scripts/run_reconstruction_unified.py \
   --output-root results/real_measurements_3d_strict
 ```
 
+`solver_mode="strict"` still means the reference solve path. On 3D `gn-difference` with the current NOSER diagonal regularization, the implementation keeps the original dense parameter-space backend (`dense-param`) for 2D, small 3D, and any case that stays within the strict memory guard. Only when the estimated dense strict system would exceed the 3D memory guard does it switch internally to the algebraically equivalent low-memory backend `measurement-exact`. This is not a fast fallback and not an approximate iterative strict mode.
+
+When you validate strict behavior through `scripts/benchmarks/benchmark_3d_runtime.py`, inspect `difference_solver.strict_solver_backend_effective`, `difference_solver.strict_memory_guard_triggered`, and `difference_solver.strict_measurement_system_shape` in the JSON report. `measurement-exact` means strict stayed exact while avoiding the dense `JᵀJ + λ diag(R)` allocation; `dense-param` means the original parameter-space strict path was retained.
+
 ### 3. Sparse Bayesian Learning
 Run the advanced sparse Bayesian solver (supports GPU):
 
@@ -414,6 +418,11 @@ python scripts/benchmarks/check_perf_gate.py \
   --input reports/perf/latest.json \
   --mode warn
 
+python scripts/benchmarks/benchmark_3d_runtime.py \
+  --solver-mode strict \
+  --repeat 1 \
+  --perf-report reports/perf/latest_strict.json
+
 python scripts/benchmarks/benchmark_3d_fair_compare.py \
   --benchmark-phase quick \
   --output-json reports/perf/fair_compare_latest.json \
@@ -424,6 +433,8 @@ python scripts/benchmarks/benchmark_3d_fair_compare.py \
   --output-json reports/perf/fair_compare_latest.json \
   --output-md reports/perf/fair_compare_latest.md
 ```
+
+For CPU strict reports on the current WSL2 machine, read the difference-side diagnostics before assuming the backend changed semantics. If `difference_solver.strict_solver_backend_effective == "measurement-exact"` and `difference_solver.strict_memory_guard_triggered == true`, the 3D difference reference solve hit the dense-memory guard and switched to the exact measurement-space strict backend. If it remains `dense-param`, the original dense strict backend was used. `absolute` strict is unchanged by this fallback and should continue to be interpreted through the usual strict diagnostics, not as a fast-path downgrade.
 
 Latest local fair-compare summary (`2026-03-06`, Apple Silicon, single-thread BLAS/OMP):
 

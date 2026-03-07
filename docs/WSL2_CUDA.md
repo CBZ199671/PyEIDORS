@@ -88,6 +88,25 @@ python scripts/env/verify_env_manifest.py
 python -c "import pyeidors; print(pyeidors.check_environment())"
 ```
 
+如果你要在当前 WSL2 机器上验证 CPU strict 参考，可以直接跑：
+
+```bash
+python scripts/benchmarks/benchmark_3d_runtime.py \
+  --solver-mode strict \
+  --repeat 1 \
+  --perf-report reports/benchmark_3d_runtime_cpu_strict.json
+```
+
+这里的 `solver_mode="strict"` 对外语义没有变化。对于 3D `gn-difference` + NOSER 对角正则，只有在 dense strict 内存守卫触发时，内部后端才会从 `dense-param` 自动切到代数等价的 `measurement-exact`。这表示 strict 仍然是精确参考求解，只是避免了参数空间 dense `JᵀJ + λ diag(R)` 的大块内存分配；它不是 fast fallback，也不是近似 iterative strict。2D、小规模 3D、以及不触发守卫的 case 仍保持 `dense-param`。
+
+CPU strict benchmark 报告应重点看：
+
+- `difference_solver.strict_solver_backend_effective`
+- `difference_solver.strict_memory_guard_triggered`
+- `difference_solver.strict_measurement_system_shape`
+
+当这些字段显示 `measurement-exact`、`true`、以及一个 measurement-space 形状时，表示当前 3D difference strict 使用的是低内存精确后端。`absolute` strict 仍走原主路径，不受 difference strict fallback 污染。
+
 ### CUDA 路径
 
 ```bash
@@ -96,6 +115,8 @@ python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty
 ```
 
 如果 probe 通过，可以继续跑 3D benchmark：
+
+在 CPU/CUDA 对照时，CPU strict 报告也应按上面的 difference diagnostics 来解释：`measurement-exact` 表示 strict 参考在内存守卫下切到了精确的 measurement-space 后端，而不是退回 fast；如果字段仍是 `dense-param`，则表示 CPU strict 仍走原 dense 参考路径。
 
 ```bash
 python scripts/benchmarks/benchmark_3d_runtime.py \
