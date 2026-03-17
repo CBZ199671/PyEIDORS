@@ -13,6 +13,19 @@ A Python-first EIT framework with a FEniCS Complete Electrode Model (CEM) backen
 
 SoftwareX manuscript in preparation; citation info will be added after acceptance.
 
+## Affiliation, Laboratory, and Funding
+
+| Item | Details |
+|---|---|
+| Laboratory | 455 Lab |
+| Location | Beijing, China |
+| Affiliation | College of Information and Electrical Engineering, China Agricultural University |
+| Lab Head | Prof. Lan Huang, Prof. Zhong-Yi Wang, and Dr. Lifeng Fan |
+
+455 Lab focuses on plant electrophysiological phenotyping, crop root phenotyping, and the monitoring of crop water status. Building on Electrical Impedance Tomography (EIT), the lab develops methods for real-time, in situ, and non-destructive monitoring of electrical conductivity distributions in root zones, ears of corn, and related plant tissues. PyEIDORS is developed within this research context to support advanced EIT modeling, reconstruction, and experimental analysis.
+
+**Funding Statement.** This work was supported by the National Natural Science Foundation of China [Grant Number 62271488].
+
 ## Why PyEIDORS
 
 - **Numerical Consistency**: Matches EIDORS-style workflows with verified simulation parity.
@@ -278,6 +291,10 @@ Results are written to `results/sparse_bayesian/` by default. For a full list of
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
 - **Docker Notes**: `docs/DOCKER.md`
+
+## Acknowledgments
+
+PyEIDORS is developed in the research environment of 455 Lab, College of Information and Electrical Engineering, China Agricultural University. This work was supported by the National Natural Science Foundation of China [Grant Number 62271488].
 
 ## Docker Environment Setup
 
