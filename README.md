@@ -97,9 +97,9 @@ The repository includes pre-generated demo outputs under `results/` (see the `CO
   <img src="pictures/reconstruction_iterations.gif" alt="Gauss-Newton absolute reconstruction iterations" width="600" />
 </p>
 
-*Absolute-mode voltage RMSE reaches **8.23×10⁻⁸ V**, supporting numerical consistency of the underlying FEM implementation and EIDORS-style reconstruction workflow.*
+*Absolute-mode voltage RMSE reaches **8.23×10⁻⁸ V** in this synthetic parity example, supporting numerical consistency of the underlying FEM implementation and EIDORS-style reconstruction workflow rather than serving as an analytical-solution validation.*
 
-Numerical performance metrics for absolute and difference reconstruction modes:
+Synthetic parity metrics for absolute and difference reconstruction modes:
 
 | Metric | Absolute mode | Difference mode |
 |---|---:|---:|
@@ -110,6 +110,8 @@ Numerical performance metrics for absolute and difference reconstruction modes:
 | Measurements | 208 | 208 |
 
 ### Simulation Parity with EIDORS
+
+No closed-form analytical reference solution is used in this example; the reported voltage agreement is intended only as a synthetic numerical-consistency / cross-platform parity check.
 
 <p align="center">
   <img src="pictures/Fig.%203.%20Simulation%20parity_combined.png" alt="Simulation parity with EIDORS" width="900" />
