@@ -84,6 +84,8 @@ def parse_args() -> argparse.Namespace:
                         help="Fraction of perimeter covered by each electrode (affects cache key).")
     parser.add_argument("--background", type=float, default=1.0,
                         help="Background conductivity used for simulations.")
+    parser.add_argument("--contact-impedance", type=float, default=1e-2,
+                        help="Electrode contact impedance used by the CEM forward model.")
     parser.add_argument("--phantom-center", type=float, nargs=2, default=(0.3, 0.2),
                         help="Center (x, y) of the circular phantom.")
     parser.add_argument("--phantom-radius", type=float, default=0.2,
@@ -188,7 +190,13 @@ def build_pattern_config(n_elec: int) -> PatternConfig:
 
 def setup_eit_system(args: argparse.Namespace) -> Tuple[EITSystem, object]:
     pattern = build_pattern_config(args.n_elec)
-    eit_system = EITSystem(n_elec=args.n_elec, pattern_config=pattern)
+    contact_impedance = float(getattr(args, "contact_impedance", 1e-2))
+    eit_system = EITSystem(
+        n_elec=args.n_elec,
+        pattern_config=pattern,
+        contact_impedance=np.full(args.n_elec, contact_impedance, dtype=float),
+        base_conductivity=args.background,
+    )
     mesh = load_or_create_mesh(mesh_dir=str(args.mesh_dir), mesh_name=args.mesh_name,
                                n_elec=args.n_elec, refinement=args.refinement,
                                radius=args.mesh_radius, electrode_coverage=args.electrode_coverage)
@@ -602,6 +610,11 @@ def main() -> None:
         "n_measurements": int(diff_vector.size),
         "metadata": {
             "n_elec": args.n_elec,
+            "background": args.background,
+            "contact_impedance": float(getattr(args, "contact_impedance", 1e-2)),
+            "phantom_center": args.phantom_center,
+            "phantom_radius": args.phantom_radius,
+            "phantom_contrast": args.phantom_contrast,
             "phantom": {
                 "center": args.phantom_center,
                 "radius": args.phantom_radius,
