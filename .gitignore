@@ -90,8 +90,8 @@ data/measurements/**
 !data/measurements/tank/
 !data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv
 !data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml
-!data/measurements/tank/3-14最新数据/
-!data/measurements/tank/3-14最新数据/**
+!data/measurements/tank/2026-03-14_latest_tank_data/
+!data/measurements/tank/2026-03-14_latest_tank_data/**
 !data/measurements/EIT_DEV_Test/
 !data/measurements/EIT_DEV_Test/2025-09-23-00-01-56_10_10.00_100uA_2000Hz.csv
 !data/measurements/EIT_DEV_Test/2025-09-23-00-01-56_10_10.00_100uA_2000Hz.yaml
