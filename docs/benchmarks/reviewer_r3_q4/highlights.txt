@@ -1,0 +1,8 @@
+Reviewer 3 Q4 GPU runtime benchmark highlights
+- Task: absolute_gn
+- Scenario: low_z
+- GN path: legacy_dense
+- Warmups/Repetitions: 1/3
+- Medium mesh (5702 elements): CPU 27.450s vs GPU 17.705s (1.55x)
+- Fine mesh (13530 elements): CPU 170.969s vs GPU 50.966s (3.35x)
+- Scope note: GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.
