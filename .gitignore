@@ -73,6 +73,11 @@ docs/repro_cli_reference.md
 
 # Local analysis / comparison / archived
 compare_with_Eidors/
+!compare_with_Eidors/
+compare_with_Eidors/**
+!compare_with_Eidors/export_geometry_from_eidors.m
+!compare_with_Eidors/import_geometry_from_pyeidors.m
+!compare_with_Eidors/render_eidors_native_reconstruction.m
 reports/
 archived/
 scripts/archived/
@@ -85,6 +90,8 @@ data/measurements/**
 !data/measurements/tank/
 !data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv
 !data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.yaml
+!data/measurements/tank/3-14最新数据/
+!data/measurements/tank/3-14最新数据/**
 !data/measurements/EIT_DEV_Test/
 !data/measurements/EIT_DEV_Test/2025-09-23-00-01-56_10_10.00_100uA_2000Hz.csv
 !data/measurements/EIT_DEV_Test/2025-09-23-00-01-56_10_10.00_100uA_2000Hz.yaml
@@ -130,6 +137,7 @@ jitfailure-*/
 SoftwareX-PyEidors-Paper/
 temp_abs_result/
 tank_cols.png
+Software_patent/
 
 # Local Docker image archives (never commit)
 *.tar
