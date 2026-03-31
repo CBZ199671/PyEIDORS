@@ -10,8 +10,10 @@ import numpy as np
 
 from pyeidors.perf import (
     DEFAULT_ABSOLUTE_STARTUP_CACHE,
+    DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_FORWARD_BACKEND,
     DEFAULT_FORWARD_MAT_SOLVE,
     DEFAULT_INEXACT_ETA0,
     DEFAULT_INEXACT_ETA_MAX,
@@ -22,6 +24,7 @@ from pyeidors.perf import (
     DEFAULT_JACOBIAN_BLOCK_SIZE,
     DEFAULT_JACOBIAN_BLOCK_TUNE,
     DEFAULT_LINEAR_SOLVER,
+    DEFAULT_MESH_FAMILY,
     DEFAULT_LOWRANK_ENERGY,
     DEFAULT_LOWRANK_METHOD,
     DEFAULT_LOWRANK_MODE,
@@ -33,6 +36,8 @@ from pyeidors.perf import (
     DEFAULT_ROM_RANK_GLOBAL,
     DEFAULT_ROM_REFRESH_EVERY,
     DEFAULT_ROM_SNAPSHOT_SOURCE,
+    normalize_forward_backend,
+    normalize_mesh_family,
     normalize_petsc_device,
     parse_block_size_candidates,
     resolve_experimental_mode,
@@ -130,6 +135,18 @@ def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
             getattr(args, "petsc_device", DEFAULT_PETSC_DEVICE),
             default=DEFAULT_PETSC_DEVICE,
         ),
+        "forward_backend": normalize_forward_backend(
+            getattr(args, "forward_backend", DEFAULT_FORWARD_BACKEND),
+            default=DEFAULT_FORWARD_BACKEND,
+        ),
+        "mesh_family": normalize_mesh_family(
+            getattr(args, "mesh_family", DEFAULT_MESH_FAMILY),
+            default=DEFAULT_MESH_FAMILY,
+        ),
+        "geometry_version": str(
+            getattr(args, "geometry_version", DEFAULT_3D_GEOMETRY_VERSION)
+        ).strip().lower()
+        or DEFAULT_3D_GEOMETRY_VERSION,
         "device": str(getattr(args, "device", "auto")).strip().lower() or "auto",
         "cholmod_max_n": int(getattr(args, "cholmod_max_n", DEFAULT_CHOLMOD_MAX_N)),
         "cholmod_max_memory_gib": float(
@@ -259,6 +276,17 @@ def run_gn_difference_cases(
         getattr(args, "petsc_device", DEFAULT_PETSC_DEVICE),
         default=DEFAULT_PETSC_DEVICE,
     )
+    forward_backend = normalize_forward_backend(
+        getattr(args, "forward_backend", DEFAULT_FORWARD_BACKEND),
+        default=DEFAULT_FORWARD_BACKEND,
+    )
+    mesh_family = normalize_mesh_family(
+        getattr(args, "mesh_family", DEFAULT_MESH_FAMILY),
+        default=DEFAULT_MESH_FAMILY,
+    )
+    geometry_version = str(
+        getattr(args, "geometry_version", DEFAULT_3D_GEOMETRY_VERSION)
+    ).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
 
     ctx = gn_difference_runner.build_shared_context(
         mesh_dir=str(args.mesh_dir),
@@ -289,6 +317,9 @@ def run_gn_difference_cases(
         lowrank_method=str(getattr(args, "lowrank_method", "tsvd")),
         lowrank_energy=float(getattr(args, "lowrank_energy", 0.995)),
         forward_mat_solve=forward_mat_solve,
+        forward_backend=forward_backend,
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
         petsc_device=petsc_device,
         device=str(getattr(args, "device", "auto")).strip().lower() or "auto",
     )

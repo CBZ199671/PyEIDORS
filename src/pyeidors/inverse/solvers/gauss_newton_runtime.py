@@ -15,6 +15,7 @@ from scipy.sparse import isspmatrix
 from scipy.sparse.linalg import LinearOperator, cg, lsmr
 from scipy import sparse
 from scipy.linalg import cho_factor, cho_solve
+from scipy.optimize import minimize_scalar
 
 try:  # pragma: no cover - optional dependency
     import pyamg
@@ -26,6 +27,12 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     cholmod_cholesky = None
 
+from ...data.difference import (
+    normalize_difference_mode,
+    normalize_difference_orientation,
+    project_measurement_jacobian,
+    project_measurement_vector,
+)
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
 from ...perf.capabilities import (
@@ -134,7 +141,17 @@ def ensure_measurement_weights(reconstructor, sigma_function: fem.Function) -> N
 
     img = EITImage(elem_data=function_get_array(sigma_function), fwd_model=reconstructor.fwd_model)
     baseline_data, _ = reconstructor.fwd_model.fwd_solve(img)
-    baseline_vector = baseline_data.meas.astype(np.float64)
+    baseline_vector = project_measurement_vector(
+        baseline_data.meas,
+        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
+        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
+        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
+        difference_orientation=getattr(
+            reconstructor,
+            "_difference_orientation_effective",
+            reconstructor.difference_orientation,
+        ),
+    )
     reconstructor._baseline_measurement = baseline_vector.copy()
 
     reference_vector = build_weight_reference(
@@ -1103,8 +1120,72 @@ def _solve_linear_system_fast(
 
 def _extract_measured_vector(measured_data) -> np.ndarray:
     if hasattr(measured_data, "meas"):
-        return measured_data.meas
-    return measured_data.flatten()
+        return np.asarray(measured_data.meas, dtype=np.float64).reshape(-1)
+    return np.asarray(measured_data, dtype=np.float64).reshape(-1)
+
+
+def _configure_measurement_space(reconstructor, measured_data) -> None:
+    measurement_type = str(getattr(measured_data, "type", "real")).strip().lower()
+    reference_meas_raw = getattr(measured_data, "reference_meas", None)
+    target_meas_raw = getattr(measured_data, "target_meas", None)
+    reference_meas = (
+        np.asarray(reference_meas_raw, dtype=np.float64).reshape(-1)
+        if reference_meas_raw is not None
+        else None
+    )
+    target_meas = (
+        np.asarray(target_meas_raw, dtype=np.float64).reshape(-1)
+        if target_meas_raw is not None
+        else None
+    )
+
+    if measurement_type == "difference" and reference_meas is not None:
+        reconstructor._measurement_space_type = "difference"
+        reconstructor._difference_reference_meas = reference_meas.copy()
+        reconstructor._difference_target_meas = target_meas.copy() if target_meas is not None else None
+        reconstructor._difference_mode_effective = normalize_difference_mode(
+            getattr(measured_data, "difference_mode", reconstructor.difference_mode),
+            default=reconstructor.difference_mode,
+        )
+        reconstructor._difference_orientation_effective = normalize_difference_orientation(
+            getattr(measured_data, "difference_orientation", reconstructor.difference_orientation),
+            default=reconstructor.difference_orientation,
+        )
+        return
+
+    reconstructor._measurement_space_type = "real"
+    reconstructor._difference_reference_meas = None
+    reconstructor._difference_target_meas = None
+    reconstructor._difference_mode_effective = reconstructor.difference_mode
+    reconstructor._difference_orientation_effective = reconstructor.difference_orientation
+
+
+def _project_simulated_measurements(reconstructor, simulated_meas: np.ndarray) -> np.ndarray:
+    return project_measurement_vector(
+        simulated_meas,
+        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
+        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
+        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
+        difference_orientation=getattr(
+            reconstructor,
+            "_difference_orientation_effective",
+            reconstructor.difference_orientation,
+        ),
+    )
+
+
+def _project_measurement_jacobian(reconstructor, jacobian: np.ndarray) -> np.ndarray:
+    return project_measurement_jacobian(
+        jacobian,
+        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
+        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
+        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
+        difference_orientation=getattr(
+            reconstructor,
+            "_difference_orientation_effective",
+            reconstructor.difference_orientation,
+        ),
+    )
 
 
 def _startup_cache_payload(reconstructor, sigma_array: np.ndarray, jacobian_method: str) -> dict[str, object]:
@@ -1213,6 +1294,199 @@ def _prepare_prior(
     else:
         reconstructor._prior_data = np.asarray(initial_conductivity).flatten()
     return _to_runtime_tensor(reconstructor, reconstructor._prior_data)
+
+
+def _best_homog_bounds(
+    reconstructor,
+    initial_conductivity: float | np.ndarray,
+) -> tuple[float, float]:
+    if np.isscalar(initial_conductivity):
+        center = max(float(initial_conductivity), 1e-6)
+    else:
+        arr = np.asarray(initial_conductivity, dtype=np.float64).reshape(-1)
+        center = max(float(np.mean(arr)), 1e-6)
+    clip_values = getattr(reconstructor, "clip_values", None)
+    if clip_values is not None:
+        lower = max(float(clip_values[0]), 1e-6)
+        upper = max(float(clip_values[1]), lower * 1.01)
+        return (lower, upper)
+    return (max(center * 0.2, 1e-6), max(center * 5.0, center + 1e-6))
+
+
+def _estimate_best_homogeneous_conductivity(
+    reconstructor,
+    *,
+    measured_vector: np.ndarray,
+    initial_conductivity: float | np.ndarray,
+) -> dict[str, object]:
+    mode = str(getattr(reconstructor, "best_homog_mode", "off")).strip().lower()
+    info: dict[str, object] = {
+        "mode": mode,
+        "applied": False,
+        "value": None,
+        "objective": None,
+    }
+    if mode != "optimize":
+        info["reason"] = "disabled"
+        return info
+    if getattr(reconstructor, "_measurement_space_type", "real") != "real":
+        info["reason"] = "difference_measurement_space"
+        return info
+
+    bounds = _best_homog_bounds(reconstructor, initial_conductivity)
+    info["bounds"] = [float(bounds[0]), float(bounds[1])]
+    calls = {"count": 0}
+
+    def _objective(conductivity_value: float) -> float:
+        calls["count"] += 1
+        image = EITImage(
+            elem_data=np.full(
+                reconstructor.n_elements,
+                float(conductivity_value),
+                dtype=np.float64,
+            ),
+            fwd_model=reconstructor.fwd_model,
+        )
+        simulated, _ = reconstructor.fwd_model.fwd_solve(image)
+        simulated_vector = _project_simulated_measurements(reconstructor, simulated.meas)
+        residual = np.asarray(simulated_vector, dtype=np.float64) - measured_vector
+        return float(np.dot(residual, residual))
+
+    try:
+        result = minimize_scalar(
+            _objective,
+            bounds=bounds,
+            method="bounded",
+            options={"xatol": 1e-4, "maxiter": 32},
+        )
+        value = float(result.x)
+        objective = float(result.fun)
+        info["success"] = bool(result.success)
+        info["message"] = str(result.message)
+    except Exception as exc:
+        info["reason"] = f"optimization_failed:{type(exc).__name__}"
+        info["eval_count"] = int(calls["count"])
+        return info
+
+    info["eval_count"] = int(calls["count"])
+    info["applied"] = True
+    info["value"] = value
+    info["objective"] = objective
+    return info
+
+
+def _difference_step_size_objective(
+    reconstructor,
+    *,
+    prior_sigma: np.ndarray,
+    delta_sigma: np.ndarray,
+    measured_vector: np.ndarray,
+    alpha: float,
+) -> float:
+    sigma = np.asarray(prior_sigma + float(alpha) * delta_sigma, dtype=np.float64)
+    clip_values = getattr(reconstructor, "clip_values", None)
+    if clip_values is not None:
+        sigma = np.clip(sigma, clip_values[0], clip_values[1])
+    image = EITImage(elem_data=sigma, fwd_model=reconstructor.fwd_model)
+    simulated, _ = reconstructor.fwd_model.fwd_solve(image)
+    simulated_vector = _project_simulated_measurements(reconstructor, simulated.meas)
+    residual = np.asarray(simulated_vector, dtype=np.float64) - measured_vector
+    return float(np.dot(residual, residual))
+
+
+def _apply_difference_step_size(
+    reconstructor,
+    *,
+    sigma_final: np.ndarray,
+    measured_vector: np.ndarray,
+) -> tuple[np.ndarray, dict[str, object]]:
+    mode = str(getattr(reconstructor, "difference_step_size_mode", "off")).strip().lower()
+    info: dict[str, object] = {
+        "mode": mode,
+        "applied": False,
+        "value": 1.0,
+        "objective": None,
+    }
+    if getattr(reconstructor, "_measurement_space_type", "real") != "difference":
+        info["reason"] = "real_measurement_space"
+        return np.asarray(sigma_final, dtype=np.float64), info
+    if mode == "off":
+        info["reason"] = "disabled"
+        return np.asarray(sigma_final, dtype=np.float64), info
+    if str(getattr(reconstructor, "active_preset_name", "")).strip().lower() not in {
+        "eidors_one_step_noser",
+        "eidors_demo3d_tv",
+    }:
+        info["reason"] = "preset_not_one_step"
+        return np.asarray(sigma_final, dtype=np.float64), info
+
+    prior_raw = getattr(reconstructor, "_prior_data", None)
+    if prior_raw is None:
+        info["reason"] = "missing_prior"
+        return np.asarray(sigma_final, dtype=np.float64), info
+    prior_sigma = np.asarray(prior_raw, dtype=np.float64).reshape(-1)
+    if prior_sigma.shape[0] != sigma_final.shape[0]:
+        info["reason"] = "missing_prior"
+        return np.asarray(sigma_final, dtype=np.float64), info
+
+    delta_sigma = np.asarray(sigma_final - prior_sigma, dtype=np.float64)
+    if np.linalg.norm(delta_sigma) <= 1e-18:
+        info["reason"] = "zero_delta"
+        return np.asarray(sigma_final, dtype=np.float64), info
+
+    if mode == "fixed":
+        alpha = float(
+            1.0 if reconstructor.difference_step_size_value is None else reconstructor.difference_step_size_value
+        )
+        objective = _difference_step_size_objective(
+            reconstructor,
+            prior_sigma=prior_sigma,
+            delta_sigma=delta_sigma,
+            measured_vector=measured_vector,
+            alpha=alpha,
+        )
+        info["applied"] = True
+        info["value"] = alpha
+        info["objective"] = objective
+        return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
+
+    bounds = tuple(float(v) for v in getattr(reconstructor, "difference_step_size_bounds", (0.0, 4.0)))
+    options = {"xatol": 1e-3, "maxiter": 32}
+    options.update(dict(getattr(reconstructor, "difference_step_size_fmin_options", {}) or {}))
+    info["bounds"] = [float(bounds[0]), float(bounds[1])]
+    calls = {"count": 0}
+
+    def _objective(alpha: float) -> float:
+        calls["count"] += 1
+        return _difference_step_size_objective(
+            reconstructor,
+            prior_sigma=prior_sigma,
+            delta_sigma=delta_sigma,
+            measured_vector=measured_vector,
+            alpha=float(alpha),
+        )
+
+    try:
+        result = minimize_scalar(
+            _objective,
+            bounds=bounds,
+            method="bounded",
+            options=options,
+        )
+        alpha = float(result.x)
+        objective = float(result.fun)
+        info["success"] = bool(result.success)
+        info["message"] = str(result.message)
+    except Exception as exc:
+        info["reason"] = f"optimization_failed:{type(exc).__name__}"
+        info["eval_count"] = int(calls["count"])
+        return np.asarray(sigma_final, dtype=np.float64), info
+
+    info["eval_count"] = int(calls["count"])
+    info["applied"] = True
+    info["value"] = alpha
+    info["objective"] = objective
+    return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
 
 
 def _compute_residuals(
@@ -1386,6 +1660,14 @@ def _select_step_size(
     prior_torch: torch.Tensor,
     lambda_eff: float,
 ) -> float:
+    if (
+        getattr(reconstructor, "_measurement_space_type", "real") == "difference"
+        and str(getattr(reconstructor, "active_preset_name", "")).strip().lower()
+        in {"eidors_one_step_noser", "eidors_demo3d_tv"}
+        and int(getattr(reconstructor, "max_iterations", 1)) <= 1
+    ):
+        return 1.0
+
     if reconstructor.solver_mode == "fast" and reconstructor.line_search_mode == "fast":
         quick_step = min(float(reconstructor.max_step), 1.0)
         if reconstructor.min_step is not None:
@@ -1505,6 +1787,17 @@ def run_reconstruction(
     reconstructor._baseline_measurement = None
 
     meas_vector = _extract_measured_vector(measured_data)
+    _configure_measurement_space(reconstructor, measured_data)
+    reconstructor._difference_step_size_info = {
+        "mode": str(getattr(reconstructor, "difference_step_size_mode", "off")),
+        "applied": False,
+        "value": 1.0,
+    }
+    reconstructor._best_homog_info = {
+        "mode": str(getattr(reconstructor, "best_homog_mode", "off")),
+        "applied": False,
+        "value": None,
+    }
 
     if len(meas_vector) != reconstructor.n_measurements:
         raise ValueError(
@@ -1522,9 +1815,17 @@ def run_reconstruction(
     _require_scalar_finite("meas_max", meas_max)
     meas_weighted_norm = None
 
-    sigma_current, initial_conductivity = _init_sigma_function(
-        reconstructor, initial_conductivity
-    )
+    if prior_data is None:
+        best_homog_info = _estimate_best_homogeneous_conductivity(
+            reconstructor,
+            measured_vector=meas_vector,
+            initial_conductivity=initial_conductivity,
+        )
+        reconstructor._best_homog_info = best_homog_info
+        if best_homog_info.get("applied") and best_homog_info.get("value") is not None:
+            initial_conductivity = float(best_homog_info["value"])
+
+    sigma_current, initial_conductivity = _init_sigma_function(reconstructor, initial_conductivity)
     reconstructor._ensure_measurement_weights(sigma_current)
 
     if reconstructor._meas_weight_sqrt is not None:
@@ -1545,7 +1846,10 @@ def run_reconstruction(
     max_consecutive_rollbacks = 5
 
     if reconstructor.verbose:
-        print(f"[INFO] lambda={reconstructor.regularization_param:.3e}")
+        print(
+            f"[INFO] lambda={reconstructor.regularization_param:.3e}, "
+            f"hp={reconstructor.hyperparameter:.3e}"
+        )
         print("\nStarting modular Gauss-Newton reconstruction...")
         print(f"Using Jacobian method: {jacobian_method}")
 
@@ -1577,7 +1881,11 @@ def run_reconstruction(
         sigma_current,
         jacobian_method,
     )
+    if startup_jacobian_np is not None:
+        startup_jacobian_np = _project_measurement_jacobian(reconstructor, startup_jacobian_np)
+    final_simulated_measurement: np.ndarray | None = None
 
+    lambda_eff = reconstructor.regularization_param
     with reconstructor._progress(total=reconstructor.max_iterations) as pbar:
         for iteration in range(reconstructor.max_iterations):
             sigma_array = function_get_array(sigma_current)
@@ -1587,6 +1895,11 @@ def run_reconstruction(
             data_simulated, _ = reconstructor.fwd_model.fwd_solve(img_current)
             timing_totals["forward"] += perf_counter() - forward_start
             _require_finite("data_simulated.meas", data_simulated.meas, iteration)
+            simulated_measurement = _project_simulated_measurements(
+                reconstructor,
+                data_simulated.meas,
+            )
+            _require_finite("simulated_measurement", simulated_measurement, iteration)
 
             lambda_eff = reconstructor.regularization_param
             (
@@ -1598,7 +1911,7 @@ def run_reconstruction(
                 residual_max,
             ) = _compute_residuals(
                 reconstructor,
-                data_simulated.meas,
+                simulated_measurement,
                 meas_torch,
                 iteration,
             )
@@ -1659,6 +1972,10 @@ def run_reconstruction(
                 timing_totals["jacobian"] += perf_counter() - jacobian_start
                 if reconstructor.negate_jacobian:
                     measurement_jacobian_np = -measurement_jacobian_np
+                measurement_jacobian_np = _project_measurement_jacobian(
+                    reconstructor,
+                    measurement_jacobian_np,
+                )
                 _require_finite("measurement_jacobian_np", measurement_jacobian_np, iteration)
                 prev_jacobian_np = measurement_jacobian_np
                 prev_jacobian_iter = iteration
@@ -1853,6 +2170,7 @@ def run_reconstruction(
             sigma_change_history.append(relative_change)
             if record_conductivity_history and (iteration + 1) % history_stride == 0:
                 conductivity_history.append(function_get_array(sigma_current).copy())
+            final_simulated_measurement = simulated_measurement.copy()
 
             _record_iteration_log(
                 iteration_logs,
@@ -1894,6 +2212,29 @@ def run_reconstruction(
     cache_stats = {}
     if getattr(reconstructor, "cache_manager", None) is not None:
         cache_stats = reconstructor.cache_manager.stats()
+    sigma_final_array = function_get_array(sigma_current).copy()
+    sigma_final_array, difference_step_size_info = _apply_difference_step_size(
+        reconstructor,
+        sigma_final=sigma_final_array,
+        measured_vector=meas_vector,
+    )
+    reconstructor._difference_step_size_info = difference_step_size_info
+    if reconstructor.clip_values is not None:
+        sigma_final_array = np.clip(
+            sigma_final_array,
+            reconstructor.clip_values[0],
+            reconstructor.clip_values[1],
+        )
+    function_set_array(sigma_current, sigma_final_array)
+    final_img = EITImage(
+        elem_data=sigma_final_array.copy(),
+        fwd_model=reconstructor.fwd_model,
+    )
+    final_data_simulated, _ = reconstructor.fwd_model.fwd_solve(final_img)
+    final_simulated_measurement = _project_simulated_measurements(
+        reconstructor,
+        final_data_simulated.meas,
+    )
     jacobian_block_tune_info = (
         reconstructor.jacobian_calculator.block_tuning_info()
         if hasattr(reconstructor.jacobian_calculator, "block_tuning_info")
@@ -1998,12 +2339,34 @@ def run_reconstruction(
             if reconstructor._meas_weight_sqrt is not None
             else None
         ),
+        simulated_measurement=final_simulated_measurement,
         diagnostics={
             "cache_hits": cache_stats.get("total_hits", 0),
             "cache_misses": cache_stats.get("total_misses", 0),
             "cache_stats": cache_stats,
             "backend_info": backend_info,
             "timing": timing_totals,
+            "hyperparameter": float(reconstructor.hyperparameter),
+            "lambda_eff": float(reconstructor.regularization_param),
+            "difference_step_size": reconstructor._difference_step_size_info,
+            "best_homog": reconstructor._best_homog_info,
+            "preset_name": str(getattr(reconstructor, "active_preset_name", "")),
+            "jacobian_background_conductivity": float(
+                getattr(reconstructor, "jacobian_background_conductivity", 1.0)
+            ),
+            "measurement_space": {
+                "type": getattr(reconstructor, "_measurement_space_type", "real"),
+                "difference_mode": getattr(
+                    reconstructor,
+                    "_difference_mode_effective",
+                    reconstructor.difference_mode,
+                ),
+                "difference_orientation": getattr(
+                    reconstructor,
+                    "_difference_orientation_effective",
+                    reconstructor.difference_orientation,
+                ),
+            },
         },
     )
 

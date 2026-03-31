@@ -14,6 +14,23 @@ PETSC_DEVICE_CPU = "cpu"
 PETSC_DEVICE_CUDA = "cuda"
 PETSC_DEVICE_VALUES = (PETSC_DEVICE_AUTO, PETSC_DEVICE_CPU, PETSC_DEVICE_CUDA)
 
+FORWARD_BACKEND_DOLFINX = "dolfinx"
+FORWARD_BACKEND_CUDA_STRUCTURED = "cuda_structured"
+FORWARD_BACKEND_VALUES = (
+    FORWARD_BACKEND_DOLFINX,
+    FORWARD_BACKEND_CUDA_STRUCTURED,
+)
+
+MESH_FAMILY_TETRA = "tetra"
+MESH_FAMILY_HEX = "hex"
+MESH_FAMILY_VALUES = (MESH_FAMILY_TETRA, MESH_FAMILY_HEX)
+
+GEOMETRY_VERSION_LEGACY = "legacy"
+GEOMETRY_VERSION_GEOMV2 = "geomv2"
+LEGACY_3D_GENERATOR_REVISION = "g3d0"
+SQUARE_TO_DISK_3D_GENERATOR_REVISION = "g3d2"
+DEFAULT_3D_GENERATOR_REVISION = "g3d3"
+
 DEFAULT_ROM_MODE = FEATURE_MODE_OFF
 DEFAULT_INEXACT_MODE = FEATURE_MODE_OFF
 DEFAULT_LOWRANK_MODE = FEATURE_MODE_OFF
@@ -31,6 +48,9 @@ DEFAULT_FAST_LINEAR_PATH = "auto"
 DEFAULT_FORWARD_MAT_SOLVE = "auto"
 DEFAULT_PETSC_DEVICE = PETSC_DEVICE_AUTO
 DEFAULT_ABSOLUTE_STARTUP_CACHE = "on"
+DEFAULT_FORWARD_BACKEND = FORWARD_BACKEND_DOLFINX
+DEFAULT_MESH_FAMILY = MESH_FAMILY_TETRA
+DEFAULT_3D_GEOMETRY_VERSION = GEOMETRY_VERSION_GEOMV2
 
 DEFAULT_ROM_RANK_GLOBAL = 32
 DEFAULT_ROM_RANK_ADAPTIVE = 16
@@ -89,6 +109,16 @@ def normalize_feature_mode(value: object, *, default: str = FEATURE_MODE_OFF) ->
 def normalize_petsc_device(value: object, *, default: str = DEFAULT_PETSC_DEVICE) -> str:
     """Normalize PETSc FEM device policy to ``auto|cpu|cuda``."""
     return normalize_mode(value, valid=PETSC_DEVICE_VALUES, default=default)
+
+
+def normalize_forward_backend(value: object, *, default: str = DEFAULT_FORWARD_BACKEND) -> str:
+    """Normalize forward discretization backend to a supported runtime label."""
+    return normalize_mode(value, valid=FORWARD_BACKEND_VALUES, default=default)
+
+
+def normalize_mesh_family(value: object, *, default: str = DEFAULT_MESH_FAMILY) -> str:
+    """Normalize 3D mesh cell family to a supported runtime label."""
+    return normalize_mode(value, valid=MESH_FAMILY_VALUES, default=default)
 
 
 def resolve_solver_mode(value: object, *, mesh_dim: int) -> str:

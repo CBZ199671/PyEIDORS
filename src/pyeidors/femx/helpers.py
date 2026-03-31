@@ -107,6 +107,11 @@ def build_eit_mesh(
     radius: Optional[float] = None,
     mesh_file: Optional[str] = None,
     electrode_vertices: Optional[list[np.ndarray]] = None,
+    mesh_family: Optional[str] = None,
+    geometry_version: Optional[str] = None,
+    generator_revision: Optional[str] = None,
+    structured_sidecar_file: Optional[str] = None,
+    structured_sidecar_version: Optional[str] = None,
 ) -> EITMesh:
     """Build a strongly-typed :class:`EITMesh` container."""
     resolved_radius = float(radius) if radius is not None else estimate_radius(mesh)
@@ -119,6 +124,11 @@ def build_eit_mesh(
         radius=resolved_radius,
         mesh_file=mesh_file,
         electrode_vertices=electrode_vertices,
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
+        structured_sidecar_file=structured_sidecar_file,
+        structured_sidecar_version=structured_sidecar_version,
     )
 
 

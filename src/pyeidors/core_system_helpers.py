@@ -11,6 +11,11 @@ from typing import Any, Dict, Optional, Tuple, Union
 import numpy as np
 from dolfinx import fem
 
+from .data.difference import (
+    build_difference_vector,
+    normalize_difference_mode,
+    normalize_difference_orientation,
+)
 from .data.structures import EITData, EITImage
 
 
@@ -25,17 +30,34 @@ def conductivity_to_image(fwd_model, conductivity: Union[np.ndarray, fem.Functio
     raise ValueError("Unsupported conductivity input type")
 
 
-def difference_measurement(data: EITData, reference_data: Optional[EITData]) -> EITData:
+def difference_measurement(
+    data: EITData,
+    reference_data: Optional[EITData],
+    *,
+    mode: str = "raw",
+    orientation: str = "target_minus_reference",
+) -> EITData:
     """Build difference-mode measurements when reference data is provided."""
     if reference_data is None:
         return data
+    resolved_mode = normalize_difference_mode(mode)
+    resolved_orientation = normalize_difference_orientation(orientation)
     return EITData(
-        meas=data.meas - reference_data.meas,
+        meas=build_difference_vector(
+            data.meas,
+            reference_data.meas,
+            mode=resolved_mode,
+            orientation=resolved_orientation,
+        ),
         stim_pattern=data.stim_pattern,
         n_elec=data.n_elec,
         n_stim=data.n_stim,
         n_meas=data.n_meas,
         type="difference",
+        reference_meas=np.asarray(reference_data.meas, dtype=np.float64).copy(),
+        target_meas=np.asarray(data.meas, dtype=np.float64).copy(),
+        difference_mode=resolved_mode,
+        difference_orientation=resolved_orientation,
     )
 
 
@@ -71,6 +93,20 @@ def collect_system_info(eit_system) -> Dict[str, Any]:
         "n_elec": eit_system.n_elec,
         "pattern_config": eit_system.pattern_config,
         "mesh_config": eit_system.mesh_config,
+        "difference_mode": getattr(eit_system, "difference_mode", "raw"),
+        "difference_orientation": getattr(
+            eit_system,
+            "difference_orientation",
+            "target_minus_reference",
+        ),
+        "difference_preset": getattr(eit_system, "difference_preset", "eidors_one_step_noser"),
+        "absolute_preset": getattr(eit_system, "absolute_preset", "eidors_abs_gn"),
+        "hyperparameter": getattr(eit_system, "hyperparameter", None),
+        "jacobian_background_conductivity": getattr(
+            eit_system,
+            "jacobian_background_conductivity",
+            getattr(eit_system, "base_conductivity", 1.0),
+        ),
         "performance_mode": getattr(eit_system, "performance_mode", "aggressive"),
         "linear_backend": getattr(eit_system, "linear_backend", "scipy"),
         "cache_scope": getattr(eit_system, "cache_scope", "off"),

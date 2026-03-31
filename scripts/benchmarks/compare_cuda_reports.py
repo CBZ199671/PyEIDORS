@@ -52,14 +52,59 @@ def _backend(report: dict[str, Any]) -> dict[str, Any]:
 
 def _forward_probe_seconds(report: dict[str, Any]) -> float:
     backend = _backend(report)
-    value = backend.get("forward_probe_elapsed_sec")
+    value = backend.get("warm_forward_total_sec")
+    if value is None:
+        value = backend.get("forward_probe_elapsed_sec")
     if value is None:
         return float("nan")
     return float(value)
 
 
+def _warm_forward_avg_seconds(report: dict[str, Any]) -> float:
+    backend = _backend(report)
+    value = backend.get("warm_forward_avg_sec")
+    if value is None:
+        repeats = backend.get("forward_probe_repeats")
+        probe = backend.get("forward_probe_elapsed_sec")
+        if isinstance(repeats, (int, float)) and float(repeats) > 0 and isinstance(probe, (int, float)):
+            return float(probe) / float(repeats)
+        return float("nan")
+    return float(value)
+
+
+def _first_forward_seconds(report: dict[str, Any]) -> float:
+    backend = _backend(report)
+    value = backend.get("first_forward_elapsed_sec")
+    if value is None:
+        return float("nan")
+    return float(value)
+
+
+def _absolute_reconstruct_seconds(report: dict[str, Any]) -> float:
+    backend = _backend(report)
+    value = backend.get("absolute_reconstruct_elapsed_sec")
+    if value is None:
+        return float("nan")
+    return float(value)
+
+
+def _difference_total_seconds(report: dict[str, Any]) -> float:
+    solver = report.get("difference_solver", {})
+    if not isinstance(solver, dict):
+        return float("nan")
+    cold = solver.get("difference_context_cold_elapsed_sec")
+    warm = solver.get("difference_context_warm_elapsed_sec")
+    reconstruct = solver.get("difference_reconstruct_elapsed_sec")
+    if not all(isinstance(value, (int, float)) for value in (cold, warm, reconstruct)):
+        return float("nan")
+    return float(cold) + float(warm) + float(reconstruct)
+
+
 def _pick_forward_heavy_metric(report: dict[str, Any], *, kind: str) -> tuple[str, float]:
     if kind == "3d":
+        warm_avg = _warm_forward_avg_seconds(report)
+        if math.isfinite(warm_avg) and warm_avg > 0.0:
+            return "absolute_warm_forward_avg", warm_avg
         probe = _forward_probe_seconds(report)
         if math.isfinite(probe) and probe > 0.0:
             return "absolute_forward_probe", probe
@@ -81,12 +126,28 @@ def main() -> None:
     gpu_total = _sum_stage_timings(gpu)
     forward_metric_label, cpu_forward = _pick_forward_heavy_metric(cpu, kind=str(args.kind))
     _, gpu_forward = _pick_forward_heavy_metric(gpu, kind=str(args.kind))
+    cpu_first_forward = _first_forward_seconds(cpu)
+    gpu_first_forward = _first_forward_seconds(gpu)
+    cpu_warm_forward_avg = _warm_forward_avg_seconds(cpu)
+    gpu_warm_forward_avg = _warm_forward_avg_seconds(gpu)
     cpu_forward_legacy = _legacy_forward_heavy_seconds(cpu, kind=str(args.kind))
     gpu_forward_legacy = _legacy_forward_heavy_seconds(gpu, kind=str(args.kind))
+    cpu_absolute_reconstruct = _absolute_reconstruct_seconds(cpu)
+    gpu_absolute_reconstruct = _absolute_reconstruct_seconds(gpu)
+    cpu_difference_total = _difference_total_seconds(cpu)
+    gpu_difference_total = _difference_total_seconds(gpu)
 
     total_speedup = float(cpu_total / gpu_total) if gpu_total > 0 else 0.0
     forward_speedup = float(cpu_forward / gpu_forward) if gpu_forward > 0 else 0.0
+    first_forward_speedup = float(cpu_first_forward / gpu_first_forward) if gpu_first_forward > 0 else 0.0
+    warm_forward_avg_speedup = float(cpu_warm_forward_avg / gpu_warm_forward_avg) if gpu_warm_forward_avg > 0 else 0.0
     legacy_forward_speedup = float(cpu_forward_legacy / gpu_forward_legacy) if gpu_forward_legacy > 0 else 0.0
+    absolute_reconstruct_speedup = (
+        float(cpu_absolute_reconstruct / gpu_absolute_reconstruct)
+        if gpu_absolute_reconstruct > 0
+        else 0.0
+    )
+    difference_total_speedup = float(cpu_difference_total / gpu_difference_total) if gpu_difference_total > 0 else 0.0
 
     payload = {
         "kind": str(args.kind),
@@ -97,14 +158,36 @@ def main() -> None:
         "forward_heavy_metric": forward_metric_label,
         "cpu_forward_heavy_sec": cpu_forward,
         "gpu_forward_heavy_sec": gpu_forward,
+        "cpu_first_forward_sec": cpu_first_forward,
+        "gpu_first_forward_sec": gpu_first_forward,
+        "cpu_warm_forward_avg_sec": cpu_warm_forward_avg,
+        "gpu_warm_forward_avg_sec": gpu_warm_forward_avg,
         "cpu_forward_legacy_sec": cpu_forward_legacy,
         "gpu_forward_legacy_sec": gpu_forward_legacy,
+        "cpu_absolute_reconstruct_sec": cpu_absolute_reconstruct,
+        "gpu_absolute_reconstruct_sec": gpu_absolute_reconstruct,
+        "cpu_difference_total_sec": cpu_difference_total,
+        "gpu_difference_total_sec": gpu_difference_total,
         "total_speedup_x": total_speedup,
         "forward_heavy_speedup_x": forward_speedup,
+        "first_forward_speedup_x": first_forward_speedup,
+        "warm_forward_avg_speedup_x": warm_forward_avg_speedup,
         "forward_legacy_speedup_x": legacy_forward_speedup,
+        "absolute_reconstruct_speedup_x": absolute_reconstruct_speedup,
+        "difference_total_speedup_x": difference_total_speedup,
         "gpu_faster_total": bool(gpu_total < cpu_total),
         "gpu_faster_forward_heavy": bool(gpu_forward < cpu_forward),
+        "gpu_faster_first_forward": bool(gpu_first_forward < cpu_first_forward) if math.isfinite(cpu_first_forward) and math.isfinite(gpu_first_forward) else False,
+        "gpu_faster_warm_forward_avg": bool(gpu_warm_forward_avg < cpu_warm_forward_avg) if math.isfinite(cpu_warm_forward_avg) and math.isfinite(gpu_warm_forward_avg) else False,
         "gpu_faster_forward_legacy": bool(gpu_forward_legacy < cpu_forward_legacy),
+        "gpu_faster_absolute_reconstruct": bool(gpu_absolute_reconstruct < cpu_absolute_reconstruct)
+        if math.isfinite(cpu_absolute_reconstruct) and math.isfinite(gpu_absolute_reconstruct)
+        else False,
+        "gpu_faster_difference_total": bool(gpu_difference_total < cpu_difference_total)
+        if math.isfinite(cpu_difference_total) and math.isfinite(gpu_difference_total)
+        else False,
+        "cpu_mesh_info": cpu.get("mesh_info"),
+        "gpu_mesh_info": gpu.get("mesh_info"),
         "cpu_backend": _backend(cpu),
         "gpu_backend": _backend(gpu),
     }

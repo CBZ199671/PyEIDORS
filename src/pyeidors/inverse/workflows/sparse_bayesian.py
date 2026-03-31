@@ -6,6 +6,8 @@ from typing import Dict, Optional, Any
 
 import numpy as np
 
+from ...core_system_helpers import difference_measurement
+from ...data.difference import project_measurement_vector
 from .base import (
     ReconstructionResult,
     resolve_reconstruction_output,
@@ -147,8 +149,20 @@ def perform_sparse_difference_reconstruction(
         simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
         simulated_vector = simulated_data.meas
 
-    measured_vector = measurement_data.meas - reference_data.meas
-    predicted_vector = simulated_vector - reference_data.meas
+    diff_data = difference_measurement(
+        measurement_data,
+        reference_data,
+        mode=eit_system.difference_mode,
+        orientation=eit_system.difference_orientation,
+    )
+    measured_vector = diff_data.meas
+    predicted_vector = project_measurement_vector(
+        simulated_vector,
+        measurement_type="difference",
+        reference_meas=diff_data.reference_meas,
+        difference_mode=diff_data.difference_mode,
+        difference_orientation=diff_data.difference_orientation,
+    )
     residual_vector, _, _, _ = compute_residuals(measured_vector, predicted_vector)
 
     result_metadata: Dict[str, Any] = {

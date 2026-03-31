@@ -12,6 +12,7 @@ from pyeidors.femx import build_eit_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.physics.current_drive import (
     build_stim_currents,
+    normalize_pattern_config_for_mesh,
     resolve_electrode_lengths_m,
     validate_drive_config,
 )
@@ -83,6 +84,20 @@ def test_validate_drive_config_rules():
             geometry_scale_to_m=1.0,
             mesh_tdim=3,
         )
+
+
+def test_normalize_pattern_config_for_mesh_promotes_3d_line_density():
+    pattern = PatternConfig(
+        n_elec=16,
+        drive_mode="line_current_density",
+        drive_value=1.0,
+    )
+    normalized, diag = normalize_pattern_config_for_mesh(pattern, mesh_tdim=3)
+    assert normalized.drive_mode == "total_current"
+    assert diag == {
+        "drive_mode_requested": "line_current_density",
+        "drive_mode_effective": "total_current",
+    }
 
 
 def test_resolve_electrode_lengths_with_override():

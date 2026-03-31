@@ -135,6 +135,13 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         petsc_vec_type = petsc_vec_type or stable_vec_type or "cpu-default"
     payload = {
         "linear_backend": str(fwd_model.linear_backend),
+        "forward_backend": str(getattr(fwd_model, "forward_backend", "dolfinx")),
+        "mesh_family": str(getattr(fwd_model, "mesh_family", "tetra")),
+        "geometry_version": str(getattr(fwd_model, "geometry_version", "legacy")),
+        "generator_revision": str(getattr(fwd_model, "generator_revision", "g3d0")),
+        "structured_sidecar_version": str(
+            getattr(getattr(fwd_model, "eit_mesh", None), "structured_sidecar_version", None)
+        ),
         "performance_mode": str(getattr(fwd_model, "performance_mode", "aggressive")),
         "ksp_type": str(config.ksp_type),
         "pc_type": str(config.pc_type),
@@ -149,6 +156,13 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         "petsc_vec_type": petsc_vec_type,
         "petsc_dense_mat_type": petsc_backend.get("petsc_dense_mat_type"),
         "gpu_constraint_strategy": petsc_backend.get("gpu_constraint_strategy"),
+        "forward_backend_effective": petsc_backend.get(
+            "forward_backend_effective",
+            getattr(fwd_model, "forward_backend", "dolfinx"),
+        ),
+        "structured_backend_version": petsc_backend.get("structured_backend_version"),
+        "structured_sidecar_loaded": petsc_backend.get("structured_sidecar_loaded"),
+        "operator_backend": petsc_backend.get("operator_backend"),
     }
     return stable_signature_hash(payload)
 
@@ -164,6 +178,11 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
         mesh_payload: dict[str, Any] = {
             "association_table": dict(mesh.association_table),
             "tdim": int(getattr(mesh.mesh.topology, "dim", 0)),
+            "mesh_family": getattr(mesh, "mesh_family", None),
+            "geometry_version": getattr(mesh, "geometry_version", None),
+            "generator_revision": getattr(mesh, "generator_revision", None),
+            "structured_sidecar_file": getattr(mesh, "structured_sidecar_file", None),
+            "structured_sidecar_version": getattr(mesh, "structured_sidecar_version", None),
         }
         if mesh_file:
             try:

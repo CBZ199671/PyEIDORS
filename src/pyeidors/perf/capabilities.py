@@ -15,6 +15,14 @@ def _load_petsc_runtime():
     return PETSc
 
 
+def _has_cuda_structured() -> bool:
+    try:
+        from ..forward.cuda_structured_backend import _torch_cuda_available
+    except Exception:
+        return False
+    return bool(_torch_cuda_available())
+
+
 def _has_pyamg() -> bool:
     try:
         import pyamg  # noqa: F401
@@ -222,6 +230,7 @@ def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> di
     return {
         "pyamg": _has_pyamg(),
         "cholmod": _has_cholmod(),
+        "cuda_structured": _has_cuda_structured(),
         "petsc_mat_solve": _has_petsc_mat_solve(),
         "petsc_gamg": _has_petsc_gamg(),
         "petsc_cuda_mat": bool(cuda_probe.get("petsc_cuda_mat", False)),
@@ -234,7 +243,12 @@ def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> di
 def detect_performance_capabilities() -> dict[str, bool]:
     """Detect optional acceleration features available in the runtime."""
     return _detect_performance_capabilities_cached(
-        (_petsc_runtime_cache_key(), bool(_has_pyamg()), bool(_has_cholmod()))
+        (
+            _petsc_runtime_cache_key(),
+            bool(_has_pyamg()),
+            bool(_has_cholmod()),
+            bool(_has_cuda_structured()),
+        )
     )
 
 

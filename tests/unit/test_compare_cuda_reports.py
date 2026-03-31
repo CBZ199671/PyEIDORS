@@ -47,12 +47,34 @@ def test_compare_cuda_reports_handles_3d_payload(tmp_path: Path):
     cpu.write_text(json.dumps({
         "stages": [{"stage": "diff_context_cold", "elapsed_sec": 5.0}, {"stage": "absolute_reconstruct", "elapsed_sec": 10.0}],
         "stage_breakdown": {"absolute": {"forward": 4.0}, "difference": {"forward_validate": 2.0}},
-        "absolute_solver": {"execution_profile": "cpu"},
+        "absolute_solver": {
+            "execution_profile": "cpu",
+            "first_forward_elapsed_sec": 2.0,
+            "warm_forward_avg_sec": 0.8,
+            "warm_forward_total_sec": 4.0,
+            "absolute_reconstruct_elapsed_sec": 10.0,
+        },
+        "difference_solver": {
+            "difference_context_cold_elapsed_sec": 5.0,
+            "difference_context_warm_elapsed_sec": 1.0,
+            "difference_reconstruct_elapsed_sec": 4.0,
+        },
     }), encoding="utf-8")
     gpu.write_text(json.dumps({
         "stages": [{"stage": "diff_context_cold", "elapsed_sec": 4.0}, {"stage": "absolute_reconstruct", "elapsed_sec": 8.0}],
         "stage_breakdown": {"absolute": {"forward": 2.0}, "difference": {"forward_validate": 1.0}},
-        "absolute_solver": {"execution_profile": "cuda"},
+        "absolute_solver": {
+            "execution_profile": "cuda",
+            "first_forward_elapsed_sec": 1.0,
+            "warm_forward_avg_sec": 0.4,
+            "warm_forward_total_sec": 2.0,
+            "absolute_reconstruct_elapsed_sec": 8.0,
+        },
+        "difference_solver": {
+            "difference_context_cold_elapsed_sec": 4.0,
+            "difference_context_warm_elapsed_sec": 0.5,
+            "difference_reconstruct_elapsed_sec": 3.0,
+        },
     }), encoding="utf-8")
 
     proc = subprocess.run(
@@ -65,3 +87,8 @@ def test_compare_cuda_reports_handles_3d_payload(tmp_path: Path):
     payload = json.loads(proc.stdout)
     assert payload["gpu_faster_total"] is True
     assert payload["gpu_faster_forward_heavy"] is True
+    assert payload["gpu_faster_first_forward"] is True
+    assert payload["gpu_faster_warm_forward_avg"] is True
+    assert payload["forward_heavy_metric"] == "absolute_warm_forward_avg"
+    assert payload["gpu_faster_absolute_reconstruct"] is True
+    assert payload["gpu_faster_difference_total"] is True

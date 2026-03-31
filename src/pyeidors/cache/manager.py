@@ -6,10 +6,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .keys import CacheKeyParts, build_cache_key
+from .lifecycle import resolve_cache_directory
 from .object_signature import signature_of_cache_obj
 from .store_disk import DiskCacheStore
 from .store_process import ProcessCacheStore, estimate_object_size_bytes
-from .types import CacheLookup, CachePolicy, CacheScope, CacheStats
+from .types import CacheLookup, CachePolicy, CacheScope, CacheStats, normalize_cache_lifecycle
 
 
 class CacheManager:
@@ -26,7 +27,25 @@ class CacheManager:
         self.scope: CacheScope = scope
         self.policy = policy or CachePolicy()
         self.code_fingerprint = code_fingerprint
-        self.cache_dir = Path(cache_dir)
+        self.requested_cache_dir = Path(cache_dir)
+        self.disk_lifecycle = normalize_cache_lifecycle(getattr(self.policy, "disk_lifecycle", "session"))
+        if scope in {"disk", "both"}:
+            self._cache_dir_spec = resolve_cache_directory(
+                self.requested_cache_dir,
+                lifecycle=self.disk_lifecycle,
+                cleanup_on_exit=bool(getattr(self.policy, "cleanup_on_exit", True)),
+                cleanup_stale_sessions_on_startup=bool(
+                    getattr(self.policy, "cleanup_stale_sessions_on_startup", True)
+                ),
+                stale_session_max_age_seconds=float(
+                    getattr(self.policy, "stale_session_max_age_seconds", 7 * 24 * 60 * 60)
+                ),
+            )
+        else:
+            self._cache_dir_spec = None
+        self.cache_dir = Path(
+            self._cache_dir_spec.effective_dir if self._cache_dir_spec is not None else self.requested_cache_dir
+        )
 
         self._cache_enable: float = 0.0 if scope == "off" else 1.0
         self._cache_disabled_on: set[str] = set()
@@ -54,6 +73,10 @@ class CacheManager:
     @property
     def enabled(self) -> bool:
         return self.status() > 0.0
+
+    @property
+    def session_cache_enabled(self) -> bool:
+        return bool(self.disk_lifecycle == "session" and self.scope in {"disk", "both"})
 
     def build_key(self, artifact: str, payload: dict[str, Any], namespace: str = "default") -> str:
         return build_cache_key(
@@ -506,4 +529,10 @@ class CacheManager:
         payload["process_namespaces"] = process_namespaces
         payload["disk_artifacts"] = disk_artifacts
         payload["disk_namespaces"] = disk_namespaces
+        payload["disk_cache_lifecycle"] = str(self.disk_lifecycle)
+        payload["disk_cache_requested_dir"] = str(self.requested_cache_dir)
+        payload["disk_cache_effective_dir"] = str(self.cache_dir)
+        payload["disk_cache_cleanup_on_exit"] = bool(
+            self.session_cache_enabled and getattr(self.policy, "cleanup_on_exit", True)
+        )
         return payload

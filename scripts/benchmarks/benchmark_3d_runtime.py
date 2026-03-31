@@ -8,6 +8,7 @@ import json
 import os
 import shutil
 import sys
+import tempfile
 import time
 import tracemalloc
 from pathlib import Path
@@ -26,9 +27,12 @@ from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import detect_performance_capabilities
 from pyeidors.perf.policy import (
+    DEFAULT_3D_GEOMETRY_VERSION,
+    DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_ABSOLUTE_STARTUP_CACHE,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_FORWARD_BACKEND,
     DEFAULT_INEXACT_ETA0,
     DEFAULT_INEXACT_ETA_MAX,
     DEFAULT_INEXACT_ETA_MIN,
@@ -41,12 +45,15 @@ from pyeidors.perf.policy import (
     DEFAULT_LOWRANK_METHOD,
     DEFAULT_LOWRANK_MODE,
     DEFAULT_LOWRANK_RANK,
+    DEFAULT_MESH_FAMILY,
     DEFAULT_PETSC_DEVICE,
     DEFAULT_ROM_MODE,
     DEFAULT_ROM_RANK_ADAPTIVE,
     DEFAULT_ROM_RANK_GLOBAL,
     DEFAULT_ROM_REFRESH_EVERY,
     DEFAULT_ROM_SNAPSHOT_SOURCE,
+    FORWARD_BACKEND_VALUES,
+    MESH_FAMILY_VALUES,
     parse_block_size_candidates,
 )
 
@@ -65,8 +72,18 @@ os.environ.setdefault("NUMEXPR_NUM_THREADS", "1")
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
-    parser.add_argument("--cache-dir", type=Path, default=Path(".pyeidors_cache") / "v2")
+    parser.add_argument(
+        "--mesh-dir",
+        type=Path,
+        default=None,
+        help="Explicit mesh cache root. Defaults to an ephemeral /tmp directory for generated 3D meshes.",
+    )
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=None,
+        help="Explicit cache root. Defaults to an ephemeral /tmp directory for fair cold/warm runs.",
+    )
     parser.add_argument("--output-json", type=Path, default=Path("reports") / "benchmark_3d_runtime.json")
     parser.add_argument("--perf-report", type=Path, default=None)
     parser.add_argument("--profile-label", type=str, default="default")
@@ -136,6 +153,21 @@ def _parse_args() -> argparse.Namespace:
         default="auto",
     )
     parser.add_argument(
+        "--forward-backend",
+        choices=list(FORWARD_BACKEND_VALUES),
+        default=DEFAULT_FORWARD_BACKEND,
+    )
+    parser.add_argument(
+        "--mesh-family",
+        choices=list(MESH_FAMILY_VALUES),
+        default=DEFAULT_MESH_FAMILY,
+    )
+    parser.add_argument(
+        "--geometry-version",
+        type=str,
+        default=DEFAULT_3D_GEOMETRY_VERSION,
+    )
+    parser.add_argument(
         "--jacobian-block-tune",
         choices=["auto", "off"],
         default=DEFAULT_JACOBIAN_BLOCK_TUNE,
@@ -158,6 +190,7 @@ def _parse_args() -> argparse.Namespace:
         default=DEFAULT_ABSOLUTE_STARTUP_CACHE,
     )
     parser.add_argument("--absolute-iters", type=int, default=2)
+    parser.add_argument("--warm-forward-repeats", type=int, default=5)
     parser.add_argument("--run-diff", choices=["on", "off"], default="on")
     parser.add_argument("--run-absolute", choices=["on", "off"], default="on")
     return parser.parse_args()
@@ -199,8 +232,25 @@ def main() -> None:
     args = _parse_args()
     if int(args.repeat) <= 0:
         raise ValueError("--repeat must be a positive integer.")
+    if int(args.warm_forward_repeats) <= 0:
+        raise ValueError("--warm-forward-repeats must be a positive integer.")
     jacobian_block_candidates = parse_block_size_candidates(args.jacobian_block_candidates)
-    cache_dir = args.cache_dir.resolve()
+    ephemeral_cache_root = None
+    ephemeral_mesh_root = None
+    if args.cache_dir is None:
+        ephemeral_cache_root = Path(
+            tempfile.mkdtemp(prefix="pyeidors-bench-3d-", dir="/tmp")
+        ).resolve()
+        cache_dir = ephemeral_cache_root
+    else:
+        cache_dir = args.cache_dir.resolve()
+    if args.mesh_dir is None:
+        ephemeral_mesh_root = Path(
+            tempfile.mkdtemp(prefix="pyeidors-bench-3d-mesh-", dir="/tmp")
+        ).resolve()
+        mesh_dir = ephemeral_mesh_root
+    else:
+        mesh_dir = args.mesh_dir.resolve()
 
     def _run_once(run_index: int) -> dict:
         run_cache_dir = cache_dir if int(args.repeat) == 1 else cache_dir / f"run_{run_index:02d}"
@@ -216,14 +266,19 @@ def main() -> None:
         warm_ctx: dict[str, object] = {}
         absolute_timing: dict[str, object] = {}
         absolute_backend_info: dict[str, object] = {}
+        absolute_mesh_info: dict[str, object] = {}
         absolute_forward_probe_stage: dict[str, float | str] | None = None
-        absolute_forward_probe_repeats = 5
+        absolute_first_forward_stage: dict[str, float | str] | None = None
+        absolute_mesh_stage: dict[str, float | str] | None = None
+        absolute_setup_stage: dict[str, float | str] | None = None
+        absolute_target_forward_stage: dict[str, float | str] | None = None
+        absolute_forward_probe_repeats = int(args.warm_forward_repeats)
 
         if run_diff:
             cold_ctx, cold_stage = _timed(
                 "diff_context_cold",
                 lambda: gn_difference_runner.build_shared_context(
-                    mesh_dir=str(args.mesh_dir),
+                    mesh_dir=str(mesh_dir),
                     mesh_name=None,
                     mesh_dim=3,
                     mesh_height=float(args.height),
@@ -252,12 +307,15 @@ def main() -> None:
                     forward_mat_solve=str(args.forward_mat_solve),
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
+                    forward_backend=str(args.forward_backend),
+                    mesh_family=str(args.mesh_family),
+                    geometry_version=str(args.geometry_version),
                 ),
             )
             warm_ctx, warm_stage = _timed(
                 "diff_context_warm",
                 lambda: gn_difference_runner.build_shared_context(
-                    mesh_dir=str(args.mesh_dir),
+                    mesh_dir=str(mesh_dir),
                     mesh_name=None,
                     mesh_dim=3,
                     mesh_height=float(args.height),
@@ -286,6 +344,9 @@ def main() -> None:
                     forward_mat_solve=str(args.forward_mat_solve),
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
+                    forward_backend=str(args.forward_backend),
+                    mesh_family=str(args.mesh_family),
+                    geometry_version=str(args.geometry_version),
                 ),
             )
 
@@ -314,17 +375,22 @@ def main() -> None:
             stages.extend([cold_stage, warm_stage, diff_stage])
 
         if run_absolute:
-            mesh = load_or_create_mesh(
-                mesh_dir=str(args.mesh_dir),
-                mesh_name=None,
-                n_elec=int(args.n_elec),
-                dimension=3,
-                radius=float(args.radius),
-                refinement=int(args.refinement),
-                height=float(args.height),
-                electrode_height_ratio=0.2,
-                z_center=0.0,
-                electrode_coverage=0.5,
+            mesh, absolute_mesh_stage = _timed(
+                "absolute_mesh_load",
+                lambda: load_or_create_mesh(
+                    mesh_dir=str(mesh_dir),
+                    mesh_name=None,
+                    n_elec=int(args.n_elec),
+                    dimension=3,
+                    radius=float(args.radius),
+                    refinement=int(args.refinement),
+                    height=float(args.height),
+                    electrode_height_ratio=0.2,
+                    z_center=0.0,
+                    electrode_coverage=0.5,
+                    mesh_family=str(args.mesh_family),
+                    geometry_version=str(args.geometry_version),
+                ),
             )
             pattern = PatternConfig(
                 n_elec=int(args.n_elec),
@@ -334,74 +400,139 @@ def main() -> None:
                 drive_value=1.0,
                 geometry_scale_to_m=1.0,
             )
-            system = EITSystem(
-                n_elec=int(args.n_elec),
-                pattern_config=pattern,
-                contact_impedance=np.full(int(args.n_elec), float(args.contact_impedance), dtype=float),
-                base_conductivity=float(args.background),
-                regularization_type="noser",
-                regularization_alpha=1.0,
-                cache_scope="both",
-                cache_dir=str(run_cache_dir),
-                solver_mode=str(args.solver_mode),
-                linear_solver=str(args.linear_solver),
-                jacobian_update_every=2,
-                jacobian_reuse_tol=1e-3,
-                line_search_mode="fast" if str(args.solver_mode) == "fast" else "full",
-                preconditioner=str(args.preconditioner),
-                fast_linear_path=str(args.fast_linear_path),
-                rom_mode=str(args.rom_mode),
-                rom_rank_global=int(args.rom_rank_global),
-                rom_rank_adaptive=int(args.rom_rank_adaptive),
-                rom_refresh_every=int(args.rom_refresh_every),
-                rom_snapshot_source=str(args.rom_snapshot_source),
-                inexact_mode=str(args.inexact_mode),
-                inexact_forcing=str(args.inexact_forcing),
-                inexact_eta0=float(args.inexact_eta0),
-                inexact_eta_min=float(args.inexact_eta_min),
-                inexact_eta_max=float(args.inexact_eta_max),
-                lowrank_mode=str(args.lowrank_mode),
-                lowrank_rank=int(args.lowrank_rank),
-                lowrank_method=str(args.lowrank_method),
-                lowrank_energy=float(args.lowrank_energy),
-                absolute_startup_cache=str(args.absolute_startup_cache) == "on",
-                cholmod_max_n=int(args.cholmod_max_n),
-                cholmod_max_memory_gib=float(args.cholmod_max_memory_gib),
-                jacobian_block_tune=str(args.jacobian_block_tune),
-                jacobian_block_size=int(args.jacobian_block_size),
-                jacobian_block_candidates=jacobian_block_candidates,
-                petsc_device=str(args.petsc_device),
-                device=str(args.device),
-                linear_backend_config={"mat_solve_mode": str(args.forward_mat_solve), "petsc_device": str(args.petsc_device)},
+            def _build_system() -> EITSystem:
+                system = EITSystem(
+                    n_elec=int(args.n_elec),
+                    pattern_config=pattern,
+                    contact_impedance=np.full(int(args.n_elec), float(args.contact_impedance), dtype=float),
+                    base_conductivity=float(args.background),
+                    regularization_type="noser",
+                    regularization_alpha=1.0,
+                    cache_scope="both",
+                    cache_dir=str(run_cache_dir),
+                    solver_mode=str(args.solver_mode),
+                    linear_solver=str(args.linear_solver),
+                    jacobian_update_every=2,
+                    jacobian_reuse_tol=1e-3,
+                    line_search_mode="fast" if str(args.solver_mode) == "fast" else "full",
+                    preconditioner=str(args.preconditioner),
+                    fast_linear_path=str(args.fast_linear_path),
+                    rom_mode=str(args.rom_mode),
+                    rom_rank_global=int(args.rom_rank_global),
+                    rom_rank_adaptive=int(args.rom_rank_adaptive),
+                    rom_refresh_every=int(args.rom_refresh_every),
+                    rom_snapshot_source=str(args.rom_snapshot_source),
+                    inexact_mode=str(args.inexact_mode),
+                    inexact_forcing=str(args.inexact_forcing),
+                    inexact_eta0=float(args.inexact_eta0),
+                    inexact_eta_min=float(args.inexact_eta_min),
+                    inexact_eta_max=float(args.inexact_eta_max),
+                    lowrank_mode=str(args.lowrank_mode),
+                    lowrank_rank=int(args.lowrank_rank),
+                    lowrank_method=str(args.lowrank_method),
+                    lowrank_energy=float(args.lowrank_energy),
+                    absolute_startup_cache=str(args.absolute_startup_cache) == "on",
+                    cholmod_max_n=int(args.cholmod_max_n),
+                    cholmod_max_memory_gib=float(args.cholmod_max_memory_gib),
+                    jacobian_block_tune=str(args.jacobian_block_tune),
+                    jacobian_block_size=int(args.jacobian_block_size),
+                    jacobian_block_candidates=jacobian_block_candidates,
+                    petsc_device=str(args.petsc_device),
+                    device=str(args.device),
+                    forward_backend=str(args.forward_backend),
+                    mesh_family=str(args.mesh_family),
+                    linear_backend_config={
+                        "mat_solve_mode": str(args.forward_mat_solve),
+                        "petsc_device": str(args.petsc_device),
+                    },
+                )
+                system.setup(mesh=mesh)
+                return system
+
+            system, absolute_setup_stage = _timed(
+                "absolute_system_setup",
+                _build_system,
             )
-            system.setup(mesh=mesh)
             system.reconstructor.max_iterations = int(args.absolute_iters)
             system.reconstructor.verbose = False
+            absolute_mesh_info = {
+                "mesh_file": getattr(mesh, "mesh_file", None),
+                "nodes": int(mesh.num_vertices()),
+                "elements": int(mesh.num_cells()),
+                "potential_dofs": int(system.fwd_model.dofs),
+                "sigma_dofs": int(
+                    system.fwd_model.V_sigma.dofmap.index_map.size_local
+                    * system.fwd_model.V_sigma.dofmap.index_map_bs
+                ),
+                "mesh_dim": int(mesh.topology.dim),
+                "mesh_family": getattr(mesh, "mesh_family", None),
+                "geometry_version": getattr(mesh, "geometry_version", None),
+                "generator_revision": getattr(mesh, "generator_revision", None),
+            }
 
             baseline = system.create_homogeneous_image(conductivity=float(args.background))
-            baseline_data = system.forward_solve(baseline)
+            baseline_data, absolute_first_forward_stage = _timed(
+                "absolute_first_forward",
+                lambda: system.forward_solve(baseline),
+            )
             _, absolute_forward_probe_stage = _timed(
-                "absolute_forward_probe",
+                "absolute_warm_forward",
                 lambda: [system.forward_solve(baseline) for _ in range(int(absolute_forward_probe_repeats))],
             )
-            stages.append(absolute_forward_probe_stage)
             phantom_sigma = _build_phantom_sigma(system, background=float(args.background))
             phantom = EITImage(elem_data=phantom_sigma, fwd_model=system.fwd_model)
-            target_data = system.forward_solve(phantom)
+            target_data, absolute_target_forward_stage = _timed(
+                "absolute_target_forward",
+                lambda: system.forward_solve(phantom),
+            )
+            absolute_backend_info = dict(system.fwd_model.get_backend_diagnostics())
 
             absolute_result, absolute_stage = _timed(
                 "absolute_reconstruct",
                 lambda: system.inverse_solve(data=target_data, reference_data=baseline_data),
             )
-            stages.append(absolute_stage)
+            stages.extend(
+                [
+                    absolute_mesh_stage,
+                    absolute_setup_stage,
+                    absolute_first_forward_stage,
+                    absolute_forward_probe_stage,
+                    absolute_target_forward_stage,
+                    absolute_stage,
+                ]
+            )
             if hasattr(absolute_result, "diagnostics") and isinstance(absolute_result.diagnostics, dict):
                 absolute_timing = absolute_result.diagnostics.get("timing", {})
                 backend = absolute_result.diagnostics.get("backend_info", {})
                 if isinstance(backend, dict):
-                    absolute_backend_info = backend
+                    merged_backend = dict(absolute_backend_info)
+                    merged_backend.update(backend)
+                    absolute_backend_info = merged_backend
 
         if absolute_forward_probe_stage is not None:
             absolute_timing = dict(absolute_timing) if isinstance(absolute_timing, dict) else {}
+            absolute_timing["mesh_load_elapsed_sec"] = float(
+                absolute_mesh_stage.get("elapsed_sec", 0.0)
+            ) if absolute_mesh_stage is not None else 0.0
+            absolute_timing["system_setup_elapsed_sec"] = float(
+                absolute_setup_stage.get("elapsed_sec", 0.0)
+            ) if absolute_setup_stage is not None else 0.0
+            absolute_timing["first_forward_elapsed_sec"] = float(
+                absolute_first_forward_stage.get("elapsed_sec", 0.0)
+            ) if absolute_first_forward_stage is not None else 0.0
+            absolute_timing["warm_forward_total_sec"] = float(
+                absolute_forward_probe_stage.get("elapsed_sec", 0.0)
+            )
+            absolute_timing["warm_forward_avg_sec"] = float(
+                float(absolute_forward_probe_stage.get("elapsed_sec", 0.0))
+                / max(1, int(absolute_forward_probe_repeats))
+            )
+            absolute_timing["target_forward_elapsed_sec"] = float(
+                absolute_target_forward_stage.get("elapsed_sec", 0.0)
+            ) if absolute_target_forward_stage is not None else 0.0
+            absolute_timing["absolute_reconstruct_elapsed_sec"] = float(
+                absolute_stage.get("elapsed_sec", 0.0)
+            ) if run_absolute else 0.0
             absolute_timing["forward_probe"] = float(absolute_forward_probe_stage.get("elapsed_sec", 0.0))
             absolute_timing["forward_probe_repeats"] = int(absolute_forward_probe_repeats)
 
@@ -409,9 +540,20 @@ def main() -> None:
             "run_index": int(run_index),
             "stages": stages,
             "stage_breakdown": {
-                "difference": diff_metrics.get("stage_timings", {}) if isinstance(diff_metrics, dict) else {},
+                "difference": (
+                    {
+                        **(diff_metrics.get("stage_timings", {}) if isinstance(diff_metrics, dict) else {}),
+                        "context_cold_elapsed_sec": float(cold_stage.get("elapsed_sec", 0.0))
+                        if run_diff
+                        else 0.0,
+                        "context_warm_elapsed_sec": float(warm_stage.get("elapsed_sec", 0.0))
+                        if run_diff
+                        else 0.0,
+                    }
+                ),
                 "absolute": absolute_timing,
             },
+            "mesh_info": absolute_mesh_info,
             "difference_solver": {
                 "solver_mode": diff_metrics.get("solver_mode") if isinstance(diff_metrics, dict) else None,
                 "linear_solver": diff_metrics.get("linear_solver") if isinstance(diff_metrics, dict) else None,
@@ -426,8 +568,53 @@ def main() -> None:
                 "inverse_device_effective": diff_metrics.get("inverse_device_effective") if isinstance(diff_metrics, dict) else None,
                 "execution_profile": diff_metrics.get("execution_profile") if isinstance(diff_metrics, dict) else None,
                 "jacobian_block_backend": diff_metrics.get("jacobian_block_backend") if isinstance(diff_metrics, dict) else None,
+                "difference_context_cold_elapsed_sec": float(cold_stage.get("elapsed_sec", 0.0))
+                if run_diff
+                else 0.0,
+                "difference_context_warm_elapsed_sec": float(warm_stage.get("elapsed_sec", 0.0))
+                if run_diff
+                else 0.0,
+                "difference_reconstruct_elapsed_sec": float(
+                    sum(
+                        float(value)
+                        for value in (diff_metrics.get("stage_timings", {}) if isinstance(diff_metrics, dict) else {}).values()
+                        if isinstance(value, (int, float))
+                    )
+                )
+                if run_diff
+                else 0.0,
             },
             "absolute_solver": {
+                "forward_backend_requested": absolute_backend_info.get(
+                    "forward_backend_requested",
+                    str(args.forward_backend),
+                ),
+                "forward_backend_effective": absolute_backend_info.get(
+                    "forward_backend_effective",
+                    str(args.forward_backend),
+                ),
+                "mesh_family": getattr(system.fwd_model, "mesh_family", str(args.mesh_family)),
+                "geometry_version": getattr(system.fwd_model, "geometry_version", str(args.geometry_version)),
+                "generator_revision": getattr(system.fwd_model, "generator_revision", DEFAULT_3D_GENERATOR_REVISION),
+                "drive_mode_requested": absolute_backend_info.get("drive_mode_requested"),
+                "drive_mode_effective": absolute_backend_info.get("drive_mode_effective"),
+                "solve_mode": absolute_backend_info.get("solve_mode"),
+                "h1_solver": absolute_backend_info.get("h1_solver"),
+                "h1_preconditioner": absolute_backend_info.get("h1_preconditioner"),
+                "partial_probe_passed": absolute_backend_info.get("partial_probe_passed"),
+                "partial_probe_detail": absolute_backend_info.get("partial_probe_detail"),
+                "nonfinite_guard_triggered": absolute_backend_info.get("nonfinite_guard_triggered"),
+                "mesh_quality_min_volume": absolute_backend_info.get("mesh_quality_min_volume"),
+                "electrode_measure_min": absolute_backend_info.get("electrode_measure_min"),
+                "structured_backend_version": absolute_backend_info.get("structured_backend_version"),
+                "structured_sidecar_loaded": absolute_backend_info.get("structured_sidecar_loaded"),
+                "structured_sidecar_file": absolute_backend_info.get("structured_sidecar_file"),
+                "structured_sidecar_version": absolute_backend_info.get("structured_sidecar_version"),
+                "operator_backend": absolute_backend_info.get("operator_backend"),
+                "mg_levels": absolute_backend_info.get("mg_levels"),
+                "pcg_iterations": absolute_backend_info.get("pcg_iterations"),
+                "batched_rhs_count": absolute_backend_info.get("batched_rhs_count"),
+                "forward_reuse_state_hit": absolute_backend_info.get("forward_reuse_state_hit"),
                 "resolved_preconditioner": absolute_backend_info.get("resolved_preconditioner"),
                 "fast_solver_path": absolute_backend_info.get("fast_solver_path"),
                 "fast_linear_path_selected": absolute_backend_info.get("fast_linear_path_selected"),
@@ -459,6 +646,27 @@ def main() -> None:
                 "startup_jacobian_elapsed": float(absolute_timing.get("jacobian", 0.0))
                 if isinstance(absolute_timing, dict)
                 else 0.0,
+                "mesh_load_elapsed_sec": float(absolute_timing.get("mesh_load_elapsed_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "system_setup_elapsed_sec": float(absolute_timing.get("system_setup_elapsed_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "first_forward_elapsed_sec": float(absolute_timing.get("first_forward_elapsed_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "warm_forward_total_sec": float(absolute_timing.get("warm_forward_total_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "warm_forward_avg_sec": float(absolute_timing.get("warm_forward_avg_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "target_forward_elapsed_sec": float(absolute_timing.get("target_forward_elapsed_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
+                "absolute_reconstruct_elapsed_sec": float(absolute_timing.get("absolute_reconstruct_elapsed_sec", 0.0))
+                if isinstance(absolute_timing, dict)
+                else 0.0,
                 "forward_probe_elapsed_sec": float(absolute_timing.get("forward_probe", 0.0))
                 if isinstance(absolute_timing, dict)
                 else 0.0,
@@ -468,6 +676,8 @@ def main() -> None:
                 "startup_cache_lookup": absolute_backend_info.get("startup_cache_lookup", {}),
             },
             "cache": {
+                "root": str(run_cache_dir),
+                "ephemeral_root": bool(ephemeral_cache_root is not None),
                 "cold_build": cold_ctx.get("cache_build_seconds", {}) if isinstance(cold_ctx, dict) else {},
                 "warm_build": warm_ctx.get("cache_build_seconds", {}) if isinstance(warm_ctx, dict) else {},
                 "warm_lookups": warm_ctx.get("cache_lookups", {}) if isinstance(warm_ctx, dict) else {},
@@ -512,6 +722,10 @@ def main() -> None:
             "forward_mat_solve": str(args.forward_mat_solve),
             "petsc_device": str(args.petsc_device),
             "device": str(args.device),
+            "forward_backend": str(args.forward_backend),
+            "mesh_family": str(args.mesh_family),
+            "geometry_version": str(args.geometry_version),
+            "generator_revision": DEFAULT_3D_GENERATOR_REVISION,
             "jacobian_block_tune": str(args.jacobian_block_tune),
             "jacobian_block_size": int(args.jacobian_block_size),
             "jacobian_block_candidates": jacobian_block_candidates,
@@ -519,14 +733,18 @@ def main() -> None:
             "cholmod_max_memory_gib": float(args.cholmod_max_memory_gib),
             "absolute_startup_cache": str(args.absolute_startup_cache),
             "absolute_iters": int(args.absolute_iters),
+            "warm_forward_repeats": int(args.warm_forward_repeats),
             "run_diff": str(args.run_diff),
             "run_absolute": str(args.run_absolute),
         },
         "profile_label": str(args.profile_label),
         "repeat": int(args.repeat),
+        "cache_root_mode": "ephemeral" if ephemeral_cache_root is not None else "explicit",
+        "mesh_root_mode": "ephemeral" if ephemeral_mesh_root is not None else "explicit",
         "capabilities": detect_performance_capabilities(),
         "stages": median_run.get("stages", []),
         "stage_breakdown": median_run.get("stage_breakdown", {}),
+        "mesh_info": median_run.get("mesh_info", {}),
         "difference_solver": median_run.get("difference_solver", {}),
         "absolute_solver": median_run.get("absolute_solver", {}),
         "cache": median_run.get("cache", {}),
@@ -536,6 +754,10 @@ def main() -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
     print(f"[OK] 3D benchmark report saved: {output_path}")
+    if ephemeral_cache_root is not None and ephemeral_cache_root.exists():
+        shutil.rmtree(ephemeral_cache_root, ignore_errors=True)
+    if ephemeral_mesh_root is not None and ephemeral_mesh_root.exists():
+        shutil.rmtree(ephemeral_mesh_root, ignore_errors=True)
 
 
 if __name__ == "__main__":

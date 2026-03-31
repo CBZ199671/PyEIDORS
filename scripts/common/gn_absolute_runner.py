@@ -16,8 +16,11 @@ from pyeidors.data.structures import EITData, EITImage
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.policy import (
+    DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_FORWARD_BACKEND,
+    DEFAULT_MESH_FAMILY,
     DEFAULT_INEXACT_ETA0,
     DEFAULT_INEXACT_ETA_MAX,
     DEFAULT_INEXACT_ETA_MIN,
@@ -36,7 +39,10 @@ from pyeidors.perf.policy import (
     DEFAULT_ROM_RANK_GLOBAL,
     DEFAULT_ROM_REFRESH_EVERY,
     DEFAULT_ROM_SNAPSHOT_SOURCE,
+    normalize_forward_backend,
+    normalize_mesh_family,
 )
+from pyeidors.physics.current_drive import normalize_pattern_config_for_mesh
 from pyeidors.visualization import EITVisualizer
 
 from .io_utils import align_measurement_polarity
@@ -171,6 +177,9 @@ def run_absolute_reconstruction(
     forward_mat_solve: str = "off",
     petsc_device: str = "auto",
     device: str = "auto",
+    forward_backend: str = DEFAULT_FORWARD_BACKEND,
+    mesh_family: str = DEFAULT_MESH_FAMILY,
+    geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
     cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
     cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
@@ -179,6 +188,15 @@ def run_absolute_reconstruction(
 ) -> None:
     """Execute GN absolute reconstruction and save outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
+    forward_backend = normalize_forward_backend(
+        forward_backend,
+        default=DEFAULT_FORWARD_BACKEND,
+    )
+    mesh_family = normalize_mesh_family(
+        mesh_family,
+        default=DEFAULT_MESH_FAMILY,
+    )
+    geometry_version = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
 
     print(f"[INFO] CSV data file: {csv_path}")
     print(f"[INFO] YAML metadata file: {metadata_path}")
@@ -193,9 +211,10 @@ def run_absolute_reconstruction(
     )
 
     dataset = _build_dataset(measurement, metadata)
-    pattern_config = dataset.pattern_config
-    if int(mesh_dim) == 3 and str(pattern_config.drive_mode) == "line_current_density":
-        pattern_config.drive_mode = "total_current"
+    pattern_config, drive_mode_diag = normalize_pattern_config_for_mesh(
+        dataset.pattern_config,
+        mesh_tdim=int(mesh_dim),
+    )
     n_elec = pattern_config.n_elec
 
     mesh = load_or_create_mesh(
@@ -209,6 +228,8 @@ def run_absolute_reconstruction(
         electrode_height_ratio=float(electrode_height_ratio),
         z_center=float(z_center),
         electrode_coverage=float(metadata.get("electrode_coverage", 0.5)),
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
     )
 
     system = EITSystem(
@@ -250,6 +271,8 @@ def run_absolute_reconstruction(
         jacobian_block_candidates=tuple(int(v) for v in jacobian_block_candidates if int(v) > 0),
         petsc_device=str(petsc_device),
         device=str(device),
+        forward_backend=str(forward_backend),
+        mesh_family=str(mesh_family),
         linear_backend_config={"mat_solve_mode": str(forward_mat_solve), "petsc_device": str(petsc_device)},
     )
     system.setup(mesh=mesh)
@@ -395,6 +418,7 @@ def run_absolute_reconstruction(
         "initial_sigma": background_sigma,
         "measurement_gain": measurement_gain,
         "contact_impedance": contact_impedance,
+        **drive_mode_diag,
         "residual_history": list(recon_result.residual_history or []),
         "sigma_change_history": list(recon_result.sigma_change_history or []),
         "solver_mode": solver_mode,
@@ -418,6 +442,9 @@ def run_absolute_reconstruction(
         "lowrank_energy": float(lowrank_energy),
         "absolute_startup_cache": bool(absolute_startup_cache),
         "forward_mat_solve": forward_mat_solve,
+        "forward_backend": str(forward_backend),
+        "mesh_family": str(mesh_family),
+        "geometry_version": str(geometry_version),
         "petsc_device": petsc_device,
         "device": device,
         "cholmod_max_n": int(cholmod_max_n),

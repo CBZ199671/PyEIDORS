@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Optional
 
 import numpy as np
-from scipy.sparse import csr_matrix
+from scipy.sparse import csr_matrix, diags
 from dolfinx import fem
 
 from .base_regularization import BaseRegularization
@@ -19,37 +19,11 @@ class SmoothnessRegularization(BaseRegularization):
         super().__init__(fwd_model)
         self.alpha = alpha
 
-    def create_matrix(self) -> np.ndarray:
-        mesh = self.mesh
-        tdim = mesh.topology.dim
-        fdim = tdim - 1
-
-        mesh.topology.create_connectivity(fdim, tdim)
-        facet_to_cell = mesh.topology.connectivity(fdim, tdim)
-        facet_map = mesh.topology.index_map(fdim)
-        if facet_to_cell is None or facet_map is None:
-            return np.eye(self.n_elements)
-
-        n_cells = int(mesh.topology.index_map(tdim).size_local)
-        rows = []
-        cols = []
-        data = []
-        row_idx = 0
-
-        for facet in range(int(facet_map.size_local)):
-            adjacent_cells = facet_to_cell.links(facet)
-            if len(adjacent_cells) == 2:
-                cell1, cell2 = int(adjacent_cells[0]), int(adjacent_cells[1])
-                rows.extend([row_idx, row_idx])
-                cols.extend([cell1, cell2])
-                data.extend([1.0, -1.0])
-                row_idx += 1
-
-        if row_idx == 0:
-            return self.alpha * np.eye(n_cells)
-
-        L = csr_matrix((data, (rows, cols)), shape=(row_idx, n_cells))
-        regularization_matrix = self.alpha * (L.T @ L).toarray()
+    def create_matrix(self):
+        L = _cell_difference_operator(self.mesh, self.n_elements)
+        if L.shape[0] == 0:
+            return csr_matrix(self.alpha * np.eye(self.n_elements))
+        regularization_matrix = (self.alpha * (L.T @ L)).tocsr()
         return regularization_matrix
 
 
@@ -65,15 +39,44 @@ class TikhonovRegularization(BaseRegularization):
 
 
 class TotalVariationRegularization(BaseRegularization):
-    """Approximate Total Variation regularization."""
+    """Frozen linearized Total Variation prior around a background conductivity."""
 
-    def __init__(self, fwd_model, alpha: float = 1.0, epsilon: float = 1e-6):
+    def __init__(
+        self,
+        fwd_model,
+        alpha: float = 1.0,
+        epsilon: float = 1e-6,
+        reference_conductivity: float | np.ndarray = 1.0,
+    ):
         super().__init__(fwd_model)
         self.alpha = alpha
         self.epsilon = epsilon
+        self.reference_conductivity = reference_conductivity
 
-    def create_matrix(self) -> np.ndarray:
-        return self.alpha * np.eye(self.n_elements)
+    def _reference_vector(self) -> np.ndarray:
+        if np.isscalar(self.reference_conductivity):
+            return np.full(self.n_elements, float(self.reference_conductivity), dtype=np.float64)
+        reference = np.asarray(self.reference_conductivity, dtype=np.float64).reshape(-1)
+        if reference.shape[0] != self.n_elements:
+            raise ValueError(
+                "reference_conductivity must match the number of elements: "
+                f"{reference.shape[0]} vs {self.n_elements}."
+            )
+        return reference
+
+    def create_matrix(self):
+        L = _cell_difference_operator(self.mesh, self.n_elements)
+        if L.shape[0] == 0:
+            return csr_matrix(self.alpha * np.eye(self.n_elements))
+        reference = self._reference_vector()
+        grad_ref = np.asarray(L @ reference, dtype=np.float64).reshape(-1)
+        weights = 1.0 / np.sqrt(np.square(grad_ref) + float(self.epsilon) ** 2)
+        finite_weights = weights[np.isfinite(weights)]
+        median_weight = float(np.median(finite_weights)) if finite_weights.size else 1.0
+        if median_weight > 0.0:
+            weights = weights / median_weight
+        W = diags(weights, offsets=0, format="csr")
+        return (self.alpha * (L.T @ W @ L)).tocsr()
 
     def create_nonlinear_term(self, sigma_current: np.ndarray) -> np.ndarray:
         grad_magnitude = np.abs(np.gradient(sigma_current))
@@ -120,8 +123,40 @@ class NOSERRegularization(BaseRegularization):
 
         return np.maximum(diag_entries, effective_floor)
 
-    def create_matrix(self) -> np.ndarray:
+    def create_matrix(self):
         if self._baseline_diag is None:
             self._baseline_diag = self._compute_baseline_diag()
         scaled_diag = self._baseline_diag ** self.exponent
-        return self.alpha * np.diag(scaled_diag)
+        return diags(self.alpha * scaled_diag, offsets=0, format="csr")
+
+
+def _cell_difference_operator(mesh, n_elements: int) -> csr_matrix:
+    """Build the cell-adjacency difference operator used by smoothness/TV priors."""
+    tdim = mesh.topology.dim
+    fdim = tdim - 1
+
+    mesh.topology.create_connectivity(fdim, tdim)
+    facet_to_cell = mesh.topology.connectivity(fdim, tdim)
+    facet_map = mesh.topology.index_map(fdim)
+    if facet_to_cell is None or facet_map is None:
+        return csr_matrix((0, n_elements), dtype=np.float64)
+
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    row_idx = 0
+
+    for facet in range(int(facet_map.size_local)):
+        adjacent_cells = facet_to_cell.links(facet)
+        if len(adjacent_cells) != 2:
+            continue
+        cell1, cell2 = int(adjacent_cells[0]), int(adjacent_cells[1])
+        rows.extend([row_idx, row_idx])
+        cols.extend([cell1, cell2])
+        data.extend([1.0, -1.0])
+        row_idx += 1
+
+    if row_idx == 0:
+        return csr_matrix((0, n_elements), dtype=np.float64)
+
+    return csr_matrix((data, (rows, cols)), shape=(row_idx, n_elements), dtype=np.float64)

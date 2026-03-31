@@ -7,6 +7,7 @@ cd "$ROOT_DIR"
 readonly EXPECTED_PY_MM="3.13"
 readonly ACTIVE_VENV_DIR="${PYEIDORS_ACTIVE_VENV:-.venv}"
 readonly PYTHON_BIN="${PYTHON_BIN:-${ACTIVE_VENV_DIR}/bin/python}"
+readonly ALLOW_INEXACT_SYNC="${PYEIDORS_ENV_SYNC_INEXACT:-0}"
 readonly PROFILE_EXTRAS=(torch cuqi dev)
 readonly OPTIONAL_PERF_EXTRAS=(performance)
 
@@ -32,6 +33,7 @@ PyEIDORS locked environment profile
 - Python interpreter: ${PYTHON_BIN}
 - Required Python major/minor: 3.13
 - uv sync flags: --frozen
+- Inexact mode: ${ALLOW_INEXACT_SYNC}
 - Lock freshness gate: uv lock --check
 - Profile extras: torch, cuqi, dev
 - Optional extras (opt-in): performance
@@ -65,6 +67,9 @@ ensure_python_version() {
 
 build_sync_cmd() {
   SYNC_CMD=(uv sync --python "$PYTHON_BIN" --frozen)
+  if [ "$ALLOW_INEXACT_SYNC" = "1" ]; then
+    SYNC_CMD+=(--inexact)
+  fi
 
   if [ -n "${VIRTUAL_ENV:-}" ]; then
     active_real="$(cd "$VIRTUAL_ENV" 2>/dev/null && pwd || true)"

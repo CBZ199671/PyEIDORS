@@ -27,6 +27,8 @@ htmlcov/
 .tox/
 .pytest_cache/
 .nox/
+.pyeidors_cache/
+.tmp_cache_debug*/
 
 # Type checking
 .mypy_cache/

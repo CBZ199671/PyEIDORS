@@ -5,6 +5,7 @@ from __future__ import annotations
 import configparser
 import logging
 from pathlib import Path
+import re
 from typing import Any, Dict
 
 import numpy as np
@@ -13,15 +14,51 @@ from dolfinx.io import gmsh as gmshio
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
+from .mesh3d_generator import (
+    STRUCTURED_SIDECAR_VERSION,
+    load_structured_sidecar,
+    structured_sidecar_path_for_mesh,
+)
+from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
 
 logger = logging.getLogger(__name__)
+
+
+def _infer_mesh_family_from_mesh(mesh: EITMesh) -> str | None:
+    if int(mesh.topology.dim) != 3:
+        return None
+    cells = mesh.cells()
+    if cells.ndim != 2 or cells.shape[0] == 0:
+        return None
+    verts_per_cell = int(cells.shape[1])
+    if verts_per_cell == 8:
+        return "hex"
+    if verts_per_cell == 4:
+        return "tetra"
+    return None
+
+
+def _infer_geometry_version(mesh_name: str) -> str:
+    lowered = str(mesh_name).strip().lower()
+    return "geomv2" if "geomv2" in lowered else "legacy"
+
+
+def _infer_generator_revision(mesh_name: str) -> str:
+    lowered = str(mesh_name).strip().lower()
+    match = re.search(r"(g3d\d+)", lowered)
+    if match is not None:
+        return str(match.group(1))
+    return LEGACY_3D_GENERATOR_REVISION
 
 
 class MeshLoader:
     """Load cached EIT meshes from ``.msh`` files."""
 
-    def __init__(self, mesh_dir: str = "eit_meshes"):
+    def __init__(self, mesh_dir: str = "eit_meshes", gdim: int = 2):
         self.mesh_dir = Path(mesh_dir)
+        self.gdim = int(gdim)
+        if self.gdim not in {2, 3}:
+            raise ValueError(f"gdim must be 2 or 3, got {gdim!r}")
         if not self.mesh_dir.exists():
             raise FileNotFoundError(f"Mesh directory does not exist: {mesh_dir}")
 
@@ -33,12 +70,27 @@ class MeshLoader:
         if not msh_file.exists():
             raise FileNotFoundError(f"Mesh file does not exist: {msh_file}")
 
-        mesh_data = gmshio.read_from_msh(str(msh_file), MPI.COMM_WORLD, rank=0, gdim=2)
+        mesh_data = gmshio.read_from_msh(
+            str(msh_file),
+            MPI.COMM_WORLD,
+            rank=0,
+            gdim=self.gdim,
+        )
         association_table = self._load_association_table(association_file)
         if not association_table:
             association_table = {
                 name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
             }
+        sidecar_path = structured_sidecar_path_for_mesh(msh_file)
+        geometry_version = _infer_geometry_version(mesh_name)
+        generator_revision = _infer_generator_revision(mesh_name)
+        if sidecar_path.exists():
+            try:
+                sidecar = load_structured_sidecar(sidecar_path)
+                geometry_version = str(sidecar.get("geometry_version", geometry_version)).strip().lower() or geometry_version
+                generator_revision = str(sidecar.get("generator_revision", generator_revision)).strip().lower() or generator_revision
+            except Exception:
+                pass
 
         eit_mesh = build_eit_mesh(
             mesh_data.mesh,
@@ -48,7 +100,20 @@ class MeshLoader:
             physical_groups=mesh_data.physical_groups,
             radius=estimate_radius(mesh_data.mesh),
             mesh_file=str(msh_file),
+            geometry_version=geometry_version,
+            generator_revision=generator_revision,
+            structured_sidecar_file=(
+                str(sidecar_path)
+                if sidecar_path.exists()
+                else None
+            ),
+            structured_sidecar_version=(
+                STRUCTURED_SIDECAR_VERSION
+                if sidecar_path.exists()
+                else None
+            ),
         )
+        eit_mesh.mesh_family = _infer_mesh_family_from_mesh(eit_mesh)
         logger.info(
             "Mesh loaded from %s (vertices=%d, cells=%d)",
             msh_file,
@@ -111,5 +176,5 @@ class MeshLoader:
         return self.load_mesh(available["msh"][0])
 
 
-def create_simple_mesh_loader(mesh_dir: str = "eit_meshes") -> MeshLoader:
-    return MeshLoader(mesh_dir)
+def create_simple_mesh_loader(mesh_dir: str = "eit_meshes", gdim: int = 2) -> MeshLoader:
+    return MeshLoader(mesh_dir, gdim=gdim)

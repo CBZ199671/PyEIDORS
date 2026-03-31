@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Tuple, Union
+from typing import Any, Optional, Tuple, Union
 
 import numpy as np
 import torch
@@ -10,6 +10,12 @@ from dolfinx import fem
 from scipy.sparse import isspmatrix
 from scipy.sparse.linalg import LinearOperator
 
+from ...data.difference import (
+    DEFAULT_DIFFERENCE_MODE,
+    DEFAULT_DIFFERENCE_ORIENTATION,
+    normalize_difference_mode,
+    normalize_difference_orientation,
+)
 from ...femx import function_set_array
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
@@ -77,6 +83,7 @@ class GaussNewtonReconstructor:
         max_iterations: int = 15,
         convergence_tol: float = 1e-4,
         regularization_param: float = 0.01,
+        hyperparameter: float | None = None,
         line_search_steps: int = 8,
         clip_values: Tuple[float, float] = (1e-6, 10.0),
         device: str = "auto",
@@ -89,6 +96,16 @@ class GaussNewtonReconstructor:
         negate_jacobian: bool = True,
         min_iterations: int = 1,
         use_prior_term: bool = True,
+        difference_mode: str = DEFAULT_DIFFERENCE_MODE,
+        difference_orientation: str = DEFAULT_DIFFERENCE_ORIENTATION,
+        jacobian_background_conductivity: float = 1.0,
+        difference_step_size_mode: str = "off",
+        difference_step_size_value: float | None = None,
+        difference_step_size_bounds: tuple[float, float] = (0.0, 4.0),
+        difference_step_size_fmin_options: Optional[dict[str, Any]] = None,
+        difference_preset: str = "eidors_one_step_noser",
+        absolute_preset: str = "eidors_abs_gn",
+        best_homog_mode: str = "off",
         cache_manager=None,
         performance_mode: str = "aggressive",
         solver_mode: str = "strict",
@@ -119,7 +136,12 @@ class GaussNewtonReconstructor:
         self.fwd_model = fwd_model
         self.max_iterations = max_iterations
         self.convergence_tol = convergence_tol
-        self.regularization_param = regularization_param
+        self._regularization_param = 0.0
+        self._hyperparameter = 0.0
+        if hyperparameter is None:
+            self.regularization_param = regularization_param
+        else:
+            self.hyperparameter = hyperparameter
         self.line_search_steps = line_search_steps
         self.clip_values = clip_values
         self.verbose = verbose
@@ -132,11 +154,38 @@ class GaussNewtonReconstructor:
         self.step_schedule: Optional[list[float]] = None
         self.min_iterations = int(max(1, min_iterations))
         self.use_prior_term = use_prior_term
+        self.difference_mode = normalize_difference_mode(
+            difference_mode,
+            default=DEFAULT_DIFFERENCE_MODE,
+        )
+        self.difference_orientation = normalize_difference_orientation(
+            difference_orientation,
+            default=DEFAULT_DIFFERENCE_ORIENTATION,
+        )
+        self.jacobian_background_conductivity = float(jacobian_background_conductivity)
+        self.difference_step_size_mode = str(difference_step_size_mode).strip().lower()
+        self.difference_step_size_value = (
+            None if difference_step_size_value is None else float(difference_step_size_value)
+        )
+        self.difference_step_size_bounds = (
+            float(difference_step_size_bounds[0]),
+            float(difference_step_size_bounds[1]),
+        )
+        self.difference_step_size_fmin_options = dict(difference_step_size_fmin_options or {})
+        self.difference_preset = str(difference_preset).strip().lower()
+        self.absolute_preset = str(absolute_preset).strip().lower()
+        self.active_preset_name = self.difference_preset
+        self.best_homog_mode = str(best_homog_mode).strip().lower()
         self._prior_data: Optional[np.ndarray] = None
         self._meas_weight_sqrt: Optional[torch.Tensor] = None
         self._baseline_measurement: Optional[np.ndarray] = None
         self._measured_vector: Optional[np.ndarray] = None
         self._line_search_perturb: Optional[np.ndarray] = None
+        self._measurement_space_type = "real"
+        self._difference_reference_meas: Optional[np.ndarray] = None
+        self._difference_target_meas: Optional[np.ndarray] = None
+        self._difference_mode_effective = self.difference_mode
+        self._difference_orientation_effective = self.difference_orientation
         self.cache_manager = cache_manager
         self.performance_mode = str(performance_mode).strip().lower()
         self.solver_mode = str(solver_mode).strip().lower()
@@ -263,6 +312,7 @@ class GaussNewtonReconstructor:
         if self.verbose:
             print(
                 f"[INFO] GN config: lambda={self.regularization_param:.3e}, "
+                f"hp={self.hyperparameter:.3e}, "
                 f"use_prior_term={self.use_prior_term}"
             )
             print("Modular PyTorch Gauss-Newton Reconstructor initialized:")
@@ -288,6 +338,26 @@ class GaussNewtonReconstructor:
                 f"  CHOLMOD guard: max_n={self.cholmod_max_n}, "
                 f"max_memory_gib={self.cholmod_max_memory_gib:.2f}"
             )
+
+    @property
+    def regularization_param(self) -> float:
+        return float(self._regularization_param)
+
+    @regularization_param.setter
+    def regularization_param(self, value: float) -> None:
+        resolved = max(0.0, float(value))
+        self._regularization_param = resolved
+        self._hyperparameter = float(np.sqrt(resolved))
+
+    @property
+    def hyperparameter(self) -> float:
+        return float(self._hyperparameter)
+
+    @hyperparameter.setter
+    def hyperparameter(self, value: float | None) -> None:
+        resolved = 0.0 if value is None else max(0.0, float(value))
+        self._hyperparameter = resolved
+        self._regularization_param = float(resolved * resolved)
 
     def _progress(self, total: int):
         return tqdm(total=total, disable=not self.verbose)

@@ -8,6 +8,8 @@ import numpy as np
 import torch
 from dolfinx import fem
 
+from pyeidors.data.difference import build_difference_vector
+from pyeidors.data.structures import EITData
 from pyeidors.inverse.solvers.gauss_newton import GaussNewtonReconstructor
 
 
@@ -133,6 +135,72 @@ def test_measurement_length_mismatch_raises(eit_system):
         assert "Measurement data length mismatch" in str(exc)
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected ValueError for measurement length mismatch")
+
+
+def test_reconstruct_difference_modes_project_residual_and_jacobian(eit_system, monkeypatch):
+    monkeypatch.setattr(torch.linalg, "solve", _safe_torch_solve)
+    V_sigma = eit_system.fwd_model.V_sigma
+    n_elem = int(fem.Function(V_sigma).x.array.size)
+    jacobian = np.eye(n_elem, dtype=float)
+    bias = np.linspace(0.2, 0.6, n_elem, dtype=float)
+    sigma_ref = np.linspace(0.8, 1.2, n_elem, dtype=float)
+    sigma_true = sigma_ref + 0.05 * np.sin(np.linspace(0.0, 3.0 * np.pi, n_elem))
+
+    for mode, orientation in (
+        ("raw", "target_minus_reference"),
+        ("normalized", "target_minus_reference"),
+        ("normalized", "reference_minus_target"),
+    ):
+        fwd_model = _LinearForwardModel(V_sigma=V_sigma, jacobian=jacobian, bias=bias)
+        reconstructor = GaussNewtonReconstructor(
+            fwd_model=fwd_model,
+            jacobian_calculator=_DummyJacobian(jacobian),
+            regularization=_DummyRegularization(np.eye(jacobian.shape[1])),
+            max_iterations=1,
+            min_iterations=1,
+            convergence_tol=1e-12,
+            regularization_param=0.0,
+            line_search_steps=2,
+            device="cpu",
+            verbose=False,
+            clip_values=None,
+            min_step=1.0,
+            use_prior_term=False,
+            negate_jacobian=False,
+            difference_mode=mode,
+            difference_orientation=orientation,
+        )
+        reconstructor.step_schedule = [1.0]
+
+        reference_meas = np.dot(jacobian, sigma_ref) + bias
+        target_meas = np.dot(jacobian, sigma_true) + bias
+        measured = EITData(
+            meas=build_difference_vector(
+                target_meas,
+                reference_meas,
+                mode=mode,
+                orientation=orientation,
+            ),
+            stim_pattern=np.zeros((1, 1), dtype=float),
+            n_elec=16,
+            n_stim=1,
+            n_meas=n_elem,
+            type="difference",
+            reference_meas=reference_meas,
+            target_meas=target_meas,
+            difference_mode=mode,
+            difference_orientation=orientation,
+        )
+
+        out = reconstructor.reconstruct(
+            measured_data=measured,
+            initial_conductivity=sigma_ref.copy(),
+            jacobian_method="efficient",
+        )
+        sigma_est = out.conductivity.x.array.copy()
+        assert np.allclose(sigma_est, sigma_true, atol=1e-10)
+        assert out.simulated_measurement is not None
+        assert np.allclose(out.simulated_measurement, measured.meas, atol=1e-10)
 
 
 def test_measurement_weight_strategies_and_baseline_storage(eit_system, monkeypatch):
@@ -261,3 +329,96 @@ def test_setters_invalidate_or_replace_components(eit_system):
     new_jac = _DummyJacobian(np.eye(reconstructor.n_measurements, n_elem))
     reconstructor.set_jacobian_calculator(new_jac)
     assert reconstructor.jacobian_calculator is new_jac
+
+
+def test_hyperparameter_maps_to_squared_lambda(eit_system):
+    reconstructor, _, _ = _make_solver(eit_system, n_meas=5)
+    assert np.isclose(reconstructor.hyperparameter, np.sqrt(0.05))
+
+    reconstructor.hyperparameter = 0.2
+    assert np.isclose(reconstructor.regularization_param, 0.04)
+
+    reconstructor.regularization_param = 0.09
+    assert np.isclose(reconstructor.hyperparameter, 0.3)
+
+
+def test_difference_fixed_step_size_scales_increment_only(eit_system, monkeypatch):
+    monkeypatch.setattr(torch.linalg, "solve", _safe_torch_solve)
+    V_sigma = eit_system.fwd_model.V_sigma
+    n_elem = int(fem.Function(V_sigma).x.array.size)
+    jacobian = np.eye(n_elem, dtype=float)
+    sigma_ref = np.linspace(0.8, 1.2, n_elem, dtype=float)
+    sigma_true = sigma_ref + 0.1 * np.cos(np.linspace(0.0, 2.0 * np.pi, n_elem))
+
+    fwd_model = _LinearForwardModel(V_sigma=V_sigma, jacobian=jacobian)
+    reconstructor = GaussNewtonReconstructor(
+        fwd_model=fwd_model,
+        jacobian_calculator=_DummyJacobian(jacobian),
+        regularization=_DummyRegularization(np.eye(n_elem)),
+        max_iterations=1,
+        min_iterations=1,
+        convergence_tol=1e-12,
+        regularization_param=0.0,
+        device="cpu",
+        verbose=False,
+        clip_values=None,
+        use_prior_term=False,
+        negate_jacobian=False,
+        difference_mode="raw",
+        difference_orientation="target_minus_reference",
+        difference_step_size_mode="fixed",
+        difference_step_size_value=0.5,
+        difference_preset="eidors_one_step_noser",
+    )
+
+    measured = EITData(
+        meas=build_difference_vector(
+            sigma_true,
+            sigma_ref,
+            mode="raw",
+            orientation="target_minus_reference",
+        ),
+        stim_pattern=np.zeros((1, 1), dtype=float),
+        n_elec=16,
+        n_stim=1,
+        n_meas=n_elem,
+        type="difference",
+        reference_meas=sigma_ref,
+        target_meas=sigma_true,
+        difference_mode="raw",
+        difference_orientation="target_minus_reference",
+    )
+
+    out = reconstructor.reconstruct(
+        measured_data=measured,
+        initial_conductivity=sigma_ref.copy(),
+        jacobian_method="efficient",
+    )
+    sigma_est = out.conductivity.x.array.copy()
+    expected = sigma_ref + 0.5 * (sigma_true - sigma_ref)
+    assert np.allclose(sigma_est, expected, atol=1e-10)
+    assert np.isclose(out.diagnostics["difference_step_size"]["value"], 0.5)
+
+
+def test_best_homog_optimize_fits_homogeneous_absolute_data(eit_system, monkeypatch):
+    monkeypatch.setattr(torch.linalg, "solve", _safe_torch_solve)
+    reconstructor, _, jacobian = _make_solver(eit_system, n_meas=6)
+    n_elem = jacobian.shape[1]
+    target_sigma = 1.7
+    measured = np.dot(jacobian, np.full(n_elem, target_sigma, dtype=float)) + np.linspace(0.01, 0.02, 6)
+
+    reconstructor.max_iterations = 1
+    reconstructor.regularization_param = 0.0
+    reconstructor.use_prior_term = False
+    reconstructor.best_homog_mode = "optimize"
+    reconstructor.active_preset_name = "eidors_abs_gn"
+    reconstructor.step_schedule = [1.0]
+
+    out = reconstructor.reconstruct(
+        measured_data=SimpleNamespace(meas=measured),
+        initial_conductivity=1.0,
+        jacobian_method="efficient",
+    )
+    fitted = out.diagnostics["best_homog"]["value"]
+    assert fitted is not None
+    assert np.isclose(float(fitted), target_sigma, atol=1e-3)

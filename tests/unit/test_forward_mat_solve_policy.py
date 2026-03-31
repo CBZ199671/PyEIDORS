@@ -156,3 +156,35 @@ def test_resolve_petsc_backend_info_cuda_requires_real_capability(monkeypatch):
 
     assert "petsc_device='cuda'" in message
     assert "nix develop .#cuda" in message
+
+
+def test_resolve_mfem_runtime_device_prefers_requested_cuda_when_petsc_is_cpu():
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.backend_config = SimpleNamespace(petsc_device="cuda")
+    model._petsc_backend_info = {"petsc_device_effective": "cpu"}
+
+    assert EITForwardModel._resolve_mfem_runtime_device(model) == "cuda"
+
+
+def test_resolve_mfem_runtime_device_keeps_effective_cuda():
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.backend_config = SimpleNamespace(petsc_device="auto")
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+
+    assert EITForwardModel._resolve_mfem_runtime_device(model) == "cuda"
+
+
+def test_ensure_electrode_matrix_is_lazy():
+    model = EITForwardModel.__new__(EITForwardModel)
+    calls = {"count": 0}
+
+    def fake_assemble():
+        calls["count"] += 1
+        return "assembled"
+
+    model.M = None
+    model._assemble_electrode_matrix = fake_assemble
+
+    assert EITForwardModel._ensure_electrode_matrix(model) == "assembled"
+    assert EITForwardModel._ensure_electrode_matrix(model) == "assembled"
+    assert calls["count"] == 1

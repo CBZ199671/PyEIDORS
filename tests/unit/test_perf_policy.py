@@ -5,6 +5,8 @@ from __future__ import annotations
 import pytest
 
 from pyeidors.perf.policy import (
+    normalize_forward_backend,
+    normalize_mesh_family,
     parse_block_size_candidates,
     resolve_experimental_mode,
     resolve_forward_mat_solve,
@@ -36,6 +38,18 @@ def test_resolve_forward_mat_solve_only_keeps_auto_for_3d_fast():
     assert resolve_forward_mat_solve("auto", mesh_dim=3, solver_mode="strict") == "off"
     assert resolve_forward_mat_solve("auto", mesh_dim=2, solver_mode="fast") == "off"
     assert resolve_forward_mat_solve("on", mesh_dim=2, solver_mode="strict") == "on"
+
+
+def test_normalize_forward_backend_keeps_supported_values_and_defaults():
+    assert normalize_forward_backend("dolfinx") == "dolfinx"
+    assert normalize_forward_backend("cuda_structured") == "cuda_structured"
+    assert normalize_forward_backend("unexpected") == "dolfinx"
+
+
+def test_normalize_mesh_family_keeps_supported_values_and_defaults():
+    assert normalize_mesh_family("tetra") == "tetra"
+    assert normalize_mesh_family("hex") == "hex"
+    assert normalize_mesh_family("unexpected") == "tetra"
 
 
 def test_parse_block_size_candidates_normalizes_strings_and_iterables():

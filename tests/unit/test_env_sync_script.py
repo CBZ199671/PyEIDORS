@@ -99,6 +99,17 @@ def test_check_mode_runs_lock_and_sync_with_profile(tmp_path: Path):
     assert "--extra dev" in uv_log
 
 
+def test_check_mode_uses_inexact_when_requested(tmp_path: Path):
+    repo, env = _build_fake_repo(tmp_path)
+    env["PYEIDORS_ENV_SYNC_INEXACT"] = "1"
+
+    out = _run(repo, env, "--check")
+
+    assert out.returncode == 0
+    uv_log = (repo / "uv.log").read_text(encoding="utf-8")
+    assert "--inexact" in uv_log
+
+
 def test_check_mode_reports_lock_drift(tmp_path: Path):
     repo, env = _build_fake_repo(tmp_path)
     env["UV_LOCK_FAIL"] = "1"

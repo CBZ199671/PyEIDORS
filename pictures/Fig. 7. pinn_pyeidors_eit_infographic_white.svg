@@ -1,0 +1,390 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="svg-title desc">
+  <title id="svg-title">PINN 与 pyeidors 协同求解 EIT 逆问题科研信息图</title>
+  <desc id="desc">白底科研信息图，展示 PINN 与 pyeidors 结合进行电阻抗成像的输入、处理和闭环优化流程。</desc>
+  <defs>
+    <linearGradient id="bgGlow" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f7fbff"/>
+      <stop offset="100%" stop-color="#ffffff"/>
+    </linearGradient>
+    <radialGradient id="cyanGlow" cx="50%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#7be7ff" stop-opacity="0.65"/>
+      <stop offset="70%" stop-color="#7be7ff" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#7be7ff" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="goldGlow" cx="50%" cy="50%" r="65%">
+      <stop offset="0%" stop-color="#ffd76a" stop-opacity="0.65"/>
+      <stop offset="70%" stop-color="#ffd76a" stop-opacity="0.12"/>
+      <stop offset="100%" stop-color="#ffd76a" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="cardGrad" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#fbfdff"/>
+      <stop offset="100%" stop-color="#eef5ff"/>
+    </linearGradient>
+    <linearGradient id="glassGrad" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#d7e4ff" stop-opacity="0.72"/>
+      <stop offset="50%" stop-color="#eff5ff" stop-opacity="0.94"/>
+      <stop offset="100%" stop-color="#c8d6f6" stop-opacity="0.72"/>
+    </linearGradient>
+    <linearGradient id="metalGrad" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#7c8bb1"/>
+      <stop offset="50%" stop-color="#edf3ff"/>
+      <stop offset="100%" stop-color="#6b7da7"/>
+    </linearGradient>
+    <linearGradient id="tubeGrad" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#1f3568"/>
+      <stop offset="100%" stop-color="#18264d"/>
+    </linearGradient>
+    <linearGradient id="wireBlue" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#6fdcff"/>
+      <stop offset="100%" stop-color="#2db7ff"/>
+    </linearGradient>
+    <linearGradient id="wireGold" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#e9c25a"/>
+      <stop offset="100%" stop-color="#ffdf6e"/>
+    </linearGradient>
+    <linearGradient id="hotMesh" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#1752c2"/>
+      <stop offset="35%" stop-color="#40d2ff"/>
+      <stop offset="68%" stop-color="#6ad08d"/>
+      <stop offset="100%" stop-color="#ffd166"/>
+    </linearGradient>
+    <linearGradient id="tableHead" x1="0" x2="1" y1="0" y2="0">
+      <stop offset="0%" stop-color="#f4f8ff"/>
+      <stop offset="100%" stop-color="#ebf2ff"/>
+    </linearGradient>
+    <filter id="softShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#28426f" flood-opacity="0.12"/>
+    </filter>
+    <filter id="blueShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="8" flood-color="#2db7ff" flood-opacity="0.25"/>
+    </filter>
+    <filter id="goldShadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="7" flood-color="#f0c34f" flood-opacity="0.28"/>
+    </filter>
+    <filter id="blur24" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur stdDeviation="24"/>
+    </filter>
+    <pattern id="meshPattern" width="24" height="24" patternUnits="userSpaceOnUse">
+      <path d="M0 24L12 0L24 24ZM0 0L12 24L24 0" fill="none" stroke="#5a6f9c" stroke-opacity="0.25" stroke-width="1.1"/>
+    </pattern>
+    <clipPath id="heatClip">
+      <circle cx="0" cy="0" r="68"/>
+    </clipPath>
+    <clipPath id="meshClip">
+      <rect x="0" y="0" width="260" height="138" rx="18"/>
+    </clipPath>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#2db7ff"/>
+    </marker>
+    <marker id="arrowGold" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M0,0 L10,5 L0,10 z" fill="#d1a53c"/>
+    </marker>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --ink: #1c2b4a;
+        --muted: #5e6f92;
+        --line: #dbe6f5;
+        --line-strong: #b9cde8;
+        --blue: #2d5bff;
+        --cyan: #30c7ff;
+        --cyan-soft: #dff7ff;
+        --gold: #d8a735;
+        --gold-soft: #fff4d6;
+        --panel: #f8fbff;
+        --panel-alt: #f1f6ff;
+      }
+      text {
+        font-family: Inter, "Segoe UI", "PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", "WenQuanYi Micro Hei", "SimHei", sans-serif;
+        fill: var(--ink);
+      }
+      .h1 { font-size: 34px; font-weight: 800; letter-spacing: 0.5px; }
+      .h2 { font-size: 24px; font-weight: 800; }
+      .h3 { font-size: 16px; font-weight: 800; letter-spacing: 0.3px; }
+      .body { font-size: 14px; font-weight: 500; fill: var(--muted); }
+      .small { font-size: 12px; font-weight: 600; fill: var(--muted); }
+      .caption { font-size: 13px; font-weight: 700; }
+      .panel { fill: url(#cardGrad); stroke: var(--line); stroke-width: 1.5; filter: url(#softShadow); }
+      .divider { stroke: var(--line-strong); stroke-width: 1.5; }
+      .wire-cyan { fill: none; stroke: url(#wireBlue); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .wire-gold { fill: none; stroke: url(#wireGold); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+      .chip { fill: #ecf4ff; stroke: #b9cde8; stroke-width: 1.4; }
+      .node-blue { fill: #2ed3ff; filter: url(#blueShadow); }
+      .node-gold { fill: #ffe14a; filter: url(#goldShadow); }
+      .table-text { font-size: 13px; font-weight: 600; }
+      .table-value { font-size: 13px; font-weight: 700; }
+    </style>
+  </defs>
+
+  <g id="background">
+    <rect width="1600" height="900" fill="url(#bgGlow)"/>
+    <circle cx="1380" cy="110" r="180" fill="url(#cyanGlow)" opacity="0.35"/>
+    <circle cx="270" cy="120" r="210" fill="url(#goldGlow)" opacity="0.18"/>
+    <circle cx="1180" cy="720" r="260" fill="url(#cyanGlow)" opacity="0.22" filter="url(#blur24)"/>
+    <path d="M70 165H1530" class="divider" opacity="0.6"/>
+    <path d="M690 398H1530" class="divider" opacity="0.75"/>
+    <path d="M690 640H1530" class="divider" opacity="0.75"/>
+  </g>
+
+  <g id="title">
+    <text x="800" y="96" text-anchor="middle" class="h1">物理信息神经网络（PINN）与 pyeidors：协同求解电阻抗成像（EIT）逆问题</text>
+    <text x="800" y="132" text-anchor="middle" class="body">以白底科研信息图形式展示：边界测量输入、神经网络先验、CEM 物理约束，以及闭环损失优化的协同工作流</text>
+  </g>
+
+  <g id="connectors" opacity="0.95">
+    <path class="wire-cyan" d="M300 198 C300 138, 300 132, 350 132 H1110 C1140 132, 1140 152, 1140 184"/>
+    <path class="wire-cyan" d="M370 194 C370 148, 370 146, 520 146 H1004 C1036 146, 1036 168, 1036 200"/>
+    <path class="wire-cyan" d="M438 194 C438 170, 438 170, 754 170 H936 C962 170, 962 186, 962 214"/>
+    <path class="wire-cyan" d="M520 198 C520 212, 520 236, 805 236 H1010"/>
+    <path class="wire-cyan" d="M542 292 C610 292, 660 292, 812 292"/>
+    <path class="wire-cyan" d="M542 312 C640 312, 695 312, 1260 312 V275"/>
+    <path class="wire-gold" d="M510 448 C620 448, 640 448, 680 448" marker-end="url(#arrowGold)"/>
+    <path class="wire-gold" d="M504 702 C620 702, 652 702, 732 702" marker-end="url(#arrowGold)"/>
+  </g>
+
+  <g id="left-apparatus">
+    <g transform="translate(84,170)">
+      <ellipse cx="196" cy="62" rx="172" ry="56" fill="url(#metalGrad)" stroke="#5b6f99" stroke-width="3"/>
+      <ellipse cx="196" cy="62" rx="102" ry="34" fill="#dfe8f6" stroke="#667aa5" stroke-width="2.5"/>
+      <rect x="54" y="64" width="284" height="90" rx="22" fill="url(#glassGrad)" stroke="#6479a5" stroke-width="3"/>
+      <rect x="64" y="84" width="264" height="52" rx="14" fill="#12224a" opacity="0.9"/>
+      <ellipse cx="196" cy="154" rx="168" ry="34" fill="#d9e4f5" stroke="#6479a5" stroke-width="3"/>
+      <ellipse cx="196" cy="154" rx="122" ry="19" fill="#f6f9ff" stroke="#8394bb" stroke-width="2" opacity="0.75"/>
+
+      <g fill="#d7def0" stroke="#3f4f7d" stroke-width="2.3">
+        <g transform="translate(58,12)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(100,0)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(168,-12)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(248,-10)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(318,-4)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(356,18)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(368,58)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(356,98)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(328,130)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(64,96)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+        <g transform="translate(38,58)"><ellipse cx="0" cy="0" rx="16" ry="7"/><rect x="-16" y="0" width="32" height="14" rx="3"/><ellipse cx="0" cy="14" rx="16" ry="7"/></g>
+      </g>
+
+      <path d="M78 118 C78 154, 74 220, 74 282" class="wire-gold" opacity="0.8"/>
+      <path d="M168 134 C168 178, 168 250, 168 302" class="wire-gold" opacity="0.75"/>
+      <path d="M272 134 C272 184, 272 242, 272 292" class="wire-cyan" opacity="0.8"/>
+
+      <ellipse cx="196" cy="544" rx="186" ry="58" fill="url(#metalGrad)" stroke="#5b6f99" stroke-width="3"/>
+      <rect x="38" y="274" width="316" height="270" rx="18" fill="url(#tubeGrad)" stroke="#6479a5" stroke-width="3"/>
+      <ellipse cx="196" cy="274" rx="174" ry="48" fill="#dce7f8" stroke="#6479a5" stroke-width="3"/>
+      <ellipse cx="196" cy="274" rx="126" ry="30" fill="#f7faff" stroke="#8394bb" stroke-width="2" opacity="0.7"/>
+      <ellipse cx="196" cy="544" rx="146" ry="36" fill="#dbe6f6" stroke="#6f82ad" stroke-width="2"/>
+      <rect x="56" y="300" width="280" height="180" rx="16" fill="#0f1d42" opacity="0.92"/>
+
+      <path d="M80 350 q-18 0 -18 18 v110 q0 18 18 18" fill="none" stroke="#36d1ff" stroke-width="3" stroke-linecap="round"/>
+      <path d="M312 350 q18 0 18 18 v110 q0 18 -18 18" fill="none" stroke="#e2bf55" stroke-width="3" stroke-linecap="round"/>
+
+      <g stroke-width="2.1" opacity="0.9">
+        <line x1="104" y1="384" x2="196" y2="352" stroke="#69ddff"/>
+        <line x1="104" y1="384" x2="196" y2="416" stroke="#69ddff"/>
+        <line x1="104" y1="418" x2="196" y2="352" stroke="#69ddff"/>
+        <line x1="104" y1="418" x2="196" y2="416" stroke="#69ddff"/>
+        <line x1="104" y1="452" x2="196" y2="352" stroke="#69ddff"/>
+        <line x1="104" y1="452" x2="196" y2="416" stroke="#69ddff"/>
+        <line x1="104" y1="486" x2="196" y2="416" stroke="#69ddff"/>
+        <line x1="196" y1="352" x2="274" y2="384" stroke="#e5c85f"/>
+        <line x1="196" y1="352" x2="274" y2="418" stroke="#e5c85f"/>
+        <line x1="196" y1="352" x2="274" y2="452" stroke="#e5c85f"/>
+        <line x1="196" y1="384" x2="274" y2="384" stroke="#e5c85f"/>
+        <line x1="196" y1="384" x2="274" y2="418" stroke="#e5c85f"/>
+        <line x1="196" y1="384" x2="274" y2="452" stroke="#e5c85f"/>
+        <line x1="196" y1="416" x2="274" y2="384" stroke="#e5c85f"/>
+        <line x1="196" y1="416" x2="274" y2="418" stroke="#e5c85f"/>
+        <line x1="196" y1="416" x2="274" y2="452" stroke="#e5c85f"/>
+        <line x1="196" y1="448" x2="274" y2="418" stroke="#e5c85f"/>
+        <line x1="196" y1="448" x2="274" y2="452" stroke="#e5c85f"/>
+      </g>
+
+      <g>
+        <circle class="node-blue" cx="104" cy="384" r="14"/>
+        <circle class="node-blue" cx="104" cy="418" r="14"/>
+        <circle class="node-blue" cx="104" cy="452" r="14"/>
+        <circle class="node-blue" cx="104" cy="486" r="14"/>
+        <circle class="node-blue" cx="196" cy="352" r="14"/>
+        <circle class="node-blue" cx="196" cy="384" r="14"/>
+        <circle class="node-blue" cx="196" cy="416" r="14"/>
+        <circle class="node-blue" cx="196" cy="448" r="14"/>
+        <circle class="node-gold" cx="274" cy="384" r="14"/>
+        <circle class="node-gold" cx="274" cy="418" r="14"/>
+        <circle class="node-gold" cx="274" cy="452" r="14"/>
+        <circle class="node-gold" cx="356" cy="410" r="14"/>
+      </g>
+
+      <g transform="translate(156,520)">
+        <rect x="-56" y="0" width="34" height="48" rx="3" fill="#f8ea42" stroke="#4d4b20" stroke-width="2"/>
+        <rect x="-4" y="0" width="34" height="48" rx="3" fill="#9ae5cf" stroke="#386c68" stroke-width="2"/>
+        <rect x="48" y="0" width="34" height="48" rx="3" fill="#39d9ff" stroke="#175b77" stroke-width="2"/>
+      </g>
+
+      <line x1="196" y1="544" x2="196" y2="662" stroke="#7f8eb2" stroke-width="2" stroke-dasharray="8 10" opacity="0.8"/>
+      <rect x="42" y="598" width="308" height="210" rx="18" fill="url(#tubeGrad)" stroke="#6479a5" stroke-width="3"/>
+      <ellipse cx="196" cy="598" rx="182" ry="50" fill="#dce7f8" stroke="#6479a5" stroke-width="3"/>
+      <ellipse cx="196" cy="808" rx="182" ry="50" fill="url(#metalGrad)" stroke="#5b6f99" stroke-width="3"/>
+      <rect x="64" y="632" width="266" height="122" rx="16" fill="#17274f" opacity="0.96"/>
+
+      <g transform="translate(71,642)">
+        <rect x="0" y="0" width="54" height="54" rx="10" fill="#1f6fb0" opacity="0.16" stroke="#46d2ff" stroke-width="2.4"/>
+        <path d="M14 38H40M18 34V22M26 34V16M34 34V12" fill="none" stroke="#4ad7ff" stroke-width="4" stroke-linecap="round"/>
+        <text x="27" y="78" text-anchor="middle" class="caption" fill="#45d0ff">测量电压</text>
+        <text x="27" y="96" text-anchor="middle" class="small" fill="#94c9ff">Voltage</text>
+      </g>
+
+      <g transform="translate(129,646)">
+        <path d="M0 61H18" fill="none" stroke="#59d8ff" stroke-width="4" marker-end="url(#arrowBlue)"/>
+      </g>
+
+      <g transform="translate(156,640)">
+        <path d="M6 58H74" fill="none" stroke="#c6d3ef" stroke-width="3"/>
+        <path d="M16 58L28 28L40 58L52 22L64 58" fill="none" stroke="#cbd8f1" stroke-width="3" stroke-linecap="round"/>
+        <line x1="40" y1="18" x2="40" y2="90" stroke="#cbd8f1" stroke-width="3"/>
+        <circle cx="40" cy="46" r="12" fill="#dfe9ff" stroke="#7a8fb7" stroke-width="3"/>
+      </g>
+
+      <g transform="translate(230,646)">
+        <path d="M0 61H20" fill="none" stroke="#e0bf54" stroke-width="4" marker-end="url(#arrowGold)"/>
+      </g>
+
+      <g transform="translate(265,642)">
+        <rect x="0" y="0" width="54" height="54" rx="10" fill="#d39e16" opacity="0.14" stroke="#e2bc4d" stroke-width="2.4"/>
+        <path d="M16 38V24M26 38V16M36 38V20M12 38H40" fill="none" stroke="#f0cf61" stroke-width="4" stroke-linecap="round"/>
+        <text x="27" y="78" text-anchor="middle" class="caption" fill="#d5a72f">模拟电压</text>
+        <text x="27" y="96" text-anchor="middle" class="small" fill="#d0a647">Voltage</text>
+      </g>
+    </g>
+  </g>
+
+  <g id="input-layer">
+    <rect x="760" y="178" width="110" height="70" rx="14" class="chip"/>
+    <rect x="772" y="190" width="86" height="46" rx="8" fill="#16305f" opacity="0.9"/>
+    <rect x="782" y="202" width="48" height="22" rx="4" fill="#2ed3ff" opacity="0.18" stroke="#7ce7ff" stroke-width="1.3"/>
+    <rect x="814" y="205" width="26" height="16" rx="3" fill="#ffd76a" opacity="0.6"/>
+    <path class="wire-cyan" d="M728 212 C744 212, 752 212, 760 212"/>
+    <path class="wire-cyan" d="M870 212 C908 212, 928 212, 960 212"/>
+
+    <rect x="860" y="150" width="230" height="140" rx="18" fill="#e8eefc" stroke="#95a9cf" stroke-width="2" filter="url(#softShadow)"/>
+    <text x="975" y="186" text-anchor="middle" class="h2">Acquisition of</text>
+    <text x="975" y="218" text-anchor="middle" class="h2">Electrode Potential</text>
+    <text x="975" y="250" text-anchor="middle" class="h2">Differences</text>
+
+    <g transform="translate(1128,165)">
+      <ellipse cx="110" cy="52" rx="88" ry="30" fill="url(#metalGrad)" stroke="#60759f" stroke-width="2.6"/>
+      <rect x="24" y="52" width="172" height="44" rx="12" fill="#d8e3f7" stroke="#60759f" stroke-width="2.6"/>
+      <ellipse cx="110" cy="96" rx="86" ry="24" fill="#d9e4f5" stroke="#60759f" stroke-width="2.6"/>
+      <g fill="#cfd7eb" stroke="#546688" stroke-width="1.7">
+        <g transform="translate(42,26)"><rect x="-6" y="0" width="12" height="12" rx="2"/><rect x="-5" y="12" width="10" height="8" rx="2"/></g>
+        <g transform="translate(76,20)"><rect x="-6" y="0" width="12" height="12" rx="2"/><rect x="-5" y="12" width="10" height="8" rx="2"/></g>
+        <g transform="translate(110,18)"><rect x="-6" y="0" width="12" height="12" rx="2"/><rect x="-5" y="12" width="10" height="8" rx="2"/></g>
+        <g transform="translate(144,20)"><rect x="-6" y="0" width="12" height="12" rx="2"/><rect x="-5" y="12" width="10" height="8" rx="2"/></g>
+        <g transform="translate(178,26)"><rect x="-6" y="0" width="12" height="12" rx="2"/><rect x="-5" y="12" width="10" height="8" rx="2"/></g>
+        <g transform="translate(42,96)"><rect x="-5" y="0" width="10" height="8" rx="2"/></g>
+        <g transform="translate(76,102)"><rect x="-5" y="0" width="10" height="8" rx="2"/></g>
+        <g transform="translate(110,104)"><rect x="-5" y="0" width="10" height="8" rx="2"/></g>
+        <g transform="translate(144,102)"><rect x="-5" y="0" width="10" height="8" rx="2"/></g>
+        <g transform="translate(178,96)"><rect x="-5" y="0" width="10" height="8" rx="2"/></g>
+      </g>
+    </g>
+
+    <text x="1332" y="196" class="h2" fill="#2964d8">INPUT LAYER</text>
+    <text x="1332" y="226" class="h3" fill="#2964d8">边界测量数据</text>
+    <text x="1332" y="260" class="body"><tspan x="1332" dy="0">边界电位差被整理为</tspan><tspan x="1332" dy="22">统一测量向量，作为反演入口。</tspan></text>
+    <text x="1332" y="312" class="body"><tspan x="1332" dy="0">它只描述边界响应，</tspan><tspan x="1332" dy="22">不直接给出内部电导率。</tspan></text>
+  </g>
+
+  <g id="processing-layer">
+    <rect x="690" y="438" width="820" height="176" rx="26" class="panel"/>
+    <text x="926" y="472" class="h2" fill="#d0a02b">PROCESSING LAYER</text>
+    <text x="926" y="498" class="h3" fill="#d0a02b">神经网络先验与 CEM 物理约束</text>
+
+    <g transform="translate(724,490)">
+      <circle cx="54" cy="52" r="72" fill="#eff7ff" stroke="#95a9cf" stroke-width="2"/>
+      <g clip-path="url(#heatClip)" transform="translate(54,52)">
+        <rect x="-75" y="-75" width="150" height="150" fill="#edf4ff"/>
+        <circle cx="-16" cy="-22" r="34" fill="#1654bf" opacity="0.92" filter="url(#blur24)"/>
+        <circle cx="20" cy="26" r="42" fill="#29ceff" opacity="0.7" filter="url(#blur24)"/>
+        <circle cx="32" cy="-28" r="22" fill="#ffd166" opacity="0.92" filter="url(#blur24)"/>
+        <circle cx="-40" cy="30" r="28" fill="#6fd38c" opacity="0.78" filter="url(#blur24)"/>
+        <circle cx="0" cy="0" r="70" fill="none" stroke="#e6f2ff" stroke-width="18" opacity="0.4"/>
+      </g>
+    </g>
+
+    <g transform="translate(872,500)">
+      <text x="0" y="24" class="h3">推理层：PINN Guesser</text>
+      <text x="0" y="54" class="body"><tspan x="0" dy="0">从边界测量中预测初始电导率场，</tspan><tspan x="0" dy="22">给出更接近真实解的热启动。</tspan></text>
+      <text x="0" y="100" class="body"><tspan x="0" dy="0">随后交由物理求解器验证，</tspan><tspan x="0" dy="22">避免网络输出偏离 PDE 约束。</tspan></text>
+    </g>
+
+    <path class="wire-gold" d="M974 540 C992 540, 1000 540, 1012 540" marker-end="url(#arrowGold)"/>
+
+    <g transform="translate(1016,476)">
+      <rect x="0" y="0" width="248" height="138" rx="18" fill="#eff4ff" stroke="#95a9cf" stroke-width="2"/>
+      <g clip-path="url(#meshClip)">
+        <rect x="0" y="0" width="260" height="138" fill="url(#meshPattern)"/>
+        <path d="M124 -10 C136 24, 142 64, 120 92 C101 117, 98 148, 110 170 L290 170 L290 -10 Z" fill="#2355b7" opacity="0.86"/>
+        <path d="M84 -10 C111 24, 126 58, 120 92 C115 122, 82 140, 46 170 L-10 170 L-10 -10 Z" fill="#ffffff" opacity="0.92"/>
+        <path d="M84 -10 C111 24, 126 58, 120 92 C115 122, 82 140, 46 170" fill="none" stroke="#6f7f9f" stroke-width="2.2" stroke-dasharray="4 4"/>
+      </g>
+    </g>
+
+    <g transform="translate(1282,468)">
+      <rect x="0" y="18" width="172" height="56" rx="10" fill="#ffffff" stroke="#c9d6ee" stroke-width="1.8" filter="url(#softShadow)"/>
+      <text x="18" y="55" font-size="22" font-weight="800" fill="#3f4d68">pyeidors</text>
+      <text x="0" y="100" class="body"><tspan x="0" dy="0">以 CEM 与有限元离散校验网络猜测，</tspan><tspan x="0" dy="22">输出模拟电压与灵敏度。</tspan></text>
+    </g>
+  </g>
+
+  <g id="optimization-layer">
+    <rect x="690" y="648" width="820" height="230" rx="26" class="panel"/>
+    <text x="1004" y="686" class="h2" fill="#2964d8">OPTIMIZATION LAYER</text>
+    <text x="1004" y="714" class="h3" fill="#2964d8">闭环优化、损失修正与结果稳定化</text>
+
+    <g transform="translate(724,736)">
+      <g transform="translate(0,0)">
+        <rect x="0" y="0" width="354" height="40" rx="12" fill="#ffffff" stroke="#dfe9f7" stroke-width="1.4"/>
+        <rect x="8" y="7" width="26" height="26" rx="8" fill="#fff3d3" stroke="#e5c154" stroke-width="1.6"/>
+        <path d="M16 15H28M16 21H28M16 27H23M26 25L31 30M31 30L27 34" fill="none" stroke="#d4a63d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="48" y="18" class="caption" fill="#d0a02b">物理驱动损失</text>
+        <text x="48" y="31" class="small">测量-模拟残差被直接回传到电导率场</text>
+      </g>
+      <g transform="translate(0,44)">
+        <rect x="0" y="0" width="354" height="40" rx="12" fill="#ffffff" stroke="#dfe9f7" stroke-width="1.4"/>
+        <rect x="8" y="7" width="26" height="26" rx="8" fill="#eff8ff" stroke="#48cfff" stroke-width="1.6"/>
+        <path d="M16 31V19M21 31V14M26 31V22M12 31H30" fill="none" stroke="#2ecfff" stroke-width="2.5" stroke-linecap="round"/>
+        <text x="48" y="18" class="caption" fill="#2964d8">CEM 一致性保证</text>
+        <text x="48" y="31" class="small">边界与接触效应被吸收到可解释的物理约束</text>
+      </g>
+      <g transform="translate(0,88)">
+        <rect x="0" y="0" width="354" height="40" rx="12" fill="#ffffff" stroke="#dfe9f7" stroke-width="1.4"/>
+        <rect x="8" y="7" width="26" height="26" rx="8" fill="#fff3d3" stroke="#e5c154" stroke-width="1.6"/>
+        <path d="M15 22a10 10 0 0 1 16-7M31 22l-3-6M31 22l6 1M31 24a10 10 0 0 1-16 7M15 24l3 6M15 24l-6-1" fill="none" stroke="#d4a63d" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <text x="48" y="18" class="caption" fill="#d0a02b">迭代收敛更稳</text>
+        <text x="48" y="31" class="small">闭环更新减少人工调参，并提升重建稳定性</text>
+      </g>
+    </g>
+  </g>
+
+  <g id="table" transform="translate(1114,736)">
+    <rect x="0" y="0" width="364" height="126" rx="16" fill="#ffffff" stroke="#cddaf0" stroke-width="1.8" filter="url(#softShadow)"/>
+    <rect x="0" y="0" width="364" height="32" rx="16" fill="url(#tableHead)"/>
+    <path d="M0 32H364M82 0V126M214 0V126M0 63H364M0 94H364" stroke="#d9e5f4" stroke-width="1.2"/>
+    <text x="41" y="21" text-anchor="middle" font-size="12.5" font-weight="700">维度</text>
+    <text x="148" y="21" text-anchor="middle" font-size="12.5" font-weight="700">传统 GN</text>
+    <text x="289" y="21" text-anchor="middle" font-size="12" font-weight="700">PINN + pyeidors</text>
+
+    <text x="41" y="53" text-anchor="middle" class="table-text">启动</text>
+    <text x="148" y="53" text-anchor="middle" font-size="12" font-weight="600" fill="#5e6f92">随机/经验初始化</text>
+    <text x="289" y="53" text-anchor="middle" font-size="12" font-weight="700" fill="#2964d8">网络先验热启动</text>
+
+    <text x="41" y="84" text-anchor="middle" class="table-text">效率</text>
+    <text x="148" y="84" text-anchor="middle" font-size="12" font-weight="600" fill="#5e6f92">依赖局部线性化</text>
+    <text x="289" y="84" text-anchor="middle" font-size="12" font-weight="700" fill="#2964d8">更少试探与回溯</text>
+
+    <text x="41" y="115" text-anchor="middle" class="table-text">一致性</text>
+    <text x="148" y="115" text-anchor="middle" font-size="12" font-weight="600" fill="#5e6f92">正则项较敏感</text>
+    <text x="289" y="115" text-anchor="middle" font-size="12" font-weight="700" fill="#d0a02b">CEM 残差约束</text>
+  </g>
+</svg>

@@ -16,10 +16,10 @@ dependency signatures, deterministic invalidation, and rank-aware eviction.
    - Default size budget: `3 GB`.
 
 2. **L2 Disk cache**
-   - Persistent object store under `.pyeidors_cache/v2`.
+   - Runtime object store rooted at `.pyeidors_cache/v2`. By default, supported dev shells place the effective disk cache under `.pyeidors_cache/v2/.sessions/<session-id>`.
    - sqlite index (`index.sqlite`) + object payload files.
    - Maintains `name/namespace/effort/use_count/priority/score_eff/score_size/score` metadata.
-   - Default size budget: `20 GB`.
+   - Default size budget: `20 GB`. Session caches are terminal-scoped by default and are cleaned automatically when the owning `nix develop` shell exits; use `cache_lifecycle="persistent"` to opt into long-lived cross-terminal storage.
 
 ## Artifact kinds
 
@@ -30,6 +30,11 @@ dependency signatures, deterministic invalidation, and rank-aware eviction.
 - `single_step_operator`
 - `sparse_basis`
 - `measurement_projection`
+- `rom_snapshot_bank`
+- `rom_global_basis`
+- `rom_adaptive_basis`
+- `rom_reduced_operator_absolute`
+- `rom_reduced_rm_diff`
 
 ## Key design
 
@@ -111,6 +116,12 @@ If a disk payload is unreadable/corrupted:
 - Single-step difference reconstruction caches `J/Jᵀ/NOSER/A(LU)` via
   `single_step_operator` and reuses them across runs when background conductivity and
   model signatures are unchanged.
+- Reduced-order 3D fast paths persist snapshot banks, global/adaptive bases, and reduced operators via
+  `rom_snapshot_bank`, `rom_global_basis`, `rom_adaptive_basis`, `rom_reduced_operator_absolute`, and
+  `rom_reduced_rm_diff`. These artifacts are now considered experimental accelerators rather than the primary 3D fast path.
+- The main delivery path remains `woodbury / pcg / cholmod-precond`, with fused fallback chain `fused -> current fast path -> strict` available only when the experimental knobs are enabled.
+- When reduced artifacts improve Jacobian assembly but not end-to-end totals, treat them as stage-local research wins rather than delivery-path regressions.
+- The current mac CPU封版 and the next-stage WSL2/CUDA migration plan are documented in `docs/WSL2_CUDA_HANDOFF.md`.
 
 ## EIDORS Mapping
 
@@ -134,3 +145,10 @@ For command-line operations, use:
 - `python scripts/cache/cache_ctl.py clear-old --timestamp <epoch-seconds>`
 - `python scripts/cache/cache_ctl.py collect-recent --name inv_solve_diff_GN_one_step --with-values --output snapshot.json`
 - `python scripts/cache/cache_ctl.py install-to-cache --input snapshot.json --target-layers both`
+
+## Lifecycle
+
+- Default `cache_lifecycle="session"` maps disk artifacts into a per-terminal directory under `<cache-root>/.sessions/<session-id>`.
+- In supported `nix develop` / `nix develop .#cuda` shells, the shell hook owns that session and clears it on `EXIT`, `HUP`, `INT`, `TERM`, or `deactivate`.
+- Multiple terminals do not share runtime disk cache; each shell gets its own session directory and only cleans its own directory.
+- `cache_lifecycle="persistent"` bypasses `.sessions/` and leaves the cache root untouched across terminal restarts.

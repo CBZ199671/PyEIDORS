@@ -36,6 +36,13 @@ from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
 from pyeidors.perf.capabilities import detect_performance_capabilities, select_preconditioner
+from pyeidors.perf.policy import (
+    DEFAULT_3D_GEOMETRY_VERSION,
+    DEFAULT_FORWARD_BACKEND,
+    DEFAULT_MESH_FAMILY,
+    normalize_forward_backend,
+    normalize_mesh_family,
+)
 from pyeidors.inverse.reduced.lowrank_subspace import build_lowrank_subspace
 from pyeidors.inverse.reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
 from pyeidors.inverse.reduced.snapshot_bank import select_snapshot_matrix
@@ -507,6 +514,9 @@ def build_shared_context(
     forward_mat_solve: str = "off",
     petsc_device: str = "auto",
     device: str = "auto",
+    forward_backend: str = DEFAULT_FORWARD_BACKEND,
+    mesh_family: str = DEFAULT_MESH_FAMILY,
+    geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
 ) -> dict:
     if int(mesh_dim) not in {2, 3}:
         raise ValueError(f"mesh_dim must be 2 or 3, got {mesh_dim!r}")
@@ -520,6 +530,15 @@ def build_shared_context(
     forward_mat_solve = str(forward_mat_solve).strip().lower()
     petsc_device = str(petsc_device).strip().lower()
     device = str(device).strip().lower()
+    forward_backend = normalize_forward_backend(
+        forward_backend,
+        default=DEFAULT_FORWARD_BACKEND,
+    )
+    mesh_family = normalize_mesh_family(
+        mesh_family,
+        default=DEFAULT_MESH_FAMILY,
+    )
+    geometry_version = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
     if solver_mode not in {"strict", "fast"}:
         raise ValueError(f"solver_mode must be 'strict' or 'fast', got {solver_mode!r}")
     if preconditioner not in {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"}:
@@ -569,6 +588,8 @@ def build_shared_context(
         height=float(mesh_height),
         electrode_height_ratio=float(electrode_height_ratio),
         z_center=float(z_center),
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
     )
     pattern_cfg = PatternConfig(
         n_elec=n_elec,
@@ -588,6 +609,7 @@ def build_shared_context(
         mesh=mesh,
         cache_manager=cache_manager,
         backend_config={"mat_solve_mode": forward_mat_solve, "petsc_device": petsc_device},
+        forward_backend=forward_backend,
     )
     petsc_backend_info = getattr(fwd_model, "_petsc_backend_info", {}) or {}
     runtime_selection = resolve_torch_device(
@@ -619,6 +641,8 @@ def build_shared_context(
         "electrode_height_ratio": float(electrode_height_ratio),
         "z_center": float(z_center),
         "background_sigma": float(background_sigma),
+        "mesh_family": str(mesh_family),
+        "geometry_version": str(geometry_version),
         "model_signature": model_signature_from_forward_model(fwd_model),
         "pattern_signature": pattern_signature_from_forward_model(fwd_model),
         "backend_signature": backend_signature_from_forward_model(fwd_model),
@@ -1055,6 +1079,9 @@ def build_shared_context(
         "lowrank_method": lowrank_method,
         "lowrank_energy": float(lowrank_energy),
         "forward_mat_solve": forward_mat_solve,
+        "forward_backend": forward_backend,
+        "mesh_family": mesh_family,
+        "geometry_version": geometry_version,
         "petsc_device": petsc_device,
         "device_requested": str(runtime_selection.requested),
         "device_effective": str(runtime_selection.effective),

@@ -6,7 +6,14 @@ from pathlib import Path
 
 import numpy as np
 
-from pyeidors.cache import CacheKeyParts, CacheManager, CachePolicy, build_cache_key
+from pyeidors.cache import (
+    CacheKeyParts,
+    CacheManager,
+    CachePolicy,
+    build_cache_key,
+    cleanup_registered_session_caches,
+    cleanup_stale_session_caches,
+)
 
 
 def test_cache_key_stable_for_semantically_equal_payload():
@@ -176,3 +183,121 @@ def test_cache_manager_semantic_helpers_and_name_controls(tmp_path: Path):
 
     removed = manager.clear_name("inv_solve_diff_GN_one_step", namespace="difference")
     assert removed >= 1
+
+
+def test_cache_manager_uses_session_disk_cache_by_default(tmp_path: Path):
+    cache_dir = tmp_path / "cache"
+    manager1 = CacheManager(scope="both", cache_dir=cache_dir, policy=CachePolicy())
+    manager2 = CacheManager(scope="both", cache_dir=cache_dir, policy=CachePolicy())
+
+    assert manager1.disk_lifecycle == "session"
+    assert manager1.session_cache_enabled is True
+    assert manager1.requested_cache_dir == cache_dir
+    assert manager1.cache_dir != cache_dir
+    assert manager1.cache_dir.parent == cache_dir / ".sessions"
+    assert manager1.cache_dir == manager2.cache_dir
+
+    stats = manager1.stats()
+    assert stats["disk_cache_lifecycle"] == "session"
+    assert stats["disk_cache_requested_dir"] == str(cache_dir)
+    assert stats["disk_cache_effective_dir"] == str(manager1.cache_dir)
+    assert stats["disk_cache_cleanup_on_exit"] is True
+
+
+def test_cache_manager_can_opt_into_persistent_disk_cache(tmp_path: Path):
+    cache_dir = tmp_path / "cache"
+    policy = CachePolicy(disk_lifecycle="persistent", cleanup_on_exit=False)
+    manager = CacheManager(scope="both", cache_dir=cache_dir, policy=policy)
+
+    assert manager.disk_lifecycle == "persistent"
+    assert manager.session_cache_enabled is False
+    assert manager.requested_cache_dir == cache_dir
+    assert manager.cache_dir == cache_dir
+
+
+def test_cleanup_registered_session_caches_removes_effective_session_dir(tmp_path: Path, monkeypatch):
+    from pyeidors.cache import cleanup_registered_session_caches
+
+    for name in (
+        "PYEIDORS_CACHE_SESSION_ID",
+        "PYEIDORS_CACHE_SESSION_DIR",
+        "PYEIDORS_CACHE_REQUESTED_ROOT",
+        "PYEIDORS_CACHE_OWNER_PID",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    cache_dir = tmp_path / "cache"
+    manager = CacheManager(scope="both", cache_dir=cache_dir, policy=CachePolicy())
+    manager.get_or_compute(
+        artifact="single_step_operator",
+        payload={"alpha": 1},
+        compute_fn=lambda: np.eye(2),
+        persist=True,
+    )
+    session_dir = manager.cache_dir
+    assert session_dir.exists()
+
+    removed = cleanup_registered_session_caches()
+    assert removed >= 1
+    assert not session_dir.exists()
+
+
+def test_cache_manager_prefers_shell_session_environment(tmp_path: Path, monkeypatch):
+    cleanup_registered_session_caches()
+    cache_root = tmp_path / "cache-root"
+    session_id = "session-shellpid424242-demo"
+    session_dir = cache_root / ".sessions" / session_id
+    session_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("PYEIDORS_CACHE_SESSION_ID", session_id)
+    monkeypatch.setenv("PYEIDORS_CACHE_SESSION_DIR", str(session_dir))
+    monkeypatch.setenv("PYEIDORS_CACHE_REQUESTED_ROOT", str(cache_root))
+    monkeypatch.setenv("PYEIDORS_CACHE_OWNER_PID", "424242")
+
+    manager1 = CacheManager(scope="both", cache_dir=cache_root, policy=CachePolicy())
+    manager2 = CacheManager(scope="both", cache_dir=cache_root, policy=CachePolicy())
+
+    assert manager1.cache_dir == session_dir
+    assert manager2.cache_dir == session_dir
+    assert manager1.stats()["disk_cache_effective_dir"] == str(session_dir)
+
+    removed = cleanup_registered_session_caches()
+    assert removed == 0
+    assert session_dir.exists()
+
+
+def test_cache_manager_uses_shell_session_id_for_custom_root(tmp_path: Path, monkeypatch):
+    cleanup_registered_session_caches()
+    default_root = tmp_path / "default-cache"
+    custom_root = tmp_path / "custom-cache"
+    session_id = "session-shellpid515151-demo"
+    default_session_dir = default_root / ".sessions" / session_id
+    default_session_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("PYEIDORS_CACHE_SESSION_ID", session_id)
+    monkeypatch.setenv("PYEIDORS_CACHE_SESSION_DIR", str(default_session_dir))
+    monkeypatch.setenv("PYEIDORS_CACHE_REQUESTED_ROOT", str(default_root))
+    monkeypatch.setenv("PYEIDORS_CACHE_OWNER_PID", "515151")
+
+    manager = CacheManager(scope="both", cache_dir=custom_root, policy=CachePolicy())
+    expected_dir = custom_root / ".sessions" / session_id
+    registry_path = default_session_dir / ".session-dirs"
+
+    assert manager.cache_dir == expected_dir
+    assert expected_dir.exists()
+    assert registry_path.exists()
+    entries = {line.strip() for line in registry_path.read_text(encoding="utf-8").splitlines() if line.strip()}
+    assert str(default_session_dir) in entries
+    assert str(expected_dir) in entries
+
+
+def test_cleanup_stale_session_caches_removes_dead_shellpid_dirs(tmp_path: Path):
+    cache_root = tmp_path / "cache-root"
+    stale_dir = cache_root / ".sessions" / "session-shellpid999999-dead"
+    stale_dir.mkdir(parents=True)
+    (stale_dir / "payload.bin").write_text("x", encoding="utf-8")
+
+    removed = cleanup_stale_session_caches(cache_root)
+
+    assert removed == 1
+    assert not stale_dir.exists()

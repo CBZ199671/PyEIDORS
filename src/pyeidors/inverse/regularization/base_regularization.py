@@ -1,8 +1,15 @@
-"""Regularization base class."""
+"""Regularization base class and operator helpers."""
+
+from __future__ import annotations
+
+from abc import ABC, abstractmethod
+from typing import TypeAlias
 
 import numpy as np
-from abc import ABC, abstractmethod
-from scipy.sparse import csr_matrix
+from scipy.sparse import isspmatrix
+from scipy.sparse.linalg import LinearOperator, aslinearoperator
+
+RegularizationMatrix: TypeAlias = np.ndarray | LinearOperator | object
 
 
 class BaseRegularization(ABC):
@@ -15,12 +22,24 @@ class BaseRegularization(ABC):
         self.n_elements = int(V_sigma.dofmap.index_map.size_local * V_sigma.dofmap.index_map_bs)
 
     @abstractmethod
-    def create_matrix(self) -> np.ndarray:
+    def create_matrix(self) -> RegularizationMatrix:
         """Create regularization matrix."""
         pass
 
-    def get_regularization_matrix(self, cache: bool = True) -> np.ndarray:
+    def get_regularization_matrix(self, cache: bool = True) -> RegularizationMatrix:
         """Get regularization matrix (with caching support)."""
         if not hasattr(self, '_cached_matrix') or not cache:
             self._cached_matrix = self.create_matrix()
         return self._cached_matrix
+
+    @staticmethod
+    def as_linear_operator(matrix: RegularizationMatrix, *, shape: tuple[int, int] | None = None) -> LinearOperator:
+        """Convert dense/sparse matrix-like payload to ``LinearOperator``."""
+        if isinstance(matrix, LinearOperator):
+            return matrix
+        if isspmatrix(matrix):
+            return aslinearoperator(matrix)
+        dense = np.asarray(matrix, dtype=np.float64)
+        if shape is not None and dense.shape != shape:
+            raise ValueError(f"Regularization shape mismatch: expected {shape}, got {dense.shape}")
+        return aslinearoperator(dense)

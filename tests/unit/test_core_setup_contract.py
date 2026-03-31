@@ -7,6 +7,7 @@ import pytest
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
+from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 
 
 def _new_system() -> EITSystem:
@@ -74,27 +75,76 @@ def test_setup_dispatches_generated(monkeypatch):
         dimension: int = 2,
         height: float | None = None,
         electrode_height_ratio: float | None = None,
+        electrode_level_fractions: tuple[float, ...] | list[float] | None = None,
         z_center: float | None = None,
+        mesh_family: str | None = None,
+        geometry_version: str | None = None,
     ):
         calls["radius"] = radius
         calls["mesh_size"] = mesh_size
         calls["dimension"] = dimension
         calls["height"] = height
         calls["electrode_height_ratio"] = electrode_height_ratio
+        calls["electrode_level_fractions"] = electrode_level_fractions
         calls["z_center"] = z_center
+        calls["mesh_family"] = mesh_family
+        calls["geometry_version"] = geometry_version
 
     monkeypatch.setattr(system, "setup_generated_mesh", _fake_setup_generated_mesh)
-    system.setup(mesh_source="generated", radius=1.5, mesh_size=0.08)
+    system.setup(
+        mesh_source="generated",
+        radius=1.5,
+        mesh_size=0.08,
+        mesh_family="hex",
+        geometry_version="geomv2",
+    )
 
     assert calls["radius"] == 1.5
     assert calls["mesh_size"] == 0.08
     assert calls["dimension"] == 2
+    assert calls["mesh_family"] == "hex"
+    assert calls["geometry_version"] == "geomv2"
 
 
 def test_setup_with_mesh_type_guard():
     system = _new_system()
     with pytest.raises(TypeError, match="expects an EITMesh"):
         system.setup_with_mesh(object())  # type: ignore[arg-type]
+
+
+def test_setup_with_mesh_normalizes_3d_drive_mode(tmp_path, monkeypatch):
+    pattern = PatternConfig(
+        n_elec=16,
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+        drive_mode="line_current_density",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
+    )
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=pattern,
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+    )
+    mesh = create_cylinder_3d_eit_mesh(
+        n_elec=16,
+        radius=0.18,
+        height=0.16,
+        refinement=1,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        output_dir=str(tmp_path),
+        mesh_name="drive_mode_norm",
+        mesh_family="hex",
+        geometry_version="geomv2",
+    )
+    monkeypatch.setattr(system, "_initialize_components", lambda: None)
+    system.setup_with_mesh(mesh)
+    assert system.pattern_config.drive_mode == "total_current"
+    assert system._pattern_config_diagnostics == {
+        "drive_mode_requested": "line_current_density",
+        "drive_mode_effective": "total_current",
+    }
 
 
 def test_setup_from_cache_calls_loader_paths(monkeypatch):
@@ -149,13 +199,57 @@ def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
 def test_system_stores_public_device_policy():
     system = _new_system()
     assert system.device == "auto"
+    assert system.forward_backend == "dolfinx"
 
-    system_cpu = EITSystem(
+    system_gpu = EITSystem(
+        n_elec=16,
+        pattern_config=system.pattern_config,
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        regularization_type="noser",
+        regularization_alpha=1.0,
+        device="cuda",
+        forward_backend="cuda_structured",
+    )
+    assert system_gpu.device == "cuda"
+    assert system_gpu.forward_backend == "cuda_structured"
+
+    system_unknown = EITSystem(
         n_elec=16,
         pattern_config=system.pattern_config,
         contact_impedance=np.full(16, 1e-5, dtype=float),
         regularization_type="noser",
         regularization_alpha=1.0,
         device="cpu",
+        forward_backend="unexpected",
     )
-    assert system_cpu.device == "cpu"
+    assert system_unknown.device == "cpu"
+    assert system_unknown.forward_backend == "dolfinx"
+
+
+def test_system_cache_lifecycle_defaults_to_session_and_supports_persistent():
+    system = _new_system()
+    assert system.cache_lifecycle == "session"
+    assert system.cache_manager.disk_lifecycle == "session"
+    assert system.cache_manager.session_cache_enabled is True
+
+    persistent = EITSystem(
+        n_elec=16,
+        pattern_config=system.pattern_config,
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        regularization_type="noser",
+        regularization_alpha=1.0,
+        cache_lifecycle="persistent",
+    )
+    assert persistent.cache_lifecycle == "persistent"
+    assert persistent.cache_manager.disk_lifecycle == "persistent"
+    assert persistent.cache_manager.session_cache_enabled is False
+
+
+def test_system_stores_eidors_alignment_defaults():
+    system = _new_system()
+    assert system.difference_preset == "eidors_one_step_noser"
+    assert system.absolute_preset == "eidors_abs_gn"
+    assert system.hyperparameter is None
+    assert system.jacobian_background_conductivity == system.base_conductivity
+    assert system.difference_step_size_mode == "off"
+    assert system.best_homog_mode == "off"

@@ -1,0 +1,662 @@
+#!/usr/bin/env python3
+"""Render a full 3D reconstruction overview for cylindrical CEM test cases.
+
+This script supports both difference and absolute inverse workflows using the
+EIDORS-like multi-height zigzag electrode layout. The output emphasizes
+volumetric structure and exports numerical diagnostics needed for parity
+analysis.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import math
+import os
+from pathlib import Path
+
+os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+os.environ.setdefault("OMP_NUM_THREADS", "1")
+os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+os.environ.setdefault("MPLBACKEND", "Agg")
+
+import matplotlib
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib import colors as mcolors
+from matplotlib.font_manager import fontManager
+from scipy.interpolate import griddata
+from scipy.ndimage import gaussian_filter
+
+from pyeidors import EITSystem
+from pyeidors.core_system import DEFAULT_ABSOLUTE_PRESET, DEFAULT_DIFFERENCE_PRESET
+from pyeidors.data.difference import build_difference_vector
+from pyeidors.data.structures import EITImage, PatternConfig
+from pyeidors.femx import function_get_array
+from pyeidors.geometry.mesh3d_generator import (
+    DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+    normalize_electrode_level_fractions,
+)
+from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo"
+
+
+def _configure_times_new_roman() -> None:
+    candidate_fonts = [
+        "/mnt/c/Windows/Fonts/times.ttf",
+        "/mnt/c/Windows/Fonts/timesbd.ttf",
+        "/mnt/c/Windows/Fonts/timesi.ttf",
+        "/mnt/c/Windows/Fonts/timesbi.ttf",
+    ]
+    for font_path in candidate_fonts:
+        path = Path(font_path)
+        if path.exists():
+            try:
+                fontManager.addfont(str(path))
+            except Exception:
+                pass
+    matplotlib.rcParams.update(
+        {
+            "font.family": "serif",
+            "font.serif": ["Times New Roman", "Times", "Liberation Serif", "DejaVu Serif"],
+            "axes.unicode_minus": False,
+            "svg.fonttype": "none",
+        }
+    )
+
+
+def _build_3d_phantom(
+    eit_system: EITSystem,
+    *,
+    base_conductivity: float,
+    phantom_conductivity: float,
+    center: tuple[float, float, float],
+    radius: float,
+) -> EITImage:
+    image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
+    sigma = np.asarray(image.elem_data, dtype=float).copy()
+    coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
+    distances = np.linalg.norm(coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1)
+    sigma[distances <= float(radius)] = float(phantom_conductivity)
+    return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
+
+
+def _build_cylinder_wireframe(
+    *,
+    radius: float,
+    height: float,
+    z_center: float,
+    n_theta: int = 160,
+    n_vertical: int = 12,
+) -> list[np.ndarray]:
+    theta = np.linspace(0.0, 2.0 * math.pi, n_theta)
+    z_top = z_center + 0.5 * height
+    z_bottom = z_center - 0.5 * height
+    x = radius * np.cos(theta)
+    y = radius * np.sin(theta)
+
+    segments: list[np.ndarray] = []
+    segments.append(np.column_stack([x, y, np.full_like(x, z_top)]))
+    segments.append(np.column_stack([x, y, np.full_like(x, z_bottom)]))
+
+    vertical_angles = np.linspace(0.0, 2.0 * math.pi, n_vertical, endpoint=False)
+    for ang in vertical_angles:
+        xv = radius * math.cos(float(ang))
+        yv = radius * math.sin(float(ang))
+        segments.append(np.array([[xv, yv, z_bottom], [xv, yv, z_top]], dtype=float))
+    return segments
+
+
+def _build_electrode_markers(
+    *,
+    n_elec: int,
+    radius: float,
+    height: float,
+    z_center: float,
+    electrode_level_fractions: tuple[float, ...],
+) -> np.ndarray:
+    theta = np.linspace(0.0, 2.0 * math.pi, n_elec, endpoint=False)
+    z_levels = (
+        z_center - 0.5 * height
+        + height * np.asarray(electrode_level_fractions, dtype=float)[
+            np.arange(n_elec, dtype=np.int32) % len(electrode_level_fractions)
+        ]
+    )
+    return np.column_stack(
+        [radius * np.cos(theta), radius * np.sin(theta), np.asarray(z_levels, dtype=float)]
+    )
+
+
+def _choose_threshold(values: np.ndarray, *, baseline: float, truth_mode: bool) -> float:
+    vmax = float(np.max(values))
+    if truth_mode:
+        return baseline + 0.55 * (vmax - baseline)
+    return max(
+        baseline + 0.60 * (vmax - baseline),
+        float(np.percentile(values, 97.5)),
+    )
+
+
+def _parse_level_fractions(text: str | None) -> tuple[float, ...]:
+    if text is None or not str(text).strip():
+        return tuple(float(v) for v in DEFAULT_ZIGZAG_LEVEL_FRACTIONS)
+    values = tuple(float(part.strip()) for part in str(text).split(",") if part.strip())
+    return normalize_electrode_level_fractions(
+        values,
+        default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+    )
+
+
+def _compute_shape_metrics(
+    coords: np.ndarray,
+    values: np.ndarray,
+    *,
+    threshold: float,
+) -> dict[str, float]:
+    mask = np.isfinite(values) & (values >= float(threshold))
+    if not np.any(mask):
+        return {
+            "selected_count": 0,
+            "threshold": float(threshold),
+            "extent_x": 0.0,
+            "extent_y": 0.0,
+            "extent_z": 0.0,
+            "z_to_xy_mean_ratio": float("nan"),
+            "xy_aspect_ratio": float("nan"),
+        }
+    region = np.asarray(coords[mask], dtype=float)
+    extents = np.max(region, axis=0) - np.min(region, axis=0)
+    xy_extent_min = max(float(min(extents[0], extents[1])), 1e-12)
+    xy_extent_mean = max(float(0.5 * (extents[0] + extents[1])), 1e-12)
+    return {
+        "selected_count": int(mask.sum()),
+        "threshold": float(threshold),
+        "extent_x": float(extents[0]),
+        "extent_y": float(extents[1]),
+        "extent_z": float(extents[2]),
+        "z_to_xy_mean_ratio": float(extents[2] / xy_extent_mean),
+        "xy_aspect_ratio": float(max(extents[0], extents[1]) / xy_extent_min),
+    }
+
+
+def _build_regular_volume(
+    *,
+    coords: np.ndarray,
+    values: np.ndarray,
+    radius: float,
+    height: float,
+    z_center: float,
+    resolution: tuple[int, int, int] = (34, 34, 24),
+    smooth_sigma: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    nx, ny, nz = resolution
+    x_centers = np.linspace(-radius, radius, nx)
+    y_centers = np.linspace(-radius, radius, ny)
+    z_centers = np.linspace(z_center - 0.5 * height, z_center + 0.5 * height, nz)
+    Xc, Yc, Zc = np.meshgrid(x_centers, y_centers, z_centers, indexing="ij")
+    volume = griddata(coords, values, (Xc, Yc, Zc), method="linear", fill_value=float(np.min(values)))
+    if smooth_sigma > 0.0:
+        volume = gaussian_filter(volume, sigma=smooth_sigma)
+    radial_mask = (Xc**2 + Yc**2) <= (radius * 0.995) ** 2
+
+    x_edges = np.linspace(-radius, radius, nx + 1)
+    y_edges = np.linspace(-radius, radius, ny + 1)
+    z_edges = np.linspace(z_center - 0.5 * height, z_center + 0.5 * height, nz + 1)
+    Xe, Ye, Ze = np.meshgrid(x_edges, y_edges, z_edges, indexing="ij")
+    return Xe, Ye, Ze, np.where(radial_mask, volume, np.nan)
+
+
+def _add_voxel_volume(
+    ax,
+    *,
+    X: np.ndarray,
+    Y: np.ndarray,
+    Z: np.ndarray,
+    values: np.ndarray,
+    threshold: float,
+    cmap,
+    norm,
+    alpha_surface: float,
+) -> None:
+    valid = np.isfinite(values)
+    mask = valid & (values >= threshold)
+    if not np.any(mask):
+        return
+    mapped = cmap(norm(np.where(mask, values, np.nan)))
+    mapped[..., 3] = np.where(mask, alpha_surface, 0.0)
+    ax.voxels(
+        X,
+        Y,
+        Z,
+        mask,
+        facecolors=mapped,
+        edgecolor=None,
+        shade=True,
+    )
+
+
+def _style_3d_axes(ax, *, radius: float, height: float, z_center: float) -> None:
+    lim_xy = radius * 1.08
+    z_half = 0.5 * height * 1.18
+    ax.set_xlim(-lim_xy, lim_xy)
+    ax.set_ylim(-lim_xy, lim_xy)
+    ax.set_zlim(z_center - z_half, z_center + z_half)
+    ax.set_box_aspect((1.0, 1.0, height / max(radius * 2.0, 1e-9)))
+    ax.view_init(elev=21, azim=-50)
+    ax.set_axis_off()
+
+
+def run_case(
+    *,
+    output_dir: Path,
+    refinement: int,
+    max_iterations: int | None,
+    radius: float,
+    height: float,
+    inverse_mode: str,
+    difference_mode: str,
+    difference_orientation: str,
+    electrode_level_fractions: tuple[float, ...],
+    difference_preset: str,
+    absolute_preset: str,
+    hyperparameter: float | None,
+    difference_step_size_mode: str | None,
+    best_homog_mode: str | None,
+) -> dict[str, object]:
+    n_elec = 16
+    base_sigma = 1.0
+    target_sigma = 2.0
+    z_center = 0.0
+    resolved_inverse_mode = str(inverse_mode).strip().lower()
+    resolved_difference_preset = str(difference_preset).strip().lower()
+    resolved_absolute_preset = str(absolute_preset).strip().lower()
+    preset_name = (
+        resolved_difference_preset if resolved_inverse_mode == "difference" else resolved_absolute_preset
+    )
+    resolved_level_fractions = normalize_electrode_level_fractions(
+        electrode_level_fractions,
+        default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+    )
+
+    mesh = load_or_create_mesh(
+        mesh_dir=str(REPO_ROOT / "eit_meshes"),
+        n_elec=n_elec,
+        dimension=3,
+        radius=radius,
+        height=height,
+        refinement=refinement,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        electrode_level_fractions=resolved_level_fractions,
+        z_center=z_center,
+    )
+
+    pattern_config = PatternConfig(
+        n_elec=n_elec,
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+        drive_mode="total_current",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
+    )
+    system = EITSystem(
+        n_elec=n_elec,
+        pattern_config=pattern_config,
+        contact_impedance=np.full(n_elec, 1e-5, dtype=float),
+        base_conductivity=base_sigma,
+        difference_mode=difference_mode,
+        difference_orientation=difference_orientation,
+        regularization_type="noser",
+        regularization_alpha=1.0,
+        hyperparameter=hyperparameter,
+        difference_step_size_mode=difference_step_size_mode,
+        difference_preset=resolved_difference_preset,
+        absolute_preset=resolved_absolute_preset,
+        best_homog_mode=best_homog_mode,
+        linear_backend="scipy",
+        performance_mode="safe",
+        solver_mode="fast",
+        linear_solver="auto",
+        jacobian_update_every=2,
+        jacobian_reuse_tol=1e-3,
+        line_search_mode="fast",
+    )
+    system.setup(mesh=mesh)
+
+    reference_img = system.create_homogeneous_image(conductivity=base_sigma)
+    reference_data = system.forward_solve(reference_img)
+
+    phantom_img = _build_3d_phantom(
+        system,
+        base_conductivity=base_sigma,
+        phantom_conductivity=target_sigma,
+        center=(radius * 0.36, -radius * 0.18, height * 0.20),
+        radius=radius * 0.22,
+    )
+    phantom_data = system.forward_solve(phantom_img)
+
+    if system.reconstructor is None:
+        raise RuntimeError("Reconstructor was not initialized.")
+    system.reconstructor.ensure_regularization_ready()
+    system.reconstructor.clip_values = (1e-6, 3.0)
+    if max_iterations is not None:
+        system.reconstructor.max_iterations = max_iterations
+
+    if resolved_inverse_mode == "absolute":
+        recon = system.inverse_solve(
+            data=phantom_data,
+            reference_data=None,
+            initial_guess=None,
+        )
+        inverse_target = "eidors_abs_gn_prior"
+    else:
+        recon = system.inverse_solve(
+            data=phantom_data,
+            reference_data=reference_data,
+            initial_guess=None,
+        )
+        if preset_name == "eidors_demo3d_tv":
+            inverse_target = "eidors_demo_3d_simdata_tv"
+        elif preset_name == "sphere_multistep_noser":
+            inverse_target = "sphere_multistep_noser"
+        else:
+            inverse_target = "eidors_3d_difference_one_step_gn_noser"
+
+    truth_sigma = np.asarray(phantom_img.elem_data, dtype=float).copy()
+    recon_sigma = function_get_array(recon.conductivity).copy()
+    coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()[:, :3]
+
+    cond_rmse = float(np.sqrt(np.mean((recon_sigma - truth_sigma) ** 2)))
+    cond_corr = float(np.corrcoef(truth_sigma, recon_sigma)[0, 1]) if truth_sigma.size > 1 else float("nan")
+    pred_img = EITImage(elem_data=recon_sigma, fwd_model=system.fwd_model)
+    pred_data = system.forward_solve(pred_img)
+    vh = np.asarray(reference_data.meas, dtype=float).copy()
+    vi = np.asarray(phantom_data.meas, dtype=float).copy()
+    pred_vi = np.asarray(pred_data.meas, dtype=float).copy()
+    dv_raw = build_difference_vector(
+        vi,
+        vh,
+        mode="raw",
+        orientation="target_minus_reference",
+    )
+    dv_norm = build_difference_vector(
+        vi,
+        vh,
+        mode="normalized",
+        orientation="target_minus_reference",
+    )
+    dv_data_space = build_difference_vector(
+        vi,
+        vh,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
+    pred_dv_data_space = build_difference_vector(
+        pred_vi,
+        vh,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
+    if resolved_inverse_mode == "absolute":
+        measurement_vector = vi
+        prediction_vector = pred_vi
+    else:
+        measurement_vector = dv_data_space
+        prediction_vector = pred_dv_data_space
+    residual_vector = prediction_vector - measurement_vector
+    volt_rmse = float(np.sqrt(np.mean((prediction_vector - measurement_vector) ** 2)))
+    residual_l2 = float(np.linalg.norm(residual_vector))
+    residual_max = float(np.max(np.abs(residual_vector)))
+    truth_threshold = _choose_threshold(truth_sigma, baseline=base_sigma, truth_mode=True)
+    recon_threshold = _choose_threshold(recon_sigma, baseline=base_sigma, truth_mode=False)
+    truth_shape = _compute_shape_metrics(coords, truth_sigma, threshold=truth_threshold)
+    recon_shape = _compute_shape_metrics(coords, recon_sigma, threshold=recon_threshold)
+    target_mask = truth_sigma > (base_sigma + 0.5 * (target_sigma - base_sigma))
+    background_mask = ~target_mask
+    target_mean = float(np.mean(recon_sigma[target_mask])) if np.any(target_mask) else float("nan")
+    background_mean = (
+        float(np.mean(recon_sigma[background_mask])) if np.any(background_mask) else float("nan")
+    )
+    peak_conductivity = float(np.max(recon_sigma))
+    contrast_recovery = float((target_mean - background_mean) / (target_sigma - base_sigma))
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    cmap = plt.get_cmap("turbo")
+    norm = mcolors.Normalize(vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma)))
+    grid_X, grid_Y, grid_Z, truth_volume = _build_regular_volume(
+        coords=coords,
+        values=truth_sigma,
+        radius=radius,
+        height=height,
+        z_center=z_center,
+        resolution=(34, 34, 24),
+        smooth_sigma=0.6,
+    )
+    _, _, _, recon_volume = _build_regular_volume(
+        coords=coords,
+        values=recon_sigma,
+        radius=radius,
+        height=height,
+        z_center=z_center,
+        resolution=(34, 34, 24),
+        smooth_sigma=1.0,
+    )
+
+    fig = plt.figure(figsize=(11.6, 5.6), facecolor="white")
+    ax_truth = fig.add_subplot(1, 2, 1, projection="3d")
+    ax_recon = fig.add_subplot(1, 2, 2, projection="3d")
+
+    wire_segments = _build_cylinder_wireframe(radius=radius, height=height, z_center=z_center)
+    wire_color = (0.45, 0.45, 0.45, 0.38)
+    for ax in (ax_truth, ax_recon):
+        for seg in wire_segments:
+            ax.plot(
+                seg[:, 0],
+                seg[:, 1],
+                seg[:, 2],
+                color=wire_color,
+                linewidth=0.9,
+            )
+        electrodes = _build_electrode_markers(
+            n_elec=n_elec,
+            radius=radius * 1.002,
+            height=height,
+            z_center=z_center,
+            electrode_level_fractions=resolved_level_fractions,
+        )
+        ax.scatter(
+            electrodes[:, 0],
+            electrodes[:, 1],
+            electrodes[:, 2],
+            s=16,
+            c="#2f6f43",
+            alpha=0.95,
+            depthshade=False,
+            linewidths=0.0,
+        )
+
+    _add_voxel_volume(
+        ax_truth,
+        X=grid_X,
+        Y=grid_Y,
+        Z=grid_Z,
+        values=truth_volume,
+        threshold=truth_threshold,
+        cmap=cmap,
+        norm=norm,
+        alpha_surface=0.42,
+    )
+    _add_voxel_volume(
+        ax_recon,
+        X=grid_X,
+        Y=grid_Y,
+        Z=grid_Z,
+        values=recon_volume,
+        threshold=recon_threshold,
+        cmap=cmap,
+        norm=norm,
+        alpha_surface=0.52,
+    )
+
+    for ax in (ax_truth, ax_recon):
+        _style_3d_axes(ax, radius=radius, height=height, z_center=z_center)
+
+    ax_truth.text2D(0.50, 0.97, "Truth", transform=ax_truth.transAxes, ha="center", va="top", fontsize=15)
+    ax_recon.text2D(0.50, 0.97, "Reconstruction", transform=ax_recon.transAxes, ha="center", va="top", fontsize=15)
+    fig.suptitle(
+        f"{resolved_inverse_mode.capitalize()} / {preset_name}",
+        fontsize=14,
+        y=0.98,
+    )
+    ax_recon.text2D(
+        0.50,
+        0.03,
+        f"Conductivity RMSE = {cond_rmse:.4f}\nVoltage RMSE = {volt_rmse:.2e}",
+        transform=ax_recon.transAxes,
+        ha="center",
+        va="bottom",
+        fontsize=11.5,
+    )
+
+    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+    sm.set_array([])
+    cbar = fig.colorbar(sm, ax=[ax_truth, ax_recon], fraction=0.032, pad=0.02)
+    cbar.set_label("Conductivity", fontsize=12)
+
+    fig.subplots_adjust(left=0.02, right=0.90, top=0.95, bottom=0.06, wspace=0.02)
+
+    png_path = output_dir / "inverse_3d_overview.png"
+    svg_path = output_dir / "inverse_3d_overview.svg"
+    fig.savefig(png_path, dpi=320, bbox_inches="tight")
+    fig.savefig(svg_path, bbox_inches="tight")
+    plt.close(fig)
+
+    metrics = {
+        "conductivity_rmse": cond_rmse,
+        "conductivity_correlation": cond_corr,
+        "voltage_rmse": volt_rmse,
+        "residual_l2": residual_l2,
+        "residual_max": residual_max,
+        "refinement": int(refinement),
+        "max_iterations": int(recon.iterations),
+        "radius": float(radius),
+        "height": float(height),
+        "inverse_mode": resolved_inverse_mode,
+        "difference_mode": str(difference_mode),
+        "difference_orientation": str(difference_orientation),
+        "electrode_level_fractions": [float(v) for v in resolved_level_fractions],
+        "inverse_target": inverse_target,
+        "preset_name": preset_name,
+        "hyperparameter": recon.diagnostics.get("hyperparameter"),
+        "lambda_eff": recon.diagnostics.get("lambda_eff"),
+        "step_size": recon.diagnostics.get("difference_step_size", {}).get("value"),
+        "difference_step_size": recon.diagnostics.get("difference_step_size", {}),
+        "best_homog": recon.diagnostics.get("best_homog", {}),
+        "jacobian_background_conductivity": recon.diagnostics.get(
+            "jacobian_background_conductivity"
+        ),
+        "contrast_recovery": contrast_recovery,
+        "target_mean": target_mean,
+        "background_mean": background_mean,
+        "peak_conductivity": peak_conductivity,
+        "shape_metrics": {
+            "truth": truth_shape,
+            "reconstruction": recon_shape,
+        },
+        "measurement_space": recon.diagnostics.get("measurement_space", {}),
+        "backend_info": recon.diagnostics.get("backend_info", {}),
+    }
+    (output_dir / "inverse_3d_overview_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
+    np.savez(
+        output_dir / "inverse_3d_overview_data.npz",
+        coords=coords,
+        truth_sigma=truth_sigma,
+        recon_sigma=recon_sigma,
+        vh=vh,
+        vi=vi,
+        dv_raw=dv_raw,
+        dv_norm=dv_norm,
+        dv_measurement_space=dv_data_space,
+        pred_vi=pred_vi,
+        pred_dv_measurement_space=pred_dv_data_space,
+        measurement_vector=measurement_vector,
+        prediction_vector=prediction_vector,
+        residual_vector=residual_vector,
+        target_mask=target_mask,
+        background_mask=background_mask,
+    )
+    return metrics
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Render a full 3D inverse reconstruction overview")
+    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
+    parser.add_argument("--refinement", type=int, default=1)
+    parser.add_argument("--max-iterations", type=int, default=None)
+    parser.add_argument("--radius", type=float, default=0.22)
+    parser.add_argument("--height", type=float, default=0.16)
+    parser.add_argument("--inverse-mode", choices=["difference", "absolute"], default="difference")
+    parser.add_argument("--difference-mode", choices=["raw", "normalized"], default="normalized")
+    parser.add_argument(
+        "--difference-orientation",
+        choices=["target_minus_reference", "reference_minus_target"],
+        default="target_minus_reference",
+    )
+    parser.add_argument(
+        "--electrode-level-fractions",
+        default="0.25,0.75",
+        help="Comma-separated normalized electrode center heights in (0,1) for zigzag 3D electrodes.",
+    )
+    parser.add_argument(
+        "--difference-preset",
+        choices=["eidors_one_step_noser", "eidors_demo3d_tv", "sphere_multistep_noser"],
+        default=DEFAULT_DIFFERENCE_PRESET,
+    )
+    parser.add_argument(
+        "--absolute-preset",
+        choices=["eidors_abs_gn"],
+        default=DEFAULT_ABSOLUTE_PRESET,
+    )
+    parser.add_argument("--hyperparameter", type=float, default=None)
+    parser.add_argument(
+        "--difference-step-size-mode",
+        choices=["off", "optimize", "fixed"],
+        default=None,
+    )
+    parser.add_argument(
+        "--best-homog-mode",
+        choices=["off", "optimize"],
+        default=None,
+    )
+    return parser.parse_args()
+
+
+def main() -> None:
+    args = parse_args()
+    _configure_times_new_roman()
+    metrics = run_case(
+        output_dir=args.output_dir,
+        refinement=args.refinement,
+        max_iterations=args.max_iterations,
+        radius=args.radius,
+        height=args.height,
+        inverse_mode=args.inverse_mode,
+        difference_mode=args.difference_mode,
+        difference_orientation=args.difference_orientation,
+        electrode_level_fractions=_parse_level_fractions(args.electrode_level_fractions),
+        difference_preset=args.difference_preset,
+        absolute_preset=args.absolute_preset,
+        hyperparameter=args.hyperparameter,
+        difference_step_size_mode=args.difference_step_size_mode,
+        best_homog_mode=args.best_homog_mode,
+    )
+    print(json.dumps(metrics, indent=2))
+    print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.png'}")
+    print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.svg'}")
+
+
+if __name__ == "__main__":
+    main()

@@ -24,6 +24,18 @@
           pkgs = import nixpkgs { inherit system; };
           python = pkgs.python313;
           py = python.pkgs;
+          linuxGuiLibs = [
+            pkgs.xorg.libX11
+            pkgs.xorg.libXext
+            pkgs.xorg.libXrender
+            pkgs.xorg.libXt
+            pkgs.xorg.libSM
+            pkgs.xorg.libICE
+            pkgs.libGL
+            pkgs.libGLU
+            pkgs.libxkbcommon
+            pkgs.mesa
+          ];
           hasPy = name: builtins.hasAttr name py;
           pyOpt = name: if hasPy name then [ (builtins.getAttr name py) ] else [ ];
           fenicsDolfinx = py."fenics-dolfinx".overridePythonAttrs (
@@ -56,7 +68,6 @@
           pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
           hasCudaPy = name: linuxCudaSupported && builtins.hasAttr name pyCuda;
           pyCudaOpt = name: if hasCudaPy name then [ (builtins.getAttr name pyCuda) ] else [ ];
-
           cudaPetsc = if linuxCudaSupported then
             (pkgsCuda.petsc.override {
               mpi = pkgsCuda.openmpi;
@@ -208,6 +219,12 @@ PY
 
               source "$PYEIDORS_ACTIVE_VENV/bin/activate"
 
+              if [ -f scripts/env/cache_session.sh ]; then
+                # shellcheck disable=SC1091
+                source scripts/env/cache_session.sh
+                pyeidors_cache_session_init ".pyeidors_cache/v2"
+              fi
+
               venv_site="$($PYEIDORS_ACTIVE_VENV/bin/python - <<'PY'
 import site
 paths = site.getsitepackages()
@@ -316,6 +333,13 @@ PY
               pythonFor = python;
               envProfile = "default";
               venvDir = ".venv";
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib:${lib.makeLibraryPath linuxGuiLibs}";
+              extraPrelude = ''
+                export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
             };
           };
         }

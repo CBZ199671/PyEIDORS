@@ -131,9 +131,24 @@ python scripts/run_reconstruction_unified.py \
   --output-root results/demo_output
 ```
 
+For 3D cylindrical reconstruction (current release: `gn-difference` only), add:
+
+```bash
+python scripts/run_reconstruction_unified.py \
+  --method gn-difference \
+  --input-mode paired \
+  --csv data/measurements/tank/sample.csv \
+  --output-root results/demo_output_3d \
+  --mesh-dim 3 \
+  --mesh-height 0.2 \
+  --radius 0.25 \
+  --refinement 3
+```
+
 This script will:
 
 - Validate measurement matrix dimensions and build `MeasurementDataset`;
 - Set up `EITSystem` (preferring cached meshes, optionally using simplified mesh generator);
+- In 3D mode, force `drive_mode=total_current` (2D-specific `line_current_density` is not used);
 - Perform difference reconstruction using frame 0 as reference;
 - Save measurement curves and conductivity reconstruction images to the output directory.

@@ -14,7 +14,7 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from pyeidors.cache import CacheManager
+from pyeidors.cache import CacheManager, CachePolicy
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -39,7 +39,12 @@ def build_parser() -> argparse.ArgumentParser:
         ],
     )
     parser.add_argument("--cache-scope", choices=["off", "process", "both"], default="both")
-    parser.add_argument("--cache-dir", type=Path, default=REPO_ROOT / ".pyeidors_cache" / "v2")
+    parser.add_argument(
+        "--cache-dir",
+        type=Path,
+        default=REPO_ROOT / ".pyeidors_cache" / "v2",
+        help="Persistent cache root to inspect/manage. Runtime session caches live under <cache-dir>/.sessions/.",
+    )
     parser.add_argument("--name", action="append", default=[], help="Cache family name")
     parser.add_argument("--namespace", type=str, default=None)
     parser.add_argument("--max-bytes", type=int, default=None)
@@ -70,6 +75,7 @@ def main() -> None:
     manager = CacheManager(
         scope=str(args.cache_scope),
         cache_dir=args.cache_dir,
+        policy=CachePolicy(disk_lifecycle="persistent", cleanup_on_exit=False),
     )
 
     if args.command == "status":

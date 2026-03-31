@@ -15,6 +15,7 @@ from pyeidors.data.structures import ElectrodePosition, MeshConfig
 from pyeidors.geometry import mesh_generator as mesh_gen_module
 from pyeidors.geometry import mesh_loader as mesh_loader_module
 from pyeidors.geometry import optimized_mesh_generator as opt_mesh_module
+from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 
 
 def _make_fake_mesh_data():
@@ -181,6 +182,58 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         electrode_coverage=0.5,
     )
     assert created.num_vertices() > 0
+
+
+def test_build_cache_name_3d_includes_generator_revision():
+    name = opt_mesh_module._build_cache_name_3d(
+        n_elec=16,
+        radius=0.18,
+        height=0.16,
+        refinement=1,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        z_center=0.0,
+        mesh_family="hex",
+        geometry_version="geomv2",
+        generator_revision="g3d2",
+    )
+    assert name.endswith("cfhex_geomv2_g3d2")
+
+
+def test_cached_3d_cem_mesh_validator_rejects_missing_electrode(tmp_path):
+    mesh = create_cylinder_3d_eit_mesh(
+        n_elec=16,
+        radius=0.18,
+        height=0.16,
+        refinement=1,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        output_dir=str(tmp_path),
+        mesh_name="hex_cached_check",
+        mesh_family="hex",
+        geometry_version="geomv2",
+    )
+    mesh.association_table = dict(mesh.association_table)
+    mesh.association_table.pop("electrode_1", None)
+    assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh, n_elec=16) is False
+
+
+def test_cached_3d_cem_mesh_validator_rejects_missing_g3d3_sidecar(tmp_path):
+    mesh = create_cylinder_3d_eit_mesh(
+        n_elec=16,
+        radius=0.18,
+        height=0.16,
+        refinement=1,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        output_dir=str(tmp_path),
+        mesh_name="hex_cached_sidecar_check",
+        mesh_family="hex",
+        geometry_version="geomv2",
+    )
+    sidecar = tmp_path / "hex_cached_sidecar_check_structured.json"
+    sidecar.unlink()
+    assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh, n_elec=16) is False
 
 
 def test_mesh_loader_functions_with_fake_read(tmp_path, monkeypatch):

@@ -19,13 +19,21 @@ logger = logging.getLogger(__name__)
 class MeshConverter:
     """Convert ``.msh`` file to DOLFINx mesh with facet tags."""
 
-    def __init__(self, mesh_file: str, output_dir: str):
+    def __init__(self, mesh_file: str, output_dir: str, gdim: int = 2):
         self.mesh_file = Path(mesh_file)
         self.output_dir = Path(output_dir)
         self.prefix = self.mesh_file.stem
+        self.gdim = int(gdim)
+        if self.gdim not in {2, 3}:
+            raise ValueError(f"gdim must be 2 or 3, got {gdim!r}")
 
     def convert(self) -> Tuple[EITMesh, object, Dict[str, int]]:
-        mesh_data = gmshio.read_from_msh(str(self.mesh_file), MPI.COMM_WORLD, rank=0, gdim=2)
+        mesh_data = gmshio.read_from_msh(
+            str(self.mesh_file),
+            MPI.COMM_WORLD,
+            rank=0,
+            gdim=self.gdim,
+        )
 
         association_table: Dict[str, int] = {
             name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()

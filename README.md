@@ -325,6 +325,7 @@ python scripts/run_reconstruction_unified.py \
 ```
 
 The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. With unchanged background conductivity, Jacobian and single-step operator are reused from cache on later runs. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
+By default, disk cache now uses a terminal-scoped session lifecycle in supported `nix develop` / `nix develop .#cuda` shells: repeated runs in the same shell reuse `.pyeidors_cache/v2/.sessions/<session-id>`, and that shell-owned cache is cleared automatically on shell exit or `deactivate`. Use `cache_lifecycle="persistent"` only when you explicitly want cross-terminal reuse.
 
 3D reconstruction uses the same unified CLI and supports `gn-difference` and `gn-absolute`.
 For 3D, `--solver-mode` defaults to `fast` (with `strict` as fallback):

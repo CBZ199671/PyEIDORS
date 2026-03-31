@@ -6,6 +6,8 @@ from typing import Optional, Dict, Any
 
 from typing import TYPE_CHECKING
 
+from ...core_system_helpers import difference_measurement
+from ...data.difference import project_measurement_vector
 from ...data.structures import EITData, EITImage
 from .base import (
     ReconstructionResult,
@@ -52,9 +54,24 @@ def perform_difference_reconstruction(
     )
 
     simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
-
-    measured_vector = measurement_data.meas - reference_data.meas
-    simulated_vector = simulated_data.meas - reference_data.meas
+    diff_data = difference_measurement(
+        measurement_data,
+        reference_data,
+        mode=eit_system.difference_mode,
+        orientation=eit_system.difference_orientation,
+    )
+    measured_vector = diff_data.meas
+    simulated_vector = (
+        reconstruction.simulated_measurement
+        if reconstruction.simulated_measurement is not None
+        else project_measurement_vector(
+            simulated_data.meas,
+            measurement_type="difference",
+            reference_meas=diff_data.reference_meas,
+            difference_mode=diff_data.difference_mode,
+            difference_orientation=diff_data.difference_orientation,
+        )
+    )
     residual_vector, l2_error, rel_error, mse = compute_residuals(
         measured_vector, simulated_vector
     )

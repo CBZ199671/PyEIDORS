@@ -152,6 +152,9 @@ The `shellHook` in `flake.nix` will:
 5. Run `scripts/env/sync_locked_env.sh --check`.
 6. If drift is detected, auto-run `scripts/env/sync_locked_env.sh --repair`.
 7. Fail fast if repair still fails, with explicit manual recovery command.
+8. Initialize a terminal-scoped cache session under `.pyeidors_cache/v2/.sessions/<session-id>` and clear that shell-owned cache automatically on shell exit, signal termination, or `deactivate`.
+
+CPU and CUDA shells follow the same cache-lifecycle rule: each terminal gets its own runtime disk cache, terminals do not share session cache, and closing one shell only cleans that shell's cache. Bare `.venv/bin/python` outside the shell hook falls back to the older process-scoped lifecycle and is not the supported long-running workflow.
 
 ### Optional performance extras
 

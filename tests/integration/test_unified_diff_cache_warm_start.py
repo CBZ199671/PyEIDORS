@@ -26,6 +26,11 @@ def _build_ctx(cache_dir: Path) -> dict:
     return gn_difference_runner.build_shared_context(
         mesh_dir=str(REPO_ROOT / "eit_meshes"),
         mesh_name="mesh_16e_r0p025_ref10_cov0p5",
+        mesh_dim=2,
+        mesh_height=1.0,
+        electrode_height_ratio=0.2,
+        z_center=0.0,
+        refinement=6,
         n_elec=16,
         radius=0.025,
         drive_value=1.0,

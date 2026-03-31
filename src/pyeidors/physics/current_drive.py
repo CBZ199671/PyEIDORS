@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import replace
 from typing import Literal
 
 import numpy as np
+
+from ..data.structures import PatternConfig
 
 DriveMode = Literal["line_current_density", "total_current", "normalized"]
 _VALID_DRIVE_MODES: tuple[DriveMode, ...] = (
@@ -51,6 +54,27 @@ def validate_drive_config(
         )
 
     return normalized_mode
+
+
+def normalize_pattern_config_for_mesh(
+    pattern_config: PatternConfig,
+    *,
+    mesh_tdim: int,
+) -> tuple[PatternConfig, dict[str, str]]:
+    """Normalize drive-mode semantics to a mesh-compatible configuration."""
+
+    requested_mode = normalize_drive_mode(pattern_config.drive_mode)
+    effective_mode = requested_mode
+    if int(mesh_tdim) == 3 and requested_mode == "line_current_density":
+        effective_mode = "total_current"
+    normalized = pattern_config if effective_mode == requested_mode else replace(
+        pattern_config,
+        drive_mode=effective_mode,
+    )
+    return normalized, {
+        "drive_mode_requested": requested_mode,
+        "drive_mode_effective": effective_mode,
+    }
 
 
 def _as_positive_array(values: Sequence[float], *, n_elec: int, name: str) -> np.ndarray:

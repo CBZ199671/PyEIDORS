@@ -5,6 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+DEFAULT_CACHE_LIFECYCLE = "session"
+
+CacheDiskLifecycle = Literal["session", "persistent"]
+
+
+def normalize_cache_lifecycle(
+    value: object,
+    *,
+    default: CacheDiskLifecycle = DEFAULT_CACHE_LIFECYCLE,
+) -> CacheDiskLifecycle:
+    normalized = str(value).strip().lower() if value is not None else str(default)
+    if normalized in {"session", "persistent"}:
+        return normalized
+    return default
+
 CacheScope = Literal["process", "disk", "both", "off"]
 CacheArtifactKind = Literal[
     "mesh_bundle",
@@ -26,6 +41,10 @@ class CachePolicy:
     ttl_seconds: float | None = None
     compress_disk_payloads: bool = True
     read_only: bool = False
+    disk_lifecycle: CacheDiskLifecycle = DEFAULT_CACHE_LIFECYCLE
+    cleanup_on_exit: bool = True
+    cleanup_stale_sessions_on_startup: bool = True
+    stale_session_max_age_seconds: float = 7 * 24 * 60 * 60
     artifact_cost: dict[str, float] = field(
         default_factory=lambda: {
             "forward_factor": 16.0,

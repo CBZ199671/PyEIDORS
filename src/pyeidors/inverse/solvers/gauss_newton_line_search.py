@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import torch
 
+from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array
 
@@ -53,7 +54,22 @@ def line_search_torch(
             reconstructor.device,
             dtype=reconstructor._torch_dtype,
         )
-        dv_torch = data_test_torch - meas_target_torch
+        data_test_projected = project_measurement_vector(
+            data_test_torch.detach().cpu().numpy(),
+            measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
+            reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
+            difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
+            difference_orientation=getattr(
+                reconstructor,
+                "_difference_orientation_effective",
+                reconstructor.difference_orientation,
+            ),
+        )
+        data_test_projected_torch = torch.from_numpy(data_test_projected).to(
+            reconstructor.device,
+            dtype=reconstructor._torch_dtype,
+        )
+        dv_torch = data_test_projected_torch - meas_target_torch
         weighted_dv = dv_torch * weight_vector if weight_vector is not None else dv_torch
 
         meas_misfit = 0.5 * torch.dot(weighted_dv, weighted_dv).item()

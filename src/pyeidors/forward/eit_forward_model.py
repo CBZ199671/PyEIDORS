@@ -22,6 +22,8 @@ except ImportError:  # pragma: no cover
 from ..data.structures import EITData, EITImage, EITMesh, PatternConfig
 from ..electrodes.patterns import StimMeasPatternManager
 from ..femx import create_ds_measure
+from .cuda_structured_backend import CudaStructuredForwardBackend, resolve_cuda_structured_runtime
+from ..perf.policy import DEFAULT_FORWARD_BACKEND, normalize_forward_backend
 from ..physics.current_drive import resolve_electrode_lengths_m
 
 
@@ -69,6 +71,7 @@ class EITForwardModel:
         mesh: EITMesh,
         linear_backend: str = "petsc",
         backend_config: dict | LinearBackendConfig | None = None,
+        forward_backend: str = DEFAULT_FORWARD_BACKEND,
         cache_manager=None,
         performance_mode: str = "aggressive",
     ):
@@ -78,6 +81,9 @@ class EITForwardModel:
             raise TypeError("EITForwardModel expects an EITMesh instance")
         self.eit_mesh = mesh
         self.mesh = mesh.mesh
+        self.mesh_family = str(getattr(mesh, "mesh_family", None) or "tetra")
+        self.geometry_version = str(getattr(mesh, "geometry_version", None) or "legacy")
+        self.generator_revision = str(getattr(mesh, "generator_revision", None) or "g3d0")
 
         if self.mesh.comm.size != 1:
             raise RuntimeError(
@@ -90,6 +96,10 @@ class EITForwardModel:
             )
 
         self.linear_backend = str(linear_backend).strip().lower()
+        self.forward_backend = normalize_forward_backend(
+            forward_backend,
+            default=DEFAULT_FORWARD_BACKEND,
+        )
         self.backend_config = (
             backend_config
             if isinstance(backend_config, LinearBackendConfig)
@@ -131,9 +141,30 @@ class EITForwardModel:
         self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
-        self.M = self._assemble_electrode_matrix()
         self._M_petsc = {}
+        self.M = self._assemble_electrode_matrix()
         self._petsc_backend_info = self._resolve_petsc_backend_info()
+        self._petsc_backend_info["forward_backend_requested"] = self.forward_backend
+        self._petsc_backend_info["forward_backend_effective"] = self.forward_backend
+        self._petsc_backend_info["mesh_family"] = self.mesh_family
+        self._petsc_backend_info["geometry_version"] = self.geometry_version
+        self._petsc_backend_info["generator_revision"] = self.generator_revision
+        self._cuda_structured_runtime = None
+        self._cuda_structured_backend = None
+        if self.forward_backend == "cuda_structured":
+            self._cuda_structured_runtime = resolve_cuda_structured_runtime(
+                mesh_dim=self.mesh_tdim,
+                mesh_file=getattr(self.eit_mesh, "mesh_file", None),
+                mesh_family=self.mesh_family,
+                geometry_version=self.geometry_version,
+                generator_revision=self.generator_revision,
+                petsc_device_requested=str(self._petsc_backend_info.get("petsc_device_requested", "auto")),
+                scalar_type="real",
+                mesh_comm_size=int(self.mesh.comm.size),
+            )
+            self._set_backend_diagnostic(**self._cuda_structured_runtime)
+            self._cuda_structured_backend = CudaStructuredForwardBackend(self, self._cuda_structured_runtime)
+            self._set_backend_diagnostic(**self._cuda_structured_backend.backend_diagnostics())
 
     def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
         """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
@@ -321,6 +352,9 @@ class EITForwardModel:
         if requested == "cpu":
             return info
         if requested == "cuda" and not cuda_available:
+            if self.forward_backend == "cuda_structured":
+                info["gpu_fallback_reason"] = "petsc_cuda_not_required_for_cuda_structured"
+                return info
             reason = capability.get("errors", {}) if isinstance(capability.get("errors"), dict) else capability
             raise RuntimeError(
                 "petsc_device='cuda' requested, but the current PETSc/DOLFINx runtime "
@@ -458,6 +492,9 @@ class EITForwardModel:
         info.update(updates)
         self._petsc_backend_info = info
 
+    def get_backend_diagnostics(self) -> dict[str, object]:
+        return dict(getattr(self, "_petsc_backend_info", {}) or {})
+
     def _ensure_structural_diagonal(self, mat) -> None:
         if PETSc is None or mat is None:
             return
@@ -591,6 +628,11 @@ class EITForwardModel:
 
         return csr_matrix(M_lil)
 
+    def _ensure_electrode_matrix(self):
+        if self.M is None:
+            self.M = self._assemble_electrode_matrix()
+        return self.M
+
     def _assemble_conductivity_matrix(self, sigma: fem.Function, *, mat_kind=None):
         """Assemble the conductivity-dependent stiffness matrix in PETSc form."""
         a_form = ufl.inner(sigma * ufl.grad(self.u), ufl.grad(self.phi)) * ufl.dx
@@ -600,7 +642,7 @@ class EITForwardModel:
         """Build full system matrix for SciPy backend."""
         scipy_A = self._petsc_to_csr(self._assemble_conductivity_matrix(sigma))
         scipy_A.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
-        return scipy_A + self.M
+        return scipy_A + self._ensure_electrode_matrix()
 
     def _assemble_electrode_matrix_petsc(self, *, mat_type=None, vec_type=None):
         if PETSc is None:
@@ -642,7 +684,7 @@ class EITForwardModel:
             raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
         key = self._mat_type_key(mat_type)
         if key not in self._M_petsc:
-            electrode_matrix = self._csr_to_petsc(self.M)
+            electrode_matrix = self._csr_to_petsc(self._ensure_electrode_matrix())
             ground_row = self.dofs + self.n_elec
             try:
                 if hasattr(electrode_matrix, "setOption"):
@@ -753,6 +795,7 @@ class EITForwardModel:
 
         return {
             "backend": self.linear_backend,
+            "forward_backend": self.forward_backend,
             "sigma_hash": sigma_hash,
             "n_elec": self.n_elec,
             "n_patterns": n_patterns,
@@ -1093,6 +1136,14 @@ class EITForwardModel:
     def forward_solve(self, sigma: fem.Function, current_patterns=None):
         """Forward solve for given conductivity and stimulation patterns."""
         pattern_matrix = self._resolve_pattern_matrix(current_patterns)
+        if self.forward_backend == "cuda_structured":
+            if self._cuda_structured_backend is None:
+                raise RuntimeError("cuda_structured backend was not initialized")
+            self._set_backend_diagnostic(**self._cuda_structured_backend.backend_diagnostics())
+            return self._cuda_structured_backend.solve_batch(
+                np.asarray(sigma.x.array, dtype=np.float64),
+                pattern_matrix,
+            )
         if self.linear_backend == "scipy":
             sol_matrix = self._solve_with_scipy(sigma, pattern_matrix)
         elif self.linear_backend == "petsc":

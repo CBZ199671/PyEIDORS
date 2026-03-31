@@ -39,6 +39,10 @@ class EITData:
     n_stim: int
     n_meas: int
     type: str = 'real'
+    reference_meas: Optional[np.ndarray] = None
+    target_meas: Optional[np.ndarray] = None
+    difference_mode: str = 'raw'
+    difference_orientation: str = 'target_minus_reference'
 
 
 @dataclass
@@ -62,11 +66,15 @@ class MeshConfig:
     radius: float = 1.0
     height: float = 1.0
     electrode_height_ratio: float = 0.2
+    electrode_level_fractions: Tuple[float, ...] = (0.25, 0.75)
     z_center: float = 0.0
     refinement: int = 8
     electrode_vertices: int = 8
     gap_vertices: int = 4
     mesh_size: float = 0.1
+    mesh_family: str = "tetra"
+    geometry_version: str = "geomv2"
+    generator_revision: Optional[str] = None
 
 
 @dataclass
@@ -106,6 +114,11 @@ class EITMesh:
     radius: float = 0.0
     mesh_file: Optional[str] = None
     electrode_vertices: Optional[list[np.ndarray]] = None
+    mesh_family: Optional[str] = None
+    geometry_version: Optional[str] = None
+    generator_revision: Optional[str] = None
+    structured_sidecar_file: Optional[str] = None
+    structured_sidecar_version: Optional[str] = None
 
     @property
     def comm(self):
@@ -164,4 +177,9 @@ class EITMesh:
             "center": center.tolist(),
             "association_table": dict(self.association_table),
             "mesh_file": self.mesh_file,
+            "mesh_family": self.mesh_family,
+            "geometry_version": self.geometry_version,
+            "generator_revision": self.generator_revision,
+            "structured_sidecar_file": self.structured_sidecar_file,
+            "structured_sidecar_version": self.structured_sidecar_version,
         }

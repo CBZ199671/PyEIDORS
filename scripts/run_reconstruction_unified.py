@@ -21,8 +21,11 @@ if str(SCRIPTS_PATH) not in sys.path:
 
 from common.recon_cli_models import InputMode, ReconstructionMethod
 from pyeidors.perf import (
+    DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
+    DEFAULT_FORWARD_BACKEND,
+    DEFAULT_MESH_FAMILY,
     DEFAULT_INEXACT_ETA0,
     DEFAULT_INEXACT_ETA_MAX,
     DEFAULT_INEXACT_ETA_MIN,
@@ -42,6 +45,10 @@ from pyeidors.perf import (
     DEFAULT_ROM_RANK_GLOBAL,
     DEFAULT_ROM_REFRESH_EVERY,
     DEFAULT_ROM_SNAPSHOT_SOURCE,
+    FORWARD_BACKEND_VALUES,
+    MESH_FAMILY_VALUES,
+    normalize_forward_backend,
+    normalize_mesh_family,
     normalize_petsc_device,
     parse_block_size_candidates,
     resolve_experimental_mode,
@@ -258,6 +265,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Torch/GN inverse runtime device policy",
     )
     parser.add_argument(
+        "--forward-backend",
+        choices=list(FORWARD_BACKEND_VALUES),
+        default=DEFAULT_FORWARD_BACKEND,
+        help=(
+            "Forward discretization backend. `cuda_structured` is the single-rank "
+            "3D hex CUDA fast path; `dolfinx` remains the default/reference backend."
+        ),
+    )
+    parser.add_argument(
+        "--mesh-family",
+        choices=list(MESH_FAMILY_VALUES),
+        default=DEFAULT_MESH_FAMILY,
+        help="3D cell family for generated/cached meshes. GPU-only forward backends require `hex`.",
+    )
+    parser.add_argument(
+        "--geometry-version",
+        type=str,
+        default=DEFAULT_3D_GEOMETRY_VERSION,
+        help="3D generated mesh contract. `geomv2` enables finite-height electrode patches.",
+    )
+    parser.add_argument(
         "--perf-report",
         type=Path,
         default=None,
@@ -317,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--cache-dir",
         type=Path,
         default=REPO_ROOT / ".pyeidors_cache" / "v2",
-        help="Persistent cache directory",
+        help="Cache root. Disk cache defaults to terminal-session lifecycle and is cleaned when the active dev shell exits.",
     )
     parser.add_argument(
         "--cache-clear-name",
@@ -376,6 +404,15 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         solver_mode=args.solver_mode,
     )
     args.petsc_device = normalize_petsc_device(args.petsc_device, default=DEFAULT_PETSC_DEVICE)
+    args.forward_backend = normalize_forward_backend(
+        args.forward_backend,
+        default=DEFAULT_FORWARD_BACKEND,
+    )
+    args.mesh_family = normalize_mesh_family(
+        args.mesh_family,
+        default=DEFAULT_MESH_FAMILY,
+    )
+    args.geometry_version = str(args.geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
     if int(args.cholmod_max_n) <= 0:
         parser.error("--cholmod-max-n must be positive.")
     if float(args.cholmod_max_memory_gib) <= 0:

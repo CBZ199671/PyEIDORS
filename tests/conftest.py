@@ -3,16 +3,32 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
 import pytest
-from dolfinx import mesh as dmesh
-from mpi4py import MPI
 
-from pyeidors.data.structures import PatternConfig
-from pyeidors.core_system import EITSystem
-from pyeidors.femx import build_eit_mesh
+REPO_ROOT = Path(__file__).resolve().parents[1]
+SRC_PATH = REPO_ROOT / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
+_TEST_STACK_IMPORT_ERROR: Exception | None = None
+try:
+    from dolfinx import mesh as dmesh
+    from mpi4py import MPI
+
+    from pyeidors.data.structures import PatternConfig
+    from pyeidors.core_system import EITSystem
+    from pyeidors.femx import build_eit_mesh
+except Exception as exc:  # pragma: no cover - import guard for lean environments
+    dmesh = None
+    MPI = None
+    PatternConfig = None
+    EITSystem = None
+    build_eit_mesh = None
+    _TEST_STACK_IMPORT_ERROR = exc
 
 # Darwin/OpenMP runtime stability guard for mixed PETSc/Torch test runs.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -35,6 +51,8 @@ def gmsh_mesh_artifacts(tmp_path_factory: pytest.TempPathFactory):
 
 @pytest.fixture(scope="session")
 def eit_mesh(gmsh_mesh_artifacts):
+    if _TEST_STACK_IMPORT_ERROR is not None:
+        pytest.skip(f"requires DOLFINx test stack: {_TEST_STACK_IMPORT_ERROR}")
     mesh = dmesh.create_unit_square(MPI.COMM_WORLD, 32, 32)
     tdim = mesh.topology.dim
     fdim = tdim - 1
@@ -71,6 +89,8 @@ def eit_mesh(gmsh_mesh_artifacts):
 
 @pytest.fixture(scope="session")
 def eit_system(eit_mesh):
+    if _TEST_STACK_IMPORT_ERROR is not None:
+        pytest.skip(f"requires DOLFINx test stack: {_TEST_STACK_IMPORT_ERROR}")
     pattern = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
