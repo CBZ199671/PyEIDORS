@@ -116,12 +116,38 @@ def pattern_signature_from_forward_model(fwd_model: Any) -> str:
     return stable_signature_hash(payload)
 
 
+def _forward_model_comm_size(fwd_model: Any) -> int:
+    mesh = getattr(fwd_model, "mesh", None)
+    comm = getattr(mesh, "comm", None)
+    try:
+        if comm is not None and hasattr(comm, "Get_size"):
+            return int(comm.Get_size())
+        if comm is not None and hasattr(comm, "size"):
+            return int(comm.size)
+    except Exception:
+        pass
+    return 1
+
+
+def _canonicalize_cuda_mat_type(mat_type: Any, *, comm_size: int) -> Any:
+    if mat_type is None:
+        return None
+    text = str(mat_type).strip().lower()
+    if text in {"aijcusparse", "seqaijcusparse", "mpiaijcusparse"}:
+        return "mpiaijcusparse" if int(comm_size) > 1 else "seqaijcusparse"
+    if text in {"densecuda", "seqdensecuda", "mpidensecuda"}:
+        return "mpidensecuda" if int(comm_size) > 1 else "seqdensecuda"
+    return text
+
+
 def backend_signature_from_forward_model(fwd_model: Any) -> str:
     config = fwd_model.backend_config
     petsc_backend = getattr(fwd_model, "_petsc_backend_info", {}) or {}
     petsc_device_effective = str(petsc_backend.get("petsc_device_effective", "cpu"))
     petsc_mat_type = petsc_backend.get("petsc_mat_type")
     petsc_vec_type = petsc_backend.get("petsc_vec_type")
+    petsc_dense_mat_type = petsc_backend.get("petsc_dense_mat_type")
+    gpu_constraint_strategy = petsc_backend.get("gpu_constraint_strategy")
     if petsc_device_effective == "cpu" and (petsc_mat_type is None or petsc_vec_type is None):
         stable_types_fn = getattr(fwd_model, "_stable_cpu_petsc_types", None)
         stable_mat_type = None
@@ -133,6 +159,12 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
                 stable_mat_type, stable_vec_type = None, None
         petsc_mat_type = petsc_mat_type or stable_mat_type or "cpu-default"
         petsc_vec_type = petsc_vec_type or stable_vec_type or "cpu-default"
+    elif petsc_device_effective == "cuda":
+        comm_size = _forward_model_comm_size(fwd_model)
+        petsc_mat_type = _canonicalize_cuda_mat_type(petsc_mat_type, comm_size=comm_size)
+        petsc_dense_mat_type = _canonicalize_cuda_mat_type(petsc_dense_mat_type, comm_size=comm_size)
+        if gpu_constraint_strategy is None:
+            gpu_constraint_strategy = "electrode-zero"
     payload = {
         "linear_backend": str(fwd_model.linear_backend),
         "forward_backend": str(getattr(fwd_model, "forward_backend", "dolfinx")),
@@ -154,8 +186,8 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         "petsc_device_effective": petsc_device_effective,
         "petsc_mat_type": petsc_mat_type,
         "petsc_vec_type": petsc_vec_type,
-        "petsc_dense_mat_type": petsc_backend.get("petsc_dense_mat_type"),
-        "gpu_constraint_strategy": petsc_backend.get("gpu_constraint_strategy"),
+        "petsc_dense_mat_type": petsc_dense_mat_type,
+        "gpu_constraint_strategy": gpu_constraint_strategy,
         "forward_backend_effective": petsc_backend.get(
             "forward_backend_effective",
             getattr(fwd_model, "forward_backend", "dolfinx"),

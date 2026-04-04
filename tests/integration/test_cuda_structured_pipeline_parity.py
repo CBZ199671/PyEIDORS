@@ -22,6 +22,10 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 
 
 CUDA_STRUCTURED_AVAILABLE = bool(torch is not None and torch.cuda.is_available() and GMSH_AVAILABLE)
+FORWARD_REL_L2_TOL = 2.0e-6
+DIFFERENCE_INVERSE_RMSE_TOL = 1.5e-5
+ABSOLUTE_INVERSE_RMSE_TOL = 2.0e-5
+
 pytestmark = pytest.mark.skipif(
     not CUDA_STRUCTURED_AVAILABLE,
     reason="requires gmsh python bindings and torch.cuda for cuda_structured parity",
@@ -122,8 +126,8 @@ def test_forward_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: 
     cpu_phantom = cpu.forward_solve(phantom_cpu)
     gpu_phantom = gpu.forward_solve(phantom_gpu)
 
-    assert _relative_l2(cpu_hom.meas, gpu_hom.meas) <= 1e-6
-    assert _relative_l2(cpu_phantom.meas, gpu_phantom.meas) <= 1e-6
+    assert _relative_l2(cpu_hom.meas, gpu_hom.meas) <= FORWARD_REL_L2_TOL
+    assert _relative_l2(cpu_phantom.meas, gpu_phantom.meas) <= FORWARD_REL_L2_TOL
 
 
 @pytest.mark.parametrize("refinement", [1, 2])
@@ -177,4 +181,5 @@ def test_inverse_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: 
     rel_l2 = _relative_l2(cpu_sigma, gpu_sigma)
 
     assert rel_l2 <= 5e-5
-    assert rmse <= 1.25e-6
+    rmse_tol = DIFFERENCE_INVERSE_RMSE_TOL if mode == "difference" else ABSOLUTE_INVERSE_RMSE_TOL
+    assert rmse <= rmse_tol

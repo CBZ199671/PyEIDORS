@@ -2314,6 +2314,11 @@ def run_reconstruction(
             if isinstance(jacobian_block_tune_info, dict)
             else 0.0
         ),
+        "forward_static_setup_lookup": (
+            dict(reconstructor.fwd_model.get_backend_diagnostics().get("static_setup_lookup", {}))
+            if hasattr(reconstructor.fwd_model, "get_backend_diagnostics")
+            else {}
+        ),
         "timing_totals": timing_totals,
     }
 

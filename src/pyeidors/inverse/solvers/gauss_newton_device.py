@@ -16,6 +16,11 @@ class ResolvedTorchDevice:
     torch_device: torch.device
     fallback_reason: str | None = None
 
+    @property
+    def type(self) -> str:
+        """Compatibility proxy for legacy callers expecting ``torch.device.type``."""
+        return str(self.torch_device.type)
+
 
 RUNTIME_DEVICE_AUTO = "auto"
 RUNTIME_DEVICE_CPU = "cpu"

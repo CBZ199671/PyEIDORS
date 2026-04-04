@@ -28,7 +28,12 @@ from .data.difference import (
 )
 from .data.structures import EITData, EITImage, EITMesh, MeshConfig, PatternConfig
 from .forward.eit_forward_model import EITForwardModel
+from .forward.process_setup_cache import (
+    clear_process_forward_setup_cache,
+    process_forward_setup_cache_stats,
+)
 from .geometry.mesh_loader import MeshLoader
+from .geometry.process_mesh_cache import clear_process_mesh_cache
 from .geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 from .geometry.simple_mesh_generator import create_simple_eit_mesh
 from .inverse.contracts import SolverOutput
@@ -791,10 +796,14 @@ class EITSystem(CoreSystemFacadeMixin):
 
     def get_cache_stats(self) -> dict[str, Any]:
         """Return runtime cache hit/miss and footprint statistics."""
-
-        return self.cache_manager.stats()
+        stats = dict(self.cache_manager.stats())
+        stats["process_forward_setup_cache"] = process_forward_setup_cache_stats()
+        return stats
 
     def clear_cache(self, scope: CacheScope = "both") -> None:
         """Clear cache entries for selected scope."""
 
         self.cache_manager.clear(scope=scope)
+        if scope in {"process", "both"}:
+            clear_process_mesh_cache()
+            clear_process_forward_setup_cache()

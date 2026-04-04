@@ -16,6 +16,7 @@ from pyeidors.geometry import mesh_generator as mesh_gen_module
 from pyeidors.geometry import mesh_loader as mesh_loader_module
 from pyeidors.geometry import optimized_mesh_generator as opt_mesh_module
 from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
+from pyeidors.geometry.process_mesh_cache import clear_process_mesh_cache
 
 
 def _make_fake_mesh_data():
@@ -137,6 +138,7 @@ def test_mesh_generator_generate_with_fake_gmsh(tmp_path, monkeypatch):
 
 
 def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
+    clear_process_mesh_cache()
     fake_gmsh = _FakeGmsh()
     fake_mesh_data = _make_fake_mesh_data()
     monkeypatch.setattr(opt_mesh_module, "gmsh", fake_gmsh)
@@ -183,6 +185,38 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
     )
     assert created.num_vertices() > 0
 
+    read_calls = {"count": 0}
+
+    def _tracked_read_from_msh(file, comm, rank, gdim):
+        _ = (file, comm, rank, gdim)
+        read_calls["count"] += 1
+        return fake_mesh_data
+
+    clear_process_mesh_cache()
+    monkeypatch.setattr(
+        opt_mesh_module.gmshio,
+        "read_from_msh",
+        _tracked_read_from_msh,
+    )
+    mesh_first = opt_mesh_module.load_or_create_mesh(
+        mesh_dir=str(tmp_path),
+        mesh_name="opt_patch",
+        n_elec=8,
+        radius=1.0,
+        refinement=4,
+        electrode_coverage=0.5,
+    )
+    mesh_second = opt_mesh_module.load_or_create_mesh(
+        mesh_dir=str(tmp_path),
+        mesh_name="opt_patch",
+        n_elec=8,
+        radius=1.0,
+        refinement=4,
+        electrode_coverage=0.5,
+    )
+    assert read_calls["count"] == 1
+    assert mesh_first is mesh_second
+
 
 def test_build_cache_name_3d_includes_generator_revision():
     name = opt_mesh_module._build_cache_name_3d(
@@ -192,6 +226,7 @@ def test_build_cache_name_3d_includes_generator_revision():
         refinement=1,
         electrode_coverage=0.5,
         electrode_height_ratio=0.2,
+        electrode_level_fractions=(0.25, 0.75),
         z_center=0.0,
         mesh_family="hex",
         geometry_version="geomv2",
@@ -237,12 +272,16 @@ def test_cached_3d_cem_mesh_validator_rejects_missing_g3d3_sidecar(tmp_path):
 
 
 def test_mesh_loader_functions_with_fake_read(tmp_path, monkeypatch):
+    clear_process_mesh_cache()
     fake_mesh_data = _make_fake_mesh_data()
-    monkeypatch.setattr(
-        mesh_loader_module.gmshio,
-        "read_from_msh",
-        lambda file, comm, rank, gdim: fake_mesh_data,
-    )
+    read_calls = {"count": 0}
+
+    def _tracked_read_from_msh(file, comm, rank, gdim):
+        _ = (file, comm, rank, gdim)
+        read_calls["count"] += 1
+        return fake_mesh_data
+
+    monkeypatch.setattr(mesh_loader_module.gmshio, "read_from_msh", _tracked_read_from_msh)
 
     mesh_name = "cached_mesh"
     (tmp_path / f"{mesh_name}.msh").write_text("msh", encoding="utf-8")
@@ -257,6 +296,15 @@ def test_mesh_loader_functions_with_fake_read(tmp_path, monkeypatch):
     loaded_mesh = loader.load_mesh(mesh_name)
     assert loaded_mesh.num_cells() > 0
     assert loaded_mesh.association_table["domain"] == 1
+    loaded_mesh_2 = loader.load_mesh(mesh_name)
+    assert loaded_mesh_2 is loaded_mesh
+    assert read_calls["count"] == 1
+
+    # Changing the mesh file invalidates the process-cache key and forces a reload.
+    (tmp_path / f"{mesh_name}.msh").write_text("msh-updated", encoding="utf-8")
+    loaded_mesh_3 = loader.load_mesh(mesh_name)
+    assert loaded_mesh_3.num_cells() > 0
+    assert read_calls["count"] == 2
 
     listed = loader.list_available_meshes()
     assert mesh_name in listed["msh"]

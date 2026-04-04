@@ -52,13 +52,14 @@ def solve_fista(
     gpu_ctx = _resolve_gpu_context(config)
     if gpu_ctx is not None:
         torch, device, dtype = gpu_ctx
-        A_t = torch.tensor(A, device=device, dtype=dtype, copy=False)
-        b_t = torch.tensor(b, device=device, dtype=dtype, copy=False)
-        x_t = torch.tensor(x, device=device, dtype=dtype, copy=False)
+        compute_dtype = torch.float32 if dtype == torch.float16 else dtype
+        A_t = torch.as_tensor(A, device=device, dtype=compute_dtype)
+        b_t = torch.as_tensor(b, device=device, dtype=compute_dtype)
+        x_t = torch.as_tensor(x, device=device, dtype=compute_dtype)
         y_t = x_t.clone()
-        t_scalar = torch.tensor(1.0, device=device, dtype=dtype)
-        L_t = torch.tensor(L, device=device, dtype=dtype)
-        lam_over_L = torch.tensor(lambda_reg, device=device, dtype=dtype) / L_t
+        t_scalar = torch.tensor(1.0, device=device, dtype=compute_dtype)
+        L_t = torch.tensor(L, device=device, dtype=compute_dtype)
+        lam_over_L = torch.tensor(lambda_reg, device=device, dtype=compute_dtype) / L_t
 
         for _ in range(config.linear_max_iterations):
             grad = torch.matmul(A_t.T, torch.matmul(A_t, y_t) - b_t)
@@ -111,9 +112,10 @@ def solve_irls(
     gpu_ctx = _resolve_gpu_context(config)
     if gpu_ctx is not None:
         torch, device, dtype = gpu_ctx
-        A_t = torch.tensor(A, device=device, dtype=dtype, copy=False)
-        b_t = torch.tensor(b, device=device, dtype=dtype, copy=False)
-        x_t = torch.tensor(x, device=device, dtype=dtype, copy=False)
+        compute_dtype = torch.float32 if dtype == torch.float16 else dtype
+        A_t = torch.as_tensor(A, device=device, dtype=compute_dtype)
+        b_t = torch.as_tensor(b, device=device, dtype=compute_dtype)
+        x_t = torch.as_tensor(x, device=device, dtype=compute_dtype)
 
         AtA = torch.matmul(A_t.T, A_t)
         Atb = torch.matmul(A_t.T, b_t)

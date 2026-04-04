@@ -6,8 +6,13 @@ import importlib.util
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
+
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SRC_ROOT = REPO_ROOT / "src"
 
 
 def _skip_if_cuqi_missing() -> None:
@@ -17,9 +22,13 @@ def _skip_if_cuqi_missing() -> None:
 
 def _run_python_snippet(snippet: str) -> subprocess.CompletedProcess[str]:
     env = dict(os.environ)
-    repo_root = "/Users/tom/workspace/PyEIDORS"
     python_path = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = f"{repo_root}:{python_path}" if python_path else repo_root
+    repo_root = str(REPO_ROOT)
+    src_root = str(SRC_ROOT)
+    injected = os.pathsep.join([src_root, repo_root])
+    env["PYTHONPATH"] = (
+        os.pathsep.join([injected, python_path]) if python_path else injected
+    )
     return subprocess.run(
         [sys.executable, "-c", snippet],
         cwd=repo_root,

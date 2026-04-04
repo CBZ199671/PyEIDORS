@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 import textwrap
 import time
 
 import numpy as np
 
 from pyeidors.cache.object_signature import (
+    backend_signature_from_forward_model,
     signature_of_cache_obj,
     stable_signature_hash,
 )
@@ -68,3 +70,61 @@ def test_callable_signature_changes_when_source_mtime_changes(tmp_path: Path):
 
     assert hash_before != hash_after
 
+
+def test_backend_signature_is_stable_across_cuda_petsc_alias_resolution():
+    backend_config = SimpleNamespace(
+        ksp_type="preonly",
+        pc_type="lu",
+        rtol=1e-10,
+        atol=1e-12,
+        max_it=2000,
+        reuse_preconditioner=True,
+        mat_solve_mode="auto",
+        petsc_device="cuda",
+    )
+    mesh = SimpleNamespace(comm=SimpleNamespace(Get_size=lambda: 1))
+    eit_mesh = SimpleNamespace(structured_sidecar_version=None)
+
+    pre_solve = SimpleNamespace(
+        backend_config=backend_config,
+        linear_backend="petsc",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d3",
+        performance_mode="aggressive",
+        mesh=mesh,
+        eit_mesh=eit_mesh,
+        _petsc_backend_info={
+            "petsc_device_effective": "cuda",
+            "petsc_mat_type": "aijcusparse",
+            "petsc_vec_type": "cuda",
+            "petsc_dense_mat_type": "densecuda",
+            "gpu_constraint_strategy": None,
+            "forward_backend_effective": "dolfinx",
+        },
+    )
+    post_solve = SimpleNamespace(
+        backend_config=backend_config,
+        linear_backend="petsc",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d3",
+        performance_mode="aggressive",
+        mesh=mesh,
+        eit_mesh=eit_mesh,
+        _petsc_backend_info={
+            "petsc_device_effective": "cuda",
+            "petsc_mat_type": "seqaijcusparse",
+            "petsc_vec_type": "cuda",
+            "petsc_dense_mat_type": "seqdensecuda",
+            "gpu_constraint_strategy": "electrode-zero",
+            "forward_backend_effective": "dolfinx",
+        },
+    )
+
+    assert (
+        backend_signature_from_forward_model(pre_solve)
+        == backend_signature_from_forward_model(post_solve)
+    )

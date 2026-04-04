@@ -14,6 +14,7 @@ import json
 import math
 import os
 from pathlib import Path
+from time import perf_counter
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
@@ -182,16 +183,16 @@ def _compute_shape_metrics(
     }
 
 
-def _build_regular_volume(
+def _compute_regular_volume_payload(
     *,
     coords: np.ndarray,
     values: np.ndarray,
     radius: float,
     height: float,
     z_center: float,
-    resolution: tuple[int, int, int] = (34, 34, 24),
-    smooth_sigma: float = 1.0,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    resolution: tuple[int, int, int],
+    smooth_sigma: float,
+) -> dict[str, np.ndarray]:
     nx, ny, nz = resolution
     x_centers = np.linspace(-radius, radius, nx)
     y_centers = np.linspace(-radius, radius, ny)
@@ -205,8 +206,40 @@ def _build_regular_volume(
     x_edges = np.linspace(-radius, radius, nx + 1)
     y_edges = np.linspace(-radius, radius, ny + 1)
     z_edges = np.linspace(z_center - 0.5 * height, z_center + 0.5 * height, nz + 1)
+    return {
+        "x_edges": np.asarray(x_edges, dtype=float),
+        "y_edges": np.asarray(y_edges, dtype=float),
+        "z_edges": np.asarray(z_edges, dtype=float),
+        "volume": np.where(radial_mask, volume, np.nan),
+    }
+
+
+def _build_regular_volume(
+    *,
+    coords: np.ndarray,
+    values: np.ndarray,
+    radius: float,
+    height: float,
+    z_center: float,
+    resolution: tuple[int, int, int] = (34, 34, 24),
+    smooth_sigma: float = 1.0,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    resolution_tuple = tuple(int(v) for v in resolution)
+    payload = _compute_regular_volume_payload(
+        coords=np.asarray(coords, dtype=float),
+        values=np.asarray(values, dtype=float),
+        radius=float(radius),
+        height=float(height),
+        z_center=float(z_center),
+        resolution=resolution_tuple,
+        smooth_sigma=float(smooth_sigma),
+    )
+    x_edges = np.asarray(payload["x_edges"], dtype=float)
+    y_edges = np.asarray(payload["y_edges"], dtype=float)
+    z_edges = np.asarray(payload["z_edges"], dtype=float)
+    volume = np.asarray(payload["volume"], dtype=float)
     Xe, Ye, Ze = np.meshgrid(x_edges, y_edges, z_edges, indexing="ij")
-    return Xe, Ye, Ze, np.where(radial_mask, volume, np.nan)
+    return Xe, Ye, Ze, volume
 
 
 def _add_voxel_volume(
@@ -265,6 +298,8 @@ def run_case(
     hyperparameter: float | None,
     difference_step_size_mode: str | None,
     best_homog_mode: str | None,
+    render_plot: bool = True,
+    save_data: bool = True,
 ) -> dict[str, object]:
     n_elec = 16
     base_sigma = 1.0
@@ -281,6 +316,14 @@ def run_case(
         default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
     )
 
+    wall_time_breakdown = {
+        "setup_elapsed_sec": 0.0,
+        "solve_elapsed_sec": 0.0,
+        "postprocess_elapsed_sec": 0.0,
+        "save_elapsed_sec": 0.0,
+    }
+
+    setup_start = perf_counter()
     mesh = load_or_create_mesh(
         mesh_dir=str(REPO_ROOT / "eit_meshes"),
         n_elec=n_elec,
@@ -344,7 +387,9 @@ def run_case(
     system.reconstructor.clip_values = (1e-6, 3.0)
     if max_iterations is not None:
         system.reconstructor.max_iterations = max_iterations
+    wall_time_breakdown["setup_elapsed_sec"] = perf_counter() - setup_start
 
+    solve_start = perf_counter()
     if resolved_inverse_mode == "absolute":
         recon = system.inverse_solve(
             data=phantom_data,
@@ -364,7 +409,9 @@ def run_case(
             inverse_target = "sphere_multistep_noser"
         else:
             inverse_target = "eidors_3d_difference_one_step_gn_noser"
+    wall_time_breakdown["solve_elapsed_sec"] = perf_counter() - solve_start
 
+    postprocess_start = perf_counter()
     truth_sigma = np.asarray(phantom_img.elem_data, dtype=float).copy()
     recon_sigma = function_get_array(recon.conductivity).copy()
     coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()[:, :3]
@@ -422,117 +469,113 @@ def run_case(
     )
     peak_conductivity = float(np.max(recon_sigma))
     contrast_recovery = float((target_mean - background_mean) / (target_sigma - base_sigma))
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    cmap = plt.get_cmap("turbo")
-    norm = mcolors.Normalize(vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma)))
-    grid_X, grid_Y, grid_Z, truth_volume = _build_regular_volume(
-        coords=coords,
-        values=truth_sigma,
-        radius=radius,
-        height=height,
-        z_center=z_center,
-        resolution=(34, 34, 24),
-        smooth_sigma=0.6,
-    )
-    _, _, _, recon_volume = _build_regular_volume(
-        coords=coords,
-        values=recon_sigma,
-        radius=radius,
-        height=height,
-        z_center=z_center,
-        resolution=(34, 34, 24),
-        smooth_sigma=1.0,
-    )
-
-    fig = plt.figure(figsize=(11.6, 5.6), facecolor="white")
-    ax_truth = fig.add_subplot(1, 2, 1, projection="3d")
-    ax_recon = fig.add_subplot(1, 2, 2, projection="3d")
-
-    wire_segments = _build_cylinder_wireframe(radius=radius, height=height, z_center=z_center)
-    wire_color = (0.45, 0.45, 0.45, 0.38)
-    for ax in (ax_truth, ax_recon):
-        for seg in wire_segments:
-            ax.plot(
-                seg[:, 0],
-                seg[:, 1],
-                seg[:, 2],
-                color=wire_color,
-                linewidth=0.9,
-            )
-        electrodes = _build_electrode_markers(
-            n_elec=n_elec,
-            radius=radius * 1.002,
-            height=height,
-            z_center=z_center,
-            electrode_level_fractions=resolved_level_fractions,
-        )
-        ax.scatter(
-            electrodes[:, 0],
-            electrodes[:, 1],
-            electrodes[:, 2],
-            s=16,
-            c="#2f6f43",
-            alpha=0.95,
-            depthshade=False,
-            linewidths=0.0,
-        )
-
-    _add_voxel_volume(
-        ax_truth,
-        X=grid_X,
-        Y=grid_Y,
-        Z=grid_Z,
-        values=truth_volume,
-        threshold=truth_threshold,
-        cmap=cmap,
-        norm=norm,
-        alpha_surface=0.42,
-    )
-    _add_voxel_volume(
-        ax_recon,
-        X=grid_X,
-        Y=grid_Y,
-        Z=grid_Z,
-        values=recon_volume,
-        threshold=recon_threshold,
-        cmap=cmap,
-        norm=norm,
-        alpha_surface=0.52,
-    )
-
-    for ax in (ax_truth, ax_recon):
-        _style_3d_axes(ax, radius=radius, height=height, z_center=z_center)
-
-    ax_truth.text2D(0.50, 0.97, "Truth", transform=ax_truth.transAxes, ha="center", va="top", fontsize=15)
-    ax_recon.text2D(0.50, 0.97, "Reconstruction", transform=ax_recon.transAxes, ha="center", va="top", fontsize=15)
-    fig.suptitle(
-        f"{resolved_inverse_mode.capitalize()} / {preset_name}",
-        fontsize=14,
-        y=0.98,
-    )
-    ax_recon.text2D(
-        0.50,
-        0.03,
-        f"Conductivity RMSE = {cond_rmse:.4f}\nVoltage RMSE = {volt_rmse:.2e}",
-        transform=ax_recon.transAxes,
-        ha="center",
-        va="bottom",
-        fontsize=11.5,
-    )
-
-    sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
-    sm.set_array([])
-    cbar = fig.colorbar(sm, ax=[ax_truth, ax_recon], fraction=0.032, pad=0.02)
-    cbar.set_label("Conductivity", fontsize=12)
-
-    fig.subplots_adjust(left=0.02, right=0.90, top=0.95, bottom=0.06, wspace=0.02)
-
+    fig = None
     png_path = output_dir / "inverse_3d_overview.png"
     svg_path = output_dir / "inverse_3d_overview.svg"
-    fig.savefig(png_path, dpi=320, bbox_inches="tight")
-    fig.savefig(svg_path, bbox_inches="tight")
-    plt.close(fig)
+    if render_plot:
+        cmap = plt.get_cmap("turbo")
+        norm = mcolors.Normalize(vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma)))
+        grid_X, grid_Y, grid_Z, truth_volume = _build_regular_volume(
+            coords=coords,
+            values=truth_sigma,
+            radius=radius,
+            height=height,
+            z_center=z_center,
+            resolution=(34, 34, 24),
+            smooth_sigma=0.6,
+        )
+        _, _, _, recon_volume = _build_regular_volume(
+            coords=coords,
+            values=recon_sigma,
+            radius=radius,
+            height=height,
+            z_center=z_center,
+            resolution=(34, 34, 24),
+            smooth_sigma=1.0,
+        )
+
+        fig = plt.figure(figsize=(11.6, 5.6), facecolor="white")
+        ax_truth = fig.add_subplot(1, 2, 1, projection="3d")
+        ax_recon = fig.add_subplot(1, 2, 2, projection="3d")
+
+        wire_segments = _build_cylinder_wireframe(radius=radius, height=height, z_center=z_center)
+        wire_color = (0.45, 0.45, 0.45, 0.38)
+        for ax in (ax_truth, ax_recon):
+            for seg in wire_segments:
+                ax.plot(
+                    seg[:, 0],
+                    seg[:, 1],
+                    seg[:, 2],
+                    color=wire_color,
+                    linewidth=0.9,
+                )
+            electrodes = _build_electrode_markers(
+                n_elec=n_elec,
+                radius=radius * 1.002,
+                height=height,
+                z_center=z_center,
+                electrode_level_fractions=resolved_level_fractions,
+            )
+            ax.scatter(
+                electrodes[:, 0],
+                electrodes[:, 1],
+                electrodes[:, 2],
+                s=16,
+                c="#2f6f43",
+                alpha=0.95,
+                depthshade=False,
+                linewidths=0.0,
+            )
+
+        _add_voxel_volume(
+            ax_truth,
+            X=grid_X,
+            Y=grid_Y,
+            Z=grid_Z,
+            values=truth_volume,
+            threshold=truth_threshold,
+            cmap=cmap,
+            norm=norm,
+            alpha_surface=0.42,
+        )
+        _add_voxel_volume(
+            ax_recon,
+            X=grid_X,
+            Y=grid_Y,
+            Z=grid_Z,
+            values=recon_volume,
+            threshold=recon_threshold,
+            cmap=cmap,
+            norm=norm,
+            alpha_surface=0.52,
+        )
+
+        for ax in (ax_truth, ax_recon):
+            _style_3d_axes(ax, radius=radius, height=height, z_center=z_center)
+
+        ax_truth.text2D(0.50, 0.97, "Truth", transform=ax_truth.transAxes, ha="center", va="top", fontsize=15)
+        ax_recon.text2D(0.50, 0.97, "Reconstruction", transform=ax_recon.transAxes, ha="center", va="top", fontsize=15)
+        fig.suptitle(
+            f"{resolved_inverse_mode.capitalize()} / {preset_name}",
+            fontsize=14,
+            y=0.98,
+        )
+        ax_recon.text2D(
+            0.50,
+            0.03,
+            f"Conductivity RMSE = {cond_rmse:.4f}\nVoltage RMSE = {volt_rmse:.2e}",
+            transform=ax_recon.transAxes,
+            ha="center",
+            va="bottom",
+            fontsize=11.5,
+        )
+
+        sm = matplotlib.cm.ScalarMappable(norm=norm, cmap=cmap)
+        sm.set_array([])
+        cbar = fig.colorbar(sm, ax=[ax_truth, ax_recon], fraction=0.032, pad=0.02)
+        cbar.set_label("Conductivity", fontsize=12)
+        fig.subplots_adjust(left=0.02, right=0.90, top=0.95, bottom=0.06, wspace=0.02)
+    wall_time_breakdown["postprocess_elapsed_sec"] = perf_counter() - postprocess_start
 
     metrics = {
         "conductivity_rmse": cond_rmse,
@@ -562,6 +605,9 @@ def run_case(
         "target_mean": target_mean,
         "background_mean": background_mean,
         "peak_conductivity": peak_conductivity,
+        "wall_time_breakdown": {
+            key: float(value) for key, value in wall_time_breakdown.items()
+        },
         "shape_metrics": {
             "truth": truth_shape,
             "reconstruction": recon_shape,
@@ -569,25 +615,44 @@ def run_case(
         "measurement_space": recon.diagnostics.get("measurement_space", {}),
         "backend_info": recon.diagnostics.get("backend_info", {}),
     }
-    (output_dir / "inverse_3d_overview_metrics.json").write_text(json.dumps(metrics, indent=2), encoding="utf-8")
-    np.savez(
-        output_dir / "inverse_3d_overview_data.npz",
-        coords=coords,
-        truth_sigma=truth_sigma,
-        recon_sigma=recon_sigma,
-        vh=vh,
-        vi=vi,
-        dv_raw=dv_raw,
-        dv_norm=dv_norm,
-        dv_measurement_space=dv_data_space,
-        pred_vi=pred_vi,
-        pred_dv_measurement_space=pred_dv_data_space,
-        measurement_vector=measurement_vector,
-        prediction_vector=prediction_vector,
-        residual_vector=residual_vector,
-        target_mask=target_mask,
-        background_mask=background_mask,
-    )
+
+    save_start = perf_counter()
+    should_create_output_dir = render_plot or save_data
+    if should_create_output_dir:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    if render_plot and fig is not None:
+        fig.savefig(png_path, dpi=320, bbox_inches="tight")
+        fig.savefig(svg_path, bbox_inches="tight")
+        plt.close(fig)
+    if save_data:
+        np.savez(
+            output_dir / "inverse_3d_overview_data.npz",
+            coords=coords,
+            truth_sigma=truth_sigma,
+            recon_sigma=recon_sigma,
+            vh=vh,
+            vi=vi,
+            dv_raw=dv_raw,
+            dv_norm=dv_norm,
+            dv_measurement_space=dv_data_space,
+            pred_vi=pred_vi,
+            pred_dv_measurement_space=pred_dv_data_space,
+            measurement_vector=measurement_vector,
+            prediction_vector=prediction_vector,
+            residual_vector=residual_vector,
+            target_mask=target_mask,
+            background_mask=background_mask,
+        )
+    if should_create_output_dir:
+        wall_time_breakdown["save_elapsed_sec"] = perf_counter() - save_start
+    metrics["wall_time_breakdown"] = {
+        key: float(value) for key, value in wall_time_breakdown.items()
+    }
+    if save_data:
+        (output_dir / "inverse_3d_overview_metrics.json").write_text(
+            json.dumps(metrics, indent=2),
+            encoding="utf-8",
+        )
     return metrics
 
 
@@ -631,6 +696,16 @@ def parse_args() -> argparse.Namespace:
         choices=["off", "optimize"],
         default=None,
     )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Skip 3D plot construction and figure export; useful for pure runtime diagnostics.",
+    )
+    parser.add_argument(
+        "--no-save-data",
+        action="store_true",
+        help="Skip JSON/NPZ summary export; plot files are still written unless --no-plot is also set.",
+    )
     return parser.parse_args()
 
 
@@ -652,10 +727,16 @@ def main() -> None:
         hyperparameter=args.hyperparameter,
         difference_step_size_mode=args.difference_step_size_mode,
         best_homog_mode=args.best_homog_mode,
+        render_plot=not args.no_plot,
+        save_data=not args.no_save_data,
     )
     print(json.dumps(metrics, indent=2))
-    print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.png'}")
-    print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.svg'}")
+    if not args.no_plot:
+        print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.png'}")
+        print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.svg'}")
+    if not args.no_save_data:
+        print(f"Saved metrics to: {args.output_dir / 'inverse_3d_overview_metrics.json'}")
+        print(f"Saved data to: {args.output_dir / 'inverse_3d_overview_data.npz'}")
 
 
 if __name__ == "__main__":

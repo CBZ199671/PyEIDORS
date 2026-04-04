@@ -52,3 +52,12 @@ def test_compare_3d_alignment_exports_all_preset_cases(tmp_path: Path):
         "difference_eidors_demo3d_tv",
         "absolute_eidors_abs_gn",
     }
+    for entry in summary:
+        assert "wall_time_breakdown" in entry
+        for key in (
+            "setup_elapsed_sec",
+            "solve_elapsed_sec",
+            "postprocess_elapsed_sec",
+            "save_elapsed_sec",
+        ):
+            assert key in entry["wall_time_breakdown"]

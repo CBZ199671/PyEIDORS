@@ -19,6 +19,11 @@ from .mesh3d_generator import (
     load_structured_sidecar,
     structured_sidecar_path_for_mesh,
 )
+from .process_mesh_cache import (
+    build_process_mesh_cache_key,
+    get_process_cached_mesh,
+    put_process_cached_mesh,
+)
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
 
 logger = logging.getLogger(__name__)
@@ -70,6 +75,24 @@ class MeshLoader:
         if not msh_file.exists():
             raise FileNotFoundError(f"Mesh file does not exist: {msh_file}")
 
+        sidecar_path = structured_sidecar_path_for_mesh(msh_file)
+        process_mesh_key = build_process_mesh_cache_key(
+            mesh_file=msh_file,
+            association_file=association_file if association_file.exists() else None,
+            sidecar_file=sidecar_path if sidecar_path.exists() else None,
+            gdim=self.gdim,
+            mesh_name=mesh_name,
+        )
+        process_mesh = get_process_cached_mesh(process_mesh_key)
+        if process_mesh is not None:
+            logger.info(
+                "Mesh loaded from process cache %s (vertices=%d, cells=%d)",
+                msh_file,
+                process_mesh.num_vertices(),
+                process_mesh.num_cells(),
+            )
+            return process_mesh
+
         mesh_data = gmshio.read_from_msh(
             str(msh_file),
             MPI.COMM_WORLD,
@@ -81,7 +104,6 @@ class MeshLoader:
             association_table = {
                 name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
             }
-        sidecar_path = structured_sidecar_path_for_mesh(msh_file)
         geometry_version = _infer_geometry_version(mesh_name)
         generator_revision = _infer_generator_revision(mesh_name)
         if sidecar_path.exists():
@@ -114,6 +136,7 @@ class MeshLoader:
             ),
         )
         eit_mesh.mesh_family = _infer_mesh_family_from_mesh(eit_mesh)
+        put_process_cached_mesh(process_mesh_key, eit_mesh)
         logger.info(
             "Mesh loaded from %s (vertices=%d, cells=%d)",
             msh_file,

@@ -67,12 +67,15 @@ def build_cache_key(parts: CacheKeyParts) -> str:
 
 
 def hash_path(path: str | Path) -> str:
-    """Hash a file path and mtime metadata for lightweight invalidation."""
+    """Hash a file path plus stable file metadata and content for invalidation."""
 
     p = Path(path)
     try:
         stat = p.stat()
-        payload = f"{p.resolve()}::{stat.st_size}::{stat.st_mtime_ns}".encode("utf-8")
+        content_hash = hashlib.sha256(p.read_bytes()).hexdigest()
+        payload = (
+            f"{p.resolve()}::{stat.st_size}::{stat.st_mtime_ns}::{content_hash}"
+        ).encode("utf-8")
     except OSError:
         payload = str(p).encode("utf-8")
     return hashlib.sha256(payload).hexdigest()
@@ -84,4 +87,3 @@ def hash_array(arr: np.ndarray) -> str:
     a = np.ascontiguousarray(np.asarray(arr))
     payload = f"{a.dtype}:{a.shape}:".encode("utf-8") + a.tobytes()
     return hashlib.sha256(payload).hexdigest()
-

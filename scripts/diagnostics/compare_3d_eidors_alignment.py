@@ -46,6 +46,16 @@ def parse_args() -> argparse.Namespace:
         choices=["target_minus_reference", "reference_minus_target"],
         default="target_minus_reference",
     )
+    parser.add_argument(
+        "--no-plot",
+        action="store_true",
+        help="Skip per-case 3D plot construction/export and only keep numerical comparisons.",
+    )
+    parser.add_argument(
+        "--no-save-data",
+        action="store_true",
+        help="Skip writing per-case JSON/NPZ outputs and final alignment_summary.json.",
+    )
     return parser.parse_args()
 
 
@@ -113,6 +123,8 @@ def main() -> None:
             hyperparameter=None,
             difference_step_size_mode=None,
             best_homog_mode=None,
+            render_plot=not args.no_plot,
+            save_data=not args.no_save_data,
         )
         summary.append(
             {
@@ -129,15 +141,17 @@ def main() -> None:
                 "peak_conductivity": metrics.get("peak_conductivity"),
                 "step_size": metrics.get("step_size"),
                 "shape_score": _shape_score(metrics),
+                "wall_time_breakdown": metrics.get("wall_time_breakdown", {}),
                 "output_dir": str(case_output),
             }
         )
 
-    args.output_dir.mkdir(parents=True, exist_ok=True)
-    summary_path = args.output_dir / "alignment_summary.json"
-    summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     print(json.dumps(summary, indent=2))
-    print(f"Saved summary to: {summary_path}")
+    if not args.no_save_data:
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        summary_path = args.output_dir / "alignment_summary.json"
+        summary_path.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        print(f"Saved summary to: {summary_path}")
 
 
 if __name__ == "__main__":

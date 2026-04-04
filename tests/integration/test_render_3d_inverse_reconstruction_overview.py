@@ -72,6 +72,14 @@ def test_render_3d_overview_exports_difference_artifacts(tmp_path: Path):
     assert "contrast_recovery" in metrics
     assert "difference_step_size" in metrics
     assert "shape_metrics" in metrics
+    assert "wall_time_breakdown" in metrics
+    for key in (
+        "setup_elapsed_sec",
+        "solve_elapsed_sec",
+        "postprocess_elapsed_sec",
+        "save_elapsed_sec",
+    ):
+        assert key in metrics["wall_time_breakdown"]
 
     payload = np.load(data_path)
     for key in (
@@ -121,6 +129,7 @@ def test_render_3d_overview_exports_absolute_artifacts(tmp_path: Path):
     assert metrics["inverse_target"] == "eidors_abs_gn_prior"
     assert metrics["preset_name"] == "eidors_abs_gn"
     assert "best_homog" in metrics
+    assert "wall_time_breakdown" in metrics
 
     payload = np.load(output_dir / "inverse_3d_overview_data.npz")
     for key in (
@@ -136,3 +145,27 @@ def test_render_3d_overview_exports_absolute_artifacts(tmp_path: Path):
         "background_mask",
     ):
         assert key in payload.files
+
+
+@pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
+def test_render_3d_overview_supports_no_plot_and_no_save_data(tmp_path: Path):
+    output_dir = tmp_path / "render_3d_no_artifacts"
+    run = _run(
+        [
+            "--output-dir",
+            str(output_dir),
+            "--refinement",
+            "1",
+            "--max-iterations",
+            "1",
+            "--inverse-mode",
+            "difference",
+            "--no-plot",
+            "--no-save-data",
+        ]
+    )
+    assert run.returncode == 0, run.stderr
+    assert '"inverse_mode": "difference"' in run.stdout
+    assert '"wall_time_breakdown"' in run.stdout
+    assert not (output_dir / "inverse_3d_overview.png").exists()
+    assert not (output_dir / "inverse_3d_overview.svg").exists()

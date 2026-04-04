@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from copy import deepcopy
 import hashlib
 import warnings
 
@@ -23,6 +24,12 @@ from ..data.structures import EITData, EITImage, EITMesh, PatternConfig
 from ..electrodes.patterns import StimMeasPatternManager
 from ..femx import create_ds_measure
 from .cuda_structured_backend import CudaStructuredForwardBackend, resolve_cuda_structured_runtime
+from .process_setup_cache import (
+    ForwardStaticSetupBundle,
+    build_process_forward_setup_key,
+    get_process_forward_setup_bundle,
+    put_process_forward_setup_bundle,
+)
 from ..perf.policy import DEFAULT_FORWARD_BACKEND, normalize_forward_backend
 from ..physics.current_drive import resolve_electrode_lengths_m
 
@@ -114,41 +121,23 @@ class EITForwardModel:
         if self.facet_tags is None:
             raise ValueError("EITMesh lacks electrode facet tags, cannot assemble CEM")
 
-        self.ds_electrodes = create_ds_measure(self.mesh, self.facet_tags)
-
-        self.electrode_tags = self._resolve_electrode_tags()
-        self.electrode_boundary_measures = self._compute_electrode_boundary_measures()
-        self.geometry_scale_to_m = float(pattern_config.geometry_scale_to_m)
-        self.mesh_tdim = int(self.mesh.topology.dim)
-        self.boundary_scale_to_m = self.geometry_scale_to_m ** max(1, self.mesh_tdim - 1)
-        self.electrode_lengths_m = resolve_electrode_lengths_m(
-            electrode_lengths_mesh=[
-                self.electrode_boundary_measures[tag] for tag in self.electrode_tags
-            ],
-            geometry_scale_to_m=self.boundary_scale_to_m,
-            electrode_length_m_override=pattern_config.electrode_length_m_override,
+        self._static_setup_cache_key = build_process_forward_setup_key(
+            mesh_runtime_id=id(self.mesh),
+            mesh_file=getattr(mesh, "mesh_file", None),
             n_elec=self.n_elec,
+            z=self.z,
+            pattern_config=deepcopy(pattern_config),
         )
-        self.pattern_manager = StimMeasPatternManager(
-            pattern_config,
-            electrode_lengths_m=self.electrode_lengths_m,
-            mesh_tdim=self.mesh.topology.dim,
-        )
-
-        self.V = fem.functionspace(self.mesh, ("Lagrange", 1))
-        self.V_sigma = fem.functionspace(self.mesh, ("DG", 0))
-        dofmap = self.V.dofmap.index_map
-        self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
-        self.u = ufl.TrialFunction(self.V)
-        self.phi = ufl.TestFunction(self.V)
+        self._static_setup_lookup = {"hit": False, "layer": "compute", "artifact": "forward_static_setup"}
+        self._initialize_static_setup(pattern_config)
         self._M_petsc = {}
-        self.M = self._assemble_electrode_matrix()
         self._petsc_backend_info = self._resolve_petsc_backend_info()
         self._petsc_backend_info["forward_backend_requested"] = self.forward_backend
         self._petsc_backend_info["forward_backend_effective"] = self.forward_backend
         self._petsc_backend_info["mesh_family"] = self.mesh_family
         self._petsc_backend_info["geometry_version"] = self.geometry_version
         self._petsc_backend_info["generator_revision"] = self.generator_revision
+        self._petsc_backend_info["static_setup_lookup"] = dict(self._static_setup_lookup)
         self._cuda_structured_runtime = None
         self._cuda_structured_backend = None
         if self.forward_backend == "cuda_structured":
@@ -165,6 +154,86 @@ class EITForwardModel:
             self._set_backend_diagnostic(**self._cuda_structured_runtime)
             self._cuda_structured_backend = CudaStructuredForwardBackend(self, self._cuda_structured_runtime)
             self._set_backend_diagnostic(**self._cuda_structured_backend.backend_diagnostics())
+
+    def _initialize_static_setup(self, pattern_config: PatternConfig) -> None:
+        bundle = get_process_forward_setup_bundle(self._static_setup_cache_key)
+        if bundle is not None:
+            self._apply_static_setup_bundle(bundle)
+            self._static_setup_lookup = {
+                "key": self._static_setup_cache_key,
+                "hit": True,
+                "layer": "process",
+                "artifact": "forward_static_setup",
+            }
+            return
+
+        self.ds_electrodes = create_ds_measure(self.mesh, self.facet_tags)
+        self.electrode_tags = self._resolve_electrode_tags()
+        self.electrode_boundary_measures = self._compute_electrode_boundary_measures()
+        self.geometry_scale_to_m = float(pattern_config.geometry_scale_to_m)
+        self.mesh_tdim = int(self.mesh.topology.dim)
+        self.boundary_scale_to_m = self.geometry_scale_to_m ** max(1, self.mesh_tdim - 1)
+        self.electrode_lengths_m = resolve_electrode_lengths_m(
+            electrode_lengths_mesh=[
+                self.electrode_boundary_measures[tag] for tag in self.electrode_tags
+            ],
+            geometry_scale_to_m=self.boundary_scale_to_m,
+            electrode_length_m_override=pattern_config.electrode_length_m_override,
+            n_elec=self.n_elec,
+        )
+        cached_pattern_config = deepcopy(pattern_config)
+        self.pattern_manager = StimMeasPatternManager(
+            cached_pattern_config,
+            electrode_lengths_m=self.electrode_lengths_m,
+            mesh_tdim=self.mesh.topology.dim,
+        )
+        self.V = fem.functionspace(self.mesh, ("Lagrange", 1))
+        self.V_sigma = fem.functionspace(self.mesh, ("DG", 0))
+        dofmap = self.V.dofmap.index_map
+        self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
+        self.u = ufl.TrialFunction(self.V)
+        self.phi = ufl.TestFunction(self.V)
+        self.M = self._assemble_electrode_matrix()
+
+        bundle = ForwardStaticSetupBundle(
+            ds_electrodes=self.ds_electrodes,
+            electrode_tags=tuple(int(tag) for tag in self.electrode_tags),
+            electrode_boundary_measures=dict(self.electrode_boundary_measures),
+            geometry_scale_to_m=float(self.geometry_scale_to_m),
+            mesh_tdim=int(self.mesh_tdim),
+            boundary_scale_to_m=float(self.boundary_scale_to_m),
+            electrode_lengths_m=np.asarray(self.electrode_lengths_m, dtype=float),
+            pattern_manager=self.pattern_manager,
+            V=self.V,
+            V_sigma=self.V_sigma,
+            dofs=int(self.dofs),
+            electrode_matrix=self.M,
+        )
+        put_process_forward_setup_bundle(self._static_setup_cache_key, bundle)
+        self._static_setup_lookup = {
+            "key": self._static_setup_cache_key,
+            "hit": False,
+            "layer": "compute",
+            "artifact": "forward_static_setup",
+        }
+
+    def _apply_static_setup_bundle(self, bundle: ForwardStaticSetupBundle) -> None:
+        self.ds_electrodes = bundle.ds_electrodes
+        self.electrode_tags = [int(tag) for tag in bundle.electrode_tags]
+        self.electrode_boundary_measures = {
+            int(tag): float(value) for tag, value in bundle.electrode_boundary_measures.items()
+        }
+        self.geometry_scale_to_m = float(bundle.geometry_scale_to_m)
+        self.mesh_tdim = int(bundle.mesh_tdim)
+        self.boundary_scale_to_m = float(bundle.boundary_scale_to_m)
+        self.electrode_lengths_m = np.asarray(bundle.electrode_lengths_m, dtype=float)
+        self.pattern_manager = deepcopy(bundle.pattern_manager)
+        self.V = bundle.V
+        self.V_sigma = bundle.V_sigma
+        self.dofs = int(bundle.dofs)
+        self.u = ufl.TrialFunction(self.V)
+        self.phi = ufl.TestFunction(self.V)
+        self.M = bundle.electrode_matrix
 
     def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
         """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
@@ -313,6 +382,7 @@ class EITForwardModel:
 
     def _resolve_petsc_backend_info(self) -> dict[str, object]:
         requested = self._normalize_petsc_device(getattr(self.backend_config, "petsc_device", "auto"))
+        forward_backend = str(getattr(self, "forward_backend", "dolfinx"))
         info: dict[str, object] = {
             "petsc_device_requested": requested,
             "petsc_device_effective": "cpu",
@@ -352,7 +422,7 @@ class EITForwardModel:
         if requested == "cpu":
             return info
         if requested == "cuda" and not cuda_available:
-            if self.forward_backend == "cuda_structured":
+            if forward_backend == "cuda_structured":
                 info["gpu_fallback_reason"] = "petsc_cuda_not_required_for_cuda_structured"
                 return info
             reason = capability.get("errors", {}) if isinstance(capability.get("errors"), dict) else capability
@@ -370,6 +440,18 @@ class EITForwardModel:
         if requested == "auto":
             info["gpu_fallback_reason"] = "petsc_cuda_not_available"
         return info
+
+    def _resolve_mfem_runtime_device(self) -> str:
+        """Compatibility helper for legacy runtime-device policy tests."""
+        requested = self._normalize_petsc_device(getattr(self.backend_config, "petsc_device", "auto"))
+        effective = str(
+            getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective", "cpu")
+        ).strip().lower()
+        if effective == "cuda":
+            return "cuda"
+        if requested == "cuda":
+            return "cuda"
+        return "cpu"
 
     def _get_requested_petsc_mat_type(self):
         info = getattr(self, "_petsc_backend_info", {}) or {}

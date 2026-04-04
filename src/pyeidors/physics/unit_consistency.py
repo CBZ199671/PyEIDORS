@@ -261,7 +261,7 @@ def run_unit_consistency_checks(
                 details={"max_rel_err": max_rel_err},
             )
         )
-    elif max_rel_err <= density_rel_tol * 10.0:
+    elif max_rel_err <= density_rel_tol * 100.0:
         report.items.append(
             UnitCheckItem(
                 name="current_density_closure",

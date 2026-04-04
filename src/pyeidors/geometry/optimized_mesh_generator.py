@@ -35,6 +35,11 @@ from .mesh3d_generator import (
     normalize_electrode_level_fractions,
     structured_sidecar_path_for_mesh,
 )
+from .process_mesh_cache import (
+    build_process_mesh_cache_key,
+    get_process_cached_mesh,
+    put_process_cached_mesh,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -566,9 +571,29 @@ def load_or_create_mesh(
             generator_revision=generator_revision,
         )
 
+    process_mesh_key: str | None = None
+    msh_file = mesh_dir_path / f"{cache_name}.msh"
+    if msh_file.exists():
+        association_file = mesh_dir_path / f"{cache_name}_association_table.ini"
+        sidecar_file = structured_sidecar_path_for_mesh(msh_file)
+        process_mesh_key = build_process_mesh_cache_key(
+            mesh_file=msh_file,
+            association_file=association_file if association_file.exists() else None,
+            sidecar_file=sidecar_file if sidecar_file.exists() else None,
+            gdim=gdim,
+            n_elec=n_elec,
+            mesh_name=cache_name,
+        )
+        process_mesh = get_process_cached_mesh(process_mesh_key)
+        if process_mesh is not None:
+            logger.info("Loaded process-cached mesh: %s", cache_name)
+            return process_mesh
+
     cached_mesh = _load_cached_mesh(mesh_dir_path, cache_name, gdim=gdim, n_elec=n_elec)
     if cached_mesh is not None:
         logger.info("Loaded cached mesh: %s", cache_name)
+        if process_mesh_key is not None:
+            put_process_cached_mesh(process_mesh_key, cached_mesh)
         return cached_mesh
 
     logger.info("Cached mesh not found, generating: %s", cache_name)
@@ -576,7 +601,7 @@ def load_or_create_mesh(
         logger.debug("Unused mesh parameters: %s", params)
 
     if gdim == 2:
-        return create_eit_mesh(
+        created_mesh = create_eit_mesh(
             n_elec=n_elec,
             radius=radius,
             refinement=refinement,
@@ -584,18 +609,34 @@ def load_or_create_mesh(
             output_dir=str(mesh_dir_path),
             mesh_name=cache_name,
         )
-    return create_cylinder_3d_eit_mesh(
-        n_elec=n_elec,
-        radius=radius,
-        height=height,
-        refinement=refinement,
-        electrode_coverage=electrode_coverage,
-        electrode_height_ratio=electrode_height_ratio,
-        electrode_level_fractions=electrode_level_fractions,
-        z_center=z_center,
-        output_dir=str(mesh_dir_path),
-        mesh_name=cache_name,
-        mesh_family=mesh_family,
-        geometry_version=geometry_version,
-        generator_revision=generator_revision,
-    )
+    else:
+        created_mesh = create_cylinder_3d_eit_mesh(
+            n_elec=n_elec,
+            radius=radius,
+            height=height,
+            refinement=refinement,
+            electrode_coverage=electrode_coverage,
+            electrode_height_ratio=electrode_height_ratio,
+            electrode_level_fractions=electrode_level_fractions,
+            z_center=z_center,
+            output_dir=str(mesh_dir_path),
+            mesh_name=cache_name,
+            mesh_family=mesh_family,
+            geometry_version=geometry_version,
+            generator_revision=generator_revision,
+        )
+
+    created_mesh_file = getattr(created_mesh, "mesh_file", None)
+    if created_mesh_file:
+        association_file = mesh_dir_path / f"{cache_name}_association_table.ini"
+        sidecar_file = structured_sidecar_path_for_mesh(created_mesh_file)
+        process_mesh_key = build_process_mesh_cache_key(
+            mesh_file=created_mesh_file,
+            association_file=association_file if association_file.exists() else None,
+            sidecar_file=sidecar_file if sidecar_file.exists() else None,
+            gdim=gdim,
+            n_elec=n_elec,
+            mesh_name=cache_name,
+        )
+        put_process_cached_mesh(process_mesh_key, created_mesh)
+    return created_mesh

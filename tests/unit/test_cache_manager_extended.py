@@ -34,6 +34,7 @@ def test_cache_key_stable_for_semantically_equal_payload():
 
 def test_cache_manager_process_hit():
     manager = CacheManager(scope="process", policy=CachePolicy(process_max_bytes=2 * 1024**2))
+    manager.clear(scope="process")
     calls = {"count": 0}
 
     def _compute():
@@ -59,6 +60,38 @@ def test_cache_manager_process_hit():
     np.testing.assert_allclose(v1, v2)
     stats = manager.stats()
     assert stats["process_hits"] >= 1
+
+
+def test_cache_manager_process_store_shared_across_managers(tmp_path: Path):
+    cache_dir = tmp_path / "shared-process-cache"
+    policy = CachePolicy(process_max_bytes=2 * 1024**2)
+    manager1 = CacheManager(scope="process", cache_dir=cache_dir, policy=policy)
+    manager2 = CacheManager(scope="process", cache_dir=cache_dir, policy=policy)
+    manager1.clear(scope="process")
+    calls = {"count": 0}
+
+    def _compute():
+        calls["count"] += 1
+        return {"value": np.arange(4, dtype=float)}
+
+    _, lookup1 = manager1.get_or_compute(
+        artifact="mesh_bundle",
+        payload={"mesh": "shared", "gdim": 3},
+        compute_fn=_compute,
+        persist=False,
+    )
+    value2, lookup2 = manager2.get_or_compute(
+        artifact="mesh_bundle",
+        payload={"mesh": "shared", "gdim": 3},
+        compute_fn=_compute,
+        persist=False,
+    )
+
+    assert lookup1.hit is False
+    assert lookup2.hit is True
+    assert lookup2.layer == "process"
+    assert calls["count"] == 1
+    np.testing.assert_allclose(value2["value"], np.arange(4, dtype=float))
 
 
 def test_cache_manager_disk_persistence(tmp_path: Path):
@@ -89,7 +122,8 @@ def test_cache_manager_disk_persistence(tmp_path: Path):
     assert lookup.hit is True
     assert lookup.layer in {"disk", "process"}
     assert calls["count"] == 0
-    assert manager2.stats()["disk_hits"] >= 1
+    stats = manager2.stats()
+    assert stats["disk_hits"] + stats["process_hits"] >= 1
 
 
 def test_cache_manager_off_scope_and_invalidation_paths(tmp_path: Path):

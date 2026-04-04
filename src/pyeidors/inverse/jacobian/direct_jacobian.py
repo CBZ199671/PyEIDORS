@@ -194,7 +194,14 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             self._runtime_cuda_device = str(torch_device)
 
     def _wants_cuda_contraction(self) -> bool:
-        self._jacobian_backend_requested = normalize_runtime_device_label(self._runtime_device_requested, default="auto")
+        requested = getattr(self, "_runtime_device_requested", "auto")
+        effective = getattr(self, "_runtime_device_effective", "cpu")
+        self._runtime_device_requested = normalize_runtime_device(requested, default="auto")
+        self._runtime_device_effective = normalize_runtime_device_label(effective, default="cpu")
+        self._jacobian_backend_requested = normalize_runtime_device_label(
+            self._runtime_device_requested,
+            default="auto",
+        )
         return bool(
             torch is not None
             and hasattr(torch, "cuda")

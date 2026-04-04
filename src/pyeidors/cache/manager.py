@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
 from typing import Any, Callable
 
 from .keys import CacheKeyParts, build_cache_key
@@ -11,6 +12,35 @@ from .object_signature import signature_of_cache_obj
 from .store_disk import DiskCacheStore
 from .store_process import ProcessCacheStore, estimate_object_size_bytes
 from .types import CacheLookup, CachePolicy, CacheScope, CacheStats, normalize_cache_lifecycle
+
+
+_SHARED_PROCESS_STORES: dict[tuple[str, str], ProcessCacheStore] = {}
+_SHARED_PROCESS_STORES_LOCK = threading.Lock()
+
+
+def _shared_process_store_key(*, cache_dir: Path, code_fingerprint: str) -> tuple[str, str]:
+    return (str(cache_dir.resolve()), str(code_fingerprint or "unknown"))
+
+
+def _get_shared_process_store(
+    *,
+    cache_dir: Path,
+    max_bytes: int,
+    code_fingerprint: str,
+) -> ProcessCacheStore:
+    key = _shared_process_store_key(
+        cache_dir=cache_dir,
+        code_fingerprint=code_fingerprint,
+    )
+    with _SHARED_PROCESS_STORES_LOCK:
+        store = _SHARED_PROCESS_STORES.get(key)
+        if store is None:
+            store = ProcessCacheStore(int(max(0, max_bytes)))
+            _SHARED_PROCESS_STORES[key] = store
+            return store
+        if int(max_bytes) > int(store.max_bytes):
+            store.max_bytes = int(max_bytes)
+        return store
 
 
 class CacheManager:
@@ -54,7 +84,11 @@ class CacheManager:
         self._priority_boost: float = 0.0
 
         self._process = (
-            ProcessCacheStore(self.policy.process_max_bytes)
+            _get_shared_process_store(
+                cache_dir=self.requested_cache_dir,
+                max_bytes=self.policy.process_max_bytes,
+                code_fingerprint=self.code_fingerprint,
+            )
             if scope in {"process", "both"}
             else None
         )
