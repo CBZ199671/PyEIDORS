@@ -84,8 +84,8 @@ class AcquisitionProcess(mp.Process):
             self._status.value = AcquisitionStatus.IDLE.value
 
             while True:
-                # Check for commands (non-blocking)
-                cmd = self._drain_command()
+                # Wait for a command; blocks up to 0.1s to avoid busy-spin
+                cmd = self._drain_command(timeout=0.1)
 
                 if cmd == AcquisitionCommand.SHUTDOWN:
                     self._status.value = AcquisitionStatus.SHUTDOWN.value
@@ -163,8 +163,16 @@ class AcquisitionProcess(mp.Process):
                     pass
             ring.close()
 
-    def _drain_command(self) -> AcquisitionCommand | None:
+    def _drain_command(self, timeout: float | None = None) -> AcquisitionCommand | None:
+        """Read the next command from the queue.
+
+        Args:
+            timeout: If *None* (default), non-blocking.  If a float,
+                     block for at most *timeout* seconds.
+        """
         try:
-            return self._cmd_queue.get_nowait()
+            if timeout is None:
+                return self._cmd_queue.get_nowait()
+            return self._cmd_queue.get(timeout=timeout)
         except Exception:
             return None

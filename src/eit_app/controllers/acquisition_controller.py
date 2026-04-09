@@ -126,11 +126,21 @@ class AcquisitionController(QObject):
             if self._process.pid is not None:
                 from eit_app.acquisition.ipc_protocol import AcquisitionCommand
 
-                self._process.send_command(AcquisitionCommand.SHUTDOWN)
-                self._process.join(timeout=3.0)
+                # Send STOP first so the inner read loop can break,
+                # then SHUTDOWN so the outer loop exits cleanly.
+                try:
+                    self._process.send_command(AcquisitionCommand.STOP)
+                except Exception:
+                    pass
+                try:
+                    self._process.send_command(AcquisitionCommand.SHUTDOWN)
+                except Exception:
+                    pass
+                self._process.join(timeout=5.0)
                 if self._process.is_alive():
                     self._process.terminate()
-                    log.warning("Acquisition process terminated forcefully")
+                    self._process.join(timeout=2.0)
+                    log.debug("Acquisition process terminated on shutdown")
 
         if self._ring_buffer is not None:
             self._ring_buffer.close()

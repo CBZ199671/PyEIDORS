@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QHBoxLayout, QSplitter, QToolBox, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QScrollArea,
+    QSplitter,
+    QToolBox,
+    QVBoxLayout,
+    QWidget,
+)
 
 from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
 from eit_app.ui.hardware.connection_panel import ConnectionPanel
@@ -34,12 +41,16 @@ class HardwareTab(QWidget):
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # --- Left panel ---
+        # --- Left panel (scrollable to prevent cramping) ---
+        left_scroll = QScrollArea()
+        left_scroll.setWidgetResizable(True)
+        left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        left_scroll.setMinimumWidth(380)
+        left_scroll.setMaximumWidth(480)
+
         left_container = QWidget()
-        left_container.setMinimumWidth(380)
-        left_container.setMaximumWidth(480)
         left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setContentsMargins(0, 0, 4, 0)
         left_layout.setSpacing(4)
 
         self._summary_panel = SessionSummaryPanel()
@@ -49,7 +60,6 @@ class HardwareTab(QWidget):
 
         self._workflow_toolbox = QToolBox()
         self._workflow_toolbox.setObjectName("workflowToolbox")
-        self._workflow_toolbox.setSizePolicy(self._summary_panel.sizePolicy())
         set_panel_role(self._conn_panel, "workflow")
         set_panel_role(self._control_panel, "workflow")
         set_panel_role(self._acq_panel, "workflow")
@@ -59,6 +69,8 @@ class HardwareTab(QWidget):
 
         left_layout.addWidget(self._summary_panel)
         left_layout.addWidget(self._workflow_toolbox, 1)
+
+        left_scroll.setWidget(left_container)
 
         # --- Central visualization ---
         center_splitter = QSplitter(Qt.Orientation.Vertical)
@@ -75,7 +87,7 @@ class HardwareTab(QWidget):
         self._frame_browser.setMinimumWidth(320)
         self._frame_browser.setMaximumWidth(420)
 
-        main_splitter.addWidget(left_container)
+        main_splitter.addWidget(left_scroll)
         main_splitter.addWidget(center_splitter)
         main_splitter.addWidget(self._frame_browser)
         main_splitter.setStretchFactor(0, 0)
