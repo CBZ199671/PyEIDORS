@@ -1,0 +1,214 @@
+"""Batch dataset generator for deep learning training data."""
+
+from __future__ import annotations
+
+import logging
+from dataclasses import dataclass
+from pathlib import Path
+
+import numpy as np
+from PySide6.QtCore import QObject, QThread, Signal
+
+from eit_app.controllers.forward_solver_controller import _paint_shape
+from eit_app.models.simulation_state import DatasetGeneratorConfig, InhomogeneitySpec
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class DatasetGeneratorRequest:
+    """Input for batch dataset generation."""
+
+    config: DatasetGeneratorConfig
+
+
+class _DatasetGeneratorWorker(QObject):
+    finished = Signal(int)  # total samples generated
+    progress = Signal(int, int)  # current, total
+    error = Signal(str)
+
+    def __init__(self, request: DatasetGeneratorRequest) -> None:
+        super().__init__()
+        self._request = request
+        self._cancel = False
+
+    def cancel(self) -> None:
+        self._cancel = True
+
+    def run(self) -> None:
+        cfg = self._request.config
+        total = cfg.n_samples
+
+        try:
+            from pyeidors import EITSystem
+            from pyeidors.data.structures import PatternConfig
+            from pyeidors.femx import cell_midpoints
+
+            pattern = PatternConfig(
+                n_elec=cfg.n_electrodes,
+                stim_pattern="{ad}",
+                meas_pattern="{ad}",
+                drive_mode="line_current_density",
+                drive_value=1.0,
+                geometry_scale_to_m=1.0,
+            )
+            system = EITSystem(n_elec=cfg.n_electrodes, pattern_config=pattern)
+            system.setup(
+                mesh_source="generated",
+                dimension=cfg.mesh_dimension,
+                mesh_size=cfg.mesh_refinement,
+            )
+
+            fwd = system.fwd_model
+            centers = cell_midpoints(fwd.mesh)
+            n_elements = len(centers)
+
+            # Extract mesh geometry once
+            mesh = system.mesh
+            node_coords = mesh.geometry.x[:, :cfg.mesh_dimension].copy()
+            cells_conn = mesh.topology.connectivity(mesh.topology.dim, 0)
+            n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
+            cell_connectivity = np.array(
+                [cells_conn.links(i) for i in range(n_cells)], dtype=np.int32
+            )
+
+            # Compute homogeneous reference once
+            sigma_homog = np.ones(n_elements, dtype=np.float64)
+            data_homog = system.forward_solve(sigma_homog)
+            homog_voltages = data_homog.meas.copy()
+
+            # Prepare output directory
+            out_dir = Path(cfg.output_dir)
+            out_dir.mkdir(parents=True, exist_ok=True)
+
+            # Save mesh info once
+            np.savez(
+                out_dir / "mesh_info.npz",
+                node_coords=node_coords,
+                cell_connectivity=cell_connectivity,
+                n_electrodes=cfg.n_electrodes,
+                homogeneous_voltages=homog_voltages,
+            )
+
+            rng = np.random.default_rng()
+            generated = 0
+
+            for i in range(total):
+                if self._cancel:
+                    log.info("Dataset generation cancelled at sample %d/%d", i, total)
+                    break
+
+                # Random background conductivity
+                bg = rng.uniform(
+                    cfg.background_conductivity_min,
+                    cfg.background_conductivity_max,
+                )
+                sigma = np.full(n_elements, bg, dtype=np.float64)
+
+                # Random number of inhomogeneities
+                n_inhom = rng.integers(
+                    cfg.n_inhomogeneities_min,
+                    cfg.n_inhomogeneities_max + 1,
+                )
+
+                specs = []
+                for _ in range(n_inhom):
+                    shape = rng.choice(cfg.shapes)
+                    cx = rng.uniform(cfg.position_min, cfg.position_max)
+                    cy = rng.uniform(cfg.position_min, cfg.position_max)
+                    sx = rng.uniform(cfg.size_min, cfg.size_max)
+                    sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max)
+                    cond = rng.uniform(cfg.conductivity_min, cfg.conductivity_max)
+                    spec = InhomogeneitySpec(
+                        shape=shape,
+                        center_x=float(cx),
+                        center_y=float(cy),
+                        size_x=float(sx),
+                        size_y=float(sy),
+                        conductivity=float(cond),
+                    )
+                    specs.append(spec)
+                    _paint_shape(sigma, centers, spec)
+
+                # Forward solve
+                data = system.forward_solve(sigma)
+                voltages = data.meas.copy()
+
+                # Add noise if requested
+                if cfg.noise_level > 0:
+                    noise_std = cfg.noise_level * np.std(voltages)
+                    voltages += noise_std * rng.standard_normal(voltages.shape)
+
+                # Save sample
+                np.savez(
+                    out_dir / f"sample_{i:06d}.npz",
+                    ground_truth=sigma,
+                    boundary_voltages=voltages,
+                    background_conductivity=bg,
+                    n_inhomogeneities=n_inhom,
+                )
+
+                generated += 1
+                self.progress.emit(generated, total)
+
+            self.finished.emit(generated)
+
+        except Exception as exc:
+            log.exception("Dataset generation failed")
+            self.error.emit(str(exc))
+            self.finished.emit(0)
+
+
+class DatasetGeneratorController(QObject):
+    """Manages batch dataset generation in a background thread."""
+
+    generation_done = Signal(int)  # total samples
+    progress = Signal(int, int)  # current, total
+    error = Signal(str)
+
+    def __init__(self, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._thread: QThread | None = None
+        self._worker: _DatasetGeneratorWorker | None = None
+
+    def generate(self, request: DatasetGeneratorRequest) -> None:
+        """Start dataset generation in a background thread."""
+        if self._thread is not None and self._thread.isRunning():
+            self.error.emit("Dataset generation is already running.")
+            return
+
+        self._thread = QThread()
+        self._worker = _DatasetGeneratorWorker(request)
+        self._worker.moveToThread(self._thread)
+
+        self._thread.started.connect(self._worker.run)
+        self._worker.finished.connect(self._on_finished)
+        self._worker.progress.connect(self.progress)
+        self._worker.error.connect(self.error)
+        self._worker.finished.connect(self._thread.quit)
+
+        self._thread.start()
+
+    def cancel(self) -> None:
+        """Request cancellation of the running generation."""
+        if self._worker is not None:
+            self._worker.cancel()
+
+    def _on_finished(self, total: int) -> None:
+        self.generation_done.emit(total)
+        self._cleanup()
+
+    def _cleanup(self) -> None:
+        if self._thread is not None:
+            self._thread.quit()
+            self._thread.wait(5000)
+            self._thread.deleteLater()
+            self._thread = None
+        if self._worker is not None:
+            self._worker.deleteLater()
+            self._worker = None
+
+    def shutdown(self) -> None:
+        """Cancel and clean up."""
+        self.cancel()
+        self._cleanup()

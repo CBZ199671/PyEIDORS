@@ -134,6 +134,35 @@ QToolBox::tab:selected {
 
 QToolBox#workflowToolbox::tab {
     min-height: 18px;
+    font-size: 12px;
+}
+
+QTabWidget::pane {
+    border: none;
+    background: #eef3f8;
+}
+
+QTabBar::tab {
+    background: #dfe9f4;
+    color: #243447;
+    border: 1px solid #c5d2df;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 8px 20px;
+    margin-right: 2px;
+    font-weight: 600;
+    font-size: 13px;
+}
+
+QTabBar::tab:selected {
+    background: #eef3f8;
+    color: #1f3b5b;
+    border-bottom: 2px solid #1f5d8b;
+}
+
+QTabBar::tab:hover:!selected {
+    background: #e3ebf4;
 }
 
 QToolBox#workflowToolbox QWidget {

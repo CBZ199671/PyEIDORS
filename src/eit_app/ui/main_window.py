@@ -1,4 +1,4 @@
-"""Main application window with dock-based layout."""
+"""Main application window with tab-based layout."""
 
 from __future__ import annotations
 
@@ -8,14 +8,26 @@ from urllib.parse import urlparse
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import QTimer, Qt, Slot
-from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox, QSplitter, QToolBox, QWidget
+from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
 from eit_app.acquisition.scheduler import BurstScheduler
 from eit_app.controllers.acquisition_controller import AcquisitionController
 from eit_app.controllers.device_controller import DeviceController
-from eit_app.controllers.reconstruction_controller import ReconstructionController, ReconstructionRequest
+from eit_app.controllers.reconstruction_controller import (
+    ReconstructionController,
+    ReconstructionRequest,
+)
+from eit_app.controllers.dataset_generator_controller import (
+    DatasetGeneratorController,
+    DatasetGeneratorRequest,
+)
+from eit_app.controllers.forward_solver_controller import (
+    ForwardSolverController,
+    ForwardSolverRequest,
+    ForwardSolverResult,
+)
 from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
 from eit_app.hardware.types import STIM_AMP_VALUES_UA
@@ -26,15 +38,13 @@ from eit_app.models.app_state import (
     PowerStatus,
     RecordingStatus,
 )
-from eit_app.ui.acquisition_panel import AcquisitionPanel
-from eit_app.ui.connection_panel import ConnectionPanel
-from eit_app.ui.control_panel import ControlPanel
-from eit_app.ui.frame_browser_widget import FrameBrowserWidget
-from eit_app.ui.live_plot_widget import LivePlotWidget
-from eit_app.ui.reconstruction_widget import ReconstructionWidget
-from eit_app.ui.session_summary_panel import SessionSummaryPanel
+from eit_app.models.simulation_state import (
+    DatasetGeneratorConfig,
+    SimulationState,
+)
+from eit_app.ui.hardware.hardware_tab import HardwareTab
+from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
-from eit_app.ui.theme import set_panel_role
 
 if TYPE_CHECKING:
     from eit_app.models.frame_model import FrameData
@@ -62,10 +72,14 @@ class EITWorkstation(QMainWindow):
         self.resize(1400, 900)
 
         self._state = AppState(self)
+        self._sim_state = SimulationState(self)
         self._device_ctrl = DeviceController(self)
         self._acq_ctrl = AcquisitionController(self)
         self._rec_ctrl = RecordingController(self)
         self._recon_ctrl = ReconstructionController(self)
+        self._fwd_ctrl = ForwardSolverController(self)
+        self._dataset_ctrl = DatasetGeneratorController(self)
+        self._last_fwd_result: ForwardSolverResult | None = None
 
         self._transport_type = "serial"
         self._device_config = normalize_device_config("serial", {})
@@ -87,58 +101,53 @@ class EITWorkstation(QMainWindow):
         self._control_panel.set_enabled(False)
         self._refresh_session_summary()
 
+    # --- Convenience accessors that delegate to the hardware tab ---
+
+    @property
+    def _conn_panel(self):
+        return self._hw_tab.connection_panel
+
+    @property
+    def _control_panel(self):
+        return self._hw_tab.control_panel
+
+    @property
+    def _acq_panel(self):
+        return self._hw_tab.acquisition_panel
+
+    @property
+    def _summary_panel(self):
+        return self._hw_tab.summary_panel
+
+    @property
+    def _workflow_toolbox(self):
+        return self._hw_tab.workflow_toolbox
+
+    @property
+    def _live_plot(self):
+        return self._hw_tab.live_plot
+
+    @property
+    def _recon_widget(self):
+        return self._hw_tab.reconstruction_widget
+
+    @property
+    def _frame_browser(self):
+        return self._hw_tab.frame_browser
+
     def _build_ui(self) -> None:
-        splitter = QSplitter(Qt.Orientation.Vertical)
-        self._live_plot = LivePlotWidget()
-        self._recon_widget = ReconstructionWidget()
-        splitter.addWidget(self._live_plot)
-        splitter.addWidget(self._recon_widget)
-        splitter.setStretchFactor(0, 2)
-        splitter.setStretchFactor(1, 1)
-        splitter.setChildrenCollapsible(False)
-        self.setCentralWidget(splitter)
+        self._tab_widget = QTabWidget()
+        self._tab_widget.setTabPosition(QTabWidget.TabPosition.North)
+        self._tab_widget.setDocumentMode(True)
+        self.setCentralWidget(self._tab_widget)
 
-        left_dock = QDockWidget("Device", self)
-        left_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        left_dock.setMinimumWidth(420)
-        left_container = QWidget()
-        from PySide6.QtWidgets import QVBoxLayout
+        # Hardware Measurement tab
+        self._hw_tab = HardwareTab()
+        self._tab_widget.addTab(self._hw_tab, "Hardware Measurement (\u5b9e\u6d4b)")
 
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(4, 4, 4, 4)
-
-        self._conn_panel = ConnectionPanel()
-        self._control_panel = ControlPanel()
-        self._acq_panel = AcquisitionPanel()
-        self._summary_panel = SessionSummaryPanel()
-        self._workflow_toolbox = QToolBox()
-        self._workflow_toolbox.setObjectName("workflowToolbox")
-        self._workflow_toolbox.setSizePolicy(self._summary_panel.sizePolicy())
-        set_panel_role(self._conn_panel, "workflow")
-        set_panel_role(self._control_panel, "workflow")
-        set_panel_role(self._acq_panel, "workflow")
-        self._workflow_toolbox.addItem(self._conn_panel, "Step 1 · Link & Verify")
-        self._workflow_toolbox.addItem(self._control_panel, "Step 2 · Setup & Diagnostics")
-        self._workflow_toolbox.addItem(self._acq_panel, "Step 3 · Acquire & Record")
-
-        left_layout.addWidget(self._summary_panel)
-        left_layout.addWidget(self._workflow_toolbox, 1)
-
-        left_dock.setWidget(left_container)
-        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, left_dock)
-
-        right_dock = QDockWidget("Frames", self)
-        right_dock.setFeatures(
-            QDockWidget.DockWidgetFeature.DockWidgetMovable
-            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
-        )
-        right_dock.setMinimumWidth(360)
-        self._frame_browser = FrameBrowserWidget()
-        right_dock.setWidget(self._frame_browser)
-        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right_dock)
+        # Simulation tab
+        self._sim_tab = SimulationTab()
+        self._tab_widget.addTab(self._sim_tab, "Simulation (\u4eff\u771f)")
 
         self._status_bar = EITStatusBar(self)
         self.setStatusBar(self._status_bar)
@@ -208,6 +217,25 @@ class EITWorkstation(QMainWindow):
         self._state.power_status_changed.connect(lambda _value: self._refresh_session_summary())
         self._state.acquisition_mode_changed.connect(lambda _value: self._refresh_session_summary())
         self._state.recording_status_changed.connect(lambda _value: self._refresh_session_summary())
+
+        # Tab switching
+        self._tab_widget.currentChanged.connect(self._status_bar.on_tab_changed)
+
+        # --- Simulation signals ---
+        sim = self._sim_tab
+        sim.forward_problem_panel.run_forward_requested.connect(self._on_run_forward)
+        sim.inverse_problem_panel.run_inverse_requested.connect(self._on_run_sim_inverse)
+        sim.inverse_problem_panel.save_requested.connect(self._on_save_sim_results)
+        sim.dataset_generator_panel.generate_requested.connect(self._on_generate_dataset)
+        sim.dataset_generator_panel.cancel_requested.connect(self._dataset_ctrl.cancel)
+
+        self._fwd_ctrl.forward_done.connect(self._on_forward_done)
+        self._fwd_ctrl.progress.connect(lambda msg: self._status_bar.showMessage(msg, 3000))
+        self._fwd_ctrl.error.connect(self._on_error)
+
+        self._dataset_ctrl.progress.connect(self._sim_tab.dataset_generator_panel.set_progress)
+        self._dataset_ctrl.generation_done.connect(self._on_dataset_done)
+        self._dataset_ctrl.error.connect(self._on_error)
 
     @Slot(str, dict)
     def _on_connect_requested(self, transport_type: str, config: dict) -> None:
@@ -956,6 +984,187 @@ class EITWorkstation(QMainWindow):
                 return line
         return lines[-1]
 
+    # ---- Simulation handlers ----
+
+    @Slot()
+    def _on_run_forward(self) -> None:
+        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
+        noise = self._sim_tab.forward_problem_panel.noise_level
+
+        request = ForwardSolverRequest(
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=mesh_cfg["mesh_refinement"],
+            n_electrodes=mesh_cfg["n_electrodes"],
+            background_conductivity=mesh_cfg["background_conductivity"],
+            inhomogeneities=inhomogeneities,
+            noise_level=noise,
+        )
+        self._sim_state.forward_running = True
+        self._sim_tab.forward_problem_panel.set_running(True)
+        self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+        self._fwd_ctrl.solve(request)
+
+    @Slot(object)
+    def _on_forward_done(self, result: ForwardSolverResult) -> None:
+        self._sim_state.forward_running = False
+        self._sim_tab.forward_problem_panel.set_running(False)
+
+        if result.error_msg:
+            self._sim_tab.forward_problem_panel.set_status(f"Error: {result.error_msg}")
+            return
+
+        self._last_fwd_result = result
+        self._sim_tab.forward_problem_panel.set_status(
+            f"Done: {result.n_elements} elements, {result.n_measurements} measurements"
+        )
+        self._sim_tab.results_widget.update_forward_result(result)
+
+    @Slot()
+    def _on_run_sim_inverse(self) -> None:
+        if self._last_fwd_result is None or self._last_fwd_result.error_msg:
+            self._on_error("Run the forward problem first.")
+            return
+
+        result = self._last_fwd_result
+        inv_cfg = self._sim_tab.inverse_problem_panel.get_config()
+        self._sim_state.inverse_running = True
+        self._sim_tab.inverse_problem_panel.set_running(True)
+
+        # Build a ReconstructionRequest using the forward result data
+        from eit_app.models.frame_model import FrameData
+        import numpy as np
+
+        n_meas = len(result.boundary_voltages)
+        half = n_meas // 2
+
+        # Treat homogeneous as reference, inhomogeneous as target
+        ref_frame = FrameData(
+            real=result.homogeneous_voltages[:half] if result.homogeneous_voltages is not None else np.zeros(half),
+            imag=result.homogeneous_voltages[half:] if result.homogeneous_voltages is not None else np.zeros(n_meas - half),
+            timestamp=0.0,
+            frame_index=0,
+        )
+        tgt_frame = FrameData(
+            real=result.boundary_voltages[:half],
+            imag=result.boundary_voltages[half:] if n_meas > half else np.zeros(n_meas - half),
+            timestamp=0.0,
+            frame_index=1,
+        )
+
+        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        request = ReconstructionRequest(
+            reference_frame=ref_frame,
+            target_frame=tgt_frame,
+            use_part="real",
+            method=inv_cfg["method"],
+            regularization_alpha=inv_cfg["regularization_alpha"],
+            max_iterations=inv_cfg["max_iterations"],
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=int(1.0 / mesh_cfg["mesh_refinement"]),
+            metadata={
+                "difference_mode": "raw",
+                "difference_orientation": "target_minus_reference",
+                "n_elec": mesh_cfg["n_electrodes"],
+                "stim_pattern": "{ad}",
+                "meas_pattern": "{ad}",
+                "drive_mode": "line_current_density",
+                "drive_value": 1.0,
+                "geometry_scale_to_m": 1.0,
+            },
+        )
+        self._recon_ctrl.reconstruct(request)
+
+        # Connect one-shot handler for simulation inverse result
+        def _on_sim_recon_done(recon_result):
+            self._sim_state.inverse_running = False
+            self._sim_tab.inverse_problem_panel.set_running(False)
+
+            if recon_result.error_msg:
+                self._sim_tab.inverse_problem_panel.set_status(
+                    f"Error: {recon_result.error_msg}"
+                )
+                return
+
+            self._sim_tab.inverse_problem_panel.set_status("Reconstruction complete.")
+            self._sim_tab.inverse_problem_panel.set_save_enabled(True)
+            self._sim_tab.results_widget.update_inverse_result(
+                reconstructed_conductivity=recon_result.conductivity,
+                node_coords=recon_result.node_coords,
+                cell_connectivity=recon_result.cell_connectivity,
+            )
+
+        # Disconnect previous one-shot connections and reconnect
+        try:
+            self._recon_ctrl.reconstruction_done.disconnect(self._sim_recon_handler)
+        except (RuntimeError, AttributeError):
+            pass
+        self._sim_recon_handler = _on_sim_recon_done
+        self._recon_ctrl.reconstruction_done.connect(self._sim_recon_handler)
+
+    @Slot()
+    def _on_save_sim_results(self) -> None:
+        if self._last_fwd_result is None:
+            return
+
+        from PySide6.QtWidgets import QFileDialog
+        import numpy as np
+
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save Simulation Results", "", "NumPy archive (*.npz)"
+        )
+        if not path:
+            return
+
+        result = self._last_fwd_result
+        np.savez(
+            path,
+            ground_truth=result.ground_truth_conductivity,
+            boundary_voltages=result.boundary_voltages,
+            homogeneous_voltages=result.homogeneous_voltages,
+            node_coords=result.node_coords,
+            cell_connectivity=result.cell_connectivity,
+        )
+        self._status_bar.showMessage(f"Saved to {path}", 5000)
+
+    @Slot()
+    def _on_generate_dataset(self) -> None:
+        panel_cfg = self._sim_tab.dataset_generator_panel.get_config()
+        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+
+        if not panel_cfg["output_dir"]:
+            self._on_error("Please specify an output directory for the dataset.")
+            return
+
+        config = DatasetGeneratorConfig(
+            n_samples=panel_cfg["n_samples"],
+            output_dir=panel_cfg["output_dir"],
+            n_inhomogeneities_min=panel_cfg["n_inhomogeneities_min"],
+            n_inhomogeneities_max=panel_cfg["n_inhomogeneities_max"],
+            shapes=panel_cfg["shapes"],
+            position_min=panel_cfg["position_min"],
+            position_max=panel_cfg["position_max"],
+            size_min=panel_cfg["size_min"],
+            size_max=panel_cfg["size_max"],
+            conductivity_min=panel_cfg["conductivity_min"],
+            conductivity_max=panel_cfg["conductivity_max"],
+            background_conductivity_min=panel_cfg["background_conductivity_min"],
+            background_conductivity_max=panel_cfg["background_conductivity_max"],
+            noise_level=panel_cfg["noise_level"],
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=mesh_cfg["mesh_refinement"],
+            n_electrodes=mesh_cfg["n_electrodes"],
+        )
+        self._sim_state.dataset_running = True
+        self._sim_tab.dataset_generator_panel.set_generating(True)
+        self._dataset_ctrl.generate(DatasetGeneratorRequest(config=config))
+
+    @Slot(int)
+    def _on_dataset_done(self, total: int) -> None:
+        self._sim_state.dataset_running = False
+        self._sim_tab.dataset_generator_panel.set_generating(False)
+        self._status_bar.showMessage(f"Dataset generation complete: {total} samples.", 10000)
+
     def closeEvent(self, event) -> None:
         self._on_stop_acquisition()
         if self._state.connection_status is ConnectionStatus.CONNECTED:
@@ -965,4 +1174,6 @@ class EITWorkstation(QMainWindow):
                 log.warning("Failed to power off device during shutdown: %s", exc)
         self._device_ctrl.shutdown()
         self._recon_ctrl.shutdown()
+        self._fwd_ctrl.shutdown()
+        self._dataset_ctrl.shutdown()
         super().closeEvent(event)

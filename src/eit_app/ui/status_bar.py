@@ -27,6 +27,10 @@ class EITStatusBar(QStatusBar):
         apply_state_chip(self._acq_label, tone="idle", compact=True)
         apply_state_chip(self._rec_label, tone="idle", compact=True)
 
+        self._mode_label = self._make_pill("Mode: Hardware")
+        apply_state_chip(self._mode_label, tone="active", compact=True)
+
+        self.addPermanentWidget(self._mode_label)
         self.addPermanentWidget(self._conn_label)
         self.addPermanentWidget(self._power_label)
         self.addPermanentWidget(self._acq_label)
@@ -129,3 +133,16 @@ class EITStatusBar(QStatusBar):
     @Slot(int)
     def on_frame_count_changed(self, count: int) -> None:
         self._frame_label.setText(f"Frames: {count}")
+
+    @Slot(int)
+    def on_tab_changed(self, index: int) -> None:
+        """Update mode indicator when the user switches tabs."""
+        labels = {0: "Mode: Hardware", 1: "Mode: Simulation"}
+        tones = {0: "active", 1: "ready"}
+        self._mode_label.setText(labels.get(index, f"Mode: {index}"))
+        apply_state_chip(
+            self._mode_label,
+            tone=tones.get(index, "idle"),
+            compact=True,
+            emphasized=True,
+        )
