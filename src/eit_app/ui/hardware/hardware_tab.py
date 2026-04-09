@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
 from eit_app.ui.hardware.connection_panel import ConnectionPanel
 from eit_app.ui.hardware.control_panel import ControlPanel
@@ -25,9 +26,10 @@ from eit_app.ui.theme import set_panel_role
 class HardwareTab(QWidget):
     """Top-level container for the hardware measurement workflow.
 
-    Assembles the left control panel, central visualization area,
-    and right frame browser into a single QWidget suitable for
-    embedding in a QTabWidget.
+    Layout:
+        Left   – scrollable QToolBox with Step 1-3 panels
+        Center – LivePlot (top) | Reconstruction + Summary + VoltageFit (bottom)
+        Right  – FrameBrowser
     """
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -41,19 +43,18 @@ class HardwareTab(QWidget):
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # --- Left panel (scrollable to prevent cramping) ---
+        # ── Left panel: only Step 1-3 (scrollable) ──
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        left_scroll.setMinimumWidth(380)
-        left_scroll.setMaximumWidth(480)
+        left_scroll.setMinimumWidth(420)
+        left_scroll.setMaximumWidth(520)
 
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 4, 0)
         left_layout.setSpacing(4)
 
-        self._summary_panel = SessionSummaryPanel()
         self._conn_panel = ConnectionPanel()
         self._control_panel = ControlPanel()
         self._acq_panel = AcquisitionPanel()
@@ -67,22 +68,44 @@ class HardwareTab(QWidget):
         self._workflow_toolbox.addItem(self._control_panel, "Step 2 \u00b7 Setup & Diagnostics")
         self._workflow_toolbox.addItem(self._acq_panel, "Step 3 \u00b7 Acquire & Record")
 
-        left_layout.addWidget(self._summary_panel)
         left_layout.addWidget(self._workflow_toolbox, 1)
-
         left_scroll.setWidget(left_container)
 
-        # --- Central visualization ---
+        # ── Central visualization ──
         center_splitter = QSplitter(Qt.Orientation.Vertical)
+
+        # Top: live measurement plot
         self._live_plot = LivePlotWidget()
+
+        # Bottom: horizontal split  →  Reconstruction | (Summary + VoltageFit)
+        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+
         self._recon_widget = ReconstructionWidget()
+
+        right_info = QWidget()
+        right_info_layout = QVBoxLayout(right_info)
+        right_info_layout.setContentsMargins(0, 0, 0, 0)
+        right_info_layout.setSpacing(4)
+
+        self._summary_panel = SessionSummaryPanel()
+        self._voltage_plot = BoundaryVoltagePlotWidget()
+
+        right_info_layout.addWidget(self._summary_panel, 1)
+        right_info_layout.addWidget(self._voltage_plot, 1)
+
+        bottom_splitter.addWidget(self._recon_widget)
+        bottom_splitter.addWidget(right_info)
+        bottom_splitter.setStretchFactor(0, 1)
+        bottom_splitter.setStretchFactor(1, 1)
+        bottom_splitter.setChildrenCollapsible(False)
+
         center_splitter.addWidget(self._live_plot)
-        center_splitter.addWidget(self._recon_widget)
+        center_splitter.addWidget(bottom_splitter)
         center_splitter.setStretchFactor(0, 2)
         center_splitter.setStretchFactor(1, 1)
         center_splitter.setChildrenCollapsible(False)
 
-        # --- Right panel ---
+        # ── Right panel: frame browser ──
         self._frame_browser = FrameBrowserWidget()
         self._frame_browser.setMinimumWidth(320)
         self._frame_browser.setMaximumWidth(420)
@@ -96,7 +119,7 @@ class HardwareTab(QWidget):
 
         root.addWidget(main_splitter)
 
-    # --- Property accessors for signal wiring in main_window ---
+    # ── Property accessors for signal wiring in main_window ──
 
     @property
     def connection_panel(self) -> ConnectionPanel:
@@ -129,3 +152,7 @@ class HardwareTab(QWidget):
     @property
     def frame_browser(self) -> FrameBrowserWidget:
         return self._frame_browser
+
+    @property
+    def voltage_plot(self) -> BoundaryVoltagePlotWidget:
+        return self._voltage_plot

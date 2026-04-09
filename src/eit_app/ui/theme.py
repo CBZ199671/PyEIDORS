@@ -120,7 +120,7 @@ QToolBox::tab {
     background: #dfe9f4;
     border: 1px solid #c5d2df;
     border-radius: 8px;
-    padding: 8px 12px;
+    padding: 10px 14px;
     margin: 2px 0;
     color: #243447;
     font-weight: 600;
@@ -133,8 +133,8 @@ QToolBox::tab:selected {
 }
 
 QToolBox#workflowToolbox::tab {
-    min-height: 18px;
-    font-size: 12px;
+    min-height: 24px;
+    font-size: 13px;
 }
 
 QTabWidget::pane {

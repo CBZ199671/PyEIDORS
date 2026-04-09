@@ -135,6 +135,10 @@ class EITWorkstation(QMainWindow):
     def _frame_browser(self):
         return self._hw_tab.frame_browser
 
+    @property
+    def _voltage_plot(self):
+        return self._hw_tab.voltage_plot
+
     def _build_ui(self) -> None:
         self._tab_widget = QTabWidget()
         self._tab_widget.setTabPosition(QTabWidget.TabPosition.North)
