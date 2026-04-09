@@ -41,24 +41,24 @@ class _FakeBuiltMesh:
 
 def test_mesh_loader_helpers_cover_family_version_revision_and_table_parsing(tmp_path: Path):
     mesh2d = SimpleNamespace(topology=SimpleNamespace(dim=2), cells=lambda: np.zeros((1, 3), dtype=np.int32))
-    assert mesh_loader_module._infer_mesh_family_from_mesh(mesh2d) is None
-    assert mesh_loader_module._infer_mesh_family_from_mesh(
+    assert mesh_loader_module.infer_mesh_family_from_mesh(mesh2d) is None
+    assert mesh_loader_module.infer_mesh_family_from_mesh(
         SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((0, 8), dtype=np.int32))
     ) is None
-    assert mesh_loader_module._infer_mesh_family_from_mesh(
+    assert mesh_loader_module.infer_mesh_family_from_mesh(
         SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 8), dtype=np.int32))
     ) == "hex"
-    assert mesh_loader_module._infer_mesh_family_from_mesh(
+    assert mesh_loader_module.infer_mesh_family_from_mesh(
         SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 4), dtype=np.int32))
     ) == "tetra"
-    assert mesh_loader_module._infer_mesh_family_from_mesh(
+    assert mesh_loader_module.infer_mesh_family_from_mesh(
         SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 6), dtype=np.int32))
     ) is None
 
-    assert mesh_loader_module._infer_geometry_version("demo_geomv2_mesh") == "geomv2"
-    assert mesh_loader_module._infer_geometry_version("legacy_mesh") == "legacy"
-    assert mesh_loader_module._infer_generator_revision("demo_g3d7_mesh") == "g3d7"
-    assert mesh_loader_module._infer_generator_revision("legacy_mesh") == mesh_loader_module.LEGACY_3D_GENERATOR_REVISION
+    assert mesh_loader_module.infer_geometry_version("demo_geomv2_mesh") == "geomv2"
+    assert mesh_loader_module.infer_geometry_version("legacy_mesh") == "legacy"
+    assert mesh_loader_module.infer_generator_revision("demo_g3d7_mesh") == "g3d7"
+    assert mesh_loader_module.infer_generator_revision("legacy_mesh") == mesh_loader_module.LEGACY_3D_GENERATOR_REVISION
 
     with pytest.raises(ValueError, match="gdim must be 2 or 3"):
         mesh_loader_module.MeshLoader(mesh_dir=str(tmp_path), gdim=4)

@@ -19,6 +19,20 @@ for candidate in (str(PROJECT_ROOT), str(SRC_ROOT)):
     if candidate not in sys.path:
         sys.path.insert(0, candidate)
 
+from pyeidors.perf import ACCELERATION_PROFILE_GPU3D, DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    resolve_3d_mesh_contract,
+)
+from scripts.diagnostics.gallery_shared import (
+    consistency_metrics as _shared_consistency_metrics,
+    jsonable as _jsonable,
+    relative_l2 as _relative_l2,
+    rmse as _rmse,
+    safe_pearson as _safe_pearson,
+    save_case_data as _save_case_data,
+    truth_metrics as _truth_metrics,
+)
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
@@ -51,6 +65,30 @@ ANOMALIES_3D = (
 )
 
 
+def _consistency_metrics(
+    *,
+    dim: int,
+    baseline_cpu_meas: np.ndarray | None,
+    baseline_gpu_meas: np.ndarray | None,
+    target_cpu_meas: np.ndarray,
+    target_gpu_meas: np.ndarray,
+    cpu_recon: np.ndarray,
+    gpu_recon: np.ndarray,
+) -> dict[str, Any]:
+    return _shared_consistency_metrics(
+        dim=dim,
+        baseline_cpu_meas=baseline_cpu_meas,
+        baseline_gpu_meas=baseline_gpu_meas,
+        target_cpu_meas=target_cpu_meas,
+        target_gpu_meas=target_gpu_meas,
+        cpu_recon=cpu_recon,
+        gpu_recon=gpu_recon,
+        measurement_rel_tol=_MEASUREMENT_REL_TOL,
+        image_rel_tol=_IMAGE_REL_TOL,
+        image_rmse_tol_by_dim=_IMAGE_RMSE_TOL,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dim", type=int, choices=[2, 3], required=True)
@@ -69,6 +107,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--electrode-coverage", type=float, default=0.5)
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
     parser.add_argument("--max-iterations", type=int, default=2)
+    add_acceleration_profile_argument(
+        parser,
+        flag="--gpu-acceleration-profile",
+        default=ACCELERATION_PROFILE_GPU3D,
+        help_suffix="Used for the 3D GPU case only.",
+    )
     return parser.parse_args()
 
 
@@ -93,45 +137,6 @@ def _timed(fn, *, sync_cuda: bool = False):
     if sync_cuda:
         _maybe_cuda_sync()
     return out, float(time.perf_counter() - started)
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    return value
-
-
-def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
-    diff = np.asarray(left, dtype=np.float64) - np.asarray(right, dtype=np.float64)
-    denom = np.linalg.norm(np.asarray(left, dtype=np.float64)) + 1e-12
-    return float(np.linalg.norm(diff) / denom)
-
-
-def _rmse(left: np.ndarray, right: np.ndarray) -> float:
-    diff = np.asarray(left, dtype=np.float64) - np.asarray(right, dtype=np.float64)
-    return float(np.sqrt(np.mean(diff**2)))
-
-
-def _safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
-    left_arr = np.asarray(left, dtype=np.float64).ravel()
-    right_arr = np.asarray(right, dtype=np.float64).ravel()
-    if left_arr.size == 0 or right_arr.size == 0:
-        return float("nan")
-    if np.allclose(left_arr, left_arr[0]) or np.allclose(right_arr, right_arr[0]):
-        return 1.0 if np.allclose(left_arr, right_arr) else 0.0
-    return float(np.corrcoef(left_arr, right_arr)[0, 1])
 
 
 def _sigma_coordinates(system: EITSystem) -> np.ndarray:
@@ -199,77 +204,6 @@ def _build_truth_values(system: EITSystem, *, dim: int) -> tuple[np.ndarray, lis
         dist = np.linalg.norm(coords - center[None, :], axis=1)
         values[dist <= float(item["radius"])] = float(item["conductivity"])
     return values, anomalies
-
-
-def _truth_metrics(
-    *,
-    truth: np.ndarray,
-    recon: np.ndarray,
-    coords: np.ndarray,
-    anomalies: list[dict[str, Any]],
-) -> dict[str, float]:
-    metrics: dict[str, float] = {
-        "relative_l2": _relative_l2(truth, recon),
-        "rmse": _rmse(truth, recon),
-        "pearson": _safe_pearson(truth, recon),
-    }
-    background_mask = np.ones(truth.shape[0], dtype=bool)
-    for item in anomalies:
-        center = np.asarray(item["center"], dtype=np.float64)
-        radius = float(item["radius"])
-        roi = np.linalg.norm(coords - center[None, :], axis=1) <= radius
-        background_mask &= ~roi
-        truth_mean = float(np.mean(truth[roi]))
-        recon_mean = float(np.mean(recon[roi]))
-        bg_mean = float(np.mean(recon[background_mask])) if np.any(background_mask) else BACKGROUND_CONDUCTIVITY
-        denom = truth_mean - BACKGROUND_CONDUCTIVITY
-        metrics[f"contrast_recovery_{item['label']}"] = 0.0 if abs(denom) <= 1e-12 else float((recon_mean - bg_mean) / denom)
-        metrics[f"roi_mean_{item['label']}"] = recon_mean
-    background_mean = float(np.mean(recon[background_mask])) if np.any(background_mask) else BACKGROUND_CONDUCTIVITY
-    metrics["background_bias"] = float(background_mean - BACKGROUND_CONDUCTIVITY)
-    return metrics
-
-
-def _consistency_metrics(
-    *,
-    dim: int,
-    baseline_cpu_meas: np.ndarray,
-    baseline_gpu_meas: np.ndarray,
-    target_cpu_meas: np.ndarray,
-    target_gpu_meas: np.ndarray,
-    cpu_recon: np.ndarray,
-    gpu_recon: np.ndarray,
-) -> dict[str, Any]:
-    baseline_rel = _relative_l2(baseline_cpu_meas, baseline_gpu_meas)
-    target_rel = _relative_l2(target_cpu_meas, target_gpu_meas)
-    image_rel = _relative_l2(cpu_recon, gpu_recon)
-    image_rmse = _rmse(cpu_recon, gpu_recon)
-    baseline_pass = bool(baseline_rel <= _MEASUREMENT_REL_TOL)
-    target_pass = bool(target_rel <= _MEASUREMENT_REL_TOL)
-    measurement_pass = bool(baseline_pass and target_pass)
-    image_pass = bool(image_rel <= _IMAGE_REL_TOL and image_rmse <= _IMAGE_RMSE_TOL[int(dim)])
-    return {
-        "baseline_measurement_relative_l2": baseline_rel,
-        "target_measurement_relative_l2": target_rel,
-        "image_relative_l2": image_rel,
-        "image_rmse": image_rmse,
-        "image_pearson": _safe_pearson(cpu_recon, gpu_recon),
-        "image_max_abs_diff": float(np.max(np.abs(np.asarray(cpu_recon) - np.asarray(gpu_recon)))),
-        "measurement_threshold": _MEASUREMENT_REL_TOL,
-        "image_relative_l2_threshold": _IMAGE_REL_TOL,
-        "image_rmse_threshold": _IMAGE_RMSE_TOL[int(dim)],
-        "baseline_measurement_pass": baseline_pass,
-        "target_measurement_pass": target_pass,
-        "measurement_pass": measurement_pass,
-        "image_pass": image_pass,
-        "passed": bool(measurement_pass and image_pass),
-    }
-
-
-def _save_case_data(path: Path, payload: dict[str, Any]) -> None:
-    arrays = {k: v for k, v in payload.items() if isinstance(v, np.ndarray)}
-    scalars = {k: v for k, v in payload.items() if not isinstance(v, np.ndarray)}
-    np.savez_compressed(path, **arrays, meta=np.array(json.dumps(_jsonable(scalars)), dtype=object))
 
 
 def _summary_case(case: dict[str, Any], *, data_path: Path, output_dir: Path) -> dict[str, Any]:
@@ -401,12 +335,14 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
         recon=np.asarray(cpu_recon.conductivity, dtype=np.float64),
         coords=coords,
         anomalies=anomalies,
+        background_conductivity=BACKGROUND_CONDUCTIVITY,
     )
     gpu_truth_metrics = _truth_metrics(
         truth=truth_values,
         recon=np.asarray(gpu_recon.conductivity, dtype=np.float64),
         coords=coords,
         anomalies=anomalies,
+        background_conductivity=BACKGROUND_CONDUCTIVITY,
     )
     consistency = _consistency_metrics(
         dim=2,
@@ -462,7 +398,12 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
     }
 
 
-def _backend_settings(*, dim: int, backend_key: str) -> dict[str, str]:
+def _backend_settings(
+    *,
+    dim: int,
+    backend_key: str,
+    gpu_acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
+) -> dict[str, str]:
     if int(dim) == 2:
         if backend_key == "cpu":
             return {"label": "2D CPU", "forward_backend": "dolfinx", "device": "cpu", "petsc_device": "cpu"}
@@ -477,6 +418,7 @@ def _backend_settings(*, dim: int, backend_key: str) -> dict[str, str]:
                 "forward_backend": "cuda_structured",
                 "device": "cuda",
                 "petsc_device": "cuda",
+                "acceleration_profile": str(gpu_acceleration_profile),
             }
     raise ValueError(f"unsupported backend {backend_key!r} for dim={dim}")
 
@@ -489,9 +431,15 @@ def _build_mesh(*, dim: int, args: argparse.Namespace, output_dir: Path):
             mesh_size=float(args.mesh_size_2d),
             output_dir=str(output_dir / "runtime" / "meshes_2d"),
         )
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=args.gpu_acceleration_profile,
+    )
     return load_or_create_mesh(
         mesh_dir=str(output_dir / "runtime" / "meshes_3d"),
-        mesh_name=f"gallery_real_ref{int(args.refinement_3d)}_cfhex_geomv2_g3d3",
+        mesh_name=(
+            f"gallery_real_ref{int(args.refinement_3d)}"
+            f"_cf{mesh_family}_{geometry_version}_{generator_revision}"
+        ),
         n_elec=int(args.n_elec),
         dimension=3,
         radius=float(args.radius_3d),
@@ -500,9 +448,9 @@ def _build_mesh(*, dim: int, args: argparse.Namespace, output_dir: Path):
         electrode_height_ratio=float(args.electrode_height_ratio),
         z_center=0.0,
         electrode_coverage=float(args.electrode_coverage),
-        mesh_family="hex",
-        geometry_version="geomv2",
-        generator_revision="g3d3",
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
     )
 
 
@@ -514,7 +462,11 @@ def _build_system(
     cache_dir: Path,
     backend_key: str,
 ) -> EITSystem:
-    settings = _backend_settings(dim=dim, backend_key=backend_key)
+    settings = _backend_settings(
+        dim=dim,
+        backend_key=backend_key,
+        gpu_acceleration_profile=str(args.gpu_acceleration_profile),
+    )
     pattern = PatternConfig(
         n_elec=int(args.n_elec),
         stim_pattern="{ad}",
@@ -539,15 +491,21 @@ def _build_system(
         "jacobian_reuse_tol": 0.0,
         "petsc_device": settings["petsc_device"],
         "device": settings["device"],
+        "acceleration_profile": str(
+            settings.get("acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
+        ),
         "linear_backend_config": {"petsc_device": settings["petsc_device"]},
     }
     if int(dim) == 3:
+        mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+            acceleration_profile=settings.get("acceleration_profile", DEFAULT_ACCELERATION_PROFILE),
+        )
         kwargs.update(
             {
                 "forward_backend": settings["forward_backend"],
-                "mesh_family": "hex",
-                "geometry_version": "geomv2",
-                "generator_revision": "g3d3",
+                "mesh_family": mesh_family,
+                "geometry_version": geometry_version,
+                "generator_revision": generator_revision,
             }
         )
     system = EITSystem(**kwargs)
@@ -568,7 +526,11 @@ def _run_backend_case(
     backend_key: str,
     cache_root: Path,
 ) -> dict[str, Any]:
-    settings = _backend_settings(dim=dim, backend_key=backend_key)
+    settings = _backend_settings(
+        dim=dim,
+        backend_key=backend_key,
+        gpu_acceleration_profile=str(args.gpu_acceleration_profile),
+    )
     measure_cache = cache_root / backend_key / "measure"
     inverse_cache = cache_root / backend_key / "inverse"
     measure_cache.mkdir(parents=True, exist_ok=True)
@@ -601,6 +563,7 @@ def _run_backend_case(
         recon=recon_values,
         coords=coords,
         anomalies=anomalies,
+        background_conductivity=BACKGROUND_CONDUCTIVITY,
     )
     return {
         "label": settings["label"],

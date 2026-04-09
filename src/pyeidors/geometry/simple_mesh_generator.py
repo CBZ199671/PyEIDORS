@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 from math import pi
-from pathlib import Path
 from typing import Optional
 
 from .optimized_mesh_generator import create_eit_mesh

@@ -9,11 +9,11 @@ from the inverse problem workflow.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Iterator, Mapping, Optional, Sequence, Union
+from typing import Any, Iterator, Mapping, Sequence
 
 import numpy as np
 
-from .structures import PatternConfig, EITData
+from .structures import EITData, PatternConfig
 from ..electrodes.patterns import StimMeasPatternManager
 
 
@@ -70,7 +70,7 @@ class MeasurementDataset:
     @classmethod
     def from_metadata(
         cls,
-        measurements: Union[np.ndarray, Sequence[Sequence[float]]],
+        measurements: np.ndarray | Sequence[Sequence[float]],
         metadata: Mapping[str, Any],
         data_type: str = "real",
     ) -> "MeasurementDataset":
@@ -120,7 +120,7 @@ class MeasurementDataset:
     def to_eit_data(
         self,
         frame_index: int = 0,
-        data_type: Optional[str] = None,
+        data_type: str | None = None,
         copy_policy: str = "view",
     ) -> EITData:
         """Convert specified frame to ``EITData`` object.
@@ -151,7 +151,7 @@ class MeasurementDataset:
 
     def iter_frames(
         self,
-        data_type: Optional[str] = None,
+        data_type: str | None = None,
         copy_policy: str = "view",
     ) -> Iterator[EITData]:
         """Generate ``EITData`` objects frame by frame."""
@@ -165,7 +165,7 @@ class MeasurementDataset:
 
     def replace_measurements(
         self,
-        measurements: Union[np.ndarray, Sequence[Sequence[float]]],
+        measurements: np.ndarray | Sequence[Sequence[float]],
     ) -> None:
         """Replace measurement matrix while preserving shape and read-only contract."""
         normalized = self._normalize_measurements(measurements)
@@ -176,7 +176,7 @@ class MeasurementDataset:
             )
         self.measurements = self._as_read_only(normalized)
 
-    def summary(self) -> Dict[str, Any]:
+    def summary(self) -> dict[str, Any]:
         """Return summary of measurement configuration and data dimensions."""
 
         return {
@@ -191,7 +191,7 @@ class MeasurementDataset:
     # ---------------------------- Internal Utilities ----------------------------
     @staticmethod
     def _normalize_measurements(
-        measurements: Union[np.ndarray, Sequence[Sequence[float]]]
+        measurements: np.ndarray | Sequence[Sequence[float]],
     ) -> np.ndarray:
         array = np.asarray(measurements, dtype=float)
         if array.ndim == 1:

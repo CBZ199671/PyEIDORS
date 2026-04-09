@@ -12,7 +12,7 @@ import locale
 import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any
 
 import matplotlib.pyplot as plt
 from matplotlib import font_manager
@@ -38,7 +38,7 @@ _ZH_FONT_CANDIDATES = [
     "WenQuanYi Zen Hei",
 ]
 
-_PLOT_TEXTS: Dict[str, Dict[str, str]] = {
+_PLOT_TEXTS: dict[str, dict[str, str]] = {
     "en": {
         "mesh_title": "Mesh Structure",
         "axis_x": "X",
@@ -119,7 +119,7 @@ def _auto_language() -> str:
     return "en"
 
 
-def resolve_plot_language(language: Optional[str] = None) -> str:
+def resolve_plot_language(language: str | None = None) -> str:
     """Resolve plotting language from arg/env/default.
 
     Priority: explicit arg > PYEIDORS_PLOT_LANG > default('en').
@@ -169,7 +169,7 @@ def _apply_matplotlib_fonts(selected_fonts: list[str]) -> None:
     plt.rcParams["axes.unicode_minus"] = False
 
 
-def configure_plot_fonts(language: Optional[str] = None) -> PlotFontConfigResult:
+def configure_plot_fonts(language: str | None = None) -> PlotFontConfigResult:
     """Configure matplotlib fonts for plotting language.
 
     Chinese mode prefers Chinese-capable fonts; if unavailable it falls back to
@@ -210,7 +210,7 @@ def configure_plot_fonts(language: Optional[str] = None) -> PlotFontConfigResult
     )
 
 
-def get_plot_texts(language: str) -> Dict[str, str]:
+def get_plot_texts(language: str) -> dict[str, str]:
     """Get plotting text dictionary for resolved language."""
     return _PLOT_TEXTS.get(language, _PLOT_TEXTS["en"])
 

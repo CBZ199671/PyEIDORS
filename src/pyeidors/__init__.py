@@ -5,8 +5,6 @@ A modular EIT system based on DOLFINx, PyTorch, and CUQIpy.
 
 from __future__ import annotations
 
-from typing import Any
-
 from .utils.cuqi_imports import suppress_known_cuqi_import_warnings
 
 __version__ = "1.0.0"
@@ -40,10 +38,9 @@ except ImportError:
     _CUQI_AVAILABLE = False
 
 # Environment info
-def check_environment():
+def check_environment() -> dict[str, object]:
     """Check runtime environment and available dependencies."""
-
-    info = {
+    info: dict[str, object] = {
         "dolfinx_available": _DOLFINX_AVAILABLE,
         "torch_available": _TORCH_AVAILABLE,
         "cuda_available": _CUDA_AVAILABLE,
@@ -58,24 +55,23 @@ def check_environment():
 
 
 def _runtime_import_error(exc: ImportError) -> ImportError:
-    detail = str(exc).strip()
-    suffix = f" Original import error: {detail}" if detail else ""
-    return ImportError(
+    msg = (
         "EITSystem requires the supported FEniCSx/DOLFINx runtime. "
         "Run `nix develop` to enter the supported environment, then retry. "
         "For setup details see docs/NIX_FENICSX.md."
-        + suffix
     )
+    detail = str(exc).strip()
+    if detail:
+        msg = f"{msg} Original import error: {detail}"
+    return ImportError(msg)
 
 
-def __getattr__(name: str) -> Any:
+def __getattr__(name: str) -> object:
     if name != "EITSystem":
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
     try:
         from .core_system import EITSystem as _EITSystem
-    except ModuleNotFoundError as exc:
-        raise _runtime_import_error(exc) from exc
     except ImportError as exc:
         raise _runtime_import_error(exc) from exc
     return _EITSystem

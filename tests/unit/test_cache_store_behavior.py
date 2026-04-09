@@ -103,6 +103,8 @@ def test_disk_store_ttl_invalidate_and_corruption_recovery(tmp_path: Path):
     # Expired entries are removed and treated as misses.
     assert store.get("k1") is None
 
+    # Disable TTL for the remaining assertions so this test is not wall-clock flaky.
+    store.default_ttl_seconds = None
     assert store.put("prefix_a", {"v": "a"}, artifact="jacobian", cost=1.0)
     assert store.put("prefix_b", {"v": "b"}, artifact="jacobian", cost=1.0)
     assert store.put("other_c", {"v": "c"}, artifact="jacobian", cost=1.0)

@@ -15,18 +15,17 @@ Run:
 
 from __future__ import annotations
 
-import math
 import sys
 from pathlib import Path
-from typing import Dict
 
 import numpy as np
 import matplotlib.pyplot as plt
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
-if str(SRC_PATH) not in sys.path:
-    sys.path.insert(0, str(SRC_PATH))
+for candidate in (str(REPO_ROOT), str(SRC_PATH)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 from dolfinx import fem
 
@@ -38,30 +37,7 @@ from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
-
-
-def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
-    """Interpolate cell values to nodes by averaging, for plotting convenience."""
-    node_values = np.zeros(mesh.num_vertices())
-    node_counts = np.zeros(mesh.num_vertices())
-    for cell_idx, cell in enumerate(mesh.cells()):
-        for v_idx in cell:
-            node_values[v_idx] += cell_values[cell_idx]
-            node_counts[v_idx] += 1
-    node_counts[node_counts == 0] = 1
-    node_values /= node_counts
-    return node_values
-
-
-def make_random_anomaly(rng: np.random.Generator) -> Dict:
-    radius = float(rng.uniform(0.08, 0.18))
-    angle = float(rng.uniform(0, 2 * math.pi))
-    dist = float(rng.uniform(0.0, 0.5))
-    center = (dist * math.cos(angle), dist * math.sin(angle))
-    contrast = float(rng.uniform(1.5, 3.0))
-    if rng.random() < 0.35:  # 35% chance for low conductivity
-        contrast = float(rng.uniform(0.2, 0.8))
-    return {"center": center, "radius": radius, "conductivity": contrast}
+from scripts.demos._shared import cell_to_node, make_random_anomaly, save_voltage_comparison_figure
 
 
 def main() -> None:
@@ -155,32 +131,12 @@ def main() -> None:
     fig_cmp.savefig(out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cmp)
 
-    fig_v = plt.figure(figsize=(10, 4))
-    ax1 = fig_v.add_subplot(1, 2, 1)
-    ax1.scatter(data_true.meas, data_est.meas, s=14, alpha=0.7, label="Predicted vs Ground Truth")
-    vmin = min(data_true.meas.min(), data_est.meas.min())
-    vmax = max(data_true.meas.max(), data_est.meas.max())
-    ax1.plot([vmin, vmax], [vmin, vmax], "r--", label="y = x")
-    ax1.set_title("Boundary Voltage Scatter")
-    ax1.set_xlabel("Ground Truth")
-    ax1.set_ylabel("Predicted")
-    ax1.legend()
-    ax1.grid(alpha=0.3)
-
-    ax2 = fig_v.add_subplot(1, 2, 2)
-    idx = np.arange(len(data_true.meas))
-    ax2.plot(idx, data_true.meas, "b-", lw=1.2, label="Ground Truth")
-    ax2.plot(idx, data_est.meas, "r--", lw=1.2, label="Predicted")
-    ax2.set_title("Boundary Voltage Sequence")
-    ax2.set_xlabel("Measurement Index")
-    ax2.set_ylabel("Voltage")
-    ax2.legend()
-    ax2.grid(alpha=0.3)
-
-    fig_v.suptitle("Single-Step Difference: Target/Predicted Boundary Voltage Comparison", fontsize=13, fontweight="bold")
-    fig_v.tight_layout()
-    fig_v.savefig(out_dir / "voltage_comparison.png", dpi=300, bbox_inches="tight")
-    plt.close(fig_v)
+    save_voltage_comparison_figure(
+        output_path=out_dir / "voltage_comparison.png",
+        measured=data_true.meas,
+        predicted=data_est.meas,
+        suptitle="Single-Step Difference: Target/Predicted Boundary Voltage Comparison",
+    )
 
     # Save data
     np.savez(

@@ -137,6 +137,28 @@ def test_mesh_generator_generate_with_fake_gmsh(tmp_path, monkeypatch):
     assert fake_gmsh.written_files
 
 
+def test_mesh_generator_generate_uses_defaults_without_saving(monkeypatch, tmp_path):
+    fake_gmsh = _FakeGmsh()
+    fake_mesh_data = _make_fake_mesh_data()
+    monkeypatch.setattr(mesh_gen_module, "gmsh", fake_gmsh)
+    monkeypatch.setattr(mesh_gen_module.tempfile, "mkdtemp", lambda: str(tmp_path))
+    monkeypatch.setattr(mesh_gen_module.time, "time", lambda: 123.456789)
+    monkeypatch.setattr(
+        mesh_gen_module.gmshio,
+        "model_to_mesh",
+        lambda model, comm, rank, gdim: fake_mesh_data,
+    )
+
+    config = MeshConfig(radius=1.0, refinement=6, electrode_vertices=4, gap_vertices=1, mesh_size=0.15)
+    electrode_positions = ElectrodePosition.create_circular(n_elec=8)
+    generator = mesh_gen_module.MeshGenerator(config=config, electrodes=electrode_positions)
+
+    mesh = generator.generate(output_dir=None, return_metadata=False, save_msh=False, mesh_name=None)
+    assert mesh.num_cells() > 0
+    assert mesh.mesh_file is None
+    assert fake_gmsh.written_files == []
+
+
 def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
     clear_process_mesh_cache()
     fake_gmsh = _FakeGmsh()
@@ -216,6 +238,50 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
     )
     assert read_calls["count"] == 1
     assert mesh_first is mesh_second
+
+
+def test_mesh_loader_sidecar_overrides_cached_metadata(tmp_path: Path, monkeypatch):
+    clear_process_mesh_cache()
+    mesh_name = "loader_sidecar"
+    msh_file = tmp_path / f"{mesh_name}.msh"
+    msh_file.write_text("fake-msh", encoding="utf-8")
+    sidecar_path = mesh_loader_module.structured_sidecar_path_for_mesh(msh_file)
+    sidecar_path.write_text("{}", encoding="utf-8")
+
+    monkeypatch.setattr(
+        mesh_loader_module.gmshio,
+        "read_from_msh",
+        lambda *_args, **_kwargs: _make_fake_mesh_data(),
+    )
+    monkeypatch.setattr(mesh_loader_module, "load_structured_sidecar", lambda _path: {"geometry_version": "geomv9", "generator_revision": "g9"})
+    monkeypatch.setattr(mesh_loader_module, "estimate_radius", lambda _mesh: 0.5)
+    monkeypatch.setattr(mesh_loader_module, "infer_mesh_family_from_mesh", lambda _mesh: "tetra")
+
+    def _build_mesh(*args, **kwargs):
+        return SimpleNamespace(
+            mesh=args[0],
+            facet_tags=kwargs["facet_tags"],
+            cell_tags=kwargs["cell_tags"],
+            association_table=kwargs["association_table"],
+            physical_groups=kwargs["physical_groups"],
+            radius=kwargs["radius"],
+            mesh_file=kwargs["mesh_file"],
+            geometry_version=kwargs["geometry_version"],
+            generator_revision=kwargs["generator_revision"],
+            structured_sidecar_file=kwargs["structured_sidecar_file"],
+            structured_sidecar_version=kwargs["structured_sidecar_version"],
+            mesh_family=None,
+            num_vertices=lambda: 4,
+            num_cells=lambda: 2,
+        )
+
+    monkeypatch.setattr(mesh_loader_module, "build_eit_mesh", _build_mesh)
+
+    loader = mesh_loader_module.MeshLoader(mesh_dir=str(tmp_path), gdim=2)
+    loaded = loader.load_mesh(mesh_name)
+    assert loaded.geometry_version == "geomv9"
+    assert loaded.generator_revision == "g9"
+    assert loaded.structured_sidecar_file == str(sidecar_path)
 
 
 def test_build_cache_name_3d_includes_generator_revision():

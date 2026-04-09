@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any
 
 import numpy as np
 import ufl
@@ -71,11 +71,11 @@ def plot_electrodes(ax, electrode_vertices):
         ax.legend()
 
 
-def is_eidors_diff(colormap: Union[str, Any]) -> bool:
+def is_eidors_diff(colormap: str | Any) -> bool:
     return isinstance(colormap, str) and colormap.lower() in {"eidors_diff", "eidors-diff"}
 
 
-def resolve_colormap(colormap: Union[str, Any]) -> Any:
+def resolve_colormap(colormap: str | Any) -> Any:
     if isinstance(colormap, str) and colormap.lower() in {"eidors_diff", "eidors-diff"}:
         return LinearSegmentedColormap.from_list(
             "eidors_diff",
@@ -86,12 +86,14 @@ def resolve_colormap(colormap: Union[str, Any]) -> Any:
 
 def resolve_eidors_diff_limits(
     values: np.ndarray,
-    vmin: Optional[float],
-    vmax: Optional[float],
+    vmin: float | None,
+    vmax: float | None,
 ):
     if vmin is None and vmax is None:
         max_abs = float(np.nanmax(np.abs(values)))
-        return (-max_abs if max_abs != 0.0 else -1e-12, max_abs if max_abs != 0.0 else 1e-12)
+        if max_abs == 0.0:
+            max_abs = 1e-12
+        return -max_abs, max_abs
     if vmin is None and vmax is not None:
         return -abs(vmax), vmax
     if vmax is None and vmin is not None:
@@ -102,7 +104,7 @@ def resolve_eidors_diff_limits(
 def eidors_tick_vals(
     max_scale: float,
     ref_lev: float,
-    tick_div_in: Optional[int] = None,
+    tick_div_in: int | None = None,
 ) -> np.ndarray:
     if max_scale <= 0:
         return np.array([ref_lev], dtype=float)
@@ -136,10 +138,10 @@ def eidors_tick_vals(
 
 def apply_eidors_ticks(
     cbar: Any,
-    vmin: Optional[float],
-    vmax: Optional[float],
+    vmin: float | None,
+    vmax: float | None,
     ref_lev: float = 0.0,
-    tick_div: Optional[int] = None,
+    tick_div: int | None = None,
 ) -> None:
     if vmin is None or vmax is None:
         return
@@ -194,9 +196,9 @@ def format_colorbar(cbar: Any, format_mode: str) -> None:
     cbar.update_ticks()
 
 
-def extract_electrode_tags(mesh) -> List[int]:
+def extract_electrode_tags(mesh) -> list[int]:
     assoc = getattr(mesh, "association_table", {}) or {}
-    tags: List[int] = []
+    tags: list[int] = []
     for key, value in assoc.items():
         try:
             tag_val = int(value)
@@ -222,7 +224,7 @@ def overlay_electrode_labels(ax, mesh, label_outset: float = 0.08):
     if facet_tags is None:
         raise RuntimeError("Mesh has no facet tags")
 
-    tag_points: Dict[int, List[np.ndarray]] = {tag: [] for tag in tags}
+    tag_points: dict[int, list[np.ndarray]] = {tag: [] for tag in tags}
     mesh_obj = raw_mesh(mesh)
     tdim = mesh_obj.topology.dim
     fdim = tdim - 1

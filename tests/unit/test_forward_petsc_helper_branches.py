@@ -177,6 +177,9 @@ def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(monkeypatch: pytes
     model.mesh = SimpleNamespace(comm=SimpleNamespace(Get_size=lambda: 4))
     assert EITForwardModel._stable_cpu_petsc_types(model) == ("MATMPIAIJ", "VECMPI")
 
+    model.mesh = SimpleNamespace(comm=SimpleNamespace(size=3))
+    assert EITForwardModel._stable_cpu_petsc_types(model) == ("MATMPIAIJ", "VECMPI")
+
     model.mesh = SimpleNamespace(comm=_ExplodingComm())
     monkeypatch.setattr(
         forward_module,
@@ -198,6 +201,11 @@ def test_resolve_petsc_backend_info_handles_non_petsc_missing_probe_and_capabili
     monkeypatch.setattr(forward_module, "PETSc", None)
     info = EITForwardModel._resolve_petsc_backend_info(model)
     assert info["gpu_fallback_reason"] == "petsc_unavailable"
+
+    cuda_missing = _make_model()
+    cuda_missing.backend_config = SimpleNamespace(petsc_device="cuda")
+    with pytest.raises(RuntimeError, match="petsc4py/PETSc support"):
+        EITForwardModel._resolve_petsc_backend_info(cuda_missing)
 
     monkeypatch.setattr(forward_module, "PETSc", object())
     monkeypatch.delattr(perf_caps, "probe_petsc_cuda_runtime", raising=False)
@@ -280,6 +288,29 @@ def test_requested_petsc_type_helpers_use_explicit_and_namespace_fallbacks(monke
     assert EITForwardModel._get_requested_dense_mat_type(model) == "dense-explicit"
     assert EITForwardModel._get_requested_petsc_vec_type(model) == "vec-explicit"
 
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(Mat=SimpleNamespace(Type=SimpleNamespace()), Vec=SimpleNamespace(Type=SimpleNamespace())),
+    )
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    assert EITForwardModel._get_cuda_type(model, "petsc_mat_type", "Mat", "AIJCUSPARSE") is None
+
+
+def test_gpu_gauge_fix_flag_and_csr_to_petsc_helpers_cover_cpu_and_unavailable_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = _make_model()
+    model._petsc_backend_info = {"petsc_device_effective": "cpu"}
+    assert EITForwardModel._gpu_gauge_fix_enabled(model) is False
+
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    assert EITForwardModel._gpu_gauge_fix_enabled(model) is True
+
+    monkeypatch.setattr(forward_module, "PETSc", None)
+    with pytest.raises(RuntimeError, match="petsc4py is not available"):
+        EITForwardModel._csr_to_petsc(sparse.identity(2, format="csr"))
+
 
 def test_ensure_mat_and_vec_type_cover_convert_settype_and_passthrough(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(forward_module, "PETSc", object())
@@ -359,6 +390,12 @@ def test_structural_diagonal_and_cuda_gauge_fix_helpers(monkeypatch: pytest.Monk
 
     EITForwardModel._ensure_structural_diagonal(model, _StructuralMat(fail_get_size=True))
 
+    monkeypatch.setattr(forward_module, "PETSc", None)
+    mat_passthrough = _FakeMat("aijcusparse")
+    EITForwardModel._ensure_structural_diagonal(model, mat_passthrough)
+    assert EITForwardModel._apply_cuda_gauge_fix_matrix(model, mat_passthrough) is mat_passthrough
+
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETScDense)
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
     captured = {}
     base = sparse.lil_matrix((5, 5), dtype=float)
@@ -391,6 +428,19 @@ def test_structural_diagonal_and_cuda_gauge_fix_helpers(monkeypatch: pytest.Monk
     monkeypatch.setattr(model, "_petsc_to_csr", lambda _mat: (_ for _ in ()).throw(RuntimeError("bad csr")))
     original2 = _FakeMat("aijcusparse")
     assert EITForwardModel._apply_cuda_gauge_fix_matrix(model, original2) is original2
+
+    class _ExplodingDestroyMat(_FakeMat):
+        def destroy(self):
+            self.destroyed = True
+            raise RuntimeError("destroy failed")
+
+    monkeypatch.setattr(model, "_petsc_to_csr", lambda _mat: base.copy())
+    exploding = _ExplodingDestroyMat("aijcusparse")
+    fixed_again = _FakeMat("aijcusparse")
+    monkeypatch.setattr(model, "_csr_to_petsc", lambda _csr: fixed_again)
+    out = EITForwardModel._apply_cuda_gauge_fix_matrix(model, exploding)
+    assert out is fixed_again
+    assert exploding.destroyed is True
 
 
 def test_cuda_rhs_and_solution_recentering_respect_gpu_enablement():
@@ -442,3 +492,16 @@ def test_make_petsc_dense_solver_bundle_validates_dense_type_and_builds_solver(m
     assert bundle["ksp"].tolerances == {"rtol": 1e-10, "atol": 1e-12, "max_it": 200}
     assert bundle["ksp"].reuse is True
     assert bundle["ksp"].did_setup is True
+
+    class _ReuseFailKSP(_FakeKSPInstance):
+        def setReusePreconditioner(self, enabled):
+            _ = enabled
+            raise RuntimeError("reuse failed")
+
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(KSP=lambda: _ReuseFailKSP()),
+    )
+    bundle_reuse_fail = EITForwardModel._make_petsc_dense_solver_bundle(model, _FakeMat("aij"))
+    assert bundle_reuse_fail["ksp"].did_setup is True

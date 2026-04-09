@@ -3,15 +3,15 @@
 from __future__ import annotations
 
 import logging
-from configparser import ConfigParser
 from pathlib import Path
 from typing import Dict, Tuple
 
-from mpi4py import MPI
 from dolfinx.io import gmsh as gmshio
+from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh
+from ._helpers import association_from_mesh_data, write_association_table
 
 logger = logging.getLogger(__name__)
 
@@ -35,9 +35,7 @@ class MeshConverter:
             gdim=self.gdim,
         )
 
-        association_table: Dict[str, int] = {
-            name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
-        }
+        association_table = association_from_mesh_data(mesh_data)
         self._write_association_table(association_table)
 
         mesh = build_eit_mesh(
@@ -51,10 +49,6 @@ class MeshConverter:
         return mesh, mesh_data.facet_tags, association_table
 
     def _write_association_table(self, association_table: Dict[str, int]) -> None:
-        self.output_dir.mkdir(parents=True, exist_ok=True)
-        config = ConfigParser()
-        config["ASSOCIATION TABLE"] = {k: str(v) for k, v in association_table.items()}
         file_path = self.output_dir / f"{self.prefix}_association_table.ini"
-        with file_path.open("w", encoding="utf-8") as f:
-            config.write(f)
+        write_association_table(file_path, association_table)
         logger.debug("Association table saved: %s", file_path)

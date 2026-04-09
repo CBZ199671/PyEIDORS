@@ -13,11 +13,13 @@ def _rank_from_energy(singular_values: np.ndarray, energy: float, max_rank: int)
         return 0
     target = min(max(float(energy), 0.0), 1.0) * total
     accum = 0.0
+    chosen = int(min(max_rank, singular_values.size))
     for idx, s_val in enumerate(singular_values, start=1):
         accum += float(s_val * s_val)
-        if accum >= target:
-            return int(min(idx, max_rank))
-    return int(max_rank)
+        if accum >= target or idx == singular_values.size:
+            chosen = int(min(idx, max_rank))
+            break
+    return chosen
 
 
 def _randomized_right_svd(jacobian: np.ndarray, q_rank: int) -> tuple[np.ndarray, np.ndarray]:

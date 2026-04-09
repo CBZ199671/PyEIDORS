@@ -2,14 +2,12 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
-from scipy.sparse import csr_matrix, diags
 from dolfinx import fem
+from scipy.sparse import csr_matrix, diags
 
-from .base_regularization import BaseRegularization
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
+from .base_regularization import BaseRegularization
 
 
 class SmoothnessRegularization(BaseRegularization):
@@ -23,8 +21,7 @@ class SmoothnessRegularization(BaseRegularization):
         L = _cell_difference_operator(self.mesh, self.n_elements)
         if L.shape[0] == 0:
             return csr_matrix(self.alpha * np.eye(self.n_elements))
-        regularization_matrix = (self.alpha * (L.T @ L)).tocsr()
-        return regularization_matrix
+        return (self.alpha * (L.T @ L)).tocsr()
 
 
 class TikhonovRegularization(BaseRegularization):
@@ -106,7 +103,7 @@ class NOSERRegularization(BaseRegularization):
         self.adaptive_floor = adaptive_floor
         self.floor_fraction = floor_fraction
         self._jacobian_calculator = jacobian_calculator
-        self._baseline_diag: Optional[np.ndarray] = None
+        self._baseline_diag: np.ndarray | None = None
 
     def _compute_baseline_diag(self) -> np.ndarray:
         sigma_fn = fem.Function(self.fwd_model.V_sigma)

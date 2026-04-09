@@ -45,18 +45,21 @@ def normalize_difference_orientation(
 
 
 def _as_measurement_vector(values, *, name: str) -> np.ndarray:
-    array = np.asarray(values, dtype=np.float64).reshape(-1)
-    if array.ndim != 1:
-        raise ValueError(f"{name} must be a 1D measurement vector.")
-    return array
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim > 2:
+        raise ValueError(f"{name} must be a 1D or 2D measurement vector, got {array.ndim}D.")
+    return array.reshape(-1)
 
 
 def _safe_reference(reference_meas: np.ndarray, *, floor: float | None = None) -> np.ndarray:
+    """Clamp near-zero reference values to ``+/-eps``, preserving sign."""
     safe = np.asarray(reference_meas, dtype=np.float64).copy()
     eps = np.finfo(np.float64).eps if floor is None else float(max(floor, np.finfo(np.float64).eps))
     small = np.abs(safe) < eps
-    safe[small] = np.where(small, np.sign(safe), safe)[small]
-    safe[np.abs(safe) < eps] = eps
+    # Preserve sign for tiny nonzero values; default to +eps for exact zeros
+    signs = np.sign(safe[small])
+    signs[signs == 0] = 1.0
+    safe[small] = signs * eps
     return safe
 
 

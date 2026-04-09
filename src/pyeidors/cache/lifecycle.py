@@ -47,9 +47,8 @@ def _ensure_atexit_cleanup() -> None:
 
 def _parse_session_pid(name: str) -> int | None:
     for prefix in (SHELL_SESSION_PREFIX, PROCESS_SESSION_PREFIX):
-        if str(name).startswith(prefix):
-            remainder = str(name)[len(prefix) :]
-            pid_text = remainder.split("-", 1)[0].strip()
+        if name.startswith(prefix):
+            pid_text = name[len(prefix):].split("-", 1)[0].strip()
             if not pid_text:
                 return None
             try:
@@ -60,10 +59,10 @@ def _parse_session_pid(name: str) -> int | None:
 
 
 def _pid_is_alive(pid: int) -> bool:
-    if int(pid) <= 0:
+    if pid <= 0:
         return False
     try:
-        os.kill(int(pid), 0)
+        os.kill(pid, 0)
     except ProcessLookupError:
         return False
     except PermissionError:
@@ -74,12 +73,12 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 def _shell_session_env() -> tuple[str, Path | None, Path | None, int | None] | None:
-    session_id = str(os.environ.get("PYEIDORS_CACHE_SESSION_ID", "")).strip()
+    session_id = os.environ.get("PYEIDORS_CACHE_SESSION_ID", "").strip()
     if not session_id:
         return None
-    session_dir_raw = str(os.environ.get("PYEIDORS_CACHE_SESSION_DIR", "")).strip()
-    requested_root_raw = str(os.environ.get("PYEIDORS_CACHE_REQUESTED_ROOT", "")).strip()
-    owner_pid_raw = str(os.environ.get("PYEIDORS_CACHE_OWNER_PID", "")).strip()
+    session_dir_raw = os.environ.get("PYEIDORS_CACHE_SESSION_DIR", "").strip()
+    requested_root_raw = os.environ.get("PYEIDORS_CACHE_REQUESTED_ROOT", "").strip()
+    owner_pid_raw = os.environ.get("PYEIDORS_CACHE_OWNER_PID", "").strip()
     session_dir = Path(session_dir_raw) if session_dir_raw else None
     requested_root = Path(requested_root_raw) if requested_root_raw else None
     owner_pid = None
@@ -127,7 +126,7 @@ def cleanup_stale_session_caches(
     max_age_seconds: float = DEFAULT_STALE_SESSION_MAX_AGE_SECONDS,
 ) -> int:
     requested_dir = Path(cache_root)
-    session_root = requested_dir / str(session_root_name)
+    session_root = requested_dir / session_root_name
     if not session_root.exists():
         return 0
 
@@ -164,11 +163,11 @@ def resolve_cache_directory(
     session_root_name: str = SESSION_ROOT_NAME,
 ) -> CacheDirectorySpec:
     requested_dir = Path(cache_root)
-    if str(lifecycle) != "session":
+    if lifecycle != "session":
         return CacheDirectorySpec(
             requested_dir=requested_dir,
             effective_dir=requested_dir,
-            lifecycle=str(lifecycle),
+            lifecycle=lifecycle,
         )
 
     key = str(requested_dir.resolve())
@@ -189,7 +188,7 @@ def resolve_cache_directory(
     shell_managed = shell_session is not None
     if shell_session is not None:
         session_id, default_session_dir, shell_requested_root, _owner_pid = shell_session
-        session_root = requested_dir / str(session_root_name)
+        session_root = requested_dir / session_root_name
         session_root.mkdir(parents=True, exist_ok=True)
         if (
             default_session_dir is not None
@@ -215,7 +214,7 @@ def resolve_cache_directory(
             shell_managed=True,
         )
     else:
-        session_root = requested_dir / str(session_root_name)
+        session_root = requested_dir / session_root_name
         session_root.mkdir(parents=True, exist_ok=True)
         effective_dir = session_root / _PROCESS_SESSION_ID
         effective_dir.mkdir(parents=True, exist_ok=True)

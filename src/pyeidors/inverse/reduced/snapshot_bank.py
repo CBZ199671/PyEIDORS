@@ -33,8 +33,6 @@ class SnapshotBank:
             return np.zeros((0, 0), dtype=np.float64)
         dim = int(self._snapshots[-1].shape[0])
         cols = [v for v in self._snapshots if int(v.shape[0]) == dim]
-        if not cols:
-            return np.zeros((0, 0), dtype=np.float64)
         return np.ascontiguousarray(np.column_stack(cols), dtype=np.float64)
 
     def snapshot_hash(self) -> str:
@@ -103,15 +101,13 @@ def select_snapshot_matrix(
     if stacked.shape[1] <= 1:
         return stacked
 
-    keep_cols: list[np.ndarray] = []
-    seen_hashes: set[str] = set()
-    for col_idx in range(stacked.shape[1]):
+    keep_cols = [np.ascontiguousarray(stacked[:, 0], dtype=np.float64)]
+    seen_hashes: set[str] = {hashlib.sha256(keep_cols[0].tobytes()).hexdigest()}
+    for col_idx in range(1, stacked.shape[1]):
         col = np.ascontiguousarray(stacked[:, col_idx], dtype=np.float64)
         h = hashlib.sha256(col.tobytes()).hexdigest()
         if h in seen_hashes:
             continue
         seen_hashes.add(h)
         keep_cols.append(col)
-    if not keep_cols:
-        return np.zeros((n_param, 0), dtype=np.float64)
     return np.ascontiguousarray(np.column_stack(keep_cols), dtype=np.float64)

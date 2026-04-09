@@ -13,6 +13,7 @@ import argparse
 import json
 import math
 import os
+import sys
 from pathlib import Path
 from time import perf_counter
 
@@ -20,6 +21,12 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
 os.environ.setdefault("MPLBACKEND", "Agg")
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+for candidate in (str(REPO_ROOT), str(SCRIPTS_ROOT)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
 
 import matplotlib
 import matplotlib.pyplot as plt
@@ -39,9 +46,12 @@ from pyeidors.geometry.mesh3d_generator import (
     normalize_electrode_level_fractions,
 )
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
 
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
+from common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    resolve_3d_mesh_contract,
+)
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo"
 
 
@@ -298,6 +308,7 @@ def run_case(
     hyperparameter: float | None,
     difference_step_size_mode: str | None,
     best_homog_mode: str | None,
+    acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
     render_plot: bool = True,
     save_data: bool = True,
 ) -> dict[str, object]:
@@ -322,6 +333,9 @@ def run_case(
         "postprocess_elapsed_sec": 0.0,
         "save_elapsed_sec": 0.0,
     }
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=acceleration_profile,
+    )
 
     setup_start = perf_counter()
     mesh = load_or_create_mesh(
@@ -335,6 +349,9 @@ def run_case(
         electrode_height_ratio=0.2,
         electrode_level_fractions=resolved_level_fractions,
         z_center=z_center,
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
     )
 
     pattern_config = PatternConfig(
@@ -359,6 +376,7 @@ def run_case(
         difference_preset=resolved_difference_preset,
         absolute_preset=resolved_absolute_preset,
         best_homog_mode=best_homog_mode,
+        acceleration_profile=str(acceleration_profile),
         linear_backend="scipy",
         performance_mode="safe",
         solver_mode="fast",
@@ -593,6 +611,7 @@ def run_case(
         "electrode_level_fractions": [float(v) for v in resolved_level_fractions],
         "inverse_target": inverse_target,
         "preset_name": preset_name,
+        "acceleration_profile": str(acceleration_profile),
         "hyperparameter": recon.diagnostics.get("hyperparameter"),
         "lambda_eff": recon.diagnostics.get("lambda_eff"),
         "step_size": recon.diagnostics.get("difference_step_size", {}).get("value"),
@@ -663,6 +682,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--radius", type=float, default=0.22)
     parser.add_argument("--height", type=float, default=0.16)
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="Only affects this 3D workflow.",
+    )
     parser.add_argument("--inverse-mode", choices=["difference", "absolute"], default="difference")
     parser.add_argument("--difference-mode", choices=["raw", "normalized"], default="normalized")
     parser.add_argument(
@@ -727,6 +751,7 @@ def main() -> None:
         hyperparameter=args.hyperparameter,
         difference_step_size_mode=args.difference_step_size_mode,
         best_homog_mode=args.best_homog_mode,
+        acceleration_profile=args.acceleration_profile,
         render_plot=not args.no_plot,
         save_data=not args.no_save_data,
     )

@@ -12,8 +12,8 @@ from typing import Any, Dict, Optional, Union
 
 import gmsh
 import numpy as np
-from mpi4py import MPI
 from dolfinx.io import gmsh as gmshio
+from mpi4py import MPI
 
 from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
 from ..femx import build_eit_mesh

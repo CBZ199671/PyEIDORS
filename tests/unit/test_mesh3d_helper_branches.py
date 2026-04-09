@@ -231,7 +231,7 @@ def test_sidecar_and_output_path_helpers_cover_validation_and_io(tmp_path: Path,
             mesh3d_module.validate_structured_sidecar_payload(case)
 
     assoc_path = tmp_path / "assoc.ini"
-    mesh3d_module._write_association_table(assoc_path, {"domain": 1, "electrode_1": 2})
+    mesh3d_module.write_association_table(assoc_path, {"domain": 1, "electrode_1": 2})
     assert "electrode_1 = 2" in assoc_path.read_text(encoding="utf-8")
 
     sidecar_path = mesh3d_module.structured_sidecar_path_for_mesh(tmp_path / "demo.msh")
@@ -372,7 +372,11 @@ def test_legacy_and_geomv2_tetra_generator_helpers_and_dispatch(monkeypatch: pyt
     )
     assert any(group[3] == "gaps" for group in fake_gmsh.model.physical_groups) is False
 
-    geomv2 = mesh3d_module._GeomV2TetraCylinder3DMeshGenerator(cfg, electrodes, generator_revision="g3d3")
+    geomv2 = mesh3d_module._GeomV2TetraCylinder3DMeshGenerator(
+        cfg,
+        mesh3d_module.ElectrodeArcConfig(n_elec=1, coverage=0.5),
+        generator_revision="g3d3",
+    )
     base_surface, lines = geomv2._create_base_surface()
     assert isinstance(base_surface, int)
     assert len(lines) > 0
@@ -450,3 +454,124 @@ def test_legacy_and_geomv2_tetra_generator_helpers_and_dispatch(monkeypatch: pyt
 
     out_geom_dispatch = mesh3d_module.create_cylinder_3d_eit_mesh(output_dir=str(tmp_path), mesh_name="geom_dispatch", mesh_family="tetra", geometry_version="geomv2", generator_revision="g3d7")
     assert out_geom_dispatch.mesh_name == "geom_dispatch"
+
+
+def test_mesh3d_generator_remaining_edge_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    cfg = mesh3d_module.Cylinder3DMeshConfig(
+        refinement=1,
+        electrode_vertices=3,
+        gap_vertices=1,
+        electrode_level_fractions=(0.25, 0.75),
+    )
+    electrodes = mesh3d_module.ElectrodeArcConfig(n_elec=4, coverage=0.5)
+    fake_gmsh = _FakeGmsh()
+    monkeypatch.setattr(mesh3d_module, "gmsh", fake_gmsh)
+
+    legacy = mesh3d_module._LegacyTetraCylinder3DMeshGenerator(cfg, electrodes)
+    fake_gmsh.model.occ.extrude = lambda *_args, **_kwargs: [(2, 20)]
+    with pytest.raises(RuntimeError, match="Failed to create 3D volume"):
+        legacy._create_geometry()
+
+    fake_gmsh.model._boundary = {30: [(2, 99), (1, 8), (1, 1)]}
+    mapped = legacy._map_side_surfaces_to_lines([30], [1, 2])
+    assert mapped == {1: 30}
+
+    fake_gmsh.model.physical_groups.clear()
+    legacy._set_physical_groups(
+        {
+            "volume_tag": 99,
+            "lines": [1, 2, 3, 4],
+            "electrode_ranges": [(0, 1), (1, 2), (2, 3), (3, 4)],
+            "side_surfaces": [30, 31, 32, 33, 40],
+            "side_by_line": {1: 30, 2: 31, 3: 32, 4: 33},
+        }
+    )
+    assert any(group[3] == "gaps" for group in fake_gmsh.model.physical_groups)
+
+    fake_mesh_data = SimpleNamespace(
+        mesh="mesh",
+        facet_tags="facet",
+        cell_tags="cell",
+        physical_groups={"domain": _FakeGroup(1), "electrode_1": _FakeGroup(2), "gaps": _FakeGroup(6)},
+    )
+    monkeypatch.setattr(mesh3d_module, "GMSH_AVAILABLE", True)
+    monkeypatch.setattr(mesh3d_module.gmshio, "model_to_mesh", lambda *_args, **_kwargs: fake_mesh_data)
+    monkeypatch.setattr(mesh3d_module, "estimate_radius", lambda _mesh: 1.0)
+    monkeypatch.setattr(
+        mesh3d_module,
+        "build_eit_mesh",
+        lambda *_args, **kwargs: SimpleNamespace(
+            mesh_family=kwargs["mesh_family"],
+            geometry_version=kwargs["geometry_version"],
+            generator_revision=kwargs["generator_revision"],
+            association_table=kwargs["association_table"],
+            mesh_file=kwargs["mesh_file"],
+        ),
+    )
+
+    clear_calls = {"legacy": 0, "geomv2": 0}
+    fake_gmsh.initialized = True
+
+    def _track_clear_legacy():
+        clear_calls["legacy"] += 1
+        fake_gmsh.model = _FakeModel()
+
+    fake_gmsh.clear = _track_clear_legacy
+    monkeypatch.setattr(legacy, "_create_geometry", lambda: {"volume_tag": 99, "lines": [1], "electrode_ranges": [(0, 0)] * 4, "side_surfaces": [30], "side_by_line": {1: 30}})
+    monkeypatch.setattr(legacy, "_set_physical_groups", lambda _geometry: None)
+    out_legacy = legacy.generate(output_dir=tmp_path, mesh_name="legacy_initialized")
+    assert out_legacy.geometry_version == "legacy"
+    assert clear_calls["legacy"] >= 1
+
+    geomv2 = mesh3d_module._GeomV2TetraCylinder3DMeshGenerator(
+        cfg,
+        mesh3d_module.ElectrodeArcConfig(n_elec=1, coverage=0.5),
+        generator_revision="g3d3",
+    )
+
+    def _track_clear_geomv2():
+        clear_calls["geomv2"] += 1
+        fake_gmsh.model = _FakeModel()
+        fake_gmsh.model.occ.center_of_mass = {21: (1.0, 0.0, 0.25)}
+
+    fake_gmsh.clear = _track_clear_geomv2
+    monkeypatch.setattr(geomv2, "_create_base_surface", lambda: (1, [1]))
+    fake_gmsh.model.occ.extrude = lambda *_args, **_kwargs: [(2, 20), (2, 21), (3, 99)]
+    monkeypatch.setattr(mesh3d_module, "_top_surface_from_extrusion", lambda _extruded: 20)
+    monkeypatch.setattr(mesh3d_module, "_lateral_surfaces_from_extrusion", lambda _extruded, _top: [21])
+    monkeypatch.setattr(mesh3d_module, "_find_electrode_window_index", lambda _z, _cfg: 0)
+    monkeypatch.setattr(mesh3d_module, "_classify_sidewall_patch", lambda **_kwargs: ("electrode", 1))
+    out_geomv2 = geomv2.generate(output_dir=tmp_path, mesh_name="geomv2_initialized")
+    assert out_geomv2.geometry_version == "geomv2"
+    assert clear_calls["geomv2"] >= 1
+
+    geomv2_missing = mesh3d_module._GeomV2TetraCylinder3DMeshGenerator(
+        cfg,
+        mesh3d_module.ElectrodeArcConfig(n_elec=2, coverage=0.5),
+        generator_revision="g3d3",
+    )
+    monkeypatch.setattr(mesh3d_module, "_z_stage_intervals", lambda _cfg: [(0.0, 0.0)])
+    with pytest.raises(RuntimeError, match="Failed to create 3D geomv2 tetra volume"):
+        geomv2_missing.generate(output_dir=tmp_path, mesh_name="geomv2_no_volume")
+
+    monkeypatch.setattr(mesh3d_module, "_z_stage_intervals", lambda _cfg: [(0.0, 0.0), (0.0, 1.0)])
+    fake_gmsh.model.occ.extrude = lambda *_args, **_kwargs: [(2, 20), (2, 21), (3, 99)]
+    monkeypatch.setattr(mesh3d_module, "_lateral_surfaces_from_extrusion", lambda _extruded, _top: [21])
+    monkeypatch.setattr(mesh3d_module, "_classify_sidewall_patch", lambda **_kwargs: ("gaps", None))
+    with pytest.raises(RuntimeError, match="electrode_1"):
+        geomv2_missing.generate(output_dir=tmp_path, mesh_name="geomv2_missing_surface")
+
+    monkeypatch.setattr(mesh3d_module, "MESHIO_AVAILABLE", False)
+    with pytest.raises(ImportError, match="meshio is required"):
+        mesh3d_module._GeomV2HexCylinder3DMeshGenerator(cfg, electrodes).generate(output_dir=tmp_path)
+    monkeypatch.setattr(mesh3d_module, "MESHIO_AVAILABLE", True)
+
+    gen_hex = mesh3d_module._GeomV2HexCylinder3DMeshGenerator(cfg, electrodes)
+    monkeypatch.setattr(mesh3d_module, "_z_stage_intervals", lambda _cfg: [(0.0, 0.24), (0.24, 0.48), (0.48, 0.72), (0.72, 1.0)])
+    z_levels = gen_hex._z_levels()
+    assert z_levels[0] == pytest.approx(0.0)
+    assert z_levels[-1] == pytest.approx(1.0)
+
+    monkeypatch.setattr(gen_hex, "_signed_quad_area", lambda _coords: -1.0)
+    _, _, meta = gen_hex._structured_geometry_o_grid()
+    assert meta["block_topology"][0] == "core"

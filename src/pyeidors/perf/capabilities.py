@@ -63,90 +63,91 @@ def _enum_name(namespace, name: str) -> str | None:
         return None
 
 
-def _create_mat(PETSc):
-    mat = PETSc.Mat()
-    creator = getattr(mat, "create", None)
+def _create_petsc_object(PETSc, cls_name: str):
+    """Create and initialize a PETSc Mat or Vec object."""
+    obj = getattr(PETSc, cls_name)()
+    creator = getattr(obj, "create", None)
     if callable(creator):
         comm = getattr(PETSc, "COMM_SELF", None)
         try:
             creator(comm=comm)
         except TypeError:
             creator()
-    return mat
+    return obj
 
 
-def _create_vec(PETSc):
-    vec = PETSc.Vec()
-    creator = getattr(vec, "create", None)
-    if callable(creator):
-        comm = getattr(PETSc, "COMM_SELF", None)
-        try:
-            creator(comm=comm)
-        except TypeError:
-            creator()
-    return vec
+def _probe_petsc_type(
+    type_name: str | None,
+    *,
+    cls_name: str,
+    missing_label: str,
+    setup_fn,
+) -> tuple[bool, str | None]:
+    """Probe whether a PETSc type is truly usable at runtime."""
+    if not type_name:
+        return False, missing_label
+    PETSc = _load_petsc_runtime()
+    if PETSc is None:
+        return False, "petsc_unavailable"
+    obj = None
+    try:
+        obj = _create_petsc_object(PETSc, cls_name)
+        setup_fn(obj, type_name)
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if obj is not None and hasattr(obj, "destroy"):
+            try:
+                obj.destroy()
+            except Exception:
+                pass
+
+
+def _setup_mat_probe(mat, type_name: str) -> None:
+    mat.setSizes((1, 1))
+    mat.setType(type_name)
+    if hasattr(mat, "setPreallocationNNZ"):
+        mat.setPreallocationNNZ(1)
+    if hasattr(mat, "setUp"):
+        mat.setUp()
+    if hasattr(mat, "setValue"):
+        mat.setValue(0, 0, 1.0)
+    if hasattr(mat, "assemblyBegin"):
+        mat.assemblyBegin()
+    if hasattr(mat, "assemblyEnd"):
+        mat.assemblyEnd()
+
+
+def _setup_vec_probe(vec, type_name: str) -> None:
+    vec.setSizes(1)
+    vec.setType(type_name)
+    if hasattr(vec, "setUp"):
+        vec.setUp()
+    if hasattr(vec, "setValue"):
+        vec.setValue(0, 1.0)
+    if hasattr(vec, "assemblyBegin"):
+        vec.assemblyBegin()
+    if hasattr(vec, "assemblyEnd"):
+        vec.assemblyEnd()
 
 
 def _probe_petsc_mat_type(type_name: str | None) -> tuple[bool, str | None]:
-    if not type_name:
-        return False, "mat_type_symbol_missing"
-    PETSc = _load_petsc_runtime()
-    if PETSc is None:
-        return False, "petsc_unavailable"
-    mat = None
-    try:
-        mat = _create_mat(PETSc)
-        mat.setSizes((1, 1))
-        mat.setType(type_name)
-        if hasattr(mat, "setPreallocationNNZ"):
-            mat.setPreallocationNNZ(1)
-        if hasattr(mat, "setUp"):
-            mat.setUp()
-        if hasattr(mat, "setValue"):
-            mat.setValue(0, 0, 1.0)
-        if hasattr(mat, "assemblyBegin"):
-            mat.assemblyBegin()
-        if hasattr(mat, "assemblyEnd"):
-            mat.assemblyEnd()
-        return True, None
-    except Exception as exc:
-        return False, str(exc)
-    finally:
-        if mat is not None and hasattr(mat, "destroy"):
-            try:
-                mat.destroy()
-            except Exception:
-                pass
+    return _probe_petsc_type(
+        type_name,
+        cls_name="Mat",
+        missing_label="mat_type_symbol_missing",
+        setup_fn=_setup_mat_probe,
+    )
 
 
 def _probe_petsc_vec_type(type_name: str | None) -> tuple[bool, str | None]:
-    if not type_name:
-        return False, "vec_type_symbol_missing"
-    PETSc = _load_petsc_runtime()
-    if PETSc is None:
-        return False, "petsc_unavailable"
-    vec = None
-    try:
-        vec = _create_vec(PETSc)
-        vec.setSizes(1)
-        vec.setType(type_name)
-        if hasattr(vec, "setUp"):
-            vec.setUp()
-        if hasattr(vec, "setValue"):
-            vec.setValue(0, 1.0)
-        if hasattr(vec, "assemblyBegin"):
-            vec.assemblyBegin()
-        if hasattr(vec, "assemblyEnd"):
-            vec.assemblyEnd()
-        return True, None
-    except Exception as exc:
-        return False, str(exc)
-    finally:
-        if vec is not None and hasattr(vec, "destroy"):
-            try:
-                vec.destroy()
-            except Exception:
-                pass
+    return _probe_petsc_type(
+        type_name,
+        cls_name="Vec",
+        missing_label="vec_type_symbol_missing",
+        setup_fn=_setup_vec_probe,
+    )
 
 
 def _petsc_runtime_cache_key() -> tuple[object, ...]:
@@ -264,14 +265,12 @@ def select_preconditioner(
     resolved_mode = str(mode).strip().lower()
     if capabilities is None:
         capabilities = detect_performance_capabilities()
-    if resolved_mode in {"diag", "pyamg", "cholmod", "petsc-gamg"}:
-        if resolved_mode == "pyamg" and not capabilities.get("pyamg", False):
-            return "diag"
-        if resolved_mode == "cholmod" and not capabilities.get("cholmod", False):
-            return "diag"
-        if resolved_mode == "petsc-gamg" and not capabilities.get("petsc_gamg", False):
-            return "diag"
-        return resolved_mode
+    mode_capability = {"pyamg": "pyamg", "cholmod": "cholmod", "petsc-gamg": "petsc_gamg"}
+    if resolved_mode == "diag":
+        return "diag"
+    if resolved_mode in mode_capability:
+        required = mode_capability[resolved_mode]
+        return resolved_mode if capabilities.get(required, False) else "diag"
     if resolved_mode != "auto":
         return "diag"
 

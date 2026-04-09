@@ -6,7 +6,6 @@ from dataclasses import dataclass
 import hashlib
 import json
 from time import perf_counter
-from typing import Optional, Union
 
 import numpy as np
 import torch
@@ -142,15 +141,7 @@ def ensure_measurement_weights(reconstructor, sigma_function: fem.Function) -> N
     img = EITImage(elem_data=function_get_array(sigma_function), fwd_model=reconstructor.fwd_model)
     baseline_data, _ = reconstructor.fwd_model.fwd_solve(img)
     baseline_vector = project_measurement_vector(
-        baseline_data.meas,
-        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
-        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
-        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
-        difference_orientation=getattr(
-            reconstructor,
-            "_difference_orientation_effective",
-            reconstructor.difference_orientation,
-        ),
+        baseline_data.meas, **_measurement_space_kwargs(reconstructor)
     )
     reconstructor._baseline_measurement = baseline_vector.copy()
 
@@ -317,9 +308,7 @@ def _solve_linear_system_fast(
     fast_linear_path_reason = "explicit"
 
     def _add_fallback(reason: str | None) -> None:
-        if not reason:
-            return
-        token = str(reason).strip()
+        token = "" if reason is None else str(reason).strip()
         if token and token not in fallback_reasons:
             fallback_reasons.append(token)
 
@@ -798,8 +787,6 @@ def _solve_linear_system_fast(
         return basis_arr, "compute"
 
     def _solve_linear_system_fused(diag_vector: np.ndarray | None) -> tuple[np.ndarray | None, dict[str, object]]:
-        if not bool(fused_strategy.get("enabled", False)):
-            return None, {"reason": "disabled"}
         if rom_mode_effective == "off":
             return None, {"reason": "rom_off"}
         rom_mode_raw = str(getattr(reconstructor, "rom_mode", "auto")).strip().lower()
@@ -1160,32 +1147,26 @@ def _configure_measurement_space(reconstructor, measured_data) -> None:
     reconstructor._difference_orientation_effective = reconstructor.difference_orientation
 
 
-def _project_simulated_measurements(reconstructor, simulated_meas: np.ndarray) -> np.ndarray:
-    return project_measurement_vector(
-        simulated_meas,
-        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
-        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
-        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
-        difference_orientation=getattr(
-            reconstructor,
-            "_difference_orientation_effective",
-            reconstructor.difference_orientation,
+def _measurement_space_kwargs(reconstructor) -> dict[str, object]:
+    """Common keyword arguments for measurement projection functions."""
+    return {
+        "measurement_type": getattr(reconstructor, "_measurement_space_type", "real"),
+        "reference_meas": getattr(reconstructor, "_difference_reference_meas", None),
+        "difference_mode": getattr(
+            reconstructor, "_difference_mode_effective", reconstructor.difference_mode
         ),
-    )
+        "difference_orientation": getattr(
+            reconstructor, "_difference_orientation_effective", reconstructor.difference_orientation
+        ),
+    }
+
+
+def _project_simulated_measurements(reconstructor, simulated_meas: np.ndarray) -> np.ndarray:
+    return project_measurement_vector(simulated_meas, **_measurement_space_kwargs(reconstructor))
 
 
 def _project_measurement_jacobian(reconstructor, jacobian: np.ndarray) -> np.ndarray:
-    return project_measurement_jacobian(
-        jacobian,
-        measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
-        reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
-        difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
-        difference_orientation=getattr(
-            reconstructor,
-            "_difference_orientation_effective",
-            reconstructor.difference_orientation,
-        ),
-    )
+    return project_measurement_jacobian(jacobian, **_measurement_space_kwargs(reconstructor))
 
 
 def _startup_cache_payload(reconstructor, sigma_array: np.ndarray, jacobian_method: str) -> dict[str, object]:
@@ -1284,7 +1265,7 @@ def _init_sigma_function(
 
 def _prepare_prior(
     reconstructor,
-    prior_data: Optional[np.ndarray],
+    prior_data: np.ndarray | None,
     initial_conductivity: float | np.ndarray,
 ) -> torch.Tensor:
     if prior_data is not None:
@@ -1698,7 +1679,7 @@ def _maybe_rollback(
     sigma_current: fem.Function,
     sigma_old_values: np.ndarray,
     residual_norm: float,
-    prev_residual: Optional[float],
+    prev_residual: float | None,
     residual_history: list[float],
     sigma_change_history: list[float],
     consecutive_rollbacks: int,
@@ -1775,10 +1756,10 @@ def _record_iteration_log(
 
 def run_reconstruction(
     reconstructor,
-    measured_data: Union[object, np.ndarray],
+    measured_data: object | np.ndarray,
     initial_conductivity: float = 1.0,
     jacobian_method: str = "efficient",
-    prior_data: Optional[np.ndarray] = None,
+    prior_data: np.ndarray | None = None,
     record_conductivity_history: bool = False,
     conductivity_history_stride: int = 1,
 ) -> SolverOutput:
@@ -1857,7 +1838,7 @@ def run_reconstruction(
     relative_change = float("inf")
     reconstructor._runtime_tensor_cache = {}
     reconstructor._force_jacobian_refresh = False
-    prev_jacobian_np: Optional[np.ndarray] = None
+    prev_jacobian_np: np.ndarray | None = None
     prev_jacobian_iter = -1
     fast_fallback_reason: str | None = None
     resolved_preconditioner: str | None = None

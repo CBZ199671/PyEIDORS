@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 import logging
-from typing import Any, Dict, Optional, Union
+from typing import Any, Optional
 
 import numpy as np
 
@@ -49,7 +49,11 @@ from .inverse.solvers.gauss_newton_device import normalize_runtime_device
 from .physics import UnitCheckReport, run_unit_consistency_checks
 from .physics.current_drive import normalize_pattern_config_for_mesh
 from .perf.policy import (
+    ACCELERATION_PROFILE_GPU3D,
+    ACCELERATION_PROFILE_GPU3D_FUSED,
+    ACCELERATION_PROFILE_VALUES,
     DEFAULT_3D_GEOMETRY_VERSION,
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
     DEFAULT_FORWARD_BACKEND,
@@ -73,9 +77,15 @@ from .perf.policy import (
     DEFAULT_ROM_RANK_GLOBAL,
     DEFAULT_ROM_REFRESH_EVERY,
     DEFAULT_ROM_SNAPSHOT_SOURCE,
+    FORWARD_BACKEND_CUDA_STRUCTURED,
+    MESH_FAMILY_HEX,
+    PETSC_DEVICE_CUDA,
     normalize_forward_backend,
+    normalize_acceleration_profile,
     normalize_mesh_family,
     normalize_petsc_device,
+    prefers_3d_gpu_pipeline,
+    prefers_fused_3d_gpu_pipeline,
 )
 
 logger = logging.getLogger(__name__)
@@ -93,44 +103,50 @@ _VALID_DIFFERENCE_STEP_SIZE_MODES = {"off", "optimize", "fixed"}
 _VALID_BEST_HOMOG_MODES = {"off", "optimize", "on"}
 
 
-def _normalize_difference_preset(name: str | None) -> str:
-    resolved = str(name or DEFAULT_DIFFERENCE_PRESET).strip().lower()
-    if resolved not in _VALID_DIFFERENCE_PRESETS:
-        raise ValueError(
-            f"Unsupported difference_preset={name!r}. "
-            "Expected one of: 'eidors_one_step_noser', 'eidors_demo3d_tv', 'sphere_multistep_noser'."
-        )
+def _normalize_choice(
+    value: str | None,
+    *,
+    default: str,
+    valid: set[str],
+    param_name: str,
+) -> str:
+    """Normalize a string parameter to a validated lowercase choice."""
+    resolved = str(value or default).strip().lower()
+    if resolved not in valid:
+        options = ", ".join(f"'{v}'" for v in sorted(valid))
+        raise ValueError(f"Unsupported {param_name}={value!r}. Expected one of: {options}.")
     return resolved
+
+
+def _normalize_difference_preset(name: str | None) -> str:
+    return _normalize_choice(
+        name, default=DEFAULT_DIFFERENCE_PRESET,
+        valid=_VALID_DIFFERENCE_PRESETS, param_name="difference_preset",
+    )
 
 
 def _normalize_absolute_preset(name: str | None) -> str:
-    resolved = str(name or DEFAULT_ABSOLUTE_PRESET).strip().lower()
-    if resolved not in _VALID_ABSOLUTE_PRESETS:
-        raise ValueError(
-            f"Unsupported absolute_preset={name!r}. Expected 'eidors_abs_gn'."
-        )
-    return resolved
+    return _normalize_choice(
+        name, default=DEFAULT_ABSOLUTE_PRESET,
+        valid=_VALID_ABSOLUTE_PRESETS, param_name="absolute_preset",
+    )
 
 
 def _normalize_difference_step_size_mode(mode: str | None) -> str:
-    resolved = str(mode or "off").strip().lower()
-    if resolved not in _VALID_DIFFERENCE_STEP_SIZE_MODES:
-        raise ValueError(
-            f"Unsupported difference_step_size_mode={mode!r}. "
-            "Expected one of: 'off', 'optimize', 'fixed'."
-        )
-    return resolved
+    return _normalize_choice(
+        mode, default="off",
+        valid=_VALID_DIFFERENCE_STEP_SIZE_MODES, param_name="difference_step_size_mode",
+    )
 
 
 def _normalize_best_homog_mode(mode: str | None) -> str:
     resolved = str(mode or "off").strip().lower()
     if resolved == "on":
         return "optimize"
-    if resolved not in _VALID_BEST_HOMOG_MODES:
-        raise ValueError(
-            f"Unsupported best_homog_mode={mode!r}. Expected one of: 'off', 'optimize'."
-        )
-    return resolved
+    return _normalize_choice(
+        resolved, default="off",
+        valid=_VALID_BEST_HOMOG_MODES, param_name="best_homog_mode",
+    )
 
 
 def _normalize_bounds(bounds: tuple[float, float] | list[float] | None) -> tuple[float, float]:
@@ -148,7 +164,7 @@ def _matches_previous(current: Any, previous: Any) -> bool:
     if previous is None:
         return True
     if isinstance(current, np.ndarray) or isinstance(previous, np.ndarray):
-        return np.array_equal(np.asarray(current), np.asarray(previous))
+        return bool(np.array_equal(np.asarray(current), np.asarray(previous)))
     if isinstance(current, (list, tuple)) or isinstance(previous, (list, tuple)):
         return tuple(current) == tuple(previous)
     if isinstance(current, dict) or isinstance(previous, dict):
@@ -189,6 +205,7 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_family: str = DEFAULT_MESH_FAMILY,
         petsc_device: str = DEFAULT_PETSC_DEVICE,
         device: str = "auto",
+        acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
         performance_mode: str = "aggressive",
         solver_mode: str = "strict",
         linear_solver: str = "auto",
@@ -235,7 +252,7 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         self.mesh_config = mesh_config or MeshConfig(radius=1.0, refinement=8)
         self.contact_impedance = (
-            np.ones(n_elec, dtype=float) * 0.01
+            np.full(n_elec, 0.01, dtype=float)
             if contact_impedance is None
             else np.asarray(contact_impedance, dtype=float)
         )
@@ -285,9 +302,17 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         self.petsc_device = normalize_petsc_device(petsc_device, default=DEFAULT_PETSC_DEVICE)
         self.device = normalize_runtime_device(device, default="auto")
+        self.acceleration_profile = _normalize_choice(
+            normalize_acceleration_profile(acceleration_profile, default=DEFAULT_ACCELERATION_PROFILE),
+            default=DEFAULT_ACCELERATION_PROFILE,
+            valid=set(ACCELERATION_PROFILE_VALUES),
+            param_name="acceleration_profile",
+        )
         self.linear_backend_config = dict(linear_backend_config or {})
-        self.linear_backend_config["petsc_device"] = self.petsc_device
-        self.performance_mode = str(performance_mode).strip().lower()
+        self.performance_mode = _normalize_choice(
+            performance_mode, default="aggressive",
+            valid={"safe", "aggressive"}, param_name="performance_mode",
+        )
         self.solver_mode = str(solver_mode).strip().lower()
         self.linear_solver = str(linear_solver).strip().lower()
         self.jacobian_update_every = int(max(1, jacobian_update_every))
@@ -312,21 +337,14 @@ class EITSystem(CoreSystemFacadeMixin):
         self.absolute_startup_cache = bool(absolute_startup_cache)
         self.cholmod_max_n = int(max(1, cholmod_max_n))
         self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
-        self.jacobian_block_tune = str(jacobian_block_tune).strip().lower()
-        if self.jacobian_block_tune not in {"auto", "off"}:
-            raise ValueError(
-                f"Unsupported jacobian_block_tune={jacobian_block_tune!r}. "
-                "Expected one of: 'auto', 'off'."
-            )
+        self.jacobian_block_tune = _normalize_choice(
+            jacobian_block_tune, default="auto",
+            valid={"auto", "off"}, param_name="jacobian_block_tune",
+        )
         self.jacobian_block_size = int(max(0, jacobian_block_size))
         self.jacobian_block_candidates = tuple(
             sorted({int(v) for v in jacobian_block_candidates if int(v) > 0})
         ) or (64, 128, 256, 512)
-        if self.performance_mode not in {"safe", "aggressive"}:
-            raise ValueError(
-                f"Unsupported performance_mode={performance_mode!r}. "
-                "Expected one of: 'safe', 'aggressive'."
-            )
         self.cache_scope: CacheScope = cache_scope
         requested_cache_lifecycle = (
             normalize_cache_lifecycle(cache_lifecycle, default=DEFAULT_CACHE_LIFECYCLE)
@@ -353,9 +371,10 @@ class EITSystem(CoreSystemFacadeMixin):
             cache_dir=cache_dir,
             policy=self.cache_policy,
         )
+        initial_drive_mode = str(self.pattern_config.drive_mode).strip().lower()
         self._pattern_config_diagnostics: dict[str, str] = {
-            "drive_mode_requested": str(self.pattern_config.drive_mode).strip().lower(),
-            "drive_mode_effective": str(self.pattern_config.drive_mode).strip().lower(),
+            "drive_mode_requested": initial_drive_mode,
+            "drive_mode_effective": initial_drive_mode,
         }
 
         self.mesh: Optional[EITMesh] = None
@@ -364,6 +383,7 @@ class EITSystem(CoreSystemFacadeMixin):
         self._is_initialized = False
         self._last_reconstructor_controls: dict[str, Any] = {}
         self._active_inverse_preset_name: str | None = None
+        self._resolved_runtime_policy: dict[str, Any] = {}
 
     def setup(
         self,
@@ -388,11 +408,15 @@ class EITSystem(CoreSystemFacadeMixin):
             self.setup_with_mesh(mesh)
             return
         if mesh_source == "cache":
-            resolved_gdim = int(gdim if gdim is not None else (dimension if dimension is not None else 2))
+            resolved_gdim = int(gdim if gdim is not None
+                                else dimension if dimension is not None
+                                else 2)
             self.setup_from_cache(mesh_dir=mesh_dir, mesh_name=mesh_name, gdim=resolved_gdim)
             return
         if mesh_source == "generated":
-            resolved_dim = int(dimension if dimension is not None else (gdim if gdim is not None else 2))
+            resolved_dim = int(dimension if dimension is not None
+                               else gdim if gdim is not None
+                               else 2)
             self.setup_generated_mesh(
                 radius=radius,
                 mesh_size=mesh_size,
@@ -471,15 +495,10 @@ class EITSystem(CoreSystemFacadeMixin):
                 else tuple(float(v) for v in electrode_level_fractions)
             )
             resolved_z = self.mesh_config.z_center if z_center is None else float(z_center)
-            resolved_mesh_family = normalize_mesh_family(
-                self.mesh_config.mesh_family if mesh_family is None else mesh_family,
-                default=DEFAULT_MESH_FAMILY,
+            resolved_mesh_family, resolved_geometry_version = self._resolve_generated_3d_mesh_preferences(
+                mesh_family=mesh_family,
+                geometry_version=geometry_version,
             )
-            resolved_geometry_version = (
-                self.mesh_config.geometry_version
-                if geometry_version is None
-                else str(geometry_version).strip().lower()
-            ) or DEFAULT_3D_GEOMETRY_VERSION
             resolved_refinement = max(
                 2,
                 int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
@@ -504,27 +523,152 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         self.setup_with_mesh(generated)
 
+    def _resolve_generated_3d_mesh_preferences(
+        self,
+        *,
+        mesh_family: str | None,
+        geometry_version: str | None,
+    ) -> tuple[str, str]:
+        requested_profile = getattr(self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
+        requested_forward_backend = getattr(self, "forward_backend", DEFAULT_FORWARD_BACKEND)
+        wants_easy_gpu = prefers_3d_gpu_pipeline(requested_profile)
+        wants_structured_mesh = wants_easy_gpu or requested_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        if wants_structured_mesh and mesh_family is None:
+            resolved_mesh_family = MESH_FAMILY_HEX
+        else:
+            resolved_mesh_family = normalize_mesh_family(
+                self.mesh_config.mesh_family if mesh_family is None else mesh_family,
+                default=DEFAULT_MESH_FAMILY,
+            )
+        if wants_structured_mesh and geometry_version is None:
+            resolved_geometry_version = DEFAULT_3D_GEOMETRY_VERSION
+        else:
+            resolved_geometry_version = (
+                self.mesh_config.geometry_version
+                if geometry_version is None
+                else str(geometry_version).strip().lower()
+            ) or DEFAULT_3D_GEOMETRY_VERSION
+        return resolved_mesh_family, resolved_geometry_version
+
+    def _supports_cuda_structured_backend(self) -> bool:
+        if self.mesh is None:
+            return False
+        return bool(
+            int(self.mesh.topology.dim) == 3
+            and str(getattr(self.mesh, "mesh_family", "")).strip().lower() == MESH_FAMILY_HEX
+            and str(getattr(self.mesh, "geometry_version", "")).strip().lower() == DEFAULT_3D_GEOMETRY_VERSION
+            and str(getattr(self.mesh, "generator_revision", "")).strip().lower().startswith("g3d3")
+            and str(getattr(self.mesh, "mesh_file", "")).strip().lower().endswith(".msh")
+        )
+
+    def _resolve_runtime_policy(self) -> dict[str, Any]:
+        if self.mesh is None:
+            raise RuntimeError("Cannot resolve runtime policy before mesh setup.")
+
+        mesh_dim = int(self.mesh.topology.dim)
+        structured_supported = self._supports_cuda_structured_backend()
+        requested_profile = getattr(self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
+        requested_forward_backend = getattr(self, "forward_backend", DEFAULT_FORWARD_BACKEND)
+        requested_petsc_device = getattr(self, "petsc_device", DEFAULT_PETSC_DEVICE)
+        requested_device = getattr(self, "device", "auto")
+        requested_solver_mode = getattr(self, "solver_mode", "strict")
+        requested_line_search_mode = getattr(self, "line_search_mode", "full")
+        requested_rom_mode = getattr(self, "rom_mode", DEFAULT_ROM_MODE)
+        requested_inexact_mode = getattr(self, "inexact_mode", DEFAULT_INEXACT_MODE)
+        requested_lowrank_mode = getattr(self, "lowrank_mode", DEFAULT_LOWRANK_MODE)
+        easy_gpu_profile = prefers_3d_gpu_pipeline(requested_profile)
+        fused_gpu_profile = prefers_fused_3d_gpu_pipeline(requested_profile)
+
+        resolved_forward_backend = requested_forward_backend
+        if (
+            easy_gpu_profile
+            and resolved_forward_backend == DEFAULT_FORWARD_BACKEND
+            and structured_supported
+        ):
+            resolved_forward_backend = FORWARD_BACKEND_CUDA_STRUCTURED
+
+        resolved_petsc_device = requested_petsc_device
+        if (
+            (easy_gpu_profile and mesh_dim == 3)
+            or resolved_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        ) and resolved_petsc_device == DEFAULT_PETSC_DEVICE:
+            resolved_petsc_device = PETSC_DEVICE_CUDA
+
+        resolved_device = requested_device
+        if easy_gpu_profile and mesh_dim == 3 and resolved_device == "auto":
+            resolved_device = "cuda"
+
+        resolved_solver_mode = requested_solver_mode
+        resolved_line_search_mode = requested_line_search_mode
+        if easy_gpu_profile and mesh_dim == 3:
+            if resolved_solver_mode == "strict":
+                resolved_solver_mode = "fast"
+            if resolved_line_search_mode == "full" and resolved_solver_mode == "fast":
+                resolved_line_search_mode = "fast"
+
+        resolved_rom_mode = requested_rom_mode
+        resolved_inexact_mode = requested_inexact_mode
+        resolved_lowrank_mode = requested_lowrank_mode
+        if fused_gpu_profile and mesh_dim == 3:
+            if resolved_rom_mode == DEFAULT_ROM_MODE:
+                resolved_rom_mode = "on"
+            if resolved_inexact_mode == DEFAULT_INEXACT_MODE:
+                resolved_inexact_mode = "auto"
+            if resolved_lowrank_mode == DEFAULT_LOWRANK_MODE:
+                resolved_lowrank_mode = "auto"
+
+        effective_profile = requested_profile if easy_gpu_profile and mesh_dim == 3 else DEFAULT_ACCELERATION_PROFILE
+        return {
+            "mesh_dim": mesh_dim,
+            "acceleration_profile_requested": requested_profile,
+            "acceleration_profile_effective": effective_profile,
+            "structured_backend_supported": structured_supported,
+            "forward_backend_requested": requested_forward_backend,
+            "forward_backend_effective": resolved_forward_backend,
+            "petsc_device_requested": requested_petsc_device,
+            "petsc_device_effective": resolved_petsc_device,
+            "device_requested": requested_device,
+            "device_effective": resolved_device,
+            "solver_mode_requested": requested_solver_mode,
+            "solver_mode_effective": resolved_solver_mode,
+            "line_search_mode_requested": requested_line_search_mode,
+            "line_search_mode_effective": resolved_line_search_mode,
+            "rom_mode_requested": requested_rom_mode,
+            "rom_mode_effective": resolved_rom_mode,
+            "inexact_mode_requested": requested_inexact_mode,
+            "inexact_mode_effective": resolved_inexact_mode,
+            "lowrank_mode_requested": requested_lowrank_mode,
+            "lowrank_mode_effective": resolved_lowrank_mode,
+        }
+
     def _initialize_components(self) -> None:
         if self.mesh is None:
             raise RuntimeError("Cannot initialize EITSystem without mesh")
+        runtime_policy = self._resolve_runtime_policy()
+        self._resolved_runtime_policy = dict(runtime_policy)
+        resolved_backend_config = dict(self.linear_backend_config)
+        resolved_backend_config["petsc_device"] = runtime_policy["petsc_device_effective"]
         self.fwd_model = EITForwardModel(
             n_elec=self.n_elec,
             pattern_config=self.pattern_config,
             z=self.contact_impedance,
             mesh=self.mesh,
             linear_backend=self.linear_backend,
-            backend_config=self.linear_backend_config,
-            forward_backend=self.forward_backend,
+            backend_config=resolved_backend_config,
+            forward_backend=str(runtime_policy["forward_backend_effective"]),
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
         )
-        self.fwd_model._set_backend_diagnostic(**self._pattern_config_diagnostics)
+        self.fwd_model._set_backend_diagnostic(
+            **self._pattern_config_diagnostics,
+            **runtime_policy,
+        )
         jacobian_calculator = DirectJacobianCalculator(
             self.fwd_model,
             block_tune_mode=self.jacobian_block_tune,
             block_size=self.jacobian_block_size,
             block_candidates=self.jacobian_block_candidates,
-            runtime_device=self.device,
+            runtime_device=str(runtime_policy["device_effective"]),
         )
         regularization = self._build_regularization(jacobian_calculator)
         self.reconstructor = GaussNewtonReconstructor(
@@ -544,25 +688,25 @@ class EITSystem(CoreSystemFacadeMixin):
             best_homog_mode=self.best_homog_mode,
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
-            device=self.device,
-            solver_mode=self.solver_mode,
+            device=str(runtime_policy["device_effective"]),
+            solver_mode=str(runtime_policy["solver_mode_effective"]),
             linear_solver=self.linear_solver,
             jacobian_update_every=self.jacobian_update_every,
             jacobian_reuse_tol=self.jacobian_reuse_tol,
-            line_search_mode=self.line_search_mode,
+            line_search_mode=str(runtime_policy["line_search_mode_effective"]),
             preconditioner=self.preconditioner,
             fast_linear_path=self.fast_linear_path,
-            rom_mode=self.rom_mode,
+            rom_mode=str(runtime_policy["rom_mode_effective"]),
             rom_rank_global=self.rom_rank_global,
             rom_rank_adaptive=self.rom_rank_adaptive,
             rom_refresh_every=self.rom_refresh_every,
             rom_snapshot_source=self.rom_snapshot_source,
-            inexact_mode=self.inexact_mode,
+            inexact_mode=str(runtime_policy["inexact_mode_effective"]),
             inexact_forcing=self.inexact_forcing,
             inexact_eta0=self.inexact_eta0,
             inexact_eta_min=self.inexact_eta_min,
             inexact_eta_max=self.inexact_eta_max,
-            lowrank_mode=self.lowrank_mode,
+            lowrank_mode=str(runtime_policy["lowrank_mode_effective"]),
             lowrank_rank=self.lowrank_rank,
             lowrank_method=self.lowrank_method,
             lowrank_energy=self.lowrank_energy,
@@ -635,6 +779,10 @@ class EITSystem(CoreSystemFacadeMixin):
             preset_name = self.difference_preset
             config: dict[str, Any] = {
                 "preset_name": preset_name,
+                "hyperparameter": self._default_hyperparameter(preset_name),
+                "jacobian_update_every": 1,
+                "jacobian_reuse_tol": 0.0,
+                "line_search_mode": "full",
                 "difference_step_size_mode": (
                     self.difference_step_size_mode
                     if self._difference_step_size_mode_explicit
@@ -648,40 +796,15 @@ class EITSystem(CoreSystemFacadeMixin):
                 "max_step": 1.0,
             }
             if preset_name == "eidors_one_step_noser":
-                config.update(
-                    {
-                        "regularization_type": "noser",
-                        "hyperparameter": self._default_hyperparameter(preset_name),
-                        "max_iterations": 1,
-                        "jacobian_update_every": 1,
-                        "jacobian_reuse_tol": 0.0,
-                        "line_search_mode": "full",
-                    }
-                )
+                config["regularization_type"] = "noser"
+                config["max_iterations"] = 1
             elif preset_name == "eidors_demo3d_tv":
-                config.update(
-                    {
-                        "regularization_type": "tv",
-                        "hyperparameter": self._default_hyperparameter(preset_name),
-                        "max_iterations": 1,
-                        "jacobian_update_every": 1,
-                        "jacobian_reuse_tol": 0.0,
-                        "line_search_mode": "full",
-                    }
-                )
+                config["regularization_type"] = "tv"
+                config["max_iterations"] = 1
             else:
-                config.update(
-                    {
-                        "regularization_type": "noser",
-                        "hyperparameter": self._default_hyperparameter(preset_name),
-                        "max_iterations": 3,
-                        "jacobian_update_every": 1,
-                        "jacobian_reuse_tol": 0.0,
-                        "line_search_mode": "full",
-                        "difference_step_size_mode": "off",
-                        "max_step": 1.0,
-                    }
-                )
+                config["regularization_type"] = "noser"
+                config["max_iterations"] = 3
+                config["difference_step_size_mode"] = "off"
             return config
 
         preset_name = self.absolute_preset
@@ -746,7 +869,7 @@ class EITSystem(CoreSystemFacadeMixin):
         if not self._is_initialized or self.fwd_model is None or self.reconstructor is None:
             raise RuntimeError("System not initialized. Please call setup(...) first.")
 
-    def forward_solve(self, conductivity: Union[np.ndarray, EITImage, Any]) -> EITData:
+    def forward_solve(self, conductivity: np.ndarray | EITImage | Any) -> EITData:
         self._require_initialized()
         image = conductivity_to_image(self.fwd_model, conductivity)
         data, _ = self.fwd_model.fwd_solve(image)

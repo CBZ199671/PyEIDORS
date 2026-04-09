@@ -51,6 +51,15 @@ DEFAULT_ABSOLUTE_STARTUP_CACHE = "on"
 DEFAULT_FORWARD_BACKEND = FORWARD_BACKEND_DOLFINX
 DEFAULT_MESH_FAMILY = MESH_FAMILY_TETRA
 DEFAULT_3D_GEOMETRY_VERSION = GEOMETRY_VERSION_GEOMV2
+ACCELERATION_PROFILE_DEFAULT = "default"
+ACCELERATION_PROFILE_GPU3D = "gpu3d"
+ACCELERATION_PROFILE_GPU3D_FUSED = "gpu3d_fused"
+ACCELERATION_PROFILE_VALUES = (
+    ACCELERATION_PROFILE_DEFAULT,
+    ACCELERATION_PROFILE_GPU3D,
+    ACCELERATION_PROFILE_GPU3D_FUSED,
+)
+DEFAULT_ACCELERATION_PROFILE = ACCELERATION_PROFILE_DEFAULT
 
 DEFAULT_ROM_RANK_GLOBAL = 32
 DEFAULT_ROM_RANK_ADAPTIVE = 16
@@ -94,11 +103,43 @@ PERF_GATE_COMBINED_TOTAL_TARGETS = {
     2: 1.01,
 }
 
+_ACCELERATION_PROFILE_ALIASES = {
+    "3d_gpu": ACCELERATION_PROFILE_GPU3D,
+    "gpu_3d": ACCELERATION_PROFILE_GPU3D,
+    "full_3d_gpu": ACCELERATION_PROFILE_GPU3D_FUSED,
+    "3d_gpu_fused": ACCELERATION_PROFILE_GPU3D_FUSED,
+    "gpu_3d_fused": ACCELERATION_PROFILE_GPU3D_FUSED,
+}
+
 
 def normalize_mode(value: object, *, valid: tuple[str, ...], default: str) -> str:
     """Normalize a string mode against an explicit allow-list."""
     mode = str(value).strip().lower()
     return mode if mode in valid else default
+
+
+def normalize_acceleration_profile(
+    value: object,
+    *,
+    default: str = DEFAULT_ACCELERATION_PROFILE,
+) -> str:
+    """Normalize high-level acceleration presets for easier runtime selection."""
+    mode = str(value).strip().lower()
+    resolved = _ACCELERATION_PROFILE_ALIASES.get(mode, mode)
+    return resolved if resolved in ACCELERATION_PROFILE_VALUES else default
+
+
+def prefers_3d_gpu_pipeline(value: object) -> bool:
+    """Return True when the profile targets the easier 3D GPU execution path."""
+    return normalize_acceleration_profile(value) in {
+        ACCELERATION_PROFILE_GPU3D,
+        ACCELERATION_PROFILE_GPU3D_FUSED,
+    }
+
+
+def prefers_fused_3d_gpu_pipeline(value: object) -> bool:
+    """Return True when the profile also opts into fused reduced-order acceleration."""
+    return normalize_acceleration_profile(value) == ACCELERATION_PROFILE_GPU3D_FUSED
 
 
 def normalize_feature_mode(value: object, *, default: str = FEATURE_MODE_OFF) -> str:

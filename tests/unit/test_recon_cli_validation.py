@@ -276,3 +276,25 @@ def test_cli_accepts_inverse_device_in_dry_run(tmp_path: Path):
         ]
     )
     assert out.returncode == 0
+
+
+def test_cli_accepts_acceleration_profile_in_3d_dry_run(tmp_path: Path):
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text("1,2,3,4\n", encoding="utf-8")
+
+    out = _run_cli(
+        [
+            "--method",
+            "gn-difference",
+            "--csv",
+            str(csv_path),
+            "--output-root",
+            str(tmp_path / "out"),
+            "--mesh-dim",
+            "3",
+            "--acceleration-profile",
+            "gpu3d",
+            "--dry-run",
+        ]
+    )
+    assert out.returncode == 0

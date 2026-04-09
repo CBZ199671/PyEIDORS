@@ -18,7 +18,7 @@ class ResolvedTorchDevice:
 
     @property
     def type(self) -> str:
-        """Compatibility proxy for legacy callers expecting ``torch.device.type``."""
+        """Mirror ``torch.device.type`` for callers that need the compact device label."""
         return str(self.torch_device.type)
 
 
@@ -53,10 +53,12 @@ def normalize_runtime_device_label(value: object, *, default: str = RUNTIME_DEVI
 
 
 def _disable_tf32() -> None:
-    if hasattr(torch.backends, "cuda") and hasattr(torch.backends.cuda, "matmul"):
-        torch.backends.cuda.matmul.allow_tf32 = False
-    if hasattr(torch.backends, "cudnn"):
-        torch.backends.cudnn.allow_tf32 = False
+    cuda_backend = getattr(torch.backends, "cuda", None)
+    if cuda_backend is not None and hasattr(cuda_backend, "matmul"):
+        cuda_backend.matmul.allow_tf32 = False
+    cudnn_backend = getattr(torch.backends, "cudnn", None)
+    if cudnn_backend is not None:
+        cudnn_backend.allow_tf32 = False
     set_precision = getattr(torch, "set_float32_matmul_precision", None)
     if callable(set_precision):
         try:

@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import hashlib
+from time import perf_counter
+
 import numpy as np
+import ufl
+from dolfinx import fem
+import dolfinx.fem.petsc as fem_petsc
+
 try:
     import torch
 except Exception:  # pragma: no cover - optional in some unit stubs
     torch = None
-import ufl
-from dolfinx import fem
-import dolfinx.fem.petsc as fem_petsc
-import hashlib
-from time import perf_counter
 
 from ...cache.object_signature import (
     backend_signature_from_forward_model,
@@ -122,10 +124,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             cost=2.0,
             effort_seconds=0.5,
         )
-        if bool(getattr(lookup, "hit", False)):
-            self._block_tune_source = str(getattr(lookup, "layer", "cache"))
-        else:
-            self._block_tune_source = "compute"
+        self._block_tune_source = str(getattr(lookup, "layer", "cache")) if getattr(lookup, "hit", False) else "compute"
         return int(max(1, min(int(chosen), n_elements)))
 
     def _calibrate_block_size_once(
@@ -196,13 +195,17 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     def _wants_cuda_contraction(self) -> bool:
         requested = getattr(self, "_runtime_device_requested", "auto")
         effective = getattr(self, "_runtime_device_effective", "cpu")
-        self._runtime_device_requested = normalize_runtime_device(requested, default="auto")
-        self._runtime_device_effective = normalize_runtime_device_label(effective, default="cpu")
-        self._jacobian_backend_requested = normalize_runtime_device_label(
-            self._runtime_device_requested,
-            default="auto",
+        self._runtime_device_requested = normalize_runtime_device(
+            requested, default="auto"
         )
-        return bool(
+        self._runtime_device_effective = normalize_runtime_device_label(
+            effective, default="cpu"
+        )
+        self._jacobian_backend_requested = normalize_runtime_device_label(
+            self._runtime_device_requested, default="auto"
+        )
+        self._runtime_cuda_device = str(getattr(self, "_runtime_cuda_device", "cuda"))
+        return (
             torch is not None
             and hasattr(torch, "cuda")
             and torch.cuda.is_available()
@@ -232,18 +235,22 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
 
     def block_tuning_info(self) -> dict[str, object]:
         """Expose current Jacobian block-size tuning state for diagnostics."""
-        selected = self._resolved_block_size if self._resolved_block_size is not None else self.block_size
+        selected = (
+            self._resolved_block_size
+            if getattr(self, "_resolved_block_size", None) is not None
+            else getattr(self, "block_size", 0)
+        )
         if selected <= 0:
-            selected = int(max(1, len(self.cell_areas)))
+            selected = max(1, len(self.cell_areas))
         return {
             "selected_block_size": int(selected),
-            "tune_mode": self.block_tune_mode,
-            "tune_source": self._block_tune_source,
-            "candidates": list(self.block_candidates),
+            "tune_mode": getattr(self, "block_tune_mode", "auto"),
+            "tune_source": getattr(self, "_block_tune_source", "unset"),
+            "candidates": list(getattr(self, "block_candidates", ()) or ()),
             "assembly_elapsed_only": float(getattr(self, "_last_assembly_elapsed_only", 0.0)),
-            "jacobian_backend_requested": str(getattr(self, "_jacobian_backend_requested", "cpu")),
-            "jacobian_backend_effective": str(getattr(self, "_jacobian_backend_effective", "cpu")),
-            "jacobian_block_backend": str(getattr(self, "_jacobian_block_backend", "numpy")),
+            "jacobian_backend_requested": getattr(self, "_jacobian_backend_requested", "auto"),
+            "jacobian_backend_effective": getattr(self, "_jacobian_backend_effective", "cpu"),
+            "jacobian_block_backend": getattr(self, "_jacobian_block_backend", "numpy"),
             "jacobian_transfer_estimate": float(getattr(self, "_jacobian_transfer_estimate", 0.0)),
             "jacobian_cuda_threshold_hit": bool(getattr(self, "_jacobian_cuda_threshold_hit", False)),
         }
@@ -255,7 +262,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         cache_manager = getattr(self.fwd_model, "cache_manager", None)
         if cache_manager is None or not cache_manager.enabled:
             jacobian = self._calculate_efficient(sigma) if method == "efficient" else self._calculate_traditional(sigma)
-            setattr(self, "_last_block_tune_info", self.block_tuning_info())
+            self._last_block_tune_info = self.block_tuning_info()
             return jacobian
 
         sigma_values = np.ascontiguousarray(function_get_array(sigma), dtype=np.float64)
@@ -281,21 +288,20 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             persist=True,
             cost=12.0,
         )
-        setattr(
-            self,
-            "_last_cache_lookup",
-            {"hit": lookup.hit, "layer": lookup.layer, "artifact": lookup.artifact, "key": lookup.key},
-        )
-        setattr(self, "_last_block_tune_info", self.block_tuning_info())
+        self._last_cache_lookup = {
+            "hit": lookup.hit,
+            "layer": lookup.layer,
+            "artifact": lookup.artifact,
+            "key": lookup.key,
+        }
+        self._last_block_tune_info = self.block_tuning_info()
         return jacobian
 
     def _calculate_efficient(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)
         grad_u_all = self._compute_field_gradients(u_all)
-
         adjoint_fields = self._compute_adjoint_fields_efficient(sigma)
-        jacobian = self._assemble_jacobian_efficient(grad_u_all, adjoint_fields)
-        return jacobian
+        return self._assemble_jacobian_efficient(grad_u_all, adjoint_fields)
 
     def _calculate_traditional(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)

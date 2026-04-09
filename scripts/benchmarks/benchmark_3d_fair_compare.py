@@ -12,7 +12,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from pyeidors.perf.policy import (
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     PROFILE_A_BASELINE,
     PROFILE_B_CHOLMOD_ONLY,
@@ -25,6 +30,7 @@ from pyeidors.perf.policy import (
     QUICK_PERF_PROFILES,
     is_experimental_profile,
 )
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 def _parse_args() -> argparse.Namespace:
@@ -59,6 +65,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
     parser.add_argument("--cache-root", type=Path, default=Path(".pyeidors_cache") / "fair_compare")
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="Forwarded to benchmark_3d_runtime.py for both quick and full phases.",
+    )
     parser.add_argument("--cholmod-max-memory-gib", type=float, default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB)
     parser.add_argument(
         "--benchmark-quick-threshold-total",
@@ -136,6 +147,7 @@ def _run_runtime_report(
     absolute_startup_cache: str,
     run_diff: str,
     run_absolute: str,
+    acceleration_profile: str,
 ) -> dict[str, Any]:
     cmd = [
         sys.executable,
@@ -148,6 +160,8 @@ def _run_runtime_report(
         str(output_json),
         "--profile-label",
         profile_label,
+        "--acceleration-profile",
+        str(acceleration_profile),
         "--refinement",
         str(refinement),
         "--preconditioner",
@@ -499,6 +513,7 @@ def _run_profiles(
                     absolute_startup_cache=str(profile_cfg.get("absolute_startup_cache", "off")),
                     run_diff="on",
                     run_absolute="off",
+                    acceleration_profile=str(args.acceleration_profile),
                 )
                 source_reports["diff"] = str(diff_json)
 
@@ -547,6 +562,7 @@ def _run_profiles(
                     absolute_startup_cache=str(profile_cfg.get("absolute_startup_cache", "off")),
                     run_diff="off",
                     run_absolute="on",
+                    acceleration_profile=str(args.acceleration_profile),
                 )
                 source_reports["absolute"] = str(absolute_json)
 

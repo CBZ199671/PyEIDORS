@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional, Tuple
 
 import numpy as np
 from dolfinx import fem
@@ -56,9 +55,9 @@ class EITPDE(_PDEBase):
         self._sigma_function = fem.Function(self._V_sigma)
 
         self._jacobian_calculator = DirectJacobianCalculator(self._fwd_model)
-        self._current_image: Optional[EITImage] = None
-        self._cached_jacobian: Optional[np.ndarray] = None
-        self._cached_sigma_vector: Optional[np.ndarray] = None
+        self._current_image: EITImage | None = None
+        self._cached_jacobian: np.ndarray | None = None
+        self._cached_sigma_vector: np.ndarray | None = None
 
     def _validate_parameter_size(self, param_array: np.ndarray) -> None:
         expected = int(self._sigma_function.x.array.size)
@@ -78,7 +77,7 @@ class EITPDE(_PDEBase):
         self._validate_parameter_size(param_array)
         self._set_sigma(param_array)
 
-    def solve(self) -> Tuple[object, dict]:
+    def solve(self) -> tuple[object, dict]:
         if self._current_image is None:
             raise RuntimeError("assemble() must be called before solve().")
 
@@ -145,7 +144,7 @@ class EITPDE(_PDEBase):
         return self.observe(self.solve())
 
 
-def create_pde_model(eit_system) -> Tuple[EITPDE, "PDEModel", EITGeometryInfo]:
+def create_pde_model(eit_system) -> tuple[EITPDE, "PDEModel", EITGeometryInfo]:
     """Construct CUQI PDEModel for ``EITSystem``."""
 
     if PDEModel is None:

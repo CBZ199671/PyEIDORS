@@ -27,6 +27,8 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
@@ -37,6 +39,8 @@ from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array, mesh_num_vertices
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 def _solve_with_cached_factor(
@@ -144,6 +148,11 @@ def parse_args() -> argparse.Namespace:
                         help="Optional plot output path.")
     parser.add_argument("--memory-stats", action="store_true",
                         help="Record peak memory (MiB) for timed single-step calls.")
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="For this 2D runtime benchmark the profile is accepted mainly for CLI consistency.",
+    )
     return parser.parse_args()
 
 
@@ -358,7 +367,11 @@ def main() -> None:
     rows = []
     for refinement in args.refinements:
         pattern = build_pattern_config(args.n_elec)
-        system = EITSystem(n_elec=args.n_elec, pattern_config=pattern)
+        system = EITSystem(
+            n_elec=args.n_elec,
+            pattern_config=pattern,
+            acceleration_profile=str(args.acceleration_profile),
+        )
         mesh = load_or_create_mesh(
             mesh_dir=str(args.mesh_dir),
             n_elec=args.n_elec,

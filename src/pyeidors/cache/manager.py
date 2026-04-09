@@ -136,12 +136,8 @@ class CacheManager:
     def set_enabled(self, on: bool, name: str | None = None) -> float:
         """Enable/disable cache globally or for a specific name."""
         if name is None:
-            if on:
-                self._cache_enable = 1.0
-                self._cache_disabled_on.clear()
-            else:
-                self._cache_enable = 0.0
-                self._cache_disabled_on.clear()
+            self._cache_enable = 1.0 if on else 0.0
+            self._cache_disabled_on.clear()
             return float(self._cache_enable)
 
         if on:
@@ -306,46 +302,28 @@ class CacheManager:
         size_mb = estimate_object_size_bytes(value) / (1024.0 * 1024.0)
         return max(1.0, base * max(1.0, size_mb))
 
-    def invalidate(self, prefix: str = "", reason: str = "") -> int:
-        del reason
+    def _apply_to_stores(self, method: str, *args: Any, **kwargs: Any) -> int:
+        """Apply a named method to both cache stores and sum the results."""
         removed = 0
-        if self._process is not None:
-            removed += self._process.invalidate(prefix=prefix)
-        if self._disk is not None:
-            removed += self._disk.invalidate(prefix=prefix)
+        for store in (self._process, self._disk):
+            if store is not None:
+                removed += getattr(store, method)(*args, **kwargs)
         return removed
+
+    def invalidate(self, prefix: str = "", reason: str = "") -> int:  # noqa: ARG002
+        return self._apply_to_stores("invalidate", prefix=prefix)
 
     def clear_name(self, name: str, namespace: str | None = None) -> int:
-        removed = 0
-        if self._process is not None:
-            removed += self._process.clear_name(name=name, namespace=namespace)
-        if self._disk is not None:
-            removed += self._disk.clear_name(name=name, namespace=namespace)
-        return removed
+        return self._apply_to_stores("clear_name", name=name, namespace=namespace)
 
     def clear_max(self, max_bytes: int) -> int:
-        removed = 0
-        if self._process is not None:
-            removed += self._process.clear_max(max_bytes=max_bytes)
-        if self._disk is not None:
-            removed += self._disk.clear_max(max_bytes=max_bytes)
-        return removed
+        return self._apply_to_stores("clear_max", max_bytes=max_bytes)
 
     def clear_old(self, timestamp: float) -> int:
-        removed = 0
-        if self._process is not None:
-            removed += self._process.clear_old(timestamp)
-        if self._disk is not None:
-            removed += self._disk.clear_old(timestamp)
-        return removed
+        return self._apply_to_stores("clear_old", timestamp)
 
     def clear_new(self, timestamp: float) -> int:
-        removed = 0
-        if self._process is not None:
-            removed += self._process.clear_new(timestamp)
-        if self._disk is not None:
-            removed += self._disk.clear_new(timestamp)
-        return removed
+        return self._apply_to_stores("clear_new", timestamp)
 
     def _entry_value_for_layer(self, key: str, layer: str) -> Any | None:
         if layer == "process" and self._process is not None:

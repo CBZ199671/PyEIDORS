@@ -135,6 +135,34 @@ class TestCleanupStaleSessions:
         removed = cleanup_stale_session_caches(tmp_path, max_age_seconds=999999)
         assert removed == 0
 
+    def test_file_not_found_during_real_cleanup_stat(self, tmp_path, monkeypatch):
+        session_root = tmp_path / ".sessions"
+        session_root.mkdir()
+        child = session_root / "stale-shell-123"
+        child.mkdir()
+
+        class _VanishingDir:
+            name = child.name
+
+            @staticmethod
+            def is_dir() -> bool:
+                return True
+
+            @staticmethod
+            def stat():
+                raise FileNotFoundError("gone")
+
+        original_iterdir = Path.iterdir
+
+        def _iterdir_with_delete(self_path: Path):
+            if self_path == session_root:
+                return iter([_VanishingDir()])
+            return original_iterdir(self_path)
+
+        monkeypatch.setattr(Path, "iterdir", _iterdir_with_delete)
+        removed = cleanup_stale_session_caches(tmp_path, max_age_seconds=0)
+        assert removed == 0
+
 
 class TestResolveCacheDirectory:
     """Cover lines 202-205: FileNotFoundError in resolve check."""
@@ -164,6 +192,72 @@ class TestResolveCacheDirectory:
         )
         assert spec.lifecycle == "session"
         assert spec.shell_managed is True
+
+        with _LOCK:
+            _REGISTERED_SPECS.pop(key, None)
+
+    def test_shell_root_resolve_file_not_found_falls_back(self, tmp_path, monkeypatch):
+        session_dir = tmp_path / "session_dir_2"
+        session_dir.mkdir()
+        requested_root = tmp_path / "requested_root"
+        requested_root.mkdir()
+        cache_root = tmp_path / "cache_resolve_test_2"
+        cache_root.mkdir()
+
+        monkeypatch.setenv("PYEIDORS_CACHE_SESSION_ID", "test-id-2")
+        monkeypatch.setenv("PYEIDORS_CACHE_SESSION_DIR", str(session_dir))
+        monkeypatch.setenv("PYEIDORS_CACHE_REQUESTED_ROOT", str(requested_root))
+        monkeypatch.setenv("PYEIDORS_CACHE_OWNER_PID", "")
+
+        original_resolve = Path.resolve
+
+        def _resolve_with_fnf(self_path: Path, *args, **kwargs):
+            if self_path == requested_root:
+                raise FileNotFoundError("gone")
+            return original_resolve(self_path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "resolve", _resolve_with_fnf)
+
+        with _LOCK:
+            key = str(original_resolve(cache_root))
+            _REGISTERED_SPECS.pop(key, None)
+
+        spec = resolve_cache_directory(
+            cache_root,
+            lifecycle="session",
+            cleanup_on_exit=False,
+            cleanup_stale_sessions_on_startup=False,
+            stale_session_max_age_seconds=0,
+        )
+        assert spec.shell_managed is True
+        assert spec.effective_dir != session_dir
+
+        with _LOCK:
+            _REGISTERED_SPECS.pop(key, None)
+
+    def test_relative_shell_session_path_forces_same_root_false(self, tmp_path, monkeypatch):
+        cache_root = tmp_path / "cache_relative_test"
+        cache_root.mkdir()
+        relative_session_dir = Path("relative-session")
+
+        monkeypatch.setenv("PYEIDORS_CACHE_SESSION_ID", "test-relative")
+        monkeypatch.setenv("PYEIDORS_CACHE_SESSION_DIR", str(relative_session_dir))
+        monkeypatch.setenv("PYEIDORS_CACHE_REQUESTED_ROOT", str(cache_root))
+        monkeypatch.setenv("PYEIDORS_CACHE_OWNER_PID", "")
+
+        with _LOCK:
+            key = str(cache_root.resolve())
+            _REGISTERED_SPECS.pop(key, None)
+
+        spec = resolve_cache_directory(
+            cache_root,
+            lifecycle="session",
+            cleanup_on_exit=False,
+            cleanup_stale_sessions_on_startup=False,
+            stale_session_max_age_seconds=0,
+        )
+        assert spec.shell_managed is True
+        assert spec.effective_dir != relative_session_dir
 
         with _LOCK:
             _REGISTERED_SPECS.pop(key, None)

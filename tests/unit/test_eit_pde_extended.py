@@ -49,6 +49,17 @@ def _build_pde_stub(eit_system):
     return pde, n_elem, n_meas
 
 
+def test_constructor_initializes_runtime_state(eit_system):
+    pde = eit_pde_module.EITPDE(eit_system)
+
+    assert pde._eit_system is eit_system
+    assert pde._fwd_model is eit_system.fwd_model
+    assert pde._current_image is None
+    assert pde._cached_jacobian is None
+    assert pde._cached_sigma_vector is None
+    assert isinstance(pde._jacobian_calculator, eit_pde_module.DirectJacobianCalculator)
+
+
 def test_assemble_and_solve_observe(eit_system):
     pde, n_elem, n_meas = _build_pde_stub(eit_system)
 

@@ -36,6 +36,11 @@ def _torch_cuda_available() -> bool:
     return bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
 
 
+def _norm(value: object) -> str:
+    """Normalize a string-like value to lowercase stripped form."""
+    return str(value).strip().lower()
+
+
 def resolve_cuda_structured_runtime(
     *,
     mesh_dim: int,
@@ -49,7 +54,7 @@ def resolve_cuda_structured_runtime(
 ) -> dict[str, Any]:
     if int(mesh_dim) != 3:
         raise ValueError("forward_backend='cuda_structured' currently supports 3D meshes only.")
-    if str(scalar_type).strip().lower() != "real":
+    if _norm(scalar_type) != "real":
         raise ValueError(
             "forward_backend='cuda_structured' currently supports real-valued conductivity only."
         )
@@ -57,19 +62,19 @@ def resolve_cuda_structured_runtime(
         raise ValueError("forward_backend='cuda_structured' supports single-rank execution only.")
     if not mesh_file:
         raise ValueError("forward_backend='cuda_structured' requires a file-backed 3D mesh (.msh).")
-    if str(mesh_family).strip().lower() != "hex":
+    if _norm(mesh_family) != "hex":
         raise ValueError("forward_backend='cuda_structured' currently supports mesh_family='hex' only.")
-    if str(geometry_version).strip().lower() != "geomv2":
+    if _norm(geometry_version) != "geomv2":
         raise ValueError(
             "forward_backend='cuda_structured' currently supports geometry_version='geomv2' only."
         )
-    resolved_revision = str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
+    resolved_revision = _norm(generator_revision) or DEFAULT_3D_GENERATOR_REVISION
     if resolved_revision != DEFAULT_3D_GENERATOR_REVISION:
         raise ValueError(
             "forward_backend='cuda_structured' currently supports "
             f"generator_revision={DEFAULT_3D_GENERATOR_REVISION!r} only."
         )
-    if str(petsc_device_requested).strip().lower() != "cuda":
+    if _norm(petsc_device_requested) != "cuda":
         raise ValueError(
             "forward_backend='cuda_structured' requires petsc_device='cuda' "
             "to make GPU selection explicit."
@@ -91,7 +96,7 @@ def resolve_cuda_structured_runtime(
             "forward_backend='cuda_structured' requires a structured sidecar generated with the g3d3 hex mesh."
         )
     sidecar = load_structured_sidecar(sidecar_path)
-    if str(sidecar.get("generator_revision")).strip().lower() != DEFAULT_3D_GENERATOR_REVISION:
+    if _norm(sidecar.get("generator_revision")) != DEFAULT_3D_GENERATOR_REVISION:
         raise ValueError(
             "forward_backend='cuda_structured' requires a g3d3 structured sidecar matching the mesh."
         )
@@ -161,10 +166,8 @@ class CudaStructuredForwardBackend:
         dims = []
         for block in self.sidecar.get("blocks", []):
             logical = block.get("logical_cells", [1, 1, 1])
-            try:
+            if len(logical) >= 3:
                 dims.append(min(int(logical[0]), int(logical[1]), int(logical[2])))
-            except Exception:
-                continue
         if not dims:
             return 1
         min_dim = max(1, min(dims))
@@ -324,22 +327,15 @@ class CudaStructuredForwardBackend:
             self._diagnostics["batched_rhs_count"] = int(self._sigma_state.rhs_count)
             return self._sigma_state
 
-        top_left = self._assemble_top_left_matrix(np.asarray(sigma_values, dtype=np.float64))
+        top_left = self._assemble_top_left_matrix(sigma_values)
         diag = np.asarray(top_left.diagonal(), dtype=np.float64)
         if diag.size != self.model.dofs or not np.all(np.isfinite(diag)) or float(np.min(diag)) <= 0.0:
             raise RuntimeError("cuda_structured top-left system has an invalid diagonal.")
 
         A_gpu = self._csr_to_torch(top_left, self.device)
-        coupling_gpu = torch.as_tensor(
-            np.asarray(self._coupling_columns, dtype=np.float64),
-            device=self.device,
-            dtype=torch.float64,
-        )
-        diag_inv = torch.as_tensor(
-            (1.0 / diag)[:, None],
-            device=self.device,
-            dtype=torch.float64,
-        )
+        coupling_gpu = torch.as_tensor(self._coupling_columns, device=self.device, dtype=torch.float64)
+        diag_inv = torch.as_tensor((1.0 / diag)[:, None], device=self.device, dtype=torch.float64)
+
         response_basis_gpu, pcg_iterations = self._block_pcg(
             A_gpu,
             coupling_gpu,
@@ -348,12 +344,14 @@ class CudaStructuredForwardBackend:
             atol=1e-12,
             max_it=max(512, min(8192, 4 * int(self.model.dofs))),
         )
-        response_basis = np.asarray(response_basis_gpu.detach().cpu().numpy(), dtype=np.float64)
-        schur = np.asarray(self._electrode_diag - (self._coupling_columns.T @ response_basis), dtype=np.float64)
-        schur_aug = np.zeros((self.model.n_elec + 1, self.model.n_elec + 1), dtype=np.float64)
-        schur_aug[: self.model.n_elec, : self.model.n_elec] = schur
-        schur_aug[: self.model.n_elec, self.model.n_elec] = 1.0
-        schur_aug[self.model.n_elec, : self.model.n_elec] = 1.0
+
+        response_basis_cpu = response_basis_gpu.detach().cpu().numpy()
+        n_elec = self.model.n_elec
+        schur = self._electrode_diag - (self._coupling_columns.T @ response_basis_cpu)
+        schur_aug = np.zeros((n_elec + 1, n_elec + 1), dtype=np.float64)
+        schur_aug[:n_elec, :n_elec] = schur
+        schur_aug[:n_elec, n_elec] = 1.0
+        schur_aug[n_elec, :n_elec] = 1.0
         schur_factor = lu_factor(schur_aug)
 
         state = _CudaStructuredSigmaState(
@@ -362,59 +360,52 @@ class CudaStructuredForwardBackend:
             schur_factor=schur_factor,
             pcg_iterations=int(pcg_iterations),
             forward_reuse_state_hit=False,
-            rhs_count=int(self.model.n_elec),
+            rhs_count=n_elec,
         )
         self._sigma_state = state
-        self._diagnostics.update(
-            {
-                "pcg_iterations": int(pcg_iterations),
-                "batched_rhs_count": int(self.model.n_elec),
-                "forward_reuse_state_hit": False,
-            }
-        )
+        self._diagnostics.update({
+            "pcg_iterations": int(pcg_iterations),
+            "batched_rhs_count": n_elec,
+            "forward_reuse_state_hit": False,
+        })
         return state
 
     def backend_diagnostics(self) -> dict[str, object]:
-        return {
+        _RUNTIME_KEYS = (
+            "structured_sidecar_version",
+            "mesh_family",
+            "geometry_version",
+            "generator_revision",
+            "petsc_device_requested",
+            "petsc_device_effective",
+        )
+        result: dict[str, object] = {
             "forward_backend_requested": "cuda_structured",
             "forward_backend_effective": "cuda_structured",
-            "solve_mode": self._diagnostics.get("solve_mode"),
-            "h1_solver": self._diagnostics.get("h1_solver"),
-            "h1_preconditioner": self._diagnostics.get("h1_preconditioner"),
-            "structured_backend_version": self._diagnostics.get("structured_backend_version"),
-            "structured_sidecar_loaded": self._diagnostics.get("structured_sidecar_loaded"),
-            "structured_sidecar_file": self._diagnostics.get("structured_sidecar_file"),
-            "structured_sidecar_version": self.runtime.get("structured_sidecar_version"),
-            "operator_backend": self._diagnostics.get("operator_backend"),
-            "mg_levels": self._diagnostics.get("mg_levels"),
-            "pcg_iterations": self._diagnostics.get("pcg_iterations"),
-            "batched_rhs_count": self._diagnostics.get("batched_rhs_count"),
-            "forward_reuse_state_hit": self._diagnostics.get("forward_reuse_state_hit"),
-            "mesh_family": self.runtime.get("mesh_family"),
-            "geometry_version": self.runtime.get("geometry_version"),
-            "generator_revision": self.runtime.get("generator_revision"),
-            "petsc_device_requested": self.runtime.get("petsc_device_requested"),
-            "petsc_device_effective": self.runtime.get("petsc_device_effective"),
         }
+        result.update(self._diagnostics)
+        for key in _RUNTIME_KEYS:
+            result[key] = self.runtime.get(key)
+        return result
 
     def solve_batch(self, sigma_values: np.ndarray, pattern_matrix: np.ndarray) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
-        state = self._build_sigma_state(np.asarray(sigma_values, dtype=np.float64))
-        rhs = np.zeros((self.model.n_elec + 1, int(pattern_matrix.shape[0])), dtype=np.float64)
+        sigma_f64 = np.asarray(sigma_values, dtype=np.float64)
+        state = self._build_sigma_state(sigma_f64)
+        n_patterns = int(pattern_matrix.shape[0])
+
+        rhs = np.zeros((self.model.n_elec + 1, n_patterns), dtype=np.float64)
         rhs[: self.model.n_elec, :] = np.asarray(pattern_matrix, dtype=np.float64).T
+
         schur_solution = lu_solve(state.schur_factor, rhs)
         electrode_block = np.asarray(schur_solution[: self.model.n_elec, :].T, dtype=np.float64)
-        electrode_gpu = torch.as_tensor(
-            np.asarray(electrode_block.T, dtype=np.float64),
-            device=self.device,
-            dtype=torch.float64,
-        )
+
+        electrode_gpu = torch.as_tensor(electrode_block.T, device=self.device, dtype=torch.float64)
         potentials_gpu = -(state.response_basis_gpu @ electrode_gpu)
-        potentials = np.asarray(potentials_gpu.detach().cpu().numpy(), dtype=np.float64)
-        self._diagnostics["batched_rhs_count"] = int(pattern_matrix.shape[0])
+        potentials = potentials_gpu.detach().cpu().numpy().astype(np.float64, copy=False)
+
+        self._diagnostics["batched_rhs_count"] = n_patterns
         self._diagnostics["forward_reuse_state_hit"] = bool(state.forward_reuse_state_hit)
         self._diagnostics["pcg_iterations"] = int(state.pcg_iterations)
-        u_all = tuple(
-            np.asarray(potentials[:, idx], dtype=np.float64)
-            for idx in range(int(pattern_matrix.shape[0]))
-        )
+
+        u_all = tuple(potentials[:, idx] for idx in range(n_patterns))
         return u_all, electrode_block

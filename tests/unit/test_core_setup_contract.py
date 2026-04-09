@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from types import SimpleNamespace
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
@@ -224,6 +225,77 @@ def test_system_stores_public_device_policy():
     )
     assert system_unknown.device == "cpu"
     assert system_unknown.forward_backend == "dolfinx"
+
+
+def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+    )
+    generated_calls = []
+    monkeypatch.setattr(
+        "pyeidors.core_system.create_cylinder_3d_eit_mesh",
+        lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
+    )
+    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+
+    system.setup_generated_mesh(dimension=3)
+
+    assert generated_calls[0]["mesh_family"] == "hex"
+    assert generated_calls[0]["geometry_version"] == "geomv2"
+    assert generated_calls[1]["mesh"] == "generated-3d-mesh"
+
+
+def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="hex",
+        geometry_version="geomv2",
+        generator_revision="g3d3",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["acceleration_profile_effective"] == "gpu3d"
+    assert policy["forward_backend_effective"] == "cuda_structured"
+    assert policy["petsc_device_effective"] == "cuda"
+    assert policy["device_effective"] == "cuda"
+    assert policy["solver_mode_effective"] == "fast"
+    assert policy["line_search_mode_effective"] == "fast"
+
+
+def test_runtime_policy_gpu3d_fused_enables_fused_defaults():
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d_fused",
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d2",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["forward_backend_effective"] == "dolfinx"
+    assert policy["petsc_device_effective"] == "cuda"
+    assert policy["device_effective"] == "cuda"
+    assert policy["rom_mode_effective"] == "on"
+    assert policy["inexact_mode_effective"] == "auto"
+    assert policy["lowrank_mode_effective"] == "auto"
 
 
 def test_system_cache_lifecycle_defaults_to_session_and_supports_persistent():

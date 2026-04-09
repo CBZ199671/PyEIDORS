@@ -2,23 +2,14 @@
 
 from __future__ import annotations
 
-from typing import Dict, Optional, Any
-
-import numpy as np
+from typing import Any
 
 from ...core_system_helpers import difference_measurement
 from ...data.difference import project_measurement_vector
-from .base import (
-    ReconstructionResult,
-    resolve_reconstruction_output,
-    compute_residuals,
-)
-from ..contracts import SolverOutput
-from ..solvers.sparse_bayesian import (
-    SparseBayesianConfig,
-    SparseBayesianReconstructor,
-)
 from ...data.structures import EITData, EITImage
+from ..contracts import SolverOutput
+from ..solvers.sparse_bayesian import SparseBayesianConfig, SparseBayesianReconstructor
+from .base import ReconstructionResult, compute_residuals, resolve_reconstruction_output
 
 try:  # pragma: no cover - optional import guard for type checking
     from ...core_system import EITSystem
@@ -28,8 +19,8 @@ except ImportError:  # pragma: no cover
 
 def _ensure_reconstructor(
     eit_system: "EITSystem",
-    reconstructor: Optional[SparseBayesianReconstructor],
-    config: Optional[SparseBayesianConfig],
+    reconstructor: SparseBayesianReconstructor | None,
+    config: SparseBayesianConfig | None,
 ) -> SparseBayesianReconstructor:
     if reconstructor is not None:
         return reconstructor
@@ -42,12 +33,12 @@ def _ensure_reconstructor(
 def perform_sparse_absolute_reconstruction(
     eit_system: "EITSystem",
     measurement_data: EITData,
-    baseline_image: Optional[EITImage] = None,
-    reconstructor: Optional[SparseBayesianReconstructor] = None,
-    config: Optional[SparseBayesianConfig] = None,
-    noise_std: Optional[float] = None,
-    prior_scale: Optional[float] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    baseline_image: EITImage | None = None,
+    reconstructor: SparseBayesianReconstructor | None = None,
+    config: SparseBayesianConfig | None = None,
+    noise_std: float | None = None,
+    prior_scale: float | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ReconstructionResult:
     """Execute sparse Bayesian absolute imaging."""
 
@@ -82,7 +73,7 @@ def perform_sparse_absolute_reconstruction(
     measured_vector = measurement_data.meas
     residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
 
-    result_metadata: Dict[str, Any] = {
+    result_metadata: dict[str, Any] = {
         "baseline_used": baseline_image.elem_data.copy(),
         "display_values": conductivity_values,
         "solver": "sparse_bayesian",
@@ -111,12 +102,12 @@ def perform_sparse_difference_reconstruction(
     eit_system: "EITSystem",
     measurement_data: EITData,
     reference_data: EITData,
-    baseline_image: Optional[EITImage] = None,
-    reconstructor: Optional[SparseBayesianReconstructor] = None,
-    config: Optional[SparseBayesianConfig] = None,
-    noise_std: Optional[float] = None,
-    prior_scale: Optional[float] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    baseline_image: EITImage | None = None,
+    reconstructor: SparseBayesianReconstructor | None = None,
+    config: SparseBayesianConfig | None = None,
+    noise_std: float | None = None,
+    prior_scale: float | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ReconstructionResult:
     """Execute sparse Bayesian difference imaging."""
 
@@ -165,7 +156,7 @@ def perform_sparse_difference_reconstruction(
     )
     residual_vector, _, _, _ = compute_residuals(measured_vector, predicted_vector)
 
-    result_metadata: Dict[str, Any] = {
+    result_metadata: dict[str, Any] = {
         "reference_measured": reference_data.meas.copy(),
         "display_values": conductivity_values,
         "solver": "sparse_bayesian",

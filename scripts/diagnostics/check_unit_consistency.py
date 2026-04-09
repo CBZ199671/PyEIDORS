@@ -20,11 +20,15 @@ if sys.platform == "darwin":
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 def parse_args() -> argparse.Namespace:
@@ -50,6 +54,11 @@ def parse_args() -> argparse.Namespace:
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Exit non-zero on ERROR checks.",
+    )
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="For this diagnostics script the profile is accepted mainly for CLI consistency.",
     )
     return parser.parse_args()
 
@@ -106,6 +115,7 @@ def main() -> int:
             n_elec=args.n_elec,
             pattern_config=pattern,
             contact_impedance=np.full(args.n_elec, float(args.contact_impedance), dtype=float),
+            acceleration_profile=str(args.acceleration_profile),
         )
         if args.mesh_source == "cache":
             system.setup(mesh_source="cache", mesh_dir=args.mesh_dir, mesh_name=args.mesh_name)

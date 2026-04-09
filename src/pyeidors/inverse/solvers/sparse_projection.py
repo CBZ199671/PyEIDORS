@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from typing import Dict, List, Tuple
-
 import numpy as np
 
 from ...utils.numeric_ops import safe_dot
 
 
-def _resolve_coarse_sizes(config) -> List[int]:
-    sizes: List[int] = []
+def _resolve_coarse_sizes(config) -> list[int]:
+    sizes: list[int] = []
     if config.coarse_levels:
         sizes.extend(int(s) for s in config.coarse_levels if s and s > 1)
     elif config.coarse_group_size and config.coarse_group_size > 1:
@@ -18,15 +16,15 @@ def _resolve_coarse_sizes(config) -> List[int]:
     return sizes
 
 
-def _build_groups(n_elements: int, size: int) -> List[np.ndarray]:
-    groups: List[np.ndarray] = []
+def _build_groups(n_elements: int, size: int) -> list[np.ndarray]:
+    groups: list[np.ndarray] = []
     for start in range(0, n_elements, size):
         stop = min(start + size, n_elements)
         groups.append(np.arange(start, stop, dtype=int))
     return groups
 
 
-def _sum_group_columns(jacobian: np.ndarray, groups: List[np.ndarray]) -> List[np.ndarray]:
+def _sum_group_columns(jacobian: np.ndarray, groups: list[np.ndarray]) -> list[np.ndarray]:
     return [jacobian[:, idx].sum(axis=1) for idx in groups]
 
 
@@ -44,12 +42,12 @@ def _init_power_vector(matrix: np.ndarray, rng: np.random.Generator) -> np.ndarr
 def build_coarse_hierarchy(
     config,
     n_elements: int,
-    cache: Dict[int, List[np.ndarray]],
-) -> List[Tuple[int, List[np.ndarray]]]:
+    cache: dict[int, list[np.ndarray]],
+) -> list[tuple[int, list[np.ndarray]]]:
     """Build (group_size, groups) hierarchy from config and cache."""
     sizes = _resolve_coarse_sizes(config)
 
-    hierarchy: List[Tuple[int, List[np.ndarray]]] = []
+    hierarchy: list[tuple[int, list[np.ndarray]]] = []
     for size in sorted(set(sizes), reverse=True):
         if size >= n_elements:
             continue
@@ -63,9 +61,9 @@ def build_coarse_hierarchy(
 
 def get_coarse_matrix(
     jacobian: np.ndarray,
-    groups: List[np.ndarray],
+    groups: list[np.ndarray],
     group_size: int,
-    cache: Dict[int, np.ndarray],
+    cache: dict[int, np.ndarray],
 ) -> np.ndarray:
     """Get or build grouped coarse matrix."""
     if group_size not in cache:
@@ -77,7 +75,7 @@ def get_coarse_matrix(
 def compute_projection(
     jacobian: np.ndarray,
     rank: int,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
     """Compute SVD projection basis and reduced system."""
     U, s, Vt = np.linalg.svd(jacobian, full_matrices=False)
     k = min(rank, len(s))

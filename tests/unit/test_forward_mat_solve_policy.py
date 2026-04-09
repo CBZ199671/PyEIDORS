@@ -158,20 +158,13 @@ def test_resolve_petsc_backend_info_cuda_requires_real_capability(monkeypatch):
     assert "nix develop .#cuda" in message
 
 
-def test_resolve_mfem_runtime_device_prefers_requested_cuda_when_petsc_is_cpu():
+def test_gpu_gauge_fix_enabled_tracks_effective_cuda_backend():
     model = EITForwardModel.__new__(EITForwardModel)
-    model.backend_config = SimpleNamespace(petsc_device="cuda")
     model._petsc_backend_info = {"petsc_device_effective": "cpu"}
+    assert EITForwardModel._gpu_gauge_fix_enabled(model) is False
 
-    assert EITForwardModel._resolve_mfem_runtime_device(model) == "cuda"
-
-
-def test_resolve_mfem_runtime_device_keeps_effective_cuda():
-    model = EITForwardModel.__new__(EITForwardModel)
-    model.backend_config = SimpleNamespace(petsc_device="auto")
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
-
-    assert EITForwardModel._resolve_mfem_runtime_device(model) == "cuda"
+    assert EITForwardModel._gpu_gauge_fix_enabled(model) is True
 
 
 def test_ensure_electrode_matrix_is_lazy():

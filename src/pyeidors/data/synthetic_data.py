@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Any
 
 import numpy as np
 from dolfinx import fem
@@ -11,7 +11,7 @@ from ..femx import cell_midpoints
 from .structures import EITData, EITImage
 
 
-def _paint_circle(values: np.ndarray, centers: np.ndarray, center: Tuple[float, float], radius: float, conductivity: float):
+def _paint_circle(values: np.ndarray, centers: np.ndarray, center: tuple[float, float], radius: float, conductivity: float) -> None:
     if centers.size == 0:
         return
     dist2 = (centers[:, 0] - center[0]) ** 2 + (centers[:, 1] - center[1]) ** 2
@@ -23,9 +23,9 @@ def create_synthetic_data(
     inclusion_conductivity: float = 2.5,
     background_conductivity: float = 1.0,
     noise_level: float = 0.02,
-    center: Tuple[float, float] = (0.2, 0.2),
+    center: tuple[float, float] = (0.2, 0.2),
     radius: float = 0.3,
-):
+) -> dict[str, Any]:
     """Create synthetic EIT test data."""
 
     sigma_true = fem.Function(fwd_model.V_sigma)
@@ -62,7 +62,7 @@ def create_synthetic_data(
 def create_custom_phantom(
     fwd_model,
     background_conductivity: float = 1.0,
-    anomalies: list = None,
+    anomalies: list[dict[str, Any]] | None = None,
 ):
     """Create custom phantom conductivity field."""
 

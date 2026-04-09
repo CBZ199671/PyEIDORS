@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
@@ -16,12 +16,12 @@ class PatternConfig:
     """Stimulation and measurement pattern configuration."""
     n_elec: int
     n_rings: int = 1
-    stim_pattern: Union[str, List[int]] = '{ad}'
-    meas_pattern: Union[str, List[int]] = '{ad}'
+    stim_pattern: str | list[int] = '{ad}'
+    meas_pattern: str | list[int] = '{ad}'
     drive_mode: Literal["line_current_density", "total_current", "normalized"] = "line_current_density"
     drive_value: float = 1.0
     geometry_scale_to_m: float = 1.0
-    electrode_length_m_override: Optional[Union[float, List[float]]] = None
+    electrode_length_m_override: float | list[float] | None = None
     use_meas_current: bool = False
     use_meas_current_next: int = 0
     rotate_meas: bool = True
@@ -39,8 +39,8 @@ class EITData:
     n_stim: int
     n_meas: int
     type: str = 'real'
-    reference_meas: Optional[np.ndarray] = None
-    target_meas: Optional[np.ndarray] = None
+    reference_meas: np.ndarray | None = None
+    target_meas: np.ndarray | None = None
     difference_mode: str = 'raw'
     difference_orientation: str = 'target_minus_reference'
 
@@ -66,7 +66,7 @@ class MeshConfig:
     radius: float = 1.0
     height: float = 1.0
     electrode_height_ratio: float = 0.2
-    electrode_level_fractions: Tuple[float, ...] = (0.25, 0.75)
+    electrode_level_fractions: tuple[float, ...] = (0.25, 0.75)
     z_center: float = 0.0
     refinement: int = 8
     electrode_vertices: int = 8
@@ -74,23 +74,22 @@ class MeshConfig:
     mesh_size: float = 0.1
     mesh_family: str = "tetra"
     geometry_version: str = "geomv2"
-    generator_revision: Optional[str] = None
+    generator_revision: str | None = None
 
 
 @dataclass
 class ElectrodePosition:
     """Electrode position information."""
     L: int  # Number of electrodes
-    positions: List[Tuple[float, float]]  # Electrode angular positions (start, end)
+    positions: list[tuple[float, float]]  # Electrode angular positions (start, end)
 
     @classmethod
     def create_circular(cls, n_elec: int = 16, radius: float = 1.0) -> 'ElectrodePosition':
         """Create circular electrode positions."""
         import math
 
-        # Calculate electrode coverage angle
-        electrode_width = 2 * math.pi / n_elec / 4  # Each electrode covers 1/4 of segment
-        gap_width = 2 * math.pi / n_elec * 3 / 4    # Gap covers 3/4 of segment
+        # Each electrode covers 1/4 of its angular segment
+        electrode_width = 2 * math.pi / n_elec / 4
 
         positions = []
         for i in range(n_elec):
@@ -108,17 +107,17 @@ class EITMesh:
 
     mesh: "Mesh"
     facet_tags: "MeshTags"
-    cell_tags: Optional["MeshTags"] = None
+    cell_tags: "MeshTags | None" = None
     association_table: dict[str, int] = field(default_factory=dict)
     physical_groups: dict[str, Any] = field(default_factory=dict)
     radius: float = 0.0
-    mesh_file: Optional[str] = None
-    electrode_vertices: Optional[list[np.ndarray]] = None
-    mesh_family: Optional[str] = None
-    geometry_version: Optional[str] = None
-    generator_revision: Optional[str] = None
-    structured_sidecar_file: Optional[str] = None
-    structured_sidecar_version: Optional[str] = None
+    mesh_file: str | None = None
+    electrode_vertices: list[np.ndarray] | None = None
+    mesh_family: str | None = None
+    geometry_version: str | None = None
+    generator_revision: str | None = None
+    structured_sidecar_file: str | None = None
+    structured_sidecar_version: str | None = None
 
     @property
     def comm(self):
@@ -168,7 +167,7 @@ class EITMesh:
     def get_info(self) -> dict[str, Any]:
         coords = self.coordinates()
         center = coords.mean(axis=0) if coords.size else np.zeros((self.mesh.geometry.dim,))
-        n_elec = len([k for k in self.association_table if isinstance(k, str) and k.lower().startswith("electrode")])
+        n_elec = sum(1 for k in self.association_table if isinstance(k, str) and k.lower().startswith("electrode"))
         return {
             "num_vertices": self.num_vertices(),
             "num_cells": self.num_cells(),

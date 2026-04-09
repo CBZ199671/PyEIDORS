@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 import hashlib
 import json
-from pathlib import Path
 import threading
+from collections import OrderedDict
+from pathlib import Path
 
 from ..cache.keys import hash_path
 from ..data.structures import EITMesh

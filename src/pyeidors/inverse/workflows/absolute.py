@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
-
-import numpy as np
-
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from ...data.structures import EITData, EITImage
 from .base import (
@@ -22,9 +18,9 @@ if TYPE_CHECKING:  # pragma: no cover
 def perform_absolute_reconstruction(
     eit_system: "EITSystem",
     measurement_data: EITData,
-    baseline_image: Optional[EITImage] = None,
-    initial_image: Optional[EITImage] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    baseline_image: EITImage | None = None,
+    initial_image: EITImage | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ReconstructionResult:
     """Perform absolute imaging.
 
@@ -62,11 +58,11 @@ def perform_absolute_reconstruction(
 
     measured_vector = measurement_data.meas
     simulated_vector = simulated_data.meas
-    residual_vector, l2_error, rel_error, mse = compute_residuals(
+    residual_vector, _, _, _ = compute_residuals(
         measured_vector, simulated_vector
     )
 
-    result_metadata: Dict[str, Any] = {
+    result_metadata: dict[str, Any] = {
         "display_values": conductivity_values,
         "baseline_used": baseline_elem,
         "solver_diagnostics": reconstruction.diagnostics,

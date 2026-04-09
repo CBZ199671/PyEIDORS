@@ -11,6 +11,8 @@ from typing import Any
 
 import numpy as np
 
+from .types import compute_score_eff, compute_score_size
+
 
 def estimate_object_size_bytes(value: Any) -> int:
     """Estimate object size in bytes for eviction decisions."""
@@ -49,18 +51,6 @@ class _Entry:
     last_access: float
 
 
-def _compute_score_eff(*, effort: float, use_count: int, priority: float) -> float:
-    """Mirrors EIDORS score_eff = round(10*log10(effort*count)) + priority."""
-    scaled_effort = max(float(effort), 1e-9)
-    return float(round(10.0 * np.log10(scaled_effort * max(int(use_count), 1))) + float(priority))
-
-
-def _compute_score_size(size_bytes: int) -> float:
-    """Mirrors EIDORS score_sz = round(10*log10(size_bytes/1024))."""
-    scaled_size = max(int(size_bytes), 1)
-    return float(round(10.0 * np.log10(float(scaled_size) / 1024.0)))
-
-
 def _eviction_key(entry: _Entry) -> tuple[float, float, float]:
     """Evict lower-priority entries first.
 
@@ -93,7 +83,7 @@ class ProcessCacheStore:
             self._items.move_to_end(key)
             entry.last_access = now
             entry.use_count += 1
-            entry.score_eff = _compute_score_eff(
+            entry.score_eff = compute_score_eff(
                 effort=entry.effort,
                 use_count=entry.use_count,
                 priority=entry.priority,
@@ -117,12 +107,12 @@ class ProcessCacheStore:
         size = estimate_object_size_bytes(value)
         now = time.time()
         use_effort = float(cost if effort is None else effort)
-        score_eff = _compute_score_eff(
+        score_eff = compute_score_eff(
             effort=use_effort,
             use_count=1,
             priority=float(priority),
         )
-        score_size = _compute_score_size(size)
+        score_size = compute_score_size(size)
         with self._lock:
             existing = self._items.pop(key, None)
             if existing is not None:

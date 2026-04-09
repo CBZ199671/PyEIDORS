@@ -54,7 +54,7 @@ class TestForwardSolveDeep:
         # Jacobian computation
         jac = eit_system.reconstructor.jacobian_calculator
         if jac is not None:
-            J = jac.compute_jacobian(img)
+            J = jac.calculate_from_image(img)
             assert J is not None
 
     def test_fwd_solve_with_perturbation(self, eit_system):

@@ -75,3 +75,34 @@ def test_collect_recent_with_values_and_install_roundtrip(tmp_path: Path):
     assert warm_lookup.hit is True
     assert calls["count"] == 1
     np.testing.assert_allclose(value_warm, np.eye(4))
+
+
+def test_collect_recent_preserves_input_name_order(tmp_path: Path):
+    cache_dir = tmp_path / "cache"
+    manager = CacheManager(scope="both", cache_dir=cache_dir, policy=CachePolicy())
+
+    manager.get_or_compute(
+        artifact="single_step_operator",
+        payload={"case": "a"},
+        compute_fn=lambda: np.eye(2),
+        name="alpha",
+        namespace="demo",
+        persist=True,
+    )
+    manager.get_or_compute(
+        artifact="single_step_operator",
+        payload={"case": "b"},
+        compute_fn=lambda: np.eye(2) * 2.0,
+        name="beta",
+        namespace="demo",
+        persist=True,
+    )
+
+    collected = manager.collect_recent(
+        names=["beta", "alpha", "beta"],
+        limit_per_name=1,
+        namespace="demo",
+    )
+    assert list(collected.keys()) == ["beta", "alpha"]
+    assert len(collected["beta"]) == 1
+    assert len(collected["alpha"]) == 1

@@ -9,6 +9,7 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 import numpy as np
 
 from pyeidors.perf import (
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_ABSOLUTE_STARTUP_CACHE,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
@@ -152,6 +153,10 @@ def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
         "cholmod_max_memory_gib": float(
             getattr(args, "cholmod_max_memory_gib", DEFAULT_CHOLMOD_MAX_MEMORY_GIB)
         ),
+        "acceleration_profile": str(
+            getattr(args, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
+        ).strip().lower()
+        or DEFAULT_ACCELERATION_PROFILE,
         "jacobian_block_tune": str(getattr(args, "jacobian_block_tune", DEFAULT_JACOBIAN_BLOCK_TUNE)),
         "jacobian_block_size": int(getattr(args, "jacobian_block_size", DEFAULT_JACOBIAN_BLOCK_SIZE)),
         "jacobian_block_candidates": parse_block_size_candidates(

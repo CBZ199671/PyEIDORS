@@ -5,7 +5,21 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
+import numpy as np
+
 DEFAULT_CACHE_LIFECYCLE = "session"
+
+
+def compute_score_eff(*, effort: float, use_count: int, priority: float) -> float:
+    """EIDORS-style efficiency score: round(10*log10(effort*count)) + priority."""
+    scaled_effort = max(effort, 1e-9)
+    return float(round(10.0 * np.log10(scaled_effort * max(use_count, 1))) + priority)
+
+
+def compute_score_size(size_bytes: int) -> float:
+    """EIDORS-style size score: round(10*log10(size_bytes/1024))."""
+    scaled_size = max(size_bytes, 1)
+    return float(round(10.0 * np.log10(float(scaled_size) / 1024.0)))
 
 CacheDiskLifecycle = Literal["session", "persistent"]
 
@@ -84,6 +98,8 @@ class CacheStats:
     disk_max_bytes: int = 0
 
     def to_dict(self) -> dict[str, Any]:
+        total_hits = self.process_hits + self.disk_hits
+        total_misses = self.process_misses + self.disk_misses
         return {
             "process_hits": self.process_hits,
             "process_misses": self.process_misses,
@@ -95,13 +111,7 @@ class CacheStats:
             "disk_items": self.disk_items,
             "disk_bytes": self.disk_bytes,
             "disk_max_bytes": self.disk_max_bytes,
-            "total_hits": self.process_hits + self.disk_hits,
-            "total_misses": self.process_misses + self.disk_misses,
-            "hit_rate": (
-                (self.process_hits + self.disk_hits)
-                / max(
-                    1,
-                    self.process_hits + self.disk_hits + self.process_misses + self.disk_misses,
-                )
-            ),
+            "total_hits": total_hits,
+            "total_misses": total_misses,
+            "hit_rate": total_hits / max(1, total_hits + total_misses),
         }

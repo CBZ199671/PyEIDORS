@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -17,9 +17,7 @@ from ...cache.object_signature import (
 from ...utils.cuqi_imports import suppress_known_cuqi_import_warnings
 from .sparse_bayesian_backends import SparseBayesianBackendMixin
 from .eit_pde import EITPDE, create_pde_model
-from .sparse_projection import (
-    build_coarse_hierarchy,
-)
+from .sparse_projection import build_coarse_hierarchy
 from .sparse_runtime import run_sparse_reconstruction
 
 try:  # pragma: no cover - optional dependency guard
@@ -45,19 +43,19 @@ class SparseBayesianConfig:
     smoothing_beta: float = 1e-6
     noise_rel: float = 0.02
     noise_floor: float = 1e-6
-    clip_values: Optional[Tuple[float, float]] = (1e-6, 10.0)
+    clip_values: tuple[float, float] | None = (1e-6, 10.0)
     cache_jacobian: bool = True
-    subspace_rank: Optional[int] = None
+    subspace_rank: int | None = None
     use_linear_warm_start: bool = False
     solver: str = "map"  # map | fista | irls
     linear_max_iterations: int = 200
     linear_tolerance: float = 1e-6
-    coarse_group_size: Optional[int] = None
+    coarse_group_size: int | None = None
     use_gpu: bool = False
     gpu_dtype: str = "float32"
-    coarse_levels: Optional[Tuple[int, ...]] = None
+    coarse_levels: tuple[int, ...] | None = None
     block_iterations: int = 0
-    block_size: Optional[int] = None
+    block_size: int | None = None
     refinement_gradient_tol: float = 1e-5
     coarse_iterations: int = 0
     coarse_relaxation: float = 1.0
@@ -69,7 +67,7 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
     def __init__(
         self,
         eit_system,
-        config: Optional[SparseBayesianConfig] = None,
+        config: SparseBayesianConfig | None = None,
         verbose: bool = True,
     ) -> None:
         if not _CUQI_AVAILABLE:  # pragma: no cover
@@ -86,14 +84,14 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
         self._eit_pde: EITPDE
         self._cuqi_model, geometry = self._initialise_pde_model()
 
-        self._cached_jacobian: Optional[np.ndarray] = None
-        self._cached_baseline: Optional[np.ndarray] = None
-        self._cached_basis: Optional[np.ndarray] = None
-        self._cached_reduced_matrix: Optional[np.ndarray] = None
-        self._cached_U: Optional[np.ndarray] = None
-        self._cached_singular: Optional[np.ndarray] = None
-        self._coarse_levels_cache: Dict[int, List[np.ndarray]] = {}
-        self._cached_coarse_matrices: Dict[int, np.ndarray] = {}
+        self._cached_jacobian: np.ndarray | None = None
+        self._cached_baseline: np.ndarray | None = None
+        self._cached_basis: np.ndarray | None = None
+        self._cached_reduced_matrix: np.ndarray | None = None
+        self._cached_U: np.ndarray | None = None
+        self._cached_singular: np.ndarray | None = None
+        self._coarse_levels_cache: dict[int, list[np.ndarray]] = {}
+        self._cached_coarse_matrices: dict[int, np.ndarray] = {}
 
         self.n_elements = geometry.n_elements
         self.n_measurements = geometry.n_measurements
@@ -101,13 +99,13 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
     def reconstruct(
         self,
         measurement_data: EITData,
-        baseline_image: Optional[EITImage] = None,
-        reference_data: Optional[EITData] = None,
+        baseline_image: EITImage | None = None,
+        reference_data: EITData | None = None,
         initial_conductivity: float = 1.0,
-        noise_std: Optional[float] = None,
-        prior_scale: Optional[float] = None,
-        clip_values: Optional[Tuple[float, float]] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        noise_std: float | None = None,
+        prior_scale: float | None = None,
+        clip_values: tuple[float, float] | None = None,
+        metadata: dict[str, Any] | None = None,
     ):
         return run_sparse_reconstruction(
             self,
@@ -192,7 +190,7 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
             noise_sigma = self.config.noise_floor
         return noise_sigma
 
-    def _build_coarse_hierarchy(self) -> List[Tuple[int, List[np.ndarray]]]:
+    def _build_coarse_hierarchy(self) -> list[tuple[int, list[np.ndarray]]]:
         cache_manager = getattr(self.eit_system, "cache_manager", None)
         if cache_manager is None or not cache_manager.enabled:
             return build_coarse_hierarchy(

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from copy import deepcopy
 from dataclasses import asdict, dataclass
 import hashlib
 import json
@@ -41,8 +40,7 @@ _PROCESS_FORWARD_SETUP_CACHE_LOCK = threading.Lock()
 
 
 def _pattern_signature(config: PatternConfig) -> dict[str, Any]:
-    cloned = deepcopy(config)
-    return _normalize(asdict(cloned))
+    return _normalize(asdict(config))
 
 
 def build_process_forward_setup_key(

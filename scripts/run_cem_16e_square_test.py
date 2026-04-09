@@ -15,11 +15,16 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from pathlib import Path
 
 # Runtime stability guard for mixed PETSc/Torch execution on macOS.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 import numpy as np
 import ufl
@@ -29,6 +34,8 @@ from mpi4py import MPI
 from pyeidors import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.femx import build_eit_mesh, function_get_array
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 try:  # pragma: no cover - thread cap is a runtime stability measure
     import torch
@@ -99,7 +106,7 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
     return eit_mesh
 
 
-def run_test(*, skip_inverse: bool = False):
+def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE):
     n_elec = 16
     # Keep the mesh moderately fine for signal quality while avoiding
     # unnecessary solver pressure in local/CI smoke runs.
@@ -125,6 +132,7 @@ def run_test(*, skip_inverse: bool = False):
         regularization_alpha=1.0,
         linear_backend="scipy",
         performance_mode="safe",
+        acceleration_profile=str(acceleration_profile),
     )
     eit_system.setup(mesh=mesh)
 
@@ -188,13 +196,21 @@ def _parse_args() -> argparse.Namespace:
         action="store_true",
         help="Skip inverse reconstruction and run forward checks only.",
     )
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="For this 2D smoke script the profile is accepted mainly for CLI consistency.",
+    )
     return parser.parse_args()
 
 
 def main() -> None:
     args = _parse_args()
     try:
-        run_test(skip_inverse=bool(args.skip_inverse))
+        run_test(
+            skip_inverse=bool(args.skip_inverse),
+            acceleration_profile=str(args.acceleration_profile),
+        )
     except Exception as exc:
         print(f"[ERROR] CEM square test failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

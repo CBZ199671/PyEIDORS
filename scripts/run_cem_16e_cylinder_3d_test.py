@@ -22,6 +22,11 @@ from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    resolve_3d_mesh_contract,
+)
 
 try:  # pragma: no cover - runtime tuning only
     import torch
@@ -49,9 +54,16 @@ def _build_3d_phantom(
     return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
 
 
-def run_test(*, skip_inverse: bool = False) -> None:
+def run_test(
+    *,
+    skip_inverse: bool = False,
+    acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
+) -> None:
     n_elec = 16
     radius = 0.22
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=acceleration_profile,
+    )
     mesh = load_or_create_mesh(
         mesh_dir=str(Path("eit_meshes")),
         n_elec=n_elec,
@@ -62,6 +74,9 @@ def run_test(*, skip_inverse: bool = False) -> None:
         electrode_coverage=0.5,
         electrode_height_ratio=0.2,
         z_center=0.0,
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
     )
 
     pattern_config = PatternConfig(
@@ -88,6 +103,7 @@ def run_test(*, skip_inverse: bool = False) -> None:
         jacobian_update_every=2,
         jacobian_reuse_tol=1e-3,
         line_search_mode="fast",
+        acceleration_profile=str(acceleration_profile),
     )
     eit_system.setup(mesh=mesh)
 
@@ -147,6 +163,11 @@ def run_test(*, skip_inverse: bool = False) -> None:
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="3D CEM cylinder forward/inverse smoke test")
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="Use `gpu3d` to simplify the 3D GPU path when the runtime supports it.",
+    )
     parser.add_argument(
         "--skip-inverse",
         action="store_true",
@@ -158,7 +179,10 @@ def _parse_args() -> argparse.Namespace:
 def main() -> None:
     args = _parse_args()
     try:
-        run_test(skip_inverse=bool(args.skip_inverse))
+        run_test(
+            skip_inverse=bool(args.skip_inverse),
+            acceleration_profile=str(args.acceleration_profile),
+        )
     except Exception as exc:
         print(f"[ERROR] 3D CEM cylinder test failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         raise SystemExit(1) from exc

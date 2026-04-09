@@ -13,17 +13,7 @@ import threading
 import time
 from typing import Any
 
-import numpy as np
-
-
-def _compute_score_eff(*, effort: float, use_count: int, priority: float) -> float:
-    scaled_effort = max(float(effort), 1e-9)
-    return float(round(10.0 * np.log10(scaled_effort * max(int(use_count), 1))) + float(priority))
-
-
-def _compute_score_size(size_bytes: int) -> float:
-    scaled_size = max(int(size_bytes), 1)
-    return float(round(10.0 * np.log10(float(scaled_size) / 1024.0)))
+from .types import compute_score_eff, compute_score_size
 
 
 class DiskCacheStore:
@@ -171,7 +161,7 @@ class DiskCacheStore:
                     return None
 
                 updated_use_count = int(use_count) + 1
-                score_eff = _compute_score_eff(
+                score_eff = compute_score_eff(
                     effort=float(effort),
                     use_count=updated_use_count,
                     priority=float(priority),
@@ -218,12 +208,12 @@ class DiskCacheStore:
         size = int(target.stat().st_size)
         now = time.time()
         use_effort = float(cost if effort is None else effort)
-        score_eff = _compute_score_eff(
+        score_eff = compute_score_eff(
             effort=use_effort,
             use_count=1,
             priority=float(priority),
         )
-        score_size = _compute_score_size(size)
+        score_size = compute_score_size(size)
 
         with self._lock:
             with self._session() as conn:

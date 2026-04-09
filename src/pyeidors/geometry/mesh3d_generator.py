@@ -6,15 +6,14 @@ import json
 import logging
 import tempfile
 import time
-from configparser import ConfigParser
 from dataclasses import dataclass
 from math import atan2, cos, pi, sin
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import numpy as np
-from mpi4py import MPI
 from dolfinx.io import gmsh as gmshio
+from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
@@ -26,6 +25,7 @@ from ..perf.policy import (
     SQUARE_TO_DISK_3D_GENERATOR_REVISION,
     normalize_mesh_family,
 )
+from ._helpers import association_from_mesh_data, write_association_table
 
 logger = logging.getLogger(__name__)
 
@@ -112,12 +112,10 @@ class Cylinder3DMeshConfig:
                 "3D cylindrical meshes require at least two electrode_level_fractions "
                 "entries for the zigzag layout."
             )
+        sorted_windows = sorted(_electrode_vertical_windows(self), key=lambda w: w[0])
         if any(
-            float(right[0]) - float(left[1]) <= 1e-10
-            for left, right in zip(
-                sorted(_electrode_vertical_windows(self), key=lambda item: item[0])[:-1],
-                sorted(_electrode_vertical_windows(self), key=lambda item: item[0])[1:],
-            )
+            right[0] - left[1] <= 1e-10
+            for left, right in zip(sorted_windows[:-1], sorted_windows[1:])
         ):
             raise ValueError(
                 "electrode windows overlap; reduce electrode_height_ratio or "
@@ -195,19 +193,6 @@ def _classify_theta(theta: float, positions: Sequence[Tuple[float, float]]) -> i
     return None
 
 
-def _association_from_mesh_data(mesh_data) -> Dict[str, int]:
-    association_table: Dict[str, int] = {}
-    for name, group in (mesh_data.physical_groups or {}).items():
-        association_table[name] = int(group.tag)
-    return association_table
-
-
-def _write_association_table(path: Path, association_table: Dict[str, int]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    config = ConfigParser()
-    config["ASSOCIATION TABLE"] = {str(k): str(v) for k, v in association_table.items()}
-    with path.open("w", encoding="utf-8") as handle:
-        config.write(handle)
 
 
 def structured_sidecar_path_for_mesh(mesh_file: str | Path) -> Path:
@@ -294,12 +279,12 @@ def _prepare_output_paths(
 
 
 def _electrode_vertical_windows(config: Cylinder3DMeshConfig) -> list[tuple[float, float]]:
-    half_height = 0.5 * float(config.height * config.electrode_height_ratio)
+    half_height = 0.5 * config.height * config.electrode_height_ratio
     windows: list[tuple[float, float]] = []
     for frac in config.electrode_level_fractions:
-        center = float(config.z_min + float(frac) * config.height)
-        z_lower = max(float(config.z_min), float(center - half_height))
-        z_upper = min(float(config.z_max), float(center + half_height))
+        center = config.z_min + frac * config.height
+        z_lower = max(config.z_min, center - half_height)
+        z_upper = min(config.z_max, center + half_height)
         if z_upper - z_lower <= 1e-10:
             raise ValueError(
                 "Resolved electrode window collapsed; adjust "
@@ -315,7 +300,7 @@ def _window_contains(
     *,
     tol: float = 1e-10,
 ) -> bool:
-    return float(window[0]) - tol <= float(z_value) <= float(window[1]) + tol
+    return window[0] - tol <= z_value <= window[1] + tol
 
 
 def _find_electrode_window_index(
@@ -324,28 +309,28 @@ def _find_electrode_window_index(
 ) -> int | None:
     for idx, window in enumerate(_electrode_vertical_windows(config)):
         if _window_contains(z_value, window):
-            return int(idx)
+            return idx
     return None
 
 
 def _build_z_stage_breakpoints(config: Cylinder3DMeshConfig) -> list[float]:
-    points = [float(config.z_min), float(config.z_max)]
+    points = [config.z_min, config.z_max]
     for z_lower, z_upper in _electrode_vertical_windows(config):
-        points.extend([float(z_lower), float(z_upper)])
+        points.extend([z_lower, z_upper])
     ordered = sorted(points)
     unique: list[float] = []
     for value in ordered:
-        if not unique or abs(float(value) - float(unique[-1])) > 1e-10:
-            unique.append(float(value))
+        if not unique or abs(value - unique[-1]) > 1e-10:
+            unique.append(value)
     return unique
 
 
 def _z_stage_intervals(config: Cylinder3DMeshConfig) -> list[tuple[float, float]]:
     breaks = _build_z_stage_breakpoints(config)
     return [
-        (float(start), float(stop))
+        (start, stop)
         for start, stop in zip(breaks[:-1], breaks[1:])
-        if float(stop) - float(start) > 1e-12
+        if stop - start > 1e-12
     ]
 
 
@@ -364,7 +349,7 @@ def _classify_sidewall_patch(
     if electrode_idx is None:
         return "gaps", None
 
-    if window_idx == (int(electrode_idx) - 1) % len(_electrode_vertical_windows(config)):
+    if window_idx == (electrode_idx - 1) % len(_electrode_vertical_windows(config)):
         return "electrode", int(electrode_idx)
     return "gaps", None
 
@@ -373,10 +358,11 @@ def _top_surface_from_extrusion(extruded: Sequence[tuple[int, int]]) -> int:
     candidates = [int(tag) for dim, tag in extruded if int(dim) == 2]
     if not candidates:
         raise RuntimeError("Expected a top surface from extrusion, but none were returned.")
-    top_tag = None
-    top_z = float("-inf")
-    top_span = float("inf")
-    for surf_tag in candidates:
+    top_tag = int(candidates[0])
+    xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, top_tag)
+    top_z = float(0.5 * (zmin + zmax))
+    top_span = float(zmax - zmin)
+    for surf_tag in candidates[1:]:
         xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, surf_tag)
         z_span = float(zmax - zmin)
         z_mid = float(0.5 * (zmin + zmax))
@@ -384,8 +370,6 @@ def _top_surface_from_extrusion(extruded: Sequence[tuple[int, int]]) -> int:
             top_z = z_mid
             top_tag = int(surf_tag)
             top_span = z_span
-    if top_tag is None:
-        raise RuntimeError("Failed to identify the top surface after extrusion.")
     return top_tag
 
 
@@ -442,8 +426,8 @@ class _LegacyTetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = _association_from_mesh_data(mesh_data)
-        _write_association_table(assoc_path, association_table)
+        association_table = association_from_mesh_data(mesh_data)
+        write_association_table(assoc_path, association_table)
 
         return build_eit_mesh(
             mesh_data.mesh,
@@ -713,8 +697,8 @@ class _GeomV2TetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = _association_from_mesh_data(mesh_data)
-        _write_association_table(assoc_path, association_table)
+        association_table = association_from_mesh_data(mesh_data)
+        write_association_table(assoc_path, association_table)
 
         return build_eit_mesh(
             mesh_data.mesh,
@@ -758,41 +742,30 @@ class _GeomV2HexCylinder3DMeshGenerator:
 
     def _z_levels(self) -> np.ndarray:
         intervals = _z_stage_intervals(self.config)
-        total_layers = max(len(intervals), max(6, int(self.config.refinement) * 3))
-        total_height = max(float(self.config.height), 1e-12)
+        total_layers = max(len(intervals), max(6, self.config.refinement * 3))
+        total_height = max(self.config.height, 1e-12)
         counts = [
-            max(1, int(round(total_layers * (float(z_stop) - float(z_start)) / total_height)))
+            max(1, int(round(total_layers * (z_stop - z_start) / total_height)))
             for z_start, z_stop in intervals
         ]
         while sum(counts) > total_layers:
-            reduced = False
-            for idx in np.argsort(np.asarray(counts, dtype=np.int32))[::-1]:
-                if counts[int(idx)] > 1:
-                    counts[int(idx)] -= 1
-                    reduced = True
-                    break
-            if not reduced:
-                break
+            idx = int(np.argmax(np.asarray(counts, dtype=np.int32)))
+            counts[idx] -= 1
         while sum(counts) < total_layers:
             interval_lengths = np.asarray(
-                [float(z_stop) - float(z_start) for z_start, z_stop in intervals],
+                [z_stop - z_start for z_start, z_stop in intervals],
                 dtype=np.float64,
             )
             counts[int(np.argmax(interval_lengths))] += 1
 
-        levels = [float(intervals[0][0])]
+        levels = [intervals[0][0]]
         for (z_start, z_stop), n_interval in zip(intervals, counts):
-            segment = np.linspace(
-                float(z_start),
-                float(z_stop),
-                int(n_interval) + 1,
-                dtype=np.float64,
-            )[1:]
-            levels.extend(float(value) for value in segment.tolist())
+            segment = np.linspace(z_start, z_stop, n_interval + 1, dtype=np.float64)[1:]
+            levels.extend(segment.tolist())
         return np.asarray(levels, dtype=np.float64)
 
     def _structured_geometry_square_to_disk(self) -> tuple[np.ndarray, np.ndarray, dict]:
-        n_side = max(8, int(self.electrodes.n_elec) * max(1, int(self.config.refinement)))
+        n_side = max(8, self.electrodes.n_elec * max(1, self.config.refinement))
         x_grid = np.linspace(-1.0, 1.0, n_side + 1, dtype=np.float64)
         y_grid = np.linspace(-1.0, 1.0, n_side + 1, dtype=np.float64)
         z_grid = self._z_levels()
@@ -802,14 +775,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
         for k, z_val in enumerate(z_grid):
             for j, y_val in enumerate(y_grid):
                 for i, x_val in enumerate(x_grid):
-                    xd, yd = _square_to_disk(float(x_val), float(y_val))
-                    points.append(
-                        [
-                            float(self.config.radius * xd),
-                            float(self.config.radius * yd),
-                            float(z_val),
-                        ]
-                    )
+                    xd, yd = _square_to_disk(x_val, y_val)
+                    r = self.config.radius
+                    points.append([r * xd, r * yd, float(z_val)])
                     index[(i, j, k)] = len(points) - 1
 
         cells: list[list[int]] = []
@@ -834,19 +802,19 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 {
                     "id": 0,
                     "name": "square_to_disk",
-                    "logical_cells": [int(n_side), int(n_side), int(len(z_grid) - 1)],
-                    "logical_nodes": [int(n_side + 1), int(n_side + 1), int(len(z_grid))],
+                    "logical_cells": [n_side, n_side, len(z_grid) - 1],
+                    "logical_nodes": [n_side + 1, n_side + 1, len(z_grid)],
                 }
             ],
             "structured_node_to_mesh_node": list(range(len(points))),
             "structured_cell_to_block": [0] * len(cells),
             "structured_cell_local_ijk": [
-                [int(i), int(j), int(k)]
+                [i, j, k]
                 for k in range(len(z_grid) - 1)
                 for j in range(len(y_grid) - 1)
                 for i in range(len(x_grid) - 1)
             ],
-            "z_levels": [float(value) for value in z_grid.tolist()],
+            "z_levels": z_grid.tolist(),
         }
         return np.asarray(points, dtype=np.float64), np.asarray(cells, dtype=np.int32), metadata
 
@@ -857,7 +825,7 @@ class _GeomV2HexCylinder3DMeshGenerator:
         return 0.5 * float(np.sum(x * np.roll(y, -1) - y * np.roll(x, -1)))
 
     def _structured_geometry_o_grid(self) -> tuple[np.ndarray, np.ndarray, dict]:
-        refinement_i = max(1, int(self.config.refinement))
+        refinement_i = max(1, self.config.refinement)
         n_core = max(8, 4 * refinement_i + 4)
         n_ring = max(6, 2 * refinement_i + 4)
         core_half = 0.45
@@ -870,11 +838,11 @@ class _GeomV2HexCylinder3DMeshGenerator:
         blocks: list[dict[str, object]] = []
 
         def _add_base_point(x: float, y: float) -> int:
-            key = (round(float(x), 12), round(float(y), 12))
+            key = (round(x, 12), round(y, 12))
             if key in base_index:
                 return base_index[key]
             base_index[key] = len(base_points)
-            base_points.append([float(x), float(y)])
+            base_points.append([x, y])
             return base_index[key]
 
         def _add_block(name: str, x_grid: np.ndarray, y_grid: np.ndarray) -> int:
@@ -958,7 +926,7 @@ class _GeomV2HexCylinder3DMeshGenerator:
             for x_val, y_val in base_points_arr:
                 points.append([float(x_val), float(y_val), float(z_val)])
 
-        n_base = int(base_points_arr.shape[0])
+        n_base = base_points_arr.shape[0]
         hexes: list[list[int]] = []
         cell_blocks: list[int] = []
         cell_local_ijk: list[list[int]] = []
@@ -979,13 +947,13 @@ class _GeomV2HexCylinder3DMeshGenerator:
                         offset1 + v3,
                     ]
                 )
-                cell_blocks.append(int(base_quad_block[quad_index]))
+                cell_blocks.append(base_quad_block[quad_index])
                 i_local, j_local = base_quad_local_ij[quad_index]
-                cell_local_ijk.append([int(i_local), int(j_local), int(k)])
+                cell_local_ijk.append([i_local, j_local, k])
 
         for block in blocks:
-            block["logical_cells"][2] = int(len(z_grid) - 1)  # type: ignore[index]
-            block["logical_nodes"][2] = int(len(z_grid))  # type: ignore[index]
+            block["logical_cells"][2] = len(z_grid) - 1  # type: ignore[index]
+            block["logical_nodes"][2] = len(z_grid)  # type: ignore[index]
 
         metadata = {
             "block_topology": [str(block["name"]) for block in blocks],
@@ -993,7 +961,7 @@ class _GeomV2HexCylinder3DMeshGenerator:
             "structured_node_to_mesh_node": list(range(len(points))),
             "structured_cell_to_block": cell_blocks,
             "structured_cell_local_ijk": cell_local_ijk,
-            "z_levels": [float(value) for value in z_grid.tolist()],
+            "z_levels": z_grid.tolist(),
         }
         return np.asarray(points, dtype=np.float64), np.asarray(hexes, dtype=np.int32), metadata
 
@@ -1144,8 +1112,8 @@ class _GeomV2HexCylinder3DMeshGenerator:
         )
 
         mesh_data = gmshio.read_from_msh(str(msh_path), MPI.COMM_WORLD, rank=0, gdim=3)
-        association_table = _association_from_mesh_data(mesh_data)
-        _write_association_table(assoc_path, association_table)
+        association_table = association_from_mesh_data(mesh_data)
+        write_association_table(assoc_path, association_table)
 
         return build_eit_mesh(
             mesh_data.mesh,

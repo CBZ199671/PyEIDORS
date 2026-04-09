@@ -5,15 +5,20 @@ from __future__ import annotations
 import configparser
 import logging
 from pathlib import Path
-import re
-from typing import Any, Dict
+from typing import Dict
 
 import numpy as np
-from mpi4py import MPI
 from dolfinx.io import gmsh as gmshio
+from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
+from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
+from ._helpers import (
+    infer_generator_revision,
+    infer_geometry_version,
+    infer_mesh_family_from_mesh,
+)
 from .mesh3d_generator import (
     STRUCTURED_SIDECAR_VERSION,
     load_structured_sidecar,
@@ -24,36 +29,8 @@ from .process_mesh_cache import (
     get_process_cached_mesh,
     put_process_cached_mesh,
 )
-from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
 
 logger = logging.getLogger(__name__)
-
-
-def _infer_mesh_family_from_mesh(mesh: EITMesh) -> str | None:
-    if int(mesh.topology.dim) != 3:
-        return None
-    cells = mesh.cells()
-    if cells.ndim != 2 or cells.shape[0] == 0:
-        return None
-    verts_per_cell = int(cells.shape[1])
-    if verts_per_cell == 8:
-        return "hex"
-    if verts_per_cell == 4:
-        return "tetra"
-    return None
-
-
-def _infer_geometry_version(mesh_name: str) -> str:
-    lowered = str(mesh_name).strip().lower()
-    return "geomv2" if "geomv2" in lowered else "legacy"
-
-
-def _infer_generator_revision(mesh_name: str) -> str:
-    lowered = str(mesh_name).strip().lower()
-    match = re.search(r"(g3d\d+)", lowered)
-    if match is not None:
-        return str(match.group(1))
-    return LEGACY_3D_GENERATOR_REVISION
 
 
 class MeshLoader:
@@ -104,16 +81,24 @@ class MeshLoader:
             association_table = {
                 name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
             }
-        geometry_version = _infer_geometry_version(mesh_name)
-        generator_revision = _infer_generator_revision(mesh_name)
+
+        geometry_version = infer_geometry_version(mesh_name)
+        generator_revision = infer_generator_revision(mesh_name)
         if sidecar_path.exists():
             try:
                 sidecar = load_structured_sidecar(sidecar_path)
-                geometry_version = str(sidecar.get("geometry_version", geometry_version)).strip().lower() or geometry_version
-                generator_revision = str(sidecar.get("generator_revision", generator_revision)).strip().lower() or generator_revision
+                geometry_version = (
+                    str(sidecar.get("geometry_version", geometry_version)).strip().lower()
+                    or geometry_version
+                )
+                generator_revision = (
+                    str(sidecar.get("generator_revision", generator_revision)).strip().lower()
+                    or generator_revision
+                )
             except Exception:
                 pass
 
+        sidecar_exists = sidecar_path.exists()
         eit_mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
@@ -124,18 +109,10 @@ class MeshLoader:
             mesh_file=str(msh_file),
             geometry_version=geometry_version,
             generator_revision=generator_revision,
-            structured_sidecar_file=(
-                str(sidecar_path)
-                if sidecar_path.exists()
-                else None
-            ),
-            structured_sidecar_version=(
-                STRUCTURED_SIDECAR_VERSION
-                if sidecar_path.exists()
-                else None
-            ),
+            structured_sidecar_file=str(sidecar_path) if sidecar_exists else None,
+            structured_sidecar_version=STRUCTURED_SIDECAR_VERSION if sidecar_exists else None,
         )
-        eit_mesh.mesh_family = _infer_mesh_family_from_mesh(eit_mesh)
+        eit_mesh.mesh_family = infer_mesh_family_from_mesh(eit_mesh)
         put_process_cached_mesh(process_mesh_key, eit_mesh)
         logger.info(
             "Mesh loaded from %s (vertices=%d, cells=%d)",

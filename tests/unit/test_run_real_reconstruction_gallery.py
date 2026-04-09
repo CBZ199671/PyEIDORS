@@ -67,7 +67,12 @@ def test_write_report_embeds_expected_figure_links(tmp_path: Path):
         output_path=report_path,
         title="Gallery",
         figures={"2d_overview": "figures/2d_overview.png", "3d_overview": "figures/3d_overview.png"},
-        config={"refinement_3d": 3},
+        config={
+            "refinement_3d": 3,
+            "mesh_family_3d": "hex_custom",
+            "geometry_version_3d": "geom_custom",
+            "generator_revision_3d": "g3d9",
+        },
         case_rows=[
             {"case": "2D CPU", "forward_backend": "dolfinx", "forward_sec": 1.0, "inverse_sec": 2.0},
         ],
@@ -94,6 +99,7 @@ def test_write_report_embeds_expected_figure_links(tmp_path: Path):
     text = report_path.read_text(encoding="utf-8")
     assert "![2D overview](figures/2d_overview.png)" in text
     assert "![3D overview](figures/3d_overview.png)" in text
+    assert "3D mesh: `hex_custom + geom_custom + g3d9`, refinement `3`" in text
     assert "2D consistency: PASS" in text
     assert "3D consistency: FAIL" in text
     assert "3D fairness: PASS" in text
@@ -116,6 +122,7 @@ def test_worker_command_uses_separate_worker_script(tmp_path: Path):
         max_iterations=2,
         slice_resolution=220,
         report_title="Gallery",
+        gpu_acceleration_profile="gpu3d",
     )
     cmd = module._worker_command(
         args,
@@ -129,3 +136,4 @@ def test_worker_command_uses_separate_worker_script(tmp_path: Path):
     assert "--worker-dim" not in cmd
     assert "--run-kind" in cmd
     assert "--backend-order" in cmd
+    assert "--gpu-acceleration-profile" in cmd

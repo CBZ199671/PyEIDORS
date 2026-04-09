@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Optional
-
 import numpy as np
 
 from ...utils.numeric_ops import safe_dot
@@ -20,13 +18,8 @@ def _resolve_gpu_context(config):
     if not torch.cuda.is_available():
         return None
 
-    gpu_dtype = str(config.gpu_dtype).lower()
-    if gpu_dtype == "float64":
-        dtype = torch.float64
-    elif gpu_dtype in {"float16", "half"}:
-        dtype = torch.float16
-    else:
-        dtype = torch.float32
+    dtype_map = {"float64": torch.float64, "float16": torch.float16, "half": torch.float16}
+    dtype = dtype_map.get(str(config.gpu_dtype).lower(), torch.float32)
     return torch, torch.device("cuda"), dtype
 
 
@@ -35,7 +28,7 @@ def solve_fista(
     data_vector: np.ndarray,
     noise_sigma: float,
     prior_scale: float,
-    warm_start: Optional[np.ndarray],
+    warm_start: np.ndarray | None,
     config,
 ) -> np.ndarray:
     """Solve l1-regularized least squares with FISTA."""
@@ -98,7 +91,7 @@ def solve_irls(
     data_vector: np.ndarray,
     noise_sigma: float,
     prior_scale: float,
-    warm_start: Optional[np.ndarray],
+    warm_start: np.ndarray | None,
     config,
 ) -> np.ndarray:
     """Solve smoothed-l1 least squares with IRLS."""

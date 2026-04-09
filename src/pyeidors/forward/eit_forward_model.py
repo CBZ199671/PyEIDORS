@@ -244,7 +244,7 @@ class EITForwardModel:
             if matrix.ndim != 2:
                 raise ValueError("current_patterns must be a 2D array")
             if matrix.shape[1] == self.n_elec:
-                pass
+                pass  # already correct orientation
             elif matrix.shape[0] == self.n_elec:
                 matrix = matrix.T
             else:
@@ -441,47 +441,27 @@ class EITForwardModel:
             info["gpu_fallback_reason"] = "petsc_cuda_not_available"
         return info
 
-    def _resolve_mfem_runtime_device(self) -> str:
-        """Compatibility helper for legacy runtime-device policy tests."""
-        requested = self._normalize_petsc_device(getattr(self.backend_config, "petsc_device", "auto"))
-        effective = str(
-            getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective", "cpu")
-        ).strip().lower()
-        if effective == "cuda":
-            return "cuda"
-        if requested == "cuda":
-            return "cuda"
-        return "cpu"
+    def _get_cuda_type(self, info_key: str, petsc_obj_name: str, type_attr: str):
+        """Look up a PETSc CUDA type from backend info, falling back to PETSc constants."""
+        info = getattr(self, "_petsc_backend_info", {}) or {}
+        if info.get("petsc_device_effective") != "cuda" or PETSc is None:
+            return None
+        cached = info.get(info_key)
+        if cached:
+            return cached
+        namespace = getattr(getattr(PETSc, petsc_obj_name, None), "Type", None)
+        if namespace is not None and hasattr(namespace, type_attr):
+            return str(getattr(namespace, type_attr))
+        return None
 
     def _get_requested_petsc_mat_type(self):
-        info = getattr(self, "_petsc_backend_info", {}) or {}
-        if info.get("petsc_device_effective") != "cuda" or PETSc is None:
-            return None
-        mat_type = info.get("petsc_mat_type")
-        if mat_type:
-            return mat_type
-        mat_namespace = getattr(getattr(PETSc, "Mat", None), "Type", None)
-        return str(getattr(mat_namespace, "AIJCUSPARSE")) if mat_namespace is not None and hasattr(mat_namespace, "AIJCUSPARSE") else None
+        return self._get_cuda_type("petsc_mat_type", "Mat", "AIJCUSPARSE")
 
     def _get_requested_dense_mat_type(self):
-        info = getattr(self, "_petsc_backend_info", {}) or {}
-        if info.get("petsc_device_effective") != "cuda" or PETSc is None:
-            return None
-        dense_type = info.get("petsc_dense_mat_type")
-        if dense_type:
-            return dense_type
-        mat_namespace = getattr(getattr(PETSc, "Mat", None), "Type", None)
-        return str(getattr(mat_namespace, "DENSECUDA")) if mat_namespace is not None and hasattr(mat_namespace, "DENSECUDA") else None
+        return self._get_cuda_type("petsc_dense_mat_type", "Mat", "DENSECUDA")
 
     def _get_requested_petsc_vec_type(self):
-        info = getattr(self, "_petsc_backend_info", {}) or {}
-        if info.get("petsc_device_effective") != "cuda" or PETSc is None:
-            return None
-        vec_type = info.get("petsc_vec_type")
-        if vec_type:
-            return vec_type
-        vec_namespace = getattr(getattr(PETSc, "Vec", None), "Type", None)
-        return str(getattr(vec_namespace, "CUDA")) if vec_namespace is not None and hasattr(vec_namespace, "CUDA") else None
+        return self._get_cuda_type("petsc_vec_type", "Vec", "CUDA")
 
     @staticmethod
     def _mat_type_key(mat_type) -> str:
@@ -839,30 +819,39 @@ class EITForwardModel:
         values = np.ascontiguousarray(sigma.x.array, dtype=np.float64)
         return hashlib.sha256(values.tobytes()).hexdigest()
 
-    def _predict_forward_mat_solve_effective(self, n_patterns: int) -> str:
+    def _resolve_mat_solve_mode(self) -> str:
+        """Normalize mat_solve_mode from backend config to 'on', 'off', or 'auto'."""
         backend_cfg = getattr(self, "backend_config", None)
         if backend_cfg is None:
-            mat_mode = "on"
-        else:
-            mat_mode = str(getattr(backend_cfg, "mat_solve_mode", "")).strip().lower()
-            if mat_mode not in {"auto", "on", "off"}:
-                mat_mode = "on" if bool(getattr(backend_cfg, "use_mat_solve", False)) else "off"
+            return "on"
+        mat_mode = str(getattr(backend_cfg, "mat_solve_mode", "")).strip().lower()
+        if mat_mode in {"auto", "on", "off"}:
+            return mat_mode
+        return "on" if bool(getattr(backend_cfg, "use_mat_solve", False)) else "off"
 
+    def _should_use_mat_solve(self, n_patterns: int) -> bool:
+        """Determine whether matSolve should be used for the given pattern count."""
+        mat_mode = self._resolve_mat_solve_mode()
         if mat_mode == "on":
             use_mat_solve = True
         elif mat_mode == "off":
             use_mat_solve = False
         else:
-            use_mat_solve = bool(self.mesh_tdim == 3 and n_patterns > 1 and self.performance_mode == "aggressive")
+            use_mat_solve = self.mesh_tdim == 3 and n_patterns > 1 and self.performance_mode == "aggressive"
 
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
         capability = backend_info.get("capability") if isinstance(backend_info.get("capability"), dict) else {}
-        if effective_device == "cuda" and n_patterns > 1 and bool(capability.get("petsc_cuda_dense", False)):
+        has_cuda_dense = bool(capability.get("petsc_cuda_dense", False))
+
+        if effective_device == "cuda" and n_patterns > 1 and has_cuda_dense:
             use_mat_solve = True
-        if effective_device == "cuda" and use_mat_solve and not bool(capability.get("petsc_cuda_dense", False)):
+        if effective_device == "cuda" and use_mat_solve and not has_cuda_dense:
             use_mat_solve = False
-        return "matsolve" if use_mat_solve else "vec-loop"
+        return use_mat_solve
+
+    def _predict_forward_mat_solve_effective(self, n_patterns: int) -> str:
+        return "matsolve" if self._should_use_mat_solve(n_patterns) else "vec-loop"
 
     def _base_cache_payload(self, sigma_hash: str, n_patterns: int) -> dict[str, object]:
         petsc_backend = getattr(self, "_petsc_backend_info", {}) or {}
@@ -1022,10 +1011,7 @@ class EITForwardModel:
                     )
                 except Exception as exc:
                     last_error = exc
-            if last_error is not None:
-                setup_error = last_error
-            else:
-                setup_error = RuntimeError("unknown PETSc CUDA direct setup failure")
+            setup_error = last_error or RuntimeError("petsc_cuda_direct_setup_failed")
         else:
             setup_error = None
             try:
@@ -1087,19 +1073,7 @@ class EITForwardModel:
         rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
         rhs_matrix = self._apply_cuda_gauge_fix_rhs(rhs_matrix)
 
-        backend_cfg = getattr(self, "backend_config", None)
-        if backend_cfg is None:
-            mat_mode = "on"
-        else:
-            mat_mode = str(getattr(backend_cfg, "mat_solve_mode", "")).strip().lower()
-            if mat_mode not in {"auto", "on", "off"}:
-                mat_mode = "on" if bool(getattr(backend_cfg, "use_mat_solve", False)) else "off"
-        if mat_mode == "on":
-            use_mat_solve = True
-        elif mat_mode == "off":
-            use_mat_solve = False
-        else:
-            use_mat_solve = bool(self.mesh_tdim == 3 and n_patterns > 1 and self.performance_mode == "aggressive")
+        use_mat_solve = self._should_use_mat_solve(n_patterns)
 
         solve_mat_type = str(bundle.get("solve_mat_type") or "").strip().lower()
         if "dense" in solve_mat_type and hasattr(ksp, "matSolve"):
@@ -1110,8 +1084,7 @@ class EITForwardModel:
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
         capability = backend_info.get("capability") if isinstance(backend_info.get("capability"), dict) else {}
         dense_mat_type = self._get_requested_dense_mat_type()
-        if effective_device == "cuda" and n_patterns > 1 and bool(capability.get("petsc_cuda_dense", False)) and hasattr(ksp, "matSolve"):
-            use_mat_solve = True
+
         if effective_device == "cuda" and use_mat_solve and not bool(capability.get("petsc_cuda_dense", False)):
             use_mat_solve = False
             self._set_backend_diagnostic(

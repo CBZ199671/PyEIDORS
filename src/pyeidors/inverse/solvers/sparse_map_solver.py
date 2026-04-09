@@ -266,8 +266,6 @@ def multilevel_correction(
 
             group_sizes = np.array([len(idx) for idx in groups], dtype=float)
             coarse_grad = np.array([grad[idx].sum() for idx in groups], dtype=float)
-            if coarse_grad.size == 0:
-                continue
             if tol > 0.0 and np.linalg.norm(coarse_grad, ord=np.inf) <= tol:
                 continue
 
@@ -315,6 +313,8 @@ def block_refinement(
         return solution
 
     n = solution.size
+    if n == 0:
+        return solution
     block_size = min(block_size, n)
     lambda_reg = 1.0 / max(prior_scale, 1e-12)
     inv_noise_var = 1.0 / max(noise_sigma * noise_sigma, 1e-18)
@@ -338,12 +338,8 @@ def block_refinement(
             for start in range(0, n, block_size):
                 stop = min(start + block_size, n)
                 grad_block = grad[start:stop]
-                if grad_block.size == 0:
-                    continue
                 blocks.append((float(np.linalg.norm(grad_block, ord=2)), start, stop))
 
-            if not blocks:
-                break
             blocks.sort(key=lambda item: item[0], reverse=True)
 
             block_used = False

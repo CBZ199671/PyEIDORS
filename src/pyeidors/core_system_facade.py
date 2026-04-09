@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any, Optional
 
 from .core_system_helpers import add_circular_phantom, collect_system_info, create_homogeneous_image
 from .data.structures import EITData, EITImage
@@ -21,15 +21,14 @@ class CoreSystemFacadeMixin:
         measurement_data: EITData,
         baseline_image: Optional[EITImage] = None,
         initial_image: Optional[EITImage] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ReconstructionResult:
-        baseline = baseline_image
-        if baseline is None and self._is_initialized:
-            baseline = self.create_homogeneous_image()
+        if baseline_image is None and self._is_initialized:
+            baseline_image = self.create_homogeneous_image()
         return perform_absolute_reconstruction(
             eit_system=self,
             measurement_data=measurement_data,
-            baseline_image=baseline,
+            baseline_image=baseline_image,
             initial_image=initial_image,
             metadata=metadata,
         )
@@ -39,7 +38,7 @@ class CoreSystemFacadeMixin:
         measurement_data: EITData,
         reference_data: EITData,
         initial_image: Optional[EITImage] = None,
-        metadata: Optional[Dict[str, Any]] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ) -> ReconstructionResult:
         return perform_difference_reconstruction(
             eit_system=self,
@@ -69,5 +68,5 @@ class CoreSystemFacadeMixin:
             phantom_radius=phantom_radius,
         )
 
-    def get_system_info(self) -> Dict[str, Any]:
+    def get_system_info(self) -> dict[str, Any]:
         return collect_system_info(self)

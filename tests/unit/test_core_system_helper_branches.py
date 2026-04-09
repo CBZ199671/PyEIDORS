@@ -257,6 +257,13 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(monkeypatch:
     assert bare._last_reconstructor_controls["line_search_mode"] == "full"
 
 
+def test_runtime_policy_helper_guards_cover_missing_mesh_branch():
+    bare = _bare_system()
+    assert bare._supports_cuda_structured_backend() is False
+    with pytest.raises(RuntimeError, match="before mesh setup"):
+        bare._resolve_runtime_policy()
+
+
 def test_regularization_and_preset_application_helpers(monkeypatch: pytest.MonkeyPatch):
     system = _bare_system()
     system.fwd_model = SimpleNamespace(name="fwd")

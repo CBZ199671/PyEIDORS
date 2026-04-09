@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, TYPE_CHECKING, Optional
+from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
@@ -65,7 +65,7 @@ def _geometry_size_m(mesh, geometry_scale_to_m: float) -> tuple[np.ndarray, floa
 def run_unit_consistency_checks(
     fwd_model: "EITForwardModel",
     *,
-    expected_domain_size_m: Optional[float] = None,
+    expected_domain_size_m: float | None = None,
     geometry_tolerance: float = 0.05,
     density_rel_tol: float = 1e-8,
 ) -> UnitCheckReport:

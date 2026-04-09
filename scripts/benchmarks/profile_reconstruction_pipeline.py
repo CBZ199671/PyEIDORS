@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 import time
 import tracemalloc
 from pathlib import Path
@@ -18,11 +19,17 @@ from dolfinx import fem
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 def parse_args() -> argparse.Namespace:
@@ -35,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
     parser.add_argument("--max-iterations", type=int, default=2)
     parser.add_argument("--output-json", type=Path, default=None)
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="For this 2D profiling script the profile is accepted mainly for CLI consistency.",
+    )
     return parser.parse_args()
 
 
@@ -70,6 +82,7 @@ def _build_system(args: argparse.Namespace) -> EITSystem:
         regularization_type="noser",
         regularization_alpha=1.0,
         cache_scope="off",
+        acceleration_profile=str(args.acceleration_profile),
     )
     mesh = load_or_create_mesh(
         mesh_dir=str(args.mesh_dir),

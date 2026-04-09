@@ -1,5 +1,7 @@
+from __future__ import annotations
+
 import numpy as np
-from typing import List, Optional, Union
+
 from ..data.structures import PatternConfig
 from ..physics.current_drive import (
     build_stim_currents,
@@ -13,9 +15,9 @@ class StimMeasPatternManager:
     def __init__(
         self,
         config: PatternConfig,
-        electrode_lengths_m: Optional[np.ndarray] = None,
-        mesh_tdim: Optional[int] = None,
-    ):
+        electrode_lengths_m: np.ndarray | None = None,
+        mesh_tdim: int | None = None,
+    ) -> None:
         self.config = config
         self.n_elec = config.n_elec
         self.n_rings = config.n_rings
@@ -30,13 +32,13 @@ class StimMeasPatternManager:
         )
         self.drive_value = float(self.config.drive_value)
         self._electrode_lengths_m = self._resolve_electrode_lengths(electrode_lengths_m)
-        
+
         self._parse_patterns()
         self._generate_patterns()
         self._build_measurement_projection()
         self._compute_measurement_selector()
 
-    def _resolve_electrode_lengths(self, electrode_lengths_m: Optional[np.ndarray]) -> Optional[np.ndarray]:
+    def _resolve_electrode_lengths(self, electrode_lengths_m: np.ndarray | None) -> np.ndarray | None:
         if electrode_lengths_m is None:
             if self.drive_mode == "line_current_density":
                 # Allow pattern construction without mesh in metadata-only paths.
@@ -55,8 +57,8 @@ class StimMeasPatternManager:
             bad = int(np.nonzero(lengths <= 0.0)[0][0])
             raise ValueError(f"electrode_lengths_m[{bad}] must be positive, got {lengths[bad]!r}.")
         return lengths
-    
-    def _parse_patterns(self):
+
+    def _parse_patterns(self) -> None:
         # Parse stimulation pattern
         if isinstance(self.config.stim_pattern, str):
             if self.config.stim_pattern == '{ad}':
@@ -67,7 +69,7 @@ class StimMeasPatternManager:
                 raise ValueError(f"Unknown stimulation pattern: {self.config.stim_pattern}")
         else:
             self.inj_electrodes = self.config.stim_pattern
-            
+
         if len(self.inj_electrodes) == 2:
             if self.config.stim_first_positive:
                 self.inj_weights = np.array([1, -1])
@@ -75,7 +77,7 @@ class StimMeasPatternManager:
                 self.inj_weights = np.array([-1, 1])
         else:
             self.inj_weights = np.array([1])
-        
+
         # Parse measurement pattern
         if isinstance(self.config.meas_pattern, str):
             if self.config.meas_pattern == '{ad}':
@@ -86,16 +88,16 @@ class StimMeasPatternManager:
                 raise ValueError(f"Unknown measurement pattern: {self.config.meas_pattern}")
         else:
             self.meas_electrodes = self.config.meas_pattern
-            
+
         self.meas_weights = np.array([1, -1]) if len(self.meas_electrodes) == 2 else np.array([1])
-    
-    def _generate_patterns(self):
+
+    def _generate_patterns(self) -> None:
         self.stim_matrix = []
         self.meas_matrices = []
         self.meas_start_indices = []
         self.n_meas_total = 0
         self.n_meas_per_stim = []
-        
+
         for ring in range(self.n_rings):
             for elec in range(self.n_elec):
                 # Stimulation vector
@@ -117,21 +119,21 @@ class StimMeasPatternManager:
 
                 # Measurement matrix
                 meas_mat = self._make_meas_matrix(elec, ring)
-                
+
                 if not self.config.use_meas_current:
                     meas_mat = self._filter_measurements(meas_mat, elec, ring)
-                
+
                 if meas_mat.shape[0] > 0:
                     self.stim_matrix.append(stim_vec)
                     self.meas_matrices.append(meas_mat)
                     self.meas_start_indices.append(self.n_meas_total)
                     self.n_meas_per_stim.append(meas_mat.shape[0])
                     self.n_meas_total += meas_mat.shape[0]
-        
+
         self.stim_matrix = np.array(self.stim_matrix)
         self.n_stim = len(self.stim_matrix)
-    
-    def _compute_measurement_selector(self):
+
+    def _compute_measurement_selector(self) -> None:
         if self.config.use_meas_current:
             self.meas_selector = np.ones(self.n_elec * self.n_stim, dtype=bool)
             return
@@ -140,16 +142,16 @@ class StimMeasPatternManager:
         for i in range(self.n_stim):
             elec = i % self.n_elec
             ring = i // self.n_elec
-            
+
             full_meas_mat = self._make_meas_matrix(elec, ring)
             filtered_meas_mat = self.meas_matrices[i]
-            
+
             full_set_hash = self._create_meas_hash(full_meas_mat)
             filtered_set_hash = self._create_meas_hash(filtered_meas_mat)
-            
+
             frame_selector = np.isin(full_set_hash, filtered_set_hash)
             selector.append(frame_selector)
-        
+
         self.meas_selector = np.concatenate(selector)
 
     def _build_measurement_projection(self) -> None:
@@ -162,59 +164,59 @@ class StimMeasPatternManager:
             col_slice = slice(col_start, col_start + self.tn_elec)
             projection[row_slice, col_slice] = meas_mat
         self._meas_projection = projection
-    
+
     def _create_meas_hash(self, meas_mat: np.ndarray) -> np.ndarray:
         if meas_mat.size == 0:
             return np.array([])
-        
+
         pos_indices = np.argmax(meas_mat > 0, axis=1)
         neg_indices = np.argmax(meas_mat < 0, axis=1)
-        
+
         pos_mask = np.any(meas_mat > 0, axis=1)
         neg_mask = np.any(meas_mat < 0, axis=1)
-        
+
         hash_vals = (pos_indices * pos_mask) * 1e7 + (neg_indices * neg_mask)
         return hash_vals
-    
+
     def _make_meas_matrix(self, elec: int, ring: int) -> np.ndarray:
         meas_list = []
         offset = self.meas_direction * elec if self.config.rotate_meas else 0
-        
+
         for meas_idx in range(self.tn_elec):
             meas_vec = np.zeros(self.tn_elec)
             within_ring = meas_idx % self.n_elec
             ring_offset = (meas_idx // self.n_elec) * self.n_elec
-            
+
             for i, meas_elec in enumerate(self.meas_electrodes):
                 idx = (meas_elec + within_ring + offset) % self.n_elec + ring_offset
                 meas_vec[idx] = self.meas_weights[i]
-            
+
             meas_list.append(meas_vec)
-        
+
         return np.array(meas_list)
-    
+
     def _filter_measurements(self, meas_mat: np.ndarray, elec: int, ring: int) -> np.ndarray:
         stim_indices = []
         for inj_elec in self.inj_electrodes:
             idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
             stim_indices.append(idx)
-        
+
         if self.config.use_meas_current_next > 0:
             extended = []
             for idx in stim_indices:
                 base = idx % self.n_elec
                 ring_base = idx - base
-                for offset in range(-self.config.use_meas_current_next, 
+                for offset in range(-self.config.use_meas_current_next,
                                   self.config.use_meas_current_next + 1):
                     extended.append((base + offset) % self.n_elec + ring_base)
             stim_indices = list(set(extended))
-        
+
         mask = ~np.any(meas_mat[:, stim_indices] != 0, axis=1)
         return meas_mat[mask]
-    
+
     def get_stim_matrix(self) -> np.ndarray:
         return self.stim_matrix
-    
+
     def apply_meas_pattern(self, electrode_voltages: np.ndarray) -> np.ndarray:
         voltages = np.asarray(electrode_voltages, dtype=float)
         if voltages.shape != (self.n_stim, self.tn_elec):

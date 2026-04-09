@@ -25,6 +25,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.perf import ACCELERATION_PROFILE_GPU3D, DEFAULT_ACCELERATION_PROFILE
+from scripts.common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    resolve_3d_mesh_contract,
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -46,6 +51,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
     parser.add_argument("--output-json", type=Path, default=Path("reports") / "cuda_structured_scaling.json")
     parser.add_argument("--gate", choices=["strict", "off"], default="strict")
+    add_acceleration_profile_argument(
+        parser,
+        flag="--gpu-acceleration-profile",
+        default=ACCELERATION_PROFILE_GPU3D,
+        help_suffix="Used for the GPU-side 3D case only.",
+    )
     return parser.parse_args()
 
 
@@ -83,7 +94,20 @@ def _pattern(n_elec: int) -> PatternConfig:
     )
 
 
-def _build_system(*, mesh, cache_dir: Path, backend: str, petsc_device: str, device: str, n_elec: int, contact_impedance: float) -> EITSystem:
+def _build_system(
+    *,
+    mesh,
+    cache_dir: Path,
+    backend: str,
+    petsc_device: str,
+    device: str,
+    n_elec: int,
+    contact_impedance: float,
+    mesh_family: str,
+    geometry_version: str,
+    generator_revision: str,
+    acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
+) -> EITSystem:
     system = EITSystem(
         n_elec=n_elec,
         pattern_config=_pattern(n_elec),
@@ -94,13 +118,14 @@ def _build_system(*, mesh, cache_dir: Path, backend: str, petsc_device: str, dev
         cache_dir=str(cache_dir),
         cache_scope="both",
         forward_backend=backend,
-        mesh_family="hex",
-        geometry_version="geomv2",
-        generator_revision="g3d3",
+        mesh_family=str(mesh_family),
+        geometry_version=str(geometry_version),
+        generator_revision=str(generator_revision),
         solver_mode="fast",
         line_search_mode="fast",
         petsc_device=petsc_device,
         device=device,
+        acceleration_profile=str(acceleration_profile),
         linear_backend_config={"petsc_device": petsc_device},
     )
     system.setup(mesh=mesh)
@@ -145,9 +170,15 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
         shutil.rmtree(cpu_cache, ignore_errors=True)
     if gpu_cache.exists():
         shutil.rmtree(gpu_cache, ignore_errors=True)
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=args.gpu_acceleration_profile,
+    )
     mesh = load_or_create_mesh(
         mesh_dir=str(mesh_dir),
-        mesh_name=f"cuda_structured_scaling_ref{refinement}_cfhex_geomv2_g3d3",
+        mesh_name=(
+            f"cuda_structured_scaling_ref{refinement}"
+            f"_cf{mesh_family}_{geometry_version}_{generator_revision}"
+        ),
         n_elec=int(args.n_elec),
         dimension=3,
         radius=float(args.radius),
@@ -156,9 +187,9 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
         electrode_height_ratio=float(args.electrode_height_ratio),
         z_center=0.0,
         electrode_coverage=float(args.electrode_coverage),
-        mesh_family="hex",
-        geometry_version="geomv2",
-        generator_revision="g3d3",
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
     )
     cpu = _build_system(
         mesh=mesh,
@@ -168,6 +199,10 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
         device="cpu",
         n_elec=int(args.n_elec),
         contact_impedance=float(args.contact_impedance),
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
+        acceleration_profile=DEFAULT_ACCELERATION_PROFILE,
     )
     gpu = _build_system(
         mesh=mesh,
@@ -177,6 +212,10 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
         device="cuda",
         n_elec=int(args.n_elec),
         contact_impedance=float(args.contact_impedance),
+        mesh_family=mesh_family,
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
+        acceleration_profile=str(args.gpu_acceleration_profile),
     )
 
     cpu_baseline = cpu.create_homogeneous_image(conductivity=1.0)
@@ -241,6 +280,9 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
 def main() -> None:
     args = _parse_args()
     refinements = _parse_refinements(args.refinements)
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=args.gpu_acceleration_profile,
+    )
     ephemeral_mesh_root = None
     ephemeral_cache_root = None
     mesh_root = args.mesh_dir
@@ -264,9 +306,10 @@ def main() -> None:
                 "electrode_coverage": float(args.electrode_coverage),
                 "contact_impedance": float(args.contact_impedance),
                 "warm_forward_repeats": int(args.warm_forward_repeats),
-                "mesh_family": "hex",
-                "geometry_version": "geomv2",
-                "generator_revision": "g3d3",
+                "gpu_acceleration_profile": str(args.gpu_acceleration_profile),
+                "mesh_family": str(mesh_family),
+                "geometry_version": str(geometry_version),
+                "generator_revision": str(generator_revision),
             },
             "mesh_root_mode": "ephemeral" if ephemeral_mesh_root is not None else "explicit",
             "cache_root_mode": "ephemeral" if ephemeral_cache_root is not None else "explicit",

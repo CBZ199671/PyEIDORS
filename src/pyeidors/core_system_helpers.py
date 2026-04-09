@@ -6,7 +6,7 @@ preserving runtime behavior.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional, Tuple, Union
+from typing import Any, Optional
 
 import numpy as np
 from dolfinx import fem
@@ -19,7 +19,7 @@ from .data.difference import (
 from .data.structures import EITData, EITImage
 
 
-def conductivity_to_image(fwd_model, conductivity: Union[np.ndarray, fem.Function, EITImage]) -> EITImage:
+def conductivity_to_image(fwd_model, conductivity: np.ndarray | fem.Function | EITImage) -> EITImage:
     """Normalize conductivity inputs to ``EITImage`` for forward solving."""
     if isinstance(conductivity, EITImage):
         return conductivity
@@ -74,7 +74,7 @@ def add_circular_phantom(
     *,
     base_conductivity: float,
     phantom_conductivity: float,
-    phantom_center: Tuple[float, float],
+    phantom_center: tuple[float, float],
     phantom_radius: float,
 ) -> EITImage:
     """Create an image with a circular phantom anomaly."""
@@ -87,9 +87,9 @@ def add_circular_phantom(
     return EITImage(elem_data=elem_data, fwd_model=eit_system.fwd_model)
 
 
-def collect_system_info(eit_system) -> Dict[str, Any]:
+def collect_system_info(eit_system) -> dict[str, Any]:
     """Return stable, structured runtime diagnostics for ``EITSystem``."""
-    info: Dict[str, Any] = {
+    info: dict[str, Any] = {
         "n_elec": eit_system.n_elec,
         "pattern_config": eit_system.pattern_config,
         "mesh_config": eit_system.mesh_config,
@@ -101,16 +101,17 @@ def collect_system_info(eit_system) -> Dict[str, Any]:
         ),
         "difference_preset": getattr(eit_system, "difference_preset", "eidors_one_step_noser"),
         "absolute_preset": getattr(eit_system, "absolute_preset", "eidors_abs_gn"),
+        "acceleration_profile": getattr(eit_system, "acceleration_profile", "default"),
         "hyperparameter": getattr(eit_system, "hyperparameter", None),
         "jacobian_background_conductivity": getattr(
-            eit_system,
-            "jacobian_background_conductivity",
+            eit_system, "jacobian_background_conductivity",
             getattr(eit_system, "base_conductivity", 1.0),
         ),
         "performance_mode": getattr(eit_system, "performance_mode", "aggressive"),
         "linear_backend": getattr(eit_system, "linear_backend", "scipy"),
         "cache_scope": getattr(eit_system, "cache_scope", "off"),
-        "cache_stats": eit_system.get_cache_stats() if hasattr(eit_system, "get_cache_stats") else {},
+        "cache_stats": getattr(eit_system, "get_cache_stats", lambda: {})(),
+        "runtime_policy": dict(getattr(eit_system, "_resolved_runtime_policy", {}) or {}),
         "initialized": eit_system._is_initialized,
     }
     if not eit_system._is_initialized:

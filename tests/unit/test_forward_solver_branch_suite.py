@@ -303,6 +303,43 @@ def test_electrode_matrix_petsc_helpers_cover_none_cache_and_full_expansion(monk
     assert any(value[:2] == (model.dofs + model.n_elec, model.dofs + model.n_elec) for value in base_electrode.values)
 
 
+def test_electrode_matrix_petsc_helpers_cover_destroy_and_ground_value_exceptions(monkeypatch: pytest.MonkeyPatch):
+    model = _make_model()
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+    monkeypatch.setattr(forward_module.ufl, "inner", lambda _a, _b: 1.0)
+    monkeypatch.setattr(forward_module.fem, "form", lambda expr: expr)
+
+    top_left = _FakeMat(size=(2, 2))
+    full_matrix = _FakeMat(size=(5, 5))
+
+    class _ExplodingVec(_FakeVec):
+        def destroy(self):
+            raise RuntimeError("destroy failed")
+
+    vec = _ExplodingVec(2)
+    vec.arr[:] = np.array([1.0, 0.0], dtype=float)
+    monkeypatch.setattr(model, "_assemble_form_matrix", lambda _form, mat_kind=None: top_left)
+    monkeypatch.setattr(model, "_expand_conductivity_csr_to_full", lambda _mat, mat_type=None: full_matrix)
+    monkeypatch.setattr(model, "_assemble_form_vector", lambda _form, vec_kind=None: vec)
+    monkeypatch.setattr(model, "_vec_to_numpy", lambda _vec: np.asarray(vec.arr, dtype=float))
+    monkeypatch.setattr(model, "_ensure_mat_type", lambda mat, _kind: mat)
+
+    out = EITForwardModel._assemble_electrode_matrix_petsc(model, mat_type="aij", vec_type="seq")
+    assert out is full_matrix
+    assert full_matrix.assembled >= 2
+
+    class _ExplodingGroundMat(_FakeMat):
+        def setValue(self, row, col, value):
+            raise RuntimeError("ground failed")
+
+    ground_mat = _ExplodingGroundMat(size=(5, 5))
+    monkeypatch.setattr(model, "_csr_to_petsc", lambda _csr: ground_mat)
+    monkeypatch.setattr(model, "_ensure_electrode_matrix", lambda: csr_matrix(np.eye(5, dtype=float)))
+    model._M_petsc = {}
+    out_ground = EITForwardModel._get_electrode_matrix_petsc(model, mat_type="cuda")
+    assert out_ground is ground_mat
+
+
 def test_create_full_matrix_petsc_predict_payload_and_scipy_solver_cover_branches(monkeypatch: pytest.MonkeyPatch):
     model = _make_model()
     monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
@@ -456,6 +493,56 @@ def test_make_petsc_solver_bundle_covers_direct_dense_and_gmres_fallback(monkeyp
     assert bundle_gmres["ksp_type"] == "gmres"
 
 
+def test_make_petsc_solver_bundle_covers_reuse_monitor_and_cuda_dense_setup_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    model = _make_model()
+    model.backend_config = SimpleNamespace(
+        ksp_type="preonly",
+        pc_type="lu",
+        rtol=1e-10,
+        atol=1e-12,
+        max_it=200,
+        reuse_preconditioner=True,
+        monitor=True,
+        mat_solve_mode="auto",
+        use_mat_solve=False,
+        petsc_device="auto",
+    )
+
+    class _ReuseFailKSP(_FakeKSP):
+        def setReusePreconditioner(self, enabled):
+            _ = enabled
+            raise RuntimeError("reuse failed")
+
+    monkeypatch.setattr(forward_module, "PETSc", SimpleNamespace(Mat=_FakePETSc.Mat, KSP=lambda: _ReuseFailKSP()))
+    model._petsc_backend_info = {"petsc_device_effective": "cpu"}
+    bundle = EITForwardModel._make_petsc_solver_bundle(model, _FakeMat(size=(5, 5)))
+    assert callable(bundle["ksp"].monitor)
+    bundle["ksp"].monitor(bundle["ksp"], 1, 1e-3)
+    assert "[KSP] iter=1" in capsys.readouterr().out
+
+    class _Factory:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self):
+            self.calls += 1
+            if self.calls <= 3:
+                return _FakeKSP(fail_setup=True)
+            return _FakeKSP()
+
+    factory = _Factory()
+    monkeypatch.setattr(forward_module, "PETSc", SimpleNamespace(Mat=_FakePETSc.Mat, KSP=factory))
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    monkeypatch.setattr(model, "_get_requested_dense_mat_type", lambda: "densecuda")
+    monkeypatch.setattr(model, "_ensure_mat_type", lambda mat, mat_type: (mat.setType(mat_type), mat)[1])
+    bundle_gmres = EITForwardModel._make_petsc_solver_bundle(model, _FakeMat(size=(5, 5)))
+    assert bundle_gmres["backend"] == "petsc-ksp-gmres+none"
+    assert bundle_gmres["ksp_type"] == "gmres"
+
+
 def test_solve_with_petsc_and_forward_interfaces_cover_mat_solve_fallbacks_and_errors(monkeypatch: pytest.MonkeyPatch):
     model = _make_model()
     model._set_backend_diagnostic = EITForwardModel._set_backend_diagnostic.__get__(model, EITForwardModel)
@@ -582,3 +669,103 @@ def test_solve_with_petsc_and_forward_interfaces_cover_mat_solve_fallbacks_and_e
     np.testing.assert_allclose(data.meas, np.array([3.0, 7.0], dtype=float))
     assert data.type == "simulated"
     assert U.shape == (2, 2)
+
+
+def test_solve_with_petsc_covers_cuda_dense_unavailable_dense_fallback_failure_and_cuda_ksp_error(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = _make_model()
+    model._set_backend_diagnostic = EITForwardModel._set_backend_diagnostic.__get__(model, EITForwardModel)
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+    monkeypatch.setattr(model, "_sigma_fingerprint", lambda _sigma: "sig")
+    monkeypatch.setattr(model, "_base_cache_payload", lambda **_kwargs: {})
+    monkeypatch.setattr(model, "_apply_cuda_gauge_fix_rhs", lambda rhs: rhs)
+    monkeypatch.setattr(model, "_get_requested_dense_mat_type", lambda: "densecuda")
+    monkeypatch.setattr(model, "_ensure_mat_type", lambda obj, _kind: obj)
+    monkeypatch.setattr(model, "_get_requested_petsc_vec_type", lambda: None)
+    monkeypatch.setattr(model, "_create_full_matrix_petsc", lambda _sigma: _FakeMat(size=(5, 5)))
+
+    vec_loop_bundle = {
+        "A": _FakeMat(size=(5, 5), mat_type="aij"),
+        "solve_A": _FakeMat(size=(5, 5), mat_type="aij"),
+        "ksp": _FakeKSP(),
+        "backend": "petsc-ksp",
+        "solve_mat_type": "aij",
+    }
+    monkeypatch.setattr(model, "_make_petsc_solver_bundle", lambda _A: vec_loop_bundle)
+    monkeypatch.setattr(model, "_should_use_mat_solve", lambda _n: True)
+    model._petsc_backend_info = {
+        "petsc_device_requested": "auto",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": False},
+    }
+    sol_unavailable = EITForwardModel._solve_with_petsc(
+        model,
+        sigma=None,
+        pattern_matrix=np.array([[1.0, -1.0], [0.5, -0.5]], dtype=float),
+    )
+    assert sol_unavailable.shape == (5, 2)
+    assert model.get_backend_diagnostics()["gpu_fallback_reason"] == "petsc_densecuda_unavailable"
+
+    failing_ksp = _FakeKSP()
+    failing_ksp.raise_on_matsolve = True
+    dense_failing_ksp = _FakeKSP()
+    dense_failing_ksp.raise_on_matsolve = True
+    mat_fail_bundle = {
+        "A": _FakeMat(size=(5, 5), mat_type="aij"),
+        "solve_A": _FakeMat(size=(5, 5), mat_type="densecuda"),
+        "ksp": failing_ksp,
+        "backend": "petsc-ksp",
+        "solve_mat_type": "densecuda",
+    }
+    monkeypatch.setattr(model, "_make_petsc_solver_bundle", lambda _A: mat_fail_bundle)
+    monkeypatch.setattr(
+        model,
+        "_make_petsc_dense_solver_bundle",
+        lambda _A: {
+            "A": _FakeMat(size=(5, 5)),
+            "solve_A": _FakeMat(size=(5, 5), mat_type="densecuda"),
+            "ksp": dense_failing_ksp,
+            "backend": "petsc-ksp-densecuda-lu",
+            "solve_mat_type": "densecuda",
+        },
+    )
+    model._petsc_backend_info = {
+        "petsc_device_requested": "auto",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+    sol_fallback_fail = EITForwardModel._solve_with_petsc(
+        model,
+        sigma=None,
+        pattern_matrix=np.array([[1.0, -1.0]], dtype=float),
+    )
+    assert sol_fallback_fail.shape == (5, 1)
+    assert str(model.get_backend_diagnostics()["gpu_fallback_reason"]).startswith("matSolve_failed:")
+    assert model.get_backend_diagnostics()["forward_mat_solve_effective"] == "vec-loop"
+
+    bad_ksp = _FakeKSP()
+    bad_ksp.converged_reason = -9
+    monkeypatch.setattr(
+        model,
+        "_make_petsc_solver_bundle",
+        lambda _A: {
+            "A": _FakeMat(size=(5, 5), mat_type="aij"),
+            "solve_A": _FakeMat(size=(5, 5), mat_type="aij"),
+            "ksp": bad_ksp,
+            "backend": "petsc-ksp",
+            "solve_mat_type": "aij",
+        },
+    )
+    monkeypatch.setattr(model, "_should_use_mat_solve", lambda _n: False)
+    model._petsc_backend_info = {
+        "petsc_device_requested": "auto",
+        "petsc_device_effective": "cuda",
+        "capability": {},
+    }
+    with pytest.raises(RuntimeError, match="PETSc CUDA solve failed with a negative convergence reason"):
+        EITForwardModel._solve_with_petsc(
+            model,
+            sigma=None,
+            pattern_matrix=np.array([[1.0, -1.0]], dtype=float),
+        )

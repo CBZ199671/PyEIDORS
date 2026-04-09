@@ -16,6 +16,7 @@ from pyeidors.data.structures import EITData, EITImage
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.policy import (
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
@@ -182,6 +183,7 @@ def run_absolute_reconstruction(
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
     cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
     cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
+    acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
     jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
     jacobian_block_size: int = DEFAULT_JACOBIAN_BLOCK_SIZE,
     jacobian_block_candidates: list[int] | tuple[int, ...] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
@@ -266,6 +268,7 @@ def run_absolute_reconstruction(
         absolute_startup_cache=absolute_startup_cache,
         cholmod_max_n=int(max(1, cholmod_max_n)),
         cholmod_max_memory_gib=float(max(0.25, cholmod_max_memory_gib)),
+        acceleration_profile=str(acceleration_profile),
         jacobian_block_tune=str(jacobian_block_tune),
         jacobian_block_size=int(max(0, jacobian_block_size)),
         jacobian_block_candidates=tuple(int(v) for v in jacobian_block_candidates if int(v) > 0),

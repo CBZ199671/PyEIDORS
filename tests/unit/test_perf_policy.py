@@ -5,9 +5,12 @@ from __future__ import annotations
 import pytest
 
 from pyeidors.perf.policy import (
+    normalize_acceleration_profile,
     normalize_forward_backend,
     normalize_mesh_family,
     parse_block_size_candidates,
+    prefers_3d_gpu_pipeline,
+    prefers_fused_3d_gpu_pipeline,
     resolve_experimental_mode,
     resolve_forward_mat_solve,
     resolve_line_search_mode,
@@ -50,6 +53,15 @@ def test_normalize_mesh_family_keeps_supported_values_and_defaults():
     assert normalize_mesh_family("tetra") == "tetra"
     assert normalize_mesh_family("hex") == "hex"
     assert normalize_mesh_family("unexpected") == "tetra"
+
+
+def test_acceleration_profile_aliases_normalize_to_gpu3d_variants():
+    assert normalize_acceleration_profile("gpu3d") == "gpu3d"
+    assert normalize_acceleration_profile("3d_gpu") == "gpu3d"
+    assert normalize_acceleration_profile("full_3d_gpu") == "gpu3d_fused"
+    assert prefers_3d_gpu_pipeline("gpu_3d") is True
+    assert prefers_fused_3d_gpu_pipeline("3d_gpu_fused") is True
+    assert prefers_3d_gpu_pipeline("unexpected") is False
 
 
 def test_parse_block_size_candidates_normalizes_strings_and_iterables():

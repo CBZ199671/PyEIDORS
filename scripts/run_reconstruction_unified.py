@@ -20,7 +20,12 @@ if str(SCRIPTS_PATH) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_PATH))
 
 from common.recon_cli_models import InputMode, ReconstructionMethod
+from common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    apply_acceleration_profile_overrides,
+)
 from pyeidors.perf import (
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
@@ -124,6 +129,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="3D electrode height ratio (reserved for mesh signature)",
     )
     parser.add_argument("--z-center", type=float, default=0.0, help="3D cylinder z-center")
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="Only affects 3D runs; low-level flags remain available for advanced overrides.",
+    )
     parser.add_argument(
         "--solver-mode",
         choices=["auto", "strict", "fast"],
@@ -393,6 +403,7 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if mesh_dim == 3 and method == ReconstructionMethod.SPARSE_BAYES:
         parser.error("3D mesh mode currently does not support --method sparse-bayes.")
 
+    apply_acceleration_profile_overrides(args, mesh_dim=mesh_dim)
     args.solver_mode = resolve_solver_mode(args.solver_mode, mesh_dim=mesh_dim)
     args.line_search_mode = resolve_line_search_mode(args.line_search_mode, mesh_dim=mesh_dim)
     args.rom_mode = resolve_experimental_mode(args.rom_mode)

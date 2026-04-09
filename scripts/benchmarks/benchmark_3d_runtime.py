@@ -27,6 +27,7 @@ from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import detect_performance_capabilities
 from pyeidors.perf.policy import (
+    DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_ABSOLUTE_STARTUP_CACHE,
@@ -56,11 +57,15 @@ from pyeidors.perf.policy import (
     MESH_FAMILY_VALUES,
     parse_block_size_candidates,
 )
-
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
+from scripts.common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    apply_acceleration_profile_overrides,
+    resolve_3d_mesh_contract,
+)
 from scripts.common import gn_difference_runner
 
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -92,6 +97,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--radius", type=float, default=0.18)
     parser.add_argument("--height", type=float, default=0.16)
     parser.add_argument("--refinement", type=int, default=2)
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="This benchmark still exposes low-level solver knobs for profile A/B/C/D/E studies.",
+    )
     parser.add_argument("--lambda", dest="lam", type=float, default=1e-2)
     parser.add_argument("--background", type=float, default=1.0)
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
@@ -230,6 +240,7 @@ def _build_phantom_sigma(system: EITSystem, *, background: float) -> np.ndarray:
 
 def main() -> None:
     args = _parse_args()
+    apply_acceleration_profile_overrides(args, mesh_dim=3)
     if int(args.repeat) <= 0:
         raise ValueError("--repeat must be a positive integer.")
     if int(args.warm_forward_repeats) <= 0:
@@ -251,6 +262,11 @@ def main() -> None:
         mesh_dir = ephemeral_mesh_root
     else:
         mesh_dir = args.mesh_dir.resolve()
+    mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
+        acceleration_profile=args.acceleration_profile,
+        mesh_family=args.mesh_family,
+        geometry_version=args.geometry_version,
+    )
 
     def _run_once(run_index: int) -> dict:
         run_cache_dir = cache_dir if int(args.repeat) == 1 else cache_dir / f"run_{run_index:02d}"
@@ -308,8 +324,8 @@ def main() -> None:
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
                     forward_backend=str(args.forward_backend),
-                    mesh_family=str(args.mesh_family),
-                    geometry_version=str(args.geometry_version),
+                    mesh_family=str(mesh_family),
+                    geometry_version=str(geometry_version),
                 ),
             )
             warm_ctx, warm_stage = _timed(
@@ -345,8 +361,8 @@ def main() -> None:
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
                     forward_backend=str(args.forward_backend),
-                    mesh_family=str(args.mesh_family),
-                    geometry_version=str(args.geometry_version),
+                    mesh_family=str(mesh_family),
+                    geometry_version=str(geometry_version),
                 ),
             )
 
@@ -388,8 +404,9 @@ def main() -> None:
                     electrode_height_ratio=0.2,
                     z_center=0.0,
                     electrode_coverage=0.5,
-                    mesh_family=str(args.mesh_family),
-                    geometry_version=str(args.geometry_version),
+                    mesh_family=str(mesh_family),
+                    geometry_version=str(geometry_version),
+                    generator_revision=str(generator_revision),
                 ),
             )
             pattern = PatternConfig(
@@ -440,7 +457,8 @@ def main() -> None:
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
                     forward_backend=str(args.forward_backend),
-                    mesh_family=str(args.mesh_family),
+                    mesh_family=str(mesh_family),
+                    acceleration_profile=str(args.acceleration_profile),
                     linear_backend_config={
                         "mat_solve_mode": str(args.forward_mat_solve),
                         "petsc_device": str(args.petsc_device),

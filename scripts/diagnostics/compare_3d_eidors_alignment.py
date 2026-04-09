@@ -5,7 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+SCRIPTS_ROOT = REPO_ROOT / "scripts"
+for candidate in (str(REPO_ROOT), str(SCRIPTS_ROOT)):
+    if candidate not in sys.path:
+        sys.path.insert(0, candidate)
+
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
 
 from render_3d_inverse_reconstruction_overview import (
     DEFAULT_ABSOLUTE_PRESET,
@@ -14,6 +23,7 @@ from render_3d_inverse_reconstruction_overview import (
     _configure_times_new_roman,
     run_case,
 )
+from common.acceleration_profiles import add_acceleration_profile_argument
 
 DEFAULT_LEVEL_FRACTIONS = (0.25, 0.75)
 
@@ -40,6 +50,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--radius", type=float, default=0.22)
     parser.add_argument("--height", type=float, default=0.16)
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="Forwarded to each 3D reconstruction case.",
+    )
     parser.add_argument("--difference-mode", choices=["raw", "normalized"], default="normalized")
     parser.add_argument(
         "--difference-orientation",
@@ -123,6 +138,7 @@ def main() -> None:
             hyperparameter=None,
             difference_step_size_mode=None,
             best_homog_mode=None,
+            acceleration_profile=args.acceleration_profile,
             render_plot=not args.no_plot,
             save_data=not args.no_save_data,
         )

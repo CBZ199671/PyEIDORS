@@ -2,9 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Dict, Any
-
-from typing import TYPE_CHECKING
+from typing import Any, TYPE_CHECKING
 
 from ...core_system_helpers import difference_measurement
 from ...data.difference import project_measurement_vector
@@ -23,8 +21,8 @@ def perform_difference_reconstruction(
     eit_system: "EITSystem",
     measurement_data: EITData,
     reference_data: EITData,
-    initial_image: Optional[EITImage] = None,
-    metadata: Optional[Dict[str, Any]] = None,
+    initial_image: EITImage | None = None,
+    metadata: dict[str, Any] | None = None,
 ) -> ReconstructionResult:
     """Perform difference imaging.
 
@@ -72,11 +70,11 @@ def perform_difference_reconstruction(
             difference_orientation=diff_data.difference_orientation,
         )
     )
-    residual_vector, l2_error, rel_error, mse = compute_residuals(
+    residual_vector, _, _, _ = compute_residuals(
         measured_vector, simulated_vector
     )
 
-    result_metadata: Dict[str, Any] = {
+    result_metadata: dict[str, Any] = {
         "reference_measured": reference_data.meas,
         "display_values": conductivity_values,
         "solver_diagnostics": reconstruction.diagnostics,

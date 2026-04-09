@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Sequence, Tuple
+from typing import Any
 
 import numpy as np
 
@@ -22,9 +23,9 @@ class ReconstructionResult:
     measured: np.ndarray
     simulated: np.ndarray
     residual: np.ndarray
-    residual_history: Optional[Sequence[float]] = None
-    sigma_change_history: Optional[Sequence[float]] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
+    residual_history: Sequence[float] | None = None
+    sigma_change_history: Sequence[float] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
 
     @property
     def l2_error(self) -> float:
@@ -40,7 +41,7 @@ class ReconstructionResult:
     def mse(self) -> float:
         return float(np.mean(self.residual ** 2))
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for script-facing serialization."""
 
         data = {
@@ -62,7 +63,7 @@ class ReconstructionResult:
 def resolve_reconstruction_output(
     reconstruction: SolverOutput,
     fwd_model: Any,
-) -> Tuple[EITImage, np.ndarray, Optional[Sequence[float]], Optional[Sequence[float]]]:
+) -> tuple[EITImage, np.ndarray, Sequence[float] | None, Sequence[float] | None]:
     """Extract conductivity image and history from typed solver output."""
     if not isinstance(reconstruction, SolverOutput):
         raise TypeError(
@@ -92,7 +93,7 @@ def resolve_reconstruction_output(
 def compute_residuals(
     measured_vector: np.ndarray,
     simulated_vector: np.ndarray,
-) -> Tuple[np.ndarray, float, float, float]:
+) -> tuple[np.ndarray, float, float, float]:
     """Compute residual vector and basic metrics."""
 
     residual_vector = simulated_vector - measured_vector

@@ -24,11 +24,13 @@ def _rank_from_energy(singular_values: np.ndarray, energy: float, max_rank: int)
         return 0
     target = min(max(float(energy), 0.0), 1.0) * total
     accum = 0.0
+    chosen = int(min(max_rank, singular_values.size))
     for idx, s_val in enumerate(singular_values, start=1):
         accum += float(s_val * s_val)
-        if accum >= target:
-            return int(min(idx, max_rank))
-    return int(max_rank)
+        if accum >= target or idx == singular_values.size:
+            chosen = int(min(idx, max_rank))
+            break
+    return chosen
 
 
 def compute_pod_basis(
@@ -86,10 +88,9 @@ def merge_orthonormal_bases(
             continue
         valid_blocks.append(np.ascontiguousarray(arr, dtype=np.float64))
 
-    if n_param is None:
-        return np.zeros((0, 0), dtype=np.float64)
     if not valid_blocks:
-        return np.zeros((n_param, 0), dtype=np.float64)
+        rows = 0 if n_param is None else int(n_param)
+        return np.zeros((rows, 0), dtype=np.float64)
 
     merged = np.column_stack(valid_blocks)
     with np.errstate(all="ignore"):

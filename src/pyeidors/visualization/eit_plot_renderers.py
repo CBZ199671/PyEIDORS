@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Union
+from typing import Any
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri
@@ -24,7 +24,7 @@ from .eit_plot_helpers import (
 Function = fem.Function
 
 
-def render_mesh(viz, mesh, title: str, show_electrodes: bool, save_path: Optional[str]):
+def render_mesh(viz, mesh, title: str, show_electrodes: bool, save_path: str | None):
     fig, ax = plt.subplots(figsize=viz.figsize)
     coords = coordinates(mesh)
     mesh_cells = cells(mesh)
@@ -52,16 +52,16 @@ def render_mesh(viz, mesh, title: str, show_electrodes: bool, save_path: Optiona
 def render_conductivity(
     viz,
     mesh,
-    conductivity: Union[Function, np.ndarray],
-    title: Optional[str],
+    conductivity: Function | np.ndarray,
+    title: str | None,
     colormap,
-    save_path: Optional[str],
-    vmin: Optional[float],
-    vmax: Optional[float],
+    save_path: str | None,
+    vmin: float | None,
+    vmax: float | None,
     minimal: bool,
     show_electrodes: bool,
     scientific_notation: bool,
-    colorbar_format: Optional[str],
+    colorbar_format: str | None,
     transparent: bool,
 ):
     fig, ax = plt.subplots(figsize=viz.figsize)
@@ -147,7 +147,7 @@ def render_conductivity(
         try:
             viz._overlay_electrode_labels(ax, mesh)
         except Exception as exc:
-            viz._logger.warning(f"Electrode visualization failed: {exc}")
+            viz._logger.warning("Electrode visualization failed: %s", exc)
 
     plt.tight_layout()
     if save_path:
@@ -155,7 +155,7 @@ def render_conductivity(
     return fig
 
 
-def render_measurements(viz, data, title: str, save_path: Optional[str]):
+def render_measurements(viz, data, title: str, save_path: str | None):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=viz.figsize)
     measurements = data.meas if hasattr(data, "meas") else np.asarray(data)
 
@@ -197,7 +197,7 @@ def render_reconstruction_comparison(
     true_conductivity,
     reconstructed_conductivity,
     title: str,
-    save_path: Optional[str],
+    save_path: str | None,
 ):
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
@@ -245,7 +245,7 @@ def render_reconstruction_comparison(
     return fig
 
 
-def render_convergence(viz, iterations, errors, title: str, save_path: Optional[str]):
+def render_convergence(viz, iterations, errors, title: str, save_path: str | None):
     fig, ax = plt.subplots(figsize=(10, 6))
     ax.semilogy(iterations, errors, "b-o", linewidth=2, markersize=6)
     ax.set_title(title, fontsize=14, fontweight="bold")

@@ -169,3 +169,38 @@ def test_lowrank_subspace_helpers_cover_invalid_empty_and_randomized_paths():
     assert basis_rand.shape[0] == 4
     assert 1 <= basis_rand.shape[1] <= 2
     assert sv_rand.shape[0] == basis_rand.shape[1]
+
+
+def test_reduced_helper_remaining_rank_and_single_column_edges(monkeypatch: pytest.MonkeyPatch):
+    assert lowrank_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 3.0, 2) == 2
+
+    monkeypatch.setattr(
+        lowrank_module,
+        "_randomized_right_svd",
+        lambda _jacobian, _rank: (np.array([1.0], dtype=float), np.zeros((0, 3), dtype=float)),
+    )
+    empty_basis, empty_sv = lowrank_module.build_lowrank_subspace(
+        np.ones((2, 3), dtype=float),
+        rank=2,
+        method="randomized",
+    )
+    assert empty_basis.shape == (3, 0)
+    assert empty_sv.shape == (0,)
+
+    assert pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 5.0, 2) == 2
+
+    monkeypatch.setattr(pod_module, "_rank_from_energy", lambda *_args, **_kwargs: 0)
+    zero_rank_basis = compute_pod_basis(np.eye(2, dtype=float), rank=None, energy=0.8)
+    assert zero_rank_basis.shape == (2, 0)
+
+    all_zero_qr = merge_orthonormal_bases(np.zeros((2, 2), dtype=float))
+    assert all_zero_qr.shape == (2, 0)
+
+    single_snapshot = select_snapshot_matrix(
+        "synthetic",
+        n_param=2,
+        bank_matrix=None,
+        synthetic_matrix=np.array([1.0, 2.0], dtype=float),
+        cached_matrix=None,
+    )
+    assert single_snapshot.shape == (2, 1)

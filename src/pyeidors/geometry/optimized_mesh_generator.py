@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import re
 import tempfile
 import time
 from configparser import ConfigParser
@@ -13,19 +12,25 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-from mpi4py import MPI
+import ufl
 from dolfinx import fem
 from dolfinx.io import gmsh as gmshio
-import ufl
+from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import (
-    DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_3D_GENERATOR_REVISION,
+    DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_MESH_FAMILY,
-    LEGACY_3D_GENERATOR_REVISION,
     normalize_mesh_family,
+)
+from ._helpers import (
+    association_from_mesh_data,
+    infer_generator_revision,
+    infer_geometry_version,
+    infer_mesh_family_from_mesh,
+    write_association_table,
 )
 from .mesh3d_generator import (
     DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
@@ -143,8 +148,8 @@ class OptimizedMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = _association_from_mesh_data(mesh_data)
-        _write_association_table(association_path, association_table)
+        association_table = association_from_mesh_data(mesh_data)
+        write_association_table(association_path, association_table)
 
         electrode_vertices = [np.asarray(v, dtype=float) for v in self.mesh_data.get("electrode_vertices", [])]
         mesh = build_eit_mesh(
@@ -272,10 +277,10 @@ class OptimizedMeshConverter:
 
     def convert(self) -> tuple[EITMesh, object, Dict[str, int]]:
         mesh_data = gmshio.read_from_msh(str(self.mesh_file), MPI.COMM_WORLD, rank=0, gdim=self.gdim)
-        association_table = _association_from_mesh_data(mesh_data)
+        association_table = association_from_mesh_data(mesh_data)
 
         association_file = self.output_dir / f"{self.prefix}_association_table.ini"
-        _write_association_table(association_file, association_table)
+        write_association_table(association_file, association_table)
 
         mesh = build_eit_mesh(
             mesh_data.mesh,
@@ -287,21 +292,6 @@ class OptimizedMeshConverter:
             mesh_file=str(self.mesh_file),
         )
         return mesh, mesh_data.facet_tags, association_table
-
-
-def _write_association_table(path: Path, association_table: Dict[str, int]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    config = ConfigParser()
-    config["ASSOCIATION TABLE"] = {str(k): str(v) for k, v in association_table.items()}
-    with path.open("w", encoding="utf-8") as f:
-        config.write(f)
-
-
-def _association_from_mesh_data(mesh_data) -> Dict[str, int]:
-    association_table: Dict[str, int] = {}
-    for name, group in (mesh_data.physical_groups or {}).items():
-        association_table[name] = int(group.tag)
-    return association_table
 
 
 # Convenience functions
@@ -366,33 +356,6 @@ def _build_cache_name_3d(
         f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
         f"{str(generator_revision).strip().lower()}"
     )
-
-
-def _infer_geometry_version(mesh_name: str) -> str:
-    lowered = str(mesh_name).strip().lower()
-    return "geomv2" if "geomv2" in lowered else "legacy"
-
-
-def _infer_generator_revision(mesh_name: str) -> str:
-    lowered = str(mesh_name).strip().lower()
-    match = re.search(r"(g3d\d+)", lowered)
-    if match is not None:
-        return str(match.group(1))
-    return LEGACY_3D_GENERATOR_REVISION
-
-
-def _infer_mesh_family_from_mesh(mesh: EITMesh) -> str | None:
-    if int(mesh.topology.dim) != 3:
-        return None
-    cells = mesh.cells()
-    if cells.ndim != 2 or cells.shape[0] == 0:
-        return None
-    verts_per_cell = int(cells.shape[1])
-    if verts_per_cell == 8:
-        return "hex"
-    if verts_per_cell == 4:
-        return "tetra"
-    return None
 
 
 def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
@@ -470,19 +433,26 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
         else:
             association_table = {}
     else:
-        association_table = _association_from_mesh_data(mesh_data)
+        association_table = association_from_mesh_data(mesh_data)
 
     sidecar_path = structured_sidecar_path_for_mesh(msh_file)
-    geometry_version = _infer_geometry_version(mesh_name)
-    generator_revision = _infer_generator_revision(mesh_name)
+    geometry_version = infer_geometry_version(mesh_name)
+    generator_revision = infer_generator_revision(mesh_name)
     if sidecar_path.exists():
         try:
             sidecar = load_structured_sidecar(sidecar_path)
-            geometry_version = str(sidecar.get("geometry_version", geometry_version)).strip().lower() or geometry_version
-            generator_revision = str(sidecar.get("generator_revision", generator_revision)).strip().lower() or generator_revision
+            geometry_version = (
+                str(sidecar.get("geometry_version", geometry_version)).strip().lower()
+                or geometry_version
+            )
+            generator_revision = (
+                str(sidecar.get("generator_revision", generator_revision)).strip().lower()
+                or generator_revision
+            )
         except Exception:
             pass
 
+    sidecar_exists = sidecar_path.exists()
     mesh = build_eit_mesh(
         mesh_data.mesh,
         facet_tags=mesh_data.facet_tags,
@@ -493,18 +463,10 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
         mesh_file=str(msh_file),
         geometry_version=geometry_version,
         generator_revision=generator_revision,
-        structured_sidecar_file=(
-            str(sidecar_path)
-            if sidecar_path.exists()
-            else None
-        ),
-        structured_sidecar_version=(
-            STRUCTURED_SIDECAR_VERSION
-            if sidecar_path.exists()
-            else None
-        ),
+        structured_sidecar_file=str(sidecar_path) if sidecar_exists else None,
+        structured_sidecar_version=STRUCTURED_SIDECAR_VERSION if sidecar_exists else None,
     )
-    mesh.mesh_family = _infer_mesh_family_from_mesh(mesh)
+    mesh.mesh_family = infer_mesh_family_from_mesh(mesh)
     if int(gdim) == 3 and not _cached_3d_cem_mesh_is_complete(mesh, n_elec=int(n_elec)):
         logger.warning("Skipping cached mesh %s because 3D CEM tags/measures are incomplete", mesh_name)
         return None

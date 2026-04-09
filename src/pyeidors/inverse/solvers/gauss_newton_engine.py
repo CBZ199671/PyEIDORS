@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 
 import numpy as np
 import torch
@@ -72,6 +72,13 @@ except ImportError:  # pragma: no cover - optional dependency fallback
         return _NoOpTqdm(*args, **kwargs)
 
 
+def _validate_option(name: str, value: str, allowed: set[str]) -> None:
+    """Raise ``ValueError`` if *value* is not in *allowed*."""
+    if value not in allowed:
+        options = ", ".join(repr(v) for v in sorted(allowed))
+        raise ValueError(f"Unsupported {name}={value!r}. Expected one of: {options}.")
+
+
 class GaussNewtonReconstructor:
     """Gauss-Newton solver with optional measurement weighting and line-search."""
 
@@ -85,7 +92,7 @@ class GaussNewtonReconstructor:
         regularization_param: float = 0.01,
         hyperparameter: float | None = None,
         line_search_steps: int = 8,
-        clip_values: Tuple[float, float] = (1e-6, 10.0),
+        clip_values: tuple[float, float] = (1e-6, 10.0),
         device: str = "auto",
         verbose: bool = True,
         use_measurement_weights: bool = False,
@@ -102,7 +109,7 @@ class GaussNewtonReconstructor:
         difference_step_size_mode: str = "off",
         difference_step_size_value: float | None = None,
         difference_step_size_bounds: tuple[float, float] = (0.0, 4.0),
-        difference_step_size_fmin_options: Optional[dict[str, Any]] = None,
+        difference_step_size_fmin_options: dict[str, Any] | None = None,
         difference_preset: str = "eidors_one_step_noser",
         absolute_preset: str = "eidors_abs_gn",
         best_homog_mode: str = "off",
@@ -151,7 +158,7 @@ class GaussNewtonReconstructor:
         self.negate_jacobian = negate_jacobian
         self.max_step = max_step
         self.min_step = min_step
-        self.step_schedule: Optional[list[float]] = None
+        self.step_schedule: list[float] | None = None
         self.min_iterations = int(max(1, min_iterations))
         self.use_prior_term = use_prior_term
         self.difference_mode = normalize_difference_mode(
@@ -176,14 +183,14 @@ class GaussNewtonReconstructor:
         self.absolute_preset = str(absolute_preset).strip().lower()
         self.active_preset_name = self.difference_preset
         self.best_homog_mode = str(best_homog_mode).strip().lower()
-        self._prior_data: Optional[np.ndarray] = None
-        self._meas_weight_sqrt: Optional[torch.Tensor] = None
-        self._baseline_measurement: Optional[np.ndarray] = None
-        self._measured_vector: Optional[np.ndarray] = None
-        self._line_search_perturb: Optional[np.ndarray] = None
+        self._prior_data: np.ndarray | None = None
+        self._meas_weight_sqrt: torch.Tensor | None = None
+        self._baseline_measurement: np.ndarray | None = None
+        self._measured_vector: np.ndarray | None = None
+        self._line_search_perturb: np.ndarray | None = None
         self._measurement_space_type = "real"
-        self._difference_reference_meas: Optional[np.ndarray] = None
-        self._difference_target_meas: Optional[np.ndarray] = None
+        self._difference_reference_meas: np.ndarray | None = None
+        self._difference_target_meas: np.ndarray | None = None
         self._difference_mode_effective = self.difference_mode
         self._difference_orientation_effective = self.difference_orientation
         self.cache_manager = cache_manager
@@ -212,65 +219,18 @@ class GaussNewtonReconstructor:
         self.absolute_startup_cache = bool(absolute_startup_cache)
         self.cholmod_max_n = int(max(1, cholmod_max_n))
         self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
-        if self.performance_mode not in {"safe", "aggressive"}:
-            raise ValueError(
-                f"Unsupported performance_mode={performance_mode!r}. "
-                "Expected one of: 'safe', 'aggressive'."
-            )
-        if self.solver_mode not in {"strict", "fast"}:
-            raise ValueError(
-                f"Unsupported solver_mode={solver_mode!r}. Expected one of: 'strict', 'fast'."
-            )
-        if self.linear_solver not in {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"}:
-            raise ValueError(
-                f"Unsupported linear_solver={linear_solver!r}. "
-                "Expected one of: 'auto', 'petsc-ksp', 'scipy-lsmr', 'pyamg-cg', 'cholmod'."
-            )
-        if self.line_search_mode not in {"full", "fast"}:
-            raise ValueError(
-                f"Unsupported line_search_mode={line_search_mode!r}. Expected one of: 'full', 'fast'."
-            )
-        if self.preconditioner not in {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"}:
-            raise ValueError(
-                f"Unsupported preconditioner={preconditioner!r}. "
-                "Expected one of: 'auto', 'diag', 'pyamg', 'cholmod', 'petsc-gamg'."
-            )
-        if self.fast_linear_path not in {"auto", "woodbury", "pcg", "cholmod-direct", "strict"}:
-            raise ValueError(
-                f"Unsupported fast_linear_path={fast_linear_path!r}. "
-                "Expected one of: 'auto', 'woodbury', 'pcg', 'cholmod-direct', 'strict'."
-            )
-        if self.rom_mode not in {"off", "auto", "on"}:
-            raise ValueError(
-                f"Unsupported rom_mode={rom_mode!r}. Expected one of: 'off', 'auto', 'on'."
-            )
-        if self.rom_snapshot_source not in {"cache", "synthetic", "hybrid"}:
-            raise ValueError(
-                "Unsupported rom_snapshot_source="
-                f"{rom_snapshot_source!r}. Expected one of: 'cache', 'synthetic', 'hybrid'."
-            )
-        if self.inexact_mode not in {"off", "auto", "on"}:
-            raise ValueError(
-                f"Unsupported inexact_mode={inexact_mode!r}. Expected one of: 'off', 'auto', 'on'."
-            )
-        if self.inexact_forcing not in {"fixed", "eisenstat-walker"}:
-            raise ValueError(
-                "Unsupported inexact_forcing="
-                f"{inexact_forcing!r}. Expected one of: 'fixed', 'eisenstat-walker'."
-            )
-        if self.lowrank_mode not in {"off", "auto", "on"}:
-            raise ValueError(
-                f"Unsupported lowrank_mode={lowrank_mode!r}. Expected one of: 'off', 'auto', 'on'."
-            )
-        if self.lowrank_method not in {"tsvd", "randomized"}:
-            raise ValueError(
-                f"Unsupported lowrank_method={lowrank_method!r}. "
-                "Expected one of: 'tsvd', 'randomized'."
-            )
-        if self.cholmod_max_n <= 0:
-            raise ValueError("cholmod_max_n must be positive.")
-        if self.cholmod_max_memory_gib <= 0.0:
-            raise ValueError("cholmod_max_memory_gib must be positive.")
+        _validate_option("performance_mode", self.performance_mode, {"safe", "aggressive"})
+        _validate_option("solver_mode", self.solver_mode, {"strict", "fast"})
+        _validate_option("linear_solver", self.linear_solver, {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"})
+        _validate_option("line_search_mode", self.line_search_mode, {"full", "fast"})
+        _validate_option("preconditioner", self.preconditioner, {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"})
+        _validate_option("fast_linear_path", self.fast_linear_path, {"auto", "woodbury", "pcg", "cholmod-direct", "strict"})
+        _validate_option("rom_mode", self.rom_mode, {"off", "auto", "on"})
+        _validate_option("rom_snapshot_source", self.rom_snapshot_source, {"cache", "synthetic", "hybrid"})
+        _validate_option("inexact_mode", self.inexact_mode, {"off", "auto", "on"})
+        _validate_option("inexact_forcing", self.inexact_forcing, {"fixed", "eisenstat-walker"})
+        _validate_option("lowrank_mode", self.lowrank_mode, {"off", "auto", "on"})
+        _validate_option("lowrank_method", self.lowrank_method, {"tsvd", "randomized"})
         if self.inexact_eta_min <= 0.0 or self.inexact_eta_max <= 0.0:
             raise ValueError("inexact eta bounds must be positive.")
         if self.inexact_eta_min > self.inexact_eta_max:
@@ -306,8 +266,8 @@ class GaussNewtonReconstructor:
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
         self.R_torch = None
         self.R_matrix = None
-        self.R_linear_operator: Optional[LinearOperator] = None
-        self.R_diag: Optional[np.ndarray] = None
+        self.R_linear_operator: LinearOperator | None = None
+        self.R_diag: np.ndarray | None = None
 
         if self.verbose:
             print(
@@ -438,7 +398,7 @@ class GaussNewtonReconstructor:
                 f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
             )
         self.R_diag = np.asarray(np.diag(dense), dtype=np.float64)
-        if needs_dense_tensor or not isinstance(matrix, LinearOperator):
+        if needs_dense_tensor:
             self.R_torch = torch.from_numpy(dense).to(
                 self.device,
                 dtype=self._torch_dtype,
@@ -450,10 +410,10 @@ class GaussNewtonReconstructor:
 
     def reconstruct(
         self,
-        measured_data: Union[object, np.ndarray],
+        measured_data: object | np.ndarray,
         initial_conductivity: float = 1.0,
         jacobian_method: str = "efficient",
-        prior_data: Optional[np.ndarray] = None,
+        prior_data: np.ndarray | None = None,
         record_conductivity_history: bool = False,
         conductivity_history_stride: int = 1,
     ) -> SolverOutput:

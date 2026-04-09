@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional, Tuple, Union
+from typing import Any
 
-import matplotlib.pyplot as plt
 import numpy as np
-from dolfinx import fem
 
 from .eit_plot_helpers import (
     apply_eidors_ticks,
@@ -38,14 +36,9 @@ from .eit_plot_renderers import (
 logger = logging.getLogger(__name__)
 
 try:
-    Function = fem.Function
-    FENICS_AVAILABLE = True
-except Exception:
-    FENICS_AVAILABLE = False
-
-try:
     import matplotlib.pyplot as plt
-
+    from dolfinx import fem
+    Function = fem.Function
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
@@ -56,8 +49,8 @@ class EITVisualizer:
     def __init__(
         self,
         style: str = "seaborn",
-        figsize: Tuple[int, int] = (12, 8),
-        language: Optional[str] = None,
+        figsize: tuple[int, int] = (12, 8),
+        language: str | None = None,
     ):
         if not MATPLOTLIB_AVAILABLE:
             raise ImportError("matplotlib not available, cannot perform visualization")
@@ -76,9 +69,9 @@ class EITVisualizer:
     def plot_mesh(
         self,
         mesh,
-        title: Optional[str] = None,
+        title: str | None = None,
         show_electrodes: bool = True,
-        save_path: Optional[str] = None,
+        save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("mesh_title") if title is None else title
         return render_mesh(self, mesh, title=resolved_title, show_electrodes=show_electrodes, save_path=save_path)
@@ -86,16 +79,16 @@ class EITVisualizer:
     def plot_conductivity(
         self,
         mesh,
-        conductivity: Union[Function, np.ndarray],
-        title: Optional[str] = None,
+        conductivity: np.ndarray | Any,
+        title: str | None = None,
         colormap: str = "viridis",
-        save_path: Optional[str] = None,
-        vmin: Optional[float] = None,
-        vmax: Optional[float] = None,
+        save_path: str | None = None,
+        vmin: float | None = None,
+        vmax: float | None = None,
         minimal: bool = False,
         show_electrodes: bool = False,
         scientific_notation: bool = False,
-        colorbar_format: Optional[str] = None,
+        colorbar_format: str | None = None,
         transparent: bool = False,
     ) -> plt.Figure:
         resolved_title = self._text("conductivity_title") if title is None else title
@@ -118,8 +111,8 @@ class EITVisualizer:
     def plot_measurements(
         self,
         data,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None,
+        title: str | None = None,
+        save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("measurement_title") if title is None else title
         return render_measurements(self, data, title=resolved_title, save_path=save_path)
@@ -129,8 +122,8 @@ class EITVisualizer:
         mesh,
         true_conductivity,
         reconstructed_conductivity,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None,
+        title: str | None = None,
+        save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("recon_comparison") if title is None else title
         return render_reconstruction_comparison(
@@ -146,8 +139,8 @@ class EITVisualizer:
         self,
         iterations,
         errors,
-        title: Optional[str] = None,
-        save_path: Optional[str] = None,
+        title: str | None = None,
+        save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("convergence") if title is None else title
         return render_convergence(self, iterations, errors, title=resolved_title, save_path=save_path)
@@ -158,7 +151,7 @@ class EITVisualizer:
             return template.format(**kwargs)
         return template
 
-    # Compatibility wrappers used by tests/diagnostics.
+    # Thin delegates kept as part of the renderer/test-facing helper surface.
     def _plot_electrodes(self, ax, electrode_vertices):
         return plot_electrodes(ax, electrode_vertices)
 
@@ -166,23 +159,23 @@ class EITVisualizer:
         return interpolate_cell_to_node(mesh, cell_values)
 
     @staticmethod
-    def _is_eidors_diff(colormap: Union[str, Any]) -> bool:
+    def _is_eidors_diff(colormap: str | Any) -> bool:
         return is_eidors_diff(colormap)
 
     @staticmethod
-    def _resolve_colormap(colormap: Union[str, Any]) -> Any:
+    def _resolve_colormap(colormap: str | Any) -> Any:
         return resolve_colormap(colormap)
 
     @staticmethod
-    def _resolve_eidors_diff_limits(values: np.ndarray, vmin: Optional[float], vmax: Optional[float]):
+    def _resolve_eidors_diff_limits(values: np.ndarray, vmin: float | None, vmax: float | None):
         return resolve_eidors_diff_limits(values, vmin, vmax)
 
     @staticmethod
-    def _apply_eidors_ticks(cbar: Any, vmin: Optional[float], vmax: Optional[float], ref_lev: float = 0.0, tick_div: Optional[int] = None) -> None:
+    def _apply_eidors_ticks(cbar: Any, vmin: float | None, vmax: float | None, ref_lev: float = 0.0, tick_div: int | None = None) -> None:
         apply_eidors_ticks(cbar, vmin, vmax, ref_lev, tick_div)
 
     @staticmethod
-    def _eidors_tick_vals(max_scale: float, ref_lev: float, tick_div_in: Optional[int] = None):
+    def _eidors_tick_vals(max_scale: float, ref_lev: float, tick_div_in: int | None = None):
         return eidors_tick_vals(max_scale, ref_lev, tick_div_in)
 
     @staticmethod
@@ -212,5 +205,5 @@ class EITVisualizer:
         return num_vertices(mesh)
 
 
-def create_visualizer(style: str = "seaborn", language: Optional[str] = None) -> EITVisualizer:
+def create_visualizer(style: str = "seaborn", language: str | None = None) -> EITVisualizer:
     return EITVisualizer(style=style, language=language)

@@ -28,6 +28,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import sys
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -44,6 +45,10 @@ from scipy.optimize import minimize_scalar
 from scipy.linalg import lu_factor, lu_solve
 import matplotlib.pyplot as plt
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from pyeidors import EITSystem
 from pyeidors.cache import hash_array
 from pyeidors.data.synthetic_data import create_custom_phantom
@@ -51,7 +56,9 @@ from pyeidors.data.structures import EITData, EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
+from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
 from pyeidors.visualization import EITVisualizer, create_visualizer
+from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 @dataclass
@@ -182,6 +189,11 @@ def parse_args() -> argparse.Namespace:
                         help="PETSc/DOLFINx FEM device policy.")
     parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
                         help="Torch/GN inverse runtime device policy.")
+    add_acceleration_profile_argument(
+        parser,
+        default=DEFAULT_ACCELERATION_PROFILE,
+        help_suffix="For this 2D parity script the profile is accepted mainly for CLI consistency.",
+    )
     parser.add_argument("--perf-report", type=Path, default=None,
                         help="Optional JSON report path for repeated parity/performance runs.")
     parser.add_argument("--repeat", type=int, default=1,
@@ -213,6 +225,7 @@ def setup_eit_system(args: argparse.Namespace) -> Tuple[EITSystem, object]:
         pattern_config=pattern,
         petsc_device=str(args.petsc_device),
         device=str(args.device),
+        acceleration_profile=str(args.acceleration_profile),
     )
     mesh = load_or_create_mesh(mesh_dir=str(args.mesh_dir), mesh_name=args.mesh_name,
                                n_elec=args.n_elec, refinement=args.refinement,

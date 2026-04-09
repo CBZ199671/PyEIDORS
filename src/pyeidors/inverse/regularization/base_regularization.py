@@ -24,7 +24,6 @@ class BaseRegularization(ABC):
     @abstractmethod
     def create_matrix(self) -> RegularizationMatrix:
         """Create regularization matrix."""
-        pass
 
     def get_regularization_matrix(self, cache: bool = True) -> RegularizationMatrix:
         """Get regularization matrix (with caching support)."""

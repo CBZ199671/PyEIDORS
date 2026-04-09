@@ -26,26 +26,3 @@ def cell_to_node(mesh, cell_values: np.ndarray) -> np.ndarray:
     counts[counts == 0] = 1  # Avoid division by zero
     node_vals /= counts
     return node_vals
-
-
-def get_mesh_info(mesh) -> dict:
-    """Get basic mesh information.
-
-    Args:
-        mesh: ``EITMesh`` or raw DOLFINx mesh-like object.
-
-    Returns:
-        Dictionary containing mesh information.
-    """
-    raw_mesh = mesh.mesh if hasattr(mesh, "mesh") else mesh
-    topology = raw_mesh.topology
-    topology.create_entities(1)
-    edge_map = topology.index_map(1)
-    num_edges = int(edge_map.size_local if edge_map is not None else 0)
-    return {
-        "num_cells": mesh.num_cells(),
-        "num_vertices": mesh.num_vertices(),
-        "num_edges": num_edges,
-        "geometric_dimension": int(raw_mesh.geometry.dim),
-        "topology_dimension": int(raw_mesh.topology.dim),
-    }

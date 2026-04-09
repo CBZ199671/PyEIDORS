@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Union
-
 import numpy as np
 import torch
 import ufl
@@ -20,27 +18,26 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         self,
         fwd_model,
         use_torch: bool = False,
-        device: Optional[str] = None,
-        torch_dtype: Optional[Union[str, torch.dtype]] = None,
+        device: str | None = None,
+        torch_dtype: str | torch.dtype | None = None,
         torch_batch_all: bool = False,
     ):
         super().__init__(fwd_model)
         self.use_torch = use_torch
         self.torch_batch_all = torch_batch_all
         self.torch_dtype = self._resolve_torch_dtype(torch_dtype)
-        if device is None:
-            if torch.cuda.is_available():
-                self.torch_device = torch.device("cuda")
-            elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
-                self.torch_device = torch.device("mps")
-            else:
-                self.torch_device = torch.device("cpu")
-        else:
+        if device is not None:
             self.torch_device = torch.device(device)
+        elif torch.cuda.is_available():
+            self.torch_device = torch.device("cuda")
+        elif getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+            self.torch_device = torch.device("mps")
+        else:
+            self.torch_device = torch.device("cpu")
         self._setup()
 
     @staticmethod
-    def _resolve_torch_dtype(dtype: Optional[Union[str, torch.dtype]]) -> torch.dtype:
+    def _resolve_torch_dtype(dtype: str | torch.dtype | None) -> torch.dtype:
         if dtype is None:
             return torch.float64
         if isinstance(dtype, torch.dtype):
@@ -114,7 +111,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             meas_idx += n_meas_this
         return current_patterns
 
-    def _assemble_numpy(self, grad_u_all: List[np.ndarray], grad_adj_all: List[np.ndarray]) -> np.ndarray:
+    def _assemble_numpy(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
         J = np.zeros((n_meas, n_elem), dtype=float)
@@ -129,7 +126,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             meas_idx += n_meas_this
         return J
 
-    def _assemble_torch(self, grad_u_all: List[np.ndarray], grad_adj_all: List[np.ndarray]) -> np.ndarray:
+    def _assemble_torch(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
         if self.torch_batch_all:
             return self._assemble_torch_all(grad_u_all, grad_adj_all)
 
@@ -148,7 +145,7 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             meas_idx += n_meas_this
         return J_t.cpu().numpy()
 
-    def _assemble_torch_all(self, grad_u_all: List[np.ndarray], grad_adj_all: List[np.ndarray]) -> np.ndarray:
+    def _assemble_torch_all(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
         np_dtype = np.float32 if self.torch_dtype == torch.float32 else np.float64

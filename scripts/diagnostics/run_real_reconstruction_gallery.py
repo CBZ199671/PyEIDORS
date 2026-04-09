@@ -30,17 +30,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-try:  # pragma: no cover - optional outside the full FEM runtime
-    from pyeidors import EITSystem
-    from pyeidors.data.structures import EITImage, PatternConfig
-    from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
-    from pyeidors.geometry.simple_mesh_generator import create_simple_eit_mesh
-except Exception:  # pragma: no cover
-    EITSystem = None  # type: ignore[assignment]
-    EITImage = None  # type: ignore[assignment]
-    PatternConfig = None  # type: ignore[assignment]
-    load_or_create_mesh = None  # type: ignore[assignment]
-    create_simple_eit_mesh = None  # type: ignore[assignment]
+from pyeidors.perf import ACCELERATION_PROFILE_GPU3D
+from scripts.common.acceleration_profiles import (
+    add_acceleration_profile_argument,
+    resolve_3d_mesh_contract,
+)
+from scripts.diagnostics.gallery_shared import (
+    consistency_metrics as _shared_consistency_metrics,
+    jsonable as _jsonable,
+    relative_l2 as _relative_l2,
+    rmse as _rmse,
+    safe_pearson as _safe_pearson,
+    save_case_data as _save_case_data,
+)
 
 
 BACKGROUND_CONDUCTIVITY = 1.0
@@ -70,6 +72,30 @@ ANOMALIES_3D = (
 )
 
 
+def _consistency_metrics(
+    *,
+    dim: int,
+    baseline_cpu_meas: np.ndarray | None,
+    baseline_gpu_meas: np.ndarray | None,
+    target_cpu_meas: np.ndarray,
+    target_gpu_meas: np.ndarray,
+    cpu_recon: np.ndarray,
+    gpu_recon: np.ndarray,
+) -> dict[str, Any]:
+    return _shared_consistency_metrics(
+        dim=dim,
+        baseline_cpu_meas=baseline_cpu_meas,
+        baseline_gpu_meas=baseline_gpu_meas,
+        target_cpu_meas=target_cpu_meas,
+        target_gpu_meas=target_gpu_meas,
+        cpu_recon=cpu_recon,
+        gpu_recon=gpu_recon,
+        measurement_rel_tol=_MEASUREMENT_REL_TOL,
+        image_rel_tol=_IMAGE_REL_TOL,
+        image_rmse_tol_by_dim=_IMAGE_RMSE_TOL,
+    )
+
+
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
@@ -85,16 +111,17 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--max-iterations", type=int, default=2)
     parser.add_argument("--slice-resolution", type=int, default=220)
     parser.add_argument("--report-title", type=str, default="Real-Valued Reconstruction Gallery")
+    add_acceleration_profile_argument(
+        parser,
+        flag="--gpu-acceleration-profile",
+        default=ACCELERATION_PROFILE_GPU3D,
+        help_suffix="Used for the 3D GPU gallery case and forwarded to the worker.",
+    )
     return parser.parse_args()
 
 
 def _cuda_available() -> bool:
     return bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
-
-
-def _require_runtime() -> None:
-    if any(item is None for item in (EITSystem, EITImage, PatternConfig, load_or_create_mesh, create_simple_eit_mesh)):
-        raise RuntimeError("This gallery requires the full PyEIDORS FEM runtime in the active environment.")
 
 
 def _ensure_plot_stack() -> None:
@@ -112,283 +139,6 @@ def _ensure_plot_stack() -> None:
     plt = _plt  # type: ignore[assignment]
     TwoSlopeNorm = _TwoSlopeNorm  # type: ignore[assignment]
     griddata = _griddata  # type: ignore[assignment]
-
-
-def _maybe_cuda_sync() -> None:
-    if torch is None or not hasattr(torch, "cuda") or not torch.cuda.is_available():
-        return
-    try:
-        torch.cuda.synchronize()
-    except Exception:
-        return
-
-
-def _timed(fn, *, sync_cuda: bool = False):
-    if sync_cuda:
-        _maybe_cuda_sync()
-    started = time.perf_counter()
-    out = fn()
-    if sync_cuda:
-        _maybe_cuda_sync()
-    return out, float(time.perf_counter() - started)
-
-
-def _pattern(dim: int, *, n_elec: int) -> PatternConfig:
-    return PatternConfig(
-        n_elec=n_elec,
-        stim_pattern="{ad}",
-        meas_pattern="{ad}",
-        drive_mode="normalized" if int(dim) == 2 else "total_current",
-        drive_value=1.0,
-        geometry_scale_to_m=1.0,
-        rotate_meas=True,
-    )
-
-
-def _build_system(
-    *,
-    mesh,
-    dim: int,
-    cache_dir: Path,
-    backend: str,
-    petsc_device: str,
-    device: str,
-    n_elec: int,
-    contact_impedance: float,
-    max_iterations: int,
-) -> EITSystem:
-    kwargs: dict[str, Any] = {
-        "n_elec": n_elec,
-        "pattern_config": _pattern(dim, n_elec=n_elec),
-        "contact_impedance": np.full(n_elec, float(contact_impedance), dtype=float),
-        "base_conductivity": BACKGROUND_CONDUCTIVITY,
-        "regularization_type": "noser",
-        "regularization_alpha": 1.0,
-        "cache_scope": "both",
-        "cache_dir": str(cache_dir),
-        "solver_mode": "fast" if int(dim) == 3 else "strict",
-        "line_search_mode": "fast" if int(dim) == 3 else "full",
-        "jacobian_update_every": 1,
-        "jacobian_reuse_tol": 0.0,
-        "petsc_device": petsc_device,
-        "device": device,
-        "linear_backend_config": {"petsc_device": petsc_device},
-    }
-    if int(dim) == 3:
-        kwargs.update(
-            {
-                "forward_backend": backend,
-                "mesh_family": "hex",
-                "geometry_version": "geomv2",
-                "generator_revision": "g3d3",
-            }
-        )
-    system = EITSystem(**kwargs)
-    system.setup(mesh=mesh)
-    system.reconstructor.max_iterations = int(max(1, max_iterations))
-    system.reconstructor.min_iterations = 1
-    system.reconstructor.verbose = False
-    return system
-
-
-def _make_2d_mesh(*, mesh_dir: Path, n_elec: int, radius: float, mesh_size: float):
-    mesh_dir.mkdir(parents=True, exist_ok=True)
-    return create_simple_eit_mesh(
-        n_elec=n_elec,
-        radius=radius,
-        mesh_size=mesh_size,
-        output_dir=str(mesh_dir),
-    )
-
-
-def _make_3d_mesh(
-    *,
-    mesh_dir: Path,
-    n_elec: int,
-    radius: float,
-    height: float,
-    refinement: int,
-    electrode_height_ratio: float,
-    electrode_coverage: float,
-):
-    return load_or_create_mesh(
-        mesh_dir=str(mesh_dir),
-        mesh_name=f"gallery_real_ref{int(refinement)}_cfhex_geomv2_g3d3",
-        n_elec=n_elec,
-        dimension=3,
-        radius=radius,
-        refinement=refinement,
-        height=height,
-        electrode_height_ratio=electrode_height_ratio,
-        z_center=0.0,
-        electrode_coverage=electrode_coverage,
-        mesh_family="hex",
-        geometry_version="geomv2",
-        generator_revision="g3d3",
-    )
-
-
-def _clone_image(system: EITSystem, values: np.ndarray) -> EITImage:
-    return EITImage(elem_data=np.asarray(values, dtype=np.float64).copy(), fwd_model=system.fwd_model)
-
-
-def _sigma_coordinates(system: EITSystem) -> np.ndarray:
-    coords = np.asarray(system.fwd_model.V_sigma.tabulate_dof_coordinates(), dtype=np.float64)
-    return coords[:, : system.mesh.geometry.dim]
-
-
-def _actual_anomalies(system: EITSystem, *, dim: int) -> list[dict[str, Any]]:
-    coords = _sigma_coordinates(system)
-    center = coords.mean(axis=0)
-    radius = float(system.mesh.radius)
-    anomalies = ANOMALIES_2D if int(dim) == 2 else ANOMALIES_3D
-    actual: list[dict[str, Any]] = []
-    if int(dim) == 2:
-        for item in anomalies:
-            actual.append(
-                {
-                    "label": item.label,
-                    "center": np.array(
-                        [
-                            center[0] + item.center_norm[0] * radius,
-                            center[1] + item.center_norm[1] * radius,
-                        ],
-                        dtype=np.float64,
-                    ),
-                    "radius": float(item.radius_norm * radius),
-                    "conductivity": float(item.conductivity),
-                    "center_norm": tuple(float(v) for v in item.center_norm),
-                    "radius_norm": float(item.radius_norm),
-                }
-            )
-        return actual
-
-    z_min = float(np.min(coords[:, 2]))
-    z_max = float(np.max(coords[:, 2]))
-    z_center = 0.5 * (z_min + z_max)
-    half_height = 0.5 * (z_max - z_min)
-    for item in anomalies:
-        actual.append(
-            {
-                "label": item.label,
-                "center": np.array(
-                    [
-                        center[0] + item.center_norm[0] * radius,
-                        center[1] + item.center_norm[1] * radius,
-                        z_center + item.center_norm[2] * half_height,
-                    ],
-                    dtype=np.float64,
-                ),
-                "radius": float(item.radius_norm * radius),
-                "conductivity": float(item.conductivity),
-                "center_norm": tuple(float(v) for v in item.center_norm),
-                "radius_norm": float(item.radius_norm),
-            }
-        )
-    return actual
-
-
-def _build_truth_values(system: EITSystem, *, dim: int) -> tuple[np.ndarray, list[dict[str, Any]]]:
-    coords = _sigma_coordinates(system)
-    values = np.full(coords.shape[0], BACKGROUND_CONDUCTIVITY, dtype=np.float64)
-    anomalies = _actual_anomalies(system, dim=dim)
-    for item in anomalies:
-        center = np.asarray(item["center"], dtype=np.float64)
-        dist = np.linalg.norm(coords - center[None, :], axis=1)
-        values[dist <= float(item["radius"])] = float(item["conductivity"])
-    return values, anomalies
-
-
-def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
-    diff = np.asarray(left, dtype=np.float64) - np.asarray(right, dtype=np.float64)
-    denom = np.linalg.norm(np.asarray(left, dtype=np.float64)) + 1e-12
-    return float(np.linalg.norm(diff) / denom)
-
-
-def _rmse(left: np.ndarray, right: np.ndarray) -> float:
-    diff = np.asarray(left, dtype=np.float64) - np.asarray(right, dtype=np.float64)
-    return float(np.sqrt(np.mean(diff**2)))
-
-
-def _safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
-    left_arr = np.asarray(left, dtype=np.float64).ravel()
-    right_arr = np.asarray(right, dtype=np.float64).ravel()
-    if left_arr.size == 0 or right_arr.size == 0:
-        return float("nan")
-    if np.allclose(left_arr, left_arr[0]) or np.allclose(right_arr, right_arr[0]):
-        return 1.0 if np.allclose(left_arr, right_arr) else 0.0
-    return float(np.corrcoef(left_arr, right_arr)[0, 1])
-
-
-def _truth_metrics(
-    *,
-    truth: np.ndarray,
-    recon: np.ndarray,
-    coords: np.ndarray,
-    anomalies: list[dict[str, Any]],
-) -> dict[str, float]:
-    metrics: dict[str, float] = {
-        "relative_l2": _relative_l2(truth, recon),
-        "rmse": _rmse(truth, recon),
-        "pearson": _safe_pearson(truth, recon),
-    }
-    background_mask = np.ones(truth.shape[0], dtype=bool)
-    background_truth = BACKGROUND_CONDUCTIVITY
-    for item in anomalies:
-        center = np.asarray(item["center"], dtype=np.float64)
-        radius = float(item["radius"])
-        roi = np.linalg.norm(coords - center[None, :], axis=1) <= radius
-        background_mask &= ~roi
-        truth_mean = float(np.mean(truth[roi]))
-        recon_mean = float(np.mean(recon[roi]))
-        bg_mean = float(np.mean(recon[background_mask])) if np.any(background_mask) else BACKGROUND_CONDUCTIVITY
-        denom = truth_mean - background_truth
-        crc = 0.0 if abs(denom) <= 1e-12 else float((recon_mean - bg_mean) / denom)
-        metrics[f"contrast_recovery_{item['label']}"] = crc
-        metrics[f"roi_mean_{item['label']}"] = recon_mean
-    background_mean = float(np.mean(recon[background_mask])) if np.any(background_mask) else BACKGROUND_CONDUCTIVITY
-    metrics["background_bias"] = float(background_mean - BACKGROUND_CONDUCTIVITY)
-    return metrics
-
-
-def _consistency_metrics(
-    *,
-    dim: int,
-    baseline_cpu_meas: np.ndarray | None,
-    baseline_gpu_meas: np.ndarray | None,
-    target_cpu_meas: np.ndarray,
-    target_gpu_meas: np.ndarray,
-    cpu_recon: np.ndarray,
-    gpu_recon: np.ndarray,
-) -> dict[str, Any]:
-    baseline_rel = (
-        _relative_l2(baseline_cpu_meas, baseline_gpu_meas)
-        if baseline_cpu_meas is not None and baseline_gpu_meas is not None
-        else None
-    )
-    target_rel = _relative_l2(target_cpu_meas, target_gpu_meas)
-    image_rel = _relative_l2(cpu_recon, gpu_recon)
-    image_rmse = _rmse(cpu_recon, gpu_recon)
-    baseline_pass = bool(baseline_rel is None or float(baseline_rel) <= _MEASUREMENT_REL_TOL)
-    target_pass = bool(float(target_rel) <= _MEASUREMENT_REL_TOL)
-    pass_measurement = bool(baseline_pass and target_pass)
-    pass_image = bool(image_rel <= _IMAGE_REL_TOL and image_rmse <= _IMAGE_RMSE_TOL[int(dim)])
-    return {
-        "baseline_measurement_relative_l2": baseline_rel,
-        "target_measurement_relative_l2": target_rel,
-        "image_relative_l2": image_rel,
-        "image_rmse": image_rmse,
-        "image_pearson": _safe_pearson(cpu_recon, gpu_recon),
-        "image_max_abs_diff": float(np.max(np.abs(np.asarray(cpu_recon) - np.asarray(gpu_recon)))),
-        "measurement_threshold": _MEASUREMENT_REL_TOL,
-        "image_relative_l2_threshold": _IMAGE_REL_TOL,
-        "image_rmse_threshold": _IMAGE_RMSE_TOL[int(dim)],
-        "baseline_measurement_pass": baseline_pass,
-        "target_measurement_pass": target_pass,
-        "measurement_pass": pass_measurement,
-        "image_pass": pass_image,
-        "passed": bool(pass_measurement and pass_image),
-    }
 
 
 def _griddata_fill(points: np.ndarray, values: np.ndarray, query: np.ndarray) -> np.ndarray:
@@ -494,30 +244,6 @@ def _apply_plot_style() -> None:
             "axes.spines.right": False,
         }
     )
-
-
-def _save_case_data(path: Path, payload: dict[str, Any]) -> None:
-    arrays = {k: v for k, v in payload.items() if isinstance(v, np.ndarray)}
-    scalars = {k: v for k, v in payload.items() if not isinstance(v, np.ndarray)}
-    np.savez_compressed(path, **arrays, meta=np.array(json.dumps(_jsonable(scalars)), dtype=object))
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    return value
 
 
 def _render_2d_overview(
@@ -791,6 +517,12 @@ def _write_report(
 
     fairness_3d_rows = [row for row in fairness_backend_rows if row["dimension"] == "3D" and not row["report_only"]]
     fairness_3d_pass = bool(fairness_3d_rows and all(row["passed"] for row in fairness_3d_rows))
+    mesh_family_default, geometry_version_default, generator_revision_default = resolve_3d_mesh_contract(
+        acceleration_profile=config.get("gpu_acceleration_profile", ACCELERATION_PROFILE_GPU3D),
+    )
+    mesh_family = str(config.get("mesh_family_3d", mesh_family_default))
+    geometry_version = str(config.get("geometry_version_3d", geometry_version_default))
+    generator_revision = str(config.get("generator_revision_3d", generator_revision_default))
     quick_lines = [
         f"- 2D consistency: {'PASS' if consistency_rows[0]['passed'] else 'FAIL'}",
         f"- 3D consistency: {'PASS' if consistency_rows[1]['passed'] else 'FAIL'}",
@@ -819,7 +551,7 @@ def _write_report(
             f"- Mode: `absolute`, `real-valued`, `noise-free`",
             f"- 2D backends: `dolfinx/cpu` vs `dolfinx/cuda`",
             f"- 3D backends: `dolfinx/cpu` vs `cuda_structured`",
-            f"- 3D mesh: `hex + geomv2 + g3d3`, refinement `{config['refinement_3d']}`",
+            f"- 3D mesh: `{mesh_family} + {geometry_version} + {generator_revision}`, refinement `{config['refinement_3d']}`",
             "",
             "## Quick Summary",
             "",
@@ -924,6 +656,8 @@ def _worker_command(
         str(args.contact_impedance),
         "--max-iterations",
         str(args.max_iterations),
+        "--gpu-acceleration-profile",
+        str(args.gpu_acceleration_profile),
         "--run-kind",
         str(run_kind),
         "--backend-order",
@@ -1136,9 +870,12 @@ def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path,
 
 def main() -> None:
     args = _parse_args()
-    _require_runtime()
     if not _cuda_available():
         raise RuntimeError("This gallery requires the CUDA runtime (`nix develop .#cuda`).")
+
+    mesh_family_3d, geometry_version_3d, generator_revision_3d = resolve_3d_mesh_contract(
+        acceleration_profile=args.gpu_acceleration_profile,
+    )
 
     output_dir = args.output_dir.resolve()
     figures_dir = output_dir / "figures"
@@ -1333,6 +1070,10 @@ def main() -> None:
             "radius_3d": float(args.radius_3d),
             "height_3d": float(args.height_3d),
             "refinement_3d": int(args.refinement_3d),
+            "gpu_acceleration_profile": str(args.gpu_acceleration_profile),
+            "mesh_family_3d": str(mesh_family_3d),
+            "geometry_version_3d": str(geometry_version_3d),
+            "generator_revision_3d": str(generator_revision_3d),
             "electrode_height_ratio": float(args.electrode_height_ratio),
             "electrode_coverage": float(args.electrode_coverage),
             "contact_impedance": float(args.contact_impedance),

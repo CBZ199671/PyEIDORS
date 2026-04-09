@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from typing import List, Optional, Tuple
-
 import numpy as np
 
 from .sparse_map_solver import block_refinement, coarse_initialization, multilevel_correction, solve_sparse_map
@@ -29,9 +27,9 @@ class SparseBayesianBackendMixin:
         data_vector: np.ndarray,
         noise_sigma: float,
         prior_scale: float,
-        groups: List[np.ndarray],
+        groups: list[np.ndarray],
         group_size: int,
-        initial_guess: Optional[np.ndarray],
+        initial_guess: np.ndarray | None,
     ) -> np.ndarray:
         return coarse_initialization(
             self,
@@ -47,7 +45,7 @@ class SparseBayesianBackendMixin:
     def _get_coarse_matrix(
         self,
         jacobian: np.ndarray,
-        groups: List[np.ndarray],
+        groups: list[np.ndarray],
         group_size: int,
     ) -> np.ndarray:
         return get_coarse_matrix(
@@ -63,8 +61,11 @@ class SparseBayesianBackendMixin:
     def _estimate_lipschitz_constant(self, matrix: np.ndarray, iters: int = 12) -> float:
         return estimate_lipschitz_constant(matrix, iters=iters)
 
-    def _solve_with_cuqi_map(self, problem, warm_start: Optional[np.ndarray]) -> np.ndarray:
-        map_estimate = problem.MAP(disp=self.verbose, x0=warm_start) if warm_start is not None else problem.MAP(disp=self.verbose)
+    def _solve_with_cuqi_map(self, problem, warm_start: np.ndarray | None) -> np.ndarray:
+        if warm_start is not None:
+            map_estimate = problem.MAP(disp=self.verbose, x0=warm_start)
+        else:
+            map_estimate = problem.MAP(disp=self.verbose)
         return np.asarray(map_estimate.to_numpy(), dtype=float)
 
     def _solve_fista(
@@ -73,7 +74,7 @@ class SparseBayesianBackendMixin:
         data_vector: np.ndarray,
         noise_sigma: float,
         prior_scale: float,
-        warm_start: Optional[np.ndarray],
+        warm_start: np.ndarray | None,
     ) -> np.ndarray:
         return solve_fista(
             linear_matrix=linear_matrix,
@@ -90,7 +91,7 @@ class SparseBayesianBackendMixin:
         data_vector: np.ndarray,
         noise_sigma: float,
         prior_scale: float,
-        warm_start: Optional[np.ndarray],
+        warm_start: np.ndarray | None,
     ) -> np.ndarray:
         return solve_irls(
             linear_matrix=linear_matrix,
@@ -108,7 +109,7 @@ class SparseBayesianBackendMixin:
         noise_sigma: float,
         prior_scale: float,
         solution: np.ndarray,
-        hierarchy: List[Tuple[int, List[np.ndarray]]],
+        hierarchy: list[tuple[int, list[np.ndarray]]],
     ) -> np.ndarray:
         return multilevel_correction(
             self,

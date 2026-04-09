@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Dict, Optional
+from typing import Any
 
 import numpy as np
 from dolfinx import fem
@@ -46,12 +46,11 @@ def mesh_cell_vertices(mesh: Mesh) -> np.ndarray:
     if num_cells == 0:
         return np.empty((0, 0), dtype=np.int32)
 
-    first = connectivity.links(0)
-    vertices_per_cell = len(first)
-    data = np.zeros((num_cells, vertices_per_cell), dtype=np.int32)
-    data[0, :] = first
-    for cell in range(1, num_cells):
-        data[cell, :] = connectivity.links(cell)
+    verts_per_cell = len(connectivity.links(0))
+    data = np.array(
+        [connectivity.links(cell) for cell in range(num_cells)],
+        dtype=np.int32,
+    ).reshape(num_cells, verts_per_cell)
     return data
 
 
@@ -71,12 +70,11 @@ def mesh_facet_vertices(mesh: Mesh) -> np.ndarray:
     if num_facets == 0:
         return np.empty((0, 0), dtype=np.int32)
 
-    first = connectivity.links(0)
-    verts_per_facet = len(first)
-    data = np.zeros((num_facets, verts_per_facet), dtype=np.int32)
-    data[0, :] = first
-    for facet in range(1, num_facets):
-        data[facet, :] = connectivity.links(facet)
+    verts_per_facet = len(connectivity.links(0))
+    data = np.array(
+        [connectivity.links(facet) for facet in range(num_facets)],
+        dtype=np.int32,
+    ).reshape(num_facets, verts_per_facet)
     return data
 
 
@@ -101,17 +99,17 @@ def build_eit_mesh(
     mesh: Mesh,
     *,
     facet_tags: MeshTags,
-    cell_tags: Optional[MeshTags] = None,
-    association_table: Optional[Dict[str, int]] = None,
-    physical_groups: Optional[Dict[str, Any]] = None,
-    radius: Optional[float] = None,
-    mesh_file: Optional[str] = None,
-    electrode_vertices: Optional[list[np.ndarray]] = None,
-    mesh_family: Optional[str] = None,
-    geometry_version: Optional[str] = None,
-    generator_revision: Optional[str] = None,
-    structured_sidecar_file: Optional[str] = None,
-    structured_sidecar_version: Optional[str] = None,
+    cell_tags: MeshTags | None = None,
+    association_table: dict[str, int] | None = None,
+    physical_groups: dict[str, Any] | None = None,
+    radius: float | None = None,
+    mesh_file: str | None = None,
+    electrode_vertices: list[np.ndarray] | None = None,
+    mesh_family: str | None = None,
+    geometry_version: str | None = None,
+    generator_revision: str | None = None,
+    structured_sidecar_file: str | None = None,
+    structured_sidecar_version: str | None = None,
 ) -> EITMesh:
     """Build a strongly-typed :class:`EITMesh` container."""
     resolved_radius = float(radius) if radius is not None else estimate_radius(mesh)
