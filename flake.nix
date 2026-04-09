@@ -25,12 +25,27 @@
           python = pkgs.python313;
           py = python.pkgs;
           linuxGuiLibs = [
+            pkgs.glib
+            pkgs.dbus
+            pkgs.wayland
+            pkgs.fontconfig
+            pkgs.freetype
+            pkgs.expat
             pkgs.xorg.libX11
+            pkgs.xorg.libXau
+            pkgs.xorg.libXdmcp
             pkgs.xorg.libXext
             pkgs.xorg.libXrender
             pkgs.xorg.libXt
             pkgs.xorg.libSM
             pkgs.xorg.libICE
+            pkgs.xorg.libxcb
+            pkgs.xorg.xcbutil
+            pkgs.xorg.xcbutilcursor
+            pkgs.xorg.xcbutilimage
+            pkgs.xorg.xcbutilkeysyms
+            pkgs.xorg.xcbutilrenderutil
+            pkgs.xorg.xcbutilwm
             pkgs.libGL
             pkgs.libGLU
             pkgs.libxkbcommon
@@ -129,6 +144,7 @@
             pythonFor,
             envProfile,
             venvDir,
+            extraLinuxRuntimeLibs ? [ ],
             extraLinuxLibraryPath ? "",
             extraPrelude ? "",
           }:
@@ -139,6 +155,7 @@
               export HDF5_DIR="${pkgsFor.hdf5}"
               export PYEIDORS_ENV_PROFILE="${envProfile}"
               export PYEIDORS_ACTIVE_VENV="${venvDir}"
+              export PYEIDORS_ENV_SYNC_INEXACT="''${PYEIDORS_ENV_SYNC_INEXACT:-1}"
               ${extraPrelude}
 
               if [ "$(uname -s)" = "Darwin" ]; then
@@ -193,7 +210,7 @@ PY
               fi
 
               if [ "$(uname -s)" = "Linux" ]; then
-                export LD_LIBRARY_PATH="${pkgsFor.stdenv.cc.cc.lib}/lib:${pkgsFor.zlib}/lib${extraLinuxLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+                export LD_LIBRARY_PATH="${lib.makeLibraryPath ([ pkgsFor.stdenv.cc.cc pkgsFor.zlib pkgsFor.zstd ] ++ extraLinuxRuntimeLibs)}${extraLinuxLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               fi
 
               nix_python_mm="$($UV_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
@@ -240,21 +257,22 @@ PY
                 esac
               fi
 
-              if [ -x scripts/env/sync_locked_env.sh ]; then
-                echo "[nix+uv] Checking locked Python environment profile (torch+cuqi+dev)..."
-                if ! scripts/env/sync_locked_env.sh --check; then
-                  echo "[nix+uv] Drift detected. Attempting automatic repair..."
-                  if ! scripts/env/sync_locked_env.sh --repair; then
-                    echo "[nix+uv] ERROR: environment repair failed."
-                    echo "[nix+uv] Manual repair command: scripts/env/sync_locked_env.sh --repair"
-                    exit 1
+              if [ -z "''${PYEIDORS_SHELL_HOOK_READY:-}" ]; then
+                if [ -x scripts/env/sync_locked_env.sh ]; then
+                  echo "[nix+uv] Checking locked Python environment profile (torch+cuqi+dev+eit-app)..."
+                  if ! scripts/env/sync_locked_env.sh --check; then
+                    echo "[nix+uv] Drift detected. Attempting automatic repair..."
+                    if ! scripts/env/sync_locked_env.sh --repair; then
+                      echo "[nix+uv] ERROR: environment repair failed."
+                      echo "[nix+uv] Manual repair command: scripts/env/sync_locked_env.sh --repair"
+                      exit 1
+                    fi
                   fi
+                else
+                  echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
                 fi
-              else
-                echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
-              fi
 
-              perf_status="$($UV_PYTHON - <<'PY'
+                perf_status="$($UV_PYTHON - <<'PY'
 import importlib
 
 status = {}
@@ -274,21 +292,23 @@ if status["sksparse"] == "available":
         cholmod = "missing"
 
 print(
-    f"[nix+uv] Performance extras status: "
+    f"[nix+uv] Optional performance extras status: "
     f"pyamg={status['pyamg']}, sksparse={status['sksparse']}, cholmod={cholmod}"
+    + " (missing extras do not block the core environment)"
 )
 PY
 )"
-              echo "$perf_status"
+                echo "$perf_status"
 
-              if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ]; then
-                echo "[nix+uv] CUDA profile ready. Verify PETSc CUDA backend with:"
-                echo "  python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty"
+                if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ]; then
+                  echo "[nix+uv] CUDA profile ready. Verify PETSc CUDA backend with:"
+                  echo "  python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty"
+                fi
+
+                echo "[nix+uv] Dev shell ready ($PYEIDORS_ENV_PROFILE)."
+                echo "[nix+uv] Core dependency import checks completed during shell entry."
+                export PYEIDORS_SHELL_HOOK_READY=1
               fi
-
-              echo "[nix+uv] Dev shell ready ($PYEIDORS_ENV_PROFILE)."
-              echo "[nix+uv] Verify stack quickly:"
-              echo "  python -c \"import dolfinx, torch, cuqi, pyeidors; print(dolfinx.__version__)\""
             '';
         in
         {
@@ -305,6 +325,13 @@ PY
               pkgs.gfortran
               pkgs.openblas
               pkgs.suitesparse
+              pkgs.zstd
+              pkgs.glib
+              pkgs.dbus
+              pkgs.fontconfig
+              pkgs.freetype
+              pkgs.liberation_ttf
+              pkgs.expat
 
               fenicsDolfinx
               py."fenics-basix"
@@ -333,7 +360,8 @@ PY
               pythonFor = python;
               envProfile = "default";
               venvDir = ".venv";
-              extraLinuxLibraryPath = ":/usr/lib/wsl/lib:${lib.makeLibraryPath linuxGuiLibs}";
+              extraLinuxRuntimeLibs = linuxGuiLibs;
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
               extraPrelude = ''
                 export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
                 if [ -d /usr/lib/wsl/lib ]; then
@@ -357,6 +385,13 @@ PY
               pkgsCuda.gfortran
               pkgsCuda.openblas
               pkgsCuda.suitesparse
+              pkgsCuda.zstd
+              pkgsCuda.glib
+              pkgsCuda.dbus
+              pkgsCuda.fontconfig
+              pkgsCuda.freetype
+              pkgsCuda.liberation_ttf
+              pkgsCuda.expat
               pkgsCuda.cudaPackages.cuda_nvcc
               pkgsCuda.cudaPackages.cudatoolkit
               pkgsCuda.cudaPackages.cuda_cudart
@@ -395,7 +430,13 @@ PY
               pythonFor = pythonCuda;
               envProfile = "cuda";
               venvDir = ".venv-cuda";
-              extraLinuxLibraryPath = ":/usr/lib/wsl/lib:${pkgsCuda.cudaPackages.cuda_cudart}/lib:${pkgsCuda.cudaPackages.libcublas}/lib:${pkgsCuda.cudaPackages.libcusolver}/lib:${pkgsCuda.cudaPackages.libcusparse}/lib";
+              extraLinuxRuntimeLibs = linuxGuiLibs ++ [
+                pkgsCuda.cudaPackages.cuda_cudart
+                pkgsCuda.cudaPackages.libcublas
+                pkgsCuda.cudaPackages.libcusolver
+                pkgsCuda.cudaPackages.libcusparse
+              ];
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
               extraPrelude = ''
                 export CUDA_HOME="${pkgsCuda.cudaPackages.cudatoolkit}"
                 export CUDA_PATH="$CUDA_HOME"

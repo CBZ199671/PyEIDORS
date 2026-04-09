@@ -8,7 +8,7 @@ readonly EXPECTED_PY_MM="3.13"
 readonly ACTIVE_VENV_DIR="${PYEIDORS_ACTIVE_VENV:-.venv}"
 readonly PYTHON_BIN="${PYTHON_BIN:-${ACTIVE_VENV_DIR}/bin/python}"
 readonly ALLOW_INEXACT_SYNC="${PYEIDORS_ENV_SYNC_INEXACT:-0}"
-readonly PROFILE_EXTRAS=(torch cuqi dev)
+readonly PROFILE_EXTRAS=(torch cuqi dev eit-app)
 readonly OPTIONAL_PERF_EXTRAS=(performance)
 
 is_wsl2() {
@@ -35,10 +35,14 @@ PyEIDORS locked environment profile
 - uv sync flags: --frozen
 - Inexact mode: ${ALLOW_INEXACT_SYNC}
 - Lock freshness gate: uv lock --check
-- Profile extras: torch, cuqi, dev
+- Profile extras: torch, cuqi, dev, eit-app
 - Optional extras (opt-in): performance
-- Required imports: dolfinx, torch, cuqi, numpy, scipy, pyeidors
+- Required imports: dolfinx, torch, cuqi, numpy, scipy, pyeidors, PySide6.QtCore, pyqtgraph
 EOF
+}
+
+perf_enabled() {
+  [ "${ENABLE_PERFORMANCE_EXTRAS:-0}" = "1" ]
 }
 
 ensure_commands() {
@@ -120,7 +124,7 @@ warnings.filterwarnings(
     module=r"(numpy\.matlib(\..*)?|cuqi(\..*)?)",
 )
 
-required = ["dolfinx", "torch", "cuqi", "numpy", "scipy", "pyeidors"]
+required = ["dolfinx", "torch", "cuqi", "numpy", "scipy", "pyeidors", "pyqtgraph"]
 missing = []
 for name in required:
     try:
@@ -128,12 +132,17 @@ for name in required:
     except Exception as exc:  # pragma: no cover - runtime check
         missing.append((name, str(exc)))
 
+try:
+    from PySide6.QtCore import Qt  # noqa: F401
+except Exception as exc:  # pragma: no cover - runtime check
+    missing.append(("PySide6.QtCore", str(exc)))
+
 if missing:
     for name, err in missing:
         print(f"[env-sync] missing import: {name}: {err}", file=sys.stderr)
     raise SystemExit(1)
 
-print("[env-sync] import checks passed")
+print("[env-sync] Core dependency import checks passed: dolfinx, torch, cuqi, numpy, scipy, pyeidors, PySide6.QtCore, pyqtgraph")
 
 optional = ["pyamg", "sksparse"]
 optional_missing = []
@@ -142,11 +151,17 @@ for name in optional:
         importlib.import_module(name)
     except Exception:
         optional_missing.append(name)
+perf_enabled = "${ENABLE_PERFORMANCE_EXTRAS:-0}" == "1"
 if optional_missing:
+    suffix = (
+        "performance extras are not enabled; this does not block the core environment. Recommended command: scripts/env/bootstrap_dev_env.sh --recommended --repair."
+        if not perf_enabled
+        else "performance extras were requested, but the current environment could not provide these optional accelerators."
+    )
     print(
-        "[env-sync] optional performance imports missing: "
+        "[env-sync] Optional performance extras are not fully available: "
         + ", ".join(optional_missing)
-        + " (set ENABLE_PERFORMANCE_EXTRAS=1 to install when available)"
+        + f". {suffix}"
     )
 else:
     cholmod_ok = False
@@ -156,7 +171,7 @@ else:
     except Exception:
         cholmod_ok = False
     print(
-        "[env-sync] optional performance imports available"
+        "[env-sync] Optional performance extras available"
         + f" (cholmod={'yes' if cholmod_ok else 'no'})"
     )
 PY

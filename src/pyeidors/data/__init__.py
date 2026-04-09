@@ -1,12 +1,18 @@
-"""PyEIDORS data processing module"""
+"""PyEIDORS data processing module.
+
+Keep this package import lightweight: pure I/O helpers such as
+``pyeidors.data.frame_io`` should not eagerly pull in heavy FEniCSx
+dependencies through ``synthetic_data``.
+"""
 
 from .structures import (
     PatternConfig,
-    EITData, 
+    EITData,
     EITImage,
     EITMesh,
     MeshConfig,
-    ElectrodePosition
+    ElectrodePosition,
+    FrameMetadata,
 )
 from .difference import (
     DEFAULT_DIFFERENCE_MODE,
@@ -17,7 +23,6 @@ from .difference import (
     project_measurement_jacobian,
     project_measurement_vector,
 )
-from .synthetic_data import create_synthetic_data, create_custom_phantom
 from .measurement_dataset import MeasurementDataset
 
 __all__ = [
@@ -36,5 +41,16 @@ __all__ = [
     'project_measurement_vector',
     'create_synthetic_data',
     'create_custom_phantom',
-    'MeasurementDataset'
+    'MeasurementDataset',
+    'FrameMetadata',
 ]
+
+
+def __getattr__(name: str):
+    if name in {"create_synthetic_data", "create_custom_phantom"}:
+        from .synthetic_data import create_custom_phantom, create_synthetic_data
+
+        globals()["create_synthetic_data"] = create_synthetic_data
+        globals()["create_custom_phantom"] = create_custom_phantom
+        return globals()[name]
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

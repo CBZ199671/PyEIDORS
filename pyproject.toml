@@ -75,6 +75,12 @@ viz = [
     "pyvista>=0.37.0",
     "vtk>=9.0.0"
 ]
+# EIT Workstation GUI application
+eit-app = [
+    "PySide6>=6.6",
+    "pyqtgraph>=0.13",
+    "pyserial>=3.5",
+]
 
 [project.urls]
 Homepage = "https://github.com/CBZ199671/PyEIDORS"
@@ -118,6 +124,8 @@ markers = [
     "gpu: marks tests that require GPU",
     "fenicsx: marks tests that require FEniCSx/DOLFINx",
     "cuqi: marks tests that require CUQIpy",
+    "gui: marks tests requiring PySide6 GUI",
+    "hardware: marks tests requiring physical EIT hardware",
 ]
 
 [tool.flake8]

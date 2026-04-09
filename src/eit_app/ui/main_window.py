@@ -1,0 +1,968 @@
+"""Main application window with dock-based layout."""
+
+from __future__ import annotations
+
+import logging
+from pathlib import Path
+from urllib.parse import urlparse
+from typing import TYPE_CHECKING
+
+from PySide6.QtCore import QTimer, Qt, Slot
+from PySide6.QtWidgets import QDockWidget, QMainWindow, QMessageBox, QSplitter, QToolBox, QWidget
+
+from eit_app.acquisition.acquisition_process import AcquisitionProcess
+from eit_app.acquisition.ring_buffer import FrameRingBuffer
+from eit_app.acquisition.scheduler import BurstScheduler
+from eit_app.controllers.acquisition_controller import AcquisitionController
+from eit_app.controllers.device_controller import DeviceController
+from eit_app.controllers.reconstruction_controller import ReconstructionController, ReconstructionRequest
+from eit_app.controllers.recording_controller import RecordingController
+from eit_app.hardware.factory import create_device_from_config, normalize_device_config
+from eit_app.hardware.types import STIM_AMP_VALUES_UA
+from eit_app.models.app_state import (
+    AcquisitionMode,
+    AppState,
+    ConnectionStatus,
+    PowerStatus,
+    RecordingStatus,
+)
+from eit_app.ui.acquisition_panel import AcquisitionPanel
+from eit_app.ui.connection_panel import ConnectionPanel
+from eit_app.ui.control_panel import ControlPanel
+from eit_app.ui.frame_browser_widget import FrameBrowserWidget
+from eit_app.ui.live_plot_widget import LivePlotWidget
+from eit_app.ui.reconstruction_widget import ReconstructionWidget
+from eit_app.ui.session_summary_panel import SessionSummaryPanel
+from eit_app.ui.status_bar import EITStatusBar
+from eit_app.ui.theme import set_panel_role
+
+if TYPE_CHECKING:
+    from eit_app.models.frame_model import FrameData
+
+log = logging.getLogger(__name__)
+
+_VOLTAGE_GAIN_LABELS = {
+    0: "0.097x",
+    1: "0.175x",
+    2: "0.327x",
+    3: "0.623x",
+    4: "1.238x",
+    5: "2.460x",
+    6: "4.880x",
+    7: "9.000x",
+}
+
+
+class EITWorkstation(QMainWindow):
+    """Main window for the EIT Workstation application."""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("EIT Workstation")
+        self.resize(1400, 900)
+
+        self._state = AppState(self)
+        self._device_ctrl = DeviceController(self)
+        self._acq_ctrl = AcquisitionController(self)
+        self._rec_ctrl = RecordingController(self)
+        self._recon_ctrl = ReconstructionController(self)
+
+        self._transport_type = "serial"
+        self._device_config = normalize_device_config("serial", {})
+        self._ring_buffer: FrameRingBuffer | None = None
+        self._acq_process: AcquisitionProcess | None = None
+        self._scheduler: BurstScheduler | None = None
+        self._scheduled_enabled = False
+        self._scheduled_interval_sec = 300.0
+        self._scheduled_frames_per_burst = 1
+        self._latest_frame_timestamp = 0.0
+        self._selected_reference_entry: dict | None = None
+        self._selected_target_entry: dict | None = None
+        self._record_requested = False
+        self._single_frame_pending = False
+
+        self._build_ui()
+        self._acq_panel.set_output_dir(self._default_output_dir())
+        self._connect_signals()
+        self._control_panel.set_enabled(False)
+        self._refresh_session_summary()
+
+    def _build_ui(self) -> None:
+        splitter = QSplitter(Qt.Orientation.Vertical)
+        self._live_plot = LivePlotWidget()
+        self._recon_widget = ReconstructionWidget()
+        splitter.addWidget(self._live_plot)
+        splitter.addWidget(self._recon_widget)
+        splitter.setStretchFactor(0, 2)
+        splitter.setStretchFactor(1, 1)
+        splitter.setChildrenCollapsible(False)
+        self.setCentralWidget(splitter)
+
+        left_dock = QDockWidget("Device", self)
+        left_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        left_dock.setMinimumWidth(420)
+        left_container = QWidget()
+        from PySide6.QtWidgets import QVBoxLayout
+
+        left_layout = QVBoxLayout(left_container)
+        left_layout.setContentsMargins(4, 4, 4, 4)
+
+        self._conn_panel = ConnectionPanel()
+        self._control_panel = ControlPanel()
+        self._acq_panel = AcquisitionPanel()
+        self._summary_panel = SessionSummaryPanel()
+        self._workflow_toolbox = QToolBox()
+        self._workflow_toolbox.setObjectName("workflowToolbox")
+        self._workflow_toolbox.setSizePolicy(self._summary_panel.sizePolicy())
+        set_panel_role(self._conn_panel, "workflow")
+        set_panel_role(self._control_panel, "workflow")
+        set_panel_role(self._acq_panel, "workflow")
+        self._workflow_toolbox.addItem(self._conn_panel, "Step 1 · Link & Verify")
+        self._workflow_toolbox.addItem(self._control_panel, "Step 2 · Setup & Diagnostics")
+        self._workflow_toolbox.addItem(self._acq_panel, "Step 3 · Acquire & Record")
+
+        left_layout.addWidget(self._summary_panel)
+        left_layout.addWidget(self._workflow_toolbox, 1)
+
+        left_dock.setWidget(left_container)
+        self.addDockWidget(Qt.DockWidgetArea.LeftDockWidgetArea, left_dock)
+
+        right_dock = QDockWidget("Frames", self)
+        right_dock.setFeatures(
+            QDockWidget.DockWidgetFeature.DockWidgetMovable
+            | QDockWidget.DockWidgetFeature.DockWidgetFloatable
+        )
+        right_dock.setMinimumWidth(360)
+        self._frame_browser = FrameBrowserWidget()
+        right_dock.setWidget(self._frame_browser)
+        self.addDockWidget(Qt.DockWidgetArea.RightDockWidgetArea, right_dock)
+
+        self._status_bar = EITStatusBar(self)
+        self.setStatusBar(self._status_bar)
+
+        menu = self.menuBar()
+        file_menu = menu.addMenu("&File")
+        file_menu.addAction("&Settings...", self._open_settings)
+        file_menu.addSeparator()
+        file_menu.addAction("E&xit", self.close)
+
+        tools_menu = menu.addMenu("&Tools")
+        tools_menu.addAction("&Difference Reconstruction...", self._open_difference_dialog)
+
+    def _connect_signals(self) -> None:
+        self._conn_panel.connect_requested.connect(self._on_connect_requested)
+        self._conn_panel.disconnect_requested.connect(self._on_disconnect_requested)
+
+        self._device_ctrl.connected.connect(self._on_connected)
+        self._device_ctrl.disconnected.connect(self._on_disconnected)
+        self._device_ctrl.error.connect(self._on_error)
+        self._device_ctrl.command_done.connect(self._on_device_command_done)
+        self._device_ctrl.impedance_result.connect(self._on_impedance_result)
+
+        self._control_panel.frequency_changed.connect(self._on_frequency_changed)
+        self._control_panel.stim_amp_changed.connect(self._on_stim_amp_changed)
+        self._control_panel.voltage_amp_changed.connect(self._on_voltage_amp_changed)
+        self._control_panel.power_toggled.connect(self._on_power_toggled)
+        self._control_panel.impedance_requested.connect(self._device_ctrl.measure_impedance)
+        self._control_panel.single_point_requested.connect(self._on_single_point_requested)
+        self._control_panel.sweep_requested.connect(self._on_sweep_requested)
+
+        self._acq_panel.start_requested.connect(self._on_start_acquisition)
+        self._acq_panel.single_frame_requested.connect(self._on_single_frame_requested)
+        self._acq_panel.stop_requested.connect(self._on_stop_acquisition)
+        self._acq_panel.recording_toggled.connect(self._on_recording_toggled)
+        self._acq_panel.output_dir_changed.connect(self._on_output_dir_changed)
+        self._acq_panel.scheduled_mode_changed.connect(self._on_scheduled_mode_changed)
+
+        self._acq_ctrl.new_frame.connect(self._live_plot.update_frame)
+        self._acq_ctrl.new_frame.connect(self._on_new_frame)
+        self._acq_ctrl.fps_updated.connect(self._status_bar.on_fps_updated)
+        self._acq_ctrl.error.connect(self._on_error)
+
+        self._rec_ctrl.frame_saved.connect(self._on_frame_saved)
+        self._rec_ctrl.recording_started.connect(self._on_recording_started)
+        self._rec_ctrl.recording_stopped.connect(self._on_recording_stopped)
+        self._rec_ctrl.error.connect(self._on_error)
+
+        self._recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
+        self._recon_ctrl.progress.connect(
+            lambda msg: self._status_bar.showMessage(msg, 3000)
+        )
+        self._recon_ctrl.error.connect(self._on_error)
+
+        self._frame_browser.reference_selected.connect(self._on_reference_selected)
+        self._frame_browser.target_selected.connect(self._on_target_selected)
+        self._frame_browser.cleared.connect(self._on_frame_browser_cleared)
+
+        self._state.connection_status_changed.connect(self._status_bar.on_connection_changed)
+        self._state.power_status_changed.connect(self._status_bar.on_power_status_changed)
+        self._state.acquisition_mode_changed.connect(self._status_bar.on_acquisition_mode_changed)
+        self._state.frame_count_changed.connect(self._status_bar.on_frame_count_changed)
+        self._state.frame_count_changed.connect(self._acq_panel.set_frame_count)
+        self._state.recording_active_changed.connect(self._status_bar.on_recording_changed)
+        self._state.recording_status_changed.connect(self._status_bar.on_recording_status_changed)
+        self._state.connection_status_changed.connect(lambda _value: self._refresh_session_summary())
+        self._state.power_status_changed.connect(lambda _value: self._refresh_session_summary())
+        self._state.acquisition_mode_changed.connect(lambda _value: self._refresh_session_summary())
+        self._state.recording_status_changed.connect(lambda _value: self._refresh_session_summary())
+
+    @Slot(str, dict)
+    def _on_connect_requested(self, transport_type: str, config: dict) -> None:
+        merged = dict(self._device_config)
+        merged.update(config)
+        merged["transport_type"] = transport_type
+        self._transport_type = transport_type
+        self._device_config = normalize_device_config(transport_type, merged)
+        self._sync_state_device_config()
+        self._device_ctrl.set_connection_profile(transport_type, self._device_config)
+        self._state.set_connection_status(ConnectionStatus.CONNECTING)
+        self._refresh_session_summary()
+        self._device_ctrl.connect_device()
+
+    @Slot()
+    def _on_connected(self) -> None:
+        self._state.set_connection_status(ConnectionStatus.CONNECTED)
+        self._state.set_power_status(PowerStatus.UNKNOWN)
+        self._state.set_acquisition_mode(AcquisitionMode.IDLE)
+        self._state.set_recording_status(RecordingStatus.OFF)
+        self._conn_panel.set_connected(True)
+        self._control_panel.set_enabled(True)
+        self._workflow_toolbox.setCurrentIndex(1)
+        self._status_bar.showMessage("链路连接与协议验证已完成，可按需开启测量电源并开始采集。", 4000)
+        self._refresh_session_summary()
+
+    @Slot()
+    def _on_disconnected(self) -> None:
+        self._state.set_connection_status(ConnectionStatus.DISCONNECTED)
+        self._state.set_power_status(PowerStatus.UNKNOWN)
+        self._state.set_acquisition_mode(AcquisitionMode.IDLE)
+        self._state.set_recording_status(RecordingStatus.OFF)
+        self._conn_panel.set_connected(False)
+        self._control_panel.set_enabled(False)
+        self._workflow_toolbox.setCurrentIndex(0)
+        self._refresh_session_summary()
+
+    def _on_disconnect_requested(self) -> None:
+        self._on_stop_acquisition()
+        self._device_ctrl.disconnect_device()
+
+    @Slot()
+    def _on_start_acquisition(self) -> None:
+        self._start_acquisition(single_frame=False)
+
+    @Slot()
+    def _on_single_frame_requested(self) -> None:
+        self._start_acquisition(single_frame=True)
+
+    def _start_acquisition(self, *, single_frame: bool) -> None:
+        if self._state.connection_status is not ConnectionStatus.CONNECTED and self._transport_type != "simulator":
+            self._on_error("请先完成设备连接验证。")
+            return
+
+        self._single_frame_pending = single_frame
+        self._latest_frame_timestamp = 0.0
+        self._state.set_frame_count(0)
+        self._rebuild_acquisition_pipeline()
+        if self._record_requested:
+            if not self._ensure_recording_session(self._acq_panel.output_dir()):
+                self._record_requested = False
+                self._state.set_recording_status(RecordingStatus.OFF)
+
+        if single_frame:
+            self._state.set_acquisition_mode(AcquisitionMode.SINGLE_SHOT)
+            self._acq_ctrl.capture_one()
+            self._status_bar.showMessage("单帧采集已启动，采到 1 帧后将自动停止。", 4000)
+        elif self._scheduled_enabled:
+            self._state.set_acquisition_mode(AcquisitionMode.SCHEDULED)
+            self._acq_ctrl.start(activate_device=False)
+            self._scheduler = BurstScheduler(
+                self._acq_process,
+                interval_seconds=self._scheduled_interval_sec,
+                frames_per_burst=self._scheduled_frames_per_burst,
+            )
+            self._scheduler.start()
+            self._status_bar.showMessage("定时采集已启动。", 3000)
+        else:
+            self._state.set_acquisition_mode(AcquisitionMode.CONTINUOUS)
+            self._acq_ctrl.start()
+            self._status_bar.showMessage("连续采集已启动。", 3000)
+
+        self._state.set_power_status(PowerStatus.ON)
+        self._acq_panel.set_acquiring(True)
+        self._control_panel.set_enabled(False)
+        self._workflow_toolbox.setCurrentIndex(2)
+        self._refresh_session_summary()
+
+    @Slot()
+    def _on_stop_acquisition(self) -> None:
+        was_single_frame_mode = self._state.acquisition_mode is AcquisitionMode.SINGLE_SHOT
+        if self._scheduler is not None:
+            self._scheduler.stop()
+            self._scheduler = None
+
+        if self._acq_process is not None:
+            self._acq_ctrl.stop()
+
+        self._reset_acquisition_pipeline()
+        self._single_frame_pending = False
+        self._state.set_acquisition_mode(AcquisitionMode.IDLE)
+        self._acq_panel.set_acquiring(False)
+
+        if self._state.connection_status is ConnectionStatus.CONNECTED:
+            self._control_panel.set_enabled(True)
+            self._workflow_toolbox.setCurrentIndex(2)
+
+        if self._rec_ctrl.is_recording:
+            self._rec_ctrl.stop_recording()
+            self._state.set_recording_active(False)
+
+        if self._record_requested:
+            self._state.set_recording_status(RecordingStatus.ARMED)
+        else:
+            self._state.set_recording_status(RecordingStatus.OFF)
+
+        if was_single_frame_mode:
+            self._status_bar.showMessage("单帧采集完成。", 4000)
+        self._refresh_session_summary()
+
+    @Slot(object)
+    def _on_new_frame(self, frame: FrameData) -> None:
+        self._latest_frame_timestamp = frame.timestamp
+        self._state.set_frame_count(self._acq_ctrl.total_frames)
+        if self._rec_ctrl.is_recording:
+            self._rec_ctrl.save_frame(frame)
+        if self._single_frame_pending and self._state.frame_count >= 1:
+            self._single_frame_pending = False
+            QTimer.singleShot(0, self._on_stop_acquisition)
+
+    @Slot(int, float, str)
+    def _on_frame_saved(self, index: int, timestamp: float, path: str) -> None:
+        self._frame_browser.add_frame_entry(index, timestamp, path)
+
+    @Slot(str)
+    def _on_recording_started(self, session_dir: str) -> None:
+        self._state.set_recording_active(True)
+        self._state.set_recording_status(RecordingStatus.RECORDING)
+        self._status_bar.showMessage(f"开始录制: {session_dir}", 5000)
+        self._refresh_session_summary()
+
+    @Slot(int)
+    def _on_recording_stopped(self, count: int) -> None:
+        self._state.set_recording_active(False)
+        if self._record_requested:
+            self._state.set_recording_status(RecordingStatus.ARMED)
+        else:
+            self._state.set_recording_status(RecordingStatus.OFF)
+        self._status_bar.showMessage(f"录制已停止，共保存 {count} 帧。", 5000)
+        self._refresh_session_summary()
+
+    @Slot(dict)
+    def _on_reference_selected(self, entry: dict) -> None:
+        self._selected_reference_entry = dict(entry)
+        self._status_bar.showMessage(
+            f"参考帧已选择: #{entry.get('frame_index', '?')}",
+            3000,
+        )
+
+    @Slot(dict)
+    def _on_target_selected(self, entry: dict) -> None:
+        self._selected_target_entry = dict(entry)
+        self._status_bar.showMessage(
+            f"目标帧已选择: #{entry.get('frame_index', '?')}",
+            3000,
+        )
+
+    @Slot()
+    def _on_frame_browser_cleared(self) -> None:
+        self._selected_reference_entry = None
+        self._selected_target_entry = None
+        self._status_bar.showMessage("已清空录制帧列表。", 3000)
+
+    @Slot(bool, str)
+    def _on_recording_toggled(self, active: bool, output_dir: str) -> None:
+        normalized_output_dir = self._normalize_output_dir(output_dir)
+        if normalized_output_dir:
+            self._acq_panel.set_output_dir(normalized_output_dir)
+        elif normalized_output_dir != output_dir:
+            self._acq_panel.set_output_dir(normalized_output_dir)
+
+        if active and not normalized_output_dir:
+            normalized_output_dir = self._default_output_dir()
+            self._acq_panel.set_output_dir(normalized_output_dir)
+
+        self._record_requested = active
+        if active:
+            self._state.set_recording_status(RecordingStatus.ARMED)
+            if self._state.acquisition_mode is AcquisitionMode.IDLE:
+                target_dir = normalized_output_dir or self._default_output_dir()
+                self._status_bar.showMessage(
+                    f"已启用录制，开始采集后将保存到 {target_dir}",
+                    5000,
+                )
+                self._state.set_recording_active(False)
+                return
+            started = self._ensure_recording_session(normalized_output_dir)
+            if not started:
+                self._record_requested = False
+                self._acq_panel.set_recording_active(False)
+                self._state.set_recording_active(False)
+                self._state.set_recording_status(RecordingStatus.OFF)
+        else:
+            if self._rec_ctrl.is_recording:
+                self._rec_ctrl.stop_recording()
+            self._state.set_recording_active(False)
+            self._state.set_recording_status(RecordingStatus.OFF)
+        self._refresh_session_summary()
+
+    @Slot(str)
+    def _on_output_dir_changed(self, _path: str) -> None:
+        self._refresh_session_summary()
+
+    @Slot(bool, float, int)
+    def _on_scheduled_mode_changed(self, enabled: bool, interval_sec: float, frames_per_burst: int) -> None:
+        self._scheduled_enabled = enabled
+        self._scheduled_interval_sec = interval_sec
+        self._scheduled_frames_per_burst = frames_per_burst
+        self._refresh_session_summary()
+
+    @Slot(int)
+    def _on_frequency_changed(self, hz: int) -> None:
+        self._device_config["frequency_hz"] = hz
+        self._sync_state_device_config()
+        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_frequency(hz)
+        self._refresh_session_summary()
+
+    @Slot(int)
+    def _on_stim_amp_changed(self, level: int) -> None:
+        self._device_config["stim_amp_level"] = level
+        self._device_config["stim_amp_uA"] = STIM_AMP_VALUES_UA.get(level, level)
+        self._sync_state_device_config()
+        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_stim_amplitude(level)
+        self._refresh_session_summary()
+
+    @Slot(int, int)
+    def _on_voltage_amp_changed(self, level_1: int, level_2: int) -> None:
+        self._device_config["voltage_amp_level_1"] = level_1
+        self._device_config["voltage_amp_level_2"] = level_2
+        self._device_config["contact_impedance_amp_level"] = level_1
+        self._sync_state_device_config()
+        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_voltage_amp_levels(level_1, level_2)
+        self._refresh_session_summary()
+
+    @Slot(bool)
+    def _on_power_toggled(self, on: bool) -> None:
+        self._device_ctrl.power_control(on)
+        self._state.set_power_status(PowerStatus.ON if on else PowerStatus.OFF)
+        if on:
+            self._workflow_toolbox.setCurrentIndex(2)
+        self._refresh_session_summary()
+
+    @Slot()
+    def _on_single_point_requested(self) -> None:
+        hz = int(self._device_config.get("frequency_hz", 1000))
+        self._device_ctrl.single_point_test(hz)
+
+    @Slot(int, int, int)
+    def _on_sweep_requested(self, start_hz: int, end_hz: int, n_points: int) -> None:
+        self._device_ctrl.run_sweep(start_hz, end_hz, n_points)
+
+    @Slot(str, object)
+    def _on_device_command_done(self, name: str, result: object) -> None:
+        if name == "capabilities" and isinstance(result, dict):
+            protocol_version = str(result.get("protocol_version", "legacy-v1"))
+            self._device_config["protocol_version"] = protocol_version
+            for key in (
+                "acquisition_mode",
+                "supports_streaming",
+                "supports_extended_impedance",
+                "supports_3d_batch",
+            ):
+                if key in result:
+                    self._device_config[key] = result[key]
+            self._sync_state_device_config()
+            self._status_bar.showMessage(f"协议能力: {protocol_version}", 3000)
+            return
+
+        if name == "single_point_test_at" and isinstance(result, tuple) and len(result) == 2:
+            self._status_bar.showMessage(
+                f"单点测试: real={result[0]:.4f} V, imag={result[1]:.4f} V",
+                5000,
+            )
+            return
+
+        if name == "run_sweep" and isinstance(result, list):
+            self._status_bar.showMessage(f"扫频完成，共 {len(result)} 个点。", 5000)
+            return
+
+        if name == "power_control":
+            self._status_bar.showMessage("测量电源命令已发送。", 3000)
+            return
+
+        if name in {"set_frequency", "set_stim_amplitude", "set_voltage_amp_levels"}:
+            self._status_bar.showMessage(f"命令已发送: {name}", 3000)
+
+    @Slot(object)
+    def _on_impedance_result(self, result: object) -> None:
+        try:
+            values = list(result)
+        except Exception:
+            self._status_bar.showMessage("接触阻抗测量完成。", 3000)
+            return
+        preview = ", ".join(f"{float(v):.4f}" for v in values[:4])
+        self._status_bar.showMessage(f"接触阻抗: {preview}", 5000)
+
+    def _rebuild_acquisition_pipeline(self) -> None:
+        self._reset_acquisition_pipeline()
+        self._ring_buffer = FrameRingBuffer(capacity=256, n_meas=208, create=True)
+        self._acq_process = AcquisitionProcess(
+            device_factory=create_device_from_config,
+            device_config={
+                "transport_type": self._transport_type,
+                "config": dict(self._device_config),
+            },
+            buffer_name=self._ring_buffer.name,
+            buffer_capacity=self._ring_buffer.capacity,
+            n_meas=208,
+        )
+        self._acq_ctrl.configure(
+            self._acq_process,
+            self._ring_buffer,
+            frame_metadata=self._frame_metadata(),
+        )
+
+    def _reset_acquisition_pipeline(self) -> None:
+        if self._acq_process is not None:
+            self._acq_ctrl.shutdown()
+            self._acq_process = None
+        if self._ring_buffer is not None:
+            try:
+                self._ring_buffer.unlink()
+            except FileNotFoundError:
+                pass
+            self._ring_buffer = None
+
+    def _frame_metadata(self) -> dict:
+        return {
+            "frequency_hz": int(self._device_config.get("frequency_hz", 1000)),
+            "stim_amp_uA": int(self._device_config.get("stim_amp_uA", 100)),
+            "voltage_amp_level_1": int(self._device_config.get("voltage_amp_level_1", 0)),
+            "voltage_amp_level_2": int(self._device_config.get("voltage_amp_level_2", 0)),
+            "mea_mode": int(self._device_config.get("mea_mode", 2)),
+            "board_id": int(self._device_config.get("board_id", 1)),
+            "user_id": int(self._device_config.get("user_id", 1)),
+            "transport_type": self._transport_type,
+            "protocol_version": str(self._device_config.get("protocol_version", "legacy-v1")),
+        }
+
+    def _ensure_recording_session(self, output_dir: str) -> bool:
+        target_dir = self._normalize_output_dir(output_dir) or self._default_output_dir()
+        self._acq_panel.set_output_dir(target_dir)
+
+        current_parent = None
+        if self._rec_ctrl.session_dir is not None:
+            current_parent = str(self._rec_ctrl.session_dir.parent)
+        if self._rec_ctrl.is_recording and current_parent == target_dir:
+            return True
+        if self._rec_ctrl.is_recording:
+            if self._rec_ctrl.frames_recorded == 0:
+                self._rec_ctrl.stop_recording()
+            else:
+                self._status_bar.showMessage(
+                    "当前录制已开始，新保存路径将在下次采集时生效。",
+                    5000,
+                )
+                return True
+
+        meta = self._frame_metadata()
+        meta.update(
+            {
+                "n_elec": 16,
+                "stim_pattern": "{ad}",
+                "meas_pattern": "{ad}",
+            }
+        )
+        started = self._rec_ctrl.start_recording(target_dir, session_metadata=meta)
+        if not started:
+            self._acq_panel.set_recording_active(False)
+            return False
+        return True
+
+    def _default_output_dir(self) -> str:
+        return str(self._acq_panel.default_output_dir())
+
+    @staticmethod
+    def _normalize_output_dir(output_dir: str) -> str:
+        raw = str(output_dir or "").strip()
+        if not raw:
+            return raw
+
+        if raw.startswith("file://"):
+            parsed = urlparse(raw)
+            raw = parsed.path or raw
+
+        normalized = raw.replace("\\", "/")
+        for prefix in ("//wsl.localhost/", "//wsl$/"):
+            if normalized.startswith(prefix):
+                parts = normalized.split("/")
+                if len(parts) >= 5:
+                    return "/" + "/".join(parts[4:])
+
+        if len(raw) >= 3 and raw[1] == ":" and raw[2] in {"\\", "/"}:
+            drive = raw[0].lower()
+            tail = raw[2:].replace("\\", "/")
+            return f"/mnt/{drive}{tail}"
+
+        return normalized
+
+    def _sync_state_device_config(self) -> None:
+        for key, value in self._device_config.items():
+            if hasattr(self._state.device_config, key):
+                setattr(self._state.device_config, key, value)
+        self._refresh_session_summary()
+
+    def _refresh_session_summary(self) -> None:
+        stim_level = int(self._device_config.get("stim_amp_level", 1))
+        stim_uA = int(self._device_config.get("stim_amp_uA", STIM_AMP_VALUES_UA.get(stim_level, 100)))
+        gain_1 = int(self._device_config.get("voltage_amp_level_1", 3))
+        gain_2 = int(self._device_config.get("voltage_amp_level_2", 5))
+        title, detail, next_action, tone = self._summary_banner_state()
+
+        self._summary_panel.set_status_banner(
+            title=title,
+            detail=detail,
+            next_action=next_action,
+            tone=tone,
+        )
+        self._summary_panel.set_indicator_states(
+            {
+                "link": self._indicator_link_state(),
+                "power": self._indicator_power_state(),
+                "record": self._indicator_record_state(),
+                "acq": self._indicator_acq_state(),
+            }
+        )
+
+        self._summary_panel.set_summary(
+            {
+                "link": self._format_link_summary(),
+                "power": self._format_power_summary(),
+                "identity": self._format_identity_summary(),
+                "protocol": self._format_protocol_summary(),
+                "transport": self._format_transport_summary(),
+                "frequency": f"{int(self._device_config.get('frequency_hz', 1000))} Hz",
+                "stim": f"{stim_uA} uA (level {stim_level})",
+                "gain": (
+                    f"V1 {_VOLTAGE_GAIN_LABELS.get(gain_1, '?')} (L{gain_1}) | "
+                    f"V2 {_VOLTAGE_GAIN_LABELS.get(gain_2, '?')} (L{gain_2})"
+                ),
+                "record": self._format_record_summary(),
+                "mode": self._format_mode_summary(),
+            }
+        )
+
+    def _format_link_summary(self) -> str:
+        mapping = {
+            ConnectionStatus.DISCONNECTED: "Down",
+            ConnectionStatus.CONNECTING: "Connecting",
+            ConnectionStatus.CONNECTED: "Verified",
+            ConnectionStatus.ERROR: "Error",
+        }
+        return mapping.get(self._state.connection_status, "Unknown")
+
+    def _format_power_summary(self) -> str:
+        mapping = {
+            PowerStatus.UNKNOWN: "Unknown",
+            PowerStatus.OFF: "OFF",
+            PowerStatus.ON: "ON",
+        }
+        return mapping.get(self._state.power_status, "Unknown")
+
+    def _format_identity_summary(self) -> str:
+        board = int(self._device_config.get("board_id", 1))
+        user = int(self._device_config.get("user_id", 1))
+        mea_mode = int(self._device_config.get("mea_mode", 2))
+        dimension = "3D" if mea_mode == 3 else "2D"
+        return f"Board {board} | User {user} | {dimension}"
+
+    def _format_protocol_summary(self) -> str:
+        version = str(self._device_config.get("protocol_version", "legacy-v1"))
+        acquisition_mode = str(self._device_config.get("acquisition_mode", "legacy_one_shot"))
+        mode_label = "streaming" if acquisition_mode == "streaming" else "legacy one-shot"
+        extended_impedance = "yes" if bool(self._device_config.get("supports_extended_impedance", False)) else "no"
+        batch_3d = "yes" if bool(self._device_config.get("supports_3d_batch", False)) else "reserved"
+        return f"{version} | {mode_label} | Zext {extended_impedance} | 3D batch {batch_3d}"
+
+    def _format_transport_summary(self) -> str:
+        if self._transport_type == "serial":
+            port = str(self._device_config.get("port", "")) or "not set"
+            baud = int(self._device_config.get("baudrate", 115200))
+            return f"Serial | {port} @ {baud}"
+        if self._transport_type == "relay":
+            host = str(self._device_config.get("server_host", "127.0.0.1"))
+            port = int(self._device_config.get("server_port", 4555))
+            board = int(self._device_config.get("board_id", 1))
+            user = int(self._device_config.get("user_id", 1))
+            return f"4G Relay | {host}:{port} | board {board} | user {user}"
+        return "Simulator"
+
+    def _format_record_summary(self) -> str:
+        path = self._acq_panel.output_dir() or self._default_output_dir()
+        status = {
+            RecordingStatus.OFF: "Off",
+            RecordingStatus.ARMED: "Armed",
+            RecordingStatus.RECORDING: "Writing",
+        }.get(self._state.recording_status, "Off")
+        return f"{status} | {path}"
+
+    def _format_mode_summary(self) -> str:
+        mode = self._state.acquisition_mode
+        if mode is AcquisitionMode.CONTINUOUS:
+            return "Continuous"
+        if mode is AcquisitionMode.SINGLE_SHOT:
+            return "Single frame"
+        if mode is AcquisitionMode.SCHEDULED:
+            return (
+                f"Scheduled | every {self._scheduled_interval_sec:.1f}s | "
+                f"{self._scheduled_frames_per_burst} frame/burst"
+            )
+        if self._scheduled_enabled:
+            return (
+                f"Idle | scheduled every {self._scheduled_interval_sec:.1f}s | "
+                f"{self._scheduled_frames_per_burst} frame/burst"
+            )
+        return "Idle | manual"
+
+    def _summary_banner_state(self) -> tuple[str, str, str, str]:
+        if self._state.connection_status is ConnectionStatus.ERROR:
+            return (
+                "FAULT",
+                "The link is in an error state and requires operator attention.",
+                "Next: Disconnect the link, check transport settings, and verify again.",
+                "error",
+            )
+
+        if self._state.connection_status is ConnectionStatus.CONNECTING:
+            return (
+                "VERIFYING LINK",
+                "The workstation is probing the device and reading its protocol capabilities.",
+                "Next: Wait for link verification to finish.",
+                "warn",
+            )
+
+        if self._state.connection_status is ConnectionStatus.DISCONNECTED:
+            return (
+                "LINK DOWN",
+                "No verified device link is active.",
+                "Next: Select a transport and click Connect & Verify.",
+                "idle",
+            )
+
+        if self._state.acquisition_mode in {
+            AcquisitionMode.CONTINUOUS,
+            AcquisitionMode.SCHEDULED,
+            AcquisitionMode.SINGLE_SHOT,
+        }:
+            if self._state.recording_status is RecordingStatus.RECORDING:
+                return (
+                    "ACQUIRING + RECORDING",
+                    "Frames are being captured and written to the active session.",
+                    "Next: Monitor incoming frames or stop acquisition when the run is complete.",
+                    "active",
+                )
+            return (
+                "ACQUIRING",
+                "Frames are being captured from the active transport.",
+                "Next: Monitor the live plot and stop acquisition when the run is complete.",
+                "active",
+            )
+
+        if self._transport_type == "simulator":
+            return (
+                "READY FOR ACQUISITION",
+                "The simulator link is verified and can start generating frames immediately.",
+                "Next: Start continuous or single-frame acquisition.",
+                "ready",
+            )
+
+        if self._state.power_status is PowerStatus.ON:
+            if self._state.recording_status is RecordingStatus.ARMED:
+                return (
+                    "READY + RECORD ARMED",
+                    "The device link is verified, measurement power is ON, and the next run will be saved.",
+                    "Next: Start acquisition to capture and record the next session.",
+                    "ready",
+                )
+            return (
+                "READY FOR ACQUISITION",
+                "The device link is verified and measurement power is ON.",
+                "Next: Start continuous or single-frame acquisition.",
+                "ready",
+            )
+
+        if self._state.recording_status is RecordingStatus.ARMED:
+            return (
+                "LINK VERIFIED",
+                "The link is verified and recording is armed, but measurement power is not confirmed ON.",
+                "Next: Turn measurement power ON when the hardware is ready, then start acquisition.",
+                "warn",
+            )
+
+        return (
+            "LINK VERIFIED",
+            "The device link is verified and waiting for measurement power or the next setup change.",
+            "Next: Turn measurement power ON when the hardware is ready, then start acquisition.",
+            "warn",
+        )
+
+    def _indicator_link_state(self) -> tuple[str, str]:
+        mapping = {
+            ConnectionStatus.DISCONNECTED: ("DOWN", "idle"),
+            ConnectionStatus.CONNECTING: ("CHECK", "warn"),
+            ConnectionStatus.CONNECTED: ("OK", "ready"),
+            ConnectionStatus.ERROR: ("FAULT", "error"),
+        }
+        return mapping.get(self._state.connection_status, ("UNK", "idle"))
+
+    def _indicator_power_state(self) -> tuple[str, str]:
+        mapping = {
+            PowerStatus.UNKNOWN: ("UNK", "idle"),
+            PowerStatus.OFF: ("OFF", "warn"),
+            PowerStatus.ON: ("ON", "ready"),
+        }
+        return mapping.get(self._state.power_status, ("UNK", "idle"))
+
+    def _indicator_record_state(self) -> tuple[str, str]:
+        mapping = {
+            RecordingStatus.OFF: ("OFF", "idle"),
+            RecordingStatus.ARMED: ("ARM", "ready"),
+            RecordingStatus.RECORDING: ("REC", "active"),
+        }
+        return mapping.get(self._state.recording_status, ("OFF", "idle"))
+
+    def _indicator_acq_state(self) -> tuple[str, str]:
+        mapping = {
+            AcquisitionMode.IDLE: ("IDLE", "idle"),
+            AcquisitionMode.CONTINUOUS: ("RUN", "active"),
+            AcquisitionMode.SCHEDULED: ("SCH", "active"),
+            AcquisitionMode.SINGLE_SHOT: ("1FR", "active"),
+        }
+        return mapping.get(self._state.acquisition_mode, ("IDLE", "idle"))
+
+    def _open_difference_dialog(self) -> None:
+        from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
+
+        entries = []
+        for row in range(self._frame_browser._model.rowCount()):
+            entry = self._frame_browser._model.get_entry(row)
+            if entry:
+                entries.append(entry)
+
+        if len(entries) < 2:
+            QMessageBox.information(self, "Info", "Need at least 2 recorded frames.")
+            return
+
+        ref_index = self._entry_index(entries, self._selected_reference_entry)
+        tgt_index = self._entry_index(entries, self._selected_target_entry)
+        if tgt_index == ref_index:
+            tgt_index = None
+
+        dialog = DifferenceDialog(
+            entries,
+            self,
+            default_ref_index=ref_index,
+            default_tgt_index=tgt_index,
+        )
+        dialog.reconstruction_requested.connect(self._on_reconstruction_config)
+        dialog.exec()
+
+    @staticmethod
+    def _entry_index(entries: list[dict], selected: dict | None) -> int:
+        if not selected:
+            return 0
+        for index, entry in enumerate(entries):
+            if entry.get("file_path") == selected.get("file_path"):
+                return index
+        return 0
+
+    @Slot(dict)
+    def _on_reconstruction_config(self, config: dict) -> None:
+        ref_entry = config["ref_entry"]
+        tgt_entry = config["tgt_entry"]
+
+        try:
+            from pyeidors.data.frame_io import read_frame_csv
+
+            ref_real, ref_imag = read_frame_csv(ref_entry["file_path"])
+            tgt_real, tgt_imag = read_frame_csv(tgt_entry["file_path"])
+        except Exception as exc:
+            self._on_error(f"Failed to load frames: {exc}")
+            return
+
+        from eit_app.models.frame_model import FrameData
+
+        ref_frame = FrameData(real=ref_real, imag=ref_imag, timestamp=0.0, frame_index=0)
+        tgt_frame = FrameData(real=tgt_real, imag=tgt_imag, timestamp=0.0, frame_index=1)
+
+        rc = self._state.reconstruction_config
+        request = ReconstructionRequest(
+            reference_frame=ref_frame,
+            target_frame=tgt_frame,
+            use_part=config.get("use_part", rc.use_part),
+            method=rc.method,
+            regularization_alpha=rc.regularization_alpha,
+            max_iterations=rc.max_iterations,
+            mesh_dimension=rc.mesh_dimension,
+            mesh_refinement=rc.mesh_refinement,
+            metadata={
+                "difference_mode": config.get("mode", "raw"),
+                "difference_orientation": config.get("orientation", "target_minus_reference"),
+                "n_elec": 16,
+                "stim_pattern": "{ad}",
+                "meas_pattern": "{ad}",
+                "drive_mode": "total_current",
+                "drive_value": 1.0e-5,
+                "geometry_scale_to_m": 1.0,
+            },
+        )
+        self._recon_ctrl.reconstruct(request)
+
+    def _open_settings(self) -> None:
+        from eit_app.ui.dialogs.settings_dialog import SettingsDialog
+
+        dialog = SettingsDialog(self._state.reconstruction_config, self)
+        if dialog.exec():
+            self._state.reconstruction_config = dialog.get_config()
+
+    @Slot(str)
+    def _on_error(self, msg: str) -> None:
+        log.error(msg)
+        self._state.report_error(msg)
+        summary = self._summarize_error_message(msg)
+        self._status_bar.showMessage(f"Error: {summary}", 15000)
+
+    @staticmethod
+    def _summarize_error_message(msg: str) -> str:
+        lines = [line.strip() for line in str(msg).splitlines() if line.strip()]
+        if not lines:
+            return "Unknown error"
+        for line in reversed(lines):
+            if line.lower().startswith("runtimeerror:"):
+                return line
+        return lines[-1]
+
+    def closeEvent(self, event) -> None:
+        self._on_stop_acquisition()
+        if self._state.connection_status is ConnectionStatus.CONNECTED:
+            try:
+                self._device_ctrl.power_off_device()
+            except Exception as exc:
+                log.warning("Failed to power off device during shutdown: %s", exc)
+        self._device_ctrl.shutdown()
+        self._recon_ctrl.shutdown()
+        super().closeEvent(event)

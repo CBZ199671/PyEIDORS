@@ -182,3 +182,22 @@ class EITMesh:
             "structured_sidecar_file": self.structured_sidecar_file,
             "structured_sidecar_version": self.structured_sidecar_version,
         }
+
+
+@dataclass
+class FrameMetadata:
+    """Per-frame metadata for the streaming acquisition format."""
+
+    timestamp: str = ""
+    frame_index: int = 0
+    n_meas: int = 208
+    frequency_hz: float = 0.0
+    stim_amplitude: float = 0.0
+    voltage_amplitude: float = 0.0
+    board_id: int = 1
+    user_id: int = 1
+    transport_type: str = "serial"
+    protocol_version: str = "legacy-v1"
+    sampling_rate_hz: float = 0.0
+    adc_params: dict[str, float] | None = None
+    notes: str = ""

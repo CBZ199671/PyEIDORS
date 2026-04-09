@@ -128,6 +128,18 @@ From the repository root:
 nix develop
 ```
 
+Recommended one-time environment bootstrap after entering the shell:
+
+```bash
+scripts/env/bootstrap_dev_env.sh --recommended --repair
+```
+
+Minimal bootstrap (required dependencies only):
+
+```bash
+scripts/env/bootstrap_dev_env.sh --minimal --repair
+```
+
 Important for WSL2 and other fresh shells:
 
 - `scripts/env/sync_locked_env.sh --check` is a validation command, not the bootstrap step.
@@ -164,7 +176,13 @@ optional acceleration extras through uv:
 - `pyamg>=5.2`
 - `scikit-sparse>=0.4.12`
 
-Enable them explicitly when needed:
+Recommended bootstrap with performance extras:
+
+```bash
+scripts/env/bootstrap_dev_env.sh --recommended --repair
+```
+
+If you only want to add them to an existing shell environment, enable them explicitly:
 
 ```bash
 ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
@@ -201,6 +219,10 @@ Recommended interpretation for the fused 3D profiles:
 
 `sksparse` availability depends on SuiteSparse support in the current platform
 toolchain; absence is non-fatal and PyEIDORS will fall back to PETSc/SciPy paths.
+
+In the maintained WSL2/Linux `nix develop` flow, this repository now keeps
+environment sync in `--inexact` mode by default so that recommended optional
+packages already installed in `.venv` are not removed on the next shell entry.
 
 Nix note:
 
