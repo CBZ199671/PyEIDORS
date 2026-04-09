@@ -1,0 +1,11 @@
+{
+  "summary_csv": "/root/shared/docs/benchmarks/reviewer_r3_q4/table_r3_q4_gpu_runtime_summary.csv",
+  "summary_raw_json": "/root/shared/docs/benchmarks/reviewer_r3_q4/raw/summary_raw.json",
+  "iteration_sweep_csv": "/root/shared/docs/benchmarks/reviewer_r3_q4/table_r3_q4_gpu_runtime_iteration_sweep.csv",
+  "iteration_sweep_raw_json": "/root/shared/docs/benchmarks/reviewer_r3_q4/raw/iteration_sweep_raw.json",
+  "figure_png": "/root/shared/docs/benchmarks/reviewer_r3_q4/figure_r3_q4_gpu_runtime.png",
+  "benchmark_environment_json": "/root/shared/docs/benchmarks/reviewer_r3_q4/benchmark_environment.json",
+  "reproducibility_commands_txt": "/root/shared/docs/benchmarks/reviewer_r3_q4/reproducibility_commands.txt",
+  "highlights_txt": "/root/shared/docs/benchmarks/reviewer_r3_q4/highlights.txt",
+  "figure_svg": "/root/shared/docs/benchmarks/reviewer_r3_q4/figure_r3_q4_gpu_runtime.svg"
+}
