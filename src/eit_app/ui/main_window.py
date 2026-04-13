@@ -62,8 +62,7 @@ from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
 
-if TYPE_CHECKING:
-    from eit_app.models.frame_model import FrameData
+from eit_app.models.frame_model import FrameData
 
 log = logging.getLogger(__name__)
 
@@ -120,6 +119,11 @@ class EITWorkstation(QMainWindow):
         self._record_requested = False
         self._single_frame_pending = False
         self._pending_power_commands: list[bool] = []
+
+        # Auto-reconstruction pipeline state
+        self._auto_reconstruct = False
+        self._reference_frame: FrameData | None = None
+        self._auto_recon_busy = False
 
         self._build_ui()
         self._acq_panel.set_output_dir(self._default_output_dir())
@@ -236,6 +240,7 @@ class EITWorkstation(QMainWindow):
 
         self._recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
         self._recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
+        self._recon_ctrl.reconstruction_done.connect(self._on_auto_reconstruction_done)
         self._recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
         )
@@ -403,6 +408,10 @@ class EITWorkstation(QMainWindow):
         self._single_frame_pending = single_frame
         self._latest_frame_timestamp = 0.0
         self._state.set_frame_count(0)
+        # Enable auto-reconstruction for multi-frame acquisition
+        self._auto_reconstruct = not single_frame
+        self._reference_frame = None
+        self._auto_recon_busy = False
         self._rebuild_acquisition_pipeline()
         if self._record_requested:
             if not self._ensure_recording_session(self._acq_panel.output_dir()):
@@ -446,6 +455,7 @@ class EITWorkstation(QMainWindow):
 
         self._reset_acquisition_pipeline()
         self._single_frame_pending = False
+        self._auto_reconstruct = False
         self._state.set_acquisition_mode(AcquisitionMode.IDLE)
         self._acq_panel.set_acquiring(False)
 
@@ -476,6 +486,18 @@ class EITWorkstation(QMainWindow):
             self._single_frame_pending = False
             QTimer.singleShot(0, self._on_stop_acquisition)
 
+        # Auto-reconstruction: first frame becomes reference, subsequent
+        # frames are reconstructed as difference against the reference.
+        if self._auto_reconstruct:
+            if self._reference_frame is None:
+                self._reference_frame = frame
+                self._frame_browser.set_reference_highlight(0)
+                self._status_bar.showMessage(
+                    f"Auto-reference set to frame #{frame.frame_index}", 3000
+                )
+            elif not self._auto_recon_busy:
+                self._submit_auto_reconstruction(frame)
+
     @Slot(int, float, str)
     def _on_frame_saved(self, index: int, timestamp: float, path: str) -> None:
         self._frame_browser.add_frame_entry(index, timestamp, path)
@@ -497,13 +519,74 @@ class EITWorkstation(QMainWindow):
         self._status_bar.showMessage(f"录制已停止，共保存 {count} 帧。", 5000)
         self._refresh_session_summary()
 
+    # ---- Auto-reconstruction helpers ----
+
+    def _submit_auto_reconstruction(self, target_frame: FrameData) -> None:
+        """Submit a difference reconstruction request using the stored reference."""
+        if self._reference_frame is None:
+            return
+        self._auto_recon_busy = True
+        n_elec = int(self._device_config.get("n_elec", 16))
+        request = ReconstructionRequest(
+            reference_frame=self._reference_frame,
+            target_frame=target_frame,
+            use_part="real",
+            method="gn-difference",
+            regularization_alpha=1.0,
+            max_iterations=1,
+            mesh_dimension=2,
+            mesh_refinement=int(self._state.reconstruction_config.mesh_refinement),
+            metadata={
+                "difference_mode": "raw",
+                "difference_orientation": "target_minus_reference",
+                "n_elec": n_elec,
+                "stim_pattern": "{ad}",
+                "meas_pattern": "{ad}",
+                "drive_mode": "total_current",
+                "drive_value": 1.0e-5,
+                "geometry_scale_to_m": 1.0,
+            },
+        )
+        self._recon_ctrl.reconstruct(request)
+
+    @Slot(object)
+    def _on_auto_reconstruction_done(self, result) -> None:
+        """Handle completed auto-reconstruction during acquisition."""
+        self._auto_recon_busy = False
+        if result.error_msg:
+            log.warning("Auto-reconstruction failed: %s", result.error_msg)
+            return
+        self._recon_widget.update_reconstruction(result)
+        if hasattr(result, "measured") and result.measured is not None:
+            self._voltage_plot.update_hardware_voltages(
+                result.measured,
+                result.simulated if hasattr(result, "simulated") else None,
+            )
+
     @Slot(dict)
     def _on_reference_selected(self, entry: dict) -> None:
         self._selected_reference_entry = dict(entry)
-        self._status_bar.showMessage(
-            f"参考帧已选择: #{entry.get('frame_index', '?')}",
-            3000,
-        )
+        # Also update the auto-reconstruct reference frame
+        file_path = entry.get("file_path", "")
+        if file_path:
+            try:
+                from pyeidors.data.frame_io import read_frame_csv
+                real, imag = read_frame_csv(file_path)
+                self._reference_frame = FrameData(
+                    real=real, imag=imag,
+                    timestamp=entry.get("timestamp", 0.0),
+                    frame_index=entry.get("frame_index", 0),
+                )
+                self._status_bar.showMessage(
+                    f"参考帧已更新: #{entry.get('frame_index', '?')}", 3000
+                )
+            except Exception as exc:
+                self._on_error(f"Failed to load reference frame: {exc}")
+                return
+        else:
+            self._status_bar.showMessage(
+                f"参考帧已选择: #{entry.get('frame_index', '?')}", 3000
+            )
 
     @Slot(dict)
     def _on_target_selected(self, entry: dict) -> None:

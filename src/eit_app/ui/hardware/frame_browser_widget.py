@@ -34,6 +34,7 @@ class _FrameTableModel(QAbstractTableModel):
     def __init__(self) -> None:
         super().__init__()
         self._entries: list[dict[str, Any]] = []
+        self._reference_row: int = -1
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return len(self._entries)
@@ -49,7 +50,12 @@ class _FrameTableModel(QAbstractTableModel):
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
-        if not index.isValid() or role != Qt.ItemDataRole.DisplayRole:
+        if not index.isValid():
+            return None
+        if role == Qt.ItemDataRole.BackgroundRole and index.row() == self._reference_row:
+            from PySide6.QtGui import QColor
+            return QColor("#d9e8f7")
+        if role != Qt.ItemDataRole.DisplayRole:
             return None
         entry = self._entries[index.row()]
         col = index.column()
@@ -79,6 +85,18 @@ class _FrameTableModel(QAbstractTableModel):
         if 0 <= row < len(self._entries):
             return self._entries[row]
         return None
+
+    def set_reference_row(self, row: int) -> None:
+        old = self._reference_row
+        self._reference_row = row
+        if old >= 0 and old < self.rowCount():
+            self.dataChanged.emit(
+                self.index(old, 0), self.index(old, self.columnCount() - 1)
+            )
+        if row >= 0 and row < self.rowCount():
+            self.dataChanged.emit(
+                self.index(row, 0), self.index(row, self.columnCount() - 1)
+            )
 
 
 class FrameBrowserWidget(QGroupBox):
@@ -157,6 +175,10 @@ class FrameBrowserWidget(QGroupBox):
             {"frame_index": frame_index, "timestamp": timestamp, "file_path": file_path}
         )
         self._update_action_state()
+
+    def set_reference_highlight(self, row: int) -> None:
+        """Highlight the given row as the current reference frame."""
+        self._model.set_reference_row(row)
 
     def _selected_entry(self) -> dict[str, Any] | None:
         indexes = self._table.selectionModel().selectedRows()
