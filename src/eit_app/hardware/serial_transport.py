@@ -185,8 +185,8 @@ class C8051Device(AbstractHardwareDevice):
             raise RuntimeError(f"Unexpected frame command: {result.cmd}")
         real, imag = parse_measurement_frame(
             result.data,
-            gain_level_1=int(self._config.get("voltage_amp_level_1", 3)),
-            gain_level_2=int(self._config.get("voltage_amp_level_2", 5)),
+            gain_level_1=int(self._config.get("voltage_amp_level_1", 7)),
+            gain_level_2=int(self._config.get("voltage_amp_level_2", 7)),
             spec=self._frame_spec(),
         )
         return RawFrame(
@@ -232,7 +232,7 @@ class C8051Device(AbstractHardwareDevice):
                     raise RuntimeError(f"Unexpected single-point response: {result.cmd}")
                 return parse_single_point_response(
                     result.data,
-                    gain_level=int(self._config.get("voltage_amp_level_1", 3)),
+                    gain_level=int(self._config.get("voltage_amp_level_1", 7)),
                 )
             except Exception as exc:
                 errors.append(f"{attempt}/{retries}: {exc}")
@@ -312,8 +312,8 @@ class C8051Device(AbstractHardwareDevice):
         if bool(self._config.get("apply_profile_on_start", True)):
             self.set_stim_amplitude(int(self._config.get("stim_amp_level", 1)))
             self.set_voltage_amp_levels(
-                int(self._config.get("voltage_amp_level_1", 3)),
-                int(self._config.get("voltage_amp_level_2", 5)),
+                int(self._config.get("voltage_amp_level_1", 7)),
+                int(self._config.get("voltage_amp_level_2", 7)),
             )
         self._prepared = True
 
@@ -431,8 +431,8 @@ class C8051Device(AbstractHardwareDevice):
         return {
             "frequency_hz": int(self._config.get("frequency_hz", 1000)),
             "stim_amp_uA": int(self._config.get("stim_amp_uA", 100)),
-            "voltage_amp_level_1": int(self._config.get("voltage_amp_level_1", 3)),
-            "voltage_amp_level_2": int(self._config.get("voltage_amp_level_2", 5)),
+            "voltage_amp_level_1": int(self._config.get("voltage_amp_level_1", 7)),
+            "voltage_amp_level_2": int(self._config.get("voltage_amp_level_2", 7)),
             "mea_mode": int(self._config.get("mea_mode", DEFAULT_MEA_MODE)),
             "board_id": int(self._config.get("board_id", 1)),
             "user_id": int(self._config.get("user_id", 1)),
