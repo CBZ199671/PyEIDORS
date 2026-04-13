@@ -13,9 +13,9 @@ from PySide6.QtCore import (
 )
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QGridLayout,
     QGroupBox,
     QHeaderView,
-    QHBoxLayout,
     QLabel,
     QPushButton,
     QTableView,
@@ -91,6 +91,7 @@ class FrameBrowserWidget(QGroupBox):
 
     reference_selected = Signal(dict)
     target_selected = Signal(dict)
+    frame_clicked = Signal(dict)
     cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -115,34 +116,39 @@ class FrameBrowserWidget(QGroupBox):
         self._table.setAlternatingRowColors(True)
         self._table.verticalHeader().setVisible(False)
         self._table.setSortingEnabled(False)
-        self._table.horizontalHeader().setStretchLastSection(True)
-        self._table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
+        header = self._table.horizontalHeader()
+        header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
         self._table.selectionModel().selectionChanged.connect(self._update_action_state)
-        layout.addWidget(self._table)
+        self._table.clicked.connect(self._on_row_clicked)
+        layout.addWidget(self._table, 1)
 
         self._count_label = QLabel("Recorded frames: 0")
         set_subtle_value(self._count_label)
         layout.addWidget(self._count_label)
 
-        btn_row = QHBoxLayout()
-        btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(8)
-        self._ref_btn = QPushButton("Set as Reference")
+        btn_grid = QGridLayout()
+        btn_grid.setContentsMargins(0, 0, 0, 0)
+        btn_grid.setHorizontalSpacing(6)
+        btn_grid.setVerticalSpacing(6)
+        btn_grid.setColumnStretch(0, 1)
+        btn_grid.setColumnStretch(1, 1)
+        self._ref_btn = QPushButton("Reference")
         self._ref_btn.clicked.connect(self._on_set_reference)
         set_button_role(self._ref_btn, "primary")
-        self._tgt_btn = QPushButton("Set as Target")
+        self._tgt_btn = QPushButton("Target")
         self._tgt_btn.clicked.connect(self._on_set_target)
         set_button_role(self._tgt_btn, "subtle")
-        self._clear_btn = QPushButton("Clear All")
+        self._clear_btn = QPushButton("Clear List")
         self._clear_btn.clicked.connect(self._on_clear)
         set_button_role(self._clear_btn, "danger")
-        btn_row.addWidget(self._ref_btn)
-        btn_row.addWidget(self._tgt_btn)
-        btn_row.addStretch()
-        btn_row.addWidget(self._clear_btn)
-        layout.addLayout(btn_row)
+        for button in (self._ref_btn, self._tgt_btn, self._clear_btn):
+            button.setMinimumWidth(0)
+        btn_grid.addWidget(self._ref_btn, 0, 0)
+        btn_grid.addWidget(self._tgt_btn, 0, 1)
+        btn_grid.addWidget(self._clear_btn, 1, 0, 1, 2)
+        layout.addLayout(btn_grid)
         self._update_action_state()
 
     def add_frame_entry(self, frame_index: int, timestamp: float, file_path: str) -> None:
@@ -167,6 +173,11 @@ class FrameBrowserWidget(QGroupBox):
         entry = self._selected_entry()
         if entry:
             self.target_selected.emit(entry)
+
+    def _on_row_clicked(self, index: QModelIndex) -> None:
+        entry = self._model.get_entry(index.row())
+        if entry:
+            self.frame_clicked.emit(entry)
 
     def _on_clear(self) -> None:
         self._model.clear()

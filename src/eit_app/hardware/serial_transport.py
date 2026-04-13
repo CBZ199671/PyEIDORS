@@ -32,7 +32,9 @@ from .types import (
     FRAME_END,
     AcquisitionMode,
     Command,
+    DEFAULT_FRAME_SPEC,
     DEFAULT_MEA_MODE,
+    FrameSpec,
     STIM_AMP_VALUES_UA,
 )
 
@@ -183,8 +185,9 @@ class C8051Device(AbstractHardwareDevice):
             raise RuntimeError(f"Unexpected frame command: {result.cmd}")
         real, imag = parse_measurement_frame(
             result.data,
-            gain_level_1=int(self._config.get("voltage_amp_level_1", 0)),
-            gain_level_2=int(self._config.get("voltage_amp_level_2", 0)),
+            gain_level_1=int(self._config.get("voltage_amp_level_1", 3)),
+            gain_level_2=int(self._config.get("voltage_amp_level_2", 5)),
+            spec=self._frame_spec(),
         )
         return RawFrame(
             real=real,
@@ -229,7 +232,7 @@ class C8051Device(AbstractHardwareDevice):
                     raise RuntimeError(f"Unexpected single-point response: {result.cmd}")
                 return parse_single_point_response(
                     result.data,
-                    gain_level=int(self._config.get("voltage_amp_level_1", 0)),
+                    gain_level=int(self._config.get("voltage_amp_level_1", 3)),
                 )
             except Exception as exc:
                 errors.append(f"{attempt}/{retries}: {exc}")
@@ -306,7 +309,7 @@ class C8051Device(AbstractHardwareDevice):
         if settle_sec > 0:
             time.sleep(settle_sec)
 
-        if bool(self._config.get("apply_profile_on_start", False)):
+        if bool(self._config.get("apply_profile_on_start", True)):
             self.set_stim_amplitude(int(self._config.get("stim_amp_level", 1)))
             self.set_voltage_amp_levels(
                 int(self._config.get("voltage_amp_level_1", 3)),
@@ -335,6 +338,7 @@ class C8051Device(AbstractHardwareDevice):
                         result.data,
                         gain_level_1=int(self._config.get("voltage_amp_level_1", 0)),
                         gain_level_2=int(self._config.get("voltage_amp_level_2", 0)),
+                        spec=self._frame_spec(),
                     )
                     return RawFrame(
                         real=real,
@@ -423,17 +427,38 @@ class C8051Device(AbstractHardwareDevice):
         raise RuntimeError("Timed out while reading device frame")
 
     def _frame_metadata(self) -> dict[str, Any]:
+        frame_spec = self._frame_spec()
         return {
             "frequency_hz": int(self._config.get("frequency_hz", 1000)),
             "stim_amp_uA": int(self._config.get("stim_amp_uA", 100)),
-            "voltage_amp_level_1": int(self._config.get("voltage_amp_level_1", 0)),
-            "voltage_amp_level_2": int(self._config.get("voltage_amp_level_2", 0)),
+            "voltage_amp_level_1": int(self._config.get("voltage_amp_level_1", 3)),
+            "voltage_amp_level_2": int(self._config.get("voltage_amp_level_2", 5)),
             "mea_mode": int(self._config.get("mea_mode", DEFAULT_MEA_MODE)),
             "board_id": int(self._config.get("board_id", 1)),
             "user_id": int(self._config.get("user_id", 1)),
             "transport_type": self._config.get("transport_type", "serial"),
             "protocol_version": self._config.get("protocol_version", "legacy-v1"),
+            "n_elec": int(self._config.get("n_elec", frame_spec.n_electrodes)),
+            "n_rings": int(self._config.get("n_rings", 1)),
+            "stim_pattern": self._config.get("stim_pattern", "{ad}"),
+            "meas_pattern": self._config.get("meas_pattern", "{ad}"),
+            "use_meas_current": bool(self._config.get("use_meas_current", False)),
+            "use_meas_current_next": int(self._config.get("use_meas_current_next", 0)),
+            "points_per_frame": int(frame_spec.points_per_frame),
         }
+
+    def _frame_spec(self) -> FrameSpec:
+        total_electrodes = max(int(self._config.get("n_elec", DEFAULT_FRAME_SPEC.n_electrodes)), 1)
+        total_electrodes *= max(int(self._config.get("n_rings", 1)), 1)
+        points_per_frame = max(
+            int(self._config.get("points_per_frame", DEFAULT_FRAME_SPEC.points_per_frame)),
+            1,
+        )
+        return FrameSpec(
+            n_electrodes=total_electrodes,
+            points_per_frame=points_per_frame,
+            bytes_per_point=DEFAULT_FRAME_SPEC.bytes_per_point,
+        )
 
     def _clear_transport_input(self) -> None:
         reset_input = getattr(self._transport, "reset_input_buffer", None)

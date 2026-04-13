@@ -7,6 +7,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from typing import TYPE_CHECKING
 
+import numpy as np
 from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
 
@@ -29,8 +30,21 @@ from eit_app.controllers.forward_solver_controller import (
     ForwardSolverResult,
 )
 from eit_app.controllers.recording_controller import RecordingController
+from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
 from eit_app.hardware.types import STIM_AMP_VALUES_UA
+from eit_app.interop import (
+    EidorsExportJob,
+    EidorsScriptCaptureService,
+    InteropBundleExporter,
+    InteropBundleImporter,
+    InteropSmokeValidator,
+    ReconstructionPreset,
+    build_geometry_payload_from_result,
+)
+from eit_app.measurement_layout import (
+    measurement_layout_from_config,
+)
 from eit_app.models.app_state import (
     AcquisitionMode,
     AppState,
@@ -38,11 +52,13 @@ from eit_app.models.app_state import (
     PowerStatus,
     RecordingStatus,
 )
+from eit_app.models.forward_model_config import ForwardModelConfig
 from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
     SimulationState,
 )
 from eit_app.ui.hardware.hardware_tab import HardwareTab
+from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
 
@@ -69,7 +85,7 @@ class EITWorkstation(QMainWindow):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("EIT Workstation")
-        self.resize(1400, 900)
+        self.resize(1500, 940)
 
         self._state = AppState(self)
         self._sim_state = SimulationState(self)
@@ -80,6 +96,15 @@ class EITWorkstation(QMainWindow):
         self._fwd_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
+        self._interop_capture_service = EidorsScriptCaptureService()
+        self._interop_importer = InteropBundleImporter()
+        self._interop_exporter = InteropBundleExporter()
+        self._interop_smoke_validator = InteropSmokeValidator()
+        self._sim_forward_model_config = ForwardModelConfig()
+        self._dataset_forward_model_config = ForwardModelConfig()
+        self._interop_geometry_asset: dict | None = None
+        self._interop_measurements_asset: dict[str, np.ndarray] | None = None
+        self._last_imported_bundle = None
 
         self._transport_type = "serial"
         self._device_config = normalize_device_config("serial", {})
@@ -94,11 +119,13 @@ class EITWorkstation(QMainWindow):
         self._selected_target_entry: dict | None = None
         self._record_requested = False
         self._single_frame_pending = False
+        self._pending_power_commands: list[bool] = []
 
         self._build_ui()
         self._acq_panel.set_output_dir(self._default_output_dir())
         self._connect_signals()
         self._control_panel.set_enabled(False)
+        self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
 
     # --- Convenience accessors that delegate to the hardware tab ---
@@ -153,6 +180,10 @@ class EITWorkstation(QMainWindow):
         self._sim_tab = SimulationTab()
         self._tab_widget.addTab(self._sim_tab, "Simulation (\u4eff\u771f)")
 
+        # Dataset generation tab
+        self._dataset_tab = DatasetGeneratorTab()
+        self._tab_widget.addTab(self._dataset_tab, "Dataset Generator (\u6570\u636e\u96c6\u751f\u6210)")
+
         self._status_bar = EITStatusBar(self)
         self.setStatusBar(self._status_bar)
 
@@ -164,10 +195,12 @@ class EITWorkstation(QMainWindow):
 
         tools_menu = menu.addMenu("&Tools")
         tools_menu.addAction("&Difference Reconstruction...", self._open_difference_dialog)
+        tools_menu.addAction("EIDORS &Interop Hub...", self._open_interop_hub)
 
     def _connect_signals(self) -> None:
         self._conn_panel.connect_requested.connect(self._on_connect_requested)
         self._conn_panel.disconnect_requested.connect(self._on_disconnect_requested)
+        self._conn_panel.validation_failed.connect(self._on_error)
 
         self._device_ctrl.connected.connect(self._on_connected)
         self._device_ctrl.disconnected.connect(self._on_disconnected)
@@ -178,6 +211,7 @@ class EITWorkstation(QMainWindow):
         self._control_panel.frequency_changed.connect(self._on_frequency_changed)
         self._control_panel.stim_amp_changed.connect(self._on_stim_amp_changed)
         self._control_panel.voltage_amp_changed.connect(self._on_voltage_amp_changed)
+        self._control_panel.measurement_layout_changed.connect(self._on_measurement_layout_changed)
         self._control_panel.power_toggled.connect(self._on_power_toggled)
         self._control_panel.impedance_requested.connect(self._device_ctrl.measure_impedance)
         self._control_panel.single_point_requested.connect(self._on_single_point_requested)
@@ -201,6 +235,7 @@ class EITWorkstation(QMainWindow):
         self._rec_ctrl.error.connect(self._on_error)
 
         self._recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
+        self._recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
         self._recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
         )
@@ -208,10 +243,12 @@ class EITWorkstation(QMainWindow):
 
         self._frame_browser.reference_selected.connect(self._on_reference_selected)
         self._frame_browser.target_selected.connect(self._on_target_selected)
+        self._frame_browser.frame_clicked.connect(self._on_frame_clicked)
         self._frame_browser.cleared.connect(self._on_frame_browser_cleared)
 
         self._state.connection_status_changed.connect(self._status_bar.on_connection_changed)
         self._state.power_status_changed.connect(self._status_bar.on_power_status_changed)
+        self._state.power_status_changed.connect(self._control_panel.set_power_state)
         self._state.acquisition_mode_changed.connect(self._status_bar.on_acquisition_mode_changed)
         self._state.frame_count_changed.connect(self._status_bar.on_frame_count_changed)
         self._state.frame_count_changed.connect(self._acq_panel.set_frame_count)
@@ -230,21 +267,26 @@ class EITWorkstation(QMainWindow):
         sim.forward_problem_panel.run_forward_requested.connect(self._on_run_forward)
         sim.inverse_problem_panel.run_inverse_requested.connect(self._on_run_sim_inverse)
         sim.inverse_problem_panel.save_requested.connect(self._on_save_sim_results)
-        sim.dataset_generator_panel.generate_requested.connect(self._on_generate_dataset)
-        sim.dataset_generator_panel.cancel_requested.connect(self._dataset_ctrl.cancel)
+
+        dataset = self._dataset_tab
+        dataset.dataset_generator_panel.generate_requested.connect(self._on_generate_dataset)
+        dataset.dataset_generator_panel.cancel_requested.connect(self._dataset_ctrl.cancel)
 
         self._fwd_ctrl.forward_done.connect(self._on_forward_done)
         self._fwd_ctrl.progress.connect(lambda msg: self._status_bar.showMessage(msg, 3000))
         self._fwd_ctrl.error.connect(self._on_error)
 
-        self._dataset_ctrl.progress.connect(self._sim_tab.dataset_generator_panel.set_progress)
+        self._dataset_ctrl.progress.connect(self._dataset_tab.set_progress)
         self._dataset_ctrl.generation_done.connect(self._on_dataset_done)
         self._dataset_ctrl.error.connect(self._on_error)
 
     @Slot(str, dict)
     def _on_connect_requested(self, transport_type: str, config: dict) -> None:
+        prepared = self._prepare_connection_request(transport_type, dict(config))
+        if prepared is None:
+            return
         merged = dict(self._device_config)
-        merged.update(config)
+        merged.update(prepared)
         merged["transport_type"] = transport_type
         self._transport_type = transport_type
         self._device_config = normalize_device_config(transport_type, merged)
@@ -252,7 +294,64 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_connection_profile(transport_type, self._device_config)
         self._state.set_connection_status(ConnectionStatus.CONNECTING)
         self._refresh_session_summary()
+        self._status_bar.showMessage(self._connect_attempt_message(transport_type, self._device_config), 5000)
         self._device_ctrl.connect_device()
+
+    def _prepare_connection_request(self, transport_type: str, config: dict) -> dict | None:
+        if transport_type == "serial":
+            port = str(config.get("port", "")).strip()
+            if not port:
+                self._conn_panel.refresh_serial_ports()
+                config["port"] = self._conn_panel.selected_serial_port()
+                config["port_display"] = self._conn_panel.selected_serial_display_name()
+                port = str(config.get("port", "")).strip()
+
+            if not port:
+                self._conn_panel.set_serial_hint(
+                    "未检测到可连接串口。请检查 USB 线、驱动、设备供电，然后点击 Scan 重新检测。"
+                )
+                self._on_error("Connection failed: No serial port detected.")
+                return None
+
+            preflight = preflight_connection_target("serial", config)
+            if not preflight.ok:
+                self._conn_panel.set_serial_hint(preflight.hint or preflight.summary)
+                self._on_error(f"Connection failed: {preflight.summary}")
+                return None
+            if preflight.hint:
+                self._conn_panel.set_serial_hint(preflight.hint)
+            return config
+
+        if transport_type == "relay":
+            host = str(config.get("server_host", "")).strip()
+            if not host:
+                self._conn_panel.set_relay_hint("4G Relay 服务器地址为空，请先填写可访问的 host。")
+                self._on_error("Connection failed: Relay host is empty.")
+                return None
+            preflight = preflight_connection_target("relay", config)
+            if not preflight.ok:
+                self._conn_panel.set_relay_hint(preflight.hint or preflight.summary)
+                self._on_error(f"Connection failed: {preflight.summary}")
+                return None
+            if preflight.hint:
+                self._conn_panel.set_relay_hint(preflight.hint)
+            return config
+
+        return config
+
+    @staticmethod
+    def _connect_attempt_message(transport_type: str, config: dict) -> str:
+        if transport_type == "serial":
+            port = str(config.get("port_display", "")).strip() or str(config.get("port", "")).strip()
+            baud = int(config.get("baudrate", 115200))
+            if port.upper().startswith("COM"):
+                return f"正在通过 Windows 主机串口 {port} 验证设备链路，波特率 {baud}。"
+            return f"正在验证串口链路: {port} @ {baud}"
+        if transport_type == "relay":
+            host = str(config.get("server_host", "127.0.0.1"))
+            port = int(config.get("server_port", 4555))
+            return f"正在验证 4G Relay 链路: {host}:{port}"
+        return "正在验证设备链路。"
 
     @Slot()
     def _on_connected(self) -> None:
@@ -268,6 +367,7 @@ class EITWorkstation(QMainWindow):
 
     @Slot()
     def _on_disconnected(self) -> None:
+        self._pending_power_commands.clear()
         self._state.set_connection_status(ConnectionStatus.DISCONNECTED)
         self._state.set_power_status(PowerStatus.UNKNOWN)
         self._state.set_acquisition_mode(AcquisitionMode.IDLE)
@@ -293,6 +393,12 @@ class EITWorkstation(QMainWindow):
         if self._state.connection_status is not ConnectionStatus.CONNECTED and self._transport_type != "simulator":
             self._on_error("请先完成设备连接验证。")
             return
+
+        if self._transport_type != "simulator":
+            released = self._device_ctrl.suspend_session(timeout_ms=3000)
+            if not released:
+                self._on_error("启动采集前未能释放控制串口，请重试或重新连接设备。")
+                return
 
         self._single_frame_pending = single_frame
         self._latest_frame_timestamp = 0.0
@@ -407,6 +513,32 @@ class EITWorkstation(QMainWindow):
             3000,
         )
 
+    @Slot(dict)
+    def _on_frame_clicked(self, entry: dict) -> None:
+        """Load a recorded frame and display its waveform in the live plot."""
+        file_path = entry.get("file_path", "")
+        if not file_path:
+            return
+        try:
+            from pyeidors.data.frame_io import read_frame_csv
+
+            real, imag = read_frame_csv(file_path)
+            from eit_app.models.frame_model import FrameData
+
+            frame = FrameData(
+                real=real,
+                imag=imag,
+                timestamp=entry.get("timestamp", 0.0),
+                frame_index=entry.get("frame_index", 0),
+            )
+            self._live_plot.update_frame(frame)
+            self._status_bar.showMessage(
+                f"显示帧 #{entry.get('frame_index', '?')} 的波形数据",
+                3000,
+            )
+        except Exception as exc:
+            self._on_error(f"Failed to load frame: {exc}")
+
     @Slot()
     def _on_frame_browser_cleared(self) -> None:
         self._selected_reference_entry = None
@@ -487,12 +619,22 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_voltage_amp_levels(level_1, level_2)
         self._refresh_session_summary()
 
+    @Slot(dict)
+    def _on_measurement_layout_changed(self, layout: dict) -> None:
+        self._device_config.update(layout)
+        self._device_config = normalize_device_config(self._transport_type, self._device_config)
+        self._sync_state_device_config()
+        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        points = int(self._device_config.get("points_per_frame", self._measurement_point_count()))
+        self._status_bar.showMessage(
+            f"硬件布局已更新：{points} 个边界电压点。",
+            3500,
+        )
+
     @Slot(bool)
     def _on_power_toggled(self, on: bool) -> None:
+        self._pending_power_commands.append(on)
         self._device_ctrl.power_control(on)
-        self._state.set_power_status(PowerStatus.ON if on else PowerStatus.OFF)
-        if on:
-            self._workflow_toolbox.setCurrentIndex(2)
         self._refresh_session_summary()
 
     @Slot()
@@ -523,7 +665,7 @@ class EITWorkstation(QMainWindow):
 
         if name == "single_point_test_at" and isinstance(result, tuple) and len(result) == 2:
             self._status_bar.showMessage(
-                f"单点测试: real={result[0]:.4f} V, imag={result[1]:.4f} V",
+                f"单点测试返回: real={result[0]:.4f} V, imag={result[1]:.4f} V",
                 5000,
             )
             return
@@ -533,7 +675,18 @@ class EITWorkstation(QMainWindow):
             return
 
         if name == "power_control":
-            self._status_bar.showMessage("测量电源命令已发送。", 3000)
+            desired = self._pending_power_commands.pop(0) if self._pending_power_commands else None
+            if desired is True:
+                self._state.set_power_status(PowerStatus.ON)
+                self._control_panel.set_power_state("on")
+                self._status_bar.showMessage("测量电源已切换为 ON。", 4000)
+            elif desired is False:
+                self._state.set_power_status(PowerStatus.OFF)
+                self._control_panel.set_power_state("off")
+                self._status_bar.showMessage("测量电源已切换为 OFF。", 4000)
+            else:
+                self._status_bar.showMessage("测量电源命令已发送。", 3000)
+            self._refresh_session_summary()
             return
 
         if name in {"set_frequency", "set_stim_amplitude", "set_voltage_amp_levels"}:
@@ -549,9 +702,52 @@ class EITWorkstation(QMainWindow):
         preview = ", ".join(f"{float(v):.4f}" for v in values[:4])
         self._status_bar.showMessage(f"接触阻抗: {preview}", 5000)
 
+    @Slot(object)
+    def _on_hardware_reconstruction_done(self, result: object) -> None:
+        if self._tab_widget.currentWidget() is not self._hw_tab:
+            return
+        measured = getattr(result, "measured", None)
+        reconstructed = getattr(result, "simulated", None)
+        if measured is None:
+            return
+        try:
+            measured_arr = np.asarray(measured, dtype=float).reshape(-1)
+        except Exception:
+            return
+        if measured_arr.size == 0:
+            return
+        reconstructed_arr = None
+        if reconstructed is not None:
+            try:
+                reconstructed_arr = np.asarray(reconstructed, dtype=float).reshape(-1)
+            except Exception:
+                reconstructed_arr = None
+        self._voltage_plot.update_hardware_voltages(measured_arr, reconstructed_arr)
+
+    def _measurement_layout_config(self) -> dict[str, object]:
+        layout = measurement_layout_from_config(self._device_config)
+        return {
+            "n_elec": int(layout["n_elec"]),
+            "n_rings": int(layout["n_rings"]),
+            "stim_pattern": layout["stim_pattern"],
+            "meas_pattern": layout["meas_pattern"],
+            "use_meas_current": bool(layout["use_meas_current"]),
+            "use_meas_current_next": int(layout["use_meas_current_next"]),
+            "rotate_meas": bool(layout["rotate_meas"]),
+            "stim_direction": layout["stim_direction"],
+            "meas_direction": layout["meas_direction"],
+            "stim_first_positive": bool(layout["stim_first_positive"]),
+            "points_per_frame": int(layout["points_per_frame"]),
+            "total_electrodes": int(layout["total_electrodes"]),
+        }
+
+    def _measurement_point_count(self) -> int:
+        return int(self._measurement_layout_config()["points_per_frame"])
+
     def _rebuild_acquisition_pipeline(self) -> None:
         self._reset_acquisition_pipeline()
-        self._ring_buffer = FrameRingBuffer(capacity=256, n_meas=208, create=True)
+        n_meas = self._measurement_point_count()
+        self._ring_buffer = FrameRingBuffer(capacity=256, n_meas=n_meas, create=True)
         self._acq_process = AcquisitionProcess(
             device_factory=create_device_from_config,
             device_config={
@@ -560,7 +756,7 @@ class EITWorkstation(QMainWindow):
             },
             buffer_name=self._ring_buffer.name,
             buffer_capacity=self._ring_buffer.capacity,
-            n_meas=208,
+            n_meas=n_meas,
         )
         self._acq_ctrl.configure(
             self._acq_process,
@@ -580,7 +776,7 @@ class EITWorkstation(QMainWindow):
             self._ring_buffer = None
 
     def _frame_metadata(self) -> dict:
-        return {
+        metadata = {
             "frequency_hz": int(self._device_config.get("frequency_hz", 1000)),
             "stim_amp_uA": int(self._device_config.get("stim_amp_uA", 100)),
             "voltage_amp_level_1": int(self._device_config.get("voltage_amp_level_1", 0)),
@@ -591,6 +787,8 @@ class EITWorkstation(QMainWindow):
             "transport_type": self._transport_type,
             "protocol_version": str(self._device_config.get("protocol_version", "legacy-v1")),
         }
+        metadata.update(self._measurement_layout_config())
+        return metadata
 
     def _ensure_recording_session(self, output_dir: str) -> bool:
         target_dir = self._normalize_output_dir(output_dir) or self._default_output_dir()
@@ -611,15 +809,7 @@ class EITWorkstation(QMainWindow):
                 )
                 return True
 
-        meta = self._frame_metadata()
-        meta.update(
-            {
-                "n_elec": 16,
-                "stim_pattern": "{ad}",
-                "meas_pattern": "{ad}",
-            }
-        )
-        started = self._rec_ctrl.start_recording(target_dir, session_metadata=meta)
+        started = self._rec_ctrl.start_recording(target_dir, session_metadata=self._frame_metadata())
         if not started:
             self._acq_panel.set_recording_active(False)
             return False
@@ -656,7 +846,14 @@ class EITWorkstation(QMainWindow):
         for key, value in self._device_config.items():
             if hasattr(self._state.device_config, key):
                 setattr(self._state.device_config, key, value)
+        self._control_panel.set_measurement_layout(self._device_config)
+        self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
+
+    def _refresh_expected_measurement_counts(self) -> None:
+        hardware_count = self._measurement_point_count()
+        self._live_plot.set_expected_point_count(hardware_count)
+        self._voltage_plot.set_expected_point_count(hardware_count)
 
     def _refresh_session_summary(self) -> None:
         stim_level = int(self._device_config.get("stim_amp_level", 1))
@@ -682,38 +879,19 @@ class EITWorkstation(QMainWindow):
 
         self._summary_panel.set_summary(
             {
-                "link": self._format_link_summary(),
-                "power": self._format_power_summary(),
                 "identity": self._format_identity_summary(),
-                "protocol": self._format_protocol_summary(),
                 "transport": self._format_transport_summary(),
-                "frequency": f"{int(self._device_config.get('frequency_hz', 1000))} Hz",
-                "stim": f"{stim_uA} uA (level {stim_level})",
-                "gain": (
-                    f"V1 {_VOLTAGE_GAIN_LABELS.get(gain_1, '?')} (L{gain_1}) | "
-                    f"V2 {_VOLTAGE_GAIN_LABELS.get(gain_2, '?')} (L{gain_2})"
+                "layout": self._format_layout_summary(),
+                "drive": (
+                    f"{int(self._device_config.get('frequency_hz', 1000))} Hz | "
+                    f"{stim_uA} uA (L{stim_level}) | "
+                    f"V1 {_VOLTAGE_GAIN_LABELS.get(gain_1, '?')} | "
+                    f"V2 {_VOLTAGE_GAIN_LABELS.get(gain_2, '?')}"
                 ),
                 "record": self._format_record_summary(),
-                "mode": self._format_mode_summary(),
+                "plan": self._format_mode_summary(),
             }
         )
-
-    def _format_link_summary(self) -> str:
-        mapping = {
-            ConnectionStatus.DISCONNECTED: "Down",
-            ConnectionStatus.CONNECTING: "Connecting",
-            ConnectionStatus.CONNECTED: "Verified",
-            ConnectionStatus.ERROR: "Error",
-        }
-        return mapping.get(self._state.connection_status, "Unknown")
-
-    def _format_power_summary(self) -> str:
-        mapping = {
-            PowerStatus.UNKNOWN: "Unknown",
-            PowerStatus.OFF: "OFF",
-            PowerStatus.ON: "ON",
-        }
-        return mapping.get(self._state.power_status, "Unknown")
 
     def _format_identity_summary(self) -> str:
         board = int(self._device_config.get("board_id", 1))
@@ -722,17 +900,10 @@ class EITWorkstation(QMainWindow):
         dimension = "3D" if mea_mode == 3 else "2D"
         return f"Board {board} | User {user} | {dimension}"
 
-    def _format_protocol_summary(self) -> str:
-        version = str(self._device_config.get("protocol_version", "legacy-v1"))
-        acquisition_mode = str(self._device_config.get("acquisition_mode", "legacy_one_shot"))
-        mode_label = "streaming" if acquisition_mode == "streaming" else "legacy one-shot"
-        extended_impedance = "yes" if bool(self._device_config.get("supports_extended_impedance", False)) else "no"
-        batch_3d = "yes" if bool(self._device_config.get("supports_3d_batch", False)) else "reserved"
-        return f"{version} | {mode_label} | Zext {extended_impedance} | 3D batch {batch_3d}"
-
     def _format_transport_summary(self) -> str:
         if self._transport_type == "serial":
-            port = str(self._device_config.get("port", "")) or "not set"
+            port_display = str(self._device_config.get("port_display", "")).strip()
+            port = port_display or str(self._device_config.get("port", "")).strip() or "not set"
             baud = int(self._device_config.get("baudrate", 115200))
             return f"Serial | {port} @ {baud}"
         if self._transport_type == "relay":
@@ -742,6 +913,21 @@ class EITWorkstation(QMainWindow):
             user = int(self._device_config.get("user_id", 1))
             return f"4G Relay | {host}:{port} | board {board} | user {user}"
         return "Simulator"
+
+    def _format_layout_summary(self) -> str:
+        layout = self._measurement_layout_config()
+        mea_mode = int(self._device_config.get("mea_mode", 2))
+        dimension = "3D" if mea_mode == 3 else "2D"
+        rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
+        drive = "drive-included" if bool(layout["use_meas_current"]) else "drive-excluded"
+        return (
+            f"{dimension} | "
+            f"{int(layout['n_elec'])}E x {int(layout['n_rings'])}R | "
+            f"{layout['stim_pattern']} / {layout['meas_pattern']} | "
+            f"{rotate} | {drive} | "
+            f"+{int(layout['use_meas_current_next'])} skip | "
+            f"{int(layout['points_per_frame'])} pts"
+        )
 
     def _format_record_summary(self) -> str:
         path = self._acq_panel.output_dir() or self._default_output_dir()
@@ -952,11 +1138,9 @@ class EITWorkstation(QMainWindow):
             mesh_dimension=rc.mesh_dimension,
             mesh_refinement=rc.mesh_refinement,
             metadata={
+                **self._measurement_layout_config(),
                 "difference_mode": config.get("mode", "raw"),
                 "difference_orientation": config.get("orientation", "target_minus_reference"),
-                "n_elec": 16,
-                "stim_pattern": "{ad}",
-                "meas_pattern": "{ad}",
                 "drive_mode": "total_current",
                 "drive_value": 1.0e-5,
                 "geometry_scale_to_m": 1.0,
@@ -971,11 +1155,259 @@ class EITWorkstation(QMainWindow):
         if dialog.exec():
             self._state.reconstruction_config = dialog.get_config()
 
+    def _current_hardware_forward_model_config(self) -> ForwardModelConfig:
+        return ForwardModelConfig.from_mapping(
+            {
+                **self._device_config,
+                "mesh_dimension": 3 if int(self._device_config.get("mea_mode", 2)) == 3 else 2,
+            }
+        )
+
+    def _current_sim_forward_model_config(self) -> ForwardModelConfig:
+        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        return self._sim_forward_model_config.with_overrides(
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=mesh_cfg["mesh_refinement"],
+            n_elec=mesh_cfg["n_electrodes"],
+            background_conductivity=mesh_cfg["background_conductivity"],
+            noise_level=self._sim_tab.forward_problem_panel.noise_level,
+        )
+
+    def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
+        mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
+        panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
+        return self._dataset_forward_model_config.with_overrides(
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=mesh_cfg["mesh_refinement"],
+            n_elec=mesh_cfg["n_electrodes"],
+            noise_level=panel_cfg["noise_level"],
+        )
+
+    def _interop_reconstruction_preset(self) -> ReconstructionPreset:
+        rc = self._state.reconstruction_config
+        return ReconstructionPreset(
+            method=rc.method,
+            regularization_alpha=rc.regularization_alpha,
+            max_iterations=rc.max_iterations,
+            difference_mode="raw",
+            difference_orientation="target_minus_reference",
+        )
+
+    def _simulation_measurement_export(self) -> dict[str, np.ndarray] | None:
+        if self._last_fwd_result is None or self._last_fwd_result.error_msg:
+            return None
+        measurements = {
+            "target": np.asarray(self._last_fwd_result.boundary_voltages, dtype=float).reshape(-1),
+        }
+        if self._last_fwd_result.homogeneous_voltages is not None:
+            homogeneous = np.asarray(self._last_fwd_result.homogeneous_voltages, dtype=float).reshape(-1)
+            measurements["homogeneous"] = homogeneous
+            measurements["difference"] = measurements["target"] - homogeneous
+        return measurements
+
+    def _recording_measurement_export(self) -> dict[str, np.ndarray] | None:
+        if not self._selected_reference_entry or not self._selected_target_entry:
+            return None
+        try:
+            from pyeidors.data.frame_io import read_frame_csv
+
+            ref_real, _ref_imag = read_frame_csv(self._selected_reference_entry["file_path"])
+            tgt_real, _tgt_imag = read_frame_csv(self._selected_target_entry["file_path"])
+        except Exception as exc:
+            log.warning("Failed to build recording export payload: %s", exc)
+            return None
+        homogeneous = np.asarray(ref_real, dtype=float).reshape(-1)
+        target = np.asarray(tgt_real, dtype=float).reshape(-1)
+        return {
+            "homogeneous": homogeneous,
+            "target": target,
+            "difference": target - homogeneous,
+        }
+
+    def _interop_export_snapshots(self) -> dict[str, dict[str, object]]:
+        simulation_cfg = self._current_sim_forward_model_config()
+        simulation_measurements = self._simulation_measurement_export()
+        simulation_geometry = None
+        simulation_notes: list[str] = []
+        if self._last_fwd_result is not None and not self._last_fwd_result.error_msg:
+            try:
+                simulation_geometry = build_geometry_payload_from_result(
+                    node_coords=self._last_fwd_result.node_coords,
+                    cell_connectivity=self._last_fwd_result.cell_connectivity,
+                    forward_model_config=simulation_cfg,
+                    truth_elem_data=self._last_fwd_result.ground_truth_conductivity,
+                    background=simulation_cfg.background_conductivity,
+                    mesh_name="simulation_export",
+                    scenario_name="simulation_forward_result",
+                )
+            except Exception as exc:
+                simulation_notes.append(f"无法自动生成 simulation geometry.mat：{exc}")
+
+        recording_notes: list[str] = []
+        recording_measurements = self._recording_measurement_export()
+        if recording_measurements is not None:
+            recording_notes.append("当前录制导出默认使用实部边界电压，以便与 EIDORS 常见差分工作流兼容。")
+
+        snapshots: dict[str, dict[str, object]] = {
+            "simulation": {
+                "name": "Current Simulation",
+                "forward_model_config": simulation_cfg,
+                "geometry_payload": simulation_geometry,
+                "measurements": simulation_measurements,
+                "reconstruction_preset": self._interop_reconstruction_preset(),
+                "notes": simulation_notes,
+            },
+            "hardware": {
+                "name": "Current Hardware Layout",
+                "forward_model_config": self._current_hardware_forward_model_config(),
+                "geometry_payload": self._interop_geometry_asset,
+                "measurements": None,
+                "reconstruction_preset": self._interop_reconstruction_preset(),
+                "notes": ["硬件页当前默认导出布局模板；若需要几何，请先从仿真结果或 bridge 包导入 geometry 资产。"],
+            },
+            "recording": {
+                "name": "Current Recorded Frames",
+                "forward_model_config": self._current_hardware_forward_model_config(),
+                "geometry_payload": self._interop_geometry_asset,
+                "measurements": recording_measurements,
+                "reconstruction_preset": self._interop_reconstruction_preset(),
+                "notes": recording_notes,
+            },
+        }
+        return snapshots
+
+    def _apply_reconstruction_preset(self, preset: ReconstructionPreset | None) -> None:
+        if preset is None:
+            return
+        self._state.reconstruction_config.method = preset.method
+        self._state.reconstruction_config.regularization_alpha = preset.regularization_alpha
+        self._state.reconstruction_config.max_iterations = preset.max_iterations
+        self._sim_tab.inverse_problem_panel.set_config(
+            {
+                "method": preset.method,
+                "regularization_alpha": preset.regularization_alpha,
+                "max_iterations": preset.max_iterations,
+            }
+        )
+
+    def _apply_interop_import(self, target: str, loaded_bundle) -> str:
+        preview = self._interop_importer.preview_loaded_package(loaded_bundle)
+        config = preview.forward_model_config
+        self._last_imported_bundle = loaded_bundle
+        if loaded_bundle.geometry_payload is not None:
+            self._interop_geometry_asset = loaded_bundle.geometry_payload
+        if loaded_bundle.measurements is not None:
+            self._interop_measurements_asset = loaded_bundle.measurements
+        self._apply_reconstruction_preset(loaded_bundle.reconstruction_preset)
+
+        if target == "hardware":
+            self._device_config.update(
+                {
+                    "mea_mode": 3 if int(config.mesh_dimension) == 3 else 2,
+                    "n_elec": int(config.n_elec),
+                    "n_rings": int(config.n_rings),
+                    "stim_pattern": config.stim_pattern,
+                    "meas_pattern": config.meas_pattern,
+                    "rotate_meas": bool(config.rotate_meas),
+                    "use_meas_current": bool(config.use_meas_current),
+                    "use_meas_current_next": int(config.use_meas_current_next),
+                    "stim_direction": config.stim_direction,
+                    "meas_direction": config.meas_direction,
+                    "stim_first_positive": bool(config.stim_first_positive),
+                }
+            )
+            self._device_config = normalize_device_config(self._transport_type, self._device_config)
+            self._sync_state_device_config()
+            self._tab_widget.setCurrentWidget(self._hw_tab)
+            return (
+                f"已将 bridge 配置导入到硬件页：{config.display_dimension()} | "
+                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            )
+
+        if target == "simulation":
+            self._sim_forward_model_config = config
+            self._sim_tab.mesh_setup_panel.set_config(
+                {
+                    "mesh_dimension": config.mesh_dimension,
+                    "mesh_refinement": config.mesh_refinement,
+                    "n_electrodes": config.n_elec,
+                    "background_conductivity": config.background_conductivity,
+                }
+            )
+            self._sim_tab.forward_problem_panel.set_noise_level(config.noise_level)
+            self._sim_tab.results_widget.set_expected_point_count(config.point_count())
+            self._tab_widget.setCurrentWidget(self._sim_tab)
+            return (
+                f"已将 bridge 配置导入到仿真页：{config.display_dimension()} | "
+                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            )
+
+        if target == "dataset":
+            self._dataset_forward_model_config = config
+            self._dataset_tab.mesh_setup_panel.set_config(
+                {
+                    "mesh_dimension": config.mesh_dimension,
+                    "mesh_refinement": config.mesh_refinement,
+                    "n_electrodes": config.n_elec,
+                    "background_conductivity": config.background_conductivity,
+                }
+            )
+            self._dataset_tab.dataset_generator_panel.set_config({"noise_level": config.noise_level})
+            self._tab_widget.setCurrentWidget(self._dataset_tab)
+            return (
+                f"已将 bridge 配置导入到数据集页：{config.display_dimension()} | "
+                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            )
+
+        if target == "measurements":
+            if loaded_bundle.measurements is None:
+                raise RuntimeError("这个 bridge 包里没有可导入的边界电压数据。")
+            return "已缓存边界电压数据资产，后续可用于导出、对照或重构冒烟。"
+
+        if target == "geometry":
+            if loaded_bundle.geometry_payload is None:
+                raise RuntimeError("这个 bridge 包里没有 geometry.mat。")
+            return "已缓存 geometry 资产，后续导出到 EIDORS 时可直接复用。"
+
+        raise RuntimeError(f"未知导入目标：{target}")
+
+    def _run_interop_smoke_validation(self, loaded_bundle) -> str:
+        preset = loaded_bundle.reconstruction_preset or self._interop_reconstruction_preset()
+        result = self._interop_smoke_validator.validate(
+            loaded_bundle,
+            reconstruction_preset=preset,
+        )
+        return str(result.get("message", "互通烟测已完成。"))
+
+    def _open_interop_hub(self) -> None:
+        from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
+
+        dialog = InteropHubDialog(
+            self,
+            capture_service=self._interop_capture_service,
+            importer=self._interop_importer,
+            exporter=self._interop_exporter,
+            export_snapshot_provider=self._interop_export_snapshots,
+            apply_import_callback=self._apply_interop_import,
+            smoke_validate_callback=self._run_interop_smoke_validation,
+        )
+        dialog.exec()
+
     @Slot(str)
     def _on_error(self, msg: str) -> None:
         log.error(msg)
+        if "power_control" in str(msg).lower():
+            self._pending_power_commands.clear()
+            self._control_panel.set_power_state(self._state.power_status.value)
         self._state.report_error(msg)
-        summary = self._summarize_error_message(msg)
+        if str(msg).lower().startswith("connection failed:"):
+            self._state.set_connection_status(ConnectionStatus.ERROR)
+            self._conn_panel.set_connected(False)
+            self._control_panel.set_enabled(False)
+            self._workflow_toolbox.setCurrentIndex(0)
+            self._refresh_session_summary()
+        summary = self._humanize_error_message(msg)
+        self._apply_error_help(msg, summary)
         self._status_bar.showMessage(f"Error: {summary}", 15000)
 
     @staticmethod
@@ -988,13 +1420,72 @@ class EITWorkstation(QMainWindow):
                 return line
         return lines[-1]
 
+    def _humanize_error_message(self, msg: str) -> str:
+        raw = self._summarize_error_message(msg)
+        text = raw.lower()
+
+        if "no serial port detected" in text:
+            return "未检测到可用串口。请检查 USB 连接、驱动和设备供电后重新 Scan。"
+
+        if "windows 串口" in raw or "未找到串口设备" in raw or "串口 " in raw and "当前无法打开" in raw:
+            return raw
+
+        if "4g relay 服务器地址为空" in raw or "无法连接到 4g relay 服务器" in raw:
+            return raw
+
+        if "could not configure port" in text or "input/output error" in text:
+            return (
+                "串口无法配置。当前环境中该端口不可用；请优先从下拉框选择自动检测到的 COM 口，"
+                "不要手动填写 /dev/ttyS*。"
+            )
+
+        if "windows serial bridge failed" in text:
+            if (
+                "access to the port" in text
+                or "access is denied" in text
+                or "denied" in text
+                or "访问被拒绝" in raw
+                or "拒绝访问" in raw
+            ):
+                return (
+                    "Windows 串口桥接失败：该 COM 口可能仍被其他程序占用；"
+                    "如果你刚关闭本软件，请等待 1-2 秒后重试。"
+                )
+            if "cannot find the file" in text or "cannot find" in text:
+                return "Windows 串口桥接失败：当前找不到这个 COM 口，请重新插拔设备后再 Scan。"
+            return "Windows 主机串口桥接启动失败，请重新 Scan 后重试。"
+
+        if "relay host is empty" in text:
+            return "4G Relay 服务器地址为空，请填写可访问的 host。"
+
+        if "connection refused" in text:
+            return "4G Relay 服务器拒绝连接，请检查 host/port 是否正确以及服务是否已启动。"
+
+        if "timed out" in text and "relay" in text:
+            return "4G Relay 连接超时，请检查网络、服务器地址和目标设备是否在线。"
+
+        if "permission denied" in text or "access is denied" in text:
+            return "串口访问被拒绝，可能被其他程序占用。请关闭占用进程后重试。"
+
+        return raw
+
+    def _apply_error_help(self, msg: str, summary: str) -> None:
+        lowered = str(msg).lower()
+        if "serial" in self._transport_type:
+            if "connection failed:" in lowered or "serial" in lowered or "com" in lowered:
+                self._conn_panel.set_serial_hint(summary)
+        if self._transport_type == "relay" and (
+            "connection failed:" in lowered or "relay" in lowered
+        ):
+            self._conn_panel.set_relay_hint(summary)
+
     # ---- Simulation handlers ----
 
     @Slot()
     def _on_run_forward(self) -> None:
         mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
         inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
-        noise = self._sim_tab.forward_problem_panel.noise_level
+        forward_cfg = self._current_sim_forward_model_config()
 
         request = ForwardSolverRequest(
             mesh_dimension=mesh_cfg["mesh_dimension"],
@@ -1002,7 +1493,8 @@ class EITWorkstation(QMainWindow):
             n_electrodes=mesh_cfg["n_electrodes"],
             background_conductivity=mesh_cfg["background_conductivity"],
             inhomogeneities=inhomogeneities,
-            noise_level=noise,
+            noise_level=forward_cfg.noise_level,
+            forward_model_config=forward_cfg.to_mapping(),
         )
         self._sim_state.forward_running = True
         self._sim_tab.forward_problem_panel.set_running(True)
@@ -1022,6 +1514,7 @@ class EITWorkstation(QMainWindow):
         self._sim_tab.forward_problem_panel.set_status(
             f"Done: {result.n_elements} elements, {result.n_measurements} measurements"
         )
+        self._sim_tab.metrics_panel.clear()
         self._sim_tab.results_widget.update_forward_result(result)
 
     @Slot()
@@ -1056,7 +1549,7 @@ class EITWorkstation(QMainWindow):
             frame_index=1,
         )
 
-        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        forward_cfg = self._current_sim_forward_model_config()
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
@@ -1064,17 +1557,13 @@ class EITWorkstation(QMainWindow):
             method=inv_cfg["method"],
             regularization_alpha=inv_cfg["regularization_alpha"],
             max_iterations=inv_cfg["max_iterations"],
-            mesh_dimension=mesh_cfg["mesh_dimension"],
-            mesh_refinement=int(1.0 / mesh_cfg["mesh_refinement"]),
+            mesh_dimension=forward_cfg.mesh_dimension,
+            mesh_refinement=int(1.0 / max(forward_cfg.mesh_refinement, 1e-6)),
             metadata={
+                **forward_cfg.to_mapping(),
+                **measurement_layout_from_config(forward_cfg.to_mapping()),
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
-                "n_elec": mesh_cfg["n_electrodes"],
-                "stim_pattern": "{ad}",
-                "meas_pattern": "{ad}",
-                "drive_mode": "line_current_density",
-                "drive_value": 1.0,
-                "geometry_scale_to_m": 1.0,
             },
         )
         self._recon_ctrl.reconstruct(request)
@@ -1096,6 +1585,10 @@ class EITWorkstation(QMainWindow):
                 reconstructed_conductivity=recon_result.conductivity,
                 node_coords=recon_result.node_coords,
                 cell_connectivity=recon_result.cell_connectivity,
+            )
+            self._sim_tab.metrics_panel.update_metrics(
+                self._last_fwd_result.ground_truth_conductivity,
+                recon_result.conductivity,
             )
 
         # Disconnect previous one-shot connections and reconnect
@@ -1133,13 +1626,14 @@ class EITWorkstation(QMainWindow):
 
     @Slot()
     def _on_generate_dataset(self) -> None:
-        panel_cfg = self._sim_tab.dataset_generator_panel.get_config()
-        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
+        mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
 
         if not panel_cfg["output_dir"]:
             self._on_error("Please specify an output directory for the dataset.")
             return
 
+        forward_cfg = self._current_dataset_forward_model_config()
         config = DatasetGeneratorConfig(
             n_samples=panel_cfg["n_samples"],
             output_dir=panel_cfg["output_dir"],
@@ -1154,19 +1648,29 @@ class EITWorkstation(QMainWindow):
             conductivity_max=panel_cfg["conductivity_max"],
             background_conductivity_min=panel_cfg["background_conductivity_min"],
             background_conductivity_max=panel_cfg["background_conductivity_max"],
-            noise_level=panel_cfg["noise_level"],
-            mesh_dimension=mesh_cfg["mesh_dimension"],
-            mesh_refinement=mesh_cfg["mesh_refinement"],
-            n_electrodes=mesh_cfg["n_electrodes"],
+            noise_level=forward_cfg.noise_level,
+            mesh_dimension=forward_cfg.mesh_dimension,
+            mesh_refinement=forward_cfg.mesh_refinement,
+            n_electrodes=forward_cfg.n_elec,
         )
         self._sim_state.dataset_running = True
-        self._sim_tab.dataset_generator_panel.set_generating(True)
-        self._dataset_ctrl.generate(DatasetGeneratorRequest(config=config))
+        self._dataset_tab.set_generating(True)
+        self._dataset_tab.set_progress(0, panel_cfg["n_samples"])
+        self._dataset_ctrl.generate(
+            DatasetGeneratorRequest(
+                config=config,
+                forward_model_config=forward_cfg.to_mapping(),
+            )
+        )
 
     @Slot(int)
     def _on_dataset_done(self, total: int) -> None:
         self._sim_state.dataset_running = False
-        self._sim_tab.dataset_generator_panel.set_generating(False)
+        self._dataset_tab.set_generating(False)
+        if total > 0:
+            self._dataset_tab.set_progress(total, total)
+        else:
+            self._dataset_tab.set_progress(0, 0)
         self._status_bar.showMessage(f"Dataset generation complete: {total} samples.", 10000)
 
     def closeEvent(self, event) -> None:
