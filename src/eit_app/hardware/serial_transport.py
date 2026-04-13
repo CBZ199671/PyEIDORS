@@ -304,17 +304,26 @@ class C8051Device(AbstractHardwareDevice):
         return caps
 
     def _prepare_measurement_state(self) -> None:
+        # Match the C# host sequence: power on → wait → stim amp → wait →
+        # voltage amp → wait, each step requires the hardware to finish
+        # processing before the next command is sent.
         self.power_control(True)
         settle_sec = float(self._config.get("power_on_settle_sec", 0.8))
         if settle_sec > 0:
             time.sleep(settle_sec)
 
+        cmd_settle = float(self._config.get("command_settle_sec", 0.15))
+
         if bool(self._config.get("apply_profile_on_start", True)):
             self.set_stim_amplitude(int(self._config.get("stim_amp_level", 1)))
+            time.sleep(cmd_settle)
+
             self.set_voltage_amp_levels(
                 int(self._config.get("voltage_amp_level_1", 7)),
                 int(self._config.get("voltage_amp_level_2", 7)),
             )
+            time.sleep(cmd_settle)
+
         self._prepared = True
 
     def _read_legacy_one_shot_frame(self) -> RawFrame:
