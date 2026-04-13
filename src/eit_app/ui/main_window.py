@@ -554,7 +554,18 @@ class EITWorkstation(QMainWindow):
         """Handle completed auto-reconstruction during acquisition."""
         self._auto_recon_busy = False
         if result.error_msg:
-            log.warning("Auto-reconstruction failed: %s", result.error_msg)
+            # Disable auto-reconstruction on fatal errors (e.g. missing DOLFINx)
+            # to prevent spamming the same error every frame.
+            if self._auto_reconstruct:
+                self._auto_reconstruct = False
+                self._status_bar.showMessage(
+                    "Auto-reconstruction disabled: " + str(result.error_msg)[:80],
+                    10000,
+                )
+                log.warning(
+                    "Auto-reconstruction disabled after error: %s",
+                    result.error_msg,
+                )
             return
         self._recon_widget.update_reconstruction(result)
         if hasattr(result, "measured") and result.measured is not None:
