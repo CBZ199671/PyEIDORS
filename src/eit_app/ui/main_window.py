@@ -609,14 +609,14 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_stim_amplitude(level)
         self._refresh_session_summary()
 
-    @Slot(int, int)
-    def _on_voltage_amp_changed(self, level_1: int, level_2: int) -> None:
-        self._device_config["voltage_amp_level_1"] = level_1
-        self._device_config["voltage_amp_level_2"] = level_2
-        self._device_config["contact_impedance_amp_level"] = level_1
+    @Slot(int)
+    def _on_voltage_amp_changed(self, level: int) -> None:
+        self._device_config["voltage_amp_level_1"] = level
+        self._device_config["voltage_amp_level_2"] = level
+        self._device_config["contact_impedance_amp_level"] = level
         self._sync_state_device_config()
         self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
-        self._device_ctrl.set_voltage_amp_levels(level_1, level_2)
+        self._device_ctrl.set_voltage_amp_levels(level, level)
         self._refresh_session_summary()
 
     @Slot(dict)

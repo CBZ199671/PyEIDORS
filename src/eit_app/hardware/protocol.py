@@ -266,23 +266,26 @@ def adc_to_voltage(
 def parse_measurement_frame(
     data: bytes,
     *,
-    gain_level_1: int = 0,
-    gain_level_2: int = 0,
+    gain_level_1: int = 7,
+    gain_level_2: int | None = None,
     spec: FrameSpec = DEFAULT_FRAME_SPEC,
     params: ADCParams = DEFAULT_ADC_PARAMS,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Parse a legacy 208-point frame into calibrated real/imag arrays."""
+    """Parse one calibrated measurement frame into real/imag arrays.
+
+    Uses a single uniform gain for all measurement points.
+    ``gain_level_2`` is accepted for backward compatibility but ignored;
+    ``gain_level_1`` is applied to every point.
+    """
     expected = spec.points_per_frame * spec.bytes_per_point
     if len(data) != expected:
         raise ValueError(f"Expected {expected} bytes, got {len(data)}")
 
-    gain_a = VOLTAGE_AMP_FACTORS[gain_level_1]
-    gain_b = VOLTAGE_AMP_FACTORS[gain_level_2]
+    gain = VOLTAGE_AMP_FACTORS[gain_level_1]
     real = np.empty(spec.points_per_frame, dtype=np.float64)
     imag = np.empty(spec.points_per_frame, dtype=np.float64)
 
     for i in range(spec.points_per_frame):
-        gain = gain_a if i % 13 in (0, 12) else gain_b
         off = i * spec.bytes_per_point
         r, im = adc_to_voltage(
             data[off],

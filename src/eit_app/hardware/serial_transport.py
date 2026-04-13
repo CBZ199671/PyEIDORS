@@ -186,7 +186,6 @@ class C8051Device(AbstractHardwareDevice):
         real, imag = parse_measurement_frame(
             result.data,
             gain_level_1=int(self._config.get("voltage_amp_level_1", 7)),
-            gain_level_2=int(self._config.get("voltage_amp_level_2", 7)),
             spec=self._frame_spec(),
         )
         return RawFrame(
@@ -345,8 +344,7 @@ class C8051Device(AbstractHardwareDevice):
                     self._start_variant = variant_name
                     real, imag = parse_measurement_frame(
                         result.data,
-                        gain_level_1=int(self._config.get("voltage_amp_level_1", 0)),
-                        gain_level_2=int(self._config.get("voltage_amp_level_2", 0)),
+                        gain_level_1=int(self._config.get("voltage_amp_level_1", 7)),
                         spec=self._frame_spec(),
                     )
                     return RawFrame(

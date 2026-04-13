@@ -32,14 +32,14 @@ _STIM_AMP_LABELS = [
 ]
 
 _VOLTAGE_AMP_LABELS = [
-    "0 - 0.097x",
-    "1 - 0.175x",
-    "2 - 0.327x",
-    "3 - 0.623x",
-    "4 - 1.238x",
-    "5 - 2.460x",
-    "6 - 4.880x",
-    "7 - 9.000x",
+    "0.08x",
+    "0.16x",
+    "0.32x",
+    "0.63x",
+    "1.26x",
+    "2.52x",
+    "5.01x",
+    "10.00x",
 ]
 
 
@@ -58,7 +58,7 @@ class ControlPanel(QGroupBox):
 
     frequency_changed = Signal(int)
     stim_amp_changed = Signal(int)
-    voltage_amp_changed = Signal(int, int)
+    voltage_amp_changed = Signal(int)
     power_toggled = Signal(bool)
     measurement_layout_changed = Signal(dict)
     single_point_requested = Signal()
@@ -175,22 +175,18 @@ class ControlPanel(QGroupBox):
         )
         layout.addWidget(self._stim_block)
 
-        self._vamp_combo_1 = AutoCloseComboBox()
-        self._vamp_combo_1.addItems(_VOLTAGE_AMP_LABELS)
-        self._vamp_combo_1.setCurrentIndex(7)
-        self._vamp_combo_2 = AutoCloseComboBox()
-        self._vamp_combo_2.addItems(_VOLTAGE_AMP_LABELS)
-        self._vamp_combo_2.setCurrentIndex(7)
-        self._vamp_apply = QPushButton("Apply gains")
+        self._vamp_combo = AutoCloseComboBox()
+        self._vamp_combo.addItems(_VOLTAGE_AMP_LABELS)
+        self._vamp_combo.setCurrentIndex(7)
+        self._vamp_apply = QPushButton("Set")
         self._vamp_apply.clicked.connect(
-            lambda: self.voltage_amp_changed.emit(
-                self._vamp_combo_1.currentIndex(),
-                self._vamp_combo_2.currentIndex(),
-            )
+            lambda: self.voltage_amp_changed.emit(self._vamp_combo.currentIndex())
         )
         set_button_role(self._vamp_apply, "subtle")
-        self._voltage_gain_section = self._voltage_gain_block()
-        layout.addWidget(self._voltage_gain_section)
+        self._voltage_gain_block_w = self._field_block(
+            "Voltage gain", self._inline_row(self._vamp_combo, self._vamp_apply)
+        )
+        layout.addWidget(self._voltage_gain_block_w)
 
         self._diag_header = QLabel("Diagnostics")
         set_section_header(self._diag_header)
@@ -254,34 +250,6 @@ class ControlPanel(QGroupBox):
         block_layout.addWidget(field_widget)
         return block
 
-    def _voltage_gain_block(self) -> QWidget:
-        block = QWidget()
-        block_layout = QVBoxLayout(block)
-        block_layout.setContentsMargins(0, 0, 0, 0)
-        block_layout.setSpacing(4)
-
-        title = QLabel("Voltage amps:")
-        title.setStyleSheet("color: #4d5f75; font-weight: 600;")
-        block_layout.addWidget(title)
-
-        combo_grid = QGridLayout()
-        combo_grid.setContentsMargins(0, 0, 0, 0)
-        combo_grid.setHorizontalSpacing(6)
-        combo_grid.setVerticalSpacing(4)
-        combo_grid.setColumnStretch(0, 1)
-        combo_grid.setColumnStretch(1, 1)
-
-        left_label = QLabel("V1")
-        left_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
-        right_label = QLabel("V2")
-        right_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
-        combo_grid.addWidget(left_label, 0, 0)
-        combo_grid.addWidget(right_label, 0, 1)
-        combo_grid.addWidget(self._vamp_combo_1, 1, 0)
-        combo_grid.addWidget(self._vamp_combo_2, 1, 1)
-        block_layout.addLayout(combo_grid)
-        block_layout.addWidget(self._vamp_apply)
-        return block
 
     def _hardware_layout_block(self) -> QWidget:
         block = QWidget()
