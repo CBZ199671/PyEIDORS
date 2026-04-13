@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
+from eit_app.measurement_layout import measurement_layout_from_config
+
 from .relay_transport import RelayTransport
+from .serial_port_discovery import resolve_serial_port_name, running_in_wsl
 from .serial_transport import C8051Device, SerialTransport
 from .simulator import SimulatorDevice
 from .types import (
@@ -14,11 +18,15 @@ from .types import (
     DEFAULT_USER_ID,
     STIM_AMP_VALUES_UA,
 )
+from .windows_serial_transport import WindowsSerialTransport
+
+_WINDOWS_COM_RE = re.compile(r"COM\d+$", re.IGNORECASE)
 
 
 def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict[str, Any]:
     """Fill in missing device configuration with runtime defaults."""
     normalized = dict(config)
+    raw_port = str(normalized.get("port", "")).strip()
     normalized.setdefault("transport_type", transport_type)
     normalized.setdefault("server_host", "127.0.0.1")
     normalized.setdefault("baudrate", 115200)
@@ -28,7 +36,7 @@ def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict
     normalized.setdefault("mea_mode", DEFAULT_MEA_MODE)
     normalized.setdefault("start_variant", "3byte")
     normalized.setdefault("power_on_settle_sec", 0.8)
-    normalized.setdefault("apply_profile_on_start", False)
+    normalized.setdefault("apply_profile_on_start", True)
     normalized.setdefault("frequency_hz", 1000)
     normalized.setdefault("stim_amp_level", 1)
     normalized["stim_amp_uA"] = int(
@@ -37,13 +45,18 @@ def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict
             int(normalized.get("stim_amp_uA", 100)),
         )
     )
-    normalized.setdefault("voltage_amp_level_1", 3)
-    normalized.setdefault("voltage_amp_level_2", 5)
+    normalized.setdefault("voltage_amp_level_1", 7)
+    normalized.setdefault("voltage_amp_level_2", 7)
     normalized.setdefault("contact_impedance_amp_level", normalized["voltage_amp_level_1"])
     normalized.setdefault("protocol_version", "legacy-v1")
     normalized.setdefault("command_retries", 2)
     normalized.setdefault("legacy_frame_timeout_sec", 20.0)
     normalized.setdefault("legacy_frame_retries", 2)
+    normalized.update(measurement_layout_from_config(normalized))
+    if transport_type == "serial":
+        normalized["port"] = resolve_serial_port_name(raw_port)
+        if "port_display" not in normalized and raw_port:
+            normalized["port_display"] = raw_port
     return normalized
 
 
@@ -59,13 +72,30 @@ def create_device_from_config(
             fps=float(normalized.get("simulator_fps", 30.0)),
             noise_std=float(normalized.get("simulator_noise_std", 0.002)),
             seed=normalized.get("simulator_seed"),
+            n_electrodes=int(normalized.get("n_elec", normalized.get("n_electrodes", 16))),
+            n_rings=int(normalized.get("n_rings", 1)),
+            stim_pattern=normalized.get("stim_pattern", "{ad}"),
+            meas_pattern=normalized.get("meas_pattern", "{ad}"),
+            use_meas_current=bool(normalized.get("use_meas_current", False)),
+            use_meas_current_next=int(normalized.get("use_meas_current_next", 0)),
+            rotate_meas=bool(normalized.get("rotate_meas", True)),
+            stim_direction=str(normalized.get("stim_direction", "ccw")),
+            meas_direction=str(normalized.get("meas_direction", "ccw")),
+            stim_first_positive=bool(normalized.get("stim_first_positive", False)),
         )
 
     if transport_type == "serial":
-        transport = SerialTransport(
-            normalized.get("port", ""),
-            int(normalized.get("baudrate", 115200)),
-        )
+        port_name = str(normalized.get("port", "")).strip()
+        if running_in_wsl() and _WINDOWS_COM_RE.fullmatch(port_name):
+            transport = WindowsSerialTransport(
+                port_name,
+                int(normalized.get("baudrate", 115200)),
+            )
+        else:
+            transport = SerialTransport(
+                port_name,
+                int(normalized.get("baudrate", 115200)),
+            )
         return C8051Device(transport=transport, device_config=normalized)
 
     if transport_type == "relay":
