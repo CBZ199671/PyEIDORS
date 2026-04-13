@@ -58,8 +58,15 @@ class SerialTransport(AbstractTransport):
         if _serial is None:
             raise ImportError("pyserial is required: pip install pyserial")
         self._serial = _serial.Serial(
-            self._port, self._baudrate, timeout=2.0, write_timeout=2.0
+            self._port,
+            self._baudrate,
+            timeout=2.0,
+            write_timeout=2.0,
+            dsrdtr=False,
+            rtscts=False,
         )
+        # Prevent DTR toggle from resetting the C8051 board
+        self._serial.dtr = False
 
     def close(self) -> None:
         if self._serial is not None and self._serial.is_open:
@@ -70,6 +77,7 @@ class SerialTransport(AbstractTransport):
         if self._serial is None:
             raise RuntimeError("Transport not open")
         self._serial.write(data)
+        self._serial.flush()
 
     def read(self, size: int, timeout: float = 2.0) -> bytes:
         if self._serial is None:
