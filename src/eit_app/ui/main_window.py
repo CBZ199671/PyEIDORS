@@ -136,6 +136,9 @@ class EITWorkstation(QMainWindow):
         self._auto_reconstruct = False
         self._reference_frame: FrameData | None = None
         self._auto_recon_busy = False
+
+        # Database-driven reconstruction state
+        self._pending_db_reconstruction: dict | None = None
         self._pending_auto_target_frame: FrameData | None = None
 
         self._build_ui()
@@ -261,6 +264,7 @@ class EITWorkstation(QMainWindow):
         self._recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
         self._recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
         self._recon_ctrl.reconstruction_done.connect(self._on_auto_reconstruction_done)
+        self._recon_ctrl.reconstruction_done.connect(self._on_db_reconstruction_done)
         self._recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
         )
@@ -270,6 +274,12 @@ class EITWorkstation(QMainWindow):
         self._frame_browser.target_selected.connect(self._on_target_selected)
         self._frame_browser.frame_clicked.connect(self._on_frame_clicked)
         self._frame_browser.cleared.connect(self._on_frame_browser_cleared)
+
+        # Database tab: user-driven reconstruction on historical data
+        self._db_tab.reconstruct_requested.connect(self._on_db_reconstruct_requested)
+        self._db_tab.open_containing_folder_requested.connect(
+            self._on_open_session_folder
+        )
 
         self._state.connection_status_changed.connect(self._status_bar.on_connection_changed)
         self._state.power_status_changed.connect(self._status_bar.on_power_status_changed)
@@ -1436,6 +1446,211 @@ class EITWorkstation(QMainWindow):
             },
         )
         self._recon_ctrl.reconstruct(request)
+
+    @Slot(dict)
+    def _on_db_reconstruct_requested(self, config: dict) -> None:
+        """User triggered a reconstruction from the Database tab."""
+        target_entry = config.get("target_entry")
+        if not target_entry:
+            self._on_error("Reconstruction requires at least a target frame.")
+            return
+
+        ref_entry = config.get("reference_entry")
+        method = config.get("method", "gn-difference")
+        use_part = config.get("use_part", "real")
+
+        try:
+            from pyeidors.data.frame_io import read_frame_csv
+            from eit_app.models.frame_model import FrameData
+
+            tgt_path = target_entry.get("csv_path") or target_entry.get("file_path")
+            tgt_real, tgt_imag = read_frame_csv(tgt_path)
+            tgt_frame = FrameData(
+                real=tgt_real,
+                imag=tgt_imag,
+                timestamp=float(target_entry.get("timestamp", 0.0)),
+                frame_index=int(target_entry.get("frame_index", 0)),
+            )
+
+            if ref_entry is not None:
+                ref_path = ref_entry.get("csv_path") or ref_entry.get("file_path")
+                ref_real, ref_imag = read_frame_csv(ref_path)
+                ref_frame = FrameData(
+                    real=ref_real,
+                    imag=ref_imag,
+                    timestamp=float(ref_entry.get("timestamp", 0.0)),
+                    frame_index=int(ref_entry.get("frame_index", 0)),
+                )
+            else:
+                # Absolute method — reuse target as a placeholder reference
+                # (the worker picks gn-absolute branch and ignores reference)
+                ref_frame = tgt_frame
+        except Exception as exc:
+            self._on_error(f"Failed to load frames for reconstruction: {exc}")
+            return
+
+        rc = self._state.reconstruction_config
+        request = ReconstructionRequest(
+            reference_frame=ref_frame,
+            target_frame=tgt_frame,
+            use_part=use_part,
+            method=method,
+            regularization_alpha=float(config.get("regularization_alpha", 1.0)),
+            max_iterations=int(config.get("max_iterations", 10)),
+            mesh_dimension=rc.mesh_dimension,
+            mesh_refinement=rc.mesh_refinement,
+            metadata={
+                **self._measurement_layout_config(),
+                "difference_mode": "raw",
+                "difference_orientation": "target_minus_reference",
+                "drive_mode": "total_current",
+                "drive_value": 1.0e-5,
+                "geometry_scale_to_m": float(
+                    self._device_config.get("geometry_scale_to_m", 1.0)
+                ),
+                "radius": float(self._device_config.get("radius", 1.0)),
+                "contact_impedance": float(
+                    self._device_config.get("contact_impedance", 0.01)
+                ),
+                "electrode_length_m_override": self._device_config.get(
+                    "electrode_length_m_override"
+                ),
+                "electrode_coverage": float(
+                    self._device_config.get("electrode_coverage", 0.5)
+                ),
+                "db_reconstruction": True,
+                "db_output_dir": config.get("output_dir"),
+                "db_save_recon_image": bool(config.get("save_recon_image", False)),
+                "db_save_voltage_fit": bool(config.get("save_voltage_fit", False)),
+                "db_method_label": config.get("method_label", method),
+            },
+        )
+        self._pending_db_reconstruction = dict(config)
+        self._status_bar.showMessage(
+            f"Running {config.get('method_label', method)}…", 0
+        )
+        self._recon_ctrl.reconstruct(request)
+
+    @Slot(object)
+    def _on_db_reconstruction_done(self, result: object) -> None:
+        """Persist DB-triggered reconstruction output if requested."""
+        config = self._pending_db_reconstruction
+        if config is None:
+            return
+        self._pending_db_reconstruction = None
+
+        if getattr(result, "error_msg", None):
+            self._status_bar.showMessage(
+                f"Reconstruction failed: {result.error_msg}", 10000
+            )
+            return
+
+        self._status_bar.showMessage(
+            f"Reconstruction complete: {config.get('method_label', '')}", 6000
+        )
+
+        # Update the hardware-tab reconstruction display so the user sees it
+        try:
+            self._recon_widget.update_reconstruction(result)
+        except Exception:
+            pass
+
+        output_dir = config.get("output_dir")
+        if not output_dir:
+            return
+
+        try:
+            from datetime import datetime
+
+            out = Path(output_dir)
+            out.mkdir(parents=True, exist_ok=True)
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            method = str(config.get("method", "recon")).replace("-", "_")
+            tgt_idx = (config.get("target_entry") or {}).get("frame_index", "?")
+            prefix = f"{stamp}_{method}_tgt{tgt_idx}"
+
+            if config.get("save_recon_image"):
+                self._save_reconstruction_image(result, out / f"{prefix}_conductivity.png")
+            if config.get("save_voltage_fit"):
+                self._save_voltage_fit_plot(result, out / f"{prefix}_voltage_fit.png")
+
+            self._status_bar.showMessage(f"Saved outputs to {out}", 8000)
+        except Exception as exc:
+            log.warning("Failed to save reconstruction outputs: %s", exc)
+            self._status_bar.showMessage(f"Save failed: {exc}", 8000)
+
+    def _save_reconstruction_image(self, result, path: Path) -> None:
+        """Render conductivity as PNG using matplotlib tripcolor."""
+        import matplotlib
+        matplotlib.use("Agg", force=False)
+        from matplotlib import pyplot as plt
+        from matplotlib.tri import Triangulation
+
+        sigma = np.asarray(getattr(result, "conductivity", []), dtype=float).reshape(-1)
+        coords = np.asarray(getattr(result, "node_coords", []), dtype=float)
+        cells = np.asarray(getattr(result, "cell_connectivity", []), dtype=int)
+        if sigma.size == 0 or coords.size == 0 or cells.size == 0:
+            return
+
+        fig, ax = plt.subplots(figsize=(6, 6), dpi=150)
+        fig.patch.set_facecolor("#f4f7fb")
+        ax.set_facecolor("#fbfdff")
+        tri = Triangulation(coords[:, 0], coords[:, 1], cells)
+        if sigma.size == len(cells):
+            tpc = ax.tripcolor(tri, sigma, shading="flat", cmap="viridis")
+        else:
+            tpc = ax.tripcolor(tri, sigma, shading="gouraud", cmap="viridis")
+        ax.set_aspect("equal")
+        ax.set_title("Conductivity reconstruction")
+        fig.colorbar(tpc, ax=ax, label="S/m")
+        fig.tight_layout()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    def _save_voltage_fit_plot(self, result, path: Path) -> None:
+        """Render measured vs reconstructed boundary voltages as PNG."""
+        import matplotlib
+        matplotlib.use("Agg", force=False)
+        from matplotlib import pyplot as plt
+
+        measured = getattr(result, "measured", None)
+        simulated = getattr(result, "simulated", None)
+        if measured is None:
+            return
+        measured = np.asarray(measured, dtype=float).reshape(-1)
+        x = np.arange(1, measured.size + 1)
+
+        fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
+        fig.patch.set_facecolor("#f4f7fb")
+        ax.set_facecolor("#fbfdff")
+        ax.plot(x, measured, color="#4ecdc4", label="Measured")
+        if simulated is not None:
+            sim = np.asarray(simulated, dtype=float).reshape(-1)
+            ax.plot(x, sim, color="#ff6b6b", linestyle="--", label="Reconstructed fit")
+        ax.set_xlabel("Measurement index")
+        ax.set_ylabel("Voltage (V)")
+        ax.set_title("Boundary voltage fit")
+        ax.grid(True, alpha=0.3)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(path, dpi=150, bbox_inches="tight")
+        plt.close(fig)
+
+    @Slot(str)
+    def _on_open_session_folder(self, folder: str) -> None:
+        """Open a session folder using the OS file manager."""
+        import subprocess
+        import sys
+        try:
+            if sys.platform == "win32":
+                import os
+                os.startfile(folder)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception as exc:
+            self._on_error(f"Failed to open folder: {exc}")
 
     def _open_settings(self) -> None:
         from eit_app.ui.dialogs.settings_dialog import SettingsDialog

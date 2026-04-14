@@ -186,11 +186,14 @@ class DatabaseTab(QWidget):
     load_as_reference_requested = Signal(dict)
     load_as_target_requested = Signal(dict)
     open_containing_folder_requested = Signal(str)
+    reconstruct_requested = Signal(dict)  # config dict from ReconstructionDialog
 
     def __init__(self, db_controller, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._db_ctrl = db_controller
         self._current_session_id: int | None = None
+        self._selected_reference: dict | None = None
+        self._selected_target: dict | None = None
         self._build_ui()
         self._connect_signals()
         self.refresh_sessions()
@@ -368,17 +371,32 @@ class DatabaseTab(QWidget):
 
         frames_layout.addWidget(self._frame_table, 1)
 
+        # Selection status line
+        self._selection_status = QLabel(
+            "Select a frame, then click 'Set as Reference' or 'Set as Target'."
+        )
+        set_hint_text(self._selection_status)
+        self._selection_status.setWordWrap(True)
+        frames_layout.addWidget(self._selection_status)
+
         frame_actions = QHBoxLayout()
         frame_actions.setSpacing(6)
-        self._as_ref_btn = QPushButton("Load as Reference")
+        self._as_ref_btn = QPushButton("Set as Reference")
         set_button_role(self._as_ref_btn, "primary")
         self._as_ref_btn.setEnabled(False)
-        self._as_tgt_btn = QPushButton("Load as Target")
+        self._as_tgt_btn = QPushButton("Set as Target")
         set_button_role(self._as_tgt_btn, "success")
         self._as_tgt_btn.setEnabled(False)
+        self._reconstruct_btn = QPushButton("Reconstruct…")
+        set_button_role(self._reconstruct_btn, "danger")
+        self._reconstruct_btn.setEnabled(False)
+        self._clear_sel_btn = QPushButton("Clear")
+        set_button_role(self._clear_sel_btn, "subtle")
         frame_actions.addWidget(self._as_ref_btn)
         frame_actions.addWidget(self._as_tgt_btn)
+        frame_actions.addWidget(self._reconstruct_btn)
         frame_actions.addStretch()
+        frame_actions.addWidget(self._clear_sel_btn)
         frames_layout.addLayout(frame_actions)
 
         splitter.addWidget(frames_box)
@@ -421,8 +439,10 @@ class DatabaseTab(QWidget):
         self._frame_table.clicked.connect(self._on_frame_clicked)
 
         self._open_folder_btn.clicked.connect(self._on_open_folder)
-        self._as_ref_btn.clicked.connect(self._on_load_as_reference)
-        self._as_tgt_btn.clicked.connect(self._on_load_as_target)
+        self._as_ref_btn.clicked.connect(self._on_set_reference)
+        self._as_tgt_btn.clicked.connect(self._on_set_target)
+        self._reconstruct_btn.clicked.connect(self._on_open_reconstruct_dialog)
+        self._clear_sel_btn.clicked.connect(self._on_clear_selection)
 
         self._db_ctrl.session_added.connect(self._on_session_added)
         self._db_ctrl.frame_added.connect(self._on_frame_added)
@@ -523,15 +543,48 @@ class DatabaseTab(QWidget):
         if folder:
             self.open_containing_folder_requested.emit(folder)
 
-    def _on_load_as_reference(self) -> None:
+    def _on_set_reference(self) -> None:
         frame = self._selected_frame()
         if frame is not None:
+            self._selected_reference = dict(frame)
+            self._update_selection_status()
             self.load_as_reference_requested.emit(dict(frame))
 
-    def _on_load_as_target(self) -> None:
+    def _on_set_target(self) -> None:
         frame = self._selected_frame()
         if frame is not None:
+            self._selected_target = dict(frame)
+            self._update_selection_status()
             self.load_as_target_requested.emit(dict(frame))
+
+    def _on_clear_selection(self) -> None:
+        self._selected_reference = None
+        self._selected_target = None
+        self._update_selection_status()
+
+    def _on_open_reconstruct_dialog(self) -> None:
+        from eit_app.ui.dialogs.reconstruction_dialog import ReconstructionDialog
+
+        dialog = ReconstructionDialog(
+            reference_entry=self._selected_reference,
+            target_entry=self._selected_target,
+            parent=self,
+        )
+        dialog.run_requested.connect(self.reconstruct_requested)
+        dialog.exec()
+
+    def _update_selection_status(self) -> None:
+        ref_txt = self._format_selection(self._selected_reference, "Reference")
+        tgt_txt = self._format_selection(self._selected_target, "Target")
+        self._selection_status.setText(f"{ref_txt}   |   {tgt_txt}")
+        self._reconstruct_btn.setEnabled(self._selected_target is not None)
+
+    @staticmethod
+    def _format_selection(entry: dict | None, role: str) -> str:
+        if entry is None:
+            return f"{role}: <unset>"
+        idx = entry.get("frame_index", "?")
+        return f"{role}: #{idx}"
 
     def _on_session_added(self, session_id: int, row: dict) -> None:
         row = dict(row)
