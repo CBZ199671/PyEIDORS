@@ -197,37 +197,40 @@ class DatabaseTab(QWidget):
 
     def _build_ui(self) -> None:
         root = QHBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(6)
+        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(8)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
         splitter.addWidget(self._build_filter_panel())
         splitter.addWidget(self._build_center_panel())
         splitter.addWidget(self._build_preview_panel())
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 0)
-        splitter.setSizes([280, 760, 420])
+        splitter.setStretchFactor(1, 3)
+        splitter.setStretchFactor(2, 2)
+        splitter.setSizes([260, 700, 440])
         root.addWidget(splitter)
 
     def _build_filter_panel(self) -> QWidget:
         box = QGroupBox("Filters")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(10, 14, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 18, 12, 12)
+        layout.setSpacing(10)
 
-        hint = QLabel("Search and filter historical sessions.")
+        hint = QLabel("Search and filter recorded sessions.")
         hint.setWordWrap(True)
         set_hint_text(hint)
         layout.addWidget(hint)
 
         form = QFormLayout()
-        form.setSpacing(8)
+        form.setSpacing(10)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._filter_name = QLineEdit()
-        self._filter_name.setPlaceholderText("e.g. tank, test_for_gui")
-        form.addRow("Name contains:", self._filter_name)
+        self._filter_name.setPlaceholderText("tank, test_for_gui …")
+        form.addRow("Name:", self._filter_name)
 
         self._filter_freq = QLineEdit()
         self._filter_freq.setPlaceholderText("e.g. 1000")
@@ -235,58 +238,74 @@ class DatabaseTab(QWidget):
 
         self._filter_date_from = QDateEdit()
         self._filter_date_from.setCalendarPopup(True)
-        self._filter_date_from.setSpecialValueText(" ")
+        self._filter_date_from.setSpecialValueText("Any")
         self._filter_date_from.setDate(self._filter_date_from.minimumDate())
+        self._filter_date_from.setDisplayFormat("yyyy-MM-dd")
         form.addRow("Date from:", self._filter_date_from)
 
         self._filter_date_to = QDateEdit()
         self._filter_date_to.setCalendarPopup(True)
-        self._filter_date_to.setSpecialValueText(" ")
+        self._filter_date_to.setSpecialValueText("Any")
         self._filter_date_to.setDate(self._filter_date_to.minimumDate())
+        self._filter_date_to.setDisplayFormat("yyyy-MM-dd")
         form.addRow("Date to:", self._filter_date_to)
 
         layout.addLayout(form)
 
-        btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        self._apply_btn = QPushButton("Apply")
+        self._apply_btn = QPushButton("Apply Filters")
         set_button_role(self._apply_btn, "primary")
+        layout.addWidget(self._apply_btn)
+
+        sub_btn_row = QHBoxLayout()
+        sub_btn_row.setSpacing(6)
         self._clear_btn = QPushButton("Clear")
         set_button_role(self._clear_btn, "subtle")
         self._refresh_btn = QPushButton("Refresh")
         set_button_role(self._refresh_btn, "subtle")
-        btn_row.addWidget(self._apply_btn)
-        btn_row.addWidget(self._clear_btn)
-        btn_row.addWidget(self._refresh_btn)
-        layout.addLayout(btn_row)
+        sub_btn_row.addWidget(self._clear_btn)
+        sub_btn_row.addWidget(self._refresh_btn)
+        layout.addLayout(sub_btn_row)
 
         layout.addStretch()
 
-        self._count_label = QLabel("Sessions: 0")
-        set_hint_text(self._count_label)
-        layout.addWidget(self._count_label)
+        status_box = QWidget()
+        status_layout = QVBoxLayout(status_box)
+        status_layout.setContentsMargins(0, 8, 0, 0)
+        status_layout.setSpacing(4)
+
+        self._count_label = QLabel("0 sessions")
+        self._count_label.setStyleSheet(
+            "color: #1f3b5b; font-weight: 700; font-size: 14px;"
+        )
+        status_layout.addWidget(self._count_label)
 
         self._backfill_status = QLabel("")
         set_hint_text(self._backfill_status)
         self._backfill_status.setWordWrap(True)
-        layout.addWidget(self._backfill_status)
+        status_layout.addWidget(self._backfill_status)
 
-        box.setMinimumWidth(260)
-        box.setMaximumWidth(360)
+        layout.addWidget(status_box)
+
+        box.setMinimumWidth(240)
+        box.setMaximumWidth(320)
         return box
 
     def _build_center_panel(self) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
+        layout.setSpacing(8)
 
         splitter = QSplitter(Qt.Orientation.Vertical)
         splitter.setChildrenCollapsible(False)
+        splitter.setHandleWidth(6)
 
+        # ---- Sessions section ----
         sessions_box = QGroupBox("Sessions")
         sessions_layout = QVBoxLayout(sessions_box)
-        sessions_layout.setContentsMargins(10, 14, 10, 10)
+        sessions_layout.setContentsMargins(12, 18, 12, 12)
+        sessions_layout.setSpacing(8)
+
         self._session_model = _SessionTableModel()
         self._session_table = QTableView()
         self._session_table.setModel(self._session_model)
@@ -294,25 +313,42 @@ class DatabaseTab(QWidget):
         self._session_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._session_table.setAlternatingRowColors(True)
         self._session_table.verticalHeader().setVisible(False)
-        self._session_table.horizontalHeader().setStretchLastSection(True)
-        self._session_table.horizontalHeader().setSectionResizeMode(
-            QHeaderView.ResizeMode.ResizeToContents
-        )
-        sessions_layout.addWidget(self._session_table)
+        self._session_table.setShowGrid(False)
+        self._session_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._session_table.horizontalHeader().setHighlightSections(False)
+        self._session_table.verticalHeader().setDefaultSectionSize(26)
+
+        hdr = self._session_table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        # Column-specific sizing
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)   # ID
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)            # Name
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)   # Started
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)   # N_elec
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)   # Frequency
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)   # Stim
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)   # Gain
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)   # Frames
+
+        sessions_layout.addWidget(self._session_table, 1)
 
         session_actions = QHBoxLayout()
-        self._open_folder_btn = QPushButton("Open folder")
+        session_actions.setSpacing(6)
+        self._open_folder_btn = QPushButton("Open Folder")
         set_button_role(self._open_folder_btn, "subtle")
         self._open_folder_btn.setEnabled(False)
-        session_actions.addWidget(self._open_folder_btn)
         session_actions.addStretch()
+        session_actions.addWidget(self._open_folder_btn)
         sessions_layout.addLayout(session_actions)
 
         splitter.addWidget(sessions_box)
 
+        # ---- Frames section ----
         frames_box = QGroupBox("Frames")
         frames_layout = QVBoxLayout(frames_box)
-        frames_layout.setContentsMargins(10, 14, 10, 10)
+        frames_layout.setContentsMargins(12, 18, 12, 12)
+        frames_layout.setSpacing(8)
+
         self._frame_model = _FrameTableModel()
         self._frame_table = QTableView()
         self._frame_table.setModel(self._frame_model)
@@ -320,15 +356,25 @@ class DatabaseTab(QWidget):
         self._frame_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._frame_table.setAlternatingRowColors(True)
         self._frame_table.verticalHeader().setVisible(False)
-        self._frame_table.horizontalHeader().setStretchLastSection(True)
-        frames_layout.addWidget(self._frame_table)
+        self._frame_table.setShowGrid(False)
+        self._frame_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._frame_table.horizontalHeader().setHighlightSections(False)
+        self._frame_table.verticalHeader().setDefaultSectionSize(26)
+
+        frame_hdr = self._frame_table.horizontalHeader()
+        frame_hdr.setStretchLastSection(True)
+        frame_hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+        frame_hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+
+        frames_layout.addWidget(self._frame_table, 1)
 
         frame_actions = QHBoxLayout()
+        frame_actions.setSpacing(6)
         self._as_ref_btn = QPushButton("Load as Reference")
         set_button_role(self._as_ref_btn, "primary")
         self._as_ref_btn.setEnabled(False)
         self._as_tgt_btn = QPushButton("Load as Target")
-        set_button_role(self._as_tgt_btn, "subtle")
+        set_button_role(self._as_tgt_btn, "success")
         self._as_tgt_btn.setEnabled(False)
         frame_actions.addWidget(self._as_ref_btn)
         frame_actions.addWidget(self._as_tgt_btn)
@@ -336,17 +382,18 @@ class DatabaseTab(QWidget):
         frames_layout.addLayout(frame_actions)
 
         splitter.addWidget(frames_box)
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([420, 280])
 
         layout.addWidget(splitter)
         return container
 
     def _build_preview_panel(self) -> QWidget:
-        box = QGroupBox("Frame preview")
+        box = QGroupBox("Frame Preview")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(8, 12, 8, 8)
-        layout.setSpacing(6)
+        layout.setContentsMargins(12, 18, 12, 12)
+        layout.setSpacing(8)
 
         hint = QLabel("Click a frame to preview its waveform.")
         hint.setWordWrap(True)
@@ -354,9 +401,10 @@ class DatabaseTab(QWidget):
         layout.addWidget(hint)
 
         self._preview_plot = LivePlotWidget()
+        self._preview_plot.setMinimumHeight(320)
         layout.addWidget(self._preview_plot, 1)
 
-        box.setMinimumWidth(360)
+        box.setMinimumWidth(380)
         return box
 
     def _connect_signals(self) -> None:
@@ -401,7 +449,7 @@ class DatabaseTab(QWidget):
 
         sessions = self._db_ctrl.query_sessions(**filters)
         self._session_model.set_rows(sessions)
-        self._count_label.setText(f"Sessions: {len(sessions)}")
+        self._count_label.setText(f"{len(sessions)} sessions")
         self._frame_model.set_rows([])
         self._current_session_id = None
         self._as_ref_btn.setEnabled(False)
@@ -489,7 +537,7 @@ class DatabaseTab(QWidget):
         row = dict(row)
         row.setdefault("frame_count", 0)
         self._session_model.upsert(row)
-        self._count_label.setText(f"Sessions: {self._session_model.rowCount()}")
+        self._count_label.setText(f"{self._session_model.rowCount()} sessions")
 
     def _on_frame_added(self, frame_id: int, row: dict) -> None:
         session_id = row.get("session_id")
