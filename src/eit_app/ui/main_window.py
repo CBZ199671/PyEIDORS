@@ -13,7 +13,6 @@ from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
-from eit_app.acquisition.scheduler import BurstScheduler
 from eit_app.controllers.acquisition_controller import AcquisitionController
 from eit_app.controllers.device_controller import DeviceController
 from eit_app.controllers.reconstruction_controller import (
@@ -29,6 +28,7 @@ from eit_app.controllers.forward_solver_controller import (
     ForwardSolverRequest,
     ForwardSolverResult,
 )
+from eit_app.controllers.database_controller import DatabaseController
 from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
@@ -57,6 +57,7 @@ from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
     SimulationState,
 )
+from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
@@ -92,6 +93,8 @@ class EITWorkstation(QMainWindow):
         self._acq_ctrl = AcquisitionController(self)
         self._rec_ctrl = RecordingController(self)
         self._recon_ctrl = ReconstructionController(self)
+        self._db_ctrl = DatabaseController(self._default_db_path(), self)
+        self._rec_ctrl.set_database_controller(self._db_ctrl)
         self._fwd_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
@@ -109,10 +112,19 @@ class EITWorkstation(QMainWindow):
         self._device_config = normalize_device_config("serial", {})
         self._ring_buffer: FrameRingBuffer | None = None
         self._acq_process: AcquisitionProcess | None = None
-        self._scheduler: BurstScheduler | None = None
         self._scheduled_enabled = False
-        self._scheduled_interval_sec = 300.0
-        self._scheduled_frames_per_burst = 1
+        self._scheduled_interval_sec = 5.0
+        self._planned_acquisition_count = 0
+        self._frequency_stepping_enabled = False
+        self._planned_start_hz = int(self._device_config.get("frequency_hz", 1000))
+        self._planned_end_hz = int(self._device_config.get("frequency_hz", 1000))
+        self._plan_timer = QTimer(self)
+        self._plan_timer.setSingleShot(True)
+        self._plan_timer.timeout.connect(self._run_next_planned_acquisition)
+        self._plan_active = False
+        self._plan_completed_count = 0
+        self._plan_frequencies: list[int] = []
+        self._planned_step_pending = False
         self._latest_frame_timestamp = 0.0
         self._selected_reference_entry: dict | None = None
         self._selected_target_entry: dict | None = None
@@ -124,6 +136,7 @@ class EITWorkstation(QMainWindow):
         self._auto_reconstruct = False
         self._reference_frame: FrameData | None = None
         self._auto_recon_busy = False
+        self._pending_auto_target_frame: FrameData | None = None
 
         self._build_ui()
         self._acq_panel.set_output_dir(self._default_output_dir())
@@ -131,6 +144,10 @@ class EITWorkstation(QMainWindow):
         self._control_panel.set_enabled(False)
         self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
+
+        # Kick off DB backfill shortly after startup so the UI shows
+        # historical sessions without blocking window initialization.
+        QTimer.singleShot(500, self._trigger_backfill)
 
     # --- Convenience accessors that delegate to the hardware tab ---
 
@@ -188,6 +205,10 @@ class EITWorkstation(QMainWindow):
         self._dataset_tab = DatasetGeneratorTab()
         self._tab_widget.addTab(self._dataset_tab, "Dataset Generator (\u6570\u636e\u96c6\u751f\u6210)")
 
+        # Database tab — persistent archive of all recorded sessions
+        self._db_tab = DatabaseTab(self._db_ctrl)
+        self._tab_widget.addTab(self._db_tab, "Database (\u6570\u636e\u5e93)")
+
         self._status_bar = EITStatusBar(self)
         self.setStatusBar(self._status_bar)
 
@@ -219,14 +240,13 @@ class EITWorkstation(QMainWindow):
         self._control_panel.power_toggled.connect(self._on_power_toggled)
         self._control_panel.impedance_requested.connect(self._device_ctrl.measure_impedance)
         self._control_panel.single_point_requested.connect(self._on_single_point_requested)
-        self._control_panel.sweep_requested.connect(self._on_sweep_requested)
 
         self._acq_panel.start_requested.connect(self._on_start_acquisition)
         self._acq_panel.single_frame_requested.connect(self._on_single_frame_requested)
         self._acq_panel.stop_requested.connect(self._on_stop_acquisition)
         self._acq_panel.recording_toggled.connect(self._on_recording_toggled)
         self._acq_panel.output_dir_changed.connect(self._on_output_dir_changed)
-        self._acq_panel.scheduled_mode_changed.connect(self._on_scheduled_mode_changed)
+        self._acq_panel.acquisition_plan_changed.connect(self._on_acquisition_plan_changed)
 
         self._acq_ctrl.new_frame.connect(self._live_plot.update_frame)
         self._acq_ctrl.new_frame.connect(self._on_new_frame)
@@ -408,31 +428,27 @@ class EITWorkstation(QMainWindow):
         self._single_frame_pending = single_frame
         self._latest_frame_timestamp = 0.0
         self._state.set_frame_count(0)
-        # Enable auto-reconstruction for multi-frame acquisition
         self._auto_reconstruct = not single_frame
         self._reference_frame = None
         self._auto_recon_busy = False
-        self._rebuild_acquisition_pipeline()
+        self._pending_auto_target_frame = None
         if self._record_requested:
             if not self._ensure_recording_session(self._acq_panel.output_dir()):
                 self._record_requested = False
                 self._state.set_recording_status(RecordingStatus.OFF)
 
         if single_frame:
+            self._rebuild_acquisition_pipeline()
             self._state.set_acquisition_mode(AcquisitionMode.SINGLE_SHOT)
             self._acq_ctrl.capture_one()
             self._status_bar.showMessage("单帧采集已启动，采到 1 帧后将自动停止。", 4000)
-        elif self._scheduled_enabled:
-            self._state.set_acquisition_mode(AcquisitionMode.SCHEDULED)
-            self._acq_ctrl.start(activate_device=False)
-            self._scheduler = BurstScheduler(
-                self._acq_process,
-                interval_seconds=self._scheduled_interval_sec,
-                frames_per_burst=self._scheduled_frames_per_burst,
-            )
-            self._scheduler.start()
-            self._status_bar.showMessage("定时采集已启动。", 3000)
+        elif self._planned_acquisition_count > 0 or self._frequency_stepping_enabled or self._scheduled_enabled:
+            if self._planned_acquisition_count <= 0:
+                self._on_error("有限次采集或定时采集需要将 Acquisitions 设置为大于 0。")
+                return
+            self._start_planned_acquisition_run()
         else:
+            self._rebuild_acquisition_pipeline()
             self._state.set_acquisition_mode(AcquisitionMode.CONTINUOUS)
             self._acq_ctrl.start()
             self._status_bar.showMessage("连续采集已启动。", 3000)
@@ -445,17 +461,21 @@ class EITWorkstation(QMainWindow):
 
     @Slot()
     def _on_stop_acquisition(self) -> None:
+        self._plan_timer.stop()
         was_single_frame_mode = self._state.acquisition_mode is AcquisitionMode.SINGLE_SHOT
-        if self._scheduler is not None:
-            self._scheduler.stop()
-            self._scheduler = None
+        was_plan_mode = self._plan_active
 
         if self._acq_process is not None:
             self._acq_ctrl.stop()
 
         self._reset_acquisition_pipeline()
         self._single_frame_pending = False
+        self._planned_step_pending = False
+        self._plan_active = False
+        self._plan_completed_count = 0
+        self._plan_frequencies = []
         self._auto_reconstruct = False
+        self._pending_auto_target_frame = None
         self._state.set_acquisition_mode(AcquisitionMode.IDLE)
         self._acq_panel.set_acquiring(False)
 
@@ -474,6 +494,8 @@ class EITWorkstation(QMainWindow):
 
         if was_single_frame_mode:
             self._status_bar.showMessage("单帧采集完成。", 4000)
+        elif was_plan_mode:
+            self._status_bar.showMessage("计划采集已停止。", 4000)
         self._refresh_session_summary()
 
     @Slot(object)
@@ -482,6 +504,25 @@ class EITWorkstation(QMainWindow):
         self._state.set_frame_count(self._acq_ctrl.total_frames)
         if self._rec_ctrl.is_recording:
             self._rec_ctrl.save_frame(frame)
+        self._voltage_plot.update_hardware_voltages(frame.real, None)
+        if self._plan_active and self._planned_step_pending:
+            self._planned_step_pending = False
+            self._plan_completed_count += 1
+            self._state.set_frame_count(self._plan_completed_count)
+            self._acq_ctrl.stop(deactivate_device=False)
+            self._reset_acquisition_pipeline()
+            if self._plan_completed_count >= len(self._plan_frequencies):
+                self._finish_planned_acquisition_run()
+            elif self._scheduled_enabled:
+                self._plan_timer.start(int(self._scheduled_interval_sec * 1000))
+                self._status_bar.showMessage(
+                    f"第 {self._plan_completed_count}/{len(self._plan_frequencies)} 次采集完成，"
+                    f"{self._scheduled_interval_sec:.1f}s 后开始下一次。",
+                    4000,
+                )
+            else:
+                QTimer.singleShot(0, self._run_next_planned_acquisition)
+            return
         if self._single_frame_pending and self._state.frame_count >= 1:
             self._single_frame_pending = False
             QTimer.singleShot(0, self._on_stop_acquisition)
@@ -497,6 +538,8 @@ class EITWorkstation(QMainWindow):
                 )
             elif not self._auto_recon_busy:
                 self._submit_auto_reconstruction(frame)
+            else:
+                self._pending_auto_target_frame = frame
 
     @Slot(int, float, str)
     def _on_frame_saved(self, index: int, timestamp: float, path: str) -> None:
@@ -526,7 +569,8 @@ class EITWorkstation(QMainWindow):
         if self._reference_frame is None:
             return
         self._auto_recon_busy = True
-        n_elec = int(self._device_config.get("n_elec", 16))
+        self._pending_auto_target_frame = None
+        layout_meta = self._measurement_layout_config()
         request = ReconstructionRequest(
             reference_frame=self._reference_frame,
             target_frame=target_frame,
@@ -534,17 +578,25 @@ class EITWorkstation(QMainWindow):
             method="gn-difference",
             regularization_alpha=1.0,
             max_iterations=1,
-            mesh_dimension=2,
+            mesh_dimension=3 if int(self._device_config.get("mea_mode", 2)) == 3 else 2,
             mesh_refinement=int(self._state.reconstruction_config.mesh_refinement),
             metadata={
+                **layout_meta,
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
-                "n_elec": n_elec,
-                "stim_pattern": "{ad}",
-                "meas_pattern": "{ad}",
                 "drive_mode": "total_current",
                 "drive_value": 1.0e-5,
-                "geometry_scale_to_m": 1.0,
+                "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
+                "reconstruction_runtime": "single_step_cached",
+                "difference_lambda": 1.0e-2,
+                "background_sigma": 1.0,
+                "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
+                "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
+                "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
+                "radius": float(self._device_config.get("radius", 1.0)),
+                "mesh_height": float(self._device_config.get("height", 1.0)),
+                "electrode_height_ratio": float(self._device_config.get("electrode_height_ratio", 0.2)),
+                "z_center": float(self._device_config.get("z_center", 0.0)),
             },
         )
         self._recon_ctrl.reconstruct(request)
@@ -573,6 +625,16 @@ class EITWorkstation(QMainWindow):
                 result.measured,
                 result.simulated if hasattr(result, "simulated") else None,
             )
+        if self._auto_reconstruct and self._pending_auto_target_frame is not None:
+            QTimer.singleShot(0, self._submit_pending_auto_reconstruction)
+
+    def _submit_pending_auto_reconstruction(self) -> None:
+        if not self._auto_reconstruct or self._auto_recon_busy:
+            return
+        pending_frame = self._pending_auto_target_frame
+        if pending_frame is None:
+            return
+        self._submit_auto_reconstruction(pending_frame)
 
     @Slot(dict)
     def _on_reference_selected(self, entry: dict) -> None:
@@ -679,11 +741,14 @@ class EITWorkstation(QMainWindow):
     def _on_output_dir_changed(self, _path: str) -> None:
         self._refresh_session_summary()
 
-    @Slot(bool, float, int)
-    def _on_scheduled_mode_changed(self, enabled: bool, interval_sec: float, frames_per_burst: int) -> None:
-        self._scheduled_enabled = enabled
-        self._scheduled_interval_sec = interval_sec
-        self._scheduled_frames_per_burst = frames_per_burst
+    @Slot(dict)
+    def _on_acquisition_plan_changed(self, plan: dict) -> None:
+        self._scheduled_enabled = bool(plan.get("timed_enabled", False))
+        self._scheduled_interval_sec = float(plan.get("interval_sec", 5.0))
+        self._planned_acquisition_count = int(plan.get("acquisition_count", 0))
+        self._frequency_stepping_enabled = bool(plan.get("frequency_stepping", False))
+        self._planned_start_hz = int(plan.get("start_hz", self._device_config.get("frequency_hz", 1000)))
+        self._planned_end_hz = int(plan.get("end_hz", self._device_config.get("frequency_hz", 1000)))
         self._refresh_session_summary()
 
     @Slot(int)
@@ -719,6 +784,8 @@ class EITWorkstation(QMainWindow):
         self._device_config = normalize_device_config(self._transport_type, self._device_config)
         self._sync_state_device_config()
         self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._refresh_expected_measurement_counts()
+        self._refresh_session_summary()
         points = int(self._device_config.get("points_per_frame", self._measurement_point_count()))
         self._status_bar.showMessage(
             f"硬件布局已更新：{points} 个边界电压点。",
@@ -735,10 +802,6 @@ class EITWorkstation(QMainWindow):
     def _on_single_point_requested(self) -> None:
         hz = int(self._device_config.get("frequency_hz", 1000))
         self._device_ctrl.single_point_test(hz)
-
-    @Slot(int, int, int)
-    def _on_sweep_requested(self, start_hz: int, end_hz: int, n_points: int) -> None:
-        self._device_ctrl.run_sweep(start_hz, end_hz, n_points)
 
     @Slot(str, object)
     def _on_device_command_done(self, name: str, result: object) -> None:
@@ -762,10 +825,6 @@ class EITWorkstation(QMainWindow):
                 f"单点测试返回: real={result[0]:.4f} V, imag={result[1]:.4f} V",
                 5000,
             )
-            return
-
-        if name == "run_sweep" and isinstance(result, list):
-            self._status_bar.showMessage(f"扫频完成，共 {len(result)} 个点。", 5000)
             return
 
         if name == "power_control":
@@ -831,6 +890,11 @@ class EITWorkstation(QMainWindow):
             "stim_direction": layout["stim_direction"],
             "meas_direction": layout["meas_direction"],
             "stim_first_positive": bool(layout["stim_first_positive"]),
+            "radius": float(layout["radius"]),
+            "geometry_scale_to_m": float(layout["geometry_scale_to_m"]),
+            "electrode_length_m_override": layout["electrode_length_m_override"],
+            "electrode_coverage": float(layout["electrode_coverage"]),
+            "contact_impedance": float(layout["contact_impedance"]),
             "points_per_frame": int(layout["points_per_frame"]),
             "total_electrodes": int(layout["total_electrodes"]),
         }
@@ -913,6 +977,25 @@ class EITWorkstation(QMainWindow):
         return str(self._acq_panel.default_output_dir())
 
     @staticmethod
+    def _default_db_path() -> Path:
+        """Return a platform-appropriate path for the frame database."""
+        import os
+        if os.name == "nt":
+            base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        else:
+            base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+        return base / "PyEidors" / "eit_frames.db"
+
+    def _trigger_backfill(self) -> None:
+        """Scan data/measurements/ and backfill the SQLite DB on startup."""
+        try:
+            data_dir = Path(self._default_output_dir()).parent
+            if data_dir.exists():
+                self._db_ctrl.start_backfill(data_dir)
+        except Exception as exc:
+            log.warning("Backfill trigger failed: %s", exc)
+
+    @staticmethod
     def _normalize_output_dir(output_dir: str) -> str:
         raw = str(output_dir or "").strip()
         if not raw:
@@ -948,6 +1031,11 @@ class EITWorkstation(QMainWindow):
         hardware_count = self._measurement_point_count()
         self._live_plot.set_expected_point_count(hardware_count)
         self._voltage_plot.set_expected_point_count(hardware_count)
+        self._recon_widget.configure_layout(
+            n_elec=int(self._device_config.get("n_elec", 16)),
+            radius=float(self._device_config.get("radius", 1.0)),
+            electrode_coverage=float(self._device_config.get("electrode_coverage", 0.5)),
+        )
 
     def _refresh_session_summary(self) -> None:
         stim_level = int(self._device_config.get("stim_amp_level", 1))
@@ -1014,13 +1102,17 @@ class EITWorkstation(QMainWindow):
         dimension = "3D" if mea_mode == 3 else "2D"
         rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
         drive = "drive-included" if bool(layout["use_meas_current"]) else "drive-excluded"
+        electrode_length = float(layout.get("electrode_length_m_override", 0.0) or 0.0)
+        contact_impedance = float(layout.get("contact_impedance", 0.01) or 0.01)
+        electrode_coverage = float(layout.get("electrode_coverage", 0.5) or 0.5)
         return (
             f"{dimension} | "
             f"{int(layout['n_elec'])}E x {int(layout['n_rings'])}R | "
             f"{layout['stim_pattern']} / {layout['meas_pattern']} | "
             f"{rotate} | {drive} | "
             f"+{int(layout['use_meas_current_next'])} skip | "
-            f"{int(layout['points_per_frame'])} pts"
+            f"{int(layout['points_per_frame'])} pts\n"
+            f"CEM | L={electrode_length:.4f} | z={contact_impedance:.4g} | cov={electrode_coverage * 100.0:.1f}%"
         )
 
     def _format_record_summary(self) -> str:
@@ -1034,20 +1126,38 @@ class EITWorkstation(QMainWindow):
 
     def _format_mode_summary(self) -> str:
         mode = self._state.acquisition_mode
+        current_hz = int(self._device_config.get("frequency_hz", self._planned_start_hz))
+        if self._plan_active:
+            freq_info = ""
+            if self._frequency_stepping_enabled and self._plan_frequencies:
+                freq_info = f" | {self._plan_frequencies[0]}→{self._plan_frequencies[-1]} Hz"
+            elif self._plan_frequencies:
+                freq_info = f" | {current_hz} Hz"
+            if self._scheduled_enabled:
+                return (
+                    f"Timed run | {self._plan_completed_count}/{len(self._plan_frequencies)}"
+                    f" | every {self._scheduled_interval_sec:.1f}s{freq_info}"
+                )
+            return (
+                f"Finite run | {self._plan_completed_count}/{len(self._plan_frequencies)}"
+                f"{freq_info}"
+            )
         if mode is AcquisitionMode.CONTINUOUS:
             return "Continuous"
         if mode is AcquisitionMode.SINGLE_SHOT:
             return "Single frame"
-        if mode is AcquisitionMode.SCHEDULED:
-            return (
-                f"Scheduled | every {self._scheduled_interval_sec:.1f}s | "
-                f"{self._scheduled_frames_per_burst} frame/burst"
-            )
-        if self._scheduled_enabled:
-            return (
-                f"Idle | scheduled every {self._scheduled_interval_sec:.1f}s | "
-                f"{self._scheduled_frames_per_burst} frame/burst"
-            )
+        if self._scheduled_enabled or self._planned_acquisition_count > 0 or self._frequency_stepping_enabled:
+            freq_info = ""
+            if self._frequency_stepping_enabled:
+                freq_info = f" | {self._planned_start_hz}→{self._planned_end_hz} Hz"
+            elif self._planned_acquisition_count > 0:
+                freq_info = f" | {current_hz} Hz"
+            if self._scheduled_enabled:
+                return (
+                    f"Idle | timed {self._planned_acquisition_count}x"
+                    f" | every {self._scheduled_interval_sec:.1f}s{freq_info}"
+                )
+            return f"Idle | run {self._planned_acquisition_count}x{freq_info}"
         return "Idle | manual"
 
     def _summary_banner_state(self) -> tuple[str, str, str, str]:
@@ -1166,6 +1276,87 @@ class EITWorkstation(QMainWindow):
         }
         return mapping.get(self._state.acquisition_mode, ("IDLE", "idle"))
 
+    def _build_planned_frequencies(self) -> list[int]:
+        count = int(self._planned_acquisition_count)
+        if count <= 0:
+            return []
+        if not self._frequency_stepping_enabled:
+            hz = int(self._device_config.get("frequency_hz", self._planned_start_hz))
+            return [hz] * count
+        start_hz = int(self._planned_start_hz)
+        end_hz = int(self._planned_end_hz)
+        if count == 1:
+            return [start_hz]
+        return [
+            int(round(start_hz + (end_hz - start_hz) * idx / (count - 1)))
+            for idx in range(count)
+        ]
+
+    def _start_planned_acquisition_run(self) -> None:
+        self._plan_timer.stop()
+        self._plan_frequencies = self._build_planned_frequencies()
+        self._plan_completed_count = 0
+        self._plan_active = True
+        self._planned_step_pending = False
+        self._state.set_acquisition_mode(
+            AcquisitionMode.SCHEDULED if self._scheduled_enabled else AcquisitionMode.CONTINUOUS
+        )
+        self._acq_panel.set_acquiring(True)
+        self._control_panel.set_enabled(False)
+        self._workflow_toolbox.setCurrentIndex(2)
+        self._status_bar.showMessage(
+            f"计划采集已启动，共 {len(self._plan_frequencies)} 次。",
+            3000,
+        )
+        if self._frequency_stepping_enabled:
+            self._status_bar.showMessage(
+                "变频采集已启动：将按交频差实时更新波形、边界电压与重构显示。",
+                6000,
+            )
+        self._refresh_session_summary()
+        self._run_next_planned_acquisition()
+
+    @Slot()
+    def _run_next_planned_acquisition(self) -> None:
+        if not self._plan_active:
+            return
+        if self._plan_completed_count >= len(self._plan_frequencies):
+            self._finish_planned_acquisition_run()
+            return
+
+        next_freq = int(self._plan_frequencies[self._plan_completed_count])
+        self._device_config["frequency_hz"] = next_freq
+        self._sync_state_device_config()
+        self._control_panel.set_frequency_value(next_freq)
+        self._rebuild_acquisition_pipeline()
+        self._planned_step_pending = True
+        self._acq_ctrl.capture_one()
+        self._status_bar.showMessage(
+            f"开始第 {self._plan_completed_count + 1}/{len(self._plan_frequencies)} 次采集：{next_freq} Hz",
+            4000,
+        )
+
+    def _finish_planned_acquisition_run(self) -> None:
+        completed = self._plan_completed_count
+        self._plan_timer.stop()
+        self._plan_active = False
+        self._planned_step_pending = False
+        self._plan_frequencies = []
+        self._state.set_acquisition_mode(AcquisitionMode.IDLE)
+        self._acq_panel.set_acquiring(False)
+        if self._state.connection_status is ConnectionStatus.CONNECTED:
+            self._control_panel.set_enabled(True)
+            self._workflow_toolbox.setCurrentIndex(2)
+        if self._rec_ctrl.is_recording:
+            self._rec_ctrl.stop_recording()
+            self._state.set_recording_active(False)
+        if self._record_requested:
+            self._state.set_recording_status(RecordingStatus.ARMED)
+        else:
+            self._state.set_recording_status(RecordingStatus.OFF)
+        self._status_bar.showMessage(f"计划采集完成，共 {completed} 次。", 5000)
+        self._refresh_session_summary()
+
     def _open_difference_dialog(self) -> None:
         from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
 
@@ -1237,7 +1428,11 @@ class EITWorkstation(QMainWindow):
                 "difference_orientation": config.get("orientation", "target_minus_reference"),
                 "drive_mode": "total_current",
                 "drive_value": 1.0e-5,
-                "geometry_scale_to_m": 1.0,
+                "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
+                "radius": float(self._device_config.get("radius", 1.0)),
+                "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
+                "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
+                "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
             },
         )
         self._recon_ctrl.reconstruct(request)
@@ -1778,4 +1973,8 @@ class EITWorkstation(QMainWindow):
         self._recon_ctrl.shutdown()
         self._fwd_ctrl.shutdown()
         self._dataset_ctrl.shutdown()
+        try:
+            self._db_ctrl.shutdown()
+        except Exception as exc:
+            log.warning("Database shutdown failed: %s", exc)
         super().closeEvent(event)

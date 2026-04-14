@@ -39,6 +39,12 @@ class RecordingController(QObject):
         self._frames_recorded: int = 0
         self._is_recording: bool = False
         self._session_metadata: dict[str, Any] = {}
+        self._db_controller = None
+        self._db_session_id: int | None = None
+
+    def set_database_controller(self, db_controller) -> None:
+        """Attach a DatabaseController so recordings are indexed in SQLite."""
+        self._db_controller = db_controller
 
     @property
     def is_recording(self) -> bool:
@@ -103,6 +109,17 @@ class RecordingController(QObject):
 
         self._frames_recorded = 0
         self._is_recording = True
+
+        # Register session with the frame database (non-fatal if it fails)
+        self._db_session_id = None
+        if self._db_controller is not None:
+            try:
+                self._db_session_id = self._db_controller.register_session(
+                    self._session_dir, self._session_metadata
+                )
+            except Exception as exc:
+                log.warning("Failed to register session in DB: %s", exc)
+
         self.recording_started.emit(str(self._session_dir))
         log.info("Recording started: %s", self._session_dir)
         return True
@@ -139,5 +156,19 @@ class RecordingController(QObject):
             write_frame_yaml(yaml_path, frame.to_dict())
             self._frames_recorded += 1
             self.frame_saved.emit(idx, frame.timestamp, str(csv_path))
+
+            # Index the frame in the SQLite database if attached
+            if self._db_controller is not None and self._db_session_id is not None:
+                try:
+                    self._db_controller.register_frame(
+                        session_id=self._db_session_id,
+                        frame_index=idx,
+                        timestamp=frame.timestamp,
+                        csv_path=csv_path,
+                        yaml_path=yaml_path,
+                        metadata=frame.to_dict(),
+                    )
+                except Exception as exc:
+                    log.debug("Failed to index frame %d in DB: %s", idx, exc)
         except Exception as exc:
             self.error.emit(f"Failed to save frame {idx}: {exc}")
