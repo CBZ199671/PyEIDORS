@@ -1,4 +1,4 @@
-"""Acquisition controls: start/stop, scheduled mode, recording toggle."""
+"""Acquisition controls: recording plus finite/timed acquisition plans."""
 
 from pathlib import Path
 
@@ -28,7 +28,7 @@ class AcquisitionPanel(QGroupBox):
         single_frame_requested: Emitted when user clicks Single Frame.
         stop_requested: Emitted when user clicks Stop.
         recording_toggled: Emitted with (active, output_dir).
-        scheduled_mode_changed: Emitted with (enabled, interval_sec, frames_per_burst).
+        acquisition_plan_changed: Emitted with the current acquisition plan.
     """
 
     start_requested = Signal()
@@ -36,7 +36,7 @@ class AcquisitionPanel(QGroupBox):
     stop_requested = Signal()
     recording_toggled = Signal(bool, str)
     output_dir_changed = Signal(str)
-    scheduled_mode_changed = Signal(bool, float, int)
+    acquisition_plan_changed = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("3. Acquire & Record", parent)
@@ -44,8 +44,10 @@ class AcquisitionPanel(QGroupBox):
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
-        layout.setContentsMargins(10, 14, 10, 8)
-        layout.setSpacing(10)
+        layout.setContentsMargins(8, 10, 8, 6)
+        layout.setHorizontalSpacing(8)
+        layout.setVerticalSpacing(6)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._layout = layout
 
         self._flow_hint = QLabel("Prepare the save path and plan, then launch the acquisition run.")
@@ -87,27 +89,53 @@ class AcquisitionPanel(QGroupBox):
         set_section_header(self._plan_header)
         layout.addRow(self._plan_header)
 
-        # Scheduled mode
-        self._sched_check = QCheckBox("Scheduled mode")
-        self._sched_check.toggled.connect(self._on_schedule_toggled)
+        self._sched_check = QCheckBox("Timed interval")
+        self._sched_check.toggled.connect(self._on_plan_toggled)
         layout.addRow(self._sched_check)
 
         self._interval_spin = QDoubleSpinBox()
-        self._interval_spin.setRange(1.0, 86400.0)
-        self._interval_spin.setValue(300.0)
+        self._interval_spin.setRange(0.1, 86400.0)
+        self._interval_spin.setValue(5.0)
         self._interval_spin.setSuffix(" s")
-        self._interval_spin.setDecimals(1)
-        self._interval_spin.valueChanged.connect(lambda _: self._emit_schedule_state())
+        self._interval_spin.setDecimals(2)
+        self._interval_spin.valueChanged.connect(lambda _: self._emit_plan_state())
         layout.addRow("Interval:", self._interval_spin)
 
-        self._burst_spin = QSpinBox()
-        self._burst_spin.setRange(1, 10000)
-        self._burst_spin.setValue(1)
-        self._burst_spin.valueChanged.connect(lambda _: self._emit_schedule_state())
-        layout.addRow("Frames/burst:", self._burst_spin)
+        self._count_spin = QSpinBox()
+        self._count_spin.setRange(0, 10000)
+        self._count_spin.setSpecialValueText("Continuous")
+        self._count_spin.setValue(0)
+        self._count_spin.valueChanged.connect(lambda _: self._emit_plan_state())
+        layout.addRow("Acquisitions:", self._count_spin)
+
+        self._freq_step_check = QCheckBox("Step frequency across the run")
+        self._freq_step_check.toggled.connect(self._on_plan_toggled)
+        layout.addRow(self._freq_step_check)
+
+        self._freq_start_spin = QSpinBox()
+        self._freq_start_spin.setRange(100, 1_000_000)
+        self._freq_start_spin.setValue(1000)
+        self._freq_start_spin.setSuffix(" Hz")
+        self._freq_start_spin.valueChanged.connect(lambda _: self._emit_plan_state())
+        layout.addRow("Start freq:", self._freq_start_spin)
+
+        self._freq_end_spin = QSpinBox()
+        self._freq_end_spin.setRange(100, 1_000_000)
+        self._freq_end_spin.setValue(1000)
+        self._freq_end_spin.setSuffix(" Hz")
+        self._freq_end_spin.valueChanged.connect(lambda _: self._emit_plan_state())
+        layout.addRow("End freq:", self._freq_end_spin)
 
         self._set_row_visible(self._interval_spin, False)
-        self._set_row_visible(self._burst_spin, False)
+        self._set_row_visible(self._freq_start_spin, False)
+        self._set_row_visible(self._freq_end_spin, False)
+
+        self._plan_hint = QLabel(
+            "Acquisitions=0 表示无限连续采集；设置为大于 0 时，将执行有限次采集并在完成后自动停止。"
+        )
+        self._plan_hint.setWordWrap(True)
+        set_hint_text(self._plan_hint)
+        layout.addRow(self._plan_hint)
 
         self._action_header = QLabel("Acquisition actions")
         set_section_header(self._action_header)
@@ -115,14 +143,17 @@ class AcquisitionPanel(QGroupBox):
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
-        btn_row.setSpacing(8)
-        self._start_btn = QPushButton("Start Continuous")
+        btn_row.setSpacing(6)
+        self._start_btn = QPushButton("Start")
+        self._start_btn.setToolTip("Start the current acquisition plan")
         self._start_btn.clicked.connect(self.start_requested)
         set_button_role(self._start_btn, "primary")
-        self._single_frame_btn = QPushButton("Acquire One Frame")
+        self._single_frame_btn = QPushButton("Single Frame")
+        self._single_frame_btn.setToolTip("Acquire exactly one frame")
         self._single_frame_btn.clicked.connect(self.single_frame_requested)
         set_button_role(self._single_frame_btn, "success")
-        self._stop_btn = QPushButton("Stop Acquisition")
+        self._stop_btn = QPushButton("Stop")
+        self._stop_btn.setToolTip("Stop the current acquisition run")
         self._stop_btn.clicked.connect(self.stop_requested)
         self._stop_btn.setEnabled(False)
         set_button_role(self._stop_btn, "danger")
@@ -138,25 +169,66 @@ class AcquisitionPanel(QGroupBox):
         set_subtle_value(self._frame_label)
         layout.addRow("Frames acquired:", self._frame_label)
 
-    def _on_schedule_toggled(self, checked: bool) -> None:
-        self._set_row_visible(self._interval_spin, checked)
-        self._set_row_visible(self._burst_spin, checked)
-        self._emit_schedule_state()
+    def _on_plan_toggled(self, _checked: bool) -> None:
+        self._set_row_visible(self._interval_spin, self._sched_check.isChecked())
+        self._set_row_visible(self._freq_start_spin, self._freq_step_check.isChecked())
+        self._set_row_visible(self._freq_end_spin, self._freq_step_check.isChecked())
+        self._emit_plan_state()
 
     def _on_recording_clicked(self, checked: bool) -> None:
         # Let the checkbox paint its new state before potentially expensive
         # session setup work runs in the main window.
         QTimer.singleShot(0, lambda checked=checked: self.recording_toggled.emit(checked, self._dir_edit.text()))
 
-    def _emit_schedule_state(self) -> None:
-        self.scheduled_mode_changed.emit(
-            self._sched_check.isChecked(),
-            self._interval_spin.value(),
-            self._burst_spin.value(),
+    def _emit_plan_state(self) -> None:
+        self.acquisition_plan_changed.emit(self.acquisition_plan())
+
+    def acquisition_plan(self) -> dict:
+        return {
+            "timed_enabled": self._sched_check.isChecked(),
+            "interval_sec": float(self._interval_spin.value()),
+            "acquisition_count": int(self._count_spin.value()),
+            "frequency_stepping": self._freq_step_check.isChecked(),
+            "start_hz": int(self._freq_start_spin.value()),
+            "end_hz": int(self._freq_end_spin.value()),
+        }
+
+    def set_acquisition_plan(self, plan: dict) -> None:
+        widgets = (
+            self._sched_check,
+            self._interval_spin,
+            self._count_spin,
+            self._freq_step_check,
+            self._freq_start_spin,
+            self._freq_end_spin,
         )
+        blockers = [QSignalBlocker(widget) for widget in widgets]
+        try:
+            self._sched_check.setChecked(bool(plan.get("timed_enabled", self._sched_check.isChecked())))
+            self._interval_spin.setValue(float(plan.get("interval_sec", self._interval_spin.value())))
+            self._count_spin.setValue(int(plan.get("acquisition_count", self._count_spin.value())))
+            self._freq_step_check.setChecked(
+                bool(plan.get("frequency_stepping", self._freq_step_check.isChecked()))
+            )
+            self._freq_start_spin.setValue(int(plan.get("start_hz", self._freq_start_spin.value())))
+            self._freq_end_spin.setValue(int(plan.get("end_hz", self._freq_end_spin.value())))
+        finally:
+            del blockers
+        self._on_plan_toggled(False)
 
     def _browse_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        # Open in the current path if valid, otherwise in the app's
+        # default data/measurements folder (creating it if needed).
+        current = self._dir_edit.text().strip()
+        default_root = self.default_output_dir()
+        try:
+            default_root.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+        start = current if current and Path(current).exists() else str(default_root)
+        path = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory", start
+        )
         if path:
             self._dir_edit.setText(path)
 

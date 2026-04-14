@@ -100,15 +100,23 @@ class _FrameTableModel(QAbstractTableModel):
 
 
 class FrameBrowserWidget(QGroupBox):
-    """Browse recorded frames and select reference/target for reconstruction.
+    """Browse recorded frames and pick the reference for real-time imaging.
+
+    During live acquisition the newest frame is always the target, so only
+    the reference needs to be selected manually. If the user never clicks
+    "Set as Reference", the very first captured frame of the run becomes
+    the reference automatically.
 
     Signals:
         reference_selected: Emitted with entry dict when user picks reference.
-        target_selected: Emitted with entry dict when user picks target.
+        target_selected: Emitted with entry dict (kept for API back-compat;
+            not driven by any UI button).
+        frame_clicked: Emitted when a row is clicked (for quick preview).
+        cleared: Emitted when the list is cleared.
     """
 
     reference_selected = Signal(dict)
-    target_selected = Signal(dict)
+    target_selected = Signal(dict)  # retained so existing slots still connect
     frame_clicked = Signal(dict)
     cleared = Signal()
 
@@ -122,7 +130,11 @@ class FrameBrowserWidget(QGroupBox):
         layout.setContentsMargins(10, 14, 10, 10)
         layout.setSpacing(8)
 
-        self._hint = QLabel("Select a recorded frame and mark it as reference or target for difference imaging.")
+        self._hint = QLabel(
+            "The first frame of each run is used as reference automatically. "
+            "Click any frame and then 'Set as Reference' to override it — "
+            "the newest acquired frame is always the target."
+        )
         self._hint.setWordWrap(True)
         set_hint_text(self._hint)
         layout.addWidget(self._hint)
@@ -152,19 +164,15 @@ class FrameBrowserWidget(QGroupBox):
         btn_grid.setVerticalSpacing(6)
         btn_grid.setColumnStretch(0, 1)
         btn_grid.setColumnStretch(1, 1)
-        self._ref_btn = QPushButton("Reference")
+        self._ref_btn = QPushButton("Set as Reference")
         self._ref_btn.clicked.connect(self._on_set_reference)
         set_button_role(self._ref_btn, "primary")
-        self._tgt_btn = QPushButton("Target")
-        self._tgt_btn.clicked.connect(self._on_set_target)
-        set_button_role(self._tgt_btn, "subtle")
         self._clear_btn = QPushButton("Clear List")
         self._clear_btn.clicked.connect(self._on_clear)
         set_button_role(self._clear_btn, "danger")
-        for button in (self._ref_btn, self._tgt_btn, self._clear_btn):
+        for button in (self._ref_btn, self._clear_btn):
             button.setMinimumWidth(0)
-        btn_grid.addWidget(self._ref_btn, 0, 0)
-        btn_grid.addWidget(self._tgt_btn, 0, 1)
+        btn_grid.addWidget(self._ref_btn, 0, 0, 1, 2)
         btn_grid.addWidget(self._clear_btn, 1, 0, 1, 2)
         layout.addLayout(btn_grid)
         self._update_action_state()
@@ -191,11 +199,6 @@ class FrameBrowserWidget(QGroupBox):
         if entry:
             self.reference_selected.emit(entry)
 
-    def _on_set_target(self) -> None:
-        entry = self._selected_entry()
-        if entry:
-            self.target_selected.emit(entry)
-
     def _on_row_clicked(self, index: QModelIndex) -> None:
         entry = self._model.get_entry(index.row())
         if entry:
@@ -210,6 +213,5 @@ class FrameBrowserWidget(QGroupBox):
         has_selection = self._selected_entry() is not None
         has_rows = self._model.rowCount() > 0
         self._ref_btn.setEnabled(has_selection)
-        self._tgt_btn.setEnabled(has_selection)
         self._clear_btn.setEnabled(has_rows)
         self._count_label.setText(f"Recorded frames: {self._model.rowCount()}")
