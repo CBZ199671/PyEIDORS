@@ -281,6 +281,8 @@ class EITWorkstation(QMainWindow):
         self._auto_reconstruct = False
         self._reference_frame: FrameData | None = None
         self._auto_recon_busy = False
+        self._last_auto_ref_frame: FrameData | None = None
+        self._last_auto_tgt_frame: FrameData | None = None
 
         # Database-driven reconstruction state
         self._pending_db_reconstruction: dict | None = None
@@ -590,6 +592,14 @@ class EITWorkstation(QMainWindow):
         self._reference_frame = None
         self._auto_recon_busy = False
         self._pending_auto_target_frame = None
+        self._last_auto_ref_frame = None
+        self._last_auto_tgt_frame = None
+        # Clear the voltage fit from any previous run so it shows nothing
+        # until the second frame of this run is captured and reconstructed.
+        try:
+            self._voltage_plot.clear()
+        except Exception:
+            pass
         if self._record_requested:
             if not self._ensure_recording_session(self._acq_panel.output_dir()):
                 self._record_requested = False
@@ -634,6 +644,8 @@ class EITWorkstation(QMainWindow):
         self._plan_frequencies = []
         self._auto_reconstruct = False
         self._pending_auto_target_frame = None
+        self._last_auto_ref_frame = None
+        self._last_auto_tgt_frame = None
         self._state.set_acquisition_mode(AcquisitionMode.IDLE)
         self._acq_panel.set_acquiring(False)
 
@@ -728,6 +740,10 @@ class EITWorkstation(QMainWindow):
             return
         self._auto_recon_busy = True
         self._pending_auto_target_frame = None
+        # Remember the frame pair so we can display measured/reconstructed
+        # difference voltages even if the backend doesn't populate them.
+        self._last_auto_ref_frame = self._reference_frame
+        self._last_auto_tgt_frame = target_frame
         layout_meta = self._measurement_layout_config()
         request = ReconstructionRequest(
             reference_frame=self._reference_frame,
@@ -761,11 +777,18 @@ class EITWorkstation(QMainWindow):
 
     @Slot(object)
     def _on_auto_reconstruction_done(self, result) -> None:
-        """Handle completed auto-reconstruction during acquisition."""
+        """Handle completed auto-reconstruction during acquisition.
+
+        Display policy (difference imaging):
+        - Reconstruction image: element-wise delta conductivity.
+        - Voltage fit plot:
+            * Measured diff = target.real - reference.real (always computed
+              locally so it's reliable even if the backend omits it).
+            * Recon fit = backend's simulated diff if provided; otherwise
+              only the measured diff is shown.
+        """
         self._auto_recon_busy = False
-        if result.error_msg:
-            # Disable auto-reconstruction on fatal errors (e.g. missing DOLFINx)
-            # to prevent spamming the same error every frame.
+        if getattr(result, "error_msg", None):
             if self._auto_reconstruct:
                 self._auto_reconstruct = False
                 self._status_bar.showMessage(
@@ -777,12 +800,60 @@ class EITWorkstation(QMainWindow):
                     result.error_msg,
                 )
             return
-        self._recon_widget.update_reconstruction(result)
-        if hasattr(result, "measured") and result.measured is not None:
-            self._voltage_plot.update_hardware_voltages(
-                result.measured,
-                result.simulated if hasattr(result, "simulated") else None,
+
+        # Always update the reconstruction image first
+        try:
+            self._recon_widget.update_reconstruction(result)
+        except Exception as exc:
+            log.warning("Reconstruction widget update failed: %s", exc)
+
+        # Voltage fit: compute measured diff from the frame pair we submitted
+        ref_frame = self._last_auto_ref_frame
+        tgt_frame = self._last_auto_tgt_frame
+        measured_diff: np.ndarray | None = None
+        if ref_frame is not None and tgt_frame is not None:
+            try:
+                measured_diff = np.asarray(
+                    tgt_frame.real - ref_frame.real, dtype=np.float64
+                )
+            except Exception as exc:
+                log.debug("Failed to compute measured diff: %s", exc)
+
+        # Prefer backend-provided measured diff if available and same shape
+        backend_measured = getattr(result, "measured", None)
+        if backend_measured is not None:
+            try:
+                backend_arr = np.asarray(backend_measured, dtype=np.float64).reshape(-1)
+                if measured_diff is None or backend_arr.size == measured_diff.size:
+                    measured_diff = backend_arr
+            except Exception:
+                pass
+
+        simulated = getattr(result, "simulated", None)
+        simulated_arr: np.ndarray | None = None
+        if simulated is not None:
+            try:
+                simulated_arr = np.asarray(simulated, dtype=np.float64).reshape(-1)
+                if (
+                    measured_diff is not None
+                    and simulated_arr.size != measured_diff.size
+                ):
+                    log.debug(
+                        "Simulated size %d != measured %d; skipping recon curve",
+                        simulated_arr.size, measured_diff.size,
+                    )
+                    simulated_arr = None
+            except Exception:
+                simulated_arr = None
+
+        if measured_diff is not None and measured_diff.size > 0:
+            self._voltage_plot.update_hardware_voltages(measured_diff, simulated_arr)
+            log.debug(
+                "Voltage fit updated: measured_diff=%d, simulated=%s",
+                measured_diff.size,
+                "yes" if simulated_arr is not None else "no",
             )
+
         if self._auto_reconstruct and self._pending_auto_target_frame is not None:
             QTimer.singleShot(0, self._submit_pending_auto_reconstruction)
 
@@ -1016,6 +1087,11 @@ class EITWorkstation(QMainWindow):
     @Slot(object)
     def _on_hardware_reconstruction_done(self, result: object) -> None:
         if self._tab_widget.currentWidget() is not self._hw_tab:
+            return
+        # When auto-reconstruction is active, the dedicated handler
+        # _on_auto_reconstruction_done owns the voltage plot update (so it
+        # can draw the *difference* voltages). Skip here to avoid clobbering.
+        if self._auto_reconstruct or self._last_auto_tgt_frame is not None:
             return
         measured = getattr(result, "measured", None)
         reconstructed = getattr(result, "simulated", None)
