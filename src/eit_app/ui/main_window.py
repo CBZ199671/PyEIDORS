@@ -28,6 +28,10 @@ from eit_app.controllers.forward_solver_controller import (
     ForwardSolverRequest,
     ForwardSolverResult,
 )
+from eit_app.controllers.batch_reconstruction_controller import (
+    BatchReconstructionController,
+    BatchReconstructionRequest,
+)
 from eit_app.controllers.database_controller import DatabaseController
 from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.connection_preflight import preflight_connection_target
@@ -95,6 +99,8 @@ class EITWorkstation(QMainWindow):
         self._recon_ctrl = ReconstructionController(self)
         self._db_ctrl = DatabaseController(self._default_db_path(), self)
         self._rec_ctrl.set_database_controller(self._db_ctrl)
+        self._batch_recon_ctrl = BatchReconstructionController(self)
+        self._batch_dialog = None  # lazily created
         self._fwd_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
@@ -279,6 +285,9 @@ class EITWorkstation(QMainWindow):
         self._db_tab.reconstruct_requested.connect(self._on_db_reconstruct_requested)
         self._db_tab.open_containing_folder_requested.connect(
             self._on_open_session_folder
+        )
+        self._db_tab.batch_reconstruct_requested.connect(
+            self._on_open_batch_dialog
         )
 
         self._state.connection_status_changed.connect(self._status_bar.on_connection_changed)
@@ -1637,6 +1646,73 @@ class EITWorkstation(QMainWindow):
         plt.close(fig)
 
     @Slot(str)
+    def _on_open_batch_dialog(self, session_dir: str) -> None:
+        """Open the batch reconstruction dialog prefilled with a session folder."""
+        from eit_app.ui.dialogs.batch_reconstruction_dialog import (
+            BatchReconstructionDialog,
+        )
+
+        src = Path(session_dir) if session_dir else None
+        # Suggest a default output directory next to the session dir
+        default_out = None
+        if src is not None and src.exists():
+            parent = src.parent
+            default_out = parent / f"{src.name}_reconstructions"
+
+        dialog = BatchReconstructionDialog(
+            default_input=src,
+            default_output=default_out,
+            parent=self,
+        )
+        self._batch_dialog = dialog
+
+        dialog.start_requested.connect(self._on_batch_start_requested)
+        dialog.cancel_requested.connect(self._batch_recon_ctrl.cancel)
+        self._batch_recon_ctrl.progress.connect(dialog.set_progress)
+        self._batch_recon_ctrl.finished.connect(dialog.on_finished)
+        self._batch_recon_ctrl.error.connect(dialog.on_error)
+
+        dialog.exec()
+
+        # Disconnect to avoid dangling connections with next dialog
+        try:
+            self._batch_recon_ctrl.progress.disconnect(dialog.set_progress)
+            self._batch_recon_ctrl.finished.disconnect(dialog.on_finished)
+            self._batch_recon_ctrl.error.disconnect(dialog.on_error)
+        except (RuntimeError, TypeError):
+            pass
+        self._batch_dialog = None
+
+    @Slot(dict)
+    def _on_batch_start_requested(self, config: dict) -> None:
+        """Launch a batch reconstruction job from the dialog's config."""
+        try:
+            req = BatchReconstructionRequest(
+                input_folder=Path(config["input_folder"]),
+                output_folder=Path(config["output_folder"]),
+                method=config["method"],
+                method_label=config.get("method_label", config["method"]),
+                reference_csv=(
+                    Path(config["reference_csv"])
+                    if config.get("reference_csv")
+                    else None
+                ),
+                use_part=config.get("use_part", "real"),
+                regularization_alpha=float(config.get("regularization_alpha", 1.0)),
+                max_iterations=int(config.get("max_iterations", 10)),
+                save_recon_image=bool(config.get("save_recon_image", True)),
+                save_voltage_fit=bool(config.get("save_voltage_fit", True)),
+                metadata=self._measurement_layout_config(),
+            )
+            ok = self._batch_recon_ctrl.start(req)
+            if not ok and self._batch_dialog is not None:
+                self._batch_dialog.on_error("A batch job is already running.")
+        except Exception as exc:
+            log.exception("Batch start failed")
+            if self._batch_dialog is not None:
+                self._batch_dialog.on_error(str(exc))
+
+    @Slot(str)
     def _on_open_session_folder(self, folder: str) -> None:
         """Open a session folder using the OS file manager."""
         import subprocess
@@ -2188,6 +2264,10 @@ class EITWorkstation(QMainWindow):
         self._recon_ctrl.shutdown()
         self._fwd_ctrl.shutdown()
         self._dataset_ctrl.shutdown()
+        try:
+            self._batch_recon_ctrl.shutdown()
+        except Exception as exc:
+            log.warning("Batch reconstruction shutdown failed: %s", exc)
         try:
             self._db_ctrl.shutdown()
         except Exception as exc:

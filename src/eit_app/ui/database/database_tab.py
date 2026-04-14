@@ -187,6 +187,7 @@ class DatabaseTab(QWidget):
     load_as_target_requested = Signal(dict)
     open_containing_folder_requested = Signal(str)
     reconstruct_requested = Signal(dict)  # config dict from ReconstructionDialog
+    batch_reconstruct_requested = Signal(str)  # session_dir
 
     def __init__(self, db_controller, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -340,8 +341,12 @@ class DatabaseTab(QWidget):
         self._open_folder_btn = QPushButton("Open Folder")
         set_button_role(self._open_folder_btn, "subtle")
         self._open_folder_btn.setEnabled(False)
+        self._batch_recon_btn = QPushButton("Batch Reconstruct…")
+        set_button_role(self._batch_recon_btn, "danger")
+        self._batch_recon_btn.setEnabled(False)
         session_actions.addStretch()
         session_actions.addWidget(self._open_folder_btn)
+        session_actions.addWidget(self._batch_recon_btn)
         sessions_layout.addLayout(session_actions)
 
         splitter.addWidget(sessions_box)
@@ -439,6 +444,7 @@ class DatabaseTab(QWidget):
         self._frame_table.clicked.connect(self._on_frame_clicked)
 
         self._open_folder_btn.clicked.connect(self._on_open_folder)
+        self._batch_recon_btn.clicked.connect(self._on_batch_reconstruct)
         self._as_ref_btn.clicked.connect(self._on_set_reference)
         self._as_tgt_btn.clicked.connect(self._on_set_target)
         self._reconstruct_btn.clicked.connect(self._on_open_reconstruct_dialog)
@@ -501,9 +507,11 @@ class DatabaseTab(QWidget):
             self._current_session_id = None
             self._frame_model.set_rows([])
             self._open_folder_btn.setEnabled(False)
+            self._batch_recon_btn.setEnabled(False)
             return
         self._current_session_id = int(session["id"])
         self._open_folder_btn.setEnabled(True)
+        self._batch_recon_btn.setEnabled(True)
         frames = self._db_ctrl.query_frames(self._current_session_id)
         self._frame_model.set_rows(frames)
 
@@ -561,6 +569,14 @@ class DatabaseTab(QWidget):
         self._selected_reference = None
         self._selected_target = None
         self._update_selection_status()
+
+    def _on_batch_reconstruct(self) -> None:
+        session = self._selected_session()
+        if session is None:
+            return
+        session_dir = str(session.get("session_dir", ""))
+        if session_dir:
+            self.batch_reconstruct_requested.emit(session_dir)
 
     def _on_open_reconstruct_dialog(self) -> None:
         from eit_app.ui.dialogs.reconstruction_dialog import ReconstructionDialog
