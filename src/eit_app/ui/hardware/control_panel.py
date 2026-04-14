@@ -1,8 +1,9 @@
-"""Hardware control panel: frequency, amplitude, and sweep settings."""
+"""Hardware control panel: frequency, amplitude, and diagnostics settings."""
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDoubleSpinBox,
     QGridLayout,
     QGroupBox,
     QHBoxLayout,
@@ -43,6 +44,19 @@ _VOLTAGE_AMP_LABELS = [
 ]
 
 
+def _coerce_scalar_float(value: object, default: float) -> float:
+    if value in (None, ""):
+        return float(default)
+    if isinstance(value, (list, tuple)):
+        if not value:
+            return float(default)
+        return _coerce_scalar_float(value[0], default)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
 class ControlPanel(QGroupBox):
     """Hardware parameter controls.
 
@@ -53,7 +67,6 @@ class ControlPanel(QGroupBox):
         power_toggled: Emitted with True (on) / False (off).
         single_point_requested: Emitted when user clicks single point test.
         impedance_requested: Emitted when user clicks contact impedance test.
-        sweep_requested: Emitted with (start_hz, end_hz, n_points).
     """
 
     frequency_changed = Signal(int)
@@ -63,13 +76,39 @@ class ControlPanel(QGroupBox):
     measurement_layout_changed = Signal(dict)
     single_point_requested = Signal()
     impedance_requested = Signal()
-    sweep_requested = Signal(int, int, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__("2. Setup & Diagnostics", parent)
         self._build_ui()
+        # Prevent child fields from forcing horizontal scrolling:
+        # let spin boxes shrink to fit the available column width.
+        from PySide6.QtWidgets import QSizePolicy
+        for spin in (
+            self._n_elec_spin,
+            self._n_rings_spin,
+            self._exclude_neighbors_spin,
+            self._radius_spin,
+            self._electrode_length_spin,
+            self._contact_impedance_spin,
+        ):
+            spin.setMinimumWidth(60)
+            spin.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        for edit in (self._stim_pattern_edit, self._meas_pattern_edit):
+            edit.setMinimumWidth(60)
+            edit.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self._mea_mode_combo.setMinimumWidth(60)
+        self._mea_mode_combo.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
 
     def _build_ui(self) -> None:
+        from PySide6.QtWidgets import QSizePolicy
+
+        # Allow this panel to shrink horizontally so child grids reflow
+        # rather than forcing horizontal scrollbars in the toolbox.
+        self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        self.setMinimumWidth(260)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 10, 8, 6)
         layout.setSpacing(8)
@@ -138,6 +177,27 @@ class ControlPanel(QGroupBox):
         self._exclude_neighbors_spin.setValue(0)
         self._exclude_neighbors_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
 
+        self._radius_spin = QDoubleSpinBox()
+        self._radius_spin.setRange(0.01, 1000.0)
+        self._radius_spin.setDecimals(4)
+        self._radius_spin.setSingleStep(0.1)
+        self._radius_spin.setValue(1.0)
+        self._radius_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+
+        self._electrode_length_spin = QDoubleSpinBox()
+        self._electrode_length_spin.setRange(0.000001, 1000.0)
+        self._electrode_length_spin.setDecimals(6)
+        self._electrode_length_spin.setSingleStep(0.01)
+        self._electrode_length_spin.setValue(0.19635)
+        self._electrode_length_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+
+        self._contact_impedance_spin = QDoubleSpinBox()
+        self._contact_impedance_spin.setRange(0.0, 1000000.0)
+        self._contact_impedance_spin.setDecimals(6)
+        self._contact_impedance_spin.setSingleStep(0.001)
+        self._contact_impedance_spin.setValue(0.01)
+        self._contact_impedance_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+
         self._layout_hint = QLabel()
         self._layout_hint.setWordWrap(True)
         set_hint_text(self._layout_hint)
@@ -200,29 +260,6 @@ class ControlPanel(QGroupBox):
         set_button_role(self._imp_btn, "subtle")
         self._diagnostic_actions = self._inline_row(self._spt_btn, self._imp_btn)
         layout.addWidget(self._diagnostic_actions)
-
-        self._sweep_start = QSpinBox()
-        self._sweep_start.setRange(100, 1_000_000)
-        self._sweep_start.setValue(1000)
-        self._sweep_start.setSuffix(" Hz")
-        self._sweep_end = QSpinBox()
-        self._sweep_end.setRange(100, 1_000_000)
-        self._sweep_end.setValue(100_000)
-        self._sweep_end.setSuffix(" Hz")
-        self._sweep_points = QSpinBox()
-        self._sweep_points.setRange(2, 1000)
-        self._sweep_points.setValue(10)
-        self._sweep_btn = QPushButton("Run Sweep")
-        self._sweep_btn.clicked.connect(
-            lambda: self.sweep_requested.emit(
-                self._sweep_start.value(),
-                self._sweep_end.value(),
-                self._sweep_points.value(),
-            )
-        )
-        set_button_role(self._sweep_btn, "subtle")
-        self._sweep_section = self._sweep_block()
-        layout.addWidget(self._sweep_section)
 
         layout.addStretch(1)
 
@@ -304,46 +341,23 @@ class ControlPanel(QGroupBox):
         options_grid.addWidget(extra_label, 1, 0)
         options_grid.addWidget(self._exclude_neighbors_spin, 1, 1)
         block_layout.addLayout(options_grid)
+
+        cem_grid = QGridLayout()
+        cem_grid.setContentsMargins(0, 0, 0, 0)
+        cem_grid.setHorizontalSpacing(6)
+        cem_grid.setVerticalSpacing(4)
+        cem_grid.setColumnStretch(0, 1)
+        cem_grid.setColumnStretch(1, 1)
+        cem_grid.setColumnStretch(2, 1)
+        for col, text in enumerate(("Radius", "Elec length", "Contact z")):
+            label = QLabel(text)
+            label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+            cem_grid.addWidget(label, 0, col)
+        cem_grid.addWidget(self._radius_spin, 1, 0)
+        cem_grid.addWidget(self._electrode_length_spin, 1, 1)
+        cem_grid.addWidget(self._contact_impedance_spin, 1, 2)
+        block_layout.addLayout(cem_grid)
         block_layout.addWidget(self._layout_hint)
-        return block
-
-    def _sweep_block(self) -> QWidget:
-        block = QWidget()
-        block_layout = QVBoxLayout(block)
-        block_layout.setContentsMargins(0, 0, 0, 0)
-        block_layout.setSpacing(4)
-
-        title = QLabel("Sweep:")
-        title.setStyleSheet("color: #4d5f75; font-weight: 600;")
-        block_layout.addWidget(title)
-
-        freq_grid = QGridLayout()
-        freq_grid.setContentsMargins(0, 0, 0, 0)
-        freq_grid.setHorizontalSpacing(6)
-        freq_grid.setVerticalSpacing(4)
-        freq_grid.setColumnStretch(0, 1)
-        freq_grid.setColumnStretch(1, 1)
-
-        start_label = QLabel("Start")
-        start_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
-        end_label = QLabel("End")
-        end_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
-        freq_grid.addWidget(start_label, 0, 0)
-        freq_grid.addWidget(end_label, 0, 1)
-        freq_grid.addWidget(self._sweep_start, 1, 0)
-        freq_grid.addWidget(self._sweep_end, 1, 1)
-        block_layout.addLayout(freq_grid)
-
-        tail_row = QWidget()
-        tail_layout = QHBoxLayout(tail_row)
-        tail_layout.setContentsMargins(0, 0, 0, 0)
-        tail_layout.setSpacing(6)
-        points_label = QLabel("Points:")
-        points_label.setStyleSheet("color: #4d5f75; font-weight: 600;")
-        tail_layout.addWidget(points_label)
-        tail_layout.addWidget(self._sweep_points, 1)
-        tail_layout.addWidget(self._sweep_btn)
-        block_layout.addWidget(tail_row)
         return block
 
     def _emit_power_toggle(self, on: bool) -> None:
@@ -362,6 +376,10 @@ class ControlPanel(QGroupBox):
             "rotate_meas": self._rotate_meas_check.isChecked(),
             "use_meas_current": self._use_meas_current_check.isChecked(),
             "use_meas_current_next": self._exclude_neighbors_spin.value(),
+            "radius": float(self._radius_spin.value()),
+            "electrode_length_m_override": float(self._electrode_length_spin.value()),
+            "contact_impedance": float(self._contact_impedance_spin.value()),
+            "geometry_scale_to_m": 1.0,
         }
 
     def set_measurement_layout(self, config: dict) -> None:
@@ -376,6 +394,9 @@ class ControlPanel(QGroupBox):
             self._rotate_meas_check,
             self._use_meas_current_check,
             self._exclude_neighbors_spin,
+            self._radius_spin,
+            self._electrode_length_spin,
+            self._contact_impedance_spin,
         )
         blockers = [widget.blockSignals(True) for widget in widgets]
         try:
@@ -387,6 +408,11 @@ class ControlPanel(QGroupBox):
             self._rotate_meas_check.setChecked(bool(layout["rotate_meas"]))
             self._use_meas_current_check.setChecked(bool(layout["use_meas_current"]))
             self._exclude_neighbors_spin.setValue(int(layout["use_meas_current_next"]))
+            self._radius_spin.setValue(float(layout["radius"]))
+            self._electrode_length_spin.setValue(
+                _coerce_scalar_float(layout.get("electrode_length_m_override"), 0.19635)
+            )
+            self._contact_impedance_spin.setValue(float(layout["contact_impedance"]))
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
@@ -402,10 +428,15 @@ class ControlPanel(QGroupBox):
         dimension = "3D" if mea_mode == 3 else "2D"
         rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
         drive = "include drive electrodes" if bool(layout["use_meas_current"]) else "exclude drive electrodes"
+        electrode_length = _coerce_scalar_float(layout.get("electrode_length_m_override"), 0.0)
+        coverage = _coerce_scalar_float(layout.get("electrode_coverage"), 0.5)
+        contact_impedance = _coerce_scalar_float(layout.get("contact_impedance"), 0.01)
         self._layout_hint.setText(
             f"{dimension} | {int(layout['n_elec'])} e/ring x {int(layout['n_rings'])} ring(s) | "
             f"{layout['stim_pattern']} / {layout['meas_pattern']} | {rotate} | {drive} | "
             f"+{int(layout['use_meas_current_next'])} extra skip | "
+            f"CEM L={electrode_length:.4f} | z={contact_impedance:.4g} | "
+            f"cov={coverage * 100.0:.1f}% | "
             f"expected {int(layout['points_per_frame'])} boundary samples"
         )
 
@@ -420,6 +451,11 @@ class ControlPanel(QGroupBox):
             blocked = button.blockSignals(True)
             button.setChecked(checked)
             button.blockSignals(blocked)
+
+    def set_frequency_value(self, hz: int) -> None:
+        blocked = self._freq_spin.blockSignals(True)
+        self._freq_spin.setValue(int(hz))
+        self._freq_spin.blockSignals(blocked)
 
     def set_enabled(self, enabled: bool) -> None:
         """Enable/disable all controls (e.g., when not connected)."""

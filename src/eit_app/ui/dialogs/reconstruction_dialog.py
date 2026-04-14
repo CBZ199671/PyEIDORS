@@ -175,7 +175,7 @@ class ReconstructionDialog(QDialog):
         return box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("ALGORITHM & PARAMETERS")
+        box = QGroupBox("ALGORITHM && PARAMETERS")
         layout = QFormLayout(box)
         layout.setSpacing(10)
         layout.setContentsMargins(14, 20, 14, 14)

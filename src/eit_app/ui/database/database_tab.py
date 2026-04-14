@@ -211,9 +211,9 @@ class DatabaseTab(QWidget):
         splitter.addWidget(self._build_center_panel())
         splitter.addWidget(self._build_preview_panel())
         splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 3)
-        splitter.setStretchFactor(2, 2)
-        splitter.setSizes([260, 700, 440])
+        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(2, 0)
+        splitter.setSizes([240, 900, 340])
         root.addWidget(splitter)
 
     def _build_filter_panel(self) -> QWidget:
@@ -437,10 +437,11 @@ class DatabaseTab(QWidget):
         layout.addWidget(hint)
 
         self._preview_plot = LivePlotWidget()
-        self._preview_plot.setMinimumHeight(320)
+        self._preview_plot.setMinimumHeight(280)
         layout.addWidget(self._preview_plot, 1)
 
-        box.setMinimumWidth(380)
+        box.setMinimumWidth(300)
+        box.setMaximumWidth(420)
         return box
 
     def _connect_signals(self) -> None:

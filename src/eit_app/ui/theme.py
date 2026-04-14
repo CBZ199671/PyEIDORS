@@ -684,21 +684,100 @@ QCheckBox::indicator:checked:hover {
     background: #2a6fa0;
 }
 
-QDateEdit::drop-down,
-QSpinBox::up-button,
-QSpinBox::down-button,
-QDoubleSpinBox::up-button,
-QDoubleSpinBox::down-button {
-    background: #f4f7fa;
-    border: none;
-    width: 18px;
+QSpinBox,
+QDoubleSpinBox {
+    padding-right: 22px;  /* leave room for the up/down buttons */
 }
 
-QDateEdit::drop-down:hover,
+QSpinBox::up-button,
+QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 18px;
+    background: #f4f7fa;
+    border-left: 1px solid #e0e6ee;
+    border-top-right-radius: 7px;
+}
+
+QSpinBox::down-button,
+QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    width: 18px;
+    background: #f4f7fa;
+    border-left: 1px solid #e0e6ee;
+    border-top: 1px solid #e0e6ee;
+    border-bottom-right-radius: 7px;
+}
+
 QSpinBox::up-button:hover,
-QSpinBox::down-button:hover,
 QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover,
 QDoubleSpinBox::down-button:hover {
-    background: #e3ebf4;
+    background: #d9e8f7;
+}
+
+QSpinBox::up-button:pressed,
+QDoubleSpinBox::up-button:pressed,
+QSpinBox::down-button:pressed,
+QDoubleSpinBox::down-button:pressed {
+    background: #b6cfe3;
+}
+
+QSpinBox::up-arrow,
+QDoubleSpinBox::up-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #5b6573;
+    width: 0;
+    height: 0;
+}
+
+QSpinBox::down-arrow,
+QDoubleSpinBox::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #5b6573;
+    width: 0;
+    height: 0;
+}
+
+QSpinBox::up-arrow:hover,
+QDoubleSpinBox::up-arrow:hover {
+    border-bottom-color: #1f5d8b;
+}
+
+QSpinBox::down-arrow:hover,
+QDoubleSpinBox::down-arrow:hover {
+    border-top-color: #1f5d8b;
+}
+
+QDateEdit {
+    padding-right: 24px;
+}
+
+QDateEdit::drop-down {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    width: 22px;
+    background: #f4f7fa;
+    border-left: 1px solid #e0e6ee;
+    border-top-right-radius: 7px;
+    border-bottom-right-radius: 7px;
+}
+
+QDateEdit::drop-down:hover {
+    background: #d9e8f7;
+}
+
+QDateEdit::down-arrow {
+    image: none;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #5b6573;
+    width: 0;
+    height: 0;
 }
 """

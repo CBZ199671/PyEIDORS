@@ -1584,9 +1584,26 @@ class EITWorkstation(QMainWindow):
                 self._save_voltage_fit_plot(result, out / f"{prefix}_voltage_fit.png")
 
             self._status_bar.showMessage(f"Saved outputs to {out}", 8000)
+            # Prompt to open the output folder
+            self._offer_open_folder(str(out))
         except Exception as exc:
             log.warning("Failed to save reconstruction outputs: %s", exc)
             self._status_bar.showMessage(f"Save failed: {exc}", 8000)
+
+    def _offer_open_folder(self, folder: str) -> None:
+        """Show a non-blocking prompt offering to open the folder."""
+        from PySide6.QtWidgets import QMessageBox
+
+        msg = QMessageBox(self)
+        msg.setWindowTitle("Reconstruction complete")
+        msg.setIcon(QMessageBox.Icon.Information)
+        msg.setText("Reconstruction saved successfully.")
+        msg.setInformativeText(f"Output folder:\n{folder}")
+        open_btn = msg.addButton("Open Folder", QMessageBox.ButtonRole.AcceptRole)
+        msg.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        msg.exec()
+        if msg.clickedButton() is open_btn:
+            self._on_open_session_folder(folder)
 
     def _save_reconstruction_image(self, result, path: Path) -> None:
         """Render conductivity as PNG using matplotlib tripcolor."""

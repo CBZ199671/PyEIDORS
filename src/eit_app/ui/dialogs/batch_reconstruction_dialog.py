@@ -65,6 +65,7 @@ class BatchReconstructionDialog(QDialog):
         self._default_input = default_input
         self._default_output = default_output
         self._is_running = False
+        self._last_output_folder: str | None = None
         self._build_ui()
         self._connect_signals()
         self._update_reference_requirement()
@@ -120,6 +121,12 @@ class BatchReconstructionDialog(QDialog):
         set_button_role(self._close_btn, "subtle")
         btn_row.addWidget(self._close_btn)
 
+        self._open_output_btn = QPushButton("Open Output Folder")
+        set_button_role(self._open_output_btn, "success")
+        self._open_output_btn.setVisible(False)
+        self._open_output_btn.setMinimumWidth(170)
+        btn_row.addWidget(self._open_output_btn)
+
         self._cancel_btn = QPushButton("Cancel Job")
         set_button_role(self._cancel_btn, "danger")
         self._cancel_btn.setVisible(False)
@@ -173,7 +180,7 @@ class BatchReconstructionDialog(QDialog):
         return box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("ALGORITHM & PARAMETERS")
+        box = QGroupBox("ALGORITHM && PARAMETERS")
         layout = QFormLayout(box)
         layout.setSpacing(8)
         layout.setContentsMargins(14, 20, 14, 14)
@@ -273,6 +280,7 @@ class BatchReconstructionDialog(QDialog):
         self._run_btn.clicked.connect(self._on_run)
         self._cancel_btn.clicked.connect(self._on_cancel)
         self._close_btn.clicked.connect(self.reject)
+        self._open_output_btn.clicked.connect(self._on_open_output_folder)
         self._update_run_enabled()
 
     def _update_reference_requirement(self, *args) -> None:
@@ -320,6 +328,8 @@ class BatchReconstructionDialog(QDialog):
         idx = self._algo_combo.currentIndex()
         label, method, needs_ref = _ALGORITHMS[idx]
         ref_csv = self._ref_edit.text().strip() or None
+        self._last_output_folder = self._output_edit.text().strip() or None
+        self._open_output_btn.setVisible(False)
         config: dict[str, Any] = {
             "input_folder": self._input_edit.text().strip(),
             "output_folder": self._output_edit.text().strip(),
@@ -369,11 +379,48 @@ class BatchReconstructionDialog(QDialog):
 
     def on_finished(self, succeeded: int, failed: int) -> None:
         self._set_running(False)
+        if succeeded > 0 and failed == 0:
+            icon = "✓"
+            tone = "color: #1b7947;"
+        elif failed > 0 and succeeded > 0:
+            icon = "⚠"
+            tone = "color: #a06a10;"
+        else:
+            icon = "✕"
+            tone = "color: #a04040;"
+        self._progress_label.setStyleSheet(
+            f"{tone} font-size: 12px; font-weight: 600;"
+            " background: transparent; padding: 4px 2px;"
+        )
         self._progress_label.setText(
-            f"Finished. Succeeded: {succeeded}, failed: {failed}"
+            f"{icon}  Finished — succeeded: {succeeded}, failed: {failed}"
         )
         self._run_btn.setEnabled(True)
+        # Show "Open Output Folder" button if we have a folder that exists
+        if self._last_output_folder and Path(self._last_output_folder).exists():
+            self._open_output_btn.setVisible(True)
 
     def on_error(self, message: str) -> None:
         self._set_running(False)
-        self._progress_label.setText(f"Error: {message}")
+        self._progress_label.setStyleSheet(
+            "color: #a04040; font-size: 12px; font-weight: 600;"
+            " background: transparent; padding: 4px 2px;"
+        )
+        self._progress_label.setText(f"✕  Error: {message}")
+
+    def _on_open_output_folder(self) -> None:
+        if not self._last_output_folder:
+            return
+        import subprocess
+        import sys
+        folder = self._last_output_folder
+        try:
+            if sys.platform == "win32":
+                import os
+                os.startfile(folder)  # type: ignore[attr-defined]
+            elif sys.platform == "darwin":
+                subprocess.Popen(["open", folder])
+            else:
+                subprocess.Popen(["xdg-open", folder])
+        except Exception:
+            pass
