@@ -72,15 +72,62 @@ from eit_app.models.frame_model import FrameData
 log = logging.getLogger(__name__)
 
 
+def _is_wsl() -> bool:
+    """Detect whether we are running inside a WSL distribution."""
+    import os
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        with open("/proc/version", "r") as f:
+            return "microsoft" in f.read().lower()
+    except Exception:
+        return False
+
+
+def _open_with_explorer_exe(folder_path: str) -> bool:
+    """Launch Windows Explorer on a WSL / Windows path. Returns True on success."""
+    import shutil
+    import subprocess
+
+    if shutil.which("explorer.exe") is None:
+        return False
+    try:
+        # If we have wslpath, convert the POSIX path to a Windows UNC/local path
+        if shutil.which("wslpath") is not None:
+            try:
+                win_path = subprocess.check_output(
+                    ["wslpath", "-w", folder_path],
+                    text=True,
+                    stderr=subprocess.DEVNULL,
+                ).strip()
+                if win_path:
+                    subprocess.Popen(["explorer.exe", win_path])
+                    return True
+            except Exception as exc:
+                log.debug("wslpath conversion failed: %s", exc)
+        # Fallback: let explorer.exe handle it as-is (works for Windows drive paths)
+        subprocess.Popen(["explorer.exe", folder_path])
+        return True
+    except Exception as exc:
+        log.debug("explorer.exe launch failed: %s", exc)
+        return False
+
+
 def _open_folder_in_file_manager(folder: str) -> bool:
     """Open *folder* in the native file manager. Returns True on success.
 
-    Tries, in order:
-      - os.startfile (Windows)
-      - `open` (macOS)
-      - `wslview`, `xdg-open`, `gio open` (Linux / WSL)
-      - `explorer.exe` with a Windows path converted via `wslpath -w`
-      - QDesktopServices.openUrl (Qt fallback)
+    Handles three environments:
+
+    - **Windows**: ``os.startfile`` (then ``explorer.exe`` as a backup)
+    - **macOS**: ``open``
+    - **Pure Linux**: ``xdg-open`` → ``gio open`` → ``dbus-send`` → QDesktopServices
+    - **WSL**: prefer ``explorer.exe`` (always available; converts path with
+      ``wslpath -w``) → ``wslview`` → then normal Linux openers as last resort
+
+    On WSL we intentionally skip ``xdg-open`` / ``gio open`` as the primary
+    choice because they commonly fail when no Linux desktop is installed
+    (the typical WSL case), producing the confusing
+    "Failed to find default application for content type 'inode/directory'".
     """
     import os
     import shutil
@@ -89,51 +136,69 @@ def _open_folder_in_file_manager(folder: str) -> bool:
 
     if not folder:
         return False
-    folder_path = str(folder)
+    folder_path = os.path.expanduser(str(folder))
 
-    # Windows native
+    # ---- Windows native ----
     if sys.platform == "win32":
         try:
             os.startfile(folder_path)  # type: ignore[attr-defined]
             return True
         except Exception as exc:
             log.debug("os.startfile failed: %s", exc)
+        try:
+            subprocess.Popen(["explorer.exe", folder_path])
+            return True
+        except Exception as exc:
+            log.debug("explorer.exe failed on win32: %s", exc)
+        return _qt_open_url(folder_path)
 
-    # macOS
+    # ---- macOS ----
     if sys.platform == "darwin":
         try:
             subprocess.Popen(["open", folder_path])
             return True
         except Exception as exc:
-            log.debug("open failed: %s", exc)
+            log.debug("open (darwin) failed: %s", exc)
+        return _qt_open_url(folder_path)
 
-    # Linux / WSL — try multiple openers
-    linux_openers = ["wslview", "xdg-open", "gio"]
-    for opener in linux_openers:
+    # ---- WSL: go straight to explorer.exe (most reliable) ----
+    if _is_wsl():
+        if _open_with_explorer_exe(folder_path):
+            return True
+        if shutil.which("wslview") is not None:
+            try:
+                subprocess.Popen(["wslview", folder_path])
+                return True
+            except Exception as exc:
+                log.debug("wslview failed: %s", exc)
+        # Fall through to pure-Linux openers (may also fail but worth trying)
+
+    # ---- Pure Linux ----
+    for opener in ("xdg-open", "gio", "kde-open5", "kioclient5", "dolphin", "nautilus"):
         if shutil.which(opener) is None:
             continue
         try:
             if opener == "gio":
-                subprocess.Popen(["gio", "open", folder_path])
+                subprocess.Popen(
+                    ["gio", "open", folder_path],
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                )
             else:
-                subprocess.Popen([opener, folder_path])
+                subprocess.Popen(
+                    [opener, folder_path],
+                    stderr=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                )
             return True
         except Exception as exc:
             log.debug("%s failed: %s", opener, exc)
 
-    # WSL fallback: convert to Windows path and launch explorer.exe
-    if shutil.which("wslpath") is not None and shutil.which("explorer.exe") is not None:
-        try:
-            win_path = subprocess.check_output(
-                ["wslpath", "-w", folder_path], text=True
-            ).strip()
-            if win_path:
-                subprocess.Popen(["explorer.exe", win_path])
-                return True
-        except Exception as exc:
-            log.debug("explorer.exe via wslpath failed: %s", exc)
+    # ---- Qt cross-platform last resort ----
+    return _qt_open_url(folder_path)
 
-    # Last resort: Qt's cross-platform opener (uses file:// URL)
+
+def _qt_open_url(folder_path: str) -> bool:
     try:
         from PySide6.QtCore import QUrl
         from PySide6.QtGui import QDesktopServices
@@ -143,7 +208,6 @@ def _open_folder_in_file_manager(folder: str) -> bool:
             return True
     except Exception as exc:
         log.debug("QDesktopServices failed: %s", exc)
-
     return False
 
 _VOLTAGE_GAIN_LABELS = {
@@ -1818,11 +1882,13 @@ class EITWorkstation(QMainWindow):
         """
         if _open_folder_in_file_manager(folder):
             return
+        # Everything failed — this is rare since explorer.exe works on WSL
+        # and xdg-open on Linux desktop. Most likely cause: folder doesn't
+        # exist or the user has no desktop/Explorer interop at all.
         self._on_error(
-            f"Failed to open folder: {folder}\n"
-            "No file-manager opener is available. On WSL, install "
-            "wslu (wslview) or xdg-utils, e.g. "
-            "sudo apt install wslu"
+            f"Failed to open folder:\n{folder}\n\n"
+            "Verify the path exists. On WSL without Windows integration, "
+            "install wslu: sudo apt install wslu"
         )
 
     def _open_settings(self) -> None:

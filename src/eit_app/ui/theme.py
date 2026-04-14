@@ -684,7 +684,7 @@ QCheckBox::indicator:checked:hover {
     background: #2a6fa0;
 }
 
-/* Spin box buttons — style background only, let Qt draw native arrows */
+/* Spin box buttons with embedded SVG arrows */
 QSpinBox::up-button,
 QDoubleSpinBox::up-button {
     subcontrol-origin: border;
@@ -722,17 +722,29 @@ QDoubleSpinBox::down-button:pressed {
 
 QSpinBox::up-arrow,
 QDoubleSpinBox::up-arrow {
+    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsMi41IDEuNSw3IDguNSw3IiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
     width: 10px;
     height: 10px;
 }
 
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
+    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
     width: 10px;
     height: 10px;
 }
 
-/* Date edit — let Qt draw the native dropdown arrow */
+QSpinBox::up-arrow:hover,
+QDoubleSpinBox::up-arrow:hover {
+    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsMi41IDEuNSw3IDguNSw3IiBmaWxsPSIjMWY1ZDhiIi8+PC9zdmc+");
+}
+
+QSpinBox::down-arrow:hover,
+QDoubleSpinBox::down-arrow:hover {
+    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjMWY1ZDhiIi8+PC9zdmc+");
+}
+
+/* Date edit dropdown */
 QDateEdit::drop-down {
     subcontrol-origin: border;
     subcontrol-position: top right;
@@ -748,6 +760,7 @@ QDateEdit::drop-down:hover {
 }
 
 QDateEdit::down-arrow {
+    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
     width: 10px;
     height: 10px;
 }
