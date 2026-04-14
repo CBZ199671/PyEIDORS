@@ -684,16 +684,12 @@ QCheckBox::indicator:checked:hover {
     background: #2a6fa0;
 }
 
-QSpinBox,
-QDoubleSpinBox {
-    padding-right: 22px;  /* leave room for the up/down buttons */
-}
-
+/* Spin box buttons — style background only, let Qt draw native arrows */
 QSpinBox::up-button,
 QDoubleSpinBox::up-button {
     subcontrol-origin: border;
     subcontrol-position: top right;
-    width: 18px;
+    width: 20px;
     background: #f4f7fa;
     border-left: 1px solid #e0e6ee;
     border-top-right-radius: 7px;
@@ -703,7 +699,7 @@ QSpinBox::down-button,
 QDoubleSpinBox::down-button {
     subcontrol-origin: border;
     subcontrol-position: bottom right;
-    width: 18px;
+    width: 20px;
     background: #f4f7fa;
     border-left: 1px solid #e0e6ee;
     border-top: 1px solid #e0e6ee;
@@ -726,38 +722,17 @@ QDoubleSpinBox::down-button:pressed {
 
 QSpinBox::up-arrow,
 QDoubleSpinBox::up-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-bottom: 5px solid #5b6573;
-    width: 0;
-    height: 0;
+    width: 10px;
+    height: 10px;
 }
 
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #5b6573;
-    width: 0;
-    height: 0;
+    width: 10px;
+    height: 10px;
 }
 
-QSpinBox::up-arrow:hover,
-QDoubleSpinBox::up-arrow:hover {
-    border-bottom-color: #1f5d8b;
-}
-
-QSpinBox::down-arrow:hover,
-QDoubleSpinBox::down-arrow:hover {
-    border-top-color: #1f5d8b;
-}
-
-QDateEdit {
-    padding-right: 24px;
-}
-
+/* Date edit — let Qt draw the native dropdown arrow */
 QDateEdit::drop-down {
     subcontrol-origin: border;
     subcontrol-position: top right;
@@ -773,11 +748,7 @@ QDateEdit::drop-down:hover {
 }
 
 QDateEdit::down-arrow {
-    image: none;
-    border-left: 4px solid transparent;
-    border-right: 4px solid transparent;
-    border-top: 5px solid #5b6573;
-    width: 0;
-    height: 0;
+    width: 10px;
+    height: 10px;
 }
 """

@@ -40,6 +40,16 @@ from eit_app.ui.theme import set_button_role, set_hint_text
 log = logging.getLogger(__name__)
 
 
+def _default_results_dir() -> Path:
+    """Return the default output directory: <app cwd>/results, created if missing."""
+    base = Path.cwd() / "results"
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return base
+
+
 # Algorithm options: (display_label, method_key, requires_reference)
 _ALGORITHMS = [
     ("Gauss-Newton · Difference (single-step)", "gn-difference", True),
@@ -78,7 +88,8 @@ class ReconstructionDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Reconstruct")
-        self.setMinimumWidth(560)
+        self.setMinimumWidth(720)
+        self.resize(780, 700)
         self._reference_entry = reference_entry
         self._target_entry = target_entry
         self._build_ui()
@@ -159,6 +170,7 @@ class ReconstructionDialog(QDialog):
             "background: #f0f6fb; border: 1px solid #c6d7e6;"
             " border-radius: 6px; padding: 7px 12px;"
             " color: #243447; font-family: monospace; font-size: 12px;"
+            " min-width: 360px;"
         )
 
         self._ref_label = QLabel(self._format_entry(self._reference_entry))
@@ -215,8 +227,10 @@ class ReconstructionDialog(QDialog):
         dir_row.setSpacing(6)
         self._dir_edit = QLineEdit()
         self._dir_edit.setPlaceholderText("Leave empty to only display the result (not save)")
+        self._dir_edit.setText(str(_default_results_dir()))
         self._dir_browse_btn = QPushButton("Browse…")
         set_button_role(self._dir_browse_btn, "subtle")
+        self._dir_browse_btn.setMinimumWidth(90)
         self._dir_browse_btn.clicked.connect(self._on_browse_output_dir)
         dir_row.addWidget(self._dir_edit, 1)
         dir_row.addWidget(self._dir_browse_btn)

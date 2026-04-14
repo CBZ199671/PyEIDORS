@@ -71,6 +71,81 @@ from eit_app.models.frame_model import FrameData
 
 log = logging.getLogger(__name__)
 
+
+def _open_folder_in_file_manager(folder: str) -> bool:
+    """Open *folder* in the native file manager. Returns True on success.
+
+    Tries, in order:
+      - os.startfile (Windows)
+      - `open` (macOS)
+      - `wslview`, `xdg-open`, `gio open` (Linux / WSL)
+      - `explorer.exe` with a Windows path converted via `wslpath -w`
+      - QDesktopServices.openUrl (Qt fallback)
+    """
+    import os
+    import shutil
+    import subprocess
+    import sys
+
+    if not folder:
+        return False
+    folder_path = str(folder)
+
+    # Windows native
+    if sys.platform == "win32":
+        try:
+            os.startfile(folder_path)  # type: ignore[attr-defined]
+            return True
+        except Exception as exc:
+            log.debug("os.startfile failed: %s", exc)
+
+    # macOS
+    if sys.platform == "darwin":
+        try:
+            subprocess.Popen(["open", folder_path])
+            return True
+        except Exception as exc:
+            log.debug("open failed: %s", exc)
+
+    # Linux / WSL — try multiple openers
+    linux_openers = ["wslview", "xdg-open", "gio"]
+    for opener in linux_openers:
+        if shutil.which(opener) is None:
+            continue
+        try:
+            if opener == "gio":
+                subprocess.Popen(["gio", "open", folder_path])
+            else:
+                subprocess.Popen([opener, folder_path])
+            return True
+        except Exception as exc:
+            log.debug("%s failed: %s", opener, exc)
+
+    # WSL fallback: convert to Windows path and launch explorer.exe
+    if shutil.which("wslpath") is not None and shutil.which("explorer.exe") is not None:
+        try:
+            win_path = subprocess.check_output(
+                ["wslpath", "-w", folder_path], text=True
+            ).strip()
+            if win_path:
+                subprocess.Popen(["explorer.exe", win_path])
+                return True
+        except Exception as exc:
+            log.debug("explorer.exe via wslpath failed: %s", exc)
+
+    # Last resort: Qt's cross-platform opener (uses file:// URL)
+    try:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        url = QUrl.fromLocalFile(folder_path)
+        if QDesktopServices.openUrl(url):
+            return True
+    except Exception as exc:
+        log.debug("QDesktopServices failed: %s", exc)
+
+    return False
+
 _VOLTAGE_GAIN_LABELS = {
     0: "0.097x",
     1: "0.175x",
@@ -1670,11 +1745,15 @@ class EITWorkstation(QMainWindow):
         )
 
         src = Path(session_dir) if session_dir else None
-        # Suggest a default output directory next to the session dir
+        # Suggest a default output directory: <app>/results/{session_name}
         default_out = None
         if src is not None and src.exists():
-            parent = src.parent
-            default_out = parent / f"{src.name}_reconstructions"
+            results_root = Path.cwd() / "results"
+            try:
+                results_root.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            default_out = results_root / src.name
 
         dialog = BatchReconstructionDialog(
             default_input=src,
@@ -1731,19 +1810,20 @@ class EITWorkstation(QMainWindow):
 
     @Slot(str)
     def _on_open_session_folder(self, folder: str) -> None:
-        """Open a session folder using the OS file manager."""
-        import subprocess
-        import sys
-        try:
-            if sys.platform == "win32":
-                import os
-                os.startfile(folder)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", folder])
-            else:
-                subprocess.Popen(["xdg-open", folder])
-        except Exception as exc:
-            self._on_error(f"Failed to open folder: {exc}")
+        """Open a session folder using the OS file manager.
+
+        Handles WSL robustly: if xdg-open is missing, falls back to
+        wslview, then explorer.exe with a Windows path, then gio open,
+        then QDesktopServices.
+        """
+        if _open_folder_in_file_manager(folder):
+            return
+        self._on_error(
+            f"Failed to open folder: {folder}\n"
+            "No file-manager opener is available. On WSL, install "
+            "wslu (wslview) or xdg-utils, e.g. "
+            "sudo apt install wslu"
+        )
 
     def _open_settings(self) -> None:
         from eit_app.ui.dialogs.settings_dialog import SettingsDialog

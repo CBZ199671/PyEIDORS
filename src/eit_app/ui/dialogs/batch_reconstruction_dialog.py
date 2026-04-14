@@ -61,7 +61,8 @@ class BatchReconstructionDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Batch Reconstruct")
-        self.setMinimumWidth(620)
+        self.setMinimumWidth(760)
+        self.resize(820, 640)
         self._default_input = default_input
         self._default_output = default_output
         self._is_running = False
@@ -153,6 +154,7 @@ class BatchReconstructionDialog(QDialog):
             self._input_edit.setText(str(self._default_input))
         self._input_browse_btn = QPushButton("Browse…")
         set_button_role(self._input_browse_btn, "subtle")
+        self._input_browse_btn.setMinimumWidth(90)
         in_row = QHBoxLayout()
         in_row.setContentsMargins(0, 0, 0, 0)
         in_row.setSpacing(6)
@@ -166,8 +168,17 @@ class BatchReconstructionDialog(QDialog):
         self._output_edit.setPlaceholderText("Folder to write reconstruction images")
         if self._default_output:
             self._output_edit.setText(str(self._default_output))
+        else:
+            # Fall back to <app>/results for convenience
+            default_root = Path.cwd() / "results"
+            try:
+                default_root.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            self._output_edit.setText(str(default_root))
         self._output_browse_btn = QPushButton("Browse…")
         set_button_role(self._output_browse_btn, "subtle")
+        self._output_browse_btn.setMinimumWidth(90)
         out_row = QHBoxLayout()
         out_row.setContentsMargins(0, 0, 0, 0)
         out_row.setSpacing(6)
@@ -214,6 +225,7 @@ class BatchReconstructionDialog(QDialog):
         )
         self._ref_browse_btn = QPushButton("Browse…")
         set_button_role(self._ref_browse_btn, "subtle")
+        self._ref_browse_btn.setMinimumWidth(90)
         ref_row = QHBoxLayout()
         ref_row.setContentsMargins(0, 0, 0, 0)
         ref_row.setSpacing(6)
@@ -411,16 +423,5 @@ class BatchReconstructionDialog(QDialog):
     def _on_open_output_folder(self) -> None:
         if not self._last_output_folder:
             return
-        import subprocess
-        import sys
-        folder = self._last_output_folder
-        try:
-            if sys.platform == "win32":
-                import os
-                os.startfile(folder)  # type: ignore[attr-defined]
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", folder])
-            else:
-                subprocess.Popen(["xdg-open", folder])
-        except Exception:
-            pass
+        from eit_app.ui.main_window import _open_folder_in_file_manager
+        _open_folder_in_file_manager(self._last_output_folder)
