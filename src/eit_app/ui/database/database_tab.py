@@ -217,12 +217,12 @@ class DatabaseTab(QWidget):
         root.addWidget(splitter)
 
     def _build_filter_panel(self) -> QWidget:
-        box = QGroupBox("Filters")
+        box = QGroupBox("FILTERS")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 18, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setSpacing(12)
 
-        hint = QLabel("Search and filter recorded sessions.")
+        hint = QLabel("Search the archive by name, frequency, or date.")
         hint.setWordWrap(True)
         set_hint_text(hint)
         layout.addWidget(hint)
@@ -272,26 +272,35 @@ class DatabaseTab(QWidget):
 
         layout.addStretch()
 
-        status_box = QWidget()
-        status_layout = QVBoxLayout(status_box)
-        status_layout.setContentsMargins(0, 8, 0, 0)
-        status_layout.setSpacing(4)
+        # Stats card at the bottom
+        stats_card = QWidget()
+        stats_card.setStyleSheet(
+            "background: #f5f9fd; border: 1px solid #dbe4ef;"
+            " border-radius: 8px; padding: 10px;"
+        )
+        stats_layout = QVBoxLayout(stats_card)
+        stats_layout.setContentsMargins(12, 10, 12, 10)
+        stats_layout.setSpacing(4)
 
         self._count_label = QLabel("0 sessions")
         self._count_label.setStyleSheet(
-            "color: #1f3b5b; font-weight: 700; font-size: 14px;"
+            "color: #1f5d8b; font-weight: 700; font-size: 15px;"
+            " background: transparent; border: none; padding: 0;"
         )
-        status_layout.addWidget(self._count_label)
+        stats_layout.addWidget(self._count_label)
 
-        self._backfill_status = QLabel("")
-        set_hint_text(self._backfill_status)
+        self._backfill_status = QLabel("Ready")
+        self._backfill_status.setStyleSheet(
+            "color: #6a7686; font-size: 11px;"
+            " background: transparent; border: none; padding: 0;"
+        )
         self._backfill_status.setWordWrap(True)
-        status_layout.addWidget(self._backfill_status)
+        stats_layout.addWidget(self._backfill_status)
 
-        layout.addWidget(status_box)
+        layout.addWidget(stats_card)
 
-        box.setMinimumWidth(240)
-        box.setMaximumWidth(320)
+        box.setMinimumWidth(250)
+        box.setMaximumWidth(330)
         return box
 
     def _build_center_panel(self) -> QWidget:
@@ -305,10 +314,10 @@ class DatabaseTab(QWidget):
         splitter.setHandleWidth(6)
 
         # ---- Sessions section ----
-        sessions_box = QGroupBox("Sessions")
+        sessions_box = QGroupBox("SESSIONS")
         sessions_layout = QVBoxLayout(sessions_box)
-        sessions_layout.setContentsMargins(12, 18, 12, 12)
-        sessions_layout.setSpacing(8)
+        sessions_layout.setContentsMargins(14, 20, 14, 14)
+        sessions_layout.setSpacing(10)
 
         self._session_model = _SessionTableModel()
         self._session_table = QTableView()
@@ -352,10 +361,10 @@ class DatabaseTab(QWidget):
         splitter.addWidget(sessions_box)
 
         # ---- Frames section ----
-        frames_box = QGroupBox("Frames")
+        frames_box = QGroupBox("FRAMES")
         frames_layout = QVBoxLayout(frames_box)
-        frames_layout.setContentsMargins(12, 18, 12, 12)
-        frames_layout.setSpacing(8)
+        frames_layout.setContentsMargins(14, 20, 14, 14)
+        frames_layout.setSpacing(10)
 
         self._frame_model = _FrameTableModel()
         self._frame_table = QTableView()
@@ -380,7 +389,11 @@ class DatabaseTab(QWidget):
         self._selection_status = QLabel(
             "Select a frame, then click 'Set as Reference' or 'Set as Target'."
         )
-        set_hint_text(self._selection_status)
+        self._selection_status.setStyleSheet(
+            "background: #f5f9fd; border: 1px solid #dbe4ef;"
+            " border-radius: 6px; padding: 6px 10px;"
+            " color: #5b6573; font-size: 12px;"
+        )
         self._selection_status.setWordWrap(True)
         frames_layout.addWidget(self._selection_status)
 
@@ -413,12 +426,12 @@ class DatabaseTab(QWidget):
         return container
 
     def _build_preview_panel(self) -> QWidget:
-        box = QGroupBox("Frame Preview")
+        box = QGroupBox("FRAME PREVIEW")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 18, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setSpacing(10)
 
-        hint = QLabel("Click a frame to preview its waveform.")
+        hint = QLabel("Click any frame row to preview its waveform here.")
         hint.setWordWrap(True)
         set_hint_text(hint)
         layout.addWidget(hint)

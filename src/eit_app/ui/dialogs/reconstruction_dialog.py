@@ -21,11 +21,9 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
-    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -88,22 +86,39 @@ class ReconstructionDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 12)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 18, 20, 16)
+        root.setSpacing(14)
 
-        # Header
-        title = QLabel("Reconstruct from recorded frames")
-        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f3b5b;")
-        root.addWidget(title)
-
-        hint = QLabel(
-            "Choose a reconstruction algorithm and parameters. "
-            "Difference methods need both reference and target frames; "
-            "absolute methods use only the target frame."
+        # Header card
+        header = QWidget()
+        header.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #1f5d8b, stop:1 #2a6fa0);"
+            " border-radius: 10px; padding: 14px 18px;"
         )
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        root.addWidget(hint)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(16, 12, 16, 12)
+        header_layout.setSpacing(4)
+
+        title = QLabel("Reconstruct from Recorded Frames")
+        title.setStyleSheet(
+            "background: transparent; color: #ffffff;"
+            " font-size: 17px; font-weight: 700; border: none;"
+        )
+        header_layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Pick an algorithm, set regularization, then run. "
+            "Difference methods need both reference and target; "
+            "absolute methods only need a target."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(
+            "background: transparent; color: #dbe8f4;"
+            " font-size: 12px; border: none;"
+        )
+        header_layout.addWidget(subtitle)
+        root.addWidget(header)
 
         # Frame selection summary
         root.addWidget(self._build_frames_section())
@@ -115,34 +130,44 @@ class ReconstructionDialog(QDialog):
         root.addWidget(self._build_output_section())
 
         # Buttons
-        btns = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Cancel,
-            parent=self,
-        )
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setSpacing(8)
+        btn_row.addStretch()
+
+        cancel_btn = QPushButton("Cancel")
+        set_button_role(cancel_btn, "subtle")
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
         self._run_btn = QPushButton("Run Reconstruction")
         set_button_role(self._run_btn, "primary")
-        btns.addButton(self._run_btn, QDialogButtonBox.ButtonRole.AcceptRole)
-        btns.rejected.connect(self.reject)
+        self._run_btn.setMinimumWidth(160)
         self._run_btn.clicked.connect(self._on_run)
-        root.addWidget(btns)
+        btn_row.addWidget(self._run_btn)
+
+        root.addLayout(btn_row)
 
     def _build_frames_section(self) -> QWidget:
-        box = QGroupBox("Frames")
+        box = QGroupBox("SELECTED FRAMES")
         layout = QFormLayout(box)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(10)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        chip_style = (
+            "background: #f0f6fb; border: 1px solid #c6d7e6;"
+            " border-radius: 6px; padding: 7px 12px;"
+            " color: #243447; font-family: monospace; font-size: 12px;"
+        )
 
         self._ref_label = QLabel(self._format_entry(self._reference_entry))
         self._ref_label.setWordWrap(True)
-        self._ref_label.setStyleSheet(
-            "background: #f7fafd; border: 1px solid #d5dee8; border-radius: 6px; padding: 6px 10px;"
-        )
+        self._ref_label.setStyleSheet(chip_style)
 
         self._tgt_label = QLabel(self._format_entry(self._target_entry))
         self._tgt_label.setWordWrap(True)
-        self._tgt_label.setStyleSheet(
-            "background: #f7fafd; border: 1px solid #d5dee8; border-radius: 6px; padding: 6px 10px;"
-        )
+        self._tgt_label.setStyleSheet(chip_style)
 
         self._ref_row_label = QLabel("Reference:")
         layout.addRow(self._ref_row_label, self._ref_label)
@@ -150,10 +175,11 @@ class ReconstructionDialog(QDialog):
         return box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("Algorithm")
+        box = QGroupBox("ALGORITHM & PARAMETERS")
         layout = QFormLayout(box)
-        layout.setSpacing(8)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setSpacing(10)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._algo_combo = AutoCloseComboBox()
         for label, _method, _needs_ref in _ALGORITHMS:
@@ -180,10 +206,10 @@ class ReconstructionDialog(QDialog):
         return box
 
     def _build_output_section(self) -> QWidget:
-        box = QGroupBox("Output (optional)")
+        box = QGroupBox("OUTPUT (OPTIONAL)")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 16, 12, 12)
-        layout.setSpacing(8)
+        layout.setContentsMargins(14, 20, 14, 14)
+        layout.setSpacing(10)
 
         dir_row = QHBoxLayout()
         dir_row.setSpacing(6)

@@ -14,7 +14,6 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
-    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
@@ -72,21 +71,39 @@ class BatchReconstructionDialog(QDialog):
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
-        root.setContentsMargins(16, 16, 16, 12)
-        root.setSpacing(12)
+        root.setContentsMargins(20, 18, 20, 16)
+        root.setSpacing(14)
 
-        title = QLabel("Batch reconstruction")
-        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f3b5b;")
-        root.addWidget(title)
-
-        hint = QLabel(
-            "Reconstruct every frame CSV in the input folder. For difference "
-            "methods, the reference frame is applied to all targets (and "
-            "excluded from targets if it lives in the same folder)."
+        # Header card
+        header = QWidget()
+        header.setStyleSheet(
+            "background: qlineargradient(x1:0, y1:0, x2:1, y2:0,"
+            " stop:0 #1f5d8b, stop:1 #2a6fa0);"
+            " border-radius: 10px;"
         )
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        root.addWidget(hint)
+        header_layout = QVBoxLayout(header)
+        header_layout.setContentsMargins(18, 14, 18, 14)
+        header_layout.setSpacing(4)
+
+        title = QLabel("Batch Reconstruction")
+        title.setStyleSheet(
+            "background: transparent; color: #ffffff;"
+            " font-size: 17px; font-weight: 700; border: none;"
+        )
+        header_layout.addWidget(title)
+
+        subtitle = QLabel(
+            "Reconstruct every frame CSV in the input folder. For difference "
+            "methods, the reference is applied to all targets and is "
+            "automatically excluded when it sits in the same folder."
+        )
+        subtitle.setWordWrap(True)
+        subtitle.setStyleSheet(
+            "background: transparent; color: #dbe8f4;"
+            " font-size: 12px; border: none;"
+        )
+        header_layout.addWidget(subtitle)
+        root.addWidget(header)
 
         root.addWidget(self._build_folders_section())
         root.addWidget(self._build_algorithm_section())
@@ -94,24 +111,33 @@ class BatchReconstructionDialog(QDialog):
         root.addWidget(self._build_progress_section())
 
         # Buttons
-        self._button_box = QDialogButtonBox(parent=self)
-        self._run_btn = QPushButton("Run Batch")
-        set_button_role(self._run_btn, "primary")
-        self._cancel_btn = QPushButton("Cancel")
-        set_button_role(self._cancel_btn, "danger")
-        self._cancel_btn.setVisible(False)
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setSpacing(8)
+        btn_row.addStretch()
+
         self._close_btn = QPushButton("Close")
         set_button_role(self._close_btn, "subtle")
-        self._button_box.addButton(self._run_btn, QDialogButtonBox.ButtonRole.AcceptRole)
-        self._button_box.addButton(self._cancel_btn, QDialogButtonBox.ButtonRole.DestructiveRole)
-        self._button_box.addButton(self._close_btn, QDialogButtonBox.ButtonRole.RejectRole)
-        root.addWidget(self._button_box)
+        btn_row.addWidget(self._close_btn)
+
+        self._cancel_btn = QPushButton("Cancel Job")
+        set_button_role(self._cancel_btn, "danger")
+        self._cancel_btn.setVisible(False)
+        self._cancel_btn.setMinimumWidth(130)
+        btn_row.addWidget(self._cancel_btn)
+
+        self._run_btn = QPushButton("Run Batch")
+        set_button_role(self._run_btn, "primary")
+        self._run_btn.setMinimumWidth(130)
+        btn_row.addWidget(self._run_btn)
+
+        root.addLayout(btn_row)
 
     def _build_folders_section(self) -> QWidget:
-        box = QGroupBox("Folders")
+        box = QGroupBox("FOLDERS")
         layout = QFormLayout(box)
         layout.setSpacing(8)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._input_edit = QLineEdit()
@@ -147,10 +173,10 @@ class BatchReconstructionDialog(QDialog):
         return box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("Algorithm")
+        box = QGroupBox("ALGORITHM & PARAMETERS")
         layout = QFormLayout(box)
         layout.setSpacing(8)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._algo_combo = AutoCloseComboBox()
@@ -194,9 +220,9 @@ class BatchReconstructionDialog(QDialog):
         return box
 
     def _build_output_section(self) -> QWidget:
-        box = QGroupBox("Outputs")
+        box = QGroupBox("OUTPUTS")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(6)
 
         self._save_recon_check = QCheckBox("Save reconstruction image (PNG)")
@@ -212,18 +238,22 @@ class BatchReconstructionDialog(QDialog):
         return box
 
     def _build_progress_section(self) -> QWidget:
-        box = QGroupBox("Progress")
+        box = QGroupBox("PROGRESS")
         layout = QVBoxLayout(box)
-        layout.setContentsMargins(12, 16, 12, 12)
+        layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(6)
 
         self._progress_bar = QProgressBar()
         self._progress_bar.setRange(0, 1)
         self._progress_bar.setValue(0)
+        self._progress_bar.setMinimumHeight(22)
         layout.addWidget(self._progress_bar)
 
-        self._progress_label = QLabel("Ready.")
-        set_hint_text(self._progress_label)
+        self._progress_label = QLabel("Ready to run.")
+        self._progress_label.setStyleSheet(
+            "color: #5b6573; font-size: 12px;"
+            " background: transparent; padding: 4px 2px;"
+        )
         self._progress_label.setWordWrap(True)
         layout.addWidget(self._progress_label)
 
@@ -243,6 +273,7 @@ class BatchReconstructionDialog(QDialog):
         self._run_btn.clicked.connect(self._on_run)
         self._cancel_btn.clicked.connect(self._on_cancel)
         self._close_btn.clicked.connect(self.reject)
+        self._update_run_enabled()
 
     def _update_reference_requirement(self, *args) -> None:
         needs_ref = _ALGORITHMS[self._algo_combo.currentIndex()][2]
