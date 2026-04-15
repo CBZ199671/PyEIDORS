@@ -595,9 +595,7 @@ class EITWorkstation(QMainWindow):
                 port = str(config.get("port", "")).strip()
 
             if not port:
-                self._conn_panel.set_serial_hint(
-                    "未检测到可连接串口。请检查 USB 线、驱动、设备供电，然后点击 Scan 重新检测。"
-                )
+                self._conn_panel.set_serial_hint(t("main.status.port_not_found_scan"))
                 self._on_error("Connection failed: No serial port detected.")
                 return None
 
@@ -613,7 +611,7 @@ class EITWorkstation(QMainWindow):
         if transport_type == "relay":
             host = str(config.get("server_host", "")).strip()
             if not host:
-                self._conn_panel.set_relay_hint("4G Relay 服务器地址为空，请先填写可访问的 host。")
+                self._conn_panel.set_relay_hint(t("main.status.relay_host_empty"))
                 self._on_error("Connection failed: Relay host is empty.")
                 return None
             preflight = preflight_connection_target("relay", config)
@@ -633,13 +631,13 @@ class EITWorkstation(QMainWindow):
             port = str(config.get("port_display", "")).strip() or str(config.get("port", "")).strip()
             baud = int(config.get("baudrate", 115200))
             if port.upper().startswith("COM"):
-                return f"正在通过 Windows 主机串口 {port} 验证设备链路，波特率 {baud}。"
-            return f"正在验证串口链路: {port} @ {baud}"
+                return t("main.status.verifying.windows_bridge", port=port, baud=baud)
+            return t("main.status.verifying.serial", port=port, baud=baud)
         if transport_type == "relay":
             host = str(config.get("server_host", "127.0.0.1"))
             port = int(config.get("server_port", 4555))
-            return f"正在验证 4G Relay 链路: {host}:{port}"
-        return "正在验证设备链路。"
+            return t("main.status.verifying.relay", host=host, port=port)
+        return t("main.status.verifying.generic")
 
     @Slot()
     def _on_connected(self) -> None:
@@ -650,7 +648,7 @@ class EITWorkstation(QMainWindow):
         self._conn_panel.set_connected(True)
         self._control_panel.set_enabled(True)
         self._workflow_toolbox.setCurrentIndex(1)
-        self._status_bar.showMessage("链路连接与协议验证已完成，可按需开启测量电源并开始采集。", 4000)
+        self._status_bar.showMessage(t("main.status.link_verified"), 4000)
         self._refresh_session_summary()
         self._schedule_realtime_recon_prewarm()
 
@@ -685,13 +683,13 @@ class EITWorkstation(QMainWindow):
 
     def _start_acquisition(self, *, single_frame: bool) -> None:
         if self._state.connection_status is not ConnectionStatus.CONNECTED and self._transport_type != "simulator":
-            self._on_error("请先完成设备连接验证。")
+            self._on_error(t("main.error.connection_required"))
             return
 
         if self._transport_type != "simulator":
             released = self._device_ctrl.suspend_session(timeout_ms=3000)
             if not released:
-                self._on_error("启动采集前未能释放控制串口，请重试或重新连接设备。")
+                self._on_error(t("main.error.port_release_failed"))
                 return
 
         self._single_frame_pending = single_frame
@@ -720,17 +718,17 @@ class EITWorkstation(QMainWindow):
             self._rebuild_acquisition_pipeline()
             self._state.set_acquisition_mode(AcquisitionMode.SINGLE_SHOT)
             self._acq_ctrl.capture_one()
-            self._status_bar.showMessage("单帧采集已启动，采到 1 帧后将自动停止。", 4000)
+            self._status_bar.showMessage(t("main.status.single_frame_started"), 4000)
         elif self._planned_acquisition_count > 0 or self._frequency_stepping_enabled or self._scheduled_enabled:
             if self._planned_acquisition_count <= 0:
-                self._on_error("有限次采集或定时采集需要将 Acquisitions 设置为大于 0。")
+                self._on_error(t("main.error.acq_count_zero"))
                 return
             self._start_planned_acquisition_run()
         else:
             self._rebuild_acquisition_pipeline()
             self._state.set_acquisition_mode(AcquisitionMode.CONTINUOUS)
             self._acq_ctrl.start()
-            self._status_bar.showMessage("连续采集已启动。", 3000)
+            self._status_bar.showMessage(t("main.status.continuous_started"), 3000)
 
         self._state.set_power_status(PowerStatus.ON)
         self._acq_panel.set_acquiring(True)
@@ -775,9 +773,9 @@ class EITWorkstation(QMainWindow):
             self._state.set_recording_status(RecordingStatus.OFF)
 
         if was_single_frame_mode:
-            self._status_bar.showMessage("单帧采集完成。", 4000)
+            self._status_bar.showMessage(t("main.status.single_frame_done"), 4000)
         elif was_plan_mode:
-            self._status_bar.showMessage("计划采集已停止。", 4000)
+            self._status_bar.showMessage(t("main.status.plan_stopped"), 4000)
         self._refresh_session_summary()
 
     @Slot(object)
@@ -833,8 +831,12 @@ class EITWorkstation(QMainWindow):
             elif self._scheduled_enabled:
                 self._plan_timer.start(int(self._scheduled_interval_sec * 1000))
                 self._status_bar.showMessage(
-                    f"第 {self._plan_completed_count}/{len(self._plan_frequencies)} 次采集完成，"
-                    f"{self._scheduled_interval_sec:.1f}s 后开始下一次。",
+                    t(
+                        "main.status.plan_step_done",
+                        current=self._plan_completed_count,
+                        total=len(self._plan_frequencies),
+                        interval=self._scheduled_interval_sec,
+                    ),
                     4000,
                 )
             else:
@@ -849,7 +851,9 @@ class EITWorkstation(QMainWindow):
     def _on_recording_started(self, session_dir: str) -> None:
         self._state.set_recording_active(True)
         self._state.set_recording_status(RecordingStatus.RECORDING)
-        self._status_bar.showMessage(f"开始录制: {session_dir}", 5000)
+        self._status_bar.showMessage(
+            t("main.status.recording_started", dir=session_dir), 5000
+        )
         self._refresh_session_summary()
 
     @Slot(int)
@@ -859,7 +863,9 @@ class EITWorkstation(QMainWindow):
             self._state.set_recording_status(RecordingStatus.ARMED)
         else:
             self._state.set_recording_status(RecordingStatus.OFF)
-        self._status_bar.showMessage(f"录制已停止，共保存 {count} 帧。", 5000)
+        self._status_bar.showMessage(
+            t("main.status.recording_stopped", count=count), 5000
+        )
         self._refresh_session_summary()
 
     # ---- Auto-reconstruction helpers ----
@@ -994,7 +1000,7 @@ class EITWorkstation(QMainWindow):
             return
         if active_signature is not None:
             self._recon_prewarm_ready_signature = active_signature
-        self._status_bar.showMessage("实时重构上下文已预热，后续采集将直接走热启动。", 4000)
+        self._status_bar.showMessage(t("main.status.prewarm_done"), 4000)
         if (
             self._recon_prewarm_requested_signature is not None
             and self._recon_prewarm_requested_signature != self._recon_prewarm_ready_signature
@@ -1010,7 +1016,10 @@ class EITWorkstation(QMainWindow):
         self._recon_prewarm_active_signature = None
         log.warning("Realtime reconstruction prewarm failed: %s", msg)
         self._status_bar.showMessage(
-            "实时重构预热失败，将在需要时重试: " + self._humanize_error_message(msg),
+            t(
+                "main.status.prewarm_failed",
+                reason=self._humanize_error_message(msg),
+            ),
             10000,
         )
 
@@ -1042,21 +1051,32 @@ class EITWorkstation(QMainWindow):
                     frame_index=entry.get("frame_index", 0),
                 )
                 self._status_bar.showMessage(
-                    f"参考帧已更新: #{entry.get('frame_index', '?')}", 3000
+                    t(
+                        "main.status.reference_updated",
+                        index=entry.get("frame_index", "?"),
+                    ),
+                    3000,
                 )
             except Exception as exc:
                 self._on_error(f"Failed to load reference frame: {exc}")
                 return
         else:
             self._status_bar.showMessage(
-                f"参考帧已选择: #{entry.get('frame_index', '?')}", 3000
+                t(
+                    "main.status.reference_selected",
+                    index=entry.get("frame_index", "?"),
+                ),
+                3000,
             )
 
     @Slot(dict)
     def _on_target_selected(self, entry: dict) -> None:
         self._selected_target_entry = dict(entry)
         self._status_bar.showMessage(
-            f"目标帧已选择: #{entry.get('frame_index', '?')}",
+            t(
+                "main.status.target_selected",
+                index=entry.get("frame_index", "?"),
+            ),
             3000,
         )
 
@@ -1080,7 +1100,10 @@ class EITWorkstation(QMainWindow):
             )
             self._live_plot.update_frame(frame)
             self._status_bar.showMessage(
-                f"显示帧 #{entry.get('frame_index', '?')} 的波形数据",
+                t(
+                    "main.status.frame_preview",
+                    index=entry.get("frame_index", "?"),
+                ),
                 3000,
             )
         except Exception as exc:
@@ -1090,7 +1113,7 @@ class EITWorkstation(QMainWindow):
     def _on_frame_browser_cleared(self) -> None:
         self._selected_reference_entry = None
         self._selected_target_entry = None
-        self._status_bar.showMessage("已清空录制帧列表。", 3000)
+        self._status_bar.showMessage(t("main.status.frames_cleared"), 3000)
 
     @Slot(bool, str)
     def _on_recording_toggled(self, active: bool, output_dir: str) -> None:
@@ -1110,7 +1133,7 @@ class EITWorkstation(QMainWindow):
             if self._state.acquisition_mode is AcquisitionMode.IDLE:
                 target_dir = normalized_output_dir or self._default_output_dir()
                 self._status_bar.showMessage(
-                    f"已启用录制，开始采集后将保存到 {target_dir}",
+                    t("main.status.record_enabled", dir=target_dir),
                     5000,
                 )
                 self._state.set_recording_active(False)
@@ -1182,7 +1205,7 @@ class EITWorkstation(QMainWindow):
         self._refresh_session_summary()
         points = int(self._device_config.get("points_per_frame", self._measurement_point_count()))
         self._status_bar.showMessage(
-            f"硬件布局已更新：{points} 个边界电压点。",
+            t("main.status.layout_updated", points=points),
             3500,
         )
         self._schedule_realtime_recon_prewarm(immediate=True)
@@ -1212,12 +1235,14 @@ class EITWorkstation(QMainWindow):
                 if key in result:
                     self._device_config[key] = result[key]
             self._sync_state_device_config()
-            self._status_bar.showMessage(f"协议能力: {protocol_version}", 3000)
+            self._status_bar.showMessage(
+                t("main.status.protocol_caps", version=protocol_version), 3000
+            )
             return
 
         if name == "single_point_test_at" and isinstance(result, tuple) and len(result) == 2:
             self._status_bar.showMessage(
-                f"单点测试返回: real={result[0]:.4f} V, imag={result[1]:.4f} V",
+                t("main.status.spt_result", real=result[0], imag=result[1]),
                 5000,
             )
             return
@@ -1227,28 +1252,32 @@ class EITWorkstation(QMainWindow):
             if desired is True:
                 self._state.set_power_status(PowerStatus.ON)
                 self._control_panel.set_power_state("on")
-                self._status_bar.showMessage("测量电源已切换为 ON。", 4000)
+                self._status_bar.showMessage(t("main.status.power_on"), 4000)
             elif desired is False:
                 self._state.set_power_status(PowerStatus.OFF)
                 self._control_panel.set_power_state("off")
-                self._status_bar.showMessage("测量电源已切换为 OFF。", 4000)
+                self._status_bar.showMessage(t("main.status.power_off"), 4000)
             else:
-                self._status_bar.showMessage("测量电源命令已发送。", 3000)
+                self._status_bar.showMessage(t("main.status.power_sent"), 3000)
             self._refresh_session_summary()
             return
 
         if name in {"set_frequency", "set_stim_amplitude", "set_voltage_amp_levels"}:
-            self._status_bar.showMessage(f"命令已发送: {name}", 3000)
+            self._status_bar.showMessage(
+                t("main.status.command_sent", name=name), 3000
+            )
 
     @Slot(object)
     def _on_impedance_result(self, result: object) -> None:
         try:
             values = list(result)
         except Exception:
-            self._status_bar.showMessage("接触阻抗测量完成。", 3000)
+            self._status_bar.showMessage(t("main.status.impedance_done"), 3000)
             return
         preview = ", ".join(f"{float(v):.4f}" for v in values[:4])
-        self._status_bar.showMessage(f"接触阻抗: {preview}", 5000)
+        self._status_bar.showMessage(
+            t("main.status.impedance_result", values=preview), 5000
+        )
 
     @Slot(object)
     def _on_hardware_reconstruction_done(self, result: object) -> None:
@@ -1411,7 +1440,7 @@ class EITWorkstation(QMainWindow):
             self._recon_prewarm_busy = False
             self._recon_prewarm_active_signature = None
             return
-        self._status_bar.showMessage("正在预热实时重构上下文...", 3000)
+        self._status_bar.showMessage(t("main.status.prewarming"), 3000)
 
     def _measurement_point_count(self) -> int:
         return int(self._measurement_layout_config()["points_per_frame"])
@@ -1476,7 +1505,7 @@ class EITWorkstation(QMainWindow):
                 self._rec_ctrl.stop_recording()
             else:
                 self._status_bar.showMessage(
-                    "当前录制已开始，新保存路径将在下次采集时生效。",
+                    t("main.status.record_path_pending"),
                     5000,
                 )
                 return True
@@ -1800,12 +1829,12 @@ class EITWorkstation(QMainWindow):
         self._control_panel.set_enabled(False)
         self._workflow_toolbox.setCurrentIndex(2)
         self._status_bar.showMessage(
-            f"计划采集已启动，共 {len(self._plan_frequencies)} 次。",
+            t("main.status.plan_started", count=len(self._plan_frequencies)),
             3000,
         )
         if self._frequency_stepping_enabled:
             self._status_bar.showMessage(
-                "变频采集已启动：将按交频差实时更新波形、边界电压与重构显示。",
+                t("main.status.plan_sweep_note"),
                 6000,
             )
         self._refresh_session_summary()
@@ -1827,7 +1856,12 @@ class EITWorkstation(QMainWindow):
         self._planned_step_pending = True
         self._acq_ctrl.capture_one()
         self._status_bar.showMessage(
-            f"开始第 {self._plan_completed_count + 1}/{len(self._plan_frequencies)} 次采集：{next_freq} Hz",
+            t(
+                "main.status.plan_step_start",
+                current=self._plan_completed_count + 1,
+                total=len(self._plan_frequencies),
+                hz=next_freq,
+            ),
             4000,
         )
 
@@ -1849,7 +1883,9 @@ class EITWorkstation(QMainWindow):
             self._state.set_recording_status(RecordingStatus.ARMED)
         else:
             self._state.set_recording_status(RecordingStatus.OFF)
-        self._status_bar.showMessage(f"计划采集完成，共 {completed} 次。", 5000)
+        self._status_bar.showMessage(
+            t("main.status.plan_complete", count=completed), 5000
+        )
         self._refresh_session_summary()
 
     def _open_difference_dialog(self) -> None:
@@ -2324,12 +2360,14 @@ class EITWorkstation(QMainWindow):
                     scenario_name="simulation_forward_result",
                 )
             except Exception as exc:
-                simulation_notes.append(f"无法自动生成 simulation geometry.mat：{exc}")
+                simulation_notes.append(
+                    t("main.interop.geometry_generate_failed", error=exc)
+                )
 
         recording_notes: list[str] = []
         recording_measurements = self._recording_measurement_export()
         if recording_measurements is not None:
-            recording_notes.append("当前录制导出默认使用实部边界电压，以便与 EIDORS 常见差分工作流兼容。")
+            recording_notes.append(t("main.interop.export_note_hw_real"))
 
         snapshots: dict[str, dict[str, object]] = {
             "simulation": {
@@ -2346,7 +2384,7 @@ class EITWorkstation(QMainWindow):
                 "geometry_payload": self._interop_geometry_asset,
                 "measurements": None,
                 "reconstruction_preset": self._interop_reconstruction_preset(),
-                "notes": ["硬件页当前默认导出布局模板；若需要几何，请先从仿真结果或 bridge 包导入 geometry 资产。"],
+                "notes": [t("main.interop.export_note_hw_no_geom")],
             },
             "recording": {
                 "name": "Current Recorded Frames",
@@ -2402,9 +2440,11 @@ class EITWorkstation(QMainWindow):
             self._device_config = normalize_device_config(self._transport_type, self._device_config)
             self._sync_state_device_config()
             self._tab_widget.setCurrentWidget(self._hw_tab)
-            return (
-                f"已将 bridge 配置导入到硬件页：{config.display_dimension()} | "
-                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            return t(
+                "main.interop.applied_to_hw",
+                dim=config.display_dimension(),
+                n_elec=config.n_elec,
+                points=config.point_count(),
             )
 
         if target == "simulation":
@@ -2420,9 +2460,11 @@ class EITWorkstation(QMainWindow):
             self._sim_tab.forward_problem_panel.set_noise_level(config.noise_level)
             self._sim_tab.results_widget.set_expected_point_count(config.point_count())
             self._tab_widget.setCurrentWidget(self._sim_tab)
-            return (
-                f"已将 bridge 配置导入到仿真页：{config.display_dimension()} | "
-                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            return t(
+                "main.interop.applied_to_sim",
+                dim=config.display_dimension(),
+                n_elec=config.n_elec,
+                points=config.point_count(),
             )
 
         if target == "dataset":
@@ -2437,22 +2479,24 @@ class EITWorkstation(QMainWindow):
             )
             self._dataset_tab.dataset_generator_panel.set_config({"noise_level": config.noise_level})
             self._tab_widget.setCurrentWidget(self._dataset_tab)
-            return (
-                f"已将 bridge 配置导入到数据集页：{config.display_dimension()} | "
-                f"{config.n_elec} 电极/环 | {config.point_count()} 点。"
+            return t(
+                "main.interop.applied_to_dataset",
+                dim=config.display_dimension(),
+                n_elec=config.n_elec,
+                points=config.point_count(),
             )
 
         if target == "measurements":
             if loaded_bundle.measurements is None:
-                raise RuntimeError("这个 bridge 包里没有可导入的边界电压数据。")
-            return "已缓存边界电压数据资产，后续可用于导出、对照或重构冒烟。"
+                raise RuntimeError(t("main.interop.no_voltage_data"))
+            return t("main.interop.voltage_cached")
 
         if target == "geometry":
             if loaded_bundle.geometry_payload is None:
-                raise RuntimeError("这个 bridge 包里没有 geometry.mat。")
-            return "已缓存 geometry 资产，后续导出到 EIDORS 时可直接复用。"
+                raise RuntimeError(t("main.interop.no_geometry"))
+            return t("main.interop.geometry_cached")
 
-        raise RuntimeError(f"未知导入目标：{target}")
+        raise RuntimeError(t("main.interop.unknown_target", target=target))
 
     def _run_interop_smoke_validation(self, loaded_bundle) -> str:
         preset = loaded_bundle.reconstruction_preset or self._interop_reconstruction_preset()
@@ -2460,7 +2504,7 @@ class EITWorkstation(QMainWindow):
             loaded_bundle,
             reconstruction_preset=preset,
         )
-        return str(result.get("message", "互通烟测已完成。"))
+        return str(result.get("message", t("main.interop.smoke_done")))
 
     def _open_interop_hub(self) -> None:
         from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
@@ -2508,8 +2552,10 @@ class EITWorkstation(QMainWindow):
         text = raw.lower()
 
         if "no serial port detected" in text:
-            return "未检测到可用串口。请检查 USB 连接、驱动和设备供电后重新 Scan。"
+            return t("main.hw_error.no_serial_ports")
 
+        # Raw messages in Chinese are upstream-formatted; pass them through
+        # untranslated so we don't double-localise already-localised content.
         if "windows 串口" in raw or "未找到串口设备" in raw or "串口 " in raw and "当前无法打开" in raw:
             return raw
 
@@ -2517,10 +2563,7 @@ class EITWorkstation(QMainWindow):
             return raw
 
         if "could not configure port" in text or "input/output error" in text:
-            return (
-                "串口无法配置。当前环境中该端口不可用；请优先从下拉框选择自动检测到的 COM 口，"
-                "不要手动填写 /dev/ttyS*。"
-            )
+            return t("main.hw_error.windows_port_invalid")
 
         if "windows serial bridge failed" in text:
             if (
@@ -2530,25 +2573,22 @@ class EITWorkstation(QMainWindow):
                 or "访问被拒绝" in raw
                 or "拒绝访问" in raw
             ):
-                return (
-                    "Windows 串口桥接失败：该 COM 口可能仍被其他程序占用；"
-                    "如果你刚关闭本软件，请等待 1-2 秒后重试。"
-                )
+                return t("main.hw_error.windows_bridge_port_busy")
             if "cannot find the file" in text or "cannot find" in text:
-                return "Windows 串口桥接失败：当前找不到这个 COM 口，请重新插拔设备后再 Scan。"
-            return "Windows 主机串口桥接启动失败，请重新 Scan 后重试。"
+                return t("main.hw_error.windows_bridge_port_missing")
+            return t("main.hw_error.windows_bridge_generic")
 
         if "relay host is empty" in text:
-            return "4G Relay 服务器地址为空，请填写可访问的 host。"
+            return t("main.hw_error.relay_host_empty")
 
         if "connection refused" in text:
-            return "4G Relay 服务器拒绝连接，请检查 host/port 是否正确以及服务是否已启动。"
+            return t("main.hw_error.relay_refused")
 
         if "timed out" in text and "relay" in text:
-            return "4G Relay 连接超时，请检查网络、服务器地址和目标设备是否在线。"
+            return t("main.hw_error.relay_timeout")
 
         if "permission denied" in text or "access is denied" in text:
-            return "串口访问被拒绝，可能被其他程序占用。请关闭占用进程后重试。"
+            return t("main.hw_error.port_access_denied")
 
         return raw
 

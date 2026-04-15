@@ -463,4 +463,84 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "db.preview.title": "FRAME PREVIEW",
     "db.preview.hint": "Click any frame row to preview its waveform here.",
+
+    # ==================================================================
+    # Main window — transient status-bar flash messages
+    # ==================================================================
+    # Connection / transport
+    "main.status.port_not_found_scan": "No serial ports detected. Check USB cable, driver, and device power, then click Scan to retry.",
+    "main.status.relay_host_empty": "4G Relay server host is empty. Please fill in a reachable host first.",
+    "main.status.verifying.windows_bridge": "Verifying device link via Windows serial bridge {port} at {baud} baud.",
+    "main.status.verifying.serial": "Verifying serial link: {port} @ {baud}",
+    "main.status.verifying.relay": "Verifying 4G Relay link: {host}:{port}",
+    "main.status.verifying.generic": "Verifying device link.",
+    "main.status.link_verified": "Link verification complete. Turn on measurement power and start acquisition when ready.",
+
+    # Acquisition + recording
+    "main.error.connection_required": "Please verify the device connection first.",
+    "main.error.port_release_failed": "Failed to release the control serial port before starting. Retry or reconnect the device.",
+    "main.error.acq_count_zero": "Finite or timed acquisition requires Acquisitions > 0.",
+    "main.status.single_frame_started": "Single-frame acquisition started. It will stop after capturing 1 frame.",
+    "main.status.single_frame_done": "Single-frame acquisition complete.",
+    "main.status.continuous_started": "Continuous acquisition started.",
+    "main.status.plan_stopped": "Planned acquisition stopped.",
+    "main.status.plan_step_done": "Acquisition {current}/{total} complete; next run starts in {interval:.1f}s.",
+    "main.status.recording_started": "Recording started: {dir}",
+    "main.status.recording_stopped": "Recording stopped; {count} frames saved.",
+    "main.status.frames_cleared": "Recorded frame list cleared.",
+    "main.status.record_enabled": "Recording enabled; captures will be saved to {dir}.",
+    "main.status.record_path_pending": "Recording is already running; the new save path will take effect on the next acquisition.",
+
+    # Reconstruction pre-warm
+    "main.status.prewarming": "Pre-warming the realtime reconstruction context\u2026",
+    "main.status.prewarm_done": "Realtime reconstruction context pre-warmed; subsequent captures will use the hot-start path.",
+    "main.status.prewarm_failed": "Realtime reconstruction pre-warm failed; will retry when needed: {reason}",
+
+    # Frame browser / reference / target
+    "main.status.reference_updated": "Reference frame updated: #{index}",
+    "main.status.reference_selected": "Reference frame selected: #{index}",
+    "main.status.target_selected": "Target frame selected: #{index}",
+    "main.status.frame_preview": "Showing waveform data for frame #{index}",
+
+    # Layout + protocol + power + diagnostics
+    "main.status.layout_updated": "Hardware layout updated: {points} boundary voltage points.",
+    "main.status.protocol_caps": "Protocol capabilities: {version}",
+    "main.status.spt_result": "Single-point returned: real={real:.4f} V, imag={imag:.4f} V",
+    "main.status.power_on": "Measurement power switched to ON.",
+    "main.status.power_off": "Measurement power switched to OFF.",
+    "main.status.power_sent": "Measurement power command sent.",
+    "main.status.command_sent": "Command sent: {name}",
+    "main.status.impedance_done": "Contact impedance measurement complete.",
+    "main.status.impedance_result": "Contact impedance: {values}",
+
+    # Plan + frequency sweep
+    "main.status.plan_started": "Planned acquisition started: {count} runs.",
+    "main.status.plan_sweep_note": "Frequency sweep active: waveforms, boundary voltage, and reconstruction update per step.",
+    "main.status.plan_step_start": "Starting run {current}/{total}: {hz} Hz",
+    "main.status.plan_complete": "Planned acquisition finished ({count} runs).",
+
+    # Interop hub bridge results
+    "main.interop.geometry_generate_failed": "Failed to auto-generate simulation geometry.mat: {error}",
+    "main.interop.export_note_hw_real": "Recording export defaults to the real part of the boundary voltage so it matches common EIDORS difference workflows.",
+    "main.interop.export_note_hw_no_geom": "Hardware export defaults to a layout template. Import a geometry asset from simulation results or a bridge bundle first if you need real mesh geometry.",
+    "main.interop.applied_to_hw": "Bridge config applied to Hardware: {dim} | {n_elec} electrodes/ring | {points} points.",
+    "main.interop.applied_to_sim": "Bridge config applied to Simulation: {dim} | {n_elec} electrodes/ring | {points} points.",
+    "main.interop.applied_to_dataset": "Bridge config applied to Dataset: {dim} | {n_elec} electrodes/ring | {points} points.",
+    "main.interop.no_voltage_data": "This bridge bundle does not contain importable boundary voltage data.",
+    "main.interop.voltage_cached": "Boundary voltage asset cached; it can now be used for exports, comparison, or reconstruction smoke tests.",
+    "main.interop.no_geometry": "This bridge bundle has no geometry.mat.",
+    "main.interop.geometry_cached": "Geometry asset cached; subsequent EIDORS exports can reuse it directly.",
+    "main.interop.unknown_target": "Unknown import target: {target}",
+    "main.interop.smoke_done": "Interop smoke test complete.",
+
+    # humanize_error_message branches
+    "main.hw_error.no_serial_ports": "No serial ports detected. Check USB, driver, and device power, then click Scan again.",
+    "main.hw_error.port_access_denied": "Serial port access denied; another process may be using it. Close the occupying process and retry.",
+    "main.hw_error.windows_port_invalid": "Serial port cannot be configured. The port is not available in this environment. Pick an auto-detected COM port from the drop-down; do not type /dev/ttyS* manually.",
+    "main.hw_error.windows_bridge_port_busy": "Windows serial bridge failed: the COM port is still held by another process. If you just closed the app, wait 1-2 seconds and retry.",
+    "main.hw_error.windows_bridge_port_missing": "Windows serial bridge failed: this COM port is not visible. Unplug + replug the device and Scan again.",
+    "main.hw_error.windows_bridge_generic": "Windows serial bridge failed to start. Scan again and retry.",
+    "main.hw_error.relay_host_empty": "4G Relay server host is empty. Please fill in a reachable host.",
+    "main.hw_error.relay_refused": "4G Relay server refused the connection. Verify host/port and confirm the service is running.",
+    "main.hw_error.relay_timeout": "4G Relay connection timed out. Check the network, server address, and target device status.",
 }
