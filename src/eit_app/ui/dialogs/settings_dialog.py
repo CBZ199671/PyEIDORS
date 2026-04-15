@@ -8,12 +8,14 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
     QSpinBox,
     QVBoxLayout,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.models.app_state import ReconstructionConfig
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 
@@ -26,63 +28,71 @@ class SettingsDialog(QDialog):
 
     def __init__(self, config: ReconstructionConfig, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Settings")
         self.setMinimumWidth(450)
         self._config = config
         self._build_ui()
         self._load_from_config()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
 
         # Reconstruction settings
-        recon_group = QGroupBox("Reconstruction")
-        recon_layout = QFormLayout(recon_group)
+        self._recon_group = QGroupBox("")  # retranslated
+        recon_layout = QFormLayout(self._recon_group)
 
+        # Method / part values are invariant algorithm codes.
         self._method_combo = AutoCloseComboBox()
         self._method_combo.addItems(["gn-difference", "gn-absolute", "sparse-bayes"])
-        recon_layout.addRow("Method:", self._method_combo)
+        self._lbl_method = QLabel("")
+        recon_layout.addRow(self._lbl_method, self._method_combo)
 
         self._alpha_spin = QDoubleSpinBox()
         self._alpha_spin.setRange(1e-6, 1e6)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setValue(1.0)
-        recon_layout.addRow("Regularization alpha:", self._alpha_spin)
+        self._lbl_alpha = QLabel("")
+        recon_layout.addRow(self._lbl_alpha, self._alpha_spin)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 1000)
         self._iter_spin.setValue(10)
-        recon_layout.addRow("Max iterations:", self._iter_spin)
+        self._lbl_iter = QLabel("")
+        recon_layout.addRow(self._lbl_iter, self._iter_spin)
 
         self._dim_combo = AutoCloseComboBox()
         self._dim_combo.addItems(["2D", "3D"])
-        recon_layout.addRow("Mesh dimension:", self._dim_combo)
+        self._lbl_dim = QLabel("")
+        recon_layout.addRow(self._lbl_dim, self._dim_combo)
 
         self._refine_spin = QSpinBox()
         self._refine_spin.setRange(1, 10)
         self._refine_spin.setValue(4)
-        recon_layout.addRow("Mesh refinement:", self._refine_spin)
+        self._lbl_refine = QLabel("")
+        recon_layout.addRow(self._lbl_refine, self._refine_spin)
 
         self._part_combo = AutoCloseComboBox()
         self._part_combo.addItems(["real", "imag", "mag"])
-        recon_layout.addRow("Use part:", self._part_combo)
+        self._lbl_part = QLabel("")
+        recon_layout.addRow(self._lbl_part, self._part_combo)
 
-        layout.addWidget(recon_group)
+        layout.addWidget(self._recon_group)
 
         # Data paths
-        path_group = QGroupBox("Data Paths")
-        path_layout = QFormLayout(path_group)
+        self._path_group = QGroupBox("")  # retranslated
+        path_layout = QFormLayout(self._path_group)
 
         dir_row = QHBoxLayout()
         self._output_dir = QLineEdit()
-        self._output_dir.setPlaceholderText("Default output directory...")
-        browse_btn = QPushButton("Browse...")
-        browse_btn.clicked.connect(self._browse_output)
+        self._browse_btn = QPushButton("")
+        self._browse_btn.clicked.connect(self._browse_output)
         dir_row.addWidget(self._output_dir, 1)
-        dir_row.addWidget(browse_btn)
-        path_layout.addRow("Output dir:", dir_row)
+        dir_row.addWidget(self._browse_btn)
+        self._lbl_output = QLabel("")
+        path_layout.addRow(self._lbl_output, dir_row)
 
-        layout.addWidget(path_group)
+        layout.addWidget(self._path_group)
 
         # Buttons
         buttons = QDialogButtonBox(
@@ -105,7 +115,7 @@ class SettingsDialog(QDialog):
             self._part_combo.setCurrentIndex(idx)
 
     def _browse_output(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        path = QFileDialog.getExistingDirectory(self, t("hw.acquisition.file_dialog_title"))
         if path:
             self._output_dir.setText(path)
 
@@ -120,3 +130,19 @@ class SettingsDialog(QDialog):
 
     def get_config(self) -> ReconstructionConfig:
         return self._config
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(t("dlg.settings.title"))
+        self._recon_group.setTitle(t("dlg.settings.recon.title"))
+        self._lbl_method.setText(t("dlg.settings.recon.method_label"))
+        self._lbl_alpha.setText(t("dlg.settings.recon.alpha_label"))
+        self._lbl_iter.setText(t("dlg.settings.recon.iter_label"))
+        self._lbl_dim.setText(t("dlg.settings.recon.dim_label"))
+        self._lbl_refine.setText(t("dlg.settings.recon.refine_label"))
+        self._lbl_part.setText(t("dlg.settings.recon.part_label"))
+        self._path_group.setTitle(t("dlg.settings.paths.title"))
+        self._output_dir.setPlaceholderText(t("dlg.settings.paths.output_placeholder"))
+        self._browse_btn.setText(t("dlg.settings.paths.browse_button"))
+        self._lbl_output.setText(t("dlg.settings.paths.output_label"))

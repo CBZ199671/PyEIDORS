@@ -544,4 +544,133 @@ TRANSLATIONS: dict[str, str] = {
     "main.hw_error.relay_host_empty": "4G Relay \u670d\u52a1\u5668\u5730\u5740\u4e3a\u7a7a\uff0c\u8bf7\u586b\u5199\u53ef\u8bbf\u95ee\u7684 host\u3002",
     "main.hw_error.relay_refused": "4G Relay \u670d\u52a1\u5668\u62d2\u7edd\u8fde\u63a5\uff0c\u8bf7\u68c0\u67e5 host/port \u662f\u5426\u6b63\u786e\u4ee5\u53ca\u670d\u52a1\u662f\u5426\u5df2\u542f\u52a8\u3002",
     "main.hw_error.relay_timeout": "4G Relay \u8fde\u63a5\u8d85\u65f6\uff0c\u8bf7\u68c0\u67e5\u7f51\u7edc\u3001\u670d\u52a1\u5668\u5730\u5740\u548c\u76ee\u6807\u8bbe\u5907\u662f\u5426\u5728\u7ebf\u3002",
+
+    # ==================================================================
+    # Bottom status bar (persistent chips + FPS / frame counters)
+    # ==================================================================
+    "status.fps": "\u5e27\u7387\uff1a--",                                                          # 帧率：--
+    "status.fps_value": "\u5e27\u7387\uff1a{value:.1f}",                                            # 帧率：{value:.1f}
+    "status.frames": "\u5e27\u6570\uff1a0",                                                         # 帧数：0
+    "status.frames_value": "\u5e27\u6570\uff1a{count}",                                             # 帧数：{count}
+    "status.mode.hardware": "\u6a21\u5f0f\uff1a\u5b9e\u6d4b",                                       # 模式：实测
+    "status.mode.simulation": "\u6a21\u5f0f\uff1a\u4eff\u771f",                                     # 模式：仿真
+    "status.mode.dataset": "\u6a21\u5f0f\uff1a\u6570\u636e\u96c6",                                  # 模式：数据集
+    "status.mode.database": "\u6a21\u5f0f\uff1a\u6570\u636e\u5e93",                                 # 模式：数据库
+    "status.mode.other": "\u6a21\u5f0f\uff1a{index}",                                               # 模式：{index}
+    "status.link.connected": "\u94fe\u8def\uff1a\u5df2\u9a8c\u8bc1",                                # 链路：已验证
+    "status.link.connecting": "\u94fe\u8def\uff1a\u8fde\u63a5\u4e2d",                               # 链路：连接中
+    "status.link.disconnected": "\u94fe\u8def\uff1a\u65ad\u5f00",                                   # 链路：断开
+    "status.link.error": "\u94fe\u8def\uff1a\u51fa\u9519",                                          # 链路：出错
+    "status.link.other": "\u94fe\u8def\uff1a{status}",                                              # 链路：{status}
+    "status.power.on": "\u7535\u6e90\uff1aON",                                                       # 电源：ON
+    "status.power.off": "\u7535\u6e90\uff1aOFF",                                                     # 电源：OFF
+    "status.power.unknown": "\u7535\u6e90\uff1a\u672a\u77e5",                                       # 电源：未知
+    "status.power.other": "\u7535\u6e90\uff1a{status}",                                             # 电源：{status}
+    "status.acq.idle": "\u91c7\u96c6\uff1a\u7a7a\u95f2",                                            # 采集：空闲
+    "status.acq.continuous": "\u91c7\u96c6\uff1a\u8fde\u7eed",                                      # 采集：连续
+    "status.acq.scheduled": "\u91c7\u96c6\uff1a\u5b9a\u65f6",                                       # 采集：定时
+    "status.acq.finite_run": "\u91c7\u96c6\uff1a\u6709\u9650\u6b21\u6570",                          # 采集：有限次数
+    "status.acq.stepped_run": "\u91c7\u96c6\uff1a\u626b\u9891",                                     # 采集：扫频
+    "status.acq.single_shot": "\u91c7\u96c6\uff1a\u5355\u5e27",                                     # 采集：单帧
+    "status.acq.other": "\u91c7\u96c6\uff1a{mode}",                                                 # 采集：{mode}
+    "status.record.off": "\u5f55\u5236\uff1a\u5173",                                                # 录制：关
+    "status.record.armed": "\u5f55\u5236\uff1a\u5c31\u7eea",                                        # 录制：就绪
+    "status.record.recording": "\u5f55\u5236\u4e2d\u2026",                                          # 录制中…
+    "status.record.other": "\u5f55\u5236\uff1a{status}",                                            # 录制：{status}
+
+    # ==================================================================
+    # Dialog — Settings
+    # ==================================================================
+    "dlg.settings.title": "\u8bbe\u7f6e",                                                            # 设置
+    "dlg.settings.recon.title": "\u91cd\u6784",                                                      # 重构
+    "dlg.settings.recon.method_label": "\u65b9\u6cd5\uff1a",                                          # 方法：
+    "dlg.settings.recon.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",                             # 正则化 α：
+    "dlg.settings.recon.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",                   # 最大迭代次数：
+    "dlg.settings.recon.dim_label": "\u7f51\u683c\u7ef4\u5ea6\uff1a",                                # 网格维度：
+    "dlg.settings.recon.refine_label": "\u7f51\u683c\u7ec6\u5316\uff1a",                              # 网格细化：
+    "dlg.settings.recon.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",                                # 使用分量：
+    "dlg.settings.paths.title": "\u6570\u636e\u8def\u5f84",                                          # 数据路径
+    "dlg.settings.paths.output_placeholder": "\u9ed8\u8ba4\u8f93\u51fa\u76ee\u5f55\u2026",           # 默认输出目录…
+    "dlg.settings.paths.browse_button": "\u6d4f\u89c8\u2026",                                        # 浏览…
+    "dlg.settings.paths.output_label": "\u8f93\u51fa\u76ee\u5f55\uff1a",                             # 输出目录：
+
+    # ==================================================================
+    # Dialog — Difference Reconstruction
+    # ==================================================================
+    "dlg.difference.title": "\u5dee\u5206\u91cd\u6784",                                              # 差分重构
+    "dlg.difference.frame_group": "\u5e27\u9009\u62e9",                                              # 帧选择
+    "dlg.difference.ref_label": "\u53c2\u8003\u5e27\uff1a",                                          # 参考帧：
+    "dlg.difference.tgt_label": "\u76ee\u6807\u5e27\uff1a",                                          # 目标帧：
+    "dlg.difference.settings_group": "\u8bbe\u7f6e",                                                 # 设置
+    "dlg.difference.mode_label": "\u5dee\u5206\u6a21\u5f0f\uff1a",                                   # 差分模式：
+    "dlg.difference.orient_label": "\u65b9\u5411\uff1a",                                             # 方向：
+    "dlg.difference.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",                                   # 使用分量：
+    "dlg.difference.warn_same_frame": "\u53c2\u8003\u5e27\u548c\u76ee\u6807\u5e27\u4e0d\u80fd\u76f8\u540c\u3002",  # 参考帧和目标帧不能相同。
+
+    # ==================================================================
+    # Dialog — Single-session Reconstruct
+    # ==================================================================
+    "dlg.reconstruction.title": "\u91cd\u6784",                                                      # 重构
+    "dlg.reconstruction.heading": "\u4ece\u5f55\u5236\u5e27\u91cd\u6784",                            # 从录制帧重构
+    "dlg.reconstruction.cancel_button": "\u53d6\u6d88",                                              # 取消
+    "dlg.reconstruction.run_button": "\u8fd0\u884c\u91cd\u6784",                                      # 运行重构
+    "dlg.reconstruction.selected_frames_group": "\u5df2\u9009\u5e27",                                # 已选帧
+    "dlg.reconstruction.ref_label": "\u53c2\u8003\uff1a",                                            # 参考：
+    "dlg.reconstruction.tgt_label": "\u76ee\u6807\uff1a",                                            # 目标：
+    "dlg.reconstruction.algo_params_group": "\u7b97\u6cd5\u4e0e\u53c2\u6570",                        # 算法与参数
+    "dlg.reconstruction.method_label": "\u65b9\u6cd5\uff1a",                                          # 方法：
+    "dlg.reconstruction.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",                                # 使用分量：
+    "dlg.reconstruction.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",                              # 正则化 α：
+    "dlg.reconstruction.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",                    # 最大迭代次数：
+    "dlg.reconstruction.output_group": "\u8f93\u51fa\uff08\u53ef\u9009\uff09",                        # 输出（可选）
+    "dlg.reconstruction.output_placeholder": "\u7559\u7a7a\u5219\u4ec5\u663e\u793a\u7ed3\u679c\uff08\u4e0d\u4fdd\u5b58\uff09",  # 留空则仅显示结果（不保存）
+    "dlg.reconstruction.browse_button": "\u6d4f\u89c8\u2026",                                         # 浏览…
+    "dlg.reconstruction.output_folder_label": "\u8f93\u51fa\u6587\u4ef6\u5939\uff1a",                 # 输出文件夹：
+    "dlg.reconstruction.save_image_check": "\u4fdd\u5b58\u91cd\u6784\u56fe\u50cf (PNG)",              # 保存重构图像 (PNG)
+    "dlg.reconstruction.save_voltage_check": "\u4fdd\u5b58\u8fb9\u754c\u7535\u538b\u62df\u5408\u56fe (PNG)",  # 保存边界电压拟合图 (PNG)
+    "dlg.reconstruction.not_selected": "<\u672a\u9009\u62e9>",                                         # <未选择>
+    "dlg.reconstruction.absolute_no_ref_tip": "\u7edd\u5bf9\u65b9\u6cd5\u4e0d\u9700\u8981\u53c2\u8003\u5e27\u3002",  # 绝对方法不需要参考帧。
+
+    # ==================================================================
+    # Dialog — Batch Reconstruct
+    # ==================================================================
+    "dlg.batch.title": "\u6279\u91cf\u91cd\u6784",                                                   # 批量重构
+    "dlg.batch.heading": "\u6279\u91cf\u91cd\u6784",                                                 # 批量重构
+    "dlg.batch.close_button": "\u5173\u95ed",                                                        # 关闭
+    "dlg.batch.open_output_button": "\u6253\u5f00\u8f93\u51fa\u6587\u4ef6\u5939",                    # 打开输出文件夹
+    "dlg.batch.cancel_button": "\u53d6\u6d88\u4efb\u52a1",                                            # 取消任务
+    "dlg.batch.run_button": "\u8fd0\u884c\u6279\u91cf",                                              # 运行批量
+    "dlg.batch.folders_group": "\u6587\u4ef6\u5939",                                                 # 文件夹
+    "dlg.batch.input_placeholder": "\u5305\u542b\u5e27 CSV \u7684\u6587\u4ef6\u5939",                # 包含帧 CSV 的文件夹
+    "dlg.batch.browse_button": "\u6d4f\u89c8\u2026",                                                  # 浏览…
+    "dlg.batch.input_label": "\u8f93\u5165\u6587\u4ef6\u5939\uff1a",                                  # 输入文件夹：
+    "dlg.batch.output_placeholder": "\u7528\u4e8e\u5199\u5165\u91cd\u6784\u56fe\u50cf\u7684\u6587\u4ef6\u5939",  # 用于写入重构图像的文件夹
+    "dlg.batch.output_label": "\u8f93\u51fa\u6587\u4ef6\u5939\uff1a",                                 # 输出文件夹：
+    "dlg.batch.algo_params_group": "\u7b97\u6cd5\u4e0e\u53c2\u6570",                                  # 算法与参数
+    "dlg.batch.method_label": "\u65b9\u6cd5\uff1a",                                                   # 方法：
+    "dlg.batch.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",                                          # 使用分量：
+    "dlg.batch.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",                                        # 正则化 α：
+    "dlg.batch.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",                              # 最大迭代次数：
+    "dlg.batch.ref_browse_button": "\u6d4f\u89c8\u2026",                                               # 浏览…
+    "dlg.batch.ref_label": "\u53c2\u8003\u5e27\uff1a",                                                 # 参考帧：
+    "dlg.batch.outputs_group": "\u8f93\u51fa",                                                         # 输出
+    "dlg.batch.save_image_check": "\u4fdd\u5b58\u91cd\u6784\u56fe\u50cf (PNG)",                        # 保存重构图像 (PNG)
+    "dlg.batch.progress_group": "\u8fdb\u5ea6",                                                        # 进度
+    "dlg.batch.ready": "\u5c31\u7eea\u3002",                                                            # 就绪。
+    "dlg.batch.cancelling": "\u53d6\u6d88\u4e2d\u2026",                                                 # 取消中…
+    "dlg.batch.progress_default": "{current}/{total}",
+    "dlg.batch.error": "\u2715  \u9519\u8bef\uff1a{message}",                                           # ✕  错误：{message}
+    "dlg.batch.subtitle": "\u91cd\u6784\u8f93\u5165\u6587\u4ef6\u5939\u4e2d\u7684\u6bcf\u4e00\u4e2a\u5e27 CSV\u3002\u5bf9\u4e8e\u5dee\u5206\u65b9\u6cd5\uff0c\u53c2\u8003\u5e27\u4f1a\u5e94\u7528\u5230\u6240\u6709\u76ee\u6807\uff0c\u82e5\u53c2\u8003\u5e27\u4f4d\u4e8e\u540c\u4e00\u6587\u4ef6\u5939\u4e2d\u4f1a\u81ea\u52a8\u6392\u9664\u3002",  # 重构输入文件夹中的每一个帧 CSV。对于差分方法，参考帧会应用到所有目标，若参考帧位于同一文件夹中会自动排除。
+    "dlg.batch.ref_placeholder": "\u4f5c\u4e3a\u53c2\u8003\u7684 CSV \u6587\u4ef6\uff08\u5dee\u5206\u65b9\u6cd5\u5fc5\u586b\uff09",  # 作为参考的 CSV 文件（差分方法必填）
+    "dlg.batch.save_voltage_check": "\u4fdd\u5b58\u8fb9\u754c\u7535\u538b\u62df\u5408\u56fe (PNG)",  # 保存边界电压拟合图 (PNG)
+    "dlg.batch.file_dialog.input": "\u9009\u62e9\u8f93\u5165\u6587\u4ef6\u5939",                      # 选择输入文件夹
+    "dlg.batch.file_dialog.output": "\u9009\u62e9\u8f93\u51fa\u6587\u4ef6\u5939",                     # 选择输出文件夹
+    "dlg.batch.file_dialog.ref": "\u9009\u62e9\u53c2\u8003\u5e27 CSV",                                 # 选择参考帧 CSV
+    "dlg.batch.file_dialog.csv_filter": "CSV \u6587\u4ef6 (*.csv)",                                    # CSV 文件 (*.csv)
+    "dlg.batch.finished_ok": "\u2713  \u5b8c\u6210 \u2014 \u6210\u529f\uff1a{succeeded}\uff0c\u5931\u8d25\uff1a{failed}",  # ✓  完成 — 成功：{succeeded}，失败：{failed}
+    "dlg.batch.finished_mixed": "\u26a0  \u5b8c\u6210 \u2014 \u6210\u529f\uff1a{succeeded}\uff0c\u5931\u8d25\uff1a{failed}",  # ⚠  完成 — 成功：{succeeded}，失败：{failed}
+    "dlg.batch.finished_fail": "\u2715  \u5b8c\u6210 \u2014 \u6210\u529f\uff1a{succeeded}\uff0c\u5931\u8d25\uff1a{failed}",  # ✕  完成 — 成功：{succeeded}，失败：{failed}
+
+    # Reconstruction dialog — subtitle copy
+    "dlg.reconstruction.subtitle": "\u9009\u62e9\u7b97\u6cd5\uff0c\u8bbe\u7f6e\u6b63\u5219\u5316\u53c2\u6570\uff0c\u7136\u540e\u8fd0\u884c\u3002\u5dee\u5206\u65b9\u6cd5\u9700\u8981\u53c2\u8003\u5e27\u548c\u76ee\u6807\u5e27\uff1b\u7edd\u5bf9\u65b9\u6cd5\u4ec5\u9700\u8981\u76ee\u6807\u5e27\u3002",  # 选择算法，设置正则化参数，然后运行。差分方法需要参考帧和目标帧；绝对方法仅需要目标帧。
 }

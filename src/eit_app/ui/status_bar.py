@@ -3,7 +3,42 @@
 from PySide6.QtCore import Slot
 from PySide6.QtWidgets import QLabel, QStatusBar, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import apply_state_chip
+
+
+# Static maps: state code -> translation key  (stored once at module scope so
+# _retranslate() can re-render without re-querying QApplication state).
+_LINK_KEYS = {
+    "connected": ("status.link.connected", "ready"),
+    "connecting": ("status.link.connecting", "warn"),
+    "disconnected": ("status.link.disconnected", "error"),
+    "error": ("status.link.error", "error"),
+}
+_POWER_KEYS = {
+    "on": ("status.power.on", "ready"),
+    "off": ("status.power.off", "idle"),
+    "unknown": ("status.power.unknown", "warn"),
+}
+_ACQ_KEYS = {
+    "idle": ("status.acq.idle", "idle"),
+    "continuous": ("status.acq.continuous", "active"),
+    "scheduled": ("status.acq.scheduled", "active"),
+    "finite_run": ("status.acq.finite_run", "active"),
+    "stepped_run": ("status.acq.stepped_run", "active"),
+    "single_shot": ("status.acq.single_shot", "active"),
+}
+_RECORD_KEYS = {
+    "off": ("status.record.off", "idle"),
+    "armed": ("status.record.armed", "warn"),
+    "recording": ("status.record.recording", "error"),
+}
+_MODE_KEYS = {
+    0: ("status.mode.hardware", "active"),
+    1: ("status.mode.simulation", "ready"),
+    2: ("status.mode.dataset", "warn"),
+    3: ("status.mode.database", "idle"),
+}
 
 
 class EITStatusBar(QStatusBar):
@@ -12,12 +47,12 @@ class EITStatusBar(QStatusBar):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
 
-        self._conn_label = self._make_pill("Link: Down")
-        self._power_label = self._make_pill("Power: Unknown")
-        self._acq_label = self._make_pill("Acq: Idle")
-        self._rec_label = self._make_pill("Record: Off")
-        self._fps_label = QLabel("FPS: --")
-        self._frame_label = QLabel("Frames: 0")
+        self._conn_label = self._make_pill("")
+        self._power_label = self._make_pill("")
+        self._acq_label = self._make_pill("")
+        self._rec_label = self._make_pill("")
+        self._fps_label = QLabel("")
+        self._frame_label = QLabel("")
 
         for label in (self._fps_label, self._frame_label):
             label.setStyleSheet("padding: 0 10px; color: #243447; font-weight: 700;")
@@ -27,7 +62,7 @@ class EITStatusBar(QStatusBar):
         apply_state_chip(self._acq_label, tone="idle", compact=True)
         apply_state_chip(self._rec_label, tone="idle", compact=True)
 
-        self._mode_label = self._make_pill("Mode: Hardware")
+        self._mode_label = self._make_pill("")
         apply_state_chip(self._mode_label, tone="active", compact=True)
 
         self.addPermanentWidget(self._mode_label)
@@ -38,120 +73,138 @@ class EITStatusBar(QStatusBar):
         self.addPermanentWidget(self._fps_label)
         self.addPermanentWidget(self._frame_label)
 
+        # Cache last known state so _retranslate() can re-render chip text
+        # in the new language without asking every upstream slot to re-fire.
+        self._state_cache = {
+            "connection": "disconnected",
+            "power": "unknown",
+            "acquisition": "idle",
+            "recording": "off",
+            "mode": 0,
+            "fps": None,           # None -> "status.fps" placeholder
+            "frames": None,        # None -> "status.frames" placeholder
+        }
+
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
+
     @staticmethod
     def _make_pill(text: str) -> QLabel:
         label = QLabel(text)
         return label
 
+    # ------------------------------------------------------------------
+    # Slot API — unchanged external signature; internal text is translated.
+    # ------------------------------------------------------------------
+
     @Slot(str)
     def on_connection_changed(self, status: str) -> None:
-        colors = {
-            "connected": ("#0b6b2d", "#dff6e6", "Link: Verified"),
-            "connecting": ("#9a6700", "#fff1c2", "Link: Connecting"),
-            "disconnected": ("#a94442", "#fdecea", "Link: Down"),
-            "error": ("#a94442", "#fdecea", "Link: Error"),
-        }
-        _fg, _bg, text = colors.get(status, ("#666666", "#eceff4", f"Link: {status}"))
-        self._conn_label.setText(text)
-        apply_state_chip(
+        self._state_cache["connection"] = status
+        self._apply_chip(
             self._conn_label,
-            tone={
-                "connected": "ready",
-                "connecting": "warn",
-                "disconnected": "error",
-                "error": "error",
-            }.get(status, "idle"),
-            compact=True,
-            emphasized=True,
+            _LINK_KEYS,
+            status,
+            fallback_key="status.link.other",
+            fallback_kwargs={"status": status},
         )
 
     @Slot(str)
     def on_power_status_changed(self, status: str) -> None:
-        colors = {
-            "on": ("#0b6b2d", "#dff6e6", "Power: ON"),
-            "off": ("#666666", "#eceff4", "Power: OFF"),
-            "unknown": ("#7a6a00", "#fff7cc", "Power: Unknown"),
-        }
-        _fg, _bg, text = colors.get(status, ("#666666", "#eceff4", f"Power: {status}"))
-        self._power_label.setText(text)
-        apply_state_chip(
+        self._state_cache["power"] = status
+        self._apply_chip(
             self._power_label,
-            tone={"on": "ready", "off": "idle", "unknown": "warn"}.get(status, "idle"),
-            compact=True,
-            emphasized=True,
+            _POWER_KEYS,
+            status,
+            fallback_key="status.power.other",
+            fallback_kwargs={"status": status},
         )
 
     @Slot(str)
     def on_acquisition_mode_changed(self, mode: str) -> None:
-        mapping = {
-            "idle": ("#666666", "#eceff4", "Acq: Idle"),
-            "continuous": ("#005f99", "#d8efff", "Acq: Continuous"),
-            "scheduled": ("#5a3e9d", "#ece3ff", "Acq: Scheduled"),
-            "finite_run": ("#005f99", "#d8efff", "Acq: Finite Run"),
-            "stepped_run": ("#5a3e9d", "#ece3ff", "Acq: Stepped Run"),
-            "single_shot": ("#9a4d00", "#ffe6cc", "Acq: Single Frame"),
-        }
-        _fg, _bg, text = mapping.get(mode, ("#666666", "#eceff4", f"Acq: {mode}"))
-        self._acq_label.setText(text)
-        apply_state_chip(
+        self._state_cache["acquisition"] = mode
+        self._apply_chip(
             self._acq_label,
-            tone={
-                "idle": "idle",
-                "continuous": "active",
-                "scheduled": "active",
-                "finite_run": "active",
-                "stepped_run": "active",
-                "single_shot": "active",
-            }.get(mode, "idle"),
-            compact=True,
-            emphasized=True,
+            _ACQ_KEYS,
+            mode,
+            fallback_key="status.acq.other",
+            fallback_kwargs={"mode": mode},
         )
 
     @Slot(bool)
     def on_recording_changed(self, active: bool) -> None:
         if active:
             self.on_recording_status_changed("recording")
-        elif self._rec_label.text() == "Record: Writing":
+        elif self._state_cache["recording"] == "recording":
             self.on_recording_status_changed("off")
 
     @Slot(str)
     def on_recording_status_changed(self, status: str) -> None:
-        mapping = {
-            "off": ("#666666", "#eceff4", "Record: Off"),
-            "armed": ("#9a6700", "#fff1c2", "Record: Armed"),
-            "recording": ("#b42318", "#fde2e1", "Record: Writing"),
-        }
-        _fg, _bg, text = mapping.get(status, ("#666666", "#eceff4", f"Record: {status}"))
-        self._rec_label.setText(text)
-        apply_state_chip(
+        self._state_cache["recording"] = status
+        self._apply_chip(
             self._rec_label,
-            tone={"off": "idle", "armed": "warn", "recording": "error"}.get(status, "idle"),
-            compact=True,
-            emphasized=True,
+            _RECORD_KEYS,
+            status,
+            fallback_key="status.record.other",
+            fallback_kwargs={"status": status},
         )
 
     @Slot(float)
     def on_fps_updated(self, fps: float) -> None:
-        self._fps_label.setText(f"FPS: {fps:.1f}")
+        self._state_cache["fps"] = float(fps)
+        self._fps_label.setText(t("status.fps_value", value=fps))
 
     @Slot(int)
     def on_frame_count_changed(self, count: int) -> None:
-        self._frame_label.setText(f"Frames: {count}")
+        self._state_cache["frames"] = int(count)
+        self._frame_label.setText(t("status.frames_value", count=count))
 
     @Slot(int)
     def on_tab_changed(self, index: int) -> None:
         """Update mode indicator when the user switches tabs."""
-        labels = {
-            0: "Mode: Hardware",
-            1: "Mode: Simulation",
-            2: "Mode: Dataset",
-            3: "Mode: Database",
-        }
-        tones = {0: "active", 1: "ready", 2: "warn", 3: "idle"}
-        self._mode_label.setText(labels.get(index, f"Mode: {index}"))
-        apply_state_chip(
-            self._mode_label,
-            tone=tones.get(index, "idle"),
-            compact=True,
-            emphasized=True,
-        )
+        self._state_cache["mode"] = index
+        key, tone = _MODE_KEYS.get(index, ("status.mode.other", "idle"))
+        self._mode_label.setText(t(key, index=index))
+        apply_state_chip(self._mode_label, tone=tone, compact=True, emphasized=True)
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _apply_chip(
+        self,
+        label: QLabel,
+        state_map: dict[str, tuple[str, str]],
+        state: str,
+        *,
+        fallback_key: str,
+        fallback_kwargs: dict,
+    ) -> None:
+        if state in state_map:
+            key, tone = state_map[state]
+            label.setText(t(key))
+        else:
+            tone = "idle"
+            label.setText(t(fallback_key, **fallback_kwargs))
+        apply_state_chip(label, tone=tone, compact=True, emphasized=True)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Rerender every chip + FPS / frame counter in the active language."""
+        self.on_connection_changed(self._state_cache["connection"])
+        self.on_power_status_changed(self._state_cache["power"])
+        self.on_acquisition_mode_changed(self._state_cache["acquisition"])
+        self.on_recording_status_changed(self._state_cache["recording"])
+        self.on_tab_changed(self._state_cache["mode"])
+
+        fps = self._state_cache["fps"]
+        if fps is None:
+            self._fps_label.setText(t("status.fps"))
+        else:
+            self._fps_label.setText(t("status.fps_value", value=fps))
+
+        frames = self._state_cache["frames"]
+        if frames is None:
+            self._frame_label.setText(t("status.frames"))
+        else:
+            self._frame_label.setText(t("status.frames_value", count=frames))

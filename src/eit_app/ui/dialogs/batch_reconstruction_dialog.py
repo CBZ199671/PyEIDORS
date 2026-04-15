@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -60,16 +61,21 @@ class BatchReconstructionDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Batch Reconstruct")
         self.setMinimumWidth(760)
         self.resize(820, 640)
         self._default_input = default_input
         self._default_output = default_output
         self._is_running = False
         self._last_output_folder: str | None = None
+        # Cached "finished" state so language switch re-renders the summary
+        # line in the active locale.
+        self._finished_state: tuple[str, int, int] | None = None  # (tone, succeeded, failed)
+        self._progress_cache: tuple[int, int, str] | None = None  # (current, total, raw_msg)
         self._build_ui()
         self._connect_signals()
         self._update_reference_requirement()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -87,24 +93,20 @@ class BatchReconstructionDialog(QDialog):
         header_layout.setContentsMargins(18, 14, 18, 14)
         header_layout.setSpacing(4)
 
-        title = QLabel("Batch Reconstruction")
-        title.setStyleSheet(
+        self._title_label = QLabel("")
+        self._title_label.setStyleSheet(
             "background: transparent; color: #ffffff;"
             " font-size: 17px; font-weight: 700; border: none;"
         )
-        header_layout.addWidget(title)
+        header_layout.addWidget(self._title_label)
 
-        subtitle = QLabel(
-            "Reconstruct every frame CSV in the input folder. For difference "
-            "methods, the reference is applied to all targets and is "
-            "automatically excluded when it sits in the same folder."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(
+        self._subtitle_label = QLabel("")
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setStyleSheet(
             "background: transparent; color: #dbe8f4;"
             " font-size: 12px; border: none;"
         )
-        header_layout.addWidget(subtitle)
+        header_layout.addWidget(self._subtitle_label)
         root.addWidget(header)
 
         root.addWidget(self._build_folders_section())
@@ -118,23 +120,23 @@ class BatchReconstructionDialog(QDialog):
         btn_row.setSpacing(8)
         btn_row.addStretch()
 
-        self._close_btn = QPushButton("Close")
+        self._close_btn = QPushButton("")
         set_button_role(self._close_btn, "subtle")
         btn_row.addWidget(self._close_btn)
 
-        self._open_output_btn = QPushButton("Open Output Folder")
+        self._open_output_btn = QPushButton("")
         set_button_role(self._open_output_btn, "success")
         self._open_output_btn.setVisible(False)
         self._open_output_btn.setMinimumWidth(170)
         btn_row.addWidget(self._open_output_btn)
 
-        self._cancel_btn = QPushButton("Cancel Job")
+        self._cancel_btn = QPushButton("")
         set_button_role(self._cancel_btn, "danger")
         self._cancel_btn.setVisible(False)
         self._cancel_btn.setMinimumWidth(130)
         btn_row.addWidget(self._cancel_btn)
 
-        self._run_btn = QPushButton("Run Batch")
+        self._run_btn = QPushButton("")
         set_button_role(self._run_btn, "primary")
         self._run_btn.setMinimumWidth(130)
         btn_row.addWidget(self._run_btn)
@@ -142,17 +144,16 @@ class BatchReconstructionDialog(QDialog):
         root.addLayout(btn_row)
 
     def _build_folders_section(self) -> QWidget:
-        box = QGroupBox("FOLDERS")
-        layout = QFormLayout(box)
+        self._folders_box = QGroupBox("")  # retranslated
+        layout = QFormLayout(self._folders_box)
         layout.setSpacing(8)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._input_edit = QLineEdit()
-        self._input_edit.setPlaceholderText("Folder containing frame CSV files")
         if self._default_input:
             self._input_edit.setText(str(self._default_input))
-        self._input_browse_btn = QPushButton("Browse…")
+        self._input_browse_btn = QPushButton("")
         set_button_role(self._input_browse_btn, "subtle")
         self._input_browse_btn.setMinimumWidth(90)
         in_row = QHBoxLayout()
@@ -162,10 +163,10 @@ class BatchReconstructionDialog(QDialog):
         in_row.addWidget(self._input_browse_btn)
         in_w = QWidget()
         in_w.setLayout(in_row)
-        layout.addRow("Input folder:", in_w)
+        self._lbl_input = QLabel("")
+        layout.addRow(self._lbl_input, in_w)
 
         self._output_edit = QLineEdit()
-        self._output_edit.setPlaceholderText("Folder to write reconstruction images")
         if self._default_output:
             self._output_edit.setText(str(self._default_output))
         else:
@@ -176,7 +177,7 @@ class BatchReconstructionDialog(QDialog):
             except Exception:
                 pass
             self._output_edit.setText(str(default_root))
-        self._output_browse_btn = QPushButton("Browse…")
+        self._output_browse_btn = QPushButton("")
         set_button_role(self._output_browse_btn, "subtle")
         self._output_browse_btn.setMinimumWidth(90)
         out_row = QHBoxLayout()
@@ -186,13 +187,14 @@ class BatchReconstructionDialog(QDialog):
         out_row.addWidget(self._output_browse_btn)
         out_w = QWidget()
         out_w.setLayout(out_row)
-        layout.addRow("Output folder:", out_w)
+        self._lbl_output = QLabel("")
+        layout.addRow(self._lbl_output, out_w)
 
-        return box
+        return self._folders_box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("ALGORITHM && PARAMETERS")
-        layout = QFormLayout(box)
+        self._algo_box = QGroupBox("")  # retranslated
+        layout = QFormLayout(self._algo_box)
         layout.setSpacing(8)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -200,30 +202,31 @@ class BatchReconstructionDialog(QDialog):
         self._algo_combo = AutoCloseComboBox()
         for label, _, _ in _ALGORITHMS:
             self._algo_combo.addItem(label)
-        layout.addRow("Method:", self._algo_combo)
+        self._lbl_method = QLabel("")
+        layout.addRow(self._lbl_method, self._algo_combo)
 
         self._use_part_combo = AutoCloseComboBox()
         self._use_part_combo.addItems(["real", "imag", "mag"])
-        layout.addRow("Use part:", self._use_part_combo)
+        self._lbl_part = QLabel("")
+        layout.addRow(self._lbl_part, self._use_part_combo)
 
         self._alpha_spin = QDoubleSpinBox()
         self._alpha_spin.setRange(0.0001, 1000.0)
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
-        layout.addRow("Regularization α:", self._alpha_spin)
+        self._lbl_alpha = QLabel("")
+        layout.addRow(self._lbl_alpha, self._alpha_spin)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
         self._iter_spin.setValue(10)
-        layout.addRow("Max iterations:", self._iter_spin)
+        self._lbl_iter = QLabel("")
+        layout.addRow(self._lbl_iter, self._iter_spin)
 
         # Reference frame (only for difference methods)
         self._ref_edit = QLineEdit()
-        self._ref_edit.setPlaceholderText(
-            "CSV file to use as reference (required for difference methods)"
-        )
-        self._ref_browse_btn = QPushButton("Browse…")
+        self._ref_browse_btn = QPushButton("")
         set_button_role(self._ref_browse_btn, "subtle")
         self._ref_browse_btn.setMinimumWidth(90)
         ref_row = QHBoxLayout()
@@ -233,32 +236,30 @@ class BatchReconstructionDialog(QDialog):
         ref_row.addWidget(self._ref_browse_btn)
         self._ref_row_w = QWidget()
         self._ref_row_w.setLayout(ref_row)
-        self._ref_row_label = QLabel("Reference frame:")
+        self._ref_row_label = QLabel("")
         layout.addRow(self._ref_row_label, self._ref_row_w)
 
-        return box
+        return self._algo_box
 
     def _build_output_section(self) -> QWidget:
-        box = QGroupBox("OUTPUTS")
-        layout = QVBoxLayout(box)
+        self._outputs_box = QGroupBox("")  # retranslated
+        layout = QVBoxLayout(self._outputs_box)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(6)
 
-        self._save_recon_check = QCheckBox("Save reconstruction image (PNG)")
+        self._save_recon_check = QCheckBox("")
         self._save_recon_check.setChecked(True)
         layout.addWidget(self._save_recon_check)
 
-        self._save_voltage_check = QCheckBox(
-            "Save boundary voltage fit plot (PNG)"
-        )
+        self._save_voltage_check = QCheckBox("")
         self._save_voltage_check.setChecked(True)
         layout.addWidget(self._save_voltage_check)
 
-        return box
+        return self._outputs_box
 
     def _build_progress_section(self) -> QWidget:
-        box = QGroupBox("PROGRESS")
-        layout = QVBoxLayout(box)
+        self._progress_box = QGroupBox("")  # retranslated
+        layout = QVBoxLayout(self._progress_box)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(6)
 
@@ -268,7 +269,7 @@ class BatchReconstructionDialog(QDialog):
         self._progress_bar.setMinimumHeight(22)
         layout.addWidget(self._progress_bar)
 
-        self._progress_label = QLabel("Ready to run.")
+        self._progress_label = QLabel("")
         self._progress_label.setStyleSheet(
             "color: #5b6573; font-size: 12px;"
             " background: transparent; padding: 4px 2px;"
@@ -276,7 +277,7 @@ class BatchReconstructionDialog(QDialog):
         self._progress_label.setWordWrap(True)
         layout.addWidget(self._progress_label)
 
-        return box
+        return self._progress_box
 
     # ---- Signals & handlers ----
 
@@ -313,14 +314,16 @@ class BatchReconstructionDialog(QDialog):
 
     def _on_browse_input(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, "Select Input Folder", self._input_edit.text() or str(Path.home())
+            self, t("dlg.batch.file_dialog.input"),
+            self._input_edit.text() or str(Path.home()),
         )
         if path:
             self._input_edit.setText(path)
 
     def _on_browse_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._output_edit.text() or str(Path.home())
+            self, t("dlg.batch.file_dialog.output"),
+            self._output_edit.text() or str(Path.home()),
         )
         if path:
             self._output_edit.setText(path)
@@ -329,9 +332,9 @@ class BatchReconstructionDialog(QDialog):
         start_dir = self._input_edit.text() or str(Path.home())
         path, _ = QFileDialog.getOpenFileName(
             self,
-            "Select Reference Frame CSV",
+            t("dlg.batch.file_dialog.ref"),
             start_dir,
-            "CSV files (*.csv)",
+            t("dlg.batch.file_dialog.csv_filter"),
         )
         if path:
             self._ref_edit.setText(path)
@@ -358,7 +361,7 @@ class BatchReconstructionDialog(QDialog):
         self.start_requested.emit(config)
 
     def _on_cancel(self) -> None:
-        self._progress_label.setText("Cancelling…")
+        self._progress_label.setText(t("dlg.batch.cancelling"))
         self.cancel_requested.emit()
 
     def _set_running(self, running: bool) -> None:
@@ -387,41 +390,109 @@ class BatchReconstructionDialog(QDialog):
         if total > 0:
             self._progress_bar.setRange(0, total)
             self._progress_bar.setValue(current)
-        self._progress_label.setText(message or f"{current}/{total}")
+        self._progress_cache = (current, total, message)
+        self._progress_label.setText(
+            message or t("dlg.batch.progress_default", current=current, total=total)
+        )
 
     def on_finished(self, succeeded: int, failed: int) -> None:
         self._set_running(False)
         if succeeded > 0 and failed == 0:
-            icon = "✓"
             tone = "color: #1b7947;"
+            self._finished_state = ("ok", succeeded, failed)
         elif failed > 0 and succeeded > 0:
-            icon = "⚠"
             tone = "color: #a06a10;"
+            self._finished_state = ("mixed", succeeded, failed)
         else:
-            icon = "✕"
             tone = "color: #a04040;"
+            self._finished_state = ("fail", succeeded, failed)
         self._progress_label.setStyleSheet(
             f"{tone} font-size: 12px; font-weight: 600;"
             " background: transparent; padding: 4px 2px;"
         )
-        self._progress_label.setText(
-            f"{icon}  Finished — succeeded: {succeeded}, failed: {failed}"
-        )
+        self._apply_finished_text()
         self._run_btn.setEnabled(True)
-        # Show "Open Output Folder" button if we have a folder that exists
         if self._last_output_folder and Path(self._last_output_folder).exists():
             self._open_output_btn.setVisible(True)
 
     def on_error(self, message: str) -> None:
         self._set_running(False)
+        self._finished_state = ("error", 0, 0)
+        self._error_message = message
         self._progress_label.setStyleSheet(
             "color: #a04040; font-size: 12px; font-weight: 600;"
             " background: transparent; padding: 4px 2px;"
         )
-        self._progress_label.setText(f"✕  Error: {message}")
+        self._progress_label.setText(t("dlg.batch.error", message=message))
+
+    def _apply_finished_text(self) -> None:
+        if self._finished_state is None:
+            return
+        kind, succeeded, failed = self._finished_state
+        key_map = {
+            "ok": "dlg.batch.finished_ok",
+            "mixed": "dlg.batch.finished_mixed",
+            "fail": "dlg.batch.finished_fail",
+        }
+        key = key_map.get(kind)
+        if key:
+            self._progress_label.setText(
+                t(key, succeeded=succeeded, failed=failed)
+            )
 
     def _on_open_output_folder(self) -> None:
         if not self._last_output_folder:
             return
         from eit_app.ui.main_window import _open_folder_in_file_manager
         _open_folder_in_file_manager(self._last_output_folder)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(t("dlg.batch.title"))
+        self._title_label.setText(t("dlg.batch.heading"))
+        self._subtitle_label.setText(t("dlg.batch.subtitle"))
+        self._close_btn.setText(t("dlg.batch.close_button"))
+        self._open_output_btn.setText(t("dlg.batch.open_output_button"))
+        self._cancel_btn.setText(t("dlg.batch.cancel_button"))
+        self._run_btn.setText(t("dlg.batch.run_button"))
+
+        self._folders_box.setTitle(t("dlg.batch.folders_group"))
+        self._input_edit.setPlaceholderText(t("dlg.batch.input_placeholder"))
+        self._input_browse_btn.setText(t("dlg.batch.browse_button"))
+        self._lbl_input.setText(t("dlg.batch.input_label"))
+        self._output_edit.setPlaceholderText(t("dlg.batch.output_placeholder"))
+        self._output_browse_btn.setText(t("dlg.batch.browse_button"))
+        self._lbl_output.setText(t("dlg.batch.output_label"))
+
+        self._algo_box.setTitle(t("dlg.batch.algo_params_group"))
+        self._lbl_method.setText(t("dlg.batch.method_label"))
+        self._lbl_part.setText(t("dlg.batch.part_label"))
+        self._lbl_alpha.setText(t("dlg.batch.alpha_label"))
+        self._lbl_iter.setText(t("dlg.batch.iter_label"))
+        self._ref_edit.setPlaceholderText(t("dlg.batch.ref_placeholder"))
+        self._ref_browse_btn.setText(t("dlg.batch.ref_browse_button"))
+        self._ref_row_label.setText(t("dlg.batch.ref_label"))
+
+        self._outputs_box.setTitle(t("dlg.batch.outputs_group"))
+        self._save_recon_check.setText(t("dlg.batch.save_image_check"))
+        self._save_voltage_check.setText(t("dlg.batch.save_voltage_check"))
+
+        self._progress_box.setTitle(t("dlg.batch.progress_group"))
+
+        # Re-render the dynamic progress line / terminal state in the new
+        # locale so mid-run language switches don't strand stale copy.
+        if self._finished_state is not None:
+            if self._finished_state[0] == "error":
+                self._progress_label.setText(
+                    t("dlg.batch.error", message=getattr(self, "_error_message", ""))
+                )
+            else:
+                self._apply_finished_text()
+        elif self._progress_cache is not None:
+            current, total, message = self._progress_cache
+            self._progress_label.setText(
+                message or t("dlg.batch.progress_default", current=current, total=total)
+            )
+        else:
+            self._progress_label.setText(t("dlg.batch.ready"))

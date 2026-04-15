@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -87,13 +88,14 @@ class ReconstructionDialog(QDialog):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Reconstruct")
         self.setMinimumWidth(720)
         self.resize(780, 700)
         self._reference_entry = reference_entry
         self._target_entry = target_entry
         self._build_ui()
         self._update_reference_visibility()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         root = QVBoxLayout(self)
@@ -111,24 +113,20 @@ class ReconstructionDialog(QDialog):
         header_layout.setContentsMargins(16, 12, 16, 12)
         header_layout.setSpacing(4)
 
-        title = QLabel("Reconstruct from Recorded Frames")
-        title.setStyleSheet(
+        self._title_label = QLabel("")
+        self._title_label.setStyleSheet(
             "background: transparent; color: #ffffff;"
             " font-size: 17px; font-weight: 700; border: none;"
         )
-        header_layout.addWidget(title)
+        header_layout.addWidget(self._title_label)
 
-        subtitle = QLabel(
-            "Pick an algorithm, set regularization, then run. "
-            "Difference methods need both reference and target; "
-            "absolute methods only need a target."
-        )
-        subtitle.setWordWrap(True)
-        subtitle.setStyleSheet(
+        self._subtitle_label = QLabel("")
+        self._subtitle_label.setWordWrap(True)
+        self._subtitle_label.setStyleSheet(
             "background: transparent; color: #dbe8f4;"
             " font-size: 12px; border: none;"
         )
-        header_layout.addWidget(subtitle)
+        header_layout.addWidget(self._subtitle_label)
         root.addWidget(header)
 
         # Frame selection summary
@@ -146,12 +144,12 @@ class ReconstructionDialog(QDialog):
         btn_row.setSpacing(8)
         btn_row.addStretch()
 
-        cancel_btn = QPushButton("Cancel")
-        set_button_role(cancel_btn, "subtle")
-        cancel_btn.clicked.connect(self.reject)
-        btn_row.addWidget(cancel_btn)
+        self._cancel_btn = QPushButton("")
+        set_button_role(self._cancel_btn, "subtle")
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._cancel_btn)
 
-        self._run_btn = QPushButton("Run Reconstruction")
+        self._run_btn = QPushButton("")
         set_button_role(self._run_btn, "primary")
         self._run_btn.setMinimumWidth(160)
         self._run_btn.clicked.connect(self._on_run)
@@ -160,8 +158,8 @@ class ReconstructionDialog(QDialog):
         root.addLayout(btn_row)
 
     def _build_frames_section(self) -> QWidget:
-        box = QGroupBox("SELECTED FRAMES")
-        layout = QFormLayout(box)
+        self._frames_box = QGroupBox("")  # retranslated
+        layout = QFormLayout(self._frames_box)
         layout.setSpacing(10)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -181,14 +179,15 @@ class ReconstructionDialog(QDialog):
         self._tgt_label.setWordWrap(True)
         self._tgt_label.setStyleSheet(chip_style)
 
-        self._ref_row_label = QLabel("Reference:")
+        self._ref_row_label = QLabel("")
+        self._tgt_row_label = QLabel("")
         layout.addRow(self._ref_row_label, self._ref_label)
-        layout.addRow("Target:", self._tgt_label)
-        return box
+        layout.addRow(self._tgt_row_label, self._tgt_label)
+        return self._frames_box
 
     def _build_algorithm_section(self) -> QWidget:
-        box = QGroupBox("ALGORITHM && PARAMETERS")
-        layout = QFormLayout(box)
+        self._algo_box = QGroupBox("")  # retranslated
+        layout = QFormLayout(self._algo_box)
         layout.setSpacing(10)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
@@ -197,58 +196,60 @@ class ReconstructionDialog(QDialog):
         for label, _method, _needs_ref in _ALGORITHMS:
             self._algo_combo.addItem(label)
         self._algo_combo.currentIndexChanged.connect(self._update_reference_visibility)
-        layout.addRow("Method:", self._algo_combo)
+        self._lbl_method = QLabel("")
+        layout.addRow(self._lbl_method, self._algo_combo)
 
         self._use_part_combo = AutoCloseComboBox()
         self._use_part_combo.addItems(["real", "imag", "mag"])
-        layout.addRow("Use part:", self._use_part_combo)
+        self._lbl_part = QLabel("")
+        layout.addRow(self._lbl_part, self._use_part_combo)
 
         self._alpha_spin = QDoubleSpinBox()
         self._alpha_spin.setRange(0.0001, 1000.0)
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
-        layout.addRow("Regularization α:", self._alpha_spin)
+        self._lbl_alpha = QLabel("")
+        layout.addRow(self._lbl_alpha, self._alpha_spin)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
         self._iter_spin.setValue(10)
-        layout.addRow("Max iterations:", self._iter_spin)
+        self._lbl_iter = QLabel("")
+        layout.addRow(self._lbl_iter, self._iter_spin)
 
-        return box
+        return self._algo_box
 
     def _build_output_section(self) -> QWidget:
-        box = QGroupBox("OUTPUT (OPTIONAL)")
-        layout = QVBoxLayout(box)
+        self._output_box = QGroupBox("")  # retranslated
+        layout = QVBoxLayout(self._output_box)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(10)
 
         dir_row = QHBoxLayout()
         dir_row.setSpacing(6)
         self._dir_edit = QLineEdit()
-        self._dir_edit.setPlaceholderText("Leave empty to only display the result (not save)")
         self._dir_edit.setText(str(_default_results_dir()))
-        self._dir_browse_btn = QPushButton("Browse…")
+        self._dir_browse_btn = QPushButton("")
         set_button_role(self._dir_browse_btn, "subtle")
         self._dir_browse_btn.setMinimumWidth(90)
         self._dir_browse_btn.clicked.connect(self._on_browse_output_dir)
         dir_row.addWidget(self._dir_edit, 1)
         dir_row.addWidget(self._dir_browse_btn)
 
-        layout.addWidget(QLabel("Output folder:"))
+        self._lbl_output_folder = QLabel("")
+        layout.addWidget(self._lbl_output_folder)
         layout.addLayout(dir_row)
 
-        self._save_recon_check = QCheckBox("Save reconstruction image (PNG)")
+        self._save_recon_check = QCheckBox("")
         self._save_recon_check.setChecked(True)
         layout.addWidget(self._save_recon_check)
 
-        self._save_voltage_check = QCheckBox(
-            "Save boundary voltage fit plot (PNG)"
-        )
+        self._save_voltage_check = QCheckBox("")
         self._save_voltage_check.setChecked(True)
         layout.addWidget(self._save_voltage_check)
 
-        return box
+        return self._output_box
 
     # ---- Event handlers ----
 
@@ -257,9 +258,7 @@ class ReconstructionDialog(QDialog):
         self._ref_label.setEnabled(needs_ref)
         self._ref_row_label.setEnabled(needs_ref)
         if not needs_ref:
-            self._ref_label.setToolTip(
-                "Absolute methods do not use a reference frame."
-            )
+            self._ref_label.setToolTip(t("dlg.reconstruction.absolute_no_ref_tip"))
         else:
             self._ref_label.setToolTip("")
 
@@ -275,7 +274,8 @@ class ReconstructionDialog(QDialog):
 
     def _on_browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, "Select Output Folder", self._dir_edit.text() or str(Path.home())
+            self, t("hw.acquisition.file_dialog_title"),
+            self._dir_edit.text() or str(Path.home()),
         )
         if path:
             self._dir_edit.setText(path)
@@ -308,8 +308,34 @@ class ReconstructionDialog(QDialog):
     @staticmethod
     def _format_entry(entry: dict | None) -> str:
         if entry is None:
-            return "<not selected>"
+            return t("dlg.reconstruction.not_selected")
         idx = entry.get("frame_index", "?")
         path = entry.get("csv_path") or entry.get("file_path", "")
         name = Path(path).name if path else ""
-        return f"#{idx}  ·  {name}"
+        return f"#{idx}  \u00b7  {name}"
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(t("dlg.reconstruction.title"))
+        self._title_label.setText(t("dlg.reconstruction.heading"))
+        self._subtitle_label.setText(t("dlg.reconstruction.subtitle"))
+        self._cancel_btn.setText(t("dlg.reconstruction.cancel_button"))
+        self._run_btn.setText(t("dlg.reconstruction.run_button"))
+        self._frames_box.setTitle(t("dlg.reconstruction.selected_frames_group"))
+        self._ref_row_label.setText(t("dlg.reconstruction.ref_label"))
+        self._tgt_row_label.setText(t("dlg.reconstruction.tgt_label"))
+        self._algo_box.setTitle(t("dlg.reconstruction.algo_params_group"))
+        self._lbl_method.setText(t("dlg.reconstruction.method_label"))
+        self._lbl_part.setText(t("dlg.reconstruction.part_label"))
+        self._lbl_alpha.setText(t("dlg.reconstruction.alpha_label"))
+        self._lbl_iter.setText(t("dlg.reconstruction.iter_label"))
+        self._output_box.setTitle(t("dlg.reconstruction.output_group"))
+        self._dir_edit.setPlaceholderText(t("dlg.reconstruction.output_placeholder"))
+        self._dir_browse_btn.setText(t("dlg.reconstruction.browse_button"))
+        self._lbl_output_folder.setText(t("dlg.reconstruction.output_folder_label"))
+        self._save_recon_check.setText(t("dlg.reconstruction.save_image_check"))
+        self._save_voltage_check.setText(t("dlg.reconstruction.save_voltage_check"))
+        # Re-render frame chips (they use "<not selected>" placeholder)
+        self._ref_label.setText(self._format_entry(self._reference_entry))
+        self._tgt_label.setText(self._format_entry(self._target_entry))
