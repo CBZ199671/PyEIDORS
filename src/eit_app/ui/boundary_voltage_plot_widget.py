@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 import pyqtgraph as pg
 
+from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
 
@@ -38,13 +39,7 @@ class BoundaryVoltagePlotWidget(QWidget):
 
         self._plot_widget = pg.PlotWidget()
         self._plot_widget.setBackground(self._plot_bg)
-        self._plot_widget.setLabel("left", "Voltage (V)", **self._label_style)
-        self._plot_widget.setTitle(
-            f'<span style="color:{self._plot_text};font-family:\'{self._serif}\';font-size:13pt;">'
-            f"{self._plot_title()}"
-            "</span>"
-        )
-
+        # Axis / title text is applied by _retranslate() below.
         self._plot_widget.showGrid(x=True, y=True, alpha=0.55)
 
         tick_font = QFont(self._serif, 9)
@@ -94,7 +89,8 @@ class BoundaryVoltagePlotWidget(QWidget):
         )
         self._legend_frame.move(18, 18)
         self._legend_frame.raise_()
-        self._empty_overlay = QLabel(self._empty_hint())
+        # Empty-overlay text is filled in by _retranslate() below.
+        self._empty_overlay = QLabel("")
         self._empty_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_overlay.setWordWrap(True)
         self._empty_overlay.setStyleSheet(
@@ -106,6 +102,9 @@ class BoundaryVoltagePlotWidget(QWidget):
         plot_stack.addWidget(self._empty_overlay)
         layout.addWidget(plot_host)
         self._configure_index_axis(self._point_count)
+
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def update_simulation_voltages(
         self,
@@ -163,25 +162,19 @@ class BoundaryVoltagePlotWidget(QWidget):
 
     def _primary_label(self) -> str:
         if self._mode == "hardware":
-            return "Measured"
-        return "Ground Truth"
+            return t("hw.boundary.primary.measured")
+        return t("hw.boundary.primary.ground_truth")
 
     def _secondary_label(self) -> str:
-        return "Recon Fit"
+        return t("hw.boundary.secondary")
 
     def _plot_title(self) -> str:
-        return "Boundary Voltage Fit"
+        return t("hw.boundary.title")
 
     def _empty_hint(self) -> str:
         if self._mode == "hardware":
-            return (
-                "Measured and reconstruction-fit boundary voltages "
-                "will appear after reconstruction updates."
-            )
-        return (
-            "Ground-truth and reconstruction-fit boundary voltages "
-            "will appear after forward or inverse updates."
-        )
+            return t("hw.boundary.empty.hardware")
+        return t("hw.boundary.empty.simulation")
 
     def legend_labels(self) -> list[str]:
         return [entry.label for entry in self._legend_entries]
@@ -242,12 +235,31 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
 
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh title, axis labels, empty-overlay, and legend labels."""
+        self._plot_widget.setLabel("left", t("hw.boundary.y_label"), **self._label_style)
+        self._plot_widget.setTitle(
+            f"<span style=\"color:{self._plot_text};"
+            f"font-family:'{self._serif}';font-size:13pt;\">"
+            f"{self._plot_title()}"
+            "</span>"
+        )
+        self._empty_overlay.setText(self._empty_hint())
+        # Push new legend labels without rebuilding the widget.
+        self._legend_frame.update_labels(
+            {"primary": self._primary_label(), "fit": self._secondary_label()}
+        )
+        # Bottom axis label is dynamic (depends on point count) — reapply.
+        self._configure_index_axis(self._point_count)
+
     def _configure_index_axis(self, point_count: int) -> None:
         count = max(int(point_count), 1)
         self._point_count = count
         self._plot_widget.setLabel(
             "bottom",
-            f"Boundary Voltage Index (1-{count})",
+            t("hw.boundary.x_label_dynamic", count=count),
             **self._label_style,
         )
         padding = 0.02 if count > 1 else 0.4

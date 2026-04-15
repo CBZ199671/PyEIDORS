@@ -11,6 +11,8 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 from scipy.spatial import Delaunay
 
+from eit_app.i18n import t, translator
+
 if TYPE_CHECKING:
     from eit_app.controllers.reconstruction_controller import ReconstructionResult
 
@@ -55,11 +57,8 @@ class ReconstructionWidget(QWidget):
         plot_item.hideAxis("left")
         plot_item.hideAxis("bottom")
         plot_item.getViewBox().setDefaultPadding(0.0)
-        plot_item.setTitle(
-            f"<span style=\"color:{self._label_color};font-family:'{self._font_family}';font-size:14pt;\">"
-            "Reconstruction"
-            "</span>"
-        )
+        # Title HTML is rebuilt in _retranslate() so it follows the UI language.
+        self._plot_item_ref = plot_item  # kept for _retranslate
 
         self._image_item = pg.ImageItem(axisOrder="row-major")
         plot_item.addItem(self._image_item)
@@ -75,11 +74,16 @@ class ReconstructionWidget(QWidget):
         )
         plot_item.addItem(self._electrode_arc_item)
 
-        self._empty_overlay = QLabel("No reconstruction yet")
+        # Empty-overlay text is populated by _retranslate() below so it
+        # follows the active language.  The `_overlay_mode` flag lets
+        # _retranslate distinguish the idle placeholder from transient
+        # error messages surfaced via _show_status().
+        self._empty_overlay = QLabel("")
         self._empty_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_overlay.setStyleSheet(
             "color: #5b6573; font-size: 12px; font-weight: 600; background: transparent;"
         )
+        self._overlay_mode = "empty"  # "empty" | "error"
 
         plot_stack.addWidget(self._plot_widget)
         plot_stack.addWidget(self._empty_overlay)
@@ -97,6 +101,8 @@ class ReconstructionWidget(QWidget):
             ),
         )
         self._reset_plot()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     @Slot(object)
     def update_reconstruction(self, result: ReconstructionResult) -> None:
@@ -113,7 +119,9 @@ class ReconstructionWidget(QWidget):
             self._show_status("Invalid mesh coordinates", error=True)
             return
         if cells.ndim != 2 or cells.shape[1] < 3:
-            self._show_status("Fast reconstruction view currently expects 2D triangles", error=True)
+            self._show_status(
+                t("hw.reconstruction.error.expect_2d_triangles"), error=True
+            )
             return
 
         metadata = getattr(result, "metadata", {}) or {}
@@ -158,17 +166,35 @@ class ReconstructionWidget(QWidget):
 
     def clear(self) -> None:
         self._image_item.clear()
-        self._empty_overlay.setText("No reconstruction yet")
+        self._overlay_mode = "empty"
+        self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
         self._empty_overlay.setStyleSheet(
             "color: #5b6573; font-size: 12px; font-weight: 600; background: transparent;"
         )
         self._empty_overlay.show()
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Rebuild the plot title HTML and reset the empty-state overlay."""
+        self._plot_item_ref.setTitle(
+            f"<span style=\"color:{self._label_color};"
+            f"font-family:'{self._font_family}';font-size:14pt;\">"
+            f"{t('hw.reconstruction.title')}"
+            "</span>"
+        )
+        # Only rewrite the overlay when showing the idle placeholder.  A
+        # transient error (from _show_status) keeps its message until the
+        # next update_reconstruction() call.
+        if self._overlay_mode == "empty":
+            self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
 
     def _reset_plot(self) -> None:
         self.configure_layout(n_elec=16, radius=1.0)
 
     def _show_status(self, text: str, *, error: bool) -> None:
         color = "#8b2f2f" if error else "#5b6573"
+        self._overlay_mode = "error" if error else "empty"
         self._empty_overlay.setText(text)
         self._empty_overlay.setStyleSheet(
             f"color: {color}; font-size: 12px; font-weight: 600; background: transparent;"

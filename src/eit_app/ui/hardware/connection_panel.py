@@ -6,6 +6,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QWidget
 
 from eit_app.hardware.serial_port_discovery import SerialPortDescriptor, discover_serial_ports
+from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -25,9 +26,12 @@ class ConnectionPanel(QGroupBox):
     validation_failed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("1. Link & Verify", parent)
+        # Title is assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._serial_ports: list[SerialPortDescriptor] = []
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -37,24 +41,23 @@ class ConnectionPanel(QGroupBox):
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._layout = layout
 
-        self._flow_hint = QLabel("Select the transport and verify the device link first.")
+        self._flow_hint = QLabel("")  # retranslated
         self._flow_hint.setWordWrap(True)
-        self._flow_hint.setText("Select the transport and verify the device link first.")
         set_hint_text(self._flow_hint)
         layout.addRow(self._flow_hint)
 
         # Transport type
         self._transport_combo = AutoCloseComboBox()
-        self._transport_combo.addItems(["Serial", "4G Relay"])
+        self._transport_combo.addItems(["", ""])  # retranslated
         self._transport_combo.currentIndexChanged.connect(self._on_transport_changed)
-        layout.addRow("Transport:", self._transport_combo)
+        self._lbl_transport = QLabel("")
+        layout.addRow(self._lbl_transport, self._transport_combo)
 
         # Serial port
         self._port_combo = AutoCloseComboBox()
         self._port_combo.setEditable(True)
         self._port_combo.currentIndexChanged.connect(lambda _index: self._update_serial_hint())
-        self._refresh_btn = QPushButton("Scan")
-        self._refresh_btn.setToolTip("Refresh serial ports")
+        self._refresh_btn = QPushButton("")
         self._refresh_btn.clicked.connect(self._refresh_ports)
         set_button_role(self._refresh_btn, "subtle")
         port_row = QHBoxLayout()
@@ -64,38 +67,44 @@ class ConnectionPanel(QGroupBox):
         port_row.addWidget(self._refresh_btn)
         self._port_widget = QWidget()
         self._port_widget.setLayout(port_row)
-        layout.addRow("Port:", self._port_widget)
+        self._lbl_port = QLabel("")
+        layout.addRow(self._lbl_port, self._port_widget)
 
         self._port_hint = QLabel("")
         self._port_hint.setWordWrap(True)
         set_hint_text(self._port_hint)
         layout.addRow(self._port_hint)
 
-        # Baud rate
+        # Baud rate (numeric strings — not localized)
         self._baud_combo = AutoCloseComboBox()
         self._baud_combo.addItems(["115200", "57600", "38400", "19200", "9600"])
-        layout.addRow("Baud rate:", self._baud_combo)
+        self._lbl_baud = QLabel("")
+        layout.addRow(self._lbl_baud, self._baud_combo)
 
         # Relay host/port (hidden by default)
         self._server_host = QLineEdit()
         self._server_host.setText("127.0.0.1")
         self._server_host.setPlaceholderText("127.0.0.1")
-        layout.addRow("Server host:", self._server_host)
+        self._lbl_host = QLabel("")
+        layout.addRow(self._lbl_host, self._server_host)
 
         self._server_port = QSpinBox()
         self._server_port.setRange(1, 65535)
         self._server_port.setValue(4555)
-        layout.addRow("Server port:", self._server_port)
+        self._lbl_server_port = QLabel("")
+        layout.addRow(self._lbl_server_port, self._server_port)
 
         self._board_id = QSpinBox()
         self._board_id.setRange(1, 255)
         self._board_id.setValue(1)
-        layout.addRow("Board ID:", self._board_id)
+        self._lbl_board_id = QLabel("")
+        layout.addRow(self._lbl_board_id, self._board_id)
 
         self._user_id = QSpinBox()
         self._user_id.setRange(1, 255)
         self._user_id.setValue(1)
-        layout.addRow("User ID:", self._user_id)
+        self._lbl_user_id = QLabel("")
+        layout.addRow(self._lbl_user_id, self._user_id)
         self._server_host.textChanged.connect(lambda _text: self._update_relay_hint())
         self._server_port.valueChanged.connect(lambda _value: self._update_relay_hint())
 
@@ -108,11 +117,10 @@ class ConnectionPanel(QGroupBox):
         btn_layout = QHBoxLayout()
         btn_layout.setContentsMargins(0, 2, 0, 0)
         btn_layout.setSpacing(6)
-        self._connect_btn = QPushButton("Connect")
-        self._connect_btn.setToolTip("Connect and verify the device link")
+        self._connect_btn = QPushButton("")
         self._connect_btn.clicked.connect(self._on_connect)
         set_button_role(self._connect_btn, "primary")
-        self._disconnect_btn = QPushButton("Disconnect")
+        self._disconnect_btn = QPushButton("")
         self._disconnect_btn.clicked.connect(self.disconnect_requested)
         self._disconnect_btn.setEnabled(False)
         set_button_role(self._disconnect_btn, "danger")
@@ -155,10 +163,7 @@ class ConnectionPanel(QGroupBox):
             )
 
         if not ports:
-            self._port_hint.setText(
-                "未检测到可用串口。软件会自动检查本地串口和 Windows COM 口；"
-                "请确认 USB 线、驱动和设备供电正常后再点 Scan。"
-            )
+            self._port_hint.setText(t("hw.connection.port_hint.no_ports"))
             return
 
         selected_index = None
@@ -179,9 +184,7 @@ class ConnectionPanel(QGroupBox):
             if not self.selected_serial_port():
                 self._refresh_ports()
             if not self.selected_serial_port():
-                self._port_hint.setText(
-                    "仍未检测到可用串口，暂不发起连接。请检查 USB 连接、驱动和设备电源。"
-                )
+                self._port_hint.setText(t("hw.connection.port_hint.still_no_ports"))
                 self.validation_failed.emit("Connection failed: No serial port detected.")
                 return
 
@@ -258,27 +261,27 @@ class ConnectionPanel(QGroupBox):
             source = str(current_data.get("source", "")).strip()
 
         if count == 1:
-            if source == "windows-com":
-                self._port_hint.setText(
-                    f"已自动选中唯一串口：{selected_name}。连接时会自动使用 Windows 主机串口桥接。"
-                )
-            else:
-                self._port_hint.setText(f"已自动选中唯一串口：{selected_name}。")
+            key = (
+                "hw.connection.port_hint.single_port_bridge"
+                if source == "windows-com"
+                else "hw.connection.port_hint.single_port"
+            )
+            self._port_hint.setText(t(key, port=selected_name))
             return
 
         if source == "windows-com":
             self._port_hint.setText(
-                f"检测到 {count} 个串口，当前选择 {selected_name}。连接时会自动使用 Windows 主机串口桥接。"
+                t("hw.connection.port_hint.multi_port_bridge", count=count, port=selected_name)
             )
             return
 
-        self._port_hint.setText(f"检测到 {count} 个串口，请确认并选择硬件对应端口。")
+        self._port_hint.setText(t("hw.connection.port_hint.multi_port", count=count))
 
     def _update_relay_hint(self) -> None:
         host = self._server_host.text().strip() or "127.0.0.1"
         port = self._server_port.value()
         self._transport_hint.setText(
-            f"4G Relay 将连接到 {host}:{port}；点击 Connect 前会先做服务器可达性检查。"
+            t("hw.connection.relay_hint.dynamic", host=host, port=port)
         )
 
     def _set_row_visible(self, field: QWidget, visible: bool) -> None:
@@ -286,3 +289,32 @@ class ConnectionPanel(QGroupBox):
             self._layout.setRowVisible(field, visible)
         except AttributeError:
             field.setVisible(visible)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh all user-visible strings to the active language."""
+        self.setTitle(t("hw.connection.title"))
+        self._flow_hint.setText(t("hw.connection.flow_hint"))
+        self._lbl_transport.setText(t("hw.connection.transport_label"))
+        self._transport_combo.setItemText(0, t("hw.connection.transport.serial"))
+        self._transport_combo.setItemText(1, t("hw.connection.transport.relay_4g"))
+        self._lbl_port.setText(t("hw.connection.port_label"))
+        self._refresh_btn.setText(t("hw.connection.scan_button"))
+        self._refresh_btn.setToolTip(t("hw.connection.scan_button_tooltip"))
+        self._lbl_baud.setText(t("hw.connection.baud_label"))
+        self._lbl_host.setText(t("hw.connection.host_label"))
+        self._lbl_server_port.setText(t("hw.connection.port_spin_label"))
+        self._lbl_board_id.setText(t("hw.connection.board_id_label"))
+        self._lbl_user_id.setText(t("hw.connection.user_id_label"))
+        self._connect_btn.setText(t("hw.connection.connect_button"))
+        self._connect_btn.setToolTip(t("hw.connection.connect_button_tooltip"))
+        self._disconnect_btn.setText(t("hw.connection.disconnect_button"))
+        # Refresh dynamic hint (serial discovery vs relay target)
+        if self._transport_combo.currentIndex() == 0:
+            if self._serial_ports:
+                self._update_serial_hint()
+            else:
+                self._port_hint.setText(t("hw.connection.port_hint.no_ports"))
+        else:
+            self._update_relay_hint()

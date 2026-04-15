@@ -8,6 +8,8 @@ from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
+from eit_app.i18n import t, translator
+
 
 @dataclass(frozen=True)
 class LegendEntry:
@@ -173,13 +175,13 @@ class _LegendIndicatorRow(QWidget):
         )
         layout.addWidget(sample, 0, Qt.AlignmentFlag.AlignVCenter)
 
-        text = QLabel(entry.label)
+        self.text_label = QLabel(entry.label)
         font = QFont()
         font.setPointSize(10 if compact else 12)
         font.setWeight(QFont.Weight.DemiBold)
-        text.setFont(font)
-        text.setStyleSheet("color: #243447;")
-        layout.addWidget(text, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.text_label.setFont(font)
+        self.text_label.setStyleSheet("color: #243447;")
+        layout.addWidget(self.text_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch(1)
 
 
@@ -198,6 +200,7 @@ class PlotLegendOverlay(QFrame):
     ) -> None:
         super().__init__(parent)
         self._buttons: dict[str, LegendToggleButton] = {}
+        self._indicator_labels: dict[str, QLabel] = {}
         self._draggable = draggable
         self._drag_offset: QPoint | None = None
         self._drag_margin = 8
@@ -213,8 +216,7 @@ class PlotLegendOverlay(QFrame):
             }}
             """
         )
-        if self._draggable:
-            self.setToolTip("可拖拽调整图例位置")
+        # Tooltip is assigned by _retranslate() below so it follows UI language.
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8 if not compact else 6, 8 if not compact else 6, 8 if not compact else 6, 8 if not compact else 6)
@@ -226,13 +228,36 @@ class PlotLegendOverlay(QFrame):
                 self._buttons[entry.key] = row.button
                 layout.addWidget(row)
             else:
-                layout.addWidget(_LegendIndicatorRow(entry, compact=compact, parent=self))
+                row = _LegendIndicatorRow(entry, compact=compact, parent=self)
+                self._indicator_labels[entry.key] = row.text_label
+                layout.addWidget(row)
 
         self.adjustSize()
         self._install_drag_handles()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def button(self, key: str) -> LegendToggleButton:
         return self._buttons[key]
+
+    def update_labels(self, labels: dict[str, str]) -> None:
+        """Re-label any entry (interactive button or indicator-only row).
+
+        The owner widget calls this during its own ``_retranslate()`` pass
+        to push newly translated strings into the legend without having to
+        rebuild it.
+        """
+        for key, text in labels.items():
+            if key in self._buttons:
+                self._buttons[key].setText(text)
+            if key in self._indicator_labels:
+                self._indicator_labels[key].setText(text)
+        self.adjustSize()
+
+    def _retranslate(self) -> None:
+        """Refresh the legend's own chrome (drag tooltip)."""
+        if self._draggable:
+            self.setToolTip(t("plot_legend.drag_tooltip"))
 
     def eventFilter(self, watched: object, event: object) -> bool:
         if not self._draggable or not isinstance(watched, QWidget):

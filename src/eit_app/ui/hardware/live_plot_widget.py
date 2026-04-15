@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 
 import pyqtgraph as pg
 
+from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
 
@@ -43,12 +44,9 @@ class LivePlotWidget(QWidget):
             "font-family": self._serif_family,
             "font-size": "12pt",
         }
-        self._plot_widget.setLabel("left", "Voltage (V)", **label_style)
-        self._plot_widget.setTitle(
-            f"<span style=\"color:{self._plot_text};font-family:'{self._serif_family}';font-size:14pt;\">"
-            "Live Measurement Channels"
-            "</span>"
-        )
+        # Axis label + title are assigned by _retranslate() so they follow
+        # the active UI language.  Keep handles around for that call.
+        self._axis_label_style = label_style
         self._plot_widget.showGrid(x=True, y=True, alpha=0.55)
 
         plot_host = QWidget()
@@ -56,9 +54,8 @@ class LivePlotWidget(QWidget):
         plot_stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
         plot_stack.setContentsMargins(0, 0, 0, 0)
         plot_stack.addWidget(self._plot_widget)
-        self._empty_overlay = QLabel(
-            "No live frames yet.\nStart acquisition to display Real and Imag."
-        )
+        # Overlay text is assigned by _retranslate() below.
+        self._empty_overlay = QLabel("")
         self._empty_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_overlay.setStyleSheet(
             "color: #5b6573; "
@@ -77,17 +74,13 @@ class LivePlotWidget(QWidget):
             axis.setTickPen(pg.mkPen(self._plot_border))
             axis.setStyle(tickFont=tick_font)
 
-        # Data curves
-        self._curve_real = self._plot_widget.plot(
-            pen=pg.mkPen("#f4d35e", width=2.2), name="Real"
-        )
-        self._curve_imag = self._plot_widget.plot(
-            pen=pg.mkPen("#4ecdc4", width=1.9), name="Imag"
-        )
+        # Data curves — localized display names applied in _retranslate()
+        self._curve_real = self._plot_widget.plot(pen=pg.mkPen("#f4d35e", width=2.2))
+        self._curve_imag = self._plot_widget.plot(pen=pg.mkPen("#4ecdc4", width=1.9))
         self._legend_frame = PlotLegendOverlay(
             [
-                LegendEntry("real", "Real", "#f4d35e", 2.2, checked=True),
-                LegendEntry("imag", "Imag", "#4ecdc4", 1.9, checked=False),
+                LegendEntry("real", t("hw.live_plot.curve.real"), "#f4d35e", 2.2, checked=True),
+                LegendEntry("imag", t("hw.live_plot.curve.imag"), "#4ecdc4", 1.9, checked=False),
             ],
             interactive=True,
             compact=False,
@@ -100,7 +93,7 @@ class LivePlotWidget(QWidget):
 
         # X-axis (measurement indices)
         self._x = np.arange(1, self._point_count + 1, dtype=np.float64)
-        self._configure_index_axis(self._point_count, label_prefix="Measurement Index")
+        self._configure_index_axis(self._point_count)
 
         # Connect checkbox toggles
         self._show_real.toggled.connect(self._on_visibility_changed)
@@ -108,6 +101,9 @@ class LivePlotWidget(QWidget):
 
         # Initial visibility
         self._curve_imag.setVisible(False)
+
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     @Slot(object)
     def update_frame(self, frame) -> None:
@@ -131,7 +127,7 @@ class LivePlotWidget(QWidget):
         n = len(frame.real)
         if n != len(self._x):
             self._x = np.arange(1, n + 1, dtype=np.float64)
-        self._configure_index_axis(n, label_prefix="Measurement Index")
+        self._configure_index_axis(n)
 
         self._curve_real.setData(self._x, frame.real)
         self._curve_imag.setData(self._x, frame.imag)
@@ -146,23 +142,42 @@ class LivePlotWidget(QWidget):
         empty = np.array([])
         self._curve_real.setData(empty, empty)
         self._curve_imag.setData(empty, empty)
-        self._configure_index_axis(self._expected_point_count, label_prefix="Measurement Index")
+        self._configure_index_axis(self._expected_point_count)
         self._empty_overlay.show()
 
     def set_expected_point_count(self, point_count: int) -> None:
         self._expected_point_count = max(int(point_count), 1)
         if not self._has_data:
-            self._configure_index_axis(self._expected_point_count, label_prefix="Measurement Index")
+            self._configure_index_axis(self._expected_point_count)
 
     def current_point_count(self) -> int:
         return self._point_count
 
-    def _configure_index_axis(self, point_count: int, *, label_prefix: str) -> None:
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh title, axis labels, empty-overlay and curve display names."""
+        self._plot_widget.setLabel(
+            "left", t("hw.live_plot.y_label"), **self._axis_label_style
+        )
+        self._plot_widget.setTitle(
+            f"<span style=\"color:{self._plot_text};"
+            f"font-family:'{self._serif_family}';font-size:14pt;\">"
+            f"{t('hw.live_plot.title')}"
+            "</span>"
+        )
+        self._empty_overlay.setText(t("hw.live_plot.empty_overlay"))
+        self._show_real.setText(t("hw.live_plot.curve.real"))
+        self._show_imag.setText(t("hw.live_plot.curve.imag"))
+        # Re-render the bottom-axis label with the localized prefix.
+        self._configure_index_axis(self._point_count)
+
+    def _configure_index_axis(self, point_count: int) -> None:
         count = max(int(point_count), 1)
         self._point_count = count
         self._plot_widget.setLabel(
             "bottom",
-            f"{label_prefix} (1-{count})",
+            t("hw.live_plot.x_label_dynamic", count=count),
             color=self._plot_text,
             **{"font-family": self._serif_family, "font-size": "12pt"},
         )

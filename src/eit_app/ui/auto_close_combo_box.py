@@ -107,6 +107,21 @@ class AutoCloseComboBox(QWidget):
             return self._items[index][0]
         return ""
 
+    def setItemText(self, index: int, text: str) -> None:
+        """Replace the display text of an existing item (matches QComboBox API).
+
+        Keeps the item's associated ``userData`` intact and refreshes the
+        popup menu entries so they show the new text.  Also repaints the
+        QLineEdit when the affected row is the currently selected one.
+        """
+        if not (0 <= index < len(self._items)):
+            return
+        _old_text, user_data = self._items[index]
+        self._items[index] = (text, user_data)
+        self._rebuild_menu()
+        if self._current_index == index:
+            self._line_edit.setText(text)
+
     def currentData(self) -> Any:
         if 0 <= self._current_index < len(self._items):
             return self._items[self._current_index][1]

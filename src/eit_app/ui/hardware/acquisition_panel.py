@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
 
 
@@ -39,8 +40,11 @@ class AcquisitionPanel(QGroupBox):
     acquisition_plan_changed = Signal(dict)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("3. Acquire & Record", parent)
+        # Title is assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -50,12 +54,12 @@ class AcquisitionPanel(QGroupBox):
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
         self._layout = layout
 
-        self._flow_hint = QLabel("Prepare the save path and plan, then launch the acquisition run.")
+        self._flow_hint = QLabel("")
         self._flow_hint.setWordWrap(True)
         set_hint_text(self._flow_hint)
         layout.addRow(self._flow_hint)
 
-        self._record_header = QLabel("Recording setup")
+        self._record_header = QLabel("")
         set_section_header(self._record_header)
         layout.addRow(self._record_header)
 
@@ -63,33 +67,33 @@ class AcquisitionPanel(QGroupBox):
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.setSpacing(8)
         self._dir_edit = QLineEdit()
-        self._dir_edit.setPlaceholderText("Output directory...")
         self._dir_edit.setText(str(self.default_output_dir()))
         self._dir_edit.textChanged.connect(self.output_dir_changed)
-        self._dir_browse = QPushButton("Browse...")
+        self._dir_browse = QPushButton("")
         self._dir_browse.clicked.connect(self._browse_dir)
         set_button_role(self._dir_browse, "subtle")
         dir_row.addWidget(self._dir_edit, 1)
         dir_row.addWidget(self._dir_browse)
         dir_w = QWidget()
         dir_w.setLayout(dir_row)
-        layout.addRow("Save to:", dir_w)
+        self._lbl_save_to = QLabel("")
+        layout.addRow(self._lbl_save_to, dir_w)
 
         # Recording
         rec_row = QHBoxLayout()
         rec_row.setContentsMargins(0, 0, 0, 0)
-        self._rec_check = QCheckBox("Record to disk")
+        self._rec_check = QCheckBox("")
         self._rec_check.clicked.connect(self._on_recording_clicked)
         rec_row.addWidget(self._rec_check)
         rec_w = QWidget()
         rec_w.setLayout(rec_row)
         layout.addRow(rec_w)
 
-        self._plan_header = QLabel("Acquisition plan")
+        self._plan_header = QLabel("")
         set_section_header(self._plan_header)
         layout.addRow(self._plan_header)
 
-        self._sched_check = QCheckBox("Timed interval")
+        self._sched_check = QCheckBox("")
         self._sched_check.toggled.connect(self._on_plan_toggled)
         layout.addRow(self._sched_check)
 
@@ -99,16 +103,18 @@ class AcquisitionPanel(QGroupBox):
         self._interval_spin.setSuffix(" s")
         self._interval_spin.setDecimals(2)
         self._interval_spin.valueChanged.connect(lambda _: self._emit_plan_state())
-        layout.addRow("Interval:", self._interval_spin)
+        self._lbl_interval = QLabel("")
+        layout.addRow(self._lbl_interval, self._interval_spin)
 
         self._count_spin = QSpinBox()
         self._count_spin.setRange(0, 10000)
-        self._count_spin.setSpecialValueText("Continuous")
+        # Special-value text updated in _retranslate so it follows UI language.
         self._count_spin.setValue(0)
         self._count_spin.valueChanged.connect(lambda _: self._emit_plan_state())
-        layout.addRow("Acquisitions:", self._count_spin)
+        self._lbl_count = QLabel("")
+        layout.addRow(self._lbl_count, self._count_spin)
 
-        self._freq_step_check = QCheckBox("Step frequency across the run")
+        self._freq_step_check = QCheckBox("")
         self._freq_step_check.toggled.connect(self._on_plan_toggled)
         layout.addRow(self._freq_step_check)
 
@@ -117,43 +123,40 @@ class AcquisitionPanel(QGroupBox):
         self._freq_start_spin.setValue(1000)
         self._freq_start_spin.setSuffix(" Hz")
         self._freq_start_spin.valueChanged.connect(lambda _: self._emit_plan_state())
-        layout.addRow("Start freq:", self._freq_start_spin)
+        self._lbl_start_freq = QLabel("")
+        layout.addRow(self._lbl_start_freq, self._freq_start_spin)
 
         self._freq_end_spin = QSpinBox()
         self._freq_end_spin.setRange(100, 1_000_000)
         self._freq_end_spin.setValue(1000)
         self._freq_end_spin.setSuffix(" Hz")
         self._freq_end_spin.valueChanged.connect(lambda _: self._emit_plan_state())
-        layout.addRow("End freq:", self._freq_end_spin)
+        self._lbl_end_freq = QLabel("")
+        layout.addRow(self._lbl_end_freq, self._freq_end_spin)
 
         self._set_row_visible(self._interval_spin, False)
         self._set_row_visible(self._freq_start_spin, False)
         self._set_row_visible(self._freq_end_spin, False)
 
-        self._plan_hint = QLabel(
-            "Acquisitions=0 表示无限连续采集；设置为大于 0 时，将执行有限次采集并在完成后自动停止。"
-        )
+        self._plan_hint = QLabel("")
         self._plan_hint.setWordWrap(True)
         set_hint_text(self._plan_hint)
         layout.addRow(self._plan_hint)
 
-        self._action_header = QLabel("Acquisition actions")
+        self._action_header = QLabel("")
         set_section_header(self._action_header)
         layout.addRow(self._action_header)
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(6)
-        self._start_btn = QPushButton("Start")
-        self._start_btn.setToolTip("Start the current acquisition plan")
+        self._start_btn = QPushButton("")
         self._start_btn.clicked.connect(self.start_requested)
         set_button_role(self._start_btn, "primary")
-        self._single_frame_btn = QPushButton("Single Frame")
-        self._single_frame_btn.setToolTip("Acquire exactly one frame")
+        self._single_frame_btn = QPushButton("")
         self._single_frame_btn.clicked.connect(self.single_frame_requested)
         set_button_role(self._single_frame_btn, "success")
-        self._stop_btn = QPushButton("Stop")
-        self._stop_btn.setToolTip("Stop the current acquisition run")
+        self._stop_btn = QPushButton("")
         self._stop_btn.clicked.connect(self.stop_requested)
         self._stop_btn.setEnabled(False)
         set_button_role(self._stop_btn, "danger")
@@ -167,7 +170,8 @@ class AcquisitionPanel(QGroupBox):
         # Frame counter
         self._frame_label = QLabel("0")
         set_subtle_value(self._frame_label)
-        layout.addRow("Frames acquired:", self._frame_label)
+        self._lbl_frames_acquired = QLabel("")
+        layout.addRow(self._lbl_frames_acquired, self._frame_label)
 
     def _on_plan_toggled(self, _checked: bool) -> None:
         self._set_row_visible(self._interval_spin, self._sched_check.isChecked())
@@ -178,7 +182,10 @@ class AcquisitionPanel(QGroupBox):
     def _on_recording_clicked(self, checked: bool) -> None:
         # Let the checkbox paint its new state before potentially expensive
         # session setup work runs in the main window.
-        QTimer.singleShot(0, lambda checked=checked: self.recording_toggled.emit(checked, self._dir_edit.text()))
+        QTimer.singleShot(
+            0,
+            lambda checked=checked: self.recording_toggled.emit(checked, self._dir_edit.text()),
+        )
 
     def _emit_plan_state(self) -> None:
         self.acquisition_plan_changed.emit(self.acquisition_plan())
@@ -217,8 +224,6 @@ class AcquisitionPanel(QGroupBox):
         self._on_plan_toggled(False)
 
     def _browse_dir(self) -> None:
-        # Open in the current path if valid, otherwise in the app's
-        # default data/measurements folder (creating it if needed).
         current = self._dir_edit.text().strip()
         default_root = self.default_output_dir()
         try:
@@ -227,7 +232,7 @@ class AcquisitionPanel(QGroupBox):
             pass
         start = current if current and Path(current).exists() else str(default_root)
         path = QFileDialog.getExistingDirectory(
-            self, "Select Output Directory", start
+            self, t("hw.acquisition.file_dialog_title"), start
         )
         if path:
             self._dir_edit.setText(path)
@@ -264,3 +269,37 @@ class AcquisitionPanel(QGroupBox):
             self._layout.setRowVisible(field, visible)
         except AttributeError:
             field.setVisible(visible)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh all user-visible strings to the active language."""
+        self.setTitle(t("hw.acquisition.title"))
+
+        self._flow_hint.setText(t("hw.acquisition.flow_hint"))
+
+        self._record_header.setText(t("hw.acquisition.record_header"))
+        self._lbl_save_to.setText(t("hw.acquisition.save_to_label"))
+        self._dir_edit.setPlaceholderText(t("hw.acquisition.dir_placeholder"))
+        self._dir_browse.setText(t("hw.acquisition.browse_button"))
+        self._rec_check.setText(t("hw.acquisition.record_check"))
+
+        self._plan_header.setText(t("hw.acquisition.plan_header"))
+        self._sched_check.setText(t("hw.acquisition.timed_interval_check"))
+        self._lbl_interval.setText(t("hw.acquisition.interval_label"))
+        self._lbl_count.setText(t("hw.acquisition.count_label"))
+        self._count_spin.setSpecialValueText(t("hw.acquisition.count_continuous"))
+        self._freq_step_check.setText(t("hw.acquisition.freq_step_check"))
+        self._lbl_start_freq.setText(t("hw.acquisition.start_freq_label"))
+        self._lbl_end_freq.setText(t("hw.acquisition.end_freq_label"))
+        self._plan_hint.setText(t("hw.acquisition.plan_hint"))
+
+        self._action_header.setText(t("hw.acquisition.action_header"))
+        self._start_btn.setText(t("hw.acquisition.start_button"))
+        self._start_btn.setToolTip(t("hw.acquisition.start_button_tooltip"))
+        self._single_frame_btn.setText(t("hw.acquisition.single_frame_button"))
+        self._single_frame_btn.setToolTip(t("hw.acquisition.single_frame_button_tooltip"))
+        self._stop_btn.setText(t("hw.acquisition.stop_button"))
+        self._stop_btn.setToolTip(t("hw.acquisition.stop_button_tooltip"))
+
+        self._lbl_frames_acquired.setText(t("hw.acquisition.frames_acquired_label"))

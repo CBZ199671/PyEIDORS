@@ -23,13 +23,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_button_role, set_hint_text, set_subtle_value
 
 
 class _FrameTableModel(QAbstractTableModel):
     """Backing model for the frame browser table."""
 
-    _COLUMNS = ("Index", "Timestamp", "File")
+    # Column translation keys — resolved dynamically in :meth:`headerData`
+    # so the header text follows the current UI language.
+    _COLUMN_KEYS = (
+        "hw.frame_browser.column.index",
+        "hw.frame_browser.column.timestamp",
+        "hw.frame_browser.column.file",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -40,13 +47,13 @@ class _FrameTableModel(QAbstractTableModel):
         return len(self._entries)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self._COLUMNS)
+        return len(self._COLUMN_KEYS)
 
     def headerData(
         self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
     ) -> Any:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return self._COLUMNS[section]
+            return t(self._COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -121,20 +128,19 @@ class FrameBrowserWidget(QGroupBox):
     cleared = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Recorded Frames", parent)
+        # Title is populated by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._model = _FrameTableModel()
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(10, 14, 10, 10)
         layout.setSpacing(8)
 
-        self._hint = QLabel(
-            "The first frame of each run is used as reference automatically. "
-            "Click any frame and then 'Set as Reference' to override it — "
-            "the newest acquired frame is always the target."
-        )
+        self._hint = QLabel("")  # retranslated below
         self._hint.setWordWrap(True)
         set_hint_text(self._hint)
         layout.addWidget(self._hint)
@@ -154,7 +160,7 @@ class FrameBrowserWidget(QGroupBox):
         self._table.clicked.connect(self._on_row_clicked)
         layout.addWidget(self._table, 1)
 
-        self._count_label = QLabel("Recorded frames: 0")
+        self._count_label = QLabel("")  # retranslated below
         set_subtle_value(self._count_label)
         layout.addWidget(self._count_label)
 
@@ -164,10 +170,10 @@ class FrameBrowserWidget(QGroupBox):
         btn_grid.setVerticalSpacing(6)
         btn_grid.setColumnStretch(0, 1)
         btn_grid.setColumnStretch(1, 1)
-        self._ref_btn = QPushButton("Set as Reference")
+        self._ref_btn = QPushButton("")
         self._ref_btn.clicked.connect(self._on_set_reference)
         set_button_role(self._ref_btn, "primary")
-        self._clear_btn = QPushButton("Clear List")
+        self._clear_btn = QPushButton("")
         self._clear_btn.clicked.connect(self._on_clear)
         set_button_role(self._clear_btn, "danger")
         for button in (self._ref_btn, self._clear_btn):
@@ -214,4 +220,20 @@ class FrameBrowserWidget(QGroupBox):
         has_rows = self._model.rowCount() > 0
         self._ref_btn.setEnabled(has_selection)
         self._clear_btn.setEnabled(has_rows)
-        self._count_label.setText(f"Recorded frames: {self._model.rowCount()}")
+        self._count_label.setText(
+            t("hw.frame_browser.count_label", count=self._model.rowCount())
+        )
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh all user-visible strings to the active language."""
+        self.setTitle(t("hw.frame_browser.title"))
+        self._hint.setText(t("hw.frame_browser.hint"))
+        self._ref_btn.setText(t("hw.frame_browser.set_ref_button"))
+        self._clear_btn.setText(t("hw.frame_browser.clear_button"))
+        self._update_action_state()
+        # Notify the view that column header labels need to be repainted.
+        self._model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal, 0, self._model.columnCount() - 1
+        )

@@ -15,12 +15,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header
 
 
-# Stimulation amplitude level descriptions
+# Stimulation amplitude level descriptions — kept as numeric/unit labels
+# that do not require localisation (engineering standard notation).
 _STIM_AMP_LABELS = [
     "0 - 50 uA",
     "1 - 100 uA",
@@ -78,10 +80,12 @@ class ControlPanel(QGroupBox):
     impedance_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("2. Setup & Diagnostics", parent)
+        # Title is assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
+        # Labels held here so _retranslate can push new text into them.
+        self._field_labels: dict[str, QLabel] = {}
+        self._grid_labels: dict[str, QLabel] = {}
         self._build_ui()
-        # Prevent child fields from forcing horizontal scrolling:
-        # let spin boxes shrink to fit the available column width.
         from PySide6.QtWidgets import QSizePolicy
         for spin in (
             self._n_elec_spin,
@@ -100,12 +104,12 @@ class ControlPanel(QGroupBox):
         self._mea_mode_combo.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         from PySide6.QtWidgets import QSizePolicy
 
-        # Allow this panel to shrink horizontally so child grids reflow
-        # rather than forcing horizontal scrollbars in the toolbox.
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         self.setMinimumWidth(260)
 
@@ -113,15 +117,15 @@ class ControlPanel(QGroupBox):
         layout.setContentsMargins(8, 10, 8, 6)
         layout.setSpacing(8)
 
-        self._power_header = QLabel("Measurement power")
+        self._power_header = QLabel("")
         set_section_header(self._power_header)
         layout.addWidget(self._power_header)
 
-        self._power_on_btn = QPushButton("Power ON")
+        self._power_on_btn = QPushButton("")
         self._power_on_btn.setCheckable(True)
         self._power_on_btn.clicked.connect(lambda: self._emit_power_toggle(True))
         set_button_role(self._power_on_btn, "success")
-        self._power_off_btn = QPushButton("Power OFF")
+        self._power_off_btn = QPushButton("")
         self._power_off_btn.setCheckable(True)
         self._power_off_btn.clicked.connect(lambda: self._emit_power_toggle(False))
         set_button_role(self._power_off_btn, "danger")
@@ -130,13 +134,13 @@ class ControlPanel(QGroupBox):
         power_layout.setContentsMargins(0, 0, 0, 0)
         power_layout.setSpacing(4)
         power_layout.addWidget(self._inline_row(self._power_on_btn, self._power_off_btn))
-        self._power_hint = QLabel("Power ON / OFF 直接控制板卡电源；Single Point 仅做功能测试。")
+        self._power_hint = QLabel("")
         self._power_hint.setWordWrap(True)
         set_hint_text(self._power_hint)
         power_layout.addWidget(self._power_hint)
         layout.addWidget(self._power_section)
 
-        self._layout_header = QLabel("Hardware layout")
+        self._layout_header = QLabel("")
         set_section_header(self._layout_header)
         layout.addWidget(self._layout_header)
 
@@ -164,11 +168,11 @@ class ControlPanel(QGroupBox):
         self._meas_pattern_edit.setPlaceholderText("{ad}")
         self._meas_pattern_edit.editingFinished.connect(self._emit_layout_changed)
 
-        self._rotate_meas_check = QCheckBox("Rotate measurement with drive")
+        self._rotate_meas_check = QCheckBox("")
         self._rotate_meas_check.setChecked(True)
         self._rotate_meas_check.toggled.connect(lambda _checked: self._emit_layout_changed())
 
-        self._use_meas_current_check = QCheckBox("Measure drive-related electrodes")
+        self._use_meas_current_check = QCheckBox("")
         self._use_meas_current_check.setChecked(False)
         self._use_meas_current_check.toggled.connect(lambda _checked: self._emit_layout_changed())
 
@@ -204,7 +208,7 @@ class ControlPanel(QGroupBox):
         self._layout_section = self._hardware_layout_block()
         layout.addWidget(self._layout_section)
 
-        self._setup_header = QLabel("Measurement setup")
+        self._setup_header = QLabel("")
         set_section_header(self._setup_header)
         layout.addWidget(self._setup_header)
 
@@ -213,49 +217,49 @@ class ControlPanel(QGroupBox):
         self._freq_spin.setValue(1000)
         self._freq_spin.setSuffix(" Hz")
         self._freq_spin.setSingleStep(100)
-        self._freq_apply = QPushButton("Set")
+        self._freq_apply = QPushButton("")
         self._freq_apply.clicked.connect(
             lambda: self.frequency_changed.emit(self._freq_spin.value())
         )
         set_button_role(self._freq_apply, "subtle")
         self._frequency_block = self._field_block(
-            "Frequency", self._inline_row(self._freq_spin, self._freq_apply)
+            "frequency", self._inline_row(self._freq_spin, self._freq_apply)
         )
         layout.addWidget(self._frequency_block)
 
         self._stim_combo = AutoCloseComboBox()
         self._stim_combo.addItems(_STIM_AMP_LABELS)
-        self._stim_apply = QPushButton("Set")
+        self._stim_apply = QPushButton("")
         self._stim_apply.clicked.connect(
             lambda: self.stim_amp_changed.emit(self._stim_combo.currentIndex())
         )
         set_button_role(self._stim_apply, "subtle")
         self._stim_block = self._field_block(
-            "Stim amplitude", self._inline_row(self._stim_combo, self._stim_apply)
+            "stim_amp", self._inline_row(self._stim_combo, self._stim_apply)
         )
         layout.addWidget(self._stim_block)
 
         self._vamp_combo = AutoCloseComboBox()
         self._vamp_combo.addItems(_VOLTAGE_AMP_LABELS)
         self._vamp_combo.setCurrentIndex(7)
-        self._vamp_apply = QPushButton("Set")
+        self._vamp_apply = QPushButton("")
         self._vamp_apply.clicked.connect(
             lambda: self.voltage_amp_changed.emit(self._vamp_combo.currentIndex())
         )
         set_button_role(self._vamp_apply, "subtle")
         self._voltage_gain_block_w = self._field_block(
-            "Voltage gain", self._inline_row(self._vamp_combo, self._vamp_apply)
+            "voltage_gain", self._inline_row(self._vamp_combo, self._vamp_apply)
         )
         layout.addWidget(self._voltage_gain_block_w)
 
-        self._diag_header = QLabel("Diagnostics")
+        self._diag_header = QLabel("")
         set_section_header(self._diag_header)
         layout.addWidget(self._diag_header)
 
-        self._spt_btn = QPushButton("Single Point")
+        self._spt_btn = QPushButton("")
         self._spt_btn.clicked.connect(self.single_point_requested)
         set_button_role(self._spt_btn, "primary")
-        self._imp_btn = QPushButton("Impedance")
+        self._imp_btn = QPushButton("")
         self._imp_btn.clicked.connect(self.impedance_requested)
         set_button_role(self._imp_btn, "subtle")
         self._diagnostic_actions = self._inline_row(self._spt_btn, self._imp_btn)
@@ -271,22 +275,22 @@ class ControlPanel(QGroupBox):
         row_layout = QHBoxLayout(row)
         row_layout.setContentsMargins(0, 0, 0, 0)
         row_layout.setSpacing(6)
-        for index, widget in enumerate(widgets):
+        for _index, widget in enumerate(widgets):
             stretch = 0 if isinstance(widget, QPushButton) else 1
             row_layout.addWidget(widget, stretch)
         return row
 
-    def _field_block(self, label_text: str, field_widget: QWidget) -> QWidget:
+    def _field_block(self, field_key: str, field_widget: QWidget) -> QWidget:
         block = QWidget()
         block_layout = QVBoxLayout(block)
         block_layout.setContentsMargins(0, 0, 0, 0)
         block_layout.setSpacing(4)
-        label = QLabel(f"{label_text}:")
+        label = QLabel("")  # retranslated via _field_labels[field_key]
         label.setStyleSheet("color: #4d5f75; font-weight: 600;")
+        self._field_labels[field_key] = label
         block_layout.addWidget(label)
         block_layout.addWidget(field_widget)
         return block
-
 
     def _hardware_layout_block(self) -> QWidget:
         block = QWidget()
@@ -302,9 +306,10 @@ class ControlPanel(QGroupBox):
         top_grid.setColumnStretch(1, 1)
         top_grid.setColumnStretch(2, 1)
 
-        for col, text in enumerate(("Mode", "Elec/ring", "Rings")):
-            label = QLabel(text)
+        for col, key in enumerate(("mode", "elec_ring", "rings")):
+            label = QLabel("")
             label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+            self._grid_labels[f"layout.{key}"] = label
             top_grid.addWidget(label, 0, col)
         top_grid.addWidget(self._mea_mode_combo, 1, 0)
         top_grid.addWidget(self._n_elec_spin, 1, 1)
@@ -318,10 +323,12 @@ class ControlPanel(QGroupBox):
         pattern_grid.setColumnStretch(0, 1)
         pattern_grid.setColumnStretch(1, 1)
 
-        stim_label = QLabel("Stim pattern")
+        stim_label = QLabel("")
         stim_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
-        meas_label = QLabel("Meas pattern")
+        self._grid_labels["layout.stim_pattern"] = stim_label
+        meas_label = QLabel("")
         meas_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+        self._grid_labels["layout.meas_pattern"] = meas_label
         pattern_grid.addWidget(stim_label, 0, 0)
         pattern_grid.addWidget(meas_label, 0, 1)
         pattern_grid.addWidget(self._stim_pattern_edit, 1, 0)
@@ -336,8 +343,9 @@ class ControlPanel(QGroupBox):
         options_grid.setColumnStretch(1, 1)
         options_grid.addWidget(self._rotate_meas_check, 0, 0)
         options_grid.addWidget(self._use_meas_current_check, 0, 1)
-        extra_label = QLabel("Extra excluded neighbors")
+        extra_label = QLabel("")
         extra_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+        self._grid_labels["layout.extra_neighbors"] = extra_label
         options_grid.addWidget(extra_label, 1, 0)
         options_grid.addWidget(self._exclude_neighbors_spin, 1, 1)
         block_layout.addLayout(options_grid)
@@ -349,9 +357,10 @@ class ControlPanel(QGroupBox):
         cem_grid.setColumnStretch(0, 1)
         cem_grid.setColumnStretch(1, 1)
         cem_grid.setColumnStretch(2, 1)
-        for col, text in enumerate(("Radius", "Elec length", "Contact z")):
-            label = QLabel(text)
+        for col, key in enumerate(("radius", "elec_length", "contact_z")):
+            label = QLabel("")
             label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+            self._grid_labels[f"cem.{key}"] = label
             cem_grid.addWidget(label, 0, col)
         cem_grid.addWidget(self._radius_spin, 1, 0)
         cem_grid.addWidget(self._electrode_length_spin, 1, 1)
@@ -425,6 +434,10 @@ class ControlPanel(QGroupBox):
         self.measurement_layout_changed.emit(config)
 
     def _update_layout_hint(self, layout: dict, *, mea_mode: int) -> None:
+        # Stored so _retranslate() can regenerate the hint if it wants to,
+        # but currently the hint is dense engineering debug info that we
+        # keep in English.  Regenerating here is a no-op when the layout
+        # hasn't changed.
         dimension = "3D" if mea_mode == 3 else "2D"
         rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
         drive = "include drive electrodes" if bool(layout["use_meas_current"]) else "exclude drive electrodes"
@@ -461,3 +474,54 @@ class ControlPanel(QGroupBox):
         """Enable/disable all controls (e.g., when not connected)."""
         for child in self.findChildren(QWidget):
             child.setEnabled(enabled)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh all user-visible strings to the active language."""
+        self.setTitle(t("hw.control.title"))
+
+        # Section headers
+        self._power_header.setText(t("hw.control.power_header"))
+        self._layout_header.setText(t("hw.control.layout_header"))
+        self._setup_header.setText(t("hw.control.setup_header"))
+        self._diag_header.setText(t("hw.control.diag_header"))
+
+        # Power section
+        self._power_on_btn.setText(t("hw.control.power_on_button"))
+        self._power_off_btn.setText(t("hw.control.power_off_button"))
+        self._power_hint.setText(t("hw.control.power_hint"))
+
+        # Layout section — grid header labels
+        self._grid_labels["layout.mode"].setText(t("hw.control.layout_grid.mode"))
+        self._grid_labels["layout.elec_ring"].setText(t("hw.control.layout_grid.elec_ring"))
+        self._grid_labels["layout.rings"].setText(t("hw.control.layout_grid.rings"))
+        self._grid_labels["layout.stim_pattern"].setText(
+            t("hw.control.layout_grid.stim_pattern")
+        )
+        self._grid_labels["layout.meas_pattern"].setText(
+            t("hw.control.layout_grid.meas_pattern")
+        )
+        self._grid_labels["layout.extra_neighbors"].setText(
+            t("hw.control.layout_grid.extra_neighbors")
+        )
+        self._grid_labels["cem.radius"].setText(t("hw.control.cem_grid.radius"))
+        self._grid_labels["cem.elec_length"].setText(t("hw.control.cem_grid.elec_length"))
+        self._grid_labels["cem.contact_z"].setText(t("hw.control.cem_grid.contact_z"))
+
+        # Checkboxes
+        self._rotate_meas_check.setText(t("hw.control.rotate_meas_check"))
+        self._use_meas_current_check.setText(t("hw.control.use_meas_current_check"))
+
+        # Measurement-setup field blocks and Set buttons
+        # Append ':' once, matching the existing visual pattern.
+        self._field_labels["frequency"].setText(t("hw.control.frequency_label") + ":")
+        self._field_labels["stim_amp"].setText(t("hw.control.stim_amp_label") + ":")
+        self._field_labels["voltage_gain"].setText(t("hw.control.voltage_gain_label") + ":")
+        self._freq_apply.setText(t("hw.control.freq_apply_button"))
+        self._stim_apply.setText(t("hw.control.stim_apply_button"))
+        self._vamp_apply.setText(t("hw.control.vamp_apply_button"))
+
+        # Diagnostics
+        self._spt_btn.setText(t("hw.control.spt_button"))
+        self._imp_btn.setText(t("hw.control.impedance_button"))

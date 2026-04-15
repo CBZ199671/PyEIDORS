@@ -424,6 +424,10 @@ class EITWorkstation(QMainWindow):
     def _on_language_changed(self, _lang: str) -> None:
         """Slot for :attr:`Translator.language_changed`."""
         self._retranslate()
+        # Session summary's banner + indicator chips are built from the
+        # current app state, not from a static key set, so re-run the
+        # summary refresh to pick up translated strings.
+        self._refresh_session_summary()
 
     def _retranslate(self) -> None:
         """Refresh every user-visible string owned by :class:`EITWorkstation`.
@@ -1676,30 +1680,22 @@ class EITWorkstation(QMainWindow):
             return f"{idle_label} {self._planned_acquisition_count}x{freq_info}"
         return "Idle | manual"
 
+    def _banner(self, variant: str, tone: str) -> tuple[str, str, str, str]:
+        """Resolve a banner variant to (title, detail, action, tone) via i18n."""
+        return (
+            t(f"hw.summary.banner.{variant}.title"),
+            t(f"hw.summary.banner.{variant}.detail"),
+            t(f"hw.summary.banner.{variant}.action"),
+            tone,
+        )
+
     def _summary_banner_state(self) -> tuple[str, str, str, str]:
         if self._state.connection_status is ConnectionStatus.ERROR:
-            return (
-                "FAULT",
-                "The link is in an error state and requires operator attention.",
-                "Next: Disconnect the link, check transport settings, and verify again.",
-                "error",
-            )
-
+            return self._banner("fault", "error")
         if self._state.connection_status is ConnectionStatus.CONNECTING:
-            return (
-                "VERIFYING LINK",
-                "The workstation is probing the device and reading its protocol capabilities.",
-                "Next: Wait for link verification to finish.",
-                "warn",
-            )
-
+            return self._banner("verifying", "warn")
         if self._state.connection_status is ConnectionStatus.DISCONNECTED:
-            return (
-                "LINK DOWN",
-                "No verified device link is active.",
-                "Next: Select a transport and click Connect & Verify.",
-                "idle",
-            )
+            return self._banner("link_down", "idle")
 
         if self._state.acquisition_mode in {
             AcquisitionMode.CONTINUOUS,
@@ -1709,92 +1705,69 @@ class EITWorkstation(QMainWindow):
             AcquisitionMode.SINGLE_SHOT,
         }:
             if self._state.recording_status is RecordingStatus.RECORDING:
-                return (
-                    "ACQUIRING + RECORDING",
-                    "Frames are being captured and written to the active session.",
-                    "Next: Monitor incoming frames or stop acquisition when the run is complete.",
-                    "active",
-                )
-            return (
-                "ACQUIRING",
-                "Frames are being captured from the active transport.",
-                "Next: Monitor the live plot and stop acquisition when the run is complete.",
-                "active",
-            )
+                return self._banner("acquiring_recording", "active")
+            return self._banner("acquiring", "active")
 
         if self._transport_type == "simulator":
-            return (
-                "READY FOR ACQUISITION",
-                "The simulator link is verified and can start generating frames immediately.",
-                "Next: Start continuous or single-frame acquisition.",
-                "ready",
-            )
+            return self._banner("ready_simulator", "ready")
 
         if self._state.power_status is PowerStatus.ON:
             if self._state.recording_status is RecordingStatus.ARMED:
-                return (
-                    "READY + RECORD ARMED",
-                    "The device link is verified, measurement power is ON, and the next run will be saved.",
-                    "Next: Start acquisition to capture and record the next session.",
-                    "ready",
-                )
-            return (
-                "READY FOR ACQUISITION",
-                "The device link is verified and measurement power is ON.",
-                "Next: Start continuous or single-frame acquisition.",
-                "ready",
-            )
+                return self._banner("ready_record_armed", "ready")
+            return self._banner("ready", "ready")
 
         if self._state.recording_status is RecordingStatus.ARMED:
-            return (
-                "LINK VERIFIED",
-                "The link is verified and recording is armed, but measurement power is not confirmed ON.",
-                "Next: Turn measurement power ON when the hardware is ready, then start acquisition.",
-                "warn",
-            )
+            return self._banner("link_verified_armed", "warn")
 
-        return (
-            "LINK VERIFIED",
-            "The device link is verified and waiting for measurement power or the next setup change.",
-            "Next: Turn measurement power ON when the hardware is ready, then start acquisition.",
-            "warn",
-        )
+        return self._banner("link_verified", "warn")
 
     def _indicator_link_state(self) -> tuple[str, str]:
         mapping = {
-            ConnectionStatus.DISCONNECTED: ("DOWN", "idle"),
-            ConnectionStatus.CONNECTING: ("CHECK", "warn"),
-            ConnectionStatus.CONNECTED: ("OK", "ready"),
-            ConnectionStatus.ERROR: ("FAULT", "error"),
+            ConnectionStatus.DISCONNECTED: ("hw.summary.chip.link.down", "idle"),
+            ConnectionStatus.CONNECTING: ("hw.summary.chip.link.check", "warn"),
+            ConnectionStatus.CONNECTED: ("hw.summary.chip.link.ok", "ready"),
+            ConnectionStatus.ERROR: ("hw.summary.chip.link.fault", "error"),
         }
-        return mapping.get(self._state.connection_status, ("UNK", "idle"))
+        key, tone = mapping.get(
+            self._state.connection_status, ("hw.summary.chip.link.unk", "idle")
+        )
+        return (t(key), tone)
 
     def _indicator_power_state(self) -> tuple[str, str]:
         mapping = {
-            PowerStatus.UNKNOWN: ("UNK", "idle"),
-            PowerStatus.OFF: ("OFF", "warn"),
-            PowerStatus.ON: ("ON", "ready"),
+            PowerStatus.UNKNOWN: ("hw.summary.chip.power.unk", "idle"),
+            PowerStatus.OFF: ("hw.summary.chip.power.off", "warn"),
+            PowerStatus.ON: ("hw.summary.chip.power.on", "ready"),
         }
-        return mapping.get(self._state.power_status, ("UNK", "idle"))
+        key, tone = mapping.get(
+            self._state.power_status, ("hw.summary.chip.power.unk", "idle")
+        )
+        return (t(key), tone)
 
     def _indicator_record_state(self) -> tuple[str, str]:
         mapping = {
-            RecordingStatus.OFF: ("OFF", "idle"),
-            RecordingStatus.ARMED: ("ARM", "ready"),
-            RecordingStatus.RECORDING: ("REC", "active"),
+            RecordingStatus.OFF: ("hw.summary.chip.record.off", "idle"),
+            RecordingStatus.ARMED: ("hw.summary.chip.record.arm", "ready"),
+            RecordingStatus.RECORDING: ("hw.summary.chip.record.rec", "active"),
         }
-        return mapping.get(self._state.recording_status, ("OFF", "idle"))
+        key, tone = mapping.get(
+            self._state.recording_status, ("hw.summary.chip.record.off", "idle")
+        )
+        return (t(key), tone)
 
     def _indicator_acq_state(self) -> tuple[str, str]:
         mapping = {
-            AcquisitionMode.IDLE: ("IDLE", "idle"),
-            AcquisitionMode.CONTINUOUS: ("RUN", "active"),
-            AcquisitionMode.SCHEDULED: ("SCH", "active"),
-            AcquisitionMode.FINITE_RUN: ("FIN", "active"),
-            AcquisitionMode.STEPPED_RUN: ("STEP", "active"),
-            AcquisitionMode.SINGLE_SHOT: ("1FR", "active"),
+            AcquisitionMode.IDLE: ("hw.summary.chip.acq.idle", "idle"),
+            AcquisitionMode.CONTINUOUS: ("hw.summary.chip.acq.run", "active"),
+            AcquisitionMode.SCHEDULED: ("hw.summary.chip.acq.sch", "active"),
+            AcquisitionMode.FINITE_RUN: ("hw.summary.chip.acq.fin", "active"),
+            AcquisitionMode.STEPPED_RUN: ("hw.summary.chip.acq.step", "active"),
+            AcquisitionMode.SINGLE_SHOT: ("hw.summary.chip.acq.1fr", "active"),
         }
-        return mapping.get(self._state.acquisition_mode, ("IDLE", "idle"))
+        key, tone = mapping.get(
+            self._state.acquisition_mode, ("hw.summary.chip.acq.idle", "idle")
+        )
+        return (t(key), tone)
 
     def _build_planned_frequencies(self) -> list[int]:
         count = int(self._planned_acquisition_count)

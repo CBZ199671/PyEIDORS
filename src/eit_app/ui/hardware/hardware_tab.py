@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
 from eit_app.ui.hardware.connection_panel import ConnectionPanel
@@ -34,6 +35,8 @@ class HardwareTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         self._conn_panel = ConnectionPanel()
@@ -69,11 +72,12 @@ class HardwareTab(QWidget):
         self._summary_panel = SessionSummaryPanel()
         self._frame_browser = FrameBrowserWidget()
 
+        # Step titles are assigned by _retranslate(); pass empty strings now.
         self._shell = WorkflowShell(
             steps=[
-                ("Step 1 \u00b7 Link", self._conn_panel),
-                ("Step 2 \u00b7 Setup", self._control_panel),
-                ("Step 3 \u00b7 Acquire", self._acq_panel),
+                ("", self._conn_panel),
+                ("", self._control_panel),
+                ("", self._acq_panel),
             ],
             center_widget=center_splitter,
             context_widget=self._frame_browser,
@@ -90,6 +94,15 @@ class HardwareTab(QWidget):
         root.setSpacing(0)
         root.addWidget(self._shell)
         self._workflow_toolbox = self._shell.toolbox
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh Step titles on the left-panel QToolBox."""
+        toolbox = self._workflow_toolbox
+        toolbox.setItemText(0, t("hw.step.link"))
+        toolbox.setItemText(1, t("hw.step.setup"))
+        toolbox.setItemText(2, t("hw.step.acquire"))
 
     # ── Property accessors for signal wiring in main_window ──
 
