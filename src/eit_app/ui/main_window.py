@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import QTimer, Qt, Slot
+from PySide6.QtGui import QActionGroup
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
@@ -38,6 +39,7 @@ from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
 from eit_app.hardware.types import STIM_AMP_VALUES_UA
+from eit_app.i18n import current_language, set_language, t, translator
 from eit_app.interop import (
     EidorsExportJob,
     EidorsScriptCaptureService,
@@ -228,7 +230,8 @@ class EITWorkstation(QMainWindow):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("EIT Workstation")
+        # Window title is set via _retranslate() so it follows the active
+        # language (see end of __init__ for the signal wiring).
         self.resize(1500, 940)
 
         self._state = AppState(self)
@@ -307,6 +310,12 @@ class EITWorkstation(QMainWindow):
         self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
 
+        # Wire runtime language switching for chrome owned by this window.
+        # Child widgets handle their own retranslation in later phases by
+        # subscribing to translator().language_changed themselves.
+        translator().language_changed.connect(self._on_language_changed)
+        self._retranslate()
+
         # Kick off DB backfill shortly after startup so the UI shows
         # historical sessions without blocking window initialization.
         QTimer.singleShot(500, self._trigger_backfill)
@@ -355,33 +364,97 @@ class EITWorkstation(QMainWindow):
         self._tab_widget.setDocumentMode(True)
         self.setCentralWidget(self._tab_widget)
 
-        # Hardware Measurement tab
+        # Tab titles are assigned by _retranslate() so they follow the
+        # active language.
         self._hw_tab = HardwareTab()
-        self._tab_widget.addTab(self._hw_tab, "Hardware Measurement (\u5b9e\u6d4b)")
+        self._tab_widget.addTab(self._hw_tab, "")
 
-        # Simulation tab
         self._sim_tab = SimulationTab()
-        self._tab_widget.addTab(self._sim_tab, "Simulation (\u4eff\u771f)")
+        self._tab_widget.addTab(self._sim_tab, "")
 
-        # Dataset generation tab
         self._dataset_tab = DatasetGeneratorTab()
-        self._tab_widget.addTab(self._dataset_tab, "Dataset Generator (\u6570\u636e\u96c6\u751f\u6210)")
+        self._tab_widget.addTab(self._dataset_tab, "")
 
-        # Database tab — persistent archive of all recorded sessions
+        # Database tab — persistent archive of all recorded sessions.
         self._db_tab = DatabaseTab(self._db_ctrl)
-        self._tab_widget.addTab(self._db_tab, "Database (\u6570\u636e\u5e93)")
+        self._tab_widget.addTab(self._db_tab, "")
 
         self._status_bar = EITStatusBar(self)
         self.setStatusBar(self._status_bar)
 
-        menu = self.menuBar()
-        file_menu = menu.addMenu("&File")
-        file_menu.addAction("&Settings...", self._open_settings)
-        file_menu.addSeparator()
-        file_menu.addAction("E&xit", self.close)
+        self._build_menus()
 
-        tools_menu = menu.addMenu("&Tools")
-        tools_menu.addAction("EIDORS &Interop Hub...", self._open_interop_hub)
+    def _build_menus(self) -> None:
+        """Create the main menu bar and retain references for retranslation."""
+        menu_bar = self.menuBar()
+
+        # File menu --------------------------------------------------------
+        self._menu_file = menu_bar.addMenu("")
+        self._action_settings = self._menu_file.addAction("")
+        self._action_settings.triggered.connect(self._open_settings)
+        self._menu_file.addSeparator()
+        self._action_exit = self._menu_file.addAction("")
+        self._action_exit.triggered.connect(self.close)
+
+        # Tools menu -------------------------------------------------------
+        self._menu_tools = menu_bar.addMenu("")
+        self._action_interop_hub = self._menu_tools.addAction("")
+        self._action_interop_hub.triggered.connect(self._open_interop_hub)
+
+        # Language menu ----------------------------------------------------
+        self._menu_language = menu_bar.addMenu("")
+        self._lang_action_group = QActionGroup(self)
+        self._lang_action_group.setExclusive(True)
+
+        self._action_lang_zh = self._menu_language.addAction("")
+        self._action_lang_zh.setCheckable(True)
+        self._action_lang_zh.triggered.connect(lambda: set_language("zh"))
+        self._lang_action_group.addAction(self._action_lang_zh)
+
+        self._action_lang_en = self._menu_language.addAction("")
+        self._action_lang_en.setCheckable(True)
+        self._action_lang_en.triggered.connect(lambda: set_language("en"))
+        self._lang_action_group.addAction(self._action_lang_en)
+
+    # ------------------------------------------------------------------
+    # i18n — retranslate chrome owned directly by the main window
+    # ------------------------------------------------------------------
+
+    @Slot(str)
+    def _on_language_changed(self, _lang: str) -> None:
+        """Slot for :attr:`Translator.language_changed`."""
+        self._retranslate()
+
+    def _retranslate(self) -> None:
+        """Refresh every user-visible string owned by :class:`EITWorkstation`.
+
+        Child widgets are responsible for their own retranslation; they
+        subscribe to :meth:`eit_app.i18n.translator.language_changed` in
+        their own ``__init__``.
+        """
+        log.info(
+            "[i18n] retranslating main window (language=%s)", current_language()
+        )
+        self.setWindowTitle(t("app.title"))
+
+        self._tab_widget.setTabText(0, t("tab.hardware"))
+        self._tab_widget.setTabText(1, t("tab.simulation"))
+        self._tab_widget.setTabText(2, t("tab.dataset"))
+        self._tab_widget.setTabText(3, t("tab.database"))
+
+        self._menu_file.setTitle(t("menu.file"))
+        self._action_settings.setText(t("menu.file.settings"))
+        self._action_exit.setText(t("menu.file.exit"))
+
+        self._menu_tools.setTitle(t("menu.tools"))
+        self._action_interop_hub.setText(t("menu.tools.interop_hub"))
+
+        self._menu_language.setTitle(t("menu.language"))
+        self._menu_language.setToolTip(t("menu.language.tooltip"))
+        self._action_lang_zh.setText(t("menu.language.zh"))
+        self._action_lang_en.setText(t("menu.language.en"))
+        self._action_lang_zh.setChecked(current_language() == "zh")
+        self._action_lang_en.setChecked(current_language() == "en")
 
     def _connect_signals(self) -> None:
         self._conn_panel.connect_requested.connect(self._on_connect_requested)

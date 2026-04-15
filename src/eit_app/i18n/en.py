@@ -7,27 +7,42 @@ This file is a plain Python ``dict`` (not JSON / YAML) on purpose so that:
   * IDEs can autocomplete key references,
   * ``grep`` finds usages directly,
   * static checkers can flag unused keys.
-
-Phase 0 only seeds a tiny validation block. Real UI strings are migrated
-tab-by-tab in Phase 3 (hardware / simulation / dataset / database).
 """
 
 from __future__ import annotations
 
 TRANSLATIONS: dict[str, str] = {
     # ------------------------------------------------------------------
-    # Phase 0 validation keys — remove once Phase 3 begins populating real
-    # translations.  Kept for smoke-testing the plumbing.
-    # ------------------------------------------------------------------
-    "_test.hello": "Hello, world!",
-    "_test.greeting": "Welcome, {name}",
-    "_test.plural": "You have {n} pending tasks",
-
-    # ------------------------------------------------------------------
-    # Application chrome — filled out in Phase 1 when the Language menu
-    # goes in.  Included here only as a forward-looking skeleton so that
-    # Phase 0's smoke test can verify end-to-end plumbing against realistic
-    # keys.
+    # Application chrome
     # ------------------------------------------------------------------
     "app.title": "EIT Workstation",
+
+    # ------------------------------------------------------------------
+    # Tab labels  (kept as short domain nouns for a tight tab bar)
+    # ------------------------------------------------------------------
+    "tab.hardware": "Hardware",
+    "tab.simulation": "Simulation",
+    "tab.dataset": "Dataset",
+    "tab.database": "Database",
+
+    # ------------------------------------------------------------------
+    # File menu
+    # ------------------------------------------------------------------
+    "menu.file": "&File",
+    "menu.file.settings": "&Settings\u2026",
+    "menu.file.exit": "E&xit",
+
+    # ------------------------------------------------------------------
+    # Tools menu
+    # ------------------------------------------------------------------
+    "menu.tools": "&Tools",
+    "menu.tools.interop_hub": "EIDORS &Interop Hub\u2026",
+
+    # ------------------------------------------------------------------
+    # Language menu
+    # ------------------------------------------------------------------
+    "menu.language": "&Language",
+    "menu.language.zh": "\u4e2d\u6587",            # 中文 — always in native script
+    "menu.language.en": "English",                   # always in English
+    "menu.language.tooltip": "Switch between Chinese and English",
 }
