@@ -409,4 +409,59 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.summary.field.mesh": "\u7f51\u683c\uff1a",                                               # 网格：
     "dataset.summary.field.electrodes": "\u7535\u6781\u6570\uff1a",                                   # 电极数：
     "dataset.summary.field.status": "\u72b6\u6001\uff1a",                                             # 状态：
+
+    # ==================================================================
+    # Database tab — Left filter panel
+    # ==================================================================
+    "db.filters.title": "\u7b5b\u9009",                                                               # 筛选
+    "db.filters.hint": "\u6309\u540d\u79f0\u3001\u9891\u7387\u6216\u65e5\u671f\u68c0\u7d22\u5386\u53f2\u8bb0\u5f55\u3002",  # 按名称、频率或日期检索历史记录。
+    "db.filters.name_label": "\u540d\u79f0\uff1a",                                                    # 名称：
+    "db.filters.name_placeholder": "tank, test_for_gui \u2026",
+    "db.filters.freq_label": "\u9891\u7387 (Hz)\uff1a",                                               # 频率 (Hz)：
+    "db.filters.freq_placeholder": "\u4f8b\u5982 1000",                                                # 例如 1000
+    "db.filters.date_any": "\u5168\u90e8",                                                            # 全部
+    "db.filters.date_from_label": "\u8d77\u59cb\u65e5\u671f\uff1a",                                    # 起始日期：
+    "db.filters.date_to_label": "\u7ed3\u675f\u65e5\u671f\uff1a",                                      # 结束日期：
+    "db.filters.apply_button": "\u5e94\u7528\u7b5b\u9009",                                            # 应用筛选
+    "db.filters.clear_button": "\u6e05\u7a7a",                                                        # 清空
+    "db.filters.refresh_button": "\u5237\u65b0",                                                      # 刷新
+    "db.stats.count": "{count} \u4e2a\u4f1a\u8bdd",                                                    # {count} 个会话
+    "db.stats.ready": "\u5c31\u7eea",                                                                  # 就绪
+    "db.stats.backfill_progress": "\u56de\u586b\u4e2d\uff1a{current}/{total}",                         # 回填中：{current}/{total}
+    "db.stats.backfill_done": "\u56de\u586b\u5b8c\u6210\uff1a\u5171\u5bfc\u5165 {count} \u4e2a\u4f1a\u8bdd\u3002",  # 回填完成：共导入 {count} 个会话。
+
+    # ==================================================================
+    # Database tab — Central sessions / frames section
+    # ==================================================================
+    "db.sessions.title": "\u4f1a\u8bdd",                                                               # 会话
+    "db.sessions.col.id": "ID",
+    "db.sessions.col.name": "\u540d\u79f0",                                                            # 名称
+    "db.sessions.col.started": "\u5f00\u59cb\u65f6\u95f4",                                             # 开始时间
+    "db.sessions.col.n_elec": "\u7535\u6781\u6570",                                                    # 电极数
+    "db.sessions.col.frequency": "\u9891\u7387",                                                       # 频率
+    "db.sessions.col.stim": "\u6fc0\u52b1 (uA)",                                                       # 激励 (uA)
+    "db.sessions.col.gain": "\u589e\u76ca",                                                            # 增益
+    "db.sessions.col.frames": "\u5e27\u6570",                                                          # 帧数
+    "db.sessions.open_folder_button": "\u6253\u5f00\u6587\u4ef6\u5939",                               # 打开文件夹
+    "db.sessions.batch_recon_button": "\u6279\u91cf\u91cd\u6784\u2026",                               # 批量重构…
+
+    "db.frames.title": "\u5e27",                                                                       # 帧
+    "db.frames.col.index": "\u5e8f\u53f7",                                                             # 序号
+    "db.frames.col.timestamp": "\u65f6\u95f4\u6233",                                                   # 时间戳
+    "db.frames.col.file": "\u6587\u4ef6",                                                              # 文件
+    "db.frames.selection_hint": "\u9009\u62e9\u4e00\u5e27\uff0c\u518d\u70b9\u51fb\u201c\u8bbe\u4e3a\u53c2\u8003\u201d\u6216\u201c\u8bbe\u4e3a\u76ee\u6807\u201d\u3002",  # 选择一帧，再点击"设为参考"或"设为目标"。
+    "db.frames.selection_role.reference": "\u53c2\u8003",                                              # 参考
+    "db.frames.selection_role.target": "\u76ee\u6807",                                                 # 目标
+    "db.frames.selection_unset": "{role}\uff1a<\u672a\u9009\u62e9>",                                   # {role}：<未选择>
+    "db.frames.selection_set": "{role}\uff1a#{index}",                                                 # {role}：#{index}
+    "db.frames.set_ref_button": "\u8bbe\u4e3a\u53c2\u8003",                                            # 设为参考
+    "db.frames.set_tgt_button": "\u8bbe\u4e3a\u76ee\u6807",                                            # 设为目标
+    "db.frames.reconstruct_button": "\u91cd\u6784\u2026",                                              # 重构…
+    "db.frames.clear_button": "\u6e05\u9664",                                                           # 清除
+
+    # ==================================================================
+    # Database tab — Right-side preview panel
+    # ==================================================================
+    "db.preview.title": "\u5e27\u9884\u89c8",                                                          # 帧预览
+    "db.preview.hint": "\u70b9\u51fb\u4efb\u610f\u4e00\u5e27\u5728\u6b64\u9884\u89c8\u5176\u6ce2\u5f62\u3002",  # 点击任意一帧在此预览其波形。
 }

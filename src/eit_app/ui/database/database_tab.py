@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -48,15 +49,15 @@ def _format_unix(ts: float) -> str:
 
 
 class _SessionTableModel(QAbstractTableModel):
-    _COLUMNS = (
-        "ID",
-        "Name",
-        "Started",
-        "N_elec",
-        "Frequency",
-        "Stim (uA)",
-        "Gain",
-        "Frames",
+    _COLUMN_KEYS = (
+        "db.sessions.col.id",
+        "db.sessions.col.name",
+        "db.sessions.col.started",
+        "db.sessions.col.n_elec",
+        "db.sessions.col.frequency",
+        "db.sessions.col.stim",
+        "db.sessions.col.gain",
+        "db.sessions.col.frames",
     )
 
     def __init__(self) -> None:
@@ -67,7 +68,7 @@ class _SessionTableModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self._COLUMNS)
+        return len(self._COLUMN_KEYS)
 
     def headerData(
         self,
@@ -76,7 +77,7 @@ class _SessionTableModel(QAbstractTableModel):
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return self._COLUMNS[section]
+            return t(self._COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -128,7 +129,11 @@ class _SessionTableModel(QAbstractTableModel):
 
 
 class _FrameTableModel(QAbstractTableModel):
-    _COLUMNS = ("Index", "Timestamp", "File")
+    _COLUMN_KEYS = (
+        "db.frames.col.index",
+        "db.frames.col.timestamp",
+        "db.frames.col.file",
+    )
 
     def __init__(self) -> None:
         super().__init__()
@@ -138,7 +143,7 @@ class _FrameTableModel(QAbstractTableModel):
         return len(self._rows)
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
-        return len(self._COLUMNS)
+        return len(self._COLUMN_KEYS)
 
     def headerData(
         self,
@@ -147,7 +152,7 @@ class _FrameTableModel(QAbstractTableModel):
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return self._COLUMNS[section]
+            return t(self._COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
@@ -196,9 +201,16 @@ class DatabaseTab(QWidget):
         self._selected_reference: dict | None = None
         self._selected_target: dict | None = None
         self._is_shutting_down = False
+        # Cache the most recent dynamic strings so _retranslate can rebuild
+        # them in the active language without re-querying the controller.
+        self._session_count_cache: int = 0
+        self._backfill_status_mode: str = "ready"  # "ready" | "progress" | "done"
+        self._backfill_cache: tuple[int, int] = (0, 0)
         self._build_ui()
         self._connect_signals()
         self.refresh_sessions()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def prepare_for_shutdown(self) -> None:
         self._is_shutting_down = True
@@ -226,15 +238,15 @@ class DatabaseTab(QWidget):
         root.addWidget(splitter)
 
     def _build_filter_panel(self) -> QWidget:
-        box = QGroupBox("FILTERS")
-        layout = QVBoxLayout(box)
+        self._filter_box = QGroupBox("")  # title set by _retranslate
+        layout = QVBoxLayout(self._filter_box)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(12)
 
-        hint = QLabel("Search the archive by name, frequency, or date.")
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addWidget(hint)
+        self._filter_hint = QLabel("")
+        self._filter_hint.setWordWrap(True)
+        set_hint_text(self._filter_hint)
+        layout.addWidget(self._filter_hint)
 
         form = QFormLayout()
         form.setSpacing(10)
@@ -242,38 +254,38 @@ class DatabaseTab(QWidget):
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._filter_name = QLineEdit()
-        self._filter_name.setPlaceholderText("tank, test_for_gui …")
-        form.addRow("Name:", self._filter_name)
+        self._lbl_name = QLabel("")
+        form.addRow(self._lbl_name, self._filter_name)
 
         self._filter_freq = QLineEdit()
-        self._filter_freq.setPlaceholderText("e.g. 1000")
-        form.addRow("Frequency (Hz):", self._filter_freq)
+        self._lbl_freq = QLabel("")
+        form.addRow(self._lbl_freq, self._filter_freq)
 
         self._filter_date_from = QDateEdit()
         self._filter_date_from.setCalendarPopup(True)
-        self._filter_date_from.setSpecialValueText("Any")
         self._filter_date_from.setDate(self._filter_date_from.minimumDate())
         self._filter_date_from.setDisplayFormat("yyyy-MM-dd")
-        form.addRow("Date from:", self._filter_date_from)
+        self._lbl_date_from = QLabel("")
+        form.addRow(self._lbl_date_from, self._filter_date_from)
 
         self._filter_date_to = QDateEdit()
         self._filter_date_to.setCalendarPopup(True)
-        self._filter_date_to.setSpecialValueText("Any")
         self._filter_date_to.setDate(self._filter_date_to.minimumDate())
         self._filter_date_to.setDisplayFormat("yyyy-MM-dd")
-        form.addRow("Date to:", self._filter_date_to)
+        self._lbl_date_to = QLabel("")
+        form.addRow(self._lbl_date_to, self._filter_date_to)
 
         layout.addLayout(form)
 
-        self._apply_btn = QPushButton("Apply Filters")
+        self._apply_btn = QPushButton("")
         set_button_role(self._apply_btn, "primary")
         layout.addWidget(self._apply_btn)
 
         sub_btn_row = QHBoxLayout()
         sub_btn_row.setSpacing(6)
-        self._clear_btn = QPushButton("Clear")
+        self._clear_btn = QPushButton("")
         set_button_role(self._clear_btn, "subtle")
-        self._refresh_btn = QPushButton("Refresh")
+        self._refresh_btn = QPushButton("")
         set_button_role(self._refresh_btn, "subtle")
         sub_btn_row.addWidget(self._clear_btn)
         sub_btn_row.addWidget(self._refresh_btn)
@@ -291,14 +303,14 @@ class DatabaseTab(QWidget):
         stats_layout.setContentsMargins(12, 10, 12, 10)
         stats_layout.setSpacing(4)
 
-        self._count_label = QLabel("0 sessions")
+        self._count_label = QLabel("")
         self._count_label.setStyleSheet(
             "color: #1f5d8b; font-weight: 700; font-size: 15px;"
             " background: transparent; border: none; padding: 0;"
         )
         stats_layout.addWidget(self._count_label)
 
-        self._backfill_status = QLabel("Ready")
+        self._backfill_status = QLabel("")
         self._backfill_status.setStyleSheet(
             "color: #6a7686; font-size: 11px;"
             " background: transparent; border: none; padding: 0;"
@@ -308,9 +320,9 @@ class DatabaseTab(QWidget):
 
         layout.addWidget(stats_card)
 
-        box.setMinimumWidth(250)
-        box.setMaximumWidth(330)
-        return box
+        self._filter_box.setMinimumWidth(250)
+        self._filter_box.setMaximumWidth(330)
+        return self._filter_box
 
     def _build_center_panel(self) -> QWidget:
         container = QWidget()
@@ -323,8 +335,8 @@ class DatabaseTab(QWidget):
         splitter.setHandleWidth(6)
 
         # ---- Sessions section ----
-        sessions_box = QGroupBox("SESSIONS")
-        sessions_layout = QVBoxLayout(sessions_box)
+        self._sessions_box = QGroupBox("")  # title set by _retranslate
+        sessions_layout = QVBoxLayout(self._sessions_box)
         sessions_layout.setContentsMargins(14, 20, 14, 14)
         sessions_layout.setSpacing(10)
 
@@ -356,10 +368,10 @@ class DatabaseTab(QWidget):
 
         session_actions = QHBoxLayout()
         session_actions.setSpacing(6)
-        self._open_folder_btn = QPushButton("Open Folder")
+        self._open_folder_btn = QPushButton("")
         set_button_role(self._open_folder_btn, "subtle")
         self._open_folder_btn.setEnabled(False)
-        self._batch_recon_btn = QPushButton("Batch Reconstruct…")
+        self._batch_recon_btn = QPushButton("")
         set_button_role(self._batch_recon_btn, "danger")
         self._batch_recon_btn.setEnabled(False)
         session_actions.addStretch()
@@ -367,11 +379,11 @@ class DatabaseTab(QWidget):
         session_actions.addWidget(self._batch_recon_btn)
         sessions_layout.addLayout(session_actions)
 
-        splitter.addWidget(sessions_box)
+        splitter.addWidget(self._sessions_box)
 
         # ---- Frames section ----
-        frames_box = QGroupBox("FRAMES")
-        frames_layout = QVBoxLayout(frames_box)
+        self._frames_box = QGroupBox("")  # title set by _retranslate
+        frames_layout = QVBoxLayout(self._frames_box)
         frames_layout.setContentsMargins(14, 20, 14, 14)
         frames_layout.setSpacing(10)
 
@@ -394,10 +406,8 @@ class DatabaseTab(QWidget):
 
         frames_layout.addWidget(self._frame_table, 1)
 
-        # Selection status line
-        self._selection_status = QLabel(
-            "Select a frame, then click 'Set as Reference' or 'Set as Target'."
-        )
+        # Selection status line — text assigned by _update_selection_status().
+        self._selection_status = QLabel("")
         self._selection_status.setStyleSheet(
             "background: #f5f9fd; border: 1px solid #dbe4ef;"
             " border-radius: 6px; padding: 6px 10px;"
@@ -408,16 +418,16 @@ class DatabaseTab(QWidget):
 
         frame_actions = QHBoxLayout()
         frame_actions.setSpacing(6)
-        self._as_ref_btn = QPushButton("Set as Reference")
+        self._as_ref_btn = QPushButton("")
         set_button_role(self._as_ref_btn, "primary")
         self._as_ref_btn.setEnabled(False)
-        self._as_tgt_btn = QPushButton("Set as Target")
+        self._as_tgt_btn = QPushButton("")
         set_button_role(self._as_tgt_btn, "success")
         self._as_tgt_btn.setEnabled(False)
-        self._reconstruct_btn = QPushButton("Reconstruct…")
+        self._reconstruct_btn = QPushButton("")
         set_button_role(self._reconstruct_btn, "danger")
         self._reconstruct_btn.setEnabled(False)
-        self._clear_sel_btn = QPushButton("Clear")
+        self._clear_sel_btn = QPushButton("")
         set_button_role(self._clear_sel_btn, "subtle")
         frame_actions.addWidget(self._as_ref_btn)
         frame_actions.addWidget(self._as_tgt_btn)
@@ -426,7 +436,7 @@ class DatabaseTab(QWidget):
         frame_actions.addWidget(self._clear_sel_btn)
         frames_layout.addLayout(frame_actions)
 
-        splitter.addWidget(frames_box)
+        splitter.addWidget(self._frames_box)
         splitter.setStretchFactor(0, 3)
         splitter.setStretchFactor(1, 2)
         splitter.setSizes([420, 280])
@@ -435,23 +445,23 @@ class DatabaseTab(QWidget):
         return container
 
     def _build_preview_panel(self) -> QWidget:
-        box = QGroupBox("FRAME PREVIEW")
-        layout = QVBoxLayout(box)
+        self._preview_box = QGroupBox("")  # title set by _retranslate
+        layout = QVBoxLayout(self._preview_box)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setSpacing(10)
 
-        hint = QLabel("Click any frame row to preview its waveform here.")
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addWidget(hint)
+        self._preview_hint = QLabel("")
+        self._preview_hint.setWordWrap(True)
+        set_hint_text(self._preview_hint)
+        layout.addWidget(self._preview_hint)
 
         self._preview_plot = LivePlotWidget()
         self._preview_plot.setMinimumHeight(280)
         layout.addWidget(self._preview_plot, 1)
 
-        box.setMinimumWidth(300)
-        box.setMaximumWidth(420)
-        return box
+        self._preview_box.setMinimumWidth(300)
+        self._preview_box.setMaximumWidth(420)
+        return self._preview_box
 
     def _connect_signals(self) -> None:
         self._apply_btn.clicked.connect(self.refresh_sessions)
@@ -500,7 +510,8 @@ class DatabaseTab(QWidget):
 
         sessions = self._db_ctrl.query_sessions(**filters)
         self._session_model.set_rows(sessions)
-        self._count_label.setText(f"{len(sessions)} sessions")
+        self._session_count_cache = len(sessions)
+        self._count_label.setText(t("db.stats.count", count=len(sessions)))
         self._frame_model.set_rows([])
         self._current_session_id = None
         self._as_ref_btn.setEnabled(False)
@@ -615,17 +626,24 @@ class DatabaseTab(QWidget):
         dialog.exec()
 
     def _update_selection_status(self) -> None:
-        ref_txt = self._format_selection(self._selected_reference, "Reference")
-        tgt_txt = self._format_selection(self._selected_target, "Target")
-        self._selection_status.setText(f"{ref_txt}   |   {tgt_txt}")
+        ref_role = t("db.frames.selection_role.reference")
+        tgt_role = t("db.frames.selection_role.target")
+        ref_txt = self._format_selection(self._selected_reference, ref_role)
+        tgt_txt = self._format_selection(self._selected_target, tgt_role)
+        # No hint yet + no selection → show the one-off helper hint; once
+        # either slot is populated, switch to the status line.
+        if self._selected_reference is None and self._selected_target is None:
+            self._selection_status.setText(t("db.frames.selection_hint"))
+        else:
+            self._selection_status.setText(f"{ref_txt}   |   {tgt_txt}")
         self._reconstruct_btn.setEnabled(self._selected_target is not None)
 
     @staticmethod
     def _format_selection(entry: dict | None, role: str) -> str:
         if entry is None:
-            return f"{role}: <unset>"
+            return t("db.frames.selection_unset", role=role)
         idx = entry.get("frame_index", "?")
-        return f"{role}: #{idx}"
+        return t("db.frames.selection_set", role=role, index=idx)
 
     def _on_session_added(self, session_id: int, row: dict) -> None:
         if self._should_skip_database_refresh():
@@ -633,7 +651,8 @@ class DatabaseTab(QWidget):
         row = dict(row)
         row.setdefault("frame_count", 0)
         self._session_model.upsert(row)
-        self._count_label.setText(f"{self._session_model.rowCount()} sessions")
+        self._session_count_cache = self._session_model.rowCount()
+        self._count_label.setText(t("db.stats.count", count=self._session_count_cache))
 
     def _on_frame_added(self, frame_id: int, row: dict) -> None:
         if self._should_skip_database_refresh():
@@ -653,10 +672,74 @@ class DatabaseTab(QWidget):
     def _on_backfill_progress(self, current: int, total: int) -> None:
         if self._should_skip_database_refresh():
             return
-        self._backfill_status.setText(f"Backfill: {current}/{total}")
+        self._backfill_status_mode = "progress"
+        self._backfill_cache = (current, total)
+        self._backfill_status.setText(
+            t("db.stats.backfill_progress", current=current, total=total)
+        )
 
     def _on_backfill_done(self, count: int) -> None:
         if self._should_skip_database_refresh():
             return
-        self._backfill_status.setText(f"Backfill complete: {count} sessions imported.")
+        self._backfill_status_mode = "done"
+        self._backfill_cache = (count, count)
+        self._backfill_status.setText(t("db.stats.backfill_done", count=count))
         self.refresh_sessions()
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh every owned string to the active language."""
+        # Filter panel
+        self._filter_box.setTitle(t("db.filters.title"))
+        self._filter_hint.setText(t("db.filters.hint"))
+        self._filter_name.setPlaceholderText(t("db.filters.name_placeholder"))
+        self._filter_freq.setPlaceholderText(t("db.filters.freq_placeholder"))
+        self._filter_date_from.setSpecialValueText(t("db.filters.date_any"))
+        self._filter_date_to.setSpecialValueText(t("db.filters.date_any"))
+        self._lbl_name.setText(t("db.filters.name_label"))
+        self._lbl_freq.setText(t("db.filters.freq_label"))
+        self._lbl_date_from.setText(t("db.filters.date_from_label"))
+        self._lbl_date_to.setText(t("db.filters.date_to_label"))
+        self._apply_btn.setText(t("db.filters.apply_button"))
+        self._clear_btn.setText(t("db.filters.clear_button"))
+        self._refresh_btn.setText(t("db.filters.refresh_button"))
+
+        # Stats card (dynamic — re-render from caches)
+        self._count_label.setText(t("db.stats.count", count=self._session_count_cache))
+        if self._backfill_status_mode == "progress":
+            current, total = self._backfill_cache
+            self._backfill_status.setText(
+                t("db.stats.backfill_progress", current=current, total=total)
+            )
+        elif self._backfill_status_mode == "done":
+            self._backfill_status.setText(
+                t("db.stats.backfill_done", count=self._backfill_cache[0])
+            )
+        else:
+            self._backfill_status.setText(t("db.stats.ready"))
+
+        # Sessions + Frames sections
+        self._sessions_box.setTitle(t("db.sessions.title"))
+        self._frames_box.setTitle(t("db.frames.title"))
+        self._open_folder_btn.setText(t("db.sessions.open_folder_button"))
+        self._batch_recon_btn.setText(t("db.sessions.batch_recon_button"))
+        self._as_ref_btn.setText(t("db.frames.set_ref_button"))
+        self._as_tgt_btn.setText(t("db.frames.set_tgt_button"))
+        self._reconstruct_btn.setText(t("db.frames.reconstruct_button"))
+        self._clear_sel_btn.setText(t("db.frames.clear_button"))
+
+        # Selection status line — refreshes role text in current language
+        self._update_selection_status()
+
+        # Preview panel
+        self._preview_box.setTitle(t("db.preview.title"))
+        self._preview_hint.setText(t("db.preview.hint"))
+
+        # Table header labels refresh
+        self._session_model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal, 0, self._session_model.columnCount() - 1
+        )
+        self._frame_model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal, 0, self._frame_model.columnCount() - 1
+        )

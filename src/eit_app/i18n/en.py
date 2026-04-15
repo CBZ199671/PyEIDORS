@@ -408,4 +408,59 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.summary.field.mesh": "Mesh:",
     "dataset.summary.field.electrodes": "Electrodes:",
     "dataset.summary.field.status": "Status:",
+
+    # ==================================================================
+    # Database tab — Left filter panel
+    # ==================================================================
+    "db.filters.title": "FILTERS",
+    "db.filters.hint": "Search the archive by name, frequency, or date.",
+    "db.filters.name_label": "Name:",
+    "db.filters.name_placeholder": "tank, test_for_gui \u2026",
+    "db.filters.freq_label": "Frequency (Hz):",
+    "db.filters.freq_placeholder": "e.g. 1000",
+    "db.filters.date_any": "Any",
+    "db.filters.date_from_label": "Date from:",
+    "db.filters.date_to_label": "Date to:",
+    "db.filters.apply_button": "Apply Filters",
+    "db.filters.clear_button": "Clear",
+    "db.filters.refresh_button": "Refresh",
+    "db.stats.count": "{count} sessions",
+    "db.stats.ready": "Ready",
+    "db.stats.backfill_progress": "Backfill: {current}/{total}",
+    "db.stats.backfill_done": "Backfill complete: {count} sessions imported.",
+
+    # ==================================================================
+    # Database tab — Central sessions / frames section
+    # ==================================================================
+    "db.sessions.title": "SESSIONS",
+    "db.sessions.col.id": "ID",
+    "db.sessions.col.name": "Name",
+    "db.sessions.col.started": "Started",
+    "db.sessions.col.n_elec": "N_elec",
+    "db.sessions.col.frequency": "Frequency",
+    "db.sessions.col.stim": "Stim (uA)",
+    "db.sessions.col.gain": "Gain",
+    "db.sessions.col.frames": "Frames",
+    "db.sessions.open_folder_button": "Open Folder",
+    "db.sessions.batch_recon_button": "Batch Reconstruct\u2026",
+
+    "db.frames.title": "FRAMES",
+    "db.frames.col.index": "Index",
+    "db.frames.col.timestamp": "Timestamp",
+    "db.frames.col.file": "File",
+    "db.frames.selection_hint": "Select a frame, then click \u2018Set as Reference\u2019 or \u2018Set as Target\u2019.",
+    "db.frames.selection_role.reference": "Reference",
+    "db.frames.selection_role.target": "Target",
+    "db.frames.selection_unset": "{role}: <unset>",
+    "db.frames.selection_set": "{role}: #{index}",
+    "db.frames.set_ref_button": "Set as Reference",
+    "db.frames.set_tgt_button": "Set as Target",
+    "db.frames.reconstruct_button": "Reconstruct\u2026",
+    "db.frames.clear_button": "Clear",
+
+    # ==================================================================
+    # Database tab — Right-side preview panel
+    # ==================================================================
+    "db.preview.title": "FRAME PREVIEW",
+    "db.preview.hint": "Click any frame row to preview its waveform here.",
 }
