@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
 
 
@@ -29,8 +30,11 @@ class DatasetRandomizationPanel(QGroupBox):
     config_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Randomization Ranges", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -38,35 +42,33 @@ class DatasetRandomizationPanel(QGroupBox):
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        hint = QLabel(
-            "Choose which shapes to sample and the numeric ranges used to paint "
-            "synthetic conductivity targets."
-        )
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addRow(hint)
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        set_hint_text(self._hint)
+        layout.addRow(self._hint)
 
-        shape_header = QLabel("Shape families")
-        set_section_header(shape_header)
-        layout.addRow(shape_header)
+        self._shape_header = QLabel("")
+        set_section_header(self._shape_header)
+        layout.addRow(self._shape_header)
 
         shape_row = QHBoxLayout()
         shape_row.setContentsMargins(0, 0, 0, 0)
         shape_row.setSpacing(8)
-        self._circle_check = QCheckBox("Circle")
+        self._circle_check = QCheckBox("")
         self._circle_check.setChecked(True)
-        self._ellipse_check = QCheckBox("Ellipse")
-        self._rect_check = QCheckBox("Rectangle")
+        self._ellipse_check = QCheckBox("")
+        self._rect_check = QCheckBox("")
         for widget in (self._circle_check, self._ellipse_check, self._rect_check):
             widget.toggled.connect(lambda _checked=False: self.config_changed.emit())
             shape_row.addWidget(widget)
         shape_w = QWidget()
         shape_w.setLayout(shape_row)
-        layout.addRow("Shapes:", shape_w)
+        self._lbl_shapes = QLabel("")
+        layout.addRow(self._lbl_shapes, shape_w)
 
-        count_header = QLabel("Target population")
-        set_section_header(count_header)
-        layout.addRow(count_header)
+        self._count_header = QLabel("")
+        set_section_header(self._count_header)
+        layout.addRow(self._count_header)
 
         n_row = QHBoxLayout()
         n_row.setContentsMargins(0, 0, 0, 0)
@@ -84,11 +86,12 @@ class DatasetRandomizationPanel(QGroupBox):
         n_row.addWidget(self._n_max_spin)
         n_w = QWidget()
         n_w.setLayout(n_row)
-        layout.addRow("N inhom.:", n_w)
+        self._lbl_n = QLabel("")
+        layout.addRow(self._lbl_n, n_w)
 
-        position_header = QLabel("Spatial ranges")
-        set_section_header(position_header)
-        layout.addRow(position_header)
+        self._position_header = QLabel("")
+        set_section_header(self._position_header)
+        layout.addRow(self._position_header)
 
         pos_row = QHBoxLayout()
         pos_row.setContentsMargins(0, 0, 0, 0)
@@ -108,7 +111,8 @@ class DatasetRandomizationPanel(QGroupBox):
         pos_row.addWidget(self._pos_max)
         pos_w = QWidget()
         pos_w.setLayout(pos_row)
-        layout.addRow("Position:", pos_w)
+        self._lbl_position = QLabel("")
+        layout.addRow(self._lbl_position, pos_w)
 
         size_row = QHBoxLayout()
         size_row.setContentsMargins(0, 0, 0, 0)
@@ -128,11 +132,12 @@ class DatasetRandomizationPanel(QGroupBox):
         size_row.addWidget(self._size_max)
         size_w = QWidget()
         size_w.setLayout(size_row)
-        layout.addRow("Size:", size_w)
+        self._lbl_size = QLabel("")
+        layout.addRow(self._lbl_size, size_w)
 
-        conductivity_header = QLabel("Conductivity ranges")
-        set_section_header(conductivity_header)
-        layout.addRow(conductivity_header)
+        self._conductivity_header = QLabel("")
+        set_section_header(self._conductivity_header)
+        layout.addRow(self._conductivity_header)
 
         cond_row = QHBoxLayout()
         cond_row.setContentsMargins(0, 0, 0, 0)
@@ -154,7 +159,8 @@ class DatasetRandomizationPanel(QGroupBox):
         cond_row.addWidget(self._cond_max)
         cond_w = QWidget()
         cond_w.setLayout(cond_row)
-        layout.addRow("\u03c3 range:", cond_w)
+        self._lbl_conductivity = QLabel("")
+        layout.addRow(self._lbl_conductivity, cond_w)
 
         bg_row = QHBoxLayout()
         bg_row.setContentsMargins(0, 0, 0, 0)
@@ -174,14 +180,16 @@ class DatasetRandomizationPanel(QGroupBox):
         bg_row.addWidget(self._bg_max)
         bg_w = QWidget()
         bg_w.setLayout(bg_row)
-        layout.addRow("Background \u03c3:", bg_w)
+        self._lbl_background = QLabel("")
+        layout.addRow(self._lbl_background, bg_w)
 
         self._noise_spin = QDoubleSpinBox()
         self._noise_spin.setRange(0.0, 1.0)
         self._noise_spin.setValue(0.0)
         self._noise_spin.setDecimals(4)
         self._noise_spin.valueChanged.connect(lambda _value: self.config_changed.emit())
-        layout.addRow("Noise level:", self._noise_spin)
+        self._lbl_noise = QLabel("")
+        layout.addRow(self._lbl_noise, self._noise_spin)
 
     def get_config(self) -> dict:
         shapes = []
@@ -247,6 +255,26 @@ class DatasetRandomizationPanel(QGroupBox):
                 widget.blockSignals(blocked)
         self.config_changed.emit()
 
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setTitle(t("dataset.random.title"))
+        self._hint.setText(t("dataset.random.hint"))
+        self._shape_header.setText(t("dataset.random.header.shapes"))
+        self._count_header.setText(t("dataset.random.header.count"))
+        self._position_header.setText(t("dataset.random.header.spatial"))
+        self._conductivity_header.setText(t("dataset.random.header.conductivity"))
+        self._circle_check.setText(t("dataset.random.shape.circle"))
+        self._ellipse_check.setText(t("dataset.random.shape.ellipse"))
+        self._rect_check.setText(t("dataset.random.shape.rectangle"))
+        self._lbl_shapes.setText(t("dataset.random.shapes_label"))
+        self._lbl_n.setText(t("dataset.random.n_label"))
+        self._lbl_position.setText(t("dataset.random.position_label"))
+        self._lbl_size.setText(t("dataset.random.size_label"))
+        self._lbl_conductivity.setText(t("dataset.random.conductivity_label"))
+        self._lbl_background.setText(t("dataset.random.background_label"))
+        self._lbl_noise.setText(t("dataset.random.noise_label"))
+
 
 class DatasetRunPanel(QGroupBox):
     """Controls output location and execution state."""
@@ -256,8 +284,13 @@ class DatasetRunPanel(QGroupBox):
     config_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Output & Run", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
+        self._generating = False
+        self._progress_cache = (0, 0)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -265,40 +298,38 @@ class DatasetRunPanel(QGroupBox):
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        hint = QLabel(
-            "Choose where the dataset should be written, then start the batch job "
-            "when the mesh and ranges look right."
-        )
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addRow(hint)
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        set_hint_text(self._hint)
+        layout.addRow(self._hint)
 
         self._n_samples_spin = QSpinBox()
         self._n_samples_spin.setRange(1, 1_000_000)
         self._n_samples_spin.setValue(1000)
         self._n_samples_spin.valueChanged.connect(lambda _value: self.config_changed.emit())
-        layout.addRow("Samples:", self._n_samples_spin)
+        self._lbl_samples = QLabel("")
+        layout.addRow(self._lbl_samples, self._n_samples_spin)
 
         dir_row = QHBoxLayout()
         dir_row.setContentsMargins(0, 0, 0, 0)
         dir_row.setSpacing(6)
         self._dir_edit = QLineEdit()
-        self._dir_edit.setPlaceholderText("Output directory...")
         self._dir_edit.textChanged.connect(lambda _text: self.config_changed.emit())
-        self._dir_browse = QPushButton("Browse...")
+        self._dir_browse = QPushButton("")
         self._dir_browse.clicked.connect(self._browse_dir)
         set_button_role(self._dir_browse, "subtle")
         dir_row.addWidget(self._dir_edit, 1)
         dir_row.addWidget(self._dir_browse)
         dir_w = QWidget()
         dir_w.setLayout(dir_row)
-        layout.addRow("Save to:", dir_w)
+        self._lbl_save_to = QLabel("")
+        layout.addRow(self._lbl_save_to, dir_w)
 
-        self._progress_header = QLabel("Execution progress")
+        self._progress_header = QLabel("")
         set_section_header(self._progress_header)
         layout.addRow(self._progress_header)
 
-        self._status_label = QLabel("Ready to generate.")
+        self._status_label = QLabel("")
         set_subtle_value(self._status_label)
         self._status_label.setWordWrap(True)
         layout.addRow(self._status_label)
@@ -311,10 +342,10 @@ class DatasetRunPanel(QGroupBox):
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(8)
-        self._gen_btn = QPushButton("Generate Dataset")
+        self._gen_btn = QPushButton("")
         self._gen_btn.clicked.connect(self.generate_requested)
         set_button_role(self._gen_btn, "primary")
-        self._cancel_btn = QPushButton("Cancel")
+        self._cancel_btn = QPushButton("")
         self._cancel_btn.clicked.connect(self.cancel_requested)
         self._cancel_btn.setEnabled(False)
         set_button_role(self._cancel_btn, "danger")
@@ -323,7 +354,7 @@ class DatasetRunPanel(QGroupBox):
         layout.addRow(btn_row)
 
     def _browse_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "Select Output Directory")
+        path = QFileDialog.getExistingDirectory(self, t("dataset.run.file_dialog_title"))
         if path:
             self._dir_edit.setText(path)
 
@@ -348,16 +379,43 @@ class DatasetRunPanel(QGroupBox):
         self.config_changed.emit()
 
     def set_progress(self, current: int, total: int) -> None:
+        self._progress_cache = (current, total)
         self._progress.setMaximum(max(total, 1))
         self._progress.setValue(min(current, max(total, 1)))
-        self._status_label.setText(f"Generated {current} / {total} samples.")
+        self._status_label.setText(
+            t("dataset.run.status.progress", current=current, total=total)
+        )
 
     def set_generating(self, running: bool) -> None:
+        self._generating = running
         self._gen_btn.setEnabled(not running)
         self._cancel_btn.setEnabled(running)
         if not running:
             self._progress.setValue(0)
-            self._status_label.setText("Ready to generate.")
+            self._progress_cache = (0, 0)
+            self._status_label.setText(t("dataset.run.status.ready"))
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setTitle(t("dataset.run.title"))
+        self._hint.setText(t("dataset.run.hint"))
+        self._lbl_samples.setText(t("dataset.run.samples_label"))
+        self._lbl_save_to.setText(t("dataset.run.save_to_label"))
+        self._dir_edit.setPlaceholderText(t("dataset.run.dir_placeholder"))
+        self._dir_browse.setText(t("dataset.run.browse_button"))
+        self._progress_header.setText(t("dataset.run.progress_header"))
+        self._gen_btn.setText(t("dataset.run.generate_button"))
+        self._cancel_btn.setText(t("dataset.run.cancel_button"))
+        # Re-apply the dynamic status line so the progress string tracks
+        # the active language when switched mid-run.
+        if self._generating or self._progress_cache[1] > 0:
+            current, total = self._progress_cache
+            self._status_label.setText(
+                t("dataset.run.status.progress", current=current, total=total)
+            )
+        else:
+            self._status_label.setText(t("dataset.run.status.ready"))
 
 
 class DatasetGeneratorPanel(QObject):

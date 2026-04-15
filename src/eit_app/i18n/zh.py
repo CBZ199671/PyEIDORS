@@ -335,4 +335,78 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "sim.results.ground_truth_title": "\u771f\u503c",                                              # 真值
     "sim.results.reconstruction_title": "\u91cd\u6784\u7ed3\u679c",                                # 重构结果
+
+    # ==================================================================
+    # Dataset Generator tab — Step labels
+    # ==================================================================
+    "dataset.step.mesh": "\u6b65\u9aa4\u4e00 \u00b7 \u7f51\u683c\u4e0e\u7535\u6781",               # 步骤一 · 网格与电极
+    "dataset.step.ranges": "\u6b65\u9aa4\u4e8c \u00b7 \u968f\u673a\u5316\u8303\u56f4",              # 步骤二 · 随机化范围
+    "dataset.step.run": "\u6b65\u9aa4\u4e09 \u00b7 \u8f93\u51fa\u4e0e\u8fd0\u884c",                 # 步骤三 · 输出与运行
+
+    # ==================================================================
+    # Dataset Generator tab — Central workspace blocks
+    # ==================================================================
+    "dataset.hero.title": "\u6279\u91cf\u6570\u636e\u96c6\u6d41\u6c34\u7ebf",                       # 批量数据集流水线
+    "dataset.hero.title_text": "\u6309\u6b65\u9aa4\u751f\u6210\u7f51\u683c\u611f\u77e5\u7684\u7535\u5bfc\u7387\u76ee\u6807\u4e0e\u8fb9\u754c\u7535\u538b\u914d\u5bf9\u3002",  # 按步骤生成网格感知的电导率目标与边界电压配对。
+    "dataset.hero.hint": "\u4f7f\u7528\u5de6\u4fa7\u7684\u6b65\u9aa4\u5b9a\u4e49\u7f51\u683c\u3001\u968f\u673a\u5316\u8303\u56f4\u548c\u6279\u91cf\u8f93\u51fa\u76ee\u6807\u3002\u53f3\u4fa7\u7684\u6458\u8981\u9762\u677f\u4f1a\u540c\u6b65\u5f53\u524d\u8fd0\u884c\u72b6\u6001\u3002",  # 使用左侧的步骤定义网格、随机化范围和批量输出目标。右侧的摘要面板会同步当前运行状态。
+    "dataset.artifacts.title": "\u751f\u6210\u7684\u4ea7\u7269",                                     # 生成的产物
+    "dataset.artifacts.item1": "mesh_info.npz\uff1a\u8282\u70b9\u5750\u6807\u3001\u5355\u5143\u62d3\u6251\u4e0e\u5747\u5300\u7535\u538b",  # mesh_info.npz：节点坐标、单元拓扑与均匀电压
+    "dataset.artifacts.item2": "sample_000000.npz\uff1a\u6bcf\u6837\u672c\u7684\u7535\u5bfc\u7387\u4e0e\u8fb9\u754c\u7535\u538b\u914d\u5bf9",  # sample_000000.npz：每样本的电导率与边界电压配对
+    "dataset.artifacts.item3": "\u8f93\u51fa\u76ee\u5f55\u6210\u4e3a\u81ea\u5305\u542b\u7684\u6570\u636e\u96c6\u5305",  # 输出目录成为自包含的数据集包
+    "dataset.notes.title": "\u4f7f\u7528\u8bf4\u660e",                                               # 使用说明
+    "dataset.notes.item1": "\u6b64\u5904\u7684\u7f51\u683c\u8bbe\u7f6e\u72ec\u7acb\u4e8e\u4ea4\u4e92\u4eff\u771f Tab\u3002",  # 此处的网格设置独立于交互仿真 Tab。
+    "dataset.notes.item2": "\u5f62\u72b6\u5f00\u5173\u5b9a\u4e49\u968f\u673a\u5bb6\u65cf\u6c60\uff1b\u5982\u679c\u672a\u52fe\u9009\u5219\u9ed8\u8ba4\u4f7f\u7528\u5706\u5f62\u3002",  # 形状开关定义随机家族池；如果未勾选则默认使用圆形。
+    "dataset.notes.item3": "\u566a\u58f0\u5728\u6b63\u95ee\u9898\u6c42\u89e3\u540e\u6dfb\u52a0\uff0c\u786e\u4fdd\u7535\u538b\u6270\u52a8\u4e0e\u6279\u91cf\u8303\u56f4\u5339\u914d\u3002",  # 噪声在正问题求解后添加，确保电压扰动与批量范围匹配。
+
+    # ==================================================================
+    # Dataset Generator tab — Step 2 Randomization panel
+    # ==================================================================
+    "dataset.random.title": "\u968f\u673a\u5316\u8303\u56f4",                                        # 随机化范围
+    "dataset.random.hint": "\u9009\u62e9\u8981\u91c7\u6837\u7684\u5f62\u72b6\uff0c\u4ee5\u53ca\u7528\u4e8e\u7ed8\u5236\u5408\u6210\u7535\u5bfc\u7387\u76ee\u6807\u7684\u6570\u503c\u8303\u56f4\u3002",  # 选择要采样的形状，以及用于绘制合成电导率目标的数值范围。
+    "dataset.random.header.shapes": "\u5f62\u72b6\u5bb6\u65cf",                                       # 形状家族
+    "dataset.random.header.count": "\u76ee\u6807\u6570\u91cf",                                        # 目标数量
+    "dataset.random.header.spatial": "\u7a7a\u95f4\u8303\u56f4",                                      # 空间范围
+    "dataset.random.header.conductivity": "\u7535\u5bfc\u7387\u8303\u56f4",                           # 电导率范围
+    "dataset.random.shape.circle": "\u5706\u5f62",                                                    # 圆形
+    "dataset.random.shape.ellipse": "\u692d\u5706",                                                   # 椭圆
+    "dataset.random.shape.rectangle": "\u77e9\u5f62",                                                 # 矩形
+    "dataset.random.shapes_label": "\u5f62\u72b6\uff1a",                                              # 形状：
+    "dataset.random.n_label": "\u5f02\u5e38\u4f53\u6570\u91cf\uff1a",                                 # 异常体数量：
+    "dataset.random.position_label": "\u4f4d\u7f6e\uff1a",                                            # 位置：
+    "dataset.random.size_label": "\u5c3a\u5bf8\uff1a",                                                # 尺寸：
+    "dataset.random.conductivity_label": "\u03c3 \u8303\u56f4\uff1a",                                 # σ 范围：
+    "dataset.random.background_label": "\u80cc\u666f \u03c3\uff1a",                                   # 背景 σ：
+    "dataset.random.noise_label": "\u566a\u58f0\u6c34\u5e73\uff1a",                                   # 噪声水平：
+
+    # ==================================================================
+    # Dataset Generator tab — Step 3 Output & Run panel
+    # ==================================================================
+    "dataset.run.title": "\u8f93\u51fa\u4e0e\u8fd0\u884c",                                            # 输出与运行
+    "dataset.run.hint": "\u9009\u62e9\u6570\u636e\u96c6\u5199\u5165\u4f4d\u7f6e\uff0c\u786e\u8ba4\u7f51\u683c\u548c\u8303\u56f4\u540e\u542f\u52a8\u6279\u91cf\u4efb\u52a1\u3002",  # 选择数据集写入位置，确认网格和范围后启动批量任务。
+    "dataset.run.samples_label": "\u6837\u672c\u6570\uff1a",                                          # 样本数：
+    "dataset.run.save_to_label": "\u4fdd\u5b58\u5230\uff1a",                                          # 保存到：
+    "dataset.run.dir_placeholder": "\u8f93\u51fa\u76ee\u5f55\u2026",                                  # 输出目录…
+    "dataset.run.browse_button": "\u6d4f\u89c8\u2026",                                                # 浏览…
+    "dataset.run.progress_header": "\u6267\u884c\u8fdb\u5ea6",                                         # 执行进度
+    "dataset.run.status.ready": "\u51c6\u5907\u751f\u6210\u3002",                                     # 准备生成。
+    "dataset.run.status.progress": "\u5df2\u751f\u6210 {current} / {total} \u4e2a\u6837\u672c\u3002",  # 已生成 {current} / {total} 个样本。
+    "dataset.run.generate_button": "\u751f\u6210\u6570\u636e\u96c6",                                  # 生成数据集
+    "dataset.run.cancel_button": "\u53d6\u6d88",                                                      # 取消
+    "dataset.run.file_dialog_title": "\u9009\u62e9\u8f93\u51fa\u76ee\u5f55",                          # 选择输出目录
+
+    # ==================================================================
+    # Dataset Generator tab — Right-side Summary panel
+    # ==================================================================
+    "dataset.summary.title": "\u751f\u6210\u6458\u8981",                                              # 生成摘要
+    "dataset.summary.hint": "\u5728\u542f\u52a8\u751f\u6210\u5668\u524d\u68c0\u67e5\u5f53\u524d\u6279\u91cf\u914d\u7f6e\u3002",  # 在启动生成器前检查当前批量配置。
+    "dataset.summary.progress": "\u8fdb\u5ea6\uff1a{current} / {total}",                              # 进度：{current} / {total}
+    "dataset.summary.state.idle": "\u7a7a\u95f2",                                                     # 空闲
+    "dataset.summary.state.generating": "\u751f\u6210\u4e2d",                                         # 生成中
+    "dataset.summary.state.complete": "\u5df2\u5b8c\u6210",                                           # 已完成
+    "dataset.summary.field.output": "\u8f93\u51fa\uff1a",                                             # 输出：
+    "dataset.summary.field.samples": "\u6837\u672c\uff1a",                                            # 样本：
+    "dataset.summary.field.shapes": "\u5f62\u72b6\uff1a",                                             # 形状：
+    "dataset.summary.field.mesh": "\u7f51\u683c\uff1a",                                               # 网格：
+    "dataset.summary.field.electrodes": "\u7535\u6781\u6570\uff1a",                                   # 电极数：
+    "dataset.summary.field.status": "\u72b6\u6001\uff1a",                                             # 状态：
 }

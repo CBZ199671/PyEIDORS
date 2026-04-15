@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.ui.simulation.dataset_generator_panel import DatasetGeneratorPanel
 from eit_app.ui.simulation.dataset_summary_panel import DatasetSummaryPanel
 from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel
@@ -12,68 +13,86 @@ from eit_app.ui.workflow_shell import WorkflowShell
 
 
 class _DatasetWorkspaceWidget(QWidget):
-    """Central workspace for the dataset tab."""
+    """Central workspace for the dataset tab — hero + artifacts + notes."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        hero = QGroupBox("Batch Dataset Pipeline")
-        hero_layout = QVBoxLayout(hero)
+        self._hero_box = QGroupBox("")  # retranslated
+        hero_layout = QVBoxLayout(self._hero_box)
         hero_layout.setContentsMargins(12, 14, 12, 12)
         hero_layout.setSpacing(8)
-        title = QLabel(
-            "Generate mesh-aware conductivity targets and boundary-voltage pairs "
-            "with a cleaner, step-by-step workflow."
-        )
-        title.setWordWrap(True)
-        title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f3b5b;")
-        hero_layout.addWidget(title)
+        self._hero_title = QLabel("")
+        self._hero_title.setWordWrap(True)
+        self._hero_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f3b5b;")
+        hero_layout.addWidget(self._hero_title)
+        self._hero_hint = QLabel("")
+        self._hero_hint.setWordWrap(True)
+        set_hint_text(self._hero_hint)
+        hero_layout.addWidget(self._hero_hint)
+        layout.addWidget(self._hero_box)
 
-        hint = QLabel(
-            "Use the left-side steps to define mesh, randomization ranges, and the "
-            "batch output target. The summary panel on the right mirrors the active run."
-        )
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        hero_layout.addWidget(hint)
-        layout.addWidget(hero)
-
-        artifacts = QGroupBox("Generated Artifacts")
-        artifacts_layout = QVBoxLayout(artifacts)
+        self._artifacts_box = QGroupBox("")
+        artifacts_layout = QVBoxLayout(self._artifacts_box)
         artifacts_layout.setContentsMargins(12, 14, 12, 12)
         artifacts_layout.setSpacing(6)
-        for text in (
-            "mesh_info.npz with node coordinates, cell connectivity, and homogeneous voltages",
-            "sample_000000.npz style per-sample conductivity and boundary-voltage pairs",
-            "The configured output directory becomes a self-contained dataset package",
+        self._artifact_labels: list[QLabel] = []
+        for _key in (
+            "dataset.artifacts.item1",
+            "dataset.artifacts.item2",
+            "dataset.artifacts.item3",
         ):
-            label = QLabel(text)
+            label = QLabel("")
             label.setWordWrap(True)
             set_subtle_value(label)
             artifacts_layout.addWidget(label)
-        layout.addWidget(artifacts)
+            self._artifact_labels.append(label)
+        layout.addWidget(self._artifacts_box)
 
-        notes = QGroupBox("Operating Notes")
-        notes_layout = QVBoxLayout(notes)
+        self._notes_box = QGroupBox("")
+        notes_layout = QVBoxLayout(self._notes_box)
         notes_layout.setContentsMargins(12, 14, 12, 12)
         notes_layout.setSpacing(6)
-        for text in (
-            "Mesh settings here are independent from the interactive Simulation tab.",
-            "Shape toggles define the random family pool; if none are checked, circle is used by default.",
-            "Noise is applied after the forward solve, so voltage perturbations match the configured batch range.",
+        self._note_labels: list[QLabel] = []
+        for _key in (
+            "dataset.notes.item1",
+            "dataset.notes.item2",
+            "dataset.notes.item3",
         ):
-            label = QLabel(text)
+            label = QLabel("")
             label.setWordWrap(True)
             set_hint_text(label)
             notes_layout.addWidget(label)
+            self._note_labels.append(label)
         notes_layout.addStretch()
-        layout.addWidget(notes, 1)
+        layout.addWidget(self._notes_box, 1)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self._hero_box.setTitle(t("dataset.hero.title"))
+        self._hero_title.setText(t("dataset.hero.title_text"))
+        self._hero_hint.setText(t("dataset.hero.hint"))
+        self._artifacts_box.setTitle(t("dataset.artifacts.title"))
+        for label, key in zip(
+            self._artifact_labels,
+            ("dataset.artifacts.item1", "dataset.artifacts.item2", "dataset.artifacts.item3"),
+        ):
+            label.setText(t(key))
+        self._notes_box.setTitle(t("dataset.notes.title"))
+        for label, key in zip(
+            self._note_labels,
+            ("dataset.notes.item1", "dataset.notes.item2", "dataset.notes.item3"),
+        ):
+            label.setText(t(key))
 
 
 class DatasetGeneratorTab(QWidget):
@@ -85,6 +104,8 @@ class DatasetGeneratorTab(QWidget):
         self._generating = False
         self._build_ui()
         self._dataset_panel._dir_edit.setText(str(self._dataset_panel.default_output_dir()))
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
         self._refresh_summary()
 
     def _build_ui(self) -> None:
@@ -93,14 +114,12 @@ class DatasetGeneratorTab(QWidget):
         self._summary_panel = DatasetSummaryPanel()
         self._workspace = _DatasetWorkspaceWidget()
 
+        # Step titles filled in by _retranslate below.
         self._shell = WorkflowShell(
             steps=[
-                ("Step 1 \u00b7 Mesh & Electrodes", self._mesh_panel),
-                (
-                    "Step 2 \u00b7 Randomization Ranges",
-                    self._dataset_panel.randomization_panel,
-                ),
-                ("Step 3 \u00b7 Output & Run", self._dataset_panel.run_panel),
+                ("", self._mesh_panel),
+                ("", self._dataset_panel.randomization_panel),
+                ("", self._dataset_panel.run_panel),
             ],
             center_widget=self._workspace,
             context_widget=self._summary_panel,
@@ -117,6 +136,17 @@ class DatasetGeneratorTab(QWidget):
 
         self._mesh_panel.config_changed.connect(self._refresh_summary)
         self._dataset_panel.config_changed.connect(self._refresh_summary)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        toolbox = self._shell.toolbox
+        toolbox.setItemText(0, t("dataset.step.mesh"))
+        toolbox.setItemText(1, t("dataset.step.ranges"))
+        toolbox.setItemText(2, t("dataset.step.run"))
+        # Re-apply the summary so state chip / progress label pick up
+        # translated tone strings after a language switch.
+        self._refresh_summary()
 
     def _refresh_summary(self) -> None:
         mesh_cfg = self._mesh_panel.get_config()
@@ -137,11 +167,11 @@ class DatasetGeneratorTab(QWidget):
         )
         self._summary_panel.set_progress(*self._progress)
         if self._generating:
-            self._summary_panel.set_status("Generating", tone="active")
+            self._summary_panel.set_status(t("dataset.summary.state.generating"), tone="active")
         elif self._progress[1] > 0 and self._progress[0] == self._progress[1]:
-            self._summary_panel.set_status("Complete", tone="ready")
+            self._summary_panel.set_status(t("dataset.summary.state.complete"), tone="ready")
         else:
-            self._summary_panel.set_status("Idle", tone="idle")
+            self._summary_panel.set_status(t("dataset.summary.state.idle"), tone="idle")
 
     def set_generating(self, running: bool) -> None:
         self._generating = running

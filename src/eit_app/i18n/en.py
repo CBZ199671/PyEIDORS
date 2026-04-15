@@ -334,4 +334,78 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "sim.results.ground_truth_title": "Ground Truth",
     "sim.results.reconstruction_title": "Reconstruction",
+
+    # ==================================================================
+    # Dataset Generator tab — Step labels
+    # ==================================================================
+    "dataset.step.mesh": "Step 1 \u00b7 Mesh & Electrodes",
+    "dataset.step.ranges": "Step 2 \u00b7 Randomization Ranges",
+    "dataset.step.run": "Step 3 \u00b7 Output & Run",
+
+    # ==================================================================
+    # Dataset Generator tab — Central workspace blocks
+    # ==================================================================
+    "dataset.hero.title": "Batch Dataset Pipeline",
+    "dataset.hero.title_text": "Generate mesh-aware conductivity targets and boundary-voltage pairs with a cleaner, step-by-step workflow.",
+    "dataset.hero.hint": "Use the left-side steps to define mesh, randomization ranges, and the batch output target. The summary panel on the right mirrors the active run.",
+    "dataset.artifacts.title": "Generated Artifacts",
+    "dataset.artifacts.item1": "mesh_info.npz with node coordinates, cell connectivity, and homogeneous voltages",
+    "dataset.artifacts.item2": "sample_000000.npz style per-sample conductivity and boundary-voltage pairs",
+    "dataset.artifacts.item3": "The configured output directory becomes a self-contained dataset package",
+    "dataset.notes.title": "Operating Notes",
+    "dataset.notes.item1": "Mesh settings here are independent from the interactive Simulation tab.",
+    "dataset.notes.item2": "Shape toggles define the random family pool; if none are checked, circle is used by default.",
+    "dataset.notes.item3": "Noise is applied after the forward solve, so voltage perturbations match the configured batch range.",
+
+    # ==================================================================
+    # Dataset Generator tab — Step 2 Randomization panel
+    # ==================================================================
+    "dataset.random.title": "Randomization Ranges",
+    "dataset.random.hint": "Choose which shapes to sample and the numeric ranges used to paint synthetic conductivity targets.",
+    "dataset.random.header.shapes": "Shape families",
+    "dataset.random.header.count": "Target population",
+    "dataset.random.header.spatial": "Spatial ranges",
+    "dataset.random.header.conductivity": "Conductivity ranges",
+    "dataset.random.shape.circle": "Circle",
+    "dataset.random.shape.ellipse": "Ellipse",
+    "dataset.random.shape.rectangle": "Rectangle",
+    "dataset.random.shapes_label": "Shapes:",
+    "dataset.random.n_label": "N inhom.:",
+    "dataset.random.position_label": "Position:",
+    "dataset.random.size_label": "Size:",
+    "dataset.random.conductivity_label": "\u03c3 range:",
+    "dataset.random.background_label": "Background \u03c3:",
+    "dataset.random.noise_label": "Noise level:",
+
+    # ==================================================================
+    # Dataset Generator tab — Step 3 Output & Run panel
+    # ==================================================================
+    "dataset.run.title": "Output & Run",
+    "dataset.run.hint": "Choose where the dataset should be written, then start the batch job when the mesh and ranges look right.",
+    "dataset.run.samples_label": "Samples:",
+    "dataset.run.save_to_label": "Save to:",
+    "dataset.run.dir_placeholder": "Output directory\u2026",
+    "dataset.run.browse_button": "Browse\u2026",
+    "dataset.run.progress_header": "Execution progress",
+    "dataset.run.status.ready": "Ready to generate.",
+    "dataset.run.status.progress": "Generated {current} / {total} samples.",
+    "dataset.run.generate_button": "Generate Dataset",
+    "dataset.run.cancel_button": "Cancel",
+    "dataset.run.file_dialog_title": "Select Output Directory",
+
+    # ==================================================================
+    # Dataset Generator tab — Right-side Summary panel
+    # ==================================================================
+    "dataset.summary.title": "Generation Summary",
+    "dataset.summary.hint": "Review the active batch configuration here before launching the generator.",
+    "dataset.summary.progress": "Progress: {current} / {total}",
+    "dataset.summary.state.idle": "Idle",
+    "dataset.summary.state.generating": "Generating",
+    "dataset.summary.state.complete": "Complete",
+    "dataset.summary.field.output": "Output:",
+    "dataset.summary.field.samples": "Samples:",
+    "dataset.summary.field.shapes": "Shapes:",
+    "dataset.summary.field.mesh": "Mesh:",
+    "dataset.summary.field.electrodes": "Electrodes:",
+    "dataset.summary.field.status": "Status:",
 }
