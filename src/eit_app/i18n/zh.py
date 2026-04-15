@@ -257,4 +257,82 @@ TRANSLATIONS: dict[str, str] = {
     # Shared plot-legend overlay (used across Hardware and Simulation)
     # ==================================================================
     "plot_legend.drag_tooltip": "\u53ef\u62d6\u62fd\u8c03\u6574\u56fe\u4f8b\u4f4d\u7f6e",   # 可拖拽调整图例位置
+
+    # ==================================================================
+    # Simulation tab — Step labels and Run Guide footer
+    # ==================================================================
+    "sim.step.mesh": "\u6b65\u9aa4\u4e00 \u00b7 \u7f51\u683c\u4e0e\u7535\u6781",             # 步骤一 · 网格与电极
+    "sim.step.inhom": "\u6b65\u9aa4\u4e8c \u00b7 \u975e\u5747\u5300\u4f53",                   # 步骤二 · 非均匀体
+    "sim.step.forward": "\u6b65\u9aa4\u4e09 \u00b7 \u6b63\u95ee\u9898",                       # 步骤三 · 正问题
+    "sim.step.inverse": "\u6b65\u9aa4\u56db \u00b7 \u9006\u95ee\u9898",                       # 步骤四 · 逆问题
+
+    "sim.runguide.title": "\u6d41\u7a0b\u6307\u5f15",                                           # 流程指引
+    "sim.runguide.step1": "\u5148\u914d\u7f6e\u7f51\u683c\u4e0e\u7535\u6781\uff0c\u518d\u7ef4\u62a4\u5f02\u5e38\u4f53\u5217\u8868\u3002",  # 先配置网格与电极，再维护异常体列表。
+    "sim.runguide.step2": "\u8fd0\u884c\u6b63\u95ee\u9898\u540e\u67e5\u770b\u8fb9\u754c\u7535\u538b\u4e0e\u771f\u503c\u56fe\u50cf\u3002",  # 运行正问题后查看边界电压与真值图像。
+    "sim.runguide.step3": "\u8fd0\u884c\u9006\u95ee\u9898\u540e\u5728\u53f3\u4fa7\u67e5\u770b\u91cd\u6784\u56fe\u50cf\u4e0e\u8bef\u5dee\u6307\u6807\u3002",  # 运行逆问题后在右侧查看重构图像与误差指标。
+    "sim.runguide.hint": "\u4e2d\u592e\u533a\u57df\u7528\u4e8e\u56fe\u50cf\u4e0e\u66f2\u7ebf\u5bf9\u6bd4\u3002",  # 中央区域用于图像与曲线对比。
+
+    # ==================================================================
+    # Simulation tab — Step 1 Mesh & Electrodes
+    # ==================================================================
+    "sim.mesh.title": "\u7f51\u683c\u4e0e\u7535\u6781",                                          # 网格与电极
+    "sim.mesh.hint": "\u914d\u7f6e\u4eff\u771f\u7f51\u683c\u548c\u7535\u6781\u5e03\u5c40\u3002",  # 配置仿真网格和电极布局。
+    "sim.mesh.dim.2d": "2D",
+    "sim.mesh.dim.3d": "3D",
+    "sim.mesh.dimension_label": "\u7ef4\u5ea6\uff1a",                                            # 维度：
+    "sim.mesh.size_label": "\u7f51\u683c\u5c3a\u5bf8\uff1a",                                      # 网格尺寸：
+    "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
+    "sim.mesh.electrodes_label": "\u7535\u6781\u6570\uff1a",                                      # 电极数：
+    "sim.mesh.conductivity_label": "\u80cc\u666f \u03c3\uff1a",                                   # 背景 σ：
+
+    # ==================================================================
+    # Simulation tab — Step 2 Inhomogeneities
+    # ==================================================================
+    "sim.inhom.title": "\u975e\u5747\u5300\u4f53",                                               # 非均匀体
+    "sim.inhom.col.shape": "\u5f62\u72b6",                                                        # 形状
+    "sim.inhom.col.x": "X",
+    "sim.inhom.col.y": "Y",
+    "sim.inhom.col.sizex": "X \u5c3a\u5bf8",                                                      # X 尺寸
+    "sim.inhom.col.sizey": "Y \u5c3a\u5bf8",                                                      # Y 尺寸
+    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
+    "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
+    "sim.inhom.add_rectangle": "+ \u77e9\u5f62",                                                  # + 矩形
+    "sim.inhom.remove_button": "\u5220\u9664",                                                    # 删除
+
+    # ==================================================================
+    # Simulation tab — Step 3 Forward Problem
+    # ==================================================================
+    "sim.forward.title": "\u6b63\u95ee\u9898",                                                    # 正问题
+    "sim.forward.hint": "\u4ece\u7535\u5bfc\u7387\u5206\u5e03\u8ba1\u7b97\u8fb9\u754c\u7535\u538b\u3002",  # 从电导率分布计算边界电压。
+    "sim.forward.noise_label": "\u566a\u58f0\u6c34\u5e73\uff1a",                                   # 噪声水平：
+    "sim.forward.noise_tooltip": "\u76f8\u5bf9\u566a\u58f0\u6c34\u5e73 (0 = \u65e0\u566a\u58f0)",   # 相对噪声水平 (0 = 无噪声)
+    "sim.forward.solve_button": "\u6c42\u89e3\u6b63\u95ee\u9898",                                  # 求解正问题
+    "sim.forward.status_solving": "\u6c42\u89e3\u4e2d\u2026",                                      # 求解中…
+
+    # ==================================================================
+    # Simulation tab — Step 4 Inverse Problem
+    # ==================================================================
+    "sim.inverse.title": "\u9006\u95ee\u9898",                                                    # 逆问题
+    "sim.inverse.hint": "\u4ece\u8fb9\u754c\u7535\u538b\u91cd\u6784\u7535\u5bfc\u7387\u5206\u5e03\u3002",  # 从边界电压重构电导率分布。
+    "sim.inverse.method_label": "\u65b9\u6cd5\uff1a",                                              # 方法：
+    "sim.inverse.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",                                  # 正则化 α：
+    "sim.inverse.iterations_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",                   # 最大迭代次数：
+    "sim.inverse.reconstruct_button": "\u91cd\u6784",                                              # 重构
+    "sim.inverse.save_button": "\u4fdd\u5b58\u7ed3\u679c",                                          # 保存结果
+    "sim.inverse.status_reconstructing": "\u91cd\u6784\u4e2d\u2026",                                # 重构中…
+
+    # ==================================================================
+    # Simulation tab — Right-side Metrics panel
+    # ==================================================================
+    "sim.metrics.title": "\u8bef\u5dee\u6307\u6807",                                              # 误差指标
+    "sim.metrics.l2_label": "\u76f8\u5bf9 L2 \u8bef\u5dee\uff1a",                                  # 相对 L2 误差：
+    "sim.metrics.correlation_label": "\u76f8\u5173\u7cfb\u6570\uff1a",                             # 相关系数：
+    "sim.metrics.rmse_label": "\u5747\u65b9\u6839\u8bef\u5dee\uff1a",                              # 均方根误差：
+
+    # ==================================================================
+    # Simulation tab — Centre results widget
+    # ==================================================================
+    "sim.results.ground_truth_title": "\u771f\u503c",                                              # 真值
+    "sim.results.reconstruction_title": "\u91cd\u6784\u7ed3\u679c",                                # 重构结果
 }

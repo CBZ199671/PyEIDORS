@@ -256,4 +256,82 @@ TRANSLATIONS: dict[str, str] = {
     # Shared plot-legend overlay (used across Hardware and Simulation)
     # ==================================================================
     "plot_legend.drag_tooltip": "Drag to reposition the legend",
+
+    # ==================================================================
+    # Simulation tab — Step labels and Run Guide footer
+    # ==================================================================
+    "sim.step.mesh": "Step 1 \u00b7 Mesh & Electrodes",
+    "sim.step.inhom": "Step 2 \u00b7 Inhomogeneities",
+    "sim.step.forward": "Step 3 \u00b7 Forward Problem",
+    "sim.step.inverse": "Step 4 \u00b7 Inverse Problem",
+
+    "sim.runguide.title": "Run Guide",
+    "sim.runguide.step1": "Configure the mesh and electrodes, then maintain the inhomogeneity list.",
+    "sim.runguide.step2": "Run Forward to inspect boundary voltages and the ground truth image.",
+    "sim.runguide.step3": "Run Inverse to view the reconstructed image and error metrics on the right.",
+    "sim.runguide.hint": "The central area is reserved for image and curve comparisons.",
+
+    # ==================================================================
+    # Simulation tab — Step 1 Mesh & Electrodes
+    # ==================================================================
+    "sim.mesh.title": "Mesh & Electrodes",
+    "sim.mesh.hint": "Configure the simulation mesh and electrode layout.",
+    "sim.mesh.dim.2d": "2D",
+    "sim.mesh.dim.3d": "3D",
+    "sim.mesh.dimension_label": "Dimension:",
+    "sim.mesh.size_label": "Mesh size:",
+    "sim.mesh.refinement_tooltip": "Smaller values produce finer meshes (more elements)",
+    "sim.mesh.electrodes_label": "Electrodes:",
+    "sim.mesh.conductivity_label": "Background \u03c3:",
+
+    # ==================================================================
+    # Simulation tab — Step 2 Inhomogeneities
+    # ==================================================================
+    "sim.inhom.title": "Inhomogeneities",
+    "sim.inhom.col.shape": "Shape",
+    "sim.inhom.col.x": "X",
+    "sim.inhom.col.y": "Y",
+    "sim.inhom.col.sizex": "Size X",
+    "sim.inhom.col.sizey": "Size Y",
+    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.add_circle": "+ Circle",
+    "sim.inhom.add_ellipse": "+ Ellipse",
+    "sim.inhom.add_rectangle": "+ Rectangle",
+    "sim.inhom.remove_button": "Remove",
+
+    # ==================================================================
+    # Simulation tab — Step 3 Forward Problem
+    # ==================================================================
+    "sim.forward.title": "Forward Problem",
+    "sim.forward.hint": "Compute boundary voltages from the conductivity distribution.",
+    "sim.forward.noise_label": "Noise level:",
+    "sim.forward.noise_tooltip": "Relative noise level (0 = noiseless)",
+    "sim.forward.solve_button": "Solve Forward Problem",
+    "sim.forward.status_solving": "Solving\u2026",
+
+    # ==================================================================
+    # Simulation tab — Step 4 Inverse Problem
+    # ==================================================================
+    "sim.inverse.title": "Inverse Problem",
+    "sim.inverse.hint": "Reconstruct the conductivity distribution from boundary voltages.",
+    "sim.inverse.method_label": "Method:",
+    "sim.inverse.alpha_label": "Regularization \u03b1:",
+    "sim.inverse.iterations_label": "Max iterations:",
+    "sim.inverse.reconstruct_button": "Reconstruct",
+    "sim.inverse.save_button": "Save Results",
+    "sim.inverse.status_reconstructing": "Reconstructing\u2026",
+
+    # ==================================================================
+    # Simulation tab — Right-side Metrics panel
+    # ==================================================================
+    "sim.metrics.title": "Metrics",
+    "sim.metrics.l2_label": "Relative L2 error:",
+    "sim.metrics.correlation_label": "Correlation:",
+    "sim.metrics.rmse_label": "RMSE:",
+
+    # ==================================================================
+    # Simulation tab — Centre results widget
+    # ==================================================================
+    "sim.results.ground_truth_title": "Ground Truth",
+    "sim.results.reconstruction_title": "Reconstruction",
 }

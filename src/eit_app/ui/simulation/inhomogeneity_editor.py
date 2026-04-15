@@ -13,12 +13,25 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.ui.theme import set_button_role
 
 
-_COLUMNS = ["Shape", "X", "Y", "Size X", "Size Y", "\u03c3 (S/m)"]
+_COLUMN_KEYS = (
+    "sim.inhom.col.shape",
+    "sim.inhom.col.x",
+    "sim.inhom.col.y",
+    "sim.inhom.col.sizex",
+    "sim.inhom.col.sizey",
+    "sim.inhom.col.conductivity",
+)
 _SHAPES = ("circle", "ellipse", "rectangle")
+_SHAPE_BUTTON_KEYS = {
+    "circle": "sim.inhom.add_circle",
+    "ellipse": "sim.inhom.add_ellipse",
+    "rectangle": "sim.inhom.add_rectangle",
+}
 
 
 class _InhomogeneityTableModel(QAbstractTableModel):
@@ -32,11 +45,11 @@ class _InhomogeneityTableModel(QAbstractTableModel):
         return len(self._data)
 
     def columnCount(self, parent=QModelIndex()) -> int:
-        return len(_COLUMNS)
+        return len(_COLUMN_KEYS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
         if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
-            return _COLUMNS[section]
+            return t(_COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
@@ -115,8 +128,12 @@ class InhomogeneityEditor(QGroupBox):
     inhomogeneities_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Inhomogeneities", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
+        self._shape_buttons: dict[str, QPushButton] = {}
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -144,17 +161,31 @@ class InhomogeneityEditor(QGroupBox):
         btn_row.setSpacing(6)
 
         for shape in _SHAPES:
-            btn = QPushButton(f"+ {shape.capitalize()}")
+            btn = QPushButton("")  # retranslated
             btn.clicked.connect(lambda checked=False, s=shape: self._add_shape(s))
             set_button_role(btn, "subtle")
+            self._shape_buttons[shape] = btn
             btn_row.addWidget(btn)
 
-        self._remove_btn = QPushButton("Remove")
+        self._remove_btn = QPushButton("")  # retranslated
         self._remove_btn.clicked.connect(self._remove_selected)
         set_button_role(self._remove_btn, "danger")
         btn_row.addWidget(self._remove_btn)
 
         layout.addLayout(btn_row)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh all user-visible strings to the active language."""
+        self.setTitle(t("sim.inhom.title"))
+        for shape, btn in self._shape_buttons.items():
+            btn.setText(t(_SHAPE_BUTTON_KEYS[shape]))
+        self._remove_btn.setText(t("sim.inhom.remove_button"))
+        # Notify the view that column header labels need a repaint.
+        self._model.headerDataChanged.emit(
+            Qt.Orientation.Horizontal, 0, self._model.columnCount() - 1
+        )
 
     def _add_shape(self, shape: str) -> None:
         spec = InhomogeneitySpec(shape=shape)

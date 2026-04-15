@@ -3,6 +3,7 @@
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QPushButton, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_button_role, set_hint_text
 
 
@@ -12,28 +13,31 @@ class ForwardProblemPanel(QGroupBox):
     run_forward_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Forward Problem", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(8)
 
-        hint = QLabel("Compute boundary voltages from the conductivity distribution.")
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addRow(hint)
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        set_hint_text(self._hint)
+        layout.addRow(self._hint)
 
         self._noise_spin = QDoubleSpinBox()
         self._noise_spin.setRange(0.0, 1.0)
         self._noise_spin.setValue(0.0)
         self._noise_spin.setDecimals(4)
         self._noise_spin.setSingleStep(0.005)
-        self._noise_spin.setToolTip("Relative noise level (0 = noiseless)")
-        layout.addRow("Noise level:", self._noise_spin)
+        self._lbl_noise = QLabel("")
+        layout.addRow(self._lbl_noise, self._noise_spin)
 
-        self._solve_btn = QPushButton("Solve Forward Problem")
+        self._solve_btn = QPushButton("")
         self._solve_btn.clicked.connect(self.run_forward_requested)
         set_button_role(self._solve_btn, "primary")
         layout.addRow(self._solve_btn)
@@ -57,4 +61,13 @@ class ForwardProblemPanel(QGroupBox):
     def set_running(self, running: bool) -> None:
         self._solve_btn.setEnabled(not running)
         if running:
-            self._status_label.setText("Solving...")
+            self._status_label.setText(t("sim.forward.status_solving"))
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setTitle(t("sim.forward.title"))
+        self._hint.setText(t("sim.forward.hint"))
+        self._lbl_noise.setText(t("sim.forward.noise_label"))
+        self._noise_spin.setToolTip(t("sim.forward.noise_tooltip"))
+        self._solve_btn.setText(t("sim.forward.solve_button"))

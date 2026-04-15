@@ -5,10 +5,11 @@ from __future__ import annotations
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
 from matplotlib.tri import Triangulation
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
-from eit_app.ui.fonts import serif_font_family
+from eit_app.ui.fonts import plot_font_families, serif_font_family
 
 
 class ConductivityImageWidget(QWidget):
@@ -17,6 +18,11 @@ class ConductivityImageWidget(QWidget):
     def __init__(self, title: str = "Conductivity", parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._serif = serif_font_family()
+        # Title uses a FontProperties with a Latin-serif-first family list
+        # so matplotlib's per-glyph fallback can reach CJK faces when the
+        # title is translated to Chinese.  Without this fallback Times New
+        # Roman emits "Glyph X missing" warnings and renders tofu boxes.
+        self._title_font = FontProperties(family=plot_font_families(), size=14)
         self._default_title = title
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -28,10 +34,16 @@ class ConductivityImageWidget(QWidget):
 
         self._ax = self._figure.add_subplot(111)
         self._ax.set_facecolor("#fbfdff")
-        self._ax.set_title(title, fontname=self._serif, fontsize=14)
+        self._ax.set_title(title, fontproperties=self._title_font)
         self._ax.set_aspect("equal")
         self._colorbar = None
         self._show_placeholder()
+
+    def setTitle(self, title: str) -> None:
+        """Update the plot title (used by i18n retranslate pipelines)."""
+        self._default_title = title
+        self._ax.set_title(title, fontproperties=self._title_font)
+        self._canvas.draw_idle()
 
     def update_image(
         self,
@@ -68,9 +80,10 @@ class ConductivityImageWidget(QWidget):
             return
 
         display_title = title or self._default_title
-        self._ax.set_title(display_title, fontname=self._serif, fontsize=14)
+        self._ax.set_title(display_title, fontproperties=self._title_font)
         self._ax.set_aspect("equal")
         self._ax.tick_params(labelsize=9)
+        # Tick labels stay Latin (numbers only) — safe to keep Times New Roman.
         for label in self._ax.get_xticklabels() + self._ax.get_yticklabels():
             label.set_fontname(self._serif)
 
@@ -89,7 +102,7 @@ class ConductivityImageWidget(QWidget):
             self._colorbar.remove()
             self._colorbar = None
         self._ax.set_facecolor("#fbfdff")
-        self._ax.set_title(self._default_title, fontname=self._serif, fontsize=14)
+        self._ax.set_title(self._default_title, fontproperties=self._title_font)
         self._show_placeholder()
 
     def _show_placeholder(self) -> None:
@@ -97,7 +110,7 @@ class ConductivityImageWidget(QWidget):
             0.5, 0.5, "No data",
             transform=self._ax.transAxes,
             ha="center", va="center",
-            fontsize=11, color="#5b6573", fontname=self._serif,
+            fontsize=11, color="#5b6573", fontproperties=self._title_font,
         )
         self._ax.set_xticks([])
         self._ax.set_yticks([])
@@ -109,7 +122,7 @@ class ConductivityImageWidget(QWidget):
             0.5, 0.5, msg,
             transform=self._ax.transAxes,
             ha="center", va="center",
-            fontsize=10, color="#8b2f2f", fontname=self._serif,
+            fontsize=10, color="#8b2f2f", fontproperties=self._title_font,
         )
         self._ax.set_xticks([])
         self._ax.set_yticks([])

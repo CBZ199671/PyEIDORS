@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -29,8 +30,11 @@ class InverseProblemPanel(QGroupBox):
     save_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Inverse Problem", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -38,37 +42,41 @@ class InverseProblemPanel(QGroupBox):
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
-        hint = QLabel("Reconstruct the conductivity distribution from boundary voltages.")
-        hint.setWordWrap(True)
-        set_hint_text(hint)
-        layout.addRow(hint)
+        self._hint = QLabel("")
+        self._hint.setWordWrap(True)
+        set_hint_text(self._hint)
+        layout.addRow(self._hint)
 
         self._method_combo = AutoCloseComboBox()
+        # Method identifiers are invariant algorithm codes; no translation.
         self._method_combo.addItems(_METHODS)
-        layout.addRow("Method:", self._method_combo)
+        self._lbl_method = QLabel("")
+        layout.addRow(self._lbl_method, self._method_combo)
 
         self._alpha_spin = QDoubleSpinBox()
         self._alpha_spin.setRange(0.001, 1000.0)
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
-        layout.addRow("Regularization \u03b1:", self._alpha_spin)
+        self._lbl_alpha = QLabel("")
+        layout.addRow(self._lbl_alpha, self._alpha_spin)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
         self._iter_spin.setValue(10)
-        layout.addRow("Max iterations:", self._iter_spin)
+        self._lbl_iter = QLabel("")
+        layout.addRow(self._lbl_iter, self._iter_spin)
 
         btn_row = QHBoxLayout()
         btn_row.setContentsMargins(0, 0, 0, 0)
         btn_row.setSpacing(8)
 
-        self._recon_btn = QPushButton("Reconstruct")
+        self._recon_btn = QPushButton("")
         self._recon_btn.clicked.connect(self.run_inverse_requested)
         set_button_role(self._recon_btn, "primary")
         btn_row.addWidget(self._recon_btn)
 
-        self._save_btn = QPushButton("Save Results")
+        self._save_btn = QPushButton("")
         self._save_btn.clicked.connect(self.save_requested)
         self._save_btn.setEnabled(False)
         set_button_role(self._save_btn, "subtle")
@@ -111,7 +119,18 @@ class InverseProblemPanel(QGroupBox):
     def set_running(self, running: bool) -> None:
         self._recon_btn.setEnabled(not running)
         if running:
-            self._status_label.setText("Reconstructing...")
+            self._status_label.setText(t("sim.inverse.status_reconstructing"))
 
     def set_save_enabled(self, enabled: bool) -> None:
         self._save_btn.setEnabled(enabled)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setTitle(t("sim.inverse.title"))
+        self._hint.setText(t("sim.inverse.hint"))
+        self._lbl_method.setText(t("sim.inverse.method_label"))
+        self._lbl_alpha.setText(t("sim.inverse.alpha_label"))
+        self._lbl_iter.setText(t("sim.inverse.iterations_label"))
+        self._recon_btn.setText(t("sim.inverse.reconstruct_button"))
+        self._save_btn.setText(t("sim.inverse.save_button"))

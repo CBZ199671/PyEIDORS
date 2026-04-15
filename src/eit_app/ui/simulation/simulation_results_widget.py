@@ -8,6 +8,7 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 
@@ -22,16 +23,23 @@ class SimulationResultsWidget(QWidget):
         super().__init__(parent)
         self._build_ui()
         self._last_forward_result: ForwardSolverResult | None = None
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
 
-        # Top: side-by-side conductivity images
+        # Top: side-by-side conductivity images — initial titles come from
+        # the i18n dict; _retranslate() re-applies them on language change.
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._ground_truth_widget = ConductivityImageWidget("Ground Truth")
-        self._reconstruction_widget = ConductivityImageWidget("Reconstruction")
+        self._ground_truth_widget = ConductivityImageWidget(
+            t("sim.results.ground_truth_title")
+        )
+        self._reconstruction_widget = ConductivityImageWidget(
+            t("sim.results.reconstruction_title")
+        )
         top_splitter.addWidget(self._ground_truth_widget)
         top_splitter.addWidget(self._reconstruction_widget)
         top_splitter.setStretchFactor(0, 1)
@@ -63,7 +71,7 @@ class SimulationResultsWidget(QWidget):
             result.ground_truth_conductivity,
             result.node_coords,
             result.cell_connectivity,
-            title="Ground Truth",
+            title=t("sim.results.ground_truth_title"),
         )
         self._reconstruction_widget.clear()
 
@@ -83,7 +91,7 @@ class SimulationResultsWidget(QWidget):
             reconstructed_conductivity,
             node_coords,
             cell_connectivity,
-            title="Reconstruction",
+            title=t("sim.results.reconstruction_title"),
         )
 
         if self._last_forward_result is not None:
@@ -100,6 +108,13 @@ class SimulationResultsWidget(QWidget):
 
     def set_expected_point_count(self, point_count: int) -> None:
         self._voltage_plot.set_expected_point_count(point_count)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh the two conductivity-image titles on language change."""
+        self._ground_truth_widget.setTitle(t("sim.results.ground_truth_title"))
+        self._reconstruction_widget.setTitle(t("sim.results.reconstruction_title"))
 
     @property
     def voltage_plot(self) -> BoundaryVoltagePlotWidget:

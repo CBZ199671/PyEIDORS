@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.ui.simulation.forward_problem_panel import ForwardProblemPanel
 from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
@@ -25,6 +26,8 @@ class SimulationTab(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         self._mesh_panel = MeshSetupPanel()
@@ -40,33 +43,33 @@ class SimulationTab(QWidget):
         context_layout.setSpacing(6)
         context_layout.addWidget(self._metrics_panel)
 
-        run_guide = QGroupBox("Run Guide")
-        guide_layout = QVBoxLayout(run_guide)
+        self._run_guide_box = QGroupBox("")  # title assigned by _retranslate
+        guide_layout = QVBoxLayout(self._run_guide_box)
         guide_layout.setContentsMargins(12, 14, 12, 12)
         guide_layout.setSpacing(6)
-        for text in (
-            "先配置网格与电极，再维护异常体列表。",
-            "运行 Forward 后查看边界电压与 Ground Truth。",
-            "运行 Inverse 后在右侧查看误差指标。",
-        ):
-            label = QLabel(text)
+        # Three instructional steps — handles stored for retranslation.
+        self._runguide_step_labels: list[QLabel] = []
+        for _key in ("sim.runguide.step1", "sim.runguide.step2", "sim.runguide.step3"):
+            label = QLabel("")
             label.setWordWrap(True)
             set_hint_text(label)
             guide_layout.addWidget(label)
-        status_hint = QLabel("中央区域优先用于图像与曲线对照。")
-        status_hint.setWordWrap(True)
-        set_subtle_value(status_hint)
-        guide_layout.addWidget(status_hint)
+            self._runguide_step_labels.append(label)
+        self._runguide_hint = QLabel("")
+        self._runguide_hint.setWordWrap(True)
+        set_subtle_value(self._runguide_hint)
+        guide_layout.addWidget(self._runguide_hint)
         guide_layout.addStretch()
-        context_layout.addWidget(run_guide)
+        context_layout.addWidget(self._run_guide_box)
         context_layout.addStretch()
 
+        # Step titles filled in by _retranslate below.
         self._shell = WorkflowShell(
             steps=[
-                ("Step 1 \u00b7 Mesh & Electrodes", self._mesh_panel),
-                ("Step 2 \u00b7 Inhomogeneities", self._inhom_editor),
-                ("Step 3 \u00b7 Forward Problem", self._forward_panel),
-                ("Step 4 \u00b7 Inverse Problem", self._inverse_panel),
+                ("", self._mesh_panel),
+                ("", self._inhom_editor),
+                ("", self._forward_panel),
+                ("", self._inverse_panel),
             ],
             center_widget=self._results_widget,
             context_widget=context_widget,
@@ -82,6 +85,25 @@ class SimulationTab(QWidget):
         root.addWidget(self._shell)
         self._mesh_panel.config_changed.connect(self._sync_expected_point_count)
         self._sync_expected_point_count()
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        """Refresh the tab's own chrome (Step titles + Run Guide)."""
+        toolbox = self._shell.toolbox
+        toolbox.setItemText(0, t("sim.step.mesh"))
+        toolbox.setItemText(1, t("sim.step.inhom"))
+        toolbox.setItemText(2, t("sim.step.forward"))
+        toolbox.setItemText(3, t("sim.step.inverse"))
+        self._run_guide_box.setTitle(t("sim.runguide.title"))
+        step_keys = (
+            "sim.runguide.step1",
+            "sim.runguide.step2",
+            "sim.runguide.step3",
+        )
+        for label, key in zip(self._runguide_step_labels, step_keys):
+            label.setText(t(key))
+        self._runguide_hint.setText(t("sim.runguide.hint"))
 
     def _sync_expected_point_count(self) -> None:
         mesh_cfg = self._mesh_panel.get_config()

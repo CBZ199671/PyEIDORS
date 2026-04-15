@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QWidget
 
+from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_subtle_value
 
 
@@ -12,8 +13,11 @@ class MetricsPanel(QGroupBox):
     """Displays reconstruction quality metrics (error, correlation, etc.)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("Metrics", parent)
+        # Title assigned by _retranslate() so it follows the UI language.
+        super().__init__("", parent)
         self._build_ui()
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         layout = QFormLayout(self)
@@ -22,15 +26,26 @@ class MetricsPanel(QGroupBox):
 
         self._l2_label = QLabel("\u2014")
         set_subtle_value(self._l2_label)
-        layout.addRow("Relative L2 error:", self._l2_label)
+        self._lbl_l2 = QLabel("")
+        layout.addRow(self._lbl_l2, self._l2_label)
 
         self._corr_label = QLabel("\u2014")
         set_subtle_value(self._corr_label)
-        layout.addRow("Correlation:", self._corr_label)
+        self._lbl_corr = QLabel("")
+        layout.addRow(self._lbl_corr, self._corr_label)
 
         self._rmse_label = QLabel("\u2014")
         set_subtle_value(self._rmse_label)
-        layout.addRow("RMSE:", self._rmse_label)
+        self._lbl_rmse = QLabel("")
+        layout.addRow(self._lbl_rmse, self._rmse_label)
+
+    # ── i18n ──
+
+    def _retranslate(self) -> None:
+        self.setTitle(t("sim.metrics.title"))
+        self._lbl_l2.setText(t("sim.metrics.l2_label"))
+        self._lbl_corr.setText(t("sim.metrics.correlation_label"))
+        self._lbl_rmse.setText(t("sim.metrics.rmse_label"))
 
     def update_metrics(
         self,
