@@ -14,6 +14,7 @@ configure_realtime_thread_env()
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
+from eit_app.i18n import init_from_settings as init_i18n_from_settings
 from eit_app.ui.fonts import configure_runtime_fonts
 from eit_app.ui.main_window import EITWorkstation
 from eit_app.ui.theme import apply_app_theme
@@ -34,6 +35,12 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("EIT Workstation")
     app.setOrganizationName("PyEIDORS")
+
+    # Load the persisted UI language preference.  Must run AFTER
+    # setOrganizationName / setApplicationName so QSettings resolves the
+    # correct config store.  Falls back to the system locale on first launch.
+    init_i18n_from_settings()
+
     configure_runtime_fonts(app)
     apply_app_theme(app)
 
