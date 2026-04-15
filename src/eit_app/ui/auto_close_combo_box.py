@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
@@ -21,12 +21,14 @@ class AutoCloseComboBox(QWidget):
     currentIndexChanged = Signal(int)
     activated = Signal(int)
     textActivated = Signal(str)
+    _CONTROL_HEIGHT = 28
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._items: list[tuple[str, Any]] = []
         self._current_index = -1
         self._editable = False
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -36,7 +38,8 @@ class AutoCloseComboBox(QWidget):
         self._line_edit.setObjectName("selectorDisplay")
         self._line_edit.setReadOnly(True)
         self._line_edit.textEdited.connect(self._on_text_edited)
-        self._line_edit.setMinimumHeight(34)
+        self._line_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._line_edit.setFixedHeight(self._CONTROL_HEIGHT)
         layout.addWidget(self._line_edit, 1)
 
         self._button = QToolButton(self)
@@ -44,7 +47,9 @@ class AutoCloseComboBox(QWidget):
         self._button.setText("▾")
         self._button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._button.setToolButtonStyle(self._button.toolButtonStyle())
-        self._button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        self._button.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._button.setFixedWidth(24)
+        self._button.setFixedHeight(self._CONTROL_HEIGHT)
         self._button.setCursor(Qt.CursorShape.PointingHandCursor)
         layout.addWidget(self._button)
 
@@ -52,7 +57,13 @@ class AutoCloseComboBox(QWidget):
         self._menu.setObjectName("selectorMenu")
         self._button.setMenu(self._menu)
         self.setFocusProxy(self._line_edit)
-        self.setMinimumHeight(34)
+        self.setFixedHeight(self._CONTROL_HEIGHT)
+
+    def sizeHint(self) -> QSize:
+        return QSize(180, self._CONTROL_HEIGHT)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(120, self._CONTROL_HEIGHT)
 
     def addItem(self, text: str, user_data: Any = None) -> None:
         self._items.append((text, user_data))

@@ -55,7 +55,6 @@ relative-session/
 Thumbs.db
 
 # Local AI tooling / credentials
-.claude/
 .codex/
 codex*.txt
 

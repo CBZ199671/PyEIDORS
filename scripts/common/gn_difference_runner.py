@@ -492,11 +492,24 @@ def build_shared_context(
     z_center: float,
     refinement: Optional[int],
     n_elec: int,
-    radius: float,
-    drive_value: Optional[float],
-    contact_impedance: float,
-    background_sigma: float,
-    lam: float,
+    n_rings: int = 1,
+    radius: float = 1.0,
+    drive_mode: str | None = None,
+    drive_value: Optional[float] = None,
+    contact_impedance: float = 0.01,
+    electrode_length_m_override: float | list[float] | None = None,
+    electrode_coverage: float = 0.5,
+    geometry_scale_to_m: float = 1.0,
+    stim_pattern: str = "{ad}",
+    meas_pattern: str = "{ad}",
+    rotate_meas: bool = True,
+    use_meas_current: bool = False,
+    use_meas_current_next: int = 0,
+    stim_direction: str = "ccw",
+    meas_direction: str = "ccw",
+    stim_first_positive: bool = False,
+    background_sigma: float = 1.0,
+    lam: float = 1.0e-2,
     cache_scope: str = "both",
     cache_dir: str = ".pyeidors_cache/v2",
     cache_clear_names: Optional[list[str]] = None,
@@ -566,8 +579,15 @@ def build_shared_context(
     if device not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"device must be auto|cpu|cuda, got {device!r}")
     stim_drive_value = drive_value if drive_value is not None else 1.0
-    drive_mode = "normalized" if int(mesh_dim) == 2 else "total_current"
-    print(f"[INFO] Diff imaging drive_mode={drive_mode}, drive_value={stim_drive_value:.2e}")
+    resolved_drive_mode = (
+        str(drive_mode).strip().lower()
+        if drive_mode is not None
+        else ("normalized" if int(mesh_dim) == 2 else "total_current")
+    )
+    print(
+        f"[INFO] Diff imaging drive_mode={resolved_drive_mode}, "
+        f"drive_value={stim_drive_value:.2e}"
+    )
 
     cache_manager = CacheManager(
         scope=cache_scope,
@@ -585,6 +605,7 @@ def build_shared_context(
         dimension=int(mesh_dim),
         radius=radius,
         refinement=refinement if refinement is not None else 6,
+        electrode_coverage=float(electrode_coverage),
         height=float(mesh_height),
         electrode_height_ratio=float(electrode_height_ratio),
         z_center=float(z_center),
@@ -593,13 +614,19 @@ def build_shared_context(
     )
     pattern_cfg = PatternConfig(
         n_elec=n_elec,
-        stim_pattern="{ad}",
-        meas_pattern="{ad}",
-        drive_mode=drive_mode,
+        n_rings=int(n_rings),
+        stim_pattern=stim_pattern,
+        meas_pattern=meas_pattern,
+        drive_mode=resolved_drive_mode,
         drive_value=stim_drive_value,
-        geometry_scale_to_m=1.0,
-        use_meas_current=False,
-        rotate_meas=True,
+        geometry_scale_to_m=float(geometry_scale_to_m),
+        electrode_length_m_override=electrode_length_m_override,
+        use_meas_current=bool(use_meas_current),
+        use_meas_current_next=int(use_meas_current_next),
+        rotate_meas=bool(rotate_meas),
+        stim_direction=str(stim_direction),
+        meas_direction=str(meas_direction),
+        stim_first_positive=bool(stim_first_positive),
     )
     z_contact = np.full(n_elec, contact_impedance, dtype=float)
     fwd_model = EITForwardModel(
@@ -1095,6 +1122,7 @@ def build_shared_context(
                 else "cpu"
             )
         ),
+        "stim_drive_mode": resolved_drive_mode,
         "stim_drive_value": stim_drive_value,
         "cache_build_seconds": dict(build_seconds),
         "performance_capabilities": perf_caps,

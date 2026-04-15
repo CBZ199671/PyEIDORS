@@ -34,7 +34,11 @@ def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict
     normalized.setdefault("board_id", DEFAULT_BOARD_ID)
     normalized.setdefault("user_id", DEFAULT_USER_ID)
     normalized.setdefault("mea_mode", DEFAULT_MEA_MODE)
-    normalized.setdefault("start_variant", "3byte")
+    # Prefer the legacy-compatible start command by default. ``auto`` tries the
+    # 2-byte START_MEA first, which matches the historical Windows upper
+    # computer behavior, then falls back to the 3-byte variant for newer
+    # firmware.
+    normalized.setdefault("start_variant", "auto")
     normalized.setdefault("power_on_settle_sec", 0.8)
     normalized.setdefault("apply_profile_on_start", True)
     normalized.setdefault("frequency_hz", 1000)
@@ -52,6 +56,9 @@ def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict
     normalized.setdefault("command_retries", 2)
     normalized.setdefault("legacy_frame_timeout_sec", 20.0)
     normalized.setdefault("legacy_frame_retries", 2)
+    normalized.setdefault("radius", 1.0)
+    normalized.setdefault("geometry_scale_to_m", 1.0)
+    normalized.setdefault("contact_impedance", 0.01)
     normalized.update(measurement_layout_from_config(normalized))
     if transport_type == "serial":
         normalized["port"] = resolve_serial_port_name(raw_port)

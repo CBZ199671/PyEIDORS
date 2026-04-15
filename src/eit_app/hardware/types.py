@@ -67,7 +67,7 @@ DEFAULT_ADC_PARAMS = ADCParams()
 
 @dataclass(frozen=True)
 class FrameSpec:
-    """Per-frame measurement layout for 16-electrode adjacent pattern."""
+    """Per-frame measurement layout for one acquisition pattern."""
 
     n_electrodes: int = 16
     points_per_frame: int = 208

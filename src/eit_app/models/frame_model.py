@@ -14,7 +14,7 @@ class FrameData:
     and visualization. It holds voltage-converted measurements (not raw ADC).
 
     Attributes:
-        real: Real-part voltages, shape (n_meas,), typically (208,).
+        real: Real-part voltages, shape (n_meas,).
         imag: Imaginary-part voltages, shape (n_meas,).
         timestamp: Unix epoch seconds at acquisition time.
         frame_index: Monotonically increasing counter from the acquisition session.

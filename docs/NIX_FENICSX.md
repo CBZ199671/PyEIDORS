@@ -149,11 +149,16 @@ Important for WSL2 and other fresh shells:
 - When the Linux manifest is exported from WSL2, it may record `platform.runtime_context.kind = wsl2` as informational provenance only; `verify_env_manifest.py` does not treat that field as a hard compatibility gate.
 - For CUDA on WSL2/NVIDIA, the only supported entry is `nix develop .#cuda`; do not treat the default CPU shell as a GPU runtime.
 - After entering `.#cuda`, run `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty` before enabling `--petsc-device auto|cuda` in benchmarks or CLI runs; use `--device auto|cuda` as the matching Torch/GN inverse runtime switch.
+- For the GUI, the supported launchers are `bash scripts/gui/run_eit_app.sh --cpu` and `bash scripts/gui/run_eit_app.sh --gpu`. Do not launch the GUI with `PYTHONPATH=src python -m eit_app.app`; that drops nix-provided FEniCSx runtime paths and can break realtime reconstruction imports.
+- On the Windows host, the supported launchers are `powershell -File .\scripts\gui\run_eit_app.ps1 -Profile cpu|gpu`, or the repository-root one-click wrappers `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd`.
 - For a lightweight preflight before the full stack is present, you can still inspect package detection with:
 
 ```bash
 PYTHONPATH=src python -c "import pyeidors; print(pyeidors.check_environment())"
 ```
+
+That `PYTHONPATH=src` form is only for lightweight import probing. It is not the
+supported way to run the GUI or any full reconstruction workflow.
 
 The `shellHook` in `flake.nix` will:
 

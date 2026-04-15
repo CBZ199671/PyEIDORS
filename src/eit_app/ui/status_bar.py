@@ -20,7 +20,7 @@ class EITStatusBar(QStatusBar):
         self._frame_label = QLabel("Frames: 0")
 
         for label in (self._fps_label, self._frame_label):
-            label.setStyleSheet("padding: 0 10px; color: #d9e2f2; font-weight: 600;")
+            label.setStyleSheet("padding: 0 10px; color: #243447; font-weight: 700;")
 
         apply_state_chip(self._conn_label, tone="error", compact=True)
         apply_state_chip(self._power_label, tone="warn", compact=True)
@@ -87,6 +87,8 @@ class EITStatusBar(QStatusBar):
             "idle": ("#666666", "#eceff4", "Acq: Idle"),
             "continuous": ("#005f99", "#d8efff", "Acq: Continuous"),
             "scheduled": ("#5a3e9d", "#ece3ff", "Acq: Scheduled"),
+            "finite_run": ("#005f99", "#d8efff", "Acq: Finite Run"),
+            "stepped_run": ("#5a3e9d", "#ece3ff", "Acq: Stepped Run"),
             "single_shot": ("#9a4d00", "#ffe6cc", "Acq: Single Frame"),
         }
         _fg, _bg, text = mapping.get(mode, ("#666666", "#eceff4", f"Acq: {mode}"))
@@ -97,6 +99,8 @@ class EITStatusBar(QStatusBar):
                 "idle": "idle",
                 "continuous": "active",
                 "scheduled": "active",
+                "finite_run": "active",
+                "stepped_run": "active",
                 "single_shot": "active",
             }.get(mode, "idle"),
             compact=True,
@@ -137,8 +141,13 @@ class EITStatusBar(QStatusBar):
     @Slot(int)
     def on_tab_changed(self, index: int) -> None:
         """Update mode indicator when the user switches tabs."""
-        labels = {0: "Mode: Hardware", 1: "Mode: Simulation"}
-        tones = {0: "active", 1: "ready"}
+        labels = {
+            0: "Mode: Hardware",
+            1: "Mode: Simulation",
+            2: "Mode: Dataset",
+            3: "Mode: Database",
+        }
+        tones = {0: "active", 1: "ready", 2: "warn", 3: "idle"}
         self._mode_label.setText(labels.get(index, f"Mode: {index}"))
         apply_state_chip(
             self._mode_label,

@@ -173,7 +173,45 @@ class MeshLoader:
                 "Generate one with scripts/mesh_tools/build_matlab_mesh_cache.py "
                 "or pyeidors.geometry.optimized_mesh_generator.create_eit_mesh()."
             )
-        return self.load_mesh(available["msh"][0])
+
+        candidates = sorted(
+            available["msh"],
+            key=lambda name: (
+                0 if self._mesh_name_matches_gdim(name) else 1,
+                -self._mesh_mtime(name),
+                name,
+            ),
+        )
+        last_error: Exception | None = None
+        for mesh_name in candidates:
+            try:
+                return self.load_mesh(mesh_name)
+            except Exception as exc:
+                last_error = exc
+                logger.debug(
+                    "Skipping cached mesh candidate %s for gdim=%d: %s",
+                    mesh_name,
+                    self.gdim,
+                    exc,
+                )
+
+        raise RuntimeError(
+            f"No compatible .msh cache could be loaded from {self.mesh_dir} for gdim={self.gdim}."
+        ) from last_error
+
+    def _mesh_name_matches_gdim(self, mesh_name: str) -> bool:
+        normalized = str(mesh_name).strip().lower()
+        is_3d_named = normalized.startswith("mesh3d_")
+        if self.gdim == 3:
+            return is_3d_named
+        return not is_3d_named
+
+    def _mesh_mtime(self, mesh_name: str) -> float:
+        msh_file = self.mesh_dir / f"{mesh_name}.msh"
+        try:
+            return msh_file.stat().st_mtime
+        except FileNotFoundError:
+            return float("-inf")
 
 
 def create_simple_mesh_loader(mesh_dir: str = "eit_meshes", gdim: int = 2) -> MeshLoader:

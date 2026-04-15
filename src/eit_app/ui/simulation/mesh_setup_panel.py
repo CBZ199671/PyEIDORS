@@ -63,3 +63,22 @@ class MeshSetupPanel(QGroupBox):
             "n_electrodes": self._n_elec_spin.value(),
             "background_conductivity": self._bg_cond_spin.value(),
         }
+
+    def set_config(self, config: dict) -> None:
+        widgets = (
+            self._dim_combo,
+            self._refine_spin,
+            self._n_elec_spin,
+            self._bg_cond_spin,
+        )
+        blockers = [widget.blockSignals(True) for widget in widgets]
+        try:
+            mesh_dimension = int(config.get("mesh_dimension", 2))
+            self._dim_combo.setCurrentIndex(0 if mesh_dimension == 2 else 1)
+            self._refine_spin.setValue(float(config.get("mesh_refinement", 0.1)))
+            self._n_elec_spin.setValue(int(config.get("n_electrodes", config.get("n_elec", 16))))
+            self._bg_cond_spin.setValue(float(config.get("background_conductivity", 1.0)))
+        finally:
+            for widget, blocked in zip(widgets, blockers):
+                widget.blockSignals(blocked)
+        self.config_changed.emit()

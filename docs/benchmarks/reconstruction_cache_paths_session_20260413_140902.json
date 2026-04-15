@@ -1,0 +1,450 @@
+{
+  "benchmark": "reconstruction_cache_paths",
+  "session_dir": "data/measurements/test_for_gui/session_20260413_140902",
+  "environment": {
+    "platform": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.40",
+    "python": "3.13.8",
+    "pyeidors_env_profile": "default"
+  },
+  "session": {
+    "frame_count": 10,
+    "target_count": 9,
+    "points_per_frame": 208,
+    "n_elec": 16,
+    "frequency_hz": 1000.0,
+    "stim_amp_uA": 50.0,
+    "use_part": "real"
+  },
+  "mesh": {
+    "mesh_dir": "eit_meshes",
+    "gui_requested_refinement": 4,
+    "gui_effective_refinement": 8
+  },
+  "gui_default": {
+    "cold_ms": 2295.8940050011734,
+    "warm": {
+      "count": 18,
+      "mean_ms": 654.6164647224941,
+      "median_ms": 659.0646434997325,
+      "p95_ms": 677.6509809948038,
+      "min_ms": 620.5694220116129,
+      "max_ms": 686.5967719932087,
+      "fps": 1.5276120505522595
+    },
+    "solver_diagnostics": {
+      "difference_step_size": null,
+      "best_homog": null,
+      "timing": null,
+      "measurement_space": null,
+      "preset_name": null,
+      "lambda_eff": null
+    },
+    "process_cache": {
+      "system_cache_items": 1,
+      "system_cache_key": "(16, '{ad}', '{ad}', 'total_current', 1e-05, 1.0, 2, 8, 1.0, 'raw', 'target_minus_reference')",
+      "eit_cache_stats": {
+        "process_hits": 900,
+        "process_misses": 10,
+        "disk_hits": 0,
+        "disk_misses": 3,
+        "process_items": 10,
+        "process_bytes": 11088064,
+        "process_max_bytes": 3221225472,
+        "disk_items": 3,
+        "disk_bytes": 10622294,
+        "disk_max_bytes": 21474836480,
+        "total_hits": 900,
+        "total_misses": 13,
+        "hit_rate": 0.9857612267250822,
+        "cache_status": 1.0,
+        "debug_status": 0.0,
+        "priority_boost": 0.0,
+        "disabled_names": [],
+        "debug_names": [],
+        "process_artifacts": {
+          "forward_factor": 7,
+          "jacobian_block_tune": 1,
+          "jacobian": 2
+        },
+        "process_namespaces": {
+          "default": 7,
+          "inverse": 3
+        },
+        "disk_artifacts": {
+          "jacobian": 2,
+          "jacobian_block_tune": 1
+        },
+        "disk_namespaces": {
+          "inverse": 3
+        },
+        "disk_cache_lifecycle": "session",
+        "disk_cache_requested_dir": ".pyeidors_cache/v2",
+        "disk_cache_effective_dir": "/home/tom/workspace/PyEidors_wsl2/.pyeidors_cache/v2/.sessions/session-shellpid1726111-1776101566-18401",
+        "disk_cache_cleanup_on_exit": true,
+        "process_forward_setup_cache": {
+          "items": 1,
+          "max_items": 8
+        }
+      }
+    },
+    "profile_top_cumulative": [
+      "         56443 function calls (55037 primitive calls) in 0.676 seconds",
+      "   Ordered by: cumulative time",
+      "   List reduced from 405 to 20 due to restriction <20>",
+      "   ncalls  tottime  percall  cumtime  percall filename:lineno(function)",
+      "        1    0.000    0.000    0.677    0.677 /home/tom/workspace/PyEidors_wsl2/scripts/benchmarks/benchmark_reconstruction_cache_paths.py:123(_quiet)",
+      "        1    0.000    0.000    0.676    0.676 /home/tom/workspace/PyEidors_wsl2/scripts/benchmarks/benchmark_reconstruction_cache_paths.py:264(<lambda>)",
+      "        1    0.000    0.000    0.676    0.676 /home/tom/workspace/PyEidors_wsl2/src/eit_app/controllers/reconstruction_controller.py:103(run_reconstruction_request)",
+      "        1    0.000    0.000    0.658    0.658 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/core_system_facade.py:36(difference_reconstruct)",
+      "        1    0.000    0.000    0.658    0.658 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/workflows/difference.py:20(perform_difference_reconstruction)",
+      "        1    0.000    0.000    0.655    0.655 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/core_system.py:878(inverse_solve)",
+      "        1    0.000    0.000    0.655    0.655 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_engine.py:411(reconstruct)",
+      "        1    0.002    0.002    0.655    0.655 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1757(run_reconstruction)",
+      "        1    0.000    0.000    0.568    0.568 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1971(_solve_strict_path)",
+      "        1    0.000    0.000    0.452    0.452 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1594(_solve_linear_system)",
+      "        1    0.452    0.452    0.452    0.452 {built-in method torch._C._linalg.linalg_solve}",
+      "       22    0.001    0.000    0.079    0.004 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/forward/eit_forward_model.py:1226(fwd_solve)",
+      "        1    0.076    0.076    0.076    0.076 {built-in method torch.mm}",
+      "       22    0.001    0.000    0.074    0.003 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/forward/eit_forward_model.py:1191(forward_solve)",
+      "        1    0.000    0.000    0.073    0.073 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1378(_apply_difference_step_size)",
+      "        1    0.000    0.000    0.073    0.073 /home/tom/workspace/PyEidors_wsl2/.venv/lib/python3.13/site-packages/scipy/optimize/_minimize.py:831(minimize_scalar)",
+      "        1    0.001    0.001    0.072    0.072 /home/tom/workspace/PyEidors_wsl2/.venv/lib/python3.13/site-packages/scipy/optimize/_optimize.py:2289(_minimize_scalar_bounded)",
+      "       22    0.003    0.000    0.072    0.003 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/forward/eit_forward_model.py:1039(_solve_with_petsc)",
+      "       19    0.000    0.000    0.072    0.004 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1440(_objective)",
+      "       19    0.001    0.000    0.072    0.004 /home/tom/workspace/PyEidors_wsl2/src/pyeidors/inverse/solvers/gauss_newton_runtime.py:1359(_difference_step_size_objective)"
+    ]
+  },
+  "gn_variant_default": {
+    "variant": "gn_default",
+    "cold_ms": 681.0052579967305,
+    "warm": {
+      "count": 18,
+      "mean_ms": 624.9691002780714,
+      "median_ms": 624.6057745011058,
+      "p95_ms": 642.6782694485155,
+      "min_ms": 610.4106349957874,
+      "max_ms": 658.0190380045678,
+      "fps": 1.600079107199162
+    },
+    "solver_diagnostics": {
+      "difference_step_size": {
+        "mode": "optimize",
+        "applied": true,
+        "value": 3.9996411115658037,
+        "objective": 29.792540104721542,
+        "bounds": [
+          0.0,
+          4.0
+        ],
+        "success": true,
+        "message": "Solution found.",
+        "eval_count": 19
+      },
+      "best_homog": {
+        "mode": "off",
+        "applied": false,
+        "value": null,
+        "objective": null,
+        "reason": "disabled"
+      },
+      "timing": {
+        "forward": 0.0031643199909012765,
+        "jacobian": 0.0006943689950276166,
+        "linear_solve": 0.5843809819925809,
+        "line_search": 9.511000826023519e-06
+      },
+      "measurement_space": {
+        "type": "difference",
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference"
+      },
+      "preset_name": "eidors_one_step_noser",
+      "lambda_eff": 0.010000000000000002
+    },
+    "cache_stats": {
+      "process_hits": 1756,
+      "process_misses": 10,
+      "disk_hits": 0,
+      "disk_misses": 0,
+      "process_items": 10,
+      "process_bytes": 11088064,
+      "process_max_bytes": 3221225472,
+      "disk_items": 3,
+      "disk_bytes": 10622294,
+      "disk_max_bytes": 21474836480,
+      "total_hits": 1756,
+      "total_misses": 10,
+      "hit_rate": 0.9943374858437146,
+      "cache_status": 1.0,
+      "debug_status": 0.0,
+      "priority_boost": 0.0,
+      "disabled_names": [],
+      "debug_names": [],
+      "process_artifacts": {
+        "jacobian_block_tune": 1,
+        "forward_factor": 7,
+        "jacobian": 2
+      },
+      "process_namespaces": {
+        "inverse": 3,
+        "default": 7
+      },
+      "disk_artifacts": {
+        "jacobian": 2,
+        "jacobian_block_tune": 1
+      },
+      "disk_namespaces": {
+        "inverse": 3
+      },
+      "disk_cache_lifecycle": "session",
+      "disk_cache_requested_dir": ".pyeidors_cache/v2",
+      "disk_cache_effective_dir": "/home/tom/workspace/PyEidors_wsl2/.pyeidors_cache/v2/.sessions/session-shellpid1726111-1776101566-18401",
+      "disk_cache_cleanup_on_exit": true,
+      "process_forward_setup_cache": {
+        "items": 1,
+        "max_items": 8
+      }
+    }
+  },
+  "gn_variant_no_step_search": {
+    "variant": "gn_no_step_search",
+    "cold_ms": 591.8568600027356,
+    "warm": {
+      "count": 18,
+      "mean_ms": 577.3703517188551,
+      "median_ms": 577.2910894957022,
+      "p95_ms": 599.7078541906376,
+      "min_ms": 556.190561997937,
+      "max_ms": 607.1560540003702,
+      "fps": 1.7319905620767662
+    },
+    "solver_diagnostics": {
+      "difference_step_size": {
+        "mode": "off",
+        "applied": false,
+        "value": 1.0,
+        "objective": null,
+        "reason": "disabled"
+      },
+      "best_homog": {
+        "mode": "off",
+        "applied": false,
+        "value": null,
+        "objective": null,
+        "reason": "disabled"
+      },
+      "timing": {
+        "forward": 0.003339957009302452,
+        "jacobian": 0.0006802069983677939,
+        "linear_solve": 0.5596413299936103,
+        "line_search": 8.641989552415907e-06
+      },
+      "measurement_space": {
+        "type": "difference",
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference"
+      },
+      "preset_name": "eidors_one_step_noser",
+      "lambda_eff": 0.010000000000000002
+    },
+    "cache_stats": {
+      "process_hits": 1872,
+      "process_misses": 28,
+      "disk_hits": 0,
+      "disk_misses": 0,
+      "process_items": 28,
+      "process_bytes": 11133280,
+      "process_max_bytes": 3221225472,
+      "disk_items": 3,
+      "disk_bytes": 10622294,
+      "disk_max_bytes": 21474836480,
+      "total_hits": 1872,
+      "total_misses": 28,
+      "hit_rate": 0.9852631578947368,
+      "cache_status": 1.0,
+      "debug_status": 0.0,
+      "priority_boost": 0.0,
+      "disabled_names": [],
+      "debug_names": [],
+      "process_artifacts": {
+        "jacobian_block_tune": 1,
+        "forward_factor": 25,
+        "jacobian": 2
+      },
+      "process_namespaces": {
+        "inverse": 3,
+        "default": 25
+      },
+      "disk_artifacts": {
+        "jacobian": 2,
+        "jacobian_block_tune": 1
+      },
+      "disk_namespaces": {
+        "inverse": 3
+      },
+      "disk_cache_lifecycle": "session",
+      "disk_cache_requested_dir": ".pyeidors_cache/v2",
+      "disk_cache_effective_dir": "/home/tom/workspace/PyEidors_wsl2/.pyeidors_cache/v2/.sessions/session-shellpid1726111-1776101566-18401",
+      "disk_cache_cleanup_on_exit": true,
+      "process_forward_setup_cache": {
+        "items": 1,
+        "max_items": 8
+      }
+    }
+  },
+  "gn_variant_fast_mode": {
+    "variant": "gn_fast_mode",
+    "cold_ms": 283.6015680077253,
+    "warm": {
+      "count": 18,
+      "mean_ms": 59.728464277415895,
+      "median_ms": 52.86096499185078,
+      "p95_ms": 92.23553480114762,
+      "min_ms": 26.31344200926833,
+      "max_ms": 246.4261060085846,
+      "fps": 16.742436158334527
+    },
+    "solver_diagnostics": {
+      "difference_step_size": {
+        "mode": "off",
+        "applied": false,
+        "value": 1.0,
+        "objective": null,
+        "reason": "disabled"
+      },
+      "best_homog": {
+        "mode": "off",
+        "applied": false,
+        "value": null,
+        "objective": null,
+        "reason": "disabled"
+      },
+      "timing": {
+        "forward": 0.007676486988202669,
+        "jacobian": 0.0,
+        "linear_solve": 0.03720253499341197,
+        "line_search": 7.244991138577461e-06
+      },
+      "measurement_space": {
+        "type": "difference",
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference"
+      },
+      "preset_name": "eidors_one_step_noser",
+      "lambda_eff": 0.010000000000000002
+    },
+    "cache_stats": {
+      "process_hits": 1988,
+      "process_misses": 48,
+      "disk_hits": 0,
+      "disk_misses": 2,
+      "process_items": 48,
+      "process_bytes": 22247424,
+      "process_max_bytes": 3221225472,
+      "disk_items": 5,
+      "disk_bytes": 21244558,
+      "disk_max_bytes": 21474836480,
+      "total_hits": 1988,
+      "total_misses": 50,
+      "hit_rate": 0.9754661432777233,
+      "cache_status": 1.0,
+      "debug_status": 0.0,
+      "priority_boost": 0.0,
+      "disabled_names": [],
+      "debug_names": [],
+      "process_artifacts": {
+        "jacobian_block_tune": 1,
+        "forward_factor": 43,
+        "jacobian": 2,
+        "absolute_startup_jacobian": 2
+      },
+      "process_namespaces": {
+        "inverse": 3,
+        "default": 43,
+        "absolute": 2
+      },
+      "disk_artifacts": {
+        "absolute_startup_jacobian": 2,
+        "jacobian": 2,
+        "jacobian_block_tune": 1
+      },
+      "disk_namespaces": {
+        "absolute": 2,
+        "inverse": 3
+      },
+      "disk_cache_lifecycle": "session",
+      "disk_cache_requested_dir": ".pyeidors_cache/v2",
+      "disk_cache_effective_dir": "/home/tom/workspace/PyEidors_wsl2/.pyeidors_cache/v2/.sessions/session-shellpid1726111-1776101566-18401",
+      "disk_cache_cleanup_on_exit": true,
+      "process_forward_setup_cache": {
+        "items": 1,
+        "max_items": 8
+      }
+    }
+  },
+  "single_step_cached": {
+    "full_process": {
+      "cold_ms": 48.254027002258226,
+      "warm": {
+        "count": 18,
+        "mean_ms": 29.572306164482143,
+        "median_ms": 22.684449999360368,
+        "p95_ms": 49.80409980780678,
+        "min_ms": 12.066329989465885,
+        "max_ms": 50.91356400225777,
+        "fps": 33.815421578485186
+      },
+      "stage_timings_ms": {
+        "linear_solve": 18.45960099308286,
+        "forward_validate": 4.489587008720264
+      },
+      "cache_build_seconds": {
+        "base_meas": 0.027551532999495976,
+        "jacobian": 0.5480209720117273,
+        "operator_jt": 1.3828001101501286e-05,
+        "operator_noser": 0.0008470620086882263,
+        "operator_A": 0.1314525310008321,
+        "operator_precond": 8.232401160057634e-05,
+        "operator_rom_snapshots": 0.0,
+        "operator_rom_reduced_rm": 0.0,
+        "operator_lu": 0.46621045100619085
+      },
+      "cache_miss_reasons": {
+        "gn_diff_base_meas": "mesh_signature_changed",
+        "calc_jacobian": "sigma_hash_changed",
+        "gn_diff_operator_jt": "solver_config_changed",
+        "gn_diff_operator_noser": "solver_config_changed",
+        "gn_diff_operator_system": "solver_config_changed",
+        "gn_diff_operator_precond": "solver_config_changed",
+        "gn_diff_operator_lu": "solver_config_changed",
+        "gn_diff_operator_reduced_rm": "disabled"
+      },
+      "strict_backend": "dense-param"
+    },
+    "pure_single_step_core": {
+      "warm": {
+        "count": 18,
+        "mean_ms": 7.777171555466743,
+        "median_ms": 7.806653498846572,
+        "p95_ms": 10.692620651389007,
+        "min_ms": 4.788021993590519,
+        "max_ms": 10.917403997154906,
+        "fps": 128.58145057853048
+      },
+      "strict_backend": "dense-param"
+    }
+  },
+  "summary": {
+    "gui_default_fps": 1.5276120505522595,
+    "gn_default_fps": 1.600079107199162,
+    "gn_no_step_search_fps": 1.7319905620767662,
+    "gn_fast_mode_fps": 16.742436158334527,
+    "single_step_cached_full_fps": 33.815421578485186,
+    "single_step_pure_core_fps": 128.58145057853048,
+    "speedup_vs_gui": {
+      "gn_no_step_search": 1.1337895386794181,
+      "single_step_cached_full": 22.136131726808713,
+      "single_step_pure_core": 84.17153460660771
+    }
+  }
+}

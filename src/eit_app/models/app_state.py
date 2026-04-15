@@ -5,6 +5,7 @@ without tight coupling. All state mutations go through setter methods
 that emit the corresponding signal.
 """
 
+import math
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -23,6 +24,8 @@ class AcquisitionMode(Enum):
     IDLE = "idle"
     CONTINUOUS = "continuous"
     SCHEDULED = "scheduled"
+    FINITE_RUN = "finite_run"
+    STEPPED_RUN = "stepped_run"
     SINGLE_SHOT = "single_shot"
 
 
@@ -57,6 +60,22 @@ class DeviceConfig:
     voltage_amp_level_2: int = 5
     contact_impedance_amp_level: int = 3
     protocol_version: str = "legacy-v1"
+    n_elec: int = 16
+    n_rings: int = 1
+    stim_pattern: str = "{ad}"
+    meas_pattern: str = "{ad}"
+    rotate_meas: bool = True
+    use_meas_current: bool = False
+    use_meas_current_next: int = 0
+    stim_direction: str = "ccw"
+    meas_direction: str = "ccw"
+    stim_first_positive: bool = False
+    radius: float = 1.0
+    geometry_scale_to_m: float = 1.0
+    electrode_coverage: float = 0.5
+    electrode_length_m_override: float = math.pi / 16.0
+    contact_impedance: float = 0.01
+    points_per_frame: int = 208
 
 
 @dataclass

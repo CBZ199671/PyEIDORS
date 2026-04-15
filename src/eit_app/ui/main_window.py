@@ -18,6 +18,7 @@ from eit_app.controllers.device_controller import DeviceController
 from eit_app.controllers.reconstruction_controller import (
     ReconstructionController,
     ReconstructionRequest,
+    get_single_step_cached_cache_key,
 )
 from eit_app.controllers.dataset_generator_controller import (
     DatasetGeneratorController,
@@ -236,6 +237,10 @@ class EITWorkstation(QMainWindow):
         self._acq_ctrl = AcquisitionController(self)
         self._rec_ctrl = RecordingController(self)
         self._recon_ctrl = ReconstructionController(self)
+        self._recon_prewarm_ctrl = ReconstructionController(self)
+        self._hw_recon_ctrl = ReconstructionController(self)
+        self._db_recon_ctrl = ReconstructionController(self)
+        self._sim_recon_ctrl = ReconstructionController(self)
         self._db_ctrl = DatabaseController(self._default_db_path(), self)
         self._rec_ctrl.set_database_controller(self._db_ctrl)
         self._batch_recon_ctrl = BatchReconstructionController(self)
@@ -266,6 +271,9 @@ class EITWorkstation(QMainWindow):
         self._plan_timer = QTimer(self)
         self._plan_timer.setSingleShot(True)
         self._plan_timer.timeout.connect(self._run_next_planned_acquisition)
+        self._recon_prewarm_timer = QTimer(self)
+        self._recon_prewarm_timer.setSingleShot(True)
+        self._recon_prewarm_timer.timeout.connect(self._run_realtime_recon_prewarm)
         self._plan_active = False
         self._plan_completed_count = 0
         self._plan_frequencies: list[int] = []
@@ -283,6 +291,10 @@ class EITWorkstation(QMainWindow):
         self._auto_recon_busy = False
         self._last_auto_ref_frame: FrameData | None = None
         self._last_auto_tgt_frame: FrameData | None = None
+        self._recon_prewarm_busy = False
+        self._recon_prewarm_active_signature: tuple[object, ...] | None = None
+        self._recon_prewarm_requested_signature: tuple[object, ...] | None = None
+        self._recon_prewarm_ready_signature: tuple[object, ...] | None = None
 
         # Database-driven reconstruction state
         self._pending_db_reconstruction: dict | None = None
@@ -369,7 +381,6 @@ class EITWorkstation(QMainWindow):
         file_menu.addAction("E&xit", self.close)
 
         tools_menu = menu.addMenu("&Tools")
-        tools_menu.addAction("&Difference Reconstruction...", self._open_difference_dialog)
         tools_menu.addAction("EIDORS &Interop Hub...", self._open_interop_hub)
 
     def _connect_signals(self) -> None:
@@ -408,14 +419,29 @@ class EITWorkstation(QMainWindow):
         self._rec_ctrl.recording_stopped.connect(self._on_recording_stopped)
         self._rec_ctrl.error.connect(self._on_error)
 
-        self._recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
-        self._recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
         self._recon_ctrl.reconstruction_done.connect(self._on_auto_reconstruction_done)
-        self._recon_ctrl.reconstruction_done.connect(self._on_db_reconstruction_done)
-        self._recon_ctrl.progress.connect(
+        self._recon_ctrl.error.connect(self._on_auto_reconstruction_error)
+
+        self._recon_prewarm_ctrl.reconstruction_done.connect(self._on_realtime_recon_prewarm_done)
+        self._recon_prewarm_ctrl.error.connect(self._on_realtime_recon_prewarm_error)
+
+        self._hw_recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
+        self._hw_recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
+        self._hw_recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
         )
-        self._recon_ctrl.error.connect(self._on_error)
+        self._hw_recon_ctrl.error.connect(self._on_error)
+
+        self._db_recon_ctrl.reconstruction_done.connect(self._on_db_reconstruction_done)
+        self._db_recon_ctrl.progress.connect(
+            lambda msg: self._status_bar.showMessage(msg, 3000)
+        )
+        self._db_recon_ctrl.error.connect(self._on_error)
+
+        self._sim_recon_ctrl.progress.connect(
+            lambda msg: self._status_bar.showMessage(msg, 3000)
+        )
+        self._sim_recon_ctrl.error.connect(self._on_error)
 
         self._frame_browser.reference_selected.connect(self._on_reference_selected)
         self._frame_browser.target_selected.connect(self._on_target_selected)
@@ -549,9 +575,15 @@ class EITWorkstation(QMainWindow):
         self._workflow_toolbox.setCurrentIndex(1)
         self._status_bar.showMessage("链路连接与协议验证已完成，可按需开启测量电源并开始采集。", 4000)
         self._refresh_session_summary()
+        self._schedule_realtime_recon_prewarm()
 
     @Slot()
     def _on_disconnected(self) -> None:
+        self._recon_prewarm_timer.stop()
+        self._recon_prewarm_busy = False
+        self._recon_prewarm_active_signature = None
+        self._recon_prewarm_requested_signature = None
+        self._recon_prewarm_ready_signature = None
         self._pending_power_commands.clear()
         self._state.set_connection_status(ConnectionStatus.DISCONNECTED)
         self._state.set_power_status(PowerStatus.UNKNOWN)
@@ -594,6 +626,8 @@ class EITWorkstation(QMainWindow):
         self._pending_auto_target_frame = None
         self._last_auto_ref_frame = None
         self._last_auto_tgt_frame = None
+        if not single_frame:
+            self._schedule_realtime_recon_prewarm(immediate=True)
         # Clear the voltage fit from any previous run so it shows nothing
         # until the second frame of this run is captured and reconstructed.
         try:
@@ -631,10 +665,11 @@ class EITWorkstation(QMainWindow):
     def _on_stop_acquisition(self) -> None:
         self._plan_timer.stop()
         was_single_frame_mode = self._state.acquisition_mode is AcquisitionMode.SINGLE_SHOT
-        was_plan_mode = self._plan_active
-
-        if self._acq_process is not None:
-            self._acq_ctrl.stop()
+        was_plan_mode = self._plan_active or self._state.acquisition_mode in {
+            AcquisitionMode.FINITE_RUN,
+            AcquisitionMode.STEPPED_RUN,
+            AcquisitionMode.SCHEDULED,
+        }
 
         self._reset_acquisition_pipeline()
         self._single_frame_pending = False
@@ -674,12 +709,47 @@ class EITWorkstation(QMainWindow):
         self._state.set_frame_count(self._acq_ctrl.total_frames)
         if self._rec_ctrl.is_recording:
             self._rec_ctrl.save_frame(frame)
-        self._voltage_plot.update_hardware_voltages(frame.real, None)
+        if not self._auto_reconstruct:
+            self._voltage_plot.update_hardware_voltages(frame.real, None)
+        if self._single_frame_pending and self._state.frame_count >= 1:
+            self._single_frame_pending = False
+            QTimer.singleShot(0, self._on_stop_acquisition)
+
+        # Auto-reconstruction: first frame becomes reference, subsequent
+        # frames are reconstructed as difference against the reference.
+        if self._auto_reconstruct:
+            if self._reference_frame is None:
+                self._reference_frame = frame
+                self._frame_browser.set_reference_highlight(0)
+                self._schedule_realtime_recon_prewarm(immediate=True)
+                self._status_bar.showMessage(
+                    f"Auto-reference set to frame #{frame.frame_index}", 3000
+                )
+            else:
+                request_signature: tuple[object, ...] | None = None
+                try:
+                    request_signature = self._build_realtime_recon_prewarm_payload()[1]
+                except Exception as exc:
+                    log.debug("Failed to build realtime prewarm signature: %s", exc)
+                if (
+                    request_signature is not None
+                    and request_signature != self._recon_prewarm_ready_signature
+                ):
+                    self._pending_auto_target_frame = frame
+                    if not (
+                        self._recon_prewarm_busy
+                        and self._recon_prewarm_active_signature == request_signature
+                    ):
+                        self._schedule_realtime_recon_prewarm(immediate=True)
+                elif not self._auto_recon_busy:
+                    self._submit_auto_reconstruction(frame)
+                else:
+                    self._pending_auto_target_frame = frame
+
         if self._plan_active and self._planned_step_pending:
             self._planned_step_pending = False
             self._plan_completed_count += 1
             self._state.set_frame_count(self._plan_completed_count)
-            self._acq_ctrl.stop(deactivate_device=False)
             self._reset_acquisition_pipeline()
             if self._plan_completed_count >= len(self._plan_frequencies):
                 self._finish_planned_acquisition_run()
@@ -693,23 +763,6 @@ class EITWorkstation(QMainWindow):
             else:
                 QTimer.singleShot(0, self._run_next_planned_acquisition)
             return
-        if self._single_frame_pending and self._state.frame_count >= 1:
-            self._single_frame_pending = False
-            QTimer.singleShot(0, self._on_stop_acquisition)
-
-        # Auto-reconstruction: first frame becomes reference, subsequent
-        # frames are reconstructed as difference against the reference.
-        if self._auto_reconstruct:
-            if self._reference_frame is None:
-                self._reference_frame = frame
-                self._frame_browser.set_reference_highlight(0)
-                self._status_bar.showMessage(
-                    f"Auto-reference set to frame #{frame.frame_index}", 3000
-                )
-            elif not self._auto_recon_busy:
-                self._submit_auto_reconstruction(frame)
-            else:
-                self._pending_auto_target_frame = frame
 
     @Slot(int, float, str)
     def _on_frame_saved(self, index: int, timestamp: float, path: str) -> None:
@@ -744,36 +797,30 @@ class EITWorkstation(QMainWindow):
         # difference voltages even if the backend doesn't populate them.
         self._last_auto_ref_frame = self._reference_frame
         self._last_auto_tgt_frame = target_frame
-        layout_meta = self._measurement_layout_config()
-        request = ReconstructionRequest(
+        request = self._build_auto_reconstruction_request(
+            target_frame,
             reference_frame=self._reference_frame,
-            target_frame=target_frame,
-            use_part="real",
-            method="gn-difference",
-            regularization_alpha=1.0,
-            max_iterations=1,
-            mesh_dimension=3 if int(self._device_config.get("mea_mode", 2)) == 3 else 2,
-            mesh_refinement=int(self._state.reconstruction_config.mesh_refinement),
-            metadata={
-                **layout_meta,
-                "difference_mode": "raw",
-                "difference_orientation": "target_minus_reference",
-                "drive_mode": "total_current",
-                "drive_value": 1.0e-5,
-                "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
-                "reconstruction_runtime": "single_step_cached",
-                "difference_lambda": 1.0e-2,
-                "background_sigma": 1.0,
-                "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
-                "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
-                "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
-                "radius": float(self._device_config.get("radius", 1.0)),
-                "mesh_height": float(self._device_config.get("height", 1.0)),
-                "electrode_height_ratio": float(self._device_config.get("electrode_height_ratio", 0.2)),
-                "z_center": float(self._device_config.get("z_center", 0.0)),
-            },
+            request_source="hardware_auto_live",
         )
-        self._recon_ctrl.reconstruct(request)
+        accepted = self._recon_ctrl.reconstruct(request)
+        if not accepted:
+            self._auto_recon_busy = False
+            self._pending_auto_target_frame = target_frame
+        return
+
+    @staticmethod
+    def _reconstruction_result_source(result: object) -> str:
+        metadata = getattr(result, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            return ""
+        return str(metadata.get("request_source", "")).strip().lower()
+
+    @Slot(str)
+    def _on_auto_reconstruction_error(self, msg: str) -> None:
+        self._auto_recon_busy = False
+        self._on_error(msg)
+        if self._auto_reconstruct and self._pending_auto_target_frame is not None:
+            QTimer.singleShot(0, self._submit_pending_auto_reconstruction)
 
     @Slot(object)
     def _on_auto_reconstruction_done(self, result) -> None:
@@ -787,6 +834,8 @@ class EITWorkstation(QMainWindow):
             * Recon fit = backend's simulated diff if provided; otherwise
               only the measured diff is shown.
         """
+        if self._reconstruction_result_source(result) != "hardware_auto_live":
+            return
         self._auto_recon_busy = False
         if getattr(result, "error_msg", None):
             if self._auto_reconstruct:
@@ -857,6 +906,37 @@ class EITWorkstation(QMainWindow):
         if self._auto_reconstruct and self._pending_auto_target_frame is not None:
             QTimer.singleShot(0, self._submit_pending_auto_reconstruction)
 
+    @Slot(object)
+    def _on_realtime_recon_prewarm_done(self, result) -> None:
+        if self._reconstruction_result_source(result) != "hardware_auto_prewarm":
+            return
+        active_signature = self._recon_prewarm_active_signature
+        self._recon_prewarm_busy = False
+        self._recon_prewarm_active_signature = None
+        if getattr(result, "error_msg", None):
+            return
+        if active_signature is not None:
+            self._recon_prewarm_ready_signature = active_signature
+        self._status_bar.showMessage("实时重构上下文已预热，后续采集将直接走热启动。", 4000)
+        if (
+            self._recon_prewarm_requested_signature is not None
+            and self._recon_prewarm_requested_signature != self._recon_prewarm_ready_signature
+        ):
+            QTimer.singleShot(0, self._run_realtime_recon_prewarm)
+            return
+        if self._auto_reconstruct and self._pending_auto_target_frame is not None:
+            QTimer.singleShot(0, self._submit_pending_auto_reconstruction)
+
+    @Slot(str)
+    def _on_realtime_recon_prewarm_error(self, msg: str) -> None:
+        self._recon_prewarm_busy = False
+        self._recon_prewarm_active_signature = None
+        log.warning("Realtime reconstruction prewarm failed: %s", msg)
+        self._status_bar.showMessage(
+            "实时重构预热失败，将在需要时重试: " + self._humanize_error_message(msg),
+            10000,
+        )
+
     def _submit_pending_auto_reconstruction(self) -> None:
         if not self._auto_reconstruct or self._auto_recon_busy:
             return
@@ -868,6 +948,11 @@ class EITWorkstation(QMainWindow):
     @Slot(dict)
     def _on_reference_selected(self, entry: dict) -> None:
         self._selected_reference_entry = dict(entry)
+        for row in range(self._frame_browser._model.rowCount()):
+            current = self._frame_browser._model.get_entry(row)
+            if current and current.get("file_path") == entry.get("file_path"):
+                self._frame_browser.set_reference_highlight(row)
+                break
         # Also update the auto-reconstruct reference frame
         file_path = entry.get("file_path", "")
         if file_path:
@@ -987,6 +1072,7 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
         self._device_ctrl.set_frequency(hz)
         self._refresh_session_summary()
+        self._schedule_realtime_recon_prewarm()
 
     @Slot(int)
     def _on_stim_amp_changed(self, level: int) -> None:
@@ -996,6 +1082,7 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
         self._device_ctrl.set_stim_amplitude(level)
         self._refresh_session_summary()
+        self._schedule_realtime_recon_prewarm()
 
     @Slot(int)
     def _on_voltage_amp_changed(self, level: int) -> None:
@@ -1006,6 +1093,7 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
         self._device_ctrl.set_voltage_amp_levels(level, level)
         self._refresh_session_summary()
+        self._schedule_realtime_recon_prewarm()
 
     @Slot(dict)
     def _on_measurement_layout_changed(self, layout: dict) -> None:
@@ -1020,6 +1108,7 @@ class EITWorkstation(QMainWindow):
             f"硬件布局已更新：{points} 个边界电压点。",
             3500,
         )
+        self._schedule_realtime_recon_prewarm(immediate=True)
 
     @Slot(bool)
     def _on_power_toggled(self, on: bool) -> None:
@@ -1088,6 +1177,9 @@ class EITWorkstation(QMainWindow):
     def _on_hardware_reconstruction_done(self, result: object) -> None:
         if self._tab_widget.currentWidget() is not self._hw_tab:
             return
+        source = self._reconstruction_result_source(result)
+        if source in {"hardware_auto_live", "db", "simulation"}:
+            return
         # When auto-reconstruction is active, the dedicated handler
         # _on_auto_reconstruction_done owns the voltage plot update (so it
         # can draw the *difference* voltages). Skip here to avoid clobbering.
@@ -1132,6 +1224,117 @@ class EITWorkstation(QMainWindow):
             "points_per_frame": int(layout["points_per_frame"]),
             "total_electrodes": int(layout["total_electrodes"]),
         }
+
+    def _hardware_reconstruction_drive_metadata(self) -> dict[str, object]:
+        stim_level = int(self._device_config.get("stim_amp_level", 1))
+        fallback_uA = float(STIM_AMP_VALUES_UA.get(stim_level, 100))
+        try:
+            stim_uA = float(self._device_config.get("stim_amp_uA", fallback_uA))
+        except (TypeError, ValueError):
+            stim_uA = fallback_uA
+        if not np.isfinite(stim_uA) or stim_uA <= 0.0:
+            stim_uA = fallback_uA
+        return {
+            "stim_amp_uA": int(round(stim_uA)),
+            "drive_mode": "total_current",
+            "drive_value": stim_uA * 1.0e-6,
+        }
+
+    def _build_auto_reconstruction_request(
+        self,
+        target_frame: FrameData,
+        *,
+        reference_frame: FrameData | None = None,
+        request_source: str = "hardware_auto_live",
+        warmup_only: bool = False,
+    ) -> ReconstructionRequest:
+        ref_frame = reference_frame or self._reference_frame or target_frame
+        metadata = {
+            **self._measurement_layout_config(),
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            **self._hardware_reconstruction_drive_metadata(),
+            "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
+            "reconstruction_runtime": "single_step_cached",
+            "difference_lambda": 1.0e-2,
+            "background_sigma": 1.0,
+            "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
+            "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
+            "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
+            "radius": float(self._device_config.get("radius", 1.0)),
+            "mesh_height": float(self._device_config.get("height", 1.0)),
+            "electrode_height_ratio": float(self._device_config.get("electrode_height_ratio", 0.2)),
+            "z_center": float(self._device_config.get("z_center", 0.0)),
+            "request_source": request_source,
+        }
+        if warmup_only:
+            metadata["warmup_only"] = True
+        return ReconstructionRequest(
+            reference_frame=ref_frame,
+            target_frame=target_frame,
+            use_part="real",
+            method="gn-difference",
+            regularization_alpha=1.0,
+            max_iterations=1,
+            mesh_dimension=3 if int(self._device_config.get("mea_mode", 2)) == 3 else 2,
+            mesh_refinement=int(self._state.reconstruction_config.mesh_refinement),
+            metadata=metadata,
+        )
+
+    def _build_realtime_recon_prewarm_payload(
+        self,
+    ) -> tuple[ReconstructionRequest, tuple[object, ...]]:
+        n_meas = max(1, self._measurement_point_count())
+        zeros = np.zeros(n_meas, dtype=float)
+        dummy_frame = FrameData(
+            real=zeros.copy(),
+            imag=zeros.copy(),
+            timestamp=0.0,
+            frame_index=-1,
+        )
+        request = self._build_auto_reconstruction_request(
+            dummy_frame,
+            reference_frame=dummy_frame,
+            request_source="hardware_auto_prewarm",
+            warmup_only=True,
+        )
+        return request, get_single_step_cached_cache_key(request)
+
+    def _schedule_realtime_recon_prewarm(self, *, immediate: bool = False) -> None:
+        if (
+            self._transport_type != "simulator"
+            and self._state.connection_status is not ConnectionStatus.CONNECTED
+        ):
+            self._recon_prewarm_timer.stop()
+            return
+        _request, signature = self._build_realtime_recon_prewarm_payload()
+        self._recon_prewarm_requested_signature = signature
+        if self._recon_prewarm_ready_signature == signature and not self._recon_prewarm_busy:
+            return
+        if self._recon_prewarm_busy and self._recon_prewarm_active_signature == signature:
+            return
+        self._recon_prewarm_timer.start(0 if immediate else 350)
+
+    def _run_realtime_recon_prewarm(self) -> None:
+        if self._recon_prewarm_busy:
+            return
+        if (
+            self._transport_type != "simulator"
+            and self._state.connection_status is not ConnectionStatus.CONNECTED
+        ):
+            return
+        request, signature = self._build_realtime_recon_prewarm_payload()
+        self._recon_prewarm_requested_signature = signature
+        if self._recon_prewarm_ready_signature == signature:
+            return
+        self._recon_prewarm_busy = True
+        self._recon_prewarm_active_signature = signature
+        accepted = self._recon_prewarm_ctrl.reconstruct(request)
+        if not accepted:
+            self._recon_prewarm_busy = False
+            self._recon_prewarm_active_signature = None
+            return
+        self._status_bar.showMessage("正在预热实时重构上下文...", 3000)
 
     def _measurement_point_count(self) -> int:
         return int(self._measurement_layout_config()["points_per_frame"])
@@ -1362,6 +1565,7 @@ class EITWorkstation(QMainWindow):
         mode = self._state.acquisition_mode
         current_hz = int(self._device_config.get("frequency_hz", self._planned_start_hz))
         if self._plan_active:
+            run_label = "Stepped Run" if self._frequency_stepping_enabled else "Finite Run"
             freq_info = ""
             if self._frequency_stepping_enabled and self._plan_frequencies:
                 freq_info = f" | {self._plan_frequencies[0]}→{self._plan_frequencies[-1]} Hz"
@@ -1369,29 +1573,34 @@ class EITWorkstation(QMainWindow):
                 freq_info = f" | {current_hz} Hz"
             if self._scheduled_enabled:
                 return (
-                    f"Timed run | {self._plan_completed_count}/{len(self._plan_frequencies)}"
+                    f"{run_label} | {self._plan_completed_count}/{len(self._plan_frequencies)}"
                     f" | every {self._scheduled_interval_sec:.1f}s{freq_info}"
                 )
-            return (
-                f"Finite run | {self._plan_completed_count}/{len(self._plan_frequencies)}"
-                f"{freq_info}"
-            )
+            return f"{run_label} | {self._plan_completed_count}/{len(self._plan_frequencies)}{freq_info}"
         if mode is AcquisitionMode.CONTINUOUS:
             return "Continuous"
+        if mode is AcquisitionMode.FINITE_RUN:
+            return "Finite Run"
+        if mode is AcquisitionMode.STEPPED_RUN:
+            return "Stepped Run"
         if mode is AcquisitionMode.SINGLE_SHOT:
             return "Single frame"
         if self._scheduled_enabled or self._planned_acquisition_count > 0 or self._frequency_stepping_enabled:
             freq_info = ""
             if self._frequency_stepping_enabled:
                 freq_info = f" | {self._planned_start_hz}→{self._planned_end_hz} Hz"
+                idle_label = "Idle | Stepped Run"
             elif self._planned_acquisition_count > 0:
                 freq_info = f" | {current_hz} Hz"
+                idle_label = "Idle | Finite Run"
+            else:
+                idle_label = "Idle | Finite Run"
             if self._scheduled_enabled:
                 return (
-                    f"Idle | timed {self._planned_acquisition_count}x"
+                    f"{idle_label} {self._planned_acquisition_count}x"
                     f" | every {self._scheduled_interval_sec:.1f}s{freq_info}"
                 )
-            return f"Idle | run {self._planned_acquisition_count}x{freq_info}"
+            return f"{idle_label} {self._planned_acquisition_count}x{freq_info}"
         return "Idle | manual"
 
     def _summary_banner_state(self) -> tuple[str, str, str, str]:
@@ -1422,6 +1631,8 @@ class EITWorkstation(QMainWindow):
         if self._state.acquisition_mode in {
             AcquisitionMode.CONTINUOUS,
             AcquisitionMode.SCHEDULED,
+            AcquisitionMode.FINITE_RUN,
+            AcquisitionMode.STEPPED_RUN,
             AcquisitionMode.SINGLE_SHOT,
         }:
             if self._state.recording_status is RecordingStatus.RECORDING:
@@ -1506,6 +1717,8 @@ class EITWorkstation(QMainWindow):
             AcquisitionMode.IDLE: ("IDLE", "idle"),
             AcquisitionMode.CONTINUOUS: ("RUN", "active"),
             AcquisitionMode.SCHEDULED: ("SCH", "active"),
+            AcquisitionMode.FINITE_RUN: ("FIN", "active"),
+            AcquisitionMode.STEPPED_RUN: ("STEP", "active"),
             AcquisitionMode.SINGLE_SHOT: ("1FR", "active"),
         }
         return mapping.get(self._state.acquisition_mode, ("IDLE", "idle"))
@@ -1533,7 +1746,9 @@ class EITWorkstation(QMainWindow):
         self._plan_active = True
         self._planned_step_pending = False
         self._state.set_acquisition_mode(
-            AcquisitionMode.SCHEDULED if self._scheduled_enabled else AcquisitionMode.CONTINUOUS
+            AcquisitionMode.STEPPED_RUN
+            if self._frequency_stepping_enabled
+            else AcquisitionMode.FINITE_RUN
         )
         self._acq_panel.set_acquiring(True)
         self._control_panel.set_enabled(False)
@@ -1660,16 +1875,16 @@ class EITWorkstation(QMainWindow):
                 **self._measurement_layout_config(),
                 "difference_mode": config.get("mode", "raw"),
                 "difference_orientation": config.get("orientation", "target_minus_reference"),
-                "drive_mode": "total_current",
-                "drive_value": 1.0e-5,
+                **self._hardware_reconstruction_drive_metadata(),
                 "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
                 "radius": float(self._device_config.get("radius", 1.0)),
                 "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
                 "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
                 "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
+                "request_source": "hardware_manual",
             },
         )
-        self._recon_ctrl.reconstruct(request)
+        self._hw_recon_ctrl.reconstruct(request)
 
     @Slot(dict)
     def _on_db_reconstruct_requested(self, config: dict) -> None:
@@ -1727,8 +1942,7 @@ class EITWorkstation(QMainWindow):
                 **self._measurement_layout_config(),
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
-                "drive_mode": "total_current",
-                "drive_value": 1.0e-5,
+                **self._hardware_reconstruction_drive_metadata(),
                 "geometry_scale_to_m": float(
                     self._device_config.get("geometry_scale_to_m", 1.0)
                 ),
@@ -1747,13 +1961,16 @@ class EITWorkstation(QMainWindow):
                 "db_save_recon_image": bool(config.get("save_recon_image", False)),
                 "db_save_voltage_fit": bool(config.get("save_voltage_fit", False)),
                 "db_method_label": config.get("method_label", method),
+                "request_source": "db",
             },
         )
+        accepted = self._db_recon_ctrl.reconstruct(request)
+        if not accepted:
+            return
         self._pending_db_reconstruction = dict(config)
         self._status_bar.showMessage(
             f"Running {config.get('method_label', method)}…", 0
         )
-        self._recon_ctrl.reconstruct(request)
 
     @Slot(object)
     def _on_db_reconstruction_done(self, result: object) -> None:
@@ -1973,6 +2190,7 @@ class EITWorkstation(QMainWindow):
         dialog = SettingsDialog(self._state.reconstruction_config, self)
         if dialog.exec():
             self._state.reconstruction_config = dialog.get_config()
+            self._schedule_realtime_recon_prewarm(immediate=True)
 
     def _current_hardware_forward_model_config(self) -> ForwardModelConfig:
         return ForwardModelConfig.from_mapping(
@@ -2383,9 +2601,14 @@ class EITWorkstation(QMainWindow):
                 **measurement_layout_from_config(forward_cfg.to_mapping()),
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
+                "request_source": "simulation",
             },
         )
-        self._recon_ctrl.reconstruct(request)
+        accepted = self._sim_recon_ctrl.reconstruct(request)
+        if not accepted:
+            self._sim_state.inverse_running = False
+            self._sim_tab.inverse_problem_panel.set_running(False)
+            return
 
         # Connect one-shot handler for simulation inverse result
         def _on_sim_recon_done(recon_result):
@@ -2412,11 +2635,11 @@ class EITWorkstation(QMainWindow):
 
         # Disconnect previous one-shot connections and reconnect
         try:
-            self._recon_ctrl.reconstruction_done.disconnect(self._sim_recon_handler)
+            self._sim_recon_ctrl.reconstruction_done.disconnect(self._sim_recon_handler)
         except (RuntimeError, AttributeError):
             pass
         self._sim_recon_handler = _on_sim_recon_done
-        self._recon_ctrl.reconstruction_done.connect(self._sim_recon_handler)
+        self._sim_recon_ctrl.reconstruction_done.connect(self._sim_recon_handler)
 
     @Slot()
     def _on_save_sim_results(self) -> None:
@@ -2493,7 +2716,9 @@ class EITWorkstation(QMainWindow):
         self._status_bar.showMessage(f"Dataset generation complete: {total} samples.", 10000)
 
     def closeEvent(self, event) -> None:
+        self._db_tab.prepare_for_shutdown()
         self._on_stop_acquisition()
+        self._recon_prewarm_timer.stop()
         if self._state.connection_status is ConnectionStatus.CONNECTED:
             try:
                 self._device_ctrl.power_off_device()
@@ -2501,6 +2726,10 @@ class EITWorkstation(QMainWindow):
                 log.warning("Failed to power off device during shutdown: %s", exc)
         self._device_ctrl.shutdown()
         self._recon_ctrl.shutdown()
+        self._recon_prewarm_ctrl.shutdown()
+        self._hw_recon_ctrl.shutdown()
+        self._db_recon_ctrl.shutdown()
+        self._sim_recon_ctrl.shutdown()
         self._fwd_ctrl.shutdown()
         self._dataset_ctrl.shutdown()
         try:

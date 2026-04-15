@@ -88,6 +88,9 @@ Documentation = "https://github.com/CBZ199671/PyEIDORS#readme"
 Repository = "https://github.com/CBZ199671/PyEIDORS.git"
 "Bug Tracker" = "https://github.com/CBZ199671/PyEIDORS/issues"
 
+[project.scripts]
+eit-app = "eit_app.app:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
 

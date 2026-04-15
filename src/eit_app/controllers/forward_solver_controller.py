@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
 from eit_app.models.simulation_state import InhomogeneitySpec
+from eit_app.models.forward_model_config import ForwardModelConfig
 
 log = logging.getLogger(__name__)
 
@@ -23,6 +25,7 @@ class ForwardSolverRequest:
     background_conductivity: float = 1.0
     inhomogeneities: list[InhomogeneitySpec] = field(default_factory=list)
     noise_level: float = 0.0
+    forward_model_config: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -88,27 +91,52 @@ class _ForwardSolverWorker(QObject):
             from pyeidors.data.structures import PatternConfig
             from pyeidors.femx import cell_midpoints
 
-            pattern = PatternConfig(
-                n_elec=req.n_electrodes,
-                stim_pattern="{ad}",
-                meas_pattern="{ad}",
-                drive_mode="line_current_density",
-                drive_value=1.0,
-                geometry_scale_to_m=1.0,
+            forward_cfg = ForwardModelConfig.from_mapping(
+                req.forward_model_config
+                or {
+                    "mesh_dimension": req.mesh_dimension,
+                    "mesh_refinement": req.mesh_refinement,
+                    "n_elec": req.n_electrodes,
+                    "background_conductivity": req.background_conductivity,
+                    "noise_level": req.noise_level,
+                }
             )
-            system = EITSystem(n_elec=req.n_electrodes, pattern_config=pattern)
+            pattern = PatternConfig(
+                n_elec=forward_cfg.n_elec,
+                n_rings=forward_cfg.n_rings,
+                stim_pattern=forward_cfg.stim_pattern,
+                meas_pattern=forward_cfg.meas_pattern,
+                drive_mode=forward_cfg.drive_mode,
+                drive_value=forward_cfg.drive_value,
+                geometry_scale_to_m=forward_cfg.geometry_scale_to_m,
+                electrode_length_m_override=forward_cfg.electrode_length_m_override,
+                use_meas_current=forward_cfg.use_meas_current,
+                use_meas_current_next=forward_cfg.use_meas_current_next,
+                rotate_meas=forward_cfg.rotate_meas,
+                stim_direction=forward_cfg.stim_direction,
+                meas_direction=forward_cfg.meas_direction,
+                stim_first_positive=forward_cfg.stim_first_positive,
+            )
+            system = EITSystem(n_elec=forward_cfg.n_elec, pattern_config=pattern)
 
             self.progress.emit("Generating mesh...")
             system.setup(
                 mesh_source="generated",
-                dimension=req.mesh_dimension,
-                mesh_size=req.mesh_refinement,
+                dimension=forward_cfg.mesh_dimension,
+                mesh_size=forward_cfg.mesh_refinement,
+                radius=forward_cfg.radius,
+                height=forward_cfg.height,
+                electrode_height_ratio=forward_cfg.electrode_height_ratio,
+                electrode_level_fractions=forward_cfg.electrode_level_fractions,
+                z_center=forward_cfg.z_center,
+                mesh_family=forward_cfg.mesh_family,
+                geometry_version=forward_cfg.geometry_version,
             )
 
             self.progress.emit("Building conductivity distribution...")
             fwd = system.fwd_model
             centers = cell_midpoints(fwd.mesh)
-            sigma = np.full(len(centers), req.background_conductivity, dtype=np.float64)
+            sigma = np.full(len(centers), forward_cfg.background_conductivity, dtype=np.float64)
             for spec in req.inhomogeneities:
                 _paint_shape(sigma, centers, spec)
 
@@ -117,20 +145,20 @@ class _ForwardSolverWorker(QObject):
 
             # Also solve homogeneous for difference reference
             self.progress.emit("Computing homogeneous reference...")
-            sigma_homog = np.full_like(sigma, req.background_conductivity)
+            sigma_homog = np.full_like(sigma, forward_cfg.background_conductivity)
             data_homog = system.forward_solve(sigma_homog)
 
             # Add noise if requested
             voltages = data.meas.copy()
             homog_voltages = data_homog.meas.copy()
-            if req.noise_level > 0:
+            if forward_cfg.noise_level > 0:
                 rng = np.random.default_rng()
-                noise_std = req.noise_level * np.std(voltages)
+                noise_std = forward_cfg.noise_level * np.std(voltages)
                 voltages += noise_std * rng.standard_normal(voltages.shape)
 
             # Extract mesh geometry
             mesh = system.mesh
-            node_coords = mesh.geometry.x[:, :req.mesh_dimension].copy()
+            node_coords = mesh.geometry.x[:, :forward_cfg.mesh_dimension].copy()
             cells = mesh.topology.connectivity(
                 mesh.topology.dim, 0
             )

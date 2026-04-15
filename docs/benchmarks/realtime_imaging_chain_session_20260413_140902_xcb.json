@@ -1,0 +1,68 @@
+{
+  "benchmark": "realtime_imaging_chain",
+  "session_dir": "data/measurements/test_for_gui/session_20260413_140902",
+  "session": {
+    "reference_frame_index": 0,
+    "target_frames": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "frame_count": 10,
+    "points_per_frame": 208,
+    "n_elec": 16,
+    "frequency_hz": 1000.0,
+    "stim_amp_uA": 50.0,
+    "use_part": "real"
+  },
+  "environment": {
+    "platform": "Linux-5.15.167.4-microsoft-standard-WSL2-x86_64-with-glibc2.40",
+    "python": "3.13.8",
+    "qt_platform": "xcb",
+    "pyeidors_env_profile": "default"
+  },
+  "static_prepare": {
+    "elapsed_ms": 9.693108993815258
+  },
+  "cold": {
+    "compute_ms": 2581.5859980066307,
+    "render_ms": 97.17979599372484,
+    "end_to_end_ms": 2678.7657940003555
+  },
+  "warm_compute": {
+    "count": 27,
+    "total_sec": 17.381647903981502,
+    "mean_ms": 643.7647371845001,
+    "median_ms": 641.7313650017604,
+    "p95_ms": 694.1585635955562,
+    "min_ms": 617.9964519978967,
+    "max_ms": 734.1135190072237,
+    "fps": 1.5533624975693636
+  },
+  "warm_render": {
+    "count": 360,
+    "total_sec": 2.7014326659264043,
+    "mean_ms": 7.503979627573345,
+    "median_ms": 7.443793998390902,
+    "p95_ms": 8.589933099574411,
+    "min_ms": 6.197530005010776,
+    "max_ms": 11.600455996813253,
+    "fps": 133.2626219193751
+  },
+  "warm_end_to_end": {
+    "count": 27,
+    "total_sec": 17.51193733602122,
+    "mean_ms": 648.5902717044896,
+    "median_ms": 643.8953180040698,
+    "p95_ms": 699.0781164902728,
+    "min_ms": 621.4755570108537,
+    "max_ms": 702.4909440078773,
+    "fps": 1.5418054257459162
+  }
+}

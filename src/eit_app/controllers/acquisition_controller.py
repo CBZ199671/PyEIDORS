@@ -46,6 +46,7 @@ class AcquisitionController(QObject):
         self._ring_buffer: FrameRingBuffer | None = None
         self._poll_timer = QTimer(self)
         self._poll_timer.timeout.connect(self._poll_buffer)
+        self._is_active = False
 
         # FPS tracking
         self._last_write_count: int = 0
@@ -82,6 +83,7 @@ class AcquisitionController(QObject):
         self._fps_timestamps.clear()
         self.fps_updated.emit(0.0)
         self._poll_timer.start(_POLL_INTERVAL_MS)
+        self._is_active = True
         self.status_changed.emit("running")
         log.info("Acquisition started, polling at %d ms", _POLL_INTERVAL_MS)
 
@@ -102,14 +104,18 @@ class AcquisitionController(QObject):
         self._fps_timestamps.clear()
         self.fps_updated.emit(0.0)
         self._poll_timer.start(_POLL_INTERVAL_MS)
+        self._is_active = True
         self.status_changed.emit("single_shot")
         log.info("Single-frame acquisition started, polling at %d ms", _POLL_INTERVAL_MS)
 
     def stop(self, *, deactivate_device: bool = True) -> None:
         """Stop acquisition and polling."""
+        if not self._is_active and not self._poll_timer.isActive():
+            return
         self._poll_timer.stop()
         self._fps_timestamps.clear()
         self.fps_updated.emit(0.0)
+        self._is_active = False
 
         if deactivate_device and self._process is not None:
             from eit_app.acquisition.ipc_protocol import AcquisitionCommand

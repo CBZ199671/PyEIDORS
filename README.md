@@ -44,6 +44,33 @@ For the opt-in CUDA path on WSL2/NVIDIA, use `nix develop .#cuda`, verify the
 runtime with `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty`,
 and then enable FEM GPU routing with `--petsc-device auto|cuda`; for full GN CUDA runs also set inverse runtime `--device auto|cuda`.
 
+For the GUI, use the repository launcher instead of ad-hoc `PYTHONPATH=src ...`
+commands. This launcher preserves the nix runtime paths, adds both repository
+root and `src/`, and performs a preflight check before opening the window:
+
+```bash
+bash scripts/gui/run_eit_app.sh --cpu
+bash scripts/gui/run_eit_app.sh --gpu
+```
+
+On the Windows host side, use:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\gui\run_eit_app.ps1 -Profile cpu
+powershell -ExecutionPolicy Bypass -File .\scripts\gui\run_eit_app.ps1 -Profile gpu
+```
+
+For one-click launch from Explorer, double-click the repository-root wrappers:
+
+```text
+EIT-GUI-CPU.cmd
+EIT-GUI-GPU.cmd
+```
+
+The `--gpu` route enters `nix develop .#cuda` automatically and runs the CUDA
+PETSc probe before launching the GUI. Use `--skip-cuda-probe` only when you are
+already sure the GPU shell is healthy.
+
 Then run a quick workflow check:
 
 ```bash
@@ -461,6 +488,7 @@ For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
 ## Documentation
 
 - **File Structure**: `FILE_ORGANIZATION.md`
+- **Branching Policy**: `docs/BRANCHING_POLICY.md`
 - **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
 - **WSL2 CUDA Workflow**: `docs/WSL2_CUDA.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`

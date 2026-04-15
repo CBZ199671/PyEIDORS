@@ -46,6 +46,11 @@ class ForwardProblemPanel(QGroupBox):
     def noise_level(self) -> float:
         return self._noise_spin.value()
 
+    def set_noise_level(self, value: float) -> None:
+        blocked = self._noise_spin.blockSignals(True)
+        self._noise_spin.setValue(float(value))
+        self._noise_spin.blockSignals(blocked)
+
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
 

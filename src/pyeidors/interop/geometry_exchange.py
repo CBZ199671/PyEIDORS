@@ -37,8 +37,16 @@ def load_forward_csv(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if not rows:
         raise ValueError(f"No rows found in forward CSV: {path}")
 
+    fieldnames = set(reader.fieldnames or [])
+    target_key = "meas_phantom" if "meas_phantom" in fieldnames else "meas_target"
+    if "meas_homogeneous" not in fieldnames or target_key not in fieldnames:
+        raise ValueError(
+            "Forward CSV must contain 'meas_homogeneous' and either "
+            "'meas_phantom' or 'meas_target' columns."
+        )
+
     baseline = np.asarray([float(row["meas_homogeneous"]) for row in rows], dtype=float)
-    phantom = np.asarray([float(row["meas_phantom"]) for row in rows], dtype=float)
+    phantom = np.asarray([float(row[target_key]) for row in rows], dtype=float)
     if "difference" in reader.fieldnames:
         target_diff = np.asarray([float(row["difference"]) for row in rows], dtype=float)
     else:

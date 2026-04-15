@@ -195,9 +195,18 @@ class DatabaseTab(QWidget):
         self._current_session_id: int | None = None
         self._selected_reference: dict | None = None
         self._selected_target: dict | None = None
+        self._is_shutting_down = False
         self._build_ui()
         self._connect_signals()
         self.refresh_sessions()
+
+    def prepare_for_shutdown(self) -> None:
+        self._is_shutting_down = True
+
+    def _should_skip_database_refresh(self) -> bool:
+        return self._is_shutting_down or bool(
+            getattr(self._db_ctrl, "is_shutting_down", False)
+        )
 
     def _build_ui(self) -> None:
         root = QHBoxLayout(self)
@@ -470,6 +479,8 @@ class DatabaseTab(QWidget):
         self._db_ctrl.backfill_done.connect(self._on_backfill_done)
 
     def refresh_sessions(self) -> None:
+        if self._should_skip_database_refresh():
+            return
         filters: dict[str, Any] = {}
         name = self._filter_name.text().strip()
         if name:
@@ -617,12 +628,16 @@ class DatabaseTab(QWidget):
         return f"{role}: #{idx}"
 
     def _on_session_added(self, session_id: int, row: dict) -> None:
+        if self._should_skip_database_refresh():
+            return
         row = dict(row)
         row.setdefault("frame_count", 0)
         self._session_model.upsert(row)
         self._count_label.setText(f"{self._session_model.rowCount()} sessions")
 
     def _on_frame_added(self, frame_id: int, row: dict) -> None:
+        if self._should_skip_database_refresh():
+            return
         session_id = row.get("session_id")
         if session_id is not None:
             for i in range(self._session_model.rowCount()):
@@ -636,8 +651,12 @@ class DatabaseTab(QWidget):
             self._frame_model.append(dict(row))
 
     def _on_backfill_progress(self, current: int, total: int) -> None:
+        if self._should_skip_database_refresh():
+            return
         self._backfill_status.setText(f"Backfill: {current}/{total}")
 
     def _on_backfill_done(self, count: int) -> None:
+        if self._should_skip_database_refresh():
+            return
         self._backfill_status.setText(f"Backfill complete: {count} sessions imported.")
         self.refresh_sessions()

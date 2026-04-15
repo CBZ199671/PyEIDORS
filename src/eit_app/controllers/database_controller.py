@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,16 @@ class _BackfillWorker(QObject):
         super().__init__()
         self._db = db
         self._root = Path(root_dir)
+        self._cancel_requested = threading.Event()
+
+    def request_cancel(self) -> None:
+        self._cancel_requested.set()
+
+    def _is_cancel_requested(self) -> bool:
+        thread = self.thread()
+        return self._cancel_requested.is_set() or (
+            thread is not None and thread.isInterruptionRequested()
+        )
 
     def run(self) -> None:
         try:
@@ -51,6 +62,13 @@ class _BackfillWorker(QObject):
             total = len(sessions)
             imported = 0
             for idx, (session_dir, metadata_path) in enumerate(sessions):
+                if self._is_cancel_requested():
+                    log.info(
+                        "Backfill cancelled after %s/%s discovered sessions",
+                        idx,
+                        total,
+                    )
+                    break
                 try:
                     self._ingest_session(session_dir, metadata_path)
                     imported += 1
@@ -73,6 +91,8 @@ class _BackfillWorker(QObject):
 
         # 1) Per-frame sessions (have session_metadata.yaml)
         for meta in root.rglob("session_metadata.yaml"):
+            if self._is_cancel_requested():
+                return results
             session_dir = meta.parent.resolve()
             if session_dir not in seen:
                 results.append((session_dir, meta))
@@ -81,6 +101,8 @@ class _BackfillWorker(QObject):
         # 2) Legacy aggregated format — any directory that has a top-level
         #    *.csv without session_metadata.yaml is treated as a session
         for csv_file in root.rglob("*.csv"):
+            if self._is_cancel_requested():
+                return results
             if csv_file.name.endswith("_AD.csv"):
                 continue
             parent = csv_file.parent.resolve()
@@ -126,6 +148,8 @@ class _BackfillWorker(QObject):
     def _ingest_frames(self, session_id: int, session_dir: Path) -> None:
         # Per-frame CSVs
         for csv_file in sorted(session_dir.glob("*_frame_*.csv")):
+            if self._is_cancel_requested():
+                return
             match = _FRAME_CSV_RE.search(csv_file.name)
             if not match:
                 continue
@@ -185,15 +209,25 @@ class DatabaseController(QObject):
         self._db = FrameDatabase(db_path)
         self._backfill_thread: QThread | None = None
         self._backfill_worker: _BackfillWorker | None = None
+        self._shutting_down = False
 
     @property
     def db(self) -> FrameDatabase:
         return self._db
 
+    @property
+    def is_shutting_down(self) -> bool:
+        return self._shutting_down
+
     def shutdown(self) -> None:
+        self._shutting_down = True
+        if self._backfill_worker is not None:
+            self._backfill_worker.request_cancel()
         if self._backfill_thread is not None:
+            self._backfill_thread.requestInterruption()
             self._backfill_thread.quit()
-            self._backfill_thread.wait(3000)
+            self._backfill_thread.wait()
+        self._cleanup_backfill()
         self._db.close()
 
     # ---- Live recording integration ----
@@ -262,6 +296,9 @@ class DatabaseController(QObject):
     # ---- Backfill ----
 
     def start_backfill(self, root_dir: Path) -> None:
+        if self._shutting_down:
+            log.info("Backfill requested during shutdown, skipping")
+            return
         if self._backfill_thread is not None and self._backfill_thread.isRunning():
             log.info("Backfill already in progress, skipping")
             return
@@ -279,10 +316,15 @@ class DatabaseController(QObject):
         self._backfill_thread.start()
 
     def _on_backfill_finished(self, count: int) -> None:
-        self.backfill_done.emit(count)
+        if not self._shutting_down:
+            self.backfill_done.emit(count)
+        self._cleanup_backfill()
+
+    def _cleanup_backfill(self) -> None:
         if self._backfill_thread is not None:
-            self._backfill_thread.quit()
-            self._backfill_thread.wait(3000)
+            if self._backfill_thread.isRunning():
+                self._backfill_thread.quit()
+                self._backfill_thread.wait(3000)
             self._backfill_thread.deleteLater()
             self._backfill_thread = None
         if self._backfill_worker is not None:

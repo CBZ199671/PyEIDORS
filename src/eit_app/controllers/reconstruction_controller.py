@@ -7,11 +7,17 @@ and calls pyeidors EITSystem for difference reconstruction.
 from __future__ import annotations
 
 import contextlib
+import glob
+import importlib
 import io
 import logging
+from functools import lru_cache
+import os
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
+from pathlib import Path
+import sys
 from typing import Any, Callable
 
 import numpy as np
@@ -64,6 +70,20 @@ class ReconstructionResult:
     simulated: np.ndarray | None = None
     error_msg: str | None = None
     metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class _SingleStepCachedRuntimeConfig:
+    meta: dict[str, Any]
+    mesh_dim: int
+    refinement: int
+    lam: float
+    background_sigma: float
+    contact_impedance: float
+    mesh_height: float
+    electrode_height_ratio: float
+    z_center: float
+    cache_key: tuple[Any, ...]
 
 
 class _ReconstructionWorker(QObject):
@@ -135,9 +155,285 @@ def _quiet_call(fn: Callable[[], Any]) -> Any:
     return result
 
 
+def _recover_nix_runtime_site_packages(missing_name: str) -> tuple[str, ...]:
+    """Best-effort recovery for nix-provided Python runtime packages.
+
+    This keeps the GUI realtime reconstruction path working even when the app
+    was launched with `PYTHONPATH=src`, which accidentally drops the nix
+    shell's FEniCSx-related site-packages.
+    """
+    missing = str(missing_name or "").strip().lower()
+    if missing not in {"ufl", "dolfinx", "mpi4py", "petsc4py", "ffcx", "basix"}:
+        return ()
+    nix_store = Path("/nix/store")
+    if not nix_store.exists():
+        return ()
+
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    patterns = (
+        f"/nix/store/*-{pyver}-fenics-dolfinx-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-{pyver}-fenics-ufl-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-{pyver}-fenics-basix-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-{pyver}-fenics-ffcx-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-{pyver}-mpi4py-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-petsc-*/lib/{pyver}/site-packages",
+        f"/nix/store/*-slepc-*/lib/{pyver}/site-packages",
+    )
+    discovered: list[str] = []
+    seen: set[str] = set()
+    for pattern in patterns:
+        for candidate in sorted(glob.glob(pattern)):
+            if candidate in seen or not os.path.isdir(candidate):
+                continue
+            seen.add(candidate)
+            discovered.append(candidate)
+    added: list[str] = []
+    for candidate in reversed(discovered):
+        if candidate in sys.path:
+            continue
+        sys.path.insert(0, candidate)
+        added.append(candidate)
+    if added:
+        current = os.environ.get("PYTHONPATH", "")
+        prefix = os.pathsep.join(added)
+        os.environ["PYTHONPATH"] = prefix if not current else f"{prefix}{os.pathsep}{current}"
+        log.info(
+            "Recovered nix runtime site-packages for realtime reconstruction (%s): %s",
+            missing,
+            added,
+        )
+    return tuple(added)
+
+
+@lru_cache(maxsize=1)
+def _load_gn_difference_runner_module():
+    """Load the realtime GN helper module even when only `src/` is on sys.path."""
+    module_name = "scripts.common.gn_difference_runner"
+    repo_root = Path(__file__).resolve().parents[3]
+    module_path = repo_root / "scripts" / "common" / "gn_difference_runner.py"
+    repo_root_str = str(repo_root)
+
+    for _attempt in range(4):
+        try:
+            return importlib.import_module(module_name)
+        except ModuleNotFoundError as exc:
+            missing_name = str(getattr(exc, "name", "") or "")
+            if missing_name in {"scripts", "scripts.common", module_name}:
+                if not module_path.exists():
+                    raise
+                if repo_root_str not in sys.path:
+                    sys.path.insert(0, repo_root_str)
+                    log.info(
+                        "Added repository root to sys.path for realtime reconstruction imports: %s",
+                        repo_root_str,
+                    )
+                importlib.invalidate_caches()
+                sys.modules.pop(module_name, None)
+                continue
+            recovered = _recover_nix_runtime_site_packages(missing_name)
+            if recovered:
+                importlib.invalidate_caches()
+                sys.modules.pop(module_name, None)
+                continue
+            raise
+    raise ModuleNotFoundError(f"Unable to import {module_name}")
+
+
 def _compute_effective_refinement(radius: float, mesh_refinement: int) -> int:
     mesh_size = max(0.02, 0.25 / max(1, int(mesh_refinement)))
     return max(2, int(round(float(radius) / max(mesh_size, 1e-6) / 2.0)))
+
+
+def _resolve_drive_mode(meta: dict[str, Any], *, default: str = "total_current") -> str:
+    raw_mode = meta.get("drive_mode", default)
+    mode = str(raw_mode).strip().lower()
+    return mode or default
+
+
+def _resolve_drive_value(
+    meta: dict[str, Any],
+    *,
+    default: float = 1.0e-5,
+) -> float:
+    raw_value = meta.get("drive_value")
+    try:
+        value = float(raw_value)
+    except (TypeError, ValueError):
+        value = float("nan")
+    if np.isfinite(value) and value > 0.0:
+        return value
+
+    raw_stim_uA = meta.get("stim_amp_uA")
+    try:
+        stim_uA = float(raw_stim_uA)
+    except (TypeError, ValueError):
+        stim_uA = float("nan")
+    if np.isfinite(stim_uA) and stim_uA > 0.0:
+        return stim_uA * 1.0e-6
+
+    return float(default)
+
+
+def _prepare_single_step_cached_runtime(
+    req: ReconstructionRequest,
+) -> _SingleStepCachedRuntimeConfig:
+    meta = dict(req.metadata)
+    meta.setdefault("n_elec", 16)
+    meta.setdefault("n_rings", 1)
+    meta.setdefault("stim_pattern", "{ad}")
+    meta.setdefault("meas_pattern", "{ad}")
+    meta.setdefault("rotate_meas", True)
+    meta.setdefault("use_meas_current", False)
+    meta.setdefault("use_meas_current_next", 0)
+    meta.setdefault("stim_direction", "ccw")
+    meta.setdefault("meas_direction", "ccw")
+    meta.setdefault("stim_first_positive", False)
+    meta.setdefault("radius", 1.0)
+    meta.setdefault("geometry_scale_to_m", 1.0)
+    meta.setdefault("electrode_length_m_override", None)
+    meta.setdefault("electrode_coverage", 0.5)
+    meta.setdefault("mesh_dir", "eit_meshes")
+    meta.setdefault("difference_mode", "raw")
+    meta.setdefault("difference_orientation", "target_minus_reference")
+    meta.setdefault("step_size_calib", True)
+    meta.setdefault("step_size_min", 1.0e-6)
+    meta.setdefault("step_size_max", 1.0)
+    meta.setdefault("step_size_maxiter", 64)
+    meta["drive_mode"] = _resolve_drive_mode(meta)
+    meta["drive_value"] = _resolve_drive_value(meta)
+    mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
+    radius = float(meta.get("radius", 1.0))
+    refinement = _compute_effective_refinement(radius, req.mesh_refinement)
+    lam = float(meta.get("difference_lambda", 1.0e-2))
+    background_sigma = float(meta.get("background_sigma", 1.0))
+    contact_impedance = float(meta.get("contact_impedance", 0.01))
+    mesh_height = float(meta.get("mesh_height", 1.0))
+    electrode_height_ratio = float(meta.get("electrode_height_ratio", 0.2))
+    z_center = float(meta.get("z_center", 0.0))
+    cache_key = (
+        int(meta["n_elec"]),
+        int(meta.get("n_rings", 1)),
+        mesh_dim,
+        refinement,
+        radius,
+        mesh_height,
+        electrode_height_ratio,
+        z_center,
+        lam,
+        background_sigma,
+        contact_impedance,
+        float(meta.get("geometry_scale_to_m", 1.0)),
+        float(meta.get("electrode_coverage", 0.5)),
+        repr(meta.get("electrode_length_m_override")),
+        str(meta.get("stim_pattern", "{ad}")),
+        str(meta.get("meas_pattern", "{ad}")),
+        bool(meta.get("rotate_meas", True)),
+        bool(meta.get("use_meas_current", False)),
+        int(meta.get("use_meas_current_next", 0)),
+        str(meta.get("stim_direction", "ccw")),
+        str(meta.get("meas_direction", "ccw")),
+        bool(meta.get("stim_first_positive", False)),
+        str(meta.get("drive_mode", "total_current")),
+        float(meta.get("drive_value", 1.0e-5)),
+        str(meta.get("mesh_dir", "eit_meshes")),
+        str(req.use_part),
+    )
+    return _SingleStepCachedRuntimeConfig(
+        meta=meta,
+        mesh_dim=mesh_dim,
+        refinement=refinement,
+        lam=lam,
+        background_sigma=background_sigma,
+        contact_impedance=contact_impedance,
+        mesh_height=mesh_height,
+        electrode_height_ratio=electrode_height_ratio,
+        z_center=z_center,
+        cache_key=cache_key,
+    )
+
+
+def get_single_step_cached_cache_key(req: ReconstructionRequest) -> tuple[Any, ...]:
+    """Return the effective cache key for a single-step cached request."""
+    return _prepare_single_step_cached_runtime(req).cache_key
+
+
+def _single_step_cached_solver_diagnostics(
+    ctx: dict[str, Any],
+    *,
+    strict_backend: str,
+) -> dict[str, Any]:
+    return {
+        "path": "single_step_cached",
+        "strict_solver_backend_effective": strict_backend,
+        "cache_build_seconds": dict(ctx.get("cache_build_seconds", {})),
+        "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
+        "cache_stats": (
+            ctx["cache_manager"].stats()
+            if ctx.get("cache_manager") is not None
+            else {}
+        ),
+    }
+
+
+def _ensure_single_step_cached_context(
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    emit: Callable[[str], None],
+    build_shared_context: Callable[..., Any],
+) -> dict[str, Any]:
+    meta = runtime.meta
+    ctx = _get_cached_fast_context(runtime.cache_key)
+    if ctx is None:
+        emit("Building cached single-step context...")
+        ctx = _quiet_call(
+            lambda: build_shared_context(
+                mesh_dir=str(meta.get("mesh_dir", "eit_meshes")),
+                mesh_name=None,
+                mesh_dim=runtime.mesh_dim,
+                mesh_height=runtime.mesh_height,
+                electrode_height_ratio=runtime.electrode_height_ratio,
+                z_center=runtime.z_center,
+                refinement=runtime.refinement,
+                n_elec=int(meta["n_elec"]),
+                radius=float(meta.get("radius", 1.0)),
+                drive_mode=str(meta["drive_mode"]),
+                drive_value=float(meta["drive_value"]),
+                contact_impedance=runtime.contact_impedance,
+                electrode_length_m_override=meta.get("electrode_length_m_override"),
+                electrode_coverage=float(meta.get("electrode_coverage", 0.5)),
+                geometry_scale_to_m=float(meta.get("geometry_scale_to_m", 1.0)),
+                n_rings=int(meta.get("n_rings", 1)),
+                stim_pattern=str(meta.get("stim_pattern", "{ad}")),
+                meas_pattern=str(meta.get("meas_pattern", "{ad}")),
+                rotate_meas=bool(meta.get("rotate_meas", True)),
+                use_meas_current=bool(meta.get("use_meas_current", False)),
+                use_meas_current_next=int(meta.get("use_meas_current_next", 0)),
+                stim_direction=str(meta.get("stim_direction", "ccw")),
+                meas_direction=str(meta.get("meas_direction", "ccw")),
+                stim_first_positive=bool(meta.get("stim_first_positive", False)),
+                background_sigma=runtime.background_sigma,
+                lam=runtime.lam,
+                cache_scope="both",
+                solver_mode="strict",
+                linear_solver="auto",
+                preconditioner="auto",
+                rom_mode="off",
+                lowrank_mode="off",
+                forward_mat_solve="off",
+                petsc_device="auto",
+                device="auto",
+            )
+        )
+        _put_cached_fast_context(runtime.cache_key, ctx)
+    else:
+        emit("Reusing cached single-step context...")
+
+    mesh = ctx["mesh"]
+    if "display_node_coords" not in ctx:
+        ctx["display_node_coords"] = np.asarray(mesh.coordinates(), dtype=np.float64)
+    if "display_cell_connectivity" not in ctx:
+        ctx["display_cell_connectivity"] = np.asarray(mesh.cells(), dtype=np.int32)
+    return ctx
 
 
 def _run_full_gn_request(
@@ -170,8 +466,6 @@ def _run_full_gn_request(
     meta.setdefault("stim_direction", "ccw")
     meta.setdefault("meas_direction", "ccw")
     meta.setdefault("stim_first_positive", False)
-    meta.setdefault("drive_mode", "total_current")
-    meta.setdefault("drive_value", 1.0e-5)
     meta.setdefault("geometry_scale_to_m", 1.0)
     meta.setdefault("radius", 1.0)
     meta.setdefault("electrode_coverage", 0.5)
@@ -179,6 +473,8 @@ def _run_full_gn_request(
     meta.setdefault("contact_impedance", 0.01)
     meta.setdefault("difference_mode", "raw")
     meta.setdefault("difference_orientation", "target_minus_reference")
+    meta["drive_mode"] = _resolve_drive_mode(meta)
+    meta["drive_value"] = _resolve_drive_value(meta)
 
     emit("Building measurement datasets...")
     data_type = req.use_part if req.use_part in {"real", "imag", "mag"} else "real"
@@ -326,123 +622,47 @@ def _run_single_step_cached_request(
         if progress_cb is not None:
             progress_cb(message)
 
+    diff_runner = _load_gn_difference_runner_module()
+    STRICT_SOLVER_BACKEND_MEASUREMENT = diff_runner.STRICT_SOLVER_BACKEND_MEASUREMENT
+    _calibrate_step_size = diff_runner._calibrate_step_size
+    _measurement_space_delta = diff_runner._measurement_space_delta
+    _solve_linear_from_bundle = diff_runner._solve_linear_from_bundle
+    runtime = _prepare_single_step_cached_runtime(req)
+    meta = runtime.meta
+    ctx = _ensure_single_step_cached_context(
+        runtime,
+        emit=emit,
+        build_shared_context=diff_runner.build_shared_context,
+    )
+    result_meta = dict(meta)
+    result_meta.update(
+        {
+            "n_elec": int(meta["n_elec"]),
+            "reconstruction_runtime": "single_step_cached",
+            "difference_lambda": runtime.lam,
+            "effective_refinement": runtime.refinement,
+        }
+    )
+
+    if bool(meta.get("warmup_only", False)):
+        result_meta["cache_warmup_only"] = True
+        result_meta["solver_diagnostics"] = _single_step_cached_solver_diagnostics(
+            ctx,
+            strict_backend="warmup_only",
+        )
+        emit("Realtime reconstruction context ready")
+        return ReconstructionResult(
+            conductivity=np.asarray([], dtype=np.float64),
+            node_coords=ctx["display_node_coords"],
+            cell_connectivity=ctx["display_cell_connectivity"],
+            metadata=result_meta,
+        )
+
     from pyeidors.data.structures import EITImage
     from pyeidors.utils.numeric_ops import safe_dot
-    from scripts.common.gn_difference_runner import (
-        STRICT_SOLVER_BACKEND_MEASUREMENT,
-        _measurement_space_delta,
-        _solve_linear_from_bundle,
-        build_shared_context,
-    )
 
     ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64)
     tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
-
-    meta = dict(req.metadata)
-    meta.setdefault("n_elec", 16)
-    meta.setdefault("n_rings", 1)
-    meta.setdefault("stim_pattern", "{ad}")
-    meta.setdefault("meas_pattern", "{ad}")
-    meta.setdefault("rotate_meas", True)
-    meta.setdefault("use_meas_current", False)
-    meta.setdefault("use_meas_current_next", 0)
-    meta.setdefault("stim_direction", "ccw")
-    meta.setdefault("meas_direction", "ccw")
-    meta.setdefault("stim_first_positive", False)
-    meta.setdefault("drive_value", 1.0e-5)
-    meta.setdefault("radius", 1.0)
-    meta.setdefault("geometry_scale_to_m", 1.0)
-    meta.setdefault("electrode_length_m_override", None)
-    meta.setdefault("electrode_coverage", 0.5)
-    meta.setdefault("mesh_dir", "eit_meshes")
-    meta.setdefault("difference_mode", "raw")
-    meta.setdefault("difference_orientation", "target_minus_reference")
-    mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
-    radius = float(meta.get("radius", 1.0))
-    refinement = _compute_effective_refinement(radius, req.mesh_refinement)
-    lam = float(meta.get("difference_lambda", 1.0e-2))
-    background_sigma = float(meta.get("background_sigma", 1.0))
-    contact_impedance = float(meta.get("contact_impedance", 0.01))
-    mesh_height = float(meta.get("mesh_height", 1.0))
-    electrode_height_ratio = float(meta.get("electrode_height_ratio", 0.2))
-    z_center = float(meta.get("z_center", 0.0))
-    cache_key = (
-        int(meta["n_elec"]),
-        int(meta.get("n_rings", 1)),
-        mesh_dim,
-        refinement,
-        radius,
-        mesh_height,
-        electrode_height_ratio,
-        z_center,
-        lam,
-        background_sigma,
-        contact_impedance,
-        float(meta.get("geometry_scale_to_m", 1.0)),
-        float(meta.get("electrode_coverage", 0.5)),
-        repr(meta.get("electrode_length_m_override")),
-        str(meta.get("stim_pattern", "{ad}")),
-        str(meta.get("meas_pattern", "{ad}")),
-        bool(meta.get("rotate_meas", True)),
-        bool(meta.get("use_meas_current", False)),
-        int(meta.get("use_meas_current_next", 0)),
-        str(meta.get("stim_direction", "ccw")),
-        str(meta.get("meas_direction", "ccw")),
-        bool(meta.get("stim_first_positive", False)),
-        str(meta.get("mesh_dir", "eit_meshes")),
-        str(req.use_part),
-    )
-
-    ctx = _get_cached_fast_context(cache_key)
-    if ctx is None:
-        emit("Building cached single-step context...")
-        ctx = _quiet_call(
-            lambda: build_shared_context(
-                mesh_dir=str(meta.get("mesh_dir", "eit_meshes")),
-                mesh_name=None,
-                mesh_dim=mesh_dim,
-                mesh_height=mesh_height,
-                electrode_height_ratio=electrode_height_ratio,
-                z_center=z_center,
-                refinement=refinement,
-                n_elec=int(meta["n_elec"]),
-                radius=radius,
-                drive_value=float(meta["drive_value"]),
-                contact_impedance=contact_impedance,
-                electrode_length_m_override=meta.get("electrode_length_m_override"),
-                electrode_coverage=float(meta.get("electrode_coverage", 0.5)),
-                geometry_scale_to_m=float(meta.get("geometry_scale_to_m", 1.0)),
-                n_rings=int(meta.get("n_rings", 1)),
-                stim_pattern=str(meta.get("stim_pattern", "{ad}")),
-                meas_pattern=str(meta.get("meas_pattern", "{ad}")),
-                rotate_meas=bool(meta.get("rotate_meas", True)),
-                use_meas_current=bool(meta.get("use_meas_current", False)),
-                use_meas_current_next=int(meta.get("use_meas_current_next", 0)),
-                stim_direction=str(meta.get("stim_direction", "ccw")),
-                meas_direction=str(meta.get("meas_direction", "ccw")),
-                stim_first_positive=bool(meta.get("stim_first_positive", False)),
-                background_sigma=background_sigma,
-                lam=lam,
-                cache_scope="both",
-                solver_mode="strict",
-                linear_solver="auto",
-                preconditioner="auto",
-                rom_mode="off",
-                lowrank_mode="off",
-                forward_mat_solve="off",
-                petsc_device="auto",
-                device="auto",
-            )
-        )
-        _put_cached_fast_context(cache_key, ctx)
-    else:
-        emit("Reusing cached single-step context...")
-
-    mesh = ctx["mesh"]
-    if "display_node_coords" not in ctx:
-        ctx["display_node_coords"] = np.asarray(mesh.coordinates(), dtype=np.float64)
-    if "display_cell_connectivity" not in ctx:
-        ctx["display_cell_connectivity"] = np.asarray(mesh.cells(), dtype=np.int32)
 
     emit("Running cached single-step reconstruction...")
     dv = np.asarray(tgt_vec - ref_vec, dtype=np.float64)
@@ -462,7 +682,29 @@ def _run_single_step_cached_request(
         )
         delta_sigma = _solve_linear_from_bundle(operator_bundle, rhs)
 
-    sigma_est = np.asarray(ctx["sigma_bg"] + delta_sigma, dtype=np.float64)
+    alpha = 1.0
+    if bool(meta.get("step_size_calib", True)):
+        try:
+            alpha = float(
+                _calibrate_step_size(
+                    fwd_model=ctx["fwd_model"],
+                    sigma_bg=ctx["sigma_bg"],
+                    delta_sigma=delta_sigma,
+                    dv=dv,
+                    base_meas=ctx["base_meas"],
+                    step_size_min=float(meta.get("step_size_min", 1.0e-6)),
+                    step_size_max=float(meta.get("step_size_max", 1.0)),
+                    step_size_maxiter=int(meta.get("step_size_maxiter", 64)),
+                )
+            )
+        except Exception as exc:
+            log.debug("Realtime step-size calibration failed: %s", exc)
+            alpha = 1.0
+        if not np.isfinite(alpha) or alpha <= 0.0:
+            alpha = 1.0
+
+    display_delta = np.asarray(alpha * delta_sigma, dtype=np.float64)
+    sigma_est = np.asarray(ctx["sigma_bg"] + display_delta, dtype=np.float64)
     img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
     pred_diff = np.asarray(pred_vi.meas - ctx["base_meas"], dtype=np.float64)
@@ -472,25 +714,19 @@ def _run_single_step_cached_request(
         {
             "n_elec": int(meta["n_elec"]),
             "reconstruction_runtime": "single_step_cached",
-            "difference_lambda": lam,
-            "effective_refinement": refinement,
-            "solver_diagnostics": {
-                "path": "single_step_cached",
-                "strict_solver_backend_effective": strict_backend,
-                "cache_build_seconds": dict(ctx.get("cache_build_seconds", {})),
-                "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
-                "cache_stats": (
-                    ctx["cache_manager"].stats()
-                    if ctx.get("cache_manager") is not None
-                    else {}
-                ),
-            },
+            "difference_lambda": runtime.lam,
+            "effective_refinement": runtime.refinement,
+            "step_size_alpha": alpha,
+            "solver_diagnostics": _single_step_cached_solver_diagnostics(
+                ctx,
+                strict_backend=strict_backend,
+            ),
         }
     )
 
     emit("Reconstruction complete")
     return ReconstructionResult(
-        conductivity=sigma_est,
+        conductivity=display_delta,
         node_coords=ctx["display_node_coords"],
         cell_connectivity=ctx["display_cell_connectivity"],
         measured=dv,
@@ -549,11 +785,11 @@ class ReconstructionController(QObject):
     def is_busy(self) -> bool:
         return self._busy
 
-    def reconstruct(self, request: ReconstructionRequest) -> None:
+    def reconstruct(self, request: ReconstructionRequest) -> bool:
         """Submit a reconstruction request. Runs in a background thread."""
         if self._busy:
             self.error.emit("Reconstruction already in progress")
-            return
+            return False
 
         self._busy = True
         self._thread = QThread()
@@ -567,6 +803,7 @@ class ReconstructionController(QObject):
         self._worker.error.connect(self.error)
 
         self._thread.start()
+        return True
 
     def _on_finished(self, result: ReconstructionResult) -> None:
         self._busy = False

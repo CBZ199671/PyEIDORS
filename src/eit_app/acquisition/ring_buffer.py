@@ -3,7 +3,7 @@
 Layout in shared memory::
 
     [write_count: 8 bytes (int64)]
-    [slot_0: real(208*8) + imag(208*8) + timestamp(8) + frame_index(8)]
+    [slot_0: real(n_meas*8) + imag(n_meas*8) + timestamp(8) + frame_index(8)]
     [slot_1: ...]
     ...
 
@@ -26,7 +26,7 @@ class FrameRingBuffer:
 
     Args:
         capacity: Max number of frames in the ring.
-        n_meas: Measurements per frame (208 for 16-electrode adjacent).
+        n_meas: Measurements per frame.
         name: SharedMemory name. Auto-generated on create if ``None``.
         create: ``True`` to allocate new memory, ``False`` to attach.
     """

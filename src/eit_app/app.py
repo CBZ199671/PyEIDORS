@@ -4,6 +4,13 @@ import logging
 import os
 import sys
 
+from eit_app.runtime_threads import (
+    configure_realtime_compute_threads,
+    configure_realtime_thread_env,
+)
+
+configure_realtime_thread_env()
+
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
@@ -17,6 +24,11 @@ def main() -> int:
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
+    thread_info = configure_realtime_compute_threads()
+    logging.getLogger(__name__).info(
+        "GUI realtime runtime threads configured: %s",
+        thread_info,
     )
 
     app = QApplication(sys.argv)

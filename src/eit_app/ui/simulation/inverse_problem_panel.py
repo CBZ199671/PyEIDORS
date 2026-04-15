@@ -87,6 +87,24 @@ class InverseProblemPanel(QGroupBox):
             "max_iterations": self._iter_spin.value(),
         }
 
+    def set_config(self, config: dict) -> None:
+        widgets = (
+            self._method_combo,
+            self._alpha_spin,
+            self._iter_spin,
+        )
+        blockers = [widget.blockSignals(True) for widget in widgets]
+        try:
+            method = str(config.get("method", self._method_combo.currentText()))
+            index = self._method_combo.findText(method)
+            if index >= 0:
+                self._method_combo.setCurrentIndex(index)
+            self._alpha_spin.setValue(float(config.get("regularization_alpha", 1.0)))
+            self._iter_spin.setValue(int(config.get("max_iterations", 10)))
+        finally:
+            for widget, blocked in zip(widgets, blockers):
+                widget.blockSignals(blocked)
+
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
 

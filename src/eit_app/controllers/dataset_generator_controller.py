@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
 from eit_app.controllers.forward_solver_controller import _paint_shape
+from eit_app.models.forward_model_config import ForwardModelConfig
 from eit_app.models.simulation_state import DatasetGeneratorConfig, InhomogeneitySpec
 
 log = logging.getLogger(__name__)
@@ -20,6 +22,7 @@ class DatasetGeneratorRequest:
     """Input for batch dataset generation."""
 
     config: DatasetGeneratorConfig
+    forward_model_config: dict[str, Any] = field(default_factory=dict)
 
 
 class _DatasetGeneratorWorker(QObject):
@@ -44,19 +47,43 @@ class _DatasetGeneratorWorker(QObject):
             from pyeidors.data.structures import PatternConfig
             from pyeidors.femx import cell_midpoints
 
-            pattern = PatternConfig(
-                n_elec=cfg.n_electrodes,
-                stim_pattern="{ad}",
-                meas_pattern="{ad}",
-                drive_mode="line_current_density",
-                drive_value=1.0,
-                geometry_scale_to_m=1.0,
+            forward_cfg = ForwardModelConfig.from_mapping(
+                self._request.forward_model_config
+                or {
+                    "mesh_dimension": cfg.mesh_dimension,
+                    "mesh_refinement": cfg.mesh_refinement,
+                    "n_elec": cfg.n_electrodes,
+                    "noise_level": cfg.noise_level,
+                }
             )
-            system = EITSystem(n_elec=cfg.n_electrodes, pattern_config=pattern)
+            pattern = PatternConfig(
+                n_elec=forward_cfg.n_elec,
+                n_rings=forward_cfg.n_rings,
+                stim_pattern=forward_cfg.stim_pattern,
+                meas_pattern=forward_cfg.meas_pattern,
+                drive_mode=forward_cfg.drive_mode,
+                drive_value=forward_cfg.drive_value,
+                geometry_scale_to_m=forward_cfg.geometry_scale_to_m,
+                electrode_length_m_override=forward_cfg.electrode_length_m_override,
+                use_meas_current=forward_cfg.use_meas_current,
+                use_meas_current_next=forward_cfg.use_meas_current_next,
+                rotate_meas=forward_cfg.rotate_meas,
+                stim_direction=forward_cfg.stim_direction,
+                meas_direction=forward_cfg.meas_direction,
+                stim_first_positive=forward_cfg.stim_first_positive,
+            )
+            system = EITSystem(n_elec=forward_cfg.n_elec, pattern_config=pattern)
             system.setup(
                 mesh_source="generated",
-                dimension=cfg.mesh_dimension,
-                mesh_size=cfg.mesh_refinement,
+                dimension=forward_cfg.mesh_dimension,
+                mesh_size=forward_cfg.mesh_refinement,
+                radius=forward_cfg.radius,
+                height=forward_cfg.height,
+                electrode_height_ratio=forward_cfg.electrode_height_ratio,
+                electrode_level_fractions=forward_cfg.electrode_level_fractions,
+                z_center=forward_cfg.z_center,
+                mesh_family=forward_cfg.mesh_family,
+                geometry_version=forward_cfg.geometry_version,
             )
 
             fwd = system.fwd_model
@@ -86,8 +113,9 @@ class _DatasetGeneratorWorker(QObject):
                 out_dir / "mesh_info.npz",
                 node_coords=node_coords,
                 cell_connectivity=cell_connectivity,
-                n_electrodes=cfg.n_electrodes,
+                n_electrodes=forward_cfg.n_elec,
                 homogeneous_voltages=homog_voltages,
+                forward_model_config=forward_cfg.to_mapping(),
             )
 
             rng = np.random.default_rng()

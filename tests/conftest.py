@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import gc
 import os
 import sys
 from pathlib import Path
@@ -33,6 +34,57 @@ except Exception as exc:  # pragma: no cover - import guard for lean environment
 # Darwin/OpenMP runtime stability guard for mixed PETSc/Torch test runs.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
+
+
+def _cleanup_qt_runtime() -> None:
+    try:
+        from PySide6.QtCore import QCoreApplication, QThread
+        from PySide6.QtWidgets import QApplication
+    except Exception:
+        return
+
+    app = QApplication.instance() or QCoreApplication.instance()
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+        top_level_widgets = getattr(app, "topLevelWidgets", None)
+        if callable(top_level_widgets):
+            for widget in list(top_level_widgets()):
+                try:
+                    widget.close()
+                except Exception:
+                    pass
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+
+    for obj in gc.get_objects():
+        try:
+            if isinstance(obj, QThread) and obj.isRunning():
+                obj.requestInterruption()
+                obj.quit()
+                obj.wait(3000)
+        except Exception:
+            pass
+
+    if app is not None:
+        try:
+            app.processEvents()
+        except Exception:
+            pass
+
+
+@pytest.fixture(autouse=True)
+def _qt_runtime_cleanup_after_each_test():
+    yield
+    _cleanup_qt_runtime()
+
+
+def pytest_sessionfinish(session, exitstatus):  # type: ignore[no-untyped-def]
+    _cleanup_qt_runtime()
 
 
 @pytest.fixture(scope="session")

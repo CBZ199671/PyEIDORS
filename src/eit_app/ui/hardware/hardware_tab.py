@@ -4,8 +4,6 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QHBoxLayout,
-    QScrollArea,
     QSplitter,
     QToolBox,
     QVBoxLayout,
@@ -21,6 +19,7 @@ from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 from eit_app.ui.hardware.session_summary_panel import SessionSummaryPanel
 from eit_app.ui.theme import set_panel_role
+from eit_app.ui.workflow_shell import WorkflowShell
 
 
 class HardwareTab(QWidget):
@@ -37,87 +36,60 @@ class HardwareTab(QWidget):
         self._build_ui()
 
     def _build_ui(self) -> None:
-        root = QHBoxLayout(self)
-        root.setContentsMargins(4, 4, 4, 4)
-        root.setSpacing(4)
-
-        main_splitter = QSplitter(Qt.Orientation.Horizontal)
-
-        # ── Left panel: only Step 1-3 (scrollable) ──
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        left_scroll.setMinimumWidth(420)
-        left_scroll.setMaximumWidth(520)
-
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(0, 0, 4, 0)
-        left_layout.setSpacing(4)
-
         self._conn_panel = ConnectionPanel()
         self._control_panel = ControlPanel()
         self._acq_panel = AcquisitionPanel()
-
-        self._workflow_toolbox = QToolBox()
-        self._workflow_toolbox.setObjectName("workflowToolbox")
         set_panel_role(self._conn_panel, "workflow")
         set_panel_role(self._control_panel, "workflow")
         set_panel_role(self._acq_panel, "workflow")
-        self._workflow_toolbox.addItem(self._conn_panel, "Step 1 \u00b7 Link & Verify")
-        self._workflow_toolbox.addItem(self._control_panel, "Step 2 \u00b7 Setup & Diagnostics")
-        self._workflow_toolbox.addItem(self._acq_panel, "Step 3 \u00b7 Acquire & Record")
 
-        left_layout.addWidget(self._workflow_toolbox, 1)
-        left_scroll.setWidget(left_container)
-
-        # ── Central visualization ──
         center_splitter = QSplitter(Qt.Orientation.Vertical)
+        center_splitter.setChildrenCollapsible(False)
 
-        # Top: live measurement plot
         self._live_plot = LivePlotWidget()
 
-        # Bottom: horizontal split  →  Reconstruction | (Summary + VoltageFit)
         bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
+        bottom_splitter.setChildrenCollapsible(False)
 
         self._recon_widget = ReconstructionWidget()
-
-        right_info = QWidget()
-        right_info_layout = QVBoxLayout(right_info)
-        right_info_layout.setContentsMargins(0, 0, 0, 0)
-        right_info_layout.setSpacing(4)
-
-        self._summary_panel = SessionSummaryPanel()
-        self._voltage_plot = BoundaryVoltagePlotWidget()
-
-        right_info_layout.addWidget(self._summary_panel, 1)
-        right_info_layout.addWidget(self._voltage_plot, 1)
+        self._voltage_plot = BoundaryVoltagePlotWidget(mode="hardware")
 
         bottom_splitter.addWidget(self._recon_widget)
-        bottom_splitter.addWidget(right_info)
+        bottom_splitter.addWidget(self._voltage_plot)
         bottom_splitter.setStretchFactor(0, 1)
         bottom_splitter.setStretchFactor(1, 1)
-        bottom_splitter.setChildrenCollapsible(False)
+        bottom_splitter.setSizes([560, 520])
 
         center_splitter.addWidget(self._live_plot)
         center_splitter.addWidget(bottom_splitter)
         center_splitter.setStretchFactor(0, 2)
         center_splitter.setStretchFactor(1, 1)
-        center_splitter.setChildrenCollapsible(False)
+        center_splitter.setSizes([520, 340])
 
-        # ── Right panel: frame browser ──
+        self._summary_panel = SessionSummaryPanel()
         self._frame_browser = FrameBrowserWidget()
-        self._frame_browser.setMinimumWidth(320)
-        self._frame_browser.setMaximumWidth(420)
 
-        main_splitter.addWidget(left_scroll)
-        main_splitter.addWidget(center_splitter)
-        main_splitter.addWidget(self._frame_browser)
-        main_splitter.setStretchFactor(0, 0)
-        main_splitter.setStretchFactor(1, 1)
-        main_splitter.setStretchFactor(2, 0)
+        self._shell = WorkflowShell(
+            steps=[
+                ("Step 1 \u00b7 Link", self._conn_panel),
+                ("Step 2 \u00b7 Setup", self._control_panel),
+                ("Step 3 \u00b7 Acquire", self._acq_panel),
+            ],
+            center_widget=center_splitter,
+            context_widget=self._frame_browser,
+            left_footer=self._summary_panel,
+            compact_toolbox=True,
+            step_min_width=480,
+            context_min_width=260,
+            splitter_sizes=(480, 760, 260),
+            parent=self,
+        )
 
-        root.addWidget(main_splitter)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        root.addWidget(self._shell)
+        self._workflow_toolbox = self._shell.toolbox
 
     # ── Property accessors for signal wiring in main_window ──
 
@@ -140,6 +112,10 @@ class HardwareTab(QWidget):
     @property
     def workflow_toolbox(self) -> QToolBox:
         return self._workflow_toolbox
+
+    @property
+    def main_splitter(self) -> QSplitter:
+        return self._shell.main_splitter
 
     @property
     def live_plot(self) -> LivePlotWidget:

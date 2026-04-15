@@ -18,6 +18,7 @@ class _DeviceWorker(QObject):
 
     connected = Signal()
     disconnected = Signal()
+    suspended = Signal()
     error = Signal(str)
     command_done = Signal(str, object)
     impedance_result = Signal(object)
@@ -26,10 +27,12 @@ class _DeviceWorker(QObject):
         super().__init__()
         self._transport_type = "simulator"
         self._device_config: dict[str, Any] = normalize_device_config("simulator", {})
+        self._device = None
 
     def set_connection_profile(self, transport_type: str, config: dict[str, Any]) -> None:
         self._transport_type = transport_type
         self._device_config = normalize_device_config(transport_type, config)
+        self._apply_profile_to_live_device()
 
     def current_config(self) -> dict[str, Any]:
         return dict(self._device_config)
@@ -41,61 +44,75 @@ class _DeviceWorker(QObject):
     @Slot()
     def do_connect(self) -> None:
         try:
-            with self._open_device() as device:
-                query = getattr(device, "try_query_capabilities", None)
-                capabilities = query() if callable(query) else device.capabilities()
-                self.command_done.emit("capabilities", capabilities)
+            device = self._ensure_connected_device()
+            query = getattr(device, "try_query_capabilities", None)
+            capabilities = query() if callable(query) else device.capabilities()
+            self.command_done.emit("capabilities", capabilities)
             self.connected.emit()
         except Exception as exc:
             self.error.emit(f"Connection failed: {exc}")
 
     @Slot()
     def do_disconnect(self) -> None:
+        self._disconnect_live_device()
         self.disconnected.emit()
+
+    @Slot()
+    def do_suspend(self) -> None:
+        try:
+            self._disconnect_live_device()
+            self.suspended.emit()
+        except Exception as exc:
+            self.error.emit(f"Suspend failed: {exc}")
 
     @Slot(str, dict)
     def do_command(self, name: str, kwargs: dict[str, Any]) -> None:
         try:
-            with self._open_device() as device:
-                method = getattr(device, name, None)
-                if method is None:
-                    self.error.emit(f"Unknown command: {name}")
-                    return
-                result = method(**kwargs)
-                self.command_done.emit(name, result)
+            device = self._ensure_connected_device()
+            method = getattr(device, name, None)
+            if method is None:
+                self.error.emit(f"Unknown command: {name}")
+                return
+            result = method(**kwargs)
+            self.command_done.emit(name, result)
         except Exception as exc:
             self.error.emit(f"Command '{name}' failed: {exc}")
 
     @Slot()
     def do_measure_impedance(self) -> None:
         try:
-            with self._open_device() as device:
-                result = device.measure_contact_impedance()
+            device = self._ensure_connected_device()
+            result = device.measure_contact_impedance()
             self.impedance_result.emit(result)
         except Exception as exc:
             self.error.emit(f"Impedance measurement failed: {exc}")
 
-    def _open_device(self):
-        worker = self
+    def _ensure_connected_device(self):
+        if self._device is None:
+            self._device = create_device_from_config(
+                self._transport_type,
+                self._device_config,
+            )
+        if not getattr(self._device, "is_connected", False):
+            self._device.connect()
+            self._apply_profile_to_live_device()
+        return self._device
 
-        class _DeviceContext:
-            def __init__(self) -> None:
-                self.device = create_device_from_config(
-                    worker._transport_type,
-                    worker._device_config,
-                )
+    def _disconnect_live_device(self) -> None:
+        if self._device is None:
+            return
+        try:
+            if getattr(self._device, "is_connected", False):
+                self._device.disconnect()
+        finally:
+            self._device = None
 
-            def __enter__(self):
-                self.device.connect()
-                return self.device
-
-            def __exit__(self, exc_type, exc, tb) -> None:
-                try:
-                    self.device.disconnect()
-                except Exception:
-                    pass
-
-        return _DeviceContext()
+    def _apply_profile_to_live_device(self) -> None:
+        if self._device is None:
+            return
+        config = getattr(self._device, "_config", None)
+        if isinstance(config, dict):
+            config.update(self._device_config)
 
 
 class DeviceController(QObject):
@@ -104,11 +121,13 @@ class DeviceController(QObject):
     request_profile_update = Signal(str, dict)
     request_connect = Signal()
     request_disconnect = Signal()
+    request_suspend = Signal()
     request_command = Signal(str, dict)
     request_impedance = Signal()
 
     connected = Signal()
     disconnected = Signal()
+    suspended = Signal()
     error = Signal(str)
     command_done = Signal(str, object)
     impedance_result = Signal(object)
@@ -130,6 +149,10 @@ class DeviceController(QObject):
             self._worker.do_disconnect,
             Qt.ConnectionType.QueuedConnection,
         )
+        self.request_suspend.connect(
+            self._worker.do_suspend,
+            Qt.ConnectionType.QueuedConnection,
+        )
         self.request_command.connect(
             self._worker.do_command,
             Qt.ConnectionType.QueuedConnection,
@@ -141,6 +164,7 @@ class DeviceController(QObject):
 
         self._worker.connected.connect(self.connected)
         self._worker.disconnected.connect(self.disconnected)
+        self._worker.suspended.connect(self.suspended)
         self._worker.error.connect(self.error)
         self._worker.command_done.connect(self.command_done)
         self._worker.impedance_result.connect(self.impedance_result)
@@ -161,6 +185,33 @@ class DeviceController(QObject):
 
     def disconnect_device(self) -> None:
         self.request_disconnect.emit()
+
+    def suspend_session(self, timeout_ms: int = 3000) -> bool:
+        if not self._thread.isRunning():
+            return False
+
+        loop = QEventLoop()
+        completed = {"ok": False}
+
+        def _on_suspended() -> None:
+            completed["ok"] = True
+            if loop.isRunning():
+                loop.quit()
+
+        def _on_error(_msg: str) -> None:
+            if loop.isRunning():
+                loop.quit()
+
+        self.suspended.connect(_on_suspended)
+        self.error.connect(_on_error)
+        try:
+            self.request_suspend.emit()
+            QTimer.singleShot(timeout_ms, loop.quit)
+            loop.exec()
+        finally:
+            self.suspended.disconnect(_on_suspended)
+            self.error.disconnect(_on_error)
+        return completed["ok"]
 
     def send_command(self, name: str, **kwargs: Any) -> None:
         config = dict(self._config)
@@ -242,5 +293,10 @@ class DeviceController(QObject):
         return completed["ok"]
 
     def shutdown(self) -> None:
+        if self._thread.isRunning():
+            try:
+                self.suspend_session(timeout_ms=1500)
+            except Exception:
+                pass
         self._thread.quit()
         self._thread.wait(3000)

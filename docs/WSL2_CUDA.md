@@ -8,6 +8,15 @@ nix develop .#cuda
 
 默认 `nix develop` 仍然是 CPU 路径；只有 `.#cuda` profile 会尝试提供 CUDA 版 PETSc/DOLFINx 运行时，并把 Python 虚拟环境分离到 `.venv-cuda`，避免和默认 `.venv` 互相污染。
 
+GUI 官方启动方式：
+
+```bash
+bash scripts/gui/run_eit_app.sh --gpu
+```
+
+这个启动器会自动进入 `nix develop .#cuda`、补齐 GUI 运行所需的
+`repo root + src + nix runtime` 路径，并在启动前执行 CUDA PETSc probe。
+
 ## 官方依据
 
 本实现和文档只依赖官方资料，不基于社区传言：

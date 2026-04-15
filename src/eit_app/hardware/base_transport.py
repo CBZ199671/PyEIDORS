@@ -15,8 +15,8 @@ from .types import AcquisitionMode
 class RawFrame:
     """Raw measurement frame from hardware after ADC conversion."""
 
-    real: np.ndarray  # (208,) float64 voltages
-    imag: np.ndarray  # (208,) float64 voltages
+    real: np.ndarray  # (n_meas,) float64 voltages
+    imag: np.ndarray  # (n_meas,) float64 voltages
     timestamp: float  # time.time() at reception
     metadata: dict[str, Any] | None = None
 
