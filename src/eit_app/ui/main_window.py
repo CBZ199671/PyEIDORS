@@ -248,6 +248,12 @@ class EITWorkstation(QMainWindow):
         self._rec_ctrl.set_database_controller(self._db_ctrl)
         self._batch_recon_ctrl = BatchReconstructionController(self)
         self._batch_dialog = None  # lazily created
+        # Phase 6: Difference dialog is modeless — retain a single
+        # instance reference so Python GC doesn't collect the dialog
+        # the moment _open_difference_dialog() returns, and so repeat
+        # Tools→Difference clicks raise the existing window instead
+        # of stacking a new one.
+        self._difference_dialog = None
         self._fwd_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
@@ -1994,11 +2000,15 @@ class EITWorkstation(QMainWindow):
     def _open_difference_dialog(self) -> None:
         """Open the Difference dialog using current Hardware-tab frames.
 
-        Wired to the Tools → Difference menu entry (Ctrl+D) as well as
-        any future button callers.  If fewer than 2 frames have been
-        recorded the user sees a status-bar hint instead of an empty
-        dialog, and the Hardware tab is brought forward so the hint is
-        actionable.
+        Wired to the Tools → Difference menu entry (Ctrl+D).  The
+        dialog is modeless so the user can keep inspecting the frame
+        browser behind it.  Repeated invocations raise the existing
+        dialog and refresh its frame list rather than stacking a new
+        copy on top.
+
+        If fewer than 2 frames have been recorded the user sees a
+        status-bar hint instead of an empty dialog, and the Hardware
+        tab is brought forward so the hint is actionable.
         """
         from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
 
@@ -2021,6 +2031,17 @@ class EITWorkstation(QMainWindow):
         if tgt_index == ref_index:
             tgt_index = None
 
+        # Single-instance guard: if the dialog is already on screen,
+        # refresh its frame list (new recordings may have arrived) and
+        # raise it instead of stacking a second window.
+        existing = getattr(self, "_difference_dialog", None)
+        if existing is not None:
+            existing.set_frame_entries(entries)
+            existing.show()
+            existing.raise_()
+            existing.activateWindow()
+            return
+
         dialog = DifferenceDialog(
             entries,
             self,
@@ -2028,7 +2049,21 @@ class EITWorkstation(QMainWindow):
             default_tgt_index=tgt_index,
         )
         dialog.reconstruction_requested.connect(self._on_reconstruction_config)
-        dialog.exec()
+        dialog.finished.connect(self._on_difference_dialog_finished)
+        # Retain the reference so Python GC doesn't collect the
+        # modeless dialog the moment this method returns.
+        self._difference_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    @Slot(int)
+    def _on_difference_dialog_finished(self, _result: int) -> None:
+        """Clear the single-instance slot when the dialog closes."""
+        dialog = getattr(self, "_difference_dialog", None)
+        if dialog is not None:
+            dialog.deleteLater()
+        self._difference_dialog = None
 
     def _open_batch_reconstruction_from_menu(self) -> None:
         """Tools → Batch Reconstruction menu launcher.

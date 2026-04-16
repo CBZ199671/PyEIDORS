@@ -1,16 +1,19 @@
 """Dialog for selecting reference and target frames for difference imaging."""
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QVBoxLayout
 
 from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 
 class DifferenceDialog(QDialog):
-    """Modal dialog for configuring difference reconstruction.
+    """Modeless dialog for configuring difference reconstruction.
 
-    The user selects reference frame, target frame, difference mode,
-    and orientation before confirming.
+    Users select reference frame, target frame, difference mode, and
+    orientation before confirming.  The dialog can stay open alongside
+    the main window so the user can inspect the live frame browser
+    before committing to a reconstruction (Phase 6 moved this off
+    ``exec()``).
 
     Signals:
         reconstruction_requested: Emitted with config dict containing
@@ -29,8 +32,15 @@ class DifferenceDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setMinimumWidth(400)
+        # Modeless: let the user interact with the main window (inspect
+        # frames, toggle legend, etc.) while this dialog is open.
+        # Window flag promotion also means the dialog gets its own
+        # taskbar representation on Windows, which fits the "tool
+        # palette" nature of Difference config.
+        self.setModal(False)
+        self.setWindowModality(Qt.WindowModality.NonModal)
 
-        self._frame_entries = frame_entries
+        self._frame_entries = list(frame_entries)
         self._default_ref_index = default_ref_index
         self._default_tgt_index = default_tgt_index
         self._build_ui()
@@ -123,6 +133,50 @@ class DifferenceDialog(QDialog):
         self.reconstruction_requested.emit(config)
         self.accept()
 
+    def set_frame_entries(self, frame_entries: list[dict]) -> None:
+        """Replace the pickable frame list without recreating the dialog.
+
+        Useful for modeless usage: when the user records more frames on
+        the Hardware tab while the dialog is open, main_window calls
+        this to refresh the combos.  Preserves the current selections
+        if the old ref/tgt entries are still present in the new list;
+        otherwise falls back to index 0 / 1.
+        """
+        # Remember which entry the user had picked (not just the index,
+        # since the new list may have a different ordering).
+        prev_ref = self._frame_entries[self._ref_combo.currentIndex()] if (
+            self._frame_entries
+            and 0 <= self._ref_combo.currentIndex() < len(self._frame_entries)
+        ) else None
+        prev_tgt = self._frame_entries[self._tgt_combo.currentIndex()] if (
+            self._frame_entries
+            and 0 <= self._tgt_combo.currentIndex() < len(self._frame_entries)
+        ) else None
+
+        self._frame_entries = list(frame_entries)
+        self._ref_combo.clear()
+        self._tgt_combo.clear()
+        for entry in self._frame_entries:
+            label = f"Frame {entry.get('frame_index', '?')} - {entry.get('file_path', '')}"
+            self._ref_combo.addItem(label)
+            self._tgt_combo.addItem(label)
+
+        if not self._frame_entries:
+            return
+
+        ref_idx = _find_entry_index(self._frame_entries, prev_ref, default=0)
+        tgt_idx = _find_entry_index(self._frame_entries, prev_tgt, default=-1)
+        if tgt_idx == -1:
+            tgt_idx = 1 if ref_idx == 0 and len(self._frame_entries) > 1 else 0
+        ref_idx = max(0, min(ref_idx, len(self._frame_entries) - 1))
+        tgt_idx = max(0, min(tgt_idx, len(self._frame_entries) - 1))
+        self._ref_combo.setCurrentIndex(ref_idx)
+        self._tgt_combo.setCurrentIndex(tgt_idx)
+        # Clear any stale "same frame" warning left over from the
+        # previous interaction.
+        self._info_label.clear()
+        self._info_label.setStyleSheet("")
+
     # ── i18n ──
 
     def _retranslate(self) -> None:
@@ -134,3 +188,25 @@ class DifferenceDialog(QDialog):
         self._lbl_mode.setText(t("dlg.difference.mode_label"))
         self._lbl_orient.setText(t("dlg.difference.orient_label"))
         self._lbl_part.setText(t("dlg.difference.part_label"))
+
+
+def _find_entry_index(
+    entries: list[dict],
+    target: dict | None,
+    *,
+    default: int = -1,
+) -> int:
+    """Return the index of ``target`` in ``entries`` by content match.
+
+    Frame entries may be rebuilt with different dict identities on
+    every acquisition, so plain ``list.index`` is unreliable — fall
+    back to matching on the (frame_index, file_path) pair which
+    uniquely identifies a recorded frame.
+    """
+    if target is None:
+        return default
+    key = (target.get("frame_index"), target.get("file_path"))
+    for i, entry in enumerate(entries):
+        if (entry.get("frame_index"), entry.get("file_path")) == key:
+            return i
+    return default

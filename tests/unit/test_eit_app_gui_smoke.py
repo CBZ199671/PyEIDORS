@@ -347,6 +347,57 @@ def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
 
 
 @pytest.mark.gui
+def test_difference_dialog_opens_modeless_and_refreshes_frame_list() -> None:
+    """Phase 6: Difference dialog no longer blocks via exec().
+
+    - Opening via Tools → Difference uses show(), so the main window
+      stays interactive (isModal() must be False).
+    - A second open request must not stack a new window; it should
+      refresh the existing dialog's frame list and raise it.
+    - Closing the dialog clears the retained reference so a fresh
+      one can be opened next time.
+    """
+    window = EITWorkstation()
+    _show_window(window)
+    app = _get_app()
+    try:
+        # Seed two fake frames so the launcher doesn't early-return.
+        window._frame_browser.add_frame_entry(0, 0.0, "/tmp/f0.csv")
+        window._frame_browser.add_frame_entry(1, 0.1, "/tmp/f1.csv")
+        app.processEvents()
+
+        window._action_difference.trigger()
+        app.processEvents()
+        dialog = window._difference_dialog
+        assert dialog is not None
+        assert dialog.isVisible()
+        assert not dialog.isModal(), "Dialog must be modeless"
+        # Main window should still be accepting events.
+        assert window._tab_widget.isEnabled()
+
+        # Record a third frame while the dialog is still on screen and
+        # re-trigger the action — the existing dialog should refresh.
+        window._frame_browser.add_frame_entry(2, 0.2, "/tmp/f2.csv")
+        app.processEvents()
+        window._action_difference.trigger()
+        app.processEvents()
+        assert window._difference_dialog is dialog, (
+            "Re-opening must reuse the existing dialog"
+        )
+        # Combo should now show 3 items, not 2.
+        assert dialog._ref_combo.count() == 3
+
+        # Closing drops the single-instance slot.
+        dialog.reject()
+        app.processEvents()
+        # The finished-signal slot schedules deleteLater, so the
+        # Python-level attr is the clearest thing to assert.
+        assert window._difference_dialog is None
+    finally:
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_tools_menu_exposes_difference_batch_reconstruction_shortcuts() -> None:
     """Tools menu must expose Difference (Ctrl+D), Batch (Ctrl+B), and
     Reconstruction (Ctrl+R) entries with safe click handlers.
