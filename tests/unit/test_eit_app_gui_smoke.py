@@ -1141,6 +1141,65 @@ def test_simulator_single_frame_capture_stops_automatically(tmp_path: Path) -> N
 
 
 @pytest.mark.gui
+def test_auto_close_combo_box_hides_popup_on_disable_clear_and_focus_loss() -> None:
+    """Edge cases around the dropdown auto-hide:
+      1. Calling setEnabled(False) while the popup is visible must hide it.
+      2. Replacing the item list via clear() + addItems() must close a
+         stale open popup so it doesn't show ghost entries.
+      3. App focus moving to an unrelated widget must close the popup
+         (keyboard Tab-away path, not just click-outside).
+    """
+    from PySide6.QtWidgets import QPushButton, QWidget, QVBoxLayout
+
+    app = _get_app()
+    host = QWidget()
+    layout = QVBoxLayout(host)
+    combo = AutoCloseComboBox()
+    combo.addItems(["A", "B"])
+    other = QPushButton("elsewhere")
+    layout.addWidget(combo)
+    layout.addWidget(other)
+    host.show()
+    app.processEvents()
+
+    # Case 1: disable while open
+    combo.showPopup()
+    app.processEvents()
+    assert combo._menu.isVisible()
+    combo.setEnabled(False)
+    app.processEvents()
+    assert not combo._menu.isVisible(), "setEnabled(False) should hide popup"
+    combo.setEnabled(True)
+    app.processEvents()
+
+    # Case 2: clear() while open
+    combo.showPopup()
+    app.processEvents()
+    assert combo._menu.isVisible()
+    combo.clear()
+    app.processEvents()
+    assert not combo._menu.isVisible(), "clear() should hide stale popup"
+    combo.addItems(["X", "Y"])
+
+    # Case 3: focus moves to an unrelated widget while popup is open
+    combo.showPopup()
+    app.processEvents()
+    assert combo._menu.isVisible()
+    # Simulate the Tab-away path by emitting focusChanged manually —
+    # QMenu's internal Qt.Popup flag would intercept a real click, but
+    # keyboard focus shifts may not always trigger the native dismiss.
+    app.focusChanged.emit(combo._line_edit, other)
+    app.processEvents()
+    assert not combo._menu.isVisible(), (
+        "focus moving to an unrelated widget should close the popup"
+    )
+
+    host.close()
+    host.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.gui
 def test_auto_close_combo_box_hides_popup_after_selection() -> None:
     app = _get_app()
     combo = AutoCloseComboBox()

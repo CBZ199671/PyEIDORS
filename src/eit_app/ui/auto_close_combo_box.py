@@ -4,8 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtCore import QEvent, QSize, Qt, Signal
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLineEdit,
     QMenu,
@@ -59,6 +60,29 @@ class AutoCloseComboBox(QWidget):
         self.setFocusProxy(self._line_edit)
         self.setFixedHeight(self._CONTROL_HEIGHT)
 
+        # -----------------------------------------------------------------
+        # Defensive hide paths for the dropdown menu.
+        #
+        # QMenu is normally a Qt.Popup which auto-dismisses on focus
+        # loss, but three edge cases can leave it stuck on screen:
+        #   1. Disabling the widget programmatically while the menu is
+        #      visible (Qt does not auto-close popups owned by a
+        #      disabled parent).
+        #   2. Reassigning a new item list via clear()/addItems() while
+        #      a user is actively hovering the old menu.
+        #   3. Composite-widget focus loss when the user Tab's away
+        #      from the line edit before ever clicking the arrow
+        #      button — the menu wasn't open, but an app-level
+        #      focusChanged observer is useful for future-proofing.
+        #
+        # Install a global focus-change watcher that hides the menu if
+        # focus lands on a widget that is NOT inside this composite or
+        # the menu itself.  This is a belt-and-suspenders measure on
+        # top of Qt's built-in Popup semantics.
+        qapp = QApplication.instance()
+        if qapp is not None:
+            qapp.focusChanged.connect(self._on_app_focus_changed)
+
     def sizeHint(self) -> QSize:
         return QSize(180, self._CONTROL_HEIGHT)
 
@@ -74,12 +98,6 @@ class AutoCloseComboBox(QWidget):
     def addItems(self, texts: list[str]) -> None:
         for text in texts:
             self.addItem(text)
-
-    def clear(self) -> None:
-        self._items.clear()
-        self._current_index = -1
-        self._line_edit.clear()
-        self._menu.clear()
 
     def count(self) -> int:
         return len(self._items)
@@ -147,6 +165,45 @@ class AutoCloseComboBox(QWidget):
         super().setEnabled(enabled)
         self._line_edit.setEnabled(enabled)
         self._button.setEnabled(enabled)
+        # Disabling the widget while the popup is visible leaves the
+        # menu orphaned on-screen until the user clicks elsewhere —
+        # force-close it here so the disabled state looks consistent.
+        if not enabled and self._menu.isVisible():
+            self._menu.hide()
+
+    def clear(self) -> None:
+        # Also close the popup if the item list is being replaced from
+        # under the user's cursor — otherwise the menu shows stale
+        # entries until the next click outside.
+        if self._menu.isVisible():
+            self._menu.hide()
+        self._items.clear()
+        self._current_index = -1
+        self._line_edit.clear()
+        self._menu.clear()
+
+    def _on_app_focus_changed(self, old: QWidget | None, new: QWidget | None) -> None:
+        """Force-close the popup when focus leaves this composite widget.
+
+        Qt.Popup already dismisses on click-outside, but keyboard
+        navigation (Tab, Ctrl+Tab) can move focus without producing
+        a mouse click; this handler catches that path too.  The menu
+        stays open when focus lands on any descendant of the combo
+        (line edit, button, the menu itself) so normal interactions
+        aren't disrupted.
+        """
+        if not self._menu.isVisible():
+            return
+        if new is None:
+            # Focus went to another top-level (Alt-Tab, etc.).  Close.
+            self._menu.hide()
+            return
+        cursor = new
+        while cursor is not None:
+            if cursor is self or cursor is self._menu:
+                return
+            cursor = cursor.parent()
+        self._menu.hide()
 
     def _rebuild_menu(self) -> None:
         self._menu.clear()
