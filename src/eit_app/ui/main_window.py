@@ -397,12 +397,6 @@ class EITWorkstation(QMainWindow):
 
         # File menu --------------------------------------------------------
         self._menu_file = menu_bar.addMenu("")
-        self._action_settings = self._menu_file.addAction("")
-        # Ctrl+, is the cross-platform Settings convention (macOS default,
-        # adopted by VS Code / JetBrains / Chrome on Windows & Linux).
-        self._action_settings.setShortcut(QKeySequence("Ctrl+,"))
-        self._action_settings.triggered.connect(self._open_settings)
-        self._menu_file.addSeparator()
         self._action_exit = self._menu_file.addAction("")
         # Ctrl+Q is the established quit binding across Linux DEs and
         # Windows Qt apps.  Set it explicitly — StandardKey.Quit returns
@@ -577,7 +571,6 @@ class EITWorkstation(QMainWindow):
         self._tab_widget.setTabText(3, t("tab.database"))
 
         self._menu_file.setTitle(t("menu.file"))
-        self._action_settings.setText(t("menu.file.settings"))
         self._action_exit.setText(t("menu.file.exit"))
 
         self._menu_view.setTitle(t("menu.view"))
@@ -2482,14 +2475,6 @@ class EITWorkstation(QMainWindow):
             "Verify the path exists. On WSL without Windows integration, "
             "install wslu: sudo apt install wslu"
         )
-
-    def _open_settings(self) -> None:
-        from eit_app.ui.dialogs.settings_dialog import SettingsDialog
-
-        dialog = SettingsDialog(self._state.reconstruction_config, self)
-        if dialog.exec():
-            self._state.reconstruction_config = dialog.get_config()
-            self._schedule_realtime_recon_prewarm(immediate=True)
 
     def _current_hardware_forward_model_config(self) -> ForwardModelConfig:
         return ForwardModelConfig.from_mapping(

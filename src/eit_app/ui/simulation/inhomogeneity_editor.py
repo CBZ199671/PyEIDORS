@@ -151,9 +151,30 @@ class InhomogeneityEditor(QGroupBox):
         self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self._table.verticalHeader().setDefaultSectionSize(28)
+        # Column-width strategy:
+        # - 6 columns sit inside the ~280px right context pane, so a
+        #   uniform Stretch mode (the previous behaviour) gave every
+        #   column ~46px and clipped headers like "X 尺寸" / "Size Y".
+        # - Use Interactive sizing with explicit per-column defaults
+        #   that fit the (now single-character) localized header
+        #   labels comfortably.  Last column stretches to absorb any
+        #   leftover width without distorting the others.
+        # - Horizontal scroll falls back when the user squeezes the
+        #   panel below the natural sum.
         header = self._table.horizontalHeader()
         header.setStretchLastSection(True)
-        header.setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
+        header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
+        # (col_index, pixel_width)
+        for col, width in (
+            (0, 78),  # Shape — short word + small dropdown indicator
+            (1, 52),  # X
+            (2, 52),  # Y
+            (3, 52),  # W (size X)
+            (4, 52),  # H (size Y)
+            # Last column (σ) is left to stretch via setStretchLastSection.
+        ):
+            header.resizeSection(col, width)
+        self._table.setHorizontalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
         layout.addWidget(self._table, 1)
 
         btn_row = QHBoxLayout()

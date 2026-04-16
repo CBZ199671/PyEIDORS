@@ -29,7 +29,6 @@ TRANSLATIONS: dict[str, str] = {
     # File menu
     # ------------------------------------------------------------------
     "menu.file": "&File",
-    "menu.file.settings": "&Settings\u2026",
     "menu.file.exit": "E&xit",
 
     # ------------------------------------------------------------------
@@ -317,9 +316,9 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.shape": "Shape",
     "sim.inhom.col.x": "X",
     "sim.inhom.col.y": "Y",
-    "sim.inhom.col.sizex": "Size X",
-    "sim.inhom.col.sizey": "Size Y",
-    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.col.sizex": "W",
+    "sim.inhom.col.sizey": "H",
+    "sim.inhom.col.conductivity": "\u03c3",
     "sim.inhom.add_circle": "+ Circle",
     "sim.inhom.add_ellipse": "+ Ellipse",
     "sim.inhom.add_rectangle": "+ Rectangle",
@@ -608,22 +607,6 @@ TRANSLATIONS: dict[str, str] = {
     "status.record.armed": "Record: Armed",
     "status.record.recording": "Record: Writing",
     "status.record.other": "Record: {status}",
-
-    # ==================================================================
-    # Dialog — Settings
-    # ==================================================================
-    "dlg.settings.title": "Settings",
-    "dlg.settings.recon.title": "Reconstruction",
-    "dlg.settings.recon.method_label": "Method:",
-    "dlg.settings.recon.alpha_label": "Regularization alpha:",
-    "dlg.settings.recon.iter_label": "Max iterations:",
-    "dlg.settings.recon.dim_label": "Mesh dimension:",
-    "dlg.settings.recon.refine_label": "Mesh refinement:",
-    "dlg.settings.recon.part_label": "Use part:",
-    "dlg.settings.paths.title": "Data Paths",
-    "dlg.settings.paths.output_placeholder": "Default output directory\u2026",
-    "dlg.settings.paths.browse_button": "Browse\u2026",
-    "dlg.settings.paths.output_label": "Output dir:",
 
     # ==================================================================
     # Dialog — Difference Reconstruction

@@ -258,6 +258,63 @@ def set_embedded_step_panel(widget: QWidget) -> None:
     _repolish(widget)
 
 
+# =====================================================================
+# Plot palette (pyqtgraph + matplotlib backgrounds, axis colors, grids)
+# =====================================================================
+#
+# pyqtgraph and matplotlib paint their own canvas — they don't honour
+# QSS — so plot widgets must explicitly read these colors and re-paint
+# themselves on theme_mode changes via subscribe_theme_mode().
+#
+# Each entry is a small dict so callers can read what they need without
+# unpacking ordered tuples.  Adding a new color requires updating both
+# variants.
+_PLOT_PALETTE_LIGHT = {
+    "bg":       "#f8fbfe",  # main plot canvas
+    "panel_bg": "#f4f7fb",  # outer figure / facecolor for matplotlib
+    "axes_bg":  "#fbfdff",  # matplotlib axes (slightly brighter than panel)
+    "text":     "#243447",
+    "grid":     "#d6e1ec",
+    "border":   "#c7d4e2",
+    # Reconstruction-image widget (pyqtgraph) extras — domain outline,
+    # electrode arc, and label color.
+    "domain":     "#8ba0b8",
+    "electrode":  "#355c7d",
+    "label":      "#243447",
+    # Color for the matplotlib placeholder/error/loading caption text
+    "caption":    "#5b6573",
+    "caption_loading": "#1f5d8b",
+    "caption_error":   "#8b2f2f",
+}
+
+_PLOT_PALETTE_DARK = {
+    "bg":       "#161b22",  # darker than QSS canvas (#1a1f26) for plot contrast
+    "panel_bg": "#1a1f26",
+    "axes_bg":  "#1e242c",
+    "text":     "#dbe1ea",
+    "grid":     "#2f3742",
+    "border":   "#3e4754",
+    "domain":     "#5d6a7a",
+    "electrode":  "#7cbeee",
+    "label":      "#dbe1ea",
+    "caption":    "#8b97a7",
+    "caption_loading": "#5ca8e0",
+    "caption_error":   "#f09e95",
+}
+
+
+def plot_palette() -> dict:
+    """Return the active plot palette (matches current_theme_mode()).
+
+    Returned dict is a *copy* so callers can mutate / compose without
+    touching the module-level source.  Keys: bg, panel_bg, axes_bg,
+    text, grid, border, domain, electrode, label, caption, caption_loading,
+    caption_error.
+    """
+    palette = _PLOT_PALETTE_DARK if _current_mode == "dark" else _PLOT_PALETTE_LIGHT
+    return dict(palette)
+
+
 _TONE_PALETTE_LIGHT = {
     "idle":   ("#5b6573", "#f7f9fc", "#d8dee9"),
     "warn":   ("#8a4b08", "#fff4dc", "#f1c27d"),

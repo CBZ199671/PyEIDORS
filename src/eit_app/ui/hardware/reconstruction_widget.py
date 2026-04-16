@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 from scipy.spatial import Delaunay
 
 from eit_app.i18n import t, translator
+from eit_app.ui.theme import plot_palette, subscribe_theme_mode
 
 if TYPE_CHECKING:
     from eit_app.controllers.reconstruction_controller import ReconstructionResult
@@ -25,11 +26,15 @@ class ReconstructionWidget(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._font_family = "Times New Roman"
-        self._plot_bg = "#f4f7fb"
-        self._domain_border = "#8ba0b8"
+        # Pull plot colors from the theme palette so the widget honours
+        # dark mode automatically.  subscribe_theme_mode in __init__
+        # rewires re-paint on later mode flips.
+        palette = plot_palette()
+        self._plot_bg = palette["panel_bg"]
+        self._domain_border = palette["domain"]
         self._electrode_fill = "#ffffff"
-        self._electrode_border = "#355c7d"
-        self._label_color = "#243447"
+        self._electrode_border = palette["electrode"]
+        self._label_color = palette["label"]
         self._mesh_cache_key: tuple[Any, ...] | None = None
         self._grid_vertices: np.ndarray | None = None
         self._grid_weights: np.ndarray | None = None
@@ -104,6 +109,37 @@ class ReconstructionWidget(QWidget):
         self._reset_plot()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+        # Re-paint canvas + electrode + boundary colors when the user
+        # toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-pull the plot palette and re-paint pyqtgraph chrome.
+
+        The conductivity image itself is colormapped from the data
+        and doesn't follow the theme; only the canvas background,
+        domain outline, electrode arc, and labels are re-skinned.
+        """
+        palette = plot_palette()
+        self._plot_bg = palette["panel_bg"]
+        self._domain_border = palette["domain"]
+        self._electrode_border = palette["electrode"]
+        self._label_color = palette["label"]
+        self._plot_widget.setBackground(self._plot_bg)
+        # Re-pen the static scene items so they match the new palette.
+        self._boundary_item.setPen(pg.mkPen(self._domain_border, width=2.0))
+        self._electrode_arc_item.setPen(
+            pg.mkPen(self._electrode_border, width=4.0)
+        )
+        # Refresh title HTML (uses _label_color) and electrode label
+        # text colors via the standard retranslate / scene rebuild.
+        self._retranslate()
+        # Force the electrode-number labels to pick up the new color.
+        for item in self._electrode_label_items:
+            try:
+                item.setColor(self._label_color)
+            except Exception:
+                pass
 
     def set_loading(self, on: bool) -> None:
         """Toggle the 'reconstructing' placeholder overlay.

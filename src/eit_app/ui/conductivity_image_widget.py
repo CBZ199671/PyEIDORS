@@ -10,6 +10,7 @@ from matplotlib.tri import Triangulation
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from eit_app.ui.fonts import plot_font_families, serif_font_family
+from eit_app.ui.theme import plot_palette, subscribe_theme_mode
 
 
 class ConductivityImageWidget(QWidget):
@@ -24,25 +25,78 @@ class ConductivityImageWidget(QWidget):
         # Roman emits "Glyph X missing" warnings and renders tofu boxes.
         self._title_font = FontProperties(family=plot_font_families(), size=14)
         self._default_title = title
+        # Cache the most recent rendered state so dark-mode toggles can
+        # repaint without losing the conductivity field.  None means
+        # "currently showing the placeholder".
+        self._last_image: tuple[np.ndarray, np.ndarray, np.ndarray, str | None] | None = None
+        self._last_caption: tuple[str, str] | None = None  # (text, kind: 'placeholder'|'loading'|'error')
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
 
+        palette = plot_palette()
         self._figure = Figure(figsize=(5, 5), tight_layout=True)
-        self._figure.patch.set_facecolor("#f4f7fb")
+        self._figure.patch.set_facecolor(palette["panel_bg"])
         self._canvas = FigureCanvasQTAgg(self._figure)
         layout.addWidget(self._canvas)
 
         self._ax = self._figure.add_subplot(111)
-        self._ax.set_facecolor("#fbfdff")
-        self._ax.set_title(title, fontproperties=self._title_font)
+        self._ax.set_facecolor(palette["axes_bg"])
+        self._ax.set_title(title, fontproperties=self._title_font, color=palette["text"])
         self._ax.set_aspect("equal")
         self._colorbar = None
         self._show_placeholder()
 
+        # Re-paint canvas / axes / caption colors on dark-mode toggles.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    # ------------------------------------------------------------------
+    # Theme integration
+    # ------------------------------------------------------------------
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-pull colors from the active palette and re-render."""
+        palette = plot_palette()
+        self._figure.patch.set_facecolor(palette["panel_bg"])
+        self._ax.set_facecolor(palette["axes_bg"])
+        # Re-render whichever state the widget was in last.  This keeps
+        # the user's data on screen across the mode flip instead of
+        # collapsing back to the placeholder.
+        if self._last_image is not None:
+            conductivity, node_coords, cell_connectivity, title = self._last_image
+            # update_image() resets _last_image, so don't pass it back
+            # in to avoid a recursion.
+            self.update_image(conductivity, node_coords, cell_connectivity, title=title)
+        elif self._last_caption is not None:
+            text, kind = self._last_caption
+            self._draw_caption(text, kind)
+        else:
+            # Re-apply the title color even when nothing is rendered.
+            self._ax.set_title(self._default_title, fontproperties=self._title_font, color=palette["text"])
+            self._canvas.draw_idle()
+
+    def _apply_axes_chrome(self) -> None:
+        """Push the active palette onto axis spines, ticks, and title."""
+        palette = plot_palette()
+        text = palette["text"]
+        for spine in self._ax.spines.values():
+            spine.set_color(palette["border"])
+        self._ax.tick_params(colors=text, labelsize=9)
+        for label in self._ax.get_xticklabels() + self._ax.get_yticklabels():
+            label.set_color(text)
+            label.set_fontname(self._serif)
+        self._ax.set_facecolor(palette["axes_bg"])
+        self._figure.patch.set_facecolor(palette["panel_bg"])
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
     def setTitle(self, title: str) -> None:
         """Update the plot title (used by i18n retranslate pipelines)."""
         self._default_title = title
-        self._ax.set_title(title, fontproperties=self._title_font)
+        palette = plot_palette()
+        self._ax.set_title(title, fontproperties=self._title_font, color=palette["text"])
         self._canvas.draw_idle()
 
     def update_image(
@@ -80,13 +134,13 @@ class ConductivityImageWidget(QWidget):
             )
             return
 
+        palette = plot_palette()
         display_title = title or self._default_title
-        self._ax.set_title(display_title, fontproperties=self._title_font)
+        self._ax.set_title(
+            display_title, fontproperties=self._title_font, color=palette["text"]
+        )
         self._ax.set_aspect("equal")
-        self._ax.tick_params(labelsize=9)
-        # Tick labels stay Latin (numbers only) — safe to keep Times New Roman.
-        for label in self._ax.get_xticklabels() + self._ax.get_yticklabels():
-            label.set_fontname(self._serif)
+        self._apply_axes_chrome()
 
         # shrink + aspect + pad keep the colorbar from dominating the
         # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
@@ -98,18 +152,28 @@ class ConductivityImageWidget(QWidget):
         )
         self._colorbar.ax.yaxis.label.set_fontname(self._serif)
         self._colorbar.ax.yaxis.label.set_size(10)
+        self._colorbar.ax.yaxis.label.set_color(palette["text"])
         # Slightly smaller tick labels so the numbers don't compete with
         # the main title for visual weight.
-        self._colorbar.ax.tick_params(labelsize=8)
+        self._colorbar.ax.tick_params(labelsize=8, colors=palette["text"])
+        for spine in self._colorbar.ax.spines.values():
+            spine.set_color(palette["border"])
+
+        # Cache so dark-mode toggles can re-render without losing data.
+        self._last_image = (conductivity, node_coords, cell_connectivity, title)
+        self._last_caption = None
 
         self._canvas.draw()
 
     def clear(self) -> None:
         """Reset to placeholder state."""
+        palette = plot_palette()
         self._remove_colorbar()
         self._ax.clear()
-        self._ax.set_facecolor("#fbfdff")
-        self._ax.set_title(self._default_title, fontproperties=self._title_font)
+        self._ax.set_facecolor(palette["axes_bg"])
+        self._ax.set_title(
+            self._default_title, fontproperties=self._title_font, color=palette["text"]
+        )
         self._show_placeholder()
 
     def set_loading(self, message: str | None = None) -> None:
@@ -119,21 +183,11 @@ class ConductivityImageWidget(QWidget):
         or inverse solve is in flight.  Keeps the panel footprint stable
         so the layout doesn't jump when the result arrives.
         """
-        self._remove_colorbar()
-        self._ax.clear()
-        self._ax.set_facecolor("#fbfdff")
-        self._ax.set_title(self._default_title, fontproperties=self._title_font)
-        caption = message or "Loading\u2026"
-        self._ax.text(
-            0.5, 0.5, caption,
-            transform=self._ax.transAxes,
-            ha="center", va="center",
-            fontsize=11, color="#1f5d8b",
-            fontproperties=self._title_font,
-        )
-        self._ax.set_xticks([])
-        self._ax.set_yticks([])
-        self._canvas.draw()
+        self._draw_caption(message or "Loading\u2026", kind="loading")
+
+    # ------------------------------------------------------------------
+    # Internal
+    # ------------------------------------------------------------------
 
     def _remove_colorbar(self) -> None:
         """Remove the existing colorbar even if matplotlib has orphaned it.
@@ -168,24 +222,39 @@ class ConductivityImageWidget(QWidget):
             pass
 
     def _show_placeholder(self) -> None:
-        self._ax.text(
-            0.5, 0.5, "No data",
-            transform=self._ax.transAxes,
-            ha="center", va="center",
-            fontsize=11, color="#5b6573", fontproperties=self._title_font,
-        )
-        self._ax.set_xticks([])
-        self._ax.set_yticks([])
-        self._canvas.draw()
+        # Reuse the unified caption painter so placeholder/loading/error
+        # all look consistent and repaint on theme changes.
+        self._draw_caption("No data", kind="placeholder")
 
     def _show_error(self, msg: str) -> None:
         self._ax.clear()
+        self._draw_caption(msg, kind="error")
+
+    def _draw_caption(self, text: str, kind: str) -> None:
+        """Centered caption painter; kind ∈ {'placeholder','loading','error'}."""
+        palette = plot_palette()
+        color = {
+            "placeholder": palette["caption"],
+            "loading":     palette["caption_loading"],
+            "error":       palette["caption_error"],
+        }.get(kind, palette["caption"])
+        # Make sure background colors track the theme even when the
+        # caption pre-empts a render that would otherwise call
+        # _apply_axes_chrome().
+        self._ax.set_facecolor(palette["axes_bg"])
+        self._figure.patch.set_facecolor(palette["panel_bg"])
+        self._ax.set_title(
+            self._default_title, fontproperties=self._title_font, color=palette["text"]
+        )
         self._ax.text(
-            0.5, 0.5, msg,
+            0.5, 0.5, text,
             transform=self._ax.transAxes,
             ha="center", va="center",
-            fontsize=10, color="#8b2f2f", fontproperties=self._title_font,
+            fontsize=11, color=color, fontproperties=self._title_font,
         )
         self._ax.set_xticks([])
         self._ax.set_yticks([])
+        # Cache so the theme-mode listener can repaint.
+        self._last_image = None
+        self._last_caption = (text, kind)
         self._canvas.draw()

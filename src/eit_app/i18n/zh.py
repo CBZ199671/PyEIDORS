@@ -31,7 +31,6 @@ TRANSLATIONS: dict[str, str] = {
     # File menu
     # ------------------------------------------------------------------
     "menu.file": "\u6587\u4ef6(&F)",                                            # 文件(&F)
-    "menu.file.settings": "\u8bbe\u7f6e(&S)\u2026",                              # 设置(&S)…
     "menu.file.exit": "\u9000\u51fa(&X)",                                       # 退出(&X)
 
     # ------------------------------------------------------------------
@@ -318,9 +317,9 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.shape": "\u5f62\u72b6",                                                        # 形状
     "sim.inhom.col.x": "X",
     "sim.inhom.col.y": "Y",
-    "sim.inhom.col.sizex": "X \u5c3a\u5bf8",                                                      # X 尺寸
-    "sim.inhom.col.sizey": "Y \u5c3a\u5bf8",                                                      # Y 尺寸
-    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.col.sizex": "\u5bbd",                                                              # 宽
+    "sim.inhom.col.sizey": "\u9ad8",                                                              # 高
+    "sim.inhom.col.conductivity": "\u03c3",
     "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",                                                  # + 矩形
@@ -609,22 +608,6 @@ TRANSLATIONS: dict[str, str] = {
     "status.record.armed": "\u5f55\u5236\uff1a\u5c31\u7eea",                                        # 录制：就绪
     "status.record.recording": "\u5f55\u5236\u4e2d\u2026",                                          # 录制中…
     "status.record.other": "\u5f55\u5236\uff1a{status}",                                            # 录制：{status}
-
-    # ==================================================================
-    # Dialog — Settings
-    # ==================================================================
-    "dlg.settings.title": "\u8bbe\u7f6e",                                                            # 设置
-    "dlg.settings.recon.title": "\u91cd\u6784",                                                      # 重构
-    "dlg.settings.recon.method_label": "\u65b9\u6cd5\uff1a",                                          # 方法：
-    "dlg.settings.recon.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",                             # 正则化 α：
-    "dlg.settings.recon.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",                   # 最大迭代次数：
-    "dlg.settings.recon.dim_label": "\u7f51\u683c\u7ef4\u5ea6\uff1a",                                # 网格维度：
-    "dlg.settings.recon.refine_label": "\u7f51\u683c\u7ec6\u5316\uff1a",                              # 网格细化：
-    "dlg.settings.recon.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",                                # 使用分量：
-    "dlg.settings.paths.title": "\u6570\u636e\u8def\u5f84",                                          # 数据路径
-    "dlg.settings.paths.output_placeholder": "\u9ed8\u8ba4\u8f93\u51fa\u76ee\u5f55\u2026",           # 默认输出目录…
-    "dlg.settings.paths.browse_button": "\u6d4f\u89c8\u2026",                                        # 浏览…
-    "dlg.settings.paths.output_label": "\u8f93\u51fa\u76ee\u5f55\uff1a",                             # 输出目录：
 
     # ==================================================================
     # Dialog — Difference Reconstruction

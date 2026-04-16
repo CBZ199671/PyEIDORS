@@ -12,6 +12,7 @@ import pyqtgraph as pg
 from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
+from eit_app.ui.theme import plot_palette, subscribe_theme_mode
 
 
 class LivePlotWidget(QWidget):
@@ -25,10 +26,14 @@ class LivePlotWidget(QWidget):
         super().__init__(parent)
         self._last_frame = None
         self._serif_family = serif_font_family()
-        self._plot_bg = "#f8fbfe"
-        self._plot_text = "#243447"
-        self._plot_grid = "#d6e1ec"
-        self._plot_border = "#c7d4e2"
+        # Pull plot-canvas colors from the theme palette so the widget
+        # picks up dark mode automatically.  subscribe_theme_mode at
+        # the end of __init__ wires re-paint on later mode flips.
+        palette = plot_palette()
+        self._plot_bg = palette["bg"]
+        self._plot_text = palette["text"]
+        self._plot_grid = palette["grid"]
+        self._plot_border = palette["border"]
         self._point_count = 208
         self._expected_point_count = 208
         self._has_data = False
@@ -107,6 +112,30 @@ class LivePlotWidget(QWidget):
         self._curve_imag.setVisible(False)
 
         translator().language_changed.connect(self._retranslate)
+        self._retranslate()
+        # Re-paint canvas + axis colors when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-pull the plot palette and re-paint canvas + axis pens.
+
+        pyqtgraph caches the canvas brush + axis pens internally — they
+        don't honour QSS — so we have to push the new colors explicitly.
+        """
+        palette = plot_palette()
+        self._plot_bg = palette["bg"]
+        self._plot_text = palette["text"]
+        self._plot_grid = palette["grid"]
+        self._plot_border = palette["border"]
+        self._plot_widget.setBackground(self._plot_bg)
+        self._axis_label_style["color"] = self._plot_text
+        for axis_name in ("left", "bottom"):
+            axis = self._plot_widget.getPlotItem().getAxis(axis_name)
+            axis.setTextPen(pg.mkPen(self._plot_text))
+            axis.setPen(pg.mkPen(self._plot_border))
+            axis.setTickPen(pg.mkPen(self._plot_border))
+        # Re-render the title HTML (uses _plot_text) and the bottom-axis
+        # dynamic label (uses _plot_text via _configure_index_axis).
         self._retranslate()
 
     @Slot(object)

@@ -12,6 +12,7 @@ import pyqtgraph as pg
 from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
+from eit_app.ui.theme import plot_palette, subscribe_theme_mode
 
 
 class BoundaryVoltagePlotWidget(QWidget):
@@ -21,10 +22,14 @@ class BoundaryVoltagePlotWidget(QWidget):
         super().__init__(parent)
         self._mode = str(mode).strip().lower()
         self._serif = serif_font_family()
-        self._plot_bg = "#f8fbfe"
-        self._plot_text = "#243447"
-        self._plot_grid = "#d6e1ec"
-        self._plot_border = "#c7d4e2"
+        # Pull plot colors from the theme palette so dark mode applies
+        # automatically.  subscribe_theme_mode at the end of __init__
+        # rewires the plot on later mode flips.
+        palette = plot_palette()
+        self._plot_bg = palette["bg"]
+        self._plot_text = palette["text"]
+        self._plot_grid = palette["grid"]
+        self._plot_border = palette["border"]
         self._point_count = 208
         self._expected_point_count = 208
         self._has_data = False
@@ -107,6 +112,33 @@ class BoundaryVoltagePlotWidget(QWidget):
 
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+        # Re-paint canvas + axis pens when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-pull the plot palette and re-paint pyqtgraph canvas + axes.
+
+        pyqtgraph caches the canvas brush + axis pens; QSS doesn't reach
+        them, so push the new colors explicitly.
+        """
+        palette = plot_palette()
+        self._plot_bg = palette["bg"]
+        self._plot_text = palette["text"]
+        self._plot_grid = palette["grid"]
+        self._plot_border = palette["border"]
+        self._label_style["color"] = self._plot_text
+        self._plot_widget.setBackground(self._plot_bg)
+        for axis_name in ("left", "bottom"):
+            axis = self._plot_widget.getPlotItem().getAxis(axis_name)
+            axis.setTextPen(pg.mkPen(self._plot_text))
+            axis.setPen(pg.mkPen(self._plot_border))
+            axis.setTickPen(pg.mkPen(self._plot_border))
+        # _retranslate rebuilds the title HTML (uses _plot_text) and the
+        # bottom axis label via _configure_index_axis.
+        self._retranslate()
+        # Refresh the loading/empty overlay so it picks up the new
+        # palette colors too.
+        self._apply_overlay_text()
 
     def update_simulation_voltages(
         self,
@@ -187,17 +219,20 @@ class BoundaryVoltagePlotWidget(QWidget):
 
     def _apply_overlay_text(self) -> None:
         """Render the overlay label for the current state + language."""
+        # Pull caption colors from the active palette so the overlay
+        # follows dark mode (was hardcoded #5b6573 / #1f5d8b before).
+        palette = plot_palette()
         if self._overlay_state == "loading":
             self._empty_overlay.setText(t("voltage_plot.loading_overlay"))
             self._empty_overlay.setStyleSheet(
-                "color: #1f5d8b; font-size: 12px; font-weight: 600; "
-                "background: transparent;"
+                f"color: {palette['caption_loading']}; font-size: 12px; "
+                "font-weight: 600; background: transparent;"
             )
         else:
             self._empty_overlay.setText(self._empty_hint())
             self._empty_overlay.setStyleSheet(
-                "color: #5b6573; font-size: 12px; font-weight: 600; "
-                "background: transparent;"
+                f"color: {palette['caption']}; font-size: 12px; "
+                "font-weight: 600; background: transparent;"
             )
 
     def _primary_label(self) -> str:

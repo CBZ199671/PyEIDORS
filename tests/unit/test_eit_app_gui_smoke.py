@@ -585,10 +585,10 @@ def test_main_window_registers_keyboard_shortcuts() -> None:
     window = EITWorkstation()
     _show_window(window)
     try:
-        # Menu action shortcuts
-        assert window._action_settings.shortcut().toString() == "Ctrl+,"
+        # Menu action shortcuts (Settings removed — File menu has only Exit)
         assert window._action_exit.shortcut().toString() == "Ctrl+Q"
         assert window._action_interop_hub.shortcut().toString() == "Ctrl+I"
+        assert not hasattr(window, "_action_settings")
 
         # Tab jump shortcuts (Ctrl+1..Ctrl+4)
         assert [sc.key().toString() for sc in window._tab_shortcuts] == [
@@ -760,6 +760,100 @@ def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
     assert 'fill="#ff0000"' in svg
     assert "viewBox=" in svg
     assert 'width="' not in svg
+
+
+@pytest.mark.gui
+def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
+    """Inhomogeneity column headers must not collide.
+
+    The previous Stretch-everything strategy gave each of the 6 columns
+    ~46px in the 280px right-context pane, which clipped headers like
+    "X 尺寸" / "Size Y" / "σ (S/m)".  We now use Interactive sizing
+    with explicit per-column defaults; the last column (σ) stretches
+    to absorb leftover width.  Single-character zh labels (宽/高) and
+    the bare σ symbol now fit in the slim columns.
+    """
+    from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
+
+    _get_app()
+    editor = InhomogeneityEditor()
+    editor.resize(280, 240)
+    editor.show()
+    _get_app().processEvents()
+    try:
+        header = editor._table.horizontalHeader()
+        widths = [header.sectionSize(c) for c in range(editor._model.columnCount())]
+        # Shape column wider than the numeric columns; X/Y/W/H share size.
+        assert widths[0] >= 70, f"Shape column too narrow: {widths[0]}"
+        for c in (1, 2, 3, 4):
+            assert widths[c] >= 50, f"Numeric column {c} too narrow: {widths[c]}"
+        # σ column (last, stretched) takes whatever is left ≥ 40px.
+        assert widths[5] >= 40
+    finally:
+        editor.close()
+        editor.deleteLater()
+        _get_app().processEvents()
+
+
+@pytest.mark.gui
+def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
+    """Dark mode must reach the four plot widgets (LivePlot, Voltage,
+    Reconstruction, ConductivityImage), not just the QSS chrome.
+
+    pyqtgraph + matplotlib paint their own canvases — they don't
+    honour QSS — so the widgets subscribe to theme_mode_changed and
+    re-pull from plot_palette() on each flip.  Regress that the
+    background colors actually swap on toggle, and swap back when
+    the user returns to light.
+    """
+    from eit_app.ui.theme import (
+        plot_palette,
+        set_theme_mode,
+    )
+
+    app = _get_app()
+    set_theme_mode(app, "light", persist=False)
+    light_palette = plot_palette()
+
+    window = EITWorkstation()
+    _show_window(window)
+    try:
+        # Initial widgets pulled the light palette.
+        assert window._live_plot._plot_bg == light_palette["bg"]
+        assert window._voltage_plot._plot_bg == light_palette["bg"]
+        assert window._recon_widget._plot_bg == light_palette["panel_bg"]
+
+        gt = window._sim_tab._results_widget._ground_truth_widget
+        light_facecolor = gt._figure.patch.get_facecolor()
+
+        # Flip to dark.
+        set_theme_mode(app, "dark", persist=False)
+        _get_app().processEvents()
+        dark_palette = plot_palette()
+
+        assert window._live_plot._plot_bg == dark_palette["bg"]
+        assert window._voltage_plot._plot_bg == dark_palette["bg"]
+        assert window._recon_widget._plot_bg == dark_palette["panel_bg"]
+        # Matplotlib facecolor is a 4-tuple (r,g,b,a) of floats — not
+        # the hex string we set — so compare via "is the value darker"
+        # (sum of channels lower).
+        dark_facecolor = gt._figure.patch.get_facecolor()
+        assert sum(dark_facecolor[:3]) < sum(light_facecolor[:3]), (
+            "ConductivityImage matplotlib figure background should darken"
+        )
+
+        # Toggle back to light: every widget reverts.
+        set_theme_mode(app, "light", persist=False)
+        _get_app().processEvents()
+        assert window._live_plot._plot_bg == light_palette["bg"]
+        assert window._voltage_plot._plot_bg == light_palette["bg"]
+        assert window._recon_widget._plot_bg == light_palette["panel_bg"]
+        # Facecolor returns to roughly the original light value.
+        again = gt._figure.patch.get_facecolor()
+        assert sum(again[:3]) > sum(dark_facecolor[:3])
+    finally:
+        set_theme_mode(app, "light", persist=False)
+        _close_window(window)
 
 
 @pytest.mark.gui
