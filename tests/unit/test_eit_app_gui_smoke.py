@@ -347,6 +347,40 @@ def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
 
 
 @pytest.mark.gui
+def test_bilingual_tab_capture_produces_stable_png_pixmaps() -> None:
+    """Phase 10: verify the QWidget.grab() path used by the
+    capture_bilingual_screenshots script produces non-trivial
+    pixmaps in both languages.  Size-pin the window so the test
+    actually exercises the layout (not a 100×100 default).
+    """
+    from eit_app.i18n import set_language
+
+    window = EITWorkstation()
+    window.resize(1280, 800)
+    _show_window(window)
+    app = _get_app()
+    try:
+        for lang in ("en", "zh"):
+            set_language(lang, persist=False)
+            app.processEvents()
+            for index in range(window._tab_widget.count()):
+                window._tab_widget.setCurrentIndex(index)
+                for _ in range(3):
+                    app.processEvents()
+                pixmap = window.grab()
+                assert not pixmap.isNull(), (
+                    f"grab() returned null pixmap for tab {index} lang {lang}"
+                )
+                # Full-window grabs should be meaningful size; a 0×0 or
+                # 1×1 result means the offscreen renderer broke.
+                assert pixmap.width() >= 800
+                assert pixmap.height() >= 500
+    finally:
+        set_language("en", persist=False)
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_difference_dialog_opens_modeless_and_refreshes_frame_list() -> None:
     """Phase 6: Difference dialog no longer blocks via exec().
 
