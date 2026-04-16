@@ -223,6 +223,11 @@ class FrameBrowserWidget(QGroupBox):
         self._count_label.setText(
             t("hw.frame_browser.count_label", count=self._model.rowCount())
         )
+        # Auto-hide the "how this works" hint once the user actually has
+        # frames in the list.  New users still see the explanation when
+        # the browser is empty; seasoned users don't stare at a block of
+        # static teaching copy they've already read.
+        self._hint.setVisible(not has_rows)
 
     # ── i18n ──
 

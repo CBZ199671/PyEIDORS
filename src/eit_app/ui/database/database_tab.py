@@ -283,6 +283,10 @@ class DatabaseTab(QWidget):
 
         sub_btn_row = QHBoxLayout()
         sub_btn_row.setSpacing(6)
+        # "Clear filters" resets the filter form inputs only — nothing
+        # on disk is touched — so "subtle" is the correct role and not
+        # an inconsistency with Hardware's Clear List (which *does*
+        # drop the in-memory frame list and is correctly tagged danger).
         self._clear_btn = QPushButton("")
         set_button_role(self._clear_btn, "subtle")
         self._refresh_btn = QPushButton("")
