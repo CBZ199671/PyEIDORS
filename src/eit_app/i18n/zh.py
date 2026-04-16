@@ -688,6 +688,10 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.batch.ready": "\u5c31\u7eea\u3002",                                                            # 就绪。
     "dlg.batch.cancelling": "\u53d6\u6d88\u4e2d\u2026",                                                 # 取消中…
     "dlg.batch.progress_default": "{current}/{total}",
+    "dlg.batch.progress_with_eta": "{current}/{total}  \u00b7  \u5269\u4f59 {eta}",                     # {current}/{total} · 剩余 {eta}
+    "dlg.batch.eta_seconds": "{seconds} \u79d2",                                                          # {seconds} 秒
+    "dlg.batch.eta_minutes": "{minutes} \u5206 {seconds} \u79d2",                                        # {minutes} 分 {seconds} 秒
+    "dlg.batch.eta_hours": "{hours} \u5c0f\u65f6 {minutes} \u5206",                                      # {hours} 小时 {minutes} 分
     "dlg.batch.error": "\u2715  \u9519\u8bef\uff1a{message}",                                           # ✕  错误：{message}
     "dlg.batch.subtitle": "\u91cd\u6784\u8f93\u5165\u6587\u4ef6\u5939\u4e2d\u7684\u6bcf\u4e00\u4e2a\u5e27 CSV\u3002\u5bf9\u4e8e\u5dee\u5206\u65b9\u6cd5\uff0c\u53c2\u8003\u5e27\u4f1a\u5e94\u7528\u5230\u6240\u6709\u76ee\u6807\uff0c\u82e5\u53c2\u8003\u5e27\u4f4d\u4e8e\u540c\u4e00\u6587\u4ef6\u5939\u4e2d\u4f1a\u81ea\u52a8\u6392\u9664\u3002",  # 重构输入文件夹中的每一个帧 CSV。对于差分方法，参考帧会应用到所有目标，若参考帧位于同一文件夹中会自动排除。
     "dlg.batch.ref_placeholder": "\u4f5c\u4e3a\u53c2\u8003\u7684 CSV \u6587\u4ef6\uff08\u5dee\u5206\u65b9\u6cd5\u5fc5\u586b\uff09",  # 作为参考的 CSV 文件（差分方法必填）

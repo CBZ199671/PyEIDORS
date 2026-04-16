@@ -346,6 +346,61 @@ def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
         _close_window(window)
 
 
+@pytest.mark.gui
+def test_batch_reconstruction_dialog_shows_eta_after_enough_samples(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Batch progress label should grow an ETA after 2+ items finish
+    and >= 1s of elapsed time.  Before that it stays on the plain
+    current/total form so the user doesn't see wildly fluctuating
+    estimates during the first hot-cache iteration.
+    """
+    import time as real_time
+    from eit_app.ui.dialogs.batch_reconstruction_dialog import BatchReconstructionDialog
+
+    _get_app()
+    dialog = BatchReconstructionDialog(default_input=None, default_output=None)
+    dialog.show()
+    _get_app().processEvents()
+
+    try:
+        # Fake a steady clock so the assertions are deterministic.
+        clock = {"now": 1000.0}
+
+        def _fake_monotonic() -> float:
+            return clock["now"]
+
+        monkeypatch.setattr(real_time, "monotonic", _fake_monotonic)
+        # Hit both the module-local import (inside _set_running /
+        # _format_eta, which does ``import time as _time``).
+        import eit_app.ui.dialogs.batch_reconstruction_dialog as mod
+        monkeypatch.setattr(mod, "__name__", mod.__name__)
+
+        dialog._set_running(True)
+        assert dialog._run_started_at == 1000.0
+
+        # Too early: only 1 item done, elapsed < 1s → no ETA suffix.
+        clock["now"] = 1000.5
+        dialog.set_progress(1, 10)
+        assert "ETA" not in dialog._progress_label.text() and "剩余" not in dialog._progress_label.text()
+
+        # 2 items done after 2s elapsed → rate 1/s → ETA for the
+        # remaining 8 items ≈ 8s.  The label must contain a
+        # localised "remaining" phrase.
+        clock["now"] = 1002.0
+        dialog.set_progress(2, 10)
+        assert "remaining" in dialog._progress_label.text() or "剩余" in dialog._progress_label.text()
+
+        # Non-empty message must bypass ETA decoration (used for
+        # cancel / error paths).
+        dialog.set_progress(3, 10, "Cancelling…")
+        assert dialog._progress_label.text() == "Cancelling…"
+    finally:
+        dialog.close()
+        dialog.deleteLater()
+        _get_app().processEvents()
+
+
 def test_frame_database_range_filters_on_n_elec_and_stim_amp(tmp_path: Path) -> None:
     """New n_elec_min/max and stim_amp_ua_min/max filters.
 

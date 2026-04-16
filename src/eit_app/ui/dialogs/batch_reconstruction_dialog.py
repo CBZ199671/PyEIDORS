@@ -71,6 +71,13 @@ class BatchReconstructionDialog(QDialog):
         # line in the active locale.
         self._finished_state: tuple[str, int, int] | None = None  # (tone, succeeded, failed)
         self._progress_cache: tuple[int, int, str] | None = None  # (current, total, raw_msg)
+        # ETA tracking — stamped the moment the first frame arrives
+        # after _set_running(True), and used to estimate remaining
+        # time off the rate so far.  `_progress_baseline` handles the
+        # case where the controller starts emitting current>0 before
+        # the dialog knows (e.g. fast folder scans).
+        self._run_started_at: float | None = None
+        self._progress_baseline: int = 0
         self._build_ui()
         self._connect_signals()
         self._update_reference_requirement()
@@ -366,6 +373,16 @@ class BatchReconstructionDialog(QDialog):
 
     def _set_running(self, running: bool) -> None:
         self._is_running = running
+        if running:
+            # Reset ETA tracking for a fresh run.  Stamp the moment
+            # set_running(True) fires — the first set_progress call
+            # may carry a non-zero current if the controller processed
+            # a few items before emitting.
+            import time as _time
+            self._run_started_at = _time.monotonic()
+            self._progress_baseline = 0
+        else:
+            self._run_started_at = None
         self._run_btn.setVisible(not running)
         self._cancel_btn.setVisible(running)
         for w in (
@@ -391,9 +408,59 @@ class BatchReconstructionDialog(QDialog):
             self._progress_bar.setRange(0, total)
             self._progress_bar.setValue(current)
         self._progress_cache = (current, total, message)
-        self._progress_label.setText(
-            message or t("dlg.batch.progress_default", current=current, total=total)
-        )
+        if message:
+            # Caller supplied a human-readable string (error, cancelling,
+            # final summary) — show it verbatim without decorating ETA.
+            self._progress_label.setText(message)
+            return
+        eta_text = self._format_eta(current, total)
+        if eta_text is None:
+            self._progress_label.setText(
+                t("dlg.batch.progress_default", current=current, total=total)
+            )
+        else:
+            self._progress_label.setText(
+                t(
+                    "dlg.batch.progress_with_eta",
+                    current=current,
+                    total=total,
+                    eta=eta_text,
+                )
+            )
+
+    def _format_eta(self, current: int, total: int) -> str | None:
+        """Return a localized 'X remaining' string, or None when
+        ETA is not yet estimable.
+
+        Uses a rolling rate = (frames done since baseline) / elapsed
+        so the estimate stabilises as more items complete.  The first
+        few seconds show no ETA rather than wildly fluctuating
+        numbers — we need at least 2 completions and 1s of elapsed
+        time to produce a meaningful figure.
+        """
+        import time as _time
+
+        if self._run_started_at is None or total <= 0 or current >= total:
+            return None
+        done_since_start = max(0, current - self._progress_baseline)
+        elapsed = _time.monotonic() - self._run_started_at
+        if done_since_start < 2 or elapsed < 1.0:
+            return None
+        rate = done_since_start / elapsed  # items per second
+        if rate <= 0:
+            return None
+        remaining_items = total - current
+        remaining_sec = int(round(remaining_items / rate))
+        if remaining_sec <= 0:
+            return None
+
+        if remaining_sec < 60:
+            return t("dlg.batch.eta_seconds", seconds=remaining_sec)
+        if remaining_sec < 3600:
+            minutes, seconds = divmod(remaining_sec, 60)
+            return t("dlg.batch.eta_minutes", minutes=minutes, seconds=seconds)
+        hours, minutes = divmod(remaining_sec // 60, 60)
+        return t("dlg.batch.eta_hours", hours=hours, minutes=minutes)
 
     def on_finished(self, succeeded: int, failed: int) -> None:
         self._set_running(False)
