@@ -53,6 +53,7 @@ class ConductivityImageWidget(QWidget):
         title: str | None = None,
     ) -> None:
         """Render a conductivity distribution on the mesh."""
+        self._remove_colorbar()
         self._ax.clear()
 
         if node_coords.ndim != 2 or node_coords.shape[1] < 2:
@@ -87,8 +88,6 @@ class ConductivityImageWidget(QWidget):
         for label in self._ax.get_xticklabels() + self._ax.get_yticklabels():
             label.set_fontname(self._serif)
 
-        if self._colorbar is not None:
-            self._colorbar.remove()
         # shrink + aspect + pad keep the colorbar from dominating the
         # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
         # keeps it slim, pad=0.04 pulls it closer to the image so the
@@ -107,13 +106,43 @@ class ConductivityImageWidget(QWidget):
 
     def clear(self) -> None:
         """Reset to placeholder state."""
+        self._remove_colorbar()
         self._ax.clear()
-        if self._colorbar is not None:
-            self._colorbar.remove()
-            self._colorbar = None
         self._ax.set_facecolor("#fbfdff")
         self._ax.set_title(self._default_title, fontproperties=self._title_font)
         self._show_placeholder()
+
+    def _remove_colorbar(self) -> None:
+        """Remove the existing colorbar even if matplotlib has orphaned it.
+
+        Matplotlib can leave a colorbar with a partially detached axes after
+        repeated Qt redraws / layout changes.  Calling ``Colorbar.remove()``
+        in that state raises internally, so make removal idempotent and fall
+        back to removing the colorbar axes directly.
+        """
+        colorbar = self._colorbar
+        self._colorbar = None
+        if colorbar is None:
+            return
+
+        cax = getattr(colorbar, "ax", None)
+        try:
+            colorbar.remove()
+            return
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            pass
+
+        if cax is None:
+            return
+        try:
+            if cax in self._figure.axes:
+                self._figure.delaxes(cax)
+            else:
+                cax.remove()
+        except (AttributeError, KeyError, RuntimeError, ValueError):
+            # Best effort only: a failed cleanup should never prevent the new
+            # reconstruction image from being displayed.
+            pass
 
     def _show_placeholder(self) -> None:
         self._ax.text(

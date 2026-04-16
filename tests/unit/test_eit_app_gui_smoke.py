@@ -23,6 +23,7 @@ from eit_app.models.app_state import ConnectionStatus
 from eit_app.models.frame_model import FrameData
 from eit_app.controllers.reconstruction_controller import ReconstructionResult
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 from eit_app.ui.main_window import EITWorkstation
@@ -186,6 +187,48 @@ def test_reconstruction_widget_pre_renders_static_layout_and_refreshes_internal_
     assert widget._image_item.image is not None
     widget.clear()
     assert widget._empty_overlay.isHidden() is False
+    widget.close()
+
+
+@pytest.mark.gui
+def test_conductivity_image_widget_recovers_from_orphaned_colorbar() -> None:
+    _get_app()
+    widget = ConductivityImageWidget()
+    widget.show()
+    _get_app().processEvents()
+
+    coords = np.array(
+        [
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [0, 2, 3]], dtype=int)
+
+    widget.update_image(np.array([1.0, 1.2], dtype=float), coords, cells)
+    _get_app().processEvents()
+    old_colorbar = widget._colorbar
+    assert old_colorbar is not None
+    old_colorbar_ax = old_colorbar.ax
+
+    class _OrphanedColorbar:
+        ax = old_colorbar_ax
+
+        def remove(self) -> None:
+            raise AttributeError("'NoneType' object has no attribute 'set_subplotspec'")
+
+    widget._colorbar = _OrphanedColorbar()
+    widget.update_image(np.array([0.9, 1.4], dtype=float), coords, cells)
+    _get_app().processEvents()
+
+    assert widget._colorbar is not None
+    assert widget._colorbar is not old_colorbar
+    assert old_colorbar_ax not in widget._figure.axes
+
+    widget.clear()
     widget.close()
 
 
