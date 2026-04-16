@@ -811,4 +811,19 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.msg.bundle_no_preview": "\u5f53\u524d\u8fd8\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684 bridge \u5305\u3002",  # 当前还没有已加载的 bridge 包。
     "dlg.interop.msg.profile_saved": "\u5df2\u4fdd\u5b58 profile\uff1a{name}",                                   # 已保存 profile：{name}
     "dlg.interop.msg.profile_removed": "\u5df2\u5220\u9664 profile\uff1a{name}",                                 # 已删除 profile：{name}
+
+    # ==================================================================
+    # Visual path picker (pick_visual_path)
+    # ==================================================================
+    "path_picker.sidebar.wsl_home": "WSL \u4e3b\u76ee\u5f55",                                                    # WSL 主目录
+    "path_picker.sidebar.wsl_root": "WSL \u6839\u76ee\u5f55",                                                    # WSL 根目录
+    "path_picker.sidebar.windows_home": "Windows \u7528\u6237\u76ee\u5f55",                                      # Windows 用户目录
+    "path_picker.sidebar.linux_home": "Linux \u4e3b\u76ee\u5f55",                                                # Linux 主目录
+    "path_picker.sidebar.linux_root": "Linux \u6839\u76ee\u5f55",                                                # Linux 根目录
+    "path_picker.label.look_in": "\u4f4d\u7f6e\uff1a",                                                           # 位置：
+    "path_picker.label.file_name": "\u540d\u79f0\uff1a",                                                         # 名称：
+    "path_picker.label.file_type": "\u7c7b\u578b\uff1a",                                                         # 类型：
+    "path_picker.label.accept": "\u9009\u62e9",                                                                  # 选择
+    "path_picker.label.reject": "\u53d6\u6d88",                                                                  # 取消
+    "path_picker.button.choose_current_folder": "\u9009\u62e9\u5f53\u524d\u6587\u4ef6\u5939",                    # 选择当前文件夹
 }

@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t
 from eit_app.interop.environment import (
     _is_windows_style_path,
     running_in_wsl,
@@ -55,14 +56,20 @@ def _available_windows_drives() -> list[str]:
 
 
 def visual_path_roots() -> list[tuple[str, str]]:
+    """Return `(display_label, path)` tuples for the sidebar shortcuts.
+
+    Labels are resolved against the active UI language each time this
+    function is called — the picker is rebuilt on every `pick_visual_path`
+    invocation, so it always renders in the language the user chose.
+    """
     roots: list[tuple[str, str]] = []
     home = str(Path.home())
 
     if running_in_wsl():
         roots.extend(
             [
-                ("WSL 主目录", home),
-                ("WSL 根目录", "/"),
+                (t("path_picker.sidebar.wsl_home"), home),
+                (t("path_picker.sidebar.wsl_root"), "/"),
             ]
         )
         for drive in _available_windows_drives():
@@ -70,14 +77,14 @@ def visual_path_roots() -> list[tuple[str, str]]:
         return roots
 
     if running_on_windows():
-        roots.append(("Windows 用户目录", home))
+        roots.append((t("path_picker.sidebar.windows_home"), home))
         for drive in _available_windows_drives():
             roots.append((f"Windows {drive[0].upper()}:", drive))
         return roots
 
     return [
-        ("Linux 主目录", home),
-        ("Linux 根目录", "/"),
+        (t("path_picker.sidebar.linux_home"), home),
+        (t("path_picker.sidebar.linux_root"), "/"),
     ]
 
 
@@ -210,11 +217,11 @@ def _configure_dialog_appearance(dialog: QFileDialog) -> None:
     dialog.setOption(QFileDialog.Option.DontUseNativeDialog, True)
     dialog.setViewMode(QFileDialog.ViewMode.Detail)
     dialog.setIconProvider(QFileIconProvider())
-    dialog.setLabelText(QFileDialog.DialogLabel.LookIn, "位置：")
-    dialog.setLabelText(QFileDialog.DialogLabel.FileName, "名称：")
-    dialog.setLabelText(QFileDialog.DialogLabel.FileType, "类型：")
-    dialog.setLabelText(QFileDialog.DialogLabel.Accept, "选择")
-    dialog.setLabelText(QFileDialog.DialogLabel.Reject, "取消")
+    dialog.setLabelText(QFileDialog.DialogLabel.LookIn, t("path_picker.label.look_in"))
+    dialog.setLabelText(QFileDialog.DialogLabel.FileName, t("path_picker.label.file_name"))
+    dialog.setLabelText(QFileDialog.DialogLabel.FileType, t("path_picker.label.file_type"))
+    dialog.setLabelText(QFileDialog.DialogLabel.Accept, t("path_picker.label.accept"))
+    dialog.setLabelText(QFileDialog.DialogLabel.Reject, t("path_picker.label.reject"))
     dialog.setStyleSheet(
         """
         QFileDialog {
@@ -284,7 +291,10 @@ def pick_visual_path(
         dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
         button_box = dialog.findChild(QDialogButtonBox)
         if button_box is not None:
-            choose_dir_btn = button_box.addButton("选择当前文件夹", QDialogButtonBox.ButtonRole.ActionRole)
+            choose_dir_btn = button_box.addButton(
+                t("path_picker.button.choose_current_folder"),
+                QDialogButtonBox.ButtonRole.ActionRole,
+            )
 
             def _choose_directory() -> None:
                 choose_current_dir["enabled"] = True

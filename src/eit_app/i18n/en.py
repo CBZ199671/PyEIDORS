@@ -810,4 +810,19 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.msg.bundle_no_preview": "No bridge package has been loaded yet.",
     "dlg.interop.msg.profile_saved": "Profile saved: {name}",
     "dlg.interop.msg.profile_removed": "Profile removed: {name}",
+
+    # ==================================================================
+    # Visual path picker (pick_visual_path)
+    # ==================================================================
+    "path_picker.sidebar.wsl_home": "WSL home",
+    "path_picker.sidebar.wsl_root": "WSL root",
+    "path_picker.sidebar.windows_home": "Windows user",
+    "path_picker.sidebar.linux_home": "Linux home",
+    "path_picker.sidebar.linux_root": "Linux root",
+    "path_picker.label.look_in": "Look in:",
+    "path_picker.label.file_name": "Name:",
+    "path_picker.label.file_type": "Type:",
+    "path_picker.label.accept": "Choose",
+    "path_picker.label.reject": "Cancel",
+    "path_picker.button.choose_current_folder": "Use this folder",
 }

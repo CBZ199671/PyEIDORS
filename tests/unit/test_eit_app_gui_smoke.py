@@ -88,7 +88,13 @@ def _boundary_radius(widget: ReconstructionWidget) -> float:
 
 
 def _connect_simulator(window: EITWorkstation) -> None:
-    window._on_connect_requested("simulator", {})
+    # Drop the simulator's per-frame sleep: SimulatorDevice.read_frame()
+    # calls time.sleep(1.0/fps) at the start of every frame (defaults to
+    # fps=30 → 33 ms/frame).  Tests don't care about real-time pacing;
+    # they just want frames to flow through the pipeline.  Setting fps
+    # to 0 disables the sleep entirely (see the guard in read_frame).
+    # This cuts ~3-5 seconds off each simulator-heavy smoke test.
+    window._on_connect_requested("simulator", {"simulator_fps": 0})
 
 
 def _splitter_has_center_priority(splitter) -> bool:
@@ -128,7 +134,12 @@ def _cleanup_top_level_widgets_after_test():
             if isinstance(obj, QThread) and obj.isRunning():
                 obj.requestInterruption()
                 obj.quit()
-                obj.wait(3000)
+                # 500ms is plenty for a cooperative shutdown; previously
+                # 3000ms, which tripled smoke-suite runtime whenever a
+                # worker thread sat in a blocking wait.  Any thread that
+                # misses 500ms likely is deadlocked anyway and the test
+                # has already failed — better to surface that fast.
+                obj.wait(500)
         except Exception:
             pass
     app.processEvents()
@@ -620,7 +631,7 @@ def test_simulator_continuous_acquisition_and_recording_smoke(tmp_path: Path) ->
     _show_window(window)
     output_dir = tmp_path / "recordings"
 
-    window._on_connect_requested("simulator", {})
+    window._on_connect_requested("simulator", {"simulator_fps": 0})
     assert _wait_until(
         lambda: window._state.connection_status is ConnectionStatus.CONNECTED,
         timeout=3.0,
@@ -660,7 +671,7 @@ def test_simulator_scheduled_acquisition_smoke() -> None:
     window = EITWorkstation()
     _show_window(window)
 
-    window._on_connect_requested("simulator", {})
+    window._on_connect_requested("simulator", {"simulator_fps": 0})
     assert _wait_until(
         lambda: window._state.connection_status is ConnectionStatus.CONNECTED,
         timeout=3.0,
@@ -708,7 +719,7 @@ def test_fixed_frequency_timed_run_uses_step2_drive_frequency_and_keeps_live_out
     window = EITWorkstation()
     _show_window(window)
 
-    window._on_connect_requested("simulator", {})
+    window._on_connect_requested("simulator", {"simulator_fps": 0})
     assert _wait_until(
         lambda: window._state.connection_status is ConnectionStatus.CONNECTED,
         timeout=3.0,
@@ -962,7 +973,7 @@ def test_simulator_single_frame_capture_stops_automatically(tmp_path: Path) -> N
     window = EITWorkstation()
     _show_window(window)
 
-    window._on_connect_requested("simulator", {})
+    window._on_connect_requested("simulator", {"simulator_fps": 0})
     assert _wait_until(
         lambda: window._state.connection_status is ConnectionStatus.CONNECTED,
         timeout=3.0,
