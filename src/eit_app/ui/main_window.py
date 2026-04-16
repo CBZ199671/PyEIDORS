@@ -410,6 +410,28 @@ class EITWorkstation(QMainWindow):
         # Ctrl+I — I as in Interop.  Not used elsewhere in the app.
         self._action_interop_hub.setShortcut(QKeySequence("Ctrl+I"))
         self._action_interop_hub.triggered.connect(self._open_interop_hub)
+        self._menu_tools.addSeparator()
+
+        # Reconstruction workflow entries — each opens the corresponding
+        # dialog from a single, discoverable menu location rather than
+        # hiding behind a button deep inside a tab.  Keyboard shortcuts
+        # mirror the first letter of each dialog's name so they read
+        # naturally: D for Difference, B for Batch, R for Reconstruct.
+        self._action_difference = self._menu_tools.addAction("")
+        self._action_difference.setShortcut(QKeySequence("Ctrl+D"))
+        self._action_difference.triggered.connect(self._open_difference_dialog)
+
+        self._action_batch_reconstruction = self._menu_tools.addAction("")
+        self._action_batch_reconstruction.setShortcut(QKeySequence("Ctrl+B"))
+        self._action_batch_reconstruction.triggered.connect(
+            self._open_batch_reconstruction_from_menu
+        )
+
+        self._action_reconstruction = self._menu_tools.addAction("")
+        self._action_reconstruction.setShortcut(QKeySequence("Ctrl+R"))
+        self._action_reconstruction.triggered.connect(
+            self._open_reconstruction_from_menu
+        )
 
         # Language menu ----------------------------------------------------
         self._menu_language = menu_bar.addMenu("")
@@ -518,6 +540,9 @@ class EITWorkstation(QMainWindow):
 
         self._menu_tools.setTitle(t("menu.tools"))
         self._action_interop_hub.setText(t("menu.tools.interop_hub"))
+        self._action_difference.setText(t("menu.tools.difference"))
+        self._action_batch_reconstruction.setText(t("menu.tools.batch_reconstruction"))
+        self._action_reconstruction.setText(t("menu.tools.reconstruction"))
 
         self._menu_language.setTitle(t("menu.language"))
         self._menu_language.setToolTip(t("menu.language.tooltip"))
@@ -1955,6 +1980,14 @@ class EITWorkstation(QMainWindow):
         self._refresh_session_summary()
 
     def _open_difference_dialog(self) -> None:
+        """Open the Difference dialog using current Hardware-tab frames.
+
+        Wired to the Tools → Difference menu entry (Ctrl+D) as well as
+        any future button callers.  If fewer than 2 frames have been
+        recorded the user sees a status-bar hint instead of an empty
+        dialog, and the Hardware tab is brought forward so the hint is
+        actionable.
+        """
         from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
 
         entries = []
@@ -1964,7 +1997,11 @@ class EITWorkstation(QMainWindow):
                 entries.append(entry)
 
         if len(entries) < 2:
-            QMessageBox.information(self, "Info", "Need at least 2 recorded frames.")
+            self._status_bar.showMessage(
+                t("main.status.need_frames_for_difference"), 5000
+            )
+            # Drop the user on the tab where they can actually fix it.
+            self._tab_widget.setCurrentWidget(self._hw_tab)
             return
 
         ref_index = self._entry_index(entries, self._selected_reference_entry)
@@ -1980,6 +2017,27 @@ class EITWorkstation(QMainWindow):
         )
         dialog.reconstruction_requested.connect(self._on_reconstruction_config)
         dialog.exec()
+
+    def _open_batch_reconstruction_from_menu(self) -> None:
+        """Tools → Batch Reconstruction menu launcher.
+
+        Delegates to the existing _on_open_batch_dialog() slot with no
+        pre-selected session; the dialog itself exposes Browse buttons
+        so the user picks input/output folders interactively.
+        """
+        self._on_open_batch_dialog("")
+
+    def _open_reconstruction_from_menu(self) -> None:
+        """Tools → Reconstruction menu launcher.
+
+        The single-frame reconstruction dialog is tied to a specific
+        reference / target pair which the user selects in the Database
+        tab.  Rather than opening an empty dialog with Run disabled,
+        switch to the Database tab and surface a status-bar hint so
+        the user knows what to do next.
+        """
+        self._tab_widget.setCurrentWidget(self._db_tab)
+        self._status_bar.showMessage(t("main.status.reconstruction_hint"), 5000)
 
     @staticmethod
     def _entry_index(entries: list[dict], selected: dict | None) -> int:

@@ -37,6 +37,11 @@ TRANSLATIONS: dict[str, str] = {
     # ------------------------------------------------------------------
     "menu.tools": "&Tools",
     "menu.tools.interop_hub": "EIDORS &Interop Hub\u2026",
+    "menu.tools.difference": "&Difference\u2026",
+    "menu.tools.batch_reconstruction": "&Batch Reconstruction\u2026",
+    "menu.tools.reconstruction": "&Reconstruction\u2026",
+    "main.status.need_frames_for_difference": "Record at least 2 frames on the Hardware tab before using Difference.",
+    "main.status.reconstruction_hint": "Switched to Database tab \u2014 select a reference and target frame, then click Reconstruct.",
 
     # ------------------------------------------------------------------
     # Language menu
