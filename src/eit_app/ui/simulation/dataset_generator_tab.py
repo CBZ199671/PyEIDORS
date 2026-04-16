@@ -8,7 +8,7 @@ from eit_app.i18n import t, translator
 from eit_app.ui.simulation.dataset_generator_panel import DatasetGeneratorPanel
 from eit_app.ui.simulation.dataset_summary_panel import DatasetSummaryPanel
 from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel
-from eit_app.ui.theme import set_hint_text, set_subtle_value
+from eit_app.ui.theme import set_hint_text, set_section_header, set_subtle_value
 from eit_app.ui.workflow_shell import WorkflowShell
 
 
@@ -32,7 +32,11 @@ class _DatasetWorkspaceWidget(QWidget):
         hero_layout.setSpacing(8)
         self._hero_title = QLabel("")
         self._hero_title.setWordWrap(True)
-        self._hero_title.setStyleSheet("font-size: 16px; font-weight: 700; color: #1f3b5b;")
+        # Use the section-header role so the color tracks dark mode
+        # (was hardcoded #1f3b5b which becomes unreadable on a dark
+        # canvas).
+        set_section_header(self._hero_title)
+        self._hero_title.setStyleSheet("font-size: 16px; font-weight: 700;")
         hero_layout.addWidget(self._hero_title)
         self._hero_hint = QLabel("")
         self._hero_hint.setWordWrap(True)

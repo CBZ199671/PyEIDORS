@@ -70,7 +70,10 @@ class EITStatusBar(QStatusBar):
         self._frame_label = QLabel("")
 
         for label in (self._fps_label, self._frame_label):
-            label.setStyleSheet("padding: 0 10px; color: #243447; font-weight: 700;")
+            # Drop the explicit color — the default QLabel { color: ...; }
+            # rule in the global stylesheet provides a theme-aware value
+            # (#243447 light / #dbe1ea dark).  Keep the padding + weight.
+            label.setStyleSheet("padding: 0 10px; font-weight: 700;")
 
         apply_state_chip(self._conn_label, tone="error", compact=True)
         apply_state_chip(self._power_label, tone="warn", compact=True)

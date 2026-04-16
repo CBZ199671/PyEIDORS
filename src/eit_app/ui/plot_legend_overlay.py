@@ -9,6 +9,7 @@ from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
+from eit_app.ui.theme import current_theme_mode, subscribe_theme_mode
 
 
 @dataclass(frozen=True)
@@ -113,7 +114,15 @@ class LegendToggleButton(QToolButton):
         self.setIcon(_eye_icon(visible=checked, compact=self._compact))
         font_size = 10 if self._compact else 11
         padding = "1px 2px" if self._compact else "2px 4px"
-        text_color = "#243447" if checked else "#8a98a8"
+        # Text color follows the theme: dark mode uses bright text on
+        # the translucent-dark legend card; light mode uses navy on
+        # the translucent-white card.  Disabled / unchecked state
+        # dims the active color in both modes.
+        if current_theme_mode() == "dark":
+            active, dim, hover = "#dbe1ea", "#6a7686", "#9dc9ea"
+        else:
+            active, dim, hover = "#243447", "#8a98a8", "#1f4b78"
+        text_color = active if checked else dim
         self.setStyleSheet(
             f"""
             QToolButton {{
@@ -126,7 +135,7 @@ class LegendToggleButton(QToolButton):
                 text-align: left;
             }}
             QToolButton:hover {{
-                color: #1f4b78;
+                color: {hover};
             }}
             """
         )
@@ -180,9 +189,18 @@ class _LegendIndicatorRow(QWidget):
         font.setPointSize(10 if compact else 12)
         font.setWeight(QFont.Weight.DemiBold)
         self.text_label.setFont(font)
-        self.text_label.setStyleSheet("color: #243447;")
+        # Text color follows the theme.  Light mode uses the navy
+        # #243447 that reads cleanly on the translucent-white legend
+        # card; dark mode uses #dbe1ea on the translucent-dark card.
+        # apply_legend_text_color() is invoked on every mode flip by
+        # the PlotLegendOverlay parent's subscribe_theme_mode hook.
+        self._apply_legend_text_color()
         layout.addWidget(self.text_label, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addStretch(1)
+
+    def _apply_legend_text_color(self) -> None:
+        color = "#dbe1ea" if current_theme_mode() == "dark" else "#243447"
+        self.text_label.setStyleSheet(f"color: {color};")
 
 
 class PlotLegendOverlay(QFrame):
@@ -204,18 +222,10 @@ class PlotLegendOverlay(QFrame):
         self._draggable = draggable
         self._drag_offset: QPoint | None = None
         self._drag_margin = 8
-        alpha = background_alpha if background_alpha is not None else (196 if compact else 204)
+        self._alpha = background_alpha if background_alpha is not None else (196 if compact else 204)
         self.setObjectName("plotLegendOverlay")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
-        self.setStyleSheet(
-            f"""
-            QFrame#plotLegendOverlay {{
-                background: rgba(255, 255, 255, {alpha});
-                border: 1px solid #c7d4e2;
-                border-radius: 8px;
-            }}
-            """
-        )
+        self._apply_card_stylesheet()
         # Tooltip is assigned by _retranslate() below so it follows UI language.
 
         layout = QVBoxLayout(self)
@@ -236,6 +246,45 @@ class PlotLegendOverlay(QFrame):
         self._install_drag_handles()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+        # Re-paint card + label colors when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _apply_card_stylesheet(self) -> None:
+        """Paint the legend card background + border according to mode.
+
+        Light mode uses translucent-white on the cream plot canvas.
+        Dark mode uses translucent-dark (#222831 base with alpha) on
+        the near-black plot canvas — keeps the legend readable while
+        still hinting at the plot underneath.
+        """
+        if current_theme_mode() == "dark":
+            bg = f"rgba(34, 40, 49, {self._alpha})"    # #222831 with alpha
+            border = "#3e4754"
+        else:
+            bg = f"rgba(255, 255, 255, {self._alpha})"
+            border = "#c7d4e2"
+        self.setStyleSheet(
+            f"""
+            QFrame#plotLegendOverlay {{
+                background: {bg};
+                border: 1px solid {border};
+                border-radius: 8px;
+            }}
+            """
+        )
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-apply card + child-row colors on theme-mode flip."""
+        self._apply_card_stylesheet()
+        for label in self._indicator_labels.values():
+            # Call on the parent row (which owns _apply_legend_text_color)
+            pass
+        # Iterate rows for both indicator and interactive variants and
+        # re-invoke their color helpers.
+        for row in self.findChildren(_LegendIndicatorRow):
+            row._apply_legend_text_color()
+        for button in self._buttons.values():
+            button._refresh_appearance(button.isChecked())
 
     def button(self, key: str) -> LegendToggleButton:
         return self._buttons[key]

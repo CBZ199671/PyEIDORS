@@ -137,12 +137,12 @@ class MeshSetupPanel(QGroupBox):
         outer.addWidget(patterns_widget)
 
         # Live point-count preview so the user sees the effect of pattern
-        # tweaks immediately (updated on every config change).
+        # tweaks immediately (updated on every config change).  Use the
+        # uiSectionHeader role so the color follows the theme (was
+        # hardcoded #1f5d8b which is invisible on the dark canvas).
         self._point_count_label = QLabel("")
-        set_hint_text(self._point_count_label)
-        self._point_count_label.setStyleSheet(
-            "padding: 4px 0; color: #1f5d8b; font-weight: 600;"
-        )
+        set_section_header(self._point_count_label)
+        self._point_count_label.setStyleSheet("padding: 4px 0;")
         outer.addWidget(self._point_count_label)
 
     # ------------------------------------------------------------------

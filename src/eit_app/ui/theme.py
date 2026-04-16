@@ -725,6 +725,14 @@ QGroupBox[embeddedStepPanel="true"] QCheckBox::indicator {
     height: 16px;
 }
 
+/* Plain QLabels without a role property inherit Qt's default
+   WindowText color (#000000), which is invisible on the dark
+   canvas and low-contrast even on the light canvas.  Pin a sane
+   default that later role-specific rules can still override. */
+QLabel {
+    color: #243447;
+}
+
 QLabel[uiSectionHeader="true"] {
     color: #1f3b5b;
     font-weight: 700;
@@ -1453,6 +1461,11 @@ QGroupBox[embeddedStepPanel="true"]::title {
     background: #222831;
 }
 
+/* Dark default for plain QLabels — inherits from canvas color.
+   Role-specific selectors below override this where needed. */
+QLabel {
+    color: #dbe1ea;
+}
 QLabel[uiSectionHeader="true"] {
     color: #9dc9ea;
 }

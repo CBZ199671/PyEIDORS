@@ -193,7 +193,10 @@ class InteropHubDialog(QDialog):
         self._status_value_labels: dict[str, QLabel] = {}
         for index, row_id in enumerate(_STATUS_ROW_IDS):
             title = QLabel("")
-            title.setStyleSheet("font-weight: 700; color: #39506b;")
+            # Use the uiSectionHeader role so the color tracks the theme
+            # (was hardcoded #39506b which is unreadable on dark canvas).
+            title.setProperty("uiSectionHeader", True)
+            title.setStyleSheet("font-weight: 700;")
             value = QLabel("")
             set_subtle_value(value)
             self._status_title_labels[row_id] = title
@@ -321,7 +324,10 @@ class InteropHubDialog(QDialog):
 
         self._preview_overview = QLabel("")
         self._preview_overview.setWordWrap(True)
-        self._preview_overview.setStyleSheet("font-weight: 700; color: #284a6e;")
+        # Use uiSectionHeader role so the color follows the theme
+        # (was hardcoded #284a6e which becomes unreadable on dark canvas).
+        self._preview_overview.setProperty("uiSectionHeader", True)
+        self._preview_overview.setStyleSheet("font-weight: 700;")
         preview_layout.addWidget(self._preview_overview)
 
         self._preview_counts = QLabel("")

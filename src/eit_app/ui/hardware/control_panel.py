@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
-from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header
+from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
 
 
 # Stimulation amplitude level descriptions — kept as numeric/unit labels
@@ -286,7 +286,10 @@ class ControlPanel(QGroupBox):
         block_layout.setContentsMargins(0, 0, 0, 0)
         block_layout.setSpacing(4)
         label = QLabel("")  # retranslated via _field_labels[field_key]
-        label.setStyleSheet("color: #4d5f75; font-weight: 600;")
+        # Use subtle-value role so color follows theme (was #4d5f75 which
+        # is invisible on the dark canvas).
+        set_subtle_value(label)
+        label.setStyleSheet("font-weight: 600;")
         self._field_labels[field_key] = label
         block_layout.addWidget(label)
         block_layout.addWidget(field_widget)
@@ -308,7 +311,10 @@ class ControlPanel(QGroupBox):
 
         for col, key in enumerate(("mode", "elec_ring", "rings")):
             label = QLabel("")
-            label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+            # Drop explicit #6a7686 — subtle-value role provides the
+            # theme-aware color (invisible on dark canvas otherwise).
+            set_subtle_value(label)
+            label.setStyleSheet("font-size: 11px; font-weight: 700;")
             self._grid_labels[f"layout.{key}"] = label
             top_grid.addWidget(label, 0, col)
         top_grid.addWidget(self._mea_mode_combo, 1, 0)
@@ -324,10 +330,12 @@ class ControlPanel(QGroupBox):
         pattern_grid.setColumnStretch(1, 1)
 
         stim_label = QLabel("")
-        stim_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+        set_subtle_value(stim_label)
+        stim_label.setStyleSheet("font-size: 11px; font-weight: 700;")
         self._grid_labels["layout.stim_pattern"] = stim_label
         meas_label = QLabel("")
-        meas_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+        set_subtle_value(meas_label)
+        meas_label.setStyleSheet("font-size: 11px; font-weight: 700;")
         self._grid_labels["layout.meas_pattern"] = meas_label
         pattern_grid.addWidget(stim_label, 0, 0)
         pattern_grid.addWidget(meas_label, 0, 1)
@@ -344,7 +352,8 @@ class ControlPanel(QGroupBox):
         options_grid.addWidget(self._rotate_meas_check, 0, 0)
         options_grid.addWidget(self._use_meas_current_check, 0, 1)
         extra_label = QLabel("")
-        extra_label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+        set_subtle_value(extra_label)
+        extra_label.setStyleSheet("font-size: 11px; font-weight: 700;")
         self._grid_labels["layout.extra_neighbors"] = extra_label
         options_grid.addWidget(extra_label, 1, 0)
         options_grid.addWidget(self._exclude_neighbors_spin, 1, 1)
@@ -359,7 +368,10 @@ class ControlPanel(QGroupBox):
         cem_grid.setColumnStretch(2, 1)
         for col, key in enumerate(("radius", "elec_length", "contact_z")):
             label = QLabel("")
-            label.setStyleSheet("color: #6a7686; font-size: 11px; font-weight: 700;")
+            # Drop explicit #6a7686 — subtle-value role provides the
+            # theme-aware color (invisible on dark canvas otherwise).
+            set_subtle_value(label)
+            label.setStyleSheet("font-size: 11px; font-weight: 700;")
             self._grid_labels[f"cem.{key}"] = label
             cem_grid.addWidget(label, 0, col)
         cem_grid.addWidget(self._radius_spin, 1, 0)
