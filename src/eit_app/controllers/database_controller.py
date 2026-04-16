@@ -282,12 +282,20 @@ class DatabaseController(QObject):
         started_after: str | None = None,
         started_before: str | None = None,
         name_like: str | None = None,
+        n_elec_min: int | None = None,
+        n_elec_max: int | None = None,
+        stim_amp_ua_min: int | None = None,
+        stim_amp_ua_max: int | None = None,
     ) -> list[dict[str, Any]]:
         return self._db.query_sessions(
             frequency_hz=frequency_hz,
             started_after=started_after,
             started_before=started_before,
             name_like=name_like,
+            n_elec_min=n_elec_min,
+            n_elec_max=n_elec_max,
+            stim_amp_ua_min=stim_amp_ua_min,
+            stim_amp_ua_max=stim_amp_ua_max,
         )
 
     def query_frames(self, session_id: int) -> list[dict[str, Any]]:

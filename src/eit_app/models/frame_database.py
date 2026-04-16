@@ -169,9 +169,18 @@ class FrameDatabase:
         started_after: str | None = None,
         started_before: str | None = None,
         name_like: str | None = None,
+        n_elec_min: int | None = None,
+        n_elec_max: int | None = None,
+        stim_amp_ua_min: int | None = None,
+        stim_amp_ua_max: int | None = None,
         limit: int = 500,
     ) -> list[dict[str, Any]]:
-        """Return sessions matching optional filters, newest first."""
+        """Return sessions matching optional filters, newest first.
+
+        Range filters (``*_min`` / ``*_max``) are inclusive on both ends.
+        Any bound that is None is skipped, so you can ask for an
+        open-ended range by supplying only one side.
+        """
         sql = "SELECT s.*, (SELECT COUNT(*) FROM frames f WHERE f.session_id = s.id) AS frame_count FROM sessions s WHERE 1=1"
         params: list[Any] = []
         if frequency_hz is not None:
@@ -187,6 +196,18 @@ class FrameDatabase:
             sql += " AND (s.name LIKE ? OR s.session_dir LIKE ?)"
             like = f"%{name_like}%"
             params.extend([like, like])
+        if n_elec_min is not None:
+            sql += " AND s.n_elec >= ?"
+            params.append(int(n_elec_min))
+        if n_elec_max is not None:
+            sql += " AND s.n_elec <= ?"
+            params.append(int(n_elec_max))
+        if stim_amp_ua_min is not None:
+            sql += " AND s.stim_amp_uA >= ?"
+            params.append(int(stim_amp_ua_min))
+        if stim_amp_ua_max is not None:
+            sql += " AND s.stim_amp_uA <= ?"
+            params.append(int(stim_amp_ua_max))
         sql += " ORDER BY s.started_at DESC LIMIT ?"
         params.append(int(limit))
 

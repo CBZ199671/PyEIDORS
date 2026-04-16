@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QDateEdit,
@@ -275,6 +276,38 @@ class DatabaseTab(QWidget):
         self._lbl_date_to = QLabel("")
         form.addRow(self._lbl_date_to, self._filter_date_to)
 
+        # Electrode-count range (min + max on one row).  Blank = unbounded.
+        n_elec_row = QHBoxLayout()
+        n_elec_row.setSpacing(4)
+        self._filter_n_elec_min = QLineEdit()
+        self._filter_n_elec_min.setValidator(QIntValidator(0, 1024, self))
+        self._filter_n_elec_max = QLineEdit()
+        self._filter_n_elec_max.setValidator(QIntValidator(0, 1024, self))
+        self._n_elec_range_dash = QLabel("\u2013")
+        self._n_elec_range_dash.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._n_elec_range_dash.setMinimumWidth(12)
+        n_elec_row.addWidget(self._filter_n_elec_min, 1)
+        n_elec_row.addWidget(self._n_elec_range_dash, 0)
+        n_elec_row.addWidget(self._filter_n_elec_max, 1)
+        self._lbl_n_elec = QLabel("")
+        form.addRow(self._lbl_n_elec, n_elec_row)
+
+        # Stim-amp range (µA) — same layout as electrode count.
+        stim_row = QHBoxLayout()
+        stim_row.setSpacing(4)
+        self._filter_stim_min = QLineEdit()
+        self._filter_stim_min.setValidator(QIntValidator(0, 100_000, self))
+        self._filter_stim_max = QLineEdit()
+        self._filter_stim_max.setValidator(QIntValidator(0, 100_000, self))
+        self._stim_range_dash = QLabel("\u2013")
+        self._stim_range_dash.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._stim_range_dash.setMinimumWidth(12)
+        stim_row.addWidget(self._filter_stim_min, 1)
+        stim_row.addWidget(self._stim_range_dash, 0)
+        stim_row.addWidget(self._filter_stim_max, 1)
+        self._lbl_stim_amp = QLabel("")
+        form.addRow(self._lbl_stim_amp, stim_row)
+
         layout.addLayout(form)
 
         self._apply_btn = QPushButton("")
@@ -518,6 +551,23 @@ class DatabaseTab(QWidget):
         if date_to != self._filter_date_to.minimumDate():
             filters["started_before"] = date_to.toString("yyyy-MM-dd") + "T23:59:59"
 
+        # Range filters: each bound is optional.  Invalid / empty
+        # values fall through silently — the QIntValidator already
+        # prevents non-digit characters from being entered.
+        for key, widget in (
+            ("n_elec_min", self._filter_n_elec_min),
+            ("n_elec_max", self._filter_n_elec_max),
+            ("stim_amp_ua_min", self._filter_stim_min),
+            ("stim_amp_ua_max", self._filter_stim_max),
+        ):
+            raw = widget.text().strip()
+            if not raw:
+                continue
+            try:
+                filters[key] = int(raw)
+            except ValueError:
+                continue
+
         sessions = self._db_ctrl.query_sessions(**filters)
         self._session_model.set_rows(sessions)
         self._session_count_cache = len(sessions)
@@ -533,6 +583,10 @@ class DatabaseTab(QWidget):
         self._filter_freq.clear()
         self._filter_date_from.setDate(self._filter_date_from.minimumDate())
         self._filter_date_to.setDate(self._filter_date_to.minimumDate())
+        self._filter_n_elec_min.clear()
+        self._filter_n_elec_max.clear()
+        self._filter_stim_min.clear()
+        self._filter_stim_max.clear()
         self.refresh_sessions()
 
     def _selected_session(self) -> dict[str, Any] | None:
@@ -711,6 +765,12 @@ class DatabaseTab(QWidget):
         self._lbl_freq.setText(t("db.filters.freq_label"))
         self._lbl_date_from.setText(t("db.filters.date_from_label"))
         self._lbl_date_to.setText(t("db.filters.date_to_label"))
+        self._lbl_n_elec.setText(t("db.filters.n_elec_label"))
+        self._filter_n_elec_min.setPlaceholderText(t("db.filters.n_elec_min_placeholder"))
+        self._filter_n_elec_max.setPlaceholderText(t("db.filters.n_elec_max_placeholder"))
+        self._lbl_stim_amp.setText(t("db.filters.stim_amp_label"))
+        self._filter_stim_min.setPlaceholderText(t("db.filters.stim_amp_min_placeholder"))
+        self._filter_stim_max.setPlaceholderText(t("db.filters.stim_amp_max_placeholder"))
         self._apply_btn.setText(t("db.filters.apply_button"))
         self._clear_btn.setText(t("db.filters.clear_button"))
         self._refresh_btn.setText(t("db.filters.refresh_button"))

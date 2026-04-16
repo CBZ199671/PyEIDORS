@@ -436,7 +436,7 @@ TRANSLATIONS: dict[str, str] = {
     # Database tab — Left filter panel
     # ==================================================================
     "db.filters.title": "FILTERS",
-    "db.filters.hint": "Search the archive by name, frequency, or date.",
+    "db.filters.hint": "Search the archive by name, frequency, electrodes, stim amp, or date.",
     "db.filters.name_label": "Name:",
     "db.filters.name_placeholder": "tank, test_for_gui \u2026",
     "db.filters.freq_label": "Frequency (Hz):",
@@ -444,6 +444,12 @@ TRANSLATIONS: dict[str, str] = {
     "db.filters.date_any": "Any",
     "db.filters.date_from_label": "Date from:",
     "db.filters.date_to_label": "Date to:",
+    "db.filters.n_elec_label": "Electrodes:",
+    "db.filters.n_elec_min_placeholder": "min",
+    "db.filters.n_elec_max_placeholder": "max",
+    "db.filters.stim_amp_label": "Stim amp (\u00b5A):",
+    "db.filters.stim_amp_min_placeholder": "min",
+    "db.filters.stim_amp_max_placeholder": "max",
     "db.filters.apply_button": "Apply Filters",
     "db.filters.clear_button": "Clear",
     "db.filters.refresh_button": "Refresh",

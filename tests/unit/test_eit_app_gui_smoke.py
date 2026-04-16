@@ -346,6 +346,52 @@ def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
         _close_window(window)
 
 
+def test_frame_database_range_filters_on_n_elec_and_stim_amp(tmp_path: Path) -> None:
+    """New n_elec_min/max and stim_amp_ua_min/max filters.
+
+    Not gated on @pytest.mark.gui — FrameDatabase is a pure SQLite
+    wrapper with no Qt widgets, so this runs fast as a normal unit.
+    """
+    from eit_app.models.frame_database import FrameDatabase
+
+    db = FrameDatabase(tmp_path / "range.db")
+    try:
+        for name, n_elec, stim in [("A", 16, 100), ("B", 32, 500), ("C", 64, 1000)]:
+            db.add_session(
+                tmp_path / name,
+                {
+                    "name": name,
+                    "started_at": f"2026-01-{int(n_elec / 16):02d}",
+                    "n_elec": n_elec,
+                    "frequency_hz": 1000,
+                    "stim_amp_uA": stim,
+                },
+            )
+
+        names = lambda rows: sorted(r["name"] for r in rows)
+
+        # n_elec inclusive range
+        assert names(db.query_sessions(n_elec_min=32)) == ["B", "C"]
+        assert names(db.query_sessions(n_elec_max=32)) == ["A", "B"]
+        assert names(db.query_sessions(n_elec_min=32, n_elec_max=32)) == ["B"]
+
+        # stim_amp_uA inclusive range
+        assert names(db.query_sessions(stim_amp_ua_min=500)) == ["B", "C"]
+        assert names(db.query_sessions(stim_amp_ua_max=500)) == ["A", "B"]
+
+        # Combined
+        assert names(
+            db.query_sessions(
+                n_elec_min=16, n_elec_max=32, stim_amp_ua_max=500
+            )
+        ) == ["A", "B"]
+
+        # Empty result when ranges don't overlap any row
+        assert names(db.query_sessions(n_elec_min=128)) == []
+    finally:
+        db.close()
+
+
 @pytest.mark.gui
 def test_bilingual_tab_capture_produces_stable_png_pixmaps() -> None:
     """Phase 10: verify the QWidget.grab() path used by the

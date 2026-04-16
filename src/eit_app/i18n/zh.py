@@ -437,7 +437,7 @@ TRANSLATIONS: dict[str, str] = {
     # Database tab — Left filter panel
     # ==================================================================
     "db.filters.title": "\u7b5b\u9009",                                                               # 筛选
-    "db.filters.hint": "\u6309\u540d\u79f0\u3001\u9891\u7387\u6216\u65e5\u671f\u68c0\u7d22\u5386\u53f2\u8bb0\u5f55\u3002",  # 按名称、频率或日期检索历史记录。
+    "db.filters.hint": "\u6309\u540d\u79f0\u3001\u9891\u7387\u3001\u7535\u6781\u6570\u3001\u6fc0\u52b1\u7535\u6d41\u6216\u65e5\u671f\u68c0\u7d22\u5386\u53f2\u8bb0\u5f55\u3002",  # 按名称、频率、电极数、激励电流或日期检索历史记录。
     "db.filters.name_label": "\u540d\u79f0\uff1a",                                                    # 名称：
     "db.filters.name_placeholder": "tank, test_for_gui \u2026",
     "db.filters.freq_label": "\u9891\u7387 (Hz)\uff1a",                                               # 频率 (Hz)：
@@ -445,6 +445,12 @@ TRANSLATIONS: dict[str, str] = {
     "db.filters.date_any": "\u5168\u90e8",                                                            # 全部
     "db.filters.date_from_label": "\u8d77\u59cb\u65e5\u671f\uff1a",                                    # 起始日期：
     "db.filters.date_to_label": "\u7ed3\u675f\u65e5\u671f\uff1a",                                      # 结束日期：
+    "db.filters.n_elec_label": "\u7535\u6781\u6570\uff1a",                                             # 电极数：
+    "db.filters.n_elec_min_placeholder": "\u6700\u5c0f",                                                # 最小
+    "db.filters.n_elec_max_placeholder": "\u6700\u5927",                                                # 最大
+    "db.filters.stim_amp_label": "\u6fc0\u52b1\u7535\u6d41 (\u00b5A)\uff1a",                             # 激励电流 (µA)：
+    "db.filters.stim_amp_min_placeholder": "\u6700\u5c0f",                                              # 最小
+    "db.filters.stim_amp_max_placeholder": "\u6700\u5927",                                              # 最大
     "db.filters.apply_button": "\u5e94\u7528\u7b5b\u9009",                                            # 应用筛选
     "db.filters.clear_button": "\u6e05\u7a7a",                                                        # 清空
     "db.filters.refresh_button": "\u5237\u65b0",                                                      # 刷新
