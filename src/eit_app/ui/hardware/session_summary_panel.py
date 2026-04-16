@@ -31,12 +31,17 @@ class SessionSummaryPanel(QGroupBox):
     )
 
     def __init__(self, parent: QWidget | None = None) -> None:
+        # Title filled in by _retranslate() so it follows the UI
+        # language.  The headerless variant was used previously to keep
+        # the panel visually compact, but it left the whole session
+        # summary without any label — Phase 9 restores a proper heading
+        # ("Session Summary" / "会话摘要") so the block reads as an
+        # actual section rather than a floating badge.
         super().__init__("", parent)
         self._values: dict[str, QLabel] = {}
         self._field_titles: dict[str, QLabel] = {}
         self._indicator_values: dict[str, QLabel] = {}
         self._indicator_titles: dict[str, QLabel] = {}
-        self.setProperty("summaryHeaderless", True)
         set_panel_role(self, "summary")
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
@@ -165,6 +170,9 @@ class SessionSummaryPanel(QGroupBox):
 
     def _retranslate(self) -> None:
         """Refresh all owner-provided strings whose source is the i18n dict."""
+        # Section heading: restored in Phase 9 (was hidden via
+        # summaryHeaderless).
+        self.setTitle(t("hw.summary.title"))
         # Field title labels (left column)
         for key, title_key in self._FIELDS:
             self._field_titles[key].setText(t(title_key))

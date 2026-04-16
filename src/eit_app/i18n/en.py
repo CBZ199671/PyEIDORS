@@ -157,6 +157,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Hardware tab — Session summary footer
     # ==================================================================
+    "hw.summary.title": "Session Summary",
     "hw.summary.field.identity": "Identity:",
     "hw.summary.field.transport": "Transport:",
     "hw.summary.field.layout": "Layout:",

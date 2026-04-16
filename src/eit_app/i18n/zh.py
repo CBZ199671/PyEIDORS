@@ -159,6 +159,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Hardware tab — Session summary footer
     # ==================================================================
+    "hw.summary.title": "\u4f1a\u8bdd\u6458\u8981",                                              # 会话摘要
     "hw.summary.field.identity": "\u8eab\u4efd\uff1a",                                   # 身份：
     "hw.summary.field.transport": "\u4f20\u8f93\uff1a",                                   # 传输：
     "hw.summary.field.layout": "\u5e03\u5c40\uff1a",                                      # 布局：
