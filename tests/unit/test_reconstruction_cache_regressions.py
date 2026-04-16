@@ -74,6 +74,12 @@ def _make_frame(index: int) -> FrameData:
     )
 
 
+def test_effective_refinement_accepts_simulation_mesh_size_without_inflation() -> None:
+    assert rc._compute_effective_refinement(1.0, 0.1) == 5
+    assert rc._compute_effective_refinement(1.0, 10.0) == 20
+    assert rc._compute_effective_refinement(1.0, 10.0, mesh_size=0.1) == 5
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

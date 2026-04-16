@@ -2651,43 +2651,64 @@ class EITWorkstation(QMainWindow):
         self._sim_state.inverse_running = True
         self._sim_tab.inverse_problem_panel.set_running(True)
 
-        # Build a ReconstructionRequest using the forward result data
+        # Build a ReconstructionRequest using the forward result data.
+        # The simulator returns a real-valued measurement vector, not an I/Q
+        # pair packed into one array; keep the whole vector in the real channel
+        # so reconstruction sees the same measurement count as the forward run.
         from eit_app.models.frame_model import FrameData
         import numpy as np
 
         n_meas = len(result.boundary_voltages)
-        half = n_meas // 2
+        zero_imag = np.zeros(n_meas, dtype=np.float64)
 
-        # Treat homogeneous as reference, inhomogeneous as target
+        homog = (
+            np.asarray(result.homogeneous_voltages, dtype=np.float64)
+            if result.homogeneous_voltages is not None
+            else np.zeros(n_meas, dtype=np.float64)
+        )
         ref_frame = FrameData(
-            real=result.homogeneous_voltages[:half] if result.homogeneous_voltages is not None else np.zeros(half),
-            imag=result.homogeneous_voltages[half:] if result.homogeneous_voltages is not None else np.zeros(n_meas - half),
+            real=homog,
+            imag=zero_imag,
             timestamp=0.0,
             frame_index=0,
         )
         tgt_frame = FrameData(
-            real=result.boundary_voltages[:half],
-            imag=result.boundary_voltages[half:] if n_meas > half else np.zeros(n_meas - half),
+            real=np.asarray(result.boundary_voltages, dtype=np.float64),
+            imag=zero_imag,
             timestamp=0.0,
             frame_index=1,
         )
 
         forward_cfg = self._current_sim_forward_model_config()
+        raw_method = str(inv_cfg.get("method", "")).strip().lower()
+        if any(tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")):
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+        elif any(tag in raw_method for tag in ("abs", "absolute")):
+            resolved_method = "gn-absolute"
+            reconstruction_runtime = "full_gn"
+        else:
+            resolved_method = raw_method or "gn-difference"
+            reconstruction_runtime = "full_gn"
+
+        mesh_size = float(forward_cfg.mesh_refinement)
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
             use_part="real",
-            method=inv_cfg["method"],
+            method=resolved_method,
             regularization_alpha=inv_cfg["regularization_alpha"],
             max_iterations=inv_cfg["max_iterations"],
             mesh_dimension=forward_cfg.mesh_dimension,
-            mesh_refinement=int(1.0 / max(forward_cfg.mesh_refinement, 1e-6)),
+            mesh_refinement=mesh_size,
             metadata={
                 **forward_cfg.to_mapping(),
                 **measurement_layout_from_config(forward_cfg.to_mapping()),
+                "mesh_size": mesh_size,
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
                 "request_source": "simulation",
+                "reconstruction_runtime": reconstruction_runtime,
             },
         )
         accepted = self._sim_recon_ctrl.reconstruct(request)
@@ -2714,6 +2735,18 @@ class EITWorkstation(QMainWindow):
                 node_coords=recon_result.node_coords,
                 cell_connectivity=recon_result.cell_connectivity,
             )
+            try:
+                measured = getattr(recon_result, "measured", None)
+                simulated = getattr(recon_result, "simulated", None)
+                if measured is not None and simulated is not None:
+                    self._sim_tab.results_widget.voltage_plot.update_simulation_voltages(
+                        ground_truth=np.asarray(measured, dtype=np.float64).reshape(-1),
+                        reconstructed=np.asarray(simulated, dtype=np.float64).reshape(-1),
+                    )
+            except Exception as exc:
+                log.warning(
+                    "Failed to update simulation voltage plot with recon fit: %s", exc
+                )
             self._sim_tab.metrics_panel.update_metrics(
                 self._last_fwd_result.ground_truth_conductivity,
                 recon_result.conductivity,

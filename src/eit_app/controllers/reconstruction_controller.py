@@ -55,7 +55,7 @@ class ReconstructionRequest:
     regularization_alpha: float = 1.0
     max_iterations: int = 10
     mesh_dimension: int = 2
-    mesh_refinement: int = 4
+    mesh_refinement: float = 4.0
     metadata: dict[str, Any] = field(default_factory=dict)
 
 
@@ -239,9 +239,40 @@ def _load_gn_difference_runner_module():
     raise ModuleNotFoundError(f"Unable to import {module_name}")
 
 
-def _compute_effective_refinement(radius: float, mesh_refinement: int) -> int:
-    mesh_size = max(0.02, 0.25 / max(1, int(mesh_refinement)))
-    return max(2, int(round(float(radius) / max(mesh_size, 1e-6) / 2.0)))
+def _compute_effective_refinement(
+    radius: float,
+    mesh_refinement: float,
+    *,
+    mesh_size: float | None = None,
+) -> int:
+    """Resolve the optimized-mesh refinement used by reconstruction.
+
+    Hardware reconstruction passes the historical integer refinement control
+    (4, 8, ...).  The Simulation tab passes a physical mesh_size such as 0.1.
+    Treating that mesh_size as ``1 / mesh_size`` and then applying the legacy
+    conversion inflates 0.1 to ref20, which makes simulation inverse appear to
+    hang while loading/building an unnecessarily dense cache mesh.
+    """
+
+    radius_f = max(float(radius), 1e-9)
+    size_f = None
+    if mesh_size is not None:
+        try:
+            size_f = float(mesh_size)
+        except (TypeError, ValueError):
+            size_f = None
+    if size_f is not None and np.isfinite(size_f) and size_f > 0.0:
+        return max(2, int(round(radius_f / max(size_f, 1e-6) / 2.0)))
+
+    try:
+        refinement_f = float(mesh_refinement)
+    except (TypeError, ValueError):
+        refinement_f = 4.0
+    if np.isfinite(refinement_f) and 0.0 < refinement_f < 1.0:
+        return max(2, int(round(radius_f / max(refinement_f, 1e-6) / 2.0)))
+
+    mesh_size_f = max(0.02, 0.25 / max(1, int(refinement_f)))
+    return max(2, int(round(radius_f / max(mesh_size_f, 1e-6) / 2.0)))
 
 
 def _resolve_drive_mode(meta: dict[str, Any], *, default: str = "total_current") -> str:
@@ -303,7 +334,11 @@ def _prepare_single_step_cached_runtime(
     meta["drive_value"] = _resolve_drive_value(meta)
     mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
     radius = float(meta.get("radius", 1.0))
-    refinement = _compute_effective_refinement(radius, req.mesh_refinement)
+    refinement = _compute_effective_refinement(
+        radius,
+        req.mesh_refinement,
+        mesh_size=meta.get("mesh_size"),
+    )
     lam = float(meta.get("difference_lambda", 1.0e-2))
     background_sigma = float(meta.get("background_sigma", 1.0))
     contact_impedance = float(meta.get("contact_impedance", 0.01))
@@ -493,7 +528,11 @@ def _run_full_gn_request(
 
     emit("Setting up EIT system...")
     radius = float(meta.get("radius", 1.0))
-    refinement = _compute_effective_refinement(radius, req.mesh_refinement)
+    refinement = _compute_effective_refinement(
+        radius,
+        req.mesh_refinement,
+        mesh_size=meta.get("mesh_size"),
+    )
     cache_key = (
         int(meta["n_elec"]),
         int(meta.get("n_rings", 1)),

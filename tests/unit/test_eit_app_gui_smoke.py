@@ -14,6 +14,8 @@ from PySide6.QtWidgets import QApplication
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import eit_app.ui.main_window as main_window_module
+from eit_app.controllers import reconstruction_controller as rc
+from eit_app.controllers.forward_solver_controller import ForwardSolverResult
 from eit_app.hardware.connection_preflight import ConnectionPreflightResult
 from eit_app.hardware.serial_port_discovery import SerialPortDescriptor
 from eit_app.measurement_layout import estimate_measurement_point_count
@@ -1148,6 +1150,55 @@ def test_simulation_voltage_index_adapts_to_mesh_electrode_count() -> None:
         use_meas_current_next=0,
     )
 
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.mesh_setup_panel._refine_spin.setValue(0.1)
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "eidors_one_step_noser",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+
+    def _capture_reconstruct(request) -> bool:
+        captured.append(request)
+        return True
+
+    monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "gn-difference"
+    assert request.reference_frame.real.size == n_meas
+    assert request.target_frame.real.size == n_meas
+    assert request.mesh_refinement == pytest.approx(0.1)
+    assert request.metadata["mesh_size"] == pytest.approx(0.1)
+    assert request.metadata["reconstruction_runtime"] == "single_step_cached"
+    assert rc._prepare_single_step_cached_runtime(request).refinement == 5
+
+    window._sim_state.inverse_running = False
     _close_window(window)
 
 
