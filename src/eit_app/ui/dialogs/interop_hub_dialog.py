@@ -30,6 +30,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.i18n import t, translator
 from eit_app.interop import (
     EidorsEnvironment,
     EidorsExportJob,
@@ -53,6 +54,12 @@ ImportApplyCallback = Callable[[str, LoadedBridgePackage], str]
 SmokeValidateCallback = Callable[[LoadedBridgePackage], str]
 
 
+# Stable identifiers for the status-panel rows.  The visible label follows
+# the active UI language, but these ids stay constant so callers can keep
+# addressing the same row across language switches.
+_STATUS_ROW_IDS = ("matlab", "startup", "source", "bridge_package")
+
+
 class InteropHubDialog(QDialog):
     """Standalone workbench for importing from and exporting to EIDORS."""
 
@@ -68,7 +75,7 @@ class InteropHubDialog(QDialog):
         smoke_validate_callback: SmokeValidateCallback | None = None,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("Interop Hub")
+        # Title assigned in _retranslate() so it follows the active language.
         self.resize(1180, 820)
 
         self._capture_service = capture_service or EidorsScriptCaptureService()
@@ -81,47 +88,64 @@ class InteropHubDialog(QDialog):
         self._environments: list[EidorsEnvironment] = []
         self._loaded_bundle: LoadedBridgePackage | None = None
         self._preview: EidorsImportPreview | None = None
+        # Track which rows are in the "pending" sentinel state so
+        # retranslation can keep them in that state rather than snapping
+        # them to "未指定 / Not set" whenever the language flips.
+        self._status_row_states: dict[str, str] = {row: "unspecified" for row in _STATUS_ROW_IDS}
 
         self._build_ui()
         self._load_profiles_into_list()
         self._refresh_manual_environment_state()
         self._refresh_source_status()
 
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
+
+    # ------------------------------------------------------------------
+    # UI construction
+    # ------------------------------------------------------------------
+
     def _make_path_row(
         self,
         line_edit: QLineEdit,
         *,
-        title: str,
+        title_key: str,
         mode: str,
-        filter_spec: str = "All files (*)",
+        filter_key: str = "",
     ) -> QWidget:
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        pick_btn = QPushButton("选择...")
+        pick_btn = QPushButton("")
         set_button_role(pick_btn, "subtle")
         pick_btn.setMinimumWidth(110)
         pick_btn.clicked.connect(
-            lambda: self._browse_into(line_edit, title=title, mode=mode, filter_spec=filter_spec)
+            lambda: self._browse_into(
+                line_edit, title_key=title_key, mode=mode, filter_key=filter_key
+            )
         )
 
         layout.addWidget(line_edit, 1)
         layout.addWidget(pick_btn)
+        # Remember the button + its translation key so _retranslate() can
+        # refresh the label without rebuilding the row.
+        self._pick_buttons.append(pick_btn)
         return row
 
     def _browse_into(
         self,
         line_edit: QLineEdit,
         *,
-        title: str,
+        title_key: str,
         mode: str,
-        filter_spec: str = "All files (*)",
+        filter_key: str = "",
     ) -> None:
+        filter_spec = t(filter_key) if filter_key else "All files (*)"
         path = pick_visual_path(
             self,
-            title=title,
+            title=t(title_key),
             mode=mode,
             filter_spec=filter_spec,
             initial_path=line_edit.text().strip(),
@@ -130,23 +154,29 @@ class InteropHubDialog(QDialog):
             line_edit.setText(path)
 
     def _build_ui(self) -> None:
+        # List populated by _make_path_row; refreshed by _retranslate().
+        self._pick_buttons: list[QPushButton] = []
+
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 12, 12, 12)
         root.setSpacing(8)
 
-        intro = QLabel(
-            "在这里我们把 EIDORS 与 PyEIDORS 之间的迁移做成一条可视化、可确认、可回滚的工作流。"
-        )
-        intro.setWordWrap(True)
-        set_hint_text(intro)
-        root.addWidget(intro)
+        self._intro_label = QLabel("")
+        self._intro_label.setWordWrap(True)
+        set_hint_text(self._intro_label)
+        root.addWidget(self._intro_label)
 
         self._tabs = QTabWidget()
         root.addWidget(self._tabs, 1)
 
-        self._tabs.addTab(self._build_import_tab(), "Import from EIDORS")
-        self._tabs.addTab(self._build_export_tab(), "Export to EIDORS")
-        self._tabs.addTab(self._build_profiles_tab(), "Profiles & Paths")
+        # Remember tab widgets so _retranslate() can refresh their titles
+        # without rebuilding the tab bar.
+        self._import_page = self._build_import_tab()
+        self._export_page = self._build_export_tab()
+        self._profiles_page = self._build_profiles_tab()
+        self._tabs.addTab(self._import_page, "")
+        self._tabs.addTab(self._export_page, "")
+        self._tabs.addTab(self._profiles_page, "")
 
     def _build_import_tab(self) -> QWidget:
         page = QWidget()
@@ -154,21 +184,23 @@ class InteropHubDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        status_box = QGroupBox("当前手动指定状态")
-        status_layout = QGridLayout(status_box)
+        self._status_box = QGroupBox("")
+        status_layout = QGridLayout(self._status_box)
         status_layout.setContentsMargins(12, 12, 12, 12)
         status_layout.setHorizontalSpacing(12)
         status_layout.setVerticalSpacing(6)
-        self._status_labels: dict[str, QLabel] = {}
-        for index, key in enumerate(("MATLAB", "EIDORS startup", "Source", "Bridge package")):
-            title = QLabel(key)
+        self._status_title_labels: dict[str, QLabel] = {}
+        self._status_value_labels: dict[str, QLabel] = {}
+        for index, row_id in enumerate(_STATUS_ROW_IDS):
+            title = QLabel("")
             title.setStyleSheet("font-weight: 700; color: #39506b;")
-            value = QLabel("未指定")
+            value = QLabel("")
             set_subtle_value(value)
-            self._status_labels[key] = value
+            self._status_title_labels[row_id] = title
+            self._status_value_labels[row_id] = value
             status_layout.addWidget(title, index, 0)
             status_layout.addWidget(value, index, 1)
-        layout.addWidget(status_box)
+        layout.addWidget(self._status_box)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         layout.addWidget(splitter, 1)
@@ -178,102 +210,103 @@ class InteropHubDialog(QDialog):
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(8)
 
-        env_box = QGroupBox("Step 1 · Specify Environment")
-        env_layout = QFormLayout(env_box)
+        self._env_box = QGroupBox("")
+        env_layout = QFormLayout(self._env_box)
         env_layout.setContentsMargins(12, 12, 12, 12)
         env_layout.setSpacing(8)
 
         self._env_combo = QComboBox()
         self._env_combo.currentIndexChanged.connect(self._sync_environment_fields)
 
-        env_hint = QLabel("请点击“选择...”手动指定 MATLAB 与 startup.m 路径。统一文件浏览器会按当前环境显示可访问的 Linux / WSL / Windows 位置；环境画像可在 Profiles & Paths 页管理。")
-        env_hint.setWordWrap(True)
-        set_hint_text(env_hint)
-        env_layout.addRow(env_hint)
+        self._env_hint = QLabel("")
+        self._env_hint.setWordWrap(True)
+        set_hint_text(self._env_hint)
+        env_layout.addRow(self._env_hint)
 
         self._matlab_edit = QLineEdit()
-        self._matlab_edit.setPlaceholderText("matlab.exe path")
         self._matlab_edit.textChanged.connect(self._refresh_manual_environment_state)
+        self._lbl_matlab = QLabel("")
         env_layout.addRow(
-            "MATLAB:",
+            self._lbl_matlab,
             self._make_path_row(
                 self._matlab_edit,
-                title="选择 MATLAB 可执行文件",
+                title_key="dlg.interop.env.pick_matlab_title",
                 mode="file",
-                filter_spec="Executable (*.exe *.bin *.sh);;All files (*)",
+                filter_key="dlg.interop.env.matlab_filter",
             ),
         )
 
         self._startup_edit = QLineEdit()
-        self._startup_edit.setPlaceholderText("startup.m path")
         self._startup_edit.textChanged.connect(self._refresh_manual_environment_state)
+        self._lbl_startup = QLabel("")
         env_layout.addRow(
-            "EIDORS startup:",
+            self._lbl_startup,
             self._make_path_row(
                 self._startup_edit,
-                title="选择 EIDORS startup.m",
+                title_key="dlg.interop.env.pick_startup_title",
                 mode="file",
-                filter_spec="MATLAB script (*.m);;All files (*)",
+                filter_key="dlg.interop.env.startup_filter",
             ),
         )
-        left_layout.addWidget(env_box)
+        left_layout.addWidget(self._env_box)
 
-        source_box = QGroupBox("Step 2 · Select Source")
-        source_layout = QFormLayout(source_box)
+        self._source_box = QGroupBox("")
+        source_layout = QFormLayout(self._source_box)
         source_layout.setContentsMargins(12, 12, 12, 12)
         source_layout.setSpacing(8)
         self._source_edit = QLineEdit()
-        self._source_edit.setPlaceholderText("选择 EIDORS .m 脚本、bridge 目录、legacy .mat 或 bridge JSON")
         self._source_edit.textChanged.connect(self._refresh_source_status)
+        self._lbl_source = QLabel("")
         source_layout.addRow(
-            "Source:",
+            self._lbl_source,
             self._make_path_row(
                 self._source_edit,
-                title="选择 EIDORS 脚本、bridge 文件或 bridge 目录",
+                title_key="dlg.interop.source.pick_title",
                 mode="file_or_directory",
-                filter_spec="Supported (*.m *.mat *.json);;MATLAB script (*.m);;MAT file (*.mat);;JSON (*.json);;All files (*)",
+                filter_key="dlg.interop.source.pick_filter",
             ),
         )
 
         self._capture_output_edit = QLineEdit()
         self._capture_output_edit.setText(str((Path.cwd() / "data" / "interop").resolve()))
+        self._lbl_capture = QLabel("")
         source_layout.addRow(
-            "Capture output:",
+            self._lbl_capture,
             self._make_path_row(
                 self._capture_output_edit,
-                title="选择桥接采集输出目录",
+                title_key="dlg.interop.source.pick_capture_title",
                 mode="directory",
             ),
         )
 
-        self._source_hint = QLabel("支持三种来源：用户脚本、已有 bridge 工程、legacy 几何 .mat。")
+        self._source_hint = QLabel("")
         self._source_hint.setWordWrap(True)
         set_hint_text(self._source_hint)
         source_layout.addRow(self._source_hint)
-        left_layout.addWidget(source_box)
+        left_layout.addWidget(self._source_box)
 
-        actions_box = QGroupBox("Step 3 · 采集与预览")
-        actions_layout = QVBoxLayout(actions_box)
+        self._actions_box = QGroupBox("")
+        actions_layout = QVBoxLayout(self._actions_box)
         actions_layout.setContentsMargins(12, 12, 12, 12)
         actions_layout.setSpacing(8)
         action_row = QWidget()
         action_row_layout = QHBoxLayout(action_row)
         action_row_layout.setContentsMargins(0, 0, 0, 0)
         action_row_layout.setSpacing(6)
-        self._preview_btn = QPushButton("生成预览")
+        self._preview_btn = QPushButton("")
         set_button_role(self._preview_btn, "primary")
         self._preview_btn.clicked.connect(self._generate_preview)
-        self._reload_btn = QPushButton("重载上次结果")
+        self._reload_btn = QPushButton("")
         set_button_role(self._reload_btn, "subtle")
         self._reload_btn.clicked.connect(self._reload_current_bundle)
         action_row_layout.addWidget(self._preview_btn)
         action_row_layout.addWidget(self._reload_btn)
         actions_layout.addWidget(action_row)
-        self._import_status = QLabel("尚未生成迁移预览。")
+        self._import_status = QLabel("")
         self._import_status.setWordWrap(True)
         set_subtle_value(self._import_status)
         actions_layout.addWidget(self._import_status)
-        left_layout.addWidget(actions_box)
+        left_layout.addWidget(self._actions_box)
         left_layout.addStretch(1)
 
         right = QWidget()
@@ -281,12 +314,12 @@ class InteropHubDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        preview_box = QGroupBox("Step 4 · 预览与导入")
-        preview_layout = QVBoxLayout(preview_box)
+        self._preview_box = QGroupBox("")
+        preview_layout = QVBoxLayout(self._preview_box)
         preview_layout.setContentsMargins(12, 12, 12, 12)
         preview_layout.setSpacing(8)
 
-        self._preview_overview = QLabel("等待 bridge 包预览。")
+        self._preview_overview = QLabel("")
         self._preview_overview.setWordWrap(True)
         self._preview_overview.setStyleSheet("font-weight: 700; color: #284a6e;")
         preview_layout.addWidget(self._preview_overview)
@@ -298,7 +331,6 @@ class InteropHubDialog(QDialog):
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._source_table = QTableWidget(0, 2)
-        self._source_table.setHorizontalHeaderLabels(["EIDORS 来源", "值"])
         self._source_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._source_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._source_table.horizontalHeader().setMinimumSectionSize(120)
@@ -307,7 +339,6 @@ class InteropHubDialog(QDialog):
         self._source_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
 
         self._mapping_table = QTableWidget(0, 2)
-        self._mapping_table.setHorizontalHeaderLabels(["PyEIDORS 映射", "值"])
         self._mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
         self._mapping_table.horizontalHeader().setMinimumSectionSize(120)
@@ -323,7 +354,6 @@ class InteropHubDialog(QDialog):
 
         self._warnings_box = QPlainTextEdit()
         self._warnings_box.setReadOnly(True)
-        self._warnings_box.setPlaceholderText("Warnings and unresolved fields will appear here.")
         preview_layout.addWidget(self._warnings_box)
 
         import_row = QWidget()
@@ -331,14 +361,20 @@ class InteropHubDialog(QDialog):
         import_row_layout.setContentsMargins(0, 0, 0, 0)
         import_row_layout.setSpacing(6)
         self._import_target_combo = QComboBox()
-        self._import_target_combo.addItem("硬件配置模板", "hardware")
-        self._import_target_combo.addItem("仿真配置", "simulation")
-        self._import_target_combo.addItem("数据集配置", "dataset")
-        self._import_target_combo.addItem("仅边界电压数据", "measurements")
-        self._import_target_combo.addItem("仅几何资产", "geometry")
-        self._auto_smoke_check = QCheckBox("导入后自动做一次逆问题冒烟验证")
+        for target_key in (
+            "dlg.interop.import_target.hardware",
+            "dlg.interop.import_target.simulation",
+            "dlg.interop.import_target.dataset",
+            "dlg.interop.import_target.measurements",
+            "dlg.interop.import_target.geometry",
+        ):
+            # Use the key suffix as the userData so the logic below doesn't
+            # depend on the (translatable) display text.
+            data = target_key.rsplit(".", 1)[-1]
+            self._import_target_combo.addItem("", data)
+        self._auto_smoke_check = QCheckBox("")
         self._auto_smoke_check.setChecked(True)
-        self._apply_import_btn = QPushButton("导入到 PyEIDORS")
+        self._apply_import_btn = QPushButton("")
         set_button_role(self._apply_import_btn, "primary")
         self._apply_import_btn.setEnabled(False)
         self._apply_import_btn.clicked.connect(self._apply_import)
@@ -351,7 +387,7 @@ class InteropHubDialog(QDialog):
         smoke_row_layout = QHBoxLayout(smoke_row)
         smoke_row_layout.setContentsMargins(0, 0, 0, 0)
         smoke_row_layout.setSpacing(6)
-        self._run_smoke_btn = QPushButton("运行冒烟验证")
+        self._run_smoke_btn = QPushButton("")
         set_button_role(self._run_smoke_btn, "subtle")
         self._run_smoke_btn.setEnabled(False)
         self._run_smoke_btn.clicked.connect(self._run_smoke_validation)
@@ -361,9 +397,8 @@ class InteropHubDialog(QDialog):
 
         self._validation_log = QPlainTextEdit()
         self._validation_log.setReadOnly(True)
-        self._validation_log.setPlaceholderText("导入后的逆问题烟测结果会显示在这里。")
         preview_layout.addWidget(self._validation_log)
-        right_layout.addWidget(preview_box, 1)
+        right_layout.addWidget(self._preview_box, 1)
 
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -376,41 +411,47 @@ class InteropHubDialog(QDialog):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
 
-        form_box = QGroupBox("导出到 EIDORS")
-        form = QFormLayout(form_box)
+        self._export_form_box = QGroupBox("")
+        form = QFormLayout(self._export_form_box)
         form.setContentsMargins(12, 12, 12, 12)
         form.setSpacing(8)
         self._export_source_combo = QComboBox()
-        self._export_source_combo.addItem("当前仿真配置", "simulation")
-        self._export_source_combo.addItem("当前硬件布局配置", "hardware")
-        self._export_source_combo.addItem("当前录制/重构结果", "recording")
-        form.addRow("Source:", self._export_source_combo)
+        for key in (
+            "dlg.interop.export.source.simulation",
+            "dlg.interop.export.source.hardware",
+            "dlg.interop.export.source.recording",
+        ):
+            data = key.rsplit(".", 1)[-1]
+            self._export_source_combo.addItem("", data)
+        self._lbl_export_source = QLabel("")
+        form.addRow(self._lbl_export_source, self._export_source_combo)
 
         self._export_dir_edit = QLineEdit()
         self._export_dir_edit.setText(str((Path.cwd() / "data" / "interop_export").resolve()))
+        self._lbl_export_output = QLabel("")
         form.addRow(
-            "Output dir:",
+            self._lbl_export_output,
             self._make_path_row(
                 self._export_dir_edit,
-                title="选择导出 Bridge 工程目录",
+                title_key="dlg.interop.export.pick_output_title",
                 mode="directory",
             ),
         )
 
-        export_hint = QLabel("导出 bridge 工程时，会优先写入当前手动指定的 MATLAB / startup.m 路径；若未指定，也仍可只导出数据与配置。")
-        export_hint.setWordWrap(True)
-        set_hint_text(export_hint)
-        form.addRow(export_hint)
+        self._export_hint = QLabel("")
+        self._export_hint.setWordWrap(True)
+        set_hint_text(self._export_hint)
+        form.addRow(self._export_hint)
 
         checks_row = QWidget()
         checks_layout = QHBoxLayout(checks_row)
         checks_layout.setContentsMargins(0, 0, 0, 0)
         checks_layout.setSpacing(8)
-        self._export_geometry_check = QCheckBox("Geometry")
+        self._export_geometry_check = QCheckBox("")
         self._export_geometry_check.setChecked(True)
-        self._export_data_check = QCheckBox("Boundary voltages")
+        self._export_data_check = QCheckBox("")
         self._export_data_check.setChecked(True)
-        self._export_scripts_check = QCheckBox("Runnable EIDORS script")
+        self._export_scripts_check = QCheckBox("")
         self._export_scripts_check.setChecked(True)
         for widget in (
             self._export_geometry_check,
@@ -419,17 +460,17 @@ class InteropHubDialog(QDialog):
         ):
             checks_layout.addWidget(widget)
         checks_layout.addStretch(1)
-        form.addRow("Include:", checks_row)
+        self._lbl_export_include = QLabel("")
+        form.addRow(self._lbl_export_include, checks_row)
 
-        self._export_btn = QPushButton("Generate Bridge Project")
+        self._export_btn = QPushButton("")
         set_button_role(self._export_btn, "primary")
         self._export_btn.clicked.connect(self._generate_export)
         form.addRow(self._export_btn)
-        layout.addWidget(form_box)
+        layout.addWidget(self._export_form_box)
 
         self._export_log = QPlainTextEdit()
         self._export_log.setReadOnly(True)
-        self._export_log.setPlaceholderText("导出说明、生成路径和任何降级行为都会写在这里。")
         layout.addWidget(self._export_log, 1)
         return page
 
@@ -448,8 +489,8 @@ class InteropHubDialog(QDialog):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(8)
 
-        profile_form_box = QGroupBox("Saved Environments")
-        profile_form = QFormLayout(profile_form_box)
+        self._profile_form_box = QGroupBox("")
+        profile_form = QFormLayout(self._profile_form_box)
         profile_form.setContentsMargins(12, 12, 12, 12)
         profile_form.setSpacing(8)
         self._profile_name_edit = QLineEdit()
@@ -457,50 +498,95 @@ class InteropHubDialog(QDialog):
         self._profile_startup_edit = QLineEdit()
         self._profile_script_edit = QLineEdit()
         self._profile_output_edit = QLineEdit()
-        profile_form.addRow("Name:", self._profile_name_edit)
-        profile_form.addRow("MATLAB:", self._profile_matlab_edit)
-        profile_form.addRow("startup.m:", self._profile_startup_edit)
-        profile_form.addRow("Last script:", self._profile_script_edit)
-        profile_form.addRow("Last output:", self._profile_output_edit)
-        right_layout.addWidget(profile_form_box)
+        self._lbl_profile_name = QLabel("")
+        self._lbl_profile_matlab = QLabel("")
+        self._lbl_profile_startup = QLabel("")
+        self._lbl_profile_script = QLabel("")
+        self._lbl_profile_output = QLabel("")
+        profile_form.addRow(self._lbl_profile_name, self._profile_name_edit)
+        profile_form.addRow(self._lbl_profile_matlab, self._profile_matlab_edit)
+        profile_form.addRow(self._lbl_profile_startup, self._profile_startup_edit)
+        profile_form.addRow(self._lbl_profile_script, self._profile_script_edit)
+        profile_form.addRow(self._lbl_profile_output, self._profile_output_edit)
+        right_layout.addWidget(self._profile_form_box)
 
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(6)
-        self._save_profile_btn = QPushButton("Save Current Environment")
+        self._save_profile_btn = QPushButton("")
         set_button_role(self._save_profile_btn, "primary")
         self._save_profile_btn.clicked.connect(self._save_current_profile)
-        self._remove_profile_btn = QPushButton("Remove Selected")
+        self._remove_profile_btn = QPushButton("")
         set_button_role(self._remove_profile_btn, "danger")
         self._remove_profile_btn.clicked.connect(self._remove_selected_profile)
         button_layout.addWidget(self._save_profile_btn)
         button_layout.addWidget(self._remove_profile_btn)
         right_layout.addWidget(button_row)
 
-        note = QLabel("这里保存的是 EIDORS 环境画像，不会修改用户原始 MATLAB 工程。")
-        note.setWordWrap(True)
-        set_hint_text(note)
-        right_layout.addWidget(note)
+        self._profile_note = QLabel("")
+        self._profile_note.setWordWrap(True)
+        set_hint_text(self._profile_note)
+        right_layout.addWidget(self._profile_note)
         right_layout.addStretch(1)
         layout.addWidget(right, 1)
         return page
+
+    # ------------------------------------------------------------------
+    # Status helpers
+    # ------------------------------------------------------------------
+
+    def _set_status(self, row_id: str, state: str) -> None:
+        """Mark row `row_id` as being in state `state` and refresh its text.
+
+        `state` is one of the dlg.interop.status.* suffixes; "ready_fmt"
+        is handled via a separate _set_status_ready() helper so the suffix
+        parameter can be injected.
+        """
+        self._status_row_states[row_id] = state
+        label = self._status_value_labels.get(row_id)
+        if label is not None:
+            label.setText(t(f"dlg.interop.status.{state}"))
+
+    def _set_status_ready(self, row_id: str, suffix: str) -> None:
+        self._status_row_states[row_id] = f"ready_fmt:{suffix}"
+        label = self._status_value_labels.get(row_id)
+        if label is not None:
+            label.setText(t("dlg.interop.status.ready_fmt", suffix=suffix))
+
+    def _refresh_status_labels(self) -> None:
+        """Re-resolve every status value label against the active language."""
+        for row_id, state in self._status_row_states.items():
+            label = self._status_value_labels.get(row_id)
+            if label is None:
+                continue
+            if state.startswith("ready_fmt:"):
+                suffix = state.split(":", 1)[1]
+                label.setText(t("dlg.interop.status.ready_fmt", suffix=suffix))
+            else:
+                label.setText(t(f"dlg.interop.status.{state}"))
 
     def _refresh_manual_environment_state(self) -> None:
         matlab = self._matlab_edit.text().strip()
         startup = self._startup_edit.text().strip()
 
-        self._status_labels["MATLAB"].setText("已指定" if matlab else "未指定")
-        self._status_labels["EIDORS startup"].setText("已指定" if startup else "未指定")
-        if self._status_labels["Bridge package"].text() == "未指定":
-            self._status_labels["Bridge package"].setText("待生成")
+        self._set_status("matlab", "specified" if matlab else "unspecified")
+        self._set_status("startup", "specified" if startup else "unspecified")
+        # Bridge-package row: leave "pending" after the first manual edit
+        # unless it already moved into a more specific state.
+        bridge_state = self._status_row_states.get("bridge_package", "unspecified")
+        if bridge_state == "unspecified":
+            self._set_status("bridge_package", "pending")
 
     def _rebuild_profile_combo(self, profiles: list[EidorsEnvironment]) -> None:
         blocked = self._env_combo.blockSignals(True)
         self._env_combo.clear()
-        self._env_combo.addItem("当前手动输入", None)
+        self._env_combo.addItem(t("dlg.interop.env.manual_entry"), None)
         for environment in profiles:
-            self._env_combo.addItem(environment.name or "Saved EIDORS Environment", environment)
+            self._env_combo.addItem(
+                environment.name or t("dlg.interop.env.saved_default_name"),
+                environment,
+            )
         self._env_combo.blockSignals(blocked)
 
     def _selected_environment(self, combo: QComboBox) -> EidorsEnvironment | None:
@@ -513,7 +599,7 @@ class InteropHubDialog(QDialog):
         if not matlab and not startup:
             return None
         return EidorsEnvironment(
-            name="Manual Environment",
+            name=t("dlg.interop.profiles.manual_name"),
             matlab_command=matlab,
             matlab_root="",
             eidors_startup=startup,
@@ -537,25 +623,32 @@ class InteropHubDialog(QDialog):
     def _refresh_source_status(self) -> None:
         source_text = self._source_edit.text().strip()
         if not source_text:
-            self._status_labels["Source"].setText("未选择")
+            self._set_status("source", "not_selected")
             return
         source = Path(to_posix_path(source_text))
         if not source.exists():
-            self._status_labels["Source"].setText("未找到")
+            self._set_status("source", "not_found")
             return
         suffix = source.suffix.lower() if source.is_file() else "<dir>"
-        self._status_labels["Source"].setText(f"就绪 ({suffix})")
+        self._set_status_ready("source", suffix)
+
+    # ------------------------------------------------------------------
+    # Preview & import
+    # ------------------------------------------------------------------
 
     def _reload_current_bundle(self) -> None:
         if self._loaded_bundle is None:
-            self._import_status.setText("当前还没有已加载的 bridge 包。")
+            self._import_status.setText(t("dlg.interop.msg.bundle_no_preview"))
             return
-        self._update_preview(self._loaded_bundle, self._importer.preview_loaded_package(self._loaded_bundle))
+        self._update_preview(
+            self._loaded_bundle,
+            self._importer.preview_loaded_package(self._loaded_bundle),
+        )
 
     def _generate_preview(self) -> None:
         source_text = self._source_edit.text().strip()
         if not source_text:
-            QMessageBox.warning(self, "Interop Hub", "请先选择一个 EIDORS 脚本或 bridge 包来源。")
+            QMessageBox.warning(self, t("dlg.interop.title"), t("dlg.interop.msg.no_source"))
             return
 
         source = Path(source_text)
@@ -566,10 +659,14 @@ class InteropHubDialog(QDialog):
             if not self._startup_edit.text().strip():
                 missing_parts.append("startup.m")
             if missing_parts:
+                joiner = t("dlg.interop.msg.missing_joiner")
                 QMessageBox.warning(
                     self,
-                    "Interop Hub",
-                    f"运行 EIDORS 脚本前，请先手动指定：{'、'.join(missing_parts)}。",
+                    t("dlg.interop.title"),
+                    t(
+                        "dlg.interop.msg.missing_before_script",
+                        parts=joiner.join(missing_parts),
+                    ),
                 )
                 return
 
@@ -597,9 +694,13 @@ class InteropHubDialog(QDialog):
             )
             preview = self._importer.preview_loaded_package(loaded)
         except Exception as exc:
-            QMessageBox.critical(self, "Interop Hub", f"生成预览失败：{exc}")
-            self._import_status.setText(f"生成预览失败：{exc}")
-            self._status_labels["Bridge package"].setText("Failed")
+            QMessageBox.critical(
+                self,
+                t("dlg.interop.title"),
+                t("dlg.interop.msg.preview_failed", error=str(exc)),
+            )
+            self._import_status.setText(t("dlg.interop.msg.preview_failed", error=str(exc)))
+            self._set_status("bridge_package", "failed")
             return
 
         self._update_preview(loaded, preview)
@@ -609,20 +710,20 @@ class InteropHubDialog(QDialog):
         self._preview = preview
         self._apply_import_btn.setEnabled(True)
         self._run_smoke_btn.setEnabled(True)
-        self._status_labels["Bridge package"].setText("就绪")
+        self._set_status("bridge_package", "ready")
 
         source_rows: list[tuple[str, str]] = []
         mapping_rows: list[tuple[str, str]] = []
         for key, value in preview.geometry_summary.items():
-            source_rows.append((f"Geometry · {key}", str(value)))
+            source_rows.append((f"Geometry \u00b7 {key}", str(value)))
         for key, value in preview.measurement_summary.items():
-            source_rows.append((f"Measurements · {key}", str(value)))
+            source_rows.append((f"Measurements \u00b7 {key}", str(value)))
         for key, value in preview.recognized_fields.items():
-            mapping_rows.append((f"Recognized · {key}", str(value)))
+            mapping_rows.append((f"Recognized \u00b7 {key}", str(value)))
         for key, value in preview.inferred_fields.items():
-            mapping_rows.append((f"Inferred · {key}", str(value)))
+            mapping_rows.append((f"Inferred \u00b7 {key}", str(value)))
         for key in preview.missing_fields:
-            mapping_rows.append((f"Missing · {key}", "需要用户补充或改用桥接模板包装脚本"))
+            mapping_rows.append((f"Missing \u00b7 {key}", t("dlg.interop.preview.missing_fallback")))
 
         for table, rows in ((self._source_table, source_rows), (self._mapping_table, mapping_rows)):
             table.setRowCount(len(rows))
@@ -632,39 +733,52 @@ class InteropHubDialog(QDialog):
             table.resizeColumnsToContents()
 
         self._preview_overview.setText(
-            f"EIDORS -> PyEIDORS 映射预览：{preview.forward_model_config.display_dimension()}，"
-            f"{preview.forward_model_config.n_elec} 电极/环，"
-            f"{preview.forward_model_config.point_count()} 个边界电压点。"
+            t(
+                "dlg.interop.preview.overview",
+                dim=preview.forward_model_config.display_dimension(),
+                n_elec=preview.forward_model_config.n_elec,
+                pts=preview.forward_model_config.point_count(),
+            )
         )
         self._preview_counts.setText(
-            f"已准确识别 {len(preview.recognized_fields)} 项 | "
-            f"已推断 {len(preview.inferred_fields)} 项 | "
-            f"待补充 {len(preview.missing_fields)} 项"
+            t(
+                "dlg.interop.preview.counts",
+                recognized=len(preview.recognized_fields),
+                inferred=len(preview.inferred_fields),
+                missing=len(preview.missing_fields),
+            )
         )
 
-        warnings = list(preview.warnings) or ["未发现需要人工确认的高风险项。"]
+        warnings = list(preview.warnings) or [t("dlg.interop.preview.no_warnings")]
         self._warnings_box.setPlainText("\n".join(f"- {item}" for item in warnings))
         self._validation_log.clear()
 
         self._import_status.setText(
-            f"预览完成：{preview.forward_model_config.display_dimension()} | "
-            f"{preview.forward_model_config.n_elec} 电极/环 | "
-            f"{preview.forward_model_config.point_count()} 个边界电压点。"
+            t(
+                "dlg.interop.preview.done",
+                dim=preview.forward_model_config.display_dimension(),
+                n_elec=preview.forward_model_config.n_elec,
+                pts=preview.forward_model_config.point_count(),
+            )
         )
 
     def _apply_import(self) -> None:
         if self._loaded_bundle is None:
             return
         if self._apply_import_callback is None:
-            QMessageBox.information(self, "Interop Hub", "当前窗口未接入导入回调。")
+            QMessageBox.information(self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_import"))
             return
 
         target = str(self._import_target_combo.currentData())
         try:
             message = self._apply_import_callback(target, self._loaded_bundle)
         except Exception as exc:
-            QMessageBox.critical(self, "Interop Hub", f"导入失败：{exc}")
-            self._import_status.setText(f"导入失败：{exc}")
+            QMessageBox.critical(
+                self,
+                t("dlg.interop.title"),
+                t("dlg.interop.msg.import_failed", error=str(exc)),
+            )
+            self._import_status.setText(t("dlg.interop.msg.import_failed", error=str(exc)))
             return
 
         smoke_message = ""
@@ -673,35 +787,39 @@ class InteropHubDialog(QDialog):
 
         self._import_status.setText(message)
         final_message = message if not smoke_message else f"{message}\n\n{smoke_message}"
-        QMessageBox.information(self, "Interop Hub", final_message)
+        QMessageBox.information(self, t("dlg.interop.title"), final_message)
 
     def _run_smoke_validation(self, *, show_dialog: bool = True) -> str:
         if self._loaded_bundle is None:
-            return "当前没有可用于烟测的 bridge 包。"
+            return t("dlg.interop.msg.smoke_no_bundle")
         if self._smoke_validate_callback is None:
-            return "当前窗口未接入烟测回调。"
+            return t("dlg.interop.msg.no_callback_smoke")
         try:
             message = self._smoke_validate_callback(self._loaded_bundle)
         except Exception as exc:
-            message = f"烟测失败：{exc}"
+            message = t("dlg.interop.msg.smoke_failed", error=str(exc))
             self._validation_log.appendPlainText(f"[FAIL] {message}")
             if show_dialog:
-                QMessageBox.warning(self, "Interop Hub", message)
+                QMessageBox.warning(self, t("dlg.interop.title"), message)
             return message
         self._validation_log.appendPlainText(f"[OK] {message}")
         if show_dialog:
-            QMessageBox.information(self, "Interop Hub", message)
+            QMessageBox.information(self, t("dlg.interop.title"), message)
         return message
+
+    # ------------------------------------------------------------------
+    # Export
+    # ------------------------------------------------------------------
 
     def _generate_export(self) -> None:
         if self._export_snapshot_provider is None:
-            QMessageBox.information(self, "Interop Hub", "当前窗口未接入导出数据提供器。")
+            QMessageBox.information(self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_export"))
             return
         snapshots = self._export_snapshot_provider()
         source_kind = str(self._export_source_combo.currentData())
         snapshot = snapshots.get(source_kind)
         if not snapshot:
-            QMessageBox.warning(self, "Interop Hub", "当前来源暂时没有可导出的上下文。")
+            QMessageBox.warning(self, t("dlg.interop.title"), t("dlg.interop.msg.no_snapshot"))
             return
 
         environment = self._manual_environment_from_fields()
@@ -724,19 +842,31 @@ class InteropHubDialog(QDialog):
                 notes=list(snapshot.get("notes", [])),
             )
         except Exception as exc:
-            QMessageBox.critical(self, "Interop Hub", f"导出失败：{exc}")
+            QMessageBox.critical(
+                self,
+                t("dlg.interop.title"),
+                t("dlg.interop.msg.export_failed", error=str(exc)),
+            )
             self._export_log.appendPlainText(f"[ERROR] {exc}")
             return
 
-        self._export_log.appendPlainText(f"[OK] Bridge 工程已生成：{root}")
-        self._export_log.appendPlainText(f"      Source: {source_kind}")
+        self._export_log.appendPlainText(t("dlg.interop.export.success", root=str(root)))
+        self._export_log.appendPlainText(t("dlg.interop.export.source_tag", source_kind=source_kind))
         self._export_log.appendPlainText("")
+
+    # ------------------------------------------------------------------
+    # Profile list
+    # ------------------------------------------------------------------
 
     def _load_profiles_into_list(self) -> None:
         profiles = self._capture_service.load_profiles()
+        # Cache profile list so _retranslate() can rebuild the combo
+        # without re-hitting the capture service (and so combo entries
+        # in the environment selector stay in the right order).
+        self._environments = list(profiles)
         self._profiles_list.clear()
         for profile in profiles:
-            item = QListWidgetItem(profile.name or "Unnamed EIDORS Environment")
+            item = QListWidgetItem(profile.name or t("dlg.interop.profiles.unnamed"))
             item.setData(Qt.ItemDataRole.UserRole, profile)
             self._profiles_list.addItem(item)
         self._rebuild_profile_combo(profiles)
@@ -769,7 +899,8 @@ class InteropHubDialog(QDialog):
 
     def _save_current_profile(self) -> None:
         profile = EidorsEnvironment(
-            name=self._profile_name_edit.text().strip() or "Custom EIDORS Environment",
+            name=self._profile_name_edit.text().strip()
+            or t("dlg.interop.profiles.custom_default"),
             matlab_command=self._matlab_edit.text().strip(),
             matlab_root="",
             eidors_startup=self._startup_edit.text().strip(),
@@ -782,7 +913,7 @@ class InteropHubDialog(QDialog):
         profiles.append(profile)
         self._capture_service.save_profiles(profiles)
         self._load_profiles_into_list()
-        self._append_diag(f"已保存 profile：{profile.name}")
+        self._append_diag(t("dlg.interop.msg.profile_saved", name=profile.name))
 
     def _remove_selected_profile(self) -> None:
         row = self._profiles_list.currentRow()
@@ -792,7 +923,143 @@ class InteropHubDialog(QDialog):
         profile = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(profile, EidorsEnvironment):
             return
-        profiles = [item for item in self._capture_service.load_profiles() if item.name != profile.name]
+        profiles = [
+            item for item in self._capture_service.load_profiles() if item.name != profile.name
+        ]
         self._capture_service.save_profiles(profiles)
         self._load_profiles_into_list()
-        self._append_diag(f"已删除 profile：{profile.name}")
+        self._append_diag(t("dlg.interop.msg.profile_removed", name=profile.name))
+
+    def _append_diag(self, message: str) -> None:
+        """Log a diagnostic message to the validation log.
+
+        The import status area in the Import tab is the most user-visible
+        place to surface transient profile events (saved / removed), so
+        we pipe non-fatal diagnostics through there.  The validation log
+        below also mirrors it for a persistent record.
+        """
+        self._import_status.setText(message)
+        self._validation_log.appendPlainText(f"[INFO] {message}")
+
+    # ------------------------------------------------------------------
+    # Translation refresh
+    # ------------------------------------------------------------------
+
+    def _retranslate(self) -> None:
+        """Refresh every user-visible string to the active language."""
+        self.setWindowTitle(t("dlg.interop.title"))
+        self._intro_label.setText(t("dlg.interop.intro"))
+
+        # Tab titles
+        self._tabs.setTabText(0, t("dlg.interop.tabs.import"))
+        self._tabs.setTabText(1, t("dlg.interop.tabs.export"))
+        self._tabs.setTabText(2, t("dlg.interop.tabs.profiles"))
+
+        # Import tab — status box
+        self._status_box.setTitle(t("dlg.interop.status.title"))
+        self._status_title_labels["matlab"].setText("MATLAB")
+        self._status_title_labels["startup"].setText("EIDORS startup")
+        self._status_title_labels["source"].setText(t("dlg.interop.source.label"))
+        self._status_title_labels["bridge_package"].setText("Bridge package")
+        self._refresh_status_labels()
+
+        # Import tab — step 1 environment
+        self._env_box.setTitle(t("dlg.interop.env.title"))
+        self._env_hint.setText(t("dlg.interop.env.hint"))
+        self._lbl_matlab.setText(t("dlg.interop.env.matlab_label"))
+        self._matlab_edit.setPlaceholderText(t("dlg.interop.env.matlab_placeholder"))
+        self._lbl_startup.setText(t("dlg.interop.env.startup_label"))
+        self._startup_edit.setPlaceholderText(t("dlg.interop.env.startup_placeholder"))
+
+        # Import tab — step 2 source
+        self._source_box.setTitle(t("dlg.interop.source.title"))
+        self._lbl_source.setText(t("dlg.interop.source.label"))
+        self._source_edit.setPlaceholderText(t("dlg.interop.source.placeholder"))
+        self._lbl_capture.setText(t("dlg.interop.source.capture_label"))
+        self._source_hint.setText(t("dlg.interop.source.hint"))
+
+        # Import tab — step 3 actions
+        self._actions_box.setTitle(t("dlg.interop.actions.title"))
+        self._preview_btn.setText(t("dlg.interop.actions.preview_button"))
+        self._reload_btn.setText(t("dlg.interop.actions.reload_button"))
+        # Only stamp the sentinel when the status area has not yet been
+        # customised by an actual operation.
+        if not self._import_status.text() or self._import_status.text() in {
+            t("dlg.interop.actions.no_preview_yet"),
+            "",
+        }:
+            self._import_status.setText(t("dlg.interop.actions.no_preview_yet"))
+
+        # Import tab — step 4 preview
+        self._preview_box.setTitle(t("dlg.interop.preview.title"))
+        if not self._preview_overview.text():
+            self._preview_overview.setText(t("dlg.interop.preview.waiting"))
+        self._source_table.setHorizontalHeaderLabels(
+            [t("dlg.interop.preview.source_col_header"), t("dlg.interop.preview.value_col_header")]
+        )
+        self._mapping_table.setHorizontalHeaderLabels(
+            [t("dlg.interop.preview.mapping_col_header"), t("dlg.interop.preview.value_col_header")]
+        )
+        self._warnings_box.setPlaceholderText(t("dlg.interop.preview.warnings_placeholder"))
+        self._validation_log.setPlaceholderText(t("dlg.interop.preview.smoke_placeholder"))
+
+        # Import target combo labels
+        target_keys = [
+            "dlg.interop.import_target.hardware",
+            "dlg.interop.import_target.simulation",
+            "dlg.interop.import_target.dataset",
+            "dlg.interop.import_target.measurements",
+            "dlg.interop.import_target.geometry",
+        ]
+        for index, key in enumerate(target_keys):
+            self._import_target_combo.setItemText(index, t(key))
+
+        self._auto_smoke_check.setText(t("dlg.interop.auto_smoke_check"))
+        self._apply_import_btn.setText(t("dlg.interop.import_button"))
+        self._run_smoke_btn.setText(t("dlg.interop.smoke_button"))
+
+        # Export tab
+        self._export_form_box.setTitle(t("dlg.interop.export.title"))
+        export_source_keys = [
+            "dlg.interop.export.source.simulation",
+            "dlg.interop.export.source.hardware",
+            "dlg.interop.export.source.recording",
+        ]
+        for index, key in enumerate(export_source_keys):
+            self._export_source_combo.setItemText(index, t(key))
+        self._lbl_export_source.setText(t("dlg.interop.export.source_label"))
+        self._lbl_export_output.setText(t("dlg.interop.export.output_label"))
+        self._export_hint.setText(t("dlg.interop.export.hint"))
+        self._lbl_export_include.setText(t("dlg.interop.export.include_label"))
+        self._export_geometry_check.setText(t("dlg.interop.export.include_geometry"))
+        self._export_data_check.setText(t("dlg.interop.export.include_data"))
+        self._export_scripts_check.setText(t("dlg.interop.export.include_scripts"))
+        self._export_btn.setText(t("dlg.interop.export.generate_button"))
+        self._export_log.setPlaceholderText(t("dlg.interop.export.log_placeholder"))
+
+        # Profiles tab
+        self._profile_form_box.setTitle(t("dlg.interop.profiles.group_title"))
+        self._lbl_profile_name.setText(t("dlg.interop.profiles.name_label"))
+        self._lbl_profile_matlab.setText(t("dlg.interop.profiles.matlab_label"))
+        self._lbl_profile_startup.setText(t("dlg.interop.profiles.startup_label"))
+        self._lbl_profile_script.setText(t("dlg.interop.profiles.script_label"))
+        self._lbl_profile_output.setText(t("dlg.interop.profiles.output_label"))
+        self._save_profile_btn.setText(t("dlg.interop.profiles.save_button"))
+        self._remove_profile_btn.setText(t("dlg.interop.profiles.remove_button"))
+        self._profile_note.setText(t("dlg.interop.profiles.note"))
+
+        # Path-picker buttons (all share the same label)
+        pick_label = t("dlg.interop.path_pick_button")
+        for btn in self._pick_buttons:
+            btn.setText(pick_label)
+
+        # Keep the environment combo's saved-profile entries in sync with
+        # the translated placeholder strings.
+        current_data = self._env_combo.currentData()
+        self._rebuild_profile_combo(self._environments)
+        # Restore selection if the same environment is still present.
+        if isinstance(current_data, EidorsEnvironment):
+            for idx in range(self._env_combo.count()):
+                if self._env_combo.itemData(idx) is current_data:
+                    self._env_combo.setCurrentIndex(idx)
+                    break

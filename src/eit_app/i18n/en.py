@@ -680,4 +680,134 @@ TRANSLATIONS: dict[str, str] = {
 
     # Reconstruction dialog — subtitle copy
     "dlg.reconstruction.subtitle": "Pick an algorithm, set regularization, then run. Difference methods need both reference and target; absolute methods only need a target.",
+
+    # ==================================================================
+    # Dialog — Interop Hub (EIDORS ↔ PyEIDORS migration workbench)
+    # ==================================================================
+    "dlg.interop.title": "Interop Hub",
+    "dlg.interop.intro": "A visual, reviewable, reversible workflow for migrating between EIDORS and PyEIDORS.",
+
+    # Tab labels
+    "dlg.interop.tabs.import": "Import from EIDORS",
+    "dlg.interop.tabs.export": "Export to EIDORS",
+    "dlg.interop.tabs.profiles": "Profiles & Paths",
+
+    # Shared — path pick button
+    "dlg.interop.path_pick_button": "Pick\u2026",
+
+    # Manual status panel (top of Import tab)
+    "dlg.interop.status.title": "Current manual selections",
+    "dlg.interop.status.unspecified": "Not set",
+    "dlg.interop.status.pending": "Pending",
+    "dlg.interop.status.specified": "Set",
+    "dlg.interop.status.not_selected": "Not chosen",
+    "dlg.interop.status.not_found": "Not found",
+    "dlg.interop.status.ready_fmt": "Ready ({suffix})",
+    "dlg.interop.status.ready": "Ready",
+    "dlg.interop.status.failed": "Failed",
+
+    # Step 1 — Environment
+    "dlg.interop.env.title": "Step 1 \u00b7 Environment",
+    "dlg.interop.env.hint": "Click \u201cPick\u2026\u201d to set MATLAB and startup.m manually. The unified file picker shows the Linux / WSL / Windows locations reachable from the current environment. Environment profiles can be managed on the Profiles & Paths tab.",
+    "dlg.interop.env.matlab_label": "MATLAB:",
+    "dlg.interop.env.matlab_placeholder": "Path to matlab executable",
+    "dlg.interop.env.pick_matlab_title": "Select MATLAB executable",
+    "dlg.interop.env.matlab_filter": "Executable (*.exe *.bin *.sh);;All files (*)",
+    "dlg.interop.env.startup_label": "EIDORS startup:",
+    "dlg.interop.env.startup_placeholder": "Path to startup.m",
+    "dlg.interop.env.pick_startup_title": "Select EIDORS startup.m",
+    "dlg.interop.env.startup_filter": "MATLAB script (*.m);;All files (*)",
+    "dlg.interop.env.manual_entry": "Current manual input",
+    "dlg.interop.env.saved_default_name": "Saved EIDORS Environment",
+
+    # Step 2 — Source
+    "dlg.interop.source.title": "Step 2 \u00b7 Source",
+    "dlg.interop.source.label": "Source:",
+    "dlg.interop.source.placeholder": "Pick an EIDORS .m script, bridge directory, legacy .mat, or bridge JSON",
+    "dlg.interop.source.pick_title": "Select EIDORS script, bridge file, or bridge directory",
+    "dlg.interop.source.pick_filter": "Supported (*.m *.mat *.json);;MATLAB script (*.m);;MAT file (*.mat);;JSON (*.json);;All files (*)",
+    "dlg.interop.source.capture_label": "Capture output:",
+    "dlg.interop.source.pick_capture_title": "Select bridge capture output directory",
+    "dlg.interop.source.hint": "Three kinds of source are supported: user scripts, existing bridge projects, and legacy geometry .mat files.",
+
+    # Step 3 — Capture & preview actions
+    "dlg.interop.actions.title": "Step 3 \u00b7 Capture & preview",
+    "dlg.interop.actions.preview_button": "Generate preview",
+    "dlg.interop.actions.reload_button": "Reload last result",
+    "dlg.interop.actions.no_preview_yet": "No migration preview yet.",
+
+    # Step 4 — Preview & import
+    "dlg.interop.preview.title": "Step 4 \u00b7 Preview & import",
+    "dlg.interop.preview.waiting": "Waiting for bridge package preview.",
+    "dlg.interop.preview.source_col_header": "EIDORS source",
+    "dlg.interop.preview.value_col_header": "Value",
+    "dlg.interop.preview.mapping_col_header": "PyEIDORS mapping",
+    "dlg.interop.preview.warnings_placeholder": "Warnings and unresolved fields will appear here.",
+    "dlg.interop.preview.missing_fallback": "Fill in manually, or wrap with a bridge template script.",
+    "dlg.interop.preview.overview": "EIDORS \u2192 PyEIDORS mapping preview: {dim}, {n_elec} electrodes/ring, {pts} boundary-voltage points.",
+    "dlg.interop.preview.counts": "Recognized: {recognized}  |  Inferred: {inferred}  |  Missing: {missing}",
+    "dlg.interop.preview.no_warnings": "No high-risk items requiring manual review.",
+    "dlg.interop.preview.done": "Preview complete: {dim}  |  {n_elec} electrodes/ring  |  {pts} boundary-voltage points.",
+    "dlg.interop.preview.smoke_placeholder": "Inverse-problem smoke test output will appear here.",
+
+    # Import target combo
+    "dlg.interop.import_target.hardware": "Hardware config template",
+    "dlg.interop.import_target.simulation": "Simulation config",
+    "dlg.interop.import_target.dataset": "Dataset config",
+    "dlg.interop.import_target.measurements": "Boundary voltages only",
+    "dlg.interop.import_target.geometry": "Geometry assets only",
+
+    "dlg.interop.auto_smoke_check": "Auto-run inverse-problem smoke test after import",
+    "dlg.interop.import_button": "Import into PyEIDORS",
+    "dlg.interop.smoke_button": "Run smoke validation",
+
+    # Export tab
+    "dlg.interop.export.title": "Export to EIDORS",
+    "dlg.interop.export.source.simulation": "Current simulation config",
+    "dlg.interop.export.source.hardware": "Current hardware layout",
+    "dlg.interop.export.source.recording": "Current recording / reconstruction",
+    "dlg.interop.export.source_label": "Source:",
+    "dlg.interop.export.output_label": "Output dir:",
+    "dlg.interop.export.pick_output_title": "Select bridge export directory",
+    "dlg.interop.export.hint": "When exporting a bridge project, the currently-set MATLAB / startup.m paths are baked in. If neither is set, only the data and configuration files are exported.",
+    "dlg.interop.export.include_label": "Include:",
+    "dlg.interop.export.include_geometry": "Geometry",
+    "dlg.interop.export.include_data": "Boundary voltages",
+    "dlg.interop.export.include_scripts": "Runnable EIDORS script",
+    "dlg.interop.export.generate_button": "Generate Bridge Project",
+    "dlg.interop.export.log_placeholder": "Export notes, generated paths, and any fallback behavior will be logged here.",
+    "dlg.interop.export.success": "[OK] Bridge project generated: {root}",
+    "dlg.interop.export.source_tag": "      Source: {source_kind}",
+
+    # Profiles & Paths tab
+    "dlg.interop.profiles.group_title": "Saved environments",
+    "dlg.interop.profiles.name_label": "Name:",
+    "dlg.interop.profiles.matlab_label": "MATLAB:",
+    "dlg.interop.profiles.startup_label": "startup.m:",
+    "dlg.interop.profiles.script_label": "Last script:",
+    "dlg.interop.profiles.output_label": "Last output:",
+    "dlg.interop.profiles.save_button": "Save current environment",
+    "dlg.interop.profiles.remove_button": "Remove selected",
+    "dlg.interop.profiles.note": "Saved here are EIDORS environment profiles only \u2014 your original MATLAB project is never modified.",
+    "dlg.interop.profiles.unnamed": "Unnamed EIDORS Environment",
+    "dlg.interop.profiles.custom_default": "Custom EIDORS Environment",
+    "dlg.interop.profiles.manual_name": "Manual Environment",
+
+    # Status-bar / message-box text
+    "dlg.interop.msg.no_source": "Please select an EIDORS script or bridge package source first.",
+    "dlg.interop.msg.missing_before_script": "Before running an EIDORS script, please set: {parts}.",
+    "dlg.interop.msg.missing_joiner": ", ",
+    "dlg.interop.msg.preview_failed": "Preview failed: {error}",
+    "dlg.interop.msg.no_bundle": "No bridge package loaded.",
+    "dlg.interop.msg.no_callback_import": "This window has no import callback wired up.",
+    "dlg.interop.msg.no_callback_smoke": "This window has no smoke-test callback wired up.",
+    "dlg.interop.msg.no_callback_export": "This window has no export data provider wired up.",
+    "dlg.interop.msg.no_snapshot": "The current source has no exportable context right now.",
+    "dlg.interop.msg.import_failed": "Import failed: {error}",
+    "dlg.interop.msg.smoke_failed": "Smoke test failed: {error}",
+    "dlg.interop.msg.smoke_no_bundle": "No bridge package available for smoke testing.",
+    "dlg.interop.msg.export_failed": "Export failed: {error}",
+    "dlg.interop.msg.bundle_no_preview": "No bridge package has been loaded yet.",
+    "dlg.interop.msg.profile_saved": "Profile saved: {name}",
+    "dlg.interop.msg.profile_removed": "Profile removed: {name}",
 }

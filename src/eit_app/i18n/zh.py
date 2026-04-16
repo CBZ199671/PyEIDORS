@@ -681,4 +681,134 @@ TRANSLATIONS: dict[str, str] = {
 
     # Reconstruction dialog — subtitle copy
     "dlg.reconstruction.subtitle": "\u9009\u62e9\u7b97\u6cd5\uff0c\u8bbe\u7f6e\u6b63\u5219\u5316\u53c2\u6570\uff0c\u7136\u540e\u8fd0\u884c\u3002\u5dee\u5206\u65b9\u6cd5\u9700\u8981\u53c2\u8003\u5e27\u548c\u76ee\u6807\u5e27\uff1b\u7edd\u5bf9\u65b9\u6cd5\u4ec5\u9700\u8981\u76ee\u6807\u5e27\u3002",  # 选择算法，设置正则化参数，然后运行。差分方法需要参考帧和目标帧；绝对方法仅需要目标帧。
+
+    # ==================================================================
+    # Dialog — Interop Hub (EIDORS ↔ PyEIDORS 迁移工作台)
+    # ==================================================================
+    "dlg.interop.title": "\u4e92\u64cd\u4f5c\u4e2d\u5fc3",                                                       # 互操作中心
+    "dlg.interop.intro": "\u5728\u8fd9\u91cc\u6211\u4eec\u628a EIDORS \u4e0e PyEIDORS \u4e4b\u95f4\u7684\u8fc1\u79fb\u505a\u6210\u4e00\u6761\u53ef\u89c6\u5316\u3001\u53ef\u786e\u8ba4\u3001\u53ef\u56de\u6eda\u7684\u5de5\u4f5c\u6d41\u3002",  # 在这里我们把 EIDORS 与 PyEIDORS 之间的迁移做成一条可视化、可确认、可回滚的工作流。
+
+    # Tab labels
+    "dlg.interop.tabs.import": "\u4ece EIDORS \u5bfc\u5165",                                                     # 从 EIDORS 导入
+    "dlg.interop.tabs.export": "\u5bfc\u51fa\u5230 EIDORS",                                                      # 导出到 EIDORS
+    "dlg.interop.tabs.profiles": "\u73af\u5883\u753b\u50cf\u4e0e\u8def\u5f84",                                    # 环境画像与路径
+
+    # Shared — path pick button
+    "dlg.interop.path_pick_button": "\u9009\u62e9\u2026",                                                        # 选择…
+
+    # Manual status panel (top of Import tab)
+    "dlg.interop.status.title": "\u5f53\u524d\u624b\u52a8\u6307\u5b9a\u72b6\u6001",                              # 当前手动指定状态
+    "dlg.interop.status.unspecified": "\u672a\u6307\u5b9a",                                                      # 未指定
+    "dlg.interop.status.pending": "\u5f85\u751f\u6210",                                                          # 待生成
+    "dlg.interop.status.specified": "\u5df2\u6307\u5b9a",                                                        # 已指定
+    "dlg.interop.status.not_selected": "\u672a\u9009\u62e9",                                                     # 未选择
+    "dlg.interop.status.not_found": "\u672a\u627e\u5230",                                                        # 未找到
+    "dlg.interop.status.ready_fmt": "\u5c31\u7eea\uff08{suffix}\uff09",                                          # 就绪({suffix})
+    "dlg.interop.status.ready": "\u5c31\u7eea",                                                                  # 就绪
+    "dlg.interop.status.failed": "\u5931\u8d25",                                                                 # 失败
+
+    # Step 1 — Environment
+    "dlg.interop.env.title": "\u7b2c 1 \u6b65 \u00b7 \u6307\u5b9a\u73af\u5883",                                  # 第 1 步 · 指定环境
+    "dlg.interop.env.hint": "\u8bf7\u70b9\u51fb\u201c\u9009\u62e9\u2026\u201d\u624b\u52a8\u6307\u5b9a MATLAB \u4e0e startup.m \u8def\u5f84\u3002\u7edf\u4e00\u6587\u4ef6\u6d4f\u89c8\u5668\u4f1a\u6309\u5f53\u524d\u73af\u5883\u663e\u793a\u53ef\u8bbf\u95ee\u7684 Linux / WSL / Windows \u4f4d\u7f6e\uff1b\u73af\u5883\u753b\u50cf\u53ef\u5728\u201c\u73af\u5883\u753b\u50cf\u4e0e\u8def\u5f84\u201d\u9875\u7ba1\u7406\u3002",  # 请点击"选择…"手动指定 MATLAB 与 startup.m 路径。统一文件浏览器会按当前环境显示可访问的 Linux / WSL / Windows 位置；环境画像可在"环境画像与路径"页管理。
+    "dlg.interop.env.matlab_label": "MATLAB\uff1a",                                                              # MATLAB：
+    "dlg.interop.env.matlab_placeholder": "MATLAB \u53ef\u6267\u884c\u6587\u4ef6\u8def\u5f84",                    # MATLAB 可执行文件路径
+    "dlg.interop.env.pick_matlab_title": "\u9009\u62e9 MATLAB \u53ef\u6267\u884c\u6587\u4ef6",                   # 选择 MATLAB 可执行文件
+    "dlg.interop.env.matlab_filter": "\u53ef\u6267\u884c\u6587\u4ef6 (*.exe *.bin *.sh);;\u6240\u6709\u6587\u4ef6 (*)",  # 可执行文件 (*.exe *.bin *.sh);;所有文件 (*)
+    "dlg.interop.env.startup_label": "EIDORS startup\uff1a",                                                     # EIDORS startup：
+    "dlg.interop.env.startup_placeholder": "startup.m \u8def\u5f84",                                             # startup.m 路径
+    "dlg.interop.env.pick_startup_title": "\u9009\u62e9 EIDORS startup.m",                                       # 选择 EIDORS startup.m
+    "dlg.interop.env.startup_filter": "MATLAB \u811a\u672c (*.m);;\u6240\u6709\u6587\u4ef6 (*)",                  # MATLAB 脚本 (*.m);;所有文件 (*)
+    "dlg.interop.env.manual_entry": "\u5f53\u524d\u624b\u52a8\u8f93\u5165",                                      # 当前手动输入
+    "dlg.interop.env.saved_default_name": "\u5df2\u4fdd\u5b58\u7684 EIDORS \u73af\u5883",                        # 已保存的 EIDORS 环境
+
+    # Step 2 — Source
+    "dlg.interop.source.title": "\u7b2c 2 \u6b65 \u00b7 \u9009\u62e9\u6765\u6e90",                               # 第 2 步 · 选择来源
+    "dlg.interop.source.label": "\u6765\u6e90\uff1a",                                                            # 来源：
+    "dlg.interop.source.placeholder": "\u9009\u62e9 EIDORS .m \u811a\u672c\u3001bridge \u76ee\u5f55\u3001legacy .mat \u6216 bridge JSON",  # 选择 EIDORS .m 脚本、bridge 目录、legacy .mat 或 bridge JSON
+    "dlg.interop.source.pick_title": "\u9009\u62e9 EIDORS \u811a\u672c\u3001bridge \u6587\u4ef6\u6216 bridge \u76ee\u5f55",  # 选择 EIDORS 脚本、bridge 文件或 bridge 目录
+    "dlg.interop.source.pick_filter": "\u652f\u6301\u7c7b\u578b (*.m *.mat *.json);;MATLAB \u811a\u672c (*.m);;MAT \u6587\u4ef6 (*.mat);;JSON (*.json);;\u6240\u6709\u6587\u4ef6 (*)",
+    "dlg.interop.source.capture_label": "\u91c7\u96c6\u8f93\u51fa\uff1a",                                        # 采集输出：
+    "dlg.interop.source.pick_capture_title": "\u9009\u62e9\u6865\u63a5\u91c7\u96c6\u8f93\u51fa\u76ee\u5f55",     # 选择桥接采集输出目录
+    "dlg.interop.source.hint": "\u652f\u6301\u4e09\u79cd\u6765\u6e90\uff1a\u7528\u6237\u811a\u672c\u3001\u5df2\u6709 bridge \u5de5\u7a0b\u3001legacy \u51e0\u4f55 .mat\u3002",  # 支持三种来源：用户脚本、已有 bridge 工程、legacy 几何 .mat。
+
+    # Step 3 — Capture & preview actions
+    "dlg.interop.actions.title": "\u7b2c 3 \u6b65 \u00b7 \u91c7\u96c6\u4e0e\u9884\u89c8",                        # 第 3 步 · 采集与预览
+    "dlg.interop.actions.preview_button": "\u751f\u6210\u9884\u89c8",                                            # 生成预览
+    "dlg.interop.actions.reload_button": "\u91cd\u8f7d\u4e0a\u6b21\u7ed3\u679c",                                 # 重载上次结果
+    "dlg.interop.actions.no_preview_yet": "\u5c1a\u672a\u751f\u6210\u8fc1\u79fb\u9884\u89c8\u3002",              # 尚未生成迁移预览。
+
+    # Step 4 — Preview & import
+    "dlg.interop.preview.title": "\u7b2c 4 \u6b65 \u00b7 \u9884\u89c8\u4e0e\u5bfc\u5165",                        # 第 4 步 · 预览与导入
+    "dlg.interop.preview.waiting": "\u7b49\u5f85 bridge \u5305\u9884\u89c8\u3002",                               # 等待 bridge 包预览。
+    "dlg.interop.preview.source_col_header": "EIDORS \u6765\u6e90",                                              # EIDORS 来源
+    "dlg.interop.preview.value_col_header": "\u503c",                                                            # 值
+    "dlg.interop.preview.mapping_col_header": "PyEIDORS \u6620\u5c04",                                           # PyEIDORS 映射
+    "dlg.interop.preview.warnings_placeholder": "\u8b66\u544a\u4e0e\u672a\u89e3\u6790\u5b57\u6bb5\u4f1a\u663e\u793a\u5728\u6b64\u3002",  # 警告与未解析字段会显示在此。
+    "dlg.interop.preview.missing_fallback": "\u9700\u7528\u6237\u8865\u5145\uff0c\u6216\u6539\u7528\u6865\u63a5\u6a21\u677f\u5305\u88c5\u811a\u672c",  # 需用户补充，或改用桥接模板包装脚本
+    "dlg.interop.preview.overview": "EIDORS \u2192 PyEIDORS \u6620\u5c04\u9884\u89c8\uff1a{dim}\uff0c{n_elec} \u7535\u6781/\u73af\uff0c{pts} \u4e2a\u8fb9\u754c\u7535\u538b\u70b9\u3002",  # EIDORS → PyEIDORS 映射预览：{dim}，{n_elec} 电极/环，{pts} 个边界电压点。
+    "dlg.interop.preview.counts": "\u5df2\u8bc6\u522b {recognized} \u9879  |  \u5df2\u63a8\u65ad {inferred} \u9879  |  \u5f85\u8865\u5145 {missing} \u9879",  # 已识别 {recognized} 项 | 已推断 {inferred} 项 | 待补充 {missing} 项
+    "dlg.interop.preview.no_warnings": "\u672a\u53d1\u73b0\u9700\u8981\u4eba\u5de5\u786e\u8ba4\u7684\u9ad8\u98ce\u9669\u9879\u3002",  # 未发现需要人工确认的高风险项。
+    "dlg.interop.preview.done": "\u9884\u89c8\u5b8c\u6210\uff1a{dim}  |  {n_elec} \u7535\u6781/\u73af  |  {pts} \u4e2a\u8fb9\u754c\u7535\u538b\u70b9\u3002",  # 预览完成：{dim} | {n_elec} 电极/环 | {pts} 个边界电压点。
+    "dlg.interop.preview.smoke_placeholder": "\u5bfc\u5165\u540e\u7684\u9006\u95ee\u9898\u70df\u6d4b\u7ed3\u679c\u4f1a\u663e\u793a\u5728\u8fd9\u91cc\u3002",  # 导入后的逆问题烟测结果会显示在这里。
+
+    # Import target combo
+    "dlg.interop.import_target.hardware": "\u786c\u4ef6\u914d\u7f6e\u6a21\u677f",                                # 硬件配置模板
+    "dlg.interop.import_target.simulation": "\u4eff\u771f\u914d\u7f6e",                                          # 仿真配置
+    "dlg.interop.import_target.dataset": "\u6570\u636e\u96c6\u914d\u7f6e",                                       # 数据集配置
+    "dlg.interop.import_target.measurements": "\u4ec5\u8fb9\u754c\u7535\u538b\u6570\u636e",                      # 仅边界电压数据
+    "dlg.interop.import_target.geometry": "\u4ec5\u51e0\u4f55\u8d44\u4ea7",                                      # 仅几何资产
+
+    "dlg.interop.auto_smoke_check": "\u5bfc\u5165\u540e\u81ea\u52a8\u505a\u4e00\u6b21\u9006\u95ee\u9898\u70df\u6d4b\u9a8c\u8bc1",  # 导入后自动做一次逆问题烟测验证
+    "dlg.interop.import_button": "\u5bfc\u5165\u5230 PyEIDORS",                                                  # 导入到 PyEIDORS
+    "dlg.interop.smoke_button": "\u8fd0\u884c\u70df\u6d4b\u9a8c\u8bc1",                                          # 运行烟测验证
+
+    # Export tab
+    "dlg.interop.export.title": "\u5bfc\u51fa\u5230 EIDORS",                                                     # 导出到 EIDORS
+    "dlg.interop.export.source.simulation": "\u5f53\u524d\u4eff\u771f\u914d\u7f6e",                              # 当前仿真配置
+    "dlg.interop.export.source.hardware": "\u5f53\u524d\u786c\u4ef6\u5e03\u5c40\u914d\u7f6e",                    # 当前硬件布局配置
+    "dlg.interop.export.source.recording": "\u5f53\u524d\u5f55\u5236/\u91cd\u6784\u7ed3\u679c",                  # 当前录制/重构结果
+    "dlg.interop.export.source_label": "\u6765\u6e90\uff1a",                                                     # 来源：
+    "dlg.interop.export.output_label": "\u8f93\u51fa\u76ee\u5f55\uff1a",                                         # 输出目录：
+    "dlg.interop.export.pick_output_title": "\u9009\u62e9\u5bfc\u51fa Bridge \u5de5\u7a0b\u76ee\u5f55",           # 选择导出 Bridge 工程目录
+    "dlg.interop.export.hint": "\u5bfc\u51fa bridge \u5de5\u7a0b\u65f6\uff0c\u4f1a\u4f18\u5148\u5199\u5165\u5f53\u524d\u624b\u52a8\u6307\u5b9a\u7684 MATLAB / startup.m \u8def\u5f84\uff1b\u82e5\u672a\u6307\u5b9a\uff0c\u4e5f\u4ecd\u53ef\u53ea\u5bfc\u51fa\u6570\u636e\u4e0e\u914d\u7f6e\u3002",  # 导出 bridge 工程时，会优先写入当前手动指定的 MATLAB / startup.m 路径；若未指定，也仍可只导出数据与配置。
+    "dlg.interop.export.include_label": "\u5305\u542b\u5185\u5bb9\uff1a",                                        # 包含内容：
+    "dlg.interop.export.include_geometry": "\u51e0\u4f55",                                                       # 几何
+    "dlg.interop.export.include_data": "\u8fb9\u754c\u7535\u538b",                                               # 边界电压
+    "dlg.interop.export.include_scripts": "\u53ef\u8fd0\u884c EIDORS \u811a\u672c",                              # 可运行 EIDORS 脚本
+    "dlg.interop.export.generate_button": "\u751f\u6210 Bridge \u5de5\u7a0b",                                    # 生成 Bridge 工程
+    "dlg.interop.export.log_placeholder": "\u5bfc\u51fa\u8bf4\u660e\u3001\u751f\u6210\u8def\u5f84\u548c\u4efb\u4f55\u964d\u7ea7\u884c\u4e3a\u90fd\u4f1a\u5199\u5728\u8fd9\u91cc\u3002",  # 导出说明、生成路径和任何降级行为都会写在这里。
+    "dlg.interop.export.success": "[OK] Bridge \u5de5\u7a0b\u5df2\u751f\u6210\uff1a{root}",                      # [OK] Bridge 工程已生成：{root}
+    "dlg.interop.export.source_tag": "      \u6765\u6e90\uff1a{source_kind}",                                    #       来源：{source_kind}
+
+    # Profiles & Paths tab
+    "dlg.interop.profiles.group_title": "\u5df2\u4fdd\u5b58\u7684\u73af\u5883\u753b\u50cf",                       # 已保存的环境画像
+    "dlg.interop.profiles.name_label": "\u540d\u79f0\uff1a",                                                     # 名称：
+    "dlg.interop.profiles.matlab_label": "MATLAB\uff1a",                                                         # MATLAB：
+    "dlg.interop.profiles.startup_label": "startup.m\uff1a",                                                     # startup.m：
+    "dlg.interop.profiles.script_label": "\u4e0a\u6b21\u811a\u672c\uff1a",                                       # 上次脚本：
+    "dlg.interop.profiles.output_label": "\u4e0a\u6b21\u8f93\u51fa\uff1a",                                       # 上次输出：
+    "dlg.interop.profiles.save_button": "\u4fdd\u5b58\u5f53\u524d\u73af\u5883",                                  # 保存当前环境
+    "dlg.interop.profiles.remove_button": "\u5220\u9664\u9009\u4e2d\u9879",                                      # 删除选中项
+    "dlg.interop.profiles.note": "\u8fd9\u91cc\u4fdd\u5b58\u7684\u662f EIDORS \u73af\u5883\u753b\u50cf\uff0c\u4e0d\u4f1a\u4fee\u6539\u7528\u6237\u539f\u59cb MATLAB \u5de5\u7a0b\u3002",  # 这里保存的是 EIDORS 环境画像，不会修改用户原始 MATLAB 工程。
+    "dlg.interop.profiles.unnamed": "\u672a\u547d\u540d\u7684 EIDORS \u73af\u5883",                              # 未命名的 EIDORS 环境
+    "dlg.interop.profiles.custom_default": "\u81ea\u5b9a\u4e49 EIDORS \u73af\u5883",                              # 自定义 EIDORS 环境
+    "dlg.interop.profiles.manual_name": "\u624b\u52a8\u73af\u5883",                                              # 手动环境
+
+    # Status-bar / message-box text
+    "dlg.interop.msg.no_source": "\u8bf7\u5148\u9009\u62e9\u4e00\u4e2a EIDORS \u811a\u672c\u6216 bridge \u5305\u6765\u6e90\u3002",  # 请先选择一个 EIDORS 脚本或 bridge 包来源。
+    "dlg.interop.msg.missing_before_script": "\u8fd0\u884c EIDORS \u811a\u672c\u524d\uff0c\u8bf7\u5148\u624b\u52a8\u6307\u5b9a\uff1a{parts}\u3002",  # 运行 EIDORS 脚本前，请先手动指定：{parts}。
+    "dlg.interop.msg.missing_joiner": "\u3001",                                                                  # 、
+    "dlg.interop.msg.preview_failed": "\u751f\u6210\u9884\u89c8\u5931\u8d25\uff1a{error}",                       # 生成预览失败：{error}
+    "dlg.interop.msg.no_bundle": "\u5f53\u524d\u8fd8\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684 bridge \u5305\u3002",     # 当前还没有已加载的 bridge 包。
+    "dlg.interop.msg.no_callback_import": "\u5f53\u524d\u7a97\u53e3\u672a\u63a5\u5165\u5bfc\u5165\u56de\u8c03\u3002",  # 当前窗口未接入导入回调。
+    "dlg.interop.msg.no_callback_smoke": "\u5f53\u524d\u7a97\u53e3\u672a\u63a5\u5165\u70df\u6d4b\u56de\u8c03\u3002",  # 当前窗口未接入烟测回调。
+    "dlg.interop.msg.no_callback_export": "\u5f53\u524d\u7a97\u53e3\u672a\u63a5\u5165\u5bfc\u51fa\u6570\u636e\u63d0\u4f9b\u5668\u3002",  # 当前窗口未接入导出数据提供器。
+    "dlg.interop.msg.no_snapshot": "\u5f53\u524d\u6765\u6e90\u6682\u65f6\u6ca1\u6709\u53ef\u5bfc\u51fa\u7684\u4e0a\u4e0b\u6587\u3002",  # 当前来源暂时没有可导出的上下文。
+    "dlg.interop.msg.import_failed": "\u5bfc\u5165\u5931\u8d25\uff1a{error}",                                    # 导入失败：{error}
+    "dlg.interop.msg.smoke_failed": "\u70df\u6d4b\u5931\u8d25\uff1a{error}",                                     # 烟测失败：{error}
+    "dlg.interop.msg.smoke_no_bundle": "\u5f53\u524d\u6ca1\u6709\u53ef\u7528\u4e8e\u70df\u6d4b\u7684 bridge \u5305\u3002",  # 当前没有可用于烟测的 bridge 包。
+    "dlg.interop.msg.export_failed": "\u5bfc\u51fa\u5931\u8d25\uff1a{error}",                                    # 导出失败：{error}
+    "dlg.interop.msg.bundle_no_preview": "\u5f53\u524d\u8fd8\u6ca1\u6709\u5df2\u52a0\u8f7d\u7684 bridge \u5305\u3002",  # 当前还没有已加载的 bridge 包。
+    "dlg.interop.msg.profile_saved": "\u5df2\u4fdd\u5b58 profile\uff1a{name}",                                   # 已保存 profile：{name}
+    "dlg.interop.msg.profile_removed": "\u5df2\u5220\u9664 profile\uff1a{name}",                                 # 已删除 profile：{name}
 }
