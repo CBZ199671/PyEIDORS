@@ -36,7 +36,7 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
-from eit_app.ui.theme import set_button_role, set_hint_text
+from eit_app.ui.theme import card_palette, set_button_role, set_hint_text
 
 log = logging.getLogger(__name__)
 
@@ -164,10 +164,16 @@ class ReconstructionDialog(QDialog):
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
+        # Pull chip surface colors from the palette so dark mode applies.
+        # The dialog is short-lived and re-instantiated on each open
+        # (single-frame reconstruct flow), so we don't bother
+        # subscribing to theme_mode_changed here — colors are correct
+        # for whichever mode was active when the dialog spawned.
+        p = card_palette()
         chip_style = (
-            "background: #f0f6fb; border: 1px solid #c6d7e6;"
+            f"background: {p['info_bg']}; border: 1px solid {p['info_border']};"
             " border-radius: 6px; padding: 7px 12px;"
-            " color: #243447; font-family: monospace; font-size: 12px;"
+            f" color: {p['value_text']}; font-family: monospace; font-size: 12px;"
             " min-width: 360px;"
         )
 

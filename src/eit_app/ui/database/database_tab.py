@@ -27,7 +27,15 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t, translator
 from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
-from eit_app.ui.theme import set_button_role, set_hint_text
+from eit_app.ui.theme import (
+    info_card_stylesheet,
+    selection_status_stylesheet,
+    set_button_role,
+    set_hint_text,
+    stat_count_stylesheet,
+    stat_subtle_stylesheet,
+    subscribe_theme_mode,
+)
 
 log = logging.getLogger(__name__)
 
@@ -212,6 +220,15 @@ class DatabaseTab(QWidget):
         self.refresh_sessions()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+        # Re-apply mini-card stylesheets when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-apply per-card stylesheets that don't go through global QSS."""
+        self._stats_card.setStyleSheet(info_card_stylesheet())
+        self._count_label.setStyleSheet(stat_count_stylesheet())
+        self._backfill_status.setStyleSheet(stat_subtle_stylesheet())
+        self._selection_status.setStyleSheet(selection_status_stylesheet())
 
     def prepare_for_shutdown(self) -> None:
         self._is_shutting_down = True
@@ -330,32 +347,24 @@ class DatabaseTab(QWidget):
 
         layout.addStretch()
 
-        # Stats card at the bottom
-        stats_card = QWidget()
-        stats_card.setStyleSheet(
-            "background: #f5f9fd; border: 1px solid #dbe4ef;"
-            " border-radius: 8px; padding: 10px;"
-        )
-        stats_layout = QVBoxLayout(stats_card)
+        # Stats card at the bottom — styles come from theme helpers so
+        # they re-paint on dark mode toggles (see _on_theme_mode_changed).
+        self._stats_card = QWidget()
+        self._stats_card.setStyleSheet(info_card_stylesheet())
+        stats_layout = QVBoxLayout(self._stats_card)
         stats_layout.setContentsMargins(12, 10, 12, 10)
         stats_layout.setSpacing(4)
 
         self._count_label = QLabel("")
-        self._count_label.setStyleSheet(
-            "color: #1f5d8b; font-weight: 700; font-size: 15px;"
-            " background: transparent; border: none; padding: 0;"
-        )
+        self._count_label.setStyleSheet(stat_count_stylesheet())
         stats_layout.addWidget(self._count_label)
 
         self._backfill_status = QLabel("")
-        self._backfill_status.setStyleSheet(
-            "color: #6a7686; font-size: 11px;"
-            " background: transparent; border: none; padding: 0;"
-        )
+        self._backfill_status.setStyleSheet(stat_subtle_stylesheet())
         self._backfill_status.setWordWrap(True)
         stats_layout.addWidget(self._backfill_status)
 
-        layout.addWidget(stats_card)
+        layout.addWidget(self._stats_card)
 
         self._filter_box.setMinimumWidth(250)
         self._filter_box.setMaximumWidth(330)
@@ -447,12 +456,10 @@ class DatabaseTab(QWidget):
         frames_layout.addWidget(self._frame_table, 1)
 
         # Selection status line — text assigned by _update_selection_status().
+        # Styling comes from theme.selection_status_stylesheet() so it
+        # follows dark mode (was hardcoded #f5f9fd / #5b6573 before).
         self._selection_status = QLabel("")
-        self._selection_status.setStyleSheet(
-            "background: #f5f9fd; border: 1px solid #dbe4ef;"
-            " border-radius: 6px; padding: 6px 10px;"
-            " color: #5b6573; font-size: 12px;"
-        )
+        self._selection_status.setStyleSheet(selection_status_stylesheet())
         self._selection_status.setWordWrap(True)
         frames_layout.addWidget(self._selection_status)
 

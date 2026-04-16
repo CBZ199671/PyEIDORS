@@ -796,6 +796,69 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
 
 
 @pytest.mark.gui
+def test_inline_card_stylesheets_follow_dark_mode_palette() -> None:
+    """Mini cards painted via setStyleSheet (Session/Dataset summary
+    panels, Database stats card, Database selection status, Database
+    backfill subtitle) must re-paint when the user toggles dark mode.
+
+    Before this fix each of those widgets used a hardcoded light
+    background (#f5f9fd / #f7f9fc / #edf4fb) and stayed bright when
+    the rest of the chrome flipped to dark.  All five paths now read
+    from theme.card_palette() and re-apply on each theme_mode flip.
+    """
+    from eit_app.ui.theme import (
+        card_palette,
+        set_theme_mode,
+    )
+
+    app = _get_app()
+    set_theme_mode(app, "light", persist=False)
+    light_value_bg = card_palette()["value_bg"]
+
+    window = EITWorkstation()
+    _show_window(window)
+    try:
+        # Initial state: every card stylesheet contains the LIGHT bg color.
+        sample_session_value = next(iter(window._summary_panel._values.values()))
+        sample_dataset_value = next(iter(window._dataset_tab._summary_panel._values.values()))
+        assert light_value_bg in sample_session_value.styleSheet()
+        assert light_value_bg in sample_dataset_value.styleSheet()
+        assert light_value_bg.lower() != "#262d38"
+
+        # Flip to dark and verify all 5 paths swap.
+        set_theme_mode(app, "dark", persist=False)
+        _get_app().processEvents()
+        dark_palette = card_palette()
+        dark_value_bg = dark_palette["value_bg"]
+
+        # SessionSummaryPanel: field value boxes + next-action banner
+        for value in window._summary_panel._values.values():
+            assert dark_value_bg in value.styleSheet(), (
+                "SessionSummaryPanel field value should follow dark mode"
+            )
+        assert dark_palette["next_action_bg"] in window._summary_panel._next_action.styleSheet()
+
+        # DatasetSummaryPanel: field value boxes
+        for value in window._dataset_tab._summary_panel._values.values():
+            assert dark_value_bg in value.styleSheet()
+
+        # Database tab: stats card + selection status
+        assert dark_palette["info_bg"] in window._db_tab._stats_card.styleSheet()
+        assert dark_palette["info_accent"] in window._db_tab._count_label.styleSheet()
+        assert dark_palette["selection_bg"] in window._db_tab._selection_status.styleSheet()
+
+        # Light mode reverts the same paths.
+        set_theme_mode(app, "light", persist=False)
+        _get_app().processEvents()
+        for value in window._summary_panel._values.values():
+            assert light_value_bg in value.styleSheet()
+        assert "#edf4fb" in window._summary_panel._next_action.styleSheet()
+    finally:
+        set_theme_mode(app, "light", persist=False)
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
     """Dark mode must reach the four plot widgets (LivePlot, Voltage,
     Reconstruction, ConductivityImage), not just the QSS chrome.

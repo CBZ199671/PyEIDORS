@@ -7,7 +7,14 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
-from eit_app.ui.theme import apply_state_banner, apply_state_chip, set_panel_role
+from eit_app.ui.theme import (
+    apply_state_banner,
+    apply_state_chip,
+    field_value_stylesheet,
+    next_action_stylesheet,
+    set_panel_role,
+    subscribe_theme_mode,
+)
 
 
 class SessionSummaryPanel(QGroupBox):
@@ -46,6 +53,29 @@ class SessionSummaryPanel(QGroupBox):
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+        # Re-apply mini-card stylesheets when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-apply per-card stylesheets that don't go through global QSS.
+
+        The next-action banner and the field-value boxes use
+        setStyleSheet() with hardcoded colors at construction time;
+        re-pull from theme on every flip so they follow dark mode.
+        Banner + indicator chips re-render via the existing
+        set_status_banner / set_indicator_states paths in
+        _retranslate().
+        """
+        self._next_action.setStyleSheet(next_action_stylesheet())
+        for value in self._values.values():
+            value.setStyleSheet(field_value_stylesheet())
+        # Banner and indicator chips read from tone_palette() which is
+        # already dark-aware; just re-apply the cached state.
+        if self._banner_active:
+            apply_state_banner(self._state_badge, tone=self._banner_tone)
+        if self._indicator_cache:
+            self.set_indicator_states(self._indicator_cache)
+        self._retranslate()
 
     def _build_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -81,13 +111,9 @@ class SessionSummaryPanel(QGroupBox):
 
         self._next_action = QLabel("")  # retranslated below
         self._next_action.setWordWrap(True)
-        self._next_action.setStyleSheet(
-            "padding: 8px 10px; "
-            "border-left: 4px solid #1f5d8b; "
-            "background: #edf4fb; "
-            "border-radius: 8px; "
-            "color: #243447;"
-        )
+        # Style comes from theme.next_action_stylesheet() so it follows
+        # dark mode; cached so _on_theme_mode_changed can re-apply it.
+        self._next_action.setStyleSheet(next_action_stylesheet())
         root_layout.addWidget(self._next_action)
 
         field_grid = QGridLayout()
@@ -112,13 +138,9 @@ class SessionSummaryPanel(QGroupBox):
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             value.setFont(fixed_font)
             value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-            value.setStyleSheet(
-                "padding: 4px 6px; "
-                "border: 1px solid #d8dee9; "
-                "border-radius: 4px; "
-                "background: #f7f9fc; "
-                "color: #243447;"
-            )
+            # Style comes from theme.field_value_stylesheet() so the
+            # box surface follows dark mode.
+            value.setStyleSheet(field_value_stylesheet())
             self._values[key] = value
             self._field_titles[key] = title_label
             field_grid.addWidget(title_label, index, 0)

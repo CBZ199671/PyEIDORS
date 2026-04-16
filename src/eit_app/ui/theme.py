@@ -315,6 +315,119 @@ def plot_palette() -> dict:
     return dict(palette)
 
 
+# ---------------------------------------------------------------------
+# Mini-card / inline stylesheet helpers
+# ---------------------------------------------------------------------
+#
+# These widgets paint their own QSS via setStyleSheet() and don't go
+# through the global app stylesheet — so they have to call back into
+# theme.py to get the right per-mode color triplet.  Each helper
+# returns a complete stylesheet string and the caller assigns it via
+# widget.setStyleSheet(...).  Re-paint on later mode flips by calling
+# subscribe_theme_mode() with a bound method that re-applies the
+# helper's output.
+_CARD_PALETTE_LIGHT = {
+    "info_bg":         "#f5f9fd",   # subtle blue-tinted info card
+    "info_border":     "#dbe4ef",
+    "info_text":       "#5b6573",
+    "info_accent":     "#1f5d8b",   # bold-text accent (e.g. count label)
+    "info_subtle":     "#6a7686",
+    "value_bg":        "#f7f9fc",   # readonly value boxes (Session/Dataset summary fields)
+    "value_border":    "#d8dee9",
+    "value_text":      "#243447",
+    "next_action_bg":  "#edf4fb",   # accent-bordered "next step" hint banner
+    "next_action_border": "#1f5d8b",
+    "next_action_text":   "#243447",
+    "selection_bg":    "#f5f9fd",   # Database tab "selection status" line
+    "selection_border": "#dbe4ef",
+    "selection_text":  "#5b6573",
+}
+
+_CARD_PALETTE_DARK = {
+    "info_bg":         "#222831",
+    "info_border":     "#3e4754",
+    "info_text":       "#a7b2c2",
+    "info_accent":     "#9dc9ea",
+    "info_subtle":     "#8b97a7",
+    "value_bg":        "#262d38",
+    "value_border":    "#3e4754",
+    "value_text":      "#dbe1ea",
+    "next_action_bg":  "#1f3148",
+    "next_action_border": "#5ca8e0",
+    "next_action_text":   "#dbe1ea",
+    "selection_bg":    "#222831",
+    "selection_border": "#3e4754",
+    "selection_text":  "#a7b2c2",
+}
+
+
+def card_palette() -> dict:
+    """Return the active mini-card palette (matches current_theme_mode())."""
+    return dict(_CARD_PALETTE_DARK if _current_mode == "dark" else _CARD_PALETTE_LIGHT)
+
+
+def info_card_stylesheet() -> str:
+    """Stylesheet for soft-tinted info cards (Database stats card etc.)."""
+    p = card_palette()
+    return (
+        f"background: {p['info_bg']}; "
+        f"border: 1px solid {p['info_border']}; "
+        "border-radius: 8px; padding: 10px;"
+    )
+
+
+def stat_count_stylesheet() -> str:
+    """Stylesheet for the bold accent number inside an info card."""
+    p = card_palette()
+    return (
+        f"color: {p['info_accent']}; font-weight: 700; font-size: 15px;"
+        " background: transparent; border: none; padding: 0;"
+    )
+
+
+def stat_subtle_stylesheet() -> str:
+    """Stylesheet for the small subtitle under an info card stat."""
+    p = card_palette()
+    return (
+        f"color: {p['info_subtle']}; font-size: 11px;"
+        " background: transparent; border: none; padding: 0;"
+    )
+
+
+def field_value_stylesheet() -> str:
+    """Stylesheet for read-only value boxes (Session/Dataset summary)."""
+    p = card_palette()
+    return (
+        "padding: 4px 6px; "
+        f"border: 1px solid {p['value_border']}; "
+        "border-radius: 4px; "
+        f"background: {p['value_bg']}; "
+        f"color: {p['value_text']};"
+    )
+
+
+def next_action_stylesheet() -> str:
+    """Stylesheet for the accent-bordered 'next step' hint banner."""
+    p = card_palette()
+    return (
+        "padding: 8px 10px; "
+        f"border-left: 4px solid {p['next_action_border']}; "
+        f"background: {p['next_action_bg']}; "
+        "border-radius: 8px; "
+        f"color: {p['next_action_text']};"
+    )
+
+
+def selection_status_stylesheet() -> str:
+    """Stylesheet for the Database tab's selection-status line."""
+    p = card_palette()
+    return (
+        f"background: {p['selection_bg']}; border: 1px solid {p['selection_border']};"
+        " border-radius: 6px; padding: 6px 10px;"
+        f" color: {p['selection_text']}; font-size: 12px;"
+    )
+
+
 _TONE_PALETTE_LIGHT = {
     "idle":   ("#5b6573", "#f7f9fc", "#d8dee9"),
     "warn":   ("#8a4b08", "#fff4dc", "#f1c27d"),
@@ -1533,5 +1646,14 @@ QToolButton {
 }
 QToolButton:hover {
     background: #313a46;
+}
+
+/* === QDateEdit dropdown button (was forgotten by the first dark pass) === */
+QDateEdit::drop-down {
+    background: #23292f;
+    border-left: 1px solid #3e4754;
+}
+QDateEdit::drop-down:hover {
+    background: #1e4870;
 }
 """

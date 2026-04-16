@@ -6,7 +6,14 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QFormLayout, QGroupBox, QLabel, QProgressBar, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
-from eit_app.ui.theme import apply_state_chip, set_hint_text, set_panel_role, set_subtle_value
+from eit_app.ui.theme import (
+    apply_state_chip,
+    field_value_stylesheet,
+    set_hint_text,
+    set_panel_role,
+    set_subtle_value,
+    subscribe_theme_mode,
+)
 
 
 class DatasetSummaryPanel(QGroupBox):
@@ -33,6 +40,22 @@ class DatasetSummaryPanel(QGroupBox):
         set_panel_role(self, "summary")
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
+        self._retranslate()
+        # Re-apply per-card stylesheets when the user toggles dark mode.
+        subscribe_theme_mode(self._on_theme_mode_changed)
+
+    def _on_theme_mode_changed(self, _mode: str) -> None:
+        """Re-paint the chip + value boxes whose stylesheets are
+        composed by setStyleSheet rather than the global QSS."""
+        for value in self._values.values():
+            value.setStyleSheet(field_value_stylesheet())
+        # State chip uses tone_palette which is already dark-aware;
+        # re-apply with the cached tone so it picks up the new
+        # palette colors.
+        apply_state_chip(self._state_chip, tone=self._chip_tone, emphasized=True)
+        # _retranslate will refresh the chip text under the default
+        # idle path; explicit owner-set states stay as the owner left
+        # them.
         self._retranslate()
 
     def _build_ui(self) -> None:
@@ -67,13 +90,9 @@ class DatasetSummaryPanel(QGroupBox):
             value = QLabel("\u2014")
             value.setWordWrap(True)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-            value.setStyleSheet(
-                "padding: 4px 6px; "
-                "border: 1px solid #d8dee9; "
-                "border-radius: 4px; "
-                "background: #f7f9fc; "
-                "color: #243447;"
-            )
+            # Style comes from theme.field_value_stylesheet() so the
+            # box surface follows dark mode.
+            value.setStyleSheet(field_value_stylesheet())
             self._values[key] = value
             self._field_titles[key] = title_label
             form.addRow(title_label, value)
