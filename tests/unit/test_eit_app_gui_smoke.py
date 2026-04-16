@@ -2161,10 +2161,11 @@ def test_simulation_voltage_index_uses_3d_ring_count() -> None:
     sim_plot = window._sim_tab.results_widget.voltage_plot
     mesh_panel = window._sim_tab.mesh_setup_panel
     mesh_panel._dim_combo.setCurrentIndex(1)
-    mesh_panel._n_elec_spin.setValue(8)
     _get_app().processEvents()
 
-    assert mesh_panel.get_config()["n_rings"] == 2
+    cfg = mesh_panel.get_config()
+    assert cfg["n_electrodes"] == 8
+    assert cfg["n_rings"] == 2
     assert sim_plot.current_point_count() == 208
 
     _close_window(window)
@@ -2177,7 +2178,6 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
 
     mesh_panel = window._sim_tab.mesh_setup_panel
     mesh_panel._dim_combo.setCurrentIndex(1)
-    mesh_panel._n_elec_spin.setValue(8)
     _get_app().processEvents()
 
     cfg = window._current_sim_forward_model_config()
@@ -2187,7 +2187,51 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     assert cfg.n_rings == 2
     assert cfg.total_electrodes() == 16
     assert cfg.point_count() == 208
+    assert cfg.radius == pytest.approx(0.18)
+    assert cfg.height == pytest.approx(0.16)
     assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from types import SimpleNamespace
+
+    from eit_app.models.forward_model_config import ForwardModelConfig
+
+    window = EITWorkstation()
+    _show_window(window)
+
+    imported = ForwardModelConfig(
+        mesh_dimension=3,
+        mesh_refinement=0.05,
+        n_elec=12,
+        n_rings=2,
+        radius=0.72,
+        height=0.44,
+    )
+    loaded_bundle = SimpleNamespace(
+        geometry_payload=None,
+        measurements=None,
+        reconstruction_preset=None,
+    )
+    monkeypatch.setattr(
+        window._interop_importer,
+        "preview_loaded_package",
+        lambda _: SimpleNamespace(forward_model_config=imported),
+    )
+
+    window._apply_interop_import("simulation", loaded_bundle)
+    cfg = window._current_sim_forward_model_config()
+
+    assert cfg.mesh_dimension == 3
+    assert cfg.n_elec == 12
+    assert cfg.n_rings == 2
+    assert cfg.radius == pytest.approx(0.72)
+    assert cfg.height == pytest.approx(0.44)
 
     _close_window(window)
 

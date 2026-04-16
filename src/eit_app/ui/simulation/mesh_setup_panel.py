@@ -16,6 +16,10 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
+from eit_app.models.forward_model_config import (
+    INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING,
+    INTERACTIVE_3D_DEFAULT_RINGS,
+)
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_hint_text, set_section_header
 
@@ -209,13 +213,41 @@ class MeshSetupPanel(QGroupBox):
     # ------------------------------------------------------------------
 
     def _on_dimension_changed(self) -> None:
-        # 3D layouts commonly use multiple electrode rings.  When the user
-        # switches dimensions manually, choose the safe/common default but
-        # still allow them to override it afterwards.
-        target_rings = 2 if self._dim_combo.currentIndex() == 1 else 1
-        if self._n_rings_spin.value() != target_rings:
-            self._n_rings_spin.setValue(target_rings)
-            return
+        # Keep the GUI's default 3D case interactive: 16 total electrodes
+        # arranged as 8 per ring x 2 rings, matching the fast 3D benchmark
+        # geometry.  Custom electrode counts are preserved; only the default
+        # 16x1/8x2 pair is auto-migrated when the user flips dimensions.
+        is_3d = self._dim_combo.currentIndex() == 1
+        current_elec = self._n_elec_spin.value()
+        current_rings = self._n_rings_spin.value()
+
+        target_elec = current_elec
+        target_rings = current_rings
+        if is_3d:
+            if current_elec == 16 and current_rings == 1:
+                target_elec = INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING
+                target_rings = INTERACTIVE_3D_DEFAULT_RINGS
+            elif current_rings == 1:
+                target_rings = INTERACTIVE_3D_DEFAULT_RINGS
+        else:
+            if (
+                current_elec == INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING
+                and current_rings == INTERACTIVE_3D_DEFAULT_RINGS
+            ):
+                target_elec = 16
+                target_rings = 1
+            elif current_rings != 1:
+                target_rings = 1
+
+        if target_elec != current_elec or target_rings != current_rings:
+            widgets = (self._n_elec_spin, self._n_rings_spin)
+            blockers = [widget.blockSignals(True) for widget in widgets]
+            try:
+                self._n_elec_spin.setValue(target_elec)
+                self._n_rings_spin.setValue(target_rings)
+            finally:
+                for widget, blocked in zip(widgets, blockers):
+                    widget.blockSignals(blocked)
         self._on_any_change()
 
     def _on_any_change(self) -> None:

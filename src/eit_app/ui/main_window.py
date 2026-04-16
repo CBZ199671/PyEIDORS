@@ -61,6 +61,8 @@ from eit_app.models.app_state import (
 )
 from eit_app.models.forward_model_config import (
     ForwardModelConfig,
+    INTERACTIVE_3D_DEFAULT_HEIGHT,
+    INTERACTIVE_3D_DEFAULT_RADIUS,
     electrode_level_fractions_for_rings,
 )
 from eit_app.models.simulation_state import (
@@ -229,6 +231,20 @@ _VOLTAGE_GAIN_LABELS = {
 }
 
 
+def _with_interactive_3d_geometry_defaults(
+    config: ForwardModelConfig,
+    *,
+    enabled: bool,
+) -> ForwardModelConfig:
+    """Apply GUI-friendly 3D geometry only for the built-in interactive setup."""
+    if not enabled or int(config.mesh_dimension) != 3:
+        return config
+    return config.with_overrides(
+        radius=INTERACTIVE_3D_DEFAULT_RADIUS,
+        height=INTERACTIVE_3D_DEFAULT_HEIGHT,
+    )
+
+
 class EITWorkstation(QMainWindow):
     """Main window for the EIT Workstation application."""
 
@@ -267,6 +283,8 @@ class EITWorkstation(QMainWindow):
         self._interop_smoke_validator = InteropSmokeValidator()
         self._sim_forward_model_config = ForwardModelConfig()
         self._dataset_forward_model_config = ForwardModelConfig()
+        self._sim_use_interactive_3d_geometry_defaults = True
+        self._dataset_use_interactive_3d_geometry_defaults = True
         self._interop_geometry_asset: dict | None = None
         self._interop_measurements_asset: dict[str, np.ndarray] | None = None
         self._last_imported_bundle = None
@@ -2493,7 +2511,7 @@ class EITWorkstation(QMainWindow):
         # the forward solver and the inverse reconstruction share exactly
         # the same PatternConfig (otherwise we get the classic
         # "measurement vector has N columns but pattern expects M" error).
-        return self._sim_forward_model_config.with_overrides(
+        config = self._sim_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             n_elec=mesh_cfg["n_electrodes"],
@@ -2511,11 +2529,15 @@ class EITWorkstation(QMainWindow):
                 else self._sim_forward_model_config.electrode_level_fractions
             ),
         )
+        return _with_interactive_3d_geometry_defaults(
+            config,
+            enabled=self._sim_use_interactive_3d_geometry_defaults,
+        )
 
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
-        return self._dataset_forward_model_config.with_overrides(
+        config = self._dataset_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             n_elec=mesh_cfg["n_electrodes"],
@@ -2532,6 +2554,10 @@ class EITWorkstation(QMainWindow):
                 if int(mesh_cfg["mesh_dimension"]) == 3
                 else self._dataset_forward_model_config.electrode_level_fractions
             ),
+        )
+        return _with_interactive_3d_geometry_defaults(
+            config,
+            enabled=self._dataset_use_interactive_3d_geometry_defaults,
         )
 
     def _interop_reconstruction_preset(self) -> ReconstructionPreset:
@@ -2681,6 +2707,7 @@ class EITWorkstation(QMainWindow):
 
         if target == "simulation":
             self._sim_forward_model_config = config
+            self._sim_use_interactive_3d_geometry_defaults = False
             self._sim_tab.mesh_setup_panel.set_config(
                 {
                     "mesh_dimension": config.mesh_dimension,
@@ -2707,6 +2734,7 @@ class EITWorkstation(QMainWindow):
 
         if target == "dataset":
             self._dataset_forward_model_config = config
+            self._dataset_use_interactive_3d_geometry_defaults = False
             self._dataset_tab.mesh_setup_panel.set_config(
                 {
                     "mesh_dimension": config.mesh_dimension,

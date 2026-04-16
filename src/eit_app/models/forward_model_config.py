@@ -8,6 +8,12 @@ from typing import Any
 from eit_app.measurement_layout import measurement_layout_from_config
 
 
+INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING = 8
+INTERACTIVE_3D_DEFAULT_RINGS = 2
+INTERACTIVE_3D_DEFAULT_RADIUS = 0.18
+INTERACTIVE_3D_DEFAULT_HEIGHT = 0.16
+
+
 def electrode_level_fractions_for_rings(n_rings: int) -> tuple[float, ...]:
     """Return stable 3D electrode level fractions for the requested ring count."""
     rings = max(int(n_rings), 1)
