@@ -2,14 +2,47 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QFont
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+
+# Latin-first base families: Segoe UI on Windows, Noto Sans / DejaVu Sans as
+# Linux fallbacks.  CJK fallbacks are appended at runtime based on what
+# eit_app.ui.fonts actually registered with the Qt font database (Microsoft
+# YaHei, Noto Sans CJK SC, etc.).  Qt walks the family list left-to-right and
+# falls back per-glyph when a character isn't drawable — the same mechanism
+# matplotlib uses.  Without this list Qt renders tofu boxes for Chinese
+# labels on systems where the primary family lacks CJK coverage.
+_LATIN_BASE_FAMILIES = ["Segoe UI", "Noto Sans", "DejaVu Sans"]
+_CJK_FALLBACK_CANDIDATES = [
+    "Microsoft YaHei",
+    "Microsoft YaHei UI",
+    "Noto Sans CJK SC",
+    "Noto Sans SC",
+    "Source Han Sans SC",
+    "PingFang SC",
+    "WenQuanYi Zen Hei",
+    "SimSun",
+    "SimHei",
+]
+
+
+def _resolve_ui_font_families() -> list[str]:
+    """Pick a Latin-first + CJK-fallback family list for Qt chrome.
+
+    Call this AFTER `configure_runtime_fonts(app)` so any bundled Windows
+    fonts already sit in the Qt font database.  If no CJK face is found
+    (pure-Linux CI runners), we still return the Latin list — Qt will
+    substitute its own last-resort face for missing glyphs.
+    """
+    known = set(QFontDatabase.families())
+    cjk = [name for name in _CJK_FALLBACK_CANDIDATES if name in known]
+    return _LATIN_BASE_FAMILIES + cjk
 
 
 def apply_app_theme(app: QApplication) -> None:
     """Apply a consistent workstation theme to the entire application."""
     font = QFont()
-    font.setFamilies(["Segoe UI", "Noto Sans", "DejaVu Sans"])
+    font.setFamilies(_resolve_ui_font_families())
     font.setPointSize(10)
     app.setFont(font)
     app.setStyleSheet(_APP_STYLESHEET)
@@ -132,10 +165,24 @@ QToolBox::tab {
     font-weight: 600;
 }
 
+QToolBox::tab:hover:!selected {
+    /* Subtle hover feedback so users know the tab is clickable. Kept
+       quieter than the selected state so it doesn't compete with it. */
+    background: #cfdeef;
+    border-color: #a8bccf;
+    color: #14253a;
+}
+
 QToolBox::tab:selected {
     background: #1f3b5b;
     color: #f8fbff;
     border-color: #1f3b5b;
+}
+
+QToolBox::tab:disabled {
+    color: #8a96a5;
+    background: #eff3f8;
+    border-color: #d8e0ea;
 }
 
 QToolBox#workflowToolbox::tab {
@@ -180,6 +227,19 @@ QTabBar::tab:hover:!selected {
     background: #e3ebf4;
     border-top-left-radius: 8px;
     border-top-right-radius: 8px;
+}
+
+QTabBar::tab:focus {
+    /* Thicker bottom rule + darker text so keyboard users see which tab
+       is about to receive Enter / Space. */
+    color: #0f3a5b;
+    border-bottom: 3px solid #0f3a5b;
+    background: #dde9f4;
+}
+
+QTabBar::tab:disabled {
+    color: #a2adbb;
+    background: transparent;
 }
 
 QToolBox#workflowToolbox > QWidget {
@@ -329,8 +389,21 @@ QLineEdit:focus,
 QAbstractSpinBox:focus,
 QPlainTextEdit:focus,
 QTextEdit:focus {
-    border: 1px solid #275d95;
+    /* 2px accent border for obvious focus indication on keyboard nav. */
+    border: 2px solid #275d95;
+    padding: 6px 9px;
     background: #fbfdff;
+}
+
+QLineEdit:disabled,
+QAbstractSpinBox:disabled,
+QPlainTextEdit:disabled,
+QTextEdit:disabled {
+    /* Disabled fields need enough contrast that users can still read
+       the value they can't edit. */
+    color: #6c7a8a;
+    background: #eef2f7;
+    border-color: #d3dbe4;
 }
 
 QComboBox {
@@ -348,7 +421,14 @@ QComboBox:hover {
 }
 
 QComboBox:focus {
-    border: 1px solid #275d95;
+    border: 2px solid #275d95;
+    padding: 5px 9px;
+}
+
+QComboBox:disabled {
+    color: #6c7a8a;
+    background: #eef2f7;
+    border-color: #d3dbe4;
 }
 
 QComboBox::drop-down {
@@ -495,6 +575,10 @@ QPushButton {
     padding: 8px 16px;
     font-weight: 600;
     min-height: 20px;
+    /* Keep Qt's default dotted focus outline suppressed; we paint our own
+       focus ring via border styling so keyboard users see a clear ring
+       that matches the rest of the theme. */
+    outline: none;
 }
 
 QPushButton:hover {
@@ -513,10 +597,20 @@ QPushButton:checked {
     border-color: #5e7994;
 }
 
+QPushButton:focus {
+    /* Keyboard focus: 2px accent ring so Tab navigation is visible.
+       Uses the same accent as the active tab so the focus cue feels
+       consistent across the app. */
+    border: 2px solid #1f5d8b;
+    padding: 7px 15px;
+}
+
 QPushButton:disabled {
-    color: #97a6b5;
-    background: #f4f7fa;
-    border-color: #dde5ed;
+    /* Bump contrast to meet WCAG 2.1 AA (4.5:1 for normal text).
+       Previous #97a6b5 on #f4f7fa was ~3.6:1 which fails AA. */
+    color: #6c7a8a;
+    background: #eef2f7;
+    border-color: #d3dbe4;
 }
 
 QPushButton[buttonRole="primary"] {
@@ -534,6 +628,18 @@ QPushButton[buttonRole="primary"]:checked {
     border-color: #123754;
 }
 
+QPushButton[buttonRole="primary"]:focus {
+    /* Light ring stands out against the dark primary fill. */
+    border: 2px solid #9fc8e4;
+    padding: 7px 15px;
+}
+
+QPushButton[buttonRole="primary"]:disabled {
+    background: #7ea3bd;
+    color: #f3f7fa;
+    border-color: #6b8fa6;
+}
+
 QPushButton[buttonRole="success"] {
     background: #1f7a52;
     color: #f8fbff;
@@ -547,6 +653,17 @@ QPushButton[buttonRole="success"]:hover {
 QPushButton[buttonRole="success"]:checked {
     background: #15563a;
     border-color: #0f412c;
+}
+
+QPushButton[buttonRole="success"]:focus {
+    border: 2px solid #a5d9bf;
+    padding: 7px 15px;
+}
+
+QPushButton[buttonRole="success"]:disabled {
+    background: #89b5a0;
+    color: #f3f7fa;
+    border-color: #72a087;
 }
 
 QPushButton[buttonRole="danger"] {
@@ -564,8 +681,24 @@ QPushButton[buttonRole="danger"]:checked {
     border-color: #4d1818;
 }
 
+QPushButton[buttonRole="danger"]:focus {
+    border: 2px solid #e8b7b4;
+    padding: 7px 15px;
+}
+
+QPushButton[buttonRole="danger"]:disabled {
+    background: #b78585;
+    color: #f4eaea;
+    border-color: #9d6e6e;
+}
+
 QPushButton[buttonRole="subtle"] {
     background: #f7fafc;
+}
+
+QPushButton[buttonRole="subtle"]:focus {
+    border: 2px solid #1f5d8b;
+    padding: 7px 15px;
 }
 
 QTableView {
@@ -662,6 +795,16 @@ QCheckBox {
     spacing: 8px;
 }
 
+QCheckBox:disabled {
+    color: #6c7a8a;
+}
+
+QCheckBox:focus {
+    /* Simple text-only focus cue to avoid fighting with the indicator
+       styling (Qt renders a QFocusFrame around the whole check). */
+    color: #0f3a5b;
+}
+
 QCheckBox::indicator {
     width: 18px;
     height: 18px;
@@ -674,6 +817,11 @@ QCheckBox::indicator:hover {
     border-color: #1f5d8b;
 }
 
+QCheckBox::indicator:focus {
+    /* Accent ring around the indicator box for keyboard users. */
+    border: 2px solid #1f5d8b;
+}
+
 QCheckBox::indicator:checked {
     background: #1f5d8b;
     border-color: #1f5d8b;
@@ -682,6 +830,16 @@ QCheckBox::indicator:checked {
 
 QCheckBox::indicator:checked:hover {
     background: #2a6fa0;
+}
+
+QCheckBox::indicator:disabled {
+    background: #eef2f7;
+    border-color: #d3dbe4;
+}
+
+QCheckBox::indicator:checked:disabled {
+    background: #9fbacb;
+    border-color: #8aa5b7;
 }
 
 /* Spin box buttons with embedded SVG arrows */

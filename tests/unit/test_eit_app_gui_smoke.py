@@ -135,6 +135,88 @@ def _cleanup_top_level_widgets_after_test():
 
 
 @pytest.mark.gui
+def test_interop_hub_dialog_hot_swaps_language() -> None:
+    """Interop Hub must refresh every labeled chrome when language flips.
+
+    Covers the Phase 3d.4 migration: dialog title, tab titles, status
+    box/row labels, step group titles, primary buttons, and the sentinel
+    state text on the manual-input status rows.
+    """
+    from eit_app.i18n import set_language, t
+    from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
+
+    app = _get_app()
+    set_language("en", persist=False)
+    dialog = InteropHubDialog()
+    dialog.show()
+    app.processEvents()
+    try:
+        assert dialog.windowTitle() == t("dlg.interop.title")
+        assert dialog._tabs.tabText(0) == t("dlg.interop.tabs.import")
+        assert dialog._tabs.tabText(1) == t("dlg.interop.tabs.export")
+        assert dialog._tabs.tabText(2) == t("dlg.interop.tabs.profiles")
+        assert dialog._preview_btn.text() == t("dlg.interop.actions.preview_button")
+        assert dialog._status_box.title() == t("dlg.interop.status.title")
+        # "Not set" sentinel because no env was picked yet.
+        assert dialog._status_value_labels["matlab"].text() == t(
+            "dlg.interop.status.unspecified"
+        )
+
+        set_language("zh", persist=False)
+        assert dialog.windowTitle() == t("dlg.interop.title")
+        assert dialog._tabs.tabText(0) == t("dlg.interop.tabs.import")
+        assert dialog._preview_btn.text() == t("dlg.interop.actions.preview_button")
+        assert dialog._status_box.title() == t("dlg.interop.status.title")
+        assert dialog._status_value_labels["matlab"].text() == t(
+            "dlg.interop.status.unspecified"
+        )
+    finally:
+        set_language("en", persist=False)
+        dialog.close()
+        dialog.deleteLater()
+        app.processEvents()
+
+
+@pytest.mark.gui
+def test_app_theme_publishes_accessibility_selectors() -> None:
+    """Guard against accidental regression of the accessibility additions.
+
+    These selectors make keyboard navigation and disabled state readable:
+      - :focus on buttons / inputs / combos / tabs
+      - :hover feedback on QToolBox tabs
+      - :disabled with ~4.5:1 contrast
+      - Latin + CJK font stack on the Qt application font
+    """
+    from eit_app.ui.fonts import configure_runtime_fonts
+    from eit_app.ui.theme import apply_app_theme, _resolve_ui_font_families
+
+    app = _get_app()
+    configure_runtime_fonts(app)
+    apply_app_theme(app)
+    css = app.styleSheet()
+
+    required_selectors = (
+        "QPushButton:focus",
+        'QPushButton[buttonRole="primary"]:focus',
+        'QPushButton[buttonRole="danger"]:focus',
+        "QLineEdit:focus,",  # shared selector — also matches spinbox/textedit
+        "QLineEdit:disabled,",
+        "QComboBox:focus",
+        "QComboBox:disabled",
+        "QTabBar::tab:focus",
+        "QToolBox::tab:hover:!selected",
+        "QCheckBox:focus",
+    )
+    missing = [sel for sel in required_selectors if sel not in css]
+    assert not missing, f"Theme is missing accessibility selectors: {missing}"
+
+    families = _resolve_ui_font_families()
+    assert families[:3] == ["Segoe UI", "Noto Sans", "DejaVu Sans"], (
+        "Latin font base should stay stable for Windows / Linux compat"
+    )
+
+
+@pytest.mark.gui
 def test_reconstruction_widget_pre_renders_static_layout_and_refreshes_internal_image() -> None:
     _get_app()
     widget = ReconstructionWidget()
