@@ -26,6 +26,7 @@ from eit_app.interop.environment import (
     to_posix_path,
     to_windows_path,
 )
+from eit_app.ui.theme import current_theme_mode
 
 _SETTINGS_GROUP = "visual_path_picker"
 _GEOMETRY_KEY = "geometry"
@@ -222,28 +223,48 @@ def _configure_dialog_appearance(dialog: QFileDialog) -> None:
     dialog.setLabelText(QFileDialog.DialogLabel.FileType, t("path_picker.label.file_type"))
     dialog.setLabelText(QFileDialog.DialogLabel.Accept, t("path_picker.label.accept"))
     dialog.setLabelText(QFileDialog.DialogLabel.Reject, t("path_picker.label.reject"))
+    # Pick the palette at dialog-open time rather than subscribing
+    # to theme_mode changes — these dialogs are short-lived (modal
+    # exec loop), so the palette active when the user clicks "Pick…"
+    # is good enough.  The global QApplication stylesheet already
+    # handles every non-QFileDialog widget; these rules only exist
+    # to tune the file browser chrome (tree/list selection colors,
+    # button min sizes) which QFileDialog paints via its own sub-
+    # stylesheet override.
+    if current_theme_mode() == "dark":
+        dialog_bg    = "#1a1f26"
+        view_bg      = "#222831"
+        view_border  = "#3e4754"
+        sel_bg       = "#1e4870"
+        sel_fg       = "#ecf4fb"
+    else:
+        dialog_bg    = "#f5f8fc"
+        view_bg      = "#ffffff"
+        view_border  = "#d5e0ee"
+        sel_bg       = "#dbe9fb"
+        sel_fg       = "#22364f"
     dialog.setStyleSheet(
-        """
-        QFileDialog {
-            background: #f5f8fc;
-        }
+        f"""
+        QFileDialog {{
+            background: {dialog_bg};
+        }}
         QFileDialog QTreeView,
-        QFileDialog QListView {
-            background: #ffffff;
-            border: 1px solid #d5e0ee;
+        QFileDialog QListView {{
+            background: {view_bg};
+            border: 1px solid {view_border};
             border-radius: 10px;
             padding: 2px;
-            selection-background-color: #dbe9fb;
-            selection-color: #22364f;
-        }
+            selection-background-color: {sel_bg};
+            selection-color: {sel_fg};
+        }}
         QFileDialog QLineEdit,
-        QFileDialog QComboBox {
+        QFileDialog QComboBox {{
             min-height: 32px;
-        }
-        QFileDialog QPushButton {
+        }}
+        QFileDialog QPushButton {{
             min-height: 34px;
             min-width: 96px;
-        }
+        }}
         """
     )
 
