@@ -78,6 +78,34 @@ def test_to_runtime_tensor_cached_reuses_buffer_and_resizes():
     assert third.data_ptr() != second.data_ptr()
 
 
+def test_to_runtime_tensor_copies_readonly_numpy_inputs(monkeypatch: pytest.MonkeyPatch):
+    recon = _solve_reconstructor()
+    readonly = np.array([1.0, 2.0, 3.0], dtype=float)
+    readonly.setflags(write=False)
+    writable = np.array([4.0, 5.0, 6.0], dtype=float)
+    seen: list[tuple[bool, bool]] = []
+    original_as_tensor = torch.as_tensor
+
+    def _spy_as_tensor(values, *args, **kwargs):
+        seen.append(
+            (
+                isinstance(values, np.ndarray) and values.flags.writeable,
+                values is writable,
+            )
+        )
+        return original_as_tensor(values, *args, **kwargs)
+
+    monkeypatch.setattr(gn_runtime.torch, "as_tensor", _spy_as_tensor)
+
+    readonly_tensor = gn_runtime._to_runtime_tensor(recon, readonly)
+    writable_tensor = gn_runtime._to_runtime_tensor(recon, writable)
+
+    assert seen == [(True, False), (True, True)]
+    assert readonly.flags.writeable is False
+    assert torch.allclose(readonly_tensor, torch.tensor([1.0, 2.0, 3.0], dtype=torch.float64))
+    assert torch.allclose(writable_tensor, torch.tensor([4.0, 5.0, 6.0], dtype=torch.float64))
+
+
 def test_measurement_weights_cover_disabled_and_verbose_paths(monkeypatch: pytest.MonkeyPatch, capsys):
     recon = _solve_reconstructor(use_measurement_weights=False)
     gn_runtime.ensure_measurement_weights(recon, sigma_function=object())

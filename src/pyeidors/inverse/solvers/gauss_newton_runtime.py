@@ -103,6 +103,8 @@ class _IterationLog:
 
 
 def _to_runtime_tensor(reconstructor, values) -> torch.Tensor:
+    if isinstance(values, np.ndarray) and not values.flags.writeable:
+        values = values.copy()
     return torch.as_tensor(
         values,
         device=reconstructor.device,
