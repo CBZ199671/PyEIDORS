@@ -177,6 +177,34 @@ def test_interop_hub_dialog_hot_swaps_language() -> None:
         app.processEvents()
 
 
+def test_status_bar_reserves_error_tone_for_real_failures() -> None:
+    """Tone-palette guard: 'error' (red) must only mark actual failures.
+
+    Previously the recording-in-progress chip was painted red ("error"
+    tone), which users reasonably read as "something is broken" — the
+    exact opposite of the real state (capture running normally).
+
+    The mode chip also used to cycle through four different tones per
+    tab, implying (e.g.) the Dataset tab carried a warning and the
+    Database tab was dormant.  Both are regular operating modes.
+    """
+    from eit_app.ui.status_bar import _ACQ_KEYS, _LINK_KEYS, _MODE_KEYS, _POWER_KEYS, _RECORD_KEYS
+
+    # recording == "recording" must be the 'active' tone, not 'error'.
+    assert _RECORD_KEYS["recording"][1] == "active"
+    # Mode chips are purely mode indicators — no per-tab threat levels.
+    assert {tone for _, tone in _MODE_KEYS.values()} == {"active"}
+    # Every tone we assign must resolve to a known palette entry.
+    from eit_app.ui.theme import tone_palette
+
+    known_tones = {"idle", "warn", "ready", "active", "error"}
+    for mapping in (_LINK_KEYS, _POWER_KEYS, _ACQ_KEYS, _RECORD_KEYS, _MODE_KEYS):
+        for _, tone in mapping.values():
+            assert tone in known_tones, f"Unknown tone: {tone!r}"
+            # tone_palette should return a 3-tuple (fg, bg, border).
+            assert len(tone_palette(tone)) == 3
+
+
 def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
     """Lint-style check: no bare QPushButton without set_button_role(...).
 

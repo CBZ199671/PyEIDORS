@@ -28,16 +28,31 @@ _ACQ_KEYS = {
     "stepped_run": ("status.acq.stepped_run", "active"),
     "single_shot": ("status.acq.single_shot", "active"),
 }
+# Tone semantics (see eit_app.ui.theme.tone_palette):
+#   idle    neutral grey     — inactive / nothing to report
+#   ready   green             — healthy, connected, warmed up
+#   active  blue              — currently doing productive work
+#   warn    amber             — transitional / attention needed
+#   error   red               — failure / broken
 _RECORD_KEYS = {
     "off": ("status.record.off", "idle"),
     "armed": ("status.record.armed", "warn"),
-    "recording": ("status.record.recording", "error"),
+    # Recording IS working correctly — it's an active mode, not an
+    # error.  Previous "error" tone painted the chip red during normal
+    # captures which misled users into thinking something had gone
+    # wrong.
+    "recording": ("status.record.recording", "active"),
 }
+# Mode chip uses a single "active" tone across every tab so users can
+# read the chip as "app is live" regardless of which tab they're on.
+# Previously each tab had a distinct tone (hardware=active, sim=ready,
+# dataset=warn, database=idle) which implied the dataset tab carried a
+# warning state and the database tab was dormant — neither is true.
 _MODE_KEYS = {
     0: ("status.mode.hardware", "active"),
-    1: ("status.mode.simulation", "ready"),
-    2: ("status.mode.dataset", "warn"),
-    3: ("status.mode.database", "idle"),
+    1: ("status.mode.simulation", "active"),
+    2: ("status.mode.dataset", "active"),
+    3: ("status.mode.database", "active"),
 }
 
 
