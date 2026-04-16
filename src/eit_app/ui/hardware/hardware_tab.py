@@ -73,6 +73,10 @@ class HardwareTab(QWidget):
         self._frame_browser = FrameBrowserWidget()
 
         # Step titles are assigned by _retranslate(); pass empty strings now.
+        # Right-context (frame browser) width unified to 300px across all
+        # WorkflowShell-based tabs — see Phase 7 in TASKS.md.  Keeping
+        # the total splitter width stable (was 1500) by trimming 40px
+        # from the center panel.
         self._shell = WorkflowShell(
             steps=[
                 ("", self._conn_panel),
@@ -84,8 +88,8 @@ class HardwareTab(QWidget):
             left_footer=self._summary_panel,
             compact_toolbox=True,
             step_min_width=480,
-            context_min_width=260,
-            splitter_sizes=(480, 760, 260),
+            context_min_width=300,
+            splitter_sizes=(480, 720, 300),
             parent=self,
         )
 

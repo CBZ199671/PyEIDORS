@@ -64,6 +64,8 @@ class SimulationTab(QWidget):
         context_layout.addStretch()
 
         # Step titles filled in by _retranslate below.
+        # context_min_width unified to 300px across all WorkflowShell
+        # tabs (see Phase 7 in TASKS.md).
         self._shell = WorkflowShell(
             steps=[
                 ("", self._mesh_panel),
@@ -74,7 +76,7 @@ class SimulationTab(QWidget):
             center_widget=self._results_widget,
             context_widget=context_widget,
             step_min_width=320,
-            context_min_width=290,
+            context_min_width=300,
             splitter_sizes=(350, 940, 300),
             parent=self,
         )

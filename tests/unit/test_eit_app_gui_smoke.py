@@ -248,6 +248,39 @@ def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
 
 
 @pytest.mark.gui
+def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
+    """Phase 7: the three WorkflowShell-based tabs (Hardware /
+    Simulation / Dataset) must expose the same 300px minimum width on
+    their right-side context panel.  Before this change Hardware was
+    260, Simulation was 290 and Dataset was 310 — visually the right
+    pane kept "jumping" as the user switched tabs.
+    """
+    window = EITWorkstation()
+    _show_window(window)
+    try:
+        # Hardware → FrameBrowser is the context widget
+        assert window._hw_tab._frame_browser.minimumWidth() == 300
+
+        # Simulation → splitter child #2 is the context widget
+        sim_splitter = window._sim_tab._shell._main_splitter
+        assert sim_splitter.widget(2).minimumWidth() == 300
+
+        # Dataset → DatasetSummaryPanel is the context widget
+        assert window._dataset_tab._summary_panel.minimumWidth() == 300
+
+        # And the initial splitter_sizes request a 300px third pane so
+        # the context shows at 300px rather than auto-shrunk.
+        for shell in (
+            window._hw_tab._shell,
+            window._sim_tab._shell,
+            window._dataset_tab._shell,
+        ):
+            assert shell._splitter_sizes[2] == 300
+    finally:
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_tools_menu_exposes_difference_batch_reconstruction_shortcuts() -> None:
     """Tools menu must expose Difference (Ctrl+D), Batch (Ctrl+B), and
     Reconstruction (Ctrl+R) entries with safe click handlers.

@@ -115,6 +115,10 @@ class DatasetGeneratorTab(QWidget):
         self._workspace = _DatasetWorkspaceWidget()
 
         # Step titles filled in by _retranslate below.
+        # context_min_width unified to 300px across all WorkflowShell
+        # tabs (see Phase 7 in TASKS.md); the dataset summary panel
+        # previously used 310/320 which made it visibly wider than the
+        # other two tabs' right panes.
         self._shell = WorkflowShell(
             steps=[
                 ("", self._mesh_panel),
@@ -124,8 +128,8 @@ class DatasetGeneratorTab(QWidget):
             center_widget=self._workspace,
             context_widget=self._summary_panel,
             step_min_width=330,
-            context_min_width=310,
-            splitter_sizes=(360, 820, 320),
+            context_min_width=300,
+            splitter_sizes=(360, 840, 300),
             parent=self,
         )
 
