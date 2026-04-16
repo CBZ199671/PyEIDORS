@@ -687,6 +687,81 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     app.processEvents()
 
 
+def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
+    """All 8 spinbox/date-edit arrow URLs must be DPR-aware.
+
+    The previous hardcoded SVGs set intrinsic width="10" height="10"
+    on the <svg> root, which pins Qt's stylesheet rasterisation to
+    exactly 10×10 px and produces blurry arrows on 2×/3× DPR displays.
+    The fix removes the intrinsic size so Qt scales the viewBox to
+    whatever device-pixel size the compositor requests.
+
+    This test guards the contract at three levels:
+      1. The decoded SVG payload must contain ``viewBox`` and must NOT
+         contain ``width=`` / ``height=`` on the root element.
+      2. The dark-mode arrow palette must use different fills from
+         light (verified by parsing the fill color out of the SVG).
+      3. Each URL must parse cleanly via QSvgRenderer — a smoke check
+         that the base64 encoding round-trips and the SVG is valid XML.
+    """
+    import base64
+    import re
+    from PySide6.QtCore import QByteArray
+    from PySide6.QtSvg import QSvgRenderer
+
+    from eit_app.ui.theme import (
+        _ARROW_URLS_DARK,
+        _ARROW_URLS_LIGHT,
+        _arrow_data_url,
+    )
+
+    _get_app()  # QSvgRenderer needs a QApplication
+
+    def _decode(url: str) -> str:
+        prefix = 'url("data:image/svg+xml;base64,'
+        assert url.startswith(prefix), f"unexpected URL form: {url[:60]}"
+        b64 = url[len(prefix):].rstrip('")')
+        return base64.b64decode(b64).decode("utf-8")
+
+    for name, url in {**_ARROW_URLS_LIGHT, **{f"dk_{k}": v for k, v in _ARROW_URLS_DARK.items()}}.items():
+        svg = _decode(url)
+        # Level 1: viewBox-only, no intrinsic raster size.
+        assert "viewBox=" in svg, f"{name}: missing viewBox"
+        assert 'width="' not in svg, f"{name}: still has width= attribute"
+        assert 'height="' not in svg, f"{name}: still has height= attribute"
+        # Level 3: Qt accepts it as a valid SVG.
+        renderer = QSvgRenderer(QByteArray(svg.encode("utf-8")))
+        assert renderer.isValid(), f"{name}: QSvgRenderer rejected the payload"
+
+    # Level 2: dark fills are brighter than light fills (higher
+    # luminance approximated by the channel sum).  Compare idle up
+    # arrows as the canonical representative.
+    def _fill(url: str) -> str:
+        m = re.search(r'fill="(#[0-9a-fA-F]{6})"', _decode(url))
+        assert m is not None
+        return m.group(1).lower()
+
+    light_fill = _fill(_ARROW_URLS_LIGHT["up_idle"])
+    dark_fill = _fill(_ARROW_URLS_DARK["up_idle"])
+    assert light_fill != dark_fill
+    # Dark palette chose #a7b2c2 (luma ≈ 175), light chose #5b6573
+    # (luma ≈ 100).  Assert the dark variant has >30% higher sum
+    # so chromatic drift alone can't pass the check.
+    light_sum = sum(int(light_fill[i : i + 2], 16) for i in (1, 3, 5))
+    dark_sum = sum(int(dark_fill[i : i + 2], 16) for i in (1, 3, 5))
+    assert dark_sum > light_sum * 1.3, (
+        f"Dark arrow fill {dark_fill} (sum {dark_sum}) should be noticeably "
+        f"brighter than light {light_fill} (sum {light_sum})"
+    )
+
+    # Cross-check the factory helper produces the same output shape.
+    url = _arrow_data_url("up", "#ff0000")
+    svg = _decode(url)
+    assert 'fill="#ff0000"' in svg
+    assert "viewBox=" in svg
+    assert 'width="' not in svg
+
+
 @pytest.mark.gui
 def test_dark_mode_toggle_swaps_stylesheet_and_tone_palette() -> None:
     """The View → Dark Theme action must:

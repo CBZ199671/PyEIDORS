@@ -2,9 +2,65 @@
 
 from __future__ import annotations
 
+import base64
+
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+
+
+# =====================================================================
+# Inline SVG helpers (used for QSpinBox / QDateEdit step arrows)
+# =====================================================================
+#
+# The stylesheet references four triangle arrows (up/down × idle/hover)
+# plus a fifth for the date-edit drop-down.  Qt's SVG rasteriser honours
+# the device pixel ratio — but only when the SVG root has a viewBox and
+# NO intrinsic ``width``/``height`` attributes.  The earlier hardcoded
+# payload included ``width="10" height="10"`` which pinned rasterisation
+# to 10×10 pixels, so arrows showed up blurry at 2× DPI scaling.
+#
+# Build the data URLs from code so:
+#   * We can flip fill colours per theme mode without hand-editing
+#     base64 blobs.
+#   * The SVG always comes out DPR-aware (no intrinsic size).
+
+
+def _arrow_data_url(direction: str, fill: str) -> str:
+    """Return a ``data:image/svg+xml;base64,…`` URL for a spinbox arrow.
+
+    ``direction`` is 'up' or 'down'; ``fill`` is a CSS color string
+    (e.g. ``"#5b6573"``).  The returned URL can be dropped into any
+    ``image: url(...)`` declaration.
+    """
+    if direction == "up":
+        points = "5,2.5 1.5,7 8.5,7"
+    else:
+        points = "5,7.5 1.5,3 8.5,3"
+    svg = (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10">'
+        f'<polygon points="{points}" fill="{fill}"/>'
+        "</svg>"
+    )
+    encoded = base64.b64encode(svg.encode("utf-8")).decode("ascii")
+    return f'url("data:image/svg+xml;base64,{encoded}")'
+
+
+# Light-mode fills mirror the existing palette (#5b6573 neutral,
+# #1f5d8b accent on hover).  Dark mode brightens both so the arrows
+# stay visible against the dark input fill.
+_ARROW_URLS_LIGHT = {
+    "up_idle":    _arrow_data_url("up",   "#5b6573"),
+    "up_hover":   _arrow_data_url("up",   "#1f5d8b"),
+    "down_idle":  _arrow_data_url("down", "#5b6573"),
+    "down_hover": _arrow_data_url("down", "#1f5d8b"),
+}
+_ARROW_URLS_DARK = {
+    "up_idle":    _arrow_data_url("up",   "#a7b2c2"),
+    "up_hover":   _arrow_data_url("up",   "#5ca8e0"),
+    "down_idle":  _arrow_data_url("down", "#a7b2c2"),
+    "down_hover": _arrow_data_url("down", "#5ca8e0"),
+}
 
 
 # =====================================================================
@@ -90,10 +146,29 @@ def subscribe_theme_mode(listener) -> None:
 
 
 def _build_stylesheet(mode: str) -> str:
-    """Concatenate the base Light stylesheet with any mode-specific overlay."""
+    """Concatenate the base Light stylesheet with any mode-specific overlay.
+
+    Also performs inline substitution of the __ARROW_*__ placeholders
+    so every spinbox / date-edit arrow uses a DPR-aware, theme-matched
+    SVG URL.  Light mode uses the neutral/accent fills; Dark mode
+    overrides with brighter versions so the arrow stays visible against
+    the dark input background.
+    """
+    urls = _ARROW_URLS_DARK if mode == "dark" else _ARROW_URLS_LIGHT
+    base = (
+        _APP_STYLESHEET
+        .replace("__ARROW_UP_IDLE__",    urls["up_idle"])
+        .replace("__ARROW_UP_HOVER__",   urls["up_hover"])
+        .replace("__ARROW_DOWN_IDLE__",  urls["down_idle"])
+        .replace("__ARROW_DOWN_HOVER__", urls["down_hover"])
+    )
     if mode == "dark":
-        return _APP_STYLESHEET + "\n\n" + _DARK_OVERLAY
-    return _APP_STYLESHEET
+        # The overlay below re-skins spinbox / date-edit button fills
+        # to match the dark panel chrome; arrow SVG URLs are already
+        # picked from _ARROW_URLS_DARK above, so the overlay only has
+        # to deal with the button backgrounds.
+        return base + "\n\n" + _DARK_OVERLAY
+    return base
 
 # Latin-first base families: Segoe UI on Windows, Noto Sans / DejaVu Sans as
 # Linux fallbacks.  CJK fallbacks are appended at runtime based on what
@@ -998,26 +1073,26 @@ QDoubleSpinBox::down-button:pressed {
 
 QSpinBox::up-arrow,
 QDoubleSpinBox::up-arrow {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsMi41IDEuNSw3IDguNSw3IiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
+    image: __ARROW_UP_IDLE__;
     width: 10px;
     height: 10px;
 }
 
 QSpinBox::down-arrow,
 QDoubleSpinBox::down-arrow {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
+    image: __ARROW_DOWN_IDLE__;
     width: 10px;
     height: 10px;
 }
 
 QSpinBox::up-arrow:hover,
 QDoubleSpinBox::up-arrow:hover {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsMi41IDEuNSw3IDguNSw3IiBmaWxsPSIjMWY1ZDhiIi8+PC9zdmc+");
+    image: __ARROW_UP_HOVER__;
 }
 
 QSpinBox::down-arrow:hover,
 QDoubleSpinBox::down-arrow:hover {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjMWY1ZDhiIi8+PC9zdmc+");
+    image: __ARROW_DOWN_HOVER__;
 }
 
 /* Date edit dropdown */
@@ -1036,9 +1111,13 @@ QDateEdit::drop-down:hover {
 }
 
 QDateEdit::down-arrow {
-    image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
+    image: __ARROW_DOWN_IDLE__;
     width: 10px;
     height: 10px;
+}
+
+QDateEdit::down-arrow:hover {
+    image: __ARROW_DOWN_HOVER__;
 }
 """
 
