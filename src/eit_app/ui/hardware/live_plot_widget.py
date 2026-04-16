@@ -32,6 +32,10 @@ class LivePlotWidget(QWidget):
         self._point_count = 208
         self._expected_point_count = 208
         self._has_data = False
+        # Tri-state for the placeholder overlay: "empty" | "loading" |
+        # "data".  _retranslate() re-applies the correct language for
+        # the current state instead of always showing the empty text.
+        self._overlay_state = "empty"
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -114,8 +118,43 @@ class LivePlotWidget(QWidget):
         """
         self._last_frame = frame
         self._has_data = True
+        self._overlay_state = "data"
         self._empty_overlay.hide()
         self._refresh_curves(frame)
+
+    def set_loading(self, on: bool) -> None:
+        """Toggle the 'waiting for frames' overlay.
+
+        Called when hardware connects / acquisition starts but no frame
+        has arrived yet — conveys "device is active, data is coming".
+        If on=False and no data yet, fall back to the empty state.
+        """
+        if on:
+            self._overlay_state = "loading"
+            self._apply_overlay_text()
+            self._empty_overlay.show()
+        else:
+            if self._has_data:
+                self._empty_overlay.hide()
+                self._overlay_state = "data"
+            else:
+                self._overlay_state = "empty"
+                self._apply_overlay_text()
+                self._empty_overlay.show()
+
+    def _apply_overlay_text(self) -> None:
+        """Re-apply the overlay text for the current state + language."""
+        if self._overlay_state == "loading":
+            key = "hw.live_plot.loading_overlay"
+            color = "#1f5d8b"
+        else:
+            key = "hw.live_plot.empty_overlay"
+            color = "#5b6573"
+        self._empty_overlay.setText(t(key))
+        self._empty_overlay.setStyleSheet(
+            f"color: {color}; font-size: 12px; font-weight: 600; "
+            "background: transparent;"
+        )
 
     def _on_visibility_changed(self, _checked: bool) -> None:
         self._curve_real.setVisible(self._show_real.isChecked())
@@ -139,10 +178,12 @@ class LivePlotWidget(QWidget):
         """Clear all curves."""
         self._last_frame = None
         self._has_data = False
+        self._overlay_state = "empty"
         empty = np.array([])
         self._curve_real.setData(empty, empty)
         self._curve_imag.setData(empty, empty)
         self._configure_index_axis(self._expected_point_count)
+        self._apply_overlay_text()
         self._empty_overlay.show()
 
     def set_expected_point_count(self, point_count: int) -> None:
@@ -166,7 +207,8 @@ class LivePlotWidget(QWidget):
             f"{t('hw.live_plot.title')}"
             "</span>"
         )
-        self._empty_overlay.setText(t("hw.live_plot.empty_overlay"))
+        # Refresh overlay text for the current state (empty or loading).
+        self._apply_overlay_text()
         self._show_real.setText(t("hw.live_plot.curve.real"))
         self._show_imag.setText(t("hw.live_plot.curve.imag"))
         # Re-render the bottom-axis label with the localized prefix.

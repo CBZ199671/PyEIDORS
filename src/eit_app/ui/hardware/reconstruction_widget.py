@@ -77,13 +77,14 @@ class ReconstructionWidget(QWidget):
         # Empty-overlay text is populated by _retranslate() below so it
         # follows the active language.  The `_overlay_mode` flag lets
         # _retranslate distinguish the idle placeholder from transient
-        # error messages surfaced via _show_status().
+        # error messages surfaced via _show_status() and from the
+        # Phase 4 "loading" state set via set_loading().
         self._empty_overlay = QLabel("")
         self._empty_overlay.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty_overlay.setStyleSheet(
             "color: #5b6573; font-size: 12px; font-weight: 600; background: transparent;"
         )
-        self._overlay_mode = "empty"  # "empty" | "error"
+        self._overlay_mode = "empty"  # "empty" | "loading" | "error"
 
         plot_stack.addWidget(self._plot_widget)
         plot_stack.addWidget(self._empty_overlay)
@@ -103,6 +104,34 @@ class ReconstructionWidget(QWidget):
         self._reset_plot()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
+
+    def set_loading(self, on: bool) -> None:
+        """Toggle the 'reconstructing' placeholder overlay.
+
+        Called before a reconstruction job is dispatched; falls back to
+        "empty" if the job failed and produced no data.  No-op when the
+        widget is already showing a real image.
+        """
+        if on:
+            self._overlay_mode = "loading"
+            self._empty_overlay.setText(t("hw.reconstruction.loading_overlay"))
+            self._empty_overlay.setStyleSheet(
+                "color: #1f5d8b; font-size: 12px; font-weight: 600; "
+                "background: transparent;"
+            )
+            self._empty_overlay.show()
+        else:
+            # If the next update_reconstruction() already painted a
+            # result, the overlay is already hidden; leave it alone.
+            # Otherwise revert to the empty placeholder so the widget
+            # doesn't stay stuck on "Reconstructing…" forever.
+            if self._overlay_mode == "loading":
+                self._overlay_mode = "empty"
+                self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
+                self._empty_overlay.setStyleSheet(
+                    "color: #5b6573; font-size: 12px; font-weight: 600; "
+                    "background: transparent;"
+                )
 
     @Slot(object)
     def update_reconstruction(self, result: ReconstructionResult) -> None:
@@ -183,11 +212,14 @@ class ReconstructionWidget(QWidget):
             f"{t('hw.reconstruction.title')}"
             "</span>"
         )
-        # Only rewrite the overlay when showing the idle placeholder.  A
-        # transient error (from _show_status) keeps its message until the
-        # next update_reconstruction() call.
+        # Only rewrite the overlay when showing the idle placeholder or
+        # the Phase 4 "Reconstructing…" loading state.  A transient
+        # error (from _show_status) keeps its message until the next
+        # update_reconstruction() call.
         if self._overlay_mode == "empty":
             self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
+        elif self._overlay_mode == "loading":
+            self._empty_overlay.setText(t("hw.reconstruction.loading_overlay"))
 
     def _reset_plot(self) -> None:
         self.configure_layout(n_elec=16, radius=1.0)

@@ -800,6 +800,12 @@ class EITWorkstation(QMainWindow):
             self._voltage_plot.clear()
         except Exception:
             pass
+        # Phase 4: flip the LivePlot to "waiting for device frames" until
+        # the first frame arrives.  update_frame() clears the overlay.
+        try:
+            self._live_plot.set_loading(True)
+        except Exception:
+            pass
         if self._record_requested:
             if not self._ensure_recording_session(self._acq_panel.output_dir()):
                 self._record_requested = False
@@ -1372,6 +1378,12 @@ class EITWorkstation(QMainWindow):
 
     @Slot(object)
     def _on_hardware_reconstruction_done(self, result: object) -> None:
+        # Phase 4: clear any "Reconstructing…" overlays regardless of
+        # which result source this is — update_reconstruction already
+        # repaints on success, and we want the overlay gone even for
+        # ignored events below.
+        self._recon_widget.set_loading(False)
+        self._voltage_plot.set_loading(False)
         if self._tab_widget.currentWidget() is not self._hw_tab:
             return
         source = self._reconstruction_result_source(result)
@@ -2090,6 +2102,10 @@ class EITWorkstation(QMainWindow):
                 "request_source": "hardware_manual",
             },
         )
+        # Phase 4: advertise the reconstruction + voltage fit plots as
+        # busy while the worker runs.
+        self._recon_widget.set_loading(True)
+        self._voltage_plot.set_loading(True)
         self._hw_recon_ctrl.reconstruct(request)
 
     @Slot(dict)
@@ -2755,12 +2771,17 @@ class EITWorkstation(QMainWindow):
         self._sim_state.forward_running = True
         self._sim_tab.forward_problem_panel.set_running(True)
         self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+        # Phase 4: flag the conductivity image + voltage plot as busy
+        # so the user sees a "Solving…" caption instead of a blank or
+        # stale panel while the forward solver runs (5-60s range).
+        self._sim_tab.results_widget.set_loading_forward(True)
         self._fwd_ctrl.solve(request)
 
     @Slot(object)
     def _on_forward_done(self, result: ForwardSolverResult) -> None:
         self._sim_state.forward_running = False
         self._sim_tab.forward_problem_panel.set_running(False)
+        self._sim_tab.results_widget.set_loading_forward(False)
 
         if result.error_msg:
             self._sim_tab.forward_problem_panel.set_status(f"Error: {result.error_msg}")
@@ -2783,6 +2804,9 @@ class EITWorkstation(QMainWindow):
         inv_cfg = self._sim_tab.inverse_problem_panel.get_config()
         self._sim_state.inverse_running = True
         self._sim_tab.inverse_problem_panel.set_running(True)
+        # Phase 4: show "Reconstructing…" captions on the reconstruction
+        # image + voltage plot while the inverse solver runs.
+        self._sim_tab.results_widget.set_loading_inverse(True)
 
         # Build a ReconstructionRequest using the forward result data.
         #
@@ -2863,12 +2887,14 @@ class EITWorkstation(QMainWindow):
         if not accepted:
             self._sim_state.inverse_running = False
             self._sim_tab.inverse_problem_panel.set_running(False)
+            self._sim_tab.results_widget.set_loading_inverse(False)
             return
 
         # Connect one-shot handler for simulation inverse result
         def _on_sim_recon_done(recon_result):
             self._sim_state.inverse_running = False
             self._sim_tab.inverse_problem_panel.set_running(False)
+            self._sim_tab.results_widget.set_loading_inverse(False)
 
             if recon_result.error_msg:
                 self._sim_tab.inverse_problem_panel.set_status(

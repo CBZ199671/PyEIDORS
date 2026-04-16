@@ -112,6 +112,29 @@ class ConductivityImageWidget(QWidget):
         self._ax.set_title(self._default_title, fontproperties=self._title_font)
         self._show_placeholder()
 
+    def set_loading(self, message: str | None = None) -> None:
+        """Show a centered loading caption instead of the conductivity plot.
+
+        Used by SimulationResultsWidget.set_loading() while a forward
+        or inverse solve is in flight.  Keeps the panel footprint stable
+        so the layout doesn't jump when the result arrives.
+        """
+        self._remove_colorbar()
+        self._ax.clear()
+        self._ax.set_facecolor("#fbfdff")
+        self._ax.set_title(self._default_title, fontproperties=self._title_font)
+        caption = message or "Loading\u2026"
+        self._ax.text(
+            0.5, 0.5, caption,
+            transform=self._ax.transAxes,
+            ha="center", va="center",
+            fontsize=11, color="#1f5d8b",
+            fontproperties=self._title_font,
+        )
+        self._ax.set_xticks([])
+        self._ax.set_yticks([])
+        self._canvas.draw()
+
     def _remove_colorbar(self) -> None:
         """Remove the existing colorbar even if matplotlib has orphaned it.
 

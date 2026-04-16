@@ -106,6 +106,40 @@ class SimulationResultsWidget(QWidget):
         self._voltage_plot.clear()
         self._last_forward_result = None
 
+    def set_loading_forward(self, on: bool) -> None:
+        """Mark the ground-truth image + voltage plot as busy during
+        a forward solve.  Called by main_window's forward lifecycle
+        slots so the plots advertise that work is in flight.
+        """
+        if on:
+            self._ground_truth_widget.set_loading(
+                t("sim.results.ground_truth_loading")
+            )
+            # When a fresh forward run starts, yesterday's reconstruction
+            # is no longer meaningful.
+            self._reconstruction_widget.clear()
+            self._voltage_plot.set_loading(True)
+        else:
+            # update_forward_result() repaints on success; if the solver
+            # errored with no result, drop back to a clean state instead
+            # of leaving the "Solving…" caption stuck on screen.
+            if self._last_forward_result is None:
+                self._ground_truth_widget.clear()
+                self._voltage_plot.set_loading(False)
+
+    def set_loading_inverse(self, on: bool) -> None:
+        """Mark the reconstruction image + voltage plot as busy during
+        an inverse solve."""
+        if on:
+            self._reconstruction_widget.set_loading(
+                t("sim.results.reconstruction_loading")
+            )
+            self._voltage_plot.set_loading(True)
+        else:
+            # The next update_inverse_result() call will repaint on
+            # success; if nothing arrived, fall back to a clean slate.
+            self._voltage_plot.set_loading(False)
+
     def set_expected_point_count(self, point_count: int) -> None:
         self._voltage_plot.set_expected_point_count(point_count)
 

@@ -248,6 +248,72 @@ def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
 
 
 @pytest.mark.gui
+def test_live_recon_voltage_widgets_expose_tri_state_overlay() -> None:
+    """Phase 4: four plot widgets must accept set_loading(True/False)
+    and swap their overlay to a 'loading' caption that also follows
+    the active UI language (not get stuck on the English version).
+    """
+    from eit_app.i18n import set_language, t
+    from eit_app.ui.simulation.simulation_results_widget import SimulationResultsWidget
+
+    set_language("en", persist=False)
+    window = EITWorkstation()
+    _show_window(window)
+    try:
+        lp = window._live_plot
+        rw = window._recon_widget
+        vp = window._voltage_plot
+
+        # All three start in the "empty" state (overlay visible, uses
+        # the localized empty-placeholder text).
+        assert lp._overlay_state == "empty"
+        assert rw._overlay_mode == "empty"
+        assert vp._overlay_state == "empty"
+
+        # Flip all three to loading.
+        lp.set_loading(True)
+        rw.set_loading(True)
+        vp.set_loading(True)
+        _get_app().processEvents()
+        assert lp._empty_overlay.text() == t("hw.live_plot.loading_overlay")
+        assert rw._empty_overlay.text() == t("hw.reconstruction.loading_overlay")
+        assert vp._empty_overlay.text() == t("voltage_plot.loading_overlay")
+
+        # Language switch while loading must refresh every overlay.
+        set_language("zh", persist=False)
+        _get_app().processEvents()
+        assert lp._empty_overlay.text() == t("hw.live_plot.loading_overlay")
+        assert rw._empty_overlay.text() == t("hw.reconstruction.loading_overlay")
+        assert vp._empty_overlay.text() == t("voltage_plot.loading_overlay")
+
+        # Turning loading off reverts to the empty placeholder copy.
+        lp.set_loading(False)
+        rw.set_loading(False)
+        vp.set_loading(False)
+        _get_app().processEvents()
+        assert lp._overlay_state == "empty"
+        assert rw._overlay_mode == "empty"
+        assert vp._overlay_state == "empty"
+
+        # The SimulationResultsWidget forwards to its children without
+        # crashing on back-to-back loading toggles.  Use English captions
+        # here so matplotlib doesn't emit the "CJK glyph missing" warning
+        # on Linux CI runners that lack CJK fonts.
+        set_language("en", persist=False)
+        _get_app().processEvents()
+        sr: SimulationResultsWidget = window._sim_tab._results_widget
+        sr.set_loading_forward(True)
+        _get_app().processEvents()
+        sr.set_loading_forward(False)
+        sr.set_loading_inverse(True)
+        _get_app().processEvents()
+        sr.set_loading_inverse(False)
+    finally:
+        set_language("en", persist=False)
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
     """Phase 7: the three WorkflowShell-based tabs (Hardware /
     Simulation / Dataset) must expose the same 300px minimum width on

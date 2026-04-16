@@ -28,6 +28,8 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._point_count = 208
         self._expected_point_count = 208
         self._has_data = False
+        # Phase 4 tri-state overlay: "empty" | "loading" | "data".
+        self._overlay_state = "empty"
         self._label_style = {
             "color": self._plot_text,
             "font-family": self._serif,
@@ -116,6 +118,7 @@ class BoundaryVoltagePlotWidget(QWidget):
         x = np.arange(1, len(ground_truth) + 1, dtype=np.float64)
         self._configure_index_axis(len(ground_truth))
         self._has_data = True
+        self._overlay_state = "data"
         self._empty_overlay.hide()
         self._curve_primary.setData(x, ground_truth)
         self._curve_primary.setVisible(True)
@@ -141,6 +144,7 @@ class BoundaryVoltagePlotWidget(QWidget):
         x = np.arange(1, len(measured) + 1, dtype=np.float64)
         self._configure_index_axis(len(measured))
         self._has_data = True
+        self._overlay_state = "data"
         self._empty_overlay.hide()
         self._curve_primary.setData(x, measured)
         self._curve_primary.setVisible(True)
@@ -157,8 +161,44 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
         self._has_data = False
+        self._overlay_state = "empty"
+        self._apply_overlay_text()
         self._empty_overlay.show()
         self._configure_index_axis(self._expected_point_count)
+
+    def set_loading(self, on: bool) -> None:
+        """Toggle the 'computing voltages' overlay.
+
+        Used during forward solve (simulation) or reconstruction
+        (hardware) so the plot communicates that fresh data is coming.
+        If on=False and no data arrived, fall back to the empty hint.
+        """
+        if on:
+            self._overlay_state = "loading"
+            self._apply_overlay_text()
+            self._empty_overlay.show()
+        elif not self._has_data:
+            self._overlay_state = "empty"
+            self._apply_overlay_text()
+            self._empty_overlay.show()
+        else:
+            self._overlay_state = "data"
+            self._empty_overlay.hide()
+
+    def _apply_overlay_text(self) -> None:
+        """Render the overlay label for the current state + language."""
+        if self._overlay_state == "loading":
+            self._empty_overlay.setText(t("voltage_plot.loading_overlay"))
+            self._empty_overlay.setStyleSheet(
+                "color: #1f5d8b; font-size: 12px; font-weight: 600; "
+                "background: transparent;"
+            )
+        else:
+            self._empty_overlay.setText(self._empty_hint())
+            self._empty_overlay.setStyleSheet(
+                "color: #5b6573; font-size: 12px; font-weight: 600; "
+                "background: transparent;"
+            )
 
     def _primary_label(self) -> str:
         if self._mode == "hardware":
@@ -246,7 +286,8 @@ class BoundaryVoltagePlotWidget(QWidget):
             f"{self._plot_title()}"
             "</span>"
         )
-        self._empty_overlay.setText(self._empty_hint())
+        # Overlay text follows the current state (empty or loading).
+        self._apply_overlay_text()
         # Push new legend labels without rebuilding the widget.
         self._legend_frame.update_labels(
             {"primary": self._primary_label(), "fit": self._secondary_label()}

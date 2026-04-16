@@ -43,6 +43,15 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.need_frames_for_difference": "Record at least 2 frames on the Hardware tab before using Difference.",
     "main.status.reconstruction_hint": "Switched to Database tab \u2014 select a reference and target frame, then click Reconstruct.",
 
+    # ==================================================================
+    # Loading / busy overlay messages (shared across plots)
+    # ==================================================================
+    "hw.live_plot.loading_overlay": "Waiting for device frames\u2026",
+    "hw.reconstruction.loading_overlay": "Reconstructing\u2026",
+    "voltage_plot.loading_overlay": "Computing voltages\u2026",
+    "sim.results.ground_truth_loading": "Solving forward problem\u2026",
+    "sim.results.reconstruction_loading": "Reconstructing\u2026",
+
     # ------------------------------------------------------------------
     # Language menu
     # ------------------------------------------------------------------
