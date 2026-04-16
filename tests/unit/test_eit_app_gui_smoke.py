@@ -178,6 +178,57 @@ def test_interop_hub_dialog_hot_swaps_language() -> None:
 
 
 @pytest.mark.gui
+def test_main_window_registers_keyboard_shortcuts() -> None:
+    """Power users expect Ctrl+1..4 for tabs, F5 / Ctrl+Enter for solves.
+
+    Qt lets each shortcut live on the menu action OR on an independent
+    QShortcut; both are asserted here so a future refactor that moves
+    one path to the other still trips the test.
+    """
+    window = EITWorkstation()
+    _show_window(window)
+    try:
+        # Menu action shortcuts
+        assert window._action_settings.shortcut().toString() == "Ctrl+,"
+        assert window._action_exit.shortcut().toString() == "Ctrl+Q"
+        assert window._action_interop_hub.shortcut().toString() == "Ctrl+I"
+
+        # Tab jump shortcuts (Ctrl+1..Ctrl+4)
+        assert [sc.key().toString() for sc in window._tab_shortcuts] == [
+            f"Ctrl+{i}" for i in range(1, window._tab_widget.count() + 1)
+        ]
+
+        # Simulation action shortcuts
+        assert window._sim_forward_shortcut.key().toString() == "F5"
+        assert window._sim_inverse_shortcut_enter.key().toString() == "Ctrl+Return"
+
+        # Activating Ctrl+3 should switch to the Dataset tab
+        window._tab_widget.setCurrentIndex(0)
+        window._tab_shortcuts[2].activated.emit()
+        _get_app().processEvents()
+        assert window._tab_widget.currentIndex() == 2
+
+        # F5 outside the Simulation tab is a no-op.
+        window._tab_widget.setCurrentIndex(0)  # Hardware
+        # Temporarily wire a flag to the forward button click.
+        fired = {"count": 0}
+        window._sim_tab.forward_problem_panel._solve_btn.clicked.connect(
+            lambda: fired.__setitem__("count", fired["count"] + 1)
+        )
+        window._sim_forward_shortcut.activated.emit()
+        _get_app().processEvents()
+        assert fired["count"] == 0, "F5 outside Simulation tab should not fire"
+
+        # Flip to Simulation tab and try again
+        window._tab_widget.setCurrentIndex(1)
+        window._sim_forward_shortcut.activated.emit()
+        _get_app().processEvents()
+        assert fired["count"] == 1
+    finally:
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     """set_running must reveal the busy bar AND lock adjacent inputs.
 

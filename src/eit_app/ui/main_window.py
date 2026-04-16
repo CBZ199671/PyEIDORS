@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import QTimer, Qt, Slot
-from PySide6.QtGui import QActionGroup
+from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
@@ -391,14 +391,24 @@ class EITWorkstation(QMainWindow):
         # File menu --------------------------------------------------------
         self._menu_file = menu_bar.addMenu("")
         self._action_settings = self._menu_file.addAction("")
+        # Ctrl+, is the cross-platform Settings convention (macOS default,
+        # adopted by VS Code / JetBrains / Chrome on Windows & Linux).
+        self._action_settings.setShortcut(QKeySequence("Ctrl+,"))
         self._action_settings.triggered.connect(self._open_settings)
         self._menu_file.addSeparator()
         self._action_exit = self._menu_file.addAction("")
+        # Ctrl+Q is the established quit binding across Linux DEs and
+        # Windows Qt apps.  Set it explicitly — StandardKey.Quit returns
+        # an empty sequence on some Qt builds (offscreen platform) and
+        # leaves the action with no shortcut at all.
+        self._action_exit.setShortcut(QKeySequence("Ctrl+Q"))
         self._action_exit.triggered.connect(self.close)
 
         # Tools menu -------------------------------------------------------
         self._menu_tools = menu_bar.addMenu("")
         self._action_interop_hub = self._menu_tools.addAction("")
+        # Ctrl+I — I as in Interop.  Not used elsewhere in the app.
+        self._action_interop_hub.setShortcut(QKeySequence("Ctrl+I"))
         self._action_interop_hub.triggered.connect(self._open_interop_hub)
 
         # Language menu ----------------------------------------------------
@@ -415,6 +425,62 @@ class EITWorkstation(QMainWindow):
         self._action_lang_en.setCheckable(True)
         self._action_lang_en.triggered.connect(lambda: set_language("en"))
         self._lang_action_group.addAction(self._action_lang_en)
+
+        # Tab-switching shortcuts — browser-style Ctrl+1..4 jump to the
+        # Hardware / Simulation / Dataset / Database tabs respectively.
+        # Registered as QShortcut on the main window so they fire even
+        # when the menu bar isn't focused.
+        self._tab_shortcuts: list[QShortcut] = []
+        for index in range(self._tab_widget.count()):
+            sc = QShortcut(QKeySequence(f"Ctrl+{index + 1}"), self)
+            sc.activated.connect(
+                lambda idx=index: self._tab_widget.setCurrentIndex(idx)
+            )
+            self._tab_shortcuts.append(sc)
+
+        # Simulation run shortcuts — F5 triggers the forward solve,
+        # Ctrl+Enter triggers the inverse reconstruction.  Both are
+        # gated to only fire when the Simulation tab is active, so the
+        # user's F5 inside (say) the Database tab doesn't accidentally
+        # kick off a solve on stale data.
+        self._sim_forward_shortcut = QShortcut(QKeySequence("F5"), self)
+        self._sim_forward_shortcut.activated.connect(self._sim_shortcut_run_forward)
+        self._sim_inverse_shortcut_enter = QShortcut(
+            QKeySequence("Ctrl+Return"), self
+        )
+        self._sim_inverse_shortcut_enter.activated.connect(
+            self._sim_shortcut_run_inverse
+        )
+        # Alternate binding because some keyboards label the numpad-return
+        # as Enter rather than Return, and Qt treats them distinctly.
+        self._sim_inverse_shortcut_numpad = QShortcut(
+            QKeySequence("Ctrl+Enter"), self
+        )
+        self._sim_inverse_shortcut_numpad.activated.connect(
+            self._sim_shortcut_run_inverse
+        )
+
+    # ------------------------------------------------------------------
+    # Shortcut slots
+    # ------------------------------------------------------------------
+
+    def _sim_shortcut_run_forward(self) -> None:
+        """F5 handler — only acts when the Simulation tab is visible
+        and the forward-solve button is currently enabled (i.e. we're
+        not already mid-solve)."""
+        if self._tab_widget.currentWidget() is not self._sim_tab:
+            return
+        btn = self._sim_tab.forward_problem_panel._solve_btn
+        if btn.isEnabled():
+            btn.click()
+
+    def _sim_shortcut_run_inverse(self) -> None:
+        """Ctrl+Enter handler for the inverse reconstruction button."""
+        if self._tab_widget.currentWidget() is not self._sim_tab:
+            return
+        btn = self._sim_tab.inverse_problem_panel._recon_btn
+        if btn.isEnabled():
+            btn.click()
 
     # ------------------------------------------------------------------
     # i18n — retranslate chrome owned directly by the main window
