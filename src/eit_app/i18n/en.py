@@ -283,6 +283,14 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.refinement_tooltip": "Smaller values produce finer meshes (more elements)",
     "sim.mesh.electrodes_label": "Electrodes:",
     "sim.mesh.conductivity_label": "Background \u03c3:",
+    "sim.mesh.patterns_header": "Drive & measurement pattern",
+    "sim.mesh.patterns_hint": "Controls how the forward solver builds stim/meas pairs. Inverse reconstruction reuses the same pattern — keep these in sync with your hardware board.",
+    "sim.mesh.stim_pattern_label": "Stim pattern:",
+    "sim.mesh.meas_pattern_label": "Meas pattern:",
+    "sim.mesh.rotate_meas_check": "Rotate measurement with drive",
+    "sim.mesh.use_meas_current_check": "Include drive-related electrodes",
+    "sim.mesh.extra_neighbors_label": "Extra excluded neighbors:",
+    "sim.mesh.point_count_hint": "Expected boundary samples: {count}",
 
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities

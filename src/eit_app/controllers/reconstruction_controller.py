@@ -782,12 +782,22 @@ def run_reconstruction_request(
     """Execute a reconstruction request synchronously using the realtime app pipeline."""
     try:
         runtime_path = str((req.metadata or {}).get("reconstruction_runtime", "")).strip().lower()
+        method_lc = req.method.strip().lower()
+        log.info(
+            "[recon-dispatch] method=%r use_part=%r runtime_path=%r source=%r",
+            method_lc,
+            req.use_part,
+            runtime_path,
+            (req.metadata or {}).get("request_source"),
+        )
         if (
-            req.method.strip().lower() == "gn-difference"
+            method_lc == "gn-difference"
             and req.use_part == "real"
             and runtime_path == "single_step_cached"
         ):
+            log.info("[recon-dispatch] -> single_step_cached (fast path)")
             return _run_single_step_cached_request(req, progress_cb=progress_cb)
+        log.info("[recon-dispatch] -> full_gn (iterative path)")
         return _run_full_gn_request(req, progress_cb=progress_cb)
 
     except Exception as exc:
