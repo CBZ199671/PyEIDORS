@@ -609,6 +609,17 @@ QToolBox#workflowToolbox > QWidget {
     background: #f9fbfe;
 }
 
+/* WorkflowShell intermediate QWidgets — explicitly match the canvas
+   so platform-palette defaults (#efefef on Linux) don't leak through
+   VBoxLayout gaps between the toolbox and any left_footer widget.
+   See the matching dark-mode block near the bottom of this file. */
+QScrollArea#workflowScroll,
+QWidget#workflowScrollViewport,
+QWidget#workflowLeftContainer {
+    background: #eef3f8;
+    border: none;
+}
+
 QGroupBox {
     background: #ffffff;
     border: 1px solid #e0e6ee;
@@ -805,8 +816,17 @@ QComboBox::drop-down {
 }
 
 QComboBox::down-arrow {
+    /* Without an explicit image, Qt falls back to its native down-arrow
+       which renders as a near-white glyph (#efefef-ish) on platforms
+       where QStyle paints it directly — an obvious bright rectangle
+       on a dark combobox button.  Use the same DPR-aware SVG as
+       QSpinBox / QDateEdit so all dropdowns share one glyph. */
+    image: __ARROW_DOWN_IDLE__;
     width: 10px;
     height: 10px;
+}
+QComboBox::down-arrow:hover {
+    image: __ARROW_DOWN_HOVER__;
 }
 
 QComboBox QAbstractItemView {
@@ -1377,6 +1397,20 @@ QToolBox#workflowToolbox > QWidget {
        both colors are near-white; the same 4-point gap is much more
        noticeable at low luminance.) */
     background: #1a1f26;
+}
+
+/* WorkflowShell left column — three intermediate QWidgets that would
+   otherwise paint Qt's platform-default palette (#efefef near-white
+   on Linux) and show through every VBoxLayout gap as a bright
+   horizontal band.  The most obvious leak was the strip between the
+   last QToolBox tab and the ``left_footer`` widget below it (e.g.
+   SessionSummaryPanel on the Hardware tab).  Target them by
+   objectName so this doesn't accidentally repaint unrelated widgets. */
+QScrollArea#workflowScroll,
+QWidget#workflowScrollViewport,
+QWidget#workflowLeftContainer {
+    background: #1a1f26;
+    border: none;
 }
 
 /* === GroupBox / section panels === */

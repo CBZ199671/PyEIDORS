@@ -88,6 +88,18 @@ class WorkflowShell(QWidget):
         left_scroll.setMinimumWidth(step_min_width)
 
         left_container = QWidget()
+        # Assign objectNames so the dark theme can specifically target
+        # these intermediate QWidgets.  Without this, the QScrollArea
+        # viewport and the container both paint with Qt's platform-
+        # default QPalette — which on Linux renders as #efefef (near-
+        # pure-white) and shows through every VBoxLayout gap as a
+        # visibly bright band.  We saw this most prominently as a
+        # white strip between the last QToolBox tab and any
+        # ``left_footer`` widget (e.g. SessionSummaryPanel in the
+        # Hardware tab).
+        left_scroll.setObjectName("workflowScroll")
+        left_scroll.viewport().setObjectName("workflowScrollViewport")
+        left_container.setObjectName("workflowLeftContainer")
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 4, 0)
         left_layout.setSpacing(6)
