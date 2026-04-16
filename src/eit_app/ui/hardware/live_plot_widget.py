@@ -12,7 +12,12 @@ import pyqtgraph as pg
 from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
-from eit_app.ui.theme import plot_palette, subscribe_theme_mode
+from eit_app.ui.theme import (
+    empty_placeholder_stylesheet,
+    loading_scrim_stylesheet,
+    plot_palette,
+    subscribe_theme_mode,
+)
 
 
 class LivePlotWidget(QWidget):
@@ -172,18 +177,20 @@ class LivePlotWidget(QWidget):
                 self._empty_overlay.show()
 
     def _apply_overlay_text(self) -> None:
-        """Re-apply the overlay text for the current state + language."""
+        """Re-apply the overlay text for the current state + language.
+
+        Loading state uses a full-panel scrim (theme.loading_scrim_*)
+        so any previous frames underneath the overlay are hidden
+        cleanly instead of bleeding through under the caption text.
+        Empty state stays transparent — there's no prior content to
+        mask.
+        """
         if self._overlay_state == "loading":
-            key = "hw.live_plot.loading_overlay"
-            color = "#1f5d8b"
+            self._empty_overlay.setText(t("hw.live_plot.loading_overlay"))
+            self._empty_overlay.setStyleSheet(loading_scrim_stylesheet())
         else:
-            key = "hw.live_plot.empty_overlay"
-            color = "#5b6573"
-        self._empty_overlay.setText(t(key))
-        self._empty_overlay.setStyleSheet(
-            f"color: {color}; font-size: 12px; font-weight: 600; "
-            "background: transparent;"
-        )
+            self._empty_overlay.setText(t("hw.live_plot.empty_overlay"))
+            self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
 
     def _on_visibility_changed(self, _checked: bool) -> None:
         self._curve_real.setVisible(self._show_real.isChecked())

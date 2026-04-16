@@ -316,6 +316,56 @@ def plot_palette() -> dict:
 
 
 # ---------------------------------------------------------------------
+# Overlay stylesheet helpers (used by plot widgets' transient overlays)
+# ---------------------------------------------------------------------
+#
+# All four plot widgets (LivePlot, BoundaryVoltage, Reconstruction,
+# ConductivityImage) show a centered QLabel on top of their canvas for
+# the "empty" / "loading" / "error" states.  Historically those labels
+# used `background: transparent`, which made old plot content bleed
+# through the transient text — visually messy and semantically
+# confusing when the user kicks off a new solve while previous results
+# are still on screen.
+#
+# The three helpers below return theme-aware stylesheets that
+# implement a cleaner pattern:
+#   - loading / error:  full-canvas opaque scrim in panel_bg + centered
+#                       caption in accent/red.  The scrim covers any
+#                       stale plot content so the overlay reads as a
+#                       clean "we're working" or "something broke"
+#                       modal state.
+#   - empty:            transparent background + muted caption, because
+#                       there's nothing behind to scrim out.
+def loading_scrim_stylesheet() -> str:
+    p = plot_palette()
+    return (
+        f"color: {p['caption_loading']}; "
+        "font-size: 13px; font-weight: 700; "
+        f"background: {p['panel_bg']}; "
+        "padding: 20px;"
+    )
+
+
+def error_scrim_stylesheet() -> str:
+    p = plot_palette()
+    return (
+        f"color: {p['caption_error']}; "
+        "font-size: 12px; font-weight: 700; "
+        f"background: {p['panel_bg']}; "
+        "padding: 20px;"
+    )
+
+
+def empty_placeholder_stylesheet() -> str:
+    p = plot_palette()
+    return (
+        f"color: {p['caption']}; "
+        "font-size: 12px; font-weight: 600; "
+        "background: transparent;"
+    )
+
+
+# ---------------------------------------------------------------------
 # Mini-card / inline stylesheet helpers
 # ---------------------------------------------------------------------
 #

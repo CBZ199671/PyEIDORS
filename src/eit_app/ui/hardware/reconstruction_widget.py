@@ -12,7 +12,13 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 from scipy.spatial import Delaunay
 
 from eit_app.i18n import t, translator
-from eit_app.ui.theme import plot_palette, subscribe_theme_mode
+from eit_app.ui.theme import (
+    empty_placeholder_stylesheet,
+    error_scrim_stylesheet,
+    loading_scrim_stylesheet,
+    plot_palette,
+    subscribe_theme_mode,
+)
 
 if TYPE_CHECKING:
     from eit_app.controllers.reconstruction_controller import ReconstructionResult
@@ -147,14 +153,17 @@ class ReconstructionWidget(QWidget):
         Called before a reconstruction job is dispatched; falls back to
         "empty" if the job failed and produced no data.  No-op when the
         widget is already showing a real image.
+
+        The loading overlay uses the theme-aware scrim stylesheet
+        (opaque panel-bg) so the previous reconstruction image is
+        cleanly covered while a new solve is in flight — avoids the
+        visual mess of "Reconstructing…" text rendered on top of stale
+        conductivity data.
         """
         if on:
             self._overlay_mode = "loading"
             self._empty_overlay.setText(t("hw.reconstruction.loading_overlay"))
-            self._empty_overlay.setStyleSheet(
-                "color: #1f5d8b; font-size: 12px; font-weight: 600; "
-                "background: transparent;"
-            )
+            self._empty_overlay.setStyleSheet(loading_scrim_stylesheet())
             self._empty_overlay.show()
         else:
             # If the next update_reconstruction() already painted a
@@ -164,10 +173,7 @@ class ReconstructionWidget(QWidget):
             if self._overlay_mode == "loading":
                 self._overlay_mode = "empty"
                 self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
-                self._empty_overlay.setStyleSheet(
-                    "color: #5b6573; font-size: 12px; font-weight: 600; "
-                    "background: transparent;"
-                )
+                self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
 
     @Slot(object)
     def update_reconstruction(self, result: ReconstructionResult) -> None:
@@ -233,9 +239,7 @@ class ReconstructionWidget(QWidget):
         self._image_item.clear()
         self._overlay_mode = "empty"
         self._empty_overlay.setText(t("hw.reconstruction.empty_overlay"))
-        self._empty_overlay.setStyleSheet(
-            "color: #5b6573; font-size: 12px; font-weight: 600; background: transparent;"
-        )
+        self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
         self._empty_overlay.show()
 
     # ── i18n ──
@@ -261,12 +265,19 @@ class ReconstructionWidget(QWidget):
         self.configure_layout(n_elec=16, radius=1.0)
 
     def _show_status(self, text: str, *, error: bool) -> None:
-        color = "#8b2f2f" if error else "#5b6573"
+        """Replace the current image with a status overlay.
+
+        Error states use an opaque scrim so broken reconstructions
+        don't visually mix with any stale data the user ran earlier;
+        empty states use a transparent placeholder because the
+        underlying image is already cleared.
+        """
         self._overlay_mode = "error" if error else "empty"
         self._empty_overlay.setText(text)
-        self._empty_overlay.setStyleSheet(
-            f"color: {color}; font-size: 12px; font-weight: 600; background: transparent;"
-        )
+        if error:
+            self._empty_overlay.setStyleSheet(error_scrim_stylesheet())
+        else:
+            self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
         self._image_item.clear()
         self._empty_overlay.show()
 

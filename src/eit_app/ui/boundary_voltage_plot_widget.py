@@ -12,7 +12,12 @@ import pyqtgraph as pg
 from eit_app.i18n import t, translator
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
-from eit_app.ui.theme import plot_palette, subscribe_theme_mode
+from eit_app.ui.theme import (
+    empty_placeholder_stylesheet,
+    loading_scrim_stylesheet,
+    plot_palette,
+    subscribe_theme_mode,
+)
 
 
 class BoundaryVoltagePlotWidget(QWidget):
@@ -218,22 +223,20 @@ class BoundaryVoltagePlotWidget(QWidget):
             self._empty_overlay.hide()
 
     def _apply_overlay_text(self) -> None:
-        """Render the overlay label for the current state + language."""
-        # Pull caption colors from the active palette so the overlay
-        # follows dark mode (was hardcoded #5b6573 / #1f5d8b before).
-        palette = plot_palette()
+        """Render the overlay label for the current state + language.
+
+        Loading state uses the theme-aware *scrim* stylesheet — a full
+        panel-bg fill that covers any stale curves underneath so the
+        "正问题求解中" caption reads as a clean modal state rather than
+        floating on top of old data.  Empty state keeps the transparent
+        background since there's nothing behind to mask.
+        """
         if self._overlay_state == "loading":
             self._empty_overlay.setText(t("voltage_plot.loading_overlay"))
-            self._empty_overlay.setStyleSheet(
-                f"color: {palette['caption_loading']}; font-size: 12px; "
-                "font-weight: 600; background: transparent;"
-            )
+            self._empty_overlay.setStyleSheet(loading_scrim_stylesheet())
         else:
             self._empty_overlay.setText(self._empty_hint())
-            self._empty_overlay.setStyleSheet(
-                f"color: {palette['caption']}; font-size: 12px; "
-                "font-weight: 600; background: transparent;"
-            )
+            self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
 
     def _primary_label(self) -> str:
         if self._mode == "hardware":

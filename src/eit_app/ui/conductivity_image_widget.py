@@ -245,12 +245,17 @@ class ConductivityImageWidget(QWidget):
         self._show_placeholder()
 
     def set_loading(self, message: str | None = None) -> None:
-        """Show a centered loading caption instead of the conductivity plot.
+        """Show a centered loading chip and hide any previous image.
 
         Used by SimulationResultsWidget.set_loading() while a forward
-        or inverse solve is in flight.  Keeps the panel footprint stable
-        so the layout doesn't jump when the result arrives.
+        or inverse solve is in flight.  Clears the existing tripcolor
+        and colorbar first so the "正问题求解中" / "逆问题求解中"
+        caption doesn't render on top of stale data — a cleaner modal
+        loading state than the earlier transparent-overlay-on-data
+        behaviour.
         """
+        self._remove_colorbar()
+        self._ax.clear()
         self._draw_caption(message or "Loading\u2026", kind="loading")
 
     # ------------------------------------------------------------------
@@ -299,7 +304,13 @@ class ConductivityImageWidget(QWidget):
         self._draw_caption(msg, kind="error")
 
     def _draw_caption(self, text: str, kind: str) -> None:
-        """Centered caption painter; kind ∈ {'placeholder','loading','error'}."""
+        """Centered caption painter; kind ∈ {'placeholder','loading','error'}.
+
+        Loading / error states render the caption inside a rounded chip
+        bbox so they read as active state badges rather than floating
+        text.  Placeholder stays as bare text (passive "No data" hint
+        that should not compete for attention).
+        """
         palette = plot_palette()
         color = {
             "placeholder": palette["caption"],
@@ -314,11 +325,30 @@ class ConductivityImageWidget(QWidget):
         self._ax.set_title(
             self._default_title, fontproperties=self._title_font, color=palette["text"]
         )
+        # Loading / error captions get a rounded chip bbox so they're
+        # visually distinct from the idle placeholder and so the caption
+        # stands out cleanly even if any stale alpha-blended data
+        # happened to survive underneath.
+        bbox = None
+        fontsize = 11
+        fontweight = "normal"
+        if kind in ("loading", "error"):
+            bbox = dict(
+                boxstyle="round,pad=0.7",
+                facecolor=palette["panel_bg"],
+                edgecolor=color,
+                linewidth=1.5,
+            )
+            fontsize = 12
+            fontweight = "bold"
         self._ax.text(
             0.5, 0.5, text,
             transform=self._ax.transAxes,
             ha="center", va="center",
-            fontsize=11, color=color, fontproperties=self._title_font,
+            fontsize=fontsize, color=color,
+            fontweight=fontweight,
+            fontproperties=self._title_font,
+            bbox=bbox,
         )
         self._ax.set_xticks([])
         self._ax.set_yticks([])
