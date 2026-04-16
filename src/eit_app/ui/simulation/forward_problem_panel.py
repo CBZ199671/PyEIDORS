@@ -1,7 +1,15 @@
 """Forward problem controls: noise level and solve button."""
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QDoubleSpinBox, QFormLayout, QGroupBox, QLabel, QPushButton, QWidget
+from PySide6.QtWidgets import (
+    QDoubleSpinBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QProgressBar,
+    QPushButton,
+    QWidget,
+)
 
 from eit_app.i18n import t, translator
 from eit_app.ui.theme import set_button_role, set_hint_text
@@ -42,6 +50,16 @@ class ForwardProblemPanel(QGroupBox):
         set_button_role(self._solve_btn, "primary")
         layout.addRow(self._solve_btn)
 
+        # Indeterminate "busy" bar — minRange=maxRange=0 tells Qt to keep
+        # sliding the chunk so the user sees the solve is still alive.
+        # Hidden by default; revealed by set_running(True).
+        self._busy_bar = QProgressBar()
+        self._busy_bar.setRange(0, 0)
+        self._busy_bar.setTextVisible(False)
+        self._busy_bar.setFixedHeight(6)
+        self._busy_bar.setVisible(False)
+        layout.addRow(self._busy_bar)
+
         self._status_label = QLabel("")
         set_hint_text(self._status_label)
         layout.addRow(self._status_label)
@@ -60,6 +78,10 @@ class ForwardProblemPanel(QGroupBox):
 
     def set_running(self, running: bool) -> None:
         self._solve_btn.setEnabled(not running)
+        # Lock adjacent inputs during busy so users don't kick off a
+        # second solve with different parameters mid-flight.
+        self._noise_spin.setEnabled(not running)
+        self._busy_bar.setVisible(running)
         if running:
             self._status_label.setText(t("sim.forward.status_solving"))
 

@@ -178,6 +178,68 @@ def test_interop_hub_dialog_hot_swaps_language() -> None:
 
 
 @pytest.mark.gui
+def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
+    """set_running must reveal the busy bar AND lock adjacent inputs.
+
+    Prior to this behavior the only feedback for a 30-40s solve was the
+    disabled primary button, which is a weak cue.  The indeterminate
+    QProgressBar (range 0-0) gives a visible "something's happening"
+    hint, and disabling parameter editors prevents users from kicking
+    off a second solve with different parameters mid-flight.
+    """
+    from eit_app.ui.simulation.forward_problem_panel import ForwardProblemPanel
+    from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
+
+    app = _get_app()
+
+    fwd = ForwardProblemPanel()
+    fwd.show()
+    app.processEvents()
+    assert fwd._busy_bar.isHidden()
+    assert fwd._solve_btn.isEnabled()
+    assert fwd._noise_spin.isEnabled()
+
+    fwd.set_running(True)
+    app.processEvents()
+    assert not fwd._busy_bar.isHidden(), "busy bar should show while running"
+    assert not fwd._solve_btn.isEnabled()
+    assert not fwd._noise_spin.isEnabled()
+
+    fwd.set_running(False)
+    app.processEvents()
+    assert fwd._busy_bar.isHidden()
+    assert fwd._solve_btn.isEnabled()
+    assert fwd._noise_spin.isEnabled()
+    fwd.close()
+    fwd.deleteLater()
+
+    inv = InverseProblemPanel()
+    inv.show()
+    app.processEvents()
+    assert inv._busy_bar.isHidden()
+    assert inv._method_combo.isEnabled()
+    assert inv._alpha_spin.isEnabled()
+    assert inv._iter_spin.isEnabled()
+
+    inv.set_running(True)
+    app.processEvents()
+    assert not inv._busy_bar.isHidden()
+    assert not inv._recon_btn.isEnabled()
+    assert not inv._method_combo.isEnabled()
+    assert not inv._alpha_spin.isEnabled()
+    assert not inv._iter_spin.isEnabled()
+
+    inv.set_running(False)
+    app.processEvents()
+    assert inv._busy_bar.isHidden()
+    assert inv._recon_btn.isEnabled()
+    assert inv._method_combo.isEnabled()
+    inv.close()
+    inv.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.gui
 def test_app_theme_publishes_accessibility_selectors() -> None:
     """Guard against accidental regression of the accessibility additions.
 

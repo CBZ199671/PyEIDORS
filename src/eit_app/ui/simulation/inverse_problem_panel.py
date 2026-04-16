@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QWidget,
@@ -84,6 +85,16 @@ class InverseProblemPanel(QGroupBox):
 
         layout.addRow(btn_row)
 
+        # Indeterminate busy bar, shown only while a reconstruction is
+        # running.  Matches the pattern in ForwardProblemPanel so both
+        # halves of the simulation workflow give the same visual feedback.
+        self._busy_bar = QProgressBar()
+        self._busy_bar.setRange(0, 0)
+        self._busy_bar.setTextVisible(False)
+        self._busy_bar.setFixedHeight(6)
+        self._busy_bar.setVisible(False)
+        layout.addRow(self._busy_bar)
+
         self._status_label = QLabel("")
         set_hint_text(self._status_label)
         layout.addRow(self._status_label)
@@ -118,6 +129,12 @@ class InverseProblemPanel(QGroupBox):
 
     def set_running(self, running: bool) -> None:
         self._recon_btn.setEnabled(not running)
+        # Lock adjacent inputs during busy so changing α / method / iters
+        # mid-flight doesn't desync the next run's request.
+        self._method_combo.setEnabled(not running)
+        self._alpha_spin.setEnabled(not running)
+        self._iter_spin.setEnabled(not running)
+        self._busy_bar.setVisible(running)
         if running:
             self._status_label.setText(t("sim.inverse.status_reconstructing"))
 
