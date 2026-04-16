@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 from eit_app.i18n import t, translator
 from eit_app.models.app_state import ReconstructionConfig
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+from eit_app.ui.theme import set_button_role
 
 
 class SettingsDialog(QDialog):
@@ -86,6 +87,9 @@ class SettingsDialog(QDialog):
         dir_row = QHBoxLayout()
         self._output_dir = QLineEdit()
         self._browse_btn = QPushButton("")
+        # Secondary helper button — matches the "subtle" role used by
+        # the other Browse… buttons across the app.
+        set_button_role(self._browse_btn, "subtle")
         self._browse_btn.clicked.connect(self._browse_output)
         dir_row.addWidget(self._output_dir, 1)
         dir_row.addWidget(self._browse_btn)

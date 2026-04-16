@@ -372,7 +372,10 @@ class DatabaseTab(QWidget):
         set_button_role(self._open_folder_btn, "subtle")
         self._open_folder_btn.setEnabled(False)
         self._batch_recon_btn = QPushButton("")
-        set_button_role(self._batch_recon_btn, "danger")
+        # Reconstruction is an affirmative action, not destructive.
+        # Previously tagged "danger" which rendered it red and
+        # misrepresented the button's purpose.
+        set_button_role(self._batch_recon_btn, "primary")
         self._batch_recon_btn.setEnabled(False)
         session_actions.addStretch()
         session_actions.addWidget(self._open_folder_btn)
@@ -425,7 +428,10 @@ class DatabaseTab(QWidget):
         set_button_role(self._as_tgt_btn, "success")
         self._as_tgt_btn.setEnabled(False)
         self._reconstruct_btn = QPushButton("")
-        set_button_role(self._reconstruct_btn, "danger")
+        # Reconstruction opens the reconstruct dialog — primary CTA,
+        # not destructive.  The previous "danger" tag turned a
+        # confirmation action red.
+        set_button_role(self._reconstruct_btn, "primary")
         self._reconstruct_btn.setEnabled(False)
         self._clear_sel_btn = QPushButton("")
         set_button_role(self._clear_sel_btn, "subtle")

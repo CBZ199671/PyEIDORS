@@ -177,6 +177,37 @@ def test_interop_hub_dialog_hot_swaps_language() -> None:
         app.processEvents()
 
 
+def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
+    """Lint-style check: no bare QPushButton without set_button_role(...).
+
+    A button without a role inherits the neutral white fill, which
+    breaks visual hierarchy — users can't tell "Run" from "Browse" at
+    a glance.  This is a static source scan, not a Qt runtime check,
+    so it runs fast and catches regressions right at authoring time.
+    """
+    import re
+    from pathlib import Path
+
+    ui_dir = Path(__file__).resolve().parents[2] / "src" / "eit_app" / "ui"
+    missing: list[str] = []
+    total = 0
+    for py_file in ui_dir.rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        for match in re.finditer(r"(self\.\w+)\s*=\s*QPushButton\(", text):
+            total += 1
+            name = match.group(1)
+            role_pattern = (
+                rf"set_button_role\(\s*{re.escape(name)}\s*,\s*['\"](\w+)['\"]\)"
+            )
+            if not re.search(role_pattern, text):
+                missing.append(f"{py_file.relative_to(ui_dir.parent.parent.parent)}: {name}")
+
+    assert not missing, (
+        f"Found {len(missing)} QPushButton(s) without set_button_role "
+        f"(total buttons: {total}):\n  " + "\n  ".join(missing)
+    )
+
+
 @pytest.mark.gui
 def test_main_window_registers_keyboard_shortcuts() -> None:
     """Power users expect Ctrl+1..4 for tabs, F5 / Ctrl+Enter for solves.
