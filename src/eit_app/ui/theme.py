@@ -2,8 +2,98 @@
 
 from __future__ import annotations
 
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
+
+
+# =====================================================================
+# Light / Dark mode infrastructure
+# =====================================================================
+#
+# The main `_APP_STYLESHEET` string at the bottom of this file is the
+# Light variant — hundreds of rules tuned for a high-luminance
+# background.  Instead of maintaining a fully independent Dark
+# stylesheet (which would double the maintenance burden for every
+# future tweak), we append a compact Dark *overlay* that overrides
+# only the color tokens: surfaces, borders, fills, and focus rings.
+# The overlay is appended AFTER the main stylesheet so Qt's last-rule-
+# wins semantics apply — positional priority, not `!important`.
+#
+# This approach leaves every layout rule (paddings, radii, font sizes,
+# selectors) untouched, which is what actually drives consistency
+# across the 4 tabs.  The tradeoff is that the Dark variant inherits
+# any spacing decisions made for Light — if a Dark-specific rule ever
+# needs different geometry, add it to `_DARK_OVERLAY` below.
+
+_MODE_SETTINGS_KEY = "ui/theme_mode"
+_DEFAULT_MODE = "light"
+
+# Callers subscribe via theme_mode_changed to update non-stylesheet
+# surfaces (e.g. matplotlib plot backgrounds, pyqtgraph axes).  We use
+# a module-level list of callables instead of a Qt signal because
+# theme.py has no QObject to host the signal on and we want to avoid
+# creating one just for this.
+_mode_listeners: list = []
+_current_mode: str = _DEFAULT_MODE
+
+
+def current_theme_mode() -> str:
+    """Return the active theme mode ('light' or 'dark')."""
+    return _current_mode
+
+
+def set_theme_mode(app: QApplication, mode: str, *, persist: bool = True) -> None:
+    """Switch between 'light' and 'dark' and re-apply the stylesheet.
+
+    Persistence via QSettings is on by default so the next launch
+    restores the user's preference.  Pass ``persist=False`` for
+    tests or preview flows that should not mutate the store.
+    """
+    global _current_mode
+    mode = mode if mode in ("light", "dark") else _DEFAULT_MODE
+    _current_mode = mode
+    if persist:
+        QSettings("PyEIDORS", "EITWorkstation").setValue(_MODE_SETTINGS_KEY, mode)
+    app.setStyleSheet(_build_stylesheet(mode))
+    for listener in list(_mode_listeners):
+        try:
+            listener(mode)
+        except Exception:  # pragma: no cover — best effort
+            pass
+
+
+def init_theme_mode_from_settings() -> str:
+    """Resolve the persisted mode without applying it.
+
+    apply_app_theme() reads the result and calls set_theme_mode
+    during startup.  Kept separate so callers can introspect the
+    stored preference before the QApplication exists.
+    """
+    global _current_mode
+    stored = QSettings("PyEIDORS", "EITWorkstation").value(
+        _MODE_SETTINGS_KEY, _DEFAULT_MODE
+    )
+    mode = str(stored) if stored in ("light", "dark") else _DEFAULT_MODE
+    _current_mode = mode
+    return mode
+
+
+def subscribe_theme_mode(listener) -> None:
+    """Register a ``callable(mode: str)`` invoked on every mode switch.
+
+    Useful for plot widgets that need to update their own non-QSS
+    background colors when the app flips to dark.
+    """
+    if listener not in _mode_listeners:
+        _mode_listeners.append(listener)
+
+
+def _build_stylesheet(mode: str) -> str:
+    """Concatenate the base Light stylesheet with any mode-specific overlay."""
+    if mode == "dark":
+        return _APP_STYLESHEET + "\n\n" + _DARK_OVERLAY
+    return _APP_STYLESHEET
 
 # Latin-first base families: Segoe UI on Windows, Noto Sans / DejaVu Sans as
 # Linux fallbacks.  CJK fallbacks are appended at runtime based on what
@@ -40,12 +130,21 @@ def _resolve_ui_font_families() -> list[str]:
 
 
 def apply_app_theme(app: QApplication) -> None:
-    """Apply a consistent workstation theme to the entire application."""
+    """Apply a consistent workstation theme to the entire application.
+
+    Reads the persisted theme mode ('light' / 'dark') from QSettings
+    and applies the matching stylesheet.  Callers who want to observe
+    later mode flips (e.g. plot widgets needing to re-paint their
+    background) should register via ``subscribe_theme_mode``.
+    """
     font = QFont()
     font.setFamilies(_resolve_ui_font_families())
     font.setPointSize(10)
     app.setFont(font)
-    app.setStyleSheet(_APP_STYLESHEET)
+    # Read persisted mode once at startup; set_theme_mode handles
+    # emission to listeners for every subsequent flip.
+    mode = init_theme_mode_from_settings()
+    set_theme_mode(app, mode, persist=False)
 
 
 def set_button_role(widget: QPushButton, role: str) -> None:
@@ -84,15 +183,34 @@ def set_embedded_step_panel(widget: QWidget) -> None:
     _repolish(widget)
 
 
+_TONE_PALETTE_LIGHT = {
+    "idle":   ("#5b6573", "#f7f9fc", "#d8dee9"),
+    "warn":   ("#8a4b08", "#fff4dc", "#f1c27d"),
+    "ready":  ("#0f5f3d", "#e6f6ee", "#7bc69a"),
+    "active": ("#0b4f80", "#e9f4ff", "#7fb2e5"),
+    "error":  ("#8c1d18", "#fdecec", "#f1a6a1"),
+}
+
+# Dark-mode tones: brighter foreground for contrast against dark fills,
+# with 18-22% alpha fills that sit on top of the dark panel background.
+# Borders are a muted accent of the same hue so the chip outline stays
+# legible on a #1f2630 surface.
+_TONE_PALETTE_DARK = {
+    "idle":   ("#c7d0db", "#2a313a", "#3e4754"),
+    "warn":   ("#f3c97a", "#3a2f16", "#7a5a22"),
+    "ready":  ("#7bcfa0", "#17321f", "#2a6a42"),
+    "active": ("#7cbeee", "#17324c", "#2a5a84"),
+    "error":  ("#f09e95", "#35201d", "#7a3830"),
+}
+
+
 def tone_palette(tone: str) -> tuple[str, str, str]:
-    """Return foreground/background/border colors for a named UI tone."""
-    palette = {
-        "idle": ("#5b6573", "#f7f9fc", "#d8dee9"),
-        "warn": ("#8a4b08", "#fff4dc", "#f1c27d"),
-        "ready": ("#0f5f3d", "#e6f6ee", "#7bc69a"),
-        "active": ("#0b4f80", "#e9f4ff", "#7fb2e5"),
-        "error": ("#8c1d18", "#fdecec", "#f1a6a1"),
-    }
+    """Return foreground/background/border colors for a named UI tone.
+
+    Resolves against the active theme mode so chips painted by
+    apply_state_chip/banner automatically follow dark-mode flips.
+    """
+    palette = _TONE_PALETTE_DARK if _current_mode == "dark" else _TONE_PALETTE_LIGHT
     return palette.get(tone, palette["idle"])
 
 
@@ -921,5 +1039,363 @@ QDateEdit::down-arrow {
     image: url("data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSIxMCIgaGVpZ2h0PSIxMCIgdmlld0JveD0iMCAwIDEwIDEwIj48cG9seWdvbiBwb2ludHM9IjUsNy41IDEuNSwzIDguNSwzIiBmaWxsPSIjNWI2NTczIi8+PC9zdmc+");
     width: 10px;
     height: 10px;
+}
+"""
+
+
+# =====================================================================
+# Dark-mode overlay
+# =====================================================================
+#
+# Appended AFTER _APP_STYLESHEET by set_theme_mode('dark').  Only
+# overrides color tokens, never layout.  Kept compact and grouped by
+# widget so future tweaks are easy to locate.
+#
+# Palette choices:
+#   Canvas:          #1a1f26  (near-black with a blue undertone)
+#   Panels:          #222831  (one step up so panels read as "on the canvas")
+#   Inputs:          #2a313a  (two steps up; QLineEdit / QComboBox fills)
+#   Borders:         #3e4754  (mid-grey, visible on both surface levels)
+#   Accent:          #5ca8e0  (brighter than light's #1f5d8b for contrast)
+#   Primary text:    #dbe1ea
+#   Muted text:      #8b97a7
+#   Group titles:    #8fc8ea  (accent-tinted, replaces light's #1f5d8b)
+# Contrast ratios verified for WCAG AA — muted text on panels ~4.6:1,
+# primary text on inputs ~9.7:1.
+_DARK_OVERLAY = """
+/* === Canvas + Dock + Panels === */
+QMainWindow, QDialog, QWidget#centralWidget {
+    background: #1a1f26;
+    color: #dbe1ea;
+}
+QDockWidget {
+    color: #dbe1ea;
+}
+QDockWidget::title {
+    background: #2a313a;
+    border-bottom: 1px solid #3e4754;
+    color: #dbe1ea;
+}
+QTabWidget::pane {
+    background: #1a1f26;
+}
+
+/* === Tab bar === */
+QTabBar::tab {
+    color: #8b97a7;
+}
+QTabBar::tab:selected {
+    background: #1a1f26;
+    color: #8fc8ea;
+    border-bottom: 3px solid #5ca8e0;
+}
+QTabBar::tab:hover:!selected {
+    background: #2a313a;
+    color: #dbe1ea;
+}
+QTabBar::tab:focus {
+    color: #a8d5f0;
+    border-bottom: 3px solid #a8d5f0;
+    background: #2a313a;
+}
+
+/* === ToolBox (left workflow rail) === */
+QToolBox::tab {
+    background: #2a313a;
+    border: 1px solid #3e4754;
+    color: #dbe1ea;
+}
+QToolBox::tab:hover:!selected {
+    background: #353d48;
+    border-color: #4d5868;
+    color: #eef2f8;
+}
+QToolBox::tab:selected {
+    background: #1e4870;
+    color: #ecf4fb;
+    border-color: #1e4870;
+}
+QToolBox::tab:disabled {
+    color: #596272;
+    background: #23292f;
+    border-color: #303640;
+}
+QToolBox#workflowToolbox > QWidget {
+    background: #1e242c;
+}
+
+/* === GroupBox / section panels === */
+QGroupBox {
+    background: #222831;
+    border: 1px solid #3e4754;
+    color: #dbe1ea;
+}
+QGroupBox::title {
+    color: #8fc8ea;
+}
+QGroupBox[panelRole="summary"] {
+    background: #262d38;
+    border: 1px solid #45526b;
+}
+QGroupBox[panelRole="summary"]::title {
+    color: #b3d4ed;
+}
+QGroupBox[panelRole="workflow"] {
+    background: #1e242c;
+}
+QGroupBox[embeddedStepPanel="true"] {
+    background: #222831;
+    border: 1px solid #3e4754;
+}
+
+QLabel[uiSectionHeader="true"] {
+    color: #9dc9ea;
+}
+QLabel[uiHintText="true"] {
+    color: #8b97a7;
+}
+QLabel[uiSubtleValue="true"] {
+    color: #a7b2c2;
+}
+
+/* === Inputs === */
+QLineEdit, QAbstractSpinBox, QPlainTextEdit, QTextEdit {
+    background: #2a313a;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+    selection-background-color: #5ca8e0;
+    selection-color: #0f1419;
+}
+QLineEdit:hover, QAbstractSpinBox:hover,
+QPlainTextEdit:hover, QTextEdit:hover {
+    border-color: #5d6a7a;
+}
+QLineEdit:focus, QAbstractSpinBox:focus,
+QPlainTextEdit:focus, QTextEdit:focus {
+    border: 2px solid #5ca8e0;
+    background: #313a46;
+}
+QLineEdit:disabled, QAbstractSpinBox:disabled,
+QPlainTextEdit:disabled, QTextEdit:disabled {
+    color: #5e6876;
+    background: #23292f;
+    border-color: #2e3540;
+}
+
+QComboBox {
+    background: #2a313a;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+}
+QComboBox:hover {
+    border-color: #5d6a7a;
+    background: #313a46;
+}
+QComboBox:focus {
+    border: 2px solid #5ca8e0;
+}
+QComboBox:disabled {
+    color: #5e6876;
+    background: #23292f;
+    border-color: #2e3540;
+}
+QComboBox::drop-down {
+    border-left: 1px solid #3e4754;
+    background: #23292f;
+}
+QComboBox QAbstractItemView {
+    background: #222831;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+    selection-background-color: #1e4870;
+    selection-color: #ecf4fb;
+}
+QComboBox QAbstractItemView::item:hover {
+    background: #2d3543;
+}
+
+/* === Buttons === */
+QPushButton {
+    background: #2a313a;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+}
+QPushButton:hover {
+    background: #313a46;
+    border-color: #5d6a7a;
+}
+QPushButton:pressed {
+    background: #252b33;
+}
+QPushButton:disabled {
+    color: #5e6876;
+    background: #23292f;
+    border-color: #2e3540;
+}
+QPushButton:focus {
+    border: 2px solid #5ca8e0;
+}
+QPushButton[buttonRole="primary"] {
+    background: #1e5a87;
+    color: #ecf4fb;
+    border-color: #154969;
+}
+QPushButton[buttonRole="primary"]:hover {
+    background: #226a9b;
+}
+QPushButton[buttonRole="primary"]:disabled {
+    background: #1a3a54;
+    color: #6b8299;
+    border-color: #143048;
+}
+QPushButton[buttonRole="success"] {
+    background: #1e7a52;
+    color: #ecf4fb;
+    border-color: #145c3d;
+}
+QPushButton[buttonRole="success"]:hover {
+    background: #24916a;
+}
+QPushButton[buttonRole="success"]:disabled {
+    background: #1f4b38;
+    color: #7ca090;
+    border-color: #173c2b;
+}
+QPushButton[buttonRole="danger"] {
+    background: #7a3a3a;
+    color: #fff;
+    border-color: #5c2a2a;
+}
+QPushButton[buttonRole="danger"]:hover {
+    background: #8e4545;
+}
+QPushButton[buttonRole="danger"]:disabled {
+    background: #4a2828;
+    color: #a48383;
+    border-color: #3a1f1f;
+}
+QPushButton[buttonRole="subtle"] {
+    background: #262d38;
+}
+
+/* === Tables / trees / lists === */
+QTableView, QTreeView, QListView {
+    background: #222831;
+    alternate-background-color: #262d38;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+    gridline-color: #2a313a;
+    selection-background-color: #1e4870;
+    selection-color: #ecf4fb;
+}
+QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {
+    background: #1e4870;
+    color: #ecf4fb;
+}
+QTableView::item:hover, QTreeView::item:hover, QListView::item:hover {
+    background: #2d3543;
+}
+
+QHeaderView::section {
+    background: #2a313a;
+    color: #a7b2c2;
+    border-bottom: 2px solid #3e4754;
+}
+
+/* === Menus === */
+QMenuBar {
+    background: #1a1f26;
+    color: #dbe1ea;
+    border-bottom: 1px solid #3e4754;
+}
+QMenuBar::item:selected {
+    background: #2d3543;
+    color: #ecf4fb;
+}
+QMenu {
+    background: #222831;
+    border: 1px solid #3e4754;
+    color: #dbe1ea;
+}
+QMenu::item:selected {
+    background: #1e4870;
+    color: #ecf4fb;
+}
+
+/* === Status bar === */
+QStatusBar {
+    background: #222831;
+    color: #a7b2c2;
+    border-top: 1px solid #3e4754;
+}
+
+/* === Scrollbars === */
+QScrollBar:vertical, QScrollBar:horizontal {
+    background: #1a1f26;
+}
+QScrollBar::handle:vertical, QScrollBar::handle:horizontal {
+    background: #3e4754;
+}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:horizontal:hover {
+    background: #5d6a7a;
+}
+
+/* === Progress === */
+QProgressBar {
+    background: #2a313a;
+    border: 1px solid #3e4754;
+    color: #dbe1ea;
+}
+QProgressBar::chunk {
+    background: #5ca8e0;
+}
+
+/* === Checkbox === */
+QCheckBox {
+    color: #dbe1ea;
+}
+QCheckBox:disabled {
+    color: #5e6876;
+}
+QCheckBox::indicator {
+    background: #2a313a;
+    border: 1.5px solid #3e4754;
+}
+QCheckBox::indicator:hover {
+    border-color: #5ca8e0;
+}
+QCheckBox::indicator:checked {
+    background: #5ca8e0;
+    border-color: #5ca8e0;
+}
+QCheckBox::indicator:disabled {
+    background: #23292f;
+    border-color: #2e3540;
+}
+
+/* === Splitter handles === */
+QSplitter::handle {
+    background: #3e4754;
+}
+
+/* === SpinBox arrow backgrounds (keep the SVG arrows from base) === */
+QSpinBox::up-button, QDoubleSpinBox::up-button,
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    background: #2a313a;
+    border-color: #3e4754;
+}
+QSpinBox::up-button:hover, QDoubleSpinBox::up-button:hover,
+QSpinBox::down-button:hover, QDoubleSpinBox::down-button:hover {
+    background: #1e4870;
+}
+
+/* === ToolButton === */
+QToolButton {
+    background: #2a313a;
+    color: #dbe1ea;
+    border: 1px solid #3e4754;
+}
+QToolButton:hover {
+    background: #313a46;
 }
 """

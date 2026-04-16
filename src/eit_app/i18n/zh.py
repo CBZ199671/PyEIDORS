@@ -37,6 +37,9 @@ TRANSLATIONS: dict[str, str] = {
     # ------------------------------------------------------------------
     # Tools menu
     # ------------------------------------------------------------------
+    "menu.view": "\u89c6\u56fe(&V)",                                            # 视图(&V)
+    "menu.view.theme_light": "\u6d45\u8272\u4e3b\u9898(&L)",                    # 浅色主题(&L)
+    "menu.view.theme_dark": "\u6df1\u8272\u4e3b\u9898(&D)",                      # 深色主题(&D)
     "menu.tools": "\u5de5\u5177(&T)",                                           # 工具(&T)
     "menu.tools.interop_hub": "EIDORS \u4e92\u64cd\u4f5c(&I)\u2026",             # EIDORS 互操作(&I)…
     "menu.tools.difference": "\u5dee\u5206\u91cd\u6784(&D)\u2026",              # 差分重构(&D)…

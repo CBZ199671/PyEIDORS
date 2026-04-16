@@ -35,6 +35,9 @@ TRANSLATIONS: dict[str, str] = {
     # ------------------------------------------------------------------
     # Tools menu
     # ------------------------------------------------------------------
+    "menu.view": "&View",
+    "menu.view.theme_light": "&Light Theme",
+    "menu.view.theme_dark": "&Dark Theme",
     "menu.tools": "&Tools",
     "menu.tools.interop_hub": "EIDORS &Interop Hub\u2026",
     "menu.tools.difference": "&Difference\u2026",

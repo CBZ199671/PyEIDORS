@@ -6,8 +6,11 @@ work.  Runs under QT_QPA_PLATFORM=offscreen so it works headless on
 WSL / CI, using QWidget.grab() (which renders the widget off-screen
 and does not need a visible display).
 
-Output: ``docs/screenshots/tab_<name>_<lang>.png`` — 8 files total
-(Hardware / Simulation / Dataset / Database × en / zh).
+Output:
+  ``docs/screenshots/tab_<name>_<lang>.png``       — light mode
+  ``docs/screenshots/tab_<name>_<lang>_dark.png``  — dark mode
+
+16 files total: 4 tabs × 2 languages × 2 theme modes.
 
 Each tab is seeded with a small amount of representative state
 (a couple of frames in the Hardware frame browser, a mesh-ready
@@ -47,7 +50,7 @@ def _capture_all() -> list[Path]:
     from eit_app.i18n import set_language
     from eit_app.ui.fonts import configure_runtime_fonts
     from eit_app.ui.main_window import EITWorkstation
-    from eit_app.ui.theme import apply_app_theme
+    from eit_app.ui.theme import apply_app_theme, set_theme_mode
 
     app = QApplication.instance() or QApplication(sys.argv)
     configure_runtime_fonts(app)
@@ -60,6 +63,7 @@ def _capture_all() -> list[Path]:
         ("database", 3),
     ]
     languages = ("en", "zh")
+    modes = ("light", "dark")
 
     window = EITWorkstation()
     window.resize(*_WINDOW_SIZE)
@@ -74,24 +78,35 @@ def _capture_all() -> list[Path]:
     app.processEvents()
 
     produced: list[Path] = []
-    for lang in languages:
-        set_language(lang, persist=False)
+    for mode in modes:
+        set_theme_mode(app, mode, persist=False)
+        # Refresh session summary so the banner picks up the new
+        # tone_palette values in apply_state_banner().
+        window._refresh_session_summary()
         app.processEvents()
-        for name, index in tabs:
-            window._tab_widget.setCurrentIndex(index)
-            # Let layout settle before grabbing — matplotlib canvases
-            # and pyqtgraph plots need a paint cycle to settle their
-            # viewport before the grab call.
-            for _ in range(3):
-                app.processEvents()
-            pixmap = window.grab()
-            out_path = _output_dir() / f"tab_{name}_{lang}.png"
-            if not pixmap.save(str(out_path), "PNG"):
-                raise RuntimeError(f"Failed to save {out_path}")
-            produced.append(out_path)
-            print(f"  wrote {out_path.relative_to(_repo_root())}")
+        for lang in languages:
+            set_language(lang, persist=False)
+            app.processEvents()
+            for name, index in tabs:
+                window._tab_widget.setCurrentIndex(index)
+                # Let layout settle before grabbing — matplotlib canvases
+                # and pyqtgraph plots need a paint cycle to settle their
+                # viewport before the grab call.
+                for _ in range(3):
+                    app.processEvents()
+                pixmap = window.grab()
+                # Light mode keeps the original filename for backward
+                # compatibility with any external tooling; dark mode
+                # appends "_dark" so both variants live side-by-side.
+                suffix = "" if mode == "light" else "_dark"
+                out_path = _output_dir() / f"tab_{name}_{lang}{suffix}.png"
+                if not pixmap.save(str(out_path), "PNG"):
+                    raise RuntimeError(f"Failed to save {out_path}")
+                produced.append(out_path)
+                print(f"  wrote {out_path.relative_to(_repo_root())}")
 
     set_language("en", persist=False)
+    set_theme_mode(app, "light", persist=False)
     window.close()
     return produced
 

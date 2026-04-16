@@ -688,6 +688,52 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
 
 
 @pytest.mark.gui
+def test_dark_mode_toggle_swaps_stylesheet_and_tone_palette() -> None:
+    """The View → Dark Theme action must:
+      1. switch current_theme_mode() to 'dark'
+      2. append the dark overlay QSS to the application stylesheet
+      3. flip tone_palette('idle') to the dark-variant triplet
+      4. survive another toggle back to light without leaking the
+         overlay into the light stylesheet
+    """
+    from eit_app.ui.theme import (
+        apply_app_theme,
+        current_theme_mode,
+        set_theme_mode,
+        tone_palette,
+    )
+
+    app = _get_app()
+    apply_app_theme(app)
+    # Start from known-good light state regardless of any persisted
+    # preference on the dev machine.
+    set_theme_mode(app, "light", persist=False)
+    assert current_theme_mode() == "light"
+    light_css = app.styleSheet()
+    light_tones = tone_palette("idle")
+
+    set_theme_mode(app, "dark", persist=False)
+    assert current_theme_mode() == "dark"
+    dark_css = app.styleSheet()
+    dark_tones = tone_palette("idle")
+
+    # The dark stylesheet is a strict superset of the light one (base
+    # + overlay), so it's strictly longer.
+    assert len(dark_css) > len(light_css)
+    # Dark canvas color appears in the overlay but not the base.
+    assert "#1a1f26" in dark_css
+    assert "#1a1f26" not in light_css
+    # Tone palette must swap to the dark triplet.
+    assert dark_tones != light_tones
+    assert dark_tones[0] == "#c7d0db"
+
+    # Toggle back: stylesheet returns to the base exactly.
+    set_theme_mode(app, "light", persist=False)
+    assert app.styleSheet() == light_css
+    assert tone_palette("idle") == light_tones
+
+
+@pytest.mark.gui
 def test_app_theme_publishes_accessibility_selectors() -> None:
     """Guard against accidental regression of the accessibility additions.
 

@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 from PySide6.QtCore import QTimer, Qt, Slot
 from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
-from PySide6.QtWidgets import QMainWindow, QMessageBox, QTabWidget, QWidget
+from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget, QWidget
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
@@ -69,6 +69,7 @@ from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
+from eit_app.ui.theme import current_theme_mode, set_theme_mode
 
 from eit_app.models.frame_model import FrameData
 
@@ -410,6 +411,28 @@ class EITWorkstation(QMainWindow):
         self._action_exit.setShortcut(QKeySequence("Ctrl+Q"))
         self._action_exit.triggered.connect(self.close)
 
+        # View menu --------------------------------------------------------
+        # Light / Dark mode toggle.  The checked state reflects the
+        # persisted preference (QSettings) so the initial paint matches
+        # whatever the user last chose.
+        self._menu_view = menu_bar.addMenu("")
+        self._theme_action_group = QActionGroup(self)
+        self._theme_action_group.setExclusive(True)
+
+        self._action_theme_light = self._menu_view.addAction("")
+        self._action_theme_light.setCheckable(True)
+        self._action_theme_light.triggered.connect(
+            lambda: self._on_theme_mode_selected("light")
+        )
+        self._theme_action_group.addAction(self._action_theme_light)
+
+        self._action_theme_dark = self._menu_view.addAction("")
+        self._action_theme_dark.setCheckable(True)
+        self._action_theme_dark.triggered.connect(
+            lambda: self._on_theme_mode_selected("dark")
+        )
+        self._theme_action_group.addAction(self._action_theme_dark)
+
         # Tools menu -------------------------------------------------------
         self._menu_tools = menu_bar.addMenu("")
         self._action_interop_hub = self._menu_tools.addAction("")
@@ -492,6 +515,19 @@ class EITWorkstation(QMainWindow):
     # Shortcut slots
     # ------------------------------------------------------------------
 
+    def _on_theme_mode_selected(self, mode: str) -> None:
+        """Handle View → Light/Dark action trigger."""
+        app = QApplication.instance()
+        if app is None:
+            return
+        set_theme_mode(app, mode)
+        # Repolish all custom-styled chips/banners so they pick up the
+        # new tone_palette values.  The status bar caches state and
+        # refreshes on its own retranslate/apply helpers; session
+        # summary's apply_state_banner re-runs from _refresh_session_summary.
+        self._refresh_session_summary()
+        self._status_bar._retranslate()
+
     def _sim_shortcut_run_forward(self) -> None:
         """F5 handler — only acts when the Simulation tab is visible
         and the forward-solve button is currently enabled (i.e. we're
@@ -543,6 +579,12 @@ class EITWorkstation(QMainWindow):
         self._menu_file.setTitle(t("menu.file"))
         self._action_settings.setText(t("menu.file.settings"))
         self._action_exit.setText(t("menu.file.exit"))
+
+        self._menu_view.setTitle(t("menu.view"))
+        self._action_theme_light.setText(t("menu.view.theme_light"))
+        self._action_theme_dark.setText(t("menu.view.theme_dark"))
+        self._action_theme_light.setChecked(current_theme_mode() == "light")
+        self._action_theme_dark.setChecked(current_theme_mode() == "dark")
 
         self._menu_tools.setTitle(t("menu.tools"))
         self._action_interop_hub.setText(t("menu.tools.interop_hub"))
