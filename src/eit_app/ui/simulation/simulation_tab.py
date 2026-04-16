@@ -109,11 +109,7 @@ class SimulationTab(QWidget):
 
     def _sync_expected_point_count(self) -> None:
         mesh_cfg = self._mesh_panel.get_config()
-        point_count = int(
-            measurement_layout_from_config({"n_electrodes": mesh_cfg["n_electrodes"]})[
-                "points_per_frame"
-            ]
-        )
+        point_count = int(measurement_layout_from_config(mesh_cfg)["points_per_frame"])
         self._results_widget.set_expected_point_count(point_count)
 
     # --- Property accessors for signal wiring ---

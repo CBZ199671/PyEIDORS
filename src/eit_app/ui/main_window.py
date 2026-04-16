@@ -59,7 +59,10 @@ from eit_app.models.app_state import (
     PowerStatus,
     RecordingStatus,
 )
-from eit_app.models.forward_model_config import ForwardModelConfig
+from eit_app.models.forward_model_config import (
+    ForwardModelConfig,
+    electrode_level_fractions_for_rings,
+)
 from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
     SimulationState,
@@ -2494,6 +2497,7 @@ class EITWorkstation(QMainWindow):
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             n_elec=mesh_cfg["n_electrodes"],
+            n_rings=int(mesh_cfg.get("n_rings", 1)),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=self._sim_tab.forward_problem_panel.noise_level,
             stim_pattern=mesh_cfg.get("stim_pattern", "{ad}"),
@@ -2501,6 +2505,11 @@ class EITWorkstation(QMainWindow):
             rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
             use_meas_current=bool(mesh_cfg.get("use_meas_current", False)),
             use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
+            electrode_level_fractions=(
+                electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
+                if int(mesh_cfg["mesh_dimension"]) == 3
+                else self._sim_forward_model_config.electrode_level_fractions
+            ),
         )
 
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
@@ -2510,7 +2519,19 @@ class EITWorkstation(QMainWindow):
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             n_elec=mesh_cfg["n_electrodes"],
+            n_rings=int(mesh_cfg.get("n_rings", 1)),
+            background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=panel_cfg["noise_level"],
+            stim_pattern=mesh_cfg.get("stim_pattern", "{ad}"),
+            meas_pattern=mesh_cfg.get("meas_pattern", "{ad}"),
+            rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
+            use_meas_current=bool(mesh_cfg.get("use_meas_current", False)),
+            use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
+            electrode_level_fractions=(
+                electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
+                if int(mesh_cfg["mesh_dimension"]) == 3
+                else self._dataset_forward_model_config.electrode_level_fractions
+            ),
         )
 
     def _interop_reconstruction_preset(self) -> ReconstructionPreset:
@@ -2665,7 +2686,13 @@ class EITWorkstation(QMainWindow):
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
                     "n_electrodes": config.n_elec,
+                    "n_rings": int(config.n_rings),
                     "background_conductivity": config.background_conductivity,
+                    "stim_pattern": config.stim_pattern,
+                    "meas_pattern": config.meas_pattern,
+                    "rotate_meas": bool(config.rotate_meas),
+                    "use_meas_current": bool(config.use_meas_current),
+                    "use_meas_current_next": int(config.use_meas_current_next),
                 }
             )
             self._sim_tab.forward_problem_panel.set_noise_level(config.noise_level)
@@ -2685,7 +2712,13 @@ class EITWorkstation(QMainWindow):
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
                     "n_electrodes": config.n_elec,
+                    "n_rings": int(config.n_rings),
                     "background_conductivity": config.background_conductivity,
+                    "stim_pattern": config.stim_pattern,
+                    "meas_pattern": config.meas_pattern,
+                    "rotate_meas": bool(config.rotate_meas),
+                    "use_meas_current": bool(config.use_meas_current),
+                    "use_meas_current_next": int(config.use_meas_current_next),
                 }
             )
             self._dataset_tab.dataset_generator_panel.set_config({"noise_level": config.noise_level})

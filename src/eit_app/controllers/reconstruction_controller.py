@@ -36,6 +36,81 @@ _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 
 
+def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:
+    return max(int(meta.get("n_elec", 16)), 1) * max(int(meta.get("n_rings", 1)), 1)
+
+
+def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
+    if value is None or value == "":
+        return float(default)
+    try:
+        arr = np.asarray(value, dtype=float).reshape(-1)
+    except (TypeError, ValueError):
+        return float(default)
+    if arr.size == 0:
+        return float(default)
+    return float(arr[0])
+
+
+def _contact_impedance_vector_from_meta(meta: dict[str, Any], *, total_electrodes: int) -> np.ndarray:
+    raw = meta.get("contact_impedance", 0.01)
+    total = max(int(total_electrodes), 1)
+    if raw is None or raw == "":
+        return np.full(total, 0.01, dtype=float)
+    arr = np.asarray(raw, dtype=float).reshape(-1)
+    if arr.size == 1:
+        return np.full(total, float(arr[0]), dtype=float)
+    if arr.size > 0 and total % arr.size == 0:
+        return np.tile(arr, total // arr.size).astype(float, copy=False)
+    if arr.size != total:
+        raise ValueError(
+            "contact_impedance length mismatch: "
+            f"expected {total} or a divisor of it, got {arr.size}."
+        )
+    return arr.astype(float, copy=False)
+
+
+def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> dict[str, str]:
+    gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
+
+    def _auto(key: str, default: str) -> str:
+        raw = str(meta.get(key, "") or "").strip().lower()
+        return default if raw in {"", "auto"} else raw
+
+    wants_gpu = gui_profile == "gpu" or _auto("acceleration_profile", "default") in {
+        "gpu3d",
+        "gpu3d_fused",
+    }
+    if int(mesh_dim) != 3:
+        wants_gpu = False
+
+    acceleration_profile = _auto("acceleration_profile", "default")
+    if wants_gpu and int(mesh_dim) == 3 and acceleration_profile == "default":
+        acceleration_profile = "gpu3d"
+    forward_backend = _auto("forward_backend", "dolfinx")
+    mesh_family = _auto("mesh_family", "tetra")
+    if wants_gpu:
+        if forward_backend == "dolfinx":
+            forward_backend = "cuda_structured"
+        if mesh_family == "tetra":
+            mesh_family = "hex"
+
+    return {
+        "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),
+        "line_search_mode": _auto("line_search_mode", "fast" if int(mesh_dim) == 3 else "full"),
+        "linear_solver": _auto("linear_solver", "auto"),
+        "preconditioner": _auto("preconditioner", "auto"),
+        "fast_linear_path": _auto("fast_linear_path", "auto"),
+        "forward_mat_solve": _auto("forward_mat_solve", "auto" if int(mesh_dim) == 3 else "off"),
+        "petsc_device": _auto("petsc_device", "cuda" if wants_gpu else "auto"),
+        "device": _auto("device", "cuda" if wants_gpu else "auto"),
+        "forward_backend": forward_backend,
+        "mesh_family": mesh_family,
+        "geometry_version": _auto("geometry_version", "geomv2"),
+        "acceleration_profile": acceleration_profile,
+    }
+
+
 def clear_reconstruction_system_cache() -> None:
     """Clear the in-process EITSystem cache used by realtime reconstruction."""
     with _SYSTEM_CACHE_LOCK:
@@ -330,9 +405,22 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("step_size_min", 1.0e-6)
     meta.setdefault("step_size_max", 1.0)
     meta.setdefault("step_size_maxiter", 64)
+    meta.setdefault("solver_mode", "auto")
+    meta.setdefault("linear_solver", "auto")
+    meta.setdefault("preconditioner", "auto")
+    meta.setdefault("fast_linear_path", "auto")
+    meta.setdefault("forward_mat_solve", "auto")
+    meta.setdefault("petsc_device", "auto")
+    meta.setdefault("device", "auto")
+    meta.setdefault("forward_backend", "dolfinx")
+    meta.setdefault("mesh_family", "tetra")
+    meta.setdefault("geometry_version", "geomv2")
+    meta.setdefault("acceleration_profile", "default")
     meta["drive_mode"] = _resolve_drive_mode(meta)
     meta["drive_value"] = _resolve_drive_value(meta)
     mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
+    runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=mesh_dim)
+    meta.update(runtime_options)
     radius = float(meta.get("radius", 1.0))
     refinement = _compute_effective_refinement(
         radius,
@@ -341,8 +429,8 @@ def _prepare_single_step_cached_runtime(
     )
     lam = float(meta.get("difference_lambda", 1.0e-2))
     background_sigma = float(meta.get("background_sigma", 1.0))
-    contact_impedance = float(meta.get("contact_impedance", 0.01))
-    mesh_height = float(meta.get("mesh_height", 1.0))
+    contact_impedance = _contact_impedance_scalar(meta.get("contact_impedance", 0.01))
+    mesh_height = float(meta.get("mesh_height", meta.get("height", 1.0)))
     electrode_height_ratio = float(meta.get("electrode_height_ratio", 0.2))
     z_center = float(meta.get("z_center", 0.0))
     cache_key = (
@@ -353,6 +441,7 @@ def _prepare_single_step_cached_runtime(
         radius,
         mesh_height,
         electrode_height_ratio,
+        repr(meta.get("electrode_level_fractions", (0.25, 0.75))),
         z_center,
         lam,
         background_sigma,
@@ -372,6 +461,17 @@ def _prepare_single_step_cached_runtime(
         float(meta.get("drive_value", 1.0e-5)),
         str(meta.get("mesh_dir", "eit_meshes")),
         str(req.use_part),
+        str(meta.get("solver_mode", "auto")),
+        str(meta.get("linear_solver", "auto")),
+        str(meta.get("preconditioner", "auto")),
+        str(meta.get("fast_linear_path", "auto")),
+        str(meta.get("forward_mat_solve", "auto")),
+        str(meta.get("petsc_device", "auto")),
+        str(meta.get("device", "auto")),
+        str(meta.get("forward_backend", "dolfinx")),
+        str(meta.get("mesh_family", "tetra")),
+        str(meta.get("geometry_version", "geomv2")),
+        str(meta.get("acceleration_profile", "default")),
     )
     return _SingleStepCachedRuntimeConfig(
         meta=meta,
@@ -428,6 +528,7 @@ def _ensure_single_step_cached_context(
                 mesh_height=runtime.mesh_height,
                 electrode_height_ratio=runtime.electrode_height_ratio,
                 z_center=runtime.z_center,
+                electrode_level_fractions=meta.get("electrode_level_fractions", (0.25, 0.75)),
                 refinement=runtime.refinement,
                 n_elec=int(meta["n_elec"]),
                 radius=float(meta.get("radius", 1.0)),
@@ -449,14 +550,17 @@ def _ensure_single_step_cached_context(
                 background_sigma=runtime.background_sigma,
                 lam=runtime.lam,
                 cache_scope="both",
-                solver_mode="strict",
-                linear_solver="auto",
-                preconditioner="auto",
+                solver_mode=str(meta.get("solver_mode", "strict")),
+                linear_solver=str(meta.get("linear_solver", "auto")),
+                preconditioner=str(meta.get("preconditioner", "auto")),
                 rom_mode="off",
                 lowrank_mode="off",
-                forward_mat_solve="off",
-                petsc_device="auto",
-                device="auto",
+                forward_mat_solve=str(meta.get("forward_mat_solve", "off")),
+                petsc_device=str(meta.get("petsc_device", "auto")),
+                device=str(meta.get("device", "auto")),
+                forward_backend=str(meta.get("forward_backend", "dolfinx")),
+                mesh_family=str(meta.get("mesh_family", "tetra")),
+                geometry_version=str(meta.get("geometry_version", "geomv2")),
             )
         )
         _put_cached_fast_context(runtime.cache_key, ctx)
@@ -508,8 +612,22 @@ def _run_full_gn_request(
     meta.setdefault("contact_impedance", 0.01)
     meta.setdefault("difference_mode", "raw")
     meta.setdefault("difference_orientation", "target_minus_reference")
+    meta.setdefault("solver_mode", "auto")
+    meta.setdefault("line_search_mode", "auto")
+    meta.setdefault("linear_solver", "auto")
+    meta.setdefault("preconditioner", "auto")
+    meta.setdefault("fast_linear_path", "auto")
+    meta.setdefault("forward_mat_solve", "auto")
+    meta.setdefault("petsc_device", "auto")
+    meta.setdefault("device", "auto")
+    meta.setdefault("forward_backend", "dolfinx")
+    meta.setdefault("mesh_family", "tetra")
+    meta.setdefault("geometry_version", "geomv2")
+    meta.setdefault("acceleration_profile", "default")
     meta["drive_mode"] = _resolve_drive_mode(meta)
     meta["drive_value"] = _resolve_drive_value(meta)
+    runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=int(req.mesh_dimension))
+    meta.update(runtime_options)
 
     emit("Building measurement datasets...")
     data_type = req.use_part if req.use_part in {"real", "imag", "mag"} else "real"
@@ -550,13 +668,30 @@ def _run_full_gn_request(
         int(req.mesh_dimension),
         int(refinement),
         float(meta.get("radius", 1.0)),
+        float(meta.get("mesh_height", meta.get("height", 1.0))),
+        float(meta.get("electrode_height_ratio", 0.2)),
+        float(meta.get("z_center", 0.0)),
+        repr(meta.get("electrode_level_fractions", (0.25, 0.75))),
         float(meta.get("electrode_coverage", 0.5)),
         repr(meta.get("electrode_length_m_override")),
-        float(meta.get("contact_impedance", 0.01)),
+        _contact_impedance_scalar(meta.get("contact_impedance", 0.01)),
         float(req.regularization_alpha),
         str(meta["difference_mode"]),
         str(meta["difference_orientation"]),
+        str(meta.get("solver_mode", "auto")),
+        str(meta.get("line_search_mode", "auto")),
+        str(meta.get("linear_solver", "auto")),
+        str(meta.get("preconditioner", "auto")),
+        str(meta.get("fast_linear_path", "auto")),
+        str(meta.get("forward_mat_solve", "auto")),
+        str(meta.get("petsc_device", "auto")),
+        str(meta.get("device", "auto")),
+        str(meta.get("forward_backend", "dolfinx")),
+        str(meta.get("mesh_family", "tetra")),
+        str(meta.get("geometry_version", "geomv2")),
+        str(meta.get("acceleration_profile", "default")),
     )
+    total_electrodes = _total_electrodes_from_meta(meta)
     system = _get_cached_system(cache_key)
     if system is None:
         pattern_config = PatternConfig(
@@ -576,24 +711,43 @@ def _run_full_gn_request(
             stim_first_positive=bool(meta.get("stim_first_positive", False)),
         )
         system = EITSystem(
-            n_elec=meta["n_elec"],
+            n_elec=total_electrodes,
             pattern_config=pattern_config,
             regularization_alpha=req.regularization_alpha,
             difference_mode=meta["difference_mode"],
             difference_orientation=meta["difference_orientation"],
-            contact_impedance=np.full(
-                int(meta["n_elec"]) * int(meta.get("n_rings", 1)),
-                float(meta.get("contact_impedance", 0.01)),
-                dtype=float,
+            contact_impedance=_contact_impedance_vector_from_meta(
+                meta,
+                total_electrodes=total_electrodes,
             ),
+            solver_mode=str(meta.get("solver_mode", "strict")),
+            line_search_mode=str(meta.get("line_search_mode", "full")),
+            linear_solver=str(meta.get("linear_solver", "auto")),
+            preconditioner=str(meta.get("preconditioner", "auto")),
+            fast_linear_path=str(meta.get("fast_linear_path", "auto")),
+            linear_backend_config={
+                "mat_solve_mode": str(meta.get("forward_mat_solve", "off")),
+                "petsc_device": str(meta.get("petsc_device", "auto")),
+            },
+            petsc_device=str(meta.get("petsc_device", "auto")),
+            device=str(meta.get("device", "auto")),
+            forward_backend=str(meta.get("forward_backend", "dolfinx")),
+            mesh_family=str(meta.get("mesh_family", "tetra")),
+            acceleration_profile=str(meta.get("acceleration_profile", "default")),
         )
         mesh = load_or_create_mesh(
             mesh_dir=str(meta.get("mesh_dir", "eit_meshes")),
-            n_elec=int(meta["n_elec"]),
+            n_elec=total_electrodes,
             dimension=int(req.mesh_dimension),
             radius=radius,
             refinement=refinement,
             electrode_coverage=float(meta.get("electrode_coverage", 0.5)),
+            height=float(meta.get("mesh_height", meta.get("height", 1.0))),
+            electrode_height_ratio=float(meta.get("electrode_height_ratio", 0.2)),
+            electrode_level_fractions=meta.get("electrode_level_fractions", (0.25, 0.75)),
+            z_center=float(meta.get("z_center", 0.0)),
+            mesh_family=str(meta.get("mesh_family", "tetra")),
+            geometry_version=str(meta.get("geometry_version", "geomv2")),
         )
         system.setup(mesh=mesh)
         _put_cached_system(cache_key, system)

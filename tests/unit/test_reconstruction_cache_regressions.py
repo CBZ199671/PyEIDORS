@@ -80,6 +80,29 @@ def test_effective_refinement_accepts_simulation_mesh_size_without_inflation() -
     assert rc._compute_effective_refinement(1.0, 10.0, mesh_size=0.1) == 5
 
 
+def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        mesh_dimension=3,
+        mesh_refinement=0.1,
+        metadata={
+            "mesh_dimension": 3,
+            "mesh_size": 0.1,
+            "n_elec": 8,
+            "n_rings": 2,
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert rc._total_electrodes_from_meta(runtime.meta) == 16
+    assert runtime.meta["solver_mode"] == "fast"
+    assert runtime.meta["forward_mat_solve"] == "auto"
+    assert runtime.meta["mesh_family"] == "tetra"
+    assert runtime.refinement == 5
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

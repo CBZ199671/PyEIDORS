@@ -35,6 +35,15 @@ def test_measurement_layout_can_reserve_for_32_electrode_adjacent_mode() -> None
     assert layout["points_per_frame"] == 928
 
 
+def test_measurement_layout_counts_multiring_3d_adjacent_mode() -> None:
+    layout = measurement_layout_from_config({"n_elec": 8, "n_rings": 2})
+
+    assert layout["n_elec"] == 8
+    assert layout["n_rings"] == 2
+    assert layout["total_electrodes"] == 16
+    assert layout["points_per_frame"] == 208
+
+
 def test_measurement_layout_accepts_explicit_points_override_for_future_protocols() -> None:
     layout = measurement_layout_from_config({"n_elec": 32, "points_per_frame_override": 960})
 

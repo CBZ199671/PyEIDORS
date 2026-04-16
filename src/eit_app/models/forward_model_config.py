@@ -8,6 +8,17 @@ from typing import Any
 from eit_app.measurement_layout import measurement_layout_from_config
 
 
+def electrode_level_fractions_for_rings(n_rings: int) -> tuple[float, ...]:
+    """Return stable 3D electrode level fractions for the requested ring count."""
+    rings = max(int(n_rings), 1)
+    if rings <= 2:
+        # The current 3D generator expects at least two vertical windows.
+        return (0.25, 0.75)
+    lo, hi = 0.15, 0.85
+    step = (hi - lo) / float(rings - 1)
+    return tuple(lo + step * idx for idx in range(rings))
+
+
 def _to_float_list(values: Any) -> list[float] | None:
     if values is None or values == "":
         return None
@@ -55,6 +66,17 @@ class ForwardModelConfig:
     z_center: float = 0.0
     mesh_family: str = "tetra"
     geometry_version: str = "geomv2"
+
+    solver_mode: str = "auto"
+    line_search_mode: str = "auto"
+    linear_solver: str = "auto"
+    preconditioner: str = "auto"
+    fast_linear_path: str = "auto"
+    forward_mat_solve: str = "auto"
+    petsc_device: str = "auto"
+    device: str = "auto"
+    forward_backend: str = "dolfinx"
+    acceleration_profile: str = "default"
 
     notes: list[str] = field(default_factory=list)
 
@@ -108,6 +130,16 @@ class ForwardModelConfig:
             z_center=float(raw.get("z_center", 0.0)),
             mesh_family=str(raw.get("mesh_family", "tetra")),
             geometry_version=str(raw.get("geometry_version", "geomv2")),
+            solver_mode=str(raw.get("solver_mode", "auto")),
+            line_search_mode=str(raw.get("line_search_mode", "auto")),
+            linear_solver=str(raw.get("linear_solver", "auto")),
+            preconditioner=str(raw.get("preconditioner", "auto")),
+            fast_linear_path=str(raw.get("fast_linear_path", "auto")),
+            forward_mat_solve=str(raw.get("forward_mat_solve", "auto")),
+            petsc_device=str(raw.get("petsc_device", "auto")),
+            device=str(raw.get("device", "auto")),
+            forward_backend=str(raw.get("forward_backend", "dolfinx")),
+            acceleration_profile=str(raw.get("acceleration_profile", "default")),
             notes=[str(item) for item in raw.get("notes", [])],
         )
 
@@ -139,6 +171,16 @@ class ForwardModelConfig:
             "z_center": float(self.z_center),
             "mesh_family": self.mesh_family,
             "geometry_version": self.geometry_version,
+            "solver_mode": self.solver_mode,
+            "line_search_mode": self.line_search_mode,
+            "linear_solver": self.linear_solver,
+            "preconditioner": self.preconditioner,
+            "fast_linear_path": self.fast_linear_path,
+            "forward_mat_solve": self.forward_mat_solve,
+            "petsc_device": self.petsc_device,
+            "device": self.device,
+            "forward_backend": self.forward_backend,
+            "acceleration_profile": self.acceleration_profile,
             "notes": list(self.notes),
         }
 
@@ -147,6 +189,9 @@ class ForwardModelConfig:
 
     def point_count(self) -> int:
         return int(self.measurement_layout()["points_per_frame"])
+
+    def total_electrodes(self) -> int:
+        return max(int(self.n_elec), 1) * max(int(self.n_rings), 1)
 
     def display_dimension(self) -> str:
         return "3D" if int(self.mesh_dimension) == 3 else "2D"

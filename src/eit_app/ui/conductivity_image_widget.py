@@ -13,6 +13,68 @@ from eit_app.ui.fonts import plot_font_families, serif_font_family
 from eit_app.ui.theme import plot_palette, subscribe_theme_mode
 
 
+def _triangle_area_xy(triangles: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    x0 = x[triangles[:, 0]]
+    y0 = y[triangles[:, 0]]
+    x1 = x[triangles[:, 1]]
+    y1 = y[triangles[:, 1]]
+    x2 = x[triangles[:, 2]]
+    y2 = y[triangles[:, 2]]
+    return 0.5 * np.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
+
+
+def _project_cells_to_triangles(
+    cell_connectivity: np.ndarray,
+    x: np.ndarray,
+    y: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return 2D triangles plus the source cell index for each triangle."""
+    cells = np.asarray(cell_connectivity, dtype=np.int64)
+    if cells.ndim != 2 or cells.shape[0] == 0 or cells.shape[1] < 3:
+        return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+
+    if cells.shape[1] == 3:
+        triangles = cells.astype(np.int32, copy=False)
+        sources = np.arange(len(cells), dtype=np.int32)
+    elif cells.shape[1] == 4:
+        # Tetrahedra: draw boundary faces only, otherwise internal faces
+        # overpaint the projection and make 3D phantoms unreadable.
+        faces: dict[tuple[int, int, int], tuple[tuple[int, int, int], int] | None] = {}
+        face_offsets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+        for cell_idx, cell in enumerate(cells):
+            for offsets in face_offsets:
+                face = tuple(int(cell[offset]) for offset in offsets)
+                key = tuple(sorted(face))
+                faces[key] = None if key in faces else (face, cell_idx)
+        kept = [payload for payload in faces.values() if payload is not None]
+        if not kept:
+            return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+        triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
+        sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
+    else:
+        tris: list[tuple[int, int, int]] = []
+        sources_list: list[int] = []
+        for cell_idx, cell in enumerate(cells):
+            unique = [int(value) for value in dict.fromkeys(cell.tolist())]
+            if len(unique) < 3:
+                continue
+            for idx in range(1, len(unique) - 1):
+                tris.append((unique[0], unique[idx], unique[idx + 1]))
+                sources_list.append(cell_idx)
+        if not tris:
+            return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+        triangles = np.asarray(tris, dtype=np.int32)
+        sources = np.asarray(sources_list, dtype=np.int32)
+
+    valid_index = (triangles >= 0).all(axis=1) & (triangles < len(x)).all(axis=1)
+    if np.any(valid_index):
+        valid_triangles = triangles[valid_index]
+        valid_sources = sources[valid_index]
+        area_index = _triangle_area_xy(valid_triangles, x, y) > 1.0e-14
+        return valid_triangles[area_index], valid_sources[area_index]
+    return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+
+
 class ConductivityImageWidget(QWidget):
     """Displays a conductivity distribution as a matplotlib tripcolor plot."""
 
@@ -117,14 +179,20 @@ class ConductivityImageWidget(QWidget):
         x = node_coords[:, 0]
         y = node_coords[:, 1]
 
+        triangles, source_cells = _project_cells_to_triangles(cell_connectivity, x, y)
+        if len(triangles) == 0:
+            self._show_error("Triangulation failed: no drawable 2D projection")
+            return
+
         try:
-            tri = Triangulation(x, y, cell_connectivity)
+            tri = Triangulation(x, y, triangles)
         except Exception as exc:
             self._show_error(f"Triangulation failed: {exc}")
             return
 
         if len(conductivity) == len(cell_connectivity):
-            tpc = self._ax.tripcolor(tri, conductivity, shading="flat", cmap="viridis")
+            face_values = np.asarray(conductivity, dtype=float)[source_cells]
+            tpc = self._ax.tripcolor(tri, face_values, shading="flat", cmap="viridis")
         elif len(conductivity) == len(x):
             tpc = self._ax.tripcolor(tri, conductivity, shading="gouraud", cmap="viridis")
         else:

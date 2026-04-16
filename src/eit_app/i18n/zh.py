@@ -299,7 +299,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.dimension_label": "\u7ef4\u5ea6\uff1a",                                            # 维度：
     "sim.mesh.size_label": "\u7f51\u683c\u5c3a\u5bf8\uff1a",                                      # 网格尺寸：
     "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
-    "sim.mesh.electrodes_label": "\u7535\u6781\u6570\uff1a",                                      # 电极数：
+    "sim.mesh.electrodes_label": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",                          # 每环电极数：
+    "sim.mesh.rings_label": "\u73af\u6570/\u5c42\u6570\uff1a",                                    # 环数/层数：
     "sim.mesh.conductivity_label": "\u80cc\u666f \u03c3\uff1a",                                   # 背景 σ：
     "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",                     # 激励与测量模式
     "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。

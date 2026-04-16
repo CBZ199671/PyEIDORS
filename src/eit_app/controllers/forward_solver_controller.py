@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -74,6 +75,69 @@ def _paint_shape(
         values[dist2 < rx**2] = spec.conductivity
 
 
+def _total_electrode_count(forward_cfg: ForwardModelConfig) -> int:
+    return max(int(forward_cfg.n_elec), 1) * max(int(forward_cfg.n_rings), 1)
+
+
+def _contact_impedance_vector(value: Any, *, total_electrodes: int) -> np.ndarray:
+    total = max(int(total_electrodes), 1)
+    if value is None or value == "":
+        return np.full(total, 0.01, dtype=float)
+    arr = np.asarray(value, dtype=float).reshape(-1)
+    if arr.size == 1:
+        return np.full(total, float(arr[0]), dtype=float)
+    if arr.size > 0 and total % arr.size == 0:
+        return np.tile(arr, total // arr.size).astype(float, copy=False)
+    if arr.size != total:
+        raise ValueError(
+            "contact_impedance length mismatch: "
+            f"expected {total} or a divisor of it, got {arr.size}."
+        )
+    return arr.astype(float, copy=False)
+
+
+def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
+    mesh_dim = int(forward_cfg.mesh_dimension)
+    gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
+
+    def _auto(value: str, default: str) -> str:
+        raw = str(value or "").strip().lower()
+        return default if raw in {"", "auto"} else raw
+
+    wants_gpu = gui_profile == "gpu" or str(forward_cfg.acceleration_profile).strip().lower() in {
+        "gpu3d",
+        "gpu3d_fused",
+    }
+    acceleration_profile = _auto(forward_cfg.acceleration_profile, "default")
+    if wants_gpu and mesh_dim == 3 and acceleration_profile == "default":
+        acceleration_profile = "gpu3d"
+    if mesh_dim != 3:
+        wants_gpu = False
+        acceleration_profile = "default"
+
+    forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
+    mesh_family = _auto(forward_cfg.mesh_family, "tetra")
+    if wants_gpu:
+        if forward_backend == "dolfinx":
+            forward_backend = "cuda_structured"
+        if mesh_family == "tetra":
+            mesh_family = "hex"
+
+    return {
+        "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
+        "line_search_mode": _auto(forward_cfg.line_search_mode, "fast" if mesh_dim == 3 else "full"),
+        "linear_solver": _auto(forward_cfg.linear_solver, "auto"),
+        "preconditioner": _auto(forward_cfg.preconditioner, "auto"),
+        "fast_linear_path": _auto(forward_cfg.fast_linear_path, "auto"),
+        "forward_mat_solve": _auto(forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"),
+        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_gpu else "auto"),
+        "device": _auto(forward_cfg.device, "cuda" if wants_gpu else "auto"),
+        "forward_backend": forward_backend,
+        "mesh_family": mesh_family,
+        "acceleration_profile": acceleration_profile,
+    }
+
+
 class _ForwardSolverWorker(QObject):
     finished = Signal(object)  # ForwardSolverResult
     progress = Signal(str)
@@ -117,7 +181,31 @@ class _ForwardSolverWorker(QObject):
                 meas_direction=forward_cfg.meas_direction,
                 stim_first_positive=forward_cfg.stim_first_positive,
             )
-            system = EITSystem(n_elec=forward_cfg.n_elec, pattern_config=pattern)
+            total_electrodes = _total_electrode_count(forward_cfg)
+            runtime = _resolve_forward_runtime(forward_cfg)
+            system = EITSystem(
+                n_elec=total_electrodes,
+                pattern_config=pattern,
+                contact_impedance=_contact_impedance_vector(
+                    forward_cfg.contact_impedance,
+                    total_electrodes=total_electrodes,
+                ),
+                base_conductivity=forward_cfg.background_conductivity,
+                solver_mode=runtime["solver_mode"],
+                line_search_mode=runtime["line_search_mode"],
+                linear_solver=runtime["linear_solver"],
+                preconditioner=runtime["preconditioner"],
+                fast_linear_path=runtime["fast_linear_path"],
+                linear_backend_config={
+                    "mat_solve_mode": runtime["forward_mat_solve"],
+                    "petsc_device": runtime["petsc_device"],
+                },
+                petsc_device=runtime["petsc_device"],
+                device=runtime["device"],
+                forward_backend=runtime["forward_backend"],
+                mesh_family=runtime["mesh_family"],
+                acceleration_profile=runtime["acceleration_profile"],
+            )
 
             self.progress.emit("Generating mesh...")
             system.setup(
@@ -129,7 +217,7 @@ class _ForwardSolverWorker(QObject):
                 electrode_height_ratio=forward_cfg.electrode_height_ratio,
                 electrode_level_fractions=forward_cfg.electrode_level_fractions,
                 z_center=forward_cfg.z_center,
-                mesh_family=forward_cfg.mesh_family,
+                mesh_family=runtime["mesh_family"],
                 geometry_version=forward_cfg.geometry_version,
             )
 

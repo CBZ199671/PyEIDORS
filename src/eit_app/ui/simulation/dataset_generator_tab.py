@@ -170,7 +170,9 @@ class DatasetGeneratorTab(QWidget):
                     f"{mesh_cfg['mesh_dimension']}D | "
                     f"mesh size {mesh_cfg['mesh_refinement']:.3f}"
                 ),
-                "electrodes": str(mesh_cfg["n_electrodes"]),
+                "electrodes": (
+                    f"{mesh_cfg['n_electrodes']} e/ring x {mesh_cfg.get('n_rings', 1)} ring(s)"
+                ),
             }
         )
         self._summary_panel.set_progress(*self._progress)

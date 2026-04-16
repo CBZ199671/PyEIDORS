@@ -10,7 +10,12 @@ from typing import Any
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
-from eit_app.controllers.forward_solver_controller import _paint_shape
+from eit_app.controllers.forward_solver_controller import (
+    _contact_impedance_vector,
+    _paint_shape,
+    _resolve_forward_runtime,
+    _total_electrode_count,
+)
 from eit_app.models.forward_model_config import ForwardModelConfig
 from eit_app.models.simulation_state import DatasetGeneratorConfig, InhomogeneitySpec
 
@@ -72,7 +77,31 @@ class _DatasetGeneratorWorker(QObject):
                 meas_direction=forward_cfg.meas_direction,
                 stim_first_positive=forward_cfg.stim_first_positive,
             )
-            system = EITSystem(n_elec=forward_cfg.n_elec, pattern_config=pattern)
+            total_electrodes = _total_electrode_count(forward_cfg)
+            runtime = _resolve_forward_runtime(forward_cfg)
+            system = EITSystem(
+                n_elec=total_electrodes,
+                pattern_config=pattern,
+                contact_impedance=_contact_impedance_vector(
+                    forward_cfg.contact_impedance,
+                    total_electrodes=total_electrodes,
+                ),
+                base_conductivity=forward_cfg.background_conductivity,
+                solver_mode=runtime["solver_mode"],
+                line_search_mode=runtime["line_search_mode"],
+                linear_solver=runtime["linear_solver"],
+                preconditioner=runtime["preconditioner"],
+                fast_linear_path=runtime["fast_linear_path"],
+                linear_backend_config={
+                    "mat_solve_mode": runtime["forward_mat_solve"],
+                    "petsc_device": runtime["petsc_device"],
+                },
+                petsc_device=runtime["petsc_device"],
+                device=runtime["device"],
+                forward_backend=runtime["forward_backend"],
+                mesh_family=runtime["mesh_family"],
+                acceleration_profile=runtime["acceleration_profile"],
+            )
             system.setup(
                 mesh_source="generated",
                 dimension=forward_cfg.mesh_dimension,
@@ -82,7 +111,7 @@ class _DatasetGeneratorWorker(QObject):
                 electrode_height_ratio=forward_cfg.electrode_height_ratio,
                 electrode_level_fractions=forward_cfg.electrode_level_fractions,
                 z_center=forward_cfg.z_center,
-                mesh_family=forward_cfg.mesh_family,
+                mesh_family=runtime["mesh_family"],
                 geometry_version=forward_cfg.geometry_version,
             )
 
@@ -116,6 +145,7 @@ class _DatasetGeneratorWorker(QObject):
                 n_electrodes=forward_cfg.n_elec,
                 homogeneous_voltages=homog_voltages,
                 forward_model_config=forward_cfg.to_mapping(),
+                total_electrodes=total_electrodes,
             )
 
             rng = np.random.default_rng()

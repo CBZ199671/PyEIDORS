@@ -58,7 +58,7 @@ class MeshSetupPanel(QGroupBox):
 
         self._dim_combo = AutoCloseComboBox()
         self._dim_combo.addItems(["", ""])  # retranslated
-        self._dim_combo.currentIndexChanged.connect(lambda _: self._on_any_change())
+        self._dim_combo.currentIndexChanged.connect(lambda _: self._on_dimension_changed())
         self._lbl_dim = QLabel("")
         mesh_form.addRow(self._lbl_dim, self._dim_combo)
 
@@ -77,6 +77,13 @@ class MeshSetupPanel(QGroupBox):
         self._n_elec_spin.valueChanged.connect(lambda _: self._on_any_change())
         self._lbl_electrodes = QLabel("")
         mesh_form.addRow(self._lbl_electrodes, self._n_elec_spin)
+
+        self._n_rings_spin = QSpinBox()
+        self._n_rings_spin.setRange(1, 8)
+        self._n_rings_spin.setValue(1)
+        self._n_rings_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._lbl_rings = QLabel("")
+        mesh_form.addRow(self._lbl_rings, self._n_rings_spin)
 
         self._bg_cond_spin = QDoubleSpinBox()
         self._bg_cond_spin.setRange(0.001, 100.0)
@@ -156,6 +163,7 @@ class MeshSetupPanel(QGroupBox):
             "mesh_dimension": 2 if self._dim_combo.currentIndex() == 0 else 3,
             "mesh_refinement": self._refine_spin.value(),
             "n_electrodes": self._n_elec_spin.value(),
+            "n_rings": self._n_rings_spin.value(),
             "background_conductivity": self._bg_cond_spin.value(),
             "stim_pattern": stim_pattern,
             "meas_pattern": meas_pattern,
@@ -169,6 +177,7 @@ class MeshSetupPanel(QGroupBox):
             self._dim_combo,
             self._refine_spin,
             self._n_elec_spin,
+            self._n_rings_spin,
             self._bg_cond_spin,
             self._stim_pattern_edit,
             self._meas_pattern_edit,
@@ -182,6 +191,8 @@ class MeshSetupPanel(QGroupBox):
             self._dim_combo.setCurrentIndex(0 if mesh_dimension == 2 else 1)
             self._refine_spin.setValue(float(config.get("mesh_refinement", 0.1)))
             self._n_elec_spin.setValue(int(config.get("n_electrodes", config.get("n_elec", 16))))
+            default_rings = 2 if mesh_dimension == 3 else 1
+            self._n_rings_spin.setValue(int(config.get("n_rings", default_rings)))
             self._bg_cond_spin.setValue(float(config.get("background_conductivity", 1.0)))
             self._stim_pattern_edit.setText(str(config.get("stim_pattern", "{ad}")))
             self._meas_pattern_edit.setText(str(config.get("meas_pattern", "{ad}")))
@@ -196,6 +207,16 @@ class MeshSetupPanel(QGroupBox):
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _on_dimension_changed(self) -> None:
+        # 3D layouts commonly use multiple electrode rings.  When the user
+        # switches dimensions manually, choose the safe/common default but
+        # still allow them to override it afterwards.
+        target_rings = 2 if self._dim_combo.currentIndex() == 1 else 1
+        if self._n_rings_spin.value() != target_rings:
+            self._n_rings_spin.setValue(target_rings)
+            return
+        self._on_any_change()
 
     def _on_any_change(self) -> None:
         # Recompute and cache the expected measurement point count so the
@@ -222,6 +243,7 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_size.setText(t("sim.mesh.size_label"))
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))
+        self._lbl_rings.setText(t("sim.mesh.rings_label"))
         self._lbl_conductivity.setText(t("sim.mesh.conductivity_label"))
         # Pattern section
         self._patterns_header.setText(t("sim.mesh.patterns_header"))

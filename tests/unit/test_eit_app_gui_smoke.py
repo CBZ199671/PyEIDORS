@@ -1103,6 +1103,34 @@ def test_conductivity_image_widget_recovers_from_orphaned_colorbar() -> None:
 
 
 @pytest.mark.gui
+def test_conductivity_image_widget_renders_3d_tetra_projection() -> None:
+    _get_app()
+    widget = ConductivityImageWidget()
+    widget.show()
+    _get_app().processEvents()
+
+    coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int32)
+
+    widget.update_image(np.array([1.25], dtype=float), coords, cells)
+    _get_app().processEvents()
+
+    assert widget._colorbar is not None
+    assert widget._last_caption is None
+
+    widget.clear()
+    widget.close()
+
+
+@pytest.mark.gui
 def test_connection_panel_auto_selects_unique_windows_serial_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -2121,6 +2149,45 @@ def test_simulation_voltage_index_adapts_to_mesh_electrode_count() -> None:
         use_meas_current=False,
         use_meas_current_next=0,
     )
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_voltage_index_uses_3d_ring_count() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    sim_plot = window._sim_tab.results_widget.voltage_plot
+    mesh_panel = window._sim_tab.mesh_setup_panel
+    mesh_panel._dim_combo.setCurrentIndex(1)
+    mesh_panel._n_elec_spin.setValue(8)
+    _get_app().processEvents()
+
+    assert mesh_panel.get_config()["n_rings"] == 2
+    assert sim_plot.current_point_count() == 208
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    mesh_panel = window._sim_tab.mesh_setup_panel
+    mesh_panel._dim_combo.setCurrentIndex(1)
+    mesh_panel._n_elec_spin.setValue(8)
+    _get_app().processEvents()
+
+    cfg = window._current_sim_forward_model_config()
+
+    assert cfg.mesh_dimension == 3
+    assert cfg.n_elec == 8
+    assert cfg.n_rings == 2
+    assert cfg.total_electrodes() == 16
+    assert cfg.point_count() == 208
+    assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
 
     _close_window(window)
 

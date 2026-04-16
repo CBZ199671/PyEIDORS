@@ -490,6 +490,7 @@ def build_shared_context(
     mesh_height: float,
     electrode_height_ratio: float,
     z_center: float,
+    electrode_level_fractions: tuple[float, ...] | list[float] | None = None,
     refinement: Optional[int],
     n_elec: int,
     n_rings: int = 1,
@@ -601,13 +602,14 @@ def build_shared_context(
     mesh = load_or_create_mesh(
         mesh_dir=mesh_dir,
         mesh_name=mesh_name,
-        n_elec=n_elec,
+        n_elec=max(int(n_elec), 1) * max(int(n_rings), 1),
         dimension=int(mesh_dim),
         radius=radius,
         refinement=refinement if refinement is not None else 6,
         electrode_coverage=float(electrode_coverage),
         height=float(mesh_height),
         electrode_height_ratio=float(electrode_height_ratio),
+        electrode_level_fractions=electrode_level_fractions or (0.25, 0.75),
         z_center=float(z_center),
         mesh_family=mesh_family,
         geometry_version=geometry_version,
@@ -628,9 +630,10 @@ def build_shared_context(
         meas_direction=str(meas_direction),
         stim_first_positive=bool(stim_first_positive),
     )
-    z_contact = np.full(n_elec, contact_impedance, dtype=float)
+    total_electrodes = max(int(n_elec), 1) * max(int(n_rings), 1)
+    z_contact = np.full(total_electrodes, contact_impedance, dtype=float)
     fwd_model = EITForwardModel(
-        n_elec=n_elec,
+        n_elec=total_electrodes,
         pattern_config=pattern_cfg,
         z=z_contact,
         mesh=mesh,
