@@ -89,9 +89,19 @@ class ConductivityImageWidget(QWidget):
 
         if self._colorbar is not None:
             self._colorbar.remove()
-        self._colorbar = self._figure.colorbar(tpc, ax=self._ax, label="S/m")
+        # shrink + aspect + pad keep the colorbar from dominating the
+        # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
+        # keeps it slim, pad=0.04 pulls it closer to the image so the
+        # matplotlib auto-layout does not leave a huge right-hand gap.
+        self._colorbar = self._figure.colorbar(
+            tpc, ax=self._ax, label="S/m",
+            shrink=0.72, aspect=16, pad=0.04,
+        )
         self._colorbar.ax.yaxis.label.set_fontname(self._serif)
         self._colorbar.ax.yaxis.label.set_size(10)
+        # Slightly smaller tick labels so the numbers don't compete with
+        # the main title for visual weight.
+        self._colorbar.ax.tick_params(labelsize=8)
 
         self._canvas.draw()
 

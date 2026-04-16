@@ -2284,12 +2284,21 @@ class EITWorkstation(QMainWindow):
 
     def _current_sim_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        # Pattern controls live on the mesh panel — include them here so
+        # the forward solver and the inverse reconstruction share exactly
+        # the same PatternConfig (otherwise we get the classic
+        # "measurement vector has N columns but pattern expects M" error).
         return self._sim_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             n_elec=mesh_cfg["n_electrodes"],
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=self._sim_tab.forward_problem_panel.noise_level,
+            stim_pattern=mesh_cfg.get("stim_pattern", "{ad}"),
+            meas_pattern=mesh_cfg.get("meas_pattern", "{ad}"),
+            rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
+            use_meas_current=bool(mesh_cfg.get("use_meas_current", False)),
+            use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
         )
 
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
@@ -2651,43 +2660,79 @@ class EITWorkstation(QMainWindow):
         self._sim_state.inverse_running = True
         self._sim_tab.inverse_problem_panel.set_running(True)
 
-        # Build a ReconstructionRequest using the forward result data
+        # Build a ReconstructionRequest using the forward result data.
+        #
+        # pyeidors's forward solver returns a REAL-VALUED measurement vector
+        # (no I/Q encoding), so we store the whole vector in `real` and keep
+        # `imag` as zeros.  The prior implementation split the vector in
+        # half and treated the second half as fake imaginary, which halved
+        # the effective measurement count and produced the
+        # "got 104 columns, expected 208 columns" mismatch between
+        # simulation forward output and the reconstruction pattern.
         from eit_app.models.frame_model import FrameData
         import numpy as np
 
         n_meas = len(result.boundary_voltages)
-        half = n_meas // 2
+        zero_imag = np.zeros(n_meas, dtype=np.float64)
 
-        # Treat homogeneous as reference, inhomogeneous as target
+        homog = (
+            np.asarray(result.homogeneous_voltages, dtype=np.float64)
+            if result.homogeneous_voltages is not None
+            else np.zeros(n_meas, dtype=np.float64)
+        )
         ref_frame = FrameData(
-            real=result.homogeneous_voltages[:half] if result.homogeneous_voltages is not None else np.zeros(half),
-            imag=result.homogeneous_voltages[half:] if result.homogeneous_voltages is not None else np.zeros(n_meas - half),
+            real=homog,
+            imag=zero_imag,
             timestamp=0.0,
             frame_index=0,
         )
         tgt_frame = FrameData(
-            real=result.boundary_voltages[:half],
-            imag=result.boundary_voltages[half:] if n_meas > half else np.zeros(n_meas - half),
+            real=np.asarray(result.boundary_voltages, dtype=np.float64),
+            imag=zero_imag,
             timestamp=0.0,
             frame_index=1,
         )
 
         forward_cfg = self._current_sim_forward_model_config()
+
+        # Map the user's algorithm selection into the runtime path we
+        # actually need.  The panel exposes raw eidors-style method keys
+        # ("eidors_one_step_noser" / "eidors_abs_gn") for UX continuity,
+        # but the reconstruction dispatcher keys off
+        # (method + use_part + reconstruction_runtime) — without this
+        # mapping a "single-step" selection falls through to the slow
+        # iterative GN path, which is why forward→inverse took 40 seconds
+        # and the reconstruction barely converged.
+        raw_method = str(inv_cfg.get("method", "")).strip().lower()
+        if any(tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")):
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+        elif any(tag in raw_method for tag in ("abs", "absolute")):
+            resolved_method = "gn-absolute"
+            reconstruction_runtime = "full_gn"
+        else:
+            # Unknown → safest fallback: iterative GN, no single-step cache.
+            resolved_method = raw_method or "gn-difference"
+            reconstruction_runtime = "full_gn"
+
+        mesh_size = float(forward_cfg.mesh_refinement)
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
             use_part="real",
-            method=inv_cfg["method"],
+            method=resolved_method,
             regularization_alpha=inv_cfg["regularization_alpha"],
             max_iterations=inv_cfg["max_iterations"],
             mesh_dimension=forward_cfg.mesh_dimension,
-            mesh_refinement=int(1.0 / max(forward_cfg.mesh_refinement, 1e-6)),
+            mesh_refinement=mesh_size,
             metadata={
                 **forward_cfg.to_mapping(),
                 **measurement_layout_from_config(forward_cfg.to_mapping()),
+                "mesh_size": mesh_size,
                 "difference_mode": "raw",
                 "difference_orientation": "target_minus_reference",
                 "request_source": "simulation",
+                "reconstruction_runtime": reconstruction_runtime,
             },
         )
         accepted = self._sim_recon_ctrl.reconstruct(request)
@@ -2714,6 +2759,26 @@ class EITWorkstation(QMainWindow):
                 node_coords=recon_result.node_coords,
                 cell_connectivity=recon_result.cell_connectivity,
             )
+            # Surface the difference-voltage fit quality on the boundary
+            # plot.  ReconstructionResult.measured = target − reference =
+            # the *true* diff voltage induced by the inclusion.
+            # ReconstructionResult.simulated = forward solve of the
+            # reconstructed σ minus the reference solve = the *predicted*
+            # diff voltage — what the reconstruction would produce if we
+            # re-simulated it.  Plotting both side-by-side tells the user
+            # how well their reconstructed σ matches the measured data.
+            try:
+                measured = getattr(recon_result, "measured", None)
+                simulated = getattr(recon_result, "simulated", None)
+                if measured is not None and simulated is not None:
+                    self._sim_tab.results_widget.voltage_plot.update_simulation_voltages(
+                        ground_truth=np.asarray(measured, dtype=np.float64).reshape(-1),
+                        reconstructed=np.asarray(simulated, dtype=np.float64).reshape(-1),
+                    )
+            except Exception as exc:
+                log.warning(
+                    "Failed to update simulation voltage plot with recon fit: %s", exc
+                )
             self._sim_tab.metrics_panel.update_metrics(
                 self._last_fwd_result.ground_truth_conductivity,
                 recon_result.conductivity,

@@ -284,6 +284,14 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
     "sim.mesh.electrodes_label": "\u7535\u6781\u6570\uff1a",                                      # 电极数：
     "sim.mesh.conductivity_label": "\u80cc\u666f \u03c3\uff1a",                                   # 背景 σ：
+    "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",                     # 激励与测量模式
+    "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。
+    "sim.mesh.stim_pattern_label": "\u6fc0\u52b1\u6a21\u5f0f\uff1a",                               # 激励模式：
+    "sim.mesh.meas_pattern_label": "\u6d4b\u91cf\u6a21\u5f0f\uff1a",                               # 测量模式：
+    "sim.mesh.rotate_meas_check": "\u6d4b\u91cf\u968f\u6fc0\u52b1\u65cb\u8f6c",                    # 测量随激励旋转
+    "sim.mesh.use_meas_current_check": "\u5305\u542b\u6fc0\u52b1\u76f8\u5173\u7535\u6781",          # 包含激励相关电极
+    "sim.mesh.extra_neighbors_label": "\u989d\u5916\u6392\u9664\u90bb\u5c45\u6570\uff1a",          # 额外排除邻居数：
+    "sim.mesh.point_count_hint": "\u9884\u8ba1\u8fb9\u754c\u91c7\u6837\u70b9\u6570\uff1a{count}",  # 预计边界采样点数：{count}
 
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities
