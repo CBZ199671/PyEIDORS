@@ -1370,7 +1370,13 @@ QToolBox::tab:disabled {
     border-color: #303640;
 }
 QToolBox#workflowToolbox > QWidget {
-    background: #1e242c;
+    /* Match the main canvas so the thin strip between a toolbox tab
+       header and the GroupBox below doesn't appear as a visibly
+       brighter band in dark mode.  (The light theme uses #f9fbfe
+       here, which blends seamlessly into the #eef3f8 canvas because
+       both colors are near-white; the same 4-point gap is much more
+       noticeable at low luminance.) */
+    background: #1a1f26;
 }
 
 /* === GroupBox / section panels === */
@@ -1381,20 +1387,36 @@ QGroupBox {
 }
 QGroupBox::title {
     color: #8fc8ea;
+    /* The title sits in the GroupBox's 14px margin-top and would
+       otherwise show the parent widget's background behind its
+       letters.  Give the title its own opaque fill matching the
+       GroupBox body so the 'title on an intermediate-brightness
+       strip' effect goes away. */
+    background: #222831;
 }
 QGroupBox[panelRole="summary"] {
-    background: #262d38;
-    border: 1px solid #45526b;
+    /* Flatten summary panels to the same body shade as regular
+       group boxes so there's no visible vertical brightness
+       cascade.  The accent border is what distinguishes them. */
+    background: #222831;
+    border: 1px solid #4d6188;
 }
 QGroupBox[panelRole="summary"]::title {
     color: #b3d4ed;
+    background: #222831;
 }
 QGroupBox[panelRole="workflow"] {
-    background: #1e242c;
+    background: #1a1f26;
+}
+QGroupBox[panelRole="workflow"]::title {
+    background: #1a1f26;
 }
 QGroupBox[embeddedStepPanel="true"] {
     background: #222831;
     border: 1px solid #3e4754;
+}
+QGroupBox[embeddedStepPanel="true"]::title {
+    background: #222831;
 }
 
 QLabel[uiSectionHeader="true"] {
