@@ -59,6 +59,15 @@ TRANSLATIONS: dict[str, str] = {
     "voltage_plot.loading_overlay": "\u8ba1\u7b97\u8fb9\u754c\u7535\u538b\u4e2d\u2026",            # 计算边界电压中…
     "sim.results.ground_truth_loading": "\u6b63\u95ee\u9898\u6c42\u89e3\u4e2d\u2026",              # 正问题求解中…
     "sim.results.reconstruction_loading": "\u91cd\u6784\u4e2d\u2026",                              # 重构中…
+    "sim.results.viewer3d_no_data": "\u6682\u65e0 3D \u6570\u636e",                                # 暂无 3D 数据
+    "sim.results.viewer3d_loading": "\u6e32\u67d3 3D \u573a\u4e2d\u2026",                          # 渲染 3D 场中…
+    "sim.results.viewer3d_unavailable": "\u672a\u5b89\u88c5 PyVista / VTK\uff0c\u65e0\u6cd5\u663e\u793a 3D \u7f51\u683c",  # 未安装 PyVista / VTK，无法显示 3D 网格
+    "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u4e09\u7ef4\u56db\u9762\u4f53",      # 网格不是三维四面体
+    "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d", # 电导率长度与网格不匹配
+    "sim.results.viewer3d_opacity": "\u5916\u58f3\u900f\u660e\u5ea6",                              # 外壳透明度
+    "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",                            # 突出内含物
+    "sim.results.viewer3d_wireframe": "\u8f6e\u5ed3\u7ebf",                                        # 轮廓线
+    "sim.results.viewer3d_reset": "\u590d\u4f4d\u89c6\u89d2",                                      # 复位视角
 
     # ------------------------------------------------------------------
     # Language menu

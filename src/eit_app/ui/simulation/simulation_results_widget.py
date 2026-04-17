@@ -6,14 +6,87 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QStackedLayout, QSplitter, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
+from eit_app.ui.conductivity_3d_widget import Conductivity3DWidget
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 
 if TYPE_CHECKING:
     from eit_app.controllers.forward_solver_controller import ForwardSolverResult
+
+
+def _is_3d_payload(node_coords: np.ndarray, cell_connectivity: np.ndarray) -> bool:
+    """Detect a 3D tetrahedral mesh from the shape of incoming payload."""
+    coords = np.asarray(node_coords)
+    cells = np.asarray(cell_connectivity)
+    if coords.ndim != 2 or coords.shape[1] < 3:
+        return False
+    if cells.ndim != 2 or cells.shape[1] != 4:
+        return False
+    return bool(np.ptp(coords[:, 2]) > 1.0e-9)
+
+
+class _ConductivityViewSlot(QWidget):
+    """Holds a 2D matplotlib widget and a 3D PyVista widget side-by-side
+    in a QStackedLayout, then dispatches calls to whichever matches the
+    most recent payload's dimension.
+
+    The 3D widget is constructed eagerly (cheap) but pyvistaqt's
+    QtInteractor only spins up VTK on first ``update_image()`` call —
+    see ``Conductivity3DWidget._ensure_plotter``.
+    """
+
+    def __init__(self, title: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._mpl = ConductivityImageWidget(title)
+        self._three_d = Conductivity3DWidget(title)
+        self._stack = QStackedLayout(self)
+        self._stack.setContentsMargins(0, 0, 0, 0)
+        self._stack.addWidget(self._mpl)
+        self._stack.addWidget(self._three_d)
+        self._stack.setCurrentWidget(self._mpl)
+
+    # Public API mirrors ConductivityImageWidget so the parent stays simple.
+
+    def update_image(
+        self,
+        conductivity: np.ndarray,
+        node_coords: np.ndarray,
+        cell_connectivity: np.ndarray,
+        title: str | None = None,
+    ) -> None:
+        if _is_3d_payload(node_coords, cell_connectivity):
+            self._three_d.update_image(
+                conductivity, node_coords, cell_connectivity, title=title
+            )
+            self._stack.setCurrentWidget(self._three_d)
+        else:
+            self._mpl.update_image(
+                conductivity, node_coords, cell_connectivity, title=title
+            )
+            self._stack.setCurrentWidget(self._mpl)
+
+    def clear(self) -> None:
+        self._mpl.clear()
+        self._three_d.clear()
+        # Default to 2D view between runs so the placeholder caption
+        # reads naturally.
+        self._stack.setCurrentWidget(self._mpl)
+
+    def set_loading(self, message: str | None = None) -> None:
+        # Drive the loading caption on whichever widget is visible —
+        # users won't see the hidden one's spinner anyway.
+        active = self._stack.currentWidget()
+        if active is self._three_d:
+            self._three_d.set_loading(message)
+        else:
+            self._mpl.set_loading(message)
+
+    def setTitle(self, title: str) -> None:
+        self._mpl.setTitle(title)
+        self._three_d.setTitle(title)
 
 
 class SimulationResultsWidget(QWidget):
@@ -34,10 +107,10 @@ class SimulationResultsWidget(QWidget):
         # Top: side-by-side conductivity images — initial titles come from
         # the i18n dict; _retranslate() re-applies them on language change.
         top_splitter = QSplitter(Qt.Orientation.Horizontal)
-        self._ground_truth_widget = ConductivityImageWidget(
+        self._ground_truth_widget = _ConductivityViewSlot(
             t("sim.results.ground_truth_title")
         )
-        self._reconstruction_widget = ConductivityImageWidget(
+        self._reconstruction_widget = _ConductivityViewSlot(
             t("sim.results.reconstruction_title")
         )
         top_splitter.addWidget(self._ground_truth_widget)

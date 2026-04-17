@@ -57,6 +57,15 @@ TRANSLATIONS: dict[str, str] = {
     "voltage_plot.loading_overlay": "Computing voltages\u2026",
     "sim.results.ground_truth_loading": "Solving forward problem\u2026",
     "sim.results.reconstruction_loading": "Reconstructing\u2026",
+    "sim.results.viewer3d_no_data": "No 3D data yet",
+    "sim.results.viewer3d_loading": "Rendering 3D scene\u2026",
+    "sim.results.viewer3d_unavailable": "PyVista / VTK is not installed; 3D mesh cannot be displayed.",
+    "sim.results.viewer3d_bad_mesh": "Mesh is not a 3D tetrahedral grid",
+    "sim.results.viewer3d_size_mismatch": "Conductivity length does not match the mesh",
+    "sim.results.viewer3d_opacity": "Bulk opacity",
+    "sim.results.viewer3d_highlight": "Highlight inclusions",
+    "sim.results.viewer3d_wireframe": "Outline edges",
+    "sim.results.viewer3d_reset": "Reset view",
 
     # ------------------------------------------------------------------
     # Language menu
