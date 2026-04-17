@@ -88,6 +88,17 @@ class _ConductivityViewSlot(QWidget):
         self._mpl.setTitle(title)
         self._three_d.setTitle(title)
 
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        # Forward shutdown to the 3D widget so it can tear the VTK
+        # plotter down cleanly — otherwise pyvistaqt's render thread
+        # outlives the QApplication and dumps QThreadStorage warnings
+        # at process exit.
+        try:
+            self._three_d.close()
+        except Exception:  # pragma: no cover — best-effort shutdown
+            pass
+        super().closeEvent(event)
+
 
 class SimulationResultsWidget(QWidget):
     """Displays ground truth vs reconstruction + voltage fitting + metrics."""
