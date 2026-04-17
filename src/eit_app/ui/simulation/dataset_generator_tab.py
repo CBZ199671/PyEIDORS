@@ -131,8 +131,8 @@ class DatasetGeneratorTab(QWidget):
             ],
             center_widget=self._workspace,
             context_widget=self._summary_panel,
-            step_min_width=330,
-            context_min_width=300,
+            step_min_width=240,
+            context_min_width=220,
             splitter_sizes=(360, 840, 300),
             parent=self,
         )

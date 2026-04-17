@@ -253,7 +253,14 @@ class EITWorkstation(QMainWindow):
         super().__init__(parent)
         # Window title is set via _retranslate() so it follows the active
         # language (see end of __init__ for the signal wiring).
-        self.resize(1500, 940)
+        #
+        # Initial size caps to 90 % of the primary screen's available
+        # area so the window never opens wider than the screen it's
+        # launched on — hard-coded 1500 × 940 used to overflow on
+        # 1366-px laptops and WSLg panels where the available area
+        # after taskbar / panel chrome was narrower.  The 1500 × 940
+        # preference remains the target on large displays.
+        self.resize(self._preferred_initial_size(1500, 940))
 
         self._state = AppState(self)
         self._sim_state = SimulationState(self)
@@ -553,6 +560,23 @@ class EITWorkstation(QMainWindow):
     # ------------------------------------------------------------------
     # Shortcut slots
     # ------------------------------------------------------------------
+
+    def _preferred_initial_size(self, preferred_w: int, preferred_h: int):
+        """Cap the initial window size to 90 % of the available screen
+        so the app never opens wider / taller than the display it
+        launches on.  Falls back to the preferred size if Qt can't
+        resolve a primary screen (headless / tests).
+        """
+        from PySide6.QtCore import QSize
+        from PySide6.QtGui import QGuiApplication
+
+        screen = QGuiApplication.primaryScreen()
+        if screen is None:
+            return QSize(preferred_w, preferred_h)
+        avail = screen.availableGeometry()
+        max_w = int(avail.width() * 0.9)
+        max_h = int(avail.height() * 0.9)
+        return QSize(min(preferred_w, max_w), min(preferred_h, max_h))
 
     def _on_theme_mode_selected(self, mode: str) -> None:
         """Handle View → Light/Dark action trigger."""

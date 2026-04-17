@@ -32,8 +32,9 @@ class WorkflowShell(QWidget):
         context_widget: QWidget,
         left_footer: QWidget | None = None,
         compact_toolbox: bool = False,
-        step_min_width: int = 320,
-        context_min_width: int = 300,
+        step_min_width: int = 220,
+        context_min_width: int = 200,
+        center_min_width: int = 200,
         splitter_sizes: Sequence[int] = (360, 840, 320),
         toolbox_name: str = "workflowToolbox",
         parent: QWidget | None = None,
@@ -48,6 +49,7 @@ class WorkflowShell(QWidget):
             compact_toolbox=compact_toolbox,
             step_min_width=step_min_width,
             context_min_width=context_min_width,
+            center_min_width=center_min_width,
             toolbox_name=toolbox_name,
         )
 
@@ -61,6 +63,7 @@ class WorkflowShell(QWidget):
         compact_toolbox: bool,
         step_min_width: int,
         context_min_width: int,
+        center_min_width: int,
         toolbox_name: str,
     ) -> None:
         root = QHBoxLayout(self)
@@ -84,7 +87,10 @@ class WorkflowShell(QWidget):
         left_scroll = QScrollArea()
         left_scroll.setWidgetResizable(True)
         left_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
-        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Allow a horizontal scroll if the user shrinks the window
+        # past the comfortable width — the form fields stay usable
+        # rather than getting clipped or squeezed unreadable.
+        left_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         left_scroll.setMinimumWidth(step_min_width)
 
         left_container = QWidget()
@@ -114,7 +120,7 @@ class WorkflowShell(QWidget):
         left_scroll.setWidget(left_container)
         self._left_scroll = left_scroll
 
-        center_widget.setMinimumWidth(420)
+        center_widget.setMinimumWidth(center_min_width)
         context_widget.setMinimumWidth(context_min_width)
 
         self._main_splitter.addWidget(left_scroll)

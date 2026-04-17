@@ -75,8 +75,8 @@ class SimulationTab(QWidget):
             ],
             center_widget=self._results_widget,
             context_widget=context_widget,
-            step_min_width=320,
-            context_min_width=300,
+            step_min_width=240,
+            context_min_width=220,
             splitter_sizes=(350, 940, 300),
             parent=self,
         )

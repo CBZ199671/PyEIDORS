@@ -366,7 +366,7 @@ class DatabaseTab(QWidget):
 
         layout.addWidget(self._stats_card)
 
-        self._filter_box.setMinimumWidth(250)
+        self._filter_box.setMinimumWidth(200)
         self._filter_box.setMaximumWidth(330)
         return self._filter_box
 
@@ -509,7 +509,7 @@ class DatabaseTab(QWidget):
         self._preview_plot.setMinimumHeight(280)
         layout.addWidget(self._preview_plot, 1)
 
-        self._preview_box.setMinimumWidth(300)
+        self._preview_box.setMinimumWidth(220)
         self._preview_box.setMaximumWidth(420)
         return self._preview_box
 
