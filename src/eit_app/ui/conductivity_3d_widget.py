@@ -36,7 +36,7 @@ import logging
 from typing import Optional
 
 import numpy as np
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -59,6 +59,40 @@ from eit_app.ui.theme import (
 
 
 log = logging.getLogger(__name__)
+
+
+class _InteractorHost(QFrame):
+    """QFrame whose ``realized`` signal fires once after the first
+    real ``showEvent`` — i.e. when Qt has actually placed the widget
+    in the visible hierarchy and assigned it a native window.
+
+    Used to defer VTK / pyvistaqt construction until X (or whatever
+    native windowing system) has a real handle for us, instead of
+    initialising VTK inside ``__init__`` while the host is still
+    parentless / hidden.  Without this the renderer crashes with
+    ``BadWindow / X_ConfigureWindow`` because it tries to attach to
+    a window the X server doesn't know about yet.
+    """
+
+    realized = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        # WA_NativeWindow tells Qt to allocate a real platform window
+        # for this frame the moment it joins the visible hierarchy,
+        # rather than relying on it inheriting one from an ancestor.
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        self._fired = False
+
+    def showEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().showEvent(event)
+        if self._fired:
+            return
+        self._fired = True
+        # Defer to the next event-loop tick so any pending layout,
+        # native-window allocation, and OpenGL surface setup finishes
+        # before the consumer (us) reaches in to construct VTK.
+        QTimer.singleShot(0, self.realized.emit)
 
 
 def _hex_to_rgb(value: str) -> tuple[float, float, float]:
@@ -99,9 +133,15 @@ class Conductivity3DWidget(QWidget):
 
         self._plotter = None
         self._plotter_ready = False
+        # Holds the most recent payload while the plotter is still
+        # being built (host hasn't fired its first showEvent yet).  As
+        # soon as _init_plotter completes, _drain_pending_render kicks
+        # in and renders this.
+        self._pending_render: Optional[
+            tuple[np.ndarray, np.ndarray, np.ndarray, str | None]
+        ] = None
 
         self._build_ui()
-        self._init_plotter()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
         subscribe_theme_mode(self._on_theme_mode_changed)
@@ -131,19 +171,13 @@ class Conductivity3DWidget(QWidget):
         self._caption_label.setMinimumHeight(180)
         self._stack.addWidget(self._caption_label)
 
-        self._interactor_host = QFrame()
-        # Force allocation of a real X11 / native window for the host
-        # *before* anyone (especially VTK) tries to query it.  Without
-        # this, QStackedLayout keeps the host unrealised while the
-        # caption is showing — VTK then tries to attach to a window
-        # that the X server doesn't know about and the process dies
-        # with ``BadWindow / X_ConfigureWindow``.
-        self._interactor_host.setAttribute(
-            Qt.WidgetAttribute.WA_NativeWindow, True
-        )
-        self._interactor_host.setAttribute(
-            Qt.WidgetAttribute.WA_DontCreateNativeAncestors, False
-        )
+        # _InteractorHost defers its ``realized`` signal until the
+        # widget is actually shown for the first time AND Qt has had
+        # one event-loop tick to finish realisation — that's the
+        # earliest moment we can safely hand the underlying native
+        # window to VTK.
+        self._interactor_host = _InteractorHost()
+        self._interactor_host.realized.connect(self._init_plotter)
         self._interactor_layout = QVBoxLayout(self._interactor_host)
         self._interactor_layout.setContentsMargins(0, 0, 0, 0)
         self._stack.addWidget(self._interactor_host)
@@ -199,14 +233,20 @@ class Conductivity3DWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _init_plotter(self) -> None:
-        """Construct the QtInteractor up front, with auto_update disabled.
+        """Construct the QtInteractor with auto_update disabled.
 
-        Eager construction (rather than lazy on first 3D payload) fixes
-        the X11 BadWindow crash that happened when VTK touched a not-
-        yet-realised QStackedLayout child.  Disabling ``auto_update``
-        gets rid of the 5 Hz background render timer that pyvistaqt
-        otherwise installs, which was burning CPU between user gestures.
+        Called exactly once, via ``_InteractorHost.realized`` — i.e.
+        after Qt has finished placing the host inside the visible
+        widget tree and given it a real native window.  Initialising
+        VTK any earlier (in ``__init__`` or before the first show)
+        crashes the renderer with ``BadWindow / X_ConfigureWindow``.
+
+        ``auto_update=False`` disables pyvistaqt's 5 Hz background
+        render timer; we drive renders explicitly from update_image,
+        the slider, and the toggle checkboxes.
         """
+        if self._plotter_ready:
+            return
         try:
             import pyvista  # noqa: F401  (side-effect: VTK init)
             from pyvistaqt import QtInteractor
@@ -215,21 +255,31 @@ class Conductivity3DWidget(QWidget):
             self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
             return
 
-        # Make absolutely sure the host has a native window before we
-        # hand it to VTK.  winId() forces the platform plug-in to
-        # allocate the underlying handle now rather than at first show.
+        # Belt-and-braces: even though the host's showEvent has fired,
+        # forcing winId() guarantees the platform plug-in has actually
+        # allocated the X11 / Wayland / Win32 window before VTK pulls
+        # at it.  Without this, on some platforms the first VTK render
+        # query still resolves to a stale handle.
         _ = self._interactor_host.winId()
 
         palette = plot_palette()
         self._plotter = QtInteractor(
             self._interactor_host,
-            auto_update=False,  # no 5 Hz background timer
+            auto_update=False,
             multi_samples=4,
         )
         self._plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#ffffff")))
         self._plotter.add_axes()
         self._interactor_layout.addWidget(self._plotter)
         self._plotter_ready = True
+
+        if self._pending_render is not None:
+            sigma, coords, cells, title = self._pending_render
+            self._pending_render = None
+            if title is not None:
+                self.setTitle(title)
+            self._last_image = (sigma, coords, cells, title)
+            self._build_scene(sigma, coords, cells)
 
     # ------------------------------------------------------------------
     # Public API (mirrors ConductivityImageWidget)
@@ -247,9 +297,6 @@ class Conductivity3DWidget(QWidget):
         title: str | None = None,
     ) -> None:
         """Render a 3D tetrahedral conductivity field."""
-        if not self._plotter_ready:
-            return
-
         cells = np.asarray(cell_connectivity, dtype=np.int64)
         coords = np.asarray(node_coords, dtype=float)
         if coords.shape[1] < 3 or cells.shape[1] != 4:
@@ -263,17 +310,28 @@ class Conductivity3DWidget(QWidget):
             )
             return
 
+        # Switching the stacked layout to the interactor host first
+        # gets the host into the visible tree.  On the very first
+        # switch this triggers _InteractorHost.showEvent, which
+        # eventually fires .realized → _init_plotter → builds the
+        # scene from _pending_render.  On subsequent calls the
+        # plotter is already ready and we render straight away.
+        self._stack.setCurrentWidget(self._interactor_host)
+
+        if not self._plotter_ready:
+            self._pending_render = (sigma, coords, cells, title)
+            return
+
         if title is not None:
             self.setTitle(title)
-
         self._last_image = (sigma, coords, cells, title)
         self._build_scene(sigma, coords, cells)
-        self._stack.setCurrentWidget(self._interactor_host)
 
     def clear(self) -> None:
         """Drop any rendered data and show the placeholder caption."""
         self._discard_actors()
         self._last_image = None
+        self._pending_render = None
         self._show_caption(t("sim.results.viewer3d_no_data"), kind="placeholder")
 
     def set_loading(self, message: str | None = None) -> None:
