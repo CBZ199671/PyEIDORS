@@ -14,16 +14,18 @@ mesh format and hardware-accelerated.
 Two non-obvious design points worth keeping in mind for future
 maintenance:
 
-1.  ``QtInteractor`` is constructed **eagerly** (not lazily on first
-    ``update_image``).  Lazy creation deferred VTK setup until a
-    ``QStackedLayout`` switch made the host widget visible, but at
-    that moment the host had no native X11 window assigned — VTK then
-    asked X to configure a window that didn't exist and the process
-    died with ``BadWindow / X_ConfigureWindow``.  Eager construction
-    plus ``WA_NativeWindow`` on the host guarantees a real X window
-    before VTK touches it.
+1.  ``QtInteractor`` is **not** constructed in WSL/offscreen/headless
+    runtimes by default.  The embedded Qt/VTK interactor can fail below
+    Python's exception layer with ``BadWindow / X_ConfigureWindow``,
+    so unsafe runtimes use the 2D projection fallback instead unless
+    ``EIT_APP_ENABLE_EMBEDDED_VTK=1`` explicitly opts in.
 
-2.  ``auto_update=False``.  The pyvistaqt default is a 5 Hz background
+2.  When enabled, ``QtInteractor`` is constructed only after the host
+    widget is shown and owns a native child window.  Initialising VTK
+    while the host is still parentless / hidden can materialise orphan
+    top-level windows or stale X handles.
+
+3.  ``auto_update=False``.  The pyvistaqt default is a 5 Hz background
     render timer, which means VTK redraws the scene 5×/second forever
     even if the user is just hovering over the form.  For our
     use-case nothing changes between user gestures so we drive renders
@@ -33,6 +35,8 @@ maintenance:
 from __future__ import annotations
 
 import logging
+import os
+import sys
 from typing import Optional
 
 import numpy as np
@@ -60,6 +64,60 @@ from eit_app.ui.theme import (
 
 
 log = logging.getLogger(__name__)
+
+
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _running_under_wsl() -> bool:
+    """Return True inside WSL/WSLg without importing platform helpers."""
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        with open("/proc/sys/kernel/osrelease", encoding="utf-8") as handle:
+            release = handle.read()
+    except OSError:
+        return False
+    release = release.lower()
+    return "microsoft" in release or "wsl" in release
+
+
+def embedded_vtk_status() -> tuple[bool, str]:
+    """Decide whether it is safe to embed pyvistaqt's VTK widget.
+
+    The FEniCSx-recommended PyVista path is still available, but the
+    embedded Qt/VTK interactor can terminate the whole process with an
+    X11 ``BadWindow`` in WSLg/offscreen/headless environments.  Those
+    failures happen below Python's exception layer, so the only reliable
+    fix is to avoid constructing ``QtInteractor`` there by default.
+    """
+    if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
+        return False, "disabled by EIT_APP_DISABLE_EMBEDDED_VTK"
+    if _env_flag("EIT_APP_ENABLE_EMBEDDED_VTK"):
+        return True, "forced by EIT_APP_ENABLE_EMBEDDED_VTK"
+
+    qpa = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
+    if qpa in {"offscreen", "minimal"}:
+        return False, f"Qt platform is {qpa!r}"
+
+    if _running_under_wsl():
+        return False, "WSL/WSLg embedded VTK is unstable"
+
+    if sys.platform.startswith("linux") and not (
+        os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
+    ):
+        return False, "no DISPLAY or WAYLAND_DISPLAY is available"
+
+    return True, "runtime looks compatible"
+
+
+def embedded_vtk_enabled() -> bool:
+    enabled, _reason = embedded_vtk_status()
+    return enabled
 
 
 class _InteractorHost(QFrame):
@@ -276,6 +334,15 @@ class Conductivity3DWidget(QWidget):
         """
         if self._plotter_ready:
             return
+
+        vtk_enabled, reason = embedded_vtk_status()
+        if not vtk_enabled:
+            log.info("embedded PyVista/VTK viewer disabled: %s", reason)
+            self._show_caption(
+                t("sim.results.viewer3d_embedded_disabled"), kind="placeholder"
+            )
+            return
+
         try:
             import pyvista  # noqa: F401  (side-effect: VTK init)
             from pyvistaqt import QtInteractor

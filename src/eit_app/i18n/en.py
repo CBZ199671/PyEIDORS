@@ -60,6 +60,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_no_data": "No 3D data yet",
     "sim.results.viewer3d_loading": "Rendering 3D scene\u2026",
     "sim.results.viewer3d_unavailable": "PyVista / VTK is not installed; 3D mesh cannot be displayed.",
+    "sim.results.viewer3d_embedded_disabled": "Embedded PyVista / VTK is disabled in this runtime to avoid Qt/OpenGL crashes. Showing the 3D projection instead.",
+    "sim.results.viewer3d_projection_title": "{title} (3D projection)",
     "sim.results.viewer3d_bad_mesh": "Mesh is not a 3D tetrahedral grid",
     "sim.results.viewer3d_size_mismatch": "Conductivity length does not match the mesh",
     "sim.results.viewer3d_opacity": "Bulk opacity",

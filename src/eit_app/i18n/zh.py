@@ -62,6 +62,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_no_data": "\u6682\u65e0 3D \u6570\u636e",                                # 暂无 3D 数据
     "sim.results.viewer3d_loading": "\u6e32\u67d3 3D \u573a\u4e2d\u2026",                          # 渲染 3D 场中…
     "sim.results.viewer3d_unavailable": "\u672a\u5b89\u88c5 PyVista / VTK\uff0c\u65e0\u6cd5\u663e\u793a 3D \u7f51\u683c",  # 未安装 PyVista / VTK，无法显示 3D 网格
+    "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6539\u7528 3D \u6295\u5f71\u663e\u793a\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；改用 3D 投影显示。
+    "sim.results.viewer3d_projection_title": "{title}\uff083D \u6295\u5f71\uff09",                  # {title}（3D 投影）
     "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u4e09\u7ef4\u56db\u9762\u4f53",      # 网格不是三维四面体
     "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d", # 电导率长度与网格不匹配
     "sim.results.viewer3d_opacity": "\u5916\u58f3\u900f\u660e\u5ea6",                              # 外壳透明度

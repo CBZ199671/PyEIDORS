@@ -10,7 +10,10 @@ from PySide6.QtWidgets import QStackedLayout, QSplitter, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
-from eit_app.ui.conductivity_3d_widget import Conductivity3DWidget
+from eit_app.ui.conductivity_3d_widget import (
+    Conductivity3DWidget,
+    embedded_vtk_enabled,
+)
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 
 if TYPE_CHECKING:
@@ -33,13 +36,15 @@ class _ConductivityViewSlot(QWidget):
     in a QStackedLayout, then dispatches calls to whichever matches the
     most recent payload's dimension.
 
-    The 3D widget is constructed eagerly (cheap) but pyvistaqt's
-    QtInteractor only spins up VTK on first ``update_image()`` call —
-    see ``Conductivity3DWidget._ensure_plotter``.
+    The 3D widget object is cheap to construct.  On runtimes where
+    embedded Qt/VTK is unsafe (WSLg/offscreen/headless), 3D payloads
+    are rendered through the matplotlib surface-projection path
+    instead, avoiding fatal X11 ``BadWindow`` crashes.
     """
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._title = title
         self._mpl = ConductivityImageWidget(title)
         self._three_d = Conductivity3DWidget(title)
         self._stack = QStackedLayout(self)
@@ -85,10 +90,23 @@ class _ConductivityViewSlot(QWidget):
         title: str | None = None,
     ) -> None:
         if _is_3d_payload(node_coords, cell_connectivity):
-            self._three_d.update_image(
-                conductivity, node_coords, cell_connectivity, title=title
-            )
-            self._stack.setCurrentWidget(self._three_d)
+            if embedded_vtk_enabled():
+                self._three_d.update_image(
+                    conductivity, node_coords, cell_connectivity, title=title
+                )
+                self._stack.setCurrentWidget(self._three_d)
+            else:
+                base_title = title or self._title
+                projection_title = t("sim.results.viewer3d_projection_title").format(
+                    title=base_title
+                )
+                self._mpl.update_image(
+                    conductivity,
+                    node_coords,
+                    cell_connectivity,
+                    title=projection_title,
+                )
+                self._stack.setCurrentWidget(self._mpl)
         else:
             self._mpl.update_image(
                 conductivity, node_coords, cell_connectivity, title=title
@@ -117,6 +135,7 @@ class _ConductivityViewSlot(QWidget):
             self._mpl.set_loading(message)
 
     def setTitle(self, title: str) -> None:
+        self._title = title
         self._mpl.setTitle(title)
         self._three_d.setTitle(title)
 
