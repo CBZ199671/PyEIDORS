@@ -160,7 +160,21 @@ def test_embedded_vtk_can_be_forced(monkeypatch):
     assert "forced" in reason
 
 
-def test_embedded_vtk_disabled_on_wsl_even_when_display_is_available(monkeypatch):
+def test_embedded_vtk_enabled_on_wsl_when_qt_uses_xcb(monkeypatch):
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.delenv("EIT_APP_DISABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "xcb")
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    enabled, reason = embedded_vtk_status()
+
+    assert enabled is True
+    assert embedded_vtk_enabled() is True
+    assert "XCB" in reason or "compatible" in reason
+
+
+def test_embedded_vtk_disabled_on_wsl_without_xcb(monkeypatch):
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.delenv("EIT_APP_DISABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
@@ -171,7 +185,7 @@ def test_embedded_vtk_disabled_on_wsl_even_when_display_is_available(monkeypatch
 
     assert enabled is False
     assert embedded_vtk_enabled() is False
-    assert "WSLg" in reason or "unsafe" in reason
+    assert "xcb" in reason
 
 
 def test_3d_payload_stays_in_3d_widget_when_vtk_disabled(monkeypatch):

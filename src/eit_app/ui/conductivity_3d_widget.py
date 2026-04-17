@@ -144,7 +144,9 @@ def embedded_vtk_status() -> tuple[bool, str]:
         return False, "no DISPLAY or WAYLAND_DISPLAY is available"
 
     if _running_under_wsl():
-        return False, "WSLg/X11 embedded VTK is unsafe in this runtime"
+        if qpa == "xcb":
+            return True, "WSLg is using Qt XCB, compatible with vtkXOpenGLRenderWindow"
+        return False, "WSLg embedded VTK requires QT_QPA_PLATFORM=xcb"
 
     return True, "runtime looks compatible"
 
@@ -211,6 +213,16 @@ def _boundary_faces(cells: np.ndarray) -> tuple[list[tuple[int, ...]], np.ndarra
     return [face for face, _idx in kept], np.asarray(
         [idx for _face, idx in kept], dtype=np.int64
     )
+
+
+def _configure_vtk_logging() -> None:
+    """Keep harmless VTK warnings (e.g. missing Xcursor) out of GUI logs."""
+    try:
+        from vtkmodules.vtkCommonCore import vtkLogger
+
+        vtkLogger.SetStderrVerbosity(vtkLogger.VERBOSITY_ERROR)
+    except Exception:  # pragma: no cover — best-effort log hygiene
+        pass
 
 
 class Conductivity3DWidget(QWidget):
@@ -415,6 +427,7 @@ class Conductivity3DWidget(QWidget):
         try:
             import pyvista  # noqa: F401  (side-effect: VTK init)
             from pyvistaqt import QtInteractor
+            _configure_vtk_logging()
         except Exception as exc:  # pragma: no cover — env without VTK
             log.warning("pyvistaqt unavailable; using safe 3D renderer: %s", exc)
             if self._pending_render is not None:
