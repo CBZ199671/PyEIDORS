@@ -87,8 +87,12 @@ class HardwareTab(QWidget):
             context_widget=self._frame_browser,
             left_footer=self._summary_panel,
             compact_toolbox=True,
-            step_min_width=480,
-            context_min_width=300,
+            # Comfortable defaults via splitter_sizes; floors are kept
+            # low so the user can shrink the window down to ~720 px on
+            # a small laptop.  The horizontal scroll on the left
+            # toolbox absorbs anything that would otherwise clip.
+            step_min_width=260,
+            context_min_width=220,
             splitter_sizes=(480, 720, 300),
             parent=self,
         )

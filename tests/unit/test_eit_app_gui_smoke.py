@@ -314,28 +314,34 @@ def test_live_recon_voltage_widgets_expose_tri_state_overlay() -> None:
 
 
 @pytest.mark.gui
-def test_workflow_shell_tabs_share_300px_right_context_minimum() -> None:
+def test_workflow_shell_tabs_share_right_context_minimum() -> None:
     """Phase 7: the three WorkflowShell-based tabs (Hardware /
-    Simulation / Dataset) must expose the same 300px minimum width on
-    their right-side context panel.  Before this change Hardware was
-    260, Simulation was 290 and Dataset was 310 — visually the right
-    pane kept "jumping" as the user switched tabs.
+    Simulation / Dataset) expose the same minimum width on their
+    right-side context panel so the pane doesn't visibly jump as the
+    user switches tabs.  The floor was relaxed from 300 → 220 to let
+    the main window shrink down to ~820 px on small laptop screens.
     """
     window = EITWorkstation()
     _show_window(window)
     try:
+        expected_context_min = 220
+
         # Hardware → FrameBrowser is the context widget
-        assert window._hw_tab._frame_browser.minimumWidth() == 300
+        assert window._hw_tab._frame_browser.minimumWidth() == expected_context_min
 
         # Simulation → splitter child #2 is the context widget
         sim_splitter = window._sim_tab._shell._main_splitter
-        assert sim_splitter.widget(2).minimumWidth() == 300
+        assert sim_splitter.widget(2).minimumWidth() == expected_context_min
 
         # Dataset → DatasetSummaryPanel is the context widget
-        assert window._dataset_tab._summary_panel.minimumWidth() == 300
+        assert (
+            window._dataset_tab._summary_panel.minimumWidth()
+            == expected_context_min
+        )
 
-        # And the initial splitter_sizes request a 300px third pane so
-        # the context shows at 300px rather than auto-shrunk.
+        # The initial splitter_sizes still request a 300 px third
+        # pane so the comfortable default opens unchanged on a
+        # large display, even though the floor is now smaller.
         for shell in (
             window._hw_tab._shell,
             window._sim_tab._shell,
