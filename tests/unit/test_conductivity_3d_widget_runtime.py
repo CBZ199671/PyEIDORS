@@ -67,6 +67,22 @@ def _hex_payload() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     return sigma, coords, cells
 
 
+def _inhomogeneous_tetra_payload() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=np.int64)
+    sigma = np.array([1.0, 2.0], dtype=float)
+    return sigma, coords, cells
+
+
 def test_supported_3d_cell_types_cover_tetra_and_hex():
     assert {4, 8}.issubset(SUPPORTED_3D_CELL_VERTEX_COUNTS)
 
@@ -213,6 +229,39 @@ def test_safe_3d_backend_renders_hex_when_vtk_disabled(monkeypatch):
     assert slot._three_d._last_image[3] == "Hex Truth"
     assert slot._three_d._render_backend == "mpl3d"
     slot.close()
+
+
+def test_safe_3d_controls_do_not_shrink_or_rebuild_axes(monkeypatch):
+    _get_app()
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    widget = Conductivity3DWidget("Conductivity")
+
+    sigma, coords, cells = _inhomogeneous_tetra_payload()
+    widget.update_image(sigma, coords, cells, title="Truth")
+    initial_bounds = widget._mpl3d_ax.get_position().bounds
+
+    widget._opacity_slider.setValue(30)
+    QApplication.processEvents()
+    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
+    assert widget._mpl3d_mesh_facecolors is not None
+    assert np.allclose(widget._mpl3d_mesh_facecolors[:, 3], 0.30)
+
+    assert widget._mpl3d_highlight_collection is not None
+    widget._highlight_check.setChecked(False)
+    QApplication.processEvents()
+    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
+    assert widget._mpl3d_highlight_collection.get_visible() is False
+
+    widget._wire_check.setChecked(False)
+    QApplication.processEvents()
+    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
+
+    widget._reset_btn.click()
+    QApplication.processEvents()
+    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
+    assert widget._stack.currentWidget() is widget._mpl3d_host
+    widget.close()
 
 
 def test_3d_payload_uses_vtk_widget_when_forced(monkeypatch):

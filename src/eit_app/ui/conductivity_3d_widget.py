@@ -77,6 +77,8 @@ log = logging.getLogger(__name__)
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
+_MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
+_MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
 _CELL_FACE_OFFSETS = {
     4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
     8: (
@@ -239,6 +241,10 @@ class Conductivity3DWidget(QWidget):
         self._last_vtk_disabled_reason: str | None = None
         self._title_font = FontProperties(family=_plot_font_families(), size=14)
         self._mpl3d_colorbar = None
+        self._mpl3d_mesh_collection = None
+        self._mpl3d_highlight_collection = None
+        self._mpl3d_mesh_facecolors: np.ndarray | None = None
+        self._mpl3d_highlight_facecolors: np.ndarray | None = None
 
         self._plotter = None
         self._plotter_ready = False
@@ -293,7 +299,13 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_figure.patch.set_facecolor(palette["panel_bg"])
         self._mpl3d_canvas = FigureCanvasQTAgg(self._mpl3d_figure)
         self._mpl3d_layout.addWidget(self._mpl3d_canvas)
-        self._mpl3d_ax = self._mpl3d_figure.add_subplot(111, projection="3d")
+        self._mpl3d_ax = self._mpl3d_figure.add_axes(
+            _MPL3D_AX_POSITION, projection="3d"
+        )
+        self._mpl3d_colorbar_ax = self._mpl3d_figure.add_axes(
+            _MPL3D_COLORBAR_POSITION
+        )
+        self._mpl3d_colorbar_ax.set_visible(False)
         self._stack.addWidget(self._mpl3d_host)
 
         # _InteractorHost defers its ``realized`` signal until the
@@ -530,12 +542,8 @@ class Conductivity3DWidget(QWidget):
                 setattr(self, actor_attr, None)
 
     def _remove_mpl3d_colorbar(self) -> None:
-        if self._mpl3d_colorbar is None:
-            return
-        try:
-            self._mpl3d_colorbar.remove()
-        except Exception:  # pragma: no cover — matplotlib layout edge case
-            pass
+        self._mpl3d_colorbar_ax.clear()
+        self._mpl3d_colorbar_ax.set_visible(False)
         self._mpl3d_colorbar = None
 
     def _apply_mpl3d_chrome(self) -> None:
@@ -544,6 +552,8 @@ class Conductivity3DWidget(QWidget):
         border = palette.get("border", "#888")
         axes_bg = palette.get("axes_bg", "#ffffff")
         self._mpl3d_figure.patch.set_facecolor(palette.get("panel_bg", "#ffffff"))
+        self._mpl3d_ax.set_position(_MPL3D_AX_POSITION)
+        self._mpl3d_colorbar_ax.set_position(_MPL3D_COLORBAR_POSITION)
         self._mpl3d_ax.set_facecolor(axes_bg)
         self._mpl3d_ax.tick_params(colors=text, labelsize=8)
         for axis in (self._mpl3d_ax.xaxis, self._mpl3d_ax.yaxis, self._mpl3d_ax.zaxis):
@@ -633,8 +643,12 @@ class Conductivity3DWidget(QWidget):
             alpha=None,
         )
         self._mpl3d_ax.add_collection3d(mesh)
+        self._mpl3d_mesh_collection = mesh
+        self._mpl3d_mesh_facecolors = colors.copy()
+        self._mpl3d_highlight_collection = None
+        self._mpl3d_highlight_facecolors = None
 
-        if scalar_mode == "cell" and self._highlight_check.isChecked():
+        if scalar_mode == "cell":
             median = float(np.nanmedian(cell_sigma))
             spread = float(np.nanstd(cell_sigma))
             threshold = max(spread * 0.5, 1.0e-6)
@@ -661,6 +675,9 @@ class Conductivity3DWidget(QWidget):
                         alpha=None,
                     )
                     self._mpl3d_ax.add_collection3d(highlight)
+                    highlight.set_visible(bool(self._highlight_check.isChecked()))
+                    self._mpl3d_highlight_collection = highlight
+                    self._mpl3d_highlight_facecolors = highlight_colors.copy()
 
         points = coords[:, :3]
         mins = np.nanmin(points, axis=0)
@@ -692,11 +709,11 @@ class Conductivity3DWidget(QWidget):
 
         scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
         scalar_mappable.set_array(face_values)
+        self._mpl3d_colorbar_ax.clear()
+        self._mpl3d_colorbar_ax.set_visible(True)
         self._mpl3d_colorbar = self._mpl3d_figure.colorbar(
             scalar_mappable,
-            ax=self._mpl3d_ax,
-            shrink=0.66,
-            pad=0.08,
+            cax=self._mpl3d_colorbar_ax,
         )
         self._mpl3d_colorbar.set_label("S/m", color=palette.get("text", "#222"))
         self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
@@ -846,11 +863,37 @@ class Conductivity3DWidget(QWidget):
     # Interactive controls — actor mutation only, never a full rebuild
     # ------------------------------------------------------------------
 
+    def _apply_mpl3d_opacity(self, opacity: float) -> None:
+        if (
+            self._mpl3d_mesh_collection is not None
+            and self._mpl3d_mesh_facecolors is not None
+        ):
+            self._mpl3d_mesh_facecolors[:, 3] = opacity
+            self._mpl3d_mesh_collection.set_facecolors(self._mpl3d_mesh_facecolors)
+        if (
+            self._mpl3d_highlight_collection is not None
+            and self._mpl3d_highlight_facecolors is not None
+        ):
+            self._mpl3d_highlight_facecolors[:, 3] = max(0.82, opacity)
+            self._mpl3d_highlight_collection.set_facecolors(
+                self._mpl3d_highlight_facecolors
+            )
+
+    def _apply_mpl3d_wire_visibility(self, checked: bool) -> None:
+        palette = plot_palette()
+        edge_color = palette.get("border", "#888") if checked else "none"
+        if self._mpl3d_mesh_collection is not None:
+            self._mpl3d_mesh_collection.set_edgecolor(edge_color)
+        if self._mpl3d_highlight_collection is not None:
+            highlight_edge = palette.get("highlight", "#f39c12") if checked else "none"
+            self._mpl3d_highlight_collection.set_edgecolor(highlight_edge)
+
     def _on_opacity_changed(self, value: int) -> None:
         opacity = value / 100.0
         self._opacity_value.setText(f"{opacity:.2f}")
         if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._render_matplotlib_scene(*self._last_image[:3])
+            self._apply_mpl3d_opacity(opacity)
+            self._mpl3d_canvas.draw_idle()
             return
         if self._mesh_actor is None or self._plotter is None:
             return
@@ -859,7 +902,9 @@ class Conductivity3DWidget(QWidget):
 
     def _on_highlight_toggled(self, checked: bool) -> None:
         if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._render_matplotlib_scene(*self._last_image[:3])
+            if self._mpl3d_highlight_collection is not None:
+                self._mpl3d_highlight_collection.set_visible(bool(checked))
+            self._mpl3d_canvas.draw_idle()
             return
         if self._highlight_actor is None or self._plotter is None:
             return
@@ -868,7 +913,8 @@ class Conductivity3DWidget(QWidget):
 
     def _on_wire_toggled(self, checked: bool) -> None:
         if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._render_matplotlib_scene(*self._last_image[:3])
+            self._apply_mpl3d_wire_visibility(bool(checked))
+            self._mpl3d_canvas.draw_idle()
             return
         if self._wire_actor is None or self._plotter is None:
             return
@@ -891,6 +937,10 @@ class Conductivity3DWidget(QWidget):
     def _show_caption(self, text: str, *, kind: str) -> None:
         self._render_backend = "caption"
         self._remove_mpl3d_colorbar()
+        self._mpl3d_mesh_collection = None
+        self._mpl3d_highlight_collection = None
+        self._mpl3d_mesh_facecolors = None
+        self._mpl3d_highlight_facecolors = None
         palette = plot_palette()
         color = {
             "placeholder": palette.get("caption", "#888"),
