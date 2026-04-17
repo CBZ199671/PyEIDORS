@@ -77,7 +77,9 @@ class SimulationTab(QWidget):
             context_widget=context_widget,
             step_min_width=240,
             context_min_width=220,
-            splitter_sizes=(350, 940, 300),
+            # Total opens at ~1080 px so the simulation tab fits a
+            # 1280-px laptop without horizontal scroll.
+            splitter_sizes=(280, 560, 240),
             parent=self,
         )
 

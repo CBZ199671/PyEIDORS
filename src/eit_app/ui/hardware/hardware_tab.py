@@ -61,13 +61,18 @@ class HardwareTab(QWidget):
         bottom_splitter.addWidget(self._voltage_plot)
         bottom_splitter.setStretchFactor(0, 1)
         bottom_splitter.setStretchFactor(1, 1)
-        bottom_splitter.setSizes([560, 520])
+        # Compact default — 460 px total split evenly between
+        # reconstruction and voltage plot.  User can always drag the
+        # handle to give one of them more room.
+        bottom_splitter.setSizes([240, 220])
 
         center_splitter.addWidget(self._live_plot)
         center_splitter.addWidget(bottom_splitter)
         center_splitter.setStretchFactor(0, 2)
         center_splitter.setStretchFactor(1, 1)
-        center_splitter.setSizes([520, 340])
+        # Live plot gets ~340 px tall by default so the X-axis ticks
+        # are visible without scrolling on an 800-tall window.
+        center_splitter.setSizes([340, 240])
 
         self._summary_panel = SessionSummaryPanel()
         self._frame_browser = FrameBrowserWidget()
@@ -93,7 +98,11 @@ class HardwareTab(QWidget):
             # toolbox absorbs anything that would otherwise clip.
             step_min_width=260,
             context_min_width=220,
-            splitter_sizes=(480, 720, 300),
+            # Splitter total opens at 1080 px so the centre + frame
+            # browser fit comfortably on a 1280-px laptop.  Larger
+            # screens are free to drag the splitter handles out;
+            # smaller windows shrink everything proportionally.
+            splitter_sizes=(360, 480, 240),
             parent=self,
         )
 
