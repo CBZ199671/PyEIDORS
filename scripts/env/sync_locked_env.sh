@@ -108,6 +108,7 @@ run_with_log() {
 run_import_checks() {
   "$PYTHON_BIN" - <<'PY'
 import importlib
+import os
 import sys
 import warnings
 
@@ -144,36 +145,33 @@ if missing:
 
 print("[env-sync] Core dependency import checks passed: dolfinx, torch, cuqi, numpy, scipy, pyeidors, PySide6.QtCore, pyqtgraph")
 
-optional = ["pyamg", "sksparse"]
-optional_missing = []
-for name in optional:
-    try:
-        importlib.import_module(name)
-    except Exception:
-        optional_missing.append(name)
-perf_enabled = "${ENABLE_PERFORMANCE_EXTRAS:-0}" == "1"
-if optional_missing:
-    suffix = (
-        "performance extras are not enabled; this does not block the core environment. Recommended command: scripts/env/bootstrap_dev_env.sh --recommended --repair."
-        if not perf_enabled
-        else "performance extras were requested, but the current environment could not provide these optional accelerators."
-    )
-    print(
-        "[env-sync] Optional performance extras are not fully available: "
-        + ", ".join(optional_missing)
-        + f". {suffix}"
-    )
+perf_enabled = os.environ.get("ENABLE_PERFORMANCE_EXTRAS") == "1"
+if not perf_enabled:
+    raise SystemExit(0)
 else:
-    cholmod_ok = False
-    try:
-        from sksparse import cholmod as _cholmod  # noqa: F401
-        cholmod_ok = True
-    except Exception:
+    optional = ["pyamg", "sksparse"]
+    optional_missing = []
+    for name in optional:
+        try:
+            importlib.import_module(name)
+        except Exception:
+            optional_missing.append(name)
+    if optional_missing:
+        print(
+            "[env-sync] Optional performance extras requested but unavailable: "
+            + ", ".join(optional_missing)
+        )
+    else:
         cholmod_ok = False
-    print(
-        "[env-sync] Optional performance extras available"
-        + f" (cholmod={'yes' if cholmod_ok else 'no'})"
-    )
+        try:
+            from sksparse import cholmod as _cholmod  # noqa: F401
+            cholmod_ok = True
+        except Exception:
+            cholmod_ok = False
+        print(
+            "[env-sync] Optional performance extras available"
+            + f" (cholmod={'yes' if cholmod_ok else 'no'})"
+        )
 PY
 }
 

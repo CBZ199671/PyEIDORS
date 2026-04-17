@@ -46,6 +46,26 @@ fi
 PROFILE="cpu"
 SKIP_CUDA_PROBE="0"
 APP_ARGS=()
+NIX_OPTS=(--option warn-dirty false)
+
+nix_daemon_proxy_unreachable() {
+  local daemon_env
+  daemon_env="$(systemctl show nix-daemon.service --property=Environment 2>/dev/null || true)"
+  [[ "$daemon_env" == *"127.0.0.1:7897"* ]] || return 1
+  if timeout 1 bash -c '</dev/tcp/127.0.0.1/7897' >/dev/null 2>&1; then
+    return 1
+  fi
+  return 0
+}
+
+if nix_daemon_proxy_unreachable; then
+  # The daemon-level proxy is outside this script's environment.  When it
+  # points at a closed localhost port, Nix emits repeated cache.nixos.org
+  # download warnings before falling back to local store/build behaviour.
+  # Disable substituter lookup for this launch only; do not mutate Nix config.
+  NIX_OPTS+=(--option substituters "")
+  echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable; skipping substituter lookup for this launch" >&2
+fi
 
 while (($# > 0)); do
   case "$1" in
@@ -94,7 +114,7 @@ EOF
 )
 
 if [[ "$PROFILE" == "gpu" ]]; then
-  exec nix develop .#cuda --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
+  exec nix "${NIX_OPTS[@]}" develop .#cuda --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
 fi
 
-exec nix develop --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
+exec nix "${NIX_OPTS[@]}" develop --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"

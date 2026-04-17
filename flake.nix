@@ -272,7 +272,8 @@ PY
                   echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
                 fi
 
-                perf_status="$($UV_PYTHON - <<'PY'
+                if [ "''${ENABLE_PERFORMANCE_EXTRAS:-0}" = "1" ]; then
+                  perf_status="$($UV_PYTHON - <<'PY'
 import importlib
 
 status = {}
@@ -298,7 +299,8 @@ print(
 )
 PY
 )"
-                echo "$perf_status"
+                  echo "$perf_status"
+                fi
 
                 if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ]; then
                   echo "[nix+uv] CUDA profile ready. Verify PETSc CUDA backend with:"
@@ -398,6 +400,7 @@ PY
               pkgsCuda.cudaPackages.libcublas
               pkgsCuda.cudaPackages.libcusolver
               pkgsCuda.cudaPackages.libcusparse
+              pkgsCuda.cudaPackages.libnvjitlink
 
               cudaPetsc
               cudaPetsc4py
@@ -435,6 +438,7 @@ PY
                 pkgsCuda.cudaPackages.libcublas
                 pkgsCuda.cudaPackages.libcusolver
                 pkgsCuda.cudaPackages.libcusparse
+                pkgsCuda.cudaPackages.libnvjitlink
               ];
               extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
               extraPrelude = ''
