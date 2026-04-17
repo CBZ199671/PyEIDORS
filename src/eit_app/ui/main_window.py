@@ -2580,6 +2580,7 @@ class EITWorkstation(QMainWindow):
         config = self._sim_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
+            mesh_family=mesh_cfg.get("mesh_family", "tetra"),
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             background_conductivity=mesh_cfg["background_conductivity"],
@@ -2606,6 +2607,7 @@ class EITWorkstation(QMainWindow):
         config = self._dataset_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
+            mesh_family=mesh_cfg.get("mesh_family", "tetra"),
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             background_conductivity=mesh_cfg["background_conductivity"],
@@ -2778,6 +2780,7 @@ class EITWorkstation(QMainWindow):
                 {
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
+                    "mesh_family": config.mesh_family,
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
                     "background_conductivity": config.background_conductivity,
@@ -2805,6 +2808,7 @@ class EITWorkstation(QMainWindow):
                 {
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
+                    "mesh_family": config.mesh_family,
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
                     "background_conductivity": config.background_conductivity,

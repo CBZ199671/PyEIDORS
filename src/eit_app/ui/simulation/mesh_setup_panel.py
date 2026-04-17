@@ -66,6 +66,19 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_dim = QLabel("")
         mesh_form.addRow(self._lbl_dim, self._dim_combo)
 
+        self._mesh_family_combo = AutoCloseComboBox()
+        self._mesh_family_combo.addItem("", "tetra")
+        self._mesh_family_combo.addItem("", "hex")
+        # Keep the interactive 3D default fast while still allowing a
+        # deliberate switch to 4-node tetrahedra.
+        self._mesh_family_combo.setCurrentIndex(1)
+        self._mesh_family_combo.currentIndexChanged.connect(
+            lambda _: self._on_any_change()
+        )
+        self._lbl_mesh_family = QLabel("")
+        mesh_form.addRow(self._lbl_mesh_family, self._mesh_family_combo)
+        self._refresh_mesh_family_enabled()
+
         self._refine_spin = QDoubleSpinBox()
         self._refine_spin.setRange(0.01, 1.0)
         self._refine_spin.setValue(0.1)
@@ -166,6 +179,11 @@ class MeshSetupPanel(QGroupBox):
         return {
             "mesh_dimension": 2 if self._dim_combo.currentIndex() == 0 else 3,
             "mesh_refinement": self._refine_spin.value(),
+            "mesh_family": (
+                str(self._mesh_family_combo.currentData() or "hex")
+                if self._dim_combo.currentIndex() == 1
+                else "tetra"
+            ),
             "n_electrodes": self._n_elec_spin.value(),
             "n_rings": self._n_rings_spin.value(),
             "background_conductivity": self._bg_cond_spin.value(),
@@ -179,6 +197,7 @@ class MeshSetupPanel(QGroupBox):
     def set_config(self, config: dict) -> None:
         widgets = (
             self._dim_combo,
+            self._mesh_family_combo,
             self._refine_spin,
             self._n_elec_spin,
             self._n_rings_spin,
@@ -193,6 +212,10 @@ class MeshSetupPanel(QGroupBox):
         try:
             mesh_dimension = int(config.get("mesh_dimension", 2))
             self._dim_combo.setCurrentIndex(0 if mesh_dimension == 2 else 1)
+            mesh_family = str(
+                config.get("mesh_family", "hex" if mesh_dimension == 3 else "tetra")
+            ).strip().lower()
+            self._mesh_family_combo.setCurrentIndex(1 if mesh_family == "hex" else 0)
             self._refine_spin.setValue(float(config.get("mesh_refinement", 0.1)))
             self._n_elec_spin.setValue(int(config.get("n_electrodes", config.get("n_elec", 16))))
             default_rings = 2 if mesh_dimension == 3 else 1
@@ -206,6 +229,7 @@ class MeshSetupPanel(QGroupBox):
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
+        self._refresh_mesh_family_enabled()
         self._on_any_change()
 
     # ------------------------------------------------------------------
@@ -248,6 +272,7 @@ class MeshSetupPanel(QGroupBox):
             finally:
                 for widget, blocked in zip(widgets, blockers):
                     widget.blockSignals(blocked)
+        self._refresh_mesh_family_enabled()
         self._on_any_change()
 
     def _on_any_change(self) -> None:
@@ -257,6 +282,11 @@ class MeshSetupPanel(QGroupBox):
         self._point_count_cache = int(layout.get("points_per_frame", 0))
         self._refresh_point_count_label()
         self.config_changed.emit()
+
+    def _refresh_mesh_family_enabled(self) -> None:
+        enabled = self._dim_combo.currentIndex() == 1
+        self._lbl_mesh_family.setEnabled(enabled)
+        self._mesh_family_combo.setEnabled(enabled)
 
     def _refresh_point_count_label(self) -> None:
         self._point_count_label.setText(
@@ -272,6 +302,9 @@ class MeshSetupPanel(QGroupBox):
         self._dim_combo.setItemText(0, t("sim.mesh.dim.2d"))
         self._dim_combo.setItemText(1, t("sim.mesh.dim.3d"))
         self._lbl_dim.setText(t("sim.mesh.dimension_label"))
+        self._lbl_mesh_family.setText(t("sim.mesh.family_label"))
+        self._mesh_family_combo.setItemText(0, t("sim.mesh.family.tetra"))
+        self._mesh_family_combo.setItemText(1, t("sim.mesh.family.hex"))
         self._lbl_size.setText(t("sim.mesh.size_label"))
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))

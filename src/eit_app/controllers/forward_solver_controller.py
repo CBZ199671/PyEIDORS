@@ -119,10 +119,13 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
     forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
     mesh_family = _auto(forward_cfg.mesh_family, "tetra")
     if wants_gpu:
-        if forward_backend == "dolfinx":
+        if mesh_family == "hex" and forward_backend == "dolfinx":
             forward_backend = "cuda_structured"
-        if mesh_family == "tetra":
-            mesh_family = "hex"
+        elif mesh_family != "hex" and forward_backend == "cuda_structured":
+            # The structured CUDA backend is deliberately hex-only.
+            # If the user selects 4-node tetrahedra in the GUI, keep the
+            # tetra mesh and use the generic DOLFINx/PETSc path instead.
+            forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),

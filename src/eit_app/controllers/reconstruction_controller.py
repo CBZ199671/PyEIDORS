@@ -90,10 +90,10 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
     forward_backend = _auto("forward_backend", "dolfinx")
     mesh_family = _auto("mesh_family", "tetra")
     if wants_gpu:
-        if forward_backend == "dolfinx":
+        if mesh_family == "hex" and forward_backend == "dolfinx":
             forward_backend = "cuda_structured"
-        if mesh_family == "tetra":
-            mesh_family = "hex"
+        elif mesh_family != "hex" and forward_backend == "cuda_structured":
+            forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),

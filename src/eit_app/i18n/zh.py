@@ -64,7 +64,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_unavailable": "\u672a\u5b89\u88c5 PyVista / VTK\uff0c\u65e0\u6cd5\u663e\u793a 3D \u7f51\u683c",  # 未安装 PyVista / VTK，无法显示 3D 网格
     "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6539\u7528 3D \u6295\u5f71\u663e\u793a\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；改用 3D 投影显示。
     "sim.results.viewer3d_projection_title": "{title}\uff083D \u6295\u5f71\uff09",                  # {title}（3D 投影）
-    "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u4e09\u7ef4\u56db\u9762\u4f53",      # 网格不是三维四面体
+    "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u652f\u6301\u7684\u4e09\u7ef4\u56db\u9762\u4f53/\u516d\u9762\u4f53\u4f53\u7f51\u683c", # 网格不是支持的三维四面体/六面体体网格
     "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d", # 电导率长度与网格不匹配
     "sim.results.viewer3d_opacity": "\u5916\u58f3\u900f\u660e\u5ea6",                              # 外壳透明度
     "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",                            # 突出内含物
@@ -312,6 +312,9 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.dim.2d": "2D",
     "sim.mesh.dim.3d": "3D",
     "sim.mesh.dimension_label": "\u7ef4\u5ea6\uff1a",                                            # 维度：
+    "sim.mesh.family_label": "3D \u5355\u5143\u7c7b\u578b\uff1a",                                  # 3D 单元类型：
+    "sim.mesh.family.tetra": "\u56db\u9762\u4f53\uff084 \u8282\u70b9\uff09",                       # 四面体（4 节点）
+    "sim.mesh.family.hex": "\u516d\u9762\u4f53\uff088 \u8282\u70b9\uff0cGPU \u5feb\u901f\uff09",    # 六面体（8 节点，GPU 快速）
     "sim.mesh.size_label": "\u7f51\u683c\u5c3a\u5bf8\uff1a",                                      # 网格尺寸：
     "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
     "sim.mesh.electrodes_label": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",                          # 每环电极数：

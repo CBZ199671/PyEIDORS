@@ -1,6 +1,6 @@
 """PyVista (VTK) 3D conductivity display with opacity / clipping controls.
 
-Used by ``SimulationResultsWidget`` for 3D tetrahedral phantoms — far
+Used by ``SimulationResultsWidget`` for 3D tetra / hex volume phantoms — far
 smoother than matplotlib's mpl_toolkits.mplot3d under interactive
 rotation, and exposes interior cells via a transparency slider so
 the user can see internal inclusions through the bulk.
@@ -65,6 +65,7 @@ log = logging.getLogger(__name__)
 
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 
 
 def _env_flag(name: str) -> bool:
@@ -349,10 +350,15 @@ class Conductivity3DWidget(QWidget):
         cell_connectivity: np.ndarray,
         title: str | None = None,
     ) -> None:
-        """Render a 3D tetrahedral conductivity field."""
+        """Render a 3D volume conductivity field."""
         cells = np.asarray(cell_connectivity, dtype=np.int64)
         coords = np.asarray(node_coords, dtype=float)
-        if coords.shape[1] < 3 or cells.shape[1] != 4:
+        if (
+            coords.ndim != 2
+            or cells.ndim != 2
+            or coords.shape[1] < 3
+            or cells.shape[1] not in SUPPORTED_3D_CELL_VERTEX_COUNTS
+        ):
             self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
             return
 
@@ -437,12 +443,22 @@ class Conductivity3DWidget(QWidget):
             scalar_kw = {"scalars": "sigma", "preference": "point"}
             scalar_mode = "point"
 
-        # Build the unstructured tet grid.  VTK expects [n_pts, p0, p1, …]
-        # rows so prepend a column of 4s.
-        cell_array = np.empty((n_cells, 5), dtype=np.int64)
-        cell_array[:, 0] = 4
+        # Build the unstructured volume grid.  VTK expects
+        # [n_pts, p0, p1, ...] rows; support both tetra meshes from the
+        # CPU path and hex meshes from the CUDA-structured path.
+        verts_per_cell = cells.shape[1]
+        if verts_per_cell == 4:
+            cell_type = pv.CellType.TETRA
+        elif verts_per_cell == 8:
+            cell_type = pv.CellType.HEXAHEDRON
+        else:  # update_image() guards this; keep a defensive fallback.
+            self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
+            return
+
+        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
+        cell_array[:, 0] = verts_per_cell
         cell_array[:, 1:] = cells
-        cell_types = np.full(n_cells, pv.CellType.TETRA, dtype=np.uint8)
+        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
         grid = pv.UnstructuredGrid(cell_array.flatten(), cell_types, coords)
         if scalar_mode == "cell":
             grid.cell_data["sigma"] = cell_sigma
@@ -511,7 +527,9 @@ class Conductivity3DWidget(QWidget):
 
         # Wireframe overlay: feature edges of the boundary surface,
         # gives the bulk shape a clean silhouette at low opacity.
-        outline = grid.extract_surface().extract_feature_edges(
+        outline = grid.extract_surface(
+            algorithm="dataset_surface"
+        ).extract_feature_edges(
             boundary_edges=True,
             feature_edges=True,
             feature_angle=30.0,
