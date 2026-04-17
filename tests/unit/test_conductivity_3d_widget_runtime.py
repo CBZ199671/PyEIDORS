@@ -212,7 +212,7 @@ def test_3d_payload_stays_in_3d_widget_when_vtk_disabled(monkeypatch):
     slot.close()
 
 
-def test_safe_3d_backend_renders_small_tetra(monkeypatch):
+def test_pyvista_offscreen_backend_renders_small_tetra(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -222,13 +222,14 @@ def test_safe_3d_backend_renders_small_tetra(monkeypatch):
     slot.update_image(sigma, coords, cells, title="Truth")
 
     assert slot._stack.currentWidget() is slot._three_d
-    assert slot._three_d._stack.currentWidget() is slot._three_d._mpl3d_host
+    assert slot._three_d._stack.currentWidget() is slot._three_d._offscreen_host
     assert slot._three_d._last_image is not None
-    assert slot._three_d._render_backend == "mpl3d"
+    assert slot._three_d._render_backend == "pyvista_offscreen"
+    assert slot._three_d._offscreen_label.pixmap() is not None
     slot.close()
 
 
-def test_safe_3d_backend_renders_hex_when_vtk_disabled(monkeypatch):
+def test_pyvista_offscreen_backend_renders_hex_when_vtk_disabled(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -238,14 +239,15 @@ def test_safe_3d_backend_renders_hex_when_vtk_disabled(monkeypatch):
     slot.update_image(sigma, coords, cells, title="Hex Truth")
 
     assert slot._stack.currentWidget() is slot._three_d
-    assert slot._three_d._stack.currentWidget() is slot._three_d._mpl3d_host
+    assert slot._three_d._stack.currentWidget() is slot._three_d._offscreen_host
     assert slot._three_d._last_image is not None
     assert slot._three_d._last_image[3] == "Hex Truth"
-    assert slot._three_d._render_backend == "mpl3d"
+    assert slot._three_d._render_backend == "pyvista_offscreen"
+    assert slot._three_d._offscreen_label.pixmap() is not None
     slot.close()
 
 
-def test_safe_3d_controls_do_not_shrink_or_rebuild_axes(monkeypatch):
+def test_pyvista_offscreen_controls_keep_rendered_canvas(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -253,28 +255,32 @@ def test_safe_3d_controls_do_not_shrink_or_rebuild_axes(monkeypatch):
 
     sigma, coords, cells = _inhomogeneous_tetra_payload()
     widget.update_image(sigma, coords, cells, title="Truth")
-    initial_bounds = widget._mpl3d_ax.get_position().bounds
+    initial_pixmap = widget._offscreen_label.pixmap()
+    assert widget._render_backend == "pyvista_offscreen"
+    assert initial_pixmap is not None
 
     widget._opacity_slider.setValue(30)
     QApplication.processEvents()
-    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
-    assert widget._mpl3d_mesh_facecolors is not None
-    assert np.allclose(widget._mpl3d_mesh_facecolors[:, 3], 0.30)
+    assert widget._offscreen_label.pixmap() is not None
+    assert widget._offscreen_mesh_actor is not None
+    assert widget._offscreen_mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.30)
 
-    assert widget._mpl3d_highlight_collection is not None
+    assert widget._offscreen_highlight_actor is not None
     widget._highlight_check.setChecked(False)
     QApplication.processEvents()
-    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
-    assert widget._mpl3d_highlight_collection.get_visible() is False
+    assert widget._offscreen_label.pixmap() is not None
+    assert widget._offscreen_highlight_actor.GetVisibility() == 0
 
     widget._wire_check.setChecked(False)
     QApplication.processEvents()
-    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
+    assert widget._offscreen_label.pixmap() is not None
+    assert widget._offscreen_wire_actor is not None
+    assert widget._offscreen_wire_actor.GetVisibility() == 0
 
     widget._reset_btn.click()
     QApplication.processEvents()
-    assert widget._mpl3d_ax.get_position().bounds == pytest.approx(initial_bounds)
-    assert widget._stack.currentWidget() is widget._mpl3d_host
+    assert widget._offscreen_label.pixmap() is not None
+    assert widget._stack.currentWidget() is widget._offscreen_host
     widget.close()
 
 

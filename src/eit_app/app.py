@@ -39,16 +39,24 @@ def _running_under_wsl() -> bool:
 
 
 def _configure_qt_platform_for_embedded_vtk() -> None:
-    """Use Qt's XCB backend on WSLg so VTK receives a real X11 window id.
+    """Optionally use Qt's XCB backend on WSLg for embedded VTK.
 
     VTK's Python Qt interactor passes ``QWidget.winId()`` to
     ``vtkXOpenGLRenderWindow.SetWindowInfo``.  On Qt/Wayland that id is
     not an X11 ``Window`` handle, and VTK can abort the whole GUI with
     ``BadWindow / X_ConfigureWindow``.  WSLg still exposes XWayland via
-    ``DISPLAY``, so using the XCB platform keeps the official
-    FEniCSx/PyVistaQt route in-process and stable.
+    ``DISPLAY``, so XCB keeps the embedded PyVistaQt route stable.
+
+    Do not force this by default: XWayland is visibly blurry on many
+    HiDPI WSLg desktops.  The default crisp path keeps the main GUI on
+    Wayland and lets the 3D widget use PyVista/VTK offscreen rendering.
     """
     if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
+        return
+    if not (
+        _env_flag("EIT_APP_FORCE_QT_XCB_FOR_VTK")
+        or _env_flag("EIT_APP_ENABLE_EMBEDDED_VTK")
+    ):
         return
     if os.environ.get("QT_QPA_PLATFORM"):
         return

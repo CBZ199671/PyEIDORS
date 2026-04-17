@@ -2,8 +2,8 @@
 
 Used by ``SimulationResultsWidget`` for 3D tetra / hex volume phantoms — far
 smoother through PyVista/VTK when the runtime can safely embed a native
-OpenGL window, and still a real in-process 3D view when WSLg/headless
-runtimes need the safe Matplotlib backend.
+OpenGL window, and still a real PyVista/VTK offscreen 3D view when WSLg
+must keep the main Qt window on Wayland for crisp HiDPI text.
 
 PyVista (built on VTK) is the visualisation library that the FEniCSx
 project itself ships with — see
@@ -15,9 +15,9 @@ Two non-obvious design points worth keeping in mind for future
 maintenance:
 
 1.  ``QtInteractor`` remains the preferred display path for real 3D
-    simulation output on native desktop runtimes.  WSLg/X11, offscreen,
-    and display-less runtimes use the safe Matplotlib 3D renderer
-    instead of a 2D projection.
+    simulation output on native desktop runtimes.  WSLg defaults to
+    PyVista offscreen rendering so the main UI can stay on Wayland and
+    avoid XWayland blur; Matplotlib 3D is only the last-resort fallback.
 
 2.  When enabled, ``QtInteractor`` is constructed only after the host
     widget is shown and owns a native child window.  Initialising VTK
@@ -47,7 +47,8 @@ from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from mpl_toolkits.mplot3d.art3d import Poly3DCollection
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QPoint, Qt, QTimer, Signal
+from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -184,6 +185,40 @@ class _InteractorHost(QFrame):
         QTimer.singleShot(0, self.realized.emit)
 
 
+class _OffscreenRenderLabel(QLabel):
+    """Pixmap canvas for PyVista offscreen frames with basic camera controls."""
+
+    dragged = Signal(float, float)
+    zoomed = Signal(float)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._last_pos: QPoint | None = None
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMouseTracking(True)
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._last_pos = event.position().toPoint()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        if self._last_pos is not None and event.buttons() & Qt.MouseButton.LeftButton:
+            pos = event.position().toPoint()
+            delta = pos - self._last_pos
+            self._last_pos = pos
+            self.dragged.emit(float(delta.x()), float(delta.y()))
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        self._last_pos = None
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        self.zoomed.emit(float(event.angleDelta().y()))
+        event.accept()
+
+
 def _hex_to_rgb(value: str) -> tuple[float, float, float]:
     """Parse a CSS-style ``#rrggbb`` colour into 0–1 floats for VTK."""
     text = value.strip().lstrip("#")
@@ -257,6 +292,10 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_collection = None
         self._mpl3d_mesh_facecolors: np.ndarray | None = None
         self._mpl3d_highlight_facecolors: np.ndarray | None = None
+        self._offscreen_plotter = None
+        self._offscreen_mesh_actor = None
+        self._offscreen_highlight_actor = None
+        self._offscreen_wire_actor = None
 
         self._plotter = None
         self._plotter_ready = False
@@ -302,6 +341,15 @@ class Conductivity3DWidget(QWidget):
         # 3D slot was even present.
         self._caption_label.setMinimumSize(0, 0)
         self._stack.addWidget(self._caption_label)
+
+        self._offscreen_host = QWidget()
+        self._offscreen_layout = QVBoxLayout(self._offscreen_host)
+        self._offscreen_layout.setContentsMargins(0, 0, 0, 0)
+        self._offscreen_label = _OffscreenRenderLabel()
+        self._offscreen_label.dragged.connect(self._on_offscreen_dragged)
+        self._offscreen_label.zoomed.connect(self._on_offscreen_zoomed)
+        self._offscreen_layout.addWidget(self._offscreen_label)
+        self._stack.addWidget(self._offscreen_host)
 
         self._mpl3d_host = QWidget()
         self._mpl3d_layout = QVBoxLayout(self._mpl3d_host)
@@ -417,7 +465,8 @@ class Conductivity3DWidget(QWidget):
                 if title is not None:
                     self.setTitle(title)
                 self._last_image = (sigma, coords, cells, title)
-                self._render_matplotlib_scene(sigma, coords, cells)
+                if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
+                    self._render_matplotlib_scene(sigma, coords, cells)
             else:
                 self._show_caption(
                     t("sim.results.viewer3d_embedded_disabled"), kind="placeholder"
@@ -436,7 +485,8 @@ class Conductivity3DWidget(QWidget):
                 if title is not None:
                     self.setTitle(title)
                 self._last_image = (sigma, coords, cells, title)
-                self._render_matplotlib_scene(sigma, coords, cells)
+                if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
+                    self._render_matplotlib_scene(sigma, coords, cells)
             else:
                 self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
             return
@@ -503,11 +553,15 @@ class Conductivity3DWidget(QWidget):
         vtk_enabled, reason = embedded_vtk_status()
         if not vtk_enabled:
             if reason != self._last_vtk_disabled_reason:
-                log.info("embedded PyVista/VTK viewer disabled: %s", reason)
+                log.info(
+                    "embedded PyVistaQt viewer unavailable: %s; trying PyVista offscreen",
+                    reason,
+                )
                 self._last_vtk_disabled_reason = reason
             self._pending_render = None
             self._discard_actors()
-            self._render_matplotlib_scene(sigma, coords, cells)
+            if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
+                self._render_matplotlib_scene(sigma, coords, cells)
             return
 
         # Switching the stacked layout to the interactor host first
@@ -553,6 +607,178 @@ class Conductivity3DWidget(QWidget):
                 except Exception:  # pragma: no cover — VTK quirk
                     pass
                 setattr(self, actor_attr, None)
+
+    def _discard_offscreen_plotter(self) -> None:
+        if self._offscreen_plotter is not None:
+            try:
+                self._offscreen_plotter.close()
+            except Exception:  # pragma: no cover — best-effort VTK cleanup
+                pass
+        self._offscreen_plotter = None
+        self._offscreen_mesh_actor = None
+        self._offscreen_highlight_actor = None
+        self._offscreen_wire_actor = None
+
+    def _offscreen_render_size(self) -> tuple[int, int]:
+        dpr = max(float(self.devicePixelRatioF()), 1.0)
+        width = max(320, int(round(max(self._offscreen_label.width(), 1) * dpr)))
+        height = max(240, int(round(max(self._offscreen_label.height(), 1) * dpr)))
+        return min(width, 2400), min(height, 1800)
+
+    def _refresh_offscreen_pixmap(self) -> None:
+        plotter = self._offscreen_plotter
+        if plotter is None:
+            return
+        width, height = self._offscreen_render_size()
+        try:
+            plotter.window_size = (width, height)
+            plotter.render()
+            image = np.ascontiguousarray(plotter.screenshot(return_img=True))
+        except Exception as exc:  # pragma: no cover — VTK runtime edge case
+            log.warning("PyVista offscreen render failed: %s", exc)
+            return
+        if image.ndim != 3 or image.shape[2] < 3:
+            return
+        image = image[:, :, :3]
+        qimage = QImage(
+            image.data,
+            int(image.shape[1]),
+            int(image.shape[0]),
+            int(image.strides[0]),
+            QImage.Format.Format_RGB888,
+        ).copy()
+        pixmap = QPixmap.fromImage(qimage)
+        pixmap.setDevicePixelRatio(max(float(self.devicePixelRatioF()), 1.0))
+        self._offscreen_label.setPixmap(pixmap)
+
+    def _render_pyvista_offscreen_scene(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> bool:
+        try:
+            import pyvista as pv
+
+            _configure_vtk_logging()
+        except Exception as exc:
+            log.info("PyVista offscreen renderer unavailable: %s", exc)
+            return False
+
+        self._discard_offscreen_plotter()
+
+        n_cells = cells.shape[0]
+        if sigma.shape[0] == n_cells:
+            cell_sigma = sigma
+            scalar_kw = {"scalars": "sigma", "preference": "cell"}
+            scalar_mode = "cell"
+        else:
+            cell_sigma = sigma[cells].mean(axis=1)
+            scalar_kw = {"scalars": "sigma", "preference": "point"}
+            scalar_mode = "point"
+
+        verts_per_cell = cells.shape[1]
+        if verts_per_cell == 4:
+            cell_type = pv.CellType.TETRA
+        elif verts_per_cell == 8:
+            cell_type = pv.CellType.HEXAHEDRON
+        else:
+            return False
+
+        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
+        cell_array[:, 0] = verts_per_cell
+        cell_array[:, 1:] = cells
+        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
+        grid = pv.UnstructuredGrid(cell_array.flatten(), cell_types, coords)
+        if scalar_mode == "cell":
+            grid.cell_data["sigma"] = cell_sigma
+        else:
+            grid.point_data["sigma"] = sigma
+
+        sigma_min = float(np.nanmin(cell_sigma))
+        sigma_max = float(np.nanmax(cell_sigma))
+        if not np.isfinite(sigma_min) or not np.isfinite(sigma_max):
+            sigma_min, sigma_max = 0.0, 1.0
+        if sigma_max - sigma_min < 1.0e-12:
+            sigma_max = sigma_min + 1.0e-12
+
+        palette = plot_palette()
+        width, height = self._offscreen_render_size()
+        plotter = pv.Plotter(off_screen=True, window_size=(width, height))
+        plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#ffffff")))
+        plotter.add_axes()
+        self._offscreen_plotter = plotter
+
+        opacity = self._opacity_slider.value() / 100.0
+        text_color = _hex_to_rgb(palette.get("text", "#222"))
+        self._offscreen_mesh_actor = plotter.add_mesh(
+            grid,
+            cmap="viridis",
+            opacity=opacity,
+            clim=[sigma_min, sigma_max],
+            show_edges=False,
+            show_scalar_bar=True,
+            scalar_bar_args={
+                "title": "S/m",
+                "color": text_color,
+                "vertical": True,
+                "position_x": 0.88,
+                "position_y": 0.12,
+                "width": 0.06,
+                "height": 0.55,
+                "title_font_size": 14,
+                "label_font_size": 10,
+            },
+            **scalar_kw,
+        )
+
+        if scalar_mode == "cell":
+            median = float(np.nanmedian(cell_sigma))
+            spread = float(np.nanstd(cell_sigma))
+            threshold = max(spread * 0.5, 1.0e-6)
+            inhom_mask = np.abs(cell_sigma - median) > threshold
+            if spread > 1.0e-6 and np.any(inhom_mask):
+                inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
+                if inhom_grid.n_cells > 0:
+                    self._offscreen_highlight_actor = plotter.add_mesh(
+                        inhom_grid,
+                        scalars="sigma",
+                        preference="cell",
+                        cmap="viridis",
+                        clim=[sigma_min, sigma_max],
+                        opacity=1.0,
+                        show_edges=False,
+                        show_scalar_bar=False,
+                    )
+                    self._offscreen_highlight_actor.SetVisibility(
+                        bool(self._highlight_check.isChecked())
+                    )
+
+        outline = grid.extract_surface(
+            algorithm="dataset_surface"
+        ).extract_feature_edges(
+            boundary_edges=True,
+            feature_edges=True,
+            feature_angle=30.0,
+            non_manifold_edges=False,
+            manifold_edges=False,
+        )
+        if outline.n_points > 0:
+            self._offscreen_wire_actor = plotter.add_mesh(
+                outline,
+                color=palette.get("border", "#888"),
+                line_width=1.0,
+                opacity=0.45,
+                show_scalar_bar=False,
+            )
+            self._offscreen_wire_actor.SetVisibility(bool(self._wire_check.isChecked()))
+
+        plotter.reset_camera()
+        self._stack.setCurrentWidget(self._offscreen_host)
+        self._controls.show()
+        self._render_backend = "pyvista_offscreen"
+        self._refresh_offscreen_pixmap()
+        return True
 
     def _remove_mpl3d_colorbar(self) -> None:
         self._mpl3d_colorbar_ax.clear()
@@ -904,6 +1130,11 @@ class Conductivity3DWidget(QWidget):
     def _on_opacity_changed(self, value: int) -> None:
         opacity = value / 100.0
         self._opacity_value.setText(f"{opacity:.2f}")
+        if self._render_backend == "pyvista_offscreen":
+            if self._offscreen_mesh_actor is not None:
+                self._offscreen_mesh_actor.GetProperty().SetOpacity(opacity)
+            self._refresh_offscreen_pixmap()
+            return
         if self._render_backend == "mpl3d" and self._last_image is not None:
             self._apply_mpl3d_opacity(opacity)
             self._mpl3d_canvas.draw_idle()
@@ -914,6 +1145,11 @@ class Conductivity3DWidget(QWidget):
         self._plotter.render()
 
     def _on_highlight_toggled(self, checked: bool) -> None:
+        if self._render_backend == "pyvista_offscreen":
+            if self._offscreen_highlight_actor is not None:
+                self._offscreen_highlight_actor.SetVisibility(bool(checked))
+            self._refresh_offscreen_pixmap()
+            return
         if self._render_backend == "mpl3d" and self._last_image is not None:
             if self._mpl3d_highlight_collection is not None:
                 self._mpl3d_highlight_collection.set_visible(bool(checked))
@@ -925,6 +1161,11 @@ class Conductivity3DWidget(QWidget):
         self._plotter.render()
 
     def _on_wire_toggled(self, checked: bool) -> None:
+        if self._render_backend == "pyvista_offscreen":
+            if self._offscreen_wire_actor is not None:
+                self._offscreen_wire_actor.SetVisibility(bool(checked))
+            self._refresh_offscreen_pixmap()
+            return
         if self._render_backend == "mpl3d" and self._last_image is not None:
             self._apply_mpl3d_wire_visibility(bool(checked))
             self._mpl3d_canvas.draw_idle()
@@ -935,6 +1176,11 @@ class Conductivity3DWidget(QWidget):
         self._plotter.render()
 
     def _reset_camera(self) -> None:
+        if self._render_backend == "pyvista_offscreen":
+            if self._offscreen_plotter is not None:
+                self._offscreen_plotter.reset_camera()
+                self._refresh_offscreen_pixmap()
+            return
         if self._render_backend == "mpl3d":
             self._mpl3d_ax.view_init(elev=22.0, azim=-45.0)
             self._mpl3d_canvas.draw_idle()
@@ -943,12 +1189,28 @@ class Conductivity3DWidget(QWidget):
             self._plotter.reset_camera()
             self._plotter.render()
 
+    def _on_offscreen_dragged(self, dx: float, dy: float) -> None:
+        if self._render_backend != "pyvista_offscreen" or self._offscreen_plotter is None:
+            return
+        camera = self._offscreen_plotter.camera
+        camera.Azimuth(-dx * 0.45)
+        camera.Elevation(dy * 0.45)
+        camera.OrthogonalizeViewUp()
+        self._refresh_offscreen_pixmap()
+
+    def _on_offscreen_zoomed(self, delta_y: float) -> None:
+        if self._render_backend != "pyvista_offscreen" or self._offscreen_plotter is None:
+            return
+        self._offscreen_plotter.camera.Zoom(1.12 if delta_y > 0 else 0.89)
+        self._refresh_offscreen_pixmap()
+
     # ------------------------------------------------------------------
     # Caption / theme handling
     # ------------------------------------------------------------------
 
     def _show_caption(self, text: str, *, kind: str) -> None:
         self._render_backend = "caption"
+        self._discard_offscreen_plotter()
         self._remove_mpl3d_colorbar()
         self._mpl3d_mesh_collection = None
         self._mpl3d_highlight_collection = None
@@ -972,6 +1234,9 @@ class Conductivity3DWidget(QWidget):
         self._controls.hide()
 
     def _on_theme_mode_changed(self, _mode: str) -> None:
+        if self._render_backend == "pyvista_offscreen" and self._last_image is not None:
+            self._render_pyvista_offscreen_scene(*self._last_image[:3])
+            return
         if self._render_backend == "mpl3d" and self._last_image is not None:
             self._render_matplotlib_scene(*self._last_image[:3])
             return
@@ -1011,6 +1276,7 @@ class Conductivity3DWidget(QWidget):
         ``QThreadStorage: entry destroyed before end of thread``.
         """
         self._discard_actors()
+        self._discard_offscreen_plotter()
         if self._plotter is not None:
             try:
                 self._plotter.close()
@@ -1019,3 +1285,8 @@ class Conductivity3DWidget(QWidget):
             self._plotter = None
             self._plotter_ready = False
         super().closeEvent(event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        if self._render_backend == "pyvista_offscreen":
+            QTimer.singleShot(0, self._refresh_offscreen_pixmap)
