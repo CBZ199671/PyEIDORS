@@ -48,6 +48,33 @@ class _ConductivityViewSlot(QWidget):
         self._stack.addWidget(self._three_d)
         self._stack.setCurrentWidget(self._mpl)
 
+    # ------------------------------------------------------------------
+    # Size hints
+    #
+    # QStackedLayout's default size hints take the *union* of all
+    # child hints.  That means the 2D matplotlib page — which shrinks
+    # down to 10 × 10 — inherited the 3D page's ~628 × 232 minimum,
+    # which cascaded up into the simulation tab's splitter and locked
+    # the main window at a ~1260 px minimum width.  Responsive shrink
+    # behaviour was gone.
+    #
+    # Overriding sizeHint() / minimumSizeHint() to return the active
+    # child's hints only restores the old behaviour for the 2D case
+    # and keeps the 3D case honest about what it really needs.
+    # ------------------------------------------------------------------
+
+    def sizeHint(self):  # noqa: N802 (Qt API)
+        active = self._stack.currentWidget()
+        return active.sizeHint() if active is not None else super().sizeHint()
+
+    def minimumSizeHint(self):  # noqa: N802 (Qt API)
+        active = self._stack.currentWidget()
+        return (
+            active.minimumSizeHint()
+            if active is not None
+            else super().minimumSizeHint()
+        )
+
     # Public API mirrors ConductivityImageWidget so the parent stays simple.
 
     def update_image(
@@ -67,6 +94,10 @@ class _ConductivityViewSlot(QWidget):
                 conductivity, node_coords, cell_connectivity, title=title
             )
             self._stack.setCurrentWidget(self._mpl)
+        # Our sizeHint / minimumSizeHint overrides track the active
+        # child, but parent layouts only re-query them on an explicit
+        # geometry invalidation.
+        self.updateGeometry()
 
     def clear(self) -> None:
         self._mpl.clear()
@@ -74,6 +105,7 @@ class _ConductivityViewSlot(QWidget):
         # Default to 2D view between runs so the placeholder caption
         # reads naturally.
         self._stack.setCurrentWidget(self._mpl)
+        self.updateGeometry()
 
     def set_loading(self, message: str | None = None) -> None:
         # Drive the loading caption on whichever widget is visible —

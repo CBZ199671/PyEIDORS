@@ -159,6 +159,7 @@ class Conductivity3DWidget(QWidget):
         set_section_header(self._title_label)
         self._title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._title_label.setStyleSheet("padding: 4px 0;")
+        self._title_label.setMinimumSize(0, 0)
         outer.addWidget(self._title_label)
 
         self._stack_host = QFrame()
@@ -168,7 +169,11 @@ class Conductivity3DWidget(QWidget):
         self._caption_label = QLabel("")
         self._caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._caption_label.setWordWrap(True)
-        self._caption_label.setMinimumHeight(180)
+        # No forced min-height — the slot's outer layout gives it all
+        # remaining space via the stretch factor on _stack_host; a
+        # fixed 180 px floor dragged the whole main window up when the
+        # 3D slot was even present.
+        self._caption_label.setMinimumSize(0, 0)
         self._stack.addWidget(self._caption_label)
 
         # _InteractorHost defers its ``realized`` signal until the
@@ -186,11 +191,22 @@ class Conductivity3DWidget(QWidget):
         outer.addWidget(self._stack_host, 1)
 
         # Control row: opacity slider + visibility toggles + reset.
-        controls = QFrame()
-        controls.setObjectName("conductivity3DControls")
-        bar = QHBoxLayout(controls)
-        bar.setContentsMargins(8, 4, 8, 4)
-        bar.setSpacing(8)
+        #
+        # Sizing here is deliberately *soft* — every child uses a
+        # shrinkable size policy and no fixed widths.  The old
+        # implementation pinned the slider to 120 px and the opacity
+        # readout to 36 px, which together pushed the whole simulation
+        # tab's minimum width past 1200 px and killed the main
+        # window's responsive shrink behaviour.
+        self._controls = QFrame()
+        self._controls.setObjectName("conductivity3DControls")
+        self._controls.setSizePolicy(
+            self._controls.sizePolicy().horizontalPolicy(),
+            self._controls.sizePolicy().verticalPolicy(),
+        )
+        bar = QHBoxLayout(self._controls)
+        bar.setContentsMargins(6, 2, 6, 2)
+        bar.setSpacing(6)
 
         self._opacity_label = QLabel("")
         set_hint_text(self._opacity_label)
@@ -199,16 +215,13 @@ class Conductivity3DWidget(QWidget):
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(5, 100)
         self._opacity_slider.setValue(45)
-        self._opacity_slider.setFixedWidth(120)
+        self._opacity_slider.setMinimumWidth(60)
         self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        bar.addWidget(self._opacity_slider)
+        bar.addWidget(self._opacity_slider, 1)
 
         self._opacity_value = QLabel("0.45")
         set_hint_text(self._opacity_value)
-        self._opacity_value.setMinimumWidth(36)
         bar.addWidget(self._opacity_value)
-
-        bar.addSpacing(12)
 
         self._highlight_check = QCheckBox("")
         self._highlight_check.setChecked(True)
@@ -220,13 +233,15 @@ class Conductivity3DWidget(QWidget):
         self._wire_check.toggled.connect(self._on_wire_toggled)
         bar.addWidget(self._wire_check)
 
-        bar.addStretch()
-
         self._reset_btn = QPushButton("")
         self._reset_btn.clicked.connect(self._reset_camera)
         bar.addWidget(self._reset_btn)
 
-        outer.addWidget(controls)
+        outer.addWidget(self._controls)
+        # Hidden by default — only shown while the VTK interactor is
+        # the active page.  This keeps the bar from contributing to
+        # the 2D page's footprint inside the stacked dispatcher.
+        self._controls.hide()
 
     # ------------------------------------------------------------------
     # Eager plotter init
@@ -317,6 +332,7 @@ class Conductivity3DWidget(QWidget):
         # scene from _pending_render.  On subsequent calls the
         # plotter is already ready and we render straight away.
         self._stack.setCurrentWidget(self._interactor_host)
+        self._controls.show()
 
         if not self._plotter_ready:
             self._pending_render = (sigma, coords, cells, title)
@@ -524,6 +540,11 @@ class Conductivity3DWidget(QWidget):
             f"color: {color}; font-size: 13px; padding: 36px;"
         )
         self._stack.setCurrentWidget(self._caption_label)
+        # Hide the controls bar whenever the interactor isn't the
+        # active page.  The controls only make sense against a live
+        # VTK scene, and hiding them removes their contribution to
+        # the widget's minimum-size floor.
+        self._controls.hide()
 
     def _on_theme_mode_changed(self, _mode: str) -> None:
         if self._plotter is not None:
