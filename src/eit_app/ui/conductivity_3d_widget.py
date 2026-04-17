@@ -79,10 +79,16 @@ class _InteractorHost(QFrame):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        # WA_NativeWindow tells Qt to allocate a real platform window
-        # for this frame the moment it joins the visible hierarchy,
-        # rather than relying on it inheriting one from an ancestor.
-        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        # IMPORTANT: do NOT set WA_NativeWindow here.  Setting that
+        # attribute on a widget that hasn't been parented yet causes
+        # Qt to allocate a *top-level* native window (the widget has
+        # no other window to belong to), and that orphan top-level
+        # window stays around as an empty floating "EIT 工作站"
+        # ghost beside the real main window.  The native window is
+        # requested lazily in the showEvent below — by which point
+        # the widget is in the visible hierarchy and the native
+        # window is correctly attached as a child of the right
+        # parent, not a stray top-level.
         self._fired = False
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt API)
@@ -90,6 +96,12 @@ class _InteractorHost(QFrame):
         if self._fired:
             return
         self._fired = True
+        # Now that the widget has a parent and is being shown for
+        # real, asking for a native window via WA_NativeWindow +
+        # winId() attaches it as a child window of its parent
+        # instead of materialising a stray top-level.
+        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
+        _ = self.winId()
         # Defer to the next event-loop tick so any pending layout,
         # native-window allocation, and OpenGL surface setup finishes
         # before the consumer (us) reaches in to construct VTK.
