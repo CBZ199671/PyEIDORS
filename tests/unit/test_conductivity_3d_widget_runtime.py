@@ -63,6 +63,20 @@ def test_embedded_vtk_can_be_forced(monkeypatch):
     assert "forced" in reason
 
 
+def test_embedded_vtk_enabled_on_wsl_when_display_is_available(monkeypatch):
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.delenv("EIT_APP_DISABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
+    monkeypatch.setenv("DISPLAY", ":0")
+
+    enabled, reason = embedded_vtk_status()
+
+    assert enabled is True
+    assert embedded_vtk_enabled() is True
+    assert "compatible" in reason
+
+
 def test_3d_payload_uses_matplotlib_projection_when_vtk_disabled(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)

@@ -14,11 +14,9 @@ mesh format and hardware-accelerated.
 Two non-obvious design points worth keeping in mind for future
 maintenance:
 
-1.  ``QtInteractor`` is **not** constructed in WSL/offscreen/headless
-    runtimes by default.  The embedded Qt/VTK interactor can fail below
-    Python's exception layer with ``BadWindow / X_ConfigureWindow``,
-    so unsafe runtimes use the 2D projection fallback instead unless
-    ``EIT_APP_ENABLE_EMBEDDED_VTK=1`` explicitly opts in.
+1.  ``QtInteractor`` remains the default display path for real 3D
+    simulation output.  Only explicitly disabled, offscreen, or
+    display-less runtimes use the 2D projection fallback.
 
 2.  When enabled, ``QtInteractor`` is constructed only after the host
     widget is shown and owns a native child window.  Initialising VTK
@@ -73,27 +71,13 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
-def _running_under_wsl() -> bool:
-    """Return True inside WSL/WSLg without importing platform helpers."""
-    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
-        return True
-    try:
-        with open("/proc/sys/kernel/osrelease", encoding="utf-8") as handle:
-            release = handle.read()
-    except OSError:
-        return False
-    release = release.lower()
-    return "microsoft" in release or "wsl" in release
-
-
 def embedded_vtk_status() -> tuple[bool, str]:
     """Decide whether it is safe to embed pyvistaqt's VTK widget.
 
-    The FEniCSx-recommended PyVista path is still available, but the
-    embedded Qt/VTK interactor can terminate the whole process with an
-    X11 ``BadWindow`` in WSLg/offscreen/headless environments.  Those
-    failures happen below Python's exception layer, so the only reliable
-    fix is to avoid constructing ``QtInteractor`` there by default.
+    The FEniCSx-recommended PyVista path is the normal runtime path.
+    We only fall back when the user explicitly asks us to or when Qt is
+    running without a real display surface, where interactive OpenGL is
+    not meaningful.
     """
     if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
         return False, "disabled by EIT_APP_DISABLE_EMBEDDED_VTK"
@@ -103,9 +87,6 @@ def embedded_vtk_status() -> tuple[bool, str]:
     qpa = os.environ.get("QT_QPA_PLATFORM", "").strip().lower()
     if qpa in {"offscreen", "minimal"}:
         return False, f"Qt platform is {qpa!r}"
-
-    if _running_under_wsl():
-        return False, "WSL/WSLg embedded VTK is unstable"
 
     if sys.platform.startswith("linux") and not (
         os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
@@ -123,30 +104,19 @@ def embedded_vtk_enabled() -> bool:
 class _InteractorHost(QFrame):
     """QFrame whose ``realized`` signal fires once after the first
     real ``showEvent`` — i.e. when Qt has actually placed the widget
-    in the visible hierarchy and assigned it a native window.
+    in the visible hierarchy.
 
-    Used to defer VTK / pyvistaqt construction until X (or whatever
-    native windowing system) has a real handle for us, instead of
-    initialising VTK inside ``__init__`` while the host is still
-    parentless / hidden.  Without this the renderer crashes with
-    ``BadWindow / X_ConfigureWindow`` because it tries to attach to
-    a window the X server doesn't know about yet.
+    Used to defer VTK / pyvistaqt construction until Qt has placed the
+    host inside the visible hierarchy.  We deliberately do *not* force
+    a native window on this frame: ``QVTKRenderWindowInteractor``
+    creates and owns the native child window it passes to VTK, and an
+    extra native host layer has proven fragile on WSLg/X11.
     """
 
     realized = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        # IMPORTANT: do NOT set WA_NativeWindow here.  Setting that
-        # attribute on a widget that hasn't been parented yet causes
-        # Qt to allocate a *top-level* native window (the widget has
-        # no other window to belong to), and that orphan top-level
-        # window stays around as an empty floating "EIT 工作站"
-        # ghost beside the real main window.  The native window is
-        # requested lazily in the showEvent below — by which point
-        # the widget is in the visible hierarchy and the native
-        # window is correctly attached as a child of the right
-        # parent, not a stray top-level.
         self._fired = False
 
     def showEvent(self, event) -> None:  # noqa: N802 (Qt API)
@@ -154,15 +124,8 @@ class _InteractorHost(QFrame):
         if self._fired:
             return
         self._fired = True
-        # Now that the widget has a parent and is being shown for
-        # real, asking for a native window via WA_NativeWindow +
-        # winId() attaches it as a child window of its parent
-        # instead of materialising a stray top-level.
-        self.setAttribute(Qt.WidgetAttribute.WA_NativeWindow, True)
-        _ = self.winId()
-        # Defer to the next event-loop tick so any pending layout,
-        # native-window allocation, and OpenGL surface setup finishes
-        # before the consumer (us) reaches in to construct VTK.
+        # Defer to the next event-loop tick so pending layout and Qt
+        # surface setup finishes before constructing QVTK.
         QTimer.singleShot(0, self.realized.emit)
 
 
@@ -351,16 +314,10 @@ class Conductivity3DWidget(QWidget):
             self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
             return
 
-        # Belt-and-braces: even though the host's showEvent has fired,
-        # forcing winId() guarantees the platform plug-in has actually
-        # allocated the X11 / Wayland / Win32 window before VTK pulls
-        # at it.  Without this, on some platforms the first VTK render
-        # query still resolves to a stale handle.
-        _ = self._interactor_host.winId()
-
         palette = plot_palette()
         self._plotter = QtInteractor(
             self._interactor_host,
+            off_screen=False,
             auto_update=False,
             multi_samples=4,
         )
