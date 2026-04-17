@@ -339,15 +339,18 @@ def test_workflow_shell_tabs_share_right_context_minimum() -> None:
             == expected_context_min
         )
 
-        # The initial splitter_sizes still request a 300 px third
-        # pane so the comfortable default opens unchanged on a
-        # large display, even though the floor is now smaller.
+        # All three WorkflowShell tabs request the same right-pane
+        # default so the pane width doesn't visibly jump as the user
+        # switches between them.  The shared default was reduced
+        # alongside the minimums so the tab content fully fits a
+        # 1280-px laptop.
+        expected_default = 240
         for shell in (
             window._hw_tab._shell,
             window._sim_tab._shell,
             window._dataset_tab._shell,
         ):
-            assert shell._splitter_sizes[2] == 300
+            assert shell._splitter_sizes[2] == expected_default
     finally:
         _close_window(window)
 
@@ -892,7 +895,11 @@ def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
         assert window._voltage_plot._plot_bg == light_palette["bg"]
         assert window._recon_widget._plot_bg == light_palette["panel_bg"]
 
-        gt = window._sim_tab._results_widget._ground_truth_widget
+        # The simulation results widget now wraps the matplotlib pane
+        # in a dispatcher slot (_ConductivityViewSlot) that flips
+        # between 2D matplotlib and 3D PyVista for 3D meshes — reach
+        # through ._mpl to get back to the matplotlib Figure.
+        gt = window._sim_tab._results_widget._ground_truth_widget._mpl
         light_facecolor = gt._figure.patch.get_facecolor()
 
         # Flip to dark.

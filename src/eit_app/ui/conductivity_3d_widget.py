@@ -52,6 +52,7 @@ from PySide6.QtWidgets import (
 from eit_app.i18n import t, translator
 from eit_app.ui.theme import (
     plot_palette,
+    set_button_role,
     set_hint_text,
     set_section_header,
     subscribe_theme_mode,
@@ -234,6 +235,7 @@ class Conductivity3DWidget(QWidget):
         bar.addWidget(self._wire_check)
 
         self._reset_btn = QPushButton("")
+        set_button_role(self._reset_btn, "tertiary")
         self._reset_btn.clicked.connect(self._reset_camera)
         bar.addWidget(self._reset_btn)
 
