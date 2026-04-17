@@ -281,9 +281,12 @@ def parse_measurement_frame(
     if len(data) != expected:
         raise ValueError(f"Expected {expected} bytes, got {len(data)}")
 
+    from eit_app.models.precision import compute_dtype
+
     gain = VOLTAGE_AMP_FACTORS[gain_level_1]
-    real = np.empty(spec.points_per_frame, dtype=np.float64)
-    imag = np.empty(spec.points_per_frame, dtype=np.float64)
+    dtype = compute_dtype()
+    real = np.empty(spec.points_per_frame, dtype=dtype)
+    imag = np.empty(spec.points_per_frame, dtype=dtype)
 
     for i in range(spec.points_per_frame):
         off = i * spec.bytes_per_point
@@ -322,8 +325,10 @@ def parse_contact_impedance_response(
     """Parse legacy or extended contact impedance frames."""
     if len(data) % 4 != 0 or len(data) == 0:
         raise ValueError(f"Invalid contact impedance payload length: {len(data)}")
+    from eit_app.models.precision import compute_dtype
+
     gain = VOLTAGE_AMP_FACTORS[gain_level]
-    result = np.empty(len(data) // 4, dtype=np.float64)
+    result = np.empty(len(data) // 4, dtype=compute_dtype())
     for idx in range(result.shape[0]):
         off = idx * 4
         real, imag = adc_to_voltage(

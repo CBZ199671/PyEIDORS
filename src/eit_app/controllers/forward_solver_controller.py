@@ -10,6 +10,7 @@ from typing import Any
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
 
+from eit_app.models.precision import compute_dtype
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.models.forward_model_config import ForwardModelConfig
 
@@ -255,14 +256,15 @@ class _ForwardSolverWorker(QObject):
                 [cells.links(i) for i in range(n_cells)], dtype=np.int32
             )
 
+            out_dtype = compute_dtype()
             result = ForwardSolverResult(
-                boundary_voltages=voltages,
-                ground_truth_conductivity=sigma,
+                boundary_voltages=np.asarray(voltages, dtype=out_dtype),
+                ground_truth_conductivity=np.asarray(sigma, dtype=out_dtype),
                 node_coords=node_coords,
                 cell_connectivity=cell_connectivity,
                 n_elements=n_cells,
                 n_measurements=len(voltages),
-                homogeneous_voltages=homog_voltages,
+                homogeneous_voltages=np.asarray(homog_voltages, dtype=out_dtype),
             )
             self.progress.emit("Forward solve complete.")
             self.finished.emit(result)

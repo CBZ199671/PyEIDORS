@@ -74,6 +74,7 @@ from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
+from eit_app.models.precision import current_precision, set_precision
 from eit_app.ui.theme import current_theme_mode, set_theme_mode
 
 from eit_app.models.frame_model import FrameData
@@ -448,6 +449,29 @@ class EITWorkstation(QMainWindow):
         )
         self._theme_action_group.addAction(self._action_theme_dark)
 
+        # Compute precision submenu — float32 trades a few decimals of
+        # precision for ~half the memory + faster vectorised math, and
+        # the ADC delivers ~7 effective bits, so float32 already covers
+        # the input range with headroom to spare.
+        self._menu_view.addSeparator()
+        self._menu_precision = self._menu_view.addMenu("")
+        self._precision_action_group = QActionGroup(self)
+        self._precision_action_group.setExclusive(True)
+
+        self._action_precision_float32 = self._menu_precision.addAction("")
+        self._action_precision_float32.setCheckable(True)
+        self._action_precision_float32.triggered.connect(
+            lambda: self._on_precision_selected("float32")
+        )
+        self._precision_action_group.addAction(self._action_precision_float32)
+
+        self._action_precision_float64 = self._menu_precision.addAction("")
+        self._action_precision_float64.setCheckable(True)
+        self._action_precision_float64.triggered.connect(
+            lambda: self._on_precision_selected("float64")
+        )
+        self._precision_action_group.addAction(self._action_precision_float64)
+
         # Tools menu -------------------------------------------------------
         self._menu_tools = menu_bar.addMenu("")
         self._action_interop_hub = self._menu_tools.addAction("")
@@ -543,6 +567,17 @@ class EITWorkstation(QMainWindow):
         self._refresh_session_summary()
         self._status_bar._retranslate()
 
+    def _on_precision_selected(self, mode: str) -> None:
+        """Handle View → Compute Precision → float32/float64."""
+        if mode == current_precision():
+            return
+        set_precision(mode)
+        self._action_precision_float32.setChecked(mode == "float32")
+        self._action_precision_float64.setChecked(mode == "float64")
+        self._status_bar.showMessage(
+            t("main.status.precision_changed", mode=mode), 5000
+        )
+
     def _sim_shortcut_run_forward(self) -> None:
         """F5 handler — only acts when the Simulation tab is visible
         and the forward-solve button is currently enabled (i.e. we're
@@ -599,6 +634,11 @@ class EITWorkstation(QMainWindow):
         self._action_theme_dark.setText(t("menu.view.theme_dark"))
         self._action_theme_light.setChecked(current_theme_mode() == "light")
         self._action_theme_dark.setChecked(current_theme_mode() == "dark")
+        self._menu_precision.setTitle(t("menu.view.precision"))
+        self._action_precision_float32.setText(t("menu.view.precision_float32"))
+        self._action_precision_float64.setText(t("menu.view.precision_float64"))
+        self._action_precision_float32.setChecked(current_precision() == "float32")
+        self._action_precision_float64.setChecked(current_precision() == "float64")
 
         self._menu_tools.setTitle(t("menu.tools"))
         self._action_interop_hub.setText(t("menu.tools.interop_hub"))
@@ -2941,15 +2981,17 @@ class EITWorkstation(QMainWindow):
         # "got 104 columns, expected 208 columns" mismatch between
         # simulation forward output and the reconstruction pattern.
         from eit_app.models.frame_model import FrameData
+        from eit_app.models.precision import compute_dtype
         import numpy as np
 
         n_meas = len(result.boundary_voltages)
-        zero_imag = np.zeros(n_meas, dtype=np.float64)
+        meas_dtype = compute_dtype()
+        zero_imag = np.zeros(n_meas, dtype=meas_dtype)
 
         homog = (
-            np.asarray(result.homogeneous_voltages, dtype=np.float64)
+            np.asarray(result.homogeneous_voltages, dtype=meas_dtype)
             if result.homogeneous_voltages is not None
-            else np.zeros(n_meas, dtype=np.float64)
+            else np.zeros(n_meas, dtype=meas_dtype)
         )
         ref_frame = FrameData(
             real=homog,
@@ -2958,7 +3000,7 @@ class EITWorkstation(QMainWindow):
             frame_index=0,
         )
         tgt_frame = FrameData(
-            real=np.asarray(result.boundary_voltages, dtype=np.float64),
+            real=np.asarray(result.boundary_voltages, dtype=meas_dtype),
             imag=zero_imag,
             timestamp=0.0,
             frame_index=1,
@@ -3044,9 +3086,10 @@ class EITWorkstation(QMainWindow):
                 measured = getattr(recon_result, "measured", None)
                 simulated = getattr(recon_result, "simulated", None)
                 if measured is not None and simulated is not None:
+                    plot_dtype = compute_dtype()
                     self._sim_tab.results_widget.voltage_plot.update_simulation_voltages(
-                        ground_truth=np.asarray(measured, dtype=np.float64).reshape(-1),
-                        reconstructed=np.asarray(simulated, dtype=np.float64).reshape(-1),
+                        ground_truth=np.asarray(measured, dtype=plot_dtype).reshape(-1),
+                        reconstructed=np.asarray(simulated, dtype=plot_dtype).reshape(-1),
                     )
             except Exception as exc:
                 log.warning(

@@ -80,9 +80,12 @@ def test_relay_registration_and_transmit_roundtrip() -> None:
 
 
 def test_parse_measurement_frame_keeps_2d_layout() -> None:
+    from eit_app.models.precision import compute_dtype
+
     real, imag = parse_measurement_frame(bytes(208 * 4))
 
+    expected_dtype = compute_dtype()
     assert real.shape == (208,)
     assert imag.shape == (208,)
-    assert real.dtype == np.float64
-    assert imag.dtype == np.float64
+    assert real.dtype == expected_dtype
+    assert imag.dtype == expected_dtype

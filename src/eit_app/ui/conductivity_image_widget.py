@@ -1,12 +1,16 @@
-"""Reusable matplotlib tripcolor conductivity display."""
+"""Reusable matplotlib conductivity display (2D tripcolor / 3D Poly3D)."""
 
 from __future__ import annotations
 
 import numpy as np
+import matplotlib as mpl
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.tri import Triangulation
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from eit_app.ui.fonts import plot_font_families, serif_font_family
@@ -21,6 +25,40 @@ def _triangle_area_xy(triangles: np.ndarray, x: np.ndarray, y: np.ndarray) -> np
     x2 = x[triangles[:, 2]]
     y2 = y[triangles[:, 2]]
     return 0.5 * np.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
+
+
+def _is_3d_mesh(node_coords: np.ndarray, cell_connectivity: np.ndarray) -> bool:
+    """True iff node coords carry a Z column and cells are tetrahedra."""
+    coords = np.asarray(node_coords)
+    cells = np.asarray(cell_connectivity)
+    if coords.ndim != 2 or coords.shape[1] < 3:
+        return False
+    if cells.ndim != 2 or cells.shape[1] != 4:
+        return False
+    return bool(np.ptp(coords[:, 2]) > 1.0e-9)
+
+
+def _extract_boundary_triangles_3d(
+    cell_connectivity: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return tetrahedral boundary faces as (triangles[N,3], source_cell[N])."""
+    cells = np.asarray(cell_connectivity, dtype=np.int64)
+    if cells.ndim != 2 or cells.shape[0] == 0 or cells.shape[1] != 4:
+        return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+
+    faces: dict[tuple[int, int, int], tuple[tuple[int, int, int], int] | None] = {}
+    face_offsets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+    for cell_idx, cell in enumerate(cells):
+        for offsets in face_offsets:
+            face = tuple(int(cell[offset]) for offset in offsets)
+            key = tuple(sorted(face))
+            faces[key] = None if key in faces else (face, cell_idx)
+    kept = [payload for payload in faces.values() if payload is not None]
+    if not kept:
+        return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+    triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
+    sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
+    return triangles, sources
 
 
 def _project_cells_to_triangles(
@@ -102,6 +140,7 @@ class ConductivityImageWidget(QWidget):
         self._canvas = FigureCanvasQTAgg(self._figure)
         layout.addWidget(self._canvas)
 
+        self._ax_is_3d = False
         self._ax = self._figure.add_subplot(111)
         self._ax.set_facecolor(palette["axes_bg"])
         self._ax.set_title(title, fontproperties=self._title_font, color=palette["text"])
@@ -168,13 +207,34 @@ class ConductivityImageWidget(QWidget):
         cell_connectivity: np.ndarray,
         title: str | None = None,
     ) -> None:
-        """Render a conductivity distribution on the mesh."""
-        self._remove_colorbar()
-        self._ax.clear()
+        """Render a conductivity distribution.
 
+        Picks 2D tripcolor for 2D meshes (triangles or projected tetra)
+        and a true 3D Poly3DCollection for 3D tetrahedral meshes whose
+        node coords carry a non-degenerate Z column.
+        """
         if node_coords.ndim != 2 or node_coords.shape[1] < 2:
+            self._ensure_axes(is_3d=False)
+            self._remove_colorbar()
+            self._ax.clear()
             self._show_error("Invalid mesh coordinates")
             return
+
+        if _is_3d_mesh(node_coords, cell_connectivity):
+            self._render_3d(conductivity, node_coords, cell_connectivity, title)
+        else:
+            self._render_2d(conductivity, node_coords, cell_connectivity, title)
+
+    def _render_2d(
+        self,
+        conductivity: np.ndarray,
+        node_coords: np.ndarray,
+        cell_connectivity: np.ndarray,
+        title: str | None,
+    ) -> None:
+        self._ensure_axes(is_3d=False)
+        self._remove_colorbar()
+        self._ax.clear()
 
         x = node_coords[:, 0]
         y = node_coords[:, 1]
@@ -210,32 +270,157 @@ class ConductivityImageWidget(QWidget):
         self._ax.set_aspect("equal")
         self._apply_axes_chrome()
 
-        # shrink + aspect + pad keep the colorbar from dominating the
-        # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
-        # keeps it slim, pad=0.04 pulls it closer to the image so the
-        # matplotlib auto-layout does not leave a huge right-hand gap.
-        self._colorbar = self._figure.colorbar(
-            tpc, ax=self._ax, label="S/m",
-            shrink=0.72, aspect=16, pad=0.04,
-        )
-        self._colorbar.ax.yaxis.label.set_fontname(self._serif)
-        self._colorbar.ax.yaxis.label.set_size(10)
-        self._colorbar.ax.yaxis.label.set_color(palette["text"])
-        # Slightly smaller tick labels so the numbers don't compete with
-        # the main title for visual weight.
-        self._colorbar.ax.tick_params(labelsize=8, colors=palette["text"])
-        for spine in self._colorbar.ax.spines.values():
-            spine.set_color(palette["border"])
+        self._attach_colorbar(tpc)
 
-        # Cache so dark-mode toggles can re-render without losing data.
         self._last_image = (conductivity, node_coords, cell_connectivity, title)
         self._last_caption = None
 
         self._canvas.draw()
 
+    def _render_3d(
+        self,
+        conductivity: np.ndarray,
+        node_coords: np.ndarray,
+        cell_connectivity: np.ndarray,
+        title: str | None,
+    ) -> None:
+        """Draw the tetrahedral mesh as a 3D Poly3DCollection of boundary faces."""
+        self._ensure_axes(is_3d=True)
+        self._remove_colorbar()
+        self._ax.clear()
+
+        triangles, source_cells = _extract_boundary_triangles_3d(cell_connectivity)
+        if len(triangles) == 0:
+            self._show_error("3D render failed: no boundary faces")
+            return
+
+        coords3 = np.asarray(node_coords, dtype=float)[:, :3]
+        sigma = np.asarray(conductivity, dtype=float)
+
+        if len(sigma) == len(cell_connectivity):
+            face_values = sigma[source_cells]
+        elif len(sigma) == len(coords3):
+            face_values = sigma[triangles].mean(axis=1)
+        else:
+            self._show_error(
+                f"Size mismatch: sigma={len(sigma)}, "
+                f"cells={len(cell_connectivity)}, nodes={len(coords3)}"
+            )
+            return
+
+        verts = coords3[triangles]  # shape (F, 3, 3)
+
+        sigma_min = float(np.nanmin(face_values)) if face_values.size else 0.0
+        sigma_max = float(np.nanmax(face_values)) if face_values.size else 1.0
+        if not np.isfinite(sigma_min) or not np.isfinite(sigma_max):
+            sigma_min, sigma_max = 0.0, 1.0
+        if sigma_max - sigma_min < 1.0e-12:
+            sigma_max = sigma_min + 1.0e-12
+        norm = Normalize(vmin=sigma_min, vmax=sigma_max)
+        cmap = mpl.colormaps["viridis"]
+        face_colors = cmap(norm(face_values))
+
+        palette = plot_palette()
+        collection = Poly3DCollection(
+            verts,
+            facecolors=face_colors,
+            edgecolors=palette["border"],
+            linewidths=0.2,
+            antialiased=True,
+        )
+        self._ax.add_collection3d(collection)
+
+        self._set_3d_bounds(coords3)
+
+        display_title = title or self._default_title
+        self._ax.set_title(
+            display_title, fontproperties=self._title_font, color=palette["text"]
+        )
+        self._apply_axes_chrome_3d()
+
+        mappable = ScalarMappable(norm=norm, cmap=cmap)
+        mappable.set_array(face_values)
+        self._attach_colorbar(mappable)
+
+        self._last_image = (conductivity, node_coords, cell_connectivity, title)
+        self._last_caption = None
+
+        self._canvas.draw()
+
+    def _set_3d_bounds(self, coords3: np.ndarray) -> None:
+        """Equalise the 3D bounding cube so the mesh doesn't squish."""
+        if coords3.size == 0:
+            return
+        mins = coords3.min(axis=0)
+        maxs = coords3.max(axis=0)
+        spans = maxs - mins
+        span = float(np.nanmax(spans))
+        if not np.isfinite(span) or span <= 0.0:
+            span = 1.0
+        centers = (mins + maxs) / 2.0
+        half = span / 2.0
+        self._ax.set_xlim(centers[0] - half, centers[0] + half)
+        self._ax.set_ylim(centers[1] - half, centers[1] + half)
+        self._ax.set_zlim(centers[2] - half, centers[2] + half)
+        try:
+            self._ax.set_box_aspect((1.0, 1.0, 1.0))
+        except Exception:
+            pass
+
+    def _attach_colorbar(self, mappable) -> None:
+        """Bolt a slim S/m colorbar onto the right side of the active axes."""
+        palette = plot_palette()
+        # shrink + aspect + pad keep the colorbar from dominating the
+        # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
+        # keeps it slim, pad=0.04 pulls it closer to the image so the
+        # matplotlib auto-layout does not leave a huge right-hand gap.
+        self._colorbar = self._figure.colorbar(
+            mappable, ax=self._ax, label="S/m",
+            shrink=0.72, aspect=16, pad=0.04,
+        )
+        self._colorbar.ax.yaxis.label.set_fontname(self._serif)
+        self._colorbar.ax.yaxis.label.set_size(10)
+        self._colorbar.ax.yaxis.label.set_color(palette["text"])
+        self._colorbar.ax.tick_params(labelsize=8, colors=palette["text"])
+        for spine in self._colorbar.ax.spines.values():
+            spine.set_color(palette["border"])
+
+    def _ensure_axes(self, *, is_3d: bool) -> None:
+        """Recreate the axes if the requested projection differs from current."""
+        if is_3d == self._ax_is_3d:
+            return
+        self._remove_colorbar()
+        try:
+            self._figure.delaxes(self._ax)
+        except (KeyError, ValueError):
+            pass
+        if is_3d:
+            self._ax = self._figure.add_subplot(111, projection="3d")
+        else:
+            self._ax = self._figure.add_subplot(111)
+            self._ax.set_aspect("equal")
+        self._ax_is_3d = is_3d
+
+    def _apply_axes_chrome_3d(self) -> None:
+        """Push the active palette onto a 3D axes' panes, ticks, and title."""
+        palette = plot_palette()
+        text = palette["text"]
+        # Hide the boxy 3D pane fills so the figure background bleeds
+        # through; matches the dark-mode-friendly look of the 2D path.
+        for axis in (self._ax.xaxis, self._ax.yaxis, self._ax.zaxis):
+            axis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+            axis._axinfo["grid"]["color"] = palette["border"]
+            axis.label.set_color(text)
+            axis.label.set_fontname(self._serif)
+            axis.set_tick_params(colors=text, labelsize=8)
+        for spine in self._ax.spines.values():
+            spine.set_color(palette["border"])
+        self._figure.patch.set_facecolor(palette["panel_bg"])
+
     def clear(self) -> None:
         """Reset to placeholder state."""
         palette = plot_palette()
+        self._ensure_axes(is_3d=False)
         self._remove_colorbar()
         self._ax.clear()
         self._ax.set_facecolor(palette["axes_bg"])
@@ -254,6 +439,7 @@ class ConductivityImageWidget(QWidget):
         loading state than the earlier transparent-overlay-on-data
         behaviour.
         """
+        self._ensure_axes(is_3d=False)
         self._remove_colorbar()
         self._ax.clear()
         self._draw_caption(message or "Loading\u2026", kind="loading")
@@ -297,9 +483,11 @@ class ConductivityImageWidget(QWidget):
     def _show_placeholder(self) -> None:
         # Reuse the unified caption painter so placeholder/loading/error
         # all look consistent and repaint on theme changes.
+        self._ensure_axes(is_3d=False)
         self._draw_caption("No data", kind="placeholder")
 
     def _show_error(self, msg: str) -> None:
+        self._ensure_axes(is_3d=False)
         self._ax.clear()
         self._draw_caption(msg, kind="error")
 
