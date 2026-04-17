@@ -39,6 +39,10 @@ TRANSLATIONS: dict[str, str] = {
     "menu.view": "\u89c6\u56fe(&V)",                                            # 视图(&V)
     "menu.view.theme_light": "\u6d45\u8272\u4e3b\u9898(&L)",                    # 浅色主题(&L)
     "menu.view.theme_dark": "\u6df1\u8272\u4e3b\u9898(&D)",                      # 深色主题(&D)
+    "menu.view.precision": "\u8ba1\u7b97\u7cbe\u5ea6(&P)",                       # 计算精度(&P)
+    "menu.view.precision_float32": "Float32 (\u5feb\u901f, AD 7-bit \u5145\u88d5)",  # Float32 (快速, AD 7-bit 充裕)
+    "menu.view.precision_float64": "Float64 (\u9ad8\u7cbe\u5ea6)",                # Float64 (高精度)
+    "main.status.precision_changed": "\u8ba1\u7b97\u7cbe\u5ea6\u5df2\u5207\u6362\u4e3a {mode}\uff0c\u4e0b\u4e00\u6b21\u91c7\u96c6 / \u6c42\u89e3\u751f\u6548\u3002",  # 计算精度已切换为 {mode}，下一次采集 / 求解生效。
     "menu.tools": "\u5de5\u5177(&T)",                                           # 工具(&T)
     "menu.tools.interop_hub": "EIDORS \u4e92\u64cd\u4f5c(&I)\u2026",             # EIDORS 互操作(&I)…
     "menu.tools.difference": "\u5dee\u5206\u91cd\u6784(&D)\u2026",              # 差分重构(&D)…
