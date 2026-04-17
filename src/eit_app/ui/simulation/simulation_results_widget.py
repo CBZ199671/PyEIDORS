@@ -13,7 +13,6 @@ from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.conductivity_3d_widget import (
     Conductivity3DWidget,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
-    embedded_vtk_enabled,
 )
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 
@@ -38,8 +37,9 @@ class _ConductivityViewSlot(QWidget):
     most recent payload's dimension.
 
     The 3D widget object is cheap to construct.  On runtimes where
-    embedded Qt/VTK is unsafe (WSLg/offscreen/headless), 3D payloads
-    are rendered through the matplotlib surface-projection path instead.
+    embedded Qt/VTK is unsafe (WSLg/offscreen/headless), that widget
+    chooses a safe in-process 3D renderer internally; this dispatcher
+    never downgrades 3D payloads to the 2D projection view.
     """
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
@@ -90,23 +90,10 @@ class _ConductivityViewSlot(QWidget):
         title: str | None = None,
     ) -> None:
         if _is_3d_payload(node_coords, cell_connectivity):
-            if embedded_vtk_enabled():
-                self._three_d.update_image(
-                    conductivity, node_coords, cell_connectivity, title=title
-                )
-                self._stack.setCurrentWidget(self._three_d)
-            else:
-                base_title = title or self._title
-                projection_title = t("sim.results.viewer3d_projection_title").format(
-                    title=base_title
-                )
-                self._mpl.update_image(
-                    conductivity,
-                    node_coords,
-                    cell_connectivity,
-                    title=projection_title,
-                )
-                self._stack.setCurrentWidget(self._mpl)
+            self._three_d.update_image(
+                conductivity, node_coords, cell_connectivity, title=title
+            )
+            self._stack.setCurrentWidget(self._three_d)
         else:
             self._mpl.update_image(
                 conductivity, node_coords, cell_connectivity, title=title

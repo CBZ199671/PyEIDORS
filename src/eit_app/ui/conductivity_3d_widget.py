@@ -1,9 +1,9 @@
-"""PyVista (VTK) 3D conductivity display with opacity / clipping controls.
+"""3D conductivity display with opacity / clipping controls.
 
 Used by ``SimulationResultsWidget`` for 3D tetra / hex volume phantoms — far
-smoother than matplotlib's mpl_toolkits.mplot3d under interactive
-rotation, and exposes interior cells via a transparency slider so
-the user can see internal inclusions through the bulk.
+smoother through PyVista/VTK when the runtime can safely embed a native
+OpenGL window, and still a real in-process 3D view when WSLg/headless
+runtimes need the safe Matplotlib backend.
 
 PyVista (built on VTK) is the visualisation library that the FEniCSx
 project itself ships with — see
@@ -14,9 +14,10 @@ mesh format and hardware-accelerated.
 Two non-obvious design points worth keeping in mind for future
 maintenance:
 
-1.  ``QtInteractor`` remains the default display path for real 3D
-    simulation output.  Only explicitly disabled, offscreen, or
-    display-less runtimes use the 2D projection fallback.
+1.  ``QtInteractor`` remains the preferred display path for real 3D
+    simulation output on native desktop runtimes.  WSLg/X11, offscreen,
+    and display-less runtimes use the safe Matplotlib 3D renderer
+    instead of a 2D projection.
 
 2.  When enabled, ``QtInteractor`` is constructed only after the host
     widget is shown and owns a native child window.  Initialising VTK
@@ -35,9 +36,17 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from matplotlib import colormaps
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.cm import ScalarMappable
+from matplotlib.colors import Normalize
+from matplotlib.figure import Figure
+from matplotlib.font_manager import FontProperties
+from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -52,6 +61,7 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.ui.fonts import plot_font_families
 from eit_app.ui.theme import (
     plot_palette,
     set_button_role,
@@ -66,19 +76,56 @@ log = logging.getLogger(__name__)
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
+_MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
+_CELL_FACE_OFFSETS = {
+    4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
+    8: (
+        (0, 1, 2, 3),
+        (4, 5, 6, 7),
+        (0, 1, 5, 4),
+        (1, 2, 6, 5),
+        (2, 3, 7, 6),
+        (3, 0, 4, 7),
+    ),
+}
 
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
+def _plot_font_families() -> list[str]:
+    families = plot_font_families()
+    for family in _MPL_FONT_FALLBACKS:
+        if family not in families:
+            families.append(family)
+    try:
+        from matplotlib import font_manager
+
+        known = {font.name for font in font_manager.fontManager.ttflist}
+    except Exception:
+        known = set()
+    available = [family for family in families if not known or family in known]
+    return available or list(_MPL_FONT_FALLBACKS)
+
+
+def _running_under_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(errors="ignore").lower()
+    except OSError:
+        return False
+
+
 def embedded_vtk_status() -> tuple[bool, str]:
     """Decide whether it is safe to embed pyvistaqt's VTK widget.
 
-    The FEniCSx-recommended PyVista path is the normal runtime path.
-    We only fall back when the user explicitly asks us to or when Qt is
-    running without a real display surface, where interactive OpenGL is
-    not meaningful.
+    The FEniCSx-recommended PyVista path is available on native desktop
+    runtimes, but WSLg/X11 has repeatedly crashed the whole process from
+    inside VTK's native window setup (``BadWindow / X_ConfigureWindow``).
+    That class of failure cannot be caught by Python, so WSL defaults to
+    the safe Matplotlib 3D backend unless explicitly forced.
     """
     if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
         return False, "disabled by EIT_APP_DISABLE_EMBEDDED_VTK"
@@ -93,6 +140,9 @@ def embedded_vtk_status() -> tuple[bool, str]:
         os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY")
     ):
         return False, "no DISPLAY or WAYLAND_DISPLAY is available"
+
+    if _running_under_wsl():
+        return False, "WSLg/X11 embedded VTK is unsafe in this runtime"
 
     return True, "runtime looks compatible"
 
@@ -142,6 +192,25 @@ def _hex_to_rgb(value: str) -> tuple[float, float, float]:
     )
 
 
+def _boundary_faces(cells: np.ndarray) -> tuple[list[tuple[int, ...]], np.ndarray]:
+    """Return boundary faces plus the source volume-cell index for each face."""
+    faces: dict[tuple[int, ...], tuple[tuple[int, ...], int] | None] = {}
+    offsets_for_cell = _CELL_FACE_OFFSETS.get(int(cells.shape[1]))
+    if offsets_for_cell is None:
+        return [], np.empty((0,), dtype=np.int64)
+
+    for cell_idx, cell in enumerate(cells):
+        for offsets in offsets_for_cell:
+            face = tuple(int(cell[offset]) for offset in offsets)
+            key = tuple(sorted(face))
+            faces[key] = None if key in faces else (face, cell_idx)
+
+    kept = [payload for payload in faces.values() if payload is not None]
+    return [face for face, _idx in kept], np.asarray(
+        [idx for _face, idx in kept], dtype=np.int64
+    )
+
+
 class Conductivity3DWidget(QWidget):
     """Hardware-accelerated 3D conductivity viewer with transparency controls.
 
@@ -165,6 +234,11 @@ class Conductivity3DWidget(QWidget):
         self._mesh_actor = None
         self._highlight_actor = None
         self._wire_actor = None
+
+        self._render_backend = "caption"
+        self._last_vtk_disabled_reason: str | None = None
+        self._title_font = FontProperties(family=_plot_font_families(), size=14)
+        self._mpl3d_colorbar = None
 
         self._plotter = None
         self._plotter_ready = False
@@ -210,6 +284,17 @@ class Conductivity3DWidget(QWidget):
         # 3D slot was even present.
         self._caption_label.setMinimumSize(0, 0)
         self._stack.addWidget(self._caption_label)
+
+        self._mpl3d_host = QWidget()
+        self._mpl3d_layout = QVBoxLayout(self._mpl3d_host)
+        self._mpl3d_layout.setContentsMargins(0, 0, 0, 0)
+        palette = plot_palette()
+        self._mpl3d_figure = Figure(figsize=(5, 4))
+        self._mpl3d_figure.patch.set_facecolor(palette["panel_bg"])
+        self._mpl3d_canvas = FigureCanvasQTAgg(self._mpl3d_figure)
+        self._mpl3d_layout.addWidget(self._mpl3d_canvas)
+        self._mpl3d_ax = self._mpl3d_figure.add_subplot(111, projection="3d")
+        self._stack.addWidget(self._mpl3d_host)
 
         # _InteractorHost defers its ``realized`` signal until the
         # widget is actually shown for the first time AND Qt has had
@@ -302,17 +387,33 @@ class Conductivity3DWidget(QWidget):
         vtk_enabled, reason = embedded_vtk_status()
         if not vtk_enabled:
             log.info("embedded PyVista/VTK viewer disabled: %s", reason)
-            self._show_caption(
-                t("sim.results.viewer3d_embedded_disabled"), kind="placeholder"
-            )
+            if self._pending_render is not None:
+                sigma, coords, cells, title = self._pending_render
+                self._pending_render = None
+                if title is not None:
+                    self.setTitle(title)
+                self._last_image = (sigma, coords, cells, title)
+                self._render_matplotlib_scene(sigma, coords, cells)
+            else:
+                self._show_caption(
+                    t("sim.results.viewer3d_embedded_disabled"), kind="placeholder"
+                )
             return
 
         try:
             import pyvista  # noqa: F401  (side-effect: VTK init)
             from pyvistaqt import QtInteractor
         except Exception as exc:  # pragma: no cover — env without VTK
-            log.warning("pyvistaqt unavailable, 3D widget falls back to caption: %s", exc)
-            self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
+            log.warning("pyvistaqt unavailable; using safe 3D renderer: %s", exc)
+            if self._pending_render is not None:
+                sigma, coords, cells, title = self._pending_render
+                self._pending_render = None
+                if title is not None:
+                    self.setTitle(title)
+                self._last_image = (sigma, coords, cells, title)
+                self._render_matplotlib_scene(sigma, coords, cells)
+            else:
+                self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
             return
 
         palette = plot_palette()
@@ -334,6 +435,7 @@ class Conductivity3DWidget(QWidget):
                 self.setTitle(title)
             self._last_image = (sigma, coords, cells, title)
             self._build_scene(sigma, coords, cells)
+            self._render_backend = "vtk"
 
     # ------------------------------------------------------------------
     # Public API (mirrors ConductivityImageWidget)
@@ -369,12 +471,27 @@ class Conductivity3DWidget(QWidget):
             )
             return
 
+        if title is not None:
+            self.setTitle(title)
+        self._last_image = (sigma, coords, cells, title)
+
+        vtk_enabled, reason = embedded_vtk_status()
+        if not vtk_enabled:
+            if reason != self._last_vtk_disabled_reason:
+                log.info("embedded PyVista/VTK viewer disabled: %s", reason)
+                self._last_vtk_disabled_reason = reason
+            self._pending_render = None
+            self._discard_actors()
+            self._render_matplotlib_scene(sigma, coords, cells)
+            return
+
         # Switching the stacked layout to the interactor host first
         # gets the host into the visible tree.  On the very first
         # switch this triggers _InteractorHost.showEvent, which
         # eventually fires .realized → _init_plotter → builds the
         # scene from _pending_render.  On subsequent calls the
         # plotter is already ready and we render straight away.
+        self._render_backend = "vtk"
         self._stack.setCurrentWidget(self._interactor_host)
         self._controls.show()
 
@@ -382,9 +499,6 @@ class Conductivity3DWidget(QWidget):
             self._pending_render = (sigma, coords, cells, title)
             return
 
-        if title is not None:
-            self.setTitle(title)
-        self._last_image = (sigma, coords, cells, title)
         self._build_scene(sigma, coords, cells)
 
     def clear(self) -> None:
@@ -414,6 +528,183 @@ class Conductivity3DWidget(QWidget):
                 except Exception:  # pragma: no cover — VTK quirk
                     pass
                 setattr(self, actor_attr, None)
+
+    def _remove_mpl3d_colorbar(self) -> None:
+        if self._mpl3d_colorbar is None:
+            return
+        try:
+            self._mpl3d_colorbar.remove()
+        except Exception:  # pragma: no cover — matplotlib layout edge case
+            pass
+        self._mpl3d_colorbar = None
+
+    def _apply_mpl3d_chrome(self) -> None:
+        palette = plot_palette()
+        text = palette.get("text", "#222")
+        border = palette.get("border", "#888")
+        axes_bg = palette.get("axes_bg", "#ffffff")
+        self._mpl3d_figure.patch.set_facecolor(palette.get("panel_bg", "#ffffff"))
+        self._mpl3d_ax.set_facecolor(axes_bg)
+        self._mpl3d_ax.tick_params(colors=text, labelsize=8)
+        for axis in (self._mpl3d_ax.xaxis, self._mpl3d_ax.yaxis, self._mpl3d_ax.zaxis):
+            axis.label.set_color(text)
+            axis.label.set_fontfamily(_plot_font_families())
+            axis.pane.set_facecolor((*_hex_to_rgb(axes_bg), 0.18))
+            axis.pane.set_edgecolor(border)
+        for label in (
+            self._mpl3d_ax.get_xticklabels()
+            + self._mpl3d_ax.get_yticklabels()
+            + self._mpl3d_ax.get_zticklabels()
+        ):
+            label.set_color(text)
+            label.set_fontfamily(_plot_font_families())
+
+    def _render_matplotlib_scene(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> None:
+        """Render the volume as a real 3D Matplotlib scene.
+
+        This is intentionally *not* the old XY projection.  It draws
+        boundary faces in a 3D Axes and, for cell-centered inhomogeneous
+        fields, also draws the internal anomalous cells through the
+        transparent shell so the result remains spatially inspectable
+        without touching VTK's native window layer.
+        """
+        self._remove_mpl3d_colorbar()
+        elev = getattr(self._mpl3d_ax, "elev", 22.0)
+        azim = getattr(self._mpl3d_ax, "azim", -45.0)
+        self._mpl3d_ax.clear()
+        self._apply_mpl3d_chrome()
+
+        faces, source_cells = _boundary_faces(cells)
+        valid_face_payload: list[tuple[tuple[int, ...], int]] = []
+        for face, source_cell in zip(faces, source_cells, strict=False):
+            if all(0 <= idx < len(coords) for idx in face):
+                valid_face_payload.append((face, int(source_cell)))
+        if not valid_face_payload:
+            self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
+            return
+
+        n_cells = cells.shape[0]
+        if sigma.shape[0] == n_cells:
+            scalar_mode = "cell"
+            cell_sigma = sigma.astype(float, copy=False)
+            face_values = np.asarray(
+                [cell_sigma[source_cell] for _face, source_cell in valid_face_payload],
+                dtype=float,
+            )
+        else:
+            scalar_mode = "point"
+            cell_sigma = sigma[cells].mean(axis=1)
+            face_values = np.asarray(
+                [
+                    float(np.nanmean(sigma[np.asarray(face, dtype=np.int64)]))
+                    for face, _source_cell in valid_face_payload
+                ],
+                dtype=float,
+            )
+
+        finite_values = face_values[np.isfinite(face_values)]
+        if finite_values.size == 0:
+            sigma_min, sigma_max = 0.0, 1.0
+        else:
+            sigma_min = float(np.nanmin(finite_values))
+            sigma_max = float(np.nanmax(finite_values))
+        if sigma_max - sigma_min < 1.0e-12:
+            sigma_max = sigma_min + 1.0e-12
+
+        palette = plot_palette()
+        cmap = colormaps["viridis"]
+        norm = Normalize(vmin=sigma_min, vmax=sigma_max)
+        opacity = self._opacity_slider.value() / 100.0
+        face_vertices = [coords[np.asarray(face, dtype=np.int64), :3] for face, _ in valid_face_payload]
+        colors = cmap(norm(face_values))
+        colors[:, 3] = opacity
+        edge_color = palette.get("border", "#888") if self._wire_check.isChecked() else "none"
+
+        mesh = Poly3DCollection(
+            face_vertices,
+            facecolors=colors,
+            edgecolors=edge_color,
+            linewidths=0.35,
+            alpha=None,
+        )
+        self._mpl3d_ax.add_collection3d(mesh)
+
+        if scalar_mode == "cell" and self._highlight_check.isChecked():
+            median = float(np.nanmedian(cell_sigma))
+            spread = float(np.nanstd(cell_sigma))
+            threshold = max(spread * 0.5, 1.0e-6)
+            inhom_indices = np.flatnonzero(np.abs(cell_sigma - median) > threshold)
+            if spread > 1.0e-6 and inhom_indices.size:
+                highlight_vertices: list[np.ndarray] = []
+                highlight_values: list[float] = []
+                offsets_for_cell = _CELL_FACE_OFFSETS.get(int(cells.shape[1]), ())
+                for cell_idx in inhom_indices:
+                    cell = cells[int(cell_idx)]
+                    for offsets in offsets_for_cell:
+                        face = tuple(int(cell[offset]) for offset in offsets)
+                        if all(0 <= idx < len(coords) for idx in face):
+                            highlight_vertices.append(coords[np.asarray(face), :3])
+                            highlight_values.append(float(cell_sigma[int(cell_idx)]))
+                if highlight_vertices:
+                    highlight_colors = cmap(norm(np.asarray(highlight_values)))
+                    highlight_colors[:, 3] = max(0.82, opacity)
+                    highlight = Poly3DCollection(
+                        highlight_vertices,
+                        facecolors=highlight_colors,
+                        edgecolors=palette.get("highlight", "#f39c12"),
+                        linewidths=0.45,
+                        alpha=None,
+                    )
+                    self._mpl3d_ax.add_collection3d(highlight)
+
+        points = coords[:, :3]
+        mins = np.nanmin(points, axis=0)
+        maxs = np.nanmax(points, axis=0)
+        spans = np.maximum(maxs - mins, 1.0e-9)
+        center = (mins + maxs) * 0.5
+        radius = float(np.nanmax(spans) * 0.56)
+        if radius <= 0.0 or not np.isfinite(radius):
+            radius = 1.0
+        self._mpl3d_ax.set_xlim(center[0] - radius, center[0] + radius)
+        self._mpl3d_ax.set_ylim(center[1] - radius, center[1] + radius)
+        self._mpl3d_ax.set_zlim(center[2] - radius, center[2] + radius)
+        try:
+            self._mpl3d_ax.set_box_aspect(tuple(spans))
+        except Exception:  # pragma: no cover — older matplotlib fallback
+            pass
+        self._mpl3d_ax.view_init(elev=elev, azim=azim)
+
+        title = self._default_title
+        self._mpl3d_ax.set_title(
+            title,
+            fontproperties=self._title_font,
+            color=palette.get("text", "#222"),
+            pad=8,
+        )
+        self._mpl3d_ax.set_xlabel("X")
+        self._mpl3d_ax.set_ylabel("Y")
+        self._mpl3d_ax.set_zlabel("Z")
+
+        scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
+        scalar_mappable.set_array(face_values)
+        self._mpl3d_colorbar = self._mpl3d_figure.colorbar(
+            scalar_mappable,
+            ax=self._mpl3d_ax,
+            shrink=0.66,
+            pad=0.08,
+        )
+        self._mpl3d_colorbar.set_label("S/m", color=palette.get("text", "#222"))
+        self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
+
+        self._stack.setCurrentWidget(self._mpl3d_host)
+        self._controls.show()
+        self._render_backend = "mpl3d"
+        self._mpl3d_canvas.draw_idle()
 
     def _build_scene(
         self,
@@ -558,24 +849,37 @@ class Conductivity3DWidget(QWidget):
     def _on_opacity_changed(self, value: int) -> None:
         opacity = value / 100.0
         self._opacity_value.setText(f"{opacity:.2f}")
+        if self._render_backend == "mpl3d" and self._last_image is not None:
+            self._render_matplotlib_scene(*self._last_image[:3])
+            return
         if self._mesh_actor is None or self._plotter is None:
             return
         self._mesh_actor.GetProperty().SetOpacity(opacity)
         self._plotter.render()
 
     def _on_highlight_toggled(self, checked: bool) -> None:
+        if self._render_backend == "mpl3d" and self._last_image is not None:
+            self._render_matplotlib_scene(*self._last_image[:3])
+            return
         if self._highlight_actor is None or self._plotter is None:
             return
         self._highlight_actor.SetVisibility(bool(checked))
         self._plotter.render()
 
     def _on_wire_toggled(self, checked: bool) -> None:
+        if self._render_backend == "mpl3d" and self._last_image is not None:
+            self._render_matplotlib_scene(*self._last_image[:3])
+            return
         if self._wire_actor is None or self._plotter is None:
             return
         self._wire_actor.SetVisibility(bool(checked))
         self._plotter.render()
 
     def _reset_camera(self) -> None:
+        if self._render_backend == "mpl3d":
+            self._mpl3d_ax.view_init(elev=22.0, azim=-45.0)
+            self._mpl3d_canvas.draw_idle()
+            return
         if self._plotter is not None:
             self._plotter.reset_camera()
             self._plotter.render()
@@ -585,6 +889,8 @@ class Conductivity3DWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _show_caption(self, text: str, *, kind: str) -> None:
+        self._render_backend = "caption"
+        self._remove_mpl3d_colorbar()
         palette = plot_palette()
         color = {
             "placeholder": palette.get("caption", "#888"),
@@ -603,6 +909,9 @@ class Conductivity3DWidget(QWidget):
         self._controls.hide()
 
     def _on_theme_mode_changed(self, _mode: str) -> None:
+        if self._render_backend == "mpl3d" and self._last_image is not None:
+            self._render_matplotlib_scene(*self._last_image[:3])
+            return
         if self._plotter is not None:
             palette = plot_palette()
             self._plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#fff")))

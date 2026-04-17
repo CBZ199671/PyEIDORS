@@ -144,7 +144,7 @@ def test_embedded_vtk_can_be_forced(monkeypatch):
     assert "forced" in reason
 
 
-def test_embedded_vtk_enabled_on_wsl_when_display_is_available(monkeypatch):
+def test_embedded_vtk_disabled_on_wsl_even_when_display_is_available(monkeypatch):
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.delenv("EIT_APP_DISABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.delenv("QT_QPA_PLATFORM", raising=False)
@@ -153,38 +153,36 @@ def test_embedded_vtk_enabled_on_wsl_when_display_is_available(monkeypatch):
 
     enabled, reason = embedded_vtk_status()
 
-    assert enabled is True
-    assert embedded_vtk_enabled() is True
-    assert "compatible" in reason
+    assert enabled is False
+    assert embedded_vtk_enabled() is False
+    assert "WSLg" in reason or "unsafe" in reason
 
 
-def test_3d_payload_uses_matplotlib_projection_when_vtk_disabled(monkeypatch):
+def test_3d_payload_stays_in_3d_widget_when_vtk_disabled(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
     slot = _ConductivityViewSlot("Conductivity")
     calls: list[tuple[str, str | None]] = []
 
-    def fake_mpl_update(_sigma, _coords, _cells, title=None):
-        calls.append(("mpl", title))
+    def unexpected_mpl_update(_sigma, _coords, _cells, title=None):
+        raise AssertionError("3D volume data must not fall back to the 2D plot")
 
-    def unexpected_vtk_update(_sigma, _coords, _cells, title=None):
-        raise AssertionError("QtInteractor should not be touched when VTK is disabled")
+    def fake_3d_update(_sigma, _coords, _cells, title=None):
+        calls.append(("3d", title))
 
-    monkeypatch.setattr(slot._mpl, "update_image", fake_mpl_update)
-    monkeypatch.setattr(slot._three_d, "update_image", unexpected_vtk_update)
+    monkeypatch.setattr(slot._mpl, "update_image", unexpected_mpl_update)
+    monkeypatch.setattr(slot._three_d, "update_image", fake_3d_update)
 
     sigma, coords, cells = _tetra_payload()
     slot.update_image(sigma, coords, cells, title="Truth")
 
-    assert calls and calls[0][0] == "mpl"
-    assert "Truth" in (calls[0][1] or "")
-    assert "3D" in (calls[0][1] or "")
-    assert slot._stack.currentWidget() is slot._mpl
+    assert calls == [("3d", "Truth")]
+    assert slot._stack.currentWidget() is slot._three_d
     slot.close()
 
 
-def test_3d_projection_fallback_renders_small_tetra(monkeypatch):
+def test_safe_3d_backend_renders_small_tetra(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -193,12 +191,14 @@ def test_3d_projection_fallback_renders_small_tetra(monkeypatch):
     sigma, coords, cells = _tetra_payload()
     slot.update_image(sigma, coords, cells, title="Truth")
 
-    assert slot._stack.currentWidget() is slot._mpl
-    assert slot._mpl._last_image is not None
+    assert slot._stack.currentWidget() is slot._three_d
+    assert slot._three_d._stack.currentWidget() is slot._three_d._mpl3d_host
+    assert slot._three_d._last_image is not None
+    assert slot._three_d._render_backend == "mpl3d"
     slot.close()
 
 
-def test_hex_3d_payload_uses_matplotlib_projection_when_vtk_disabled(monkeypatch):
+def test_safe_3d_backend_renders_hex_when_vtk_disabled(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -207,9 +207,11 @@ def test_hex_3d_payload_uses_matplotlib_projection_when_vtk_disabled(monkeypatch
     sigma, coords, cells = _hex_payload()
     slot.update_image(sigma, coords, cells, title="Hex Truth")
 
-    assert slot._stack.currentWidget() is slot._mpl
-    assert slot._mpl._last_image is not None
-    assert "3D" in (slot._mpl._last_image[3] or "")
+    assert slot._stack.currentWidget() is slot._three_d
+    assert slot._three_d._stack.currentWidget() is slot._three_d._mpl3d_host
+    assert slot._three_d._last_image is not None
+    assert slot._three_d._last_image[3] == "Hex Truth"
+    assert slot._three_d._render_backend == "mpl3d"
     slot.close()
 
 

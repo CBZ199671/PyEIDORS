@@ -57,11 +57,30 @@ def main() -> int:
     try:
         import gmsh  # type: ignore[import-not-found]
 
+        def _quiet_gmsh_terminal() -> None:
+            try:
+                if gmsh.isInitialized():
+                    gmsh.option.setNumber("General.Terminal", 0)
+            except Exception:  # pragma: no cover — best-effort noise control
+                pass
+
+        if not getattr(gmsh, "_eit_app_quiet_initialize_wrapped", False):
+            _original_gmsh_initialize = gmsh.initialize
+
+            def _quiet_gmsh_initialize(*args, **kwargs):  # noqa: ANN002, ANN003
+                result = _original_gmsh_initialize(*args, **kwargs)
+                _quiet_gmsh_terminal()
+                return result
+
+            gmsh.initialize = _quiet_gmsh_initialize  # type: ignore[assignment]
+            gmsh._eit_app_quiet_initialize_wrapped = True  # type: ignore[attr-defined]
+
         if not gmsh.isInitialized():
             gmsh.initialize()
             logging.getLogger(__name__).info(
                 "gmsh initialised on main thread for worker-side mesh generation"
             )
+        _quiet_gmsh_terminal()
 
         import atexit
 
