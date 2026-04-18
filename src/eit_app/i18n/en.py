@@ -48,6 +48,16 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.reconstruction": "&Reconstruction\u2026",
     "main.status.need_frames_for_difference": "Record at least 2 frames on the Hardware tab before using Difference.",
     "main.status.reconstruction_hint": "Switched to Database tab \u2014 select a reference and target frame, then click Reconstruct.",
+    "main.status.recon_running": "Running {method}\u2026",
+    "main.status.recon_failed": "Reconstruction failed: {error}",
+    "main.status.recon_complete": "Reconstruction complete: {method}",
+    "main.status.recon_save_ok": "Saved outputs to {folder}",
+    "main.status.recon_save_failed": "Save failed: {error}",
+    "main.popup.recon_complete.title": "Reconstruction complete",
+    "main.popup.recon_complete.text": "Reconstruction saved successfully.",
+    "main.popup.recon_complete.informative": "Output folder:\n{folder}",
+    "main.popup.recon_complete.open_folder": "Open Folder",
+    "main.popup.recon_complete.close": "Close",
 
     # ==================================================================
     # Loading / busy overlay messages (shared across plots)

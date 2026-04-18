@@ -50,6 +50,16 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.reconstruction": "\u5355\u5e27\u91cd\u6784(&R)\u2026",           # 单帧重构(&R)…
     "main.status.need_frames_for_difference": "\u8bf7\u5148\u5728\u786c\u4ef6\u9875\u91c7\u96c6\u81f3\u5c11 2 \u5e27\u518d\u6253\u5f00\u5dee\u5206\u91cd\u6784\u3002",  # 请先在硬件页采集至少 2 帧再打开差分重构。
     "main.status.reconstruction_hint": "\u5df2\u5207\u6362\u81f3\u6570\u636e\u5e93\u9875 \u2014 \u8bf7\u9009\u62e9\u53c2\u8003\u5e27\u4e0e\u76ee\u6807\u5e27\uff0c\u7136\u540e\u70b9\u51fb\u201c\u91cd\u6784\u201d\u3002",  # 已切换至数据库页 — 请选择参考帧与目标帧，然后点击"重构"。
+    "main.status.recon_running": "\u6b63\u5728\u8fd0\u884c {method}\u2026",                              # 正在运行 {method}…
+    "main.status.recon_failed": "\u91cd\u6784\u5931\u8d25\uff1a{error}",                                # 重构失败：{error}
+    "main.status.recon_complete": "\u91cd\u6784\u5b8c\u6210\uff1a{method}",                              # 重构完成：{method}
+    "main.status.recon_save_ok": "\u8f93\u51fa\u5df2\u4fdd\u5b58\u5230 {folder}",                       # 输出已保存到 {folder}
+    "main.status.recon_save_failed": "\u4fdd\u5b58\u5931\u8d25\uff1a{error}",                            # 保存失败：{error}
+    "main.popup.recon_complete.title": "\u91cd\u6784\u5b8c\u6210",                                       # 重构完成
+    "main.popup.recon_complete.text": "\u91cd\u6784\u5df2\u6210\u529f\u4fdd\u5b58\u3002",                # 重构已成功保存。
+    "main.popup.recon_complete.informative": "\u8f93\u51fa\u6587\u4ef6\u5939\uff1a\n{folder}",          # 输出文件夹：\n{folder}
+    "main.popup.recon_complete.open_folder": "\u6253\u5f00\u6587\u4ef6\u5939",                          # 打开文件夹
+    "main.popup.recon_complete.close": "\u5173\u95ed",                                                  # 关闭
 
     # ==================================================================
     # Loading / busy overlay messages (shared across plots)

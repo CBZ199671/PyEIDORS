@@ -2348,7 +2348,11 @@ class EITWorkstation(QMainWindow):
             return
         self._pending_db_reconstruction = dict(config)
         self._status_bar.showMessage(
-            f"Running {config.get('method_label', method)}…", 0
+            t(
+                "main.status.recon_running",
+                method=config.get("method_label", method),
+            ),
+            0,
         )
 
     @Slot(object)
@@ -2361,12 +2365,17 @@ class EITWorkstation(QMainWindow):
 
         if getattr(result, "error_msg", None):
             self._status_bar.showMessage(
-                f"Reconstruction failed: {result.error_msg}", 10000
+                t("main.status.recon_failed", error=result.error_msg),
+                10000,
             )
             return
 
         self._status_bar.showMessage(
-            f"Reconstruction complete: {config.get('method_label', '')}", 6000
+            t(
+                "main.status.recon_complete",
+                method=config.get("method_label", ""),
+            ),
+            6000,
         )
 
         # Update the hardware-tab reconstruction display so the user sees it
@@ -2394,24 +2403,42 @@ class EITWorkstation(QMainWindow):
             if config.get("save_voltage_fit"):
                 self._save_voltage_fit_plot(result, out / f"{prefix}_voltage_fit.png")
 
-            self._status_bar.showMessage(f"Saved outputs to {out}", 8000)
+            self._status_bar.showMessage(
+                t("main.status.recon_save_ok", folder=str(out)), 8000
+            )
             # Prompt to open the output folder
             self._offer_open_folder(str(out))
         except Exception as exc:
             log.warning("Failed to save reconstruction outputs: %s", exc)
-            self._status_bar.showMessage(f"Save failed: {exc}", 8000)
+            self._status_bar.showMessage(
+                t("main.status.recon_save_failed", error=str(exc)), 8000
+            )
 
     def _offer_open_folder(self, folder: str) -> None:
-        """Show a non-blocking prompt offering to open the folder."""
+        """Show a non-blocking prompt offering to open the folder.
+
+        Both the title / body text and the two buttons are pulled from
+        the i18n table so the popup follows the active language —
+        previously every label was hard-coded in English even when the
+        rest of the GUI was running in Chinese.
+        """
         from PySide6.QtWidgets import QMessageBox
 
         msg = QMessageBox(self)
-        msg.setWindowTitle("Reconstruction complete")
+        msg.setWindowTitle(t("main.popup.recon_complete.title"))
         msg.setIcon(QMessageBox.Icon.Information)
-        msg.setText("Reconstruction saved successfully.")
-        msg.setInformativeText(f"Output folder:\n{folder}")
-        open_btn = msg.addButton("Open Folder", QMessageBox.ButtonRole.AcceptRole)
-        msg.addButton("Close", QMessageBox.ButtonRole.RejectRole)
+        msg.setText(t("main.popup.recon_complete.text"))
+        msg.setInformativeText(
+            t("main.popup.recon_complete.informative", folder=folder)
+        )
+        open_btn = msg.addButton(
+            t("main.popup.recon_complete.open_folder"),
+            QMessageBox.ButtonRole.AcceptRole,
+        )
+        msg.addButton(
+            t("main.popup.recon_complete.close"),
+            QMessageBox.ButtonRole.RejectRole,
+        )
         msg.exec()
         if msg.clickedButton() is open_btn:
             self._on_open_session_folder(folder)
