@@ -283,6 +283,13 @@ TRANSLATIONS: dict[str, str] = {
     "hw.reconstruction.empty_overlay": "\u6682\u65e0\u91cd\u6784",                            # 暂无重构
     "hw.reconstruction.error.expect_2d_triangles": "\u5feb\u901f\u91cd\u6784\u89c6\u56fe\u76ee\u524d\u4ec5\u652f\u6301 2D \u4e09\u89d2\u7f51\u683c",  # 快速重构视图目前仅支持 2D 三角网格
 
+    # ------------------------------------------------------------------
+    # Hardware tab — Equipotential contour widget
+    # ------------------------------------------------------------------
+    "hw.equipotential.title": "\u7b49\u52bf\u56fe",                                          # 等势图
+    "hw.equipotential.empty_overlay": "\u6682\u65e0\u7b49\u52bf\u6570\u636e",                # 暂无等势数据
+    "hw.equipotential.no_surface": "\u4e09\u7ef4\u7f51\u683c\u8868\u9762\u63d0\u53d6\u5931\u8d25",  # 三维网格表面提取失败
+
     # ==================================================================
     # Hardware tab — Boundary voltage fit plot
     # ==================================================================

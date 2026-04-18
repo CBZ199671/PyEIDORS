@@ -390,6 +390,10 @@ class EITWorkstation(QMainWindow):
     def _voltage_plot(self):
         return self._hw_tab.voltage_plot
 
+    @property
+    def _equipotential_widget(self):
+        return self._hw_tab.equipotential_widget
+
     def _build_ui(self) -> None:
         self._tab_widget = QTabWidget()
         self._tab_widget.setTabPosition(QTabWidget.TabPosition.North)
@@ -716,6 +720,12 @@ class EITWorkstation(QMainWindow):
         self._recon_prewarm_ctrl.error.connect(self._on_realtime_recon_prewarm_error)
 
         self._hw_recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
+        # The equipotential widget shows iso-σ contours over the same
+        # reconstruction; route the controller's done-signal there too
+        # so it lights up alongside the conductivity image.
+        self._hw_recon_ctrl.reconstruction_done.connect(
+            self._equipotential_widget.update_reconstruction
+        )
         self._hw_recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
         self._hw_recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
@@ -1153,11 +1163,16 @@ class EITWorkstation(QMainWindow):
                 )
             return
 
-        # Always update the reconstruction image first
+        # Always update the reconstruction image + the equipotential
+        # contour view first so both bottom-row plots refresh in sync.
         try:
             self._recon_widget.update_reconstruction(result)
         except Exception as exc:
             log.warning("Reconstruction widget update failed: %s", exc)
+        try:
+            self._equipotential_widget.update_reconstruction(result)
+        except Exception as exc:
+            log.warning("Equipotential widget update failed: %s", exc)
 
         # Voltage fit: compute measured diff from the frame pair we submitted
         ref_frame = self._last_auto_ref_frame
@@ -1506,6 +1521,7 @@ class EITWorkstation(QMainWindow):
         # repaints on success, and we want the overlay gone even for
         # ignored events below.
         self._recon_widget.set_loading(False)
+        self._equipotential_widget.set_loading(False)
         self._voltage_plot.set_loading(False)
         if self._tab_widget.currentWidget() is not self._hw_tab:
             return
@@ -2259,9 +2275,10 @@ class EITWorkstation(QMainWindow):
                 "request_source": "hardware_manual",
             },
         )
-        # Phase 4: advertise the reconstruction + voltage fit plots as
-        # busy while the worker runs.
+        # Phase 4: advertise the reconstruction + equipotential +
+        # voltage fit plots as busy while the worker runs.
         self._recon_widget.set_loading(True)
+        self._equipotential_widget.set_loading(True)
         self._voltage_plot.set_loading(True)
         self._hw_recon_ctrl.reconstruct(request)
 
@@ -2378,9 +2395,15 @@ class EITWorkstation(QMainWindow):
             6000,
         )
 
-        # Update the hardware-tab reconstruction display so the user sees it
+        # Update the hardware-tab reconstruction display + the
+        # equipotential contour view so the operator sees the result
+        # both as a filled image and as iso-σ contour lines.
         try:
             self._recon_widget.update_reconstruction(result)
+        except Exception:
+            pass
+        try:
+            self._equipotential_widget.update_reconstruction(result)
         except Exception:
             pass
 

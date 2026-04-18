@@ -15,6 +15,7 @@ from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
 from eit_app.ui.hardware.connection_panel import ConnectionPanel
 from eit_app.ui.hardware.control_panel import ControlPanel
+from eit_app.ui.hardware.equipotential_plot_widget import EquipotentialPlotWidget
 from eit_app.ui.hardware.frame_browser_widget import FrameBrowserWidget
 from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
@@ -28,7 +29,9 @@ class HardwareTab(QWidget):
 
     Layout:
         Left   – scrollable QToolBox with Step 1-3 panels
-        Center – LivePlot (top) | Reconstruction + Summary + VoltageFit (bottom)
+        Center – 2 × 2 grid:
+                   [LivePlot                  | DifferenceVoltageFit ]
+                   [ReconstructionImage       | EquipotentialContour ]
         Right  – FrameBrowser
     """
 
@@ -46,33 +49,41 @@ class HardwareTab(QWidget):
         set_panel_role(self._control_panel, "workflow")
         set_panel_role(self._acq_panel, "workflow")
 
+        # Centre is now a 2 × 2 grid:
+        #   top row    : LivePlot                 | difference voltage fit
+        #   bottom row : reconstruction (image)   | equipotential contours
+        # Implemented as a vertical QSplitter holding two horizontal
+        # QSplitters so the user can still drag the row / column
+        # boundaries independently.
         center_splitter = QSplitter(Qt.Orientation.Vertical)
         center_splitter.setChildrenCollapsible(False)
 
         self._live_plot = LivePlotWidget()
-
-        bottom_splitter = QSplitter(Qt.Orientation.Horizontal)
-        bottom_splitter.setChildrenCollapsible(False)
-
-        self._recon_widget = ReconstructionWidget()
         self._voltage_plot = BoundaryVoltagePlotWidget(mode="hardware")
+        self._recon_widget = ReconstructionWidget()
+        self._equipotential_widget = EquipotentialPlotWidget()
 
-        bottom_splitter.addWidget(self._recon_widget)
-        bottom_splitter.addWidget(self._voltage_plot)
-        bottom_splitter.setStretchFactor(0, 1)
-        bottom_splitter.setStretchFactor(1, 1)
-        # Compact default — 460 px total split evenly between
-        # reconstruction and voltage plot.  User can always drag the
-        # handle to give one of them more room.
-        bottom_splitter.setSizes([240, 220])
+        top_row_splitter = QSplitter(Qt.Orientation.Horizontal)
+        top_row_splitter.setChildrenCollapsible(False)
+        top_row_splitter.addWidget(self._live_plot)
+        top_row_splitter.addWidget(self._voltage_plot)
+        top_row_splitter.setStretchFactor(0, 1)
+        top_row_splitter.setStretchFactor(1, 1)
+        top_row_splitter.setSizes([260, 260])
 
-        center_splitter.addWidget(self._live_plot)
-        center_splitter.addWidget(bottom_splitter)
-        center_splitter.setStretchFactor(0, 2)
+        bottom_row_splitter = QSplitter(Qt.Orientation.Horizontal)
+        bottom_row_splitter.setChildrenCollapsible(False)
+        bottom_row_splitter.addWidget(self._recon_widget)
+        bottom_row_splitter.addWidget(self._equipotential_widget)
+        bottom_row_splitter.setStretchFactor(0, 1)
+        bottom_row_splitter.setStretchFactor(1, 1)
+        bottom_row_splitter.setSizes([260, 260])
+
+        center_splitter.addWidget(top_row_splitter)
+        center_splitter.addWidget(bottom_row_splitter)
+        center_splitter.setStretchFactor(0, 1)
         center_splitter.setStretchFactor(1, 1)
-        # Live plot gets ~340 px tall by default so the X-axis ticks
-        # are visible without scrolling on an 800-tall window.
-        center_splitter.setSizes([340, 240])
+        center_splitter.setSizes([280, 280])
 
         self._summary_panel = SessionSummaryPanel()
         self._frame_browser = FrameBrowserWidget()
@@ -164,3 +175,7 @@ class HardwareTab(QWidget):
     @property
     def voltage_plot(self) -> BoundaryVoltagePlotWidget:
         return self._voltage_plot
+
+    @property
+    def equipotential_widget(self) -> EquipotentialPlotWidget:
+        return self._equipotential_widget

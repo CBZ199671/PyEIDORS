@@ -280,6 +280,9 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "hw.reconstruction.title": "Reconstruction",
     "hw.reconstruction.empty_overlay": "No reconstruction yet",
+    "hw.equipotential.title": "Equipotential map",
+    "hw.equipotential.empty_overlay": "No equipotential data yet",
+    "hw.equipotential.no_surface": "Failed to extract 3D mesh surface",
     "hw.reconstruction.error.expect_2d_triangles": "Fast reconstruction view currently expects 2D triangles",
 
     # ==================================================================
