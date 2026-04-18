@@ -92,17 +92,19 @@ class HardwareTab(QWidget):
             context_widget=self._frame_browser,
             left_footer=self._summary_panel,
             compact_toolbox=True,
-            # Comfortable defaults via splitter_sizes; floors are kept
-            # low so the user can shrink the window down to ~720 px on
-            # a small laptop.  The horizontal scroll on the left
-            # toolbox absorbs anything that would otherwise clip.
-            step_min_width=260,
+            # step_min_width sized to the densest hardware step
+            # panel's natural sizeHint (Control panel ≈ 466 px) so
+            # the form fields, combo boxes, and apply button fit
+            # without horizontal scroll or dropdown clipping.  Going
+            # below this value showed an ugly h-scrollbar AND made
+            # combo dropdowns extend past the panel edge when opened.
+            step_min_width=480,
             context_min_width=220,
-            # Splitter total opens at 1080 px so the centre + frame
-            # browser fit comfortably on a 1280-px laptop.  Larger
-            # screens are free to drag the splitter handles out;
-            # smaller windows shrink everything proportionally.
-            splitter_sizes=(360, 480, 240),
+            # Splitter total opens at ~1200 px (left + centre + right
+            # + handles) so the centre + frame browser still fit on a
+            # 1280-px laptop.  Larger screens drag the handles out;
+            # smaller windows let everything shrink to its minimum.
+            splitter_sizes=(480, 480, 240),
             parent=self,
         )
 

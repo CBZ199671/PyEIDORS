@@ -250,13 +250,12 @@ class EITWorkstation(QMainWindow):
         #
         # Initial size caps to 90 % of the primary screen's available
         # area so the window never opens wider than the screen it's
-        # launched on, AND the preferred size itself is 1280 × 800 —
-        # tight enough that the splitter contents (which now total
-        # ~1080 px wide by default) fully fit without anything being
-        # clipped or pushed off-screen.  Larger preferred values
-        # used to overflow 1366-px laptops or push the rightmost
-        # context panel past the visible area.
-        self.resize(self._preferred_initial_size(1280, 800))
+        # launched on.  The preferred 1360 × 840 leaves comfortable
+        # margin around the splitter contents (≈ 1180 px wide by
+        # default) so the form fields, dropdowns, and apply buttons
+        # in the left step panels are not clipped, while still
+        # fitting a 1366-px laptop with room to spare.
+        self.resize(self._preferred_initial_size(1360, 840))
 
         self._state = AppState(self)
         self._sim_state = SimulationState(self)

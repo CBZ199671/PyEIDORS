@@ -292,6 +292,14 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_collection = None
         self._mpl3d_mesh_facecolors: np.ndarray | None = None
         self._mpl3d_highlight_facecolors: np.ndarray | None = None
+        # Cached "fresh-render" view bounds for the matplotlib 3D
+        # backend so the reset-view button can restore the data extent
+        # the user saw on first render, not just the camera angle.
+        self._mpl3d_initial_bounds: tuple[
+            tuple[float, float],
+            tuple[float, float],
+            tuple[float, float],
+        ] | None = None
         self._offscreen_plotter = None
         self._offscreen_mesh_actor = None
         self._offscreen_highlight_actor = None
@@ -926,9 +934,16 @@ class Conductivity3DWidget(QWidget):
         radius = float(np.nanmax(spans) * 0.56)
         if radius <= 0.0 or not np.isfinite(radius):
             radius = 1.0
-        self._mpl3d_ax.set_xlim(center[0] - radius, center[0] + radius)
-        self._mpl3d_ax.set_ylim(center[1] - radius, center[1] + radius)
-        self._mpl3d_ax.set_zlim(center[2] - radius, center[2] + radius)
+        xlim = (center[0] - radius, center[0] + radius)
+        ylim = (center[1] - radius, center[1] + radius)
+        zlim = (center[2] - radius, center[2] + radius)
+        self._mpl3d_ax.set_xlim(*xlim)
+        self._mpl3d_ax.set_ylim(*ylim)
+        self._mpl3d_ax.set_zlim(*zlim)
+        # Cache so the reset-view button can restore the original
+        # extent — view_init alone only resets the camera angle,
+        # not the user's pan / zoom.
+        self._mpl3d_initial_bounds = (xlim, ylim, zlim)
         try:
             self._mpl3d_ax.set_box_aspect(tuple(spans))
         except Exception:  # pragma: no cover — older matplotlib fallback
@@ -1176,17 +1191,43 @@ class Conductivity3DWidget(QWidget):
         self._plotter.render()
 
     def _reset_camera(self) -> None:
+        """Reset both data extent AND viewing angle across all backends.
+
+        Each backend stores its camera state differently — this used
+        to silently no-op for users on the matplotlib 3D fallback (the
+        old code only called view_init but left their pan / zoom in
+        place) and only half-reset for PyVista (reset_camera fits the
+        actors but does not restore an isometric orientation).  Now
+        every backend restores both the data range and a known
+        canonical view direction.
+        """
         if self._render_backend == "pyvista_offscreen":
             if self._offscreen_plotter is not None:
                 self._offscreen_plotter.reset_camera()
+                # Bring the orientation back to isometric so a click
+                # always lands on the same canonical view, no matter
+                # how the user has dragged the scene.
+                try:
+                    self._offscreen_plotter.view_isometric()
+                except Exception:  # pragma: no cover — VTK quirk
+                    pass
                 self._refresh_offscreen_pixmap()
             return
         if self._render_backend == "mpl3d":
             self._mpl3d_ax.view_init(elev=22.0, azim=-45.0)
+            if self._mpl3d_initial_bounds is not None:
+                xlim, ylim, zlim = self._mpl3d_initial_bounds
+                self._mpl3d_ax.set_xlim(*xlim)
+                self._mpl3d_ax.set_ylim(*ylim)
+                self._mpl3d_ax.set_zlim(*zlim)
             self._mpl3d_canvas.draw_idle()
             return
         if self._plotter is not None:
             self._plotter.reset_camera()
+            try:
+                self._plotter.view_isometric()
+            except Exception:  # pragma: no cover — VTK quirk
+                pass
             self._plotter.render()
 
     def _on_offscreen_dragged(self, dx: float, dy: float) -> None:

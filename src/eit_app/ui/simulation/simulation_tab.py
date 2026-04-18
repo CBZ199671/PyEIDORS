@@ -79,11 +79,14 @@ class SimulationTab(QWidget):
             ],
             center_widget=self._results_widget,
             context_widget=context_widget,
-            step_min_width=240,
+            # step_min_width sized to the densest simulation step
+            # panel (mesh setup ≈ 480 px) — see Hardware tab for the
+            # rationale.
+            step_min_width=460,
             context_min_width=220,
-            # Total opens at ~1080 px so the simulation tab fits a
+            # Total opens at ~1180 px so the simulation tab fits a
             # 1280-px laptop without horizontal scroll.
-            splitter_sizes=(280, 560, 240),
+            splitter_sizes=(460, 480, 240),
             parent=self,
         )
 
