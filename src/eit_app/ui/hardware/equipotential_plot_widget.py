@@ -1,37 +1,64 @@
-"""Equipotential / iso-conductivity contour view of a reconstruction.
+"""3D equipotential view of a reconstructed conductivity field.
 
-Pairs with :class:`ReconstructionWidget` on the Hardware tab — that
-widget shows the filled conductivity image, this one overlays the
-filled image with iso-σ contour lines so the operator can read off
-the spatial gradient and the boundaries between regions of similar
-conductivity at a glance.
+Pairs with :class:`ReconstructionWidget` on the Hardware tab.  The
+reconstruction widget shows the σ field as a flat 2D image; this
+widget warps the same field into a 3D height surface (Z = σ × scale)
+so peaks of high conductivity rise above valleys of low conductivity
+and the spatial gradient becomes immediately legible.
 
-Public API mirrors the reconstruction widget so :mod:`main_window`
-can wire it into the same controllers (``update_reconstruction`` /
-``set_loading`` / ``clear``).
+Implementation notes:
+
+* Render via PyVista *offscreen* — VTK draws to an off-screen
+  framebuffer, we screenshot the result into a QPixmap and paint it
+  into a QLabel.  This is the same pattern Conductivity3DWidget uses
+  for its WSLg-friendly path (XCB / native VTK windows are flaky on
+  WSLg, but offscreen rendering bypasses that entirely).
+* Drag-to-rotate and wheel-to-zoom go through the same
+  ``_OffscreenRenderLabel`` helper Conductivity3DWidget uses.
+* Falls back to a 2D matplotlib contour view when PyVista isn't
+  available, so the widget never crashes the GUI on minimal builds.
+
+Public API mirrors ReconstructionWidget so the existing wiring in
+main_window stays unchanged.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.tri import Triangulation
-from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QImage, QPixmap
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QSizePolicy,
+    QSlider,
+    QStackedLayout,
+    QVBoxLayout,
+    QWidget,
+)
 
 from eit_app.i18n import t, translator
+from eit_app.ui.conductivity_3d_widget import _OffscreenRenderLabel, _hex_to_rgb
 from eit_app.ui.fonts import plot_font_families, serif_font_family
 from eit_app.ui.theme import (
     empty_placeholder_stylesheet,
     error_scrim_stylesheet,
     loading_scrim_stylesheet,
     plot_palette,
+    set_button_role,
+    set_hint_text,
     subscribe_theme_mode,
 )
+
 
 if TYPE_CHECKING:
     from eit_app.controllers.reconstruction_controller import ReconstructionResult
@@ -43,9 +70,10 @@ log = logging.getLogger(__name__)
 def _project_tetra_to_triangles(cells: np.ndarray) -> np.ndarray:
     """Reduce a 4-vertex tetra mesh to its 2D boundary triangles.
 
-    The contour drawer only needs a 2D triangulation; a 3D mesh's
-    boundary triangulation is the union of every face that appears
-    exactly once across all tetrahedra (i.e. the surface).
+    The 3D height-surface only needs a planar triangulation (Z = σ
+    becomes the new height); a 3D mesh's boundary triangulation is
+    the union of every face that appears exactly once across all
+    tetrahedra.
     """
     cells = np.asarray(cells, dtype=np.int64)
     if cells.ndim != 2 or cells.shape[1] != 4:
@@ -63,60 +91,130 @@ def _project_tetra_to_triangles(cells: np.ndarray) -> np.ndarray:
     return np.asarray(boundary, dtype=np.int32)
 
 
+def _cell_to_node(sigma: np.ndarray, cells: np.ndarray, n_nodes: int) -> np.ndarray:
+    """Average per-cell scalars onto nodes via uniform weighting."""
+    node_sum = np.zeros(n_nodes, dtype=np.float64)
+    node_count = np.zeros(n_nodes, dtype=np.float64)
+    for cell_idx, cell in enumerate(cells):
+        value = float(sigma[cell_idx])
+        for vertex in cell:
+            vidx = int(vertex)
+            if 0 <= vidx < n_nodes:
+                node_sum[vidx] += value
+                node_count[vidx] += 1.0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        node_values = np.where(node_count > 0, node_sum / node_count, np.nan)
+    if np.any(np.isnan(node_values)):
+        mean = (
+            float(np.nanmean(node_values))
+            if np.any(np.isfinite(node_values))
+            else 0.0
+        )
+        node_values = np.where(np.isnan(node_values), mean, node_values)
+    return node_values
+
+
 class EquipotentialPlotWidget(QWidget):
-    """Filled iso-σ contour view for a reconstructed conductivity field."""
+    """3D height-surface view of a conductivity reconstruction."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._serif = serif_font_family()
         self._title_font = FontProperties(family=plot_font_families(), size=13)
-        self._last_result: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None
-        self._overlay_mode = "empty"  # "empty" | "loading" | "error"
+
+        self._last_payload: Optional[
+            tuple[np.ndarray, np.ndarray, np.ndarray]
+        ] = None
+        self._overlay_mode = "empty"  # "empty" | "loading" | "error" | "data"
         self._overlay_message: str | None = None
-        self._colorbar = None
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        # PyVista 3D state
+        self._render_backend = "caption"  # "caption" | "pyvista" | "mpl3d"
+        self._plotter = None  # pv.Plotter
+        self._mesh_actor = None
+        self._scalar_bar_args: dict | None = None
 
-        plot_host = QWidget(self)
-        plot_stack = QStackedLayout(plot_host)
-        plot_stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
-        plot_stack.setContentsMargins(0, 0, 0, 0)
+        # Matplotlib fallback state
+        self._mpl_figure: Figure | None = None
+        self._mpl_canvas: FigureCanvasQTAgg | None = None
+        self._mpl_ax = None
 
-        palette = plot_palette()
-        self._figure = Figure(figsize=(4, 4), tight_layout=True)
-        self._figure.patch.set_facecolor(palette["panel_bg"])
-        self._canvas = FigureCanvasQTAgg(self._figure)
-        self._ax = self._figure.add_subplot(111)
-        self._ax.set_facecolor(palette["axes_bg"])
-        self._ax.set_aspect("equal")
-        plot_stack.addWidget(self._canvas)
-
-        # Phase-4 overlay system: show a centred caption when the widget
-        # has no data, is busy, or hit an error.  Identical pattern to
-        # the live plot / reconstruction widget so the operator sees a
-        # consistent loading / error idiom across the whole tab.
-        self._empty_overlay = QLabel("", parent=plot_host)
-        self._empty_overlay.setWordWrap(True)
-        self._empty_overlay.setMinimumWidth(0)
-        self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
-        plot_stack.addWidget(self._empty_overlay)
-
-        layout.addWidget(plot_host)
-
+        self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
         subscribe_theme_mode(self._on_theme_mode_changed)
-        # Render a blank frame so the widget has chrome before the
-        # first reconstruction arrives.
         self._show_empty()
+
+    # ------------------------------------------------------------------
+    # UI assembly
+    # ------------------------------------------------------------------
+
+    def _build_ui(self) -> None:
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        self._stack_host = QFrame(self)
+        self._stack = QStackedLayout(self._stack_host)
+        self._stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
+        self._stack.setContentsMargins(0, 0, 0, 0)
+
+        # Caption layer (placeholder / loading / error).
+        self._caption_label = QLabel("")
+        self._caption_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._caption_label.setWordWrap(True)
+        self._caption_label.setStyleSheet(empty_placeholder_stylesheet())
+        self._stack.addWidget(self._caption_label)
+
+        # PyVista offscreen pixmap layer with drag/zoom.
+        self._offscreen_label = _OffscreenRenderLabel(self._stack_host)
+        self._offscreen_label.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._offscreen_label.dragged.connect(self._on_drag)
+        self._offscreen_label.zoomed.connect(self._on_zoom)
+        self._offscreen_label.hide()
+        self._stack.addWidget(self._offscreen_label)
+
+        outer.addWidget(self._stack_host, 1)
+
+        # Compact controls bar — height-scale slider + reset.  Only
+        # visible while a 3D scene is on screen.
+        self._controls = QFrame()
+        self._controls.setObjectName("equipotentialControls")
+        bar = QHBoxLayout(self._controls)
+        bar.setContentsMargins(6, 2, 6, 2)
+        bar.setSpacing(6)
+
+        self._height_label = QLabel("")
+        set_hint_text(self._height_label)
+        bar.addWidget(self._height_label)
+
+        self._height_slider = QSlider(Qt.Orientation.Horizontal)
+        self._height_slider.setRange(0, 100)
+        self._height_slider.setValue(35)  # ~moderate warp
+        self._height_slider.setMinimumWidth(60)
+        self._height_slider.valueChanged.connect(self._on_height_changed)
+        bar.addWidget(self._height_slider, 1)
+
+        self._height_value = QLabel("0.35")
+        set_hint_text(self._height_value)
+        bar.addWidget(self._height_value)
+
+        self._reset_btn = QPushButton("")
+        set_button_role(self._reset_btn, "tertiary")
+        self._reset_btn.clicked.connect(self._reset_camera)
+        bar.addWidget(self._reset_btn)
+
+        outer.addWidget(self._controls)
+        self._controls.hide()
 
     # ------------------------------------------------------------------
     # Public API (mirrors ReconstructionWidget)
     # ------------------------------------------------------------------
 
     def update_reconstruction(self, result: ReconstructionResult) -> None:
-        """Render iso-σ contour lines for a fresh reconstruction."""
+        """Render the 3D height surface for a fresh reconstruction."""
         if result.error_msg or result.conductivity.size == 0:
             self._show_status(result.error_msg or "Empty result", error=True)
             return
@@ -134,8 +232,6 @@ class EquipotentialPlotWidget(QWidget):
             )
             return
 
-        # Tetra meshes need their boundary projected to 2D triangles
-        # before tricontour can take them.
         if cells.shape[1] == 4:
             cells = _project_tetra_to_triangles(cells)
             if cells.shape[0] == 0:
@@ -144,231 +240,361 @@ class EquipotentialPlotWidget(QWidget):
                 )
                 return
 
-        try:
-            self._render_contour(sigma, coords, cells)
-        except Exception as exc:  # pragma: no cover — runtime safety net
-            log.exception("Equipotential render failed")
-            self._show_status(str(exc), error=True)
-            return
-
-        self._last_result = (sigma, coords, cells)
-
-    def set_loading(self, on: bool) -> None:
-        """Drive the busy overlay to match the reconstruction-running state."""
-        if on:
-            self._show_status(
-                t("hw.reconstruction.loading_overlay"), loading=True
-            )
-        else:
-            # If we already have data, the next update_reconstruction()
-            # repaints; otherwise drop back to the empty hint.
-            if self._last_result is None:
-                self._show_empty()
-
-    def clear(self) -> None:
-        self._last_result = None
-        self._remove_colorbar()
-        self._ax.clear()
-        self._apply_axes_chrome()
-        self._show_empty()
-        self._canvas.draw_idle()
-
-    # ------------------------------------------------------------------
-    # Rendering
-    # ------------------------------------------------------------------
-
-    def _render_contour(
-        self,
-        sigma: np.ndarray,
-        coords: np.ndarray,
-        cells: np.ndarray,
-    ) -> None:
-        x = coords[:, 0]
-        y = coords[:, 1]
-        try:
-            tri = Triangulation(x, y, cells)
-        except Exception as exc:
-            self._show_status(f"Triangulation failed: {exc}", error=True)
-            return
-
-        # Convert cell-centred σ to node values via the standard
-        # area-weighted average so tricontour (which expects
-        # per-node scalars) gets a clean field.
         if sigma.size == cells.shape[0]:
-            node_values = self._cell_to_node(sigma, cells, len(x))
-        elif sigma.size == len(x):
+            node_values = _cell_to_node(sigma, cells, coords.shape[0])
+        elif sigma.size == coords.shape[0]:
             node_values = sigma
         else:
             self._show_status(
                 f"Size mismatch: sigma={sigma.size}, cells={cells.shape[0]}, "
-                f"nodes={len(x)}",
+                f"nodes={coords.shape[0]}",
                 error=True,
             )
             return
 
+        self._last_payload = (node_values, coords, cells)
+
+        # Try the PyVista path first; on any import / runtime failure
+        # fall back to the matplotlib 3D surface so the widget still
+        # produces something useful.
+        if self._render_pyvista(node_values, coords, cells):
+            self._render_backend = "pyvista"
+            self._stack.setCurrentWidget(self._offscreen_label)
+            self._offscreen_label.show()
+            self._caption_label.hide()
+            self._controls.show()
+            self._overlay_mode = "data"
+            return
+
+        if self._render_mpl3d(node_values, coords, cells):
+            self._render_backend = "mpl3d"
+            self._stack.setCurrentWidget(self._mpl_canvas)
+            self._caption_label.hide()
+            self._controls.show()
+            self._overlay_mode = "data"
+
+    def set_loading(self, on: bool) -> None:
+        if on:
+            self._show_status(t("hw.reconstruction.loading_overlay"), loading=True)
+        elif self._last_payload is None:
+            self._show_empty()
+
+    def clear(self) -> None:
+        self._last_payload = None
+        self._discard_plotter()
+        self._show_empty()
+
+    # ------------------------------------------------------------------
+    # PyVista offscreen rendering
+    # ------------------------------------------------------------------
+
+    def _render_pyvista(
+        self,
+        node_values: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> bool:
+        try:
+            import pyvista as pv
+        except Exception as exc:  # pragma: no cover — env without VTK
+            log.info("PyVista unavailable for equipotential 3D: %s", exc)
+            return False
+
+        try:
+            self._discard_plotter()
+
+            # Build planar PolyData (z=0) with sigma stored as a point
+            # scalar.  warp_by_scalar later promotes Z = factor * sigma
+            # so the field becomes a 3D surface.
+            n_pts = coords.shape[0]
+            points = np.zeros((n_pts, 3), dtype=np.float64)
+            points[:, :2] = coords[:, :2]
+            faces = np.empty((cells.shape[0], 4), dtype=np.int64)
+            faces[:, 0] = 3
+            faces[:, 1:] = cells
+            mesh = pv.PolyData(points, faces.flatten())
+            mesh.point_data["sigma"] = node_values
+
+            warp_factor = self._compute_warp_factor(node_values, coords)
+            warped = mesh.warp_by_scalar("sigma", factor=warp_factor)
+
+            width, height = self._render_size()
+            plotter = pv.Plotter(off_screen=True, window_size=(width, height))
+            palette = plot_palette()
+            plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#ffffff")))
+            text_color = _hex_to_rgb(palette.get("text", "#222"))
+            scalar_bar_args = {
+                "title": "S/m",
+                "color": text_color,
+                "vertical": True,
+                "position_x": 0.88,
+                "position_y": 0.05,
+                "width": 0.07,
+                "height": 0.6,
+                "title_font_size": 14,
+                "label_font_size": 11,
+            }
+            self._mesh_actor = plotter.add_mesh(
+                warped,
+                scalars="sigma",
+                cmap="viridis",
+                show_edges=False,
+                show_scalar_bar=True,
+                scalar_bar_args=scalar_bar_args,
+                smooth_shading=True,
+            )
+            plotter.add_axes()
+            plotter.view_isometric()
+            plotter.reset_camera()
+
+            self._plotter = plotter
+            self._scalar_bar_args = scalar_bar_args
+            self._refresh_offscreen_pixmap()
+            return True
+        except Exception as exc:
+            log.warning("PyVista 3D equipotential render failed: %s", exc)
+            self._discard_plotter()
+            return False
+
+    def _compute_warp_factor(
+        self, node_values: np.ndarray, coords: np.ndarray
+    ) -> float:
+        """Pick a warp scale that makes the surface visually balanced.
+
+        Targets a vertical span ≈ ``slider_value`` × the mesh's planar
+        diameter, so the height variation reads naturally regardless
+        of σ's absolute magnitude.
+        """
         finite = node_values[np.isfinite(node_values)]
         if finite.size == 0:
-            sigma_min, sigma_max = 0.0, 1.0
-        else:
-            sigma_min = float(np.nanmin(finite))
-            sigma_max = float(np.nanmax(finite))
-        if sigma_max - sigma_min < 1.0e-12:
-            sigma_max = sigma_min + 1.0e-12
-
-        self._remove_colorbar()
-        self._ax.clear()
-
-        levels = np.linspace(sigma_min, sigma_max, 12)
-        # Filled background so the contour lines have something to
-        # sit on top of — keeps the widget visually paired with the
-        # adjacent ReconstructionWidget.
-        filled = self._ax.tricontourf(
-            tri, node_values, levels=levels, cmap="viridis", alpha=0.85
+            return 1.0
+        sigma_span = float(np.nanmax(finite) - np.nanmin(finite))
+        if sigma_span < 1.0e-12:
+            return 0.0
+        x = coords[:, 0]
+        y = coords[:, 1]
+        diameter = float(
+            np.hypot(np.nanmax(x) - np.nanmin(x), np.nanmax(y) - np.nanmin(y))
         )
-        line_levels = np.linspace(sigma_min, sigma_max, 8)
-        # Use a darker colour for the lines so they read on top of
-        # the filled cmap regardless of light / dark mode.
-        contour_colour = plot_palette().get("border", "#222")
-        cs = self._ax.tricontour(
-            tri, node_values, levels=line_levels,
-            colors=contour_colour, linewidths=0.7,
-        )
+        if diameter <= 0.0 or not np.isfinite(diameter):
+            diameter = 1.0
+        scale_norm = self._height_slider.value() / 100.0
+        return (scale_norm * diameter) / sigma_span
+
+    def _render_size(self) -> tuple[int, int]:
+        dpr = max(self.devicePixelRatioF(), 1.0)
+        width = max(280, int(self._offscreen_label.width() * dpr))
+        height = max(220, int(self._offscreen_label.height() * dpr))
+        return min(width, 2400), min(height, 1800)
+
+    def _refresh_offscreen_pixmap(self) -> None:
+        plotter = self._plotter
+        if plotter is None:
+            return
+        width, height = self._render_size()
         try:
-            self._ax.clabel(cs, inline=True, fontsize=7, fmt="%.2f")
-        except Exception:  # pragma: no cover — matplotlib quirk
-            pass
+            plotter.window_size = (width, height)
+            plotter.render()
+            image = np.ascontiguousarray(plotter.screenshot(return_img=True))
+        except Exception as exc:  # pragma: no cover — VTK runtime quirk
+            log.warning("Equipotential offscreen render failed: %s", exc)
+            return
+        if image.ndim != 3 or image.shape[2] < 3:
+            return
+        image = image[:, :, :3]
+        qimage = QImage(
+            image.data,
+            int(image.shape[1]),
+            int(image.shape[0]),
+            int(image.strides[0]),
+            QImage.Format.Format_RGB888,
+        ).copy()
+        pixmap = QPixmap.fromImage(qimage)
+        pixmap.setDevicePixelRatio(max(self.devicePixelRatioF(), 1.0))
+        self._offscreen_label.setPixmap(pixmap)
 
+    def _discard_plotter(self) -> None:
+        if self._plotter is not None:
+            try:
+                self._plotter.close()
+            except Exception:  # pragma: no cover — best effort
+                pass
+        self._plotter = None
+        self._mesh_actor = None
+        self._scalar_bar_args = None
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        # Re-rasterise on resize so the surface fills the new size
+        # without obvious blur from up-scaling the cached pixmap.
+        if self._render_backend == "pyvista" and self._plotter is not None:
+            QTimer.singleShot(0, self._refresh_offscreen_pixmap)
+
+    # ------------------------------------------------------------------
+    # Matplotlib 3D fallback
+    # ------------------------------------------------------------------
+
+    def _render_mpl3d(
+        self,
+        node_values: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> bool:
+        try:
+            from mpl_toolkits.mplot3d import Axes3D  # noqa: F401  (registers '3d')
+        except Exception:  # pragma: no cover — bundled with matplotlib
+            return False
+
+        if self._mpl_figure is None:
+            palette = plot_palette()
+            self._mpl_figure = Figure(figsize=(4, 4), tight_layout=True)
+            self._mpl_figure.patch.set_facecolor(palette["panel_bg"])
+            self._mpl_canvas = FigureCanvasQTAgg(self._mpl_figure)
+            self._mpl_canvas.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            )
+            self._mpl_ax = self._mpl_figure.add_subplot(111, projection="3d")
+            self._stack.addWidget(self._mpl_canvas)
+
+        ax = self._mpl_ax
+        ax.clear()
         palette = plot_palette()
-        self._ax.set_aspect("equal")
-        self._ax.set_title(
+        ax.set_facecolor(palette["axes_bg"])
+        for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+            axis.set_pane_color((1.0, 1.0, 1.0, 0.0))
+            axis.label.set_color(palette["text"])
+            axis.set_tick_params(colors=palette["text"], labelsize=8)
+
+        try:
+            tri = Triangulation(coords[:, 0], coords[:, 1], cells)
+        except Exception:
+            return False
+
+        ax.plot_trisurf(
+            tri,
+            node_values,
+            cmap="viridis",
+            edgecolor="none",
+            antialiased=True,
+        )
+        ax.set_title(
             t("hw.equipotential.title"),
             fontproperties=self._title_font,
             color=palette["text"],
         )
-        self._apply_axes_chrome()
-
-        self._colorbar = self._figure.colorbar(
-            filled, ax=self._ax, label="S/m",
-            shrink=0.72, aspect=16, pad=0.04,
-        )
-        self._colorbar.ax.yaxis.label.set_color(palette["text"])
-        self._colorbar.ax.yaxis.label.set_size(9)
-        self._colorbar.ax.tick_params(labelsize=8, colors=palette["text"])
-        for spine in self._colorbar.ax.spines.values():
-            spine.set_color(palette["border"])
-
-        self._empty_overlay.hide()
-        self._overlay_mode = "data"
-        self._canvas.draw()
-
-    @staticmethod
-    def _cell_to_node(sigma: np.ndarray, cells: np.ndarray, n_nodes: int) -> np.ndarray:
-        """Average per-cell scalars onto nodes using a uniform weight."""
-        node_sum = np.zeros(n_nodes, dtype=np.float64)
-        node_count = np.zeros(n_nodes, dtype=np.float64)
-        for cell_idx, cell in enumerate(cells):
-            value = float(sigma[cell_idx])
-            for vertex in cell:
-                vidx = int(vertex)
-                if 0 <= vidx < n_nodes:
-                    node_sum[vidx] += value
-                    node_count[vidx] += 1.0
-        with np.errstate(invalid="ignore", divide="ignore"):
-            node_values = np.where(node_count > 0, node_sum / node_count, np.nan)
-        # Replace residual NaNs with the global mean so triangulation
-        # doesn't choke on the rare orphan node.
-        if np.any(np.isnan(node_values)):
-            mean = float(np.nanmean(node_values)) if np.any(np.isfinite(node_values)) else 0.0
-            node_values = np.where(np.isnan(node_values), mean, node_values)
-        return node_values
-
-    def _apply_axes_chrome(self) -> None:
-        palette = plot_palette()
-        text = palette["text"]
-        self._ax.set_facecolor(palette["axes_bg"])
-        self._figure.patch.set_facecolor(palette["panel_bg"])
-        for spine in self._ax.spines.values():
-            spine.set_color(palette["border"])
-        self._ax.tick_params(colors=text, labelsize=8)
-        for label in self._ax.get_xticklabels() + self._ax.get_yticklabels():
-            label.set_color(text)
-            label.set_fontname(self._serif)
+        ax.set_xlabel("X")
+        ax.set_ylabel("Y")
+        ax.set_zlabel("σ")
+        self._mpl_canvas.draw()
+        return True
 
     # ------------------------------------------------------------------
-    # Overlay state
+    # Camera controls
+    # ------------------------------------------------------------------
+
+    def _on_drag(self, dx: float, dy: float) -> None:
+        if self._render_backend != "pyvista" or self._plotter is None:
+            return
+        camera = self._plotter.camera
+        camera.Azimuth(-dx * 0.45)
+        camera.Elevation(dy * 0.45)
+        camera.OrthogonalizeViewUp()
+        self._refresh_offscreen_pixmap()
+
+    def _on_zoom(self, delta_y: float) -> None:
+        if self._render_backend != "pyvista" or self._plotter is None:
+            return
+        self._plotter.camera.Zoom(1.12 if delta_y > 0 else 0.89)
+        self._refresh_offscreen_pixmap()
+
+    def _on_height_changed(self, value: int) -> None:
+        scale = value / 100.0
+        self._height_value.setText(f"{scale:.2f}")
+        if self._last_payload is None:
+            return
+        if self._render_backend == "pyvista":
+            # Cheapest re-warp: rebuild the warped mesh and re-render.
+            node_values, coords, cells = self._last_payload
+            self._render_pyvista(node_values, coords, cells)
+            self._refresh_offscreen_pixmap()
+        elif self._render_backend == "mpl3d":
+            # mpl3d's surface height is rendered straight from σ; no
+            # warp factor needed (the user can spin the camera instead).
+            pass
+
+    def _reset_camera(self) -> None:
+        if self._render_backend == "pyvista" and self._plotter is not None:
+            self._plotter.reset_camera()
+            try:
+                self._plotter.view_isometric()
+            except Exception:  # pragma: no cover
+                pass
+            self._refresh_offscreen_pixmap()
+        elif self._render_backend == "mpl3d" and self._mpl_ax is not None:
+            self._mpl_ax.view_init(elev=30.0, azim=-60.0)
+            if self._mpl_canvas is not None:
+                self._mpl_canvas.draw_idle()
+
+    # ------------------------------------------------------------------
+    # Caption / theme
     # ------------------------------------------------------------------
 
     def _show_empty(self) -> None:
+        self._render_backend = "caption"
         self._overlay_mode = "empty"
         self._overlay_message = None
-        self._empty_overlay.setText(t("hw.equipotential.empty_overlay"))
-        self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
-        self._empty_overlay.show()
-        self._apply_axes_chrome()
-        self._canvas.draw_idle()
+        self._caption_label.setText(t("hw.equipotential.empty_overlay"))
+        self._caption_label.setStyleSheet(empty_placeholder_stylesheet())
+        self._caption_label.show()
+        self._offscreen_label.hide()
+        if self._mpl_canvas is not None:
+            self._mpl_canvas.hide()
+        self._stack.setCurrentWidget(self._caption_label)
+        self._controls.hide()
 
     def _show_status(
         self, message: str, *, loading: bool = False, error: bool = False
     ) -> None:
         if loading:
             self._overlay_mode = "loading"
-            self._empty_overlay.setStyleSheet(loading_scrim_stylesheet())
+            self._caption_label.setStyleSheet(loading_scrim_stylesheet())
         elif error:
             self._overlay_mode = "error"
-            self._empty_overlay.setStyleSheet(error_scrim_stylesheet())
+            self._caption_label.setStyleSheet(error_scrim_stylesheet())
         else:
             self._overlay_mode = "empty"
-            self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
+            self._caption_label.setStyleSheet(empty_placeholder_stylesheet())
         self._overlay_message = message
-        self._empty_overlay.setText(message)
-        self._empty_overlay.show()
-
-    # ------------------------------------------------------------------
-    # Theme / i18n
-    # ------------------------------------------------------------------
+        self._caption_label.setText(message)
+        self._caption_label.show()
+        self._stack.setCurrentWidget(self._caption_label)
+        self._controls.hide()
 
     def _on_theme_mode_changed(self, _mode: str) -> None:
-        if self._last_result is not None:
-            sigma, coords, cells = self._last_result
-            self._render_contour(sigma, coords, cells)
-        else:
-            self._apply_axes_chrome()
-            self._canvas.draw_idle()
-        # Refresh the overlay's stylesheet so the colours follow the
-        # active palette.
+        if self._last_payload is not None and self._render_backend == "pyvista":
+            node_values, coords, cells = self._last_payload
+            # Re-render with the new background / text colours.
+            self._render_pyvista(node_values, coords, cells)
+        elif self._last_payload is not None and self._render_backend == "mpl3d":
+            node_values, coords, cells = self._last_payload
+            self._render_mpl3d(node_values, coords, cells)
         if self._overlay_mode == "loading":
-            self._empty_overlay.setStyleSheet(loading_scrim_stylesheet())
+            self._caption_label.setStyleSheet(loading_scrim_stylesheet())
         elif self._overlay_mode == "error":
-            self._empty_overlay.setStyleSheet(error_scrim_stylesheet())
+            self._caption_label.setStyleSheet(error_scrim_stylesheet())
         elif self._overlay_mode == "empty":
-            self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
+            self._caption_label.setStyleSheet(empty_placeholder_stylesheet())
 
     def _retranslate(self) -> None:
+        self._height_label.setText(t("hw.equipotential.height_label"))
+        self._reset_btn.setText(t("hw.equipotential.reset_button"))
         if self._overlay_mode == "empty" and self._overlay_message is None:
-            self._empty_overlay.setText(t("hw.equipotential.empty_overlay"))
-        if self._last_result is not None:
-            palette = plot_palette()
-            self._ax.set_title(
-                t("hw.equipotential.title"),
-                fontproperties=self._title_font,
-                color=palette["text"],
-            )
-            self._canvas.draw_idle()
+            self._caption_label.setText(t("hw.equipotential.empty_overlay"))
 
     # ------------------------------------------------------------------
-    # Internal helpers
+    # Lifecycle
     # ------------------------------------------------------------------
 
-    def _remove_colorbar(self) -> None:
-        if self._colorbar is None:
-            return
-        try:
-            self._colorbar.remove()
-        except (AttributeError, KeyError, RuntimeError, ValueError):
-            cax = getattr(self._colorbar, "ax", None)
-            if cax is not None and cax in self._figure.axes:
-                try:
-                    self._figure.delaxes(cax)
-                except (AttributeError, KeyError, RuntimeError, ValueError):
-                    pass
-        self._colorbar = None
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        self._discard_plotter()
+        super().closeEvent(event)

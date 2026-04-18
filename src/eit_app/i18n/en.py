@@ -283,6 +283,8 @@ TRANSLATIONS: dict[str, str] = {
     "hw.equipotential.title": "Equipotential map",
     "hw.equipotential.empty_overlay": "No equipotential data yet",
     "hw.equipotential.no_surface": "Failed to extract 3D mesh surface",
+    "hw.equipotential.height_label": "Height scale",
+    "hw.equipotential.reset_button": "Reset view",
     "hw.reconstruction.error.expect_2d_triangles": "Fast reconstruction view currently expects 2D triangles",
 
     # ==================================================================

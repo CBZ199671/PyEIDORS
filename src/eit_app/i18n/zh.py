@@ -289,6 +289,8 @@ TRANSLATIONS: dict[str, str] = {
     "hw.equipotential.title": "\u7b49\u52bf\u56fe",                                          # 等势图
     "hw.equipotential.empty_overlay": "\u6682\u65e0\u7b49\u52bf\u6570\u636e",                # 暂无等势数据
     "hw.equipotential.no_surface": "\u4e09\u7ef4\u7f51\u683c\u8868\u9762\u63d0\u53d6\u5931\u8d25",  # 三维网格表面提取失败
+    "hw.equipotential.height_label": "\u9ad8\u5ea6\u7f29\u653e",                              # 高度缩放
+    "hw.equipotential.reset_button": "\u590d\u4f4d\u89c6\u89d2",                              # 复位视角
 
     # ==================================================================
     # Hardware tab — Boundary voltage fit plot
