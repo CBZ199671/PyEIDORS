@@ -295,6 +295,8 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "sim.step.mesh": "\u6b65\u9aa4\u4e00 \u00b7 \u7f51\u683c\u4e0e\u7535\u6781",             # 步骤一 · 网格与电极
     "sim.step.inhom": "\u6b65\u9aa4\u4e8c \u00b7 \u975e\u5747\u5300\u4f53",                   # 步骤二 · 非均匀体
+    "sim.step.inhom_2d": "\u6b65\u9aa4\u4e8c \u00b7 \u975e\u5747\u5300\u9762",                 # 步骤二 · 非均匀面
+    "sim.step.inhom_3d": "\u6b65\u9aa4\u4e8c \u00b7 \u975e\u5747\u5300\u4f53",                 # 步骤二 · 非均匀体
     "sim.step.forward": "\u6b65\u9aa4\u4e09 \u00b7 \u6b63\u95ee\u9898",                       # 步骤三 · 正问题
     "sim.step.inverse": "\u6b65\u9aa4\u56db \u00b7 \u9006\u95ee\u9898",                       # 步骤四 · 逆问题
 
@@ -319,29 +321,52 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
     "sim.mesh.electrodes_label": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",                          # 每环电极数：
     "sim.mesh.rings_label": "\u73af\u6570/\u5c42\u6570\uff1a",                                    # 环数/层数：
+    "sim.mesh.electrode_layout_label": "3D 电极编号：",
+    "sim.mesh.electrode_layout.ring_major": "Ring-major（EIDORS 标准）",
+    "sim.mesh.electrode_layout.zigzag": "Zigzag（旧版兼容）",
     "sim.mesh.conductivity_label": "\u80cc\u666f \u03c3\uff1a",                                   # 背景 σ：
     "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",                     # 激励与测量模式
     "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。
+    "sim.mesh.measurement_protocol_label": "3D 协议（激励→测量）：",
+    "sim.mesh.measurement_protocol.eidors_full_3d": "同层激励 → 全层测量（标准 3D）",
+    "sim.mesh.measurement_protocol.layer_local_2p5d": "逐层 2D → 切片/插值 3D（2.5D）",
+    "sim.mesh.measurement_protocol.cross_layer_full": "仅跨层激励 → 全层+跨层测量",
+    "sim.mesh.measurement_protocol.hybrid_full_3d": "同层+跨层激励 → 全层+跨层测量",
+    "sim.mesh.measurement_protocol.custom": "自定义激励/测量矩阵",
+    "sim.mesh.measurement_protocol_hint.eidors_full_3d": "在每一层内部按激励模式轮换注入电流；每次激励后，所有层都参与同层电压差测量。适合 EIDORS 标准多层 3D 方案。",
+    "sim.mesh.measurement_protocol_hint.layer_local_2p5d": "每一层只使用本层电极完成二维激励和二维测量；不同层结果作为切片，再用于三维显示或插值。不会直接使用跨层电压。",
+    "sim.mesh.measurement_protocol_hint.cross_layer_full": "只在相邻层同角度电极之间注入电流；测量包含各层同层电压差，并额外加入上下层电压差。适合复现实验中的纯层间激励硬件，但对小球体的横向定位通常不如混合协议。",
+    "sim.mesh.measurement_protocol_hint.hybrid_full_3d": "同时包含每层内部激励和相邻层跨层激励；测量包含各层同层电压差和上下层电压差。信息覆盖更完整，更适合三维小体积内含物重构，但测量数更多、速度更慢。",
+    "sim.mesh.measurement_protocol_hint.custom": "手动提供 stim_matrix 和 meas_matrices，用于复现真实硬件接线、固定某层激励或任意特殊采集协议。",
     "sim.mesh.stim_pattern_label": "\u6fc0\u52b1\u6a21\u5f0f\uff1a",                               # 激励模式：
     "sim.mesh.meas_pattern_label": "\u6d4b\u91cf\u6a21\u5f0f\uff1a",                               # 测量模式：
     "sim.mesh.rotate_meas_check": "\u6d4b\u91cf\u968f\u6fc0\u52b1\u65cb\u8f6c",                    # 测量随激励旋转
     "sim.mesh.use_meas_current_check": "\u5305\u542b\u6fc0\u52b1\u76f8\u5173\u7535\u6781",          # 包含激励相关电极
     "sim.mesh.extra_neighbors_label": "\u989d\u5916\u6392\u9664\u90bb\u5c45\u6570\uff1a",          # 额外排除邻居数：
+    "sim.mesh.custom_pattern_label": "自定义矩阵 JSON：",
+    "sim.mesh.custom_pattern_placeholder": "{\"stim_matrix\": [[1, -1, 0, 0]], \"meas_matrices\": [[1, 0, -1, 0]]}",
     "sim.mesh.point_count_hint": "\u9884\u8ba1\u8fb9\u754c\u91c7\u6837\u70b9\u6570\uff1a{count}",  # 预计边界采样点数：{count}
 
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities
     # ==================================================================
     "sim.inhom.title": "\u975e\u5747\u5300\u4f53",                                               # 非均匀体
+    "sim.inhom.title_2d": "\u975e\u5747\u5300\u9762",                                           # 非均匀面
+    "sim.inhom.title_3d": "\u975e\u5747\u5300\u4f53",                                           # 非均匀体
     "sim.inhom.col.shape": "\u5f62\u72b6",                                                        # 形状
     "sim.inhom.col.x": "X",
     "sim.inhom.col.y": "Y",
+    "sim.inhom.col.z": "Z",
     "sim.inhom.col.sizex": "\u5bbd",                                                              # 宽
     "sim.inhom.col.sizey": "\u9ad8",                                                              # 高
+    "sim.inhom.col.sizez": "\u6df1",                                                              # 深
     "sim.inhom.col.conductivity": "\u03c3",
     "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",                                                  # + 矩形
+    "sim.inhom.add_sphere": "+ \u7403\u4f53",                                                     # + 球体
+    "sim.inhom.add_ellipsoid": "+ \u692d\u7403",                                                  # + 椭球
+    "sim.inhom.add_box": "+ \u957f\u65b9\u4f53",                                                  # + 长方体
     "sim.inhom.remove_button": "\u5220\u9664",                                                    # 删除
 
     # ==================================================================

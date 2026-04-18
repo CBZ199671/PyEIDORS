@@ -13,7 +13,6 @@ from eit_app.controllers import reconstruction_controller as rc
 from eit_app.models.frame_model import FrameData
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
-from pyeidors.geometry.mesh_loader import MeshLoader
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -47,6 +46,8 @@ def test_mesh_loader_default_mesh_skips_incompatible_3d_candidates(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    from pyeidors.geometry.mesh_loader import MeshLoader
+
     (tmp_path / "mesh3d_first.msh").write_text("3d", encoding="utf-8")
     (tmp_path / "mesh_2d_second.msh").write_text("2d", encoding="utf-8")
 
@@ -101,6 +102,36 @@ def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
     assert runtime.meta["forward_mat_solve"] == "auto"
     assert runtime.meta["mesh_family"] == "tetra"
     assert runtime.refinement == 5
+
+
+def test_single_step_cached_runtime_uses_request_alpha_when_lambda_is_absent() -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        regularization_alpha=0.75,
+        metadata={"reconstruction_runtime": "single_step_cached"},
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.lam == pytest.approx(0.75)
+    assert runtime.meta["difference_lambda"] == pytest.approx(0.75)
+
+
+def test_single_step_cached_runtime_prefers_explicit_difference_lambda() -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        regularization_alpha=0.75,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "difference_lambda": 0.02,
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.lam == pytest.approx(0.02)
 
 
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
@@ -201,6 +232,88 @@ def test_single_step_cached_request_returns_delta_conductivity_for_display(
         request.target_frame.real - request.reference_frame.real,
     )
     assert np.allclose(result.simulated, pred_diff)
+
+
+def test_single_step_cached_request_uses_normalized_difference_space(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array([2.0, 4.0, -8.0], dtype=float)
+    target = np.array([3.0, 2.0, -4.0], dtype=float)
+    base_meas = reference.copy()
+    pred_target = np.array([2.5, 5.0, -12.0], dtype=float)
+    delta_sigma = np.array([0.2, 0.3], dtype=float)
+    captured_rhs: list[np.ndarray] = []
+    measurement_backend = "measurement-exact"
+
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "difference_mode": "normalized",
+            "difference_orientation": "target_minus_reference",
+            "step_size_calib": False,
+        },
+    )
+
+    class _StubForwardModel:
+        def fwd_solve(self, image):
+            assert image.elem_data is not None
+            return SimpleNamespace(meas=pred_target), None
+
+    ctx = {
+        "mesh": object(),
+        "display_node_coords": np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        "display_cell_connectivity": np.array([[0, 1, 2]], dtype=int),
+        "operator_bundle": {
+            "strict_solver_backend_effective": measurement_backend,
+        },
+        "sigma_bg": np.ones_like(delta_sigma),
+        "fwd_model": _StubForwardModel(),
+        "base_meas": base_meas,
+        "cache_build_seconds": {},
+        "cache_miss_reasons": {},
+        "cache_manager": None,
+    }
+
+    def _fake_delta(*, operator_bundle, rhs):
+        captured_rhs.append(np.asarray(rhs, dtype=float))
+        return delta_sigma
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: ctx)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(
+            STRICT_SOLVER_BACKEND_MEASUREMENT=measurement_backend,
+            _measurement_space_delta=_fake_delta,
+            _solve_linear_from_bundle=lambda operator_bundle, rhs: delta_sigma,
+            _calibrate_step_size=lambda **kwargs: 1.0,
+            build_shared_context=lambda **kwargs: ctx,
+        ),
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_measured = (target - reference) / reference
+    expected_simulated = (pred_target - base_meas) / base_meas
+    assert np.allclose(captured_rhs[0], expected_measured)
+    assert np.allclose(result.measured, expected_measured)
+    assert np.allclose(result.simulated, expected_simulated)
 
 
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(

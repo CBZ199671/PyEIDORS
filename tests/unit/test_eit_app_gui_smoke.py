@@ -775,12 +775,10 @@ def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
 def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
     """Inhomogeneity column headers must not collide.
 
-    The previous Stretch-everything strategy gave each of the 6 columns
+    The previous Stretch-everything strategy gave each of the columns
     ~46px in the 280px right-context pane, which clipped headers like
-    "X 尺寸" / "Size Y" / "σ (S/m)".  We now use Interactive sizing
-    with explicit per-column defaults; the last column (σ) stretches
-    to absorb leftover width.  Single-character zh labels (宽/高) and
-    the bare σ symbol now fit in the slim columns.
+    "X 尺寸" / "Size Y" / "σ (S/m)".  The editor now has 2D and 3D
+    layouts: 2D hides Z/depth and 3D reveals them for volume inclusions.
     """
     from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
 
@@ -794,10 +792,22 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
         widths = [header.sectionSize(c) for c in range(editor._model.columnCount())]
         # Shape column wider than the numeric columns; X/Y/W/H share size.
         assert widths[0] >= 70, f"Shape column too narrow: {widths[0]}"
-        for c in (1, 2, 3, 4):
+        for c in (1, 2, 4, 5):
             assert widths[c] >= 50, f"Numeric column {c} too narrow: {widths[c]}"
+        assert editor._table.isColumnHidden(3)
+        assert editor._table.isColumnHidden(6)
+
+        editor.set_domain_context(mesh_dimension=3, radius=0.18, height=0.16)
+        _get_app().processEvents()
+        assert not editor._table.isColumnHidden(3)
+        assert not editor._table.isColumnHidden(6)
+        editor._add_shape("circle")
+        spec = editor.get_inhomogeneities()[0]
+        assert spec.size_x < 0.18
+        assert spec.size_z <= 0.16 * 0.5
+        assert spec.center_z == pytest.approx(0.0)
         # σ column (last, stretched) takes whatever is left ≥ 40px.
-        assert widths[5] >= 40
+        assert header.sectionSize(7) >= 40
     finally:
         editor.close()
         editor.deleteLater()
@@ -2202,6 +2212,7 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     assert cfg.point_count() == 208
     assert cfg.radius == pytest.approx(0.18)
     assert cfg.height == pytest.approx(0.16)
+    assert cfg.drive_mode == "total_current"
     assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
 
     _close_window(window)
@@ -2266,6 +2277,8 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
         n_elements=1,
         n_measurements=n_meas,
     )
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
+    _get_app().processEvents()
     window._sim_tab.mesh_setup_panel._refine_spin.setValue(0.1)
     window._sim_tab.inverse_problem_panel.set_config(
         {
@@ -2292,7 +2305,9 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     assert request.mesh_refinement == pytest.approx(0.1)
     assert request.metadata["mesh_size"] == pytest.approx(0.1)
     assert request.metadata["reconstruction_runtime"] == "single_step_cached"
-    assert rc._prepare_single_step_cached_runtime(request).refinement == 5
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
+    assert rc._prepare_single_step_cached_runtime(request).refinement == 2
 
     window._sim_state.inverse_running = False
     _close_window(window)

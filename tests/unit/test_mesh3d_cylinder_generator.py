@@ -166,8 +166,8 @@ def test_geomv2_hex_mesh_is_file_backed_and_pure_hex(tmp_path):
     assert "gaps" in mesh.association_table
 
 
-def test_load_or_create_mesh_rejects_removed_electrode_layout(tmp_path):
-    with pytest.raises(ValueError, match="electrode_layout"):
+def test_load_or_create_mesh_rejects_unknown_electrode_layout(tmp_path):
+    with pytest.raises(ValueError, match="Unsupported electrode_layout"):
         load_or_create_mesh(
             mesh_dir=str(tmp_path),
             n_elec=16,

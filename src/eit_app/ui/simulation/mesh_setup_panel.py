@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPlainTextEdit,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -102,6 +103,13 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_rings = QLabel("")
         mesh_form.addRow(self._lbl_rings, self._n_rings_spin)
 
+        self._electrode_layout_combo = AutoCloseComboBox()
+        self._electrode_layout_combo.addItem("", "ring_major")
+        self._electrode_layout_combo.addItem("", "zigzag")
+        self._electrode_layout_combo.currentIndexChanged.connect(lambda _: self._on_any_change())
+        self._lbl_electrode_layout = QLabel("")
+        mesh_form.addRow(self._lbl_electrode_layout, self._electrode_layout_combo)
+
         self._bg_cond_spin = QDoubleSpinBox()
         self._bg_cond_spin.setRange(0.001, 100.0)
         self._bg_cond_spin.setValue(1.0)
@@ -128,6 +136,23 @@ class MeshSetupPanel(QGroupBox):
         patterns_form.setContentsMargins(0, 0, 0, 0)
         patterns_form.setSpacing(6)
         patterns_form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+
+        self._measurement_protocol_combo = AutoCloseComboBox()
+        self._measurement_protocol_combo.addItem("", "eidors_full_3d")
+        self._measurement_protocol_combo.addItem("", "layer_local_2p5d")
+        self._measurement_protocol_combo.addItem("", "cross_layer_full")
+        self._measurement_protocol_combo.addItem("", "hybrid_full_3d")
+        self._measurement_protocol_combo.addItem("", "custom")
+        self._measurement_protocol_combo.currentIndexChanged.connect(
+            lambda _: self._on_protocol_changed()
+        )
+        self._lbl_measurement_protocol = QLabel("")
+        patterns_form.addRow(self._lbl_measurement_protocol, self._measurement_protocol_combo)
+
+        self._measurement_protocol_hint = QLabel("")
+        self._measurement_protocol_hint.setWordWrap(True)
+        set_hint_text(self._measurement_protocol_hint)
+        patterns_form.addRow("", self._measurement_protocol_hint)
 
         self._stim_pattern_edit = QLineEdit("{ad}")
         self._stim_pattern_edit.setPlaceholderText("{ad}")
@@ -158,6 +183,12 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_extra_neighbors = QLabel("")
         patterns_form.addRow(self._lbl_extra_neighbors, self._extra_neighbors_spin)
 
+        self._custom_pattern_edit = QPlainTextEdit()
+        self._custom_pattern_edit.setMaximumHeight(82)
+        self._custom_pattern_edit.textChanged.connect(self._on_any_change)
+        self._lbl_custom_pattern = QLabel("")
+        patterns_form.addRow(self._lbl_custom_pattern, self._custom_pattern_edit)
+
         outer.addWidget(patterns_widget)
 
         # Live point-count preview so the user sees the effect of pattern
@@ -186,7 +217,12 @@ class MeshSetupPanel(QGroupBox):
             ),
             "n_electrodes": self._n_elec_spin.value(),
             "n_rings": self._n_rings_spin.value(),
+            "electrode_layout": str(self._electrode_layout_combo.currentData() or "ring_major"),
             "background_conductivity": self._bg_cond_spin.value(),
+            "measurement_protocol": str(
+                self._measurement_protocol_combo.currentData() or "eidors_full_3d"
+            ),
+            "custom_pattern_json": self._custom_pattern_edit.toPlainText().strip(),
             "stim_pattern": stim_pattern,
             "meas_pattern": meas_pattern,
             "rotate_meas": self._rotate_meas_check.isChecked(),
@@ -201,7 +237,10 @@ class MeshSetupPanel(QGroupBox):
             self._refine_spin,
             self._n_elec_spin,
             self._n_rings_spin,
+            self._electrode_layout_combo,
             self._bg_cond_spin,
+            self._measurement_protocol_combo,
+            self._custom_pattern_edit,
             self._stim_pattern_edit,
             self._meas_pattern_edit,
             self._rotate_meas_check,
@@ -220,7 +259,16 @@ class MeshSetupPanel(QGroupBox):
             self._n_elec_spin.setValue(int(config.get("n_electrodes", config.get("n_elec", 16))))
             default_rings = 2 if mesh_dimension == 3 else 1
             self._n_rings_spin.setValue(int(config.get("n_rings", default_rings)))
+            self._select_combo_data(
+                self._electrode_layout_combo,
+                str(config.get("electrode_layout", "ring_major")),
+            )
             self._bg_cond_spin.setValue(float(config.get("background_conductivity", 1.0)))
+            self._select_combo_data(
+                self._measurement_protocol_combo,
+                str(config.get("measurement_protocol", "eidors_full_3d")),
+            )
+            self._custom_pattern_edit.setPlainText(str(config.get("custom_pattern_json", "")))
             self._stim_pattern_edit.setText(str(config.get("stim_pattern", "{ad}")))
             self._meas_pattern_edit.setText(str(config.get("meas_pattern", "{ad}")))
             self._rotate_meas_check.setChecked(bool(config.get("rotate_meas", True)))
@@ -230,6 +278,7 @@ class MeshSetupPanel(QGroupBox):
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
         self._refresh_mesh_family_enabled()
+        self._refresh_protocol_enabled()
         self._on_any_change()
 
     # ------------------------------------------------------------------
@@ -273,9 +322,16 @@ class MeshSetupPanel(QGroupBox):
                 for widget, blocked in zip(widgets, blockers):
                     widget.blockSignals(blocked)
         self._refresh_mesh_family_enabled()
+        self._refresh_protocol_enabled()
+        self._on_any_change()
+
+    def _on_protocol_changed(self) -> None:
+        self._refresh_protocol_enabled()
+        self._refresh_protocol_hint()
         self._on_any_change()
 
     def _on_any_change(self) -> None:
+        self._refresh_protocol_enabled()
         # Recompute and cache the expected measurement point count so the
         # user can see whether their pattern matches their hardware board.
         layout = measurement_layout_from_config(self.get_config())
@@ -287,6 +343,30 @@ class MeshSetupPanel(QGroupBox):
         enabled = self._dim_combo.currentIndex() == 1
         self._lbl_mesh_family.setEnabled(enabled)
         self._mesh_family_combo.setEnabled(enabled)
+        if not hasattr(self, "_lbl_electrode_layout"):
+            return
+        self._lbl_electrode_layout.setEnabled(enabled)
+        self._electrode_layout_combo.setEnabled(enabled)
+
+    def _refresh_protocol_enabled(self) -> None:
+        is_custom = str(self._measurement_protocol_combo.currentData() or "") == "custom"
+        self._lbl_custom_pattern.setEnabled(is_custom)
+        self._custom_pattern_edit.setEnabled(is_custom)
+        self._refresh_protocol_hint()
+
+    def _refresh_protocol_hint(self) -> None:
+        protocol = str(self._measurement_protocol_combo.currentData() or "eidors_full_3d")
+        self._measurement_protocol_hint.setText(
+            t(f"sim.mesh.measurement_protocol_hint.{protocol}")
+        )
+
+    @staticmethod
+    def _select_combo_data(combo: AutoCloseComboBox, value: str) -> None:
+        target = str(value).strip().lower()
+        for idx in range(combo.count()):
+            if str(combo.itemData(idx)).strip().lower() == target:
+                combo.setCurrentIndex(idx)
+                return
 
     def _refresh_point_count_label(self) -> None:
         self._point_count_label.setText(
@@ -309,13 +389,25 @@ class MeshSetupPanel(QGroupBox):
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))
         self._lbl_rings.setText(t("sim.mesh.rings_label"))
+        self._lbl_electrode_layout.setText(t("sim.mesh.electrode_layout_label"))
+        self._electrode_layout_combo.setItemText(0, t("sim.mesh.electrode_layout.ring_major"))
+        self._electrode_layout_combo.setItemText(1, t("sim.mesh.electrode_layout.zigzag"))
         self._lbl_conductivity.setText(t("sim.mesh.conductivity_label"))
         # Pattern section
         self._patterns_header.setText(t("sim.mesh.patterns_header"))
         self._patterns_hint.setText(t("sim.mesh.patterns_hint"))
+        self._lbl_measurement_protocol.setText(t("sim.mesh.measurement_protocol_label"))
+        self._measurement_protocol_combo.setItemText(0, t("sim.mesh.measurement_protocol.eidors_full_3d"))
+        self._measurement_protocol_combo.setItemText(1, t("sim.mesh.measurement_protocol.layer_local_2p5d"))
+        self._measurement_protocol_combo.setItemText(2, t("sim.mesh.measurement_protocol.cross_layer_full"))
+        self._measurement_protocol_combo.setItemText(3, t("sim.mesh.measurement_protocol.hybrid_full_3d"))
+        self._measurement_protocol_combo.setItemText(4, t("sim.mesh.measurement_protocol.custom"))
+        self._refresh_protocol_hint()
         self._lbl_stim_pattern.setText(t("sim.mesh.stim_pattern_label"))
         self._lbl_meas_pattern.setText(t("sim.mesh.meas_pattern_label"))
         self._rotate_meas_check.setText(t("sim.mesh.rotate_meas_check"))
         self._use_meas_current_check.setText(t("sim.mesh.use_meas_current_check"))
         self._lbl_extra_neighbors.setText(t("sim.mesh.extra_neighbors_label"))
+        self._lbl_custom_pattern.setText(t("sim.mesh.custom_pattern_label"))
+        self._custom_pattern_edit.setPlaceholderText(t("sim.mesh.custom_pattern_placeholder"))
         self._refresh_point_count_label()

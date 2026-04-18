@@ -31,7 +31,9 @@ from pyeidors.cache.object_signature import (
     model_signature_from_forward_model,
     pattern_signature_from_forward_model,
 )
+from pyeidors.data.difference import build_difference_vector, project_measurement_jacobian
 from pyeidors.data.structures import PatternConfig, EITImage
+from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
@@ -457,12 +459,19 @@ def _calibrate_step_size(
     step_size_min: float,
     step_size_max: float,
     step_size_maxiter: int,
+    difference_mode: str = "raw",
+    difference_orientation: str = "target_minus_reference",
 ) -> float:
     def _objective(scale: float) -> float:
         sigma_try = sigma_bg + scale * delta_sigma
         img_try = EITImage(elem_data=sigma_try, fwd_model=fwd_model)
         pred_vi_try, _ = fwd_model.fwd_solve(img_try)
-        pred_diff_try = pred_vi_try.meas - base_meas
+        pred_diff_try = build_difference_vector(
+            pred_vi_try.meas,
+            base_meas,
+            mode=difference_mode,
+            orientation=difference_orientation,
+        )
         residual = pred_diff_try - dv
         return float(np.mean(residual**2))
 
@@ -503,12 +512,18 @@ def build_shared_context(
     geometry_scale_to_m: float = 1.0,
     stim_pattern: str = "{ad}",
     meas_pattern: str = "{ad}",
+    electrode_layout: str = "ring_major",
+    measurement_protocol: str = "eidors_full_3d",
+    custom_stim_matrix: object | None = None,
+    custom_meas_matrices: object | None = None,
     rotate_meas: bool = True,
     use_meas_current: bool = False,
     use_meas_current_next: int = 0,
     stim_direction: str = "ccw",
     meas_direction: str = "ccw",
     stim_first_positive: bool = False,
+    difference_mode: str = "raw",
+    difference_orientation: str = "target_minus_reference",
     background_sigma: float = 1.0,
     lam: float = 1.0e-2,
     cache_scope: str = "both",
@@ -599,10 +614,18 @@ def build_shared_context(
         for name in cache_clear_names:
             cache_manager.clear_name(name=name)
 
+    total_electrodes = max(int(n_elec), 1) * max(int(n_rings), 1)
+    pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
+        mesh_tdim=int(mesh_dim),
+        n_elec=int(n_elec),
+        n_rings=int(n_rings),
+        electrode_layout=electrode_layout,
+    )
+
     mesh = load_or_create_mesh(
         mesh_dir=mesh_dir,
         mesh_name=mesh_name,
-        n_elec=max(int(n_elec), 1) * max(int(n_rings), 1),
+        n_elec=total_electrodes,
         dimension=int(mesh_dim),
         radius=radius,
         refinement=refinement if refinement is not None else 6,
@@ -613,12 +636,17 @@ def build_shared_context(
         z_center=float(z_center),
         mesh_family=mesh_family,
         geometry_version=geometry_version,
+        electrode_layout=electrode_layout,
     )
     pattern_cfg = PatternConfig(
-        n_elec=n_elec,
-        n_rings=int(n_rings),
+        n_elec=pattern_n_elec,
+        n_rings=pattern_n_rings,
         stim_pattern=stim_pattern,
         meas_pattern=meas_pattern,
+        electrode_layout=electrode_layout,
+        measurement_protocol=measurement_protocol,
+        custom_stim_matrix=custom_stim_matrix,
+        custom_meas_matrices=custom_meas_matrices,
         drive_mode=resolved_drive_mode,
         drive_value=stim_drive_value,
         geometry_scale_to_m=float(geometry_scale_to_m),
@@ -630,7 +658,6 @@ def build_shared_context(
         meas_direction=str(meas_direction),
         stim_first_positive=bool(stim_first_positive),
     )
-    total_electrodes = max(int(n_elec), 1) * max(int(n_rings), 1)
     z_contact = np.full(total_electrodes, contact_impedance, dtype=float)
     fwd_model = EITForwardModel(
         n_elec=total_electrodes,
@@ -724,7 +751,7 @@ def build_shared_context(
         "backend_signature": backend_signature_from_forward_model(fwd_model),
     }
 
-    jacobian, jacobian_lookup = cache_manager.get_or_compute_semantic(
+    raw_jacobian, jacobian_lookup = cache_manager.get_or_compute_semantic(
         artifact="jacobian",
         name=CACHE_NAME_JACOBIAN,
         namespace=CACHE_NAMESPACE_DIFFERENCE,
@@ -739,6 +766,13 @@ def build_shared_context(
         effort_seconds=8.0,
     )
     build_seconds.setdefault("jacobian", 0.0)
+    jacobian = project_measurement_jacobian(
+        raw_jacobian,
+        measurement_type="difference",
+        reference_meas=base_meas,
+        difference_mode=difference_mode,
+        difference_orientation=difference_orientation,
+    )
 
     strict_backend_info = _select_strict_solver_backend(
         mesh_dim=int(mesh_dim),
@@ -774,6 +808,9 @@ def build_shared_context(
         "model_signature": jacobian_payload["model_signature"],
         "pattern_signature": jacobian_payload["pattern_signature"],
         "backend_signature": jacobian_payload["backend_signature"],
+        "difference_mode": str(difference_mode),
+        "difference_orientation": str(difference_orientation),
+        "base_meas_hash": hash_array(np.ascontiguousarray(base_meas, dtype=np.float64)),
         "strict_solver_backend_effective": str(strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)),
     }
 
@@ -1091,6 +1128,8 @@ def build_shared_context(
         "sigma_bg": sigma_bg,
         "img_bg": img_bg,
         "base_meas": base_meas,
+        "difference_mode": str(difference_mode),
+        "difference_orientation": str(difference_orientation),
         "n_stim": n_stim,
         "n_meas_total": n_meas_total,
         "n_meas_per_stim": n_meas_per_stim,
@@ -1176,8 +1215,15 @@ def process_frames(
     transparent: bool,
     write_plots: bool,
     measurement_gain: float,
+    difference_mode: str = "raw",
+    difference_orientation: str = "target_minus_reference",
 ) -> dict[str, object]:
-    dv = vi - vh
+    dv = build_difference_vector(
+        vi,
+        vh,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
     if dv.shape[0] != ctx["J"].shape[0]:
         raise RuntimeError(
             f"Data length {dv.shape[0]} does not match Jacobian rows {ctx['J'].shape[0]}"
@@ -1275,6 +1321,8 @@ def process_frames(
             step_size_min=step_size_min,
             step_size_max=step_size_max,
             step_size_maxiter=step_size_maxiter,
+            difference_mode=difference_mode,
+            difference_orientation=difference_orientation,
         )
 
     sigma_est = ctx["sigma_bg"] + alpha * delta_sigma
@@ -1283,7 +1331,12 @@ def process_frames(
     forward_start = time.perf_counter()
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
     stage_timings["forward_validate"] += time.perf_counter() - forward_start
-    pred_diff = pred_vi.meas - ctx["base_meas"]
+    pred_diff = build_difference_vector(
+        pred_vi.meas,
+        ctx["base_meas"],
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
     meas_diff = dv
 
     res = pred_vi.meas - vi

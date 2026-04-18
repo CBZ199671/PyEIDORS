@@ -32,11 +32,53 @@ class StimMeasPatternManager:
         )
         self.drive_value = float(self.config.drive_value)
         self._electrode_lengths_m = self._resolve_electrode_lengths(electrode_lengths_m)
+        self.measurement_protocol = self._normalize_measurement_protocol(
+            getattr(self.config, "measurement_protocol", "eidors_full_3d")
+        )
+        if self.n_rings <= 1 and self.measurement_protocol != "custom":
+            self.measurement_protocol = "eidors_full_3d"
 
-        self._parse_patterns()
-        self._generate_patterns()
+        self._full_meas_matrices: list[np.ndarray] = []
+        if self.measurement_protocol == "custom":
+            self._load_custom_patterns()
+        else:
+            self._parse_patterns()
+            self._generate_patterns()
         self._build_measurement_projection()
         self._compute_measurement_selector()
+
+    @staticmethod
+    def _normalize_measurement_protocol(value: object | None) -> str:
+        raw = str(value or "eidors_full_3d").strip().lower().replace("-", "_")
+        aliases = {
+            "2.5d": "layer_local_2p5d",
+            "25d": "layer_local_2p5d",
+            "layer_local": "layer_local_2p5d",
+            "layer_local_2p5d": "layer_local_2p5d",
+            "planar": "layer_local_2p5d",
+            "ring_local": "layer_local_2p5d",
+            "full_3d": "eidors_full_3d",
+            "eidors_full": "eidors_full_3d",
+            "eidors_full_3d": "eidors_full_3d",
+            "true_3d": "eidors_full_3d",
+            "cross_layer": "cross_layer_full",
+            "cross_layer_full": "cross_layer_full",
+            "hybrid": "hybrid_full_3d",
+            "hybrid_full": "hybrid_full_3d",
+            "hybrid_3d": "hybrid_full_3d",
+            "hybrid_full_3d": "hybrid_full_3d",
+            "mixed_3d": "hybrid_full_3d",
+            "custom": "custom",
+            "arbitrary": "custom",
+        }
+        try:
+            return aliases[raw]
+        except KeyError as exc:
+            raise ValueError(
+                "Unsupported measurement_protocol "
+                f"{value!r}; expected layer_local_2p5d, eidors_full_3d, "
+                "cross_layer_full, hybrid_full_3d, or custom."
+            ) from exc
 
     def _resolve_electrode_lengths(self, electrode_lengths_m: np.ndarray | None) -> np.ndarray | None:
         if electrode_lengths_m is None:
@@ -94,56 +136,83 @@ class StimMeasPatternManager:
     def _generate_patterns(self) -> None:
         self.stim_matrix = []
         self.meas_matrices = []
+        self._full_meas_matrices = []
         self.meas_start_indices = []
         self.n_meas_total = 0
         self.n_meas_per_stim = []
 
-        for ring in range(self.n_rings):
-            for elec in range(self.n_elec):
-                # Stimulation vector
-                stim_vec = np.zeros(self.tn_elec)
-                inj_indices = []
-                for i, inj_elec in enumerate(self.inj_electrodes):
-                    idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
-                    inj_indices.append(idx)
+        for elec, ring, inj_indices in self._iter_stimulation_records():
+            # Stimulation vector
+            stim_vec = np.zeros(self.tn_elec)
 
-                stim_currents = build_stim_currents(
-                    drive_mode=self.drive_mode,
-                    drive_value=self.drive_value,
-                    inj_indices=inj_indices,
-                    inj_weights=self.inj_weights,
-                    electrode_lengths_m=self._electrode_lengths_m,
-                )
-                for idx, current in zip(inj_indices, stim_currents):
-                    stim_vec[idx] = current
+            stim_currents = build_stim_currents(
+                drive_mode=self.drive_mode,
+                drive_value=self.drive_value,
+                inj_indices=inj_indices,
+                inj_weights=self.inj_weights,
+                electrode_lengths_m=self._electrode_lengths_m,
+            )
+            for idx, current in zip(inj_indices, stim_currents):
+                stim_vec[idx] = current
 
-                # Measurement matrix
-                meas_mat = self._make_meas_matrix(elec, ring)
+            # Measurement matrix
+            full_meas_mat = self._make_meas_matrix_for_protocol(elec, ring)
+            meas_mat = full_meas_mat
 
-                if not self.config.use_meas_current:
-                    meas_mat = self._filter_measurements(meas_mat, elec, ring)
+            if not self.config.use_meas_current:
+                meas_mat = self._filter_measurements(meas_mat, inj_indices)
 
-                if meas_mat.shape[0] > 0:
-                    self.stim_matrix.append(stim_vec)
-                    self.meas_matrices.append(meas_mat)
-                    self.meas_start_indices.append(self.n_meas_total)
-                    self.n_meas_per_stim.append(meas_mat.shape[0])
-                    self.n_meas_total += meas_mat.shape[0]
+            if meas_mat.shape[0] > 0:
+                self.stim_matrix.append(stim_vec)
+                self.meas_matrices.append(meas_mat)
+                self._full_meas_matrices.append(full_meas_mat)
+                self.meas_start_indices.append(self.n_meas_total)
+                self.n_meas_per_stim.append(meas_mat.shape[0])
+                self.n_meas_total += meas_mat.shape[0]
 
         self.stim_matrix = np.array(self.stim_matrix)
         self.n_stim = len(self.stim_matrix)
 
+    def _iter_stimulation_records(self) -> list[tuple[int, int, list[int]]]:
+        records: list[tuple[int, int, list[int]]] = []
+        if self.measurement_protocol in {"cross_layer_full", "hybrid_full_3d"} and self.n_rings > 1:
+            if self.measurement_protocol == "hybrid_full_3d":
+                for ring in range(self.n_rings):
+                    for elec in range(self.n_elec):
+                        inj_indices = []
+                        for inj_elec in self.inj_electrodes:
+                            idx = (
+                                (inj_elec + self.stim_direction * elec) % self.n_elec
+                                + ring * self.n_elec
+                            )
+                            inj_indices.append(idx)
+                        records.append((elec, ring, inj_indices))
+
+            for ring in range(self.n_rings - 1):
+                for elec in range(self.n_elec):
+                    lower = (self.stim_direction * elec) % self.n_elec + ring * self.n_elec
+                    upper = (self.stim_direction * elec) % self.n_elec + (ring + 1) * self.n_elec
+                    records.append((elec, ring, [lower, upper]))
+            return records
+
+        for ring in range(self.n_rings):
+            for elec in range(self.n_elec):
+                inj_indices = []
+                for inj_elec in self.inj_electrodes:
+                    idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
+                    inj_indices.append(idx)
+                records.append((elec, ring, inj_indices))
+        return records
+
     def _compute_measurement_selector(self) -> None:
         if self.config.use_meas_current:
-            self.meas_selector = np.ones(self.n_elec * self.n_stim, dtype=bool)
+            full_count = sum(int(mat.shape[0]) for mat in self._full_meas_matrices)
+            self.meas_selector = np.ones(full_count, dtype=bool)
             return
 
         selector = []
         for i in range(self.n_stim):
-            elec = i % self.n_elec
-            ring = i // self.n_elec
-
-            full_meas_mat = self._make_meas_matrix(elec, ring)
+            full_meas_mat = self._full_meas_matrices[i]
             filtered_meas_mat = self.meas_matrices[i]
 
             full_set_hash = self._create_meas_hash(full_meas_mat)
@@ -153,6 +222,55 @@ class StimMeasPatternManager:
             selector.append(frame_selector)
 
         self.meas_selector = np.concatenate(selector)
+
+    def _load_custom_patterns(self) -> None:
+        if self.config.custom_stim_matrix is None or self.config.custom_meas_matrices is None:
+            raise ValueError(
+                "measurement_protocol='custom' requires custom_stim_matrix "
+                "and custom_meas_matrices."
+            )
+        stim_matrix = np.asarray(self.config.custom_stim_matrix, dtype=float)
+        if stim_matrix.ndim == 1:
+            stim_matrix = stim_matrix.reshape(1, -1)
+        if stim_matrix.ndim != 2 or stim_matrix.shape[1] != self.tn_elec:
+            raise ValueError(
+                "custom_stim_matrix must have shape (n_stim, n_elec*n_rings); "
+                f"got {stim_matrix.shape}, expected second dimension {self.tn_elec}."
+            )
+        meas_payload = np.asarray(self.config.custom_meas_matrices, dtype=float)
+        if meas_payload.ndim == 2:
+            meas_matrices = [meas_payload.copy() for _ in range(stim_matrix.shape[0])]
+        elif meas_payload.ndim == 3:
+            meas_matrices = [np.asarray(item, dtype=float) for item in meas_payload]
+        else:
+            raise ValueError(
+                "custom_meas_matrices must be either (n_meas, total_elec) "
+                "or (n_stim, n_meas, total_elec)."
+            )
+        if len(meas_matrices) != stim_matrix.shape[0]:
+            raise ValueError(
+                "custom_meas_matrices count must match custom_stim_matrix rows: "
+                f"{len(meas_matrices)} != {stim_matrix.shape[0]}."
+            )
+        self.stim_matrix = stim_matrix
+        self.meas_matrices = []
+        self._full_meas_matrices = []
+        self.meas_start_indices = []
+        self.n_meas_total = 0
+        self.n_meas_per_stim = []
+        for meas_mat in meas_matrices:
+            mat = np.asarray(meas_mat, dtype=float)
+            if mat.ndim != 2 or mat.shape[1] != self.tn_elec:
+                raise ValueError(
+                    "Each custom measurement matrix must have shape "
+                    f"(n_meas, {self.tn_elec}); got {mat.shape}."
+                )
+            self.meas_matrices.append(mat)
+            self._full_meas_matrices.append(mat)
+            self.meas_start_indices.append(self.n_meas_total)
+            self.n_meas_per_stim.append(mat.shape[0])
+            self.n_meas_total += mat.shape[0]
+        self.n_stim = int(stim_matrix.shape[0])
 
     def _build_measurement_projection(self) -> None:
         """Build a dense projection matrix to avoid per-pattern matmul loops."""
@@ -179,28 +297,69 @@ class StimMeasPatternManager:
         return hash_vals
 
     def _make_meas_matrix(self, elec: int, ring: int) -> np.ndarray:
+        return self._make_meas_matrix_for_rings(elec, range(self.n_rings))
+
+    def _make_meas_matrix_for_protocol(self, elec: int, ring: int) -> np.ndarray:
+        if self.measurement_protocol == "layer_local_2p5d":
+            return self._make_meas_matrix_for_rings(elec, [ring])
+        if self.measurement_protocol in {"cross_layer_full", "hybrid_full_3d"}:
+            same_layer = self._make_meas_matrix_for_rings(elec, range(self.n_rings))
+            cross_layer = self._make_cross_layer_meas_matrix(elec)
+            if cross_layer.size == 0:
+                return same_layer
+            return np.vstack([same_layer, cross_layer])
+        return self._make_meas_matrix_for_rings(elec, range(self.n_rings))
+
+    def _make_meas_matrix_for_rings(self, elec: int, rings: object) -> np.ndarray:
         meas_list = []
         offset = self.meas_direction * elec if self.config.rotate_meas else 0
 
-        for meas_idx in range(self.tn_elec):
-            meas_vec = np.zeros(self.tn_elec)
-            within_ring = meas_idx % self.n_elec
-            ring_offset = (meas_idx // self.n_elec) * self.n_elec
+        for ring in rings:
+            ring_offset = int(ring) * self.n_elec
+            for within_ring in range(self.n_elec):
+                meas_vec = np.zeros(self.tn_elec)
 
-            for i, meas_elec in enumerate(self.meas_electrodes):
-                idx = (meas_elec + within_ring + offset) % self.n_elec + ring_offset
-                meas_vec[idx] = self.meas_weights[i]
+                for i, meas_elec in enumerate(self.meas_electrodes):
+                    idx = (meas_elec + within_ring + offset) % self.n_elec + ring_offset
+                    meas_vec[idx] = self.meas_weights[i]
 
-            meas_list.append(meas_vec)
+                meas_list.append(meas_vec)
 
         return np.array(meas_list)
 
-    def _filter_measurements(self, meas_mat: np.ndarray, elec: int, ring: int) -> np.ndarray:
-        stim_indices = []
-        for inj_elec in self.inj_electrodes:
-            idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
-            stim_indices.append(idx)
+    def _make_cross_layer_meas_matrix(self, elec: int) -> np.ndarray:
+        if self.n_rings <= 1:
+            return np.empty((0, self.tn_elec), dtype=float)
+        meas_list = []
+        offset = self.meas_direction * elec if self.config.rotate_meas else 0
+        for ring in range(self.n_rings - 1):
+            lower_offset = ring * self.n_elec
+            upper_offset = (ring + 1) * self.n_elec
+            for within_ring in range(self.n_elec):
+                base = (within_ring + offset) % self.n_elec
+                meas_vec = np.zeros(self.tn_elec)
+                meas_vec[lower_offset + base] = 1.0
+                meas_vec[upper_offset + base] = -1.0
+                meas_list.append(meas_vec)
+        return np.array(meas_list, dtype=float)
 
+    def _filter_measurements(
+        self,
+        meas_mat: np.ndarray,
+        stim_indices: list[int] | None = None,
+        *,
+        elec: int | None = None,
+        ring: int | None = None,
+    ) -> np.ndarray:
+        if stim_indices is None:
+            if elec is None:
+                raise TypeError("_filter_measurements requires stim_indices or elec/ring")
+            ring_offset = int(ring or 0) * self.n_elec
+            stim_indices = [
+                (int(inj_elec) + self.stim_direction * int(elec)) % self.n_elec + ring_offset
+                for inj_elec in self.inj_electrodes
+            ]
+        stim_indices = [int(idx) for idx in stim_indices]
         if self.config.use_meas_current_next > 0:
             extended = []
             for idx in stim_indices:

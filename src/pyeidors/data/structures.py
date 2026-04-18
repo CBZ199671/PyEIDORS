@@ -18,6 +18,16 @@ class PatternConfig:
     n_rings: int = 1
     stim_pattern: str | list[int] = '{ad}'
     meas_pattern: str | list[int] = '{ad}'
+    electrode_layout: Literal["ring_major", "zigzag"] = "ring_major"
+    measurement_protocol: Literal[
+        "layer_local_2p5d",
+        "eidors_full_3d",
+        "cross_layer_full",
+        "hybrid_full_3d",
+        "custom",
+    ] = "eidors_full_3d"
+    custom_stim_matrix: Any | None = None
+    custom_meas_matrices: Any | None = None
     drive_mode: Literal["line_current_density", "total_current", "normalized"] = "line_current_density"
     drive_value: float = 1.0
     geometry_scale_to_m: float = 1.0
@@ -74,6 +84,7 @@ class MeshConfig:
     mesh_size: float = 0.1
     mesh_family: str = "tetra"
     geometry_version: str = "geomv2"
+    electrode_layout: str = "ring_major"
     generator_revision: str | None = None
 
 

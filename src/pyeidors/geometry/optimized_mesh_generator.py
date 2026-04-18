@@ -18,6 +18,7 @@ from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
+from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
 from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import (
     DEFAULT_3D_GENERATOR_REVISION,
@@ -344,8 +345,10 @@ def _build_cache_name_3d(
     mesh_family: str,
     geometry_version: str,
     generator_revision: str,
+    electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
 ) -> str:
     levels_str = "-".join(_format_float(float(value)) for value in electrode_level_fractions)
+    layout_str = normalize_electrode_layout(electrode_layout)
     return (
         "mesh3d_"
         f"{n_elec}e_r{_format_float(radius)}_h{_format_float(height)}_"
@@ -353,6 +356,7 @@ def _build_cache_name_3d(
         f"ehr{_format_float(electrode_height_ratio)}_"
         f"lev{levels_str}_"
         f"zc{_format_float(z_center)}_"
+        f"el{layout_str}_"
         f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
         f"{str(generator_revision).strip().lower()}"
     )
@@ -489,11 +493,9 @@ def load_or_create_mesh(
     electrode_coverage = params.pop("electrode_coverage", 0.5)
     height = params.pop("height", 1.0)
     electrode_height_ratio = params.pop("electrode_height_ratio", 0.2)
-    if "electrode_layout" in params:
-        raise ValueError(
-            "3D electrode_layout has been removed from PyEIDORS. "
-            "Use zigzag electrode_level_fractions instead."
-        )
+    electrode_layout = normalize_electrode_layout(
+        params.pop("electrode_layout", ELECTRODE_LAYOUT_RING_MAJOR)
+    )
     electrode_level_fractions = normalize_electrode_level_fractions(
         params.pop("electrode_level_fractions", DEFAULT_ZIGZAG_LEVEL_FRACTIONS),
         default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
@@ -531,6 +533,7 @@ def load_or_create_mesh(
             mesh_family=mesh_family,
             geometry_version=geometry_version,
             generator_revision=generator_revision,
+            electrode_layout=electrode_layout,
         )
 
     process_mesh_key: str | None = None
@@ -586,6 +589,7 @@ def load_or_create_mesh(
             mesh_family=mesh_family,
             geometry_version=geometry_version,
             generator_revision=generator_revision,
+            electrode_layout=electrode_layout,
         )
 
     created_mesh_file = getattr(created_mesh, "mesh_file", None)

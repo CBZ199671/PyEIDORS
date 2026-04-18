@@ -6,6 +6,10 @@ from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
+from eit_app.models.forward_model_config import (
+    INTERACTIVE_3D_DEFAULT_HEIGHT,
+    INTERACTIVE_3D_DEFAULT_RADIUS,
+)
 from eit_app.ui.simulation.forward_problem_panel import ForwardProblemPanel
 from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
 from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
@@ -88,17 +92,15 @@ class SimulationTab(QWidget):
         root.setSpacing(0)
         root.addWidget(self._shell)
         self._mesh_panel.config_changed.connect(self._sync_expected_point_count)
+        self._mesh_panel.config_changed.connect(self._sync_inhomogeneity_context)
         self._sync_expected_point_count()
+        self._sync_inhomogeneity_context()
 
     # ── i18n ──
 
     def _retranslate(self) -> None:
         """Refresh the tab's own chrome (Step titles + Run Guide)."""
-        toolbox = self._shell.toolbox
-        toolbox.setItemText(0, t("sim.step.mesh"))
-        toolbox.setItemText(1, t("sim.step.inhom"))
-        toolbox.setItemText(2, t("sim.step.forward"))
-        toolbox.setItemText(3, t("sim.step.inverse"))
+        self._refresh_step_labels()
         self._run_guide_box.setTitle(t("sim.runguide.title"))
         step_keys = (
             "sim.runguide.step1",
@@ -109,10 +111,46 @@ class SimulationTab(QWidget):
             label.setText(t(key))
         self._runguide_hint.setText(t("sim.runguide.hint"))
 
+    def _refresh_step_labels(self) -> None:
+        toolbox = self._shell.toolbox
+        toolbox.setItemText(0, t("sim.step.mesh"))
+        mesh_dim = int(self._mesh_panel.get_config().get("mesh_dimension", 2))
+        inhom_key = "sim.step.inhom_3d" if mesh_dim == 3 else "sim.step.inhom_2d"
+        toolbox.setItemText(1, t(inhom_key))
+        toolbox.setItemText(2, t("sim.step.forward"))
+        toolbox.setItemText(3, t("sim.step.inverse"))
+
     def _sync_expected_point_count(self) -> None:
         mesh_cfg = self._mesh_panel.get_config()
         point_count = int(measurement_layout_from_config(mesh_cfg)["points_per_frame"])
         self._results_widget.set_expected_point_count(point_count)
+
+    def _sync_inhomogeneity_context(self) -> None:
+        mesh_cfg = self._mesh_panel.get_config()
+        mesh_dim = int(mesh_cfg.get("mesh_dimension", 2))
+        self._inhom_editor.set_domain_context(
+            mesh_dimension=mesh_dim,
+            radius=INTERACTIVE_3D_DEFAULT_RADIUS if mesh_dim == 3 else 1.0,
+            height=INTERACTIVE_3D_DEFAULT_HEIGHT if mesh_dim == 3 else 1.0,
+            z_center=0.0,
+        )
+        self._refresh_step_labels()
+
+    def set_inhomogeneity_domain(
+        self,
+        *,
+        mesh_dimension: int,
+        radius: float,
+        height: float,
+        z_center: float = 0.0,
+    ) -> None:
+        self._inhom_editor.set_domain_context(
+            mesh_dimension=mesh_dimension,
+            radius=radius,
+            height=height,
+            z_center=z_center,
+        )
+        self._refresh_step_labels()
 
     # --- Property accessors for signal wiring ---
 

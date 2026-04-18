@@ -16,6 +16,11 @@ from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
+from ..electrodes.layout import (
+    ELECTRODE_LAYOUT_RING_MAJOR,
+    ELECTRODE_LAYOUT_ZIGZAG,
+    normalize_electrode_layout,
+)
 from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import (
     DEFAULT_3D_GENERATOR_REVISION,
@@ -84,6 +89,7 @@ class Cylinder3DMeshConfig:
     gap_vertices: int = 1
     electrode_height_ratio: float = 0.2
     electrode_level_fractions: Tuple[float, ...] = DEFAULT_ZIGZAG_LEVEL_FRACTIONS
+    electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR
 
     def __post_init__(self) -> None:
         if self.radius <= 0.0:
@@ -107,10 +113,11 @@ class Cylinder3DMeshConfig:
             self.electrode_level_fractions,
             default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
         )
+        self.electrode_layout = normalize_electrode_layout(self.electrode_layout)
         if len(self.electrode_level_fractions) < 2:
             raise ValueError(
                 "3D cylindrical meshes require at least two electrode_level_fractions "
-                "entries for the zigzag layout."
+                "entries for multi-layer electrode placement."
             )
         sorted_windows = sorted(_electrode_vertical_windows(self), key=lambda w: w[0])
         if any(
@@ -313,6 +320,26 @@ def _find_electrode_window_index(
     return None
 
 
+def _total_3d_electrode_count(
+    *,
+    config: Cylinder3DMeshConfig,
+    electrodes: ElectrodeArcConfig,
+) -> int:
+    """Return the number of physical CEM electrode tags on the 3D mesh."""
+    if normalize_electrode_layout(config.electrode_layout) == ELECTRODE_LAYOUT_RING_MAJOR:
+        return int(electrodes.n_elec) * len(_electrode_vertical_windows(config))
+    return int(electrodes.n_elec)
+
+
+def _ring_major_electrode_index(
+    *,
+    window_idx: int,
+    electrode_idx: int,
+    electrodes_per_ring: int,
+) -> int:
+    return int(window_idx) * int(electrodes_per_ring) + int(electrode_idx)
+
+
 def _build_z_stage_breakpoints(config: Cylinder3DMeshConfig) -> list[float]:
     points = [config.z_min, config.z_max]
     for z_lower, z_upper in _electrode_vertical_windows(config):
@@ -348,6 +375,17 @@ def _classify_sidewall_patch(
     electrode_idx = _classify_theta(theta, positions)
     if electrode_idx is None:
         return "gaps", None
+
+    layout = normalize_electrode_layout(config.electrode_layout)
+    if layout == ELECTRODE_LAYOUT_RING_MAJOR:
+        return (
+            "electrode",
+            _ring_major_electrode_index(
+                window_idx=window_idx,
+                electrode_idx=int(electrode_idx),
+                electrodes_per_ring=len(positions),
+            ),
+        )
 
     if window_idx == (electrode_idx - 1) % len(_electrode_vertical_windows(config)):
         return "electrode", int(electrode_idx)
@@ -656,7 +694,11 @@ class _GeomV2TetraCylinder3DMeshGenerator:
 
             gmsh.model.addPhysicalGroup(3, sorted(set(all_volumes)), 1, name="domain")
 
-            groups: dict[int, list[int]] = {idx: [] for idx in range(1, self.electrodes.n_elec + 1)}
+            total_electrodes = _total_3d_electrode_count(
+                config=self.config,
+                electrodes=self.electrodes,
+            )
+            groups: dict[int, list[int]] = {idx: [] for idx in range(1, total_electrodes + 1)}
             gap_surfaces: list[int] = []
             positions = self.electrodes.positions
             for surf_tag in sorted(set(electrode_candidate_surfaces)):
@@ -673,7 +715,7 @@ class _GeomV2TetraCylinder3DMeshGenerator:
                 else:
                     groups[int(electrode_idx)].append(int(surf_tag))
 
-            for idx in range(1, self.electrodes.n_elec + 1):
+            for idx in range(1, total_electrodes + 1):
                 surfaces = sorted(set(groups[idx]))
                 if not surfaces:
                     raise RuntimeError(f"Failed to resolve geomv2 side surfaces for electrode_{idx}.")
@@ -683,7 +725,7 @@ class _GeomV2TetraCylinder3DMeshGenerator:
                 gmsh.model.addPhysicalGroup(
                     2,
                     sorted(set(gap_surfaces)),
-                    self.electrodes.n_elec + 2,
+                    total_electrodes + 2,
                     name="gaps",
                 )
 
@@ -996,15 +1038,19 @@ class _GeomV2HexCylinder3DMeshGenerator:
 
         z_min = float(self.config.z_min)
         z_max = float(self.config.z_max)
+        total_electrodes = _total_3d_electrode_count(
+            config=self.config,
+            electrodes=self.electrodes,
+        )
         quad_cells: list[list[int]] = []
         quad_tags: list[int] = []
         field_data: dict[str, np.ndarray] = {"domain": np.array([1, 3], dtype=np.int32)}
-        for idx in range(1, self.electrodes.n_elec + 1):
+        for idx in range(1, total_electrodes + 1):
             field_data[f"electrode_{idx}"] = np.array([idx + 1, 2], dtype=np.int32)
-        gap_tag = self.electrodes.n_elec + 2
-        top_tag = self.electrodes.n_elec + 3
-        bottom_tag = self.electrodes.n_elec + 4
-        blank_tag = self.electrodes.n_elec + 5
+        gap_tag = total_electrodes + 2
+        top_tag = total_electrodes + 3
+        bottom_tag = total_electrodes + 4
+        blank_tag = total_electrodes + 5
         field_data["gaps"] = np.array([gap_tag, 2], dtype=np.int32)
         field_data["top"] = np.array([top_tag, 2], dtype=np.int32)
         field_data["bottom"] = np.array([bottom_tag, 2], dtype=np.int32)
@@ -1102,7 +1148,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 "generator_revision": self.generator_revision,
                 "mesh_name": msh_path.stem,
                 "mesh_file": str(msh_path),
-                "n_elec": int(self.electrodes.n_elec),
+                "n_elec": int(_total_3d_electrode_count(config=self.config, electrodes=self.electrodes)),
+                "electrodes_per_ring": int(self.electrodes.n_elec),
+                "electrode_layout": normalize_electrode_layout(self.config.electrode_layout),
                 "field_tags": {
                     name: int(value[0]) for name, value in field_data.items()
                 },
@@ -1146,12 +1194,44 @@ def create_cylinder_3d_eit_mesh(
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
     generator_revision: str = DEFAULT_3D_GENERATOR_REVISION,
+    electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
 ) -> EITMesh:
     """Create a 3D cylindrical EIT mesh with explicit cell-family selection."""
 
     refinement_i = int(refinement)
     electrode_vertices = max(3, min(6, refinement_i + 2))
     gap_vertices = 0 if refinement_i <= 2 else 1
+    resolved_family = normalize_mesh_family(mesh_family, default=DEFAULT_MESH_FAMILY)
+    resolved_geometry = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    resolved_generator_revision = (
+        str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
+    )
+    resolved_layout = normalize_electrode_layout(electrode_layout)
+    if resolved_geometry == "legacy":
+        # The legacy extruded generator only has one continuous sidewall band.
+        # Keep old scripts working by using the historical single-sequence
+        # numbering there; ring-major multi-level numbering lives in geomv2.
+        resolved_layout = ELECTRODE_LAYOUT_ZIGZAG
+    level_fractions = (
+        normalize_electrode_level_fractions(
+            electrode_level_fractions,
+            default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+        )
+        if electrode_level_fractions is not None
+        else DEFAULT_ZIGZAG_LEVEL_FRACTIONS
+    )
+    if resolved_layout == ELECTRODE_LAYOUT_RING_MAJOR:
+        n_levels = len(level_fractions)
+        if int(n_elec) % n_levels != 0:
+            raise ValueError(
+                "ring_major 3D meshes require n_elec to be the total physical "
+                f"electrode count and divisible by the number of rings/levels ({n_levels}); "
+                f"got n_elec={n_elec}."
+            )
+        electrodes_per_ring = max(int(n_elec) // n_levels, 1)
+    else:
+        electrodes_per_ring = max(int(n_elec), 1)
+
     config = Cylinder3DMeshConfig(
         radius=radius,
         height=height,
@@ -1160,21 +1240,10 @@ def create_cylinder_3d_eit_mesh(
         electrode_vertices=electrode_vertices,
         gap_vertices=gap_vertices,
         electrode_height_ratio=electrode_height_ratio,
-        electrode_level_fractions=(
-            normalize_electrode_level_fractions(
-                electrode_level_fractions,
-                default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
-            )
-            if electrode_level_fractions is not None
-            else DEFAULT_ZIGZAG_LEVEL_FRACTIONS
-        ),
+        electrode_level_fractions=level_fractions,
+        electrode_layout=resolved_layout,
     )
-    electrodes = ElectrodeArcConfig(n_elec=n_elec, coverage=electrode_coverage)
-    resolved_family = normalize_mesh_family(mesh_family, default=DEFAULT_MESH_FAMILY)
-    resolved_geometry = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
-    resolved_generator_revision = (
-        str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
-    )
+    electrodes = ElectrodeArcConfig(n_elec=electrodes_per_ring, coverage=electrode_coverage)
     output_path = Path(output_dir) if output_dir else None
 
     if resolved_family == "hex":
