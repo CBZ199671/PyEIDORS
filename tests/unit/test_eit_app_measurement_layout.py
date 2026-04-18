@@ -46,6 +46,37 @@ def test_measurement_layout_counts_multiring_3d_adjacent_mode() -> None:
     assert layout["points_per_frame"] == 208
 
 
+def test_measurement_layout_uses_total_circumference_count_for_3d_zigzag() -> None:
+    ring_major = measurement_layout_from_config(
+        {
+            "mesh_dimension": 3,
+            "n_elec": 8,
+            "n_rings": 2,
+            "electrode_layout": "ring_major",
+            "radius": 0.18,
+            "electrode_coverage": 0.5,
+        }
+    )
+    zigzag = measurement_layout_from_config(
+        {
+            "mesh_dimension": 3,
+            "n_elec": 8,
+            "n_rings": 2,
+            "electrode_layout": "zigzag",
+            "radius": 0.18,
+            "electrode_coverage": 0.5,
+        }
+    )
+
+    assert ring_major["electrode_length_m_override"] == pytest.approx(
+        2.0 * math.pi * 0.18 * 0.5 / 8.0
+    )
+    assert zigzag["electrode_length_m_override"] == pytest.approx(
+        2.0 * math.pi * 0.18 * 0.5 / 16.0
+    )
+    assert zigzag["points_per_frame"] == 208
+
+
 def test_measurement_layout_counts_layer_local_25d_mode() -> None:
     layout = measurement_layout_from_config(
         {"n_elec": 8, "n_rings": 2, "measurement_protocol": "layer_local_2p5d"}

@@ -41,6 +41,7 @@ class ForwardSolverResult:
     n_elements: int
     n_measurements: int
     homogeneous_voltages: np.ndarray | None = None
+    forward_model_config: dict[str, Any] = field(default_factory=dict)
     error_msg: str | None = None
 
 
@@ -152,27 +153,32 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
         raw = str(value or "").strip().lower()
         return default if raw in {"", "auto"} else raw
 
-    wants_gpu = gui_profile == "gpu" or str(forward_cfg.acceleration_profile).strip().lower() in {
+    requested_profile = _auto(forward_cfg.acceleration_profile, "default")
+    mesh_family = _auto(forward_cfg.mesh_family, "tetra")
+    forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
+    wants_gpu_request = gui_profile == "gpu" or requested_profile in {
         "gpu3d",
         "gpu3d_fused",
     }
-    acceleration_profile = _auto(forward_cfg.acceleration_profile, "default")
-    if wants_gpu and mesh_dim == 3 and acceleration_profile == "default":
+    wants_structured_gpu = (
+        mesh_dim == 3
+        and mesh_family == "hex"
+        and (wants_gpu_request or forward_backend == "cuda_structured")
+    )
+
+    acceleration_profile = requested_profile
+    if wants_structured_gpu and acceleration_profile == "default":
         acceleration_profile = "gpu3d"
-    if mesh_dim != 3:
-        wants_gpu = False
+    if not wants_structured_gpu and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
         acceleration_profile = "default"
 
-    forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
-    mesh_family = _auto(forward_cfg.mesh_family, "tetra")
-    if wants_gpu:
-        if mesh_family == "hex" and forward_backend == "dolfinx":
-            forward_backend = "cuda_structured"
-        elif mesh_family != "hex" and forward_backend == "cuda_structured":
-            # The structured CUDA backend is deliberately hex-only.
-            # If the user selects 4-node tetrahedra in the GUI, keep the
-            # tetra mesh and use the generic DOLFINx/PETSc path instead.
-            forward_backend = "dolfinx"
+    if wants_structured_gpu and forward_backend == "dolfinx":
+        forward_backend = "cuda_structured"
+    elif not wants_structured_gpu and forward_backend == "cuda_structured":
+        # The structured CUDA backend is deliberately hex-only.  Keep tetra
+        # on the stable generic DOLFINx path so forward and inverse use the
+        # same CEM/Jacobian convention.
+        forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
@@ -181,8 +187,8 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
         "preconditioner": _auto(forward_cfg.preconditioner, "auto"),
         "fast_linear_path": _auto(forward_cfg.fast_linear_path, "auto"),
         "forward_mat_solve": _auto(forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"),
-        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_gpu else "auto"),
-        "device": _auto(forward_cfg.device, "cuda" if wants_gpu else "auto"),
+        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_structured_gpu else "auto"),
+        "device": _auto(forward_cfg.device, "cuda" if wants_structured_gpu else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
         "acceleration_profile": acceleration_profile,
@@ -327,6 +333,10 @@ class _ForwardSolverWorker(QObject):
                 n_elements=n_cells,
                 n_measurements=len(voltages),
                 homogeneous_voltages=np.asarray(homog_voltages, dtype=out_dtype),
+                forward_model_config={
+                    **forward_cfg.to_mapping(),
+                    **runtime,
+                },
             )
             self.progress.emit("Forward solve complete.")
             self.finished.emit(result)

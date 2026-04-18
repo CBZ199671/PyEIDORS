@@ -197,19 +197,32 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
     else:
         n_elec = int(source.get("n_elec", 16))
     n_rings = int(raw.get("n_rings", source.get("n_rings", 1)))
+    mesh_dimension = int(
+        raw.get("mesh_dimension", raw.get("mea_mode", source.get("mesh_dimension", 2)))
+    )
+    electrode_layout = str(source.get("electrode_layout", "ring_major")).strip().lower()
+    electrodes_per_circumference = max(n_elec, 1)
+    if mesh_dimension == 3 and n_rings > 1 and electrode_layout == "zigzag":
+        electrodes_per_circumference = max(n_elec, 1) * max(n_rings, 1)
     radius = max(_coerce_scalar_float(source.get("radius"), 1.0), 1e-9)
-    geometry_scale_to_m = max(_coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9)
-    explicit_length = "electrode_length_m_override" in raw and raw["electrode_length_m_override"] not in (None, "")
+    geometry_scale_to_m = max(
+        _coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0),
+        1e-9,
+    )
+    explicit_length = (
+        "electrode_length_m_override" in raw
+        and raw["electrode_length_m_override"] not in (None, "")
+    )
     explicit_coverage = "electrode_coverage" in raw and raw["electrode_coverage"] not in (None, "")
     electrode_length_m_override = _resolve_electrode_length_override(
         source,
-        n_elec=max(n_elec, 1),
+        n_elec=electrodes_per_circumference,
         explicit_length=explicit_length,
         explicit_coverage=explicit_coverage,
     )
     electrode_coverage = _resolve_electrode_coverage(
         source,
-        n_elec=max(n_elec, 1),
+        n_elec=electrodes_per_circumference,
         electrode_length_m_override=electrode_length_m_override,
         explicit_length=explicit_length,
         explicit_coverage=explicit_coverage,

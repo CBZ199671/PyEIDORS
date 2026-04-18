@@ -328,7 +328,9 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     )
     assert tetra["mesh_family"] == "tetra"
     assert tetra["forward_backend"] == "dolfinx"
-    assert tetra["petsc_device"] == "cuda"
+    assert tetra["petsc_device"] == "auto"
+    assert tetra["device"] == "auto"
+    assert tetra["acceleration_profile"] == "default"
 
     hex_cfg = _resolve_forward_runtime(
         ForwardModelConfig(mesh_dimension=3, mesh_family="hex")
@@ -347,6 +349,9 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     )
     assert tetra["mesh_family"] == "tetra"
     assert tetra["forward_backend"] == "dolfinx"
+    assert tetra["petsc_device"] == "auto"
+    assert tetra["device"] == "auto"
+    assert tetra["acceleration_profile"] == "default"
 
     hex_cfg = _resolve_reconstruction_runtime({"mesh_family": "hex"}, mesh_dim=3)
     assert hex_cfg["mesh_family"] == "hex"

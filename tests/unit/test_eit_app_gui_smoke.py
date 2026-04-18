@@ -2311,6 +2311,78 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
 
 
 @pytest.mark.gui
+def test_simulation_inverse_uses_config_stored_with_forward_result(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    forward_config = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.1,
+        "mesh_family": "tetra",
+        "n_elec": 8,
+        "n_rings": 2,
+        "electrode_layout": "zigzag",
+        "measurement_protocol": "eidors_full_3d",
+        "radius": 0.18,
+        "height": 0.16,
+        "drive_mode": "total_current",
+    }
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+        forward_model_config=forward_config,
+    )
+    window._sim_tab.mesh_setup_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "mesh_family": "hex",
+            "mesh_refinement": 0.2,
+            "n_electrodes": 16,
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+        }
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "eidors_one_step_noser",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+
+    def _capture_reconstruct(request) -> bool:
+        captured.append(request)
+        return True
+
+    monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.mesh_refinement == pytest.approx(0.1)
+    assert request.metadata["mesh_family"] == "tetra"
+    assert request.metadata["n_elec"] == 8
+    assert request.metadata["n_rings"] == 2
+    assert request.metadata["electrode_layout"] == "zigzag"
+    assert request.metadata["electrode_length_m_override"] == pytest.approx(
+        2.0 * np.pi * 0.18 * 0.5 / 16.0
+    )
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
 def test_live_plot_uses_positive_expected_measurement_index_range() -> None:
     window = EITWorkstation()
     _show_window(window)

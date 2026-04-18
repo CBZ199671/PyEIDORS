@@ -2615,6 +2615,22 @@ class EITWorkstation(QMainWindow):
             z_center=float(config.z_center),
         )
 
+    def _forward_model_config_for_result(
+        self,
+        result: ForwardSolverResult | None,
+    ) -> ForwardModelConfig:
+        if result is not None:
+            payload = getattr(result, "forward_model_config", None)
+            if isinstance(payload, dict) and payload:
+                try:
+                    return ForwardModelConfig.from_mapping(payload)
+                except Exception as exc:
+                    log.warning(
+                        "Invalid forward-result config, using current GUI config: %s",
+                        exc,
+                    )
+        return self._current_sim_forward_model_config()
+
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
@@ -2687,7 +2703,7 @@ class EITWorkstation(QMainWindow):
         }
 
     def _interop_export_snapshots(self) -> dict[str, dict[str, object]]:
-        simulation_cfg = self._current_sim_forward_model_config()
+        simulation_cfg = self._forward_model_config_for_result(self._last_fwd_result)
         simulation_measurements = self._simulation_measurement_export()
         simulation_geometry = None
         simulation_notes: list[str] = []
@@ -3064,7 +3080,7 @@ class EITWorkstation(QMainWindow):
             frame_index=1,
         )
 
-        forward_cfg = self._current_sim_forward_model_config()
+        forward_cfg = self._forward_model_config_for_result(result)
 
         # Map the user's algorithm selection into the runtime path we
         # actually need.  The panel exposes raw eidors-style method keys

@@ -80,23 +80,29 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
         raw = str(meta.get(key, "") or "").strip().lower()
         return default if raw in {"", "auto"} else raw
 
-    wants_gpu = gui_profile == "gpu" or _auto("acceleration_profile", "default") in {
+    requested_profile = _auto("acceleration_profile", "default")
+    mesh_family = _auto("mesh_family", "tetra")
+    forward_backend = _auto("forward_backend", "dolfinx")
+    wants_gpu_request = gui_profile == "gpu" or requested_profile in {
         "gpu3d",
         "gpu3d_fused",
     }
-    if int(mesh_dim) != 3:
-        wants_gpu = False
+    wants_structured_gpu = (
+        int(mesh_dim) == 3
+        and mesh_family == "hex"
+        and (wants_gpu_request or forward_backend == "cuda_structured")
+    )
 
-    acceleration_profile = _auto("acceleration_profile", "default")
-    if wants_gpu and int(mesh_dim) == 3 and acceleration_profile == "default":
+    acceleration_profile = requested_profile
+    if wants_structured_gpu and acceleration_profile == "default":
         acceleration_profile = "gpu3d"
-    forward_backend = _auto("forward_backend", "dolfinx")
-    mesh_family = _auto("mesh_family", "tetra")
-    if wants_gpu:
-        if mesh_family == "hex" and forward_backend == "dolfinx":
-            forward_backend = "cuda_structured"
-        elif mesh_family != "hex" and forward_backend == "cuda_structured":
-            forward_backend = "dolfinx"
+    if not wants_structured_gpu and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
+        acceleration_profile = "default"
+
+    if wants_structured_gpu and forward_backend == "dolfinx":
+        forward_backend = "cuda_structured"
+    elif not wants_structured_gpu and forward_backend == "cuda_structured":
+        forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),
@@ -105,8 +111,8 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
         "preconditioner": _auto("preconditioner", "auto"),
         "fast_linear_path": _auto("fast_linear_path", "auto"),
         "forward_mat_solve": _auto("forward_mat_solve", "auto" if int(mesh_dim) == 3 else "off"),
-        "petsc_device": _auto("petsc_device", "cuda" if wants_gpu else "auto"),
-        "device": _auto("device", "cuda" if wants_gpu else "auto"),
+        "petsc_device": _auto("petsc_device", "cuda" if wants_structured_gpu else "auto"),
+        "device": _auto("device", "cuda" if wants_structured_gpu else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
         "geometry_version": _auto("geometry_version", "geomv2"),
