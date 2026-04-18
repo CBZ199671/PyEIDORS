@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from eit_app.hardware.types import VOLTAGE_AMP_LABELS
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
@@ -41,20 +43,73 @@ log = logging.getLogger(__name__)
 
 
 def _format_timestamp(ts_iso: str) -> str:
+    """Render an ISO-8601 string in local time.
+
+    UTC timestamps stored by older sessions get converted to the
+    operator's local timezone before display; naive (already-local)
+    timestamps are shown as-is.
+    """
     try:
         dt = datetime.fromisoformat(ts_iso.replace("Z", "+00:00"))
+        if dt.tzinfo is not None:
+            dt = dt.astimezone()
         return dt.strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return ts_iso
 
 
 def _format_unix(ts: float) -> str:
+    """Render a Unix-epoch timestamp in the operator's local timezone."""
     try:
-        return datetime.fromtimestamp(float(ts), tz=timezone.utc).strftime(
-            "%Y-%m-%d %H:%M:%S"
-        )
+        return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
     except Exception:
         return str(ts)
+
+
+def _format_voltage_amp_level(value: Any) -> str:
+    """Convert the stored 0–7 voltage-amp level to the displayed label.
+
+    The hardware keeps an integer level; the user-facing label says
+    e.g. ``10.00x`` so the actual amplification factor is visible at
+    a glance instead of an opaque "level 7".
+    """
+    if value in (None, ""):
+        return ""
+    try:
+        idx = int(value)
+    except (TypeError, ValueError):
+        return str(value)
+    if 0 <= idx < len(VOLTAGE_AMP_LABELS):
+        return VOLTAGE_AMP_LABELS[idx]
+    return str(value)
+
+
+def _format_session_frequency(row: dict[str, Any]) -> str:
+    """Show ``min-max Hz`` when a session spans multiple frequencies.
+
+    Falls back to a single-value display for sessions that ran at
+    only one frequency, and to a blank string when no frequency was
+    recorded.  Reads ``frequency_hz_min`` / ``frequency_hz_max`` if
+    present (newer schema) and uses the legacy ``frequency_hz``
+    column otherwise.
+    """
+    raw_min = row.get("frequency_hz_min")
+    raw_max = row.get("frequency_hz_max")
+    if raw_min in (None, "") and raw_max in (None, ""):
+        legacy = row.get("frequency_hz")
+        return f"{legacy} Hz" if legacy not in (None, "") else ""
+    try:
+        lo = int(raw_min) if raw_min not in (None, "") else None
+        hi = int(raw_max) if raw_max not in (None, "") else None
+    except (TypeError, ValueError):
+        return ""
+    if lo is None and hi is None:
+        return ""
+    if lo is None:
+        return f"{hi} Hz"
+    if hi is None or lo == hi:
+        return f"{lo} Hz"
+    return f"{lo} – {hi} Hz"
 
 
 class _SessionTableModel(QAbstractTableModel):
@@ -103,12 +158,11 @@ class _SessionTableModel(QAbstractTableModel):
         if col == 3:
             return row.get("n_elec", "") or ""
         if col == 4:
-            hz = row.get("frequency_hz")
-            return f"{hz} Hz" if hz else ""
+            return _format_session_frequency(row)
         if col == 5:
             return row.get("stim_amp_uA", "") or ""
         if col == 6:
-            return row.get("voltage_amp_level", "") or ""
+            return _format_voltage_amp_level(row.get("voltage_amp_level"))
         if col == 7:
             return row.get("frame_count", 0)
         return ""
@@ -275,9 +329,24 @@ class DatabaseTab(QWidget):
         self._lbl_name = QLabel("")
         form.addRow(self._lbl_name, self._filter_name)
 
-        self._filter_freq = QLineEdit()
+        # Frequency range (Hz) — same layout pattern as electrode-count
+        # below.  Sessions that swept multiple frequencies match when
+        # their swept envelope overlaps the requested envelope, not
+        # only when their frequency exactly equals one number.
+        freq_row = QHBoxLayout()
+        freq_row.setSpacing(4)
+        self._filter_freq_min = QLineEdit()
+        self._filter_freq_min.setValidator(QIntValidator(0, 10_000_000, self))
+        self._filter_freq_max = QLineEdit()
+        self._filter_freq_max.setValidator(QIntValidator(0, 10_000_000, self))
+        self._freq_range_dash = QLabel("\u2013")
+        self._freq_range_dash.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._freq_range_dash.setMinimumWidth(12)
+        freq_row.addWidget(self._filter_freq_min, 1)
+        freq_row.addWidget(self._freq_range_dash, 0)
+        freq_row.addWidget(self._filter_freq_max, 1)
         self._lbl_freq = QLabel("")
-        form.addRow(self._lbl_freq, self._filter_freq)
+        form.addRow(self._lbl_freq, freq_row)
 
         self._filter_date_from = QDateEdit()
         self._filter_date_from.setCalendarPopup(True)
@@ -545,12 +614,6 @@ class DatabaseTab(QWidget):
         name = self._filter_name.text().strip()
         if name:
             filters["name_like"] = name
-        freq_text = self._filter_freq.text().strip()
-        if freq_text:
-            try:
-                filters["frequency_hz"] = int(freq_text)
-            except ValueError:
-                pass
         date_from = self._filter_date_from.date()
         if date_from != self._filter_date_from.minimumDate():
             filters["started_after"] = date_from.toString("yyyy-MM-dd")
@@ -566,6 +629,8 @@ class DatabaseTab(QWidget):
             ("n_elec_max", self._filter_n_elec_max),
             ("stim_amp_ua_min", self._filter_stim_min),
             ("stim_amp_ua_max", self._filter_stim_max),
+            ("frequency_hz_min", self._filter_freq_min),
+            ("frequency_hz_max", self._filter_freq_max),
         ):
             raw = widget.text().strip()
             if not raw:
@@ -587,7 +652,8 @@ class DatabaseTab(QWidget):
 
     def _clear_filters(self) -> None:
         self._filter_name.clear()
-        self._filter_freq.clear()
+        self._filter_freq_min.clear()
+        self._filter_freq_max.clear()
         self._filter_date_from.setDate(self._filter_date_from.minimumDate())
         self._filter_date_to.setDate(self._filter_date_to.minimumDate())
         self._filter_n_elec_min.clear()
@@ -765,7 +831,8 @@ class DatabaseTab(QWidget):
         self._filter_box.setTitle(t("db.filters.title"))
         self._filter_hint.setText(t("db.filters.hint"))
         self._filter_name.setPlaceholderText(t("db.filters.name_placeholder"))
-        self._filter_freq.setPlaceholderText(t("db.filters.freq_placeholder"))
+        self._filter_freq_min.setPlaceholderText(t("db.filters.freq_min_placeholder"))
+        self._filter_freq_max.setPlaceholderText(t("db.filters.freq_max_placeholder"))
         self._filter_date_from.setSpecialValueText(t("db.filters.date_any"))
         self._filter_date_to.setSpecialValueText(t("db.filters.date_any"))
         self._lbl_name.setText(t("db.filters.name_label"))

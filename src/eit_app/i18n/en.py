@@ -487,6 +487,8 @@ TRANSLATIONS: dict[str, str] = {
     "db.filters.name_placeholder": "tank, test_for_gui \u2026",
     "db.filters.freq_label": "Frequency (Hz):",
     "db.filters.freq_placeholder": "e.g. 1000",
+    "db.filters.freq_min_placeholder": "min",
+    "db.filters.freq_max_placeholder": "max",
     "db.filters.date_any": "Any",
     "db.filters.date_from_label": "Date from:",
     "db.filters.date_to_label": "Date to:",

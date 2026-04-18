@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import sqlite3
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS sessions (
     stim_pattern TEXT,
     meas_pattern TEXT,
     frequency_hz INTEGER,
+    frequency_hz_min INTEGER,
+    frequency_hz_max INTEGER,
     stim_amp_uA INTEGER,
     voltage_amp_level INTEGER,
     transport_type TEXT,
@@ -78,7 +80,44 @@ class FrameDatabase:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
+        self._migrate_frequency_range_columns()
         self._conn.commit()
+
+    def _migrate_frequency_range_columns(self) -> None:
+        """Add ``frequency_hz_min`` / ``_max`` columns to legacy databases.
+
+        Older indexes carried only ``frequency_hz`` (single value).  We
+        now want a min/max range so a session that swept multiple
+        frequencies shows them all.  The migration is idempotent —
+        ALTER TABLE adds the columns when missing, then back-fills the
+        new bounds from the legacy single-value column so existing
+        sessions still appear in the UI.
+        """
+        cur = self._conn.execute("PRAGMA table_info(sessions)")
+        existing = {str(row["name"]) for row in cur.fetchall()}
+        if "frequency_hz_min" not in existing:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN frequency_hz_min INTEGER"
+            )
+        if "frequency_hz_max" not in existing:
+            self._conn.execute(
+                "ALTER TABLE sessions ADD COLUMN frequency_hz_max INTEGER"
+            )
+        # Back-fill so the ``min..max`` cell isn't blank on legacy rows.
+        self._conn.execute(
+            """
+            UPDATE sessions
+               SET frequency_hz_min = frequency_hz
+             WHERE frequency_hz_min IS NULL AND frequency_hz IS NOT NULL
+            """
+        )
+        self._conn.execute(
+            """
+            UPDATE sessions
+               SET frequency_hz_max = frequency_hz
+             WHERE frequency_hz_max IS NULL AND frequency_hz IS NOT NULL
+            """
+        )
 
     @property
     def path(self) -> Path:
@@ -107,10 +146,15 @@ class FrameDatabase:
             return int(existing["id"])
 
         resolved_name = name or Path(session_dir_str).name
-        resolved_started = started_at or metadata.get("session_start") or datetime.now(
-            timezone.utc
-        ).isoformat()
+        # Default to local-system time so timestamps line up with the
+        # operator's wall clock rather than UTC.
+        resolved_started = (
+            started_at
+            or metadata.get("session_start")
+            or datetime.now().isoformat()
+        )
 
+        seed_freq = _to_int(metadata.get("frequency_hz"))
         row = {
             "name": resolved_name,
             "session_dir": session_dir_str,
@@ -118,7 +162,12 @@ class FrameDatabase:
             "n_elec": _to_int(metadata.get("n_elec")),
             "stim_pattern": _to_str(metadata.get("stim_pattern")),
             "meas_pattern": _to_str(metadata.get("meas_pattern")),
-            "frequency_hz": _to_int(metadata.get("frequency_hz")),
+            "frequency_hz": seed_freq,
+            # Seed the range with the session's initial frequency.
+            # update_session_frequency_range() widens these bounds as
+            # subsequent frames arrive at other frequencies.
+            "frequency_hz_min": seed_freq,
+            "frequency_hz_max": seed_freq,
             "stim_amp_uA": _to_int(metadata.get("stim_amp_uA")),
             "voltage_amp_level": _to_int(
                 metadata.get("voltage_amp_level")
@@ -134,11 +183,13 @@ class FrameDatabase:
             """
             INSERT INTO sessions (
                 name, session_dir, started_at, n_elec, stim_pattern, meas_pattern,
-                frequency_hz, stim_amp_uA, voltage_amp_level, transport_type,
+                frequency_hz, frequency_hz_min, frequency_hz_max,
+                stim_amp_uA, voltage_amp_level, transport_type,
                 mea_mode, notes, metadata_json
             ) VALUES (
                 :name, :session_dir, :started_at, :n_elec, :stim_pattern, :meas_pattern,
-                :frequency_hz, :stim_amp_uA, :voltage_amp_level, :transport_type,
+                :frequency_hz, :frequency_hz_min, :frequency_hz_max,
+                :stim_amp_uA, :voltage_amp_level, :transport_type,
                 :mea_mode, :notes, :metadata_json
             )
             """,
@@ -166,6 +217,8 @@ class FrameDatabase:
         self,
         *,
         frequency_hz: int | None = None,
+        frequency_hz_min: int | None = None,
+        frequency_hz_max: int | None = None,
         started_after: str | None = None,
         started_before: str | None = None,
         name_like: str | None = None,
@@ -180,12 +233,28 @@ class FrameDatabase:
         Range filters (``*_min`` / ``*_max``) are inclusive on both ends.
         Any bound that is None is skipped, so you can ask for an
         open-ended range by supplying only one side.
+
+        ``frequency_hz_min`` / ``frequency_hz_max`` filter on the
+        session's own swept range — i.e. a session that ran from
+        1000 to 3000 Hz matches a query of (1500, 2500) because its
+        sweep envelope overlaps the query envelope.  This is the
+        natural reading of "show me sessions in this band".
+        ``frequency_hz`` (the legacy single-value filter) is still
+        accepted for backward compatibility.
         """
         sql = "SELECT s.*, (SELECT COUNT(*) FROM frames f WHERE f.session_id = s.id) AS frame_count FROM sessions s WHERE 1=1"
         params: list[Any] = []
         if frequency_hz is not None:
-            sql += " AND s.frequency_hz = ?"
-            params.append(int(frequency_hz))
+            sql += " AND (s.frequency_hz = ? OR (s.frequency_hz_min <= ? AND s.frequency_hz_max >= ?))"
+            params.extend([int(frequency_hz)] * 3)
+        if frequency_hz_min is not None:
+            # The session's max must reach at least the requested
+            # lower bound for the bands to overlap.
+            sql += " AND COALESCE(s.frequency_hz_max, s.frequency_hz) >= ?"
+            params.append(int(frequency_hz_min))
+        if frequency_hz_max is not None:
+            sql += " AND COALESCE(s.frequency_hz_min, s.frequency_hz) <= ?"
+            params.append(int(frequency_hz_max))
         if started_after:
             sql += " AND s.started_at >= ?"
             params.append(started_after)
@@ -217,6 +286,28 @@ class FrameDatabase:
     def delete_session(self, session_id: int) -> None:
         self._conn.execute("DELETE FROM sessions WHERE id = ?", (int(session_id),))
         self._conn.commit()
+
+    def _update_session_frequency_range(
+        self, session_id: int, frame_frequency_hz: Any
+    ) -> None:
+        """Widen ``frequency_hz_min`` / ``frequency_hz_max`` for a session.
+
+        Called whenever a frame is added so the session row reflects
+        the full sweep range as it grows.  Silently no-ops when the
+        new frame doesn't carry a frequency.
+        """
+        freq = _to_int(frame_frequency_hz)
+        if freq is None:
+            return
+        self._conn.execute(
+            """
+            UPDATE sessions
+               SET frequency_hz_min = MIN(COALESCE(frequency_hz_min, ?), ?),
+                   frequency_hz_max = MAX(COALESCE(frequency_hz_max, ?), ?)
+             WHERE id = ?
+            """,
+            (freq, freq, freq, freq, int(session_id)),
+        )
 
     # ---- Frames ----
 
@@ -255,6 +346,12 @@ class FrameDatabase:
                 )
                 """,
                 row,
+            )
+            # Widen the session's frequency range from this frame's
+            # metadata so a session that swept multiple frequencies
+            # ends up showing them all in the UI.
+            self._update_session_frequency_range(
+                int(session_id), (metadata or {}).get("frequency_hz")
             )
             self._conn.commit()
             return int(cur.lastrowid)

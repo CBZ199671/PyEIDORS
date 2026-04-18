@@ -6,7 +6,7 @@ Manages session directories and delegates actual I/O to pyeidors.data.frame_io.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -87,7 +87,13 @@ class RecordingController(QObject):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
 
-        now = datetime.now(timezone.utc)
+        # Use the system's local time for the session timestamp so the
+        # folder name + session_start metadata match the wall-clock the
+        # operator was looking at, not the UTC time which is typically
+        # 8 hours behind in CN-timezone deployments.  ISO-formatted
+        # local time has no offset suffix; downstream readers treat it
+        # as a naive local timestamp.
+        now = datetime.now()
         ts = now.strftime("%Y%m%d_%H%M%S")
         name = session_name or f"session_{ts}"
         self._session_dir = output_path / name
@@ -147,7 +153,18 @@ class RecordingController(QObject):
             return
 
         idx = self._frames_recorded
-        base = f"{self._session_prefix}_frame_{idx:04d}"
+        # Embed the frame's measurement frequency in the filename so
+        # operators can spot frequency changes in the file listing
+        # without opening the YAML sidecar.  Falls back to the bare
+        # name when the frame metadata doesn't carry a frequency.
+        freq_suffix = ""
+        try:
+            raw_freq = frame.metadata.get("frequency_hz")
+            if raw_freq not in (None, ""):
+                freq_suffix = f"_{int(round(float(raw_freq)))}Hz"
+        except (TypeError, ValueError):
+            freq_suffix = ""
+        base = f"{self._session_prefix}_frame_{idx:04d}{freq_suffix}"
         csv_path = self._session_dir / f"{base}.csv"
         yaml_path = self._session_dir / f"{base}.yaml"
 

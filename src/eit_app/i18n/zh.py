@@ -487,7 +487,9 @@ TRANSLATIONS: dict[str, str] = {
     "db.filters.name_label": "\u540d\u79f0\uff1a",                                                    # 名称：
     "db.filters.name_placeholder": "tank, test_for_gui \u2026",
     "db.filters.freq_label": "\u9891\u7387 (Hz)\uff1a",                                               # 频率 (Hz)：
-    "db.filters.freq_placeholder": "\u4f8b\u5982 1000",                                                # 例如 1000
+    "db.filters.freq_placeholder": "\u4f8b\u5982 1000",                                                # 例如 1000  (已弃用，保留以兼容旧代码)
+    "db.filters.freq_min_placeholder": "\u6700\u5c0f",                                                  # 最小
+    "db.filters.freq_max_placeholder": "\u6700\u5927",                                                  # 最大
     "db.filters.date_any": "\u5168\u90e8",                                                            # 全部
     "db.filters.date_from_label": "\u8d77\u59cb\u65e5\u671f\uff1a",                                    # 起始日期：
     "db.filters.date_to_label": "\u7ed3\u675f\u65e5\u671f\uff1a",                                      # 结束日期：
