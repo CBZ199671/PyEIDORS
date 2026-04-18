@@ -34,9 +34,11 @@ from ._helpers import (
 )
 from .mesh3d_generator import (
     DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+    ELECTRODE_ORDER_ZIGZAG,
     STRUCTURED_SIDECAR_VERSION,
     create_cylinder_3d_eit_mesh,
     load_structured_sidecar,
+    normalize_electrode_order,
     normalize_electrode_level_fractions,
     structured_sidecar_path_for_mesh,
 )
@@ -344,9 +346,11 @@ def _build_cache_name_3d(
     mesh_family: str,
     geometry_version: str,
     generator_revision: str,
+    electrode_order: str = ELECTRODE_ORDER_ZIGZAG,
+    electrodes_per_ring: int | None = None,
 ) -> str:
     levels_str = "-".join(_format_float(float(value)) for value in electrode_level_fractions)
-    return (
+    name = (
         "mesh3d_"
         f"{n_elec}e_r{_format_float(radius)}_h{_format_float(height)}_"
         f"ref{refinement}_cov{_format_float(electrode_coverage)}_"
@@ -356,6 +360,13 @@ def _build_cache_name_3d(
         f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
         f"{str(generator_revision).strip().lower()}"
     )
+    order = normalize_electrode_order(electrode_order)
+    if order != ELECTRODE_ORDER_ZIGZAG:
+        suffix = f"_ord{order}"
+        if electrodes_per_ring is not None:
+            suffix += f"_epr{int(electrodes_per_ring)}"
+        name += suffix
+    return name
 
 
 def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
@@ -498,6 +509,11 @@ def load_or_create_mesh(
         params.pop("electrode_level_fractions", DEFAULT_ZIGZAG_LEVEL_FRACTIONS),
         default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
     )
+    electrode_order = normalize_electrode_order(params.pop("electrode_order", ELECTRODE_ORDER_ZIGZAG))
+    raw_electrodes_per_ring = params.pop("electrodes_per_ring", None)
+    electrodes_per_ring = (
+        None if raw_electrodes_per_ring is None else int(raw_electrodes_per_ring)
+    )
     z_center = params.pop("z_center", 0.0)
     mesh_family = normalize_mesh_family(
         params.pop("mesh_family", DEFAULT_MESH_FAMILY),
@@ -531,6 +547,8 @@ def load_or_create_mesh(
             mesh_family=mesh_family,
             geometry_version=geometry_version,
             generator_revision=generator_revision,
+            electrode_order=electrode_order,
+            electrodes_per_ring=electrodes_per_ring,
         )
 
     process_mesh_key: str | None = None
@@ -586,6 +604,8 @@ def load_or_create_mesh(
             mesh_family=mesh_family,
             geometry_version=geometry_version,
             generator_revision=generator_revision,
+            electrode_order=electrode_order,
+            electrodes_per_ring=electrodes_per_ring,
         )
 
     created_mesh_file = getattr(created_mesh, "mesh_file", None)

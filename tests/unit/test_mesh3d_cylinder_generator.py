@@ -133,6 +133,41 @@ def test_geomv2_tetra_zigzag_layout_resolves_all_electrodes(tmp_path):
     assert np.min(arr) > 0.0
 
 
+@pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
+def test_geomv2_tetra_ring_order_matches_eidors_plane_order(tmp_path):
+    mesh = create_cylinder_3d_eit_mesh(
+        n_elec=16,
+        radius=0.25,
+        height=0.2,
+        refinement=1,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        electrode_level_fractions=(0.25, 0.75),
+        output_dir=str(tmp_path),
+        mesh_name="tetra_geomv2_ring_order",
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        electrode_order="rings",
+        electrodes_per_ring=8,
+    )
+
+    coords = mesh.mesh.geometry.x[:, :3]
+    fdim = mesh.mesh.topology.dim - 1
+    mesh.mesh.topology.create_connectivity(fdim, 0)
+    f2v = mesh.mesh.topology.connectivity(fdim, 0)
+    z_means = []
+    for idx in range(1, 17):
+        tag = mesh.association_table[f"electrode_{idx}"]
+        facets = mesh.facet_tags.indices[mesh.facet_tags.values == tag]
+        z_values = []
+        for facet in facets:
+            z_values.extend(coords[f2v.links(int(facet)), 2].tolist())
+        z_means.append(float(np.mean(z_values)))
+
+    assert np.all(np.asarray(z_means[:8]) < 0.0)
+    assert np.all(np.asarray(z_means[8:]) > 0.0)
+
+
 def test_geomv2_hex_mesh_is_file_backed_and_pure_hex(tmp_path):
     mesh = create_cylinder_3d_eit_mesh(
         n_elec=16,

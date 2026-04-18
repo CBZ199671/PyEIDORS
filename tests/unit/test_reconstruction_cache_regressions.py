@@ -91,12 +91,14 @@ def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
             "mesh_size": 0.1,
             "n_elec": 8,
             "n_rings": 2,
+            "drive_mode": "line_current_density",
         },
     )
 
     runtime = rc._prepare_single_step_cached_runtime(request)
 
     assert rc._total_electrodes_from_meta(runtime.meta) == 16
+    assert runtime.meta["drive_mode"] == "total_current"
     assert runtime.meta["solver_mode"] == "fast"
     assert runtime.meta["forward_mat_solve"] == "auto"
     assert runtime.meta["mesh_family"] == "tetra"
@@ -398,6 +400,99 @@ def test_single_step_cached_request_warmup_only_primes_context_without_solving(
     assert result.conductivity.size == 0
     assert result.metadata["cache_warmup_only"] is True
     assert result.metadata["solver_diagnostics"]["strict_solver_backend_effective"] == "warmup_only"
+
+
+def test_single_step_cached_3d_context_uses_total_current_multiring_layout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.common.gn_difference_runner as diff_runner
+
+    build_calls: list[dict[str, object]] = []
+
+    def _fake_build_shared_context(**kwargs):
+        build_calls.append(dict(kwargs))
+        return {
+            "mesh": object(),
+            "display_node_coords": np.array(
+                [[0.0, 0.0, -0.5], [1.0, 0.0, 0.5], [0.0, 1.0, 0.5]],
+                dtype=float,
+            ),
+            "display_cell_connectivity": np.array([[0, 1, 2]], dtype=int),
+            "operator_bundle": {
+                "strict_solver_backend_effective": diff_runner.STRICT_SOLVER_BACKEND_MEASUREMENT,
+            },
+            "sigma_bg": np.array([1.0], dtype=float),
+            "fwd_model": object(),
+            "base_meas": np.array([0.0, 0.0, 0.0], dtype=float),
+            "cache_build_seconds": {},
+            "cache_miss_reasons": {},
+            "cache_manager": None,
+        }
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: None)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(diff_runner, "build_shared_context", _fake_build_shared_context)
+
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "warmup_only": True,
+            "mesh_dimension": 3,
+            "n_elec": 8,
+            "n_rings": 2,
+            "drive_mode": "line_current_density",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    assert result.metadata["cache_warmup_only"] is True
+    assert len(build_calls) == 1
+    assert build_calls[0]["mesh_dim"] == 3
+    assert build_calls[0]["n_elec"] == 8
+    assert build_calls[0]["n_rings"] == 2
+    assert build_calls[0]["drive_mode"] == "total_current"
+
+
+def test_gn_difference_runner_3d_multiring_loads_ring_ordered_mesh(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.common.gn_difference_runner as diff_runner
+
+    captured: dict[str, object] = {}
+
+    def _fake_load_or_create_mesh(**kwargs):
+        captured.update(kwargs)
+        raise RuntimeError("stop after mesh kwargs")
+
+    monkeypatch.setattr(diff_runner, "load_or_create_mesh", _fake_load_or_create_mesh)
+
+    with pytest.raises(RuntimeError, match="stop after mesh kwargs"):
+        diff_runner.build_shared_context(
+            mesh_dir=str(tmp_path),
+            mesh_name=None,
+            mesh_dim=3,
+            mesh_height=0.16,
+            electrode_height_ratio=0.2,
+            z_center=0.0,
+            electrode_level_fractions=(0.25, 0.75),
+            refinement=2,
+            n_elec=8,
+            n_rings=2,
+            radius=0.18,
+            drive_mode="line_current_density",
+            drive_value=1.0e-5,
+            solver_mode="fast",
+        )
+
+    assert captured["n_elec"] == 16
+    assert captured["dimension"] == 3
+    assert captured["electrode_order"] == "rings"
+    assert captured["electrodes_per_ring"] == 8
 
 
 def test_load_gn_difference_runner_module_falls_back_to_repo_root(

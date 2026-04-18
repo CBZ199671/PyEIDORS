@@ -248,6 +248,30 @@ def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
 
 
+def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypatch):
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=8, n_rings=2),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+    )
+    generated_calls = []
+    monkeypatch.setattr(
+        "pyeidors.core_system.create_cylinder_3d_eit_mesh",
+        lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
+    )
+    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+
+    system.setup_generated_mesh(
+        dimension=3,
+        electrode_level_fractions=(0.25, 0.75),
+    )
+
+    assert generated_calls[0]["n_elec"] == 16
+    assert generated_calls[0]["electrode_order"] == "rings"
+    assert generated_calls[0]["electrodes_per_ring"] == 8
+    assert generated_calls[1]["mesh"] == "generated-3d-mesh"
+
+
 def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
     system = EITSystem(
         n_elec=16,

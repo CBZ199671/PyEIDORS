@@ -38,7 +38,7 @@ from eit_app.controllers.database_controller import DatabaseController
 from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
-from eit_app.hardware.types import STIM_AMP_VALUES_UA
+from eit_app.hardware.types import STIM_AMP_VALUES_UA, VOLTAGE_AMP_LABELS
 from eit_app.i18n import current_language, set_language, t, translator
 from eit_app.interop import (
     EidorsExportJob,
@@ -220,16 +220,10 @@ def _qt_open_url(folder_path: str) -> bool:
         log.debug("QDesktopServices failed: %s", exc)
     return False
 
-_VOLTAGE_GAIN_LABELS = {
-    0: "0.097x",
-    1: "0.175x",
-    2: "0.327x",
-    3: "0.623x",
-    4: "1.238x",
-    5: "2.460x",
-    6: "4.880x",
-    7: "9.000x",
-}
+def _voltage_gain_label(level: int) -> str:
+    if 0 <= level < len(VOLTAGE_AMP_LABELS):
+        return VOLTAGE_AMP_LABELS[level]
+    return "?"
 
 
 def _with_interactive_3d_geometry_defaults(
@@ -1841,8 +1835,8 @@ class EITWorkstation(QMainWindow):
                 "drive": (
                     f"{int(self._device_config.get('frequency_hz', 1000))} Hz | "
                     f"{stim_uA} uA (L{stim_level}) | "
-                    f"V1 {_VOLTAGE_GAIN_LABELS.get(gain_1, '?')} | "
-                    f"V2 {_VOLTAGE_GAIN_LABELS.get(gain_2, '?')}"
+                    f"V1 {_voltage_gain_label(gain_1)} | "
+                    f"V2 {_voltage_gain_label(gain_2)}"
                 ),
                 "record": self._format_record_summary(),
                 "plan": self._format_mode_summary(),

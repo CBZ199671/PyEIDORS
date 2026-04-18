@@ -68,6 +68,17 @@ CACHE_NAME_OPERATOR_A = "gn_diff_operator_system"
 CACHE_NAME_OPERATOR_LU = "gn_diff_operator_lu"
 CACHE_NAME_OPERATOR_PRECOND = "gn_diff_operator_precond"
 CACHE_NAME_OPERATOR_REDUCED_RM = "gn_diff_operator_reduced_rm"
+
+
+def _mesh_compatible_drive_mode(drive_mode: str | None, *, mesh_dim: int) -> str:
+    if drive_mode is None:
+        return "normalized" if int(mesh_dim) == 2 else "total_current"
+    resolved = str(drive_mode).strip().lower()
+    if int(mesh_dim) == 3 and resolved == "line_current_density":
+        return "total_current"
+    return resolved or ("normalized" if int(mesh_dim) == 2 else "total_current")
+
+
 CACHE_NAME_BASE_MEAS = "gn_diff_base_meas"
 
 STRICT_SOLVER_BACKEND_DENSE = "dense-param"
@@ -580,11 +591,7 @@ def build_shared_context(
     if device not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"device must be auto|cpu|cuda, got {device!r}")
     stim_drive_value = drive_value if drive_value is not None else 1.0
-    resolved_drive_mode = (
-        str(drive_mode).strip().lower()
-        if drive_mode is not None
-        else ("normalized" if int(mesh_dim) == 2 else "total_current")
-    )
+    resolved_drive_mode = _mesh_compatible_drive_mode(drive_mode, mesh_dim=int(mesh_dim))
     print(
         f"[INFO] Diff imaging drive_mode={resolved_drive_mode}, "
         f"drive_value={stim_drive_value:.2e}"
@@ -613,6 +620,8 @@ def build_shared_context(
         z_center=float(z_center),
         mesh_family=mesh_family,
         geometry_version=geometry_version,
+        electrode_order="rings" if int(mesh_dim) == 3 and int(n_rings) > 1 else "zigzag",
+        electrodes_per_ring=max(int(n_elec), 1) if int(mesh_dim) == 3 and int(n_rings) > 1 else None,
     )
     pattern_cfg = PatternConfig(
         n_elec=n_elec,

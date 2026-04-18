@@ -93,16 +93,21 @@ STIM_AMP_LEVELS: dict[int, str] = {
     for level, value in STIM_AMP_VALUES_UA.items()
 }
 
-# Legacy voltage amplifier gain factors used in the C# host application.
+# Voltage amplifier gain factors used to remove the selected hardware gain.
+# Keep these one-to-one with the upper-computer gain labels.
 VOLTAGE_AMP_FACTORS: tuple[float, ...] = (
-    0.097,
-    0.175,
-    0.327,
-    0.623,
-    1.238,
-    2.46,
-    4.88,
-    9.0,
+    0.08,
+    0.16,
+    0.32,
+    0.63,
+    1.26,
+    2.52,
+    5.01,
+    10.0,
+)
+
+VOLTAGE_AMP_LABELS: tuple[str, ...] = tuple(
+    f"{gain:.2f}x" for gain in VOLTAGE_AMP_FACTORS
 )
 
 DEFAULT_SERVER_PORT = 4555

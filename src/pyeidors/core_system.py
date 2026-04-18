@@ -499,6 +499,13 @@ class EITSystem(CoreSystemFacadeMixin):
                 mesh_family=mesh_family,
                 geometry_version=geometry_version,
             )
+            # EIDORS' 3D cylinder convention numbers electrodes ring-major:
+            # all electrodes on one z plane, then the next z plane.  Mirror
+            # that when PatternConfig asks for multiple rings so the solver's
+            # stimulation matrix and mesh facet tags describe the same physics.
+            pattern_rings = max(int(getattr(self.pattern_config, "n_rings", 1)), 1)
+            electrodes_per_ring = max(int(getattr(self.pattern_config, "n_elec", self.n_elec)), 1)
+            use_ring_order = pattern_rings > 1
             resolved_refinement = max(
                 2,
                 int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
@@ -513,6 +520,8 @@ class EITSystem(CoreSystemFacadeMixin):
                 z_center=resolved_z,
                 mesh_family=resolved_mesh_family,
                 geometry_version=resolved_geometry_version,
+                electrode_order="rings" if use_ring_order else "zigzag",
+                electrodes_per_ring=electrodes_per_ring if use_ring_order else None,
             )
         logger.info(
             "Generated mesh on demand (n_elec=%d, dim=%d, radius=%s, mesh_size=%s)",

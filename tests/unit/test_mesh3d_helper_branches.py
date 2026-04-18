@@ -208,6 +208,33 @@ def test_electrode_arc_angle_classification_and_window_helpers():
         config=mesh3d_module.Cylinder3DMeshConfig(electrode_level_fractions=(0.1, 0.9)),
     )[0] in {"blank_side", "gaps", "electrode"}
 
+    ring_arc = mesh3d_module.ElectrodeArcConfig(
+        n_elec=8,
+        coverage=0.5,
+        n_rings=2,
+        ordering="rings",
+    )
+    assert ring_arc.total_electrodes == 16
+    ring_positions = ring_arc.positions
+    theta0 = 0.5 * (ring_positions[0][0] + ring_positions[0][1])
+    mid1 = 0.5 * (windows[1][0] + windows[1][1])
+    assert mesh3d_module._classify_sidewall_patch(
+        theta=theta0,
+        z_center=mid0,
+        positions=ring_positions,
+        config=cfg,
+        electrode_order="rings",
+        electrodes_per_ring=8,
+    ) == ("electrode", 1)
+    assert mesh3d_module._classify_sidewall_patch(
+        theta=theta0,
+        z_center=mid1,
+        positions=ring_positions,
+        config=cfg,
+        electrode_order="rings",
+        electrodes_per_ring=8,
+    ) == ("electrode", 9)
+
 
 def test_sidecar_and_output_path_helpers_cover_validation_and_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     payload = _valid_sidecar_payload()

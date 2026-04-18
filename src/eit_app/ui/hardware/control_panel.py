@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from eit_app.hardware.types import VOLTAGE_AMP_LABELS
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
@@ -34,16 +35,7 @@ _STIM_AMP_LABELS = [
     "7 - 10 mA",
 ]
 
-_VOLTAGE_AMP_LABELS = [
-    "0.08x",
-    "0.16x",
-    "0.32x",
-    "0.63x",
-    "1.26x",
-    "2.52x",
-    "5.01x",
-    "10.00x",
-]
+_VOLTAGE_AMP_LABELS = list(VOLTAGE_AMP_LABELS)
 
 
 def _coerce_scalar_float(value: object, default: float) -> float:

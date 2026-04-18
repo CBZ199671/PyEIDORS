@@ -1780,7 +1780,7 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
         and "set_voltage_amp_levels" in window._status_bar.currentMessage(),
         timeout=3.0,
     )
-    assert "0.327x" in window._summary_panel._values["drive"].text()
+    assert "0.32x" in window._summary_panel._values["drive"].text()
 
     _click(window._control_panel._imp_btn)
     assert _wait_until(

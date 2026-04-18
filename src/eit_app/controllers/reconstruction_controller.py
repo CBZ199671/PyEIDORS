@@ -350,10 +350,18 @@ def _compute_effective_refinement(
     return max(2, int(round(radius_f / max(mesh_size_f, 1e-6) / 2.0)))
 
 
-def _resolve_drive_mode(meta: dict[str, Any], *, default: str = "total_current") -> str:
+def _resolve_drive_mode(
+    meta: dict[str, Any],
+    *,
+    mesh_dim: int | None = None,
+    default: str = "total_current",
+) -> str:
     raw_mode = meta.get("drive_mode", default)
     mode = str(raw_mode).strip().lower()
-    return mode or default
+    resolved = mode or default
+    if int(mesh_dim or meta.get("mesh_dimension", 2)) == 3 and resolved == "line_current_density":
+        return "total_current"
+    return resolved
 
 
 def _resolve_drive_value(
@@ -416,9 +424,10 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
     meta.setdefault("acceleration_profile", "default")
-    meta["drive_mode"] = _resolve_drive_mode(meta)
-    meta["drive_value"] = _resolve_drive_value(meta)
     mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
+    meta["mesh_dimension"] = mesh_dim
+    meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=mesh_dim)
+    meta["drive_value"] = _resolve_drive_value(meta)
     runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=mesh_dim)
     meta.update(runtime_options)
     radius = float(meta.get("radius", 1.0))
@@ -624,7 +633,7 @@ def _run_full_gn_request(
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
     meta.setdefault("acceleration_profile", "default")
-    meta["drive_mode"] = _resolve_drive_mode(meta)
+    meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=int(req.mesh_dimension))
     meta["drive_value"] = _resolve_drive_value(meta)
     runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=int(req.mesh_dimension))
     meta.update(runtime_options)

@@ -13,7 +13,12 @@ from eit_app.hardware.protocol import (
     parse_response,
     relay_device_payload_to_frame,
 )
-from eit_app.hardware.types import Command, RelayCommand
+from eit_app.hardware.types import (
+    Command,
+    RelayCommand,
+    VOLTAGE_AMP_FACTORS,
+    VOLTAGE_AMP_LABELS,
+)
 
 
 def test_build_frame_matches_legacy_length_contract() -> None:
@@ -89,3 +94,10 @@ def test_parse_measurement_frame_keeps_2d_layout() -> None:
     assert imag.shape == (208,)
     assert real.dtype == expected_dtype
     assert imag.dtype == expected_dtype
+
+
+def test_voltage_gain_table_matches_upper_computer_labels() -> None:
+    expected = (0.08, 0.16, 0.32, 0.63, 1.26, 2.52, 5.01, 10.0)
+
+    assert np.allclose(VOLTAGE_AMP_FACTORS, expected)
+    assert VOLTAGE_AMP_LABELS == tuple(f"{gain:.2f}x" for gain in expected)

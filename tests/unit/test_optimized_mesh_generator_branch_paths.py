@@ -302,6 +302,50 @@ def test_cached_3d_validator_and_load_or_create_branches(tmp_path, monkeypatch: 
     assert mesh2d.kind == "2d"
 
 
+def test_load_or_create_3d_ring_order_uses_distinct_cache_and_generator_kwargs(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+):
+    created_calls: list[dict[str, object]] = []
+
+    def _fake_create_cylinder_3d_eit_mesh(**kwargs):
+        created_calls.append(dict(kwargs))
+        return SimpleNamespace(
+            mesh_file=str(tmp_path / f"{kwargs['mesh_name']}.msh"),
+            kind="3d",
+            kwargs=kwargs,
+        )
+
+    monkeypatch.setattr(opt_mesh_module, "_load_cached_mesh", lambda *args, **kwargs: None)
+    monkeypatch.setattr(opt_mesh_module, "create_cylinder_3d_eit_mesh", _fake_create_cylinder_3d_eit_mesh)
+    monkeypatch.setattr(opt_mesh_module, "put_process_cached_mesh", lambda *args, **kwargs: None)
+
+    mesh = opt_mesh_module.load_or_create_mesh(
+        mesh_dir=str(tmp_path),
+        mesh_name=None,
+        n_elec=16,
+        dimension=3,
+        radius=0.18,
+        height=0.16,
+        refinement=2,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        electrode_level_fractions=(0.25, 0.75),
+        z_center=0.0,
+        mesh_family="hex",
+        geometry_version="geomv2",
+        electrode_order="rings",
+        electrodes_per_ring=8,
+    )
+
+    assert mesh.kind == "3d"
+    assert len(created_calls) == 1
+    call = created_calls[0]
+    assert call["electrode_order"] == "rings"
+    assert call["electrodes_per_ring"] == 8
+    assert "_ordrings_epr8" in str(call["mesh_name"])
+
+
 def test_cached_3d_validator_covers_nonfinite_measure_and_sidecar_exception_paths(
     tmp_path,
     monkeypatch: pytest.MonkeyPatch,

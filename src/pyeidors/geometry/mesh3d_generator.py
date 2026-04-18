@@ -48,6 +48,20 @@ except ImportError:  # pragma: no cover
 
 STRUCTURED_SIDECAR_VERSION = "cuda-structured-v1"
 DEFAULT_ZIGZAG_LEVEL_FRACTIONS = (0.25, 0.75)
+ELECTRODE_ORDER_ZIGZAG = "zigzag"
+ELECTRODE_ORDER_RINGS = "rings"
+
+
+def normalize_electrode_order(value: str | None) -> str:
+    raw = str(value or ELECTRODE_ORDER_ZIGZAG).strip().lower()
+    if raw in {"ring", "rings", "ring_major", "ring-major", "eidors"}:
+        return ELECTRODE_ORDER_RINGS
+    if raw in {"zigzag", "alternate", "alternating"}:
+        return ELECTRODE_ORDER_ZIGZAG
+    raise ValueError(
+        "electrode_order must be 'zigzag' or 'rings', "
+        f"got {value!r}."
+    )
 
 
 def normalize_electrode_level_fractions(
@@ -143,12 +157,24 @@ class ElectrodeArcConfig:
     coverage: float = 0.5
     rotation: float = 0.0
     anticlockwise: bool = True
+    n_rings: int = 1
+    ordering: str = ELECTRODE_ORDER_ZIGZAG
 
     def __post_init__(self) -> None:
         if not isinstance(self.n_elec, int) or self.n_elec <= 0:
             raise ValueError("n_elec must be a positive integer")
         if not 0.0 < self.coverage <= 1.0:
             raise ValueError("coverage must be in (0, 1]")
+        self.n_rings = int(self.n_rings)
+        if self.n_rings <= 0:
+            raise ValueError("n_rings must be a positive integer")
+        self.ordering = normalize_electrode_order(self.ordering)
+
+    @property
+    def total_electrodes(self) -> int:
+        if self.ordering == ELECTRODE_ORDER_RINGS:
+            return int(self.n_elec) * int(self.n_rings)
+        return int(self.n_elec)
 
     @property
     def positions(self) -> List[Tuple[float, float]]:
@@ -340,6 +366,8 @@ def _classify_sidewall_patch(
     z_center: float,
     positions: Sequence[tuple[float, float]],
     config: Cylinder3DMeshConfig,
+    electrode_order: str = ELECTRODE_ORDER_ZIGZAG,
+    electrodes_per_ring: int | None = None,
 ) -> tuple[str, int | None]:
     window_idx = _find_electrode_window_index(z_center, config)
     if window_idx is None:
@@ -349,9 +377,59 @@ def _classify_sidewall_patch(
     if electrode_idx is None:
         return "gaps", None
 
+    order = normalize_electrode_order(electrode_order)
+    if order == ELECTRODE_ORDER_RINGS:
+        per_ring = int(electrodes_per_ring or len(positions))
+        if per_ring <= 0:
+            raise ValueError("electrodes_per_ring must be positive for ring-ordered 3D electrodes.")
+        return "electrode", int(window_idx * per_ring + electrode_idx)
+
     if window_idx == (electrode_idx - 1) % len(_electrode_vertical_windows(config)):
         return "electrode", int(electrode_idx)
     return "gaps", None
+
+
+def _resolve_3d_electrodes(
+    *,
+    n_elec: int,
+    coverage: float,
+    electrode_order: str,
+    level_count: int,
+    electrodes_per_ring: int | None,
+) -> ElectrodeArcConfig:
+    order = normalize_electrode_order(electrode_order)
+    total = int(n_elec)
+    if total <= 0:
+        raise ValueError("n_elec must be positive")
+    if order == ELECTRODE_ORDER_ZIGZAG:
+        return ElectrodeArcConfig(n_elec=total, coverage=coverage, ordering=order)
+
+    rings = int(level_count)
+    if rings <= 0:
+        raise ValueError("ring-ordered 3D electrodes require at least one z level")
+    if electrodes_per_ring is None:
+        if total % rings != 0:
+            raise ValueError(
+                "ring-ordered 3D electrodes require n_elec to be divisible by "
+                f"the number of z levels ({rings}); got n_elec={total}."
+            )
+        per_ring = total // rings
+    else:
+        per_ring = int(electrodes_per_ring)
+        if per_ring <= 0:
+            raise ValueError("electrodes_per_ring must be positive")
+        expected_total = per_ring * rings
+        if expected_total != total:
+            raise ValueError(
+                "ring-ordered 3D electrode count mismatch: "
+                f"n_elec={total}, electrodes_per_ring={per_ring}, z levels={rings}."
+            )
+    return ElectrodeArcConfig(
+        n_elec=per_ring,
+        coverage=coverage,
+        n_rings=rings,
+        ordering=order,
+    )
 
 
 def _top_surface_from_extrusion(extruded: Sequence[tuple[int, int]]) -> int:
@@ -656,7 +734,10 @@ class _GeomV2TetraCylinder3DMeshGenerator:
 
             gmsh.model.addPhysicalGroup(3, sorted(set(all_volumes)), 1, name="domain")
 
-            groups: dict[int, list[int]] = {idx: [] for idx in range(1, self.electrodes.n_elec + 1)}
+            total_electrodes = int(self.electrodes.total_electrodes)
+            groups: dict[int, list[int]] = {
+                idx: [] for idx in range(1, total_electrodes + 1)
+            }
             gap_surfaces: list[int] = []
             positions = self.electrodes.positions
             for surf_tag in sorted(set(electrode_candidate_surfaces)):
@@ -667,13 +748,15 @@ class _GeomV2TetraCylinder3DMeshGenerator:
                     z_center=float(com[2]),
                     positions=positions,
                     config=self.config,
+                    electrode_order=self.electrodes.ordering,
+                    electrodes_per_ring=self.electrodes.n_elec,
                 )
                 if face_kind != "electrode" or electrode_idx is None:
                     gap_surfaces.append(int(surf_tag))
                 else:
                     groups[int(electrode_idx)].append(int(surf_tag))
 
-            for idx in range(1, self.electrodes.n_elec + 1):
+            for idx in range(1, total_electrodes + 1):
                 surfaces = sorted(set(groups[idx]))
                 if not surfaces:
                     raise RuntimeError(f"Failed to resolve geomv2 side surfaces for electrode_{idx}.")
@@ -683,7 +766,7 @@ class _GeomV2TetraCylinder3DMeshGenerator:
                 gmsh.model.addPhysicalGroup(
                     2,
                     sorted(set(gap_surfaces)),
-                    self.electrodes.n_elec + 2,
+                    total_electrodes + 2,
                     name="gaps",
                 )
 
@@ -998,13 +1081,14 @@ class _GeomV2HexCylinder3DMeshGenerator:
         z_max = float(self.config.z_max)
         quad_cells: list[list[int]] = []
         quad_tags: list[int] = []
+        total_electrodes = int(self.electrodes.total_electrodes)
         field_data: dict[str, np.ndarray] = {"domain": np.array([1, 3], dtype=np.int32)}
-        for idx in range(1, self.electrodes.n_elec + 1):
+        for idx in range(1, total_electrodes + 1):
             field_data[f"electrode_{idx}"] = np.array([idx + 1, 2], dtype=np.int32)
-        gap_tag = self.electrodes.n_elec + 2
-        top_tag = self.electrodes.n_elec + 3
-        bottom_tag = self.electrodes.n_elec + 4
-        blank_tag = self.electrodes.n_elec + 5
+        gap_tag = total_electrodes + 2
+        top_tag = total_electrodes + 3
+        bottom_tag = total_electrodes + 4
+        blank_tag = total_electrodes + 5
         field_data["gaps"] = np.array([gap_tag, 2], dtype=np.int32)
         field_data["top"] = np.array([top_tag, 2], dtype=np.int32)
         field_data["bottom"] = np.array([bottom_tag, 2], dtype=np.int32)
@@ -1035,6 +1119,8 @@ class _GeomV2HexCylinder3DMeshGenerator:
                     z_center=z_center,
                     positions=self.electrodes.positions,
                     config=self.config,
+                    electrode_order=self.electrodes.ordering,
+                    electrodes_per_ring=self.electrodes.n_elec,
                 )
                 if face_kind == "gaps":
                     face_tag = gap_tag
@@ -1102,7 +1188,10 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 "generator_revision": self.generator_revision,
                 "mesh_name": msh_path.stem,
                 "mesh_file": str(msh_path),
-                "n_elec": int(self.electrodes.n_elec),
+                "n_elec": int(self.electrodes.total_electrodes),
+                "electrodes_per_ring": int(self.electrodes.n_elec),
+                "n_rings": int(self.electrodes.n_rings),
+                "electrode_order": str(self.electrodes.ordering),
                 "field_tags": {
                     name: int(value[0]) for name, value in field_data.items()
                 },
@@ -1146,12 +1235,22 @@ def create_cylinder_3d_eit_mesh(
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
     generator_revision: str = DEFAULT_3D_GENERATOR_REVISION,
+    electrode_order: str = ELECTRODE_ORDER_ZIGZAG,
+    electrodes_per_ring: int | None = None,
 ) -> EITMesh:
     """Create a 3D cylindrical EIT mesh with explicit cell-family selection."""
 
     refinement_i = int(refinement)
     electrode_vertices = max(3, min(6, refinement_i + 2))
     gap_vertices = 0 if refinement_i <= 2 else 1
+    resolved_level_fractions = (
+        normalize_electrode_level_fractions(
+            electrode_level_fractions,
+            default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
+        )
+        if electrode_level_fractions is not None
+        else DEFAULT_ZIGZAG_LEVEL_FRACTIONS
+    )
     config = Cylinder3DMeshConfig(
         radius=radius,
         height=height,
@@ -1160,18 +1259,20 @@ def create_cylinder_3d_eit_mesh(
         electrode_vertices=electrode_vertices,
         gap_vertices=gap_vertices,
         electrode_height_ratio=electrode_height_ratio,
-        electrode_level_fractions=(
-            normalize_electrode_level_fractions(
-                electrode_level_fractions,
-                default=DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
-            )
-            if electrode_level_fractions is not None
-            else DEFAULT_ZIGZAG_LEVEL_FRACTIONS
-        ),
+        electrode_level_fractions=resolved_level_fractions,
     )
-    electrodes = ElectrodeArcConfig(n_elec=n_elec, coverage=electrode_coverage)
     resolved_family = normalize_mesh_family(mesh_family, default=DEFAULT_MESH_FAMILY)
     resolved_geometry = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    resolved_order = normalize_electrode_order(electrode_order)
+    if resolved_order == ELECTRODE_ORDER_RINGS and resolved_geometry == "legacy":
+        raise ValueError("ring-ordered 3D electrodes require geometry_version='geomv2'.")
+    electrodes = _resolve_3d_electrodes(
+        n_elec=int(n_elec),
+        coverage=electrode_coverage,
+        electrode_order=resolved_order,
+        level_count=len(config.electrode_level_fractions),
+        electrodes_per_ring=electrodes_per_ring,
+    )
     resolved_generator_revision = (
         str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
     )
