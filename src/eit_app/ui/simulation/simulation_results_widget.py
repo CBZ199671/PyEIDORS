@@ -155,25 +155,25 @@ class SimulationResultsWidget(QWidget):
 
         # Top: side-by-side conductivity images — initial titles come from
         # the i18n dict; _retranslate() re-applies them on language change.
-        top_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._ground_truth_widget = _ConductivityViewSlot(
             t("sim.results.ground_truth_title")
         )
         self._reconstruction_widget = _ConductivityViewSlot(
             t("sim.results.reconstruction_title")
         )
-        top_splitter.addWidget(self._ground_truth_widget)
-        top_splitter.addWidget(self._reconstruction_widget)
-        top_splitter.setStretchFactor(0, 1)
-        top_splitter.setStretchFactor(1, 1)
-        top_splitter.setChildrenCollapsible(False)
-        top_splitter.setSizes([520, 520])
+        self._top_splitter.addWidget(self._ground_truth_widget)
+        self._top_splitter.addWidget(self._reconstruction_widget)
+        self._top_splitter.setStretchFactor(0, 1)
+        self._top_splitter.setStretchFactor(1, 1)
+        self._top_splitter.setChildrenCollapsible(False)
+        self._top_splitter.setSizes([520, 520])
 
         self._voltage_plot = BoundaryVoltagePlotWidget(mode="simulation")
 
         # Main vertical splitter
         main_splitter = QSplitter(Qt.Orientation.Vertical)
-        main_splitter.addWidget(top_splitter)
+        main_splitter.addWidget(self._top_splitter)
         main_splitter.addWidget(self._voltage_plot)
         main_splitter.setStretchFactor(0, 2)
         main_splitter.setStretchFactor(1, 1)
@@ -181,6 +181,23 @@ class SimulationResultsWidget(QWidget):
         main_splitter.setSizes([520, 280])
 
         layout.addWidget(main_splitter)
+
+    def _balance_top_splitter(self) -> None:
+        """Force a 50 / 50 split between the GT and recon widgets.
+
+        The dispatcher slots' sizeHint changes once one of them
+        switches its active child away from the empty placeholder
+        (matplotlib widgets gain a colorbar, PyVista widgets pick up
+        a wider control bar, etc.).  QSplitter then re-runs its
+        layout and biases extra space toward the side with the
+        bigger hint, which made the GT pane visibly grow and squeeze
+        the still-empty reconstruction pane after a forward solve.
+        Rewriting setSizes after every update keeps both panes the
+        same width.
+        """
+        total = max(self._top_splitter.width(), 1)
+        half = total // 2
+        self._top_splitter.setSizes([half, total - half])
 
     def update_forward_result(self, result: ForwardSolverResult) -> None:
         """Show ground truth and boundary voltages from forward solve."""
@@ -196,6 +213,7 @@ class SimulationResultsWidget(QWidget):
             title=t("sim.results.ground_truth_title"),
         )
         self._reconstruction_widget.clear()
+        self._balance_top_splitter()
 
         self._voltage_plot.update_simulation_voltages(
             ground_truth=result.boundary_voltages,
@@ -215,6 +233,7 @@ class SimulationResultsWidget(QWidget):
             cell_connectivity,
             title=t("sim.results.reconstruction_title"),
         )
+        self._balance_top_splitter()
 
         if self._last_forward_result is not None:
             self._voltage_plot.update_simulation_voltages(
@@ -227,6 +246,7 @@ class SimulationResultsWidget(QWidget):
         self._reconstruction_widget.clear()
         self._voltage_plot.clear()
         self._last_forward_result = None
+        self._balance_top_splitter()
 
     def set_loading_forward(self, on: bool) -> None:
         """Mark the ground-truth image + voltage plot as busy during
@@ -241,6 +261,7 @@ class SimulationResultsWidget(QWidget):
             # is no longer meaningful.
             self._reconstruction_widget.clear()
             self._voltage_plot.set_loading(True)
+            self._balance_top_splitter()
         else:
             # update_forward_result() repaints on success; if the solver
             # errored with no result, drop back to a clean state instead
@@ -248,6 +269,7 @@ class SimulationResultsWidget(QWidget):
             if self._last_forward_result is None:
                 self._ground_truth_widget.clear()
                 self._voltage_plot.set_loading(False)
+                self._balance_top_splitter()
 
     def set_loading_inverse(self, on: bool) -> None:
         """Mark the reconstruction image + voltage plot as busy during

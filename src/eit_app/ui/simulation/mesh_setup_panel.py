@@ -347,9 +347,24 @@ class MeshSetupPanel(QGroupBox):
             return
         self._lbl_electrode_layout.setEnabled(enabled)
         self._electrode_layout_combo.setEnabled(enabled)
+        # The measurement-protocol combo only exposes 3D-specific
+        # patterns (eidors_full_3d / layer_local_2p5d / cross_layer_full
+        # / hybrid_full_3d / custom) so it must follow the same 3D-only
+        # gating as the cell-type combo above — picking 2D should
+        # leave the protocol greyed out and unselectable.
+        self._refresh_protocol_enabled()
 
     def _refresh_protocol_enabled(self) -> None:
-        is_custom = str(self._measurement_protocol_combo.currentData() or "") == "custom"
+        is_3d = self._dim_combo.currentIndex() == 1
+        # Disable the protocol combo entirely in 2D mode — none of the
+        # protocols apply, so leaving them clickable is misleading.
+        self._lbl_measurement_protocol.setEnabled(is_3d)
+        self._measurement_protocol_combo.setEnabled(is_3d)
+        self._measurement_protocol_hint.setEnabled(is_3d)
+        is_custom = (
+            is_3d
+            and str(self._measurement_protocol_combo.currentData() or "") == "custom"
+        )
         self._lbl_custom_pattern.setEnabled(is_custom)
         self._custom_pattern_edit.setEnabled(is_custom)
         self._refresh_protocol_hint()

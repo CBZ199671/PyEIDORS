@@ -20,6 +20,53 @@ from eit_app.ui.theme import (
 )
 
 
+class _PlotHost(QWidget):
+    """Container that pins a child legend frame to its top-right corner.
+
+    The boundary-voltage plot floats a translucent legend over the
+    plot canvas.  Anchoring it to a fixed (18, 18) top-left position
+    looked off-balance once we centred the title, and the user
+    explicitly asked for a top-right initial placement.  Since the
+    legend's width changes with the active language (the Chinese
+    label is wider than the English one) we re-align on every
+    resize and on every label refresh.
+    """
+
+    LEGEND_MARGIN = 12
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._legend_frame: QWidget | None = None
+
+    def attach_legend(self, frame: QWidget) -> None:
+        self._legend_frame = frame
+        frame.installEventFilter(self)
+        self._reposition_legend()
+
+    def eventFilter(self, watched, event):  # noqa: N802 (Qt API)
+        if watched is self._legend_frame and event.type() in (
+            event.Type.Resize,
+            event.Type.Show,
+        ):
+            self._reposition_legend()
+        return super().eventFilter(watched, event)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        self._reposition_legend()
+
+    def _reposition_legend(self) -> None:
+        legend = self._legend_frame
+        if legend is None:
+            return
+        host_w = self.width()
+        legend_w = legend.width()
+        if host_w <= 0 or legend_w <= 0:
+            return
+        x = max(self.LEGEND_MARGIN, host_w - legend_w - self.LEGEND_MARGIN)
+        legend.move(x, self.LEGEND_MARGIN)
+
+
 class BoundaryVoltagePlotWidget(QWidget):
     """Displays boundary voltages with optional overlay for comparison."""
 
@@ -87,7 +134,7 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed_outline.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
 
-        plot_host = QWidget()
+        plot_host = _PlotHost()
         plot_stack = QStackedLayout(plot_host)
         plot_stack.setStackingMode(QStackedLayout.StackingMode.StackAll)
         plot_stack.setContentsMargins(0, 0, 0, 0)
@@ -99,7 +146,10 @@ class BoundaryVoltagePlotWidget(QWidget):
             compact=True,
             parent=plot_host,
         )
-        self._legend_frame.move(18, 18)
+        # Pin the legend to the top-right corner; _PlotHost re-aligns
+        # it on every resize and on every legend size change so it
+        # stays glued to the corner regardless of language / font.
+        plot_host.attach_legend(self._legend_frame)
         self._legend_frame.raise_()
         # Empty-overlay text is filled in by _retranslate() below.
         self._empty_overlay = QLabel("")
