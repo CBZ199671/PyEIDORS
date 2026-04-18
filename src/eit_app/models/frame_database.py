@@ -84,14 +84,22 @@ class FrameDatabase:
         self._conn.commit()
 
     def _migrate_frequency_range_columns(self) -> None:
-        """Add ``frequency_hz_min`` / ``_max`` columns to legacy databases.
+        """Add ``frequency_hz_min`` / ``_max`` columns and back-fill them.
 
         Older indexes carried only ``frequency_hz`` (single value).  We
-        now want a min/max range so a session that swept multiple
-        frequencies shows them all.  The migration is idempotent —
-        ALTER TABLE adds the columns when missing, then back-fills the
-        new bounds from the legacy single-value column so existing
-        sessions still appear in the UI.
+        now want a min / max range so a session that swept multiple
+        frequencies shows them all.  Migration steps (each idempotent):
+
+        1.  ALTER TABLE adds the new columns when missing.
+        2.  Seed ``min`` / ``max`` from the legacy single-value column
+            so rows with no per-frame frequency metadata still display
+            sensibly.
+        3.  Re-scan every frame's ``frame_metadata_json`` and widen the
+            session's range from any per-frame frequency it finds.
+            This is what makes a sweep session that pre-dates the new
+            range columns show up correctly — without it the cell
+            would still read e.g. "1000 Hz" even though the frames
+            actually span 1000 → 5000 Hz.
         """
         cur = self._conn.execute("PRAGMA table_info(sessions)")
         existing = {str(row["name"]) for row in cur.fetchall()}
@@ -103,7 +111,8 @@ class FrameDatabase:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN frequency_hz_max INTEGER"
             )
-        # Back-fill so the ``min..max`` cell isn't blank on legacy rows.
+        # Step 2 — seed from legacy column so the new fields aren't
+        # NULL on rows that have no per-frame metadata at all.
         self._conn.execute(
             """
             UPDATE sessions
@@ -118,6 +127,56 @@ class FrameDatabase:
              WHERE frequency_hz_max IS NULL AND frequency_hz IS NOT NULL
             """
         )
+        self._rebuild_session_frequency_ranges_from_frames()
+
+    def _rebuild_session_frequency_ranges_from_frames(self) -> None:
+        """Re-derive every session's frequency range from its frame rows.
+
+        Walks the frames table once per session, parses
+        ``frame_metadata_json`` for ``frequency_hz`` values, and
+        widens / shrinks the session's stored range to match.  Run
+        from the migration so historical sweep sessions immediately
+        display their full envelope after the upgrade; cheap enough
+        to also run on subsequent startups (one COUNT + one SELECT
+        per session).
+        """
+        try:
+            cur = self._conn.execute("SELECT id FROM sessions")
+            session_ids = [int(row["id"]) for row in cur.fetchall()]
+        except sqlite3.OperationalError:
+            return
+        for sid in session_ids:
+            frames = self._conn.execute(
+                """
+                SELECT frame_metadata_json
+                  FROM frames
+                 WHERE session_id = ?
+                   AND frame_metadata_json IS NOT NULL
+                """,
+                (sid,),
+            ).fetchall()
+            seen: list[int] = []
+            for row in frames:
+                payload = row["frame_metadata_json"]
+                if not payload:
+                    continue
+                try:
+                    meta = json.loads(payload)
+                except (TypeError, ValueError):
+                    continue
+                hz = _to_int(meta.get("frequency_hz"))
+                if hz is not None:
+                    seen.append(hz)
+            if not seen:
+                continue
+            self._conn.execute(
+                """
+                UPDATE sessions
+                   SET frequency_hz_min = ?, frequency_hz_max = ?
+                 WHERE id = ?
+                """,
+                (min(seen), max(seen), sid),
+            )
 
     @property
     def path(self) -> Path:
