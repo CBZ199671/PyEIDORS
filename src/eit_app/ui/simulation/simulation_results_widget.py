@@ -73,12 +73,19 @@ class _ConductivityViewSlot(QWidget):
         return active.sizeHint() if active is not None else super().sizeHint()
 
     def minimumSizeHint(self):  # noqa: N802 (Qt API)
-        active = self._stack.currentWidget()
-        return (
-            active.minimumSizeHint()
-            if active is not None
-            else super().minimumSizeHint()
-        )
+        # IMPORTANT: clamp to a tiny minimum (80 × 80) regardless of
+        # which inner widget is active.  When the active child is the
+        # PyVista 3D widget its own minimumSizeHint balloons to ~640
+        # px wide because of the controls bar + plot canvas; if we
+        # propagate that into the parent QSplitter, the splitter
+        # respects the 640 px floor and cannot honour our 50 / 50
+        # setSizes call after a forward solve — the 3D ground-truth
+        # pane then visibly squeezes the still-empty reconstruction
+        # pane to a few-pixel sliver.  Reporting a small minimum lets
+        # the splitter distribute space evenly while the inner
+        # widget happily renders into whatever space it gets.
+        from PySide6.QtCore import QSize
+        return QSize(80, 80)
 
     # Public API mirrors ConductivityImageWidget so the parent stays simple.
 
