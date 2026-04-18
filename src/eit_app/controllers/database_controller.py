@@ -279,6 +279,8 @@ class DatabaseController(QObject):
         self,
         *,
         frequency_hz: int | None = None,
+        frequency_hz_min: int | None = None,
+        frequency_hz_max: int | None = None,
         started_after: str | None = None,
         started_before: str | None = None,
         name_like: str | None = None,
@@ -289,6 +291,8 @@ class DatabaseController(QObject):
     ) -> list[dict[str, Any]]:
         return self._db.query_sessions(
             frequency_hz=frequency_hz,
+            frequency_hz_min=frequency_hz_min,
+            frequency_hz_max=frequency_hz_max,
             started_after=started_after,
             started_before=started_before,
             name_like=name_like,
