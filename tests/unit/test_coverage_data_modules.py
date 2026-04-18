@@ -153,6 +153,32 @@ class TestSyntheticDataEdgeCases:
         _paint_circle(values, centers, (0, 0), 1.0, 2.0)
         assert values.size == 0
 
+    def test_paint_circle_uses_sphere_distance_for_3d_centers(self):
+        from pyeidors.data.synthetic_data import _paint_circle
+
+        values = np.ones(3, dtype=float)
+        centers = np.array(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.3], [0.1, 0.0, 0.1]],
+            dtype=float,
+        )
+
+        _paint_circle(values, centers, (0.0, 0.0, 0.0), 0.2, 2.0)
+
+        np.testing.assert_allclose(values, [2.0, 1.0, 2.0])
+
+    def test_paint_box_uses_depth_for_3d_centers(self):
+        from pyeidors.data.synthetic_data import _paint_rectangle
+
+        values = np.ones(3, dtype=float)
+        centers = np.array(
+            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.2], [0.15, 0.0, 0.0]],
+            dtype=float,
+        )
+
+        _paint_rectangle(values, centers, (0.0, 0.0, 0.0), 0.2, 0.2, 3.0, half_d=0.1)
+
+        np.testing.assert_allclose(values, [3.0, 1.0, 3.0])
+
     def test_create_custom_phantom_none_anomalies(self):
         """Line 70: anomalies is None defaults to empty list.
         We can't test full create_custom_phantom without DOLFINx, so test the branch directly."""

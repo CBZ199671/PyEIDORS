@@ -402,6 +402,7 @@ class EITSystem(CoreSystemFacadeMixin):
         z_center: Optional[float] = None,
         mesh_family: Optional[str] = None,
         geometry_version: Optional[str] = None,
+        electrode_layout: Optional[str] = None,
     ) -> None:
         """Set up the system with an explicit mesh source."""
         if mesh is not None:
@@ -427,6 +428,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 z_center=z_center,
                 mesh_family=mesh_family,
                 geometry_version=geometry_version,
+                electrode_layout=electrode_layout,
             )
             return
         raise ValueError(
@@ -470,6 +472,7 @@ class EITSystem(CoreSystemFacadeMixin):
         z_center: Optional[float] = None,
         mesh_family: Optional[str] = None,
         geometry_version: Optional[str] = None,
+        electrode_layout: Optional[str] = None,
     ) -> None:
         if int(dimension) not in {2, 3}:
             raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
@@ -495,17 +498,15 @@ class EITSystem(CoreSystemFacadeMixin):
                 else tuple(float(v) for v in electrode_level_fractions)
             )
             resolved_z = self.mesh_config.z_center if z_center is None else float(z_center)
+            resolved_electrode_layout = (
+                self.mesh_config.electrode_layout
+                if electrode_layout is None
+                else str(electrode_layout)
+            )
             resolved_mesh_family, resolved_geometry_version = self._resolve_generated_3d_mesh_preferences(
                 mesh_family=mesh_family,
                 geometry_version=geometry_version,
             )
-            # EIDORS' 3D cylinder convention numbers electrodes ring-major:
-            # all electrodes on one z plane, then the next z plane.  Mirror
-            # that when PatternConfig asks for multiple rings so the solver's
-            # stimulation matrix and mesh facet tags describe the same physics.
-            pattern_rings = max(int(getattr(self.pattern_config, "n_rings", 1)), 1)
-            electrodes_per_ring = max(int(getattr(self.pattern_config, "n_elec", self.n_elec)), 1)
-            use_ring_order = pattern_rings > 1
             resolved_refinement = max(
                 2,
                 int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
@@ -520,8 +521,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 z_center=resolved_z,
                 mesh_family=resolved_mesh_family,
                 geometry_version=resolved_geometry_version,
-                electrode_order="rings" if use_ring_order else "zigzag",
-                electrodes_per_ring=electrodes_per_ring if use_ring_order else None,
+                electrode_layout=resolved_electrode_layout,
             )
         logger.info(
             "Generated mesh on demand (n_elec=%d, dim=%d, radius=%s, mesh_size=%s)",

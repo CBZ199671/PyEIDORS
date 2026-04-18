@@ -23,7 +23,6 @@ from .difference import (
     project_measurement_jacobian,
     project_measurement_vector,
 )
-from .measurement_dataset import MeasurementDataset
 
 __all__ = [
     'PatternConfig',
@@ -47,6 +46,11 @@ __all__ = [
 
 
 def __getattr__(name: str):
+    if name == "MeasurementDataset":
+        from .measurement_dataset import MeasurementDataset
+
+        globals()["MeasurementDataset"] = MeasurementDataset
+        return MeasurementDataset
     if name in {"create_synthetic_data", "create_custom_phantom"}:
         from .synthetic_data import create_custom_phantom, create_synthetic_data
 

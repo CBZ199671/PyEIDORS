@@ -10,7 +10,10 @@ from PySide6.QtWidgets import QStackedLayout, QSplitter, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
-from eit_app.ui.conductivity_3d_widget import Conductivity3DWidget
+from eit_app.ui.conductivity_3d_widget import (
+    Conductivity3DWidget,
+    SUPPORTED_3D_CELL_VERTEX_COUNTS,
+)
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 
 if TYPE_CHECKING:
@@ -18,12 +21,12 @@ if TYPE_CHECKING:
 
 
 def _is_3d_payload(node_coords: np.ndarray, cell_connectivity: np.ndarray) -> bool:
-    """Detect a 3D tetrahedral mesh from the shape of incoming payload."""
+    """Detect a 3D volume mesh from the shape of incoming payload."""
     coords = np.asarray(node_coords)
     cells = np.asarray(cell_connectivity)
     if coords.ndim != 2 or coords.shape[1] < 3:
         return False
-    if cells.ndim != 2 or cells.shape[1] != 4:
+    if cells.ndim != 2 or cells.shape[1] not in SUPPORTED_3D_CELL_VERTEX_COUNTS:
         return False
     return bool(np.ptp(coords[:, 2]) > 1.0e-9)
 
@@ -33,13 +36,15 @@ class _ConductivityViewSlot(QWidget):
     in a QStackedLayout, then dispatches calls to whichever matches the
     most recent payload's dimension.
 
-    The 3D widget is constructed eagerly (cheap) but pyvistaqt's
-    QtInteractor only spins up VTK on first ``update_image()`` call —
-    see ``Conductivity3DWidget._ensure_plotter``.
+    The 3D widget object is cheap to construct.  On runtimes where
+    embedded Qt/VTK is unsafe (WSLg/offscreen/headless), that widget
+    chooses a safe in-process 3D renderer internally; this dispatcher
+    never downgrades 3D payloads to the 2D projection view.
     """
 
     def __init__(self, title: str, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._title = title
         self._mpl = ConductivityImageWidget(title)
         self._three_d = Conductivity3DWidget(title)
         self._stack = QStackedLayout(self)
@@ -117,6 +122,7 @@ class _ConductivityViewSlot(QWidget):
             self._mpl.set_loading(message)
 
     def setTitle(self, title: str) -> None:
+        self._title = title
         self._mpl.setTitle(title)
         self._three_d.setTitle(title)
 

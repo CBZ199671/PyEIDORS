@@ -80,6 +80,7 @@ def test_setup_dispatches_generated(monkeypatch):
         z_center: float | None = None,
         mesh_family: str | None = None,
         geometry_version: str | None = None,
+        electrode_layout: str | None = None,
     ):
         calls["radius"] = radius
         calls["mesh_size"] = mesh_size
@@ -90,6 +91,7 @@ def test_setup_dispatches_generated(monkeypatch):
         calls["z_center"] = z_center
         calls["mesh_family"] = mesh_family
         calls["geometry_version"] = geometry_version
+        calls["electrode_layout"] = electrode_layout
 
     monkeypatch.setattr(system, "setup_generated_mesh", _fake_setup_generated_mesh)
     system.setup(
@@ -267,8 +269,7 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
     )
 
     assert generated_calls[0]["n_elec"] == 16
-    assert generated_calls[0]["electrode_order"] == "rings"
-    assert generated_calls[0]["electrodes_per_ring"] == 8
+    assert generated_calls[0]["electrode_layout"] == "ring_major"
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
 
 

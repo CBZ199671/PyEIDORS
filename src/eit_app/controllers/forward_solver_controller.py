@@ -48,31 +48,78 @@ def _paint_shape(
     values: np.ndarray,
     centers: np.ndarray,
     spec: InhomogeneitySpec,
+    *,
+    mesh_dimension: int = 2,
 ) -> None:
     """Paint a single inhomogeneity shape onto element-centered values."""
+    if centers.size == 0:
+        return
+
     cx, cy = spec.center_x, spec.center_y
-    rx, ry = spec.size_x, spec.size_y
+    rx = abs(float(spec.size_x))
+    ry = abs(float(spec.size_y))
+    rz = abs(float(getattr(spec, "size_z", spec.size_x)))
+    if rx <= 0:
+        return
+    if ry <= 0:
+        ry = rx
+    if rz <= 0:
+        rz = rx
+
+    is_3d = int(mesh_dimension) == 3 and centers.shape[1] >= 3
 
     if spec.shape == "circle":
+        if is_3d:
+            cz = float(getattr(spec, "center_z", 0.0))
+            dist2 = (
+                (centers[:, 0] - cx) ** 2
+                + (centers[:, 1] - cy) ** 2
+                + (centers[:, 2] - cz) ** 2
+            )
+            values[dist2 < rx**2] = spec.conductivity
+            return
         dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
         values[dist2 < rx**2] = spec.conductivity
 
     elif spec.shape == "ellipse":
-        if ry <= 0:
-            ry = rx
+        if is_3d:
+            cz = float(getattr(spec, "center_z", 0.0))
+            norm = (
+                ((centers[:, 0] - cx) / rx) ** 2
+                + ((centers[:, 1] - cy) / ry) ** 2
+                + ((centers[:, 2] - cz) / rz) ** 2
+            )
+            values[norm < 1.0] = spec.conductivity
+            return
         norm = ((centers[:, 0] - cx) / rx) ** 2 + ((centers[:, 1] - cy) / ry) ** 2
         values[norm < 1.0] = spec.conductivity
 
     elif spec.shape == "rectangle":
-        mask = (
-            (np.abs(centers[:, 0] - cx) < rx)
-            & (np.abs(centers[:, 1] - cy) < ry)
-        )
+        if is_3d:
+            cz = float(getattr(spec, "center_z", 0.0))
+            mask = (
+                (np.abs(centers[:, 0] - cx) < rx)
+                & (np.abs(centers[:, 1] - cy) < ry)
+                & (np.abs(centers[:, 2] - cz) < rz)
+            )
+        else:
+            mask = (
+                (np.abs(centers[:, 0] - cx) < rx)
+                & (np.abs(centers[:, 1] - cy) < ry)
+            )
         values[mask] = spec.conductivity
 
     else:
         log.warning("Unknown shape %r, falling back to circle", spec.shape)
-        dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
+        if is_3d:
+            cz = float(getattr(spec, "center_z", 0.0))
+            dist2 = (
+                (centers[:, 0] - cx) ** 2
+                + (centers[:, 1] - cy) ** 2
+                + (centers[:, 2] - cz) ** 2
+            )
+        else:
+            dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
         values[dist2 < rx**2] = spec.conductivity
 
 
@@ -119,10 +166,13 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
     forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
     mesh_family = _auto(forward_cfg.mesh_family, "tetra")
     if wants_gpu:
-        if forward_backend == "dolfinx":
+        if mesh_family == "hex" and forward_backend == "dolfinx":
             forward_backend = "cuda_structured"
-        if mesh_family == "tetra":
-            mesh_family = "hex"
+        elif mesh_family != "hex" and forward_backend == "cuda_structured":
+            # The structured CUDA backend is deliberately hex-only.
+            # If the user selects 4-node tetrahedra in the GUI, keep the
+            # tetra mesh and use the generic DOLFINx/PETSc path instead.
+            forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
@@ -154,6 +204,7 @@ class _ForwardSolverWorker(QObject):
             self.progress.emit("Initializing EIT system...")
             from pyeidors import EITSystem
             from pyeidors.data.structures import PatternConfig
+            from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
             from pyeidors.femx import cell_midpoints
 
             forward_cfg = ForwardModelConfig.from_mapping(
@@ -166,11 +217,22 @@ class _ForwardSolverWorker(QObject):
                     "noise_level": req.noise_level,
                 }
             )
-            pattern = PatternConfig(
+            total_electrodes = _total_electrode_count(forward_cfg)
+            pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
+                mesh_tdim=forward_cfg.mesh_dimension,
                 n_elec=forward_cfg.n_elec,
                 n_rings=forward_cfg.n_rings,
+                electrode_layout=forward_cfg.electrode_layout,
+            )
+            pattern = PatternConfig(
+                n_elec=pattern_n_elec,
+                n_rings=pattern_n_rings,
                 stim_pattern=forward_cfg.stim_pattern,
                 meas_pattern=forward_cfg.meas_pattern,
+                electrode_layout=forward_cfg.electrode_layout,
+                measurement_protocol=forward_cfg.measurement_protocol,
+                custom_stim_matrix=forward_cfg.custom_stim_matrix,
+                custom_meas_matrices=forward_cfg.custom_meas_matrices,
                 drive_mode=forward_cfg.drive_mode,
                 drive_value=forward_cfg.drive_value,
                 geometry_scale_to_m=forward_cfg.geometry_scale_to_m,
@@ -182,7 +244,6 @@ class _ForwardSolverWorker(QObject):
                 meas_direction=forward_cfg.meas_direction,
                 stim_first_positive=forward_cfg.stim_first_positive,
             )
-            total_electrodes = _total_electrode_count(forward_cfg)
             runtime = _resolve_forward_runtime(forward_cfg)
             system = EITSystem(
                 n_elec=total_electrodes,
@@ -220,6 +281,7 @@ class _ForwardSolverWorker(QObject):
                 z_center=forward_cfg.z_center,
                 mesh_family=runtime["mesh_family"],
                 geometry_version=forward_cfg.geometry_version,
+                electrode_layout=forward_cfg.electrode_layout,
             )
 
             self.progress.emit("Building conductivity distribution...")
@@ -227,7 +289,7 @@ class _ForwardSolverWorker(QObject):
             centers = cell_midpoints(fwd.mesh)
             sigma = np.full(len(centers), forward_cfg.background_conductivity, dtype=np.float64)
             for spec in req.inhomogeneities:
-                _paint_shape(sigma, centers, spec)
+                _paint_shape(sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension)
 
             self.progress.emit("Running forward solve...")
             data = system.forward_solve(sigma)

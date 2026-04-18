@@ -40,8 +40,46 @@ def test_measurement_layout_counts_multiring_3d_adjacent_mode() -> None:
 
     assert layout["n_elec"] == 8
     assert layout["n_rings"] == 2
+    assert layout["electrode_layout"] == "ring_major"
+    assert layout["measurement_protocol"] == "eidors_full_3d"
     assert layout["total_electrodes"] == 16
     assert layout["points_per_frame"] == 208
+
+
+def test_measurement_layout_counts_layer_local_25d_mode() -> None:
+    layout = measurement_layout_from_config(
+        {"n_elec": 8, "n_rings": 2, "measurement_protocol": "layer_local_2p5d"}
+    )
+
+    assert layout["total_electrodes"] == 16
+    assert layout["points_per_frame"] == 80
+
+
+def test_measurement_layout_counts_cross_layer_full_mode() -> None:
+    layout = measurement_layout_from_config(
+        {"n_elec": 8, "n_rings": 2, "measurement_protocol": "cross_layer_full"}
+    )
+
+    assert layout["total_electrodes"] == 16
+    assert layout["points_per_frame"] == 152
+
+
+def test_measurement_layout_counts_hybrid_full_3d_mode() -> None:
+    layout = measurement_layout_from_config(
+        {"n_elec": 8, "n_rings": 2, "measurement_protocol": "hybrid_full_3d"}
+    )
+
+    assert layout["total_electrodes"] == 16
+    assert layout["points_per_frame"] == 456
+
+
+def test_measurement_layout_counts_three_ring_hybrid_full_3d_mode() -> None:
+    layout = measurement_layout_from_config(
+        {"n_elec": 8, "n_rings": 3, "measurement_protocol": "hybrid_full_3d"}
+    )
+
+    assert layout["total_electrodes"] == 24
+    assert layout["points_per_frame"] == 1368
 
 
 def test_measurement_layout_accepts_explicit_points_override_for_future_protocols() -> None:

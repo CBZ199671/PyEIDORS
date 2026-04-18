@@ -50,6 +50,7 @@ class _DatasetGeneratorWorker(QObject):
         try:
             from pyeidors import EITSystem
             from pyeidors.data.structures import PatternConfig
+            from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
             from pyeidors.femx import cell_midpoints
 
             forward_cfg = ForwardModelConfig.from_mapping(
@@ -61,11 +62,22 @@ class _DatasetGeneratorWorker(QObject):
                     "noise_level": cfg.noise_level,
                 }
             )
-            pattern = PatternConfig(
+            total_electrodes = _total_electrode_count(forward_cfg)
+            pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
+                mesh_tdim=forward_cfg.mesh_dimension,
                 n_elec=forward_cfg.n_elec,
                 n_rings=forward_cfg.n_rings,
+                electrode_layout=forward_cfg.electrode_layout,
+            )
+            pattern = PatternConfig(
+                n_elec=pattern_n_elec,
+                n_rings=pattern_n_rings,
                 stim_pattern=forward_cfg.stim_pattern,
                 meas_pattern=forward_cfg.meas_pattern,
+                electrode_layout=forward_cfg.electrode_layout,
+                measurement_protocol=forward_cfg.measurement_protocol,
+                custom_stim_matrix=forward_cfg.custom_stim_matrix,
+                custom_meas_matrices=forward_cfg.custom_meas_matrices,
                 drive_mode=forward_cfg.drive_mode,
                 drive_value=forward_cfg.drive_value,
                 geometry_scale_to_m=forward_cfg.geometry_scale_to_m,
@@ -77,7 +89,6 @@ class _DatasetGeneratorWorker(QObject):
                 meas_direction=forward_cfg.meas_direction,
                 stim_first_positive=forward_cfg.stim_first_positive,
             )
-            total_electrodes = _total_electrode_count(forward_cfg)
             runtime = _resolve_forward_runtime(forward_cfg)
             system = EITSystem(
                 n_elec=total_electrodes,
@@ -113,6 +124,7 @@ class _DatasetGeneratorWorker(QObject):
                 z_center=forward_cfg.z_center,
                 mesh_family=runtime["mesh_family"],
                 geometry_version=forward_cfg.geometry_version,
+                electrode_layout=forward_cfg.electrode_layout,
             )
 
             fwd = system.fwd_model
@@ -172,21 +184,37 @@ class _DatasetGeneratorWorker(QObject):
                 specs = []
                 for _ in range(n_inhom):
                     shape = rng.choice(cfg.shapes)
-                    cx = rng.uniform(cfg.position_min, cfg.position_max)
-                    cy = rng.uniform(cfg.position_min, cfg.position_max)
-                    sx = rng.uniform(cfg.size_min, cfg.size_max)
-                    sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max)
+                    if int(forward_cfg.mesh_dimension) == 3:
+                        radial_scale = max(float(forward_cfg.radius), 1.0e-12)
+                        half_height = max(float(forward_cfg.height) * 0.5, 1.0e-12)
+                        cx = rng.uniform(cfg.position_min, cfg.position_max) * radial_scale
+                        cy = rng.uniform(cfg.position_min, cfg.position_max) * radial_scale
+                        cz = float(forward_cfg.z_center) + rng.uniform(
+                            cfg.position_min, cfg.position_max
+                        ) * half_height
+                        sx = rng.uniform(cfg.size_min, cfg.size_max) * radial_scale
+                        sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max) * radial_scale
+                        sz = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max) * half_height
+                    else:
+                        cx = rng.uniform(cfg.position_min, cfg.position_max)
+                        cy = rng.uniform(cfg.position_min, cfg.position_max)
+                        cz = 0.0
+                        sx = rng.uniform(cfg.size_min, cfg.size_max)
+                        sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max)
+                        sz = sx
                     cond = rng.uniform(cfg.conductivity_min, cfg.conductivity_max)
                     spec = InhomogeneitySpec(
                         shape=shape,
                         center_x=float(cx),
                         center_y=float(cy),
+                        center_z=float(cz),
                         size_x=float(sx),
                         size_y=float(sy),
+                        size_z=float(sz),
                         conductivity=float(cond),
                     )
                     specs.append(spec)
-                    _paint_shape(sigma, centers, spec)
+                    _paint_shape(sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension)
 
                 # Forward solve
                 data = system.forward_solve(sigma)

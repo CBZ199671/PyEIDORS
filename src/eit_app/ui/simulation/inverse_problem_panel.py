@@ -21,6 +21,7 @@ from eit_app.ui.theme import set_button_role, set_hint_text
 _METHODS = [
     "eidors_one_step_noser",
     "eidors_abs_gn",
+    "eidors_demo3d_tv",
 ]
 
 

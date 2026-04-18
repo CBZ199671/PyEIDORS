@@ -80,7 +80,7 @@ def test_selector_hash_filter_and_getter_branches(monkeypatch: pytest.MonkeyPatc
         mesh_tdim=2,
     )
 
-    assert manager.meas_selector.shape == (manager.n_elec * manager.n_stim,)
+    assert manager.meas_selector.shape == (manager.tn_elec * manager.n_stim,)
     assert np.all(manager.meas_selector)
     assert manager.get_stim_matrix() is manager.stim_matrix
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 from typing import Any, Dict
@@ -13,6 +14,7 @@ from dolfinx import fem
 from pyeidors.core_system import EITSystem
 from pyeidors.data.measurement_dataset import MeasurementDataset
 from pyeidors.data.structures import EITData, EITImage
+from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.policy import (
@@ -217,12 +219,28 @@ def run_absolute_reconstruction(
         dataset.pattern_config,
         mesh_tdim=int(mesh_dim),
     )
-    n_elec = pattern_config.n_elec
+    total_electrodes = int(pattern_config.n_elec) * max(int(pattern_config.n_rings), 1)
+    electrode_layout = str(getattr(pattern_config, "electrode_layout", "ring_major"))
+    pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
+        mesh_tdim=int(mesh_dim),
+        n_elec=int(pattern_config.n_elec),
+        n_rings=int(pattern_config.n_rings),
+        electrode_layout=electrode_layout,
+    )
+    if (pattern_n_elec, pattern_n_rings) != (
+        int(pattern_config.n_elec),
+        int(pattern_config.n_rings),
+    ):
+        pattern_config = replace(
+            pattern_config,
+            n_elec=pattern_n_elec,
+            n_rings=pattern_n_rings,
+        )
 
     mesh = load_or_create_mesh(
         mesh_dir=str(mesh_dir),
         mesh_name=mesh_name,
-        n_elec=n_elec,
+        n_elec=total_electrodes,
         dimension=int(mesh_dim),
         radius=float(mesh_radius),
         refinement=int(refinement),
@@ -232,12 +250,13 @@ def run_absolute_reconstruction(
         electrode_coverage=float(metadata.get("electrode_coverage", 0.5)),
         mesh_family=mesh_family,
         geometry_version=geometry_version,
+        electrode_layout=electrode_layout,
     )
 
     system = EITSystem(
-        n_elec=n_elec,
+        n_elec=total_electrodes,
         pattern_config=pattern_config,
-        contact_impedance=np.ones(n_elec, dtype=float) * float(contact_impedance),
+        contact_impedance=np.ones(total_electrodes, dtype=float) * float(contact_impedance),
         base_conductivity=float(background_sigma),
         regularization_type="noser",
         regularization_alpha=1.0,

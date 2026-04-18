@@ -11,11 +11,16 @@ from PySide6.QtCore import QObject, Signal
 class InhomogeneitySpec:
     """Specification for a single inhomogeneity (anomaly) in the domain."""
 
-    shape: str = "circle"  # "circle", "ellipse", "rectangle"
+    # Shape names are dimension-neutral:
+    # - 2D: circle / ellipse / rectangle paint areas.
+    # - 3D: circle / ellipse / rectangle paint sphere / ellipsoid / box volumes.
+    shape: str = "circle"
     center_x: float = 0.0
     center_y: float = 0.0
+    center_z: float = 0.0
     size_x: float = 0.2  # radius for circle; half-width for rect/ellipse
     size_y: float = 0.2  # same as size_x for circle; half-height for rect/ellipse
+    size_z: float = 0.2  # 3D radius/depth; ignored by 2D paints
     conductivity: float = 2.0
 
 

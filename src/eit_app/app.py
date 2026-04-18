@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+from pathlib import Path
 
 from eit_app.runtime_threads import (
     configure_realtime_compute_threads,
@@ -21,12 +22,63 @@ from eit_app.ui.main_window import EITWorkstation
 from eit_app.ui.theme import apply_app_theme
 
 
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _running_under_wsl() -> bool:
+    if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
+        return True
+    try:
+        return "microsoft" in Path("/proc/version").read_text(errors="ignore").lower()
+    except OSError:
+        return False
+
+
+def _configure_qt_platform_for_embedded_vtk() -> None:
+    """Optionally use Qt's XCB backend on WSLg for embedded VTK.
+
+    VTK's Python Qt interactor passes ``QWidget.winId()`` to
+    ``vtkXOpenGLRenderWindow.SetWindowInfo``.  On Qt/Wayland that id is
+    not an X11 ``Window`` handle, and VTK can abort the whole GUI with
+    ``BadWindow / X_ConfigureWindow``.  WSLg still exposes XWayland via
+    ``DISPLAY``, so XCB keeps the embedded PyVistaQt route stable.
+
+    Do not force this by default: XWayland is visibly blurry on many
+    HiDPI WSLg desktops.  The default crisp path keeps the main GUI on
+    Wayland and lets the 3D widget use PyVista/VTK offscreen rendering.
+    """
+    if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
+        return
+    if not (
+        _env_flag("EIT_APP_FORCE_QT_XCB_FOR_VTK")
+        or _env_flag("EIT_APP_ENABLE_EMBEDDED_VTK")
+    ):
+        return
+    if os.environ.get("QT_QPA_PLATFORM"):
+        return
+    if not _running_under_wsl():
+        return
+    if not os.environ.get("DISPLAY"):
+        return
+
+    os.environ["QT_QPA_PLATFORM"] = "xcb"
+    os.environ.setdefault("QT_X11_NO_MITSHM", "1")
+    logging.getLogger(__name__).info(
+        "WSLg detected; using Qt XCB platform for embedded PyVista/VTK"
+    )
+
+
 def main() -> int:
     """Launch the EIT Workstation application."""
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
     )
+    _configure_qt_platform_for_embedded_vtk()
     thread_info = configure_realtime_compute_threads()
     logging.getLogger(__name__).info(
         "GUI realtime runtime threads configured: %s",
@@ -57,11 +109,30 @@ def main() -> int:
     try:
         import gmsh  # type: ignore[import-not-found]
 
+        def _quiet_gmsh_terminal() -> None:
+            try:
+                if gmsh.isInitialized():
+                    gmsh.option.setNumber("General.Terminal", 0)
+            except Exception:  # pragma: no cover — best-effort noise control
+                pass
+
+        if not getattr(gmsh, "_eit_app_quiet_initialize_wrapped", False):
+            _original_gmsh_initialize = gmsh.initialize
+
+            def _quiet_gmsh_initialize(*args, **kwargs):  # noqa: ANN002, ANN003
+                result = _original_gmsh_initialize(*args, **kwargs)
+                _quiet_gmsh_terminal()
+                return result
+
+            gmsh.initialize = _quiet_gmsh_initialize  # type: ignore[assignment]
+            gmsh._eit_app_quiet_initialize_wrapped = True  # type: ignore[attr-defined]
+
         if not gmsh.isInitialized():
             gmsh.initialize()
             logging.getLogger(__name__).info(
                 "gmsh initialised on main thread for worker-side mesh generation"
             )
+        _quiet_gmsh_terminal()
 
         import atexit
 

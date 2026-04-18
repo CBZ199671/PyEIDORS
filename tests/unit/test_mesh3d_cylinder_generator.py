@@ -147,8 +147,7 @@ def test_geomv2_tetra_ring_order_matches_eidors_plane_order(tmp_path):
         mesh_name="tetra_geomv2_ring_order",
         mesh_family="tetra",
         geometry_version="geomv2",
-        electrode_order="rings",
-        electrodes_per_ring=8,
+        electrode_layout="ring_major",
     )
 
     coords = mesh.mesh.geometry.x[:, :3]
@@ -201,8 +200,8 @@ def test_geomv2_hex_mesh_is_file_backed_and_pure_hex(tmp_path):
     assert "gaps" in mesh.association_table
 
 
-def test_load_or_create_mesh_rejects_removed_electrode_layout(tmp_path):
-    with pytest.raises(ValueError, match="electrode_layout"):
+def test_load_or_create_mesh_rejects_unknown_electrode_layout(tmp_path):
+    with pytest.raises(ValueError, match="Unsupported electrode_layout"):
         load_or_create_mesh(
             mesh_dir=str(tmp_path),
             n_elec=16,

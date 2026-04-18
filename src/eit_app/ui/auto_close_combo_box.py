@@ -125,6 +125,11 @@ class AutoCloseComboBox(QWidget):
             return self._items[index][0]
         return ""
 
+    def itemData(self, index: int) -> Any:
+        if 0 <= index < len(self._items):
+            return self._items[index][1]
+        return None
+
     def setItemText(self, index: int, text: str) -> None:
         """Replace the display text of an existing item (matches QComboBox API).
 

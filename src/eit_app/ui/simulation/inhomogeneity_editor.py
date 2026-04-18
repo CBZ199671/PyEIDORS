@@ -22,16 +22,25 @@ _COLUMN_KEYS = (
     "sim.inhom.col.shape",
     "sim.inhom.col.x",
     "sim.inhom.col.y",
+    "sim.inhom.col.z",
     "sim.inhom.col.sizex",
     "sim.inhom.col.sizey",
+    "sim.inhom.col.sizez",
     "sim.inhom.col.conductivity",
 )
 _SHAPES = ("circle", "ellipse", "rectangle")
-_SHAPE_BUTTON_KEYS = {
+_SHAPE_BUTTON_KEYS_2D = {
     "circle": "sim.inhom.add_circle",
     "ellipse": "sim.inhom.add_ellipse",
     "rectangle": "sim.inhom.add_rectangle",
 }
+_SHAPE_BUTTON_KEYS_3D = {
+    "circle": "sim.inhom.add_sphere",
+    "ellipse": "sim.inhom.add_ellipsoid",
+    "rectangle": "sim.inhom.add_box",
+}
+_Z_COLUMN = 3
+_SIZE_Z_COLUMN = 6
 
 
 class _InhomogeneityTableModel(QAbstractTableModel):
@@ -64,10 +73,14 @@ class _InhomogeneityTableModel(QAbstractTableModel):
         if col == 2:
             return spec.center_y
         if col == 3:
-            return spec.size_x
+            return spec.center_z
         if col == 4:
-            return spec.size_y
+            return spec.size_x
         if col == 5:
+            return spec.size_y
+        if col == 6:
+            return spec.size_z
+        if col == 7:
             return spec.conductivity
         return None
 
@@ -85,10 +98,14 @@ class _InhomogeneityTableModel(QAbstractTableModel):
             elif col == 2:
                 spec.center_y = float(value)
             elif col == 3:
-                spec.size_x = float(value)
+                spec.center_z = float(value)
             elif col == 4:
-                spec.size_y = float(value)
+                spec.size_x = float(value)
             elif col == 5:
+                spec.size_y = float(value)
+            elif col == 6:
+                spec.size_z = float(value)
+            elif col == 7:
                 spec.conductivity = float(value)
             else:
                 return False
@@ -131,6 +148,10 @@ class InhomogeneityEditor(QGroupBox):
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
         self._shape_buttons: dict[str, QPushButton] = {}
+        self._mesh_dimension = 2
+        self._domain_radius = 1.0
+        self._domain_height = 1.0
+        self._domain_z_center = 0.0
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -169,12 +190,15 @@ class InhomogeneityEditor(QGroupBox):
             (0, 78),  # Shape — short word + small dropdown indicator
             (1, 52),  # X
             (2, 52),  # Y
-            (3, 52),  # W (size X)
-            (4, 52),  # H (size Y)
+            (3, 52),  # Z (3D only)
+            (4, 52),  # W (size X)
+            (5, 52),  # H (size Y)
+            (6, 52),  # D (3D only)
             # Last column (σ) is left to stretch via setStretchLastSection.
         ):
             header.resizeSection(col, width)
         self._table.setHorizontalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
+        self._apply_column_visibility()
         layout.addWidget(self._table, 1)
 
         btn_row = QHBoxLayout()
@@ -199,9 +223,13 @@ class InhomogeneityEditor(QGroupBox):
 
     def _retranslate(self) -> None:
         """Refresh all user-visible strings to the active language."""
-        self.setTitle(t("sim.inhom.title"))
+        title_key = "sim.inhom.title_3d" if self._mesh_dimension == 3 else "sim.inhom.title_2d"
+        self.setTitle(t(title_key))
+        button_keys = (
+            _SHAPE_BUTTON_KEYS_3D if self._mesh_dimension == 3 else _SHAPE_BUTTON_KEYS_2D
+        )
         for shape, btn in self._shape_buttons.items():
-            btn.setText(t(_SHAPE_BUTTON_KEYS[shape]))
+            btn.setText(t(button_keys[shape]))
         self._remove_btn.setText(t("sim.inhom.remove_button"))
         # Notify the view that column header labels need a repaint.
         self._model.headerDataChanged.emit(
@@ -209,14 +237,42 @@ class InhomogeneityEditor(QGroupBox):
         )
 
     def _add_shape(self, shape: str) -> None:
-        spec = InhomogeneitySpec(shape=shape)
-        if shape == "rectangle":
-            spec.size_x = 0.15
-            spec.size_y = 0.1
-        elif shape == "ellipse":
-            spec.size_x = 0.2
-            spec.size_y = 0.15
+        spec = self._default_spec(shape)
         self._model.add_spec(spec)
+
+    def _default_spec(self, shape: str) -> InhomogeneitySpec:
+        """Create a domain-scaled default inclusion for the active dimension."""
+        radius = max(abs(float(self._domain_radius)), 1.0e-9)
+        height = max(abs(float(self._domain_height)), 1.0e-9)
+        spec = InhomogeneitySpec(shape=shape, center_z=float(self._domain_z_center))
+
+        if self._mesh_dimension == 3:
+            sphere_radius = min(radius * 0.35, height * 0.40)
+            if shape == "rectangle":
+                spec.size_x = radius * 0.28
+                spec.size_y = radius * 0.22
+                spec.size_z = height * 0.25
+            elif shape == "ellipse":
+                spec.size_x = sphere_radius
+                spec.size_y = radius * 0.24
+                spec.size_z = height * 0.28
+            else:
+                spec.size_x = sphere_radius
+                spec.size_y = sphere_radius
+                spec.size_z = sphere_radius
+            return spec
+
+        if shape == "rectangle":
+            spec.size_x = radius * 0.20
+            spec.size_y = radius * 0.14
+        elif shape == "ellipse":
+            spec.size_x = radius * 0.25
+            spec.size_y = radius * 0.16
+        else:
+            spec.size_x = radius * 0.25
+            spec.size_y = radius * 0.25
+        spec.size_z = spec.size_x
+        return spec
 
     def _remove_selected(self) -> None:
         indexes = self._table.selectionModel().selectedRows()
@@ -228,3 +284,29 @@ class InhomogeneityEditor(QGroupBox):
 
     def set_inhomogeneities(self, specs: list[InhomogeneitySpec]) -> None:
         self._model.set_specs(specs)
+
+    def set_domain_context(
+        self,
+        *,
+        mesh_dimension: int,
+        radius: float | None = None,
+        height: float | None = None,
+        z_center: float | None = None,
+    ) -> None:
+        """Switch between 2D area inclusions and 3D volume inclusions."""
+        old_dimension = self._mesh_dimension
+        self._mesh_dimension = 3 if int(mesh_dimension) == 3 else 2
+        if radius is not None:
+            self._domain_radius = max(abs(float(radius)), 1.0e-9)
+        if height is not None:
+            self._domain_height = max(abs(float(height)), 1.0e-9)
+        if z_center is not None:
+            self._domain_z_center = float(z_center)
+        self._apply_column_visibility()
+        if self._mesh_dimension != old_dimension:
+            self._retranslate()
+
+    def _apply_column_visibility(self) -> None:
+        show_z = self._mesh_dimension == 3
+        self._table.setColumnHidden(_Z_COLUMN, not show_z)
+        self._table.setColumnHidden(_SIZE_Z_COLUMN, not show_z)

@@ -334,16 +334,14 @@ def test_load_or_create_3d_ring_order_uses_distinct_cache_and_generator_kwargs(
         z_center=0.0,
         mesh_family="hex",
         geometry_version="geomv2",
-        electrode_order="rings",
-        electrodes_per_ring=8,
+        electrode_layout="ring_major",
     )
 
     assert mesh.kind == "3d"
     assert len(created_calls) == 1
     call = created_calls[0]
-    assert call["electrode_order"] == "rings"
-    assert call["electrodes_per_ring"] == 8
-    assert "_ordrings_epr8" in str(call["mesh_name"])
+    assert call["electrode_layout"] == "ring_major"
+    assert "_elring_major_" in str(call["mesh_name"])
 
 
 def test_cached_3d_validator_covers_nonfinite_measure_and_sidecar_exception_paths(

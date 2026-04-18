@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import json
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -18,6 +19,11 @@ DEFAULT_MEASUREMENT_LAYOUT: dict[str, Any] = {
     "stim_direction": "ccw",
     "meas_direction": "ccw",
     "stim_first_positive": False,
+    "electrode_layout": "ring_major",
+    "measurement_protocol": "eidors_full_3d",
+    "custom_pattern_json": "",
+    "custom_stim_matrix": None,
+    "custom_meas_matrices": None,
     "radius": 1.0,
     "geometry_scale_to_m": 1.0,
     "electrode_coverage": 0.5,
@@ -41,6 +47,20 @@ def _coerce_scalar_float(value: Any, default: float) -> float:
         return float(value)
     except (TypeError, ValueError):
         return float(default)
+
+
+def _parse_custom_pattern_payload(value: Any) -> dict[str, Any]:
+    if value in (None, ""):
+        return {}
+    if isinstance(value, Mapping):
+        return dict(value)
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value.strip())
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return dict(parsed) if isinstance(parsed, Mapping) else {}
+    return {}
 
 
 def _resolve_electrode_length_override(
@@ -110,10 +130,17 @@ def estimate_measurement_point_count(
     stim_direction: str = "ccw",
     meas_direction: str = "ccw",
     stim_first_positive: bool = False,
+    electrode_layout: str = "ring_major",
+    measurement_protocol: str = "eidors_full_3d",
+    custom_stim_matrix: Any | None = None,
+    custom_meas_matrices: Any | None = None,
 ) -> int:
     """Estimate boundary-voltage sample count for the configured pattern layout."""
     total_electrodes = max(int(n_electrodes), 1) * max(int(n_rings), 1)
+    protocol = str(measurement_protocol or "eidors_full_3d").strip().lower().replace("-", "_")
     if (
+        protocol in {"eidors_full_3d", "full_3d", "true_3d"}
+        and
         _is_adjacent_pattern(stim_pattern)
         and _is_adjacent_pattern(meas_pattern)
         and not bool(use_meas_current)
@@ -132,6 +159,10 @@ def estimate_measurement_point_count(
             n_rings=max(int(n_rings), 1),
             stim_pattern=stim_pattern,
             meas_pattern=meas_pattern,
+            electrode_layout=str(electrode_layout or "ring_major"),
+            measurement_protocol=str(measurement_protocol or "eidors_full_3d"),
+            custom_stim_matrix=custom_stim_matrix,
+            custom_meas_matrices=custom_meas_matrices,
             use_meas_current=use_meas_current,
             use_meas_current_next=max(int(use_meas_current_next), 0),
             rotate_meas=rotate_meas,
@@ -188,6 +219,11 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
         "n_rings": max(n_rings, 1),
         "stim_pattern": source.get("stim_pattern", "{ad}"),
         "meas_pattern": source.get("meas_pattern", "{ad}"),
+        "electrode_layout": str(source.get("electrode_layout", "ring_major")),
+        "measurement_protocol": str(source.get("measurement_protocol", "eidors_full_3d")),
+        "custom_pattern_json": str(source.get("custom_pattern_json", "")),
+        "custom_stim_matrix": source.get("custom_stim_matrix"),
+        "custom_meas_matrices": source.get("custom_meas_matrices"),
         "use_meas_current": bool(source.get("use_meas_current", False)),
         "use_meas_current_next": max(int(source.get("use_meas_current_next", 0)), 0),
         "rotate_meas": bool(source.get("rotate_meas", True)),
@@ -201,6 +237,13 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
         "contact_impedance": max(_coerce_scalar_float(source.get("contact_impedance"), 0.01), 0.0),
     }
     explicit_points = int(raw.get("points_per_frame_override", 0) or 0)
+    custom_payload = _parse_custom_pattern_payload(layout["custom_pattern_json"])
+    custom_stim_matrix = layout["custom_stim_matrix"]
+    custom_meas_matrices = layout["custom_meas_matrices"]
+    if custom_stim_matrix is None:
+        custom_stim_matrix = custom_payload.get("stim_matrix")
+    if custom_meas_matrices is None:
+        custom_meas_matrices = custom_payload.get("meas_matrices")
     layout["points_per_frame"] = (
         explicit_points
         if explicit_points > 0
@@ -215,6 +258,10 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
             stim_direction=layout["stim_direction"],
             meas_direction=layout["meas_direction"],
             stim_first_positive=layout["stim_first_positive"],
+            electrode_layout=layout["electrode_layout"],
+            measurement_protocol=layout["measurement_protocol"],
+            custom_stim_matrix=custom_stim_matrix,
+            custom_meas_matrices=custom_meas_matrices,
         )
     )
     layout["total_electrodes"] = layout["n_elec"] * layout["n_rings"]

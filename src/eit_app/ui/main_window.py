@@ -338,6 +338,7 @@ class EITWorkstation(QMainWindow):
         self._build_ui()
         self._acq_panel.set_output_dir(self._default_output_dir())
         self._connect_signals()
+        self._sync_sim_inhomogeneity_context()
         self._control_panel.set_enabled(False)
         self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
@@ -765,6 +766,7 @@ class EITWorkstation(QMainWindow):
 
         # --- Simulation signals ---
         sim = self._sim_tab
+        sim.mesh_setup_panel.config_changed.connect(self._sync_sim_inhomogeneity_context)
         sim.forward_problem_panel.run_forward_requested.connect(self._on_run_forward)
         sim.inverse_problem_panel.run_inverse_requested.connect(self._on_run_sim_inverse)
         sim.inverse_problem_panel.save_requested.connect(self._on_save_sim_results)
@@ -1539,6 +1541,11 @@ class EITWorkstation(QMainWindow):
         return {
             "n_elec": int(layout["n_elec"]),
             "n_rings": int(layout["n_rings"]),
+            "electrode_layout": layout["electrode_layout"],
+            "measurement_protocol": layout["measurement_protocol"],
+            "custom_pattern_json": layout["custom_pattern_json"],
+            "custom_stim_matrix": layout["custom_stim_matrix"],
+            "custom_meas_matrices": layout["custom_meas_matrices"],
             "stim_pattern": layout["stim_pattern"],
             "meas_pattern": layout["meas_pattern"],
             "use_meas_current": bool(layout["use_meas_current"]),
@@ -2574,10 +2581,14 @@ class EITWorkstation(QMainWindow):
         config = self._sim_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
+            mesh_family=mesh_cfg.get("mesh_family", "tetra"),
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
+            electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=self._sim_tab.forward_problem_panel.noise_level,
+            measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
+            custom_pattern_json=mesh_cfg.get("custom_pattern_json", ""),
             stim_pattern=mesh_cfg.get("stim_pattern", "{ad}"),
             meas_pattern=mesh_cfg.get("meas_pattern", "{ad}"),
             rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
@@ -2594,16 +2605,30 @@ class EITWorkstation(QMainWindow):
             enabled=self._sim_use_interactive_3d_geometry_defaults,
         )
 
+    @Slot()
+    def _sync_sim_inhomogeneity_context(self) -> None:
+        config = self._current_sim_forward_model_config()
+        self._sim_tab.set_inhomogeneity_domain(
+            mesh_dimension=int(config.mesh_dimension),
+            radius=float(config.radius),
+            height=float(config.height),
+            z_center=float(config.z_center),
+        )
+
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
         config = self._dataset_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
+            mesh_family=mesh_cfg.get("mesh_family", "tetra"),
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
+            electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=panel_cfg["noise_level"],
+            measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
+            custom_pattern_json=mesh_cfg.get("custom_pattern_json", ""),
             stim_pattern=mesh_cfg.get("stim_pattern", "{ad}"),
             meas_pattern=mesh_cfg.get("meas_pattern", "{ad}"),
             rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
@@ -2745,6 +2770,11 @@ class EITWorkstation(QMainWindow):
                     "mea_mode": 3 if int(config.mesh_dimension) == 3 else 2,
                     "n_elec": int(config.n_elec),
                     "n_rings": int(config.n_rings),
+                    "electrode_layout": config.electrode_layout,
+                    "measurement_protocol": config.measurement_protocol,
+                    "custom_pattern_json": config.custom_pattern_json,
+                    "custom_stim_matrix": config.custom_stim_matrix,
+                    "custom_meas_matrices": config.custom_meas_matrices,
                     "stim_pattern": config.stim_pattern,
                     "meas_pattern": config.meas_pattern,
                     "rotate_meas": bool(config.rotate_meas),
@@ -2772,9 +2802,13 @@ class EITWorkstation(QMainWindow):
                 {
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
+                    "mesh_family": config.mesh_family,
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
+                    "electrode_layout": config.electrode_layout,
                     "background_conductivity": config.background_conductivity,
+                    "measurement_protocol": config.measurement_protocol,
+                    "custom_pattern_json": config.custom_pattern_json,
                     "stim_pattern": config.stim_pattern,
                     "meas_pattern": config.meas_pattern,
                     "rotate_meas": bool(config.rotate_meas),
@@ -2799,9 +2833,13 @@ class EITWorkstation(QMainWindow):
                 {
                     "mesh_dimension": config.mesh_dimension,
                     "mesh_refinement": config.mesh_refinement,
+                    "mesh_family": config.mesh_family,
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
+                    "electrode_layout": config.electrode_layout,
                     "background_conductivity": config.background_conductivity,
+                    "measurement_protocol": config.measurement_protocol,
+                    "custom_pattern_json": config.custom_pattern_json,
                     "stim_pattern": config.stim_pattern,
                     "meas_pattern": config.meas_pattern,
                     "rotate_meas": bool(config.rotate_meas),
@@ -3037,7 +3075,13 @@ class EITWorkstation(QMainWindow):
         # iterative GN path, which is why forward→inverse took 40 seconds
         # and the reconstruction barely converged.
         raw_method = str(inv_cfg.get("method", "")).strip().lower()
-        if any(tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")):
+        difference_preset = "eidors_one_step_noser"
+        absolute_preset = "eidors_abs_gn"
+        if "demo3d_tv" in raw_method:
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "full_gn"
+            difference_preset = "eidors_demo3d_tv"
+        elif any(tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")):
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
         elif any(tag in raw_method for tag in ("abs", "absolute")):
@@ -3049,6 +3093,29 @@ class EITWorkstation(QMainWindow):
             reconstruction_runtime = "full_gn"
 
         mesh_size = float(forward_cfg.mesh_refinement)
+        is_3d_difference = int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
+        # Match the 3D paper/pre-experiment sphere scripts: EIDORS-style
+        # difference reconstructions are solved in normalized measurement
+        # space with one-step NOSER lambda_eff = 1e-2.
+        difference_mode = "normalized" if is_3d_difference else "raw"
+        difference_lambda = (
+            1.0e-2
+            if is_3d_difference and reconstruction_runtime == "single_step_cached"
+            else None
+        )
+        metadata = {
+            **forward_cfg.to_mapping(),
+            **measurement_layout_from_config(forward_cfg.to_mapping()),
+            "mesh_size": mesh_size,
+            "difference_mode": difference_mode,
+            "difference_orientation": "target_minus_reference",
+            "difference_preset": difference_preset,
+            "absolute_preset": absolute_preset,
+            "request_source": "simulation",
+            "reconstruction_runtime": reconstruction_runtime,
+        }
+        if difference_lambda is not None:
+            metadata["difference_lambda"] = difference_lambda
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
@@ -3058,15 +3125,7 @@ class EITWorkstation(QMainWindow):
             max_iterations=inv_cfg["max_iterations"],
             mesh_dimension=forward_cfg.mesh_dimension,
             mesh_refinement=mesh_size,
-            metadata={
-                **forward_cfg.to_mapping(),
-                **measurement_layout_from_config(forward_cfg.to_mapping()),
-                "mesh_size": mesh_size,
-                "difference_mode": "raw",
-                "difference_orientation": "target_minus_reference",
-                "request_source": "simulation",
-                "reconstruction_runtime": reconstruction_runtime,
-            },
+            metadata=metadata,
         )
         accepted = self._sim_recon_ctrl.reconstruct(request)
         if not accepted:

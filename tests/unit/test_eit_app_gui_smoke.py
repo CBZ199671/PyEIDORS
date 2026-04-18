@@ -24,7 +24,6 @@ from eit_app.models.frame_model import FrameData
 from eit_app.controllers.reconstruction_controller import ReconstructionResult
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
-from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 from eit_app.ui.main_window import EITWorkstation
 from pyeidors.data.frame_io import read_frame_yaml, read_session_metadata
@@ -775,12 +774,10 @@ def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
 def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
     """Inhomogeneity column headers must not collide.
 
-    The previous Stretch-everything strategy gave each of the 6 columns
+    The previous Stretch-everything strategy gave each of the columns
     ~46px in the 280px right-context pane, which clipped headers like
-    "X 尺寸" / "Size Y" / "σ (S/m)".  We now use Interactive sizing
-    with explicit per-column defaults; the last column (σ) stretches
-    to absorb leftover width.  Single-character zh labels (宽/高) and
-    the bare σ symbol now fit in the slim columns.
+    "X 尺寸" / "Size Y" / "σ (S/m)".  The editor now has 2D and 3D
+    layouts: 2D hides Z/depth and 3D reveals them for volume inclusions.
     """
     from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
 
@@ -794,10 +791,22 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
         widths = [header.sectionSize(c) for c in range(editor._model.columnCount())]
         # Shape column wider than the numeric columns; X/Y/W/H share size.
         assert widths[0] >= 70, f"Shape column too narrow: {widths[0]}"
-        for c in (1, 2, 3, 4):
+        for c in (1, 2, 4, 5):
             assert widths[c] >= 50, f"Numeric column {c} too narrow: {widths[c]}"
+        assert editor._table.isColumnHidden(3)
+        assert editor._table.isColumnHidden(6)
+
+        editor.set_domain_context(mesh_dimension=3, radius=0.18, height=0.16)
+        _get_app().processEvents()
+        assert not editor._table.isColumnHidden(3)
+        assert not editor._table.isColumnHidden(6)
+        editor._add_shape("circle")
+        spec = editor.get_inhomogeneities()[0]
+        assert spec.size_x < 0.18
+        assert spec.size_z <= 0.16 * 0.5
+        assert spec.center_z == pytest.approx(0.0)
         # σ column (last, stretched) takes whatever is left ≥ 40px.
-        assert widths[5] >= 40
+        assert header.sectionSize(7) >= 40
     finally:
         editor.close()
         editor.deleteLater()
@@ -1164,8 +1173,8 @@ def test_connection_panel_auto_selects_unique_windows_serial_port(
     assert window._conn_panel.serial_port_count() == 1
     assert window._conn_panel.selected_serial_port() == "COM4"
     assert window._conn_panel.selected_serial_display_name() == "COM4 - USB-SERIAL CH340"
-    assert "已自动选中唯一串口" in window._conn_panel._port_hint.text()
-    assert "Windows 主机串口桥接" in window._conn_panel._port_hint.text()
+    assert "Auto-selected the only port" in window._conn_panel._port_hint.text()
+    assert "Windows COM bridge" in window._conn_panel._port_hint.text()
 
     window._conn_panel._port_combo.setCurrentText("COM4 -> /dev/ttyS3 - USB-SERIAL CH340")
     assert window._conn_panel.selected_serial_port() == "COM4"
@@ -1190,8 +1199,8 @@ def test_serial_connect_fails_fast_when_no_port_is_detected(
 
     assert window._state.connection_status is ConnectionStatus.ERROR
     assert window._workflow_toolbox.currentIndex() == 0
-    assert "未检测到可用串口" in window._status_bar.currentMessage()
-    assert "未检测到可用串口" in window._conn_panel._port_hint.text()
+    assert "No serial ports detected" in window._status_bar.currentMessage()
+    assert "No serial ports detected" in window._conn_panel._port_hint.text()
 
     _close_window(window)
 
@@ -1636,7 +1645,7 @@ def test_simulator_single_frame_capture_stops_automatically(tmp_path: Path) -> N
     assert _wait_until(lambda: window._acq_process is None, timeout=8.0)
     assert window._status_bar._acq_label.text() == "Acq: Idle"
     assert window._status_bar._rec_label.text() == "Record: Armed"
-    assert "单帧采集完成" in window._status_bar.currentMessage()
+    assert "Single-frame acquisition complete" in window._status_bar.currentMessage()
     csv_files = sorted(output_dir.rglob("*.csv"))
     yaml_files = sorted(output_dir.rglob("*.yaml"))
     assert len(csv_files) == 1
@@ -1784,14 +1793,14 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
 
     _click(window._control_panel._imp_btn)
     assert _wait_until(
-        lambda: window._status_bar.currentMessage().startswith("接触阻抗:"),
+        lambda: window._status_bar.currentMessage().startswith("Contact impedance:"),
         timeout=3.0,
     )
 
     _click(window._control_panel._power_on_btn)
     assert _wait_until(
         lambda: window._status_bar._power_label.text() == "Power: ON"
-        and "测量电源已切换为 ON" in window._status_bar.currentMessage(),
+        and "Measurement power switched to ON" in window._status_bar.currentMessage(),
         timeout=3.0,
     )
     assert window._workflow_toolbox.currentIndex() == 1
@@ -1802,7 +1811,7 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
     _click(window._control_panel._spt_btn)
     assert window._workflow_toolbox.currentIndex() == 1
     assert _wait_until(
-        lambda: "单点测试返回:" in window._status_bar.currentMessage(),
+        lambda: "Single-point returned:" in window._status_bar.currentMessage(),
         timeout=3.0,
     )
     assert window._summary_panel._state_badge.text() == "READY FOR ACQUISITION"
@@ -1814,7 +1823,7 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
     _click(window._control_panel._power_off_btn)
     assert _wait_until(
         lambda: window._status_bar._power_label.text() == "Power: OFF"
-        and "测量电源已切换为 OFF" in window._status_bar.currentMessage(),
+        and "Measurement power switched to OFF" in window._status_bar.currentMessage(),
         timeout=3.0,
     )
     assert window._summary_panel._state_badge.text() == "READY FOR ACQUISITION"
@@ -1851,7 +1860,7 @@ def test_single_point_does_not_force_power_state_on_without_power_command() -> N
     assert window._status_bar._power_label.text() == "Power: Unknown"
     _click(window._control_panel._spt_btn)
     assert _wait_until(
-        lambda: "单点测试返回:" in window._status_bar.currentMessage(),
+        lambda: "Single-point returned:" in window._status_bar.currentMessage(),
         timeout=3.0,
     )
     assert window._status_bar._power_label.text() == "Power: Unknown"
@@ -1880,7 +1889,7 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     _click(window._acq_panel._rec_check)
     assert _wait_until(lambda: window._acq_panel._rec_check.isChecked() is True, timeout=2.0)
     assert window._acq_panel._rec_check.isEnabled() is True
-    assert "开始采集后将保存到" in window._status_bar.currentMessage()
+    assert "Recording enabled; captures will be saved to" in window._status_bar.currentMessage()
     assert window._status_bar._rec_label.text() == "Record: Armed"
     assert window._workflow_toolbox.currentIndex() == 1
     assert window._summary_panel._state_badge.text() == "READY FOR ACQUISITION"
@@ -1943,11 +1952,11 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     _click(window._frame_browser._ref_btn)
     assert _wait_until(
         lambda: window._selected_reference_entry is not None
-        and window._selected_reference_entry.get("file_path") == first_entry["file_path"]
-        and (
-            "参考帧已选择" in window._status_bar.currentMessage()
-            or "参考帧已更新" in window._status_bar.currentMessage()
-        ),
+            and window._selected_reference_entry.get("file_path") == first_entry["file_path"]
+            and (
+                "Reference frame selected" in window._status_bar.currentMessage()
+                or "Reference frame updated" in window._status_bar.currentMessage()
+            ),
         timeout=2.0,
     )
 
@@ -1955,20 +1964,18 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     assert _wait_until(
         lambda: window._selected_target_entry is not None
         and window._selected_target_entry.get("file_path") == second_entry["file_path"]
-        and "目标帧已选择" in window._status_bar.currentMessage(),
+        and "Target frame selected" in window._status_bar.currentMessage(),
         timeout=2.0,
     )
 
-    captured: dict[str, int] = {}
-
-    def _fake_exec(self) -> int:
-        captured["ref"] = self._ref_combo.currentIndex()
-        captured["tgt"] = self._tgt_combo.currentIndex()
-        return 0
-
-    monkeypatch.setattr(DifferenceDialog, "exec", _fake_exec)
     window._open_difference_dialog()
-    assert captured == {"ref": 0, "tgt": 1}
+    _get_app().processEvents()
+    dialog = window._difference_dialog
+    assert dialog is not None
+    assert dialog._ref_combo.currentIndex() == 0
+    assert dialog._tgt_combo.currentIndex() == 1
+    dialog.reject()
+    _get_app().processEvents()
 
     _click(window._acq_panel._stop_btn)
     assert _wait_until(lambda: window._acq_process is None, timeout=5.0)
@@ -1987,7 +1994,7 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     assert _wait_until(lambda: window._frame_browser._model.rowCount() == 0, timeout=2.0)
     assert window._selected_reference_entry is None
     assert window._selected_target_entry is None
-    assert "已清空录制帧列表" in window._status_bar.currentMessage()
+    assert "Recorded frame list cleared" in window._status_bar.currentMessage()
 
     _close_window(window)
 
@@ -2031,7 +2038,7 @@ def test_record_checkbox_prefills_default_output_dir_when_empty() -> None:
         lambda: window._acq_panel.output_dir() == str(window._acq_panel.default_output_dir()),
         timeout=2.0,
     )
-    assert "开始采集后将保存到" in window._status_bar.currentMessage()
+    assert "Recording enabled; captures will be saved to" in window._status_bar.currentMessage()
     assert window._status_bar._rec_label.text() == "Record: Armed"
 
     _close_window(window)
@@ -2202,6 +2209,7 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     assert cfg.point_count() == 208
     assert cfg.radius == pytest.approx(0.18)
     assert cfg.height == pytest.approx(0.16)
+    assert cfg.drive_mode == "total_current"
     assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
 
     _close_window(window)
@@ -2266,6 +2274,8 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
         n_elements=1,
         n_measurements=n_meas,
     )
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
+    _get_app().processEvents()
     window._sim_tab.mesh_setup_panel._refine_spin.setValue(0.1)
     window._sim_tab.inverse_problem_panel.set_config(
         {
@@ -2292,7 +2302,9 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     assert request.mesh_refinement == pytest.approx(0.1)
     assert request.metadata["mesh_size"] == pytest.approx(0.1)
     assert request.metadata["reconstruction_runtime"] == "single_step_cached"
-    assert rc._prepare_single_step_cached_runtime(request).refinement == 5
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
+    assert rc._prepare_single_step_cached_runtime(request).refinement == 2
 
     window._sim_state.inverse_running = False
     _close_window(window)

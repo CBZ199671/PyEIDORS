@@ -23,7 +23,10 @@ from typing import Any, Callable
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
+from eit_app.models.forward_model_config import drive_mode_for_mesh_dimension
 from eit_app.models.frame_model import FrameData
+from pyeidors.data.difference import build_difference_vector
+from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
 
 log = logging.getLogger(__name__)
 
@@ -90,10 +93,10 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
     forward_backend = _auto("forward_backend", "dolfinx")
     mesh_family = _auto("mesh_family", "tetra")
     if wants_gpu:
-        if forward_backend == "dolfinx":
+        if mesh_family == "hex" and forward_backend == "dolfinx":
             forward_backend = "cuda_structured"
-        if mesh_family == "tetra":
-            mesh_family = "hex"
+        elif mesh_family != "hex" and forward_backend == "cuda_structured":
+            forward_backend = "dolfinx"
 
     return {
         "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),
@@ -353,15 +356,12 @@ def _compute_effective_refinement(
 def _resolve_drive_mode(
     meta: dict[str, Any],
     *,
-    mesh_dim: int | None = None,
+    mesh_dim: int,
     default: str = "total_current",
 ) -> str:
     raw_mode = meta.get("drive_mode", default)
-    mode = str(raw_mode).strip().lower()
-    resolved = mode or default
-    if int(mesh_dim or meta.get("mesh_dimension", 2)) == 3 and resolved == "line_current_density":
-        return "total_current"
-    return resolved
+    mode = drive_mode_for_mesh_dimension(raw_mode, mesh_dim)
+    return mode or default
 
 
 def _resolve_drive_value(
@@ -394,6 +394,10 @@ def _prepare_single_step_cached_runtime(
     meta = dict(req.metadata)
     meta.setdefault("n_elec", 16)
     meta.setdefault("n_rings", 1)
+    meta.setdefault("electrode_layout", "ring_major")
+    meta.setdefault("measurement_protocol", "eidors_full_3d")
+    meta.setdefault("custom_stim_matrix", None)
+    meta.setdefault("custom_meas_matrices", None)
     meta.setdefault("stim_pattern", "{ad}")
     meta.setdefault("meas_pattern", "{ad}")
     meta.setdefault("rotate_meas", True)
@@ -436,7 +440,19 @@ def _prepare_single_step_cached_runtime(
         req.mesh_refinement,
         mesh_size=meta.get("mesh_size"),
     )
-    lam = float(meta.get("difference_lambda", 1.0e-2))
+    raw_lam = meta.get("difference_lambda")
+    try:
+        lam = float(raw_lam)
+    except (TypeError, ValueError):
+        lam = float("nan")
+    if not np.isfinite(lam) or lam <= 0.0:
+        try:
+            lam = float(req.regularization_alpha)
+        except (TypeError, ValueError):
+            lam = float("nan")
+    if not np.isfinite(lam) or lam <= 0.0:
+        lam = 1.0e-2
+    meta["difference_lambda"] = lam
     background_sigma = float(meta.get("background_sigma", 1.0))
     contact_impedance = _contact_impedance_scalar(meta.get("contact_impedance", 0.01))
     mesh_height = float(meta.get("mesh_height", meta.get("height", 1.0)))
@@ -458,8 +474,14 @@ def _prepare_single_step_cached_runtime(
         float(meta.get("geometry_scale_to_m", 1.0)),
         float(meta.get("electrode_coverage", 0.5)),
         repr(meta.get("electrode_length_m_override")),
+        str(meta.get("difference_mode", "raw")),
+        str(meta.get("difference_orientation", "target_minus_reference")),
         str(meta.get("stim_pattern", "{ad}")),
         str(meta.get("meas_pattern", "{ad}")),
+        str(meta.get("electrode_layout", "ring_major")),
+        str(meta.get("measurement_protocol", "eidors_full_3d")),
+        repr(meta.get("custom_stim_matrix")),
+        repr(meta.get("custom_meas_matrices")),
         bool(meta.get("rotate_meas", True)),
         bool(meta.get("use_meas_current", False)),
         int(meta.get("use_meas_current_next", 0)),
@@ -519,6 +541,24 @@ def _single_step_cached_solver_diagnostics(
     }
 
 
+def _single_step_operator_space(
+    operator_bundle: dict[str, Any],
+    dv: np.ndarray,
+    *,
+    measurement_backend: str,
+) -> str:
+    """Return whether a cached single-step operator solves measurement or parameter space."""
+    dv_len = int(np.asarray(dv).reshape(-1).shape[0])
+    a_shape = tuple(int(dim) for dim in np.shape(operator_bundle.get("A")))
+    if len(a_shape) >= 2 and a_shape[-2] == dv_len and a_shape[-1] == dv_len:
+        return "measurement"
+    if str(operator_bundle.get("strict_solver_backend_effective", "")) == measurement_backend:
+        return "measurement"
+    if str(operator_bundle.get("mode", "")).strip().lower() == "fast":
+        return "measurement"
+    return "parameter"
+
+
 def _ensure_single_step_cached_context(
     runtime: _SingleStepCachedRuntimeConfig,
     *,
@@ -548,6 +588,10 @@ def _ensure_single_step_cached_context(
                 electrode_coverage=float(meta.get("electrode_coverage", 0.5)),
                 geometry_scale_to_m=float(meta.get("geometry_scale_to_m", 1.0)),
                 n_rings=int(meta.get("n_rings", 1)),
+                electrode_layout=str(meta.get("electrode_layout", "ring_major")),
+                measurement_protocol=str(meta.get("measurement_protocol", "eidors_full_3d")),
+                custom_stim_matrix=meta.get("custom_stim_matrix"),
+                custom_meas_matrices=meta.get("custom_meas_matrices"),
                 stim_pattern=str(meta.get("stim_pattern", "{ad}")),
                 meas_pattern=str(meta.get("meas_pattern", "{ad}")),
                 rotate_meas=bool(meta.get("rotate_meas", True)),
@@ -556,6 +600,10 @@ def _ensure_single_step_cached_context(
                 stim_direction=str(meta.get("stim_direction", "ccw")),
                 meas_direction=str(meta.get("meas_direction", "ccw")),
                 stim_first_positive=bool(meta.get("stim_first_positive", False)),
+                difference_mode=str(meta.get("difference_mode", "raw")),
+                difference_orientation=str(
+                    meta.get("difference_orientation", "target_minus_reference")
+                ),
                 background_sigma=runtime.background_sigma,
                 lam=runtime.lam,
                 cache_scope="both",
@@ -606,6 +654,10 @@ def _run_full_gn_request(
     meta = dict(req.metadata)
     meta.setdefault("n_elec", 16)
     meta.setdefault("n_rings", 1)
+    meta.setdefault("electrode_layout", "ring_major")
+    meta.setdefault("measurement_protocol", "eidors_full_3d")
+    meta.setdefault("custom_stim_matrix", None)
+    meta.setdefault("custom_meas_matrices", None)
     meta.setdefault("stim_pattern", "{ad}")
     meta.setdefault("meas_pattern", "{ad}")
     meta.setdefault("rotate_meas", True)
@@ -621,6 +673,9 @@ def _run_full_gn_request(
     meta.setdefault("contact_impedance", 0.01)
     meta.setdefault("difference_mode", "raw")
     meta.setdefault("difference_orientation", "target_minus_reference")
+    meta.setdefault("difference_preset", "eidors_one_step_noser")
+    meta.setdefault("absolute_preset", "eidors_abs_gn")
+    meta.setdefault("hyperparameter", None)
     meta.setdefault("solver_mode", "auto")
     meta.setdefault("line_search_mode", "auto")
     meta.setdefault("linear_solver", "auto")
@@ -663,6 +718,10 @@ def _run_full_gn_request(
     cache_key = (
         int(meta["n_elec"]),
         int(meta.get("n_rings", 1)),
+        str(meta.get("electrode_layout", "ring_major")),
+        str(meta.get("measurement_protocol", "eidors_full_3d")),
+        repr(meta.get("custom_stim_matrix")),
+        repr(meta.get("custom_meas_matrices")),
         str(meta["stim_pattern"]),
         str(meta["meas_pattern"]),
         bool(meta.get("rotate_meas", True)),
@@ -685,6 +744,9 @@ def _run_full_gn_request(
         repr(meta.get("electrode_length_m_override")),
         _contact_impedance_scalar(meta.get("contact_impedance", 0.01)),
         float(req.regularization_alpha),
+        repr(meta.get("hyperparameter")),
+        str(meta.get("difference_preset", "eidors_one_step_noser")),
+        str(meta.get("absolute_preset", "eidors_abs_gn")),
         str(meta["difference_mode"]),
         str(meta["difference_orientation"]),
         str(meta.get("solver_mode", "auto")),
@@ -703,11 +765,21 @@ def _run_full_gn_request(
     total_electrodes = _total_electrodes_from_meta(meta)
     system = _get_cached_system(cache_key)
     if system is None:
-        pattern_config = PatternConfig(
-            n_elec=meta["n_elec"],
+        pattern_n_elec, pattern_n_rings = effective_pattern_layout_for_3d_mesh(
+            mesh_tdim=req.mesh_dimension,
+            n_elec=int(meta["n_elec"]),
             n_rings=int(meta.get("n_rings", 1)),
+            electrode_layout=str(meta.get("electrode_layout", "ring_major")),
+        )
+        pattern_config = PatternConfig(
+            n_elec=pattern_n_elec,
+            n_rings=pattern_n_rings,
             stim_pattern=meta["stim_pattern"],
             meas_pattern=meta["meas_pattern"],
+            electrode_layout=str(meta.get("electrode_layout", "ring_major")),
+            measurement_protocol=str(meta.get("measurement_protocol", "eidors_full_3d")),
+            custom_stim_matrix=meta.get("custom_stim_matrix"),
+            custom_meas_matrices=meta.get("custom_meas_matrices"),
             drive_mode=meta["drive_mode"],
             drive_value=meta["drive_value"],
             geometry_scale_to_m=meta["geometry_scale_to_m"],
@@ -719,12 +791,20 @@ def _run_full_gn_request(
             meas_direction=str(meta.get("meas_direction", "ccw")),
             stim_first_positive=bool(meta.get("stim_first_positive", False)),
         )
+        hyperparameter = meta.get("hyperparameter")
+        if hyperparameter in (None, ""):
+            hyperparameter = None
+        else:
+            hyperparameter = float(hyperparameter)
         system = EITSystem(
             n_elec=total_electrodes,
             pattern_config=pattern_config,
             regularization_alpha=req.regularization_alpha,
+            hyperparameter=hyperparameter,
             difference_mode=meta["difference_mode"],
             difference_orientation=meta["difference_orientation"],
+            difference_preset=str(meta.get("difference_preset", "eidors_one_step_noser")),
+            absolute_preset=str(meta.get("absolute_preset", "eidors_abs_gn")),
             contact_impedance=_contact_impedance_vector_from_meta(
                 meta,
                 total_electrodes=total_electrodes,
@@ -757,6 +837,7 @@ def _run_full_gn_request(
             z_center=float(meta.get("z_center", 0.0)),
             mesh_family=str(meta.get("mesh_family", "tetra")),
             geometry_version=str(meta.get("geometry_version", "geomv2")),
+            electrode_layout=str(meta.get("electrode_layout", "ring_major")),
         )
         system.setup(mesh=mesh)
         _put_cached_system(cache_key, system)
@@ -867,7 +948,14 @@ def _run_single_step_cached_request(
     tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
 
     emit("Running cached single-step reconstruction...")
-    dv = np.asarray(tgt_vec - ref_vec, dtype=np.float64)
+    difference_mode = str(meta.get("difference_mode", "raw"))
+    difference_orientation = str(meta.get("difference_orientation", "target_minus_reference"))
+    dv = build_difference_vector(
+        tgt_vec,
+        ref_vec,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
     operator_bundle = ctx["operator_bundle"]
     strict_backend = str(
         operator_bundle.get(
@@ -875,7 +963,12 @@ def _run_single_step_cached_request(
             "dense-param",
         )
     )
-    if strict_backend == STRICT_SOLVER_BACKEND_MEASUREMENT:
+    operator_space = _single_step_operator_space(
+        operator_bundle,
+        dv,
+        measurement_backend=STRICT_SOLVER_BACKEND_MEASUREMENT,
+    )
+    if operator_space == "measurement":
         delta_sigma = _measurement_space_delta(operator_bundle=operator_bundle, rhs=dv)
     else:
         rhs = np.asarray(
@@ -897,6 +990,8 @@ def _run_single_step_cached_request(
                     step_size_min=float(meta.get("step_size_min", 1.0e-6)),
                     step_size_max=float(meta.get("step_size_max", 1.0)),
                     step_size_maxiter=int(meta.get("step_size_maxiter", 64)),
+                    difference_mode=difference_mode,
+                    difference_orientation=difference_orientation,
                 )
             )
         except Exception as exc:
@@ -909,7 +1004,12 @@ def _run_single_step_cached_request(
     sigma_est = np.asarray(ctx["sigma_bg"] + display_delta, dtype=np.float64)
     img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
-    pred_diff = np.asarray(pred_vi.meas - ctx["base_meas"], dtype=np.float64)
+    pred_diff = build_difference_vector(
+        pred_vi.meas,
+        ctx["base_meas"],
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
 
     result_meta = dict(meta)
     result_meta.update(
@@ -919,6 +1019,7 @@ def _run_single_step_cached_request(
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
             "step_size_alpha": alpha,
+            "single_step_operator_space": operator_space,
             "solver_diagnostics": _single_step_cached_solver_diagnostics(
                 ctx,
                 strict_backend=strict_backend,

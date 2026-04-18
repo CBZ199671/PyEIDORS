@@ -5,49 +5,91 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from dolfinx import fem
 
-from ..femx import cell_midpoints
 from .structures import EITData, EITImage
 
 
-def _paint_circle(values: np.ndarray, centers: np.ndarray, center: tuple[float, float], radius: float, conductivity: float) -> None:
+def _center_vector(center: tuple[float, ...] | list[float], *, ndim: int) -> np.ndarray:
+    arr = np.asarray(center, dtype=float).reshape(-1)
+    if arr.size >= ndim:
+        return arr[:ndim]
+    padded = np.zeros(ndim, dtype=float)
+    padded[: arr.size] = arr
+    return padded
+
+
+def _paint_circle(
+    values: np.ndarray,
+    centers: np.ndarray,
+    center: tuple[float, ...] | list[float],
+    radius: float,
+    conductivity: float,
+) -> None:
     if centers.size == 0:
         return
-    dist2 = (centers[:, 0] - center[0]) ** 2 + (centers[:, 1] - center[1]) ** 2
-    values[dist2 < radius**2] = conductivity
+    ndim = min(centers.shape[1], 3)
+    center_vec = _center_vector(center, ndim=ndim)
+    deltas = centers[:, :ndim] - center_vec[None, :]
+    dist2 = np.sum(deltas**2, axis=1)
+    values[dist2 < float(radius) ** 2] = conductivity
 
 
 def _paint_ellipse(
     values: np.ndarray,
     centers: np.ndarray,
-    center: tuple[float, float],
+    center: tuple[float, ...] | list[float],
     rx: float,
     ry: float,
     conductivity: float,
+    rz: float | None = None,
 ) -> None:
-    """Paint an elliptical anomaly onto element-centered values."""
+    """Paint an ellipse in 2D or an ellipsoid in 3D."""
     if centers.size == 0 or rx <= 0 or ry <= 0:
         return
-    norm = ((centers[:, 0] - center[0]) / rx) ** 2 + ((centers[:, 1] - center[1]) / ry) ** 2
+    if centers.shape[1] >= 3:
+        z_radius = float(rz if rz is not None and rz > 0 else rx)
+        center_vec = _center_vector(center, ndim=3)
+        norm = (
+            ((centers[:, 0] - center_vec[0]) / rx) ** 2
+            + ((centers[:, 1] - center_vec[1]) / ry) ** 2
+            + ((centers[:, 2] - center_vec[2]) / z_radius) ** 2
+        )
+        values[norm < 1.0] = conductivity
+        return
+    center_vec = _center_vector(center, ndim=2)
+    norm = (
+        ((centers[:, 0] - center_vec[0]) / rx) ** 2
+        + ((centers[:, 1] - center_vec[1]) / ry) ** 2
+    )
     values[norm < 1.0] = conductivity
 
 
 def _paint_rectangle(
     values: np.ndarray,
     centers: np.ndarray,
-    center: tuple[float, float],
+    center: tuple[float, ...] | list[float],
     half_w: float,
     half_h: float,
     conductivity: float,
+    half_d: float | None = None,
 ) -> None:
-    """Paint a rectangular anomaly onto element-centered values."""
+    """Paint a rectangle in 2D or an axis-aligned box in 3D."""
     if centers.size == 0 or half_w <= 0 or half_h <= 0:
         return
-    mask = (
-        (np.abs(centers[:, 0] - center[0]) < half_w)
-        & (np.abs(centers[:, 1] - center[1]) < half_h)
-    )
+    if centers.shape[1] >= 3:
+        z_half = float(half_d if half_d is not None and half_d > 0 else half_w)
+        center_vec = _center_vector(center, ndim=3)
+        mask = (
+            (np.abs(centers[:, 0] - center_vec[0]) < half_w)
+            & (np.abs(centers[:, 1] - center_vec[1]) < half_h)
+            & (np.abs(centers[:, 2] - center_vec[2]) < z_half)
+        )
+    else:
+        center_vec = _center_vector(center, ndim=2)
+        mask = (
+            (np.abs(centers[:, 0] - center_vec[0]) < half_w)
+            & (np.abs(centers[:, 1] - center_vec[1]) < half_h)
+        )
     values[mask] = conductivity
 
 
@@ -56,10 +98,12 @@ def create_synthetic_data(
     inclusion_conductivity: float = 2.5,
     background_conductivity: float = 1.0,
     noise_level: float = 0.02,
-    center: tuple[float, float] = (0.2, 0.2),
+    center: tuple[float, ...] = (0.2, 0.2),
     radius: float = 0.3,
 ) -> dict[str, Any]:
     """Create synthetic EIT test data."""
+    from dolfinx import fem
+    from ..femx import cell_midpoints
 
     sigma_true = fem.Function(fwd_model.V_sigma)
     sigma_true.x.array[:] = background_conductivity
@@ -98,6 +142,8 @@ def create_custom_phantom(
     anomalies: list[dict[str, Any]] | None = None,
 ):
     """Create custom phantom conductivity field."""
+    from dolfinx import fem
+    from ..femx import cell_midpoints
 
     if anomalies is None:
         anomalies = []
@@ -111,14 +157,24 @@ def create_custom_phantom(
         conductivity = anomaly.get("conductivity", 2.0)
         shape = anomaly.get("shape", "circle")
 
-        if shape == "ellipse":
+        if shape in {"ellipse", "ellipsoid"}:
             rx = anomaly.get("rx", anomaly.get("radius", 0.2))
             ry = anomaly.get("ry", rx)
-            _paint_ellipse(sigma.x.array, centers, center, rx, ry, conductivity)
-        elif shape == "rectangle":
+            rz = anomaly.get("rz", anomaly.get("size_z", rx))
+            _paint_ellipse(sigma.x.array, centers, center, rx, ry, conductivity, rz=rz)
+        elif shape in {"rectangle", "box"}:
             half_w = anomaly.get("half_w", anomaly.get("radius", 0.2))
             half_h = anomaly.get("half_h", half_w)
-            _paint_rectangle(sigma.x.array, centers, center, half_w, half_h, conductivity)
+            half_d = anomaly.get("half_d", anomaly.get("size_z", half_w))
+            _paint_rectangle(
+                sigma.x.array,
+                centers,
+                center,
+                half_w,
+                half_h,
+                conductivity,
+                half_d=half_d,
+            )
         else:
             radius = anomaly.get("radius", 0.2)
             _paint_circle(sigma.x.array, centers, center, radius, conductivity)
