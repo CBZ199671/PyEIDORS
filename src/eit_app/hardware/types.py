@@ -110,6 +110,23 @@ VOLTAGE_AMP_LABELS: tuple[str, ...] = tuple(
     f"{gain:.2f}x" for gain in VOLTAGE_AMP_FACTORS
 )
 
+
+def voltage_amp_label(level: object, *, fallback: str = "?") -> str:
+    """Look up the user-facing gain label (e.g. ``10.00x``) for a 0–7 level.
+
+    Coerces the input to an integer; out-of-range or non-numeric values
+    return ``fallback`` so callers can render unknown levels without
+    raising.  Single source of truth for the database tab + the
+    hardware status bar that previously each hand-rolled this lookup.
+    """
+    try:
+        idx = int(level)
+    except (TypeError, ValueError):
+        return fallback
+    if 0 <= idx < len(VOLTAGE_AMP_LABELS):
+        return VOLTAGE_AMP_LABELS[idx]
+    return fallback
+
 DEFAULT_SERVER_PORT = 4555
 DEFAULT_BOARD_ID = 1
 DEFAULT_USER_ID = 1

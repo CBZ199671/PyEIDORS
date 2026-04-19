@@ -5,10 +5,9 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import TYPE_CHECKING
 
 import numpy as np
-from PySide6.QtCore import QTimer, Qt, Slot
+from PySide6.QtCore import QTimer, Slot
 from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget, QWidget
 
@@ -38,10 +37,9 @@ from eit_app.controllers.database_controller import DatabaseController
 from eit_app.controllers.recording_controller import RecordingController
 from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
-from eit_app.hardware.types import STIM_AMP_VALUES_UA, VOLTAGE_AMP_LABELS
+from eit_app.hardware.types import STIM_AMP_VALUES_UA, voltage_amp_label
 from eit_app.i18n import current_language, set_language, t, translator
 from eit_app.interop import (
-    EidorsExportJob,
     EidorsScriptCaptureService,
     InteropBundleExporter,
     InteropBundleImporter,
@@ -220,10 +218,7 @@ def _qt_open_url(folder_path: str) -> bool:
         log.debug("QDesktopServices failed: %s", exc)
     return False
 
-def _voltage_gain_label(level: int) -> str:
-    if 0 <= level < len(VOLTAGE_AMP_LABELS):
-        return VOLTAGE_AMP_LABELS[level]
-    return "?"
+_voltage_gain_label = voltage_amp_label
 
 
 def _with_interactive_3d_geometry_defaults(
@@ -1240,16 +1235,13 @@ class EITWorkstation(QMainWindow):
                 )
             return
 
-        # Always update the reconstruction image + the equipotential
-        # contour view first so both bottom-row plots refresh in sync.
-        try:
-            self._recon_widget.update_reconstruction(result)
-        except Exception as exc:
-            log.warning("Reconstruction widget update failed: %s", exc)
-        try:
-            self._equipotential_widget.update_reconstruction(result)
-        except Exception as exc:
-            log.warning("Equipotential widget update failed: %s", exc)
+        # Refresh the bottom-row plots together so the σ image and the
+        # 3D height surface stay in sync.
+        for widget in (self._recon_widget, self._equipotential_widget):
+            try:
+                widget.update_reconstruction(result)
+            except Exception as exc:
+                log.warning("%s update failed: %s", type(widget).__name__, exc)
 
         # Voltage fit: compute measured diff from the frame pair we submitted
         ref_frame = self._last_auto_ref_frame
@@ -2472,17 +2464,11 @@ class EITWorkstation(QMainWindow):
             6000,
         )
 
-        # Update the hardware-tab reconstruction display + the
-        # equipotential contour view so the operator sees the result
-        # both as a filled image and as iso-σ contour lines.
-        try:
-            self._recon_widget.update_reconstruction(result)
-        except Exception:
-            pass
-        try:
-            self._equipotential_widget.update_reconstruction(result)
-        except Exception:
-            pass
+        for widget in (self._recon_widget, self._equipotential_widget):
+            try:
+                widget.update_reconstruction(result)
+            except Exception as exc:
+                log.warning("%s update failed: %s", type(widget).__name__, exc)
 
         output_dir = config.get("output_dir")
         if not output_dir:

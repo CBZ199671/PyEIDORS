@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from eit_app.hardware.types import VOLTAGE_AMP_LABELS
+from eit_app.hardware.types import voltage_amp_label
 
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtGui import QIntValidator
@@ -67,21 +67,15 @@ def _format_unix(ts: float) -> str:
 
 
 def _format_voltage_amp_level(value: Any) -> str:
-    """Convert the stored 0–7 voltage-amp level to the displayed label.
+    """Render the stored 0–7 voltage-amp level as ``10.00x`` etc.
 
-    The hardware keeps an integer level; the user-facing label says
-    e.g. ``10.00x`` so the actual amplification factor is visible at
-    a glance instead of an opaque "level 7".
+    Blank cells for missing values; otherwise defers to the shared
+    :func:`eit_app.hardware.types.voltage_amp_label` so the database
+    tab and the hardware status bar stay in lock-step.
     """
     if value in (None, ""):
         return ""
-    try:
-        idx = int(value)
-    except (TypeError, ValueError):
-        return str(value)
-    if 0 <= idx < len(VOLTAGE_AMP_LABELS):
-        return VOLTAGE_AMP_LABELS[idx]
-    return str(value)
+    return voltage_amp_label(value, fallback=str(value))
 
 
 def _format_session_frequency(row: dict[str, Any]) -> str:

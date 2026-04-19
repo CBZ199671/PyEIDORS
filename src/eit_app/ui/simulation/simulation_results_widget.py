@@ -204,7 +204,14 @@ class SimulationResultsWidget(QWidget):
         """
         total = max(self._top_splitter.width(), 1)
         half = total // 2
-        self._top_splitter.setSizes([half, total - half])
+        target = [half, total - half]
+        # Don't trigger a layout invalidation chain when the splitter
+        # is already at the target sizes (typical case after the
+        # first balance — every subsequent update_*/clear/set_loading
+        # call would otherwise re-run the same setSizes).
+        if list(self._top_splitter.sizes()) == target:
+            return
+        self._top_splitter.setSizes(target)
 
     def update_forward_result(self, result: ForwardSolverResult) -> None:
         """Show ground truth and boundary voltages from forward solve."""

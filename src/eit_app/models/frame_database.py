@@ -73,6 +73,13 @@ def _to_str(value: Any) -> str | None:
 class FrameDatabase:
     """SQLite wrapper for the EIT frame index."""
 
+    # Schema version 1 = baseline shape.  Bumped to 2 once the
+    # frequency-range columns + frame-driven back-fill have been
+    # applied, so we don't redo the (potentially many-thousand-row)
+    # rebuild on every app start.  Bump again whenever a future
+    # schema migration needs to fire exactly once.
+    _SCHEMA_VERSION = 2
+
     def __init__(self, db_path: Path) -> None:
         self._db_path = Path(db_path)
         self._db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -80,26 +87,36 @@ class FrameDatabase:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys = ON")
         self._conn.executescript(_SCHEMA)
-        self._migrate_frequency_range_columns()
+        self._run_migrations()
         self._conn.commit()
+
+    def _run_migrations(self) -> None:
+        """Apply pending schema migrations gated by ``PRAGMA user_version``."""
+        current = int(
+            self._conn.execute("PRAGMA user_version").fetchone()[0]
+        )
+        if current < 2:
+            self._migrate_frequency_range_columns()
+        # Every future migration adds another `if current < N:` branch
+        # before the version bump below.
+        if current < self._SCHEMA_VERSION:
+            self._conn.execute(f"PRAGMA user_version = {self._SCHEMA_VERSION}")
 
     def _migrate_frequency_range_columns(self) -> None:
         """Add ``frequency_hz_min`` / ``_max`` columns and back-fill them.
 
-        Older indexes carried only ``frequency_hz`` (single value).  We
-        now want a min / max range so a session that swept multiple
-        frequencies shows them all.  Migration steps (each idempotent):
+        Runs at most once per database file (gated by
+        ``PRAGMA user_version`` in :meth:`_run_migrations`).  Steps:
 
-        1.  ALTER TABLE adds the new columns when missing.
+        1.  ALTER TABLE adds the new columns when missing (no-op on
+            fresh databases — the column is already in ``_SCHEMA``).
         2.  Seed ``min`` / ``max`` from the legacy single-value column
-            so rows with no per-frame frequency metadata still display
+            so rows with no per-frame metadata at all still display
             sensibly.
         3.  Re-scan every frame's ``frame_metadata_json`` and widen the
-            session's range from any per-frame frequency it finds.
-            This is what makes a sweep session that pre-dates the new
-            range columns show up correctly — without it the cell
-            would still read e.g. "1000 Hz" even though the frames
-            actually span 1000 → 5000 Hz.
+            session's range from any per-frame frequency it finds —
+            this is what makes a sweep session that pre-dates the new
+            range columns show its full envelope after the upgrade.
         """
         cur = self._conn.execute("PRAGMA table_info(sessions)")
         existing = {str(row["name"]) for row in cur.fetchall()}
@@ -111,8 +128,6 @@ class FrameDatabase:
             self._conn.execute(
                 "ALTER TABLE sessions ADD COLUMN frequency_hz_max INTEGER"
             )
-        # Step 2 — seed from legacy column so the new fields aren't
-        # NULL on rows that have no per-frame metadata at all.
         self._conn.execute(
             """
             UPDATE sessions
@@ -130,18 +145,21 @@ class FrameDatabase:
         self._rebuild_session_frequency_ranges_from_frames()
 
     def _rebuild_session_frequency_ranges_from_frames(self) -> None:
-        """Re-derive every session's frequency range from its frame rows.
+        """Re-derive frequency ranges for sessions that don't have one yet.
 
         Walks the frames table once per session, parses
         ``frame_metadata_json`` for ``frequency_hz`` values, and
-        widens / shrinks the session's stored range to match.  Run
-        from the migration so historical sweep sessions immediately
-        display their full envelope after the upgrade; cheap enough
-        to also run on subsequent startups (one COUNT + one SELECT
-        per session).
+        widens / shrinks the session's stored range to match.  The
+        gating SELECT only returns sessions whose ``min`` and ``max``
+        are still equal — i.e. those whose range was seeded only
+        from the legacy single-value column.  After ``add_frame``
+        keeps the bounds live for any new sessions, so this catches
+        only the historical pre-migration ones.
         """
         try:
-            cur = self._conn.execute("SELECT id FROM sessions")
+            cur = self._conn.execute(
+                "SELECT id FROM sessions WHERE frequency_hz_min IS frequency_hz_max"
+            )
             session_ids = [int(row["id"]) for row in cur.fetchall()]
         except sqlite3.OperationalError:
             return

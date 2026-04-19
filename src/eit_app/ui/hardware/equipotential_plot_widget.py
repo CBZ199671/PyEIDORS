@@ -49,6 +49,10 @@ from PySide6.QtWidgets import (
 from eit_app.i18n import t, translator
 from eit_app.ui.conductivity_3d_widget import _OffscreenRenderLabel, _hex_to_rgb
 from eit_app.ui.fonts import plot_font_families, serif_font_family
+from eit_app.ui.mesh_helpers import (
+    cell_to_node_average,
+    extract_boundary_triangles,
+)
 from eit_app.ui.theme import (
     empty_placeholder_stylesheet,
     error_scrim_stylesheet,
@@ -65,53 +69,6 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
-
-
-def _project_tetra_to_triangles(cells: np.ndarray) -> np.ndarray:
-    """Reduce a 4-vertex tetra mesh to its 2D boundary triangles.
-
-    The 3D height-surface only needs a planar triangulation (Z = σ
-    becomes the new height); a 3D mesh's boundary triangulation is
-    the union of every face that appears exactly once across all
-    tetrahedra.
-    """
-    cells = np.asarray(cells, dtype=np.int64)
-    if cells.ndim != 2 or cells.shape[1] != 4:
-        return np.empty((0, 3), dtype=np.int32)
-    faces: dict[tuple[int, int, int], tuple[int, int, int] | None] = {}
-    offsets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
-    for cell in cells:
-        for idx in offsets:
-            face = tuple(int(cell[i]) for i in idx)
-            key = tuple(sorted(face))
-            faces[key] = None if key in faces else face
-    boundary = [face for face in faces.values() if face is not None]
-    if not boundary:
-        return np.empty((0, 3), dtype=np.int32)
-    return np.asarray(boundary, dtype=np.int32)
-
-
-def _cell_to_node(sigma: np.ndarray, cells: np.ndarray, n_nodes: int) -> np.ndarray:
-    """Average per-cell scalars onto nodes via uniform weighting."""
-    node_sum = np.zeros(n_nodes, dtype=np.float64)
-    node_count = np.zeros(n_nodes, dtype=np.float64)
-    for cell_idx, cell in enumerate(cells):
-        value = float(sigma[cell_idx])
-        for vertex in cell:
-            vidx = int(vertex)
-            if 0 <= vidx < n_nodes:
-                node_sum[vidx] += value
-                node_count[vidx] += 1.0
-    with np.errstate(invalid="ignore", divide="ignore"):
-        node_values = np.where(node_count > 0, node_sum / node_count, np.nan)
-    if np.any(np.isnan(node_values)):
-        mean = (
-            float(np.nanmean(node_values))
-            if np.any(np.isfinite(node_values))
-            else 0.0
-        )
-        node_values = np.where(np.isnan(node_values), mean, node_values)
-    return node_values
 
 
 class EquipotentialPlotWidget(QWidget):
@@ -194,7 +151,14 @@ class EquipotentialPlotWidget(QWidget):
         self._height_slider.setRange(0, 100)
         self._height_slider.setValue(35)  # ~moderate warp
         self._height_slider.setMinimumWidth(60)
+        # Live tracking off — slider sends valueChanged only on
+        # release.  Without this each pixel of drag triggered a full
+        # PolyData / warp / extract_feature_edges / plotter rebuild
+        # (~50 ticks per drag).  The readout label still updates
+        # smoothly via sliderMoved which is decoupled from rendering.
+        self._height_slider.setTracking(False)
         self._height_slider.valueChanged.connect(self._on_height_changed)
+        self._height_slider.sliderMoved.connect(self._on_height_dragged)
         bar.addWidget(self._height_slider, 1)
 
         self._height_value = QLabel("0.35")
@@ -224,7 +188,7 @@ class EquipotentialPlotWidget(QWidget):
         sigma = np.asarray(result.conductivity, dtype=np.float64).reshape(-1)
 
         if coords.ndim != 2 or coords.shape[1] < 2:
-            self._show_status("Invalid mesh coordinates", error=True)
+            self._show_status(t("hw.equipotential.bad_coords"), error=True)
             return
         if cells.ndim != 2 or cells.shape[1] < 3:
             self._show_status(
@@ -233,7 +197,7 @@ class EquipotentialPlotWidget(QWidget):
             return
 
         if cells.shape[1] == 4:
-            cells = _project_tetra_to_triangles(cells)
+            cells, _ = extract_boundary_triangles(cells)
             if cells.shape[0] == 0:
                 self._show_status(
                     t("hw.equipotential.no_surface"), error=True
@@ -241,13 +205,17 @@ class EquipotentialPlotWidget(QWidget):
                 return
 
         if sigma.size == cells.shape[0]:
-            node_values = _cell_to_node(sigma, cells, coords.shape[0])
+            node_values = cell_to_node_average(sigma, cells, coords.shape[0])
         elif sigma.size == coords.shape[0]:
             node_values = sigma
         else:
             self._show_status(
-                f"Size mismatch: sigma={sigma.size}, cells={cells.shape[0]}, "
-                f"nodes={coords.shape[0]}",
+                t(
+                    "hw.equipotential.size_mismatch",
+                    sigma=sigma.size,
+                    cells=cells.shape[0],
+                    nodes=coords.shape[0],
+                ),
                 error=True,
             )
             return
@@ -586,20 +554,23 @@ class EquipotentialPlotWidget(QWidget):
         self._plotter.camera.Zoom(1.12 if delta_y > 0 else 0.89)
         self._refresh_offscreen_pixmap()
 
+    def _on_height_dragged(self, value: int) -> None:
+        """Lightweight live readout while the slider is being dragged.
+
+        Renders nothing — the heavy rebuild fires once on release via
+        :meth:`_on_height_changed` because the slider has tracking off.
+        """
+        self._height_value.setText(f"{value / 100.0:.2f}")
+
     def _on_height_changed(self, value: int) -> None:
-        scale = value / 100.0
-        self._height_value.setText(f"{scale:.2f}")
+        self._height_value.setText(f"{value / 100.0:.2f}")
         if self._last_payload is None:
             return
         if self._render_backend == "pyvista":
-            # Cheapest re-warp: rebuild the warped mesh and re-render.
             node_values, coords, cells = self._last_payload
             self._render_pyvista(node_values, coords, cells)
-            self._refresh_offscreen_pixmap()
-        elif self._render_backend == "mpl3d":
-            # mpl3d's surface height is rendered straight from σ; no
-            # warp factor needed (the user can spin the camera instead).
-            pass
+        # mpl3d's surface height is rendered straight from σ; no
+        # warp factor to apply, the user can spin the camera instead.
 
     def _reset_camera(self) -> None:
         if self._render_backend == "pyvista" and self._plotter is not None:

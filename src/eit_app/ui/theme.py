@@ -285,6 +285,10 @@ _PLOT_PALETTE_LIGHT = {
     "caption":    "#5b6573",
     "caption_loading": "#1f5d8b",
     "caption_error":   "#8b2f2f",
+    # Inhomogeneity-highlight overlay used by the 3D conductivity
+    # widget — amber on light, pumpkin on dark for contrast against
+    # the viridis cmap underneath.
+    "highlight":  "#f39c12",
 }
 
 _PLOT_PALETTE_DARK = {
@@ -300,6 +304,7 @@ _PLOT_PALETTE_DARK = {
     "caption":    "#8b97a7",
     "caption_loading": "#5ca8e0",
     "caption_error":   "#f09e95",
+    "highlight":  "#ffa94d",
 }
 
 

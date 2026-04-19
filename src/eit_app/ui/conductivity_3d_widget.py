@@ -917,7 +917,7 @@ class Conductivity3DWidget(QWidget):
                     highlight = Poly3DCollection(
                         highlight_vertices,
                         facecolors=highlight_colors,
-                        edgecolors=palette.get("highlight", "#f39c12"),
+                        edgecolors=palette["highlight"],
                         linewidths=0.45,
                         alpha=None,
                     )
@@ -1139,7 +1139,7 @@ class Conductivity3DWidget(QWidget):
         if self._mpl3d_mesh_collection is not None:
             self._mpl3d_mesh_collection.set_edgecolor(edge_color)
         if self._mpl3d_highlight_collection is not None:
-            highlight_edge = palette.get("highlight", "#f39c12") if checked else "none"
+            highlight_edge = palette["highlight"] if checked else "none"
             self._mpl3d_highlight_collection.set_edgecolor(highlight_edge)
 
     def _on_opacity_changed(self, value: int) -> None:

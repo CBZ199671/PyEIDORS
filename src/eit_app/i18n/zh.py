@@ -76,7 +76,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_loading": "\u6e32\u67d3 3D \u573a\u4e2d\u2026",                          # 渲染 3D 场中…
     "sim.results.viewer3d_unavailable": "\u672a\u5b89\u88c5 PyVista / VTK\uff0c\u65e0\u6cd5\u663e\u793a 3D \u7f51\u683c",  # 未安装 PyVista / VTK，无法显示 3D 网格
     "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6539\u7528\u5b89\u5168\u5185\u7f6e 3D \u6e32\u67d3\u5668\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；改用安全内置 3D 渲染器。
-    "sim.results.viewer3d_projection_title": "{title}\uff083D \u6295\u5f71\uff09",                  # {title}（3D 投影）
     "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u652f\u6301\u7684\u4e09\u7ef4\u56db\u9762\u4f53/\u516d\u9762\u4f53\u4f53\u7f51\u683c", # 网格不是支持的三维四面体/六面体体网格
     "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d", # 电导率长度与网格不匹配
     "sim.results.viewer3d_opacity": "\u5916\u58f3\u900f\u660e\u5ea6",                              # 外壳透明度
@@ -292,6 +291,8 @@ TRANSLATIONS: dict[str, str] = {
     "hw.equipotential.title": "\u7b49\u52bf\u56fe",                                          # 等势图
     "hw.equipotential.empty_overlay": "\u6682\u65e0\u7b49\u52bf\u6570\u636e",                # 暂无等势数据
     "hw.equipotential.no_surface": "\u4e09\u7ef4\u7f51\u683c\u8868\u9762\u63d0\u53d6\u5931\u8d25",  # 三维网格表面提取失败
+    "hw.equipotential.bad_coords": "\u7f51\u683c\u5750\u6807\u65e0\u6548",                          # 网格坐标无效
+    "hw.equipotential.size_mismatch": "\u7535\u5bfc\u7387\u4e0e\u7f51\u683c\u4e0d\u5339\u914d\uff1a\u03c3={sigma}, cells={cells}, nodes={nodes}",  # 电导率与网格不匹配：σ={sigma}, cells={cells}, nodes={nodes}
     "hw.equipotential.height_label": "\u9ad8\u5ea6\u7f29\u653e",                              # 高度缩放
     "hw.equipotential.reset_button": "\u590d\u4f4d\u89c6\u89d2",                              # 复位视角
 
@@ -512,7 +513,6 @@ TRANSLATIONS: dict[str, str] = {
     "db.filters.name_label": "\u540d\u79f0\uff1a",                                                    # 名称：
     "db.filters.name_placeholder": "tank, test_for_gui \u2026",
     "db.filters.freq_label": "\u9891\u7387 (Hz)\uff1a",                                               # 频率 (Hz)：
-    "db.filters.freq_placeholder": "\u4f8b\u5982 1000",                                                # 例如 1000  (已弃用，保留以兼容旧代码)
     "db.filters.freq_min_placeholder": "\u6700\u5c0f",                                                  # 最小
     "db.filters.freq_max_placeholder": "\u6700\u5927",                                                  # 最大
     "db.filters.date_any": "\u5168\u90e8",                                                            # 全部
