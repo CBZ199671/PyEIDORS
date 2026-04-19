@@ -18,6 +18,8 @@ from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.models.forward_model_config import (
     INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING,
+    INTERACTIVE_3D_DEFAULT_HEIGHT,
+    INTERACTIVE_3D_DEFAULT_RADIUS,
     INTERACTIVE_3D_DEFAULT_RINGS,
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
@@ -78,6 +80,32 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_mesh_family = QLabel("")
         mesh_form.addRow(self._lbl_mesh_family, self._mesh_family_combo)
         self._refresh_mesh_family_enabled()
+
+        # Domain geometry — 2D circle radius and 3D cylinder height.
+        # Both are stored in metres; the suffix on each spin makes the
+        # unit explicit and keeps the mesh, electrode positions, and
+        # the inhomogeneity coordinates all in the same coordinate
+        # system.  The height row is greyed out for 2D meshes since
+        # there is no Z extent there.
+        self._radius_spin = QDoubleSpinBox()
+        self._radius_spin.setRange(0.01, 10.0)
+        self._radius_spin.setDecimals(4)
+        self._radius_spin.setSingleStep(0.01)
+        self._radius_spin.setValue(1.0)
+        self._radius_spin.setSuffix(" m")
+        self._radius_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._lbl_radius = QLabel("")
+        mesh_form.addRow(self._lbl_radius, self._radius_spin)
+
+        self._height_spin = QDoubleSpinBox()
+        self._height_spin.setRange(0.01, 10.0)
+        self._height_spin.setDecimals(4)
+        self._height_spin.setSingleStep(0.01)
+        self._height_spin.setValue(INTERACTIVE_3D_DEFAULT_HEIGHT)
+        self._height_spin.setSuffix(" m")
+        self._height_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._lbl_height = QLabel("")
+        mesh_form.addRow(self._lbl_height, self._height_spin)
 
         self._refine_spin = QDoubleSpinBox()
         self._refine_spin.setRange(0.01, 1.0)
@@ -199,6 +227,12 @@ class MeshSetupPanel(QGroupBox):
         self._point_count_label.setStyleSheet("padding: 4px 0;")
         outer.addWidget(self._point_count_label)
 
+        # Re-run the enabled-state pass now that every gated widget
+        # (height spin, electrode-layout combo, etc.) exists — the
+        # earlier call inside the loop above runs before those widgets
+        # are constructed.
+        self._refresh_mesh_family_enabled()
+
     # ------------------------------------------------------------------
     # Config interface
     # ------------------------------------------------------------------
@@ -206,14 +240,20 @@ class MeshSetupPanel(QGroupBox):
     def get_config(self) -> dict:
         stim_pattern = self._stim_pattern_edit.text().strip() or "{ad}"
         meas_pattern = self._meas_pattern_edit.text().strip() or stim_pattern
+        is_3d = self._dim_combo.currentIndex() == 1
         return {
-            "mesh_dimension": 2 if self._dim_combo.currentIndex() == 0 else 3,
+            "mesh_dimension": 2 if not is_3d else 3,
             "mesh_refinement": self._refine_spin.value(),
             "mesh_family": (
                 str(self._mesh_family_combo.currentData() or "hex")
-                if self._dim_combo.currentIndex() == 1
+                if is_3d
                 else "tetra"
             ),
+            "radius": float(self._radius_spin.value()),
+            # Height is meaningful only for the 3D cylinder; for 2D
+            # the field is greyed out and we report 0 so downstream
+            # consumers don't accidentally treat it as a real Z extent.
+            "height": float(self._height_spin.value()) if is_3d else 0.0,
             "n_electrodes": self._n_elec_spin.value(),
             "n_rings": self._n_rings_spin.value(),
             "electrode_layout": str(self._electrode_layout_combo.currentData() or "ring_major"),
@@ -233,6 +273,8 @@ class MeshSetupPanel(QGroupBox):
         widgets = (
             self._dim_combo,
             self._mesh_family_combo,
+            self._radius_spin,
+            self._height_spin,
             self._refine_spin,
             self._n_elec_spin,
             self._n_rings_spin,
@@ -254,6 +296,13 @@ class MeshSetupPanel(QGroupBox):
                 config.get("mesh_family", "hex" if mesh_dimension == 3 else "tetra")
             ).strip().lower()
             self._mesh_family_combo.setCurrentIndex(1 if mesh_family == "hex" else 0)
+            default_radius = (
+                INTERACTIVE_3D_DEFAULT_RADIUS if mesh_dimension == 3 else 1.0
+            )
+            self._radius_spin.setValue(float(config.get("radius", default_radius)))
+            self._height_spin.setValue(
+                float(config.get("height", INTERACTIVE_3D_DEFAULT_HEIGHT))
+            )
             self._refine_spin.setValue(float(config.get("mesh_refinement", 0.1)))
             self._n_elec_spin.setValue(int(config.get("n_electrodes", config.get("n_elec", 16))))
             default_rings = 2 if mesh_dimension == 3 else 1
@@ -320,6 +369,22 @@ class MeshSetupPanel(QGroupBox):
             finally:
                 for widget, blocked in zip(widgets, blockers):
                     widget.blockSignals(blocked)
+        # Auto-swap the radius default when the user toggles dimensions
+        # between the canonical 1.0 m unit-disc and the 3D tank radius.
+        # Custom radii (anything else) are preserved.
+        current_radius = float(self._radius_spin.value())
+        if is_3d and abs(current_radius - 1.0) < 1.0e-6:
+            self._radius_spin.blockSignals(True)
+            try:
+                self._radius_spin.setValue(INTERACTIVE_3D_DEFAULT_RADIUS)
+            finally:
+                self._radius_spin.blockSignals(False)
+        elif (not is_3d) and abs(current_radius - INTERACTIVE_3D_DEFAULT_RADIUS) < 1.0e-6:
+            self._radius_spin.blockSignals(True)
+            try:
+                self._radius_spin.setValue(1.0)
+            finally:
+                self._radius_spin.blockSignals(False)
         self._refresh_mesh_family_enabled()
         self._refresh_protocol_enabled()
         self._on_any_change()
@@ -342,6 +407,11 @@ class MeshSetupPanel(QGroupBox):
         enabled = self._dim_combo.currentIndex() == 1
         self._lbl_mesh_family.setEnabled(enabled)
         self._mesh_family_combo.setEnabled(enabled)
+        # Cylinder height is meaningless for a 2D circle — grey it out
+        # there to keep the form honest.
+        if hasattr(self, "_lbl_height"):
+            self._lbl_height.setEnabled(enabled)
+            self._height_spin.setEnabled(enabled)
         if not hasattr(self, "_lbl_electrode_layout"):
             return
         self._lbl_electrode_layout.setEnabled(enabled)
@@ -399,6 +469,10 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_mesh_family.setText(t("sim.mesh.family_label"))
         self._mesh_family_combo.setItemText(0, t("sim.mesh.family.tetra"))
         self._mesh_family_combo.setItemText(1, t("sim.mesh.family.hex"))
+        self._lbl_radius.setText(t("sim.mesh.radius_label"))
+        self._radius_spin.setToolTip(t("sim.mesh.radius_tooltip"))
+        self._lbl_height.setText(t("sim.mesh.height_label"))
+        self._height_spin.setToolTip(t("sim.mesh.height_tooltip"))
         self._lbl_size.setText(t("sim.mesh.size_label"))
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))

@@ -342,6 +342,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.family.hex": "\u516d\u9762\u4f53\uff088 \u8282\u70b9\uff0cGPU \u5feb\u901f\uff09",    # 六面体（8 节点，GPU 快速）
     "sim.mesh.size_label": "\u7f51\u683c\u5c3a\u5bf8\uff1a",                                      # 网格尺寸：
     "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
+    "sim.mesh.radius_label": "\u534a\u5f84\uff1a",                                                  # 半径：
+    "sim.mesh.radius_tooltip": "2D \u5706\u5f62\u57df / 3D \u5706\u67f1\u4f53\u7684\u534a\u5f84\uff0c\u5355\u4f4d\u4e3a\u7c73 (m)",  # 2D 圆形域 / 3D 圆柱体的半径，单位为米 (m)
+    "sim.mesh.height_label": "\u9ad8\u5ea6\uff1a",                                                  # 高度：
+    "sim.mesh.height_tooltip": "3D \u5706\u67f1\u4f53\u7684\u9ad8\u5ea6\uff08m\uff09\uff1b\u7535\u6781\u73af\u4f1a\u81ea\u52a8\u5747\u5300\u5206\u5e03\u5728\u8be5\u9ad8\u5ea6\u533a\u95f4\u5185 (15%-85%)\u3002",  # 3D 圆柱体的高度（m）；电极环会自动均匀分布在该高度区间内 (15%-85%)。
     "sim.mesh.electrodes_label": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",                          # 每环电极数：
     "sim.mesh.rings_label": "\u73af\u6570/\u5c42\u6570\uff1a",                                    # 环数/层数：
     "sim.mesh.electrode_layout_label": "3D 电极编号：",
@@ -377,16 +381,18 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.title_2d": "\u975e\u5747\u5300\u9762",                                           # 非均匀面
     "sim.inhom.title_3d": "\u975e\u5747\u5300\u4f53",                                           # 非均匀体
     "sim.inhom.col.shape": "\u5f62\u72b6",                                                        # 形状
-    "sim.inhom.col.x": "X",
-    "sim.inhom.col.y": "Y",
-    "sim.inhom.col.z": "Z",
+    # 坐标 / 尺寸列统一标注米 (m)；电导率列统一标注 S/m。所有
+    # 坐标在底层算法里使用同一坐标系，统一单位后避免出错。
+    "sim.inhom.col.x": "X (m)",
+    "sim.inhom.col.y": "Y (m)",
+    "sim.inhom.col.z": "Z (m)",
     # X / Y / Z 三轴的尺寸列。中文工程语境里：X 轴 = 长、Y 轴 = 宽、
     # Z 轴 = 高（2D 只用 长 + 宽，3D 三者全用），与"宽 / 高 / 深"
     # 的旧标签相比更符合阅读习惯。
-    "sim.inhom.col.sizex": "\u957f",                                                              # 长
-    "sim.inhom.col.sizey": "\u5bbd",                                                              # 宽
-    "sim.inhom.col.sizez": "\u9ad8",                                                              # 高
-    "sim.inhom.col.conductivity": "\u03c3",
+    "sim.inhom.col.sizex": "\u957f (m)",                                                          # 长 (m)
+    "sim.inhom.col.sizey": "\u5bbd (m)",                                                          # 宽 (m)
+    "sim.inhom.col.sizez": "\u9ad8 (m)",                                                          # 高 (m)
+    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
     "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",                                                  # + 矩形

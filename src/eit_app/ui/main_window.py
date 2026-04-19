@@ -226,13 +226,21 @@ def _with_interactive_3d_geometry_defaults(
     *,
     enabled: bool,
 ) -> ForwardModelConfig:
-    """Apply GUI-friendly 3D geometry only for the built-in interactive setup."""
+    """Apply GUI-friendly 3D geometry only for the built-in interactive setup.
+
+    The mesh-setup panel now exposes radius + height spinboxes so the
+    user controls those directly; this fallback only fires if the panel
+    didn't propagate any geometry (legacy code paths) and the
+    interactive defaults flag is on.
+    """
     if not enabled or int(config.mesh_dimension) != 3:
         return config
-    return config.with_overrides(
-        radius=INTERACTIVE_3D_DEFAULT_RADIUS,
-        height=INTERACTIVE_3D_DEFAULT_HEIGHT,
-    )
+    overrides: dict[str, float] = {}
+    if config.radius <= 0:
+        overrides["radius"] = INTERACTIVE_3D_DEFAULT_RADIUS
+    if config.height <= 0:
+        overrides["height"] = INTERACTIVE_3D_DEFAULT_HEIGHT
+    return config.with_overrides(**overrides) if overrides else config
 
 
 class EITWorkstation(QMainWindow):
@@ -2690,10 +2698,15 @@ class EITWorkstation(QMainWindow):
         # the forward solver and the inverse reconstruction share exactly
         # the same PatternConfig (otherwise we get the classic
         # "measurement vector has N columns but pattern expects M" error).
+        is_3d = int(mesh_cfg["mesh_dimension"]) == 3
+        radius = float(mesh_cfg.get("radius", 1.0))
+        height = float(mesh_cfg.get("height", 0.0)) if is_3d else 0.0
         config = self._sim_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             mesh_family=mesh_cfg.get("mesh_family", "tetra"),
+            radius=radius,
+            height=height if is_3d else self._sim_forward_model_config.height,
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
@@ -2708,7 +2721,7 @@ class EITWorkstation(QMainWindow):
             use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
-                if int(mesh_cfg["mesh_dimension"]) == 3
+                if is_3d
                 else self._sim_forward_model_config.electrode_level_fractions
             ),
         )
@@ -2746,10 +2759,15 @@ class EITWorkstation(QMainWindow):
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
+        is_3d = int(mesh_cfg["mesh_dimension"]) == 3
+        radius = float(mesh_cfg.get("radius", 1.0))
+        height = float(mesh_cfg.get("height", 0.0)) if is_3d else 0.0
         config = self._dataset_forward_model_config.with_overrides(
             mesh_dimension=mesh_cfg["mesh_dimension"],
             mesh_refinement=mesh_cfg["mesh_refinement"],
             mesh_family=mesh_cfg.get("mesh_family", "tetra"),
+            radius=radius,
+            height=height if is_3d else self._dataset_forward_model_config.height,
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
@@ -2764,7 +2782,7 @@ class EITWorkstation(QMainWindow):
             use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
-                if int(mesh_cfg["mesh_dimension"]) == 3
+                if is_3d
                 else self._dataset_forward_model_config.electrode_level_fractions
             ),
         )

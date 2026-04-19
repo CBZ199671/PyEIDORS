@@ -173,11 +173,14 @@ class ControlPanel(QGroupBox):
         self._exclude_neighbors_spin.setValue(0)
         self._exclude_neighbors_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
 
+        # Hardware geometry uses metres throughout — surface the unit
+        # in every spinbox so the operator can't mix mm with m.
         self._radius_spin = QDoubleSpinBox()
         self._radius_spin.setRange(0.01, 1000.0)
         self._radius_spin.setDecimals(4)
         self._radius_spin.setSingleStep(0.1)
         self._radius_spin.setValue(1.0)
+        self._radius_spin.setSuffix(" m")
         self._radius_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
 
         self._electrode_length_spin = QDoubleSpinBox()
@@ -185,6 +188,7 @@ class ControlPanel(QGroupBox):
         self._electrode_length_spin.setDecimals(6)
         self._electrode_length_spin.setSingleStep(0.01)
         self._electrode_length_spin.setValue(0.19635)
+        self._electrode_length_spin.setSuffix(" m")
         self._electrode_length_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
 
         self._contact_impedance_spin = QDoubleSpinBox()
@@ -192,6 +196,7 @@ class ControlPanel(QGroupBox):
         self._contact_impedance_spin.setDecimals(6)
         self._contact_impedance_spin.setSingleStep(0.001)
         self._contact_impedance_spin.setValue(0.01)
+        self._contact_impedance_spin.setSuffix(" \u03a9\u00b7m\u00b2")  # Ω·m²
         self._contact_impedance_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
 
         self._layout_hint = QLabel()

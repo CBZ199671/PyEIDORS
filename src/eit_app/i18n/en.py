@@ -338,6 +338,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.family.hex": "Hex (8-node, fast GPU)",
     "sim.mesh.size_label": "Mesh size:",
     "sim.mesh.refinement_tooltip": "Smaller values produce finer meshes (more elements)",
+    "sim.mesh.radius_label": "Radius:",
+    "sim.mesh.radius_tooltip": "Radius of the 2D circular domain or 3D cylinder, in metres (m)",
+    "sim.mesh.height_label": "Height:",
+    "sim.mesh.height_tooltip": "Height of the 3D cylinder in metres; electrode rings are auto-distributed within this height (15%-85%).",
     "sim.mesh.electrodes_label": "Electrodes / ring:",
     "sim.mesh.rings_label": "Rings / layers:",
     "sim.mesh.electrode_layout_label": "3D numbering:",
@@ -373,17 +377,20 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.title_2d": "Inhomogeneity Areas",
     "sim.inhom.title_3d": "Inhomogeneity Volumes",
     "sim.inhom.col.shape": "Shape",
-    "sim.inhom.col.x": "X",
-    "sim.inhom.col.y": "Y",
-    "sim.inhom.col.z": "Z",
+    # Coordinates + sizes are in metres throughout; conductivity in
+    # S/m.  Embedding the unit in the column header keeps every cell
+    # entry self-explanatory.
+    "sim.inhom.col.x": "X (m)",
+    "sim.inhom.col.y": "Y (m)",
+    "sim.inhom.col.z": "Z (m)",
     # X / Y / Z axis sizes — labelled L / W / H so the column reads
     # "length / width / height" left-to-right (X = length, Y = width,
     # Z = height), matching the convention used in the Chinese
     # translation.
-    "sim.inhom.col.sizex": "L",
-    "sim.inhom.col.sizey": "W",
-    "sim.inhom.col.sizez": "H",
-    "sim.inhom.col.conductivity": "\u03c3",
+    "sim.inhom.col.sizex": "L (m)",
+    "sim.inhom.col.sizey": "W (m)",
+    "sim.inhom.col.sizez": "H (m)",
+    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
     "sim.inhom.add_circle": "+ Circle",
     "sim.inhom.add_ellipse": "+ Ellipse",
     "sim.inhom.add_rectangle": "+ Rectangle",
