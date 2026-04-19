@@ -3111,7 +3111,7 @@ class EITWorkstation(QMainWindow):
             dialog._version_label.setText(
                 version_template.format(
                     version=_app_version,
-                    build="design-system gui-polish-v3",
+                    build="design-system gui-polish-v4",
                 )
             )
         except (KeyError, IndexError):

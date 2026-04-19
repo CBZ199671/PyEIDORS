@@ -93,7 +93,7 @@ TRANSLATIONS: dict[str, str] = {
     "about.brand_headline": "EIT Workstation \u00b7 Electrical Impedance Tomography",
     "about.version_line": "Version {version} \u00b7 {build}",
     "about.body": "Cross-platform PySide6 desktop app covering the full EIT workflow \u2014 hardware acquisition, simulation, dataset generation, and reconstruction. Bilingual zh / en, with PyVista 3D visualisation and PETSc / dolfinx solvers by default.",
-    "about.credit": "Brand surface authored via claude.ai/design. Design tokens, colours, typography, and the in-source QSS stay in 1:1 sync.",
+    "about.credit": "Brand surface authored via claude.ai/design (handoff WKRMymYpVs58OGTs9jRQ0A). The mark is a flat FEniCSx-style two-colour monogram with an English wordmark for a global audience. Design tokens, colours, typography, and the in-source QSS stay in 1:1 sync.",
     "about.close": "Close",
 
     # ------------------------------------------------------------------
