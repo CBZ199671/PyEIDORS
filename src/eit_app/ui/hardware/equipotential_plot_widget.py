@@ -343,9 +343,32 @@ class EquipotentialPlotWidget(QWidget):
                 scalar_bar_args=scalar_bar_args,
                 smooth_shading=True,
             )
-            plotter.add_axes()
-            plotter.view_isometric()
-            plotter.reset_camera()
+
+            # Ground-plane outline at z = 0 — same XY footprint the
+            # ReconstructionWidget on the left uses.  Gives the
+            # operator a visual anchor between "where in the recon
+            # image am I looking" and "where on the warped surface".
+            outline = mesh.extract_feature_edges(
+                boundary_edges=True, feature_edges=True,
+                non_manifold_edges=False, manifold_edges=False,
+                feature_angle=15.0,
+            )
+            if outline.n_points > 0:
+                plotter.add_mesh(
+                    outline, color=palette.get("border", "#888"),
+                    line_width=1.4, opacity=0.55,
+                )
+
+            # Make the camera + axis labels match the 2D recon's
+            # convention: X right, Y up.  reconstruction_widget.py
+            # stores y-up (math convention) via a negated QRectF
+            # height — without an explicit camera the default
+            # view_isometric() rotates the scene unpredictably and
+            # peaks no longer line up with regions of the 2D image.
+            self._apply_recon_aligned_camera(plotter, coords, warped)
+            plotter.add_axes(
+                xlabel="X", ylabel="Y", zlabel="\u03c3", line_width=2,
+            )
 
             self._plotter = plotter
             self._scalar_bar_args = scalar_bar_args
@@ -355,6 +378,58 @@ class EquipotentialPlotWidget(QWidget):
             log.warning("PyVista 3D equipotential render failed: %s", exc)
             self._discard_plotter()
             return False
+
+    @staticmethod
+    def _apply_recon_aligned_camera(plotter, coords: np.ndarray, warped) -> None:
+        """Park the camera so the warped surface lines up with the 2D recon.
+
+        ``ReconstructionWidget`` paints the conductivity image with X
+        going right and Y going up (math convention).  PyVista's
+        default ``view_isometric()`` rotates the scene 30 / 30 around
+        the cube diagonal which does NOT preserve that orientation —
+        peaks of the warped surface end up at unpredictable screen
+        positions, so the user cannot mentally map a peak back to a
+        region in the recon image.
+
+        This helper points the camera from a +X / -Y / +Z position
+        toward the bounding-box centre with up = +Z.  Result:
+
+          * X axis still points right on screen
+          * Y axis goes back-and-up (positive Y is "deeper into"
+            the scene, matching the recon's "up" direction)
+          * Z (sigma height) points straight up
+        """
+        x = np.asarray(coords[:, 0], dtype=float)
+        y = np.asarray(coords[:, 1], dtype=float)
+        if x.size == 0 or y.size == 0:
+            return
+        cx = float((np.nanmin(x) + np.nanmax(x)) / 2.0)
+        cy = float((np.nanmin(y) + np.nanmax(y)) / 2.0)
+        diameter = float(
+            max(
+                np.nanmax(x) - np.nanmin(x),
+                np.nanmax(y) - np.nanmin(y),
+                1.0e-6,
+            )
+        )
+        # Pull Z range from the warped mesh so the focal point sits at
+        # the geometric centre of the visible scene, not the un-warped
+        # ground plane.
+        try:
+            zmin, zmax = float(warped.bounds[4]), float(warped.bounds[5])
+        except Exception:
+            zmin, zmax = 0.0, diameter * 0.3
+        cz = (zmin + zmax) / 2.0
+
+        camera = plotter.camera
+        camera.position = (
+            cx + 1.1 * diameter,
+            cy - 1.6 * diameter,
+            zmax + 0.9 * diameter,
+        )
+        camera.focal_point = (cx, cy, cz)
+        camera.up = (0.0, 0.0, 1.0)
+        plotter.reset_camera_clipping_range()
 
     def _compute_warp_factor(
         self, node_values: np.ndarray, coords: np.ndarray
@@ -485,6 +560,10 @@ class EquipotentialPlotWidget(QWidget):
         ax.set_xlabel("X")
         ax.set_ylabel("Y")
         ax.set_zlabel("σ")
+        # Match the PyVista path's recon-aligned camera: looking from
+        # +X / -Y / +Z so X reads right and Y reads back-and-up,
+        # matching the 2D ReconstructionWidget on the left.
+        ax.view_init(elev=25.0, azim=-55.0)
         self._mpl_canvas.draw()
         return True
 
@@ -524,16 +603,64 @@ class EquipotentialPlotWidget(QWidget):
 
     def _reset_camera(self) -> None:
         if self._render_backend == "pyvista" and self._plotter is not None:
-            self._plotter.reset_camera()
-            try:
-                self._plotter.view_isometric()
-            except Exception:  # pragma: no cover
-                pass
+            # Re-park the camera at the same recon-aligned position
+            # we picked at first render — rather than view_isometric()
+            # which would rotate to PyVista's generic 30/30 view and
+            # break the X / Y correspondence with the 2D recon.
+            if self._last_payload is not None:
+                _, coords, _ = self._last_payload
+                # The warped mesh is hidden inside the actor; reuse its
+                # bounding box so the camera focal point stays centred.
+                actor = self._mesh_actor
+                warped_bounds = (
+                    actor.GetBounds() if actor is not None else None
+                )
+                self._apply_recon_aligned_camera_from_bounds(
+                    self._plotter, coords, warped_bounds
+                )
             self._refresh_offscreen_pixmap()
         elif self._render_backend == "mpl3d" and self._mpl_ax is not None:
-            self._mpl_ax.view_init(elev=30.0, azim=-60.0)
+            # Match the matplotlib 3D fallback to the same X-right /
+            # Y-back-up / Z-up convention as the PyVista path.
+            self._mpl_ax.view_init(elev=25.0, azim=-55.0)
             if self._mpl_canvas is not None:
                 self._mpl_canvas.draw_idle()
+
+    def _apply_recon_aligned_camera_from_bounds(
+        self, plotter, coords: np.ndarray, bounds
+    ) -> None:
+        """Reset-view variant: positions the camera from a flat (xmin,
+        xmax, ymin, ymax, zmin, zmax) tuple instead of needing the
+        warped PyVista mesh.  Used by _reset_camera so the button
+        works without re-running the full warp pipeline.
+        """
+        x = np.asarray(coords[:, 0], dtype=float)
+        y = np.asarray(coords[:, 1], dtype=float)
+        if x.size == 0 or y.size == 0:
+            return
+        cx = float((np.nanmin(x) + np.nanmax(x)) / 2.0)
+        cy = float((np.nanmin(y) + np.nanmax(y)) / 2.0)
+        diameter = float(
+            max(
+                np.nanmax(x) - np.nanmin(x),
+                np.nanmax(y) - np.nanmin(y),
+                1.0e-6,
+            )
+        )
+        if bounds is not None and len(bounds) >= 6:
+            zmin, zmax = float(bounds[4]), float(bounds[5])
+        else:
+            zmin, zmax = 0.0, diameter * 0.3
+        cz = (zmin + zmax) / 2.0
+        camera = plotter.camera
+        camera.position = (
+            cx + 1.1 * diameter,
+            cy - 1.6 * diameter,
+            zmax + 0.9 * diameter,
+        )
+        camera.focal_point = (cx, cy, cz)
+        camera.up = (0.0, 0.0, 1.0)
+        plotter.reset_camera_clipping_range()
 
     # ------------------------------------------------------------------
     # Caption / theme
