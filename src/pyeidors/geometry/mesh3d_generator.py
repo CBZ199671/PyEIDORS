@@ -7,7 +7,7 @@ import logging
 import tempfile
 import time
 from dataclasses import dataclass
-from math import atan2, cos, pi, sin
+from math import atan2, ceil, cos, pi, sin
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -1199,8 +1199,6 @@ def create_cylinder_3d_eit_mesh(
     """Create a 3D cylindrical EIT mesh with explicit cell-family selection."""
 
     refinement_i = int(refinement)
-    electrode_vertices = max(3, min(6, refinement_i + 2))
-    gap_vertices = 0 if refinement_i <= 2 else 1
     resolved_family = normalize_mesh_family(mesh_family, default=DEFAULT_MESH_FAMILY)
     resolved_geometry = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
     resolved_generator_revision = (
@@ -1231,6 +1229,22 @@ def create_cylinder_3d_eit_mesh(
         electrodes_per_ring = max(int(n_elec) // n_levels, 1)
     else:
         electrodes_per_ring = max(int(n_elec), 1)
+
+    # Boundary point density on the base disc must respect the global
+    # mesh_size; otherwise gmsh interpolates dense per-electrode chord
+    # points into the interior, exploding node count for high n_elec.
+    # Pick electrode_vertices so each chord segment ≈ mesh_size, capped
+    # at the legacy [2, 6] range. Chord error at min=2 with 16 elec is
+    # ~r·(1-cos(θ/2)) ≈ 0.86 mm at r=0.18 m — visually negligible.
+    mesh_size_target = max(float(radius) / max(refinement_i * 2.0, 1.0), 1e-9)
+    arc_per_electrode = (
+        2.0 * pi * float(radius) / max(electrodes_per_ring, 1)
+    ) * float(electrode_coverage)
+    arc_per_gap = (
+        2.0 * pi * float(radius) / max(electrodes_per_ring, 1)
+    ) * (1.0 - float(electrode_coverage))
+    electrode_vertices = max(2, min(6, ceil(arc_per_electrode / mesh_size_target) + 1))
+    gap_vertices = max(0, min(2, ceil(arc_per_gap / mesh_size_target) - 1))
 
     config = Cylinder3DMeshConfig(
         radius=radius,
