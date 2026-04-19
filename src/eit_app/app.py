@@ -39,36 +39,53 @@ def _running_under_wsl() -> bool:
 
 
 def _configure_qt_platform_for_embedded_vtk() -> None:
-    """Optionally use Qt's XCB backend on WSLg for embedded VTK.
+    """Pin Qt to XCB on WSLg by default; allow Wayland opt-in.
 
-    VTK's Python Qt interactor passes ``QWidget.winId()`` to
-    ``vtkXOpenGLRenderWindow.SetWindowInfo``.  On Qt/Wayland that id is
-    not an X11 ``Window`` handle, and VTK can abort the whole GUI with
-    ``BadWindow / X_ConfigureWindow``.  WSLg still exposes XWayland via
-    ``DISPLAY``, so XCB keeps the embedded PyVistaQt route stable.
+    Two reasons the default flipped from Wayland → XCB on WSLg:
 
-    Do not force this by default: XWayland is visibly blurry on many
-    HiDPI WSLg desktops.  The default crisp path keeps the main GUI on
-    Wayland and lets the 3D widget use PyVista/VTK offscreen rendering.
+    1. **Hard hang.**  ``QApplication(sys.argv)`` stalls indefinitely on
+       current WSLg builds when Qt picks the Wayland platform plugin —
+       confirmed locally with a 10-line PySide6 hello-world that prints
+       "imports done" then never reaches "qapp ok".  ``QT_QPA_PLATFORM=xcb``
+       resolves it cleanly, which makes the launcher actually open a
+       window instead of looking like a frozen GUI.
+
+    2. **Embedded VTK stability.**  VTK's Python Qt interactor passes
+       ``QWidget.winId()`` to ``vtkXOpenGLRenderWindow.SetWindowInfo``.
+       On Qt/Wayland that id is not an X11 ``Window`` handle, and VTK
+       can abort the whole GUI with ``BadWindow / X_ConfigureWindow``.
+       WSLg still exposes XWayland via ``DISPLAY``, so XCB keeps the
+       embedded PyVistaQt route stable.
+
+    Trade-off: XWayland is visibly slightly softer than native Wayland
+    on HiDPI WSLg — but a soft window is strictly better than no window.
+    Users on a WSLg release where Wayland actually works can opt back
+    in via ``EIT_APP_USE_QT_WAYLAND=1``.
+
+    Outside WSL, Linux defaults follow whatever PySide6 picks (no env
+    is set).  macOS / Windows are unaffected.
     """
-    if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
-        return
-    if not (
-        _env_flag("EIT_APP_FORCE_QT_XCB_FOR_VTK")
-        or _env_flag("EIT_APP_ENABLE_EMBEDDED_VTK")
-    ):
-        return
+    # Honour anything the user has already pinned — we only fill the
+    # blanks here, never override an explicit choice.
     if os.environ.get("QT_QPA_PLATFORM"):
         return
     if not _running_under_wsl():
         return
+    if _env_flag("EIT_APP_USE_QT_WAYLAND"):
+        # Explicit Wayland opt-in; trust the user.
+        return
     if not os.environ.get("DISPLAY"):
+        # No XWayland endpoint — let Qt fall back to whatever it can
+        # find rather than forcing an unreachable platform.
         return
 
     os.environ["QT_QPA_PLATFORM"] = "xcb"
+    # Disable MIT-SHM: WSLg's XWayland doesn't support shared-memory
+    # pixmaps and Qt's BadAccess complaints flood the journal otherwise.
     os.environ.setdefault("QT_X11_NO_MITSHM", "1")
     logging.getLogger(__name__).info(
-        "WSLg detected; using Qt XCB platform for embedded PyVista/VTK"
+        "WSLg detected; pinning Qt to XCB platform "
+        "(set EIT_APP_USE_QT_WAYLAND=1 to opt back into Wayland)"
     )
 
 
