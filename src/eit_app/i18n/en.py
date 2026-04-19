@@ -29,6 +29,8 @@ TRANSLATIONS: dict[str, str] = {
     # File menu
     # ------------------------------------------------------------------
     "menu.file": "&File",
+    "menu.file.open_recordings": "Open &Recordings Folder",
+    "menu.file.open_output": "Open &Output Folder",
     "menu.file.exit": "E&xit",
 
     # ------------------------------------------------------------------
@@ -37,9 +39,11 @@ TRANSLATIONS: dict[str, str] = {
     "menu.view": "&View",
     "menu.view.theme_light": "&Light Theme",
     "menu.view.theme_dark": "&Dark Theme",
-    "menu.view.precision": "Compute &Precision",
-    "menu.view.precision_float32": "Float32 (Fast, AD 7-bit headroom)",
-    "menu.view.precision_float64": "Float64 (High Precision)",
+    # Compute precision moved from View to Tools (changes computation,
+    # not what's drawn on screen).  New keys:
+    "menu.tools.precision": "Compute &Precision",
+    "menu.tools.precision_float32": "Float32 (Fast, AD 7-bit headroom)",
+    "menu.tools.precision_float64": "Float64 (High Precision)",
     "main.status.precision_changed": "Compute precision switched to {mode}; effective next acquisition / solve.",
     "menu.tools": "&Tools",
     "menu.tools.interop_hub": "EIDORS &Interop Hub\u2026",
@@ -371,9 +375,13 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.x": "X",
     "sim.inhom.col.y": "Y",
     "sim.inhom.col.z": "Z",
-    "sim.inhom.col.sizex": "W",
-    "sim.inhom.col.sizey": "H",
-    "sim.inhom.col.sizez": "D",
+    # X / Y / Z axis sizes — labelled L / W / H so the column reads
+    # "length / width / height" left-to-right (X = length, Y = width,
+    # Z = height), matching the convention used in the Chinese
+    # translation.
+    "sim.inhom.col.sizex": "L",
+    "sim.inhom.col.sizey": "W",
+    "sim.inhom.col.sizez": "H",
     "sim.inhom.col.conductivity": "\u03c3",
     "sim.inhom.add_circle": "+ Circle",
     "sim.inhom.add_ellipse": "+ Ellipse",

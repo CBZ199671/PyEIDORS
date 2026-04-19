@@ -425,7 +425,26 @@ class EITWorkstation(QMainWindow):
         menu_bar = self.menuBar()
 
         # File menu --------------------------------------------------------
+        # File-system shortcuts that match what users expect under a
+        # menu literally labelled 文件 / File: jumping to the
+        # recordings folder and the reconstruction-output folder
+        # directly in the OS file manager.  Without these the menu
+        # collapsed to a single Exit entry which felt mislabelled.
         self._menu_file = menu_bar.addMenu("")
+
+        self._action_open_recordings = self._menu_file.addAction("")
+        self._action_open_recordings.setShortcut(QKeySequence("Ctrl+Shift+R"))
+        self._action_open_recordings.triggered.connect(
+            self._open_recordings_folder
+        )
+
+        self._action_open_output = self._menu_file.addAction("")
+        self._action_open_output.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        self._action_open_output.triggered.connect(
+            self._open_default_output_folder
+        )
+
+        self._menu_file.addSeparator()
         self._action_exit = self._menu_file.addAction("")
         # Ctrl+Q is the established quit binding across Linux DEs and
         # Windows Qt apps.  Set it explicitly — StandardKey.Quit returns
@@ -456,12 +475,22 @@ class EITWorkstation(QMainWindow):
         )
         self._theme_action_group.addAction(self._action_theme_dark)
 
-        # Compute precision submenu — float32 trades a few decimals of
-        # precision for ~half the memory + faster vectorised math, and
-        # the ADC delivers ~7 effective bits, so float32 already covers
-        # the input range with headroom to spare.
-        self._menu_view.addSeparator()
-        self._menu_precision = self._menu_view.addMenu("")
+        # Tools menu -------------------------------------------------------
+        self._menu_tools = menu_bar.addMenu("")
+        self._action_interop_hub = self._menu_tools.addAction("")
+        # Ctrl+I — I as in Interop.  Not used elsewhere in the app.
+        self._action_interop_hub.setShortcut(QKeySequence("Ctrl+I"))
+        self._action_interop_hub.triggered.connect(self._open_interop_hub)
+        self._menu_tools.addSeparator()
+
+        # Compute precision submenu lives under Tools, not View — the
+        # float32 / float64 toggle changes computation behaviour, not
+        # what's drawn on screen, so categorising it as "view" was
+        # misleading.  float32 trades a few decimals of precision for
+        # ~half the memory + faster vectorised math, and the ADC
+        # delivers ~7 effective bits, so float32 already covers the
+        # input range with headroom.
+        self._menu_precision = self._menu_tools.addMenu("")
         self._precision_action_group = QActionGroup(self)
         self._precision_action_group.setExclusive(True)
 
@@ -479,12 +508,6 @@ class EITWorkstation(QMainWindow):
         )
         self._precision_action_group.addAction(self._action_precision_float64)
 
-        # Tools menu -------------------------------------------------------
-        self._menu_tools = menu_bar.addMenu("")
-        self._action_interop_hub = self._menu_tools.addAction("")
-        # Ctrl+I — I as in Interop.  Not used elsewhere in the app.
-        self._action_interop_hub.setShortcut(QKeySequence("Ctrl+I"))
-        self._action_interop_hub.triggered.connect(self._open_interop_hub)
         self._menu_tools.addSeparator()
 
         # Reconstruction workflow entries — each opens the corresponding
@@ -578,6 +601,56 @@ class EITWorkstation(QMainWindow):
         max_h = int(avail.height() * 0.9)
         return QSize(min(preferred_w, max_w), min(preferred_h, max_h))
 
+    def _open_recordings_folder(self) -> None:
+        """File menu → open the active session's recordings directory.
+
+        Falls back to the Acquisition panel's default recordings root
+        when no recording is in flight, and to the user's home dir as
+        a last resort, so the menu item is always actionable.
+        """
+        target = None
+        try:
+            session_dir = self._rec_ctrl.session_dir
+            if session_dir is not None:
+                target = str(session_dir)
+        except Exception:  # pragma: no cover — controller may be torn down
+            pass
+        if target is None:
+            try:
+                target = self._acq_panel.output_dir()
+            except Exception:  # pragma: no cover
+                target = None
+        if not target:
+            from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
+            target = str(AcquisitionPanel.default_output_dir())
+        Path(target).mkdir(parents=True, exist_ok=True)
+        self._on_open_session_folder(target)
+
+    def _open_default_output_folder(self) -> None:
+        """File menu → open the reconstruction-output root in the OS file
+        manager.  Picks the project's ``data/reconstructions`` if present,
+        otherwise the recordings root so the menu item never fails on a
+        fresh install.
+        """
+        candidates = [
+            Path.cwd() / "data" / "reconstructions",
+            Path.cwd() / "data" / "measurements",
+            Path.cwd() / "eit_recordings",
+            Path.home(),
+        ]
+        target: Path | None = None
+        for cand in candidates:
+            try:
+                if cand.exists() or cand.parent.exists():
+                    target = cand
+                    break
+            except Exception:  # pragma: no cover
+                continue
+        if target is None:
+            target = Path.home()
+        target.mkdir(parents=True, exist_ok=True)
+        self._on_open_session_folder(str(target))
+
     def _on_theme_mode_selected(self, mode: str) -> None:
         """Handle View → Light/Dark action trigger."""
         app = QApplication.instance()
@@ -651,6 +724,8 @@ class EITWorkstation(QMainWindow):
         self._tab_widget.setTabText(3, t("tab.database"))
 
         self._menu_file.setTitle(t("menu.file"))
+        self._action_open_recordings.setText(t("menu.file.open_recordings"))
+        self._action_open_output.setText(t("menu.file.open_output"))
         self._action_exit.setText(t("menu.file.exit"))
 
         self._menu_view.setTitle(t("menu.view"))
@@ -658,14 +733,16 @@ class EITWorkstation(QMainWindow):
         self._action_theme_dark.setText(t("menu.view.theme_dark"))
         self._action_theme_light.setChecked(current_theme_mode() == "light")
         self._action_theme_dark.setChecked(current_theme_mode() == "dark")
-        self._menu_precision.setTitle(t("menu.view.precision"))
-        self._action_precision_float32.setText(t("menu.view.precision_float32"))
-        self._action_precision_float64.setText(t("menu.view.precision_float64"))
-        self._action_precision_float32.setChecked(current_precision() == "float32")
-        self._action_precision_float64.setChecked(current_precision() == "float64")
 
         self._menu_tools.setTitle(t("menu.tools"))
         self._action_interop_hub.setText(t("menu.tools.interop_hub"))
+        # Compute precision moved from View to Tools — use the new
+        # menu.tools.precision* keys (see i18n).
+        self._menu_precision.setTitle(t("menu.tools.precision"))
+        self._action_precision_float32.setText(t("menu.tools.precision_float32"))
+        self._action_precision_float64.setText(t("menu.tools.precision_float64"))
+        self._action_precision_float32.setChecked(current_precision() == "float32")
+        self._action_precision_float64.setChecked(current_precision() == "float64")
         self._action_difference.setText(t("menu.tools.difference"))
         self._action_batch_reconstruction.setText(t("menu.tools.batch_reconstruction"))
         self._action_reconstruction.setText(t("menu.tools.reconstruction"))

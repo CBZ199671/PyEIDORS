@@ -31,6 +31,8 @@ TRANSLATIONS: dict[str, str] = {
     # File menu
     # ------------------------------------------------------------------
     "menu.file": "\u6587\u4ef6(&F)",                                            # 文件(&F)
+    "menu.file.open_recordings": "\u6253\u5f00\u91c7\u96c6\u6587\u4ef6\u5939(&R)",  # 打开采集文件夹(&R)
+    "menu.file.open_output": "\u6253\u5f00\u91cd\u6784\u8f93\u51fa\u6587\u4ef6\u5939(&O)",  # 打开重构输出文件夹(&O)
     "menu.file.exit": "\u9000\u51fa(&X)",                                       # 退出(&X)
 
     # ------------------------------------------------------------------
@@ -39,9 +41,10 @@ TRANSLATIONS: dict[str, str] = {
     "menu.view": "\u89c6\u56fe(&V)",                                            # 视图(&V)
     "menu.view.theme_light": "\u6d45\u8272\u4e3b\u9898(&L)",                    # 浅色主题(&L)
     "menu.view.theme_dark": "\u6df1\u8272\u4e3b\u9898(&D)",                      # 深色主题(&D)
-    "menu.view.precision": "\u8ba1\u7b97\u7cbe\u5ea6(&P)",                       # 计算精度(&P)
-    "menu.view.precision_float32": "Float32 (\u5feb\u901f, AD 7-bit \u5145\u88d5)",  # Float32 (快速, AD 7-bit 充裕)
-    "menu.view.precision_float64": "Float64 (\u9ad8\u7cbe\u5ea6)",                # Float64 (高精度)
+    # 计算精度从"视图"挪到"工具"菜单 —— 它影响计算行为而非视觉，原归类不准确。
+    "menu.tools.precision": "\u8ba1\u7b97\u7cbe\u5ea6(&P)",                       # 计算精度(&P)
+    "menu.tools.precision_float32": "Float32 (\u5feb\u901f, AD 7-bit \u5145\u88d5)",  # Float32 (快速, AD 7-bit 充裕)
+    "menu.tools.precision_float64": "Float64 (\u9ad8\u7cbe\u5ea6)",                # Float64 (高精度)
     "main.status.precision_changed": "\u8ba1\u7b97\u7cbe\u5ea6\u5df2\u5207\u6362\u4e3a {mode}\uff0c\u4e0b\u4e00\u6b21\u91c7\u96c6 / \u6c42\u89e3\u751f\u6548\u3002",  # 计算精度已切换为 {mode}，下一次采集 / 求解生效。
     "menu.tools": "\u5de5\u5177(&T)",                                           # 工具(&T)
     "menu.tools.interop_hub": "EIDORS \u4e92\u64cd\u4f5c(&I)\u2026",             # EIDORS 互操作(&I)…
@@ -376,9 +379,12 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.x": "X",
     "sim.inhom.col.y": "Y",
     "sim.inhom.col.z": "Z",
-    "sim.inhom.col.sizex": "\u5bbd",                                                              # 宽
-    "sim.inhom.col.sizey": "\u9ad8",                                                              # 高
-    "sim.inhom.col.sizez": "\u6df1",                                                              # 深
+    # X / Y / Z 三轴的尺寸列。中文工程语境里：X 轴 = 长、Y 轴 = 宽、
+    # Z 轴 = 高（2D 只用 长 + 宽，3D 三者全用），与"宽 / 高 / 深"
+    # 的旧标签相比更符合阅读习惯。
+    "sim.inhom.col.sizex": "\u957f",                                                              # 长
+    "sim.inhom.col.sizey": "\u5bbd",                                                              # 宽
+    "sim.inhom.col.sizez": "\u9ad8",                                                              # 高
     "sim.inhom.col.conductivity": "\u03c3",
     "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
