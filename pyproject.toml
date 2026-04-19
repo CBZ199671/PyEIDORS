@@ -98,6 +98,7 @@ where = ["src"]
 
 [tool.setuptools.package-data]
 pyeidors = ["*.yaml", "*.yml", "data/*"]
+eit_app = ["assets/*.svg", "assets/*.png"]
 
 [tool.black]
 line-length = 88

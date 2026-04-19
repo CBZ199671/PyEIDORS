@@ -338,6 +338,7 @@ class EITWorkstation(QMainWindow):
         self._pending_auto_target_frame: FrameData | None = None
 
         self._build_ui()
+        self._apply_window_icon()
         self._acq_panel.set_output_dir(self._default_output_dir())
         self._connect_signals()
         self._sync_sim_inhomogeneity_context()
@@ -549,6 +550,14 @@ class EITWorkstation(QMainWindow):
         self._action_lang_en.triggered.connect(lambda: set_language("en"))
         self._lang_action_group.addAction(self._action_lang_en)
 
+        # Help menu — single About entry that opens the brand surface
+        # built from the claude.ai/design handoff.  Kept after Language
+        # so it sits at the right edge of the menu bar, matching the
+        # Qt convention.
+        self._menu_help = menu_bar.addMenu("")
+        self._action_about = self._menu_help.addAction("")
+        self._action_about.triggered.connect(self._open_about_dialog)
+
         # Tab-switching shortcuts — browser-style Ctrl+1..4 jump to the
         # Hardware / Simulation / Dataset / Database tabs respectively.
         # Registered as QShortcut on the main window so they fire even
@@ -654,6 +663,55 @@ class EITWorkstation(QMainWindow):
         target.mkdir(parents=True, exist_ok=True)
         self._on_open_session_folder(str(target))
 
+    def _apply_window_icon(self) -> None:
+        """Set the brand logo as the main-window + taskbar icon.
+
+        Resolves ``src/eit_app/assets/logo.svg`` (bundled via
+        ``[tool.setuptools.package-data]``) and rasterises it into a
+        QIcon at multiple sizes so window managers pick the crispest
+        bitmap for their context (16/24/32/48/64).  No-op if the asset
+        isn't found at runtime — the title text stays as the fallback
+        identifier.
+        """
+        try:
+            from importlib import resources
+
+            from PySide6.QtCore import QRectF, Qt
+            from PySide6.QtGui import QIcon, QPainter, QPixmap
+            from PySide6.QtSvg import QSvgRenderer
+        except Exception:  # pragma: no cover — Qt SVG missing
+            return
+
+        try:
+            files = resources.files("eit_app.assets")
+            svg_path = Path(str(files.joinpath("logo.svg")))
+        except Exception:  # pragma: no cover — resources lookup edge
+            svg_path = (
+                Path(__file__).resolve().parent.parent / "assets" / "logo.svg"
+            )
+        if not svg_path.exists():
+            return
+        renderer = QSvgRenderer(str(svg_path))
+        if not renderer.isValid():
+            return
+
+        # Render only the disc portion (left ~96 px of the 360×96
+        # viewBox) into the square icon canvas — the wordmark wouldn't
+        # be readable at 16 px.
+        renderer.setViewBox(QRectF(0.0, 0.0, 96.0, 96.0))
+
+        icon = QIcon()
+        for size in (16, 24, 32, 48, 64, 128):
+            pixmap = QPixmap(size, size)
+            pixmap.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(pixmap)
+            try:
+                renderer.render(painter)
+            finally:
+                painter.end()
+            icon.addPixmap(pixmap)
+        self.setWindowIcon(icon)
+
     def _on_theme_mode_selected(self, mode: str) -> None:
         """Handle View → Light/Dark action trigger."""
         app = QApplication.instance()
@@ -756,6 +814,9 @@ class EITWorkstation(QMainWindow):
         self._action_lang_en.setText(t("menu.language.en"))
         self._action_lang_zh.setChecked(current_language() == "zh")
         self._action_lang_en.setChecked(current_language() == "en")
+
+        self._menu_help.setTitle(t("menu.help"))
+        self._action_about.setText(t("menu.help.about"))
 
     def _connect_signals(self) -> None:
         self._conn_panel.connect_requested.connect(self._on_connect_requested)
@@ -3034,6 +3095,27 @@ class EITWorkstation(QMainWindow):
             apply_import_callback=self._apply_interop_import,
             smoke_validate_callback=self._run_interop_smoke_validation,
         )
+        dialog.exec()
+
+    def _open_about_dialog(self) -> None:
+        """Show the brand About dialog (logo + version + credit)."""
+        from eit_app.ui.dialogs.about_dialog import AboutDialog
+        from eit_app import __version__ as _app_version
+
+        dialog = AboutDialog(self)
+        # Reformat the version line with the running app version + the
+        # design system handoff revision so users can match what they
+        # see against the docs/design checked-in copy.
+        version_template = dialog._version_label.text()
+        try:
+            dialog._version_label.setText(
+                version_template.format(
+                    version=_app_version,
+                    build="design-system gui-polish-v3",
+                )
+            )
+        except (KeyError, IndexError):
+            dialog._version_label.setText(_app_version)
         dialog.exec()
 
     @Slot(str)

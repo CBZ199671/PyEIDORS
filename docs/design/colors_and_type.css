@@ -1,0 +1,195 @@
+/* =====================================================================
+   EIT Workstation Design System — colors, type, spacing, radii, tones
+   =====================================================================
+   Lifted from eit_app/ui/theme.py (base light stylesheet + _DARK_OVERLAY),
+   eit_app/ui/fonts.py (font families) and _TONE_PALETTE_* (state chips).
+   Toggle themes by setting [data-theme="dark"] on <html> or any ancestor.
+   ===================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600;700&display=swap');
+
+:root {
+  /* --- Canvas / surfaces (light) ------------------------------------ */
+  --canvas:          #eef3f8;
+  --panel:           #ffffff;   /* GroupBox / card body */
+  --panel-alt:       #f9fbfe;   /* workflow toolbox section */
+  --input-bg:        #ffffff;
+  --input-bg-focus:  #fbfdff;
+  --input-bg-dis:    #eef2f7;
+  --scroll-track:    #eef3f8;
+  --scroll-thumb:    #c4d0db;
+
+  /* --- Borders ------------------------------------------------------ */
+  --border:          #e0e6ee;
+  --border-strong:   #d0d9e3;
+  --border-hover:    #b1c2d3;
+  --border-dis:      #d3dbe4;
+
+  /* --- Text --------------------------------------------------------- */
+  --text:            #243447;
+  --text-muted:      #5b6573;
+  --text-subtle:     #4d5f75;
+  --text-dis:        #6c7a8a;
+  --text-section:    #1f3b5b;   /* section header */
+  --text-group:      #1f5d8b;   /* GroupBox title */
+  --text-on-accent:  #f8fbff;
+
+  /* --- Accent / primary -------------------------------------------- */
+  --accent:          #1f5d8b;
+  --accent-hover:    #2a6fa0;
+  --accent-press:    #18496d;
+  --accent-ring:     #9fc8e4;
+  --accent-soft:     #d9e8f7;   /* selection bg */
+  --accent-soft-2:   #e4eef9;   /* hover row */
+
+  /* --- Semantic ---------------------------------------------------- */
+  --success:         #1f7a52;
+  --success-hover:   #1b6c49;
+  --danger:          #8b2f2f;
+  --danger-hover:    #7d2929;
+
+  /* --- Tone palette (chips / banners) ------------------------------ */
+  --tone-idle-fg: #5b6573;  --tone-idle-bg: #f7f9fc;  --tone-idle-bd: #d8dee9;
+  --tone-warn-fg: #8a4b08;  --tone-warn-bg: #fff4dc;  --tone-warn-bd: #f1c27d;
+  --tone-ready-fg:#0f5f3d;  --tone-ready-bg:#e6f6ee;  --tone-ready-bd:#7bc69a;
+  --tone-active-fg:#0b4f80; --tone-active-bg:#e9f4ff; --tone-active-bd:#7fb2e5;
+  --tone-error-fg:#8c1d18;  --tone-error-bg:#fdecec;  --tone-error-bd:#f1a6a1;
+
+  /* --- Plot palette ------------------------------------------------ */
+  --plot-bg:         #f8fbfe;
+  --plot-panel:      #f4f7fb;
+  --plot-axes:       #fbfdff;
+  --plot-grid:       #d6e1ec;
+  --plot-border:     #c7d4e2;
+  --plot-text:       #243447;
+  --plot-domain:     #8ba0b8;
+  --plot-electrode:  #355c7d;
+  --plot-highlight:  #f39c12;
+
+  /* --- Type -------------------------------------------------------- */
+  --font-ui:     "Noto Sans SC", "Segoe UI", "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
+  --font-serif: "Noto Serif SC", "Times New Roman", Times, serif;   /* plots / engineering labels */
+  --font-mono:  ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --fs-xs:       11px;    /* table headers, tight hints */
+  --fs-sm:       12px;    /* group titles, compact chrome */
+  --fs-base:     13px;    /* body / default Qt chrome (10pt ≈ 13px) */
+  --fs-md:       14px;
+  --fs-lg:       16px;
+  --fs-xl:       20px;
+  --fs-display:  28px;
+
+  --fw-regular:  400;
+  --fw-medium:   500;
+  --fw-semi:     600;
+  --fw-bold:     700;
+
+  --tracking-tight:  0px;
+  --tracking-caps:   0.5px;  /* QHeaderView section */
+  --tracking-title:  0.3px;  /* QGroupBox title */
+  --tracking-banner: 1px;    /* apply_state_banner */
+
+  /* --- Spacing (derived from Qt paddings) --------------------------- */
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 10px;
+  --space-6: 12px;
+  --space-7: 14px;
+  --space-8: 16px;
+  --space-10: 20px;
+  --space-12: 24px;
+
+  /* --- Radii ------------------------------------------------------- */
+  --r-xs:  4px;   /* checkbox indicator */
+  --r-sm:  6px;   /* scrollbar, tree */
+  --r-md:  7px;   /* embedded step panel controls */
+  --r-lg:  8px;   /* inputs, buttons, tabs, chips-compact */
+  --r-xl:  10px;  /* group box, menu, banner, tone chip */
+  --r-2xl: 12px;  /* embedded step panel */
+
+  /* --- Focus ring -------------------------------------------------- */
+  --ring-width: 2px;
+  --ring-color: var(--accent);
+
+  color-scheme: light;
+}
+
+/* --- Dark theme (lifted from _DARK_OVERLAY) ------------------------- */
+[data-theme="dark"] {
+  --canvas:          #1a1f26;
+  --panel:           #222831;
+  --panel-alt:       #1a1f26;
+  --input-bg:        #2a313a;
+  --input-bg-focus:  #313a46;
+  --input-bg-dis:    #23292f;
+  --scroll-track:    #1a1f26;
+  --scroll-thumb:    #3e4754;
+
+  --border:          #3e4754;
+  --border-strong:   #3e4754;
+  --border-hover:    #5d6a7a;
+  --border-dis:      #2e3540;
+
+  --text:            #dbe1ea;
+  --text-muted:      #8b97a7;
+  --text-subtle:     #a7b2c2;
+  --text-dis:        #5e6876;
+  --text-section:    #9dc9ea;
+  --text-group:      #8fc8ea;
+  --text-on-accent:  #ecf4fb;
+
+  --accent:          #5ca8e0;
+  --accent-hover:    #226a9b;
+  --accent-press:    #154969;
+  --accent-ring:     #5ca8e0;
+  --accent-soft:     #1e4870;
+  --accent-soft-2:   #2d3543;
+
+  --success:         #1e7a52;
+  --success-hover:   #24916a;
+  --danger:          #7a3a3a;
+  --danger-hover:    #8e4545;
+
+  --tone-idle-fg: #c7d0db;  --tone-idle-bg: #2a313a;  --tone-idle-bd: #3e4754;
+  --tone-warn-fg: #f3c97a;  --tone-warn-bg: #3a2f16;  --tone-warn-bd: #7a5a22;
+  --tone-ready-fg:#7bcfa0;  --tone-ready-bg:#17321f;  --tone-ready-bd:#2a6a42;
+  --tone-active-fg:#7cbeee; --tone-active-bg:#17324c; --tone-active-bd:#2a5a84;
+  --tone-error-fg:#f09e95;  --tone-error-bg:#35201d;  --tone-error-bd:#7a3830;
+
+  --plot-bg:         #161b22;
+  --plot-panel:      #1a1f26;
+  --plot-axes:       #1e242c;
+  --plot-grid:       #2f3742;
+  --plot-border:     #3e4754;
+  --plot-text:       #dbe1ea;
+  --plot-domain:     #5d6a7a;
+  --plot-electrode:  #7cbeee;
+  --plot-highlight:  #ffa94d;
+
+  color-scheme: dark;
+}
+
+/* --- Semantic type roles ------------------------------------------- */
+html, body {
+  font-family: var(--font-ui);
+  font-size: var(--fs-base);
+  color: var(--text);
+  background: var(--canvas);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, .ds-h1 { font: var(--fw-bold) var(--fs-display)/1.2 var(--font-ui); letter-spacing: -0.2px; color: var(--text); margin:0; }
+h2, .ds-h2 { font: var(--fw-bold) var(--fs-xl)/1.25 var(--font-ui); color: var(--text); margin:0; }
+h3, .ds-h3 { font: var(--fw-bold) var(--fs-lg)/1.3 var(--font-ui); color: var(--text-section); margin:0; }
+.ds-section-header { font: var(--fw-bold) var(--fs-sm)/1.3 var(--font-ui); color: var(--text-group); letter-spacing: var(--tracking-title); text-transform: none; }
+.ds-group-title    { font: var(--fw-bold) var(--fs-sm)/1 var(--font-ui); color: var(--text-group); letter-spacing: var(--tracking-title); }
+.ds-table-header   { font: var(--fw-bold) var(--fs-xs)/1 var(--font-ui); color: var(--text-muted); letter-spacing: var(--tracking-caps); text-transform: uppercase; }
+.ds-banner-title   { font: var(--fw-bold) var(--fs-base)/1.2 var(--font-ui); letter-spacing: var(--tracking-banner); }
+p, .ds-body        { font: var(--fw-regular) var(--fs-base)/1.5 var(--font-ui); color: var(--text); }
+.ds-hint           { font: var(--fw-regular) var(--fs-sm)/1.45 var(--font-ui); color: var(--text-muted); }
+.ds-subtle         { color: var(--text-subtle); }
+.ds-serif          { font-family: var(--font-serif); }
+.ds-mono           { font-family: var(--font-mono); }

@@ -1,0 +1,132 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 360 96" role="img"
+     aria-label="EIT Workstation 电阻抗断层成像 工作站">
+  <!--
+    EIT Workstation brand mark.
+
+    Recreated from the design system at claude.ai/design (handoff
+    e5N9eRab3Wdr7hlMwc80QQ) and elevated per user feedback to a
+    "立体 / 3D" treatment with depth via radial + linear gradients,
+    soft shadows, and a layered electrode ring + accent inhomogeneity.
+
+    Geometry stays anchored on the engineering motif: a perfectly
+    circular boundary domain with 16 evenly spaced electrode markers
+    and a single off-centre amber inclusion — the same physical
+    picture that drives the forward solver.  The wordmark is
+    bilingual; CJK substitutes Noto Sans SC if the runtime cannot
+    find Microsoft YaHei.
+  -->
+  <defs>
+    <!-- Steel-blue text gradient, used for the "EIT" cap. -->
+    <linearGradient id="brandWord" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#2a6fa0"/>
+      <stop offset="1" stop-color="#143958"/>
+    </linearGradient>
+    <!-- Domain disc: soft radial highlight on the upper-left to give
+         the boundary a rounded, lit-from-above feel. -->
+    <radialGradient id="domainFill" cx="38%" cy="32%" r="68%">
+      <stop offset="0" stop-color="#f3f8fd"/>
+      <stop offset="0.55" stop-color="#cfdcec"/>
+      <stop offset="1" stop-color="#8ba0b8"/>
+    </radialGradient>
+    <!-- Inhomogeneity bead: amber sphere with a brighter highlight
+         and a darker rim for a glassy, three-dimensional pop. -->
+    <radialGradient id="bead" cx="32%" cy="30%" r="65%">
+      <stop offset="0" stop-color="#ffe4a3"/>
+      <stop offset="0.55" stop-color="#f39c12"/>
+      <stop offset="1" stop-color="#a4530a"/>
+    </radialGradient>
+    <!-- Electrode disc: tiny chrome bead, two-tone vertical so the
+         row reads as polished metal rather than flat dots. -->
+    <linearGradient id="electrode" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#5a7da3"/>
+      <stop offset="1" stop-color="#1f3b5b"/>
+    </linearGradient>
+    <!-- Domain shadow: subtle soft drop so the disc lifts away from
+         the surface even though the rest of the chrome is shadowless. -->
+    <radialGradient id="shadow" cx="50%" cy="50%" r="55%">
+      <stop offset="0" stop-color="#0b1320" stop-opacity="0.25"/>
+      <stop offset="1" stop-color="#0b1320" stop-opacity="0"/>
+    </radialGradient>
+    <!-- Equipotential ribbon: faint inner ring suggesting the
+         electric field that the inhomogeneity perturbs. -->
+    <linearGradient id="equi" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#5ca8e0" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#5ca8e0" stop-opacity="0.05"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Drop-shadow layer for the disc, sits flush behind the domain. -->
+  <ellipse cx="48" cy="74" rx="34" ry="6" fill="url(#shadow)"/>
+
+  <!-- Domain disc + ring of electrodes, centred at (48, 48). -->
+  <g transform="translate(48 48)">
+    <!-- Outer rim (lit) -->
+    <circle r="34" fill="url(#domainFill)" stroke="#5b6f88" stroke-width="1.2"/>
+    <!-- Equipotential contour suggestion -->
+    <circle r="22" fill="none" stroke="url(#equi)" stroke-width="1.2"
+            stroke-dasharray="3 3"/>
+    <circle r="14" fill="none" stroke="url(#equi)" stroke-width="0.9"
+            stroke-dasharray="2 4"/>
+    <!-- Inner accent ring -->
+    <circle r="29" fill="none" stroke="#1f5d8b" stroke-width="0.6"
+            stroke-opacity="0.55"/>
+
+    <!-- 16 electrodes evenly distributed, π/2 phase so the first
+         electrode sits at 12 o'clock. Each is a small chrome bead
+         with a faint inner highlight for depth. -->
+    <g>
+      <!-- Programmatic placement done by hand for static SVG: 16
+           positions at 22.5° steps, radius 30. -->
+      <circle cx="0"      cy="-30"   r="2.6" fill="url(#electrode)"/>
+      <circle cx="11.48"  cy="-27.72" r="2.6" fill="url(#electrode)"/>
+      <circle cx="21.21"  cy="-21.21" r="2.6" fill="url(#electrode)"/>
+      <circle cx="27.72"  cy="-11.48" r="2.6" fill="url(#electrode)"/>
+      <circle cx="30"     cy="0"     r="2.6" fill="url(#electrode)"/>
+      <circle cx="27.72"  cy="11.48"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="21.21"  cy="21.21"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="11.48"  cy="27.72"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="0"      cy="30"    r="2.6" fill="url(#electrode)"/>
+      <circle cx="-11.48" cy="27.72"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="-21.21" cy="21.21"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="-27.72" cy="11.48"  r="2.6" fill="url(#electrode)"/>
+      <circle cx="-30"    cy="0"     r="2.6" fill="url(#electrode)"/>
+      <circle cx="-27.72" cy="-11.48" r="2.6" fill="url(#electrode)"/>
+      <circle cx="-21.21" cy="-21.21" r="2.6" fill="url(#electrode)"/>
+      <circle cx="-11.48" cy="-27.72" r="2.6" fill="url(#electrode)"/>
+    </g>
+
+    <!-- Inhomogeneity bead — slightly off-centre so the eye reads
+         the asymmetry that EIT actually solves for. -->
+    <g transform="translate(-6 -5)">
+      <!-- Cast shadow on the disc behind the bead -->
+      <ellipse cx="2" cy="6" rx="8" ry="2.5"
+               fill="#0b1320" fill-opacity="0.18"/>
+      <circle r="8" fill="url(#bead)"/>
+      <!-- Specular highlight to sell the sphere -->
+      <ellipse cx="-2.5" cy="-3" rx="3" ry="1.6"
+               fill="#fff5d8" fill-opacity="0.85"/>
+    </g>
+
+    <!-- Subtle limb darkening: arc on the bottom-right edge -->
+    <path d="M 20 24 A 32 32 0 0 1 -20 24" fill="none"
+          stroke="#0b1320" stroke-opacity="0.18" stroke-width="2.4"/>
+  </g>
+
+  <!-- Wordmark -->
+  <g font-family="'Times New Roman', 'Noto Serif SC', serif">
+    <text x="100" y="42" font-size="30" font-weight="700"
+          fill="url(#brandWord)" letter-spacing="2">EIT</text>
+  </g>
+  <g font-family="'Segoe UI', 'Noto Sans SC', sans-serif">
+    <text x="155" y="40" font-size="20" font-weight="600"
+          fill="#243447" letter-spacing="0.4">Workstation</text>
+    <text x="100" y="64" font-size="13" font-weight="500"
+          fill="#5b6573" letter-spacing="2">
+      电阻抗断层成像 · 工作站
+    </text>
+    <text x="100" y="82" font-size="10.5" font-weight="500"
+          fill="#7d8a9a" letter-spacing="0.6">
+      Electrical Impedance Tomography Workstation
+    </text>
+  </g>
+</svg>
