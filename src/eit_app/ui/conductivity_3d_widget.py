@@ -62,6 +62,10 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.ui.electrode_overlay import (
+    ElectrodeGeometry,
+    default_patch_quads,
+)
 from eit_app.ui.fonts import plot_font_families
 from eit_app.ui.theme import (
     plot_palette,
@@ -283,6 +287,10 @@ class Conductivity3DWidget(QWidget):
         self._mesh_actor = None
         self._highlight_actor = None
         self._wire_actor = None
+        self._electrode_actor = None
+        self._offscreen_electrode_actor = None
+        self._mpl3d_electrode_collection = None
+        self._electrode_geometry: ElectrodeGeometry | None = None
 
         self._render_backend = "caption"
         self._last_vtk_disabled_reason: str | None = None
@@ -314,6 +322,21 @@ class Conductivity3DWidget(QWidget):
         self._pending_render: Optional[
             tuple[np.ndarray, np.ndarray, np.ndarray, str | None]
         ] = None
+
+        # Drag throttle: coalesce up to ~30 fps for the offscreen
+        # backend.  Without this, every mouseMove event triggers a full
+        # screenshot which limits perceived smoothness on bigger meshes.
+        self._offscreen_render_timer = QTimer(self)
+        self._offscreen_render_timer.setSingleShot(True)
+        self._offscreen_render_timer.setInterval(33)
+        self._offscreen_render_timer.timeout.connect(self._refresh_offscreen_pixmap)
+        # Track render quality during drag so the screenshot pipeline
+        # uses a smaller window while the user is actively rotating.
+        self._is_dragging_offscreen = False
+        self._drag_release_timer = QTimer(self)
+        self._drag_release_timer.setSingleShot(True)
+        self._drag_release_timer.setInterval(120)
+        self._drag_release_timer.timeout.connect(self._on_drag_idle)
 
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
@@ -432,6 +455,15 @@ class Conductivity3DWidget(QWidget):
         self._wire_check.setChecked(True)
         self._wire_check.toggled.connect(self._on_wire_toggled)
         bar.addWidget(self._wire_check)
+
+        # Electrode overlay toggle.  Disabled until a forward result
+        # provides actual electrode geometry — checking it without a
+        # cached patch list would render nothing and confuse the user.
+        self._electrode_check = QCheckBox("")
+        self._electrode_check.setChecked(False)
+        self._electrode_check.setEnabled(False)
+        self._electrode_check.toggled.connect(self._on_electrode_toggled)
+        bar.addWidget(self._electrode_check)
 
         self._reset_btn = QPushButton("")
         set_button_role(self._reset_btn, "tertiary")
@@ -600,6 +632,231 @@ class Conductivity3DWidget(QWidget):
         text = message or t("sim.results.viewer3d_loading")
         self._show_caption(text, kind="loading")
 
+    def set_electrode_geometry(self, geometry: ElectrodeGeometry | None) -> None:
+        """Cache electrode geometry and (re)build the cached actor if shown.
+
+        Building is gated on ``geometry.is_3d()`` because the 3D widget
+        is only meaningful for cylinder data — a 2D-only ElectrodeGeometry
+        passed in (e.g. when the underlying forward solve was 2D and the
+        3D widget happens to be alive but not visible) yields no patches
+        and leaves the toggle disabled.
+        """
+        self._electrode_geometry = geometry
+        has_patches = bool(geometry and geometry.is_3d() and geometry.patches)
+        self._electrode_check.setEnabled(has_patches)
+        if not has_patches:
+            self._electrode_check.setChecked(False)
+            self._remove_all_electrode_actors()
+            self._render_active_backend_if_visible()
+            return
+        # Build (or rebuild) the cached actor on whichever backend is
+        # currently active, then honour the user's checkbox state.
+        self._refresh_electrode_actors()
+        self._render_active_backend_if_visible()
+
+    def _remove_all_electrode_actors(self) -> None:
+        if self._plotter is not None and self._electrode_actor is not None:
+            try:
+                self._plotter.remove_actor(self._electrode_actor, render=False)
+            except Exception:  # pragma: no cover — VTK quirk
+                pass
+        self._electrode_actor = None
+        if self._offscreen_plotter is not None and self._offscreen_electrode_actor is not None:
+            try:
+                self._offscreen_plotter.remove_actor(
+                    self._offscreen_electrode_actor, render=False
+                )
+            except Exception:  # pragma: no cover — VTK quirk
+                pass
+        self._offscreen_electrode_actor = None
+        if self._mpl3d_electrode_collection is not None:
+            try:
+                self._mpl3d_electrode_collection.remove()
+            except (AttributeError, ValueError):
+                pass
+            self._mpl3d_electrode_collection = None
+
+    def _refresh_electrode_actors(self) -> None:
+        """Build cached electrode geometry on the currently active backend.
+
+        Other backends defer construction to the next time their scene
+        rebuilds via update_image() — there is no point materialising a
+        VTK actor on a backend the user is not looking at.
+        """
+        geometry = self._electrode_geometry
+        if geometry is None or not geometry.is_3d() or not geometry.patches:
+            return
+        if self._render_backend == "vtk":
+            self._build_vtk_electrode_actor(geometry)
+        elif self._render_backend == "pyvista_offscreen":
+            self._build_offscreen_electrode_actor(geometry)
+        elif self._render_backend == "mpl3d":
+            self._build_mpl3d_electrode_collection(geometry)
+
+    def _render_active_backend_if_visible(self) -> None:
+        if self._render_backend == "vtk" and self._plotter is not None:
+            self._plotter.render()
+        elif self._render_backend == "pyvista_offscreen":
+            self._refresh_offscreen_pixmap()
+        elif self._render_backend == "mpl3d":
+            self._mpl3d_canvas.draw_idle()
+
+    def _build_vtk_electrode_actor(self, geometry: ElectrodeGeometry) -> None:
+        if self._plotter is None:
+            return
+        try:
+            import pyvista  # noqa: F401  (side-effect: VTK init)
+        except Exception:  # pragma: no cover — env without VTK
+            return
+        if self._electrode_actor is not None:
+            try:
+                self._plotter.remove_actor(self._electrode_actor, render=False)
+            except Exception:  # pragma: no cover — VTK quirk
+                pass
+            self._electrode_actor = None
+        polydata = self._build_electrode_polydata(geometry)
+        if polydata is None:
+            return
+        palette = plot_palette()
+        color = palette.get("highlight", "#f39c12")
+        self._electrode_actor = self._plotter.add_mesh(
+            polydata,
+            color=color,
+            opacity=0.9,
+            show_edges=False,
+            show_scalar_bar=False,
+        )
+        self._electrode_actor.SetVisibility(bool(self._electrode_check.isChecked()))
+
+    def _build_offscreen_electrode_actor(self, geometry: ElectrodeGeometry) -> None:
+        if self._offscreen_plotter is None:
+            return
+        try:
+            import pyvista  # noqa: F401  (side-effect: VTK init)
+        except Exception:  # pragma: no cover — env without VTK
+            return
+        if self._offscreen_electrode_actor is not None:
+            try:
+                self._offscreen_plotter.remove_actor(
+                    self._offscreen_electrode_actor, render=False
+                )
+            except Exception:  # pragma: no cover — VTK quirk
+                pass
+            self._offscreen_electrode_actor = None
+        polydata = self._build_electrode_polydata(geometry)
+        if polydata is None:
+            return
+        palette = plot_palette()
+        color = palette.get("highlight", "#f39c12")
+        self._offscreen_electrode_actor = self._offscreen_plotter.add_mesh(
+            polydata,
+            color=color,
+            opacity=0.9,
+            show_edges=False,
+            show_scalar_bar=False,
+        )
+        self._offscreen_electrode_actor.SetVisibility(
+            bool(self._electrode_check.isChecked())
+        )
+
+    def _build_electrode_polydata(self, geometry: ElectrodeGeometry):
+        try:
+            import pyvista as pv
+        except Exception:  # pragma: no cover — env without VTK
+            return None
+        points, triangles = default_patch_quads(geometry.patches, geometry.radius)
+        if points.shape[0] == 0 or triangles.shape[0] == 0:
+            return None
+        # PyVista expects [3, i0, i1, i2, 3, i0, i1, i2, ...] face buffer.
+        face_buffer = np.empty((triangles.shape[0], 4), dtype=np.int64)
+        face_buffer[:, 0] = 3
+        face_buffer[:, 1:] = triangles
+        return pv.PolyData(points, face_buffer.flatten())
+
+    def _build_mpl3d_electrode_collection(self, geometry: ElectrodeGeometry) -> None:
+        if self._mpl3d_electrode_collection is not None:
+            try:
+                self._mpl3d_electrode_collection.remove()
+            except (AttributeError, ValueError):
+                pass
+            self._mpl3d_electrode_collection = None
+        if not geometry.is_3d() or not geometry.patches:
+            return
+        palette = plot_palette()
+        color = palette.get("highlight", "#f39c12")
+        polys: list[np.ndarray] = []
+        for patch in geometry.patches:
+            n_theta = 6
+            thetas = np.linspace(patch.theta_start, patch.theta_end, n_theta)
+            cos_t = np.cos(thetas)
+            sin_t = np.sin(thetas)
+            lower = np.column_stack(
+                (
+                    geometry.radius * cos_t,
+                    geometry.radius * sin_t,
+                    np.full_like(cos_t, patch.z_lower),
+                )
+            )
+            upper = np.column_stack(
+                (
+                    geometry.radius * cos_t,
+                    geometry.radius * sin_t,
+                    np.full_like(cos_t, patch.z_upper),
+                )
+            )
+            for i in range(n_theta - 1):
+                polys.append(
+                    np.array(
+                        [lower[i], lower[i + 1], upper[i + 1], upper[i]],
+                        dtype=float,
+                    )
+                )
+        if not polys:
+            return
+        collection = Poly3DCollection(
+            polys,
+            facecolors=color,
+            edgecolors=color,
+            linewidths=0.6,
+            alpha=0.9,
+        )
+        self._mpl3d_ax.add_collection3d(collection)
+        collection.set_visible(bool(self._electrode_check.isChecked()))
+        self._mpl3d_electrode_collection = collection
+
+    def _on_electrode_toggled(self, checked: bool) -> None:
+        # Cache hit on every toggle — actors already built by
+        # set_electrode_geometry / build_scene; just flip visibility.
+        if self._render_backend == "pyvista_offscreen":
+            if self._offscreen_electrode_actor is None and checked:
+                self._build_offscreen_electrode_actor(self._electrode_geometry)
+            if self._offscreen_electrode_actor is not None:
+                self._offscreen_electrode_actor.SetVisibility(bool(checked))
+            self._refresh_offscreen_pixmap()
+            return
+        if self._render_backend == "mpl3d":
+            if (
+                self._mpl3d_electrode_collection is None
+                and checked
+                and self._electrode_geometry is not None
+            ):
+                self._build_mpl3d_electrode_collection(self._electrode_geometry)
+            if self._mpl3d_electrode_collection is not None:
+                self._mpl3d_electrode_collection.set_visible(bool(checked))
+            self._mpl3d_canvas.draw_idle()
+            return
+        if self._render_backend == "vtk":
+            if (
+                self._electrode_actor is None
+                and checked
+                and self._electrode_geometry is not None
+            ):
+                self._build_vtk_electrode_actor(self._electrode_geometry)
+            if self._electrode_actor is not None:
+                self._electrode_actor.SetVisibility(bool(checked))
+            if self._plotter is not None:
+                self._plotter.render()
+
     # ------------------------------------------------------------------
     # Scene construction (heavy work — runs once per update_image only)
     # ------------------------------------------------------------------
@@ -607,7 +864,12 @@ class Conductivity3DWidget(QWidget):
     def _discard_actors(self) -> None:
         if self._plotter is None:
             return
-        for actor_attr in ("_mesh_actor", "_highlight_actor", "_wire_actor"):
+        for actor_attr in (
+            "_mesh_actor",
+            "_highlight_actor",
+            "_wire_actor",
+            "_electrode_actor",
+        ):
             actor = getattr(self, actor_attr, None)
             if actor is not None:
                 try:
@@ -626,11 +888,16 @@ class Conductivity3DWidget(QWidget):
         self._offscreen_mesh_actor = None
         self._offscreen_highlight_actor = None
         self._offscreen_wire_actor = None
+        self._offscreen_electrode_actor = None
 
     def _offscreen_render_size(self) -> tuple[int, int]:
         dpr = max(float(self.devicePixelRatioF()), 1.0)
-        width = max(320, int(round(max(self._offscreen_label.width(), 1) * dpr)))
-        height = max(240, int(round(max(self._offscreen_label.height(), 1) * dpr)))
+        # Drop render resolution by ~40% during drag so VTK + screenshot
+        # roundtrip stays under one frame at 30 fps even on bigger meshes.
+        # Idle frames render at full DPR.
+        scale = 0.6 if self._is_dragging_offscreen else 1.0
+        width = max(320, int(round(max(self._offscreen_label.width(), 1) * dpr * scale)))
+        height = max(240, int(round(max(self._offscreen_label.height(), 1) * dpr * scale)))
         return min(width, 2400), min(height, 1800)
 
     def _refresh_offscreen_pixmap(self) -> None:
@@ -785,6 +1052,11 @@ class Conductivity3DWidget(QWidget):
         self._stack.setCurrentWidget(self._offscreen_host)
         self._controls.show()
         self._render_backend = "pyvista_offscreen"
+        # Re-attach cached electrode patches if a forward result already
+        # supplied geometry — discard_offscreen_plotter above wiped the
+        # actor pointer.
+        if self._electrode_geometry is not None:
+            self._build_offscreen_electrode_actor(self._electrode_geometry)
         self._refresh_offscreen_pixmap()
         return True
 
@@ -975,6 +1247,11 @@ class Conductivity3DWidget(QWidget):
         self._stack.setCurrentWidget(self._mpl3d_host)
         self._controls.show()
         self._render_backend = "mpl3d"
+        # Re-attach cached electrode patches if available — ax.clear()
+        # earlier wiped the previous Poly3DCollection.
+        self._mpl3d_electrode_collection = None
+        if self._electrode_geometry is not None:
+            self._build_mpl3d_electrode_collection(self._electrode_geometry)
         self._mpl3d_canvas.draw_idle()
 
     def _build_scene(
@@ -1110,6 +1387,11 @@ class Conductivity3DWidget(QWidget):
                 bool(self._wire_check.isChecked())
             )
 
+        # Re-attach electrode patch actor if we already have geometry —
+        # _discard_actors() above wiped the cached pointer.
+        if self._electrode_geometry is not None:
+            self._build_vtk_electrode_actor(self._electrode_geometry)
+
         plotter.reset_camera()
         plotter.render()
 
@@ -1237,12 +1519,32 @@ class Conductivity3DWidget(QWidget):
         camera.Azimuth(-dx * 0.45)
         camera.Elevation(dy * 0.45)
         camera.OrthogonalizeViewUp()
-        self._refresh_offscreen_pixmap()
+        # Mark drag-active so the render path drops resolution; reset
+        # after the user pauses for ~120 ms so the final framebuffer
+        # snaps back to crisp.
+        self._is_dragging_offscreen = True
+        self._drag_release_timer.start()
+        self._schedule_offscreen_refresh()
 
     def _on_offscreen_zoomed(self, delta_y: float) -> None:
         if self._render_backend != "pyvista_offscreen" or self._offscreen_plotter is None:
             return
         self._offscreen_plotter.camera.Zoom(1.12 if delta_y > 0 else 0.89)
+        self._is_dragging_offscreen = True
+        self._drag_release_timer.start()
+        self._schedule_offscreen_refresh()
+
+    def _schedule_offscreen_refresh(self) -> None:
+        """Coalesce rapid drag events into ~30 fps refresh."""
+        if not self._offscreen_render_timer.isActive():
+            self._offscreen_render_timer.start()
+
+    def _on_drag_idle(self) -> None:
+        """User stopped dragging — render one final crisp frame."""
+        if self._render_backend != "pyvista_offscreen":
+            self._is_dragging_offscreen = False
+            return
+        self._is_dragging_offscreen = False
         self._refresh_offscreen_pixmap()
 
     # ------------------------------------------------------------------
@@ -1299,6 +1601,7 @@ class Conductivity3DWidget(QWidget):
         self._opacity_label.setText(t("sim.results.viewer3d_opacity"))
         self._highlight_check.setText(t("sim.results.viewer3d_highlight"))
         self._wire_check.setText(t("sim.results.viewer3d_wireframe"))
+        self._electrode_check.setText(t("sim.results.electrodes_toggle"))
         self._reset_btn.setText(t("sim.results.viewer3d_reset"))
         if self._last_image is None and not self._caption_label.text():
             self._show_caption(

@@ -774,10 +774,10 @@ def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
 def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
     """Inhomogeneity column headers must not collide.
 
-    The previous Stretch-everything strategy gave each of the columns
-    ~46px in the 280px right-context pane, which clipped headers like
-    "X 尺寸" / "Size Y" / "σ (S/m)".  The editor now has 2D and 3D
-    layouts: 2D hides Z/depth and 3D reveals them for volume inclusions.
+    Headers carry single-character labels (X / Y / Z / 长 / 宽 / 高 / σ);
+    units now live in a hint line above the table so each numeric column
+    can shrink to ~44 px without clipping.  The editor still has 2D and 3D
+    layouts: 2D hides Z / depth, 3D reveals them.
     """
     from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
 
@@ -792,7 +792,7 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
         # Shape column wider than the numeric columns; X/Y/W/H share size.
         assert widths[0] >= 70, f"Shape column too narrow: {widths[0]}"
         for c in (1, 2, 4, 5):
-            assert widths[c] >= 50, f"Numeric column {c} too narrow: {widths[c]}"
+            assert widths[c] >= 40, f"Numeric column {c} too narrow: {widths[c]}"
         assert editor._table.isColumnHidden(3)
         assert editor._table.isColumnHidden(6)
 

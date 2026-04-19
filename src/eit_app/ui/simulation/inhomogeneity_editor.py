@@ -7,6 +7,7 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QHeaderView,
+    QLabel,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -15,7 +16,7 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t, translator
 from eit_app.models.simulation_state import InhomogeneitySpec
-from eit_app.ui.theme import set_button_role
+from eit_app.ui.theme import set_button_role, set_hint_text
 
 
 _COLUMN_KEYS = (
@@ -166,6 +167,17 @@ class InhomogeneityEditor(QGroupBox):
         self._model.rowsInserted.connect(lambda *_: self.inhomogeneities_changed.emit())
         self._model.rowsRemoved.connect(lambda *_: self.inhomogeneities_changed.emit())
 
+        # Caption above the table — single line that consolidates the
+        # unit info that previously lived in every column header.  This
+        # frees ~20 px per column so headers no longer clip in the
+        # narrow context pane.
+        self._units_hint = QLabel("")
+        set_hint_text(self._units_hint)
+        self._units_hint.setStyleSheet(
+            (self._units_hint.styleSheet() or "") + " padding: 0 0 4px 0;"
+        )
+        layout.addWidget(self._units_hint)
+
         self._table = QTableView()
         self._table.setModel(self._model)
         self._table.setAlternatingRowColors(True)
@@ -173,13 +185,11 @@ class InhomogeneityEditor(QGroupBox):
         self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
         self._table.verticalHeader().setDefaultSectionSize(28)
         # Column-width strategy:
-        # - 6 columns sit inside the ~280px right context pane, so a
-        #   uniform Stretch mode (the previous behaviour) gave every
-        #   column ~46px and clipped headers like "X 尺寸" / "Size Y".
-        # - Use Interactive sizing with explicit per-column defaults
-        #   that fit the (now single-character) localized header
-        #   labels comfortably.  Last column stretches to absorb any
-        #   leftover width without distorting the others.
+        # - The 8 columns sit inside the ~280px right context pane.
+        #   Header labels are single-char (X / Y / Z / 长 / 宽 / 高 / σ)
+        #   with the unit hint moved to a caption line above; that lets
+        #   each numeric column shrink to ~44 px without clipping.
+        # - Last column (σ) stretches to absorb leftover width.
         # - Horizontal scroll falls back when the user squeezes the
         #   panel below the natural sum.
         header = self._table.horizontalHeader()
@@ -187,13 +197,13 @@ class InhomogeneityEditor(QGroupBox):
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
         # (col_index, pixel_width)
         for col, width in (
-            (0, 78),  # Shape — short word + small dropdown indicator
-            (1, 52),  # X
-            (2, 52),  # Y
-            (3, 52),  # Z (3D only)
-            (4, 52),  # W (size X)
-            (5, 52),  # H (size Y)
-            (6, 52),  # D (3D only)
+            (0, 72),  # Shape — short word + small dropdown indicator
+            (1, 44),  # X
+            (2, 44),  # Y
+            (3, 44),  # Z (3D only)
+            (4, 44),  # 长 / L (size X)
+            (5, 44),  # 宽 / W (size Y)
+            (6, 44),  # 高 / H (3D only)
             # Last column (σ) is left to stretch via setStretchLastSection.
         ):
             header.resizeSection(col, width)
@@ -225,6 +235,7 @@ class InhomogeneityEditor(QGroupBox):
         """Refresh all user-visible strings to the active language."""
         title_key = "sim.inhom.title_3d" if self._mesh_dimension == 3 else "sim.inhom.title_2d"
         self.setTitle(t(title_key))
+        self._units_hint.setText(t("sim.inhom.units_hint"))
         button_keys = (
             _SHAPE_BUTTON_KEYS_3D if self._mesh_dimension == 3 else _SHAPE_BUTTON_KEYS_2D
         )

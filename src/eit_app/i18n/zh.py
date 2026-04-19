@@ -82,6 +82,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",                            # 突出内含物
     "sim.results.viewer3d_wireframe": "\u8f6e\u5ed3\u7ebf",                                        # 轮廓线
     "sim.results.viewer3d_reset": "\u590d\u4f4d\u89c6\u89d2",                                      # 复位视角
+    # 仿真显示：电极轮廓显示开关。2D 渲染线段，3D 渲染圆柱面贴片。
+    "sim.results.electrodes_toggle": "\u663e\u793a\u7535\u6781",                                    # 显示电极
 
     # ------------------------------------------------------------------
     # Language menu
@@ -381,18 +383,20 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.title_2d": "\u975e\u5747\u5300\u9762",                                           # 非均匀面
     "sim.inhom.title_3d": "\u975e\u5747\u5300\u4f53",                                           # 非均匀体
     "sim.inhom.col.shape": "\u5f62\u72b6",                                                        # 形状
-    # 坐标 / 尺寸列统一标注米 (m)；电导率列统一标注 S/m。所有
-    # 坐标在底层算法里使用同一坐标系，统一单位后避免出错。
-    "sim.inhom.col.x": "X (m)",
-    "sim.inhom.col.y": "Y (m)",
-    "sim.inhom.col.z": "Z (m)",
+    # Single-character header labels keep the table readable inside the
+    # ~280 px context pane.  The "(m)" / "(S/m)" units moved to a
+    # dedicated hint line above the table — see sim.inhom.units_hint.
+    "sim.inhom.col.x": "X",
+    "sim.inhom.col.y": "Y",
+    "sim.inhom.col.z": "Z",
     # X / Y / Z 三轴的尺寸列。中文工程语境里：X 轴 = 长、Y 轴 = 宽、
     # Z 轴 = 高（2D 只用 长 + 宽，3D 三者全用），与"宽 / 高 / 深"
     # 的旧标签相比更符合阅读习惯。
-    "sim.inhom.col.sizex": "\u957f (m)",                                                          # 长 (m)
-    "sim.inhom.col.sizey": "\u5bbd (m)",                                                          # 宽 (m)
-    "sim.inhom.col.sizez": "\u9ad8 (m)",                                                          # 高 (m)
-    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.col.sizex": "\u957f",                                                              # 长
+    "sim.inhom.col.sizey": "\u5bbd",                                                              # 宽
+    "sim.inhom.col.sizez": "\u9ad8",                                                              # 高
+    "sim.inhom.col.conductivity": "\u03c3",                                                       # σ
+    "sim.inhom.units_hint": "\u5750\u6807 / \u5c3a\u5bf8\u5355\u4f4d\uff1am\uff0c\u03c3 \u5355\u4f4d\uff1aS/m",  # 坐标 / 尺寸单位：m，σ 单位：S/m
     "sim.inhom.add_circle": "+ \u5706\u5f62",                                                     # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",                                                    # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",                                                  # + 矩形

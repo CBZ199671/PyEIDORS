@@ -15,6 +15,10 @@ from eit_app.ui.conductivity_3d_widget import (
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
 )
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
+from eit_app.ui.electrode_overlay import (
+    ElectrodeGeometry,
+    electrode_geometry_from_config,
+)
 
 if TYPE_CHECKING:
     from eit_app.controllers.forward_solver_controller import ForwardSolverResult
@@ -110,6 +114,16 @@ class _ConductivityViewSlot(QWidget):
         # child, but parent layouts only re-query them on an explicit
         # geometry invalidation.
         self.updateGeometry()
+
+    def set_electrode_geometry(self, geometry: ElectrodeGeometry | None) -> None:
+        """Update electrode overlays on whichever child widgets can use it.
+
+        The 2D widget consumes only the arc list; the 3D widget consumes
+        only the patch list.  Sending ``None`` clears any cached overlay
+        on both.
+        """
+        self._mpl.set_electrode_geometry(geometry)
+        self._three_d.set_electrode_geometry(geometry)
 
     def clear(self) -> None:
         self._mpl.clear()
@@ -220,13 +234,23 @@ class SimulationResultsWidget(QWidget):
         if result.error_msg:
             return
 
+        # Resolve electrode overlay geometry from the forward config so
+        # both the GT and (later) reconstruction widgets render the same
+        # electrode footprints.  Computed once and forwarded; the
+        # widgets cache & toggle without recomputing.
+        geometry = electrode_geometry_from_config(
+            getattr(result, "forward_model_config", None) or {}
+        )
+
         self._ground_truth_widget.update_image(
             result.ground_truth_conductivity,
             result.node_coords,
             result.cell_connectivity,
             title=t("sim.results.ground_truth_title"),
         )
+        self._ground_truth_widget.set_electrode_geometry(geometry)
         self._reconstruction_widget.clear()
+        self._reconstruction_widget.set_electrode_geometry(geometry)
         self._balance_top_splitter()
 
         self._voltage_plot.update_simulation_voltages(
@@ -247,6 +271,12 @@ class SimulationResultsWidget(QWidget):
             cell_connectivity,
             title=t("sim.results.reconstruction_title"),
         )
+        # Re-apply the cached electrode overlay — update_image clears it.
+        if self._last_forward_result is not None:
+            geometry = electrode_geometry_from_config(
+                getattr(self._last_forward_result, "forward_model_config", None) or {}
+            )
+            self._reconstruction_widget.set_electrode_geometry(geometry)
         self._balance_top_splitter()
 
         if self._last_forward_result is not None:

@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import numpy as np
 from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
+from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.tri import Triangulation
-from PySide6.QtWidgets import QVBoxLayout, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QVBoxLayout, QWidget
 
+from eit_app.i18n import t, translator
+from eit_app.ui.electrode_overlay import (
+    ElectrodeGeometry,
+    default_arc_segments,
+)
 from eit_app.ui.fonts import plot_font_families, serif_font_family
-from eit_app.ui.theme import plot_palette, subscribe_theme_mode
+from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
 
 
 def _triangle_area_xy(triangles: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
@@ -93,14 +100,36 @@ class ConductivityImageWidget(QWidget):
         self._last_image: tuple[np.ndarray, np.ndarray, np.ndarray, str | None] | None = None
         self._last_caption: tuple[str, str] | None = None  # (text, kind: 'placeholder'|'loading'|'error')
 
+        # Electrode overlay state.  Cached LineCollection lives on the
+        # axes; toggling visibility never rebuilds geometry.
+        self._electrode_geometry: ElectrodeGeometry | None = None
+        self._electrode_collection: LineCollection | None = None
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
 
         palette = plot_palette()
         self._figure = Figure(figsize=(5, 5), tight_layout=True)
         self._figure.patch.set_facecolor(palette["panel_bg"])
         self._canvas = FigureCanvasQTAgg(self._figure)
-        layout.addWidget(self._canvas)
+        layout.addWidget(self._canvas, 1)
+
+        # Bottom controls strip — only one toggle today, but kept in its
+        # own bar so future overlays (cell IDs, etc.) can sit alongside.
+        self._controls = QWidget()
+        controls_layout = QHBoxLayout(self._controls)
+        controls_layout.setContentsMargins(6, 0, 6, 2)
+        controls_layout.setSpacing(8)
+        self._electrode_check = QCheckBox("")
+        self._electrode_check.setChecked(False)
+        self._electrode_check.toggled.connect(self._on_electrode_toggled)
+        set_hint_text(self._electrode_check)
+        controls_layout.addWidget(self._electrode_check)
+        controls_layout.addStretch(1)
+        layout.addWidget(self._controls)
+        # Hidden until a forward result actually provides electrode geometry.
+        self._controls.hide()
 
         self._ax = self._figure.add_subplot(111)
         self._ax.set_facecolor(palette["axes_bg"])
@@ -111,6 +140,8 @@ class ConductivityImageWidget(QWidget):
 
         # Re-paint canvas / axes / caption colors on dark-mode toggles.
         subscribe_theme_mode(self._on_theme_mode_changed)
+        translator().language_changed.connect(self._retranslate)
+        self._retranslate()
 
     # ------------------------------------------------------------------
     # Theme integration
@@ -170,6 +201,12 @@ class ConductivityImageWidget(QWidget):
     ) -> None:
         """Render a conductivity distribution on the mesh."""
         self._remove_colorbar()
+        # ax.clear() drops every artist including the cached electrode
+        # collection.  Drop our reference here so _redraw_electrodes
+        # rebuilds from scratch with the surviving geometry — without
+        # this, a stale Python handle to a removed Artist raises on the
+        # next redraw.
+        self._electrode_collection = None
         self._ax.clear()
 
         if node_coords.ndim != 2 or node_coords.shape[1] < 2:
@@ -231,12 +268,40 @@ class ConductivityImageWidget(QWidget):
         self._last_image = (conductivity, node_coords, cell_connectivity, title)
         self._last_caption = None
 
+        # Re-attach electrode overlay if the user has it enabled.  The
+        # ax.clear() above wiped the previous LineCollection.
+        self._redraw_electrodes()
+
         self._canvas.draw()
+
+    def set_electrode_geometry(self, geometry: ElectrodeGeometry | None) -> None:
+        """Cache new electrode geometry and reveal / hide the toggle.
+
+        Geometry is rebuilt only here; toggling visibility of the cached
+        LineCollection is what runs on every checkbox click.
+        """
+        self._electrode_geometry = geometry
+        if geometry is None or not geometry.arcs:
+            self._controls.hide()
+            if self._electrode_collection is not None:
+                try:
+                    self._electrode_collection.remove()
+                except (AttributeError, ValueError):
+                    pass
+                self._electrode_collection = None
+                self._canvas.draw_idle()
+            return
+        self._controls.show()
+        self._redraw_electrodes()
+        self._canvas.draw_idle()
 
     def clear(self) -> None:
         """Reset to placeholder state."""
         palette = plot_palette()
         self._remove_colorbar()
+        # Wipe stale electrode handle before clearing axes — see notes
+        # in update_image() for why this matters.
+        self._electrode_collection = None
         self._ax.clear()
         self._ax.set_facecolor(palette["axes_bg"])
         self._ax.set_title(
@@ -293,6 +358,52 @@ class ConductivityImageWidget(QWidget):
             # Best effort only: a failed cleanup should never prevent the new
             # reconstruction image from being displayed.
             pass
+
+    def _redraw_electrodes(self) -> None:
+        """Attach the cached electrode arcs to the current axes if visible.
+
+        Idempotent: removes any prior collection first so repeated calls
+        (after ax.clear, theme switch, language change) don't stack
+        artists.
+        """
+        if self._electrode_collection is not None:
+            try:
+                self._electrode_collection.remove()
+            except (AttributeError, ValueError):
+                pass
+            self._electrode_collection = None
+        geometry = self._electrode_geometry
+        if (
+            geometry is None
+            or not geometry.arcs
+            or not self._electrode_check.isChecked()
+        ):
+            return
+        segments = default_arc_segments(geometry.arcs, geometry.radius)
+        if not segments:
+            return
+        palette = plot_palette()
+        # Use the highlight palette colour so the arcs read clearly
+        # against either the viridis bulk or an empty placeholder.
+        color = palette.get("highlight", "#f39c12")
+        collection = LineCollection(
+            segments,
+            colors=[color] * len(segments),
+            linewidths=3.0,
+            capstyle="round",
+            zorder=5,
+        )
+        self._ax.add_collection(collection)
+        self._electrode_collection = collection
+
+    def _on_electrode_toggled(self, _checked: bool) -> None:
+        # Cheap path: rebuild only if visibility flipped to on; remove
+        # without rebuild if flipped to off.
+        self._redraw_electrodes()
+        self._canvas.draw_idle()
+
+    def _retranslate(self) -> None:
+        self._electrode_check.setText(t("sim.results.electrodes_toggle"))
 
     def _show_placeholder(self) -> None:
         # Reuse the unified caption painter so placeholder/loading/error

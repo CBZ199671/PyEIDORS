@@ -81,6 +81,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_highlight": "Highlight inclusions",
     "sim.results.viewer3d_wireframe": "Outline edges",
     "sim.results.viewer3d_reset": "Reset view",
+    "sim.results.electrodes_toggle": "Show electrodes",
 
     # ------------------------------------------------------------------
     # Language menu
@@ -377,20 +378,21 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.title_2d": "Inhomogeneity Areas",
     "sim.inhom.title_3d": "Inhomogeneity Volumes",
     "sim.inhom.col.shape": "Shape",
-    # Coordinates + sizes are in metres throughout; conductivity in
-    # S/m.  Embedding the unit in the column header keeps every cell
-    # entry self-explanatory.
-    "sim.inhom.col.x": "X (m)",
-    "sim.inhom.col.y": "Y (m)",
-    "sim.inhom.col.z": "Z (m)",
+    # Single-character header labels keep the table readable in the
+    # narrow context pane; units moved to a dedicated hint line above
+    # the table — see sim.inhom.units_hint.
+    "sim.inhom.col.x": "X",
+    "sim.inhom.col.y": "Y",
+    "sim.inhom.col.z": "Z",
     # X / Y / Z axis sizes — labelled L / W / H so the column reads
     # "length / width / height" left-to-right (X = length, Y = width,
     # Z = height), matching the convention used in the Chinese
     # translation.
-    "sim.inhom.col.sizex": "L (m)",
-    "sim.inhom.col.sizey": "W (m)",
-    "sim.inhom.col.sizez": "H (m)",
-    "sim.inhom.col.conductivity": "\u03c3 (S/m)",
+    "sim.inhom.col.sizex": "L",
+    "sim.inhom.col.sizey": "W",
+    "sim.inhom.col.sizez": "H",
+    "sim.inhom.col.conductivity": "\u03c3",
+    "sim.inhom.units_hint": "Coords / sizes in metres; \u03c3 in S/m.",
     "sim.inhom.add_circle": "+ Circle",
     "sim.inhom.add_ellipse": "+ Ellipse",
     "sim.inhom.add_rectangle": "+ Rectangle",
