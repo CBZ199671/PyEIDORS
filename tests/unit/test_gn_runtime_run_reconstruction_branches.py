@@ -382,6 +382,85 @@ def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
     assert backend["dense_jacobian_materialized"] is False
 
 
+def test_operator_mode_skips_startup_dense_cache(monkeypatch: pytest.MonkeyPatch):
+    """T9: operator Jacobian must never consult the dense startup cache lookup."""
+    recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)
+    _install_common_runtime_stubs(monkeypatch, recon)
+
+    class _FakeArrayHolder:
+        def __init__(self, values):
+            self.array = np.asarray(values, dtype=float)
+
+    class _FakeSigmaFunction:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+            self.x = _FakeArrayHolder(self.values)
+
+    monkeypatch.setattr(
+        gn_runtime,
+        "_init_sigma_function",
+        lambda _recon, initial: (_FakeSigmaFunction([1.0, 1.0]), float(initial)),
+    )
+
+    linearization = JacobianLinearization(
+        grad_u_all=(np.ones((2, 1), dtype=float),),
+        adjoint_gradients=(
+            np.array([[1.0], [0.0]], dtype=float),
+            np.array([[0.0], [1.0]], dtype=float),
+        ),
+        cell_areas=np.ones(2, dtype=float),
+        n_meas_per_stim=(2,),
+        sign=1.0,
+    )
+    linearization.sigma_fingerprint = ""
+
+    def linearize(_sigma, method=None):
+        assert method == "efficient"
+        return linearization
+
+    recon.jacobian_calculator = SimpleNamespace(
+        calculate=lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("dense calculate must not run")
+        ),
+        linearize=linearize,
+        block_tuning_info=lambda: {},
+        _last_cache_lookup={},
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "_startup_cache_lookup",
+        lambda *_a, **_kw: (_ for _ in ()).throw(
+            AssertionError("startup dense cache must not run under operator mode")
+        ),
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "_solve_linear_system_fast",
+        lambda reconstructor, **_kw: (
+            reconstructor.__dict__.__setitem__(
+                "_last_fast_linear_meta",
+                {
+                    "jacobian_representation": "jacobian_linearization",
+                    "dense_jacobian_materialized": False,
+                },
+            )
+            or (np.array([0.01, 0.0], dtype=float), 0.01, 0.02)
+        ),
+    )
+    monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_a, **_kw: 1.0)
+    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_a, **_kw: (False, False, 0))
+
+    results = gn_runtime.run_reconstruction(
+        recon,
+        measured_data=np.array([1.0, 0.8], dtype=float),
+        jacobian_method="linearized",
+    )
+
+    backend = results.diagnostics["backend_info"]
+    assert backend["jacobian_representation"] == "jacobian_linearization"
+    assert backend["dense_jacobian_materialized"] is False
+
+
 def test_linearize_path_asserts_sigma_fingerprint(monkeypatch: pytest.MonkeyPatch):
     """Operator path calls JacobianLinearization.assert_compatible(current sigma)."""
     recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)

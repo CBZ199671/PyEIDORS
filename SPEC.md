@@ -90,7 +90,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | T6 | . | Persistent across-iteration Jacobian cache keyed on `sigma_fingerprint` + mesh content hash | V9,V17 |
 | T7 | . | CUDA 3D inverse benchmark gated by `probe_petsc_cuda --require cuda` | V19 |
 | T8 | x | Guard canonical solver/PC matrix doc against preset-default drift (R11 hard gate) | V4,V5,V6 |
-| T9 | . | Explicit startup cache skip for operator Jacobian (avoid `np.asarray(JacobianLinearization, dtype=float)` path) | V15 |
+| T9 | x | Explicit startup cache skip for operator Jacobian (avoid `np.asarray(JacobianLinearization, dtype=float)` path) | V15 |
 | T10 | . | PETSc AmgX / Hypre CUDA path wiring + capability probe entries in benchmark artifact | V19 |
 | T11 | . | Research: PETSc/petsc4py structural reuse hints. `KSPSetOperators(ksp, Amat, Pmat)` has no `SAME_NONZERO_PATTERN` parameter in current API; `petsc4py.KSP.setOperators(A=None, P=None)` likewise. Current main line stays `setOperators(A_new)` + `KSPSetReusePreconditioner(True)` | V13 |
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |

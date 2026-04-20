@@ -2775,7 +2775,22 @@ def run_reconstruction(
                 measurement_jacobian_np = prev_jacobian
                 jacobian_reused = True
             elif iteration == 0 and startup_jacobian_np is not None:
-                measurement_jacobian_np = np.asarray(startup_jacobian_np, dtype=np.float64)
+                # Defence in depth: operator-mode sets startup_jacobian_np=None above,
+                # but if an external cache layer ever returns an operator here we
+                # would otherwise try np.asarray(JacobianLinearization, dtype=float)
+                # which silently yields a 0-d object array. Prefer a clean rebuild.
+                if _is_matrix_free_jacobian(startup_jacobian_np):
+                    jacobian_start = perf_counter()
+                    measurement_jacobian_np = _calculate_iteration_jacobian(
+                        reconstructor,
+                        sigma_current,
+                        jacobian_method=jacobian_method,
+                    )
+                    timing_totals["jacobian"] += perf_counter() - jacobian_start
+                else:
+                    measurement_jacobian_np = np.asarray(
+                        startup_jacobian_np, dtype=np.float64
+                    )
                 prev_jacobian = measurement_jacobian_np
                 prev_jacobian_iter = iteration
             else:
