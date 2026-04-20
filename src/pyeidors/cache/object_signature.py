@@ -213,6 +213,15 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
             "pc_hypre_type": str(getattr(config, "pc_hypre_type", None)),
             "pc_gamg_type": str(getattr(config, "pc_gamg_type", None)),
             "petsc_options": dict(getattr(config, "petsc_options", {}) or {}),
+            "forward_pc_refresh_policy": str(
+                getattr(config, "forward_pc_refresh_policy", "auto")
+            ),
+            "forward_pc_refresh_iter_threshold": int(
+                getattr(config, "forward_pc_refresh_iter_threshold", 0) or 0
+            ),
+            "forward_pc_refresh_lag": int(
+                getattr(config, "forward_pc_refresh_lag", 0) or 0
+            ),
         }
     )
     return stable_signature_hash(payload)
