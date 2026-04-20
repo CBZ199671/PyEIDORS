@@ -148,7 +148,9 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
     petsc_vec_type = petsc_backend.get("petsc_vec_type")
     petsc_dense_mat_type = petsc_backend.get("petsc_dense_mat_type")
     gpu_constraint_strategy = petsc_backend.get("gpu_constraint_strategy")
-    if petsc_device_effective == "cpu" and (petsc_mat_type is None or petsc_vec_type is None):
+    if petsc_device_effective == "cpu" and (
+        petsc_mat_type is None or petsc_vec_type is None
+    ):
         stable_types_fn = getattr(fwd_model, "_stable_cpu_petsc_types", None)
         stable_mat_type = None
         stable_vec_type = None
@@ -161,8 +163,12 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         petsc_vec_type = petsc_vec_type or stable_vec_type or "cpu-default"
     elif petsc_device_effective == "cuda":
         comm_size = _forward_model_comm_size(fwd_model)
-        petsc_mat_type = _canonicalize_cuda_mat_type(petsc_mat_type, comm_size=comm_size)
-        petsc_dense_mat_type = _canonicalize_cuda_mat_type(petsc_dense_mat_type, comm_size=comm_size)
+        petsc_mat_type = _canonicalize_cuda_mat_type(
+            petsc_mat_type, comm_size=comm_size
+        )
+        petsc_dense_mat_type = _canonicalize_cuda_mat_type(
+            petsc_dense_mat_type, comm_size=comm_size
+        )
         if gpu_constraint_strategy is None:
             gpu_constraint_strategy = "electrode-zero"
     payload = {
@@ -172,7 +178,9 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         "geometry_version": str(getattr(fwd_model, "geometry_version", "legacy")),
         "generator_revision": str(getattr(fwd_model, "generator_revision", "g3d0")),
         "structured_sidecar_version": str(
-            getattr(getattr(fwd_model, "eit_mesh", None), "structured_sidecar_version", None)
+            getattr(
+                getattr(fwd_model, "eit_mesh", None), "structured_sidecar_version", None
+            )
         ),
         "performance_mode": str(getattr(fwd_model, "performance_mode", "aggressive")),
         "ksp_type": str(config.ksp_type),
@@ -196,6 +204,17 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
         "structured_sidecar_loaded": petsc_backend.get("structured_sidecar_loaded"),
         "operator_backend": petsc_backend.get("operator_backend"),
     }
+    payload.update(
+        {
+            "solver_preset": str(getattr(config, "solver_preset", "legacy")),
+            "pc_factor_mat_solver_type": str(
+                getattr(config, "pc_factor_mat_solver_type", None)
+            ),
+            "pc_hypre_type": str(getattr(config, "pc_hypre_type", None)),
+            "pc_gamg_type": str(getattr(config, "pc_gamg_type", None)),
+            "petsc_options": dict(getattr(config, "petsc_options", {}) or {}),
+        }
+    )
     return stable_signature_hash(payload)
 
 
@@ -214,7 +233,9 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
             "geometry_version": getattr(mesh, "geometry_version", None),
             "generator_revision": getattr(mesh, "generator_revision", None),
             "structured_sidecar_file": getattr(mesh, "structured_sidecar_file", None),
-            "structured_sidecar_version": getattr(mesh, "structured_sidecar_version", None),
+            "structured_sidecar_version": getattr(
+                mesh, "structured_sidecar_version", None
+            ),
         }
         if mesh_file:
             try:
@@ -223,7 +244,9 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
                 mesh_payload["mesh_file"] = str(mesh_file)
         else:
             try:
-                mesh_payload["coordinates"] = np.asarray(mesh.coordinates(), dtype=np.float64)
+                mesh_payload["coordinates"] = np.asarray(
+                    mesh.coordinates(), dtype=np.float64
+                )
                 mesh_payload["cells"] = np.asarray(mesh.cells(), dtype=np.int32)
             except Exception:
                 pass

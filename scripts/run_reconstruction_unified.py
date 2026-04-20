@@ -148,7 +148,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--preconditioner",
-        choices=["auto", "diag", "pyamg", "cholmod", "petsc-gamg"],
+        choices=[
+            "auto",
+            "diag",
+            "noser",
+            "prior",
+            "pmat",
+            "coarse",
+            "custom",
+            "pyamg",
+            "cholmod",
+            "petsc-gamg",
+        ],
         default=DEFAULT_PRECONDITIONER,
         help="Preconditioner selection for fast iterative paths",
     )

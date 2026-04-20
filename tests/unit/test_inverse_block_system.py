@@ -1,0 +1,122 @@
+"""Tests for joint inverse block metadata contracts."""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from pyeidors.inverse.block_system import (
+    build_sigma_contact_block_metadata,
+    make_block_diagonal_inverse_action,
+    scale_contact_impedance_update,
+)
+
+
+def test_sigma_contact_metadata_shapes_and_fieldsplit_plan():
+    metadata = build_sigma_contact_block_metadata(
+        n_sigma=12,
+        n_contact=4,
+        n_measurements=20,
+        fieldsplit_type="schur",
+    )
+
+    assert metadata.total_size == 16
+    assert metadata.block("sigma").slice == slice(0, 12)
+    assert metadata.block("z_contact").slice == slice(12, 16)
+    assert metadata.block_slices() == {
+        "sigma": slice(0, 12),
+        "z_contact": slice(12, 16),
+    }
+
+    coupling_shapes = {coupling.name: coupling.shape for coupling in metadata.couplings}
+    assert coupling_shapes["H_sigma_z"] == (12, 4)
+    assert coupling_shapes["H_z_sigma"] == (4, 12)
+    assert coupling_shapes["J_sigma"] == (20, 12)
+    assert coupling_shapes["J_z_contact"] == (20, 4)
+
+    plan = metadata.fieldsplit_plan()
+    assert plan["pc_type"] == "fieldsplit"
+    assert plan["pc_fieldsplit_type"] == "schur"
+    assert plan["schur_approximation"] == "diag-z-and-prior-sigma"
+    assert plan["upgrade_path"] == ["block-diagonal", "multiplicative", "schur"]
+    assert plan["blocks"][0]["name"] == "sigma"
+    assert plan["blocks"][1]["name"] == "z_contact"
+
+
+def test_block_diagonal_inverse_action_is_shape_safe():
+    metadata = build_sigma_contact_block_metadata(
+        n_sigma=3,
+        n_contact=2,
+        n_measurements=7,
+    )
+    action = make_block_diagonal_inverse_action(
+        metadata,
+        sigma_inverse_action=lambda x: np.asarray(x, dtype=float) / 2.0,
+        contact_inverse_action=lambda x: np.asarray(x, dtype=float) / 10.0,
+    )
+
+    out = action(np.array([2.0, 4.0, 6.0, 10.0, 20.0], dtype=float))
+    np.testing.assert_allclose(out, np.array([1.0, 2.0, 3.0, 1.0, 2.0]))
+
+    with pytest.raises(ValueError, match="Expected vector length 5"):
+        action(np.ones(4, dtype=float))
+
+
+def test_block_diagonal_inverse_action_validates_subblock_outputs():
+    metadata = build_sigma_contact_block_metadata(n_sigma=3, n_contact=2)
+    bad_sigma = make_block_diagonal_inverse_action(
+        metadata,
+        sigma_inverse_action=lambda _x: np.ones(2, dtype=float),
+        contact_inverse_action=lambda x: np.asarray(x, dtype=float),
+    )
+    with pytest.raises(ValueError, match="sigma inverse action returned length"):
+        bad_sigma(np.ones(5, dtype=float))
+
+    bad_contact = make_block_diagonal_inverse_action(
+        metadata,
+        sigma_inverse_action=lambda x: np.asarray(x, dtype=float),
+        contact_inverse_action=lambda _x: np.ones(1, dtype=float),
+    )
+    with pytest.raises(ValueError, match="contact inverse action returned length"):
+        bad_contact(np.ones(5, dtype=float))
+
+
+def test_sigma_contact_metadata_rejects_invalid_sizes_and_modes():
+    with pytest.raises(ValueError, match="n_sigma must be positive"):
+        build_sigma_contact_block_metadata(n_sigma=0, n_contact=4)
+    with pytest.raises(ValueError, match="n_contact must be positive"):
+        build_sigma_contact_block_metadata(n_sigma=4, n_contact=0)
+    with pytest.raises(ValueError, match="n_measurements must be non-negative"):
+        build_sigma_contact_block_metadata(n_sigma=4, n_contact=2, n_measurements=-1)
+    with pytest.raises(ValueError, match="fieldsplit_type"):
+        build_sigma_contact_block_metadata(n_sigma=4, n_contact=2, fieldsplit_type="bad")
+    with pytest.raises(KeyError, match="Unknown parameter block"):
+        build_sigma_contact_block_metadata(n_sigma=4, n_contact=2).block("missing")
+
+
+def test_scale_contact_impedance_update_is_finite_positive_and_limited():
+    current = np.array([1e-3, 2e-3], dtype=float)
+    delta = np.array([2e-3, -10e-3], dtype=float)
+
+    updated, step = scale_contact_impedance_update(
+        current,
+        delta,
+        max_relative_step=0.5,
+        floor=1e-6,
+    )
+
+    assert 0.0 < step < 1.0
+    assert np.isfinite(updated).all()
+    assert np.all(updated >= 1e-6)
+    np.testing.assert_allclose(updated, current + step * delta)
+
+    unchanged, unchanged_step = scale_contact_impedance_update(current, np.zeros_like(current))
+    np.testing.assert_allclose(unchanged, current)
+    assert unchanged_step == 1.0
+
+    with pytest.raises(ValueError, match="shape mismatch"):
+        scale_contact_impedance_update(current, np.ones(3, dtype=float))
+    with pytest.raises(FloatingPointError, match="non-finite"):
+        scale_contact_impedance_update(current, np.array([np.nan, 0.0]))
+    with pytest.raises(ValueError, match="max_relative_step"):
+        scale_contact_impedance_update(current, delta, max_relative_step=0.0)

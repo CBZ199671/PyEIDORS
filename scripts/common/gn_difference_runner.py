@@ -442,7 +442,14 @@ def _solve_measurement_space(
             if info == 0:
                 return np.asarray(x, dtype=np.float64)
 
-    if solver == "auto" and preconditioner is not None and preconditioner_choice == "diag":
+    if solver == "auto" and preconditioner is not None and preconditioner_choice in {
+        "diag",
+        "noser",
+        "prior",
+        "pmat",
+        "coarse",
+        "custom",
+    }:
         mat = sparse.csr_matrix(A)
         pinv = np.asarray(preconditioner, dtype=np.float64)
         M = sparse.linalg.LinearOperator(
@@ -581,7 +588,18 @@ def build_shared_context(
     geometry_version = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
     if solver_mode not in {"strict", "fast"}:
         raise ValueError(f"solver_mode must be 'strict' or 'fast', got {solver_mode!r}")
-    if preconditioner not in {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"}:
+    if preconditioner not in {
+        "auto",
+        "diag",
+        "noser",
+        "prior",
+        "pmat",
+        "coarse",
+        "custom",
+        "pyamg",
+        "cholmod",
+        "petsc-gamg",
+    }:
         raise ValueError(f"preconditioner is invalid: {preconditioner!r}")
     if rom_mode not in {"off", "auto", "on"}:
         raise ValueError(f"rom_mode is invalid: {rom_mode!r}")

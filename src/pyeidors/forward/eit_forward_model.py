@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 from copy import deepcopy
 import hashlib
+import time
 import warnings
 
 import numpy as np
@@ -23,7 +24,10 @@ except ImportError:  # pragma: no cover
 from ..data.structures import EITData, EITImage, EITMesh, PatternConfig
 from ..electrodes.patterns import StimMeasPatternManager
 from ..femx import create_ds_measure
-from .cuda_structured_backend import CudaStructuredForwardBackend, resolve_cuda_structured_runtime
+from .cuda_structured_backend import (
+    CudaStructuredForwardBackend,
+    resolve_cuda_structured_runtime,
+)
 from .process_setup_cache import (
     ForwardStaticSetupBundle,
     build_process_forward_setup_key,
@@ -38,8 +42,9 @@ from ..physics.current_drive import resolve_electrode_lengths_m
 class LinearBackendConfig:
     """Linear solve configuration for forward model backends."""
 
-    ksp_type: str = "preonly"
-    pc_type: str = "lu"
+    solver_preset: str = "auto"
+    ksp_type: str = "auto"
+    pc_type: str = "auto"
     rtol: float = 1e-10
     atol: float = 1e-12
     max_it: int = 2000
@@ -48,14 +53,21 @@ class LinearBackendConfig:
     mat_solve_mode: str = "off"
     use_mat_solve: bool = False
     petsc_device: str = "auto"
+    pc_factor_mat_solver_type: str | None = None
+    pc_hypre_type: str | None = None
+    pc_gamg_type: str | None = None
+    petsc_options: dict[str, object] = field(default_factory=dict)
 
     @classmethod
     def from_dict(cls, payload: dict | None) -> "LinearBackendConfig":
         if not payload:
             return cls()
         return cls(
-            ksp_type=str(payload.get("ksp_type", "preonly")),
-            pc_type=str(payload.get("pc_type", "lu")),
+            solver_preset=str(
+                payload.get("solver_preset", payload.get("preset", "auto"))
+            ),
+            ksp_type=str(payload.get("ksp_type", "auto")),
+            pc_type=str(payload.get("pc_type", "auto")),
             rtol=float(payload.get("rtol", 1e-10)),
             atol=float(payload.get("atol", 1e-12)),
             max_it=int(payload.get("max_it", 2000)),
@@ -64,6 +76,22 @@ class LinearBackendConfig:
             mat_solve_mode=str(payload.get("mat_solve_mode", "off")),
             use_mat_solve=bool(payload.get("use_mat_solve", False)),
             petsc_device=str(payload.get("petsc_device", "auto")),
+            pc_factor_mat_solver_type=(
+                None
+                if payload.get("pc_factor_mat_solver_type") is None
+                else str(payload.get("pc_factor_mat_solver_type"))
+            ),
+            pc_hypre_type=(
+                None
+                if payload.get("pc_hypre_type") is None
+                else str(payload.get("pc_hypre_type"))
+            ),
+            pc_gamg_type=(
+                None
+                if payload.get("pc_gamg_type") is None
+                else str(payload.get("pc_gamg_type"))
+            ),
+            petsc_options=dict(payload.get("petsc_options") or {}),
         )
 
 
@@ -90,13 +118,11 @@ class EITForwardModel:
         self.mesh = mesh.mesh
         self.mesh_family = str(getattr(mesh, "mesh_family", None) or "tetra")
         self.geometry_version = str(getattr(mesh, "geometry_version", None) or "legacy")
-        self.generator_revision = str(getattr(mesh, "generator_revision", None) or "g3d0")
+        self.generator_revision = str(
+            getattr(mesh, "generator_revision", None) or "g3d0"
+        )
 
-        if self.mesh.comm.size != 1:
-            raise RuntimeError(
-                "PyEIDORS phase-2 migration currently supports MPI size=1 only. "
-                "Use single-rank execution in this stage."
-            )
+        self._mpi_backend_info = self._assert_supported_mpi_runtime()
         if self.z.size != self.n_elec:
             raise ValueError(
                 f"Contact impedance length ({self.z.size}) does not match electrode count ({self.n_elec})"
@@ -128,8 +154,13 @@ class EITForwardModel:
             z=self.z,
             pattern_config=deepcopy(pattern_config),
         )
-        self._static_setup_lookup = {"hit": False, "layer": "compute", "artifact": "forward_static_setup"}
+        self._static_setup_lookup = {
+            "hit": False,
+            "layer": "compute",
+            "artifact": "forward_static_setup",
+        }
         self._initialize_static_setup(pattern_config)
+        self.backend_config = self._resolve_linear_backend_config(self.backend_config)
         self._M_petsc = {}
         self._petsc_backend_info = self._resolve_petsc_backend_info()
         self._petsc_backend_info["forward_backend_requested"] = self.forward_backend
@@ -137,7 +168,9 @@ class EITForwardModel:
         self._petsc_backend_info["mesh_family"] = self.mesh_family
         self._petsc_backend_info["geometry_version"] = self.geometry_version
         self._petsc_backend_info["generator_revision"] = self.generator_revision
-        self._petsc_backend_info["static_setup_lookup"] = dict(self._static_setup_lookup)
+        self._petsc_backend_info["static_setup_lookup"] = dict(
+            self._static_setup_lookup
+        )
         self._cuda_structured_runtime = None
         self._cuda_structured_backend = None
         if self.forward_backend == "cuda_structured":
@@ -147,13 +180,19 @@ class EITForwardModel:
                 mesh_family=self.mesh_family,
                 geometry_version=self.geometry_version,
                 generator_revision=self.generator_revision,
-                petsc_device_requested=str(self._petsc_backend_info.get("petsc_device_requested", "auto")),
+                petsc_device_requested=str(
+                    self._petsc_backend_info.get("petsc_device_requested", "auto")
+                ),
                 scalar_type="real",
                 mesh_comm_size=int(self.mesh.comm.size),
             )
             self._set_backend_diagnostic(**self._cuda_structured_runtime)
-            self._cuda_structured_backend = CudaStructuredForwardBackend(self, self._cuda_structured_runtime)
-            self._set_backend_diagnostic(**self._cuda_structured_backend.backend_diagnostics())
+            self._cuda_structured_backend = CudaStructuredForwardBackend(
+                self, self._cuda_structured_runtime
+            )
+            self._set_backend_diagnostic(
+                **self._cuda_structured_backend.backend_diagnostics()
+            )
 
     def _initialize_static_setup(self, pattern_config: PatternConfig) -> None:
         bundle = get_process_forward_setup_bundle(self._static_setup_cache_key)
@@ -172,7 +211,9 @@ class EITForwardModel:
         self.electrode_boundary_measures = self._compute_electrode_boundary_measures()
         self.geometry_scale_to_m = float(pattern_config.geometry_scale_to_m)
         self.mesh_tdim = int(self.mesh.topology.dim)
-        self.boundary_scale_to_m = self.geometry_scale_to_m ** max(1, self.mesh_tdim - 1)
+        self.boundary_scale_to_m = self.geometry_scale_to_m ** max(
+            1, self.mesh_tdim - 1
+        )
         self.electrode_lengths_m = resolve_electrode_lengths_m(
             electrode_lengths_mesh=[
                 self.electrode_boundary_measures[tag] for tag in self.electrode_tags
@@ -221,7 +262,8 @@ class EITForwardModel:
         self.ds_electrodes = bundle.ds_electrodes
         self.electrode_tags = [int(tag) for tag in bundle.electrode_tags]
         self.electrode_boundary_measures = {
-            int(tag): float(value) for tag, value in bundle.electrode_boundary_measures.items()
+            int(tag): float(value)
+            for tag, value in bundle.electrode_boundary_measures.items()
         }
         self.geometry_scale_to_m = float(bundle.geometry_scale_to_m)
         self.mesh_tdim = int(bundle.mesh_tdim)
@@ -234,6 +276,149 @@ class EITForwardModel:
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
         self.M = bundle.electrode_matrix
+
+    @staticmethod
+    def _solver_token(value: object, default: str = "auto") -> str:
+        token = str(value if value is not None else default).strip().lower()
+        return token or default
+
+    def _resolve_linear_backend_config(
+        self, config: LinearBackendConfig
+    ) -> LinearBackendConfig:
+        """Resolve high-level PETSc presets into concrete KSP/PC settings.
+
+        The default stays direct for 2D/small validation, while 3D defaults to
+        PETSc's native AMG path. Users can still pin exact PETSc types through
+        ``ksp_type`` and ``pc_type``.
+        """
+        preset = self._solver_token(config.solver_preset)
+        ksp_type = self._solver_token(config.ksp_type)
+        pc_type = self._solver_token(config.pc_type)
+        explicit_solver = ksp_type != "auto" or pc_type != "auto"
+
+        if preset == "auto":
+            if explicit_solver:
+                preset = "custom"
+            elif int(getattr(self, "mesh_tdim", 2)) >= 3:
+                preset = "3d_gamg"
+            else:
+                preset = "direct"
+
+        presets: dict[str, dict[str, object]] = {
+            "custom": {},
+            "direct": {"ksp_type": "preonly", "pc_type": "lu"},
+            "legacy_direct": {"ksp_type": "preonly", "pc_type": "lu"},
+            "debug_direct": {"ksp_type": "preonly", "pc_type": "lu"},
+            "mumps": {
+                "ksp_type": "preonly",
+                "pc_type": "lu",
+                "pc_factor_mat_solver_type": "mumps",
+            },
+            "debug_mumps": {
+                "ksp_type": "preonly",
+                "pc_type": "lu",
+                "pc_factor_mat_solver_type": "mumps",
+            },
+            "3d_gamg": {
+                "ksp_type": "fgmres",
+                "pc_type": "gamg",
+                "pc_gamg_type": "agg",
+                "petsc_options": {
+                    "mg_levels_ksp_type": "chebyshev",
+                    "mg_levels_pc_type": "jacobi",
+                },
+            },
+            "3d_amg": {
+                "ksp_type": "fgmres",
+                "pc_type": "gamg",
+                "pc_gamg_type": "agg",
+                "petsc_options": {
+                    "mg_levels_ksp_type": "chebyshev",
+                    "mg_levels_pc_type": "jacobi",
+                },
+            },
+            "3d_hypre": {
+                "ksp_type": "fgmres",
+                "pc_type": "hypre",
+                "pc_hypre_type": "boomeramg",
+            },
+            "hypre_boomeramg": {
+                "ksp_type": "fgmres",
+                "pc_type": "hypre",
+                "pc_hypre_type": "boomeramg",
+            },
+            "spd_gamg": {
+                "ksp_type": "cg",
+                "pc_type": "gamg",
+                "pc_gamg_type": "agg",
+                "petsc_options": {
+                    "mg_levels_ksp_type": "chebyshev",
+                    "mg_levels_pc_type": "jacobi",
+                },
+            },
+            "spd_hypre": {
+                "ksp_type": "cg",
+                "pc_type": "hypre",
+                "pc_hypre_type": "boomeramg",
+            },
+        }
+        if preset not in presets:
+            raise ValueError(
+                f"Unsupported PETSc solver_preset={config.solver_preset!r}. "
+                f"Expected one of: {', '.join(sorted(presets))}."
+            )
+
+        template = presets[preset]
+        resolved_options = dict(template.get("petsc_options") or {})
+        resolved_options.update(dict(config.petsc_options or {}))
+        if pc_type != "auto":
+            default_ksp_for_pc = (
+                "preonly" if pc_type in {"lu", "cholesky", "qr"} else "fgmres"
+            )
+        else:
+            default_ksp_for_pc = "preonly"
+        resolved_ksp_type = (
+            ksp_type
+            if ksp_type != "auto"
+            else str(template.get("ksp_type", default_ksp_for_pc))
+        )
+        resolved_pc_type = (
+            pc_type if pc_type != "auto" else str(template.get("pc_type", "lu"))
+        )
+        return replace(
+            config,
+            solver_preset=preset,
+            ksp_type=resolved_ksp_type,
+            pc_type=resolved_pc_type,
+            pc_factor_mat_solver_type=(
+                config.pc_factor_mat_solver_type
+                if config.pc_factor_mat_solver_type is not None
+                else (
+                    None
+                    if template.get("pc_factor_mat_solver_type") is None
+                    else str(template.get("pc_factor_mat_solver_type"))
+                )
+            ),
+            pc_hypre_type=(
+                config.pc_hypre_type
+                if config.pc_hypre_type is not None
+                else (
+                    None
+                    if template.get("pc_hypre_type") is None
+                    else str(template.get("pc_hypre_type"))
+                )
+            ),
+            pc_gamg_type=(
+                config.pc_gamg_type
+                if config.pc_gamg_type is not None
+                else (
+                    None
+                    if template.get("pc_gamg_type") is None
+                    else str(template.get("pc_gamg_type"))
+                )
+            ),
+            petsc_options=resolved_options,
+        )
 
     def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
         """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
@@ -254,7 +439,9 @@ class EITForwardModel:
                 )
 
         if matrix.shape[1] != self.n_elec:
-            raise ValueError(f"Pattern width mismatch: expected {self.n_elec}, got {matrix.shape[1]}")
+            raise ValueError(
+                f"Pattern width mismatch: expected {self.n_elec}, got {matrix.shape[1]}"
+            )
         return matrix
 
     def _resolve_electrode_tags(self):
@@ -280,7 +467,9 @@ class EITForwardModel:
                         if idx_str.isdigit():
                             electrode_map[int(idx_str)] = tag_val
 
-        if len(electrode_map) < self.n_elec and isinstance(self.association_table, dict):
+        if len(electrode_map) < self.n_elec and isinstance(
+            self.association_table, dict
+        ):
             candidates = []
             for key, val in self.association_table.items():
                 try:
@@ -290,12 +479,16 @@ class EITForwardModel:
                 if isinstance(key, (int, np.integer)) and key >= 2:
                     candidates.append(tag_val)
             if candidates:
-                for idx, tag_val in enumerate(sorted(set(candidates))[: self.n_elec], start=1):
+                for idx, tag_val in enumerate(
+                    sorted(set(candidates))[: self.n_elec], start=1
+                ):
                     electrode_map.setdefault(idx, tag_val)
 
         missing = [i for i in range(1, self.n_elec + 1) if i not in electrode_map]
         if missing:
-            raise ValueError(f"Association table missing electrode tags {missing}, cannot assemble CEM")
+            raise ValueError(
+                f"Association table missing electrode tags {missing}, cannot assemble CEM"
+            )
         return [electrode_map[i] for i in range(1, self.n_elec + 1)]
 
     def _compute_electrode_boundary_measures(self):
@@ -344,6 +537,37 @@ class EITForwardModel:
             "`python scripts/diagnostics/probe_petsc_cuda.py --require cuda`, and retry."
         )
 
+    def _resolve_mpi_backend_info(self) -> dict[str, object]:
+        comm = getattr(getattr(self, "mesh", None), "comm", None)
+        try:
+            from ..perf.capabilities import probe_mpi_runtime
+        except Exception as exc:
+            return {
+                "mpi_available": False,
+                "mpi_source": "probe_import_failed",
+                "mpi_size": 1,
+                "mpi_rank": 0,
+                "mpi_parallel": False,
+                "mpi_parallel_supported": False,
+                "mpi_size_supported": True,
+                "mpi_fallback_reason": None,
+                "mpi_guidance": f"mpi_probe_import_failed: {exc}",
+            }
+        return probe_mpi_runtime(comm=comm, supports_parallel=False)
+
+    def _assert_supported_mpi_runtime(self) -> dict[str, object]:
+        info = self._resolve_mpi_backend_info()
+        if bool(info.get("mpi_size_supported", True)):
+            return info
+        raise RuntimeError(
+            "PyEIDORS phase-2 migration currently supports MPI size=1 only. "
+            f"Detected MPI size={int(info.get('mpi_size') or 1)}, "
+            f"rank={int(info.get('mpi_rank') or 0)}. "
+            f"mpi_fallback_reason={info.get('mpi_fallback_reason')}. "
+            "Use single-rank execution in this stage; MPI production requires "
+            "distributed Mat/Vec assembly and mpiexec smoke validation."
+        )
+
     def _stable_cpu_petsc_types(self) -> tuple[str | None, str | None]:
         if PETSc is None:
             return None, None
@@ -381,8 +605,13 @@ class EITForwardModel:
         return mat_type, vec_type
 
     def _resolve_petsc_backend_info(self) -> dict[str, object]:
-        requested = self._normalize_petsc_device(getattr(self.backend_config, "petsc_device", "auto"))
+        requested = self._normalize_petsc_device(
+            getattr(self.backend_config, "petsc_device", "auto")
+        )
         forward_backend = str(getattr(self, "forward_backend", "dolfinx"))
+        mpi_info = dict(
+            getattr(self, "_mpi_backend_info", None) or self._resolve_mpi_backend_info()
+        )
         info: dict[str, object] = {
             "petsc_device_requested": requested,
             "petsc_device_effective": "cpu",
@@ -390,10 +619,35 @@ class EITForwardModel:
             "petsc_vec_type": None,
             "petsc_dense_mat_type": None,
             "gpu_fallback_reason": None,
+            "gpu_transfer_risk": None,
             "forward_factor_backend": self.linear_backend,
             "forward_mat_solve_effective": None,
+            "solver_preset": getattr(self.backend_config, "solver_preset", "auto"),
+            "ksp_type": getattr(self.backend_config, "ksp_type", None),
+            "pc_type": getattr(self.backend_config, "pc_type", None),
+            "pc_factor_mat_solver_type": getattr(
+                self.backend_config,
+                "pc_factor_mat_solver_type",
+                None,
+            ),
+            "pc_hypre_type": getattr(self.backend_config, "pc_hypre_type", None),
+            "pc_gamg_type": getattr(self.backend_config, "pc_gamg_type", None),
+            "forward_reuse_preconditioner_requested": bool(
+                getattr(self.backend_config, "reuse_preconditioner", True)
+            ),
+            "forward_reuse_preconditioner_applied": None,
+            "forward_ksp_setup_count": None,
+            "forward_ksp_setup_attempts": None,
             "capability": {},
         }
+        info.update(mpi_info)
+
+        def _with_stable_cpu_types() -> dict[str, object]:
+            mat_type, vec_type = self._stable_cpu_petsc_types()
+            info["petsc_mat_type"] = info.get("petsc_mat_type") or mat_type
+            info["petsc_vec_type"] = info.get("petsc_vec_type") or vec_type
+            return info
+
         if self.linear_backend != "petsc":
             return info
         if PETSc is None:
@@ -414,18 +668,24 @@ class EITForwardModel:
                     "petsc_device='cuda' requires a successful PETSc CUDA capability probe. "
                     + self._actionable_cuda_guidance()
                 ) from exc
-            return info
+            return _with_stable_cpu_types()
 
         capability = probe_petsc_cuda_runtime()
         info["capability"] = capability
         cuda_available = bool(capability.get("petsc_cuda", False))
         if requested == "cpu":
-            return info
+            return _with_stable_cpu_types()
         if requested == "cuda" and not cuda_available:
             if forward_backend == "cuda_structured":
-                info["gpu_fallback_reason"] = "petsc_cuda_not_required_for_cuda_structured"
-                return info
-            reason = capability.get("errors", {}) if isinstance(capability.get("errors"), dict) else capability
+                info["gpu_fallback_reason"] = (
+                    "petsc_cuda_not_required_for_cuda_structured"
+                )
+                return _with_stable_cpu_types()
+            reason = (
+                capability.get("errors", {})
+                if isinstance(capability.get("errors"), dict)
+                else capability
+            )
             raise RuntimeError(
                 "petsc_device='cuda' requested, but the current PETSc/DOLFINx runtime "
                 f"does not provide usable CUDA Mat/Vec types: {reason}. "
@@ -436,10 +696,15 @@ class EITForwardModel:
             info["petsc_mat_type"] = capability.get("mat_type_name")
             info["petsc_vec_type"] = capability.get("vec_type_name")
             info["petsc_dense_mat_type"] = capability.get("dense_mat_type_name")
+            info["gpu_transfer_risk"] = (
+                "mixed_dolfinx_assembly_to_petsc_cuda"
+                if forward_backend != "cuda_structured"
+                else "cuda_structured_runtime_reports_transfer_boundary"
+            )
             return info
         if requested == "auto":
             info["gpu_fallback_reason"] = "petsc_cuda_not_available"
-        return info
+        return _with_stable_cpu_types()
 
     def _get_cuda_type(self, info_key: str, petsc_obj_name: str, type_attr: str):
         """Look up a PETSc CUDA type from backend info, falling back to PETSc constants."""
@@ -519,6 +784,64 @@ class EITForwardModel:
         return vec
 
     @staticmethod
+    def _petsc_option_value(value: object) -> str:
+        if isinstance(value, bool):
+            return "true" if value else "false"
+        return str(value)
+
+    def _configure_pc_from_backend_config(self, pc_obj, *, factor_backend=None) -> None:
+        factor_type = factor_backend or getattr(
+            self.backend_config,
+            "pc_factor_mat_solver_type",
+            None,
+        )
+        if factor_type is not None and hasattr(pc_obj, "setFactorSolverType"):
+            pc_obj.setFactorSolverType(str(factor_type))
+
+        hypre_type = getattr(self.backend_config, "pc_hypre_type", None)
+        if hypre_type is not None and hasattr(pc_obj, "setHYPREType"):
+            try:
+                pc_obj.setHYPREType(str(hypre_type))
+            except Exception:
+                pass
+
+        gamg_type = getattr(self.backend_config, "pc_gamg_type", None)
+        if gamg_type is not None and hasattr(pc_obj, "setGAMGType"):
+            try:
+                pc_obj.setGAMGType(str(gamg_type))
+            except Exception:
+                pass
+
+    def _apply_ksp_options_database(self, ksp_obj) -> None:
+        if PETSc is None or not hasattr(ksp_obj, "setFromOptions"):
+            return
+        options = dict(getattr(self.backend_config, "petsc_options", {}) or {})
+        hypre_type = getattr(self.backend_config, "pc_hypre_type", None)
+        gamg_type = getattr(self.backend_config, "pc_gamg_type", None)
+        factor_type = getattr(self.backend_config, "pc_factor_mat_solver_type", None)
+        if hypre_type is not None:
+            options.setdefault("pc_hypre_type", str(hypre_type))
+        if gamg_type is not None:
+            options.setdefault("pc_gamg_type", str(gamg_type))
+        if factor_type is not None:
+            options.setdefault("pc_factor_mat_solver_type", str(factor_type))
+        if not options:
+            return
+
+        prefix = f"pyeidors_forward_{id(ksp_obj):x}_"
+        try:
+            ksp_obj.setOptionsPrefix(prefix)
+        except Exception:
+            prefix = ""
+        opts = PETSc.Options()
+        for key, value in options.items():
+            option_key = str(key).strip().lstrip("-")
+            if not option_key:
+                continue
+            opts[prefix + option_key] = self._petsc_option_value(value)
+        ksp_obj.setFromOptions()
+
+    @staticmethod
     def _is_gpu_petsc_kind(kind) -> bool:
         if kind is None:
             return False
@@ -570,7 +893,10 @@ class EITForwardModel:
             return
 
     def _gpu_gauge_fix_enabled(self) -> bool:
-        return bool(getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective") == "cuda")
+        return bool(
+            getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective")
+            == "cuda"
+        )
 
     def _cuda_gauge_indices(self) -> tuple[int, int]:
         return self.dofs + self.n_elec, self.dofs
@@ -625,6 +951,10 @@ class EITForwardModel:
     def _make_petsc_dense_solver_bundle(self, system_matrix):
         if PETSc is None:
             raise RuntimeError("petsc4py is required for CUDA dense fallback")
+        reuse_requested = bool(
+            getattr(self.backend_config, "reuse_preconditioner", True)
+        )
+        reuse_applied = False
         dense_type = self._get_requested_dense_mat_type()
         if dense_type is None:
             raise RuntimeError("CUDA dense PETSc Mat type is unavailable")
@@ -640,6 +970,7 @@ class EITForwardModel:
         ksp.setType(self.backend_config.ksp_type)
         pc = ksp.getPC()
         pc.setType(self.backend_config.pc_type)
+        self._configure_pc_from_backend_config(pc)
         ksp.setTolerances(
             rtol=self.backend_config.rtol,
             atol=self.backend_config.atol,
@@ -647,26 +978,43 @@ class EITForwardModel:
         )
         if hasattr(ksp, "setReusePreconditioner"):
             try:
-                ksp.setReusePreconditioner(bool(self.backend_config.reuse_preconditioner))
+                ksp.setReusePreconditioner(reuse_requested)
+                reuse_applied = True
             except Exception:
                 pass
+        self._apply_ksp_options_database(ksp)
         ksp.setUp()
         return {
             "A": system_matrix,
             "solve_A": solve_mat,
             "ksp": ksp,
             "backend": f"petsc-ksp-{str(dense_type).lower()}-{self.backend_config.pc_type}",
-            "ksp_type": str(ksp.getType()) if hasattr(ksp, "getType") else self.backend_config.ksp_type,
-            "pc_type": str(pc.getType()) if hasattr(pc, "getType") else self.backend_config.pc_type,
+            "ksp_type": (
+                str(ksp.getType())
+                if hasattr(ksp, "getType")
+                else self.backend_config.ksp_type
+            ),
+            "pc_type": (
+                str(pc.getType())
+                if hasattr(pc, "getType")
+                else self.backend_config.pc_type
+            ),
             "factor_solver_type": None,
-            "solve_mat_type": str(solve_mat.getType()) if hasattr(solve_mat, "getType") else None,
+            "solve_mat_type": (
+                str(solve_mat.getType()) if hasattr(solve_mat, "getType") else None
+            ),
+            "ksp_setup_count": 1,
+            "reuse_preconditioner": reuse_requested,
+            "reuse_preconditioner_applied": reuse_applied,
         }
 
     def _assemble_electrode_matrix(self):
         b_form = 0
         for i, electrode_tag in enumerate(self.electrode_tags):
-            b_form += (self.boundary_scale_to_m / self.z[i]) * ufl.inner(self.u, self.phi) * self.ds_electrodes(
-                electrode_tag
+            b_form += (
+                (self.boundary_scale_to_m / self.z[i])
+                * ufl.inner(self.u, self.phi)
+                * self.ds_electrodes(electrode_tag)
             )
 
         B = fem_petsc.assemble_matrix(fem.form(b_form))
@@ -676,7 +1024,11 @@ class EITForwardModel:
         M_lil = lil_matrix(M)
 
         for i, electrode_tag in enumerate(self.electrode_tags):
-            c_form = (-self.boundary_scale_to_m / self.z[i]) * self.phi * self.ds_electrodes(electrode_tag)
+            c_form = (
+                (-self.boundary_scale_to_m / self.z[i])
+                * self.phi
+                * self.ds_electrodes(electrode_tag)
+            )
             C_vec = fem_petsc.assemble_vector(fem.form(c_form))
             C_vec.assemble()
             C_i = np.asarray(C_vec.array, dtype=float)
@@ -712,14 +1064,20 @@ class EITForwardModel:
 
         b_form = 0
         for i, electrode_tag in enumerate(self.electrode_tags):
-            b_form += (self.boundary_scale_to_m / self.z[i]) * ufl.inner(self.u, self.phi) * self.ds_electrodes(
-                electrode_tag
+            b_form += (
+                (self.boundary_scale_to_m / self.z[i])
+                * ufl.inner(self.u, self.phi)
+                * self.ds_electrodes(electrode_tag)
             )
         top_left = self._assemble_form_matrix(fem.form(b_form), mat_kind=mat_type)
         full_matrix = self._expand_conductivity_csr_to_full(top_left, mat_type=mat_type)
 
         for i, electrode_tag in enumerate(self.electrode_tags):
-            c_form = (-self.boundary_scale_to_m / self.z[i]) * self.phi * self.ds_electrodes(electrode_tag)
+            c_form = (
+                (-self.boundary_scale_to_m / self.z[i])
+                * self.phi
+                * self.ds_electrodes(electrode_tag)
+            )
             c_vec = self._assemble_form_vector(fem.form(c_form), vec_kind=vec_type)
             c_i = self._vec_to_numpy(c_vec)
             nz = np.flatnonzero(c_i)
@@ -750,7 +1108,9 @@ class EITForwardModel:
             ground_row = self.dofs + self.n_elec
             try:
                 if hasattr(electrode_matrix, "setOption"):
-                    electrode_matrix.setOption(PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False)
+                    electrode_matrix.setOption(
+                        PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False
+                    )
                 electrode_matrix.setValue(ground_row, ground_row, 0.0)
             except Exception:
                 pass
@@ -796,9 +1156,15 @@ class EITForwardModel:
             self._set_backend_diagnostic(gpu_constraint_strategy="electrode-zero")
         else:
             conductivity_mat = self._assemble_conductivity_matrix(sigma, mat_kind=None)
-            conductivity_augmented = self._expand_conductivity_csr_to_full(conductivity_mat, mat_type=None)
+            conductivity_augmented = self._expand_conductivity_csr_to_full(
+                conductivity_mat, mat_type=None
+            )
             full_matrix = self._get_electrode_matrix_petsc(mat_type=None).copy()
-            full_matrix.axpy(1.0, conductivity_augmented, structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN)
+            full_matrix.axpy(
+                1.0,
+                conductivity_augmented,
+                structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
+            )
             self._ensure_structural_diagonal(full_matrix)
             full_matrix.assemblyBegin()
             full_matrix.assemblyEnd()
@@ -807,7 +1173,11 @@ class EITForwardModel:
         if hasattr(full_matrix, "assemble"):
             full_matrix.assemble()
         self._set_backend_diagnostic(
-            petsc_mat_type=str(full_matrix.getType()) if hasattr(full_matrix, "getType") else mat_kind,
+            petsc_mat_type=(
+                str(full_matrix.getType())
+                if hasattr(full_matrix, "getType")
+                else mat_kind
+            ),
         )
         return full_matrix
 
@@ -837,11 +1207,19 @@ class EITForwardModel:
         elif mat_mode == "off":
             use_mat_solve = False
         else:
-            use_mat_solve = self.mesh_tdim == 3 and n_patterns > 1 and self.performance_mode == "aggressive"
+            use_mat_solve = (
+                self.mesh_tdim == 3
+                and n_patterns > 1
+                and self.performance_mode == "aggressive"
+            )
 
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
-        capability = backend_info.get("capability") if isinstance(backend_info.get("capability"), dict) else {}
+        capability = (
+            backend_info.get("capability")
+            if isinstance(backend_info.get("capability"), dict)
+            else {}
+        )
         has_cuda_dense = bool(capability.get("petsc_cuda_dense", False))
 
         if effective_device == "cuda" and n_patterns > 1 and has_cuda_dense:
@@ -853,7 +1231,9 @@ class EITForwardModel:
     def _predict_forward_mat_solve_effective(self, n_patterns: int) -> str:
         return "matsolve" if self._should_use_mat_solve(n_patterns) else "vec-loop"
 
-    def _base_cache_payload(self, sigma_hash: str, n_patterns: int) -> dict[str, object]:
+    def _base_cache_payload(
+        self, sigma_hash: str, n_patterns: int
+    ) -> dict[str, object]:
         petsc_backend = getattr(self, "_petsc_backend_info", {}) or {}
         effective_device = str(petsc_backend.get("petsc_device_effective", "cpu"))
         mat_type = petsc_backend.get("petsc_mat_type")
@@ -862,7 +1242,9 @@ class EITForwardModel:
             stable_mat_type, stable_vec_type = self._stable_cpu_petsc_types()
             mat_type = mat_type or stable_mat_type or "cpu-default"
             vec_type = vec_type or stable_vec_type or "cpu-default"
-        mat_solve_effective = petsc_backend.get("forward_mat_solve_effective") or self._predict_forward_mat_solve_effective(n_patterns)
+        mat_solve_effective = petsc_backend.get(
+            "forward_mat_solve_effective"
+        ) or self._predict_forward_mat_solve_effective(n_patterns)
 
         return {
             "backend": self.linear_backend,
@@ -870,11 +1252,18 @@ class EITForwardModel:
             "sigma_hash": sigma_hash,
             "n_elec": self.n_elec,
             "n_patterns": n_patterns,
-            "z_hash": hashlib.sha256(np.ascontiguousarray(self.z, dtype=np.float64).tobytes()).hexdigest(),
+            "z_hash": hashlib.sha256(
+                np.ascontiguousarray(self.z, dtype=np.float64).tobytes()
+            ).hexdigest(),
             "pattern_hash": hashlib.sha256(
-                np.ascontiguousarray(self.pattern_manager.stim_matrix, dtype=np.float64).tobytes()
+                np.ascontiguousarray(
+                    self.pattern_manager.stim_matrix, dtype=np.float64
+                ).tobytes()
             ).hexdigest(),
             "backend_config": {
+                "solver_preset": getattr(
+                    self.backend_config, "solver_preset", "custom"
+                ),
                 "ksp_type": self.backend_config.ksp_type,
                 "pc_type": self.backend_config.pc_type,
                 "rtol": self.backend_config.rtol,
@@ -884,6 +1273,16 @@ class EITForwardModel:
                 "mat_solve_mode": self.backend_config.mat_solve_mode,
                 "use_mat_solve": self.backend_config.use_mat_solve,
                 "petsc_device": self.backend_config.petsc_device,
+                "pc_factor_mat_solver_type": getattr(
+                    self.backend_config,
+                    "pc_factor_mat_solver_type",
+                    None,
+                ),
+                "pc_hypre_type": getattr(self.backend_config, "pc_hypre_type", None),
+                "pc_gamg_type": getattr(self.backend_config, "pc_gamg_type", None),
+                "petsc_options": dict(
+                    getattr(self.backend_config, "petsc_options", {}) or {}
+                ),
             },
             "petsc_backend": {
                 "requested": petsc_backend.get("petsc_device_requested", "auto"),
@@ -918,7 +1317,11 @@ class EITForwardModel:
         else:
             system_matrix = self._create_full_matrix_scipy(sigma).tocsc()
             lu = splu(system_matrix)
-            self._last_cache_lookup = {"hit": False, "layer": "disabled", "artifact": "forward_factor"}
+            self._last_cache_lookup = {
+                "hit": False,
+                "layer": "disabled",
+                "artifact": "forward_factor",
+            }
 
         rhs_matrix = np.zeros((self.dofs + self.n_elec + 1, n_patterns), dtype=float)
         rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
@@ -935,18 +1338,26 @@ class EITForwardModel:
             A = system_matrix
 
         cuda_enabled = bool(
-            getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective") == "cuda"
+            getattr(self, "_petsc_backend_info", {}).get("petsc_device_effective")
+            == "cuda"
         )
         requested_ksp_type = self.backend_config.ksp_type
         requested_pc_type = self.backend_config.pc_type
+        reuse_requested = bool(
+            getattr(self.backend_config, "reuse_preconditioner", True)
+        )
+        setup_attempts = 0
+        reuse_applied_by_ksp: dict[int, bool] = {}
 
         def _configure(ksp_obj, mat_obj, *, factor_backend=None):
+            reuse_applied_by_ksp[id(ksp_obj)] = False
             ksp_obj.setOperators(mat_obj)
             ksp_obj.setType(requested_ksp_type)
             pc_obj = ksp_obj.getPC()
             pc_obj.setType(requested_pc_type)
-            if factor_backend is not None and hasattr(pc_obj, "setFactorSolverType"):
-                pc_obj.setFactorSolverType(factor_backend)
+            self._configure_pc_from_backend_config(
+                pc_obj, factor_backend=factor_backend
+            )
             ksp_obj.setTolerances(
                 rtol=self.backend_config.rtol,
                 atol=self.backend_config.atol,
@@ -954,28 +1365,62 @@ class EITForwardModel:
             )
             if hasattr(ksp_obj, "setReusePreconditioner"):
                 try:
-                    ksp_obj.setReusePreconditioner(bool(self.backend_config.reuse_preconditioner))
+                    ksp_obj.setReusePreconditioner(reuse_requested)
+                    reuse_applied_by_ksp[id(ksp_obj)] = True
                 except Exception:
                     pass
             if self.backend_config.monitor:
-                ksp_obj.setMonitor(lambda _ksp, its, rnorm: print(f"[KSP] iter={its} rnorm={rnorm:.3e}"))
+                ksp_obj.setMonitor(
+                    lambda _ksp, its, rnorm: print(
+                        f"[KSP] iter={its} rnorm={rnorm:.3e}"
+                    )
+                )
+            self._apply_ksp_options_database(ksp_obj)
             return pc_obj
 
-        def _bundle_from(ksp_obj, solve_mat_obj, *, backend_name, factor_solver_type=None):
+        def _setup(ksp_obj) -> None:
+            nonlocal setup_attempts
+            setup_attempts += 1
+            ksp_obj.setUp()
+
+        def _bundle_from(
+            ksp_obj, solve_mat_obj, *, backend_name, factor_solver_type=None
+        ):
             pc_final = ksp_obj.getPC()
             self._set_backend_diagnostic(
                 forward_factor_backend=backend_name,
-                petsc_mat_type=str(A.getType()) if hasattr(A, "getType") else getattr(self, "_petsc_backend_info", {}).get("petsc_mat_type"),
+                petsc_mat_type=(
+                    str(A.getType())
+                    if hasattr(A, "getType")
+                    else getattr(self, "_petsc_backend_info", {}).get("petsc_mat_type")
+                ),
             )
             return {
                 "A": A,
                 "solve_A": solve_mat_obj,
                 "ksp": ksp_obj,
                 "backend": backend_name,
-                "ksp_type": str(ksp_obj.getType()) if hasattr(ksp_obj, "getType") else requested_ksp_type,
-                "pc_type": str(pc_final.getType()) if hasattr(pc_final, "getType") else requested_pc_type,
+                "ksp_type": (
+                    str(ksp_obj.getType())
+                    if hasattr(ksp_obj, "getType")
+                    else requested_ksp_type
+                ),
+                "pc_type": (
+                    str(pc_final.getType())
+                    if hasattr(pc_final, "getType")
+                    else requested_pc_type
+                ),
                 "factor_solver_type": factor_solver_type,
-                "solve_mat_type": str(solve_mat_obj.getType()) if hasattr(solve_mat_obj, "getType") else None,
+                "solve_mat_type": (
+                    str(solve_mat_obj.getType())
+                    if hasattr(solve_mat_obj, "getType")
+                    else None
+                ),
+                "ksp_setup_count": int(setup_attempts),
+                "reuse_preconditioner": reuse_requested,
+                "reuse_preconditioner_applied": reuse_applied_by_ksp.get(
+                    id(ksp_obj), False
+                ),
             }
 
         direct_pc = requested_pc_type in {"lu", "cholesky"}
@@ -985,7 +1430,7 @@ class EITForwardModel:
                 try:
                     ksp = PETSc.KSP().create(self.mesh.comm)
                     _configure(ksp, A, factor_backend=candidate)
-                    ksp.setUp()
+                    _setup(ksp)
                     return _bundle_from(
                         ksp,
                         A,
@@ -1002,7 +1447,7 @@ class EITForwardModel:
                         solve_mat.assemble()
                     ksp = PETSc.KSP().create(self.mesh.comm)
                     _configure(ksp, solve_mat)
-                    ksp.setUp()
+                    _setup(ksp)
                     return _bundle_from(
                         ksp,
                         solve_mat,
@@ -1017,8 +1462,10 @@ class EITForwardModel:
             try:
                 ksp = PETSc.KSP().create(self.mesh.comm)
                 _configure(ksp, A)
-                ksp.setUp()
-                return _bundle_from(ksp, A, backend_name="petsc-ksp", factor_solver_type=None)
+                _setup(ksp)
+                return _bundle_from(
+                    ksp, A, backend_name="petsc-ksp", factor_solver_type=None
+                )
             except Exception as exc:
                 setup_error = exc
 
@@ -1032,9 +1479,20 @@ class EITForwardModel:
             atol=min(self.backend_config.atol, 1e-14),
             max_it=max(self.backend_config.max_it, 4000),
         )
-        ksp.setUp()
-        return _bundle_from(ksp, A, backend_name=f"petsc-ksp-gmres+{fallback_pc}", factor_solver_type=None)
-
+        if hasattr(ksp, "setReusePreconditioner"):
+            reuse_applied_by_ksp[id(ksp)] = False
+            try:
+                ksp.setReusePreconditioner(reuse_requested)
+                reuse_applied_by_ksp[id(ksp)] = True
+            except Exception:
+                pass
+        _setup(ksp)
+        return _bundle_from(
+            ksp,
+            A,
+            backend_name=f"petsc-ksp-gmres+{fallback_pc}",
+            factor_solver_type=None,
+        )
 
     def _solve_with_petsc(self, sigma: fem.Function, pattern_matrix: np.ndarray):
         n_patterns = pattern_matrix.shape[0]
@@ -1042,11 +1500,14 @@ class EITForwardModel:
         payload = self._base_cache_payload(sigma_hash=sigma_hash, n_patterns=n_patterns)
         payload["solver"] = "petsc-ksp"
 
+        setup_t0 = time.perf_counter()
         if self.cache_manager is not None and self.cache_manager.enabled:
             bundle, lookup = self.cache_manager.get_or_compute(
                 artifact="forward_factor",
                 payload=payload,
-                compute_fn=lambda: self._make_petsc_solver_bundle(self._create_full_matrix_petsc(sigma)),
+                compute_fn=lambda: self._make_petsc_solver_bundle(
+                    self._create_full_matrix_petsc(sigma)
+                ),
                 persist=False,
                 cost=24.0,
             )
@@ -1059,14 +1520,55 @@ class EITForwardModel:
         else:
             system_matrix = self._create_full_matrix_petsc(sigma)
             bundle = self._make_petsc_solver_bundle(system_matrix)
-            self._last_cache_lookup = {"hit": False, "layer": "disabled", "artifact": "forward_factor"}
+            self._last_cache_lookup = {
+                "hit": False,
+                "layer": "disabled",
+                "artifact": "forward_factor",
+            }
+        setup_seconds = float(time.perf_counter() - setup_t0)
 
         A = bundle["A"]
         solve_A = bundle.get("solve_A", A)
         ksp = bundle["ksp"]
+        cache_hit = bool(self._last_cache_lookup.get("hit", False))
+        bundle_setup_count = int(bundle.get("ksp_setup_count", 0 if cache_hit else 1))
+        current_setup_count = 0 if cache_hit else bundle_setup_count
         self._set_backend_diagnostic(
             forward_factor_backend=bundle.get("backend", "petsc-ksp"),
-            petsc_mat_type=str(A.getType()) if hasattr(A, "getType") else getattr(self, "_petsc_backend_info", {}).get("petsc_mat_type"),
+            forward_factor_cache_hit=cache_hit,
+            forward_rhs_count=int(n_patterns),
+            forward_ksp_setup_count=current_setup_count,
+            forward_ksp_setup_attempts=bundle_setup_count,
+            forward_reuse_preconditioner_requested=bool(
+                bundle.get(
+                    "reuse_preconditioner",
+                    getattr(
+                        getattr(self, "backend_config", None),
+                        "reuse_preconditioner",
+                        True,
+                    ),
+                )
+            ),
+            forward_reuse_preconditioner_applied=bundle.get(
+                "reuse_preconditioner_applied"
+            ),
+            ksp_type=bundle.get("ksp_type")
+            or getattr(getattr(self, "backend_config", None), "ksp_type", None),
+            pc_type=bundle.get("pc_type")
+            or getattr(getattr(self, "backend_config", None), "pc_type", None),
+            pc_factor_mat_solver_type=bundle.get("factor_solver_type")
+            or getattr(
+                getattr(self, "backend_config", None),
+                "pc_factor_mat_solver_type",
+                None,
+            ),
+            petsc_solve_mat_type=bundle.get("solve_mat_type"),
+            petsc_mat_type=(
+                str(A.getType())
+                if hasattr(A, "getType")
+                else getattr(self, "_petsc_backend_info", {}).get("petsc_mat_type")
+            ),
+            forward_setup_seconds=setup_seconds,
         )
 
         rhs_matrix = np.zeros((self.dofs + self.n_elec + 1, n_patterns), dtype=float)
@@ -1082,16 +1584,41 @@ class EITForwardModel:
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         requested_device = str(backend_info.get("petsc_device_requested", "auto"))
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
-        capability = backend_info.get("capability") if isinstance(backend_info.get("capability"), dict) else {}
+        capability = (
+            backend_info.get("capability")
+            if isinstance(backend_info.get("capability"), dict)
+            else {}
+        )
         dense_mat_type = self._get_requested_dense_mat_type()
 
-        if effective_device == "cuda" and use_mat_solve and not bool(capability.get("petsc_cuda_dense", False)):
+        if (
+            effective_device == "cuda"
+            and use_mat_solve
+            and not bool(capability.get("petsc_cuda_dense", False))
+        ):
             use_mat_solve = False
             self._set_backend_diagnostic(
                 gpu_fallback_reason="petsc_densecuda_unavailable",
                 forward_mat_solve_effective="vec-loop",
             )
 
+        def _ksp_iteration_number(ksp_obj) -> int | None:
+            if not hasattr(ksp_obj, "getIterationNumber"):
+                return None
+            try:
+                return int(ksp_obj.getIterationNumber())
+            except Exception:
+                return None
+
+        def _ksp_converged_reason(ksp_obj) -> int | None:
+            if not hasattr(ksp_obj, "getConvergedReason"):
+                return None
+            try:
+                return int(ksp_obj.getConvergedReason())
+            except Exception:
+                return None
+
+        solve_t0 = time.perf_counter()
         if use_mat_solve and hasattr(ksp, "matSolve"):
             try:
                 B = PETSc.Mat().createDense(
@@ -1107,16 +1634,40 @@ class EITForwardModel:
                 X = self._ensure_mat_type(X, dense_mat_type)
                 ksp.matSolve(B, X)
                 sol = np.array(X.getDenseArray(), dtype=float, copy=True)
+                mat_iterations = _ksp_iteration_number(ksp)
+                mat_reason = _ksp_converged_reason(ksp)
+                if mat_reason is not None and mat_reason < 0:
+                    B.destroy()
+                    X.destroy()
+                    raise RuntimeError(
+                        "PETSc matSolve failed with a negative convergence reason "
+                        f"({mat_reason})"
+                    )
                 self._set_backend_diagnostic(
                     forward_factor_backend=f"{bundle.get('backend', 'petsc-ksp')}:matsolve",
-                    petsc_dense_mat_type=str(B.getType()) if hasattr(B, "getType") else dense_mat_type,
+                    petsc_dense_mat_type=(
+                        str(B.getType()) if hasattr(B, "getType") else dense_mat_type
+                    ),
                     forward_mat_solve_effective="matsolve",
+                    forward_ksp_mat_solve_count=1,
+                    forward_ksp_solve_count=0,
+                    forward_ksp_iterations_per_rhs=(
+                        [] if mat_iterations is None else [mat_iterations]
+                    ),
+                    forward_ksp_iterations_total=mat_iterations,
+                    forward_ksp_converged_reason=mat_reason,
+                    forward_ksp_converged=(
+                        None if mat_reason is None else bool(mat_reason > 0)
+                    ),
+                    forward_solve_seconds=float(time.perf_counter() - solve_t0),
                 )
                 B.destroy()
                 X.destroy()
                 return self._recenter_cuda_gauge_solution(sol)
             except Exception as exc:
-                if effective_device == "cuda" and bool(capability.get("petsc_cuda_dense", False)):
+                if effective_device == "cuda" and bool(
+                    capability.get("petsc_cuda_dense", False)
+                ):
                     dense_bundle = bundle.get("_dense_cuda_fallback")
                     if dense_bundle is None:
                         try:
@@ -1124,7 +1675,9 @@ class EITForwardModel:
                             bundle["_dense_cuda_fallback"] = dense_bundle
                         except Exception:
                             dense_bundle = None
-                    if dense_bundle is not None and dense_bundle.get("backend") != bundle.get("backend"):
+                    if dense_bundle is not None and dense_bundle.get(
+                        "backend"
+                    ) != bundle.get("backend"):
                         dense_ksp = dense_bundle["ksp"]
                         try:
                             B = PETSc.Mat().createDense(
@@ -1133,15 +1686,44 @@ class EITForwardModel:
                                 comm=self.mesh.comm,
                             )
                             B = self._ensure_mat_type(B, dense_mat_type)
-                            X = PETSc.Mat().createDense(size=rhs_matrix.shape, comm=self.mesh.comm)
+                            X = PETSc.Mat().createDense(
+                                size=rhs_matrix.shape, comm=self.mesh.comm
+                            )
                             X = self._ensure_mat_type(X, dense_mat_type)
                             dense_ksp.matSolve(B, X)
                             sol = np.array(X.getDenseArray(), dtype=float, copy=True)
+                            dense_iterations = _ksp_iteration_number(dense_ksp)
+                            dense_reason = _ksp_converged_reason(dense_ksp)
+                            if dense_reason is not None and dense_reason < 0:
+                                B.destroy()
+                                X.destroy()
+                                raise RuntimeError(
+                                    "PETSc dense matSolve fallback failed with a negative "
+                                    f"convergence reason ({dense_reason})"
+                                )
                             self._set_backend_diagnostic(
                                 gpu_fallback_reason=f"matSolve_fallback:{exc}",
+                                forward_mat_solve_fallback_reason=str(exc),
                                 forward_factor_backend=f"{dense_bundle.get('backend', 'petsc-ksp')}:matsolve",
-                                petsc_dense_mat_type=str(B.getType()) if hasattr(B, "getType") else dense_mat_type,
+                                petsc_dense_mat_type=(
+                                    str(B.getType())
+                                    if hasattr(B, "getType")
+                                    else dense_mat_type
+                                ),
                                 forward_mat_solve_effective="matsolve",
+                                forward_ksp_mat_solve_count=1,
+                                forward_ksp_solve_count=0,
+                                forward_ksp_iterations_per_rhs=(
+                                    [] if dense_iterations is None else [dense_iterations]
+                                ),
+                                forward_ksp_iterations_total=dense_iterations,
+                                forward_ksp_converged_reason=dense_reason,
+                                forward_ksp_converged=(
+                                    None if dense_reason is None else bool(dense_reason > 0)
+                                ),
+                                forward_solve_seconds=float(
+                                    time.perf_counter() - solve_t0
+                                ),
                             )
                             B.destroy()
                             X.destroy()
@@ -1154,21 +1736,33 @@ class EITForwardModel:
                     ) from exc
                 self._set_backend_diagnostic(
                     gpu_fallback_reason=f"matSolve_failed: {exc}",
+                    fallback_reason=f"matSolve_failed: {exc}",
+                    forward_mat_solve_fallback_reason=str(exc),
                     forward_mat_solve_effective="vec-loop",
                 )
 
-        self._set_backend_diagnostic(forward_mat_solve_effective="vec-loop")
+        self._set_backend_diagnostic(
+            forward_mat_solve_effective="vec-loop",
+            forward_ksp_mat_solve_count=0,
+            forward_ksp_solve_count=0,
+        )
         sol_matrix = np.zeros_like(rhs_matrix)
-        b = self._ensure_vec_type(solve_A.createVecRight(), self._get_requested_petsc_vec_type())
-        x = self._ensure_vec_type(solve_A.createVecRight(), self._get_requested_petsc_vec_type())
+        b = self._ensure_vec_type(
+            solve_A.createVecRight(), self._get_requested_petsc_vec_type()
+        )
+        x = self._ensure_vec_type(
+            solve_A.createVecRight(), self._get_requested_petsc_vec_type()
+        )
         if hasattr(x, "getType"):
             self._set_backend_diagnostic(petsc_vec_type=str(x.getType()))
         b_array = b.getArray(readonly=False)
+        iterations_per_rhs: list[int | None] = []
         for i in range(n_patterns):
             b_array[:] = rhs_matrix[:, i]
             ksp.solve(b, x)
-            if ksp.getConvergedReason() < 0:
-                reason = int(ksp.getConvergedReason())
+            iterations_per_rhs.append(_ksp_iteration_number(ksp))
+            reason = int(ksp.getConvergedReason())
+            if reason < 0:
                 self._last_cache_lookup = {
                     "hit": False,
                     "layer": "compute",
@@ -1178,14 +1772,48 @@ class EITForwardModel:
                 if effective_device == "cuda":
                     self._set_backend_diagnostic(
                         gpu_fallback_reason=f"petsc_ksp_failed:{reason}",
+                        fallback_reason=f"petsc_ksp_failed:{reason}",
                         forward_mat_solve_effective="vec-loop",
+                        forward_ksp_solve_count=int(i + 1),
+                        forward_ksp_iterations_per_rhs=iterations_per_rhs,
+                        forward_ksp_iterations_total=sum(
+                            int(value)
+                            for value in iterations_per_rhs
+                            if value is not None
+                        ),
+                        forward_ksp_converged_reason=reason,
+                        forward_ksp_converged=False,
+                        forward_solve_seconds=float(time.perf_counter() - solve_t0),
                     )
                     raise RuntimeError(
                         "PETSc CUDA solve failed with a negative convergence reason "
                         f"({reason}). {self._actionable_cuda_guidance()}"
                     )
+                self._set_backend_diagnostic(
+                    fallback_reason=f"petsc_ksp_failed:{reason}",
+                    forward_ksp_solve_count=int(i + 1),
+                    forward_ksp_iterations_per_rhs=iterations_per_rhs,
+                    forward_ksp_iterations_total=sum(
+                        int(value)
+                        for value in iterations_per_rhs
+                        if value is not None
+                    ),
+                    forward_ksp_converged_reason=reason,
+                    forward_ksp_converged=False,
+                    forward_solve_seconds=float(time.perf_counter() - solve_t0),
+                )
                 return self._solve_with_scipy(sigma, pattern_matrix)
             sol_matrix[:, i] = x.getArray(readonly=True)
+        self._set_backend_diagnostic(
+            forward_ksp_solve_count=int(n_patterns),
+            forward_ksp_iterations_per_rhs=iterations_per_rhs,
+            forward_ksp_iterations_total=sum(
+                int(value) for value in iterations_per_rhs if value is not None
+            ),
+            forward_ksp_converged_reason=reason if n_patterns else None,
+            forward_ksp_converged=None if n_patterns == 0 else bool(reason > 0),
+            forward_solve_seconds=float(time.perf_counter() - solve_t0),
+        )
         return sol_matrix
 
     def forward_solve(self, sigma: fem.Function, current_patterns=None):
@@ -1194,7 +1822,9 @@ class EITForwardModel:
         if self.forward_backend == "cuda_structured":
             if self._cuda_structured_backend is None:
                 raise RuntimeError("cuda_structured backend was not initialized")
-            self._set_backend_diagnostic(**self._cuda_structured_backend.backend_diagnostics())
+            self._set_backend_diagnostic(
+                **self._cuda_structured_backend.backend_diagnostics()
+            )
             return self._cuda_structured_backend.solve_batch(
                 np.asarray(sigma.x.array, dtype=np.float64),
                 pattern_matrix,

@@ -21,8 +21,12 @@ from ...cache.object_signature import (
     pattern_signature_from_forward_model,
 )
 from ...femx import function_get_array
-from ..solvers.gauss_newton_device import normalize_runtime_device, normalize_runtime_device_label
+from ..solvers.gauss_newton_device import (
+    normalize_runtime_device,
+    normalize_runtime_device_label,
+)
 from .base_jacobian import BaseJacobianCalculator
+from .linearized import JacobianLinearization
 
 
 class DirectJacobianCalculator(BaseJacobianCalculator):
@@ -51,10 +55,14 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self._resolved_block_size: int | None = None
         self._block_tune_source: str = "unset"
         self._last_assembly_elapsed_only: float = 0.0
-        self._runtime_device_requested: str = normalize_runtime_device(runtime_device, default="auto")
+        self._runtime_device_requested: str = normalize_runtime_device(
+            runtime_device, default="auto"
+        )
         self._runtime_device_effective: str = "cpu"
         self._runtime_cuda_device: str = "cuda"
-        self._jacobian_backend_requested: str = normalize_runtime_device_label(self._runtime_device_requested, default="auto")
+        self._jacobian_backend_requested: str = normalize_runtime_device_label(
+            self._runtime_device_requested, default="auto"
+        )
         self._jacobian_backend_effective: str = "cpu"
         self._jacobian_block_backend: str = "numpy"
         self._jacobian_transfer_estimate: float = 0.0
@@ -97,7 +105,9 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
 
         cache_manager = getattr(self.fwd_model, "cache_manager", None)
         if cache_manager is None or not cache_manager.enabled:
-            chosen = self._calibrate_block_size_once(grad_u_all, adjoint_gradients, n_elements)
+            chosen = self._calibrate_block_size_once(
+                grad_u_all, adjoint_gradients, n_elements
+            )
             self._block_tune_source = "compute"
             return int(chosen)
 
@@ -118,13 +128,19 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             cache_obj=payload,
             payload=payload,
             compute_fn=lambda: int(
-                self._calibrate_block_size_once(grad_u_all, adjoint_gradients, n_elements)
+                self._calibrate_block_size_once(
+                    grad_u_all, adjoint_gradients, n_elements
+                )
             ),
             persist=True,
             cost=2.0,
             effort_seconds=0.5,
         )
-        self._block_tune_source = str(getattr(lookup, "layer", "cache")) if getattr(lookup, "hit", False) else "compute"
+        self._block_tune_source = (
+            str(getattr(lookup, "layer", "cache"))
+            if getattr(lookup, "hit", False)
+            else "compute"
+        )
         return int(max(1, min(int(chosen), n_elements)))
 
     def _calibrate_block_size_once(
@@ -176,7 +192,9 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
                 best_size = candidate
         return int(max(1, min(best_size, n_elements)))
 
-    def _resolve_block_size(self, grad_u_all, adjoint_gradients, n_elements: int) -> int:
+    def _resolve_block_size(
+        self, grad_u_all, adjoint_gradients, n_elements: int
+    ) -> int:
         if self._resolved_block_size is None:
             self._resolved_block_size = self._calibrate_block_size(
                 grad_u_all=grad_u_all,
@@ -185,10 +203,18 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             )
         return int(max(1, min(self._resolved_block_size, n_elements)))
 
-    def set_runtime_device(self, requested: str, effective: str, *, torch_device=None) -> None:
-        self._runtime_device_requested = normalize_runtime_device(requested, default="auto")
-        self._runtime_device_effective = normalize_runtime_device_label(effective, default="cpu")
-        self._jacobian_backend_requested = normalize_runtime_device_label(self._runtime_device_requested, default="auto")
+    def set_runtime_device(
+        self, requested: str, effective: str, *, torch_device=None
+    ) -> None:
+        self._runtime_device_requested = normalize_runtime_device(
+            requested, default="auto"
+        )
+        self._runtime_device_effective = normalize_runtime_device_label(
+            effective, default="cpu"
+        )
+        self._jacobian_backend_requested = normalize_runtime_device_label(
+            self._runtime_device_requested, default="auto"
+        )
         if torch_device is not None:
             self._runtime_cuda_device = str(torch_device)
 
@@ -212,7 +238,9 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             and self._runtime_device_effective == "cuda"
         )
 
-    def _should_use_cuda_contraction(self, *, n_measurements: int, n_elements: int) -> bool:
+    def _should_use_cuda_contraction(
+        self, *, n_measurements: int, n_elements: int
+    ) -> bool:
         if not self._wants_cuda_contraction():
             self._jacobian_cuda_threshold_hit = False
             return False
@@ -228,9 +256,9 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         if torch is None:
             return None
         if self._cell_areas_cuda is None:
-            self._cell_areas_cuda = torch.from_numpy(np.asarray(self.cell_areas, dtype=np.float64)).to(
-                self._runtime_cuda_device, dtype=torch.float64
-            )
+            self._cell_areas_cuda = torch.from_numpy(
+                np.asarray(self.cell_areas, dtype=np.float64)
+            ).to(self._runtime_cuda_device, dtype=torch.float64)
         return self._cell_areas_cuda
 
     def block_tuning_info(self) -> dict[str, object]:
@@ -247,21 +275,37 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             "tune_mode": getattr(self, "block_tune_mode", "auto"),
             "tune_source": getattr(self, "_block_tune_source", "unset"),
             "candidates": list(getattr(self, "block_candidates", ()) or ()),
-            "assembly_elapsed_only": float(getattr(self, "_last_assembly_elapsed_only", 0.0)),
-            "jacobian_backend_requested": getattr(self, "_jacobian_backend_requested", "auto"),
-            "jacobian_backend_effective": getattr(self, "_jacobian_backend_effective", "cpu"),
+            "assembly_elapsed_only": float(
+                getattr(self, "_last_assembly_elapsed_only", 0.0)
+            ),
+            "jacobian_backend_requested": getattr(
+                self, "_jacobian_backend_requested", "auto"
+            ),
+            "jacobian_backend_effective": getattr(
+                self, "_jacobian_backend_effective", "cpu"
+            ),
             "jacobian_block_backend": getattr(self, "_jacobian_block_backend", "numpy"),
-            "jacobian_transfer_estimate": float(getattr(self, "_jacobian_transfer_estimate", 0.0)),
-            "jacobian_cuda_threshold_hit": bool(getattr(self, "_jacobian_cuda_threshold_hit", False)),
+            "jacobian_transfer_estimate": float(
+                getattr(self, "_jacobian_transfer_estimate", 0.0)
+            ),
+            "jacobian_cuda_threshold_hit": bool(
+                getattr(self, "_jacobian_cuda_threshold_hit", False)
+            ),
         }
 
-    def calculate(self, sigma: fem.Function, method: str = "efficient", **kwargs) -> np.ndarray:
+    def calculate(
+        self, sigma: fem.Function, method: str = "efficient", **kwargs
+    ) -> np.ndarray:
         if method not in {"efficient", "traditional"}:
             raise ValueError(f"Unknown method: {method}")
 
         cache_manager = getattr(self.fwd_model, "cache_manager", None)
         if cache_manager is None or not cache_manager.enabled:
-            jacobian = self._calculate_efficient(sigma) if method == "efficient" else self._calculate_traditional(sigma)
+            jacobian = (
+                self._calculate_efficient(sigma)
+                if method == "efficient"
+                else self._calculate_traditional(sigma)
+            )
             self._last_block_tune_info = self.block_tuning_info()
             return jacobian
 
@@ -282,9 +326,11 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             namespace="inverse",
             cache_obj=payload,
             payload=payload,
-            compute_fn=(lambda: self._calculate_efficient(sigma))
-            if method == "efficient"
-            else (lambda: self._calculate_traditional(sigma)),
+            compute_fn=(
+                (lambda: self._calculate_efficient(sigma))
+                if method == "efficient"
+                else (lambda: self._calculate_traditional(sigma))
+            ),
             persist=True,
             cost=12.0,
         )
@@ -296,6 +342,30 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         }
         self._last_block_tune_info = self.block_tuning_info()
         return jacobian
+
+    def linearize(
+        self, sigma: fem.Function, method: str = "efficient"
+    ) -> JacobianLinearization:
+        """Build a reusable ``Jv``/``J^T r`` sensitivity operator.
+
+        ``method='efficient'`` follows the same EIDORS-style adjoint path used
+        by :meth:`calculate`, but returns an operator instead of the dense
+        measurement Jacobian.
+        """
+        if method != "efficient":
+            raise ValueError(
+                "Matrix-free linearization currently supports method='efficient'."
+            )
+        u_all, _ = self.fwd_model.forward_solve(sigma)
+        grad_u_all = self._compute_field_gradients(u_all)
+        adjoint_fields = self._compute_adjoint_fields_efficient(sigma)
+        return JacobianLinearization(
+            grad_u_all=tuple(grad_u_all),
+            adjoint_gradients=tuple(adjoint_fields),
+            cell_areas=np.asarray(self.cell_areas, dtype=np.float64),
+            n_meas_per_stim=tuple(self.fwd_model.pattern_manager.n_meas_per_stim),
+            sign=1.0,
+        )
 
     def _calculate_efficient(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)
@@ -380,16 +450,24 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             for start in range(0, n_elements, block_size):
                 end = min(start + block_size, n_elements)
                 if use_cuda_blocks:
-                    grad_u_t = torch.from_numpy(np.ascontiguousarray(grad_u_arr[start:end, :], dtype=np.float64)).to(
-                        self._runtime_cuda_device, dtype=torch.float64
-                    )
-                    adjoint_block_t = torch.from_numpy(
-                        np.ascontiguousarray(adjoint_block[:, start:end, :], dtype=np.float64)
+                    grad_u_t = torch.from_numpy(
+                        np.ascontiguousarray(grad_u_arr[start:end, :], dtype=np.float64)
                     ).to(self._runtime_cuda_device, dtype=torch.float64)
-                    sensitivity_t = torch.einsum("eg,meg->me", grad_u_t, adjoint_block_t)
+                    adjoint_block_t = torch.from_numpy(
+                        np.ascontiguousarray(
+                            adjoint_block[:, start:end, :], dtype=np.float64
+                        )
+                    ).to(self._runtime_cuda_device, dtype=torch.float64)
+                    sensitivity_t = torch.einsum(
+                        "eg,meg->me", grad_u_t, adjoint_block_t
+                    )
                     out_t = sensitivity_t * cell_areas_cuda[start:end].unsqueeze(0)
-                    jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = out_t.cpu().numpy()
-                    bytes_h2d = (grad_u_t.numel() + adjoint_block_t.numel() + out_t.numel()) * 8
+                    jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
+                        out_t.cpu().numpy()
+                    )
+                    bytes_h2d = (
+                        grad_u_t.numel() + adjoint_block_t.numel() + out_t.numel()
+                    ) * 8
                     self._jacobian_transfer_estimate += float(bytes_h2d)
                 else:
                     sensitivity_block = np.einsum(

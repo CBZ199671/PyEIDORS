@@ -12,6 +12,7 @@ import tempfile
 import time
 import tracemalloc
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 from dolfinx import fem
@@ -24,6 +25,8 @@ except Exception:  # pragma: no cover
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
+from pyeidors.forward.eit_forward_model import EITForwardModel
+from pyeidors.forward.process_setup_cache import clear_process_forward_setup_cache
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import detect_performance_capabilities
 from pyeidors.perf.policy import (
@@ -113,7 +116,18 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--preconditioner",
-        choices=["auto", "diag", "pyamg", "cholmod", "petsc-gamg"],
+        choices=[
+            "auto",
+            "diag",
+            "noser",
+            "prior",
+            "pmat",
+            "coarse",
+            "custom",
+            "pyamg",
+            "cholmod",
+            "petsc-gamg",
+        ],
         default="auto",
     )
     parser.add_argument(
@@ -151,6 +165,18 @@ def _parse_args() -> argparse.Namespace:
         "--forward-mat-solve",
         choices=["auto", "off", "on"],
         default="auto",
+    )
+    parser.add_argument(
+        "--forward-only",
+        choices=["on", "off"],
+        default="off",
+        help="Run only the 3D forward solver benchmark and emit forward_solver_benchmark.",
+    )
+    parser.add_argument(
+        "--forward-solver-preset",
+        type=str,
+        default="auto",
+        help="Forward PETSc solver_preset passed to EITForwardModel.",
     )
     parser.add_argument(
         "--petsc-device",
@@ -238,6 +264,133 @@ def _build_phantom_sigma(system: EITSystem, *, background: float) -> np.ndarray:
     return sigma
 
 
+def _as_float(value: Any, default: float = 0.0) -> float:
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def _as_int_list(value: Any) -> list[int | None]:
+    if value is None:
+        return []
+    if isinstance(value, (int, float)):
+        return [int(value)]
+    if isinstance(value, (list, tuple)):
+        out: list[int | None] = []
+        for item in value:
+            if item is None:
+                out.append(None)
+            elif isinstance(item, (int, float)):
+                out.append(int(item))
+        return out
+    return []
+
+
+def _first_nonempty(*values: Any) -> Any:
+    for value in values:
+        if value not in (None, "", [], {}):
+            return value
+    return None
+
+
+def _build_forward_solver_benchmark_artifact(
+    *,
+    args: argparse.Namespace,
+    mesh_info: dict[str, Any],
+    backend_info: dict[str, Any],
+    timing: dict[str, Any],
+) -> dict[str, Any]:
+    """Normalize forward-solver benchmark diagnostics into a stable JSON block."""
+    potential_dofs = int(mesh_info.get("potential_dofs") or 0)
+    n_elec = int(args.n_elec)
+    pc_subtype = _first_nonempty(
+        backend_info.get("pc_gamg_type"),
+        backend_info.get("pc_hypre_type"),
+        backend_info.get("pc_factor_mat_solver_type"),
+    )
+    fallback_reason = _first_nonempty(
+        backend_info.get("gpu_fallback_reason"),
+        backend_info.get("forward_mat_solve_fallback_reason"),
+        backend_info.get("fallback_reason"),
+    )
+    capability = (
+        backend_info.get("capability")
+        if isinstance(backend_info.get("capability"), dict)
+        else {}
+    )
+    return {
+        "schema_version": 1,
+        "mesh_dim": int(mesh_info.get("mesh_dim") or 3),
+        "n_cells": int(mesh_info.get("elements") or mesh_info.get("n_cells") or 0),
+        "n_dofs": int(mesh_info.get("n_dofs") or (potential_dofs + n_elec + 1)),
+        "n_elec": n_elec,
+        "n_patterns": int(backend_info.get("forward_rhs_count") or 0),
+        "solver_preset": str(
+            backend_info.get("solver_preset")
+            or getattr(args, "forward_solver_preset", "auto")
+        ),
+        "ksp_type": backend_info.get("ksp_type"),
+        "pc_type": backend_info.get("pc_type"),
+        "pc_subtype": pc_subtype,
+        "mat_type": backend_info.get("petsc_mat_type"),
+        "vec_type": backend_info.get("petsc_vec_type"),
+        "dense_mat_type": backend_info.get("petsc_dense_mat_type"),
+        "setup_seconds": _as_float(
+            backend_info.get("forward_setup_seconds"),
+            _as_float(timing.get("system_setup_elapsed_sec")),
+        ),
+        "ksp_setup_count": backend_info.get("forward_ksp_setup_count"),
+        "ksp_setup_attempts": backend_info.get("forward_ksp_setup_attempts"),
+        "forward_factor_cache_hit": backend_info.get("forward_factor_cache_hit"),
+        "reuse_preconditioner_requested": backend_info.get(
+            "forward_reuse_preconditioner_requested"
+        ),
+        "reuse_preconditioner_applied": backend_info.get(
+            "forward_reuse_preconditioner_applied"
+        ),
+        "solve_seconds": _as_float(
+            backend_info.get("forward_solve_seconds"),
+            _as_float(timing.get("first_forward_elapsed_sec")),
+        ),
+        "iterations_per_rhs": _as_int_list(
+            backend_info.get("forward_ksp_iterations_per_rhs")
+        ),
+        "iterations_total": backend_info.get("forward_ksp_iterations_total"),
+        "converged_reason": backend_info.get("forward_ksp_converged_reason"),
+        "converged": backend_info.get("forward_ksp_converged"),
+        "mat_solve_effective": backend_info.get("forward_mat_solve_effective"),
+        "petsc_device_requested": backend_info.get("petsc_device_requested"),
+        "petsc_device_effective": backend_info.get("petsc_device_effective"),
+        "petsc_cuda_available": bool(capability.get("petsc_cuda", False)),
+        "petsc_cuda_mat_available": bool(capability.get("petsc_cuda_mat", False)),
+        "petsc_cuda_vec_available": bool(capability.get("petsc_cuda_vec", False)),
+        "petsc_cuda_dense_available": bool(capability.get("petsc_cuda_dense", False)),
+        "petsc_cuda_errors": capability.get("errors", {}),
+        "gpu_transfer_risk": backend_info.get("gpu_transfer_risk"),
+        "mpi_size": int(backend_info.get("mpi_size") or 1),
+        "mpi_rank": int(backend_info.get("mpi_rank") or 0),
+        "mpi_parallel": bool(backend_info.get("mpi_parallel", False)),
+        "mpi_size_supported": bool(backend_info.get("mpi_size_supported", True)),
+        "mpi_fallback_reason": backend_info.get("mpi_fallback_reason"),
+        "fallback_reason": fallback_reason,
+        "forward_backend": backend_info.get("forward_backend_effective")
+        or backend_info.get("forward_backend_requested")
+        or str(args.forward_backend),
+        "jacobian_backend": backend_info.get("jacobian_backend_effective")
+        or backend_info.get("jacobian_backend_requested")
+        or "not-run",
+        "petsc_solve_mat_type": backend_info.get("petsc_solve_mat_type"),
+        "forward_factor_backend": backend_info.get("forward_factor_backend"),
+        "forward_ksp_solve_count": int(backend_info.get("forward_ksp_solve_count") or 0),
+        "forward_ksp_mat_solve_count": int(
+            backend_info.get("forward_ksp_mat_solve_count") or 0
+        ),
+    }
+
+
 def main() -> None:
     args = _parse_args()
     apply_acceleration_profile_overrides(args, mesh_dim=3)
@@ -289,6 +442,108 @@ def main() -> None:
         absolute_setup_stage: dict[str, float | str] | None = None
         absolute_target_forward_stage: dict[str, float | str] | None = None
         absolute_forward_probe_repeats = int(args.warm_forward_repeats)
+
+        if str(args.forward_only) == "on":
+            clear_process_forward_setup_cache()
+            mesh, forward_mesh_stage = _timed(
+                "forward_mesh_load",
+                lambda: load_or_create_mesh(
+                    mesh_dir=str(mesh_dir),
+                    mesh_name=None,
+                    n_elec=int(args.n_elec),
+                    dimension=3,
+                    radius=float(args.radius),
+                    refinement=int(args.refinement),
+                    height=float(args.height),
+                    electrode_height_ratio=0.2,
+                    z_center=0.0,
+                    electrode_coverage=0.5,
+                    mesh_family=str(mesh_family),
+                    geometry_version=str(geometry_version),
+                    generator_revision=str(generator_revision),
+                ),
+            )
+            pattern = PatternConfig(
+                n_elec=int(args.n_elec),
+                stim_pattern="{ad}",
+                meas_pattern="{ad}",
+                drive_mode="total_current",
+                drive_value=1.0,
+                geometry_scale_to_m=1.0,
+            )
+            fwd, forward_setup_stage = _timed(
+                "forward_model_setup",
+                lambda: EITForwardModel(
+                    n_elec=int(args.n_elec),
+                    pattern_config=pattern,
+                    z=np.full(
+                        int(args.n_elec),
+                        float(args.contact_impedance),
+                        dtype=float,
+                    ),
+                    mesh=mesh,
+                    linear_backend="petsc",
+                    backend_config={
+                        "solver_preset": str(args.forward_solver_preset),
+                        "mat_solve_mode": str(args.forward_mat_solve),
+                        "petsc_device": str(args.petsc_device),
+                    },
+                    performance_mode="aggressive",
+                    forward_backend=str(args.forward_backend),
+                ),
+            )
+            sigma_fn = fem.Function(fwd.V_sigma)
+            sigma_fn.x.array[:] = float(args.background)
+            (u_all, electrode_voltages), forward_solve_stage = _timed(
+                "forward_solve",
+                lambda: fwd.forward_solve(sigma_fn),
+            )
+            absolute_backend_info = dict(fwd.get_backend_diagnostics())
+            absolute_mesh_info = {
+                "mesh_file": getattr(mesh, "mesh_file", None),
+                "nodes": int(mesh.num_vertices()),
+                "elements": int(mesh.num_cells()),
+                "potential_dofs": int(fwd.dofs),
+                "sigma_dofs": int(
+                    fwd.V_sigma.dofmap.index_map.size_local
+                    * fwd.V_sigma.dofmap.index_map_bs
+                ),
+                "mesh_dim": int(mesh.topology.dim),
+                "mesh_family": getattr(mesh, "mesh_family", None),
+                "geometry_version": getattr(mesh, "geometry_version", None),
+                "generator_revision": getattr(mesh, "generator_revision", None),
+            }
+            forward_timing = {
+                "system_setup_elapsed_sec": float(
+                    forward_setup_stage.get("elapsed_sec", 0.0)
+                ),
+                "first_forward_elapsed_sec": float(
+                    forward_solve_stage.get("elapsed_sec", 0.0)
+                ),
+            }
+            forward_artifact = _build_forward_solver_benchmark_artifact(
+                args=args,
+                mesh_info=absolute_mesh_info,
+                backend_info=absolute_backend_info,
+                timing=forward_timing,
+            )
+            forward_artifact["output_shape"] = list(electrode_voltages.shape)
+            forward_artifact["output_finite"] = bool(np.all(np.isfinite(electrode_voltages)))
+            forward_artifact["returned_solution_count"] = int(len(u_all))
+            stages.extend([forward_mesh_stage, forward_setup_stage, forward_solve_stage])
+            return {
+                "run_index": int(run_index),
+                "stages": stages,
+                "stage_breakdown": {"forward": forward_timing},
+                "mesh_info": absolute_mesh_info,
+                "difference_solver": {},
+                "absolute_solver": {},
+                "forward_solver_benchmark": forward_artifact,
+                "cache": {
+                    "root": str(run_cache_dir),
+                    "ephemeral_root": bool(ephemeral_cache_root is not None),
+                },
+            }
 
         if run_diff:
             cold_ctx, cold_stage = _timed(
@@ -651,7 +906,14 @@ def main() -> None:
                 "petsc_device_effective": absolute_backend_info.get("petsc_device_effective"),
                 "petsc_mat_type": absolute_backend_info.get("petsc_mat_type"),
                 "petsc_vec_type": absolute_backend_info.get("petsc_vec_type"),
+                "petsc_dense_mat_type": absolute_backend_info.get("petsc_dense_mat_type"),
                 "gpu_fallback_reason": absolute_backend_info.get("gpu_fallback_reason"),
+                "gpu_transfer_risk": absolute_backend_info.get("gpu_transfer_risk"),
+                "mpi_size": absolute_backend_info.get("mpi_size"),
+                "mpi_rank": absolute_backend_info.get("mpi_rank"),
+                "mpi_parallel": absolute_backend_info.get("mpi_parallel"),
+                "mpi_size_supported": absolute_backend_info.get("mpi_size_supported"),
+                "mpi_fallback_reason": absolute_backend_info.get("mpi_fallback_reason"),
                 "forward_factor_backend": absolute_backend_info.get("forward_factor_backend"),
                 "forward_mat_solve_effective": absolute_backend_info.get("forward_mat_solve_effective"),
                 "inverse_device_requested": absolute_backend_info.get("inverse_device_requested"),
@@ -696,6 +958,16 @@ def main() -> None:
                 else int(absolute_forward_probe_repeats),
                 "startup_cache_lookup": absolute_backend_info.get("startup_cache_lookup", {}),
             },
+            "forward_solver_benchmark": (
+                _build_forward_solver_benchmark_artifact(
+                    args=args,
+                    mesh_info=absolute_mesh_info,
+                    backend_info=absolute_backend_info,
+                    timing=absolute_timing if isinstance(absolute_timing, dict) else {},
+                )
+                if absolute_mesh_info
+                else {}
+            ),
             "cache": {
                 "root": str(run_cache_dir),
                 "ephemeral_root": bool(ephemeral_cache_root is not None),
@@ -741,6 +1013,8 @@ def main() -> None:
             "lowrank_method": str(args.lowrank_method),
             "lowrank_energy": float(args.lowrank_energy),
             "forward_mat_solve": str(args.forward_mat_solve),
+            "forward_only": str(args.forward_only),
+            "forward_solver_preset": str(args.forward_solver_preset),
             "petsc_device": str(args.petsc_device),
             "device": str(args.device),
             "forward_backend": str(args.forward_backend),
@@ -768,6 +1042,7 @@ def main() -> None:
         "mesh_info": median_run.get("mesh_info", {}),
         "difference_solver": median_run.get("difference_solver", {}),
         "absolute_solver": median_run.get("absolute_solver", {}),
+        "forward_solver_benchmark": median_run.get("forward_solver_benchmark", {}),
         "cache": median_run.get("cache", {}),
         "runs": runs if int(args.repeat) > 1 else [],
     }

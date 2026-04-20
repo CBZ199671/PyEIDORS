@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pyeidors.perf.capabilities as perf_caps
 from pyeidors.perf.capabilities import (
+    probe_mpi_runtime,
     probe_petsc_cuda_runtime,
     select_fast_linear_path,
     select_fused_strategy,
@@ -65,6 +66,21 @@ def test_select_preconditioner_explicit_cholmod_when_available():
         "petsc_gamg": True,
     }
     assert select_preconditioner("cholmod", caps) == "cholmod"
+
+
+def test_select_preconditioner_explicit_matrix_free_diag_modes():
+    caps = {
+        "pyamg": False,
+        "cholmod": False,
+        "petsc_mat_solve": False,
+        "petsc_gamg": False,
+    }
+    assert select_preconditioner("diag", caps) == "diag"
+    assert select_preconditioner("noser", caps) == "noser"
+    assert select_preconditioner("prior", caps) == "prior"
+    assert select_preconditioner("pmat", caps) == "pmat"
+    assert select_preconditioner("coarse", caps) == "coarse"
+    assert select_preconditioner("custom", caps) == "custom"
 
 
 def test_select_fast_linear_path_auto_prefers_woodbury_for_diagonal_regularization():
@@ -246,6 +262,18 @@ class _WorkingCudaPETSc:
             GAMG = "gamg"
 
 
+class _FakeMPIComm:
+    def __init__(self, *, size: int, rank: int = 0):
+        self._size = int(size)
+        self._rank = int(rank)
+
+    def Get_size(self):
+        return self._size
+
+    def Get_rank(self):
+        return self._rank
+
+
 def test_probe_petsc_cuda_runtime_rejects_unknown_type_symbols(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()
@@ -287,6 +315,27 @@ def test_probe_petsc_cuda_runtime_cache_tracks_runtime_identity(monkeypatch):
     assert probe_working["petsc_cuda"] is True
 
 
+def test_probe_mpi_runtime_reports_single_rank_limit():
+    single = probe_mpi_runtime(comm=_FakeMPIComm(size=1, rank=0))
+    assert single["mpi_size"] == 1
+    assert single["mpi_rank"] == 0
+    assert single["mpi_size_supported"] is True
+    assert single["mpi_fallback_reason"] is None
+
+    parallel = probe_mpi_runtime(comm=_FakeMPIComm(size=4, rank=2))
+    assert parallel["mpi_parallel"] is True
+    assert parallel["mpi_size_supported"] is False
+    assert parallel["mpi_fallback_reason"] == perf_caps.MPI_SINGLE_RANK_FALLBACK_REASON
+    assert "MPI size=1" in str(parallel["mpi_guidance"])
+
+    supported = probe_mpi_runtime(
+        comm=_FakeMPIComm(size=4, rank=1),
+        supports_parallel=True,
+    )
+    assert supported["mpi_size_supported"] is True
+    assert supported["mpi_fallback_reason"] is None
+
+
 
 def test_detect_performance_capabilities_cache_tracks_runtime_identity(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
@@ -301,3 +350,4 @@ def test_detect_performance_capabilities_cache_tracks_runtime_identity(monkeypat
 
     assert caps_fail["petsc_cuda"] is False
     assert caps_working["petsc_cuda"] is True
+    assert "mpi_size_supported" in caps_working

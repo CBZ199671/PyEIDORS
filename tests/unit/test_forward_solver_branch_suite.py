@@ -520,6 +520,9 @@ def test_make_petsc_solver_bundle_covers_reuse_monitor_and_cuda_dense_setup_fail
     model._petsc_backend_info = {"petsc_device_effective": "cpu"}
     bundle = EITForwardModel._make_petsc_solver_bundle(model, _FakeMat(size=(5, 5)))
     assert callable(bundle["ksp"].monitor)
+    assert bundle["ksp_setup_count"] == 1
+    assert bundle["reuse_preconditioner"] is True
+    assert bundle["reuse_preconditioner_applied"] is False
     bundle["ksp"].monitor(bundle["ksp"], 1, 1e-3)
     assert "[KSP] iter=1" in capsys.readouterr().out
 
@@ -541,6 +544,8 @@ def test_make_petsc_solver_bundle_covers_reuse_monitor_and_cuda_dense_setup_fail
     bundle_gmres = EITForwardModel._make_petsc_solver_bundle(model, _FakeMat(size=(5, 5)))
     assert bundle_gmres["backend"] == "petsc-ksp-gmres+none"
     assert bundle_gmres["ksp_type"] == "gmres"
+    assert bundle_gmres["ksp_setup_count"] == 4
+    assert bundle_gmres["reuse_preconditioner"] is True
 
 
 def test_solve_with_petsc_and_forward_interfaces_cover_mat_solve_fallbacks_and_errors(monkeypatch: pytest.MonkeyPatch):

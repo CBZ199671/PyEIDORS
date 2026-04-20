@@ -30,6 +30,7 @@ htmlcov/
 .pyeidors_cache/
 .tmp_cache_debug*/
 relative-session/
+test_results/
 
 # Type checking
 .mypy_cache/

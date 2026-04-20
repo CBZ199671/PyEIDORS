@@ -189,6 +189,23 @@ def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(monkeypatch: pytes
     assert EITForwardModel._stable_cpu_petsc_types(model) == ("seqaij", "seq")
 
 
+def test_mpi_backend_info_reports_current_single_rank_boundary():
+    model = _make_model()
+    model.mesh = SimpleNamespace(
+        comm=SimpleNamespace(Get_size=lambda: 4, Get_rank=lambda: 2)
+    )
+
+    info = EITForwardModel._resolve_mpi_backend_info(model)
+    assert info["mpi_size"] == 4
+    assert info["mpi_rank"] == 2
+    assert info["mpi_parallel"] is True
+    assert info["mpi_size_supported"] is False
+    assert info["mpi_fallback_reason"] == "mpi_size_gt_1_not_supported_phase2_single_rank_only"
+
+    with pytest.raises(RuntimeError, match="Detected MPI size=4"):
+        EITForwardModel._assert_supported_mpi_runtime(model)
+
+
 def test_resolve_petsc_backend_info_handles_non_petsc_missing_probe_and_capabilities(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -196,6 +213,8 @@ def test_resolve_petsc_backend_info_handles_non_petsc_missing_probe_and_capabili
     info = EITForwardModel._resolve_petsc_backend_info(model)
     assert info["forward_factor_backend"] == "scipy"
     assert info["petsc_device_effective"] == "cpu"
+    assert info["mpi_size"] == 1
+    assert info["mpi_size_supported"] is True
 
     model = _make_model()
     monkeypatch.setattr(forward_module, "PETSc", None)
@@ -231,6 +250,8 @@ def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeyp
     cpu_info = EITForwardModel._resolve_petsc_backend_info(cpu_model)
     assert cpu_info["petsc_device_effective"] == "cpu"
     assert cpu_info["capability"]["petsc_cuda"] is True
+    assert cpu_info["petsc_mat_type"] == "seqaij"
+    assert cpu_info["petsc_vec_type"] == "seq"
 
     fallback_model = _make_model(forward_backend="cuda_structured")
     fallback_model.backend_config = SimpleNamespace(petsc_device="cuda")
@@ -258,6 +279,7 @@ def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeyp
     assert cuda_info["petsc_mat_type"] == "aijcusparse"
     assert cuda_info["petsc_vec_type"] == "cuda"
     assert cuda_info["petsc_dense_mat_type"] == "densecuda"
+    assert cuda_info["gpu_transfer_risk"] == "mixed_dolfinx_assembly_to_petsc_cuda"
 
 
 def test_requested_petsc_type_helpers_use_explicit_and_namespace_fallbacks(monkeypatch: pytest.MonkeyPatch):

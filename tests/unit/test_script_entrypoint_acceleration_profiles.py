@@ -37,6 +37,138 @@ def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
     assert args.acceleration_profile == "gpu3d_fused"
 
 
+def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(monkeypatch):
+    module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "benchmark_3d_runtime.py",
+            "--forward-only",
+            "on",
+            "--forward-solver-preset",
+            "3d_gamg",
+        ],
+    )
+
+    args = module._parse_args()
+
+    assert args.forward_only == "on"
+    assert args.forward_solver_preset == "3d_gamg"
+
+
+def test_benchmark_3d_runtime_builds_forward_solver_artifact():
+    module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
+    args = Namespace(
+        n_elec=8,
+        forward_solver_preset="3d_gamg",
+        forward_backend="dolfinx",
+    )
+
+    artifact = module._build_forward_solver_benchmark_artifact(
+        args=args,
+        mesh_info={
+            "mesh_dim": 3,
+            "elements": 42,
+            "potential_dofs": 100,
+        },
+        backend_info={
+            "forward_rhs_count": 8,
+            "solver_preset": "3d_gamg",
+            "ksp_type": "fgmres",
+            "pc_type": "gamg",
+            "pc_gamg_type": "agg",
+            "petsc_mat_type": "seqaij",
+            "petsc_vec_type": "seq",
+            "forward_setup_seconds": 0.25,
+            "forward_ksp_setup_count": 1,
+            "forward_ksp_setup_attempts": 1,
+            "forward_factor_cache_hit": False,
+            "forward_reuse_preconditioner_requested": True,
+            "forward_reuse_preconditioner_applied": True,
+            "forward_solve_seconds": 0.5,
+            "forward_ksp_iterations_per_rhs": [3, 4],
+            "forward_ksp_iterations_total": 7,
+            "forward_ksp_converged_reason": 2,
+            "forward_ksp_converged": True,
+            "forward_mat_solve_effective": "vec-loop",
+            "petsc_device_requested": "auto",
+            "petsc_device_effective": "cpu",
+            "gpu_fallback_reason": "petsc_cuda_not_available",
+            "capability": {
+                "petsc_cuda": False,
+                "petsc_cuda_mat": False,
+                "petsc_cuda_vec": False,
+                "petsc_cuda_dense": False,
+                "errors": {"mat": "Unknown type"},
+            },
+            "mpi_size": 1,
+            "mpi_rank": 0,
+            "mpi_parallel": False,
+            "mpi_size_supported": True,
+            "mpi_fallback_reason": None,
+            "forward_backend_effective": "dolfinx",
+            "jacobian_backend_effective": "matrix-free",
+            "forward_ksp_solve_count": 8,
+            "forward_ksp_mat_solve_count": 0,
+        },
+        timing={},
+    )
+
+    assert artifact["mesh_dim"] == 3
+    assert artifact["n_cells"] == 42
+    assert artifact["n_dofs"] == 109
+    assert artifact["n_patterns"] == 8
+    assert artifact["solver_preset"] == "3d_gamg"
+    assert artifact["ksp_type"] == "fgmres"
+    assert artifact["pc_type"] == "gamg"
+    assert artifact["pc_subtype"] == "agg"
+    assert artifact["mat_type"] == "seqaij"
+    assert artifact["vec_type"] == "seq"
+    assert artifact["setup_seconds"] == 0.25
+    assert artifact["ksp_setup_count"] == 1
+    assert artifact["ksp_setup_attempts"] == 1
+    assert artifact["forward_factor_cache_hit"] is False
+    assert artifact["reuse_preconditioner_requested"] is True
+    assert artifact["reuse_preconditioner_applied"] is True
+    assert artifact["solve_seconds"] == 0.5
+    assert artifact["iterations_per_rhs"] == [3, 4]
+    assert artifact["converged_reason"] == 2
+    assert artifact["converged"] is True
+    assert artifact["mat_solve_effective"] == "vec-loop"
+    assert artifact["petsc_device_effective"] == "cpu"
+    assert artifact["petsc_cuda_available"] is False
+    assert artifact["petsc_cuda_errors"] == {"mat": "Unknown type"}
+    assert artifact["mpi_size"] == 1
+    assert artifact["mpi_size_supported"] is True
+    assert artifact["mpi_fallback_reason"] is None
+    assert artifact["fallback_reason"] == "petsc_cuda_not_available"
+    assert artifact["forward_backend"] == "dolfinx"
+    assert artifact["jacobian_backend"] == "matrix-free"
+
+
+def test_probe_petsc_cuda_script_includes_mpi_diagnostics(monkeypatch, capsys):
+    module = _load_script_module("scripts", "diagnostics", "probe_petsc_cuda.py")
+    monkeypatch.setattr(
+        module,
+        "probe_petsc_cuda_runtime",
+        lambda: {"petsc_cuda": False, "errors": {"mat": "missing"}},
+    )
+    monkeypatch.setattr(
+        module,
+        "probe_mpi_runtime",
+        lambda: {"mpi_size": 1, "mpi_size_supported": True},
+    )
+    monkeypatch.setattr(sys, "argv", ["probe_petsc_cuda.py"])
+
+    module.main()
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["petsc_cuda"] is False
+    assert payload["mpi"]["mpi_size"] == 1
+    assert payload["mpi"]["mpi_size_supported"] is True
+
+
 def test_benchmark_3d_fair_compare_forwards_acceleration_profile(monkeypatch, tmp_path: Path):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_fair_compare.py")
     report_path = tmp_path / "runtime_report.json"

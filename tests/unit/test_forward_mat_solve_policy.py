@@ -20,6 +20,9 @@ class _FakeVec:
         _ = readonly
         return self.arr
 
+    def getType(self):
+        return "seq"
+
 
 class _FakeDenseMat:
     def __init__(self):
@@ -53,22 +56,33 @@ class _FakeA:
     def createVecRight(self):
         return _FakeVec(self.size)
 
+    def getType(self):
+        return "aij"
+
 
 class _FakeKSP:
     def __init__(self):
         self.mat_calls = 0
         self.solve_calls = 0
+        self.raise_on_mat_solve = False
+        self.converged_reason = 1
+        self.mat_converged_reason = 1
+        self.solve_converged_reason = 1
 
     def matSolve(self, B, X):
         self.mat_calls += 1
+        if self.raise_on_mat_solve:
+            raise RuntimeError("matSolve failed")
         X.arr[:, :] = B.arr * 2.0
+        self.converged_reason = self.mat_converged_reason
 
     def solve(self, b, x):
         self.solve_calls += 1
         x.arr[:] = b.arr + 1.0
+        self.converged_reason = self.solve_converged_reason
 
     def getConvergedReason(self):
-        return 1
+        return self.converged_reason
 
 
 def _make_model(*, mat_solve_mode: str, mesh_tdim: int) -> tuple[EITForwardModel, _FakeKSP]:
@@ -82,16 +96,40 @@ def _make_model(*, mat_solve_mode: str, mesh_tdim: int) -> tuple[EITForwardModel
     model.backend_config = SimpleNamespace(
         mat_solve_mode=mat_solve_mode,
         use_mat_solve=False,
+        reuse_preconditioner=True,
     )
     model._sigma_fingerprint = lambda sigma: "sigma-hash"
     model._base_cache_payload = lambda sigma_hash, n_patterns: {
         "sigma_hash": sigma_hash,
         "n_patterns": n_patterns,
     }
+    calls = {"matrix": 0, "bundle": 0}
+
+    def _create_full_matrix(_sigma):
+        calls["matrix"] += 1
+        return _FakeA(model.dofs + model.n_elec + 1)
+
+    def _make_bundle(system_matrix):
+        calls["bundle"] += 1
+        return {
+            "A": system_matrix,
+            "solve_A": system_matrix,
+            "ksp": ksp,
+            "backend": "petsc-ksp",
+            "ksp_type": "cg",
+            "pc_type": "gamg",
+            "factor_solver_type": None,
+            "solve_mat_type": "aij",
+            "ksp_setup_count": 1,
+            "reuse_preconditioner": bool(model.backend_config.reuse_preconditioner),
+            "reuse_preconditioner_applied": True,
+        }
+
     ksp = _FakeKSP()
-    model._create_full_matrix_petsc = lambda sigma: _FakeA(model.dofs + model.n_elec + 1)
-    model._make_petsc_solver_bundle = lambda system_matrix: {"A": system_matrix, "ksp": ksp}
+    model._create_full_matrix_petsc = _create_full_matrix
+    model._make_petsc_solver_bundle = _make_bundle
     model._last_cache_lookup = {}
+    model._test_calls = calls
     return model, ksp
 
 
@@ -105,6 +143,21 @@ def test_forward_mat_solve_mode_off_uses_vector_loop(monkeypatch):
     assert ksp.mat_calls == 0
     assert ksp.solve_calls == pattern_matrix.shape[0]
     assert sol.shape == (model.dofs + model.n_elec + 1, pattern_matrix.shape[0])
+    assert model._test_calls == {"matrix": 1, "bundle": 1}
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_rhs_count"] == pattern_matrix.shape[0]
+    assert diag["forward_ksp_solve_count"] == pattern_matrix.shape[0]
+    assert diag["forward_ksp_mat_solve_count"] == 0
+    assert diag["forward_mat_solve_effective"] == "vec-loop"
+    assert diag["forward_factor_cache_hit"] is False
+    assert diag["ksp_type"] == "cg"
+    assert diag["pc_type"] == "gamg"
+    assert diag["petsc_mat_type"] == "aij"
+    assert diag["petsc_vec_type"] == "seq"
+    assert diag["forward_ksp_setup_count"] == 1
+    assert diag["forward_ksp_setup_attempts"] == 1
+    assert diag["forward_reuse_preconditioner_requested"] is True
+    assert diag["forward_reuse_preconditioner_applied"] is True
 
 
 def test_forward_mat_solve_mode_auto_prefers_mat_solve_for_3d(monkeypatch):
@@ -116,6 +169,83 @@ def test_forward_mat_solve_mode_auto_prefers_mat_solve_for_3d(monkeypatch):
 
     assert ksp.mat_calls == 1
     assert ksp.solve_calls == 0
+    assert model._test_calls == {"matrix": 1, "bundle": 1}
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_rhs_count"] == pattern_matrix.shape[0]
+    assert diag["forward_ksp_mat_solve_count"] == 1
+    assert diag["forward_ksp_solve_count"] == 0
+    assert diag["forward_ksp_converged_reason"] == 1
+    assert diag["forward_ksp_converged"] is True
+    assert diag["forward_mat_solve_effective"] == "matsolve"
+
+
+def test_forward_mat_solve_mode_on_forces_mat_solve(monkeypatch):
+    model, ksp = _make_model(mat_solve_mode="on", mesh_tdim=2)
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0]], dtype=float)
+    _ = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert ksp.mat_calls == 1
+    assert ksp.solve_calls == 0
+    assert model._test_calls == {"matrix": 1, "bundle": 1}
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_rhs_count"] == 1
+    assert diag["forward_ksp_mat_solve_count"] == 1
+    assert diag["forward_ksp_solve_count"] == 0
+    assert diag["forward_ksp_converged_reason"] == 1
+    assert diag["forward_ksp_converged"] is True
+    assert diag["forward_mat_solve_effective"] == "matsolve"
+
+
+def test_forward_mat_solve_cpu_failure_falls_back_to_vector_loop(monkeypatch):
+    model, ksp = _make_model(mat_solve_mode="on", mesh_tdim=3)
+    ksp.raise_on_mat_solve = True
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
+    sol = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert ksp.mat_calls == 1
+    assert ksp.solve_calls == pattern_matrix.shape[0]
+    assert sol.shape == (model.dofs + model.n_elec + 1, pattern_matrix.shape[0])
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_mat_solve_effective"] == "vec-loop"
+    assert diag["forward_ksp_mat_solve_count"] == 0
+    assert diag["forward_ksp_solve_count"] == pattern_matrix.shape[0]
+    assert diag["forward_mat_solve_fallback_reason"] == "matSolve failed"
+    assert str(diag["gpu_fallback_reason"]).startswith("matSolve_failed:")
+
+
+def test_forward_mat_solve_negative_reason_falls_back_to_vector_loop(monkeypatch):
+    model, ksp = _make_model(mat_solve_mode="on", mesh_tdim=3)
+    ksp.mat_converged_reason = -3
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
+    _ = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert ksp.mat_calls == 1
+    assert ksp.solve_calls == pattern_matrix.shape[0]
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_mat_solve_effective"] == "vec-loop"
+    assert diag["forward_ksp_converged_reason"] == 1
+    assert diag["forward_ksp_converged"] is True
+    assert "negative convergence reason (-3)" in diag["forward_mat_solve_fallback_reason"]
+
+
+def test_forward_reuse_preconditioner_disabled_is_diagnosed(monkeypatch):
+    model, _ksp = _make_model(mat_solve_mode="off", mesh_tdim=3)
+    model.backend_config.reuse_preconditioner = False
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
+    _ = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_reuse_preconditioner_requested"] is False
+    assert diag["forward_reuse_preconditioner_applied"] is True
+    assert diag["forward_ksp_setup_count"] == 1
 
 
 def test_resolve_petsc_backend_info_auto_falls_back_to_cpu(monkeypatch):

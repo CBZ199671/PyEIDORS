@@ -17,6 +17,7 @@ from eit_app.interop import (
 )
 from eit_app.interop import InteropBundleExporter, InteropBundleImporter, save_bridge_package
 from eit_app.interop.bridge_package import default_manifest
+from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 import eit_app.ui.path_explorer as path_explorer_module
 from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
@@ -232,7 +233,7 @@ def test_interop_hub_uses_single_qt_path_picker_buttons() -> None:
 
     texts = [button.text() for button in dialog.findChildren(QPushButton)]
 
-    assert texts.count("选择...") >= 4
+    assert texts.count(t("dlg.interop.path_pick_button")) >= 4
     assert "WSL..." not in texts
     assert "Win..." not in texts
     assert "Open" not in texts
@@ -293,8 +294,8 @@ def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(monkeypatch: py
 
     roots = path_explorer_module.visual_path_roots()
 
-    assert ("WSL 主目录", str(Path.home())) in roots
-    assert ("WSL 根目录", "/") in roots
+    assert (t("path_picker.sidebar.wsl_home"), str(Path.home())) in roots
+    assert (t("path_picker.sidebar.wsl_root"), "/") in roots
     assert ("Windows C:", "/mnt/c") in roots
     assert ("Windows D:", "/mnt/d") in roots
 
@@ -306,7 +307,7 @@ def test_visual_path_roots_include_only_windows_entries_on_windows(monkeypatch: 
 
     roots = path_explorer_module.visual_path_roots()
 
-    assert ("Windows 用户目录", str(Path.home())) in roots
+    assert (t("path_picker.sidebar.windows_home"), str(Path.home())) in roots
     assert ("Windows C:", "C:\\") in roots
     assert ("Windows D:", "D:\\") in roots
     assert all("WSL" not in label for label, _root in roots)

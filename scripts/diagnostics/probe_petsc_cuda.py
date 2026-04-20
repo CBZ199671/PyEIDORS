@@ -13,7 +13,7 @@ SRC_ROOT = REPO_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
-from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
+from pyeidors.perf.capabilities import probe_mpi_runtime, probe_petsc_cuda_runtime
 
 
 def parse_args() -> argparse.Namespace:
@@ -34,7 +34,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> None:
     args = parse_args()
-    payload = probe_petsc_cuda_runtime()
+    payload = dict(probe_petsc_cuda_runtime())
+    payload["mpi"] = probe_mpi_runtime()
     print(json.dumps(payload, indent=2 if args.pretty else None, ensure_ascii=False))
     if args.require == "cuda" and not bool(payload.get("petsc_cuda", False)):
         raise SystemExit(1)

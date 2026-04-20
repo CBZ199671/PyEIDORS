@@ -7,6 +7,14 @@ from functools import lru_cache
 from .policy import FEATURE_MODE_AUTO, normalize_feature_mode
 
 
+MPI_SINGLE_RANK_FALLBACK_REASON = "mpi_size_gt_1_not_supported_phase2_single_rank_only"
+MPI_SINGLE_RANK_GUIDANCE = (
+    "PyEIDORS phase-2 CEM forward currently supports MPI size=1 only; "
+    "use single-rank execution until distributed PETSc/DOLFINx production "
+    "paths have mpiexec smoke coverage."
+)
+
+
 def _load_petsc_runtime():
     try:
         from ..forward.eit_forward_model import PETSc
@@ -52,6 +60,60 @@ def _has_petsc_gamg() -> bool:
         return False
     pc_type = getattr(getattr(PETSc, "PC", None), "Type", None)
     return pc_type is not None and hasattr(pc_type, "GAMG")
+
+
+def _load_mpi_comm_world():
+    try:
+        from mpi4py import MPI
+    except Exception:
+        return None
+    return getattr(MPI, "COMM_WORLD", None)
+
+
+def _comm_int(comm, *, method_name: str, attr_name: str, default: int) -> int:
+    if comm is None:
+        return int(default)
+    try:
+        method = getattr(comm, method_name, None)
+        if callable(method):
+            return int(method())
+    except Exception:
+        pass
+    try:
+        if hasattr(comm, attr_name):
+            return int(getattr(comm, attr_name))
+    except Exception:
+        pass
+    return int(default)
+
+
+def probe_mpi_runtime(
+    comm=None,
+    *,
+    supports_parallel: bool = False,
+) -> dict[str, object]:
+    """Report MPI rank/size and the current PyEIDORS production support boundary."""
+    source = "provided"
+    if comm is None:
+        comm = _load_mpi_comm_world()
+        source = "mpi4py.COMM_WORLD" if comm is not None else "unavailable"
+
+    size = max(1, _comm_int(comm, method_name="Get_size", attr_name="size", default=1))
+    rank = max(0, _comm_int(comm, method_name="Get_rank", attr_name="rank", default=0))
+    parallel = size > 1
+    size_supported = bool((not parallel) or supports_parallel)
+    fallback_reason = None if size_supported else MPI_SINGLE_RANK_FALLBACK_REASON
+    return {
+        "mpi_available": comm is not None,
+        "mpi_source": source,
+        "mpi_size": int(size),
+        "mpi_rank": int(rank),
+        "mpi_parallel": bool(parallel),
+        "mpi_parallel_supported": bool(supports_parallel),
+        "mpi_size_supported": bool(size_supported),
+        "mpi_fallback_reason": fallback_reason,
+        "mpi_guidance": MPI_SINGLE_RANK_GUIDANCE if fallback_reason else None,
+    }
 
 
 def _enum_name(namespace, name: str) -> str | None:
@@ -228,6 +290,7 @@ probe_petsc_cuda_runtime.cache_info = _probe_petsc_cuda_runtime_cached.cache_inf
 def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> dict[str, bool]:
     del cache_key
     cuda_probe = probe_petsc_cuda_runtime()
+    mpi_probe = probe_mpi_runtime()
     return {
         "pyamg": _has_pyamg(),
         "cholmod": _has_cholmod(),
@@ -238,6 +301,9 @@ def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> di
         "petsc_cuda_vec": bool(cuda_probe.get("petsc_cuda_vec", False)),
         "petsc_cuda_dense": bool(cuda_probe.get("petsc_cuda_dense", False)),
         "petsc_cuda": bool(cuda_probe.get("petsc_cuda", False)),
+        "mpi": bool(mpi_probe.get("mpi_available", False)),
+        "mpi_parallel": bool(mpi_probe.get("mpi_parallel", False)),
+        "mpi_size_supported": bool(mpi_probe.get("mpi_size_supported", False)),
     }
 
 
@@ -266,8 +332,8 @@ def select_preconditioner(
     if capabilities is None:
         capabilities = detect_performance_capabilities()
     mode_capability = {"pyamg": "pyamg", "cholmod": "cholmod", "petsc-gamg": "petsc_gamg"}
-    if resolved_mode == "diag":
-        return "diag"
+    if resolved_mode in {"diag", "noser", "prior", "pmat", "coarse", "custom"}:
+        return resolved_mode
     if resolved_mode in mode_capability:
         required = mode_capability[resolved_mode]
         return resolved_mode if capabilities.get(required, False) else "diag"

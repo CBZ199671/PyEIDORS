@@ -223,7 +223,22 @@ class GaussNewtonReconstructor:
         _validate_option("solver_mode", self.solver_mode, {"strict", "fast"})
         _validate_option("linear_solver", self.linear_solver, {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"})
         _validate_option("line_search_mode", self.line_search_mode, {"full", "fast"})
-        _validate_option("preconditioner", self.preconditioner, {"auto", "diag", "pyamg", "cholmod", "petsc-gamg"})
+        _validate_option(
+            "preconditioner",
+            self.preconditioner,
+            {
+                "auto",
+                "diag",
+                "noser",
+                "prior",
+                "pmat",
+                "coarse",
+                "custom",
+                "pyamg",
+                "cholmod",
+                "petsc-gamg",
+            },
+        )
         _validate_option("fast_linear_path", self.fast_linear_path, {"auto", "woodbury", "pcg", "cholmod-direct", "strict"})
         _validate_option("rom_mode", self.rom_mode, {"off", "auto", "on"})
         _validate_option("rom_snapshot_source", self.rom_snapshot_source, {"cache", "synthetic", "hybrid"})
