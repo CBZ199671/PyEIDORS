@@ -370,6 +370,103 @@ def test_matrix_free_ksp_backend_petsc_falls_back_when_unavailable(monkeypatch):
     assert meta["matrix_free_ksp_backend_fallback_reason"] == "petsc_backend_unavailable"
 
 
+def test_fast_solver_pyamg_matches_dense_reference():
+    """T13: pyamg matrix-free PC mode produces same delta as the dense reference."""
+    if gn_runtime.pyamg is None:
+        pytest.skip("pyamg unavailable in this environment")
+
+    J = np.array(
+        [
+            [0.9, 0.1, -0.3],
+            [-0.5, 0.7, 0.4],
+            [0.3, -0.2, 0.6],
+            [0.2, 0.8, -0.1],
+            [0.1, -0.4, 0.7],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.06, -0.03, 0.01, 0.05, -0.02], dtype=float)
+    de = np.array([0.05, -0.08, 0.12], dtype=float)
+    lam = 0.05
+    op = LinearOperator(
+        J.shape,
+        matvec=lambda x: J @ np.asarray(x, dtype=float),
+        rmatvec=lambda x: J.T @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="pyamg", fast_linear_path="pcg")
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=op,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    expected = _expected_solution(J, residual, de, lam)
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+
+    meta = recon._last_fast_linear_meta
+    assert meta["dense_jacobian_materialized"] is False
+    assert meta["resolved_preconditioner"] in {"pyamg", "diag"}
+    # Either pyamg PC fired (path records the explicit label) or runtime fell
+    # back to diag with an explicit fallback reason; both are acceptable per V10
+    # but we must never end up with a silent identity PC.
+    path = str(meta.get("path", ""))
+    source = str(meta.get("matrix_free_pc_source", ""))
+    if source == "identity":
+        assert meta.get("matrix_free_pc_reason"), (
+            "pyamg fallback must surface a reason, not silently pick identity."
+        )
+    else:
+        assert path in {"pcg-pyamg-precond", "pcg-diag-precond"}
+
+
+def test_fast_solver_pyamg_missing_falls_back_to_diag(monkeypatch):
+    """pyamg absent should degrade gracefully to diag PC with a named reason."""
+    monkeypatch.setattr(gn_runtime, "pyamg", None)
+
+    J = np.array(
+        [
+            [0.9, 0.1, -0.3],
+            [-0.5, 0.7, 0.4],
+            [0.3, -0.2, 0.6],
+            [0.2, 0.8, -0.1],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.06, -0.03, 0.01, 0.05], dtype=float)
+    de = np.array([0.05, -0.08, 0.12], dtype=float)
+    lam = 0.05
+    op = LinearOperator(
+        J.shape,
+        matvec=lambda x: J @ np.asarray(x, dtype=float),
+        rmatvec=lambda x: J.T @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="pyamg", fast_linear_path="pcg")
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=op,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    expected = _expected_solution(J, residual, de, lam)
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+
+    meta = recon._last_fast_linear_meta
+    assert meta["resolved_preconditioner"] == "diag"
+    assert "pyamg_unavailable" in str(meta.get("fallback_reason", ""))
+
+
 def test_solve_matrix_free_hessian_via_petsc_direct_call():
     if gn_runtime._PETSc is None:
         pytest.skip("petsc4py unavailable in this environment")

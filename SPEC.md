@@ -94,7 +94,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | T10 | . | PETSc AmgX / Hypre CUDA path wiring + capability probe entries in benchmark artifact | V19 |
 | T11 | . | Research: PETSc/petsc4py structural reuse hints. `KSPSetOperators(ksp, Amat, Pmat)` has no `SAME_NONZERO_PATTERN` parameter in current API; `petsc4py.KSP.setOperators(A=None, P=None)` likewise. Current main line stays `setOperators(A_new)` + `KSPSetReusePreconditioner(True)` | V13 |
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |
-| T13 | . | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
+| T13 | x | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
 | T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
 
 ## §B — bugs
