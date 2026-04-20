@@ -288,6 +288,35 @@ def test_resolve_petsc_backend_info_cuda_requires_real_capability(monkeypatch):
     assert "nix develop .#cuda" in message
 
 
+def test_should_use_mat_solve_respects_min_patterns_threshold():
+    model, _ksp = _make_model(mat_solve_mode="auto", mesh_tdim=3)
+    model.backend_config.forward_mat_solve_min_patterns = 0
+    assert model._should_use_mat_solve(2) is True
+    assert model._should_use_mat_solve(1) is False
+
+    model.backend_config.forward_mat_solve_min_patterns = 4
+    assert model._should_use_mat_solve(2) is False
+    assert model._should_use_mat_solve(3) is False
+    assert model._should_use_mat_solve(4) is True
+    assert model._should_use_mat_solve(16) is True
+
+
+def test_should_use_mat_solve_min_patterns_ignored_in_on_mode():
+    model, _ksp = _make_model(mat_solve_mode="on", mesh_tdim=3)
+    model.backend_config.forward_mat_solve_min_patterns = 64
+    # Explicit "on" overrides the auto-mode threshold.
+    assert model._should_use_mat_solve(2) is True
+
+
+def test_should_use_mat_solve_min_patterns_defaults_to_current_behaviour():
+    model, _ksp = _make_model(mat_solve_mode="auto", mesh_tdim=3)
+    # No explicit threshold attribute → defaults to 0 → existing heuristic wins.
+    if hasattr(model.backend_config, "forward_mat_solve_min_patterns"):
+        del model.backend_config.forward_mat_solve_min_patterns
+    assert model._should_use_mat_solve(2) is True
+    assert model._should_use_mat_solve(1) is False
+
+
 def test_gpu_gauge_fix_enabled_tracks_effective_cuda_backend():
     model = EITForwardModel.__new__(EITForwardModel)
     model._petsc_backend_info = {"petsc_device_effective": "cpu"}

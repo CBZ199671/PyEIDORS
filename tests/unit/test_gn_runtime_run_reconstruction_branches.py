@@ -380,3 +380,94 @@ def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
     backend = results.diagnostics["backend_info"]
     assert backend["jacobian_representation"] == "jacobian_linearization"
     assert backend["dense_jacobian_materialized"] is False
+
+
+def test_run_reconstruction_reuses_linearized_jacobian_across_iterations(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+):
+    """Operator path honours jacobian_update_every without re-running linearize()."""
+    recon, _progress = _make_reconstructor(max_iterations=4, verbose=True, n_elements=2)
+    _install_common_runtime_stubs(monkeypatch, recon)
+    recon.jacobian_update_every = 2
+    recon.jacobian_reuse_tol = 10.0  # force reuse based on update cadence only
+
+    linearization = JacobianLinearization(
+        grad_u_all=(np.ones((2, 1), dtype=float),),
+        adjoint_gradients=(
+            np.array([[1.0], [0.0]], dtype=float),
+            np.array([[0.0], [1.0]], dtype=float),
+        ),
+        cell_areas=np.ones(2, dtype=float),
+        n_meas_per_stim=(2,),
+        sign=1.0,
+    )
+    calls = {"linearize": 0, "calculate": 0}
+
+    def linearize(_sigma, method=None):
+        assert method == "efficient"
+        calls["linearize"] += 1
+        return linearization
+
+    def calculate(_sigma, method=None):
+        _ = method
+        calls["calculate"] += 1
+        raise AssertionError("dense calculate must not run for linearized Jacobian reuse")
+
+    recon.jacobian_calculator = SimpleNamespace(
+        calculate=calculate,
+        linearize=linearize,
+        block_tuning_info=lambda: {},
+        _last_cache_lookup={},
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "_startup_cache_lookup",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("startup dense cache should be skipped")
+        ),
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "_project_measurement_jacobian",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("operator Jacobian must not enter dense projection")
+        ),
+    )
+
+    observed_reuse = []
+
+    def fake_fast_solver(reconstructor, **kwargs):
+        observed_reuse.append(kwargs["J_weighted_np"] is linearization)
+        reconstructor._last_fast_linear_meta = {
+            "path": "pcg-diag-precond",
+            "resolved_preconditioner": "diag",
+            "fast_linear_path_selected": "pcg",
+            "fast_linear_path_reason": "auto:matrix_free_pcg",
+            "jacobian_representation": "jacobian_linearization",
+            "jacobian_shape": [2, 2],
+            "dense_jacobian_materialized": False,
+            "linear_iterations": 1,
+        }
+        return np.array([0.01, 0.0], dtype=float), 0.01, 0.02
+
+    monkeypatch.setattr(gn_runtime, "_solve_linear_system_fast", fake_fast_solver)
+    monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_args, **_kwargs: 1.0)
+    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0))
+
+    results = gn_runtime.run_reconstruction(
+        recon,
+        measured_data=np.array([1.0, 0.8], dtype=float),
+        jacobian_method="linearized",
+    )
+
+    # jacobian_update_every=2 means linearize() runs at iters 0 and 2 only.
+    assert calls["linearize"] == 2
+    assert calls["calculate"] == 0
+    # All four fast-solver calls see the SAME operator object (no rebuild).
+    assert observed_reuse == [True, True, True, True]
+    assert results.iterations == 4
+
+    # Verbose mode prints the reuse banner on the reused iterations.
+    output = capsys.readouterr().out
+    assert output.count("reused Jacobian") >= 2

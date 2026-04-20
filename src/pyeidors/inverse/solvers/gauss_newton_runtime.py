@@ -27,6 +27,128 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     cholmod_cholesky = None
 
+try:  # pragma: no cover - optional in trimmed environments
+    from petsc4py import PETSc as _PETSc
+except Exception:  # pragma: no cover
+    _PETSc = None
+
+
+def _petsc_vec_to_numpy(vec) -> np.ndarray:
+    """Safely extract a dense numpy array from a PETSc Vec wrapper."""
+    if hasattr(vec, "array_r"):
+        try:
+            return np.asarray(vec.array_r, dtype=np.float64)
+        except Exception:
+            pass
+    if hasattr(vec, "getArray"):
+        try:
+            return np.asarray(vec.getArray(readonly=True), dtype=np.float64)
+        except Exception:
+            pass
+    if hasattr(vec, "array"):
+        return np.asarray(vec.array, dtype=np.float64)
+    raise TypeError("Unsupported PETSc Vec wrapper in matrix-free CG helper.")
+
+
+class _PETScMatrixFreeHessianContext:
+    """PCSHELL/MATSHELL context applying ``H v`` via a SciPy LinearOperator."""
+
+    __slots__ = ("_op",)
+
+    def __init__(self, op: LinearOperator) -> None:
+        self._op = op
+
+    def mult(self, _mat, x, y) -> None:
+        result = np.asarray(
+            self._op.matvec(_petsc_vec_to_numpy(x)), dtype=np.float64
+        )
+        y.getArray(readonly=False)[:] = result
+
+
+class _PETScMatrixFreePCContext:
+    """PCSHELL context applying ``M^{-1} r`` via a SciPy LinearOperator."""
+
+    __slots__ = ("_op",)
+
+    def __init__(self, op: LinearOperator) -> None:
+        self._op = op
+
+    def apply(self, _pc, x, y) -> None:
+        result = np.asarray(
+            self._op.matvec(_petsc_vec_to_numpy(x)), dtype=np.float64
+        )
+        y.getArray(readonly=False)[:] = result
+
+
+def _solve_matrix_free_hessian_via_petsc(
+    h_op: LinearOperator,
+    rhs: np.ndarray,
+    m_op: LinearOperator | None,
+    *,
+    rtol: float,
+    maxiter: int,
+    petsc_module=None,
+) -> tuple[np.ndarray, int, bool, str | None]:
+    """Solve ``H delta = rhs`` using PETSc KSP(CG) + MATSHELL + PCSHELL."""
+    petsc = petsc_module if petsc_module is not None else _PETSc
+    if petsc is None:
+        raise RuntimeError("petsc4py_unavailable")
+
+    n = int(np.asarray(rhs).size)
+    comm = getattr(petsc, "COMM_SELF", None)
+
+    h_mat = petsc.Mat().createPython(
+        (n, n),
+        context=_PETScMatrixFreeHessianContext(h_op),
+        comm=comm,
+    )
+    if hasattr(h_mat, "setUp"):
+        h_mat.setUp()
+
+    ksp = petsc.KSP().create(comm=comm)
+    ksp.setOperators(h_mat)
+    ksp.setType("cg")
+    pc = ksp.getPC()
+    if m_op is None:
+        if hasattr(pc, "setType"):
+            pc.setType("none")
+    else:
+        pc.setType("python")
+        pc.setPythonContext(_PETScMatrixFreePCContext(m_op))
+    if hasattr(ksp, "setTolerances"):
+        ksp.setTolerances(rtol=float(rtol), max_it=int(max(1, maxiter)))
+    if hasattr(ksp, "setUp"):
+        ksp.setUp()
+
+    b = h_mat.createVecRight()
+    b.getArray(readonly=False)[:] = np.asarray(rhs, dtype=np.float64)
+    x = h_mat.createVecRight()
+    try:
+        ksp.solve(b, x)
+        result = np.asarray(
+            _petsc_vec_to_numpy(x), dtype=np.float64
+        ).reshape(-1).copy()
+        iterations = (
+            int(ksp.getIterationNumber()) if hasattr(ksp, "getIterationNumber") else 0
+        )
+        reason = (
+            int(ksp.getConvergedReason())
+            if hasattr(ksp, "getConvergedReason")
+            else 0
+        )
+        converged = bool(reason > 0)
+        fallback = None if converged else f"petsc_ksp_reason_{reason}"
+    finally:
+        for obj in (b, x, ksp, h_mat):
+            destroy = getattr(obj, "destroy", None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception:
+                    pass
+
+    return result, iterations, converged, fallback
+
 from ...data.difference import (
     normalize_difference_mode,
     normalize_difference_orientation,
@@ -111,6 +233,7 @@ class _JacobianActionBundle:
     dense: np.ndarray | None
     matvec: Callable[[np.ndarray], np.ndarray]
     rmatvec: Callable[[np.ndarray], np.ndarray]
+    linearization: "JacobianLinearization | None" = None
 
 
 def _to_runtime_tensor(reconstructor, values) -> torch.Tensor:
@@ -306,8 +429,14 @@ def _operator_diag_preconditioner(
     lambda_eff: float,
     *,
     preferred: str = "diag",
+    auto_hessian_diag_fn: Callable[[], np.ndarray] | None = None,
 ) -> tuple[np.ndarray, dict[str, object]]:
-    """Matrix-free Hessian PC contract based on explicit diag/NOSER/prior data."""
+    """Matrix-free Hessian PC contract based on explicit diag/NOSER/prior data.
+
+    ``auto_hessian_diag_fn`` is a last-resort callback that returns the full
+    ``diag(J^T W J [+ alpha R_diag])``. It is used when no explicit diag attrs
+    are set on the reconstructor so the PC is not silently forced to identity.
+    """
     floor = _matrix_free_pc_floor(reconstructor)
     mode = str(preferred).strip().lower()
     source = "identity"
@@ -353,11 +482,29 @@ def _operator_diag_preconditioner(
             base_diag = reg_diag
             source = "noser" if _regularization_looks_like_noser(reconstructor) else "prior"
 
-        if base_diag is None:
+        if base_diag is not None:
+            diag_h = float(lambda_eff) * np.asarray(base_diag, dtype=np.float64)
+        elif auto_hessian_diag_fn is not None:
+            diag_h = None
+            try:
+                computed = auto_hessian_diag_fn()
+            except Exception as exc:
+                diag_h = None
+                reason = f"auto_hessian_diag_failed:{type(exc).__name__}"
+            else:
+                arr = np.asarray(computed, dtype=np.float64).reshape(-1)
+                if arr.shape[0] == int(n_param) and np.isfinite(arr).all():
+                    diag_h = arr
+                    source = "auto_linearization_diag"
+                else:
+                    reason = "auto_hessian_diag_invalid_output"
+            if diag_h is None:
+                diag_h = np.full(
+                    int(n_param), max(float(lambda_eff), 1.0), dtype=np.float64
+                )
+        else:
             diag_h = np.full(int(n_param), max(float(lambda_eff), 1.0), dtype=np.float64)
             reason = "matrix_free_pc_missing_diag"
-        else:
-            diag_h = float(lambda_eff) * np.asarray(base_diag, dtype=np.float64)
 
     diag_h, clamp_reason = _sanitize_preconditioner_diag(
         diag_h,
@@ -615,6 +762,7 @@ def _as_jacobian_action_bundle(
             dense=None,
             matvec=_matvec,
             rmatvec=_rmatvec,
+            linearization=jacobian,
         )
 
     if isinstance(jacobian, LinearOperator):
@@ -750,11 +898,29 @@ def _solve_linear_system_fast(
             "matrix_free_pmat_available": True,
         }
     else:
+        auto_hessian_diag_fn: Callable[[], np.ndarray] | None = None
+        linearization = jacobian_actions.linearization
+        if linearization is not None:
+            weights_sqrt = (
+                np.asarray(measurement_weight_np, dtype=np.float64).reshape(-1)
+                if measurement_weight_np is not None
+                else None
+            )
+            weights_for_diag = (
+                weights_sqrt * weights_sqrt if weights_sqrt is not None else None
+            )
+
+            def auto_hessian_diag_fn() -> np.ndarray:
+                return linearization.hessian_diag(
+                    measurement_weights=weights_for_diag,
+                )
+
         diag_precond, pc_diag_meta = _operator_diag_preconditioner(
             reconstructor,
             n_param,
             lambda_eff,
             preferred=resolved_preconditioner,
+            auto_hessian_diag_fn=auto_hessian_diag_fn,
         )
     diag_inv_op = LinearOperator(
         (n_param, n_param),
@@ -1052,6 +1218,52 @@ def _solve_linear_system_fast(
 
         def _count_iteration(_xk) -> None:
             iteration_counter["count"] += 1
+
+        backend_requested = (
+            str(getattr(reconstructor, "matrix_free_ksp_backend", "scipy"))
+            .strip()
+            .lower()
+            or "scipy"
+        )
+        if backend_requested == "auto":
+            backend_effective = "petsc" if _PETSc is not None else "scipy"
+        elif backend_requested == "petsc":
+            backend_effective = "petsc" if _PETSc is not None else "scipy"
+        else:
+            backend_effective = "scipy"
+        pc_meta["matrix_free_ksp_backend_requested"] = backend_requested
+        pc_meta["matrix_free_ksp_backend_effective"] = backend_effective
+
+        if backend_requested == "petsc" and _PETSc is None:
+            backend_reason = "petsc_backend_unavailable"
+            pc_meta["matrix_free_ksp_backend_fallback_reason"] = backend_reason
+            if fallback is None:
+                fallback = backend_reason
+            else:
+                fallback = f"{fallback};{backend_reason}"
+
+        if backend_effective == "petsc":
+            try:
+                delta_arr, petsc_iters, petsc_converged, petsc_fallback = (
+                    _solve_matrix_free_hessian_via_petsc(
+                        h_op,
+                        rhs,
+                        m_op,
+                        rtol=cg_rtol,
+                        maxiter=cg_maxiter,
+                    )
+                )
+            except Exception as exc:
+                pc_meta["matrix_free_ksp_backend_effective"] = "scipy"
+                pc_meta["matrix_free_ksp_backend_fallback_reason"] = (
+                    f"petsc_backend_failed:{type(exc).__name__}"
+                )
+            else:
+                linear_iterations = int(petsc_iters)
+                if not petsc_converged:
+                    reason = petsc_fallback or "pcg_not_converged"
+                    return None, path, choice, reason
+                return np.asarray(delta_arr, dtype=np.float64), path, choice, fallback
 
         delta, info = cg(
             h_op,
@@ -2441,7 +2653,7 @@ def run_reconstruction(
     use_operator_jacobian = _is_operator_jacobian_method(jacobian_method)
     if use_operator_jacobian and reconstructor.solver_mode != "fast":
         raise RuntimeError("Operator Jacobian methods require solver_mode='fast'.")
-    prev_jacobian_np = None
+    prev_jacobian = None
     prev_jacobian_iter = -1
     fast_fallback_reason: str | None = None
     resolved_preconditioner: str | None = None
@@ -2543,7 +2755,7 @@ def run_reconstruction(
                 reconstructor._force_jacobian_refresh = False
             can_reuse = (
                 reconstructor.solver_mode == "fast"
-                and prev_jacobian_np is not None
+                and prev_jacobian is not None
                 and (iteration - prev_jacobian_iter) < max(1, reconstructor.jacobian_update_every)
                 and reuse_change_ok
                 and not force_refresh
@@ -2553,11 +2765,11 @@ def run_reconstruction(
                 )
             )
             if can_reuse:
-                measurement_jacobian_np = prev_jacobian_np
+                measurement_jacobian_np = prev_jacobian
                 jacobian_reused = True
             elif iteration == 0 and startup_jacobian_np is not None:
                 measurement_jacobian_np = np.asarray(startup_jacobian_np, dtype=np.float64)
-                prev_jacobian_np = measurement_jacobian_np
+                prev_jacobian = measurement_jacobian_np
                 prev_jacobian_iter = iteration
             else:
                 jacobian_start = perf_counter()
@@ -2567,7 +2779,7 @@ def run_reconstruction(
                     jacobian_method=jacobian_method,
                 )
                 timing_totals["jacobian"] += perf_counter() - jacobian_start
-                prev_jacobian_np = measurement_jacobian_np
+                prev_jacobian = measurement_jacobian_np
                 prev_jacobian_iter = iteration
 
             if reconstructor._meas_weight_sqrt is not None:
@@ -2866,10 +3078,10 @@ def run_reconstruction(
     else:
         execution_profile = "cpu"
 
-    if jacobian_representation is None and prev_jacobian_np is not None:
+    if jacobian_representation is None and prev_jacobian is not None:
         jacobian_representation = "dense"
-    if jacobian_shape is None and prev_jacobian_np is not None and hasattr(prev_jacobian_np, "shape"):
-        jacobian_shape = [int(prev_jacobian_np.shape[0]), int(prev_jacobian_np.shape[1])]
+    if jacobian_shape is None and prev_jacobian is not None and hasattr(prev_jacobian, "shape"):
+        jacobian_shape = [int(prev_jacobian.shape[0]), int(prev_jacobian.shape[1])]
     if dense_jacobian_materialized is None and jacobian_representation == "dense":
         dense_jacobian_materialized = True
 

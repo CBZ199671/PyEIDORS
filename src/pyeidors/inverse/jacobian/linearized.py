@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -12,6 +13,17 @@ from scipy.sparse.linalg import LinearOperator
 RegularizationAction = Callable[[np.ndarray], np.ndarray] | LinearOperator | np.ndarray
 
 
+def compute_sigma_fingerprint(sigma_values) -> str:
+    """Return a stable content hash for the conductivity values of ``sigma``."""
+    values = getattr(sigma_values, "x", None)
+    if values is not None:
+        array = getattr(values, "array", None)
+        if array is not None:
+            sigma_values = array
+    array = np.ascontiguousarray(np.asarray(sigma_values), dtype=np.float64).reshape(-1)
+    return hashlib.sha256(array.tobytes()).hexdigest()
+
+
 @dataclass
 class JacobianLinearization:
     """Apply EIT Jacobian actions without materializing the dense Jacobian.
@@ -20,6 +32,11 @@ class JacobianLinearization:
     point and exposes ``Jv`` and ``J^T r`` operations. Existing dense workflows
     can still call :meth:`to_dense`, but inverse solvers can use the operator
     actions directly.
+
+    ``sigma_fingerprint`` is a content hash of the conductivity that produced
+    the stored gradients. It is empty by default for backwards compatibility;
+    when set, :meth:`assert_compatible` guards external reuse against silently
+    applying stale gradients to a different linearization point.
     """
 
     grad_u_all: tuple[np.ndarray, ...]
@@ -27,6 +44,7 @@ class JacobianLinearization:
     cell_areas: np.ndarray
     n_meas_per_stim: tuple[int, ...]
     sign: float = 1.0
+    sigma_fingerprint: str = ""
 
     def __post_init__(self) -> None:
         self.cell_areas = np.asarray(self.cell_areas, dtype=np.float64)
@@ -38,7 +56,26 @@ class JacobianLinearization:
         )
         self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
         self.sign = float(self.sign)
+        self.sigma_fingerprint = str(self.sigma_fingerprint or "")
         self._validate_shapes()
+
+    def assert_compatible(self, sigma_fingerprint: str | None) -> None:
+        """Raise if the stored gradients predate a new conductivity value.
+
+        The check is permissive: it only fires when both the stored and
+        provided fingerprints are non-empty and differ. An empty stored
+        fingerprint (legacy construction) or an empty ``sigma_fingerprint``
+        argument skips the guard.
+        """
+        stored = str(self.sigma_fingerprint or "")
+        provided = str(sigma_fingerprint or "")
+        if not stored or not provided:
+            return
+        if stored != provided:
+            raise ValueError(
+                "JacobianLinearization sigma fingerprint mismatch: "
+                f"stored={stored[:12]}..., provided={provided[:12]}..."
+            )
 
     @property
     def n_parameters(self) -> int:
@@ -163,6 +200,60 @@ class JacobianLinearization:
                 )
             meas_idx += n_meas_this
         return dense
+
+    def hessian_diag(
+        self,
+        *,
+        measurement_weights: np.ndarray | None = None,
+        alpha: float = 0.0,
+        regularization_diag: np.ndarray | None = None,
+        floor: float = 0.0,
+    ) -> np.ndarray:
+        """Return ``diag(J^T W J) [+ alpha * R_diag]`` without dense ``J``.
+
+        Useful as a free NOSER-style diagonal preconditioner for matrix-free
+        Gauss-Newton solves. The contraction reuses the same ``grad_u_all`` /
+        ``adjoint_gradients`` buffers that ``matvec`` / ``rmatvec`` rely on.
+        """
+        weights = None
+        if measurement_weights is not None:
+            weights = np.asarray(measurement_weights, dtype=np.float64).reshape(-1)
+            if weights.size != self.n_measurements:
+                raise ValueError(
+                    f"Expected {self.n_measurements} weights, got {weights.size}."
+                )
+
+        diag = np.zeros(self.n_parameters, dtype=np.float64)
+        meas_idx = 0
+        for stim_idx, grad_u in enumerate(self.grad_u_all):
+            n_meas = self.n_meas_per_stim[stim_idx]
+            adjoint_block = np.asarray(
+                self.adjoint_gradients[meas_idx : meas_idx + n_meas],
+                dtype=np.float64,
+            )
+            # Per (measurement m, element e) sensitivity before cell_area scaling.
+            contrib = np.einsum(
+                "eg,meg->me", grad_u, adjoint_block, optimize=True
+            )
+            contrib_sq = contrib * contrib
+            if weights is not None:
+                contrib_sq = contrib_sq * weights[meas_idx : meas_idx + n_meas, None]
+            diag += contrib_sq.sum(axis=0)
+            meas_idx += n_meas
+        diag = diag * (float(self.sign) ** 2) * (self.cell_areas ** 2)
+
+        if float(alpha) != 0.0 and regularization_diag is not None:
+            reg = np.asarray(regularization_diag, dtype=np.float64).reshape(-1)
+            if reg.size != self.n_parameters:
+                raise ValueError(
+                    f"Expected {self.n_parameters} regularization diag entries, "
+                    f"got {reg.size}."
+                )
+            diag = diag + float(alpha) * reg
+
+        if float(floor) > 0.0:
+            diag = np.maximum(diag, float(floor))
+        return np.asarray(diag, dtype=np.float64)
 
     def normal_matvec(
         self,

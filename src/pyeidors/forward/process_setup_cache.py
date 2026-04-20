@@ -45,15 +45,30 @@ def _pattern_signature(config: PatternConfig) -> dict[str, Any]:
 
 def build_process_forward_setup_key(
     *,
-    mesh_runtime_id: int,
     mesh_file: str | None,
     n_elec: int,
     z: np.ndarray,
     pattern_config: PatternConfig,
+    mesh_content_hash: str | None = None,
 ) -> str:
+    """Build a content-addressed cache key for forward static setup.
+
+    A stable cache key requires at least one of ``mesh_file`` (file-backed
+    mesh) or ``mesh_content_hash`` (in-memory mesh). Earlier revisions mixed
+    ``id(self.mesh)`` into the key, which was unsafe: Python is free to reuse
+    addresses after garbage collection, so an in-memory mesh could share an
+    id with a freshly allocated replacement.
+    """
+    file_token = str(mesh_file or "")
+    content_token = str(mesh_content_hash or "")
+    if not file_token and not content_token:
+        raise ValueError(
+            "build_process_forward_setup_key requires either mesh_file "
+            "or mesh_content_hash to form a stable cache key."
+        )
     payload = {
-        "mesh_runtime_id": int(mesh_runtime_id),
-        "mesh_file": str(mesh_file or ""),
+        "mesh_file": file_token,
+        "mesh_content_hash": content_token,
         "n_elec": int(n_elec),
         "z_hash": hash_array(np.asarray(z, dtype=np.float64).reshape(-1)),
         "pattern_config": _pattern_signature(pattern_config),

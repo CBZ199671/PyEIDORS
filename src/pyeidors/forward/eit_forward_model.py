@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from copy import deepcopy
 import hashlib
+import json
 import time
 import warnings
 
@@ -57,6 +58,10 @@ class LinearBackendConfig:
     pc_hypre_type: str | None = None
     pc_gamg_type: str | None = None
     petsc_options: dict[str, object] = field(default_factory=dict)
+    forward_pc_refresh_policy: str = "auto"
+    forward_pc_refresh_iter_threshold: int = 0
+    forward_pc_refresh_lag: int = 0
+    forward_mat_solve_min_patterns: int = 0
 
     @classmethod
     def from_dict(cls, payload: dict | None) -> "LinearBackendConfig":
@@ -92,7 +97,129 @@ class LinearBackendConfig:
                 else str(payload.get("pc_gamg_type"))
             ),
             petsc_options=dict(payload.get("petsc_options") or {}),
+            forward_pc_refresh_policy=str(
+                payload.get("forward_pc_refresh_policy", "auto")
+            ).strip().lower() or "auto",
+            forward_pc_refresh_iter_threshold=int(
+                payload.get("forward_pc_refresh_iter_threshold", 0) or 0
+            ),
+            forward_pc_refresh_lag=int(
+                payload.get("forward_pc_refresh_lag", 0) or 0
+            ),
+            forward_mat_solve_min_patterns=int(
+                payload.get("forward_mat_solve_min_patterns", 0) or 0
+            ),
         )
+
+
+@dataclass
+class ForwardKSPSession:
+    """Long-lived PETSc KSP + PC bundle reused across GN iterations.
+
+    The session stores a single KSP and lets subsequent solves call
+    ``setOperators(A_new)`` + ``setReusePreconditioner`` instead of rebuilding
+    the PC hierarchy for every new conductivity. It is owned by the
+    ``EITForwardModel`` instance, *not* by ``cache_manager``.
+    """
+
+    ksp: object
+    current_A: object
+    current_solve_A: object
+    backend_name: str
+    ksp_type: str
+    pc_type: str
+    factor_solver_type: str | None
+    solve_mat_type: str | None
+    structural_fingerprint: str
+    reuse_requested: bool = True
+    reuse_applied: bool = False
+    solves_since_setup: int = 0
+    total_setups: int = 1
+    total_solves: int = 0
+    last_iter_count: int | None = None
+    last_refresh_reason: str | None = "initial_setup"
+    last_refresh_triggered: bool = True
+    dense_cuda_fallback: dict | None = None
+
+    def record_solve(self, iter_count: int | None) -> None:
+        self.total_solves += 1
+        self.solves_since_setup += 1
+        if iter_count is not None:
+            try:
+                self.last_iter_count = int(iter_count)
+            except (TypeError, ValueError):
+                self.last_iter_count = None
+
+    def mark_refresh(self, reason: str) -> None:
+        self.last_refresh_reason = reason
+        self.last_refresh_triggered = True
+        self.solves_since_setup = 0
+        self.total_setups += 1
+
+    def mark_reuse(self) -> None:
+        self.last_refresh_reason = None
+        self.last_refresh_triggered = False
+
+    def as_bundle(self) -> dict[str, object]:
+        return {
+            "A": self.current_A,
+            "solve_A": self.current_solve_A,
+            "ksp": self.ksp,
+            "backend": self.backend_name,
+            "ksp_type": self.ksp_type,
+            "pc_type": self.pc_type,
+            "factor_solver_type": self.factor_solver_type,
+            "solve_mat_type": self.solve_mat_type,
+            "ksp_setup_count": 1 if self.last_refresh_triggered else 0,
+            "ksp_setup_attempts": int(self.total_setups),
+            "reuse_preconditioner": bool(self.reuse_requested),
+            "reuse_preconditioner_applied": bool(self.reuse_applied),
+        }
+
+
+def _hash_mesh_content(dolfinx_mesh) -> str:
+    """Best-effort content hash for an in-memory DOLFINx mesh.
+
+    Falls back to an empty string when the mesh object does not expose the
+    expected geometry / topology arrays (e.g. unit-test fakes). Callers are
+    responsible for treating an empty hash as "unavailable" and using a
+    different stable identifier (such as ``mesh_file``) instead.
+    """
+    hasher = hashlib.sha256()
+    touched = False
+    try:
+        geometry = getattr(dolfinx_mesh, "geometry", None)
+        coords = getattr(geometry, "x", None) if geometry is not None else None
+        if coords is not None:
+            coord_arr = np.ascontiguousarray(np.asarray(coords), dtype=np.float64)
+            if coord_arr.size:
+                hasher.update(coord_arr.tobytes())
+                touched = True
+        topology = getattr(dolfinx_mesh, "topology", None)
+        if topology is not None:
+            tdim = int(getattr(topology, "dim", 0) or 0)
+            create_connectivity = getattr(topology, "create_connectivity", None)
+            if callable(create_connectivity):
+                try:
+                    create_connectivity(tdim, 0)
+                except Exception:
+                    pass
+            connectivity_fn = getattr(topology, "connectivity", None)
+            conn_obj = None
+            if callable(connectivity_fn):
+                try:
+                    conn_obj = connectivity_fn(tdim, 0)
+                except Exception:
+                    conn_obj = None
+            conn_arr = getattr(conn_obj, "array", None)
+            if conn_arr is not None:
+                cells = np.ascontiguousarray(np.asarray(conn_arr), dtype=np.int64)
+                if cells.size:
+                    hasher.update(cells.tobytes())
+                    touched = True
+    except Exception:
+        pass
+    return hasher.hexdigest() if touched else ""
 
 
 class EITForwardModel:
@@ -141,15 +268,20 @@ class EITForwardModel:
         self.performance_mode = str(performance_mode).strip().lower()
         self.cache_manager = cache_manager
         self._last_cache_lookup: dict[str, str | bool] = {}
+        self._forward_ksp_session: ForwardKSPSession | None = None
 
         self.facet_tags = mesh.facet_tags
         self.association_table = mesh.association_table
         if self.facet_tags is None:
             raise ValueError("EITMesh lacks electrode facet tags, cannot assemble CEM")
 
+        mesh_file = getattr(mesh, "mesh_file", None)
+        mesh_content_hash = None
+        if not mesh_file:
+            mesh_content_hash = _hash_mesh_content(self.mesh) or None
         self._static_setup_cache_key = build_process_forward_setup_key(
-            mesh_runtime_id=id(self.mesh),
-            mesh_file=getattr(mesh, "mesh_file", None),
+            mesh_file=mesh_file,
+            mesh_content_hash=mesh_content_hash,
             n_elec=self.n_elec,
             z=self.z,
             pattern_config=deepcopy(pattern_config),
@@ -638,6 +770,15 @@ class EITForwardModel:
             "forward_reuse_preconditioner_applied": None,
             "forward_ksp_setup_count": None,
             "forward_ksp_setup_attempts": None,
+            "forward_pc_refresh_policy": str(
+                getattr(self.backend_config, "forward_pc_refresh_policy", "auto")
+            ),
+            "forward_pc_refresh_triggered": None,
+            "forward_pc_refresh_reason": None,
+            "forward_pc_session_reused": None,
+            "forward_pc_session_solves": None,
+            "forward_pc_session_total_setups": None,
+            "forward_pc_last_iter_count": None,
             "capability": {},
         }
         info.update(mpi_info)
@@ -1200,8 +1341,28 @@ class EITForwardModel:
         return "on" if bool(getattr(backend_cfg, "use_mat_solve", False)) else "off"
 
     def _should_use_mat_solve(self, n_patterns: int) -> bool:
-        """Determine whether matSolve should be used for the given pattern count."""
+        """Determine whether matSolve should be used for the given pattern count.
+
+        ``forward_mat_solve_min_patterns`` adds an opt-in lower bound on the RHS
+        batch size before enabling ``matSolve`` in ``auto`` mode. Very small
+        batches allocate MATDENSE B/X buffers without amortizing the overhead
+        compared to the vec-loop path, so users targeting small stim counts can
+        raise the threshold to keep the vector-loop routing.
+        """
         mat_mode = self._resolve_mat_solve_mode()
+        try:
+            min_patterns = int(
+                getattr(
+                    getattr(self, "backend_config", None),
+                    "forward_mat_solve_min_patterns",
+                    0,
+                )
+                or 0
+            )
+        except (TypeError, ValueError):
+            min_patterns = 0
+        min_patterns = max(0, min_patterns)
+
         if mat_mode == "on":
             use_mat_solve = True
         elif mat_mode == "off":
@@ -1211,6 +1372,7 @@ class EITForwardModel:
                 self.mesh_tdim == 3
                 and n_patterns > 1
                 and self.performance_mode == "aggressive"
+                and (min_patterns == 0 or n_patterns >= min_patterns)
             )
 
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
@@ -1282,6 +1444,24 @@ class EITForwardModel:
                 "pc_gamg_type": getattr(self.backend_config, "pc_gamg_type", None),
                 "petsc_options": dict(
                     getattr(self.backend_config, "petsc_options", {}) or {}
+                ),
+                "forward_pc_refresh_policy": getattr(
+                    self.backend_config, "forward_pc_refresh_policy", "auto"
+                ),
+                "forward_pc_refresh_iter_threshold": int(
+                    getattr(
+                        self.backend_config, "forward_pc_refresh_iter_threshold", 0
+                    )
+                    or 0
+                ),
+                "forward_pc_refresh_lag": int(
+                    getattr(self.backend_config, "forward_pc_refresh_lag", 0) or 0
+                ),
+                "forward_mat_solve_min_patterns": int(
+                    getattr(
+                        self.backend_config, "forward_mat_solve_min_patterns", 0
+                    )
+                    or 0
                 ),
             },
             "petsc_backend": {
@@ -1494,52 +1674,174 @@ class EITForwardModel:
             factor_solver_type=None,
         )
 
-    def _solve_with_petsc(self, sigma: fem.Function, pattern_matrix: np.ndarray):
-        n_patterns = pattern_matrix.shape[0]
-        sigma_hash = self._sigma_fingerprint(sigma)
-        payload = self._base_cache_payload(sigma_hash=sigma_hash, n_patterns=n_patterns)
-        payload["solver"] = "petsc-ksp"
+    def _compute_forward_ksp_structural_fingerprint(self) -> str:
+        """Fingerprint of everything that must match for safe KSP reuse."""
+        cfg = getattr(self, "backend_config", None)
+        petsc_backend = getattr(self, "_petsc_backend_info", {}) or {}
+        payload = {
+            "linear_backend": str(getattr(self, "linear_backend", "petsc")),
+            "forward_backend": str(getattr(self, "forward_backend", "dolfinx")),
+            "solver_preset": str(getattr(cfg, "solver_preset", "auto")),
+            "ksp_type": str(getattr(cfg, "ksp_type", "auto")),
+            "pc_type": str(getattr(cfg, "pc_type", "auto")),
+            "pc_factor_mat_solver_type": getattr(cfg, "pc_factor_mat_solver_type", None),
+            "pc_hypre_type": getattr(cfg, "pc_hypre_type", None),
+            "pc_gamg_type": getattr(cfg, "pc_gamg_type", None),
+            "petsc_options": dict(getattr(cfg, "petsc_options", {}) or {}),
+            "rtol": float(getattr(cfg, "rtol", 1e-10)),
+            "atol": float(getattr(cfg, "atol", 1e-12)),
+            "max_it": int(getattr(cfg, "max_it", 2000)),
+            "petsc_device_requested": str(
+                petsc_backend.get(
+                    "petsc_device_requested",
+                    getattr(cfg, "petsc_device", "auto"),
+                )
+            ),
+            "petsc_device_effective": str(
+                petsc_backend.get("petsc_device_effective", "cpu")
+            ),
+            "dofs": int(getattr(self, "dofs", 0)),
+            "n_elec": int(getattr(self, "n_elec", 0)),
+        }
+        encoded = json.dumps(
+            payload, sort_keys=True, separators=(",", ":"), default=str
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest()
 
-        setup_t0 = time.perf_counter()
-        if self.cache_manager is not None and self.cache_manager.enabled:
-            bundle, lookup = self.cache_manager.get_or_compute(
-                artifact="forward_factor",
-                payload=payload,
-                compute_fn=lambda: self._make_petsc_solver_bundle(
-                    self._create_full_matrix_petsc(sigma)
-                ),
-                persist=False,
-                cost=24.0,
+    def _resolve_forward_pc_refresh_policy(self) -> tuple[str, int, int]:
+        cfg = getattr(self, "backend_config", None)
+        policy = (
+            str(getattr(cfg, "forward_pc_refresh_policy", "auto")).strip().lower()
+            or "auto"
+        )
+        if policy not in {"auto", "never", "always", "lag"}:
+            policy = "auto"
+        try:
+            threshold = int(getattr(cfg, "forward_pc_refresh_iter_threshold", 0) or 0)
+        except (TypeError, ValueError):
+            threshold = 0
+        try:
+            lag = int(getattr(cfg, "forward_pc_refresh_lag", 0) or 0)
+        except (TypeError, ValueError):
+            lag = 0
+        return policy, max(0, threshold), max(0, lag)
+
+    def _decide_pc_reuse_for_session(
+        self, session: "ForwardKSPSession"
+    ) -> tuple[bool, str | None]:
+        """Return ``(effective_reuse, refresh_reason)`` for the next solve."""
+        policy, threshold, lag = self._resolve_forward_pc_refresh_policy()
+        if not bool(
+            getattr(getattr(self, "backend_config", None), "reuse_preconditioner", True)
+        ):
+            return False, "reuse_preconditioner_disabled"
+        if policy == "never":
+            return False, "policy_never"
+        if policy == "always":
+            return True, None
+        if policy == "lag" and lag > 0 and session.solves_since_setup >= lag:
+            return False, f"policy_lag_{lag}_exceeded"
+        if (
+            threshold > 0
+            and session.last_iter_count is not None
+            and session.last_iter_count > threshold
+        ):
+            return (
+                False,
+                f"iter_count_{session.last_iter_count}_gt_threshold_{threshold}",
             )
-            self._last_cache_lookup = {
-                "key": lookup.key,
-                "hit": lookup.hit,
-                "layer": lookup.layer,
-                "artifact": lookup.artifact,
-            }
-        else:
-            system_matrix = self._create_full_matrix_petsc(sigma)
-            bundle = self._make_petsc_solver_bundle(system_matrix)
-            self._last_cache_lookup = {
-                "hit": False,
-                "layer": "disabled",
-                "artifact": "forward_factor",
-            }
-        setup_seconds = float(time.perf_counter() - setup_t0)
+        return True, None
 
-        A = bundle["A"]
-        solve_A = bundle.get("solve_A", A)
-        ksp = bundle["ksp"]
-        cache_hit = bool(self._last_cache_lookup.get("hit", False))
-        bundle_setup_count = int(bundle.get("ksp_setup_count", 0 if cache_hit else 1))
-        current_setup_count = 0 if cache_hit else bundle_setup_count
-        self._set_backend_diagnostic(
-            forward_factor_backend=bundle.get("backend", "petsc-ksp"),
-            forward_factor_cache_hit=cache_hit,
-            forward_rhs_count=int(n_patterns),
-            forward_ksp_setup_count=current_setup_count,
-            forward_ksp_setup_attempts=bundle_setup_count,
-            forward_reuse_preconditioner_requested=bool(
+    def _forward_session_structurally_compatible(
+        self, session: "ForwardKSPSession | None", fingerprint: str
+    ) -> bool:
+        if session is None:
+            return False
+        if session.structural_fingerprint != fingerprint:
+            return False
+        # Dense CUDA fallback bundles rebuild fresh; session reuse only safe
+        # when solve_A is A itself (primary AIJ/dense-first path).
+        return session.current_solve_A is session.current_A
+
+    def _dispose_forward_ksp_session(
+        self, session: "ForwardKSPSession | None"
+    ) -> None:
+        if session is None:
+            return
+        ksp = getattr(session, "ksp", None)
+        destroy = getattr(ksp, "destroy", None)
+        if callable(destroy):
+            try:
+                destroy()
+            except Exception:
+                pass
+        if getattr(self, "_forward_ksp_session", None) is session:
+            self._forward_ksp_session = None
+
+    def _acquire_forward_ksp_bundle(
+        self, sigma: fem.Function
+    ) -> tuple[dict[str, object], "ForwardKSPSession", bool]:
+        fingerprint = self._compute_forward_ksp_structural_fingerprint()
+        session = getattr(self, "_forward_ksp_session", None)
+        policy, _threshold, _lag = self._resolve_forward_pc_refresh_policy()
+
+        if policy != "never" and self._forward_session_structurally_compatible(
+            session, fingerprint
+        ):
+            effective_reuse, refresh_reason = self._decide_pc_reuse_for_session(session)
+            A_new = self._create_full_matrix_petsc(sigma)
+            ksp = session.ksp
+            if hasattr(ksp, "setOperators"):
+                try:
+                    ksp.setOperators(A_new)
+                except Exception:
+                    # Session KSP unusable with new operator; fall through to fresh.
+                    self._dispose_forward_ksp_session(session)
+                    session = None
+            if session is not None:
+                session.current_A = A_new
+                session.current_solve_A = A_new
+                applied = False
+                if hasattr(ksp, "setReusePreconditioner"):
+                    try:
+                        ksp.setReusePreconditioner(bool(effective_reuse))
+                        applied = True
+                    except Exception:
+                        applied = False
+                session.reuse_requested = bool(effective_reuse)
+                session.reuse_applied = bool(applied) and bool(effective_reuse)
+                if effective_reuse:
+                    session.mark_reuse()
+                else:
+                    session.mark_refresh(refresh_reason or "policy_refresh")
+                self._last_cache_lookup = {
+                    "hit": True,
+                    "layer": "forward_ksp_session",
+                    "artifact": "forward_factor",
+                }
+                return session.as_bundle(), session, True
+
+        if session is not None:
+            self._dispose_forward_ksp_session(session)
+        system_matrix = self._create_full_matrix_petsc(sigma)
+        bundle = self._make_petsc_solver_bundle(system_matrix)
+        session = ForwardKSPSession(
+            ksp=bundle["ksp"],
+            current_A=bundle["A"],
+            current_solve_A=bundle.get("solve_A", bundle["A"]),
+            backend_name=str(bundle.get("backend", "petsc-ksp")),
+            ksp_type=str(
+                bundle.get("ksp_type")
+                or getattr(getattr(self, "backend_config", None), "ksp_type", "")
+            ),
+            pc_type=str(
+                bundle.get("pc_type")
+                or getattr(getattr(self, "backend_config", None), "pc_type", "")
+            ),
+            factor_solver_type=bundle.get("factor_solver_type"),
+            solve_mat_type=bundle.get("solve_mat_type"),
+            structural_fingerprint=fingerprint,
+            reuse_requested=bool(
                 bundle.get(
                     "reuse_preconditioner",
                     getattr(
@@ -1549,20 +1851,61 @@ class EITForwardModel:
                     ),
                 )
             ),
-            forward_reuse_preconditioner_applied=bundle.get(
-                "reuse_preconditioner_applied"
-            ),
-            ksp_type=bundle.get("ksp_type")
+            reuse_applied=bool(bundle.get("reuse_preconditioner_applied", False)),
+            total_setups=int(bundle.get("ksp_setup_count", 1) or 1),
+            dense_cuda_fallback=bundle.get("_dense_cuda_fallback"),
+        )
+        self._forward_ksp_session = session
+        self._last_cache_lookup = {
+            "hit": False,
+            "layer": "forward_ksp_session",
+            "artifact": "forward_factor",
+        }
+        return session.as_bundle(), session, False
+
+    def _solve_with_petsc(self, sigma: fem.Function, pattern_matrix: np.ndarray):
+        n_patterns = pattern_matrix.shape[0]
+        sigma_hash = self._sigma_fingerprint(sigma)
+        _ = sigma_hash  # retained for future signature-based invalidation hooks
+
+        setup_t0 = time.perf_counter()
+        bundle, session, session_reused = self._acquire_forward_ksp_bundle(sigma)
+        setup_seconds = float(time.perf_counter() - setup_t0)
+
+        A = bundle["A"]
+        solve_A = bundle.get("solve_A", A)
+        ksp = bundle["ksp"]
+        refresh_triggered = bool(session.last_refresh_triggered)
+        cache_hit = bool(session_reused and not refresh_triggered)
+        current_setup_count = 0 if cache_hit else 1
+        cumulative_setup_count = int(session.total_setups)
+        policy_name = self._resolve_forward_pc_refresh_policy()[0]
+        self._set_backend_diagnostic(
+            forward_factor_backend=session.backend_name,
+            forward_factor_cache_hit=cache_hit,
+            forward_rhs_count=int(n_patterns),
+            forward_ksp_setup_count=current_setup_count,
+            forward_ksp_setup_attempts=cumulative_setup_count,
+            forward_reuse_preconditioner_requested=bool(session.reuse_requested),
+            forward_reuse_preconditioner_applied=bool(session.reuse_applied),
+            forward_pc_refresh_triggered=refresh_triggered,
+            forward_pc_refresh_reason=session.last_refresh_reason,
+            forward_pc_refresh_policy=policy_name,
+            forward_pc_session_reused=bool(session_reused),
+            forward_pc_session_solves=int(session.solves_since_setup),
+            forward_pc_session_total_setups=cumulative_setup_count,
+            forward_pc_last_iter_count=session.last_iter_count,
+            ksp_type=session.ksp_type
             or getattr(getattr(self, "backend_config", None), "ksp_type", None),
-            pc_type=bundle.get("pc_type")
+            pc_type=session.pc_type
             or getattr(getattr(self, "backend_config", None), "pc_type", None),
-            pc_factor_mat_solver_type=bundle.get("factor_solver_type")
+            pc_factor_mat_solver_type=session.factor_solver_type
             or getattr(
                 getattr(self, "backend_config", None),
                 "pc_factor_mat_solver_type",
                 None,
             ),
-            petsc_solve_mat_type=bundle.get("solve_mat_type"),
+            petsc_solve_mat_type=session.solve_mat_type,
             petsc_mat_type=(
                 str(A.getType())
                 if hasattr(A, "getType")
@@ -1663,6 +2006,10 @@ class EITForwardModel:
                 )
                 B.destroy()
                 X.destroy()
+                session.record_solve(mat_iterations)
+                self._set_backend_diagnostic(
+                    forward_pc_last_iter_count=session.last_iter_count
+                )
                 return self._recenter_cuda_gauge_solution(sol)
             except Exception as exc:
                 if effective_device == "cuda" and bool(
@@ -1727,10 +2074,15 @@ class EITForwardModel:
                             )
                             B.destroy()
                             X.destroy()
+                            session.record_solve(dense_iterations)
+                            self._set_backend_diagnostic(
+                                forward_pc_last_iter_count=session.last_iter_count
+                            )
                             return self._recenter_cuda_gauge_solution(sol)
                         except Exception:
                             pass
                 if effective_device == "cuda" and requested_device == "cuda":
+                    self._dispose_forward_ksp_session(session)
                     raise RuntimeError(
                         f"PETSc CUDA matSolve failed ({exc}). {self._actionable_cuda_guidance()}"
                     ) from exc
@@ -1785,6 +2137,7 @@ class EITForwardModel:
                         forward_ksp_converged=False,
                         forward_solve_seconds=float(time.perf_counter() - solve_t0),
                     )
+                    self._dispose_forward_ksp_session(session)
                     raise RuntimeError(
                         "PETSc CUDA solve failed with a negative convergence reason "
                         f"({reason}). {self._actionable_cuda_guidance()}"
@@ -1802,6 +2155,7 @@ class EITForwardModel:
                     forward_ksp_converged=False,
                     forward_solve_seconds=float(time.perf_counter() - solve_t0),
                 )
+                self._dispose_forward_ksp_session(session)
                 return self._solve_with_scipy(sigma, pattern_matrix)
             sol_matrix[:, i] = x.getArray(readonly=True)
         self._set_backend_diagnostic(
@@ -1813,6 +2167,14 @@ class EITForwardModel:
             forward_ksp_converged_reason=reason if n_patterns else None,
             forward_ksp_converged=None if n_patterns == 0 else bool(reason > 0),
             forward_solve_seconds=float(time.perf_counter() - solve_t0),
+        )
+        session.record_solve(
+            sum(int(value) for value in iterations_per_rhs if value is not None)
+            if n_patterns
+            else None
+        )
+        self._set_backend_diagnostic(
+            forward_pc_last_iter_count=session.last_iter_count
         )
         return sol_matrix
 

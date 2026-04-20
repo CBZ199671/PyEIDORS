@@ -26,7 +26,7 @@ from ..solvers.gauss_newton_device import (
     normalize_runtime_device_label,
 )
 from .base_jacobian import BaseJacobianCalculator
-from .linearized import JacobianLinearization
+from .linearized import JacobianLinearization, compute_sigma_fingerprint
 
 
 class DirectJacobianCalculator(BaseJacobianCalculator):
@@ -365,6 +365,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             cell_areas=np.asarray(self.cell_areas, dtype=np.float64),
             n_meas_per_stim=tuple(self.fwd_model.pattern_manager.n_meas_per_stim),
             sign=1.0,
+            sigma_fingerprint=compute_sigma_fingerprint(sigma),
         )
 
     def _calculate_efficient(self, sigma: fem.Function) -> np.ndarray:

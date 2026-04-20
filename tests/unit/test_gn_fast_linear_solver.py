@@ -144,6 +144,261 @@ def test_fast_solver_linear_operator_pcg_matches_dense_reference():
     assert isinstance(meta["linear_iterations"], int)
 
 
+def test_fast_solver_auto_hessian_diag_from_jacobian_linearization():
+    """Operator path with no explicit diag attrs derives NOSER diag for free."""
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.1, -0.04, 0.03, 0.05], dtype=float)
+    de = np.array([0.2, -0.1, 0.08], dtype=float)
+    lam = 0.15
+    linearization = _make_linearization_from_dense(J)
+
+    recon = SimpleNamespace(
+        R_matrix=diags([1.0, 2.0, 3.0], 0, format="csr"),
+        use_prior_term=True,
+        performance_mode="aggressive",
+        linear_solver="auto",
+        preconditioner="diag",
+        fast_linear_path="pcg",
+        cholmod_max_n=12000,
+        cholmod_max_memory_gib=4.0,
+    )
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=linearization,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    expected = _expected_solution(J, residual, de, lam)
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+
+    meta = recon._last_fast_linear_meta
+    assert meta["jacobian_representation"] == "jacobian_linearization"
+    assert meta["dense_jacobian_materialized"] is False
+    assert meta["matrix_free_pc_source"] == "auto_linearization_diag"
+    # diag(J^T J) is strictly positive for this synthetic problem.
+    assert meta["matrix_free_pc_min"] > 0.0
+
+
+def test_auto_hessian_diag_respects_measurement_weights():
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    linearization = _make_linearization_from_dense(J)
+    weights = np.array([1.5, 0.5, 1.0, 0.8], dtype=float)
+
+    expected = (weights[:, None] * J * J).sum(axis=0)
+    actual = linearization.hessian_diag(measurement_weights=weights)
+    np.testing.assert_allclose(actual, expected)
+
+
+def test_explicit_noser_diag_still_wins_over_auto_linearization_diag():
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.1, -0.04, 0.03, 0.05], dtype=float)
+    de = np.array([0.2, -0.1, 0.08], dtype=float)
+    lam = 0.15
+    linearization = _make_linearization_from_dense(J)
+
+    recon = SimpleNamespace(
+        R_matrix=diags([1.0, 2.0, 3.0], 0, format="csr"),
+        R_diag=np.array([1.0, 2.0, 3.0], dtype=float),
+        use_prior_term=True,
+        performance_mode="aggressive",
+        linear_solver="auto",
+        preconditioner="diag",
+        fast_linear_path="pcg",
+        cholmod_max_n=12000,
+        cholmod_max_memory_gib=4.0,
+    )
+
+    _solve_linear_system_fast(
+        recon,
+        J_weighted_np=linearization,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    meta = recon._last_fast_linear_meta
+    assert meta["matrix_free_pc_source"] != "auto_linearization_diag"
+
+
+def test_matrix_free_ksp_backend_defaults_to_scipy_when_unset():
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.1, -0.04, 0.03, 0.05], dtype=float)
+    de = np.array([0.2, -0.1, 0.08], dtype=float)
+    lam = 0.15
+    op = LinearOperator(
+        J.shape,
+        matvec=lambda x: J @ np.asarray(x, dtype=float),
+        rmatvec=lambda x: J.T @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="diag", fast_linear_path="pcg")
+    _solve_linear_system_fast(
+        recon,
+        J_weighted_np=op,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+    meta = recon._last_fast_linear_meta
+    assert meta["matrix_free_ksp_backend_requested"] == "scipy"
+    assert meta["matrix_free_ksp_backend_effective"] == "scipy"
+
+
+def test_matrix_free_ksp_backend_petsc_matches_scipy_reference():
+    if gn_runtime._PETSc is None:
+        pytest.skip("petsc4py unavailable in this environment")
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.1, -0.04, 0.03, 0.05], dtype=float)
+    de = np.array([0.2, -0.1, 0.08], dtype=float)
+    lam = 0.15
+    op = LinearOperator(
+        J.shape,
+        matvec=lambda x: J @ np.asarray(x, dtype=float),
+        rmatvec=lambda x: J.T @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="diag", fast_linear_path="pcg")
+    recon.matrix_free_ksp_backend = "petsc"
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=op,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    expected = _expected_solution(J, residual, de, lam)
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+
+    meta = recon._last_fast_linear_meta
+    assert meta["matrix_free_ksp_backend_requested"] == "petsc"
+    assert meta["matrix_free_ksp_backend_effective"] == "petsc"
+    assert isinstance(meta["linear_iterations"], int)
+    assert meta["linear_iterations"] > 0
+
+
+def test_matrix_free_ksp_backend_petsc_falls_back_when_unavailable(monkeypatch):
+    monkeypatch.setattr(gn_runtime, "_PETSc", None)
+
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5],
+            [0.1, 0.7, -0.3],
+            [0.6, 0.4, 0.2],
+            [-0.2, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    residual = np.array([0.1, -0.04, 0.03, 0.05], dtype=float)
+    de = np.array([0.2, -0.1, 0.08], dtype=float)
+    lam = 0.15
+    op = LinearOperator(
+        J.shape,
+        matvec=lambda x: J @ np.asarray(x, dtype=float),
+        rmatvec=lambda x: J.T @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="diag", fast_linear_path="pcg")
+    recon.matrix_free_ksp_backend = "petsc"
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=op,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=0,
+    )
+
+    expected = _expected_solution(J, residual, de, lam)
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+
+    meta = recon._last_fast_linear_meta
+    assert meta["matrix_free_ksp_backend_requested"] == "petsc"
+    assert meta["matrix_free_ksp_backend_effective"] == "scipy"
+    assert meta["matrix_free_ksp_backend_fallback_reason"] == "petsc_backend_unavailable"
+
+
+def test_solve_matrix_free_hessian_via_petsc_direct_call():
+    if gn_runtime._PETSc is None:
+        pytest.skip("petsc4py unavailable in this environment")
+    n = 4
+    rng = np.random.default_rng(1)
+    M = rng.standard_normal((n, n))
+    A = M @ M.T + 0.5 * np.eye(n)  # SPD
+    b = rng.standard_normal(n)
+
+    h_op = LinearOperator(
+        (n, n),
+        matvec=lambda x: A @ np.asarray(x, dtype=float),
+        dtype=np.float64,
+    )
+
+    delta, iterations, converged, reason = gn_runtime._solve_matrix_free_hessian_via_petsc(
+        h_op,
+        b,
+        None,
+        rtol=1e-10,
+        maxiter=200,
+    )
+
+    np.testing.assert_allclose(delta, np.linalg.solve(A, b), rtol=1e-6, atol=1e-8)
+    assert converged
+    assert reason is None
+    assert iterations > 0
+
+
 def test_matrix_free_noser_preconditioner_contract_clamps_positive_diag():
     recon = SimpleNamespace(
         R_diag=np.array([0.0, np.nan, 4.0], dtype=float),
