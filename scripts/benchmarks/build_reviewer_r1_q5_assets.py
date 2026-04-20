@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build Reviewer 1 Comment 5 assets across MATLAB EIDORS and Docker PyEIDORS."""
+"""Build Reviewer 1 Comment 5 assets across MATLAB EIDORS and PyEIDORS."""
 
 from __future__ import annotations
 
@@ -8,7 +8,6 @@ import json
 import re
 import subprocess
 from pathlib import Path
-
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 FAIRNESS_DIR = REPO_ROOT / "docs" / "benchmarks" / "reviewer_suite" / "fairness"
@@ -22,13 +21,26 @@ SOURCE_ZS = {
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-json", type=Path, default=FAIRNESS_DIR / "r1c5_cem_vs_pyeit.json")
-    parser.add_argument("--output-csv", type=Path, default=FAIRNESS_DIR / "r1c5_cem_vs_pyeit.csv")
-    parser.add_argument("--source-dir", type=Path, default=FAIRNESS_DIR / "r1c5_sources")
-    parser.add_argument("--config-dir", type=Path, default=FAIRNESS_DIR / "r1c5_source_configs")
-    parser.add_argument("--matlab-exe", type=Path, default=Path(r"D:\Program Files\MATLAB\R2023b\bin\matlab.exe"))
-    parser.add_argument("--docker-container", default="pyeidors")
-    parser.add_argument("--mesh-level", choices=["coarse", "medium", "fine"], default="medium")
+    parser.add_argument(
+        "--output-json", type=Path, default=FAIRNESS_DIR / "r1c5_cem_vs_pyeit.json"
+    )
+    parser.add_argument(
+        "--output-csv", type=Path, default=FAIRNESS_DIR / "r1c5_cem_vs_pyeit.csv"
+    )
+    parser.add_argument(
+        "--source-dir", type=Path, default=FAIRNESS_DIR / "r1c5_sources"
+    )
+    parser.add_argument(
+        "--config-dir", type=Path, default=FAIRNESS_DIR / "r1c5_source_configs"
+    )
+    parser.add_argument(
+        "--matlab-exe",
+        type=Path,
+        default=Path(r"D:\Program Files\MATLAB\R2023b\bin\matlab.exe"),
+    )
+    parser.add_argument(
+        "--mesh-level", choices=["coarse", "medium", "fine"], default="medium"
+    )
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--background", type=float, default=1.0)
     parser.add_argument("--phantom-conductivity", type=float, default=2.0)
@@ -79,7 +91,9 @@ def run_command(command: list[str]) -> None:
     subprocess.run(command, check=True)
 
 
-def build_eidors_source_configs(args: argparse.Namespace, commit: str) -> dict[str, Path]:
+def build_eidors_source_configs(
+    args: argparse.Namespace, commit: str
+) -> dict[str, Path]:
     args.source_dir.mkdir(parents=True, exist_ok=True)
     args.config_dir.mkdir(parents=True, exist_ok=True)
     configs: dict[str, Path] = {}
@@ -119,39 +133,55 @@ def run_matlab_export(args: argparse.Namespace, config_path: Path) -> None:
     run_command(command)
 
 
-def ensure_docker_container(name: str) -> None:
-    run_command(["docker", "inspect", name])
-
-
-def run_docker_core(args: argparse.Namespace) -> None:
-    ensure_docker_container(args.docker_container)
+def run_pyeidors_core(args: argparse.Namespace) -> None:
     output_json_rel = repo_rel(args.output_json)
     output_csv_rel = repo_rel(args.output_csv)
     source_dir_rel = repo_rel(args.source_dir)
     low_csv_rel = repo_rel(args.source_dir / "eidors_source_low_z.csv")
     high_csv_rel = repo_rel(args.source_dir / "eidors_source_high_z.csv")
-    command = (
-        "cd /root/shared && "
-        "source /opt/final_venv/bin/activate && "
-        "python scripts/benchmarks/reviewer_r1_q5_cem_vs_pyeit_core.py "
-        f"--output-json {output_json_rel} "
-        f"--output-csv {output_csv_rel} "
-        f"--source-dir {source_dir_rel} "
-        f"--eidors-source-low-z {low_csv_rel} "
-        f"--eidors-source-high-z {high_csv_rel} "
-        f"--mesh-level {args.mesh_level} "
-        f"--n-elec {args.n_elec} "
-        f"--background {args.background} "
-        f"--phantom-conductivity {args.phantom_conductivity} "
-        f"--phantom-center-x {args.phantom_center_x} "
-        f"--phantom-center-y {args.phantom_center_y} "
-        f"--phantom-radius {args.phantom_radius} "
-        f"--electrode-coverage {args.electrode_coverage} "
-        f"--radius {args.radius}"
-    )
+    command = [
+        "nix",
+        "--option",
+        "warn-dirty",
+        "false",
+        "develop",
+        "--command",
+        "python",
+        "scripts/benchmarks/reviewer_r1_q5_cem_vs_pyeit_core.py",
+        "--output-json",
+        output_json_rel,
+        "--output-csv",
+        output_csv_rel,
+        "--source-dir",
+        source_dir_rel,
+        "--eidors-source-low-z",
+        low_csv_rel,
+        "--eidors-source-high-z",
+        high_csv_rel,
+        "--mesh-level",
+        args.mesh_level,
+        "--n-elec",
+        str(args.n_elec),
+        "--background",
+        str(args.background),
+        "--phantom-conductivity",
+        str(args.phantom_conductivity),
+        "--phantom-center-x",
+        str(args.phantom_center_x),
+        "--phantom-center-y",
+        str(args.phantom_center_y),
+        "--phantom-radius",
+        str(args.phantom_radius),
+        "--electrode-coverage",
+        str(args.electrode_coverage),
+        "--radius",
+        str(args.radius),
+    ]
     if args.difference_hyperparameter is not None:
-        command += f" --difference-hyperparameter {args.difference_hyperparameter}"
-    run_command(["docker", "exec", args.docker_container, "bash", "-lc", command])
+        command.extend(
+            ["--difference-hyperparameter", str(args.difference_hyperparameter)]
+        )
+    run_command(command)
 
 
 def main() -> None:
@@ -162,7 +192,7 @@ def main() -> None:
     configs = build_eidors_source_configs(args, commit)
     for source_z in ("low_z", "high_z"):
         run_matlab_export(args, configs[source_z])
-    run_docker_core(args)
+    run_pyeidors_core(args)
     print(f"Generated: {args.output_json}")
     print(f"Generated: {args.output_csv}")
 

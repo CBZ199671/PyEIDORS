@@ -26,7 +26,6 @@ if str(SRC_PATH) not in sys.path:
 
 from benchmark_reviewer_case import GPU_SCOPE_NOTE, get_git_commit  # noqa: E402
 
-
 TASK = "absolute_gn"
 FRAMEWORK = "pyeidors"
 SCENARIO = "low_z"
@@ -54,14 +53,14 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing cached meshes.",
     )
     parser.add_argument(
-        "--container-name",
-        default="pyeidors",
-        help="Container name recorded in benchmark_environment.json.",
+        "--environment-label",
+        default="Nix + uv (FEniCSx/DOLFINx)",
+        help="Environment label recorded in benchmark_environment.json.",
     )
     parser.add_argument(
-        "--image-name",
-        default="pyeidors:latest",
-        help="Container/image label recorded in benchmark_environment.json.",
+        "--environment-doc",
+        default="docs/NIX_FENICSX.md",
+        help="Environment setup document recorded in benchmark_environment.json.",
     )
     return parser.parse_args()
 
@@ -134,7 +133,9 @@ def run_absolute_gn_case(
     return json.loads(output_path.read_text(encoding="utf-8"))
 
 
-def summarize_cpu_gpu_pair(cpu_row: dict[str, Any], gpu_row: dict[str, Any]) -> dict[str, Any]:
+def summarize_cpu_gpu_pair(
+    cpu_row: dict[str, Any], gpu_row: dict[str, Any]
+) -> dict[str, Any]:
     return {
         "task": cpu_row["task"],
         "mesh_level": cpu_row["mesh_level"],
@@ -153,7 +154,9 @@ def summarize_cpu_gpu_pair(cpu_row: dict[str, Any], gpu_row: dict[str, Any]) -> 
         "voltage_rmse_abs_diff": abs(cpu_row["voltage_rmse"] - gpu_row["voltage_rmse"]),
         "cpu_final_residual": cpu_row["final_residual"],
         "gpu_final_residual": gpu_row["final_residual"],
-        "final_residual_abs_diff": abs(cpu_row["final_residual"] - gpu_row["final_residual"]),
+        "final_residual_abs_diff": abs(
+            cpu_row["final_residual"] - gpu_row["final_residual"]
+        ),
         "cpu_linear_solver": cpu_row.get("linear_solver", ""),
         "gpu_linear_solver": gpu_row.get("linear_solver", ""),
         "cpu_regularization_structure": cpu_row.get("regularization_structure", ""),
@@ -251,7 +254,9 @@ def render_runtime_figure(
 
         cpu_times = [row["cpu_median_time_sec"] for row in summary_rows]
         gpu_times = [row["gpu_median_time_sec"] for row in summary_rows]
-        mesh_labels = [f"{row['mesh_level']} ({row['elements']} elems)" for row in summary_rows]
+        mesh_labels = [
+            f"{row['mesh_level']} ({row['elements']} elems)" for row in summary_rows
+        ]
 
         axes[0].bar(x - width / 2, cpu_times, width, label="CPU", color="#4C78A8")
         axes[0].bar(x + width / 2, gpu_times, width, label="GPU", color="#F58518")
@@ -285,7 +290,13 @@ def render_runtime_figure(
         axes[1].set_xticks(sweep_iterations)
         axes[1].grid(False)
         for xi, yi in zip(sweep_iterations, sweep_speedups):
-            axes[1].annotate(f"{yi:.2f}x", (xi, yi), textcoords="offset points", xytext=(0, 8), ha="center")
+            axes[1].annotate(
+                f"{yi:.2f}x",
+                (xi, yi),
+                textcoords="offset points",
+                xytext=(0, 8),
+                ha="center",
+            )
 
         fig.tight_layout()
         fig.savefig(figure_png_path, dpi=300)
@@ -299,7 +310,9 @@ def render_runtime_figure(
     }
 
 
-def enforce_svg_font_family(svg_path: Path, font_family: str = "Times New Roman") -> None:
+def enforce_svg_font_family(
+    svg_path: Path, font_family: str = "Times New Roman"
+) -> None:
     text = svg_path.read_text(encoding="utf-8")
     text = re.sub(r"font-family:[^;\"']+", f"font-family:'{font_family}'", text)
     text = re.sub(
@@ -330,15 +343,19 @@ def write_benchmark_environment(
     sweep_rows: list[dict[str, Any]],
 ) -> None:
     payload = {
-        "container_name": args.container_name,
-        "image": args.image_name,
-        "mount": "D:/workspace/PyEIDORS => /root/shared",
+        "environment": args.environment_label,
+        "environment_doc": args.environment_doc,
+        "repository_root": str(REPO_ROOT),
         "code_commit": get_git_commit(),
         "branch": get_git_branch(),
         "python_version": sys.version.split()[0],
         "torch_version": torch.__version__,
         "cuda_available": bool(torch.cuda.is_available()),
-        "gpu_name": torch.cuda.get_device_name(0) if torch.cuda.is_available() else "unavailable",
+        "gpu_name": (
+            torch.cuda.get_device_name(0)
+            if torch.cuda.is_available()
+            else "unavailable"
+        ),
         "framework": FRAMEWORK,
         "task": TASK,
         "scenario": SCENARIO,
@@ -353,49 +370,49 @@ def write_benchmark_environment(
         "summary_rows": summary_rows,
         "iteration_sweep_rows": sweep_rows,
     }
-    (output_dir / "benchmark_environment.json").write_text(json.dumps(payload, indent=2), encoding="utf-8")
+    (output_dir / "benchmark_environment.json").write_text(
+        json.dumps(payload, indent=2), encoding="utf-8"
+    )
 
 
 def write_reproducibility_commands(output_dir: Path) -> None:
     commands = [
-        "# Run inside the Docker container",
-        "docker exec pyeidors bash -lc \"cd /root/shared && python scripts/benchmarks/build_reviewer_r3_q4_assets.py\"",
+        "# Run from the repository root in the Nix + uv environment",
+        "nix develop --command python scripts/benchmarks/build_reviewer_r3_q4_assets.py",
         "",
         "# Main CPU/GPU summary cases",
         (
-            "docker exec pyeidors bash -lc "
-            "\"cd /root/shared && python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level medium --scenario low_z "
             "--device cpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
-            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_cpu_iter5_legacy_dense.json\""
+            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_cpu_iter5_legacy_dense.json"
         ),
         (
-            "docker exec pyeidors bash -lc "
-            "\"cd /root/shared && python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level medium --scenario low_z "
             "--device gpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
-            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_gpu_iter5_legacy_dense.json\""
+            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_gpu_iter5_legacy_dense.json"
         ),
         (
-            "docker exec pyeidors bash -lc "
-            "\"cd /root/shared && python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level fine --scenario low_z "
             "--device cpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
-            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_fine_low_z_cpu_iter5_legacy_dense.json\""
+            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_fine_low_z_cpu_iter5_legacy_dense.json"
         ),
         (
-            "docker exec pyeidors bash -lc "
-            "\"cd /root/shared && python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level fine --scenario low_z "
             "--device gpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
-            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_fine_low_z_gpu_iter5_legacy_dense.json\""
+            "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_fine_low_z_gpu_iter5_legacy_dense.json"
         ),
     ]
-    (output_dir / "reproducibility_commands.txt").write_text("\n".join(commands) + "\n", encoding="utf-8")
+    (output_dir / "reproducibility_commands.txt").write_text(
+        "\n".join(commands) + "\n", encoding="utf-8"
+    )
 
 
 def write_highlights(output_dir: Path, summary_rows: list[dict[str, Any]]) -> None:
@@ -419,7 +436,9 @@ def write_highlights(output_dir: Path, summary_rows: list[dict[str, Any]]) -> No
         ),
         f"- Scope note: {GPU_SCOPE_NOTE}",
     ]
-    (output_dir / "highlights.txt").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    (output_dir / "highlights.txt").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
 
 
 def main() -> None:
@@ -449,11 +468,17 @@ def main() -> None:
         "iteration_sweep_raw_json": sweep_outputs["raw_json"].as_posix(),
         "figure_png": figure_paths["png"].as_posix(),
         "figure_svg": figure_paths["svg"].as_posix(),
-        "benchmark_environment_json": (args.output_dir / "benchmark_environment.json").as_posix(),
-        "reproducibility_commands_txt": (args.output_dir / "reproducibility_commands.txt").as_posix(),
+        "benchmark_environment_json": (
+            args.output_dir / "benchmark_environment.json"
+        ).as_posix(),
+        "reproducibility_commands_txt": (
+            args.output_dir / "reproducibility_commands.txt"
+        ).as_posix(),
         "highlights_txt": (args.output_dir / "highlights.txt").as_posix(),
     }
-    (args.output_dir / "asset_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+    (args.output_dir / "asset_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
     print(json.dumps(manifest, indent=2))
 
 

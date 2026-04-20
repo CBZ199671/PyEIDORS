@@ -31,8 +31,11 @@ from benchmark_difference_runtime import (  # noqa: E402
     compute_difference,
     run_single_step_benchmark,
 )
-from benchmark_reviewer_case import conductivity_metrics, get_git_commit, voltage_metrics  # noqa: E402
-
+from benchmark_reviewer_case import (
+    conductivity_metrics,
+    get_git_commit,
+    voltage_metrics,
+)  # noqa: E402
 
 SCENARIO_CONFIG = {
     "low_z": {
@@ -74,12 +77,15 @@ def make_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
 
-def run_case(args: argparse.Namespace, refinement: int, label: str) -> dict[str, object]:
+def run_case(
+    args: argparse.Namespace, refinement: int, label: str
+) -> dict[str, object]:
     cfg = SCENARIO_CONFIG[args.scenario]
     pattern = make_pattern_config(args.n_elec)
     mesh = load_or_create_mesh(
@@ -103,11 +109,13 @@ def run_case(args: argparse.Namespace, refinement: int, label: str) -> dict[str,
     sigma = create_custom_phantom(
         system.fwd_model,
         background_conductivity=cfg["background"],
-        anomalies=[{
-            "center": tuple(cfg["phantom_center"]),
-            "radius": cfg["phantom_radius"],
-            "conductivity": cfg["phantom_conductivity"],
-        }],
+        anomalies=[
+            {
+                "center": tuple(cfg["phantom_center"]),
+                "radius": cfg["phantom_radius"],
+                "conductivity": cfg["phantom_conductivity"],
+            }
+        ],
     )
     truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=system.fwd_model)
     truth_sigma = truth_image.elem_data.copy()
@@ -138,7 +146,10 @@ def run_case(args: argparse.Namespace, refinement: int, label: str) -> dict[str,
         "n_nodes": int(mesh.num_vertices()),
         "n_elements": int(len(system.fwd_model.V_sigma.dofmap().dofs())),
         "reference_eidors_elements": int(args.reference_eidors_elements),
-        "element_gap": int(len(system.fwd_model.V_sigma.dofmap().dofs()) - args.reference_eidors_elements),
+        "element_gap": int(
+            len(system.fwd_model.V_sigma.dofmap().dofs())
+            - args.reference_eidors_elements
+        ),
         "runtime_sec": float(runtime),
         "peak_rss_mb": get_peak_rss_mb(),
         "optimal_step_size": float(step_size),

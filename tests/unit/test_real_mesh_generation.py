@@ -28,7 +28,7 @@ def test_mesh_loader_default_requires_msh(tmp_path):
     try:
         loader.get_default_mesh()
     except FileNotFoundError as exc:
-        assert ".msh caches" in str(exc)
+        assert ".xdmf or source .msh caches" in str(exc)
     else:
         raise AssertionError("Expected FileNotFoundError when no .msh cache exists")
 

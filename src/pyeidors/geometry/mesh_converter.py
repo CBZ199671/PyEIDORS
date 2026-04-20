@@ -11,7 +11,8 @@ from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh
-from ._helpers import association_from_mesh_data, write_association_table
+from ._helpers import validate_mesh_data_tags, write_association_table
+from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +36,14 @@ class MeshConverter:
             gdim=self.gdim,
         )
 
-        association_table = association_from_mesh_data(mesh_data)
+        association_table = validate_mesh_data_tags(mesh_data, gdim=self.gdim)
         self._write_association_table(association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=self.mesh_file,
+            association_table=association_table,
+            gdim=self.gdim,
+        )
 
         mesh = build_eit_mesh(
             mesh_data.mesh,

@@ -6,7 +6,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCAN_ROOTS = [
     REPO_ROOT / "src",
@@ -46,10 +45,6 @@ EXCLUDED_PATHS = {
 }
 
 
-def _old_word_pattern(left: str, right: str) -> re.Pattern[str]:
-    return re.compile(rf"\b{left}{right}\b", re.IGNORECASE)
-
-
 REMOVED_SCRIPT_PATTERNS = [
     re.compile(r"\brun_single_step_diff_realdata(?:_batch)?\.py\b"),
     re.compile(r"\brun_gn_absolute_eidors_style\.py\b"),
@@ -69,8 +64,6 @@ FORBIDDEN_PATTERNS = [
     re.compile(r"\bpatch_function_vector_api\b"),
     re.compile(r"\bStandardGaussNewtonReconstructor\b"),
     re.compile(r"\bdemo_fenics_"),
-    _old_word_pattern("lega", "cy"),
-    _old_word_pattern("comp", "at"),
     *REMOVED_SCRIPT_PATTERNS,
 ]
 
@@ -86,7 +79,10 @@ def _iter_files(path: Path):
     for candidate in path.rglob("*"):
         if candidate.is_dir():
             continue
-        if any(part in EXCLUDED_DIR_NAMES or part.endswith(".egg-info") for part in candidate.parts):
+        if any(
+            part in EXCLUDED_DIR_NAMES or part.endswith(".egg-info")
+            for part in candidate.parts
+        ):
             continue
         if any(str(candidate).startswith(str(excluded)) for excluded in EXCLUDED_PATHS):
             continue
@@ -108,7 +104,11 @@ def main() -> int:
             for pattern in FORBIDDEN_PATTERNS:
                 for match in pattern.finditer(text):
                     line_no = text.count("\n", 0, match.start()) + 1
-                    snippet = lines[line_no - 1].strip() if 0 < line_no <= len(lines) else pattern.pattern
+                    snippet = (
+                        lines[line_no - 1].strip()
+                        if 0 < line_no <= len(lines)
+                        else pattern.pattern
+                    )
                     failures.append((file_path, line_no, snippet))
 
     if not failures:

@@ -449,10 +449,10 @@ Regenerate "README": # PyEIDORS
 
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 ![License](https://img.shields.io/badge/license-MIT-green)
-![Backend](https://img.shields.io/badge/backend-FEniCS-orange)
+![Backend](https://img.shields.io/badge/backend-FEniCSx%20(DOLFINx)-orange)
 ![Accel](https://img.shields.io/badge/accel-PyTorch-red)
 
-A Python-first EIT framework with a FEniCS Complete Electrode Model (CEM) backend and PyTorch acceleration, designed to be familiar to EIDORS users while enabling modern GPU/differentiable workflows.
+A Python-first EIT framework with a FEniCSx (DOLFINx) Complete Electrode Model (CEM) backend and PyTorch acceleration, designed to be familiar to EIDORS users while enabling modern GPU/differentiable workflows.
 
 SoftwareX manuscript in preparation; citation info will be added after acceptance.
 
@@ -472,7 +472,7 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 ## Why PyEIDORS
 
 - **Numerical Consistency**: Matches EIDORS-style workflows with verified simulation parity.
-- **Modern Architecture**: Hybrid FEniCS (FEM) + PyTorch (Inverse/Accel) design.
+- **Modern Architecture**: Hybrid FEniCSx (DOLFINx FEM) + PyTorch (Inverse/Accel) design.
 - **Modular & Extensible**: `EITSystem` coordinator makes it easy to replace geometry, forward models, or solvers.
 - **Research Ready**: End-to-end scripts for absolute & difference reconstruction, real-time mesh generation, and benchmarking.
 
@@ -480,13 +480,9 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 ## Quick Start
 
-0. **Install Docker (required)**:
-   - **Windows**: install WSL2 first, then install Docker Desktop (WSL2 backend).
-   - **macOS/Linux**: install Docker Desktop (or Docker Engine on Linux).
-   - After installation, open a terminal and verify:
-     ```bash
-     docker --version
-     ```
+0. **Install Nix and uv**:
+   - Use the locked setup in `docs/NIX_FENICSX.md`.
+   - On WSL2/Linux, run commands from the repository root.
 
 1. **Download this repository and enter the folder**:
    ```bash
@@ -495,21 +491,20 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
    ```
    You can move the `PyEIDORS` folder anywhere you like; just make sure you run commands inside it.
 
-2. **Start the Docker Environment** (this mounts the current folder into the container):
+2. **Enter the maintained environment**:
    ```bash
-   docker run -ti -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
+   nix develop
+   uv sync
    ```
 
-   If you have an NVIDIA GPU with CUDA set up, add `--gpus all`:
+   For the CUDA shell:
    ```bash
-   docker run -ti --gpus all -v "$(pwd):/root/shared" -w /root/shared --name pyeidors ghcr.io/cbz199671/pyeidors-env:latest
+   nix develop .#cuda
    ```
 
-   If you use a different local path, replace `$(pwd)` with your full folder path. The `-v` flag binds your local repo into `/root/shared` inside the container.
-
-3. **Install the Package**:
+3. **Validate the package**:
    ```bash
-   pip install -e .
+   python -m pytest -q
    ```
 
 4. **Run a Synthetic Demo** (Paper parity example):
@@ -519,7 +514,7 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 5. **Run a Real-Data Demo** (Tank difference imaging):
    ```bash
-   python scripts/run_single_step_diff_realdata.py --csv data/measurements/tank/2025-11-14-22-18-02_1_10.00_50uA_3000Hz.csv --background-sigma 0.008 --lambda 0.9
+   python scripts/run_reconstruction_unified.py --help
    ```
 
 The repository includes pre-generated demo outputs under `results/` (see the `COMMAND.md` files inside each demo directory).
@@ -528,10 +523,10 @@ The repository includes pre-generated demo outputs under `results/` (see the `CO
 
 ## Gallery & Validation
 
-### Modern Architecture: FEniCS + PyTorch
+### Modern Architecture: FEniCSx + PyTorch
 
 <p align="center">
-  <img src="pictures/Fig.%201.%20pyeidors_architecture.png" alt="Architecture: FEniCS + PyTorch" width="900" />
+  <img src="pictures/Fig.%201.%20pyeidors_architecture.png" alt="Architecture: FEniCSx + PyTorch" width="900" />
 </p>
 
 ### Gauss-Newton Absolute Reconstruction
@@ -619,13 +614,13 @@ Highlights:
 
 - Designed for research and engineering practice, covering the complete pipeline of mesh generation, forward modeling, Jacobian computation, regularization, and Gauss-Newton reconstruction.
 - Modular design with `EITSystem` as the core coordinator for geometry, forward, and inverse problem components.
-- Supports GMsh+meshio+FEniCS mesh workflow, with built-in stimulation/measurement pattern manager, synthetic data generation, and visualization tools.
+- Supports Gmsh/DOLFINx mesh workflow, with built-in stimulation/measurement pattern manager, synthetic data generation, and visualization tools.
 - Provides examples, tests, and reports to help verify electrode layouts, mesh quality, and end-to-end reconstruction pipelines.
 
 ### Key Components
 
 - **Geometry**: GMsh-based mesh generation (`mesh_generator.py`) and cached loading (`mesh_loader.py`).
-- **Forward Model**: Complete Electrode Model (CEM) implemented in FEniCS (`eit_forward_model.py`).
+- **Forward Model**: Complete Electrode Model (CEM) implemented in FEniCSx/DOLFINx (`eit_forward_model.py`).
 - **Inverse Solver**:
     - Adaptive Gauss-Newton (PyTorch-accelerated).
     - EIDORS-style single-step difference imaging.
@@ -706,19 +701,14 @@ python scripts/run_real_measurement_reconstruction.py \
 
 The script validates the measurement matrix, builds `EITSystem`, and performs difference inverse problem reconstruction. Output measurement curves and conductivity images are saved in `results/real_measurements/`.
 
-### 3. Sparse Bayesian Learning
-Run the advanced sparse Bayesian solver (supports GPU):
+### 3. Unified Reconstruction
+Run the unified reconstruction entrypoint:
 
 ```bash
-python scripts/run_sparse_bayesian_reconstruction.py \
-  --csv data/measurements/sample.csv \
-  --mode both --solver fista --use-gpu
+python scripts/run_reconstruction_unified.py --help
 ```
 
-The repository also includes a pre-generated tank sparse Bayesian demo under:
-`results/tank_final_results/sparse_bayesian_physical_bg0008_v1_0/` (see `COMMAND.md` inside).
-
-Results are written to `results/sparse_bayesian/` by default. For a full list of options, run `python scripts/run_sparse_bayesian_reconstruction.py --help`.
+Use the current command help and `docs/MEASUREMENT_DATA_SPEC.md` to select data inputs and reconstruction mode.
 
 ## Data, Visualization, and Testing
 
@@ -735,69 +725,34 @@ Results are written to `results/sparse_bayesian/` by default. For a full list of
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
-- **Docker Notes**: `docs/DOCKER.md`
+- **Docker Status**: `docs/DOCKER.md`
 
 ## Acknowledgments
 
 PyEIDORS is developed in the research environment of 455 Lab, College of Information and Electrical Engineering, China Agricultural University. This work was supported by the National Natural Science Foundation of China [Grant Number 62271488].
 
-## Docker Environment Setup
+## Current Environment Setup
 
-The recommended workflow is to use the prebuilt Docker image. It already contains FEniCS, CUQIpy, and PyTorch. See `docs/DOCKER.md` for the most up-to-date commands.
-
-### Option A: Prebuilt Image (Recommended)
+The maintained workflow is Nix + uv with FEniCSx/DOLFINx. See `docs/NIX_FENICSX.md` for CPU, CUDA, validation, and troubleshooting commands. Docker content from the old runtime has been removed and should not be used as the installation path.
 
 ```bash
-docker pull ghcr.io/cbz199671/pyeidors-env:latest
-
-docker run -ti \
-  -v "$(pwd):/root/shared" \
-  -w /root/shared \
-  --name pyeidors \
-  ghcr.io/cbz199671/pyeidors-env:latest
+nix develop
+uv sync
+python -m pytest -q
 ```
-*Note: Add `--gpus all` for GPU support.*
 
-Notes:
-
-- The `-v ...:/root/shared` path should point to your local clone of this repository.
-- On Windows, install WSL2 + Docker Desktop (WSL2 backend) first; see `docs/DOCKER.md`.
-- For GPU support, add `--gpus all` (requires NVIDIA Container Toolkit).
-- Do not set `--cpus` / `--memory` unless you want to limit Docker. By default, Docker can use the available host resources.
-- If you hit shared-memory issues (e.g., `/dev/shm` errors), add `--shm-size=2g` (or larger). On Linux, `--ipc=host` can also help.
-- If you omit `--gpus all`, PyTorch will run on CPU; it will not error unless a script explicitly forces CUDA.
-- If you downloaded an offline image archive (e.g., `pyeidors-ultra22.tar.zst`), see `docs/DOCKER.md` for `docker load` instructions.
-
-### Option B: Manual Build
+For the GUI, use the project launchers:
 
 ```bash
-# Start container
-docker run -ti \
-  -v "$(pwd):/root/shared" \
-  -w /root/shared \
-  --name pyeidors \
-  ghcr.io/scientificcomputing/fenics-gmsh:2024-05-30
-
-# (Optional) Install CJK font dependencies
-apt-get update && apt-get install -y fonts-wqy-zenhei
-
-# Install CUQIpy and CUQIpy-FEniCS
-pip install cuqipy cuqipy-fenics
-
-# Create virtual environment
-python3 -m venv /opt/final_venv --system-site-packages
-source /opt/final_venv/bin/activate
-
-# Install PyTorch
-pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu128
+bash scripts/gui/run_eit_app.sh --cpu
+bash scripts/gui/run_eit_app.sh --gpu
 ```
 
 ## Environment Components
-- **FEniCS**: 2024-05-30 (Official Image)
-- **CUQIpy**: 1.3.0
-- **CUQIpy-FEniCS**: 0.8.0
-- **PyTorch**: 2.7.1+cu128
-- **Python**: 3.10+
+- **FEniCSx/DOLFINx**: provided by the Nix flake
+- **PETSc/SLEPc**: provided by the Nix flake
+- **PyTorch**: locked through the uv/Nix environment
+- **Python**: locked through the uv/Nix environment
 
 do like this
 
@@ -969,4 +924,3 @@ _[tool: write_file]_
 _[tool: show_to_user]_
 
 Fresh take — the circular mark now has weight and meaning: a solid tomographic cross-section showing two conductivity bands (a prominent dark upper band and a softer lower one, with a curved boundary between them — the kind of shape you actually see in a σ reconstruction), ringed by 8 electrodes with the active pair highlighted in amber. Reads as a single confident symbol rather than a thin diagram, while still being unmistakably "EIT".
-

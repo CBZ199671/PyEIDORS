@@ -35,7 +35,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false
@@ -76,7 +76,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false
@@ -117,7 +117,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false
@@ -158,7 +158,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false
@@ -199,7 +199,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false
@@ -240,7 +240,7 @@
     "linear_system_rows": 5702,
     "linear_system_cols": 5702,
     "regularization_structure": "dense",
-    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+    "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
     "used_measurement_space_fast_path": false,
     "enable_measurement_space_fast_path": false,
     "enable_diagonal_regularization_cache": false

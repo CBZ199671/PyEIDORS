@@ -17,6 +17,12 @@ from mpi4py import MPI
 
 from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
 from ..femx import build_eit_mesh
+from ._helpers import (
+    add_named_physical_group,
+    assert_unique_physical_group_ownership,
+    validate_mesh_data_tags,
+)
+from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
 
@@ -73,13 +79,31 @@ class MeshGenerator:
                 gmsh.write(str(mesh_file))
 
             self._extract_electrode_vertices()
+            assert_unique_physical_group_ownership(gmsh.model)
             mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2)
 
-        association_table = {
-            name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
-        }
+        electrode_names = [
+            f"electrode_{idx}" for idx in range(1, self.electrodes.L + 1)
+        ]
+        facet_names = [*electrode_names, "gaps"]
+        association_table = validate_mesh_data_tags(
+            mesh_data,
+            gdim=2,
+            required_names=["domain", *facet_names],
+            required_facet_names=facet_names,
+        )
+        if save_msh:
+            write_dolfinx_mesh_cache(
+                mesh_data,
+                source_msh_file=mesh_file,
+                association_table=association_table,
+                gdim=2,
+            )
 
-        electrode_vertices = [np.asarray(v, dtype=float) for v in self.mesh_data.get("electrode_vertices", [])]
+        electrode_vertices = [
+            np.asarray(v, dtype=float)
+            for v in self.mesh_data.get("electrode_vertices", [])
+        ]
         mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
@@ -169,7 +193,7 @@ class MeshGenerator:
         lines = self.mesh_data["lines"]
         electrode_ranges = self.mesh_data["electrode_ranges"]
 
-        gmsh.model.addPhysicalGroup(2, [surface], 1, name="domain")
+        add_named_physical_group(gmsh.model, 2, [surface], 1, "domain")
 
         electrode_lines = []
         for i, (start, end) in enumerate(electrode_ranges):
@@ -179,12 +203,24 @@ class MeshGenerator:
                 lines_for_electrode.append(lines[line_idx])
 
             if lines_for_electrode:
-                gmsh.model.addPhysicalGroup(1, lines_for_electrode, i + 2, name=f"electrode_{i + 1}")
+                add_named_physical_group(
+                    gmsh.model,
+                    1,
+                    lines_for_electrode,
+                    i + 2,
+                    f"electrode_{i + 1}",
+                )
                 electrode_lines.extend(lines_for_electrode)
 
         gap_lines = [line for line in lines if line not in electrode_lines]
         if gap_lines:
-            gmsh.model.addPhysicalGroup(1, gap_lines, self.electrodes.L + 2, name="gaps")
+            add_named_physical_group(
+                gmsh.model,
+                1,
+                gap_lines,
+                self.electrodes.L + 2,
+                "gaps",
+            )
 
     def _generate_mesh(self):
         gmsh.model.mesh.setSize(gmsh.model.getEntities(0), self.config.mesh_size)

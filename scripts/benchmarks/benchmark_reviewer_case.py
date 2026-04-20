@@ -28,15 +28,17 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
-from fenics import Function  # noqa: E402
-
 from pyeidors import EITSystem  # noqa: E402
 from pyeidors.data.structures import EITImage, PatternConfig  # noqa: E402
 from pyeidors.data.synthetic_data import create_custom_phantom  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian  # noqa: E402
+from pyeidors.inverse.jacobian.adjoint_jacobian import (
+    EidorsStyleAdjointJacobian,
+)  # noqa: E402
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization  # noqa: E402
-from pyeidors.inverse.solvers.gauss_newton import ModularGaussNewtonReconstructor  # noqa: E402
+from pyeidors.inverse.solvers.gauss_newton import (
+    ModularGaussNewtonReconstructor,
+)  # noqa: E402
 
 from benchmark_difference_runtime import (  # noqa: E402
     build_single_step_namespace,
@@ -46,7 +48,7 @@ from benchmark_difference_runtime import (  # noqa: E402
 
 GPU_SCOPE_NOTE = (
     "GPU acceleration currently benefits inverse/tensor operations; "
-    "forward PDE assembly remains on the FEniCS/CPU side."
+    "forward PDE assembly remains on the DOLFINx/CPU side."
 )
 
 ACTIVE_TRACKER: "BenchmarkStateTracker | None" = None
@@ -57,11 +59,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--framework", choices=["pyeidors", "pyeit"], required=True)
     parser.add_argument(
         "--task",
-        choices=["forward", "jacobian", "difference", "absolute_gn", "multi_frame_difference"],
+        choices=[
+            "forward",
+            "jacobian",
+            "difference",
+            "absolute_gn",
+            "multi_frame_difference",
+        ],
         required=True,
     )
     parser.add_argument("--output-json", type=Path, required=True)
-    parser.add_argument("--mesh-level", choices=["coarse", "medium", "fine"], required=True)
+    parser.add_argument(
+        "--mesh-level", choices=["coarse", "medium", "fine"], required=True
+    )
     parser.add_argument("--device", default="cpu", choices=["cpu", "gpu"])
     parser.add_argument("--scenario", default="low_z", choices=["low_z", "high_z"])
     parser.add_argument("--warmups", type=int, default=3)
@@ -72,7 +82,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--difference-hyperparameter", type=float, default=None)
     parser.add_argument("--absolute-lambda", type=float, default=1e-2)
     parser.add_argument("--absolute-max-iter", type=int, default=15)
-    parser.add_argument("--gn-path", choices=["optimized", "legacy_dense"], default="optimized")
+    parser.add_argument(
+        "--gn-path", choices=["optimized", "legacy_dense"], default="optimized"
+    )
     parser.add_argument("--run-id", default="")
     parser.add_argument("--case-id", default="")
     parser.add_argument("--phase", default="")
@@ -127,7 +139,8 @@ def make_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
@@ -145,26 +158,36 @@ def summarise_times(times: Iterable[float]) -> Dict[str, float]:
     }
 
 
-def conductivity_metrics(true_values: np.ndarray, recon_values: np.ndarray) -> Dict[str, float]:
-    error = np.asarray(recon_values, dtype=float).reshape(-1) - np.asarray(true_values, dtype=float).reshape(-1)
+def conductivity_metrics(
+    true_values: np.ndarray, recon_values: np.ndarray
+) -> Dict[str, float]:
+    error = np.asarray(recon_values, dtype=float).reshape(-1) - np.asarray(
+        true_values, dtype=float
+    ).reshape(-1)
     true_values = np.asarray(true_values, dtype=float).reshape(-1)
     return {
         "conductivity_mae": float(np.mean(np.abs(error))),
-        "conductivity_rmse": float(np.sqrt(np.mean(error ** 2))),
+        "conductivity_rmse": float(np.sqrt(np.mean(error**2))),
         "conductivity_relative_error_pct": float(
-            np.linalg.norm(error) / max(np.linalg.norm(true_values), np.finfo(float).eps) * 100.0
+            np.linalg.norm(error)
+            / max(np.linalg.norm(true_values), np.finfo(float).eps)
+            * 100.0
         ),
     }
 
 
 def voltage_metrics(target: np.ndarray, predicted: np.ndarray) -> Dict[str, float]:
-    error = np.asarray(predicted, dtype=float).reshape(-1) - np.asarray(target, dtype=float).reshape(-1)
+    error = np.asarray(predicted, dtype=float).reshape(-1) - np.asarray(
+        target, dtype=float
+    ).reshape(-1)
     target = np.asarray(target, dtype=float).reshape(-1)
     return {
-        "voltage_rmse": float(np.sqrt(np.mean(error ** 2))),
+        "voltage_rmse": float(np.sqrt(np.mean(error**2))),
         "voltage_mae": float(np.mean(np.abs(error))),
         "voltage_relative_error_pct": float(
-            np.linalg.norm(error) / max(np.linalg.norm(target), np.finfo(float).eps) * 100.0
+            np.linalg.norm(error)
+            / max(np.linalg.norm(target), np.finfo(float).eps)
+            * 100.0
         ),
     }
 
@@ -305,17 +328,23 @@ class PyEidorsCase:
             )
             self.absolute_jacobian_backend = type(jacobian_calculator).__name__
 
-        self.baseline_image = self.system.create_homogeneous_image(conductivity=cfg["background"])
+        self.baseline_image = self.system.create_homogeneous_image(
+            conductivity=cfg["background"]
+        )
         sigma = create_custom_phantom(
             self.system.fwd_model,
             background_conductivity=cfg["background"],
-            anomalies=[{
-                "center": tuple(cfg["phantom_center"]),
-                "radius": cfg["phantom_radius"],
-                "conductivity": cfg["phantom_conductivity"],
-            }],
+            anomalies=[
+                {
+                    "center": tuple(cfg["phantom_center"]),
+                    "radius": cfg["phantom_radius"],
+                    "conductivity": cfg["phantom_conductivity"],
+                }
+            ],
         )
-        self.truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model)
+        self.truth_image = EITImage(
+            elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model
+        )
         self.truth_sigma = self.truth_image.elem_data.copy()
         self.baseline_meas, _ = self.system.fwd_model.fwd_solve(self.baseline_image)
         self.target_meas, _ = self.system.fwd_model.fwd_solve(self.truth_image)
@@ -337,7 +366,9 @@ class PyEidorsCase:
         return voltage_metrics(self.target_meas.meas, sim.meas)
 
     def jacobian(self) -> Dict[str, float]:
-        calc = EidorsStyleAdjointJacobian(self.system.fwd_model, use_torch=self.args.device == "gpu")
+        calc = EidorsStyleAdjointJacobian(
+            self.system.fwd_model, use_torch=self.args.device == "gpu"
+        )
         matrix = calc.calculate_from_image(self.truth_image)
         return {
             "jacobian_rows": int(matrix.shape[0]),
@@ -346,11 +377,17 @@ class PyEidorsCase:
         }
 
     def difference(self) -> Dict[str, float]:
-        diff_vector = compute_difference(self.target_meas.meas, self.baseline_meas.meas, False)
+        diff_vector = compute_difference(
+            self.target_meas.meas, self.baseline_meas.meas, False
+        )
         single_step_kwargs: Dict[str, float] = {}
         if self.args.difference_hyperparameter is not None:
-            single_step_kwargs["difference_hyperparameter"] = self.args.difference_hyperparameter
-        single_step_args = build_single_step_namespace(self.system, **single_step_kwargs)
+            single_step_kwargs["difference_hyperparameter"] = (
+                self.args.difference_hyperparameter
+            )
+        single_step_args = build_single_step_namespace(
+            self.system, **single_step_kwargs
+        )
         recon_image, predicted_diff, step_size = run_single_step_benchmark(
             self.system,
             self.baseline_image,
@@ -374,27 +411,45 @@ class PyEidorsCase:
         )
         conductivity_fn = recon_result["conductivity"]
         conductivity_vec = conductivity_fn.vector()[:]
-        sim_data, _ = self.system.fwd_model.fwd_solve(EITImage(elem_data=conductivity_vec, fwd_model=self.system.fwd_model))
+        sim_data, _ = self.system.fwd_model.fwd_solve(
+            EITImage(elem_data=conductivity_vec, fwd_model=self.system.fwd_model)
+        )
         result = {}
         result.update(voltage_metrics(self.target_meas.meas, sim_data.meas))
         result.update(conductivity_metrics(self.truth_sigma, conductivity_vec))
         result["final_residual"] = float(recon_result.get("final_residual", np.nan))
-        result["iterations"] = int(recon_result.get("iterations", self.args.absolute_max_iter))
-        result["jacobian_backend"] = recon_result.get("jacobian_backend", self.absolute_jacobian_backend)
+        result["iterations"] = int(
+            recon_result.get("iterations", self.args.absolute_max_iter)
+        )
+        result["jacobian_backend"] = recon_result.get(
+            "jacobian_backend", self.absolute_jacobian_backend
+        )
         result["linear_solver"] = recon_result.get("linear_solver", "unknown")
-        result["linear_system_rows"] = int(recon_result.get("linear_system_rows", self.n_elements))
-        result["linear_system_cols"] = int(recon_result.get("linear_system_cols", self.n_elements))
-        result["regularization_structure"] = recon_result.get("regularization_structure", "unknown")
+        result["linear_system_rows"] = int(
+            recon_result.get("linear_system_rows", self.n_elements)
+        )
+        result["linear_system_cols"] = int(
+            recon_result.get("linear_system_cols", self.n_elements)
+        )
+        result["regularization_structure"] = recon_result.get(
+            "regularization_structure", "unknown"
+        )
         result["gpu_scope_note"] = recon_result.get("gpu_scope_note", GPU_SCOPE_NOTE)
         result["used_measurement_space_fast_path"] = bool(
             recon_result.get("used_measurement_space_fast_path", False)
         )
         result["gn_path"] = self.args.gn_path
         result["enable_measurement_space_fast_path"] = bool(
-            recon_result.get("enable_measurement_space_fast_path", self.args.gn_path != "legacy_dense")
+            recon_result.get(
+                "enable_measurement_space_fast_path",
+                self.args.gn_path != "legacy_dense",
+            )
         )
         result["enable_diagonal_regularization_cache"] = bool(
-            recon_result.get("enable_diagonal_regularization_cache", self.args.gn_path != "legacy_dense")
+            recon_result.get(
+                "enable_diagonal_regularization_cache",
+                self.args.gn_path != "legacy_dense",
+            )
         )
         return result
 
@@ -431,14 +486,26 @@ class PyEitCase:
         self._anomaly_cls = PyEITAnomaly_Circle
         h0 = PYEIT_H0[args.mesh_level]
         self.mesh = create(n_el=args.n_elec, h0=h0)
-        self.protocol = create_protocol(n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std")
+        self.protocol = create_protocol(
+            n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std"
+        )
         self.forward_solver = EITForward(self.mesh, self.protocol)
         self.baseline_perm = np.ones(self.mesh.n_elems, dtype=float) * cfg["background"]
-        anomaly = PyEITAnomaly_Circle(center=list(cfg["phantom_center"]), r=cfg["phantom_radius"], perm=cfg["phantom_conductivity"])
-        self.truth_mesh = set_perm(self.mesh, anomaly=anomaly, background=cfg["background"])
+        anomaly = PyEITAnomaly_Circle(
+            center=list(cfg["phantom_center"]),
+            r=cfg["phantom_radius"],
+            perm=cfg["phantom_conductivity"],
+        )
+        self.truth_mesh = set_perm(
+            self.mesh, anomaly=anomaly, background=cfg["background"]
+        )
         self.truth_perm = np.asarray(self.truth_mesh.perm_array, dtype=float).copy()
-        self.v0 = np.asarray(self.forward_solver.solve_eit(perm=self.baseline_perm)).ravel()
-        self.v1 = np.asarray(EITForward(self.truth_mesh, self.protocol).solve_eit(perm=self.truth_perm)).ravel()
+        self.v0 = np.asarray(
+            self.forward_solver.solve_eit(perm=self.baseline_perm)
+        ).ravel()
+        self.v1 = np.asarray(
+            EITForward(self.truth_mesh, self.protocol).solve_eit(perm=self.truth_perm)
+        ).ravel()
 
     @property
     def n_nodes(self) -> int:
@@ -563,7 +630,9 @@ def run_task(
     return summary, last_duration
 
 
-def build_row(case, metrics: Dict[str, float], args: argparse.Namespace) -> Dict[str, float]:
+def build_row(
+    case, metrics: Dict[str, float], args: argparse.Namespace
+) -> Dict[str, float]:
     mean_value = metrics.pop("mean")
     std_value = metrics.pop("std")
     median_value = metrics.pop("median")
@@ -577,7 +646,11 @@ def build_row(case, metrics: Dict[str, float], args: argparse.Namespace) -> Dict
         "n_nodes": int(case.n_nodes),
         "n_elements": int(case.n_elements),
         "n_frames": int(args.n_frames if args.task == "multi_frame_difference" else 1),
-        "device": args.device if args.framework == "pyeidors" and args.task in {"jacobian", "absolute_gn"} else "cpu",
+        "device": (
+            args.device
+            if args.framework == "pyeidors" and args.task in {"jacobian", "absolute_gn"}
+            else "cpu"
+        ),
         "warmups": int(args.warmups),
         "repeats": int(args.repeats),
         "commit": get_git_commit(),

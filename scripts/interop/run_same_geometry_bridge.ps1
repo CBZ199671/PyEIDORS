@@ -17,9 +17,7 @@ param(
 
     [string]$OutDir = 'docs/benchmarks/interop',
 
-    [string]$DockerContainer = 'pyeidors',
-
-    [string]$PythonExe = '/opt/final_venv/bin/python',
+    [string]$PythonExe = 'python',
 
     [string]$MatlabExe = 'D:\Program Files\MATLAB\R2023b\bin\matlab.exe'
 )
@@ -42,6 +40,15 @@ function Get-RepoRelativePosixPath {
     return ($relative -replace '\\', '/')
 }
 
+function Convert-ToWslPath {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Path
+    )
+
+    return (& wsl.exe wslpath -a $Path).Trim()
+}
+
 function Invoke-WslRepoCommand {
     param(
         [Parameter(Mandatory = $true)]
@@ -50,19 +57,19 @@ function Invoke-WslRepoCommand {
         [string]$Command
     )
 
-    $drive = $RepoRoot.Substring(0, 1).ToLowerInvariant()
-    $rest = $RepoRoot.Substring(2) -replace '\\', '/'
-    $repoWsl = "/mnt/$drive$rest"
+    $repoWsl = Convert-ToWslPath -Path $RepoRoot
     return (& wsl.exe bash -lc "cd '$repoWsl' && $Command")
 }
 
-function Invoke-DockerPython {
+function Invoke-PyEIDORSPython {
     param(
+        [Parameter(Mandatory = $true)]
+        [string]$RepoRoot,
         [Parameter(Mandatory = $true)]
         [string]$Command
     )
 
-    & wsl.exe bash -lc "docker exec $DockerContainer bash -lc 'cd /root/shared && $Command'"
+    Invoke-WslRepoCommand -RepoRoot $RepoRoot -Command "nix develop --command $Command"
 }
 
 function Invoke-MatlabBatch {
@@ -98,7 +105,7 @@ if ($Direction -in @('both', 'pyeidors_to_eidors')) {
     $meshMatRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $meshMat
     $forwardCsvRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $forwardCsv
 
-    Invoke-DockerPython " $PythonExe scripts/interop/export_geometry_from_pyeidors.py --output-mat /root/shared/$meshMatRel --forward-export-csv /root/shared/$forwardCsvRel --mesh-level $MeshLevel --scenario $Scenario --electrode-coverage $ElectrodeCoverage"
+    Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/export_geometry_from_pyeidors.py --output-mat $meshMatRel --forward-export-csv $forwardCsvRel --mesh-level $MeshLevel --scenario $Scenario --electrode-coverage $ElectrodeCoverage"
 
     @{
         mesh_mat = ($meshMat -replace '\\', '/')
@@ -114,17 +121,17 @@ if ($Direction -in @('both', 'pyeidors_to_eidors')) {
     if ($RenderPlots) {
         $detailsMatRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $detailsMat
         $plotPrefixRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path (Join-Path $OutDir "${prefix}_eidors")
-        Invoke-DockerPython " $PythonExe scripts/interop/render_bridge_report.py --geometry-mat /root/shared/$meshMatRel --details-mat /root/shared/$detailsMatRel --output-prefix /root/shared/$plotPrefixRel --title-prefix PyEIDORS_to_EIDORS"
+        Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/render_bridge_report.py --geometry-mat $meshMatRel --details-mat $detailsMatRel --output-prefix $plotPrefixRel --title-prefix PyEIDORS_to_EIDORS"
     }
 
     if ($IncludeSelfSource) {
         $selfResultJsonRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $selfResultJson
         $selfDetailsMatRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $selfDetailsMat
-        Invoke-DockerPython " $PythonExe scripts/interop/import_geometry_from_eidors.py --mesh-mat /root/shared/$meshMatRel --input-csv /root/shared/$forwardCsvRel --output-json /root/shared/$selfResultJsonRel --details-mat /root/shared/$selfDetailsMatRel"
+        Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/import_geometry_from_eidors.py --mesh-mat $meshMatRel --input-csv $forwardCsvRel --output-json $selfResultJsonRel --details-mat $selfDetailsMatRel"
         $resultPaths += $selfResultJson
         if ($RenderPlots) {
             $selfPlotPrefixRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path (Join-Path $OutDir "${prefix}_pyeidors")
-            Invoke-DockerPython " $PythonExe scripts/interop/render_bridge_report.py --geometry-mat /root/shared/$meshMatRel --details-mat /root/shared/$selfDetailsMatRel --output-prefix /root/shared/$selfPlotPrefixRel --title-prefix PyEIDORS_to_PyEIDORS"
+            Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/render_bridge_report.py --geometry-mat $meshMatRel --details-mat $selfDetailsMatRel --output-prefix $selfPlotPrefixRel --title-prefix PyEIDORS_to_PyEIDORS"
         }
     }
 }
@@ -155,11 +162,11 @@ if ($Direction -in @('both', 'eidors_to_pyeidors')) {
     $forwardCsvRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $forwardCsv
     $resultJsonRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $resultJson
     $detailsMatRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $detailsMat
-    Invoke-DockerPython " $PythonExe scripts/interop/import_geometry_from_eidors.py --mesh-mat /root/shared/$meshMatRel --input-csv /root/shared/$forwardCsvRel --output-json /root/shared/$resultJsonRel --details-mat /root/shared/$detailsMatRel"
+    Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/import_geometry_from_eidors.py --mesh-mat $meshMatRel --input-csv $forwardCsvRel --output-json $resultJsonRel --details-mat $detailsMatRel"
     $resultPaths += $resultJson
     if ($RenderPlots) {
         $plotPrefixRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path (Join-Path $OutDir "${prefix}_pyeidors")
-        Invoke-DockerPython " $PythonExe scripts/interop/render_bridge_report.py --geometry-mat /root/shared/$meshMatRel --details-mat /root/shared/$detailsMatRel --output-prefix /root/shared/$plotPrefixRel --title-prefix EIDORS_to_PyEIDORS"
+        Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/render_bridge_report.py --geometry-mat $meshMatRel --details-mat $detailsMatRel --output-prefix $plotPrefixRel --title-prefix EIDORS_to_PyEIDORS"
     }
 
     if ($IncludeSelfSource) {
@@ -176,7 +183,7 @@ if ($Direction -in @('both', 'eidors_to_pyeidors')) {
         if ($RenderPlots) {
             $selfDetailsMatRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path $selfDetailsMat
             $selfPlotPrefixRel = Get-RepoRelativePosixPath -RepoRoot $repoRoot -Path (Join-Path $OutDir "${prefix}_eidors")
-            Invoke-DockerPython " $PythonExe scripts/interop/render_bridge_report.py --geometry-mat /root/shared/$meshMatRel --details-mat /root/shared/$selfDetailsMatRel --output-prefix /root/shared/$selfPlotPrefixRel --title-prefix EIDORS_to_EIDORS"
+            Invoke-PyEIDORSPython -RepoRoot $repoRoot -Command "$PythonExe scripts/interop/render_bridge_report.py --geometry-mat $meshMatRel --details-mat $selfDetailsMatRel --output-prefix $selfPlotPrefixRel --title-prefix EIDORS_to_EIDORS"
         }
     }
 }

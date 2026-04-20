@@ -21,9 +21,16 @@ if str(BENCHMARK_SCRIPT_DIR) not in sys.path:
 
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
-from pyeidors.interop import STANDARD_INTEROP_FORMAT, build_mesh_from_exchange_mat, load_forward_csv
+from pyeidors.interop import (
+    STANDARD_INTEROP_FORMAT,
+    build_mesh_from_exchange_mat,
+    load_forward_csv,
+)
 
-from benchmark_difference_runtime import build_single_step_namespace, run_single_step_benchmark
+from benchmark_difference_runtime import (
+    build_single_step_namespace,
+    run_single_step_benchmark,
+)
 from benchmark_reviewer_case import conductivity_metrics, voltage_metrics
 
 
@@ -36,12 +43,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--n-elec", type=int, default=16)
     return parser.parse_args()
 
+
 def make_pattern_config(n_elec: int) -> PatternConfig:
     return PatternConfig(
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
@@ -96,7 +105,9 @@ def main() -> None:
         "study": "same_geometry_cross_generation",
         "source_framework": source_framework,
         "framework": "pyeidors",
-        "exchange_format": str(getattr(imported_mesh, "exchange_format", STANDARD_INTEROP_FORMAT)),
+        "exchange_format": str(
+            getattr(imported_mesh, "exchange_format", STANDARD_INTEROP_FORMAT)
+        ),
         "mesh_name": imported_mesh.mesh_name,
         "n_nodes": int(imported_mesh.num_vertices()),
         "n_elements": int(len(system.fwd_model.V_sigma.dofmap().dofs())),
@@ -117,12 +128,16 @@ def main() -> None:
         savemat(
             args.details_mat,
             {
-                "exchange_format": getattr(imported_mesh, "exchange_format", STANDARD_INTEROP_FORMAT),
+                "exchange_format": getattr(
+                    imported_mesh, "exchange_format", STANDARD_INTEROP_FORMAT
+                ),
                 "source_framework": source_framework,
                 "framework": "pyeidors",
                 "mesh_name": imported_mesh.mesh_name,
                 "truth_elem_data": np.asarray(truth_elem_data, dtype=float).reshape(-1),
-                "recon_elem_data": np.asarray(recon_image.elem_data, dtype=float).reshape(-1),
+                "recon_elem_data": np.asarray(
+                    recon_image.elem_data, dtype=float
+                ).reshape(-1),
                 "target_diff": np.asarray(target_diff, dtype=float).reshape(-1),
                 "predicted_diff": np.asarray(predicted_diff, dtype=float).reshape(-1),
                 "voltage_rmse": float(result["voltage_rmse"]),

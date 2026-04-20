@@ -44,11 +44,15 @@ from benchmark_reviewer_case import (  # noqa: E402
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--framework", choices=["pyeidors", "pyeit"], required=True)
-    parser.add_argument("--source-framework", choices=["pyeidors", "eidors"], required=True)
+    parser.add_argument(
+        "--source-framework", choices=["pyeidors", "eidors"], required=True
+    )
     parser.add_argument("--input-csv", type=Path, required=True)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--source-metrics-json", type=Path, default=None)
-    parser.add_argument("--mesh-level", choices=["coarse", "medium", "fine"], default="medium")
+    parser.add_argument(
+        "--mesh-level", choices=["coarse", "medium", "fine"], default="medium"
+    )
     parser.add_argument("--scenario", choices=["low_z", "high_z"], default="low_z")
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
@@ -69,7 +73,9 @@ def load_forward_csv(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     baseline = np.asarray([float(row["meas_homogeneous"]) for row in rows], dtype=float)
     phantom = np.asarray([float(row["meas_phantom"]) for row in rows], dtype=float)
     if "difference" in reader.fieldnames:
-        target_diff = np.asarray([float(row["difference"]) for row in rows], dtype=float)
+        target_diff = np.asarray(
+            [float(row["difference"]) for row in rows], dtype=float
+        )
     else:
         target_diff = phantom - baseline
     return baseline, phantom, target_diff
@@ -106,7 +112,9 @@ def load_source_provenance(args: argparse.Namespace) -> dict[str, object]:
             provenance["source_phantom_contrast"] = float(phantom["contrast"])
 
     try:
-        provenance["source_metrics_json"] = str(args.source_metrics_json.resolve().relative_to(REPO_ROOT.resolve()))
+        provenance["source_metrics_json"] = str(
+            args.source_metrics_json.resolve().relative_to(REPO_ROOT.resolve())
+        )
     except ValueError:
         provenance["source_metrics_json"] = str(args.source_metrics_json.resolve())
     return provenance
@@ -117,7 +125,8 @@ def make_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
@@ -145,22 +154,30 @@ class PyEidorsCrossCase:
             noser_exponent=0.5,
         )
         self.system.setup(mesh=self.mesh)
-        self.baseline_image = self.system.create_homogeneous_image(conductivity=cfg["background"])
+        self.baseline_image = self.system.create_homogeneous_image(
+            conductivity=cfg["background"]
+        )
         sigma = create_custom_phantom(
             self.system.fwd_model,
             background_conductivity=cfg["background"],
-            anomalies=[{
-                "center": tuple(cfg["phantom_center"]),
-                "radius": cfg["phantom_radius"],
-                "conductivity": cfg["phantom_conductivity"],
-            }],
+            anomalies=[
+                {
+                    "center": tuple(cfg["phantom_center"]),
+                    "radius": cfg["phantom_radius"],
+                    "conductivity": cfg["phantom_conductivity"],
+                }
+            ],
         )
-        self.truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model)
+        self.truth_image = EITImage(
+            elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model
+        )
         self.truth_sigma = self.truth_image.elem_data.copy()
 
     @property
     def mesh_name(self) -> str:
-        return getattr(self.mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}")
+        return getattr(
+            self.mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}"
+        )
 
     @property
     def n_nodes(self) -> int:
@@ -170,11 +187,17 @@ class PyEidorsCrossCase:
     def n_elements(self) -> int:
         return len(self.system.fwd_model.V_sigma.dofmap().dofs())
 
-    def run(self, baseline: np.ndarray, phantom: np.ndarray, target_diff: np.ndarray) -> dict[str, float]:
+    def run(
+        self, baseline: np.ndarray, phantom: np.ndarray, target_diff: np.ndarray
+    ) -> dict[str, float]:
         single_step_kwargs: dict[str, float] = {}
         if self.args.difference_hyperparameter is not None:
-            single_step_kwargs["difference_hyperparameter"] = self.args.difference_hyperparameter
-        single_step_args = build_single_step_namespace(self.system, **single_step_kwargs)
+            single_step_kwargs["difference_hyperparameter"] = (
+                self.args.difference_hyperparameter
+            )
+        single_step_args = build_single_step_namespace(
+            self.system, **single_step_kwargs
+        )
         recon_image, predicted_diff, step_size = run_single_step_benchmark(
             self.system,
             self.baseline_image,
@@ -204,7 +227,9 @@ class PyEitCrossCase:
         self._JAC = JAC
         h0 = PYEIT_H0[args.mesh_level]
         self.mesh = create(n_el=args.n_elec, h0=h0)
-        self.protocol = create_protocol(n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std")
+        self.protocol = create_protocol(
+            n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std"
+        )
         self.forward_solver = EITForward(self.mesh, self.protocol)
         self.baseline_perm = np.ones(self.mesh.n_elems, dtype=float) * cfg["background"]
         anomaly = PyEITAnomaly_Circle(
@@ -212,7 +237,9 @@ class PyEitCrossCase:
             r=cfg["phantom_radius"],
             perm=cfg["phantom_conductivity"],
         )
-        self.truth_mesh = set_perm(self.mesh, anomaly=anomaly, background=cfg["background"])
+        self.truth_mesh = set_perm(
+            self.mesh, anomaly=anomaly, background=cfg["background"]
+        )
         self.truth_perm = np.asarray(self.truth_mesh.perm_array, dtype=float).copy()
 
     @property
@@ -227,7 +254,9 @@ class PyEitCrossCase:
     def n_elements(self) -> int:
         return int(self.mesh.n_elems)
 
-    def run(self, baseline: np.ndarray, phantom: np.ndarray, target_diff: np.ndarray) -> dict[str, float]:
+    def run(
+        self, baseline: np.ndarray, phantom: np.ndarray, target_diff: np.ndarray
+    ) -> dict[str, float]:
         jac = self._JAC(self.mesh, self.protocol)
         jac.setup(p=0.5, lamb=0.01, method="kotre", perm=self.baseline_perm)
         ds = np.asarray(jac.solve(phantom, baseline)).ravel()
@@ -281,7 +310,11 @@ def main() -> None:
     args = parse_args()
     baseline, phantom, target_diff = load_forward_csv(args.input_csv)
     source_provenance = load_source_provenance(args)
-    case = PyEidorsCrossCase(args) if args.framework == "pyeidors" else PyEitCrossCase(args)
+    case = (
+        PyEidorsCrossCase(args)
+        if args.framework == "pyeidors"
+        else PyEitCrossCase(args)
+    )
     t0 = time.perf_counter()
     metrics = case.run(baseline, phantom, target_diff)
     runtime = time.perf_counter() - t0

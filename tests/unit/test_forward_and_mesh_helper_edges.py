@@ -21,7 +21,13 @@ class _IntDict(dict):
 
 
 class _FakeMat:
-    def __init__(self, mat_type: str = "seqaij", *, raise_on_get_type: bool = False, raise_on_set_type: bool = False):
+    def __init__(
+        self,
+        mat_type: str = "seqaij",
+        *,
+        raise_on_get_type: bool = False,
+        raise_on_set_type: bool = False,
+    ):
         self.mat_type = str(mat_type)
         self.raise_on_get_type = raise_on_get_type
         self.raise_on_set_type = raise_on_set_type
@@ -49,7 +55,13 @@ class _FakeMat:
 
 
 class _FakeVec:
-    def __init__(self, vec_type: str = "seq", *, raise_on_get_type: bool = False, raise_on_set_type: bool = False):
+    def __init__(
+        self,
+        vec_type: str = "seq",
+        *,
+        raise_on_get_type: bool = False,
+        raise_on_set_type: bool = False,
+    ):
         self.vec_type = str(vec_type)
         self.raise_on_get_type = raise_on_get_type
         self.raise_on_set_type = raise_on_set_type
@@ -77,13 +89,19 @@ def test_resolve_electrode_tags_supports_nested_mapping_and_integer_fallback():
     assert model._resolve_electrode_tags() == [20, 50]
 
 
-def test_compute_electrode_boundary_measures_warns_on_zero_measure(monkeypatch: pytest.MonkeyPatch):
+def test_compute_electrode_boundary_measures_warns_on_zero_measure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     model = EITForwardModel.__new__(EITForwardModel)
     model.electrode_tags = [7, 9]
-    model.mesh = SimpleNamespace(comm=SimpleNamespace(allreduce=lambda value, op=None: value))
+    model.mesh = SimpleNamespace(
+        comm=SimpleNamespace(allreduce=lambda value, op=None: value)
+    )
     model.ds_electrodes = lambda tag: float(tag)
 
-    monkeypatch.setattr(forward_module.fem, "Constant", lambda _mesh, value: float(value))
+    monkeypatch.setattr(
+        forward_module.fem, "Constant", lambda _mesh, value: float(value)
+    )
     monkeypatch.setattr(forward_module.fem, "form", lambda expr: expr)
     monkeypatch.setattr(
         forward_module.fem,
@@ -125,7 +143,9 @@ def test_resolve_pattern_matrix_and_type_helpers(monkeypatch: pytest.MonkeyPatch
         model._resolve_pattern_matrix()
 
     vec_with_array = SimpleNamespace(array=np.array([4.0, 5.0], dtype=float))
-    np.testing.assert_allclose(EITForwardModel._vec_to_numpy(vec_with_array), np.array([4.0, 5.0], dtype=float))
+    np.testing.assert_allclose(
+        EITForwardModel._vec_to_numpy(vec_with_array), np.array([4.0, 5.0], dtype=float)
+    )
 
     monkeypatch.setattr(forward_module, "PETSc", object())
     converted = _FakeMat("densecuda")
@@ -150,7 +170,11 @@ def _fake_mesh_data():
         mesh="mesh",
         facet_tags="facet-tags",
         cell_tags="cell-tags",
-        physical_groups={"domain": _Group(1), "electrode_1": _Group(2), "gaps": _Group(3)},
+        physical_groups={
+            "domain": _Group(1),
+            "gaps": _Group(18),
+            **{f"electrode_{idx}": _Group(idx + 1) for idx in range(1, 17)},
+        },
     )
 
 
@@ -207,18 +231,28 @@ def test_forward_model_constructor_and_electrode_tag_validation_cover_error_path
         model._resolve_electrode_tags()
 
 
-def test_load_cached_mesh_reads_association_section_and_sidecar_metadata(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_load_cached_mesh_reads_association_section_and_sidecar_metadata(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     mesh_name = "with_sidecar"
     (tmp_path / f"{mesh_name}.msh").write_text("msh", encoding="utf-8")
     assoc = configparser.ConfigParser()
     assoc["ASSOCIATION TABLE"] = {"domain": "1", "electrode_1": "2", "gaps": "3"}
-    with (tmp_path / f"{mesh_name}_association_table.ini").open("w", encoding="utf-8") as fh:
+    with (tmp_path / f"{mesh_name}_association_table.ini").open(
+        "w", encoding="utf-8"
+    ) as fh:
         assoc.write(fh)
 
-    sidecar_path = opt_mesh_module.structured_sidecar_path_for_mesh(tmp_path / f"{mesh_name}.msh")
+    sidecar_path = opt_mesh_module.structured_sidecar_path_for_mesh(
+        tmp_path / f"{mesh_name}.msh"
+    )
     sidecar_path.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(opt_mesh_module.gmshio, "read_from_msh", lambda *args, **kwargs: _fake_mesh_data())
+    monkeypatch.setattr(
+        opt_mesh_module.gmshio,
+        "read_from_msh",
+        lambda *args, **kwargs: _fake_mesh_data(),
+    )
     monkeypatch.setattr(opt_mesh_module, "estimate_radius", lambda _mesh: 0.4)
     monkeypatch.setattr(
         opt_mesh_module,
@@ -233,7 +267,9 @@ def test_load_cached_mesh_reads_association_section_and_sidecar_metadata(tmp_pat
             mesh_family=None,
         ),
     )
-    monkeypatch.setattr(opt_mesh_module, "infer_mesh_family_from_mesh", lambda _mesh: "hex")
+    monkeypatch.setattr(
+        opt_mesh_module, "infer_mesh_family_from_mesh", lambda _mesh: "hex"
+    )
     monkeypatch.setattr(
         opt_mesh_module,
         "load_structured_sidecar",
@@ -242,12 +278,16 @@ def test_load_cached_mesh_reads_association_section_and_sidecar_metadata(tmp_pat
 
     loaded = opt_mesh_module._load_cached_mesh(tmp_path, mesh_name, gdim=2)
     assert loaded is not None
-    assert loaded.association_table == {"domain": 1, "electrode_1": 2, "gaps": 3}
+    assert loaded.association_table["domain"] == 1
+    assert loaded.association_table["electrode_1"] == 2
+    assert loaded.association_table["gaps"] == 18
     assert loaded.geometry_version == "geomv9"
     assert loaded.generator_revision == "g9"
 
 
-def test_cached_3d_mesh_validator_shortcuts_and_sidecar_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_cached_3d_mesh_validator_shortcuts_and_sidecar_success(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     mesh_2d = SimpleNamespace(topology=SimpleNamespace(dim=2))
     assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_2d, n_elec=2) is True
 
@@ -262,17 +302,26 @@ def test_cached_3d_mesh_validator_shortcuts_and_sidecar_success(tmp_path: Path, 
         generator_revision=opt_mesh_module.DEFAULT_3D_GENERATOR_REVISION,
         mesh_file=None,
     )
-    monkeypatch.setattr(opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag)))
-    monkeypatch.setattr(opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value))
+    monkeypatch.setattr(
+        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag))
+    )
+    monkeypatch.setattr(
+        opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)
+    )
     monkeypatch.setattr(opt_mesh_module.fem, "form", lambda expr: expr)
     monkeypatch.setattr(opt_mesh_module.fem, "assemble_scalar", lambda expr: expr)
-    assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_hex_missing_file, n_elec=2) is False
+    assert (
+        opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_hex_missing_file, n_elec=2)
+        is False
+    )
 
     mesh_file = tmp_path / "hex_ok.msh"
     mesh_file.write_text("msh", encoding="utf-8")
     sidecar_path = opt_mesh_module.structured_sidecar_path_for_mesh(mesh_file)
     sidecar_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr(opt_mesh_module, "load_structured_sidecar", lambda _path: {"ok": True})
+    monkeypatch.setattr(
+        opt_mesh_module, "load_structured_sidecar", lambda _path: {"ok": True}
+    )
 
     mesh_ok = SimpleNamespace(
         topology=SimpleNamespace(dim=3),
@@ -292,8 +341,12 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ):
-    monkeypatch.setattr(opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag)))
-    monkeypatch.setattr(opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value))
+    monkeypatch.setattr(
+        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag))
+    )
+    monkeypatch.setattr(
+        opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)
+    )
     monkeypatch.setattr(opt_mesh_module.fem, "form", lambda expr: expr)
 
     mesh_bad_measure = SimpleNamespace(
@@ -307,8 +360,15 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
         generator_revision="g3d0",
         mesh_file="mesh.msh",
     )
-    monkeypatch.setattr(opt_mesh_module.fem, "assemble_scalar", lambda expr: float("nan") if expr == 3.0 else 1.0)
-    assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_bad_measure, n_elec=2) is False
+    monkeypatch.setattr(
+        opt_mesh_module.fem,
+        "assemble_scalar",
+        lambda expr: float("nan") if expr == 3.0 else 1.0,
+    )
+    assert (
+        opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_bad_measure, n_elec=2)
+        is False
+    )
 
     mesh_file = tmp_path / "hex_bad_sidecar.msh"
     mesh_file.write_text("msh", encoding="utf-8")
@@ -331,12 +391,21 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
         "load_structured_sidecar",
         lambda _path: (_ for _ in ()).throw(RuntimeError("broken sidecar")),
     )
-    assert opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_bad_sidecar, n_elec=2) is False
+    assert (
+        opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_bad_sidecar, n_elec=2)
+        is False
+    )
 
 
-def test_clockwise_electrode_positions_and_cached_mesh_sidecar_fallbacks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    clockwise = opt_mesh_module.ElectrodePosition(L=4, coverage=0.5, anticlockwise=False).positions
-    anticlockwise = opt_mesh_module.ElectrodePosition(L=4, coverage=0.5, anticlockwise=True).positions
+def test_clockwise_electrode_positions_and_cached_mesh_sidecar_fallbacks(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    clockwise = opt_mesh_module.ElectrodePosition(
+        L=4, coverage=0.5, anticlockwise=False
+    ).positions
+    anticlockwise = opt_mesh_module.ElectrodePosition(
+        L=4, coverage=0.5, anticlockwise=True
+    ).positions
     assert clockwise[0] == anticlockwise[0]
     assert clockwise[1:] == anticlockwise[1:][::-1]
 
@@ -346,10 +415,22 @@ def test_clockwise_electrode_positions_and_cached_mesh_sidecar_fallbacks(tmp_pat
     sidecar_path = opt_mesh_module.structured_sidecar_path_for_mesh(msh_file)
     sidecar_path.write_text("{}", encoding="utf-8")
 
-    monkeypatch.setattr(opt_mesh_module.gmshio, "read_from_msh", lambda *args, **kwargs: _fake_mesh_data())
-    monkeypatch.setattr(opt_mesh_module, "association_from_mesh_data", lambda _mesh_data: {"domain": 1, "gaps": 3})
+    monkeypatch.setattr(
+        opt_mesh_module.gmshio,
+        "read_from_msh",
+        lambda *args, **kwargs: _fake_mesh_data(),
+    )
+    monkeypatch.setattr(
+        opt_mesh_module,
+        "association_from_mesh_data",
+        lambda _mesh_data: {"domain": 1, "gaps": 3},
+    )
     monkeypatch.setattr(opt_mesh_module, "estimate_radius", lambda _mesh: 0.5)
-    monkeypatch.setattr(opt_mesh_module, "load_structured_sidecar", lambda _path: (_ for _ in ()).throw(RuntimeError("bad sidecar")))
+    monkeypatch.setattr(
+        opt_mesh_module,
+        "load_structured_sidecar",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("bad sidecar")),
+    )
     monkeypatch.setattr(
         opt_mesh_module,
         "build_eit_mesh",
@@ -363,7 +444,14 @@ def test_clockwise_electrode_positions_and_cached_mesh_sidecar_fallbacks(tmp_pat
             mesh_family=None,
         ),
     )
-    monkeypatch.setattr(opt_mesh_module, "infer_mesh_family_from_mesh", lambda _mesh: "tetra")
-    monkeypatch.setattr(opt_mesh_module, "_cached_3d_cem_mesh_is_complete", lambda _mesh, n_elec: False)
+    monkeypatch.setattr(
+        opt_mesh_module, "infer_mesh_family_from_mesh", lambda _mesh: "tetra"
+    )
+    monkeypatch.setattr(
+        opt_mesh_module, "_cached_3d_cem_mesh_is_complete", lambda _mesh, n_elec: False
+    )
 
-    assert opt_mesh_module._load_cached_mesh(tmp_path, mesh_name, gdim=3, n_elec=16) is None
+    assert (
+        opt_mesh_module._load_cached_mesh(tmp_path, mesh_name, gdim=3, n_elec=16)
+        is None
+    )

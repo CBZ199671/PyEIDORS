@@ -27,11 +27,21 @@ from ..perf.policy import (
     normalize_mesh_family,
 )
 from ._helpers import (
+    add_named_physical_group,
     association_from_mesh_data,
+    assert_unique_physical_group_ownership,
     infer_generator_revision,
     infer_geometry_version,
     infer_mesh_family_from_mesh,
+    validate_mesh_data_tags,
     write_association_table,
+)
+from .dolfinx_mesh_cache import (
+    dolfinx_cache_metadata_path_for_mesh,
+    load_dolfinx_mesh_cache,
+    write_dolfinx_mesh_cache,
+    xdmf_cache_path_for_mesh,
+    xdmf_h5_path_for_mesh,
 )
 from .mesh3d_generator import (
     DEFAULT_ZIGZAG_LEVEL_FRACTIONS,
@@ -51,6 +61,7 @@ logger = logging.getLogger(__name__)
 
 try:
     import gmsh
+
     GMSH_AVAILABLE = True
 except ImportError:  # pragma: no cover
     gmsh = None  # type: ignore[assignment]
@@ -113,7 +124,9 @@ class OptimizedMeshGenerator:
         self.electrodes = electrodes
         self.mesh_data: Dict[str, object] = {}
 
-    def generate(self, output_dir: Optional[Path] = None, mesh_name: Optional[str] = None) -> EITMesh:
+    def generate(
+        self, output_dir: Optional[Path] = None, mesh_name: Optional[str] = None
+    ) -> EITMesh:
         if not GMSH_AVAILABLE:
             raise ImportError("gmsh Python bindings are required to generate meshes.")
 
@@ -142,6 +155,7 @@ class OptimizedMeshGenerator:
             gmsh.write(str(msh_path))
             self._extract_electrode_vertices()
 
+            assert_unique_physical_group_ownership(gmsh.model)
             mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2)
         finally:
             if initialized_here:
@@ -149,10 +163,28 @@ class OptimizedMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = association_from_mesh_data(mesh_data)
+        electrode_names = [
+            f"electrode_{idx}" for idx in range(1, self.electrodes.L + 1)
+        ]
+        facet_names = [*electrode_names, "gaps"]
+        association_table = validate_mesh_data_tags(
+            mesh_data,
+            gdim=2,
+            required_names=["domain", *facet_names],
+            required_facet_names=facet_names,
+        )
         write_association_table(association_path, association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=msh_path,
+            association_table=association_table,
+            gdim=2,
+        )
 
-        electrode_vertices = [np.asarray(v, dtype=float) for v in self.mesh_data.get("electrode_vertices", [])]
+        electrode_vertices = [
+            np.asarray(v, dtype=float)
+            for v in self.mesh_data.get("electrode_vertices", [])
+        ]
         mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
@@ -231,7 +263,7 @@ class OptimizedMeshGenerator:
         lines = self.mesh_data["lines"]
         electrode_ranges = self.mesh_data["electrode_ranges"]
 
-        gmsh.model.addPhysicalGroup(2, [surface], 1, name="domain")
+        add_named_physical_group(gmsh.model, 2, [surface], 1, "domain")
 
         electrode_lines = []
         for i, (start, end) in enumerate(electrode_ranges):
@@ -241,12 +273,24 @@ class OptimizedMeshGenerator:
                 lines_for_electrode.append(lines[line_idx])
 
             if lines_for_electrode:
-                gmsh.model.addPhysicalGroup(1, lines_for_electrode, i + 2, name=f"electrode_{i + 1}")
+                add_named_physical_group(
+                    gmsh.model,
+                    1,
+                    lines_for_electrode,
+                    i + 2,
+                    f"electrode_{i + 1}",
+                )
                 electrode_lines.extend(lines_for_electrode)
 
         gap_lines = [line for line in lines if line not in electrode_lines]
         if gap_lines:
-            gmsh.model.addPhysicalGroup(1, gap_lines, self.electrodes.L + 2, name="gaps")
+            add_named_physical_group(
+                gmsh.model,
+                1,
+                gap_lines,
+                self.electrodes.L + 2,
+                "gaps",
+            )
 
     def _generate_mesh(self):
         gmsh.model.mesh.setSize(gmsh.model.getEntities(0), self.config.mesh_size)
@@ -277,11 +321,19 @@ class OptimizedMeshConverter:
         self.gdim = int(gdim)
 
     def convert(self) -> tuple[EITMesh, object, Dict[str, int]]:
-        mesh_data = gmshio.read_from_msh(str(self.mesh_file), MPI.COMM_WORLD, rank=0, gdim=self.gdim)
-        association_table = association_from_mesh_data(mesh_data)
+        mesh_data = gmshio.read_from_msh(
+            str(self.mesh_file), MPI.COMM_WORLD, rank=0, gdim=self.gdim
+        )
+        association_table = validate_mesh_data_tags(mesh_data, gdim=self.gdim)
 
         association_file = self.output_dir / f"{self.prefix}_association_table.ini"
         write_association_table(association_file, association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=self.mesh_file,
+            association_table=association_table,
+            gdim=self.gdim,
+        )
 
         mesh = build_eit_mesh(
             mesh_data.mesh,
@@ -296,6 +348,7 @@ class OptimizedMeshConverter:
 
 
 # Convenience functions
+
 
 def create_eit_mesh(
     n_elec: int = 16,
@@ -320,14 +373,18 @@ def create_eit_mesh(
     )
 
     generator = OptimizedMeshGenerator(mesh_config, electrode_config)
-    return generator.generate(output_dir=Path(output_dir) if output_dir else None, mesh_name=mesh_name)
+    return generator.generate(
+        output_dir=Path(output_dir) if output_dir else None, mesh_name=mesh_name
+    )
 
 
 def _format_float(value: float) -> str:
     return f"{value:.6f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
-def _build_cache_name(n_elec: int, radius: float, refinement: int, electrode_coverage: float) -> str:
+def _build_cache_name(
+    n_elec: int, radius: float, refinement: int, electrode_coverage: float
+) -> str:
     radius_str = _format_float(radius)
     coverage_str = _format_float(electrode_coverage)
     return f"mesh_{n_elec}e_r{radius_str}_ref{refinement}_cov{coverage_str}"
@@ -347,7 +404,9 @@ def _build_cache_name_3d(
     generator_revision: str,
     electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
 ) -> str:
-    levels_str = "-".join(_format_float(float(value)) for value in electrode_level_fractions)
+    levels_str = "-".join(
+        _format_float(float(value)) for value in electrode_level_fractions
+    )
     layout_str = normalize_electrode_layout(electrode_layout)
     return (
         "mesh3d_"
@@ -362,6 +421,35 @@ def _build_cache_name_3d(
     )
 
 
+def _facet_tags_cover_electrodes(
+    mesh: EITMesh,
+    *,
+    electrode_keys: list[str],
+    association: dict[str, int],
+) -> bool | None:
+    """Cheap 3D CEM tag-completeness check that avoids FEM/JIT assembly."""
+    values = getattr(getattr(mesh, "facet_tags", None), "values", None)
+    if values is None:
+        return None
+    try:
+        tag_values = np.asarray(values, dtype=np.int64).reshape(-1)
+    except Exception:
+        return None
+    if tag_values.size == 0:
+        return False
+
+    for key in electrode_keys:
+        tag = int(association[key])
+        local_count = int(np.count_nonzero(tag_values == tag))
+        try:
+            total_count = int(mesh.comm.allreduce(local_count, op=MPI.SUM))
+        except Exception:
+            total_count = local_count
+        if total_count <= 0:
+            return False
+    return True
+
+
 def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
     if int(mesh.topology.dim) != 3:
         return True
@@ -373,30 +461,64 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
         return False
     if mesh.facet_tags is None:
         return False
-    try:
-        ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-        one = fem.Constant(mesh.mesh, 1.0)
-        measures = []
-        for key in electrode_keys:
-            value_local = fem.assemble_scalar(fem.form(one * ds(int(association[key]))))
-            value = mesh.comm.allreduce(value_local, op=MPI.SUM)
-            measures.append(float(value))
-    except Exception as exc:
-        logger.warning("Skipping cached 3D mesh %s due to CEM validation failure: %s", mesh.mesh_file, exc)
+    facet_coverage = _facet_tags_cover_electrodes(
+        mesh,
+        electrode_keys=electrode_keys,
+        association=association,
+    )
+    if facet_coverage is False:
         return False
-    arr = np.asarray(measures, dtype=float)
-    if not bool(arr.size == int(n_elec) and np.all(np.isfinite(arr)) and float(np.min(arr)) > 0.0):
-        return False
-    mesh_family = str(getattr(mesh, "mesh_family", None) or "").strip().lower()
-    geometry_version = str(getattr(mesh, "geometry_version", None) or "").strip().lower()
-    generator_revision = str(getattr(mesh, "generator_revision", None) or "").strip().lower()
-    if mesh_family == "hex" and geometry_version == "geomv2" and generator_revision == DEFAULT_3D_GENERATOR_REVISION:
-        mesh_file = getattr(mesh, "mesh_file", None)
-        if not mesh_file:
+    if facet_coverage is None:
+        try:
+            ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
+            one = fem.Constant(mesh.mesh, 1.0)
+            measures = []
+            for key in electrode_keys:
+                value_local = fem.assemble_scalar(
+                    fem.form(one * ds(int(association[key])))
+                )
+                value = mesh.comm.allreduce(value_local, op=MPI.SUM)
+                measures.append(float(value))
+        except Exception as exc:
+            logger.warning(
+                "Skipping cached 3D mesh %s due to CEM validation failure: %s",
+                mesh.mesh_file,
+                exc,
+            )
             return False
-        sidecar_path = structured_sidecar_path_for_mesh(mesh_file)
+        arr = np.asarray(measures, dtype=float)
+        if not bool(
+            arr.size == int(n_elec)
+            and np.all(np.isfinite(arr))
+            and float(np.min(arr)) > 0.0
+        ):
+            return False
+    mesh_family = str(getattr(mesh, "mesh_family", None) or "").strip().lower()
+    geometry_version = (
+        str(getattr(mesh, "geometry_version", None) or "").strip().lower()
+    )
+    generator_revision = (
+        str(getattr(mesh, "generator_revision", None) or "").strip().lower()
+    )
+    if (
+        mesh_family == "hex"
+        and geometry_version == "geomv2"
+        and generator_revision == DEFAULT_3D_GENERATOR_REVISION
+    ):
+        mesh_file = getattr(mesh, "mesh_file", None)
+        sidecar_file = getattr(mesh, "structured_sidecar_file", None)
+        if not mesh_file and not sidecar_file:
+            return False
+        sidecar_path = (
+            Path(sidecar_file)
+            if sidecar_file
+            else structured_sidecar_path_for_mesh(mesh_file)
+        )
         if not sidecar_path.exists():
-            logger.warning("Skipping cached mesh %s because structured sidecar is missing", mesh.mesh_file)
+            logger.warning(
+                "Skipping cached mesh %s because structured sidecar is missing",
+                mesh.mesh_file,
+            )
             return False
         try:
             load_structured_sidecar(sidecar_path)
@@ -410,15 +532,52 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
     return True
 
 
-def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: int = 16):
+def _load_cached_mesh(
+    mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: int = 16
+):
     msh_file = mesh_dir / f"{mesh_name}.msh"
     association_file = mesh_dir / f"{mesh_name}_association_table.ini"
+
+    cache_data = load_dolfinx_mesh_cache(msh_file, gdim=int(gdim))
+    if cache_data is not None:
+        metadata = cache_data.metadata
+        sidecar_file = metadata.get("structured_sidecar_file")
+        mesh_file = cache_data.source_msh_file or cache_data.xdmf_file
+        mesh = build_eit_mesh(
+            cache_data.mesh,
+            facet_tags=cache_data.facet_tags,
+            cell_tags=cache_data.cell_tags,
+            association_table=cache_data.association_table,
+            physical_groups=cache_data.physical_groups,
+            radius=estimate_radius(cache_data.mesh),
+            mesh_file=mesh_file,
+            mesh_family=metadata.get("mesh_family"),
+            geometry_version=metadata.get("geometry_version")
+            or infer_geometry_version(mesh_name),
+            generator_revision=metadata.get("generator_revision")
+            or infer_generator_revision(mesh_name),
+            structured_sidecar_file=sidecar_file,
+            structured_sidecar_version=metadata.get("structured_sidecar_version"),
+        )
+        if not getattr(mesh, "mesh_family", None):
+            mesh.mesh_family = infer_mesh_family_from_mesh(mesh)
+        if int(gdim) == 3 and not _cached_3d_cem_mesh_is_complete(
+            mesh, n_elec=int(n_elec)
+        ):
+            logger.warning(
+                "Skipping cached mesh %s because 3D CEM tags/measures are incomplete",
+                mesh_name,
+            )
+            return None
+        return mesh
 
     if not msh_file.exists():
         return None
 
     try:
-        mesh_data = gmshio.read_from_msh(str(msh_file), MPI.COMM_WORLD, rank=0, gdim=int(gdim))
+        mesh_data = gmshio.read_from_msh(
+            str(msh_file), MPI.COMM_WORLD, rank=0, gdim=int(gdim)
+        )
     except Exception as exc:
         logger.warning(
             "Skipping cached mesh %s due to gdim=%d load failure: %s",
@@ -428,7 +587,8 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
         )
         return None
 
-    if association_file.exists():
+    association_table = validate_mesh_data_tags(mesh_data, gdim=int(gdim))
+    if not association_table and association_file.exists():
         association = ConfigParser()
         association.read(association_file)
         if "ASSOCIATION TABLE" in association:
@@ -436,8 +596,6 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
             association_table = {key: int(value) for key, value in section.items()}
         else:
             association_table = {}
-    else:
-        association_table = association_from_mesh_data(mesh_data)
 
     sidecar_path = structured_sidecar_path_for_mesh(msh_file)
     geometry_version = infer_geometry_version(mesh_name)
@@ -450,13 +608,27 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
                 or geometry_version
             )
             generator_revision = (
-                str(sidecar.get("generator_revision", generator_revision)).strip().lower()
+                str(sidecar.get("generator_revision", generator_revision))
+                .strip()
+                .lower()
                 or generator_revision
             )
         except Exception:
             pass
 
     sidecar_exists = sidecar_path.exists()
+    structured_sidecar_file = str(sidecar_path) if sidecar_exists else None
+    structured_sidecar_version = STRUCTURED_SIDECAR_VERSION if sidecar_exists else None
+    write_dolfinx_mesh_cache(
+        mesh_data,
+        source_msh_file=msh_file,
+        association_table=association_table,
+        gdim=int(gdim),
+        geometry_version=geometry_version,
+        generator_revision=generator_revision,
+        structured_sidecar_file=structured_sidecar_file,
+        structured_sidecar_version=structured_sidecar_version,
+    )
     mesh = build_eit_mesh(
         mesh_data.mesh,
         facet_tags=mesh_data.facet_tags,
@@ -467,12 +639,15 @@ def _load_cached_mesh(mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: 
         mesh_file=str(msh_file),
         geometry_version=geometry_version,
         generator_revision=generator_revision,
-        structured_sidecar_file=str(sidecar_path) if sidecar_exists else None,
-        structured_sidecar_version=STRUCTURED_SIDECAR_VERSION if sidecar_exists else None,
+        structured_sidecar_file=structured_sidecar_file,
+        structured_sidecar_version=structured_sidecar_version,
     )
     mesh.mesh_family = infer_mesh_family_from_mesh(mesh)
     if int(gdim) == 3 and not _cached_3d_cem_mesh_is_complete(mesh, n_elec=int(n_elec)):
-        logger.warning("Skipping cached mesh %s because 3D CEM tags/measures are incomplete", mesh_name)
+        logger.warning(
+            "Skipping cached mesh %s because 3D CEM tags/measures are incomplete",
+            mesh_name,
+        )
         return None
     return mesh
 
@@ -509,9 +684,12 @@ def load_or_create_mesh(
         str(params.pop("geometry_version", DEFAULT_3D_GEOMETRY_VERSION)).strip().lower()
         or DEFAULT_3D_GEOMETRY_VERSION
     )
-    generator_revision = str(
-        params.pop("generator_revision", DEFAULT_3D_GENERATOR_REVISION)
-    ).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
+    generator_revision = (
+        str(params.pop("generator_revision", DEFAULT_3D_GENERATOR_REVISION))
+        .strip()
+        .lower()
+        or DEFAULT_3D_GENERATOR_REVISION
+    )
     gdim = int(dimension)
     if gdim not in {2, 3}:
         raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
@@ -538,13 +716,27 @@ def load_or_create_mesh(
 
     process_mesh_key: str | None = None
     msh_file = mesh_dir_path / f"{cache_name}.msh"
-    if msh_file.exists():
+    xdmf_file = xdmf_cache_path_for_mesh(msh_file)
+    if msh_file.exists() or xdmf_file.exists():
         association_file = mesh_dir_path / f"{cache_name}_association_table.ini"
         sidecar_file = structured_sidecar_path_for_mesh(msh_file)
+        metadata_file = dolfinx_cache_metadata_path_for_mesh(msh_file)
+        process_mesh_file = xdmf_file if xdmf_file.exists() else msh_file
+        extra_files = []
+        h5_file = xdmf_h5_path_for_mesh(msh_file)
+        if h5_file.exists():
+            extra_files.append(h5_file)
+        if msh_file.exists() and process_mesh_file != msh_file:
+            extra_files.append(msh_file)
         process_mesh_key = build_process_mesh_cache_key(
-            mesh_file=msh_file,
-            association_file=association_file if association_file.exists() else None,
+            mesh_file=process_mesh_file,
+            association_file=(
+                metadata_file
+                if metadata_file.exists()
+                else association_file if association_file.exists() else None
+            ),
             sidecar_file=sidecar_file if sidecar_file.exists() else None,
+            extra_files=extra_files,
             gdim=gdim,
             n_elec=n_elec,
             mesh_name=cache_name,
@@ -557,8 +749,30 @@ def load_or_create_mesh(
     cached_mesh = _load_cached_mesh(mesh_dir_path, cache_name, gdim=gdim, n_elec=n_elec)
     if cached_mesh is not None:
         logger.info("Loaded cached mesh: %s", cache_name)
-        if process_mesh_key is not None:
-            put_process_cached_mesh(process_mesh_key, cached_mesh)
+        metadata_file = dolfinx_cache_metadata_path_for_mesh(msh_file)
+        association_file = mesh_dir_path / f"{cache_name}_association_table.ini"
+        sidecar_file = structured_sidecar_path_for_mesh(msh_file)
+        process_mesh_file = xdmf_file if xdmf_file.exists() else msh_file
+        extra_files = []
+        h5_file = xdmf_h5_path_for_mesh(msh_file)
+        if h5_file.exists():
+            extra_files.append(h5_file)
+        if msh_file.exists() and process_mesh_file != msh_file:
+            extra_files.append(msh_file)
+        process_mesh_key = build_process_mesh_cache_key(
+            mesh_file=process_mesh_file,
+            association_file=(
+                metadata_file
+                if metadata_file.exists()
+                else association_file if association_file.exists() else None
+            ),
+            sidecar_file=sidecar_file if sidecar_file.exists() else None,
+            extra_files=extra_files,
+            gdim=gdim,
+            n_elec=n_elec,
+            mesh_name=cache_name,
+        )
+        put_process_cached_mesh(process_mesh_key, cached_mesh)
         return cached_mesh
 
     logger.info("Cached mesh not found, generating: %s", cache_name)
@@ -596,10 +810,24 @@ def load_or_create_mesh(
     if created_mesh_file:
         association_file = mesh_dir_path / f"{cache_name}_association_table.ini"
         sidecar_file = structured_sidecar_path_for_mesh(created_mesh_file)
+        metadata_file = dolfinx_cache_metadata_path_for_mesh(created_mesh_file)
+        xdmf_file = xdmf_cache_path_for_mesh(created_mesh_file)
+        process_mesh_file = xdmf_file if xdmf_file.exists() else created_mesh_file
+        extra_files = []
+        h5_file = xdmf_h5_path_for_mesh(created_mesh_file)
+        if h5_file.exists():
+            extra_files.append(h5_file)
+        if xdmf_file.exists():
+            extra_files.append(created_mesh_file)
         process_mesh_key = build_process_mesh_cache_key(
-            mesh_file=created_mesh_file,
-            association_file=association_file if association_file.exists() else None,
+            mesh_file=process_mesh_file,
+            association_file=(
+                metadata_file
+                if metadata_file.exists()
+                else association_file if association_file.exists() else None
+            ),
             sidecar_file=sidecar_file if sidecar_file.exists() else None,
+            extra_files=extra_files,
             gdim=gdim,
             n_elec=n_elec,
             mesh_name=cache_name,

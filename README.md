@@ -98,7 +98,7 @@ python scripts/run_cem_16e_cylinder_3d_test.py --skip-inverse
 
 For full setup, validation, and troubleshooting, see `docs/NIX_FENICSX.md`.
 
-Historical Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
+Docker is no longer a maintained setup path; see `docs/DOCKER.md` for status.
 
 > Hard-cut note: the runtime is now **FEniCSx-only** in `src/pyeidors/**`. DOLFIN aliases are removed.
 
@@ -109,6 +109,14 @@ Historical Docker notes are archived in `docs/archive/DOCKER_LEGACY.md`.
   - `system.setup(mesh=eit_mesh)`
   - `system.setup(mesh_source="cache", mesh_dir="eit_meshes", mesh_name="mesh_...")`
   - `system.setup(mesh_source="generated", radius=1.0, mesh_size=0.1)`
+- Mesh caches now prefer DOLFINx-native XDMF/HDF5 reuse: `.msh` is imported
+  once, then `<mesh>.xdmf`, `<mesh>.h5`, and `<mesh>_dolfinx_cache.json` are
+  used for repeat loads. Set `PYEIDORS_WRITE_ADIOS2_MESH_CACHE=1` only when you
+  also want an optional ADIOS2/VTX `.bp` output artifact.
+- For very large checkpoint/restart experiments, an optional third-party
+  `adios4dolfinx` checkpoint can be emitted with
+  `PYEIDORS_WRITE_ADIOS4DOLFINX_CHECKPOINT=1`; it is not part of the default GUI
+  reload path.
 - Solver APIs now return typed `SolverOutput` objects (not ad-hoc dictionaries).
 - `EITSystem` now exposes cache controls for repeat runs:
   - `cache_scope`: `"off" | "process" | "disk" | "both"` (default `"both"`)
@@ -493,7 +501,7 @@ For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
 - **WSL2 CUDA Workflow**: `docs/WSL2_CUDA.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
-- **Docker Notes (Historical archive)**: `docs/archive/DOCKER_LEGACY.md`
+- **Docker Status**: `docs/DOCKER.md`
 
 ## Environment Note
 
@@ -507,7 +515,7 @@ Optional performance extras (`pyamg`, `scikit-sparse`) can be installed via:
 ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
 ```
 
-Docker content is archived for historical reproducibility in `docs/archive/DOCKER_LEGACY.md`.
+Docker content from the old runtime has been removed; use the locked Nix + uv environment for reproducibility.
 
 ### Locked Environment Contract (1:1 Repro)
 

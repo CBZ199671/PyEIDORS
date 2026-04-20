@@ -18,6 +18,14 @@ from ._helpers import (
     infer_generator_revision,
     infer_geometry_version,
     infer_mesh_family_from_mesh,
+    validate_mesh_data_tags,
+)
+from .dolfinx_mesh_cache import (
+    dolfinx_cache_metadata_path_for_mesh,
+    load_dolfinx_mesh_cache,
+    write_dolfinx_mesh_cache,
+    xdmf_cache_path_for_mesh,
+    xdmf_h5_path_for_mesh,
 )
 from .mesh3d_generator import (
     STRUCTURED_SIDECAR_VERSION,
@@ -34,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 
 class MeshLoader:
-    """Load cached EIT meshes from ``.msh`` files."""
+    """Load cached EIT meshes, preferring DOLFINx-native XDMF caches."""
 
     def __init__(self, mesh_dir: str = "eit_meshes", gdim: int = 2):
         self.mesh_dir = Path(mesh_dir)
@@ -45,18 +53,34 @@ class MeshLoader:
             raise FileNotFoundError(f"Mesh directory does not exist: {mesh_dir}")
 
     def load_mesh(self, mesh_name: str) -> EITMesh:
-        """Load mesh from ``<mesh_name>.msh``."""
+        """Load mesh from ``<mesh_name>.xdmf`` cache or source ``<mesh_name>.msh``."""
         msh_file = self.mesh_dir / f"{mesh_name}.msh"
         association_file = self.mesh_dir / f"{mesh_name}_association_table.ini"
+        xdmf_file = xdmf_cache_path_for_mesh(msh_file)
+        metadata_file = dolfinx_cache_metadata_path_for_mesh(msh_file)
 
-        if not msh_file.exists():
-            raise FileNotFoundError(f"Mesh file does not exist: {msh_file}")
+        if not msh_file.exists() and not xdmf_file.exists():
+            raise FileNotFoundError(
+                f"Mesh file does not exist: {xdmf_file} or {msh_file}"
+            )
 
         sidecar_path = structured_sidecar_path_for_mesh(msh_file)
+        process_mesh_file = xdmf_file if xdmf_file.exists() else msh_file
+        extra_files: list[Path] = []
+        h5_file = xdmf_h5_path_for_mesh(msh_file)
+        if h5_file.exists():
+            extra_files.append(h5_file)
+        if msh_file.exists() and process_mesh_file != msh_file:
+            extra_files.append(msh_file)
         process_mesh_key = build_process_mesh_cache_key(
-            mesh_file=msh_file,
-            association_file=association_file if association_file.exists() else None,
+            mesh_file=process_mesh_file,
+            association_file=(
+                metadata_file
+                if metadata_file.exists()
+                else association_file if association_file.exists() else None
+            ),
             sidecar_file=sidecar_path if sidecar_path.exists() else None,
+            extra_files=extra_files,
             gdim=self.gdim,
             mesh_name=mesh_name,
         )
@@ -70,17 +94,52 @@ class MeshLoader:
             )
             return process_mesh
 
+        cache_data = load_dolfinx_mesh_cache(msh_file, gdim=self.gdim)
+        if cache_data is not None:
+            metadata = cache_data.metadata
+            source_mesh_file = cache_data.source_msh_file or cache_data.xdmf_file
+            sidecar_file = metadata.get("structured_sidecar_file")
+            eit_mesh = build_eit_mesh(
+                cache_data.mesh,
+                facet_tags=cache_data.facet_tags,
+                cell_tags=cache_data.cell_tags,
+                association_table=cache_data.association_table,
+                physical_groups=cache_data.physical_groups,
+                radius=estimate_radius(cache_data.mesh),
+                mesh_file=source_mesh_file,
+                mesh_family=metadata.get("mesh_family"),
+                geometry_version=metadata.get("geometry_version")
+                or infer_geometry_version(mesh_name),
+                generator_revision=metadata.get("generator_revision")
+                or infer_generator_revision(mesh_name),
+                structured_sidecar_file=sidecar_file,
+                structured_sidecar_version=metadata.get("structured_sidecar_version"),
+            )
+            if not eit_mesh.mesh_family:
+                eit_mesh.mesh_family = infer_mesh_family_from_mesh(eit_mesh)
+            put_process_cached_mesh(process_mesh_key, eit_mesh)
+            logger.info(
+                "Mesh loaded from DOLFINx cache %s (vertices=%d, cells=%d)",
+                xdmf_file,
+                eit_mesh.num_vertices(),
+                eit_mesh.num_cells(),
+            )
+            return eit_mesh
+
+        if not msh_file.exists():
+            raise FileNotFoundError(
+                f"Stale or unreadable DOLFINx mesh cache {xdmf_file}; source {msh_file} is missing"
+            )
+
         mesh_data = gmshio.read_from_msh(
             str(msh_file),
             MPI.COMM_WORLD,
             rank=0,
             gdim=self.gdim,
         )
-        association_table = self._load_association_table(association_file)
+        association_table = validate_mesh_data_tags(mesh_data, gdim=self.gdim)
         if not association_table:
-            association_table = {
-                name: int(group.tag) for name, group in (mesh_data.physical_groups or {}).items()
-            }
+            association_table = self._load_association_table(association_file)
 
         geometry_version = infer_geometry_version(mesh_name)
         generator_revision = infer_generator_revision(mesh_name)
@@ -88,17 +147,35 @@ class MeshLoader:
             try:
                 sidecar = load_structured_sidecar(sidecar_path)
                 geometry_version = (
-                    str(sidecar.get("geometry_version", geometry_version)).strip().lower()
+                    str(sidecar.get("geometry_version", geometry_version))
+                    .strip()
+                    .lower()
                     or geometry_version
                 )
                 generator_revision = (
-                    str(sidecar.get("generator_revision", generator_revision)).strip().lower()
+                    str(sidecar.get("generator_revision", generator_revision))
+                    .strip()
+                    .lower()
                     or generator_revision
                 )
             except Exception:
                 pass
 
         sidecar_exists = sidecar_path.exists()
+        structured_sidecar_file = str(sidecar_path) if sidecar_exists else None
+        structured_sidecar_version = (
+            STRUCTURED_SIDECAR_VERSION if sidecar_exists else None
+        )
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=msh_file,
+            association_table=association_table,
+            gdim=self.gdim,
+            geometry_version=geometry_version,
+            generator_revision=generator_revision,
+            structured_sidecar_file=structured_sidecar_file,
+            structured_sidecar_version=structured_sidecar_version,
+        )
         eit_mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
@@ -109,11 +186,25 @@ class MeshLoader:
             mesh_file=str(msh_file),
             geometry_version=geometry_version,
             generator_revision=generator_revision,
-            structured_sidecar_file=str(sidecar_path) if sidecar_exists else None,
-            structured_sidecar_version=STRUCTURED_SIDECAR_VERSION if sidecar_exists else None,
+            structured_sidecar_file=structured_sidecar_file,
+            structured_sidecar_version=structured_sidecar_version,
         )
         eit_mesh.mesh_family = infer_mesh_family_from_mesh(eit_mesh)
         put_process_cached_mesh(process_mesh_key, eit_mesh)
+        if xdmf_file.exists():
+            h5_file = xdmf_h5_path_for_mesh(msh_file)
+            extra_files = [h5_file] if h5_file.exists() else []
+            if msh_file.exists():
+                extra_files.append(msh_file)
+            xdmf_process_key = build_process_mesh_cache_key(
+                mesh_file=xdmf_file,
+                association_file=metadata_file if metadata_file.exists() else None,
+                sidecar_file=sidecar_path if sidecar_path.exists() else None,
+                extra_files=extra_files,
+                gdim=self.gdim,
+                mesh_name=mesh_name,
+            )
+            put_process_cached_mesh(xdmf_process_key, eit_mesh)
         logger.info(
             "Mesh loaded from %s (vertices=%d, cells=%d)",
             msh_file,
@@ -152,12 +243,19 @@ class MeshLoader:
         return np.load(mesh_file)
 
     def list_available_meshes(self) -> Dict[str, list[str]]:
-        meshes: Dict[str, list[str]] = {"msh": [], "xdmf": [], "numpy": []}
+        meshes: Dict[str, list[str]] = {
+            "msh": [],
+            "xdmf": [],
+            "adios2": [],
+            "numpy": [],
+        }
         for file_path in self.mesh_dir.glob("*"):
             if file_path.suffix == ".msh":
                 meshes["msh"].append(file_path.stem)
             elif file_path.suffix == ".xdmf":
                 meshes["xdmf"].append(file_path.stem)
+            elif file_path.suffix == ".bp":
+                meshes["adios2"].append(file_path.stem)
             elif file_path.suffix == ".npy":
                 meshes["numpy"].append(file_path.stem)
 
@@ -167,15 +265,16 @@ class MeshLoader:
 
     def get_default_mesh(self) -> EITMesh:
         available = self.list_available_meshes()
-        if not available["msh"]:
+        mesh_names = sorted(set(available["xdmf"]) | set(available["msh"]))
+        if not mesh_names:
             raise FileNotFoundError(
-                f"No .msh caches found under {self.mesh_dir}. "
+                f"No DOLFINx .xdmf or source .msh caches found under {self.mesh_dir}. "
                 "Generate one with scripts/mesh_tools/build_matlab_mesh_cache.py "
                 "or pyeidors.geometry.optimized_mesh_generator.create_eit_mesh()."
             )
 
         candidates = sorted(
-            available["msh"],
+            mesh_names,
             key=lambda name: (
                 0 if self._mesh_name_matches_gdim(name) else 1,
                 -self._mesh_mtime(name),
@@ -196,7 +295,7 @@ class MeshLoader:
                 )
 
         raise RuntimeError(
-            f"No compatible .msh cache could be loaded from {self.mesh_dir} for gdim={self.gdim}."
+            f"No compatible DOLFINx mesh cache could be loaded from {self.mesh_dir} for gdim={self.gdim}."
         ) from last_error
 
     def _mesh_name_matches_gdim(self, mesh_name: str) -> bool:
@@ -208,11 +307,17 @@ class MeshLoader:
 
     def _mesh_mtime(self, mesh_name: str) -> float:
         msh_file = self.mesh_dir / f"{mesh_name}.msh"
-        try:
-            return msh_file.stat().st_mtime
-        except FileNotFoundError:
-            return float("-inf")
+        xdmf_file = xdmf_cache_path_for_mesh(msh_file)
+        mtimes: list[float] = []
+        for path in (xdmf_file, msh_file):
+            try:
+                mtimes.append(path.stat().st_mtime)
+            except FileNotFoundError:
+                pass
+        return max(mtimes) if mtimes else float("-inf")
 
 
-def create_simple_mesh_loader(mesh_dir: str = "eit_meshes", gdim: int = 2) -> MeshLoader:
+def create_simple_mesh_loader(
+    mesh_dir: str = "eit_meshes", gdim: int = 2
+) -> MeshLoader:
     return MeshLoader(mesh_dir, gdim=gdim)

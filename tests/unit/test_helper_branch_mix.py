@@ -11,6 +11,7 @@ import pytest
 import torch
 
 import pyeidors.core_system_helpers as core_helpers
+from pyeidors.geometry import _helpers as geometry_helpers
 import pyeidors.geometry.mesh_loader as mesh_loader_module
 from pyeidors.data.structures import EITData, EITImage
 from pyeidors.inverse.solvers import gauss_newton_device as device_module
@@ -39,26 +40,106 @@ class _FakeBuiltMesh:
         return 1
 
 
-def test_mesh_loader_helpers_cover_family_version_revision_and_table_parsing(tmp_path: Path):
-    mesh2d = SimpleNamespace(topology=SimpleNamespace(dim=2), cells=lambda: np.zeros((1, 3), dtype=np.int32))
+def test_gmsh_physical_group_helpers_validate_ownership_and_dimensions():
+    class _Group:
+        def __init__(self, dim: int, tag: int):
+            self.dim = dim
+            self.tag = tag
+
+    class _FakeModel:
+        def __init__(self):
+            self.groups = {}
+
+        def addPhysicalGroup(self, dim, entities, tag, name=None):
+            self.groups[(int(dim), int(tag))] = (tuple(entities), str(name))
+            return int(tag)
+
+        def setPhysicalName(self, dim, tag, name):
+            _ = (dim, tag, name)
+
+        def getPhysicalGroups(self):
+            return list(self.groups)
+
+        def getPhysicalName(self, dim, tag):
+            return self.groups[(int(dim), int(tag))][1]
+
+        def getEntitiesForPhysicalGroup(self, dim, tag):
+            _ = dim
+            return self.groups[(int(dim), int(tag))][0]
+
+    model = _FakeModel()
+    assert (
+        geometry_helpers.add_named_physical_group(model, 2, [4, 3, 3], 1, "domain") == 1
+    )
+    assert model.groups[(2, 1)][0] == (3, 4)
+    geometry_helpers.add_named_physical_group(model, 2, [4], 2, "overlap")
+    with pytest.raises(RuntimeError, match="belongs to both"):
+        geometry_helpers.assert_unique_physical_group_ownership(model)
+
+    mesh_data = SimpleNamespace(
+        physical_groups={"domain": _Group(2, 1), "electrode_1": _Group(2, 2)},
+        facet_tags="facet-tags",
+    )
+    with pytest.raises(RuntimeError, match="domain"):
+        geometry_helpers.validate_mesh_data_tags(
+            mesh_data,
+            gdim=3,
+            required_names=("domain", "electrode_1"),
+            required_facet_names=("electrode_1",),
+        )
+
+
+def test_mesh_loader_helpers_cover_family_version_revision_and_table_parsing(
+    tmp_path: Path,
+):
+    mesh2d = SimpleNamespace(
+        topology=SimpleNamespace(dim=2), cells=lambda: np.zeros((1, 3), dtype=np.int32)
+    )
     assert mesh_loader_module.infer_mesh_family_from_mesh(mesh2d) is None
-    assert mesh_loader_module.infer_mesh_family_from_mesh(
-        SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((0, 8), dtype=np.int32))
-    ) is None
-    assert mesh_loader_module.infer_mesh_family_from_mesh(
-        SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 8), dtype=np.int32))
-    ) == "hex"
-    assert mesh_loader_module.infer_mesh_family_from_mesh(
-        SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 4), dtype=np.int32))
-    ) == "tetra"
-    assert mesh_loader_module.infer_mesh_family_from_mesh(
-        SimpleNamespace(topology=SimpleNamespace(dim=3), cells=lambda: np.zeros((1, 6), dtype=np.int32))
-    ) is None
+    assert (
+        mesh_loader_module.infer_mesh_family_from_mesh(
+            SimpleNamespace(
+                topology=SimpleNamespace(dim=3),
+                cells=lambda: np.zeros((0, 8), dtype=np.int32),
+            )
+        )
+        is None
+    )
+    assert (
+        mesh_loader_module.infer_mesh_family_from_mesh(
+            SimpleNamespace(
+                topology=SimpleNamespace(dim=3),
+                cells=lambda: np.zeros((1, 8), dtype=np.int32),
+            )
+        )
+        == "hex"
+    )
+    assert (
+        mesh_loader_module.infer_mesh_family_from_mesh(
+            SimpleNamespace(
+                topology=SimpleNamespace(dim=3),
+                cells=lambda: np.zeros((1, 4), dtype=np.int32),
+            )
+        )
+        == "tetra"
+    )
+    assert (
+        mesh_loader_module.infer_mesh_family_from_mesh(
+            SimpleNamespace(
+                topology=SimpleNamespace(dim=3),
+                cells=lambda: np.zeros((1, 6), dtype=np.int32),
+            )
+        )
+        is None
+    )
 
     assert mesh_loader_module.infer_geometry_version("demo_geomv2_mesh") == "geomv2"
     assert mesh_loader_module.infer_geometry_version("legacy_mesh") == "legacy"
     assert mesh_loader_module.infer_generator_revision("demo_g3d7_mesh") == "g3d7"
-    assert mesh_loader_module.infer_generator_revision("legacy_mesh") == mesh_loader_module.LEGACY_3D_GENERATOR_REVISION
+    assert (
+        mesh_loader_module.infer_generator_revision("legacy_mesh")
+        == mesh_loader_module.LEGACY_3D_GENERATOR_REVISION
+    )
 
     with pytest.raises(ValueError, match="gdim must be 2 or 3"):
         mesh_loader_module.MeshLoader(mesh_dir=str(tmp_path), gdim=4)
@@ -90,7 +171,7 @@ def test_mesh_loader_load_mesh_numpy_default_and_factory_cover_remaining_paths(
         loader.load_mesh("missing")
     with pytest.raises(FileNotFoundError, match="File does not exist"):
         loader.load_numpy_mesh("missing.npy")
-    with pytest.raises(FileNotFoundError, match="No .msh caches found"):
+    with pytest.raises(FileNotFoundError, match="No DOLFINx .* caches found"):
         loader.get_default_mesh()
 
     mesh_name = "fallback_mesh"
@@ -110,9 +191,15 @@ def test_mesh_loader_load_mesh_numpy_default_and_factory_cover_remaining_paths(
         physical_groups={"domain": _Group(1), "electrode_1": _Group(2)},
     )
 
-    monkeypatch.setattr(mesh_loader_module.gmshio, "read_from_msh", lambda *_args, **_kwargs: fake_mesh_data)
+    monkeypatch.setattr(
+        mesh_loader_module.gmshio,
+        "read_from_msh",
+        lambda *_args, **_kwargs: fake_mesh_data,
+    )
     monkeypatch.setattr(mesh_loader_module, "estimate_radius", lambda _mesh: 0.25)
-    monkeypatch.setattr(mesh_loader_module, "structured_sidecar_path_for_mesh", lambda _path: sidecar)
+    monkeypatch.setattr(
+        mesh_loader_module, "structured_sidecar_path_for_mesh", lambda _path: sidecar
+    )
     monkeypatch.setattr(
         mesh_loader_module,
         "load_structured_sidecar",
@@ -133,27 +220,49 @@ def test_mesh_loader_load_mesh_numpy_default_and_factory_cover_remaining_paths(
     assert mesh_loader_module.create_simple_mesh_loader(str(tmp_path), gdim=3).gdim == 3
 
 
-def test_core_system_helpers_cover_conductivity_difference_images_and_info(monkeypatch: pytest.MonkeyPatch):
+def test_core_system_helpers_cover_conductivity_difference_images_and_info(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(core_helpers.fem, "Function", _FakeFemFunction)
 
-    fwd_model = SimpleNamespace(V_sigma=SimpleNamespace(size=4), V=SimpleNamespace(size=6))
+    fwd_model = SimpleNamespace(
+        V_sigma=SimpleNamespace(size=4), V=SimpleNamespace(size=6)
+    )
     image = EITImage(elem_data=np.array([1.0, 2.0], dtype=float), fwd_model=fwd_model)
     assert core_helpers.conductivity_to_image(fwd_model, image) is image
 
     fake_fun = _FakeFemFunction(SimpleNamespace(size=3))
     fake_fun.x.array[:] = np.array([0.1, 0.2, 0.3], dtype=float)
     img_from_fun = core_helpers.conductivity_to_image(fwd_model, fake_fun)
-    np.testing.assert_allclose(img_from_fun.elem_data, np.array([0.1, 0.2, 0.3], dtype=float))
+    np.testing.assert_allclose(
+        img_from_fun.elem_data, np.array([0.1, 0.2, 0.3], dtype=float)
+    )
 
-    arr_img = core_helpers.conductivity_to_image(fwd_model, np.array([3.0, 4.0], dtype=float))
+    arr_img = core_helpers.conductivity_to_image(
+        fwd_model, np.array([3.0, 4.0], dtype=float)
+    )
     np.testing.assert_allclose(arr_img.elem_data, np.array([3.0, 4.0], dtype=float))
     with pytest.raises(ValueError, match="Unsupported conductivity input type"):
         core_helpers.conductivity_to_image(fwd_model, 3.14)
 
-    data = EITData(meas=np.array([2.0, 4.0], dtype=float), stim_pattern=None, n_elec=8, n_stim=1, n_meas=2)
-    ref = EITData(meas=np.array([1.0, 2.0], dtype=float), stim_pattern=None, n_elec=8, n_stim=1, n_meas=2)
+    data = EITData(
+        meas=np.array([2.0, 4.0], dtype=float),
+        stim_pattern=None,
+        n_elec=8,
+        n_stim=1,
+        n_meas=2,
+    )
+    ref = EITData(
+        meas=np.array([1.0, 2.0], dtype=float),
+        stim_pattern=None,
+        n_elec=8,
+        n_stim=1,
+        n_meas=2,
+    )
     assert core_helpers.difference_measurement(data, None) is data
-    diff = core_helpers.difference_measurement(data, ref, mode="normalized", orientation="reference_minus_target")
+    diff = core_helpers.difference_measurement(
+        data, ref, mode="normalized", orientation="reference_minus_target"
+    )
     assert diff.type == "difference"
     np.testing.assert_allclose(diff.reference_meas, ref.meas)
     np.testing.assert_allclose(diff.target_meas, data.meas)
@@ -178,7 +287,9 @@ def test_core_system_helpers_cover_conductivity_difference_images_and_info(monke
         phantom_center=(0.0, 0.0),
         phantom_radius=0.75,
     )
-    np.testing.assert_allclose(phantom.elem_data, np.array([2.0, 2.0, 1.0, 1.0], dtype=float))
+    np.testing.assert_allclose(
+        phantom.elem_data, np.array([2.0, 2.0, 1.0, 1.0], dtype=float)
+    )
 
     system = SimpleNamespace(
         n_elec=16,
@@ -213,23 +324,40 @@ def test_core_system_helpers_cover_conductivity_difference_images_and_info(monke
 def test_weight_helpers_cover_scaling_difference_and_strategy_selection():
     baseline = np.array([1.0, -1.0], dtype=float)
     measured = np.array([1e-15, -1e-15], dtype=float)
-    np.testing.assert_allclose(weight_module.scale_baseline_to_measured(baseline, None), baseline)
-    np.testing.assert_allclose(weight_module.scale_baseline_to_measured(np.zeros(2, dtype=float), measured), np.zeros(2))
-    np.testing.assert_allclose(weight_module.scale_baseline_to_measured(baseline, measured), baseline)
+    np.testing.assert_allclose(
+        weight_module.scale_baseline_to_measured(baseline, None), baseline
+    )
+    np.testing.assert_allclose(
+        weight_module.scale_baseline_to_measured(np.zeros(2, dtype=float), measured),
+        np.zeros(2),
+    )
+    np.testing.assert_allclose(
+        weight_module.scale_baseline_to_measured(baseline, measured), baseline
+    )
 
-    diff = weight_module.difference_with_baseline(baseline, np.array([1.1, -0.9], dtype=float), 0.5)
+    diff = weight_module.difference_with_baseline(
+        baseline, np.array([1.1, -0.9], dtype=float), 0.5
+    )
     np.testing.assert_allclose(diff, np.array([0.5, 0.5], dtype=float))
-    np.testing.assert_allclose(weight_module.difference_with_baseline(baseline, None, 0.5), baseline)
+    np.testing.assert_allclose(
+        weight_module.difference_with_baseline(baseline, None, 0.5), baseline
+    )
 
     np.testing.assert_allclose(
-        weight_module.build_weight_reference("scaled_baseline", baseline, measured, 0.5),
+        weight_module.build_weight_reference(
+            "scaled_baseline", baseline, measured, 0.5
+        ),
         baseline,
     )
     np.testing.assert_allclose(
-        weight_module.build_weight_reference("difference", baseline, np.array([1.1, -0.9], dtype=float), 0.5),
+        weight_module.build_weight_reference(
+            "difference", baseline, np.array([1.1, -0.9], dtype=float), 0.5
+        ),
         np.array([0.5, 0.5], dtype=float),
     )
-    np.testing.assert_allclose(weight_module.build_weight_reference("other", baseline, measured, 0.5), baseline)
+    np.testing.assert_allclose(
+        weight_module.build_weight_reference("other", baseline, measured, 0.5), baseline
+    )
 
 
 def test_gauss_newton_device_helpers_cover_normalization_disable_tf32_and_failures(
@@ -246,24 +374,36 @@ def test_gauss_newton_device_helpers_cover_normalization_disable_tf32_and_failur
 
     monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", True)
     monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", True)
-    monkeypatch.setattr(torch, "set_float32_matmul_precision", lambda _value: (_ for _ in ()).throw(RuntimeError("bad")))
+    monkeypatch.setattr(
+        torch,
+        "set_float32_matmul_precision",
+        lambda _value: (_ for _ in ()).throw(RuntimeError("bad")),
+    )
     device_module._disable_tf32()
     assert torch.backends.cuda.matmul.allow_tf32 is False
     assert torch.backends.cudnn.allow_tf32 is False
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
-    auto_cuda = device_module.resolve_torch_device("auto", verbose=True, petsc_device_effective="cuda")
+    auto_cuda = device_module.resolve_torch_device(
+        "auto", verbose=True, petsc_device_effective="cuda"
+    )
     assert auto_cuda.effective == "cpu"
     assert auto_cuda.fallback_reason == "torch_cuda_unavailable"
     assert "Using CPU for computation" in capsys.readouterr().out
 
-    auto_cpu = device_module.resolve_torch_device("auto", verbose=False, petsc_device_effective="cpu")
+    auto_cpu = device_module.resolve_torch_device(
+        "auto", verbose=False, petsc_device_effective="cpu"
+    )
     assert auto_cpu.fallback_reason == "auto_cpu_policy"
 
     with pytest.raises(RuntimeError, match="device='cuda' requires"):
-        device_module.resolve_torch_device("cuda", verbose=False, petsc_device_effective="cpu")
+        device_module.resolve_torch_device(
+            "cuda", verbose=False, petsc_device_effective="cpu"
+        )
 
     if getattr(torch.backends, "mps", None) is not None:
         monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
         with pytest.raises(RuntimeError, match="device='mps' requested"):
-            device_module.resolve_torch_device("mps", verbose=False, petsc_device_effective="cpu")
+            device_module.resolve_torch_device(
+                "mps", verbose=False, petsc_device_effective="cpu"
+            )

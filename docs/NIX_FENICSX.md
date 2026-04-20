@@ -252,6 +252,68 @@ python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty
 python scripts/env/verify_env_manifest.py --profile cuda
 ```
 
+## Mesh cache policy
+
+PyEIDORS follows the DOLFINx Gmsh I/O guidance for large problems: use
+`gmshio.model_to_mesh()` or `gmshio.read_from_msh()` only for the first import,
+then persist the DOLFINx mesh and `MeshTags` for repeat access.
+
+Runtime behavior:
+
+- The source mesh remains `<name>.msh` for Gmsh provenance and old-cache
+  compatibility.
+- The fast reusable cache is `<name>.xdmf` plus its HDF5 sidecar `<name>.h5`.
+- `<name>_dolfinx_cache.json` stores the association table, physical-group
+  dimensions, generator metadata, and source `.msh` size/mtime signature.
+- `MeshLoader` and `load_or_create_mesh()` prefer the XDMF/HDF5 cache when it is
+  fresh, and fall back to `.msh` import only when the native cache is missing or
+  stale.
+- The process-local mesh cache keys use cheap path metadata signatures rather
+  than hashing full mesh payloads, so large HDF5 caches do not get re-read just
+  to compute a Python-process cache key.
+
+ADIOS2/VTX note:
+
+- DOLFINx exposes `VTXWriter` for ADIOS2/BP output, but its Python API is a
+  writer path, not the authoritative mesh/tag reload path used here.
+- To emit an optional ADIOS2 mesh snapshot next to the XDMF cache, set:
+
+```bash
+PYEIDORS_WRITE_ADIOS2_MESH_CACHE=1 python <your-script>.py
+```
+
+That `.bp` artifact is useful for downstream ADIOS2/visualization workflows, but
+PyEIDORS reloads CEM meshes from XDMF/HDF5 because that path preserves the mesh
+and named `MeshTags` through official DOLFINx read APIs.
+
+ADIOS4DOLFINx checkpoint option:
+
+- `adios4dolfinx` is a third-party checkpoint layer for DOLFINx mesh,
+  `MeshTags`, and `Function` data. It is appropriate for very large MPI runs
+  where scalable checkpoint/restart matters more than staying inside the core
+  DOLFINx API surface.
+- It is intentionally optional here. The maintained default remains XDMF/HDF5.
+- The current Nix dev shell already provides Python `adios2`, but does not
+  currently provide `adios4dolfinx`. Install it only in a compatible environment
+  where the ADIOS2 MPI build matches the DOLFINx/MPI runtime.
+- When `adios4dolfinx` is installed, emit an additional checkpoint with:
+
+```bash
+PYEIDORS_WRITE_ADIOS4DOLFINX_CHECKPOINT=1 python <your-script>.py
+```
+
+Optional engine override:
+
+```bash
+PYEIDORS_ADIOS4DOLFINX_ENGINE=BP4 \
+PYEIDORS_WRITE_ADIOS4DOLFINX_CHECKPOINT=1 \
+python <your-script>.py
+```
+
+The generated `<mesh>_adios4dolfinx.bp` is recorded in
+`<mesh>_dolfinx_cache.json`. It is not used by default GUI reloads unless we
+later promote the optional checkpoint layer into the runtime selection policy.
+
 Upstream FEniCSx regression guard (Darwin):
 
 ```bash
@@ -349,4 +411,4 @@ Rules:
 ## Scope boundary
 
 - This document covers the supported runtime path: **FEniCSx-only** + Nix + uv.
-- Historical Docker notes are archived under `docs/archive/DOCKER_LEGACY.md`.
+- Docker content from the old runtime has been removed; `docs/DOCKER.md` records the current status.

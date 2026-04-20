@@ -22,7 +22,9 @@ from pyeidors.geometry.process_mesh_cache import clear_process_mesh_cache
 def _make_fake_mesh_data():
     mesh = dmesh.create_unit_square(MPI.COMM_WORLD, 3, 3)
     fdim = mesh.topology.dim - 1
-    facets = dmesh.locate_entities_boundary(mesh, fdim, lambda x: np.full(x.shape[1], True, dtype=bool))
+    facets = dmesh.locate_entities_boundary(
+        mesh, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
+    )
     facets = np.asarray(facets, dtype=np.int32)
     values = np.full(facets.shape, 2, dtype=np.int32)
     order = np.argsort(facets)
@@ -32,8 +34,16 @@ def _make_fake_mesh_data():
         def __init__(self, tag: int):
             self.tag = int(tag)
 
-    physical_groups = {"domain": _Group(1), "electrode_1": _Group(2), "gaps": _Group(3)}
-    return SimpleNamespace(mesh=mesh, facet_tags=facet_tags, cell_tags=None, physical_groups=physical_groups)
+    physical_groups = {"domain": _Group(1), "gaps": _Group(18)}
+    physical_groups.update(
+        {f"electrode_{idx}": _Group(idx + 1) for idx in range(1, 17)}
+    )
+    return SimpleNamespace(
+        mesh=mesh,
+        facet_tags=facet_tags,
+        cell_tags=None,
+        physical_groups=physical_groups,
+    )
 
 
 class _FakeOcc:
@@ -125,11 +135,17 @@ def test_mesh_generator_generate_with_fake_gmsh(tmp_path, monkeypatch):
         lambda model, comm, rank, gdim: fake_mesh_data,
     )
 
-    config = MeshConfig(radius=1.0, refinement=6, electrode_vertices=4, gap_vertices=1, mesh_size=0.15)
+    config = MeshConfig(
+        radius=1.0, refinement=6, electrode_vertices=4, gap_vertices=1, mesh_size=0.15
+    )
     electrode_positions = ElectrodePosition.create_circular(n_elec=8)
-    generator = mesh_gen_module.MeshGenerator(config=config, electrodes=electrode_positions)
+    generator = mesh_gen_module.MeshGenerator(
+        config=config, electrodes=electrode_positions
+    )
 
-    metadata = generator.generate(output_dir=tmp_path, return_metadata=True, save_msh=True, mesh_name="patched")
+    metadata = generator.generate(
+        output_dir=tmp_path, return_metadata=True, save_msh=True, mesh_name="patched"
+    )
     mesh = metadata["mesh"]
     assert mesh.num_cells() > 0
     assert "domain" in metadata["association_table"]
@@ -149,11 +165,17 @@ def test_mesh_generator_generate_uses_defaults_without_saving(monkeypatch, tmp_p
         lambda model, comm, rank, gdim: fake_mesh_data,
     )
 
-    config = MeshConfig(radius=1.0, refinement=6, electrode_vertices=4, gap_vertices=1, mesh_size=0.15)
+    config = MeshConfig(
+        radius=1.0, refinement=6, electrode_vertices=4, gap_vertices=1, mesh_size=0.15
+    )
     electrode_positions = ElectrodePosition.create_circular(n_elec=8)
-    generator = mesh_gen_module.MeshGenerator(config=config, electrodes=electrode_positions)
+    generator = mesh_gen_module.MeshGenerator(
+        config=config, electrodes=electrode_positions
+    )
 
-    mesh = generator.generate(output_dir=None, return_metadata=False, save_msh=False, mesh_name=None)
+    mesh = generator.generate(
+        output_dir=None, return_metadata=False, save_msh=False, mesh_name=None
+    )
     assert mesh.num_cells() > 0
     assert mesh.mesh_file is None
     assert fake_gmsh.written_files == []
@@ -176,9 +198,13 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         lambda file, comm, rank, gdim: fake_mesh_data,
     )
 
-    config = opt_mesh_module.OptimizedMeshConfig(radius=1.0, refinement=5, electrode_vertices=3, gap_vertices=1)
+    config = opt_mesh_module.OptimizedMeshConfig(
+        radius=1.0, refinement=5, electrode_vertices=3, gap_vertices=1
+    )
     electrode_cfg = opt_mesh_module.ElectrodePosition(L=8, coverage=0.5)
-    generator = opt_mesh_module.OptimizedMeshGenerator(config=config, electrodes=electrode_cfg)
+    generator = opt_mesh_module.OptimizedMeshGenerator(
+        config=config, electrodes=electrode_cfg
+    )
 
     mesh = generator.generate(output_dir=tmp_path, mesh_name="opt_patch")
     assert mesh.num_vertices() > 0
@@ -236,7 +262,8 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         refinement=4,
         electrode_coverage=0.5,
     )
-    assert read_calls["count"] == 1
+    assert (tmp_path / "opt_patch.xdmf").exists()
+    assert read_calls["count"] == 0
     assert mesh_first is mesh_second
 
 
@@ -253,9 +280,15 @@ def test_mesh_loader_sidecar_overrides_cached_metadata(tmp_path: Path, monkeypat
         "read_from_msh",
         lambda *_args, **_kwargs: _make_fake_mesh_data(),
     )
-    monkeypatch.setattr(mesh_loader_module, "load_structured_sidecar", lambda _path: {"geometry_version": "geomv9", "generator_revision": "g9"})
+    monkeypatch.setattr(
+        mesh_loader_module,
+        "load_structured_sidecar",
+        lambda _path: {"geometry_version": "geomv9", "generator_revision": "g9"},
+    )
     monkeypatch.setattr(mesh_loader_module, "estimate_radius", lambda _mesh: 0.5)
-    monkeypatch.setattr(mesh_loader_module, "infer_mesh_family_from_mesh", lambda _mesh: "tetra")
+    monkeypatch.setattr(
+        mesh_loader_module, "infer_mesh_family_from_mesh", lambda _mesh: "tetra"
+    )
 
     def _build_mesh(*args, **kwargs):
         return SimpleNamespace(
@@ -347,13 +380,17 @@ def test_mesh_loader_functions_with_fake_read(tmp_path, monkeypatch):
         read_calls["count"] += 1
         return fake_mesh_data
 
-    monkeypatch.setattr(mesh_loader_module.gmshio, "read_from_msh", _tracked_read_from_msh)
+    monkeypatch.setattr(
+        mesh_loader_module.gmshio, "read_from_msh", _tracked_read_from_msh
+    )
 
     mesh_name = "cached_mesh"
     (tmp_path / f"{mesh_name}.msh").write_text("msh", encoding="utf-8")
     assoc = configparser.ConfigParser()
     assoc["ASSOCIATION TABLE"] = {"domain": "1", "electrode_1": "2", "gaps": "3"}
-    with (tmp_path / f"{mesh_name}_association_table.ini").open("w", encoding="utf-8") as f:
+    with (tmp_path / f"{mesh_name}_association_table.ini").open(
+        "w", encoding="utf-8"
+    ) as f:
         assoc.write(f)
     np.save(tmp_path / "sample.npy", np.array([1, 2, 3]))
     (tmp_path / "sample.xdmf").write_text("<xdmf/>", encoding="utf-8")

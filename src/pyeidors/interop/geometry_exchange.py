@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 from scipy.io import loadmat, savemat
 
+from pyeidors.femx import build_eit_mesh
+
 STANDARD_INTEROP_FORMAT = "eidors_pyeidors_bridge_v1"
 
 REQUIRED_EXCHANGE_FIELDS = {
@@ -48,7 +50,9 @@ def load_forward_csv(path: Path) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     baseline = np.asarray([float(row["meas_homogeneous"]) for row in rows], dtype=float)
     phantom = np.asarray([float(row[target_key]) for row in rows], dtype=float)
     if "difference" in reader.fieldnames:
-        target_diff = np.asarray([float(row["difference"]) for row in rows], dtype=float)
+        target_diff = np.asarray(
+            [float(row["difference"]) for row in rows], dtype=float
+        )
     else:
         target_diff = phantom - baseline
     return baseline, phantom, target_diff
@@ -73,13 +77,6 @@ def export_forward_csv(path: Path, baseline: np.ndarray, phantom: np.ndarray) ->
             )
 
 
-def _to_python_dict(mat_obj: Any) -> dict[str, Any]:
-    fields = getattr(mat_obj, "_fieldnames", None)
-    if not fields:
-        return {}
-    return {field: getattr(mat_obj, field) for field in fields}
-
-
 def _infer_electrode_tags(mesh) -> list[int]:
     electrode_tags = list(getattr(mesh, "electrode_tags", []))
     if electrode_tags:
@@ -96,25 +93,30 @@ def _infer_electrode_tags(mesh) -> list[int]:
 
 
 def build_electrode_arrays(mesh) -> tuple[np.ndarray, np.ndarray]:
-    """Collect padded electrode node ids from a marked PyEIDORS mesh."""
-    from fenics import facets
-
-    boundary_markers = getattr(mesh, "boundaries_mf", None)
+    """Collect padded electrode node ids from a marked DOLFINx PyEIDORS mesh."""
+    boundary_markers = getattr(mesh, "facet_tags", None)
     electrode_tags = _infer_electrode_tags(mesh)
     if boundary_markers is None or not electrode_tags:
-        raise ValueError("Mesh is missing boundary markers or electrode tags")
+        raise ValueError("Mesh is missing facet tags or electrode tags")
 
     coords = np.asarray(mesh.coordinates(), dtype=float)
     center = np.mean(coords, axis=0)
+    mesh_obj = getattr(mesh, "mesh", None)
+    if mesh_obj is None:
+        raise ValueError("Expected an EITMesh with a DOLFINx mesh")
+
+    fdim = int(mesh_obj.topology.dim) - 1
+    mesh_obj.topology.create_connectivity(fdim, 0)
+    facet_to_vertex = mesh_obj.topology.connectivity(fdim, 0)
+    if facet_to_vertex is None:
+        raise ValueError("Mesh is missing facet-to-vertex connectivity")
 
     electrode_lists: list[np.ndarray] = []
     max_nodes = 0
     for tag in electrode_tags:
         node_ids: set[int] = set()
-        for facet in facets(mesh):
-            if int(boundary_markers[facet]) != int(tag):
-                continue
-            node_ids.update(int(v) for v in facet.entities(0))
+        for facet_idx in boundary_markers.find(int(tag)):
+            node_ids.update(int(v) for v in facet_to_vertex.links(int(facet_idx)))
         if not node_ids:
             raise ValueError(f"No boundary nodes found for electrode tag {tag}")
         ordered = np.array(sorted(node_ids), dtype=np.int64)
@@ -133,18 +135,31 @@ def build_electrode_arrays(mesh) -> tuple[np.ndarray, np.ndarray]:
 
 
 def build_boundary_edges(mesh) -> np.ndarray:
-    """Collect boundary edges from a marked PyEIDORS mesh."""
-    from fenics import facets
-
-    boundary_markers = getattr(mesh, "boundaries_mf", None)
+    """Collect one-based boundary edges from a marked DOLFINx PyEIDORS mesh."""
+    boundary_markers = getattr(mesh, "facet_tags", None)
     if boundary_markers is None:
-        raise ValueError("Mesh is missing boundary markers")
+        raise ValueError("Mesh is missing facet tags")
+
+    mesh_obj = getattr(mesh, "mesh", None)
+    if mesh_obj is None:
+        raise ValueError("Expected an EITMesh with a DOLFINx mesh")
+
+    fdim = int(mesh_obj.topology.dim) - 1
+    mesh_obj.topology.create_connectivity(fdim, 0)
+    facet_to_vertex = mesh_obj.topology.connectivity(fdim, 0)
+    if facet_to_vertex is None:
+        raise ValueError("Mesh is missing facet-to-vertex connectivity")
 
     edges: list[np.ndarray] = []
-    for facet in facets(mesh):
-        if int(boundary_markers[facet]) == 0:
+    for facet_idx, marker in zip(boundary_markers.indices, boundary_markers.values):
+        if int(marker) == 0:
             continue
-        edge = np.asarray(facet.entities(0), dtype=np.int64).reshape(-1) + 1
+        edge = (
+            np.asarray(facet_to_vertex.links(int(facet_idx)), dtype=np.int64).reshape(
+                -1
+            )
+            + 1
+        )
         if len(edge) != 2:
             continue
         edges.append(edge)
@@ -157,7 +172,9 @@ def validate_exchange_payload(payload: dict[str, Any]) -> None:
     """Validate that a payload conforms to the standard interop fields."""
     missing = sorted(REQUIRED_EXCHANGE_FIELDS.difference(payload))
     if missing:
-        raise ValueError(f"Exchange payload is missing required fields: {', '.join(missing)}")
+        raise ValueError(
+            f"Exchange payload is missing required fields: {', '.join(missing)}"
+        )
 
     exchange_format = str(np.asarray(payload["exchange_format"]).reshape(-1)[0])
     if exchange_format != STANDARD_INTEROP_FORMAT:
@@ -173,97 +190,180 @@ def save_exchange_mat(path: Path, payload: dict[str, Any]) -> None:
     savemat(path, payload)
 
 
-def _load_standard_electrode_node_lists(payload: dict[str, Any]) -> list[np.ndarray] | None:
+def _load_standard_electrode_node_lists(
+    payload: dict[str, Any],
+) -> list[np.ndarray] | None:
     if "electrode_nodes" not in payload:
         return None
-    electrode_nodes = np.asarray(payload["electrode_nodes"], dtype=np.int64)
+    electrode_nodes = np.atleast_2d(
+        np.asarray(payload["electrode_nodes"], dtype=np.int64)
+    )
     counts = np.asarray(payload["electrode_node_counts"], dtype=np.int64).reshape(-1)
     node_lists = []
     for row, count in zip(electrode_nodes, counts):
-        node_lists.append(np.asarray(row[: int(count)], dtype=np.int64).reshape(-1) - 1)
+        active_nodes = np.asarray(row[: int(count)], dtype=np.int64).reshape(-1)
+        if np.any(active_nodes < 1):
+            raise ValueError("'electrode_nodes' must use one-based node ids")
+        node_lists.append(active_nodes - 1)
     return node_lists
 
 
-def build_mesh_from_exchange_mat(path: Path):
-    """Build a FEniCS mesh from a standard or legacy EIDORS/PyEIDORS .mat payload."""
-    from fenics import Mesh, MeshEditor, MeshFunction, cells, facets
+def _load_nodes(payload: dict[str, Any]) -> np.ndarray:
+    nodes = np.asarray(payload["nodes"], dtype=np.float64)
+    if nodes.ndim != 2 or nodes.shape[1] < 2:
+        raise ValueError(
+            "'nodes' must be a two-dimensional array with at least x/y columns"
+        )
+    return np.ascontiguousarray(nodes[:, :2], dtype=np.float64)
 
-    payload = loadmat(path, squeeze_me=True, struct_as_record=False)
 
-    nodes = np.asarray(payload["nodes"], dtype=float)
-    elems = np.asarray(payload["elems"], dtype=np.int64) - 1
-    exchange_format = (
-        str(np.asarray(payload.get("exchange_format", "")).reshape(-1)[0])
-        if "exchange_format" in payload
-        else ""
-    )
-    standard_electrodes = _load_standard_electrode_node_lists(payload)
-    legacy_electrodes = np.asarray(payload["electrodes"]).reshape(-1) if "electrodes" in payload else None
+def _load_one_based_connectivity(
+    payload: dict[str, Any], field: str, width: int
+) -> np.ndarray:
+    data = np.asarray(payload[field], dtype=np.int64)
+    if data.ndim == 1:
+        if data.size % width != 0:
+            raise ValueError(
+                f"'{field}' cannot be reshaped into width-{width} connectivity"
+            )
+        data = data.reshape(-1, width)
+    if data.ndim != 2 or data.shape[1] != width:
+        raise ValueError(
+            f"'{field}' must be a two-dimensional array with width {width}"
+        )
+    if np.any(data < 1):
+        raise ValueError(f"'{field}' must use one-based node ids")
+    return np.ascontiguousarray(data - 1, dtype=np.int64)
 
-    mesh = Mesh()
-    editor = MeshEditor()
-    editor.open(mesh, "triangle", 2, 2)
-    editor.init_vertices(len(nodes))
-    editor.init_cells(len(elems))
-    for idx, coord in enumerate(nodes):
-        editor.add_vertex(idx, coord[:2])
-    for idx, elem in enumerate(elems):
-        editor.add_cell(idx, elem.astype(np.uintp))
-    editor.close()
-    mesh.init(1)
-    mesh.init(1, 0)
-    mesh.init(2, 1)
 
-    boundary_markers = MeshFunction("size_t", mesh, 1, 0)
-    association_table: dict[str, int] = {}
-    electrode_point_sets: list[set[tuple[float, float]]] = []
-    electrode_node_lists: list[np.ndarray]
-    if standard_electrodes is not None:
-        electrode_node_lists = standard_electrodes
-    elif legacy_electrodes is not None:
-        electrode_node_lists = []
-        for electrode in legacy_electrodes:
-            elec_dict = _to_python_dict(electrode)
-            elec_nodes = np.asarray(elec_dict["nodes"], dtype=np.int64).reshape(-1) - 1
-            electrode_node_lists.append(elec_nodes)
-    else:
-        raise ValueError(f"Mesh exchange file {path} does not contain electrode definitions")
+def _create_dolfinx_triangle_mesh(nodes: np.ndarray, elems: np.ndarray):
+    from dolfinx import mesh as dmesh
+    from mpi4py import MPI
+    import basix.ufl
+    import ufl
 
-    for elec_idx, elec_nodes in enumerate(electrode_node_lists, start=1):
-        point_set = {
-            (float(nodes[node_id, 0]), float(nodes[node_id, 1]))
-            for node_id in elec_nodes
+    coordinate_element = basix.ufl.element("Lagrange", "triangle", 1, shape=(2,))
+    domain = ufl.Mesh(coordinate_element)
+    return dmesh.create_mesh(MPI.COMM_WORLD, elems, domain, nodes)
+
+
+def _standard_facet_tags(
+    mesh,
+    boundary_edges: np.ndarray,
+    electrode_node_lists: list[np.ndarray],
+):
+    from dolfinx import mesh as dmesh
+
+    association_table: dict[str, int] = {"domain": 1}
+    electrode_sets: list[set[int]] = []
+    for elec_idx, nodes in enumerate(electrode_node_lists, start=1):
+        node_set = {
+            int(node_id) for node_id in np.asarray(nodes, dtype=np.int64).reshape(-1)
         }
-        electrode_point_sets.append(point_set)
+        electrode_sets.append(node_set)
         association_table[f"electrode_{elec_idx}"] = elec_idx + 1
-
-    gap_tag = len(electrode_point_sets) + 2
+    gap_tag = len(electrode_sets) + 2
     association_table["gaps"] = gap_tag
 
-    for facet in facets(mesh):
-        if sum(1 for _ in cells(facet)) != 1:
+    boundary_pairs = {
+        tuple(
+            sorted(int(value) for value in np.asarray(edge, dtype=np.int64).reshape(-1))
+        )
+        for edge in boundary_edges
+    }
+
+    fdim = int(mesh.topology.dim) - 1
+    mesh.topology.create_entities(fdim)
+    mesh.topology.create_connectivity(fdim, 0)
+    facet_to_vertex = mesh.topology.connectivity(fdim, 0)
+    facet_map = mesh.topology.index_map(fdim)
+    if facet_to_vertex is None or facet_map is None:
+        raise ValueError("Unable to build DOLFINx facet connectivity for exchange mesh")
+
+    indices: list[int] = []
+    values: list[int] = []
+    for facet_idx in range(int(facet_map.size_local)):
+        vertices = tuple(sorted(int(v) for v in facet_to_vertex.links(facet_idx)))
+        if vertices not in boundary_pairs:
             continue
-        vertex_points = {
-            (float(mesh.coordinates()[int(v)][0]), float(mesh.coordinates()[int(v)][1]))
-            for v in facet.entities(0)
-        }
         marker = gap_tag
-        for elec_idx, point_set in enumerate(electrode_point_sets, start=1):
-            if vertex_points.issubset(point_set):
+        vertex_set = set(vertices)
+        for elec_idx, node_set in enumerate(electrode_sets, start=1):
+            if vertex_set.issubset(node_set):
                 marker = elec_idx + 1
                 break
-        boundary_markers[facet] = marker
+        indices.append(facet_idx)
+        values.append(marker)
 
-    mesh.boundaries_mf = boundary_markers
-    mesh.association_table = association_table
-    mesh.electrode_tags = [
-        association_table[f"electrode_{idx}"] for idx in range(1, len(electrode_point_sets) + 1)
-    ]
-    mesh.n_electrodes = len(electrode_point_sets)
-    mesh.radius = float(np.max(np.linalg.norm(nodes[:, :2], axis=1)))
+    if len(indices) != len(boundary_pairs):
+        raise ValueError(
+            "Exchange payload boundary edges do not match the generated DOLFINx mesh facets"
+        )
+
+    order = np.argsort(np.asarray(indices, dtype=np.int64))
+    facet_tags = dmesh.meshtags(
+        mesh,
+        fdim,
+        np.asarray(indices, dtype=np.int32)[order],
+        np.asarray(values, dtype=np.int32)[order],
+    )
+
+    tdim = int(mesh.topology.dim)
+    cell_map = mesh.topology.index_map(tdim)
+    n_cells = int(cell_map.size_local if cell_map is not None else 0)
+    cell_tags = dmesh.meshtags(
+        mesh,
+        tdim,
+        np.arange(n_cells, dtype=np.int32),
+        np.ones(n_cells, dtype=np.int32),
+    )
+    return facet_tags, cell_tags, association_table
+
+
+def build_mesh_from_exchange_mat(path: Path):
+    """Build an EITMesh from a standard EIDORS/PyEIDORS .mat payload."""
+    payload = loadmat(path, squeeze_me=True, struct_as_record=False)
+    validate_exchange_payload(payload)
+
+    nodes = _load_nodes(payload)
+    elems = _load_one_based_connectivity(payload, "elems", 3)
+    boundary_edges = _load_one_based_connectivity(payload, "boundary_edges", 2)
+    standard_electrodes = _load_standard_electrode_node_lists(payload)
+    if standard_electrodes is None:
+        raise ValueError(
+            f"Mesh exchange file {path} does not contain electrode definitions"
+        )
+    n_elec = int(np.asarray(payload["n_elec"]).reshape(-1)[0])
+    if n_elec != len(standard_electrodes):
+        raise ValueError(
+            f"Exchange payload declares n_elec={n_elec}, "
+            f"but contains {len(standard_electrodes)} electrode node lists"
+        )
+
+    dolfinx_mesh = _create_dolfinx_triangle_mesh(nodes, elems)
+    facet_tags, cell_tags, association_table = _standard_facet_tags(
+        dolfinx_mesh,
+        boundary_edges,
+        standard_electrodes,
+    )
+    mesh = build_eit_mesh(
+        dolfinx_mesh,
+        facet_tags=facet_tags,
+        cell_tags=cell_tags,
+        association_table=association_table,
+        radius=float(np.max(np.linalg.norm(nodes, axis=1))),
+        mesh_file=str(path),
+        electrode_vertices=[
+            nodes[np.asarray(ids, dtype=np.int64)] for ids in standard_electrodes
+        ],
+        mesh_family="triangle",
+        geometry_version="interop-v1",
+        generator_revision="interop-v1",
+    )
     if "mesh_name" in payload:
         mesh.mesh_name = str(np.asarray(payload["mesh_name"]).reshape(-1)[0])
     else:
         mesh.mesh_name = path.stem
-    mesh.exchange_format = exchange_format or STANDARD_INTEROP_FORMAT
+    mesh.exchange_format = STANDARD_INTEROP_FORMAT
+    mesh.n_electrodes = n_elec
     return mesh, payload

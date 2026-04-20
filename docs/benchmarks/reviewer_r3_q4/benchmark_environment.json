@@ -1,7 +1,7 @@
 {
-  "container_name": "pyeidors",
-  "image": "pyeidors:latest",
-  "mount": "D:/workspace/PyEIDORS => /root/shared",
+  "environment": "Nix + uv (FEniCSx/DOLFINx)",
+  "environment_doc": "docs/NIX_FENICSX.md",
+  "repository_root": "repository root",
   "code_commit": "993c7fa13b6e91058a298c2761bac1eef224e403",
   "branch": "main",
   "python_version": "3.10.12",
@@ -25,7 +25,7 @@
     3,
     5
   ],
-  "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side.",
+  "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
   "summary_rows": [
     {
       "task": "absolute_gn",
@@ -50,7 +50,7 @@
       "gpu_linear_solver": "torch_dense_normal_equations",
       "cpu_regularization_structure": "dense",
       "gpu_regularization_structure": "dense",
-      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side."
+      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side."
     },
     {
       "task": "absolute_gn",
@@ -75,7 +75,7 @@
       "gpu_linear_solver": "torch_dense_normal_equations",
       "cpu_regularization_structure": "dense",
       "gpu_regularization_structure": "dense",
-      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side."
+      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side."
     }
   ],
   "iteration_sweep_rows": [
@@ -102,7 +102,7 @@
       "gpu_linear_solver": "torch_dense_normal_equations",
       "cpu_regularization_structure": "dense",
       "gpu_regularization_structure": "dense",
-      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side."
+      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side."
     },
     {
       "task": "absolute_gn",
@@ -127,7 +127,7 @@
       "gpu_linear_solver": "torch_dense_normal_equations",
       "cpu_regularization_structure": "dense",
       "gpu_regularization_structure": "dense",
-      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side."
+      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side."
     },
     {
       "task": "absolute_gn",
@@ -152,7 +152,7 @@
       "gpu_linear_solver": "torch_dense_normal_equations",
       "cpu_regularization_structure": "dense",
       "gpu_regularization_structure": "dense",
-      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the FEniCS/CPU side."
+      "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side."
     }
   ]
 }

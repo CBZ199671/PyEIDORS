@@ -16,7 +16,7 @@ if ($Force) {
     $SkipExisting = $false
 }
 
-$repoRoot = "D:\workspace\PyEIDORS"
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..\..")).Path
 $docsRoot = Join-Path $repoRoot "docs\benchmarks\reviewer_suite"
 $rawRoot = Join-Path $docsRoot "raw"
 $fairnessRoot = Join-Path $docsRoot "fairness"
@@ -31,7 +31,7 @@ New-Item -ItemType Directory -Force -Path $stateRoot | Out-Null
 New-Item -ItemType Directory -Force -Path $staleRoot | Out-Null
 
 $matlabExe = "D:\Program Files\MATLAB\R2023b\bin\matlab.exe"
-$matlabScriptDir = "D:/workspace/PyEIDORS/compare_with_Eidors"
+$matlabScriptDir = (Join-Path $repoRoot "compare_with_Eidors") -replace "\\", "/"
 $pythonCase = "scripts/benchmarks/benchmark_reviewer_case.py"
 $pythonCrossCase = "scripts/benchmarks/cross_generation_case.py"
 $pythonMeshControl = "scripts/benchmarks/mesh_matched_control.py"
@@ -43,8 +43,18 @@ $manifestPath = Join-Path $stateRoot "run_manifest.json"
 $currentCasePath = Join-Path $stateRoot "current_case.json"
 $runStatusPath = Join-Path $stateRoot "run_status.jsonl"
 $heavyCommandsPath = Join-Path $stateRoot "heavy_commands.txt"
-$containerStateRel = "docs/benchmarks/reviewer_suite/state/current_case.json"
-$containerRawRoot = "docs/benchmarks/reviewer_suite/raw"
+$stateJsonRel = "docs/benchmarks/reviewer_suite/state/current_case.json"
+
+function Convert-ToWslPath {
+    param([string]$Path)
+    return (& wsl.exe wslpath -a $Path).Trim()
+}
+
+function Invoke-WslRepoCommand {
+    param([string]$Command)
+    $repoWsl = Convert-ToWslPath -Path $repoRoot
+    return Invoke-ExternalCommand -Exe "wsl.exe" -Arguments @("bash", "-lc", "cd '$repoWsl' && $Command")
+}
 
 function Write-Utf8NoBom {
     param(
@@ -204,7 +214,7 @@ function New-BenchmarkCase {
         [string]$Scenario = "low_z",
         [string]$Device = "cpu",
         [int]$NFrames = 1,
-        [string]$Runner = "docker"
+        [string]$Runner = "wsl"
     )
     $frameworkKey = if ($Runner -eq "matlab") { "eidors" } else { $Framework }
     $deviceKey = if ($Runner -eq "matlab") { "cpu" } else { $Device }
@@ -370,14 +380,11 @@ function Should-SkipCase {
     return [pscustomobject]@{ Skip = $false; Status = "missing"; Reason = "file_missing" }
 }
 
-function Invoke-DockerBenchmarkCase {
+function Invoke-WslBenchmarkCase {
     param([pscustomobject]$Case)
-    $commandText = @(
-        "cd /root/shared",
-        "python $pythonCase --framework $($Case.FrameworkArg) --task $($Case.Task) --mesh-level $($Case.MeshLevel) --scenario $($Case.Scenario) --device $($Case.DeviceArg) --warmups $Warmups --repeats $Repeats --n-frames $($Case.NFrames) --output-json $($Case.OutputRel.Replace('\', '/')) --run-id $runId --case-id $($Case.CaseId) --phase $($Case.PhaseName) --state-json $containerStateRel"
-    ) -join " && "
-    Write-Host "[RUN] docker benchmark $($Case.CaseId)"
-    return Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $commandText)
+    $commandText = "nix develop --command python $pythonCase --framework $($Case.FrameworkArg) --task $($Case.Task) --mesh-level $($Case.MeshLevel) --scenario $($Case.Scenario) --device $($Case.DeviceArg) --warmups $Warmups --repeats $Repeats --n-frames $($Case.NFrames) --output-json $($Case.OutputRel.Replace('\', '/')) --run-id $runId --case-id $($Case.CaseId) --phase $($Case.PhaseName) --state-json $stateJsonRel"
+    Write-Host "[RUN] PyEIDORS benchmark $($Case.CaseId)"
+    return Invoke-WslRepoCommand -Command $commandText
 }
 
 function Invoke-MatlabBenchmarkCase {
@@ -405,14 +412,14 @@ function Invoke-MatlabBenchmarkCase {
 
 function Invoke-LlmDemoCase {
     Write-Host "[RUN] LLM demo"
-    return Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", "cd /root/shared && python $llmDemo")
+    return Invoke-WslRepoCommand -Command "nix develop --command python $llmDemo"
 }
 
 function Invoke-CrossGenerationStudies {
     $pyeidorsForward = "results/simulation_parity/softwarex_cross_pyeidors_source/synthetic_forward_data.csv"
     $pyeidorsMetrics = "results/simulation_parity/softwarex_cross_pyeidors_source/metrics.json"
-    $cmdPyForward = "cd /root/shared && python scripts/run_synthetic_parity.py --output-root results/simulation_parity/softwarex_cross_pyeidors_source --mode both --save-forward-csv --difference-solver single-step --step-size-calibration --gn-max-iterations 15 --background 1.0 --contact-impedance 1e-6 --phantom-center 0.3 0.2 --phantom-radius 0.2 --phantom-contrast 2.0"
-    $exitCode = Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $cmdPyForward)
+    $cmdPyForward = "nix develop --command python scripts/run_synthetic_parity.py --output-root results/simulation_parity/softwarex_cross_pyeidors_source --mode both --save-forward-csv --difference-solver single-step --step-size-calibration --gn-max-iterations 15 --background 1.0 --contact-impedance 1e-6 --phantom-center 0.3 0.2 --phantom-radius 0.2 --phantom-contrast 2.0"
+    $exitCode = Invoke-WslRepoCommand -Command $cmdPyForward
     if ($exitCode -ne 0) { return $exitCode }
 
     $eidorsSelfConfig = Join-Path $crossRoot "eidors_source_config.json"
@@ -448,28 +455,28 @@ function Invoke-CrossGenerationStudies {
 
     foreach ($framework in @("pyeidors", "pyeit")) {
         $pyOut = "docs/benchmarks/reviewer_suite/fairness/raw_cross/${framework}_from_pyeidors.json"
-        $cmd = "cd /root/shared && python $pythonCrossCase --framework $framework --source-framework pyeidors --input-csv $pyeidorsForward --source-metrics-json $pyeidorsMetrics --output-json $pyOut --mesh-level medium --scenario low_z"
-        $exitCode = Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $cmd)
+        $cmd = "nix develop --command python $pythonCrossCase --framework $framework --source-framework pyeidors --input-csv $pyeidorsForward --source-metrics-json $pyeidorsMetrics --output-json $pyOut --mesh-level medium --scenario low_z"
+        $exitCode = Invoke-WslRepoCommand -Command $cmd
         if ($exitCode -ne 0) { return $exitCode }
     }
 
     foreach ($framework in @("pyeidors", "pyeit")) {
         $pyOut = "docs/benchmarks/reviewer_suite/fairness/raw_cross/${framework}_from_eidors.json"
-        $cmd = "cd /root/shared && python $pythonCrossCase --framework $framework --source-framework eidors --input-csv docs/benchmarks/reviewer_suite/fairness/eidors_source_forward.csv --output-json $pyOut --mesh-level medium --scenario low_z"
-        $exitCode = Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $cmd)
+        $cmd = "nix develop --command python $pythonCrossCase --framework $framework --source-framework eidors --input-csv docs/benchmarks/reviewer_suite/fairness/eidors_source_forward.csv --output-json $pyOut --mesh-level medium --scenario low_z"
+        $exitCode = Invoke-WslRepoCommand -Command $cmd
         if ($exitCode -ne 0) { return $exitCode }
     }
     return 0
 }
 
 function Invoke-MeshMatchedControlCase {
-    $cmd = "cd /root/shared && python $pythonMeshControl --output-json docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.json --output-csv docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.csv --scenario low_z --matched-refinement 5 --finer-refinement 10 --reference-eidors-elements 2130"
-    return Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $cmd)
+    $cmd = "nix develop --command python $pythonMeshControl --output-json docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.json --output-csv docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.csv --scenario low_z --matched-refinement 5 --finer-refinement 10 --reference-eidors-elements 2130"
+    return Invoke-WslRepoCommand -Command $cmd
 }
 
 function Invoke-AggregationCase {
-    $cmd = "cd /root/shared && python $pythonAggregate --mode $Mode --state-dir docs/benchmarks/reviewer_suite/state"
-    return Invoke-ExternalCommand -Exe "docker" -Arguments @("exec", "pyeidors", "bash", "-lc", $cmd)
+    $cmd = "nix develop --command python $pythonAggregate --mode $Mode --state-dir docs/benchmarks/reviewer_suite/state"
+    return Invoke-WslRepoCommand -Command $cmd
 }
 
 function Invoke-Case {
@@ -489,8 +496,8 @@ function Invoke-Case {
     $rawExitCode = 0
     switch ($Case.Kind) {
         "benchmark" {
-            if ($Case.Runner -eq "docker") {
-                $rawExitCode = Invoke-DockerBenchmarkCase -Case $Case
+            if ($Case.Runner -eq "wsl") {
+                $rawExitCode = Invoke-WslBenchmarkCase -Case $Case
             } else {
                 $rawExitCode = Invoke-MatlabBenchmarkCase -Case $Case
             }
@@ -564,8 +571,8 @@ function Get-CaseRecord {
 
 function Write-HeavyCommands {
     $lines = @(
-        "powershell -ExecutionPolicy Bypass -File D:\workspace\PyEIDORS\scripts\benchmarks\run_reviewer_suite.ps1 -Mode $Mode -Phase heavy -Warmups $Warmups -Repeats $Repeats",
-        "Get-Content D:\workspace\PyEIDORS\docs\benchmarks\reviewer_suite\state\current_case.json"
+        "powershell -ExecutionPolicy Bypass -File $repoRoot\scripts\benchmarks\run_reviewer_suite.ps1 -Mode $Mode -Phase heavy -Warmups $Warmups -Repeats $Repeats",
+        "Get-Content $repoRoot\docs\benchmarks\reviewer_suite\state\current_case.json"
     )
     Write-Utf8NoBom -Path $heavyCommandsPath -Content (($lines -join [Environment]::NewLine) + [Environment]::NewLine)
 }
@@ -573,7 +580,7 @@ function Write-HeavyCommands {
 $coreCases = @()
 $heavyCases = @()
 $fairnessCases = @(
-    (New-CaseSpec -Kind "meta" -Runner "docker" -Task "llm_poc" -PhaseName "fairness" -OutputRel "docs/benchmarks/reviewer_r1_q3/metrics.json" -Label "llm_poc"),
+    (New-CaseSpec -Kind "meta" -Runner "wsl" -Task "llm_poc" -PhaseName "fairness" -OutputRel "docs/benchmarks/reviewer_r1_q3/metrics.json" -Label "llm_poc"),
     (New-CaseSpec -Kind "meta" -Runner "mixed" -Task "cross_generation" -PhaseName "fairness" -OutputRels @(
         "docs/benchmarks/reviewer_suite/fairness/raw_cross/eidors_from_eidors.json",
         "docs/benchmarks/reviewer_suite/fairness/raw_cross/eidors_from_pyeidors.json",
@@ -582,12 +589,12 @@ $fairnessCases = @(
         "docs/benchmarks/reviewer_suite/fairness/raw_cross/pyeit_from_eidors.json",
         "docs/benchmarks/reviewer_suite/fairness/raw_cross/pyeit_from_pyeidors.json"
     ) -Label "cross_generation"),
-    (New-CaseSpec -Kind "meta" -Runner "docker" -Task "mesh_matched_control" -PhaseName "fairness" -OutputRels @(
+    (New-CaseSpec -Kind "meta" -Runner "wsl" -Task "mesh_matched_control" -PhaseName "fairness" -OutputRels @(
         "docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.json",
         "docs/benchmarks/reviewer_suite/fairness/mesh_matched_control.csv"
     ) -Label "mesh_matched_control")
 )
-$aggregateCase = New-CaseSpec -Kind "aggregate" -Runner "docker" -Task "aggregate" -PhaseName "aggregate" -OutputRel "docs/benchmarks/reviewer_suite/aggregated/aggregate_all_cases.json" -Label "aggregate"
+$aggregateCase = New-CaseSpec -Kind "aggregate" -Runner "wsl" -Task "aggregate" -PhaseName "aggregate" -OutputRel "docs/benchmarks/reviewer_suite/aggregated/aggregate_all_cases.json" -Label "aggregate"
 
 if ($Mode -eq "smoke") {
     $coreCases += New-BenchmarkCase -Framework "pyeidors" -Task "forward" -MeshLevel "coarse"

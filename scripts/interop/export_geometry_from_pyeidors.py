@@ -36,7 +36,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-mat", type=Path, required=True)
     parser.add_argument("--forward-export-csv", type=Path, default=None)
-    parser.add_argument("--mesh-level", choices=["coarse", "medium", "fine"], default="medium")
+    parser.add_argument(
+        "--mesh-level", choices=["coarse", "medium", "fine"], default="medium"
+    )
     parser.add_argument("--scenario", choices=["low_z", "high_z"], default="low_z")
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
@@ -49,7 +51,8 @@ def make_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
@@ -81,11 +84,13 @@ def main() -> None:
     sigma = create_custom_phantom(
         system.fwd_model,
         background_conductivity=cfg["background"],
-        anomalies=[{
-            "center": tuple(cfg["phantom_center"]),
-            "radius": cfg["phantom_radius"],
-            "conductivity": cfg["phantom_conductivity"],
-        }],
+        anomalies=[
+            {
+                "center": tuple(cfg["phantom_center"]),
+                "radius": cfg["phantom_radius"],
+                "conductivity": cfg["phantom_conductivity"],
+            }
+        ],
     )
     truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=system.fwd_model)
 
@@ -117,7 +122,9 @@ def main() -> None:
         "mesh_level": args.mesh_level,
         "scenario_name": args.scenario,
         "electrode_coverage": float(args.electrode_coverage),
-        "mesh_name": getattr(mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[args.mesh_level]}"),
+        "mesh_name": getattr(
+            mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[args.mesh_level]}"
+        ),
     }
     save_exchange_mat(args.output_mat, payload)
     print(f"Wrote {args.output_mat}")

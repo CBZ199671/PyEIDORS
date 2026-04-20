@@ -32,8 +32,13 @@ from benchmark_difference_runtime import (  # noqa: E402
     compute_difference,
     run_single_step_benchmark,
 )
-from benchmark_reviewer_case import PYEIDORS_REFINEMENTS, PYEIT_H0, conductivity_metrics, get_git_commit, voltage_metrics  # noqa: E402
-
+from benchmark_reviewer_case import (
+    PYEIDORS_REFINEMENTS,
+    PYEIT_H0,
+    conductivity_metrics,
+    get_git_commit,
+    voltage_metrics,
+)  # noqa: E402
 
 SOURCE_ZS = {
     "low_z": 1e-6,
@@ -44,11 +49,19 @@ SOURCE_ZS = {
 def parse_args() -> argparse.Namespace:
     fairness_dir = REPO_ROOT / "docs" / "benchmarks" / "reviewer_suite" / "fairness"
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-json", type=Path, default=fairness_dir / "r1c5_cem_vs_pyeit.json")
-    parser.add_argument("--output-csv", type=Path, default=fairness_dir / "r1c5_cem_vs_pyeit.csv")
-    parser.add_argument("--source-dir", type=Path, default=fairness_dir / "r1c5_sources")
+    parser.add_argument(
+        "--output-json", type=Path, default=fairness_dir / "r1c5_cem_vs_pyeit.json"
+    )
+    parser.add_argument(
+        "--output-csv", type=Path, default=fairness_dir / "r1c5_cem_vs_pyeit.csv"
+    )
+    parser.add_argument(
+        "--source-dir", type=Path, default=fairness_dir / "r1c5_sources"
+    )
     parser.add_argument("--mesh-dir", type=Path, default=REPO_ROOT / "eit_meshes")
-    parser.add_argument("--mesh-level", choices=["coarse", "medium", "fine"], default="medium")
+    parser.add_argument(
+        "--mesh-level", choices=["coarse", "medium", "fine"], default="medium"
+    )
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--background", type=float, default=1.0)
     parser.add_argument("--phantom-conductivity", type=float, default=2.0)
@@ -115,7 +128,8 @@ def make_pattern_config(n_elec: int) -> PatternConfig:
         n_elec=n_elec,
         stim_pattern="{ad}",
         meas_pattern="{ad}",
-        amplitude=1.0,
+        drive_mode="normalized",
+        drive_value=1.0,
         rotate_meas=True,
     )
 
@@ -142,17 +156,23 @@ class PyEidorsSourceBuilder:
             noser_exponent=0.5,
         )
         self.system.setup(mesh=self.mesh)
-        self.baseline_image = self.system.create_homogeneous_image(conductivity=args.background)
+        self.baseline_image = self.system.create_homogeneous_image(
+            conductivity=args.background
+        )
         sigma = create_custom_phantom(
             self.system.fwd_model,
             background_conductivity=args.background,
-            anomalies=[{
-                "center": (args.phantom_center_x, args.phantom_center_y),
-                "radius": args.phantom_radius,
-                "conductivity": args.phantom_conductivity,
-            }],
+            anomalies=[
+                {
+                    "center": (args.phantom_center_x, args.phantom_center_y),
+                    "radius": args.phantom_radius,
+                    "conductivity": args.phantom_conductivity,
+                }
+            ],
         )
-        self.truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model)
+        self.truth_image = EITImage(
+            elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model
+        )
 
     def export(self, output_csv: Path) -> dict[str, object]:
         baseline_meas, _ = self.system.fwd_model.fwd_solve(self.baseline_image)
@@ -167,14 +187,20 @@ class PyEidorsSourceBuilder:
             "background": float(self.args.background),
             "contact_impedance": float(self.contact_impedance),
             "phantom_contrast": float(self.args.phantom_conductivity),
-            "mesh_name": getattr(self.mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}"),
+            "mesh_name": getattr(
+                self.mesh,
+                "mesh_name",
+                f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}",
+            ),
             "n_nodes": int(self.mesh.num_vertices()),
             "n_elements": int(len(self.system.fwd_model.V_sigma.dofmap().dofs())),
         }
 
 
 class PyEidorsReconstructor:
-    def __init__(self, args: argparse.Namespace, reconstruction_contact_impedance: float):
+    def __init__(
+        self, args: argparse.Namespace, reconstruction_contact_impedance: float
+    ):
         self.args = args
         self.reconstruction_contact_impedance = reconstruction_contact_impedance
         self.pattern = make_pattern_config(args.n_elec)
@@ -195,22 +221,30 @@ class PyEidorsReconstructor:
             noser_exponent=0.5,
         )
         self.system.setup(mesh=self.mesh)
-        self.baseline_image = self.system.create_homogeneous_image(conductivity=args.background)
+        self.baseline_image = self.system.create_homogeneous_image(
+            conductivity=args.background
+        )
         sigma = create_custom_phantom(
             self.system.fwd_model,
             background_conductivity=args.background,
-            anomalies=[{
-                "center": (args.phantom_center_x, args.phantom_center_y),
-                "radius": args.phantom_radius,
-                "conductivity": args.phantom_conductivity,
-            }],
+            anomalies=[
+                {
+                    "center": (args.phantom_center_x, args.phantom_center_y),
+                    "radius": args.phantom_radius,
+                    "conductivity": args.phantom_conductivity,
+                }
+            ],
         )
-        self.truth_image = EITImage(elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model)
+        self.truth_image = EITImage(
+            elem_data=sigma.vector()[:], fwd_model=self.system.fwd_model
+        )
         self.truth_sigma = self.truth_image.elem_data.copy()
 
     @property
     def mesh_name(self) -> str:
-        return getattr(self.mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}")
+        return getattr(
+            self.mesh, "mesh_name", f"ref{PYEIDORS_REFINEMENTS[self.args.mesh_level]}"
+        )
 
     @property
     def n_nodes(self) -> int:
@@ -220,12 +254,18 @@ class PyEidorsReconstructor:
     def n_elements(self) -> int:
         return int(len(self.system.fwd_model.V_sigma.dofmap().dofs()))
 
-    def reconstruct(self, baseline: np.ndarray, phantom: np.ndarray) -> dict[str, float]:
+    def reconstruct(
+        self, baseline: np.ndarray, phantom: np.ndarray
+    ) -> dict[str, float]:
         diff_vector = compute_difference(phantom, baseline, False)
         single_step_kwargs: dict[str, float] = {}
         if self.args.difference_hyperparameter is not None:
-            single_step_kwargs["difference_hyperparameter"] = self.args.difference_hyperparameter
-        single_step_args = build_single_step_namespace(self.system, **single_step_kwargs)
+            single_step_kwargs["difference_hyperparameter"] = (
+                self.args.difference_hyperparameter
+            )
+        single_step_args = build_single_step_namespace(
+            self.system, **single_step_kwargs
+        )
         recon_image, predicted_diff, step_size = run_single_step_benchmark(
             self.system,
             self.baseline_image,
@@ -253,7 +293,9 @@ class PyEitReconstructor:
         self._JAC = JAC
         h0 = PYEIT_H0[args.mesh_level]
         self.mesh = create(n_el=args.n_elec, h0=h0)
-        self.protocol = create_protocol(n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std")
+        self.protocol = create_protocol(
+            n_el=args.n_elec, dist_exc=1, step_meas=1, parser_meas="std"
+        )
         self.forward_solver = EITForward(self.mesh, self.protocol)
         self.baseline_perm = np.ones(self.mesh.n_elems, dtype=float) * args.background
         anomaly = PyEITAnomaly_Circle(
@@ -261,7 +303,9 @@ class PyEitReconstructor:
             r=args.phantom_radius,
             perm=args.phantom_conductivity,
         )
-        self.truth_mesh = set_perm(self.mesh, anomaly=anomaly, background=args.background)
+        self.truth_mesh = set_perm(
+            self.mesh, anomaly=anomaly, background=args.background
+        )
         self.truth_perm = np.asarray(self.truth_mesh.perm_array, dtype=float).copy()
 
     @property
@@ -276,7 +320,9 @@ class PyEitReconstructor:
     def n_elements(self) -> int:
         return int(self.mesh.n_elems)
 
-    def reconstruct(self, baseline: np.ndarray, phantom: np.ndarray) -> dict[str, float]:
+    def reconstruct(
+        self, baseline: np.ndarray, phantom: np.ndarray
+    ) -> dict[str, float]:
         jac = self._JAC(self.mesh, self.protocol)
         jac.setup(p=0.5, lamb=0.01, method="kotre", perm=self.baseline_perm)
         ds = np.asarray(jac.solve(phantom, baseline)).ravel()
@@ -305,7 +351,9 @@ def build_row(
     matched_to_source = None
     if reconstruction_z is not None:
         matched_to_source = reconstruction_z == source_z
-    reconstruction_contact_impedance = SOURCE_ZS[reconstruction_z] if reconstruction_z else None
+    reconstruction_contact_impedance = (
+        SOURCE_ZS[reconstruction_z] if reconstruction_z else None
+    )
     return {
         "study": "r1c5_cem_vs_pyeit",
         "source_framework": source_framework,
@@ -318,7 +366,11 @@ def build_row(
         "reconstructor": reconstructor,
         "reconstructor_model": reconstructor_model,
         "reconstruction_z": reconstruction_z or "",
-        "reconstruction_contact_impedance": reconstruction_contact_impedance if reconstruction_contact_impedance is not None else "",
+        "reconstruction_contact_impedance": (
+            reconstruction_contact_impedance
+            if reconstruction_contact_impedance is not None
+            else ""
+        ),
         "matched_to_source": matched_to_source if matched_to_source is not None else "",
         "mesh_level": "medium",
         "mesh_name": mesh_name,
@@ -327,10 +379,16 @@ def build_row(
         "runtime_sec": runtime_sec,
         "voltage_rmse": float(metrics["voltage_rmse"]),
         "voltage_mae": float(metrics["voltage_mae"]),
-        "conductivity_relative_error_pct": float(metrics["conductivity_relative_error_pct"]),
+        "conductivity_relative_error_pct": float(
+            metrics["conductivity_relative_error_pct"]
+        ),
         "conductivity_rmse": float(metrics["conductivity_rmse"]),
         "conductivity_mae": float(metrics["conductivity_mae"]),
-        "optimal_step_size": float(metrics["optimal_step_size"]) if "optimal_step_size" in metrics else "",
+        "optimal_step_size": (
+            float(metrics["optimal_step_size"])
+            if "optimal_step_size" in metrics
+            else ""
+        ),
         "commit": get_git_commit(),
     }
 
@@ -339,21 +397,44 @@ def summarise_rows(rows: list[dict[str, object]]) -> dict[str, dict[str, float]]
     summaries: dict[str, dict[str, float]] = {}
     for source_z in ("low_z", "high_z"):
         subset = [row for row in rows if row["source_z"] == source_z]
-        matched_rows = [row for row in subset if row["reconstructor"] == "PyEIDORS" and row["matched_to_source"] is True]
-        mismatched_rows = [row for row in subset if row["reconstructor"] == "PyEIDORS" and row["matched_to_source"] is False]
+        matched_rows = [
+            row
+            for row in subset
+            if row["reconstructor"] == "PyEIDORS" and row["matched_to_source"] is True
+        ]
+        mismatched_rows = [
+            row
+            for row in subset
+            if row["reconstructor"] == "PyEIDORS" and row["matched_to_source"] is False
+        ]
         pyeit_rows = [row for row in subset if row["reconstructor"] == "pyEIT"]
         summaries[source_z] = {
-            "matched_pyeidors_voltage_rmse_median": median([float(row["voltage_rmse"]) for row in matched_rows]),
-            "mismatched_pyeidors_voltage_rmse_median": median([float(row["voltage_rmse"]) for row in mismatched_rows]),
-            "pyeit_voltage_rmse_median": median([float(row["voltage_rmse"]) for row in pyeit_rows]),
-            "matched_pyeidors_voltage_mae_median": median([float(row["voltage_mae"]) for row in matched_rows]),
-            "mismatched_pyeidors_voltage_mae_median": median([float(row["voltage_mae"]) for row in mismatched_rows]),
-            "pyeit_voltage_mae_median": median([float(row["voltage_mae"]) for row in pyeit_rows]),
+            "matched_pyeidors_voltage_rmse_median": median(
+                [float(row["voltage_rmse"]) for row in matched_rows]
+            ),
+            "mismatched_pyeidors_voltage_rmse_median": median(
+                [float(row["voltage_rmse"]) for row in mismatched_rows]
+            ),
+            "pyeit_voltage_rmse_median": median(
+                [float(row["voltage_rmse"]) for row in pyeit_rows]
+            ),
+            "matched_pyeidors_voltage_mae_median": median(
+                [float(row["voltage_mae"]) for row in matched_rows]
+            ),
+            "mismatched_pyeidors_voltage_mae_median": median(
+                [float(row["voltage_mae"]) for row in mismatched_rows]
+            ),
+            "pyeit_voltage_mae_median": median(
+                [float(row["voltage_mae"]) for row in pyeit_rows]
+            ),
             "matched_pyeidors_conductivity_relative_error_pct_median": median(
                 [float(row["conductivity_relative_error_pct"]) for row in matched_rows]
             ),
             "mismatched_pyeidors_conductivity_relative_error_pct_median": median(
-                [float(row["conductivity_relative_error_pct"]) for row in mismatched_rows]
+                [
+                    float(row["conductivity_relative_error_pct"])
+                    for row in mismatched_rows
+                ]
             ),
             "pyeit_conductivity_relative_error_pct_median": median(
                 [float(row["conductivity_relative_error_pct"]) for row in pyeit_rows]
@@ -369,8 +450,10 @@ def main() -> None:
     args.source_dir.mkdir(parents=True, exist_ok=True)
 
     eidors_sources = {
-        "low_z": args.eidors_source_low_z or (args.source_dir / "eidors_source_low_z.csv"),
-        "high_z": args.eidors_source_high_z or (args.source_dir / "eidors_source_high_z.csv"),
+        "low_z": args.eidors_source_low_z
+        or (args.source_dir / "eidors_source_low_z.csv"),
+        "high_z": args.eidors_source_high_z
+        or (args.source_dir / "eidors_source_high_z.csv"),
     }
     for path in eidors_sources.values():
         if not path.exists():
@@ -399,7 +482,10 @@ def main() -> None:
     }
 
     rows: list[dict[str, object]] = []
-    for source_framework, source_map in (("eidors", eidors_sources), ("pyeidors", pyeidors_sources)):
+    for source_framework, source_map in (
+        ("eidors", eidors_sources),
+        ("pyeidors", pyeidors_sources),
+    ):
         for source_z, source_csv in source_map.items():
             baseline, phantom = load_forward_csv(source_csv)
             for label, reconstructor in reconstructors.items():
@@ -435,9 +521,17 @@ def main() -> None:
         key=lambda row: (
             0 if row["source_framework"] == "eidors" else 1,
             0 if row["source_z"] == "low_z" else 1,
-            0 if row["reconstructor"] == "PyEIDORS" and row["reconstruction_z"] == "low_z" else
-            1 if row["reconstructor"] == "PyEIDORS" and row["reconstruction_z"] == "high_z" else
-            2,
+            (
+                0
+                if row["reconstructor"] == "PyEIDORS"
+                and row["reconstruction_z"] == "low_z"
+                else (
+                    1
+                    if row["reconstructor"] == "PyEIDORS"
+                    and row["reconstruction_z"] == "high_z"
+                    else 2
+                )
+            ),
         ),
     )
     summaries = summarise_rows(rows)

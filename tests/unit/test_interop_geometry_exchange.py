@@ -9,8 +9,11 @@ import numpy as np
 import pytest
 from scipy.io import loadmat
 
+from pyeidors.data.structures import EITMesh
 from pyeidors.interop import (
     STANDARD_INTEROP_FORMAT,
+    build_boundary_edges,
+    build_electrode_arrays,
     build_mesh_from_exchange_mat,
     export_forward_csv,
     load_forward_csv,
@@ -74,23 +77,58 @@ def test_save_exchange_mat_persists_standard_metadata(tmp_path: Path) -> None:
     save_exchange_mat(out_mat, payload)
     loaded = loadmat(out_mat, squeeze_me=True, struct_as_record=False)
 
-    assert str(np.asarray(loaded["exchange_format"]).reshape(-1)[0]) == STANDARD_INTEROP_FORMAT
+    assert (
+        str(np.asarray(loaded["exchange_format"]).reshape(-1)[0])
+        == STANDARD_INTEROP_FORMAT
+    )
     assert str(np.asarray(loaded["source_framework"]).reshape(-1)[0]) == "pyeidors"
-    np.testing.assert_allclose(np.asarray(loaded["truth_elem_data"], dtype=float).reshape(-1), [1.0, 2.0])
+    np.testing.assert_allclose(
+        np.asarray(loaded["truth_elem_data"], dtype=float).reshape(-1), [1.0, 2.0]
+    )
 
 
-@pytest.mark.fenics
 def test_build_mesh_from_exchange_mat_standard_payload(tmp_path: Path) -> None:
-    pytest.importorskip("fenics")
-
     out_mat = tmp_path / "exchange.mat"
     save_exchange_mat(out_mat, make_standard_payload())
 
     mesh, payload = build_mesh_from_exchange_mat(out_mat)
 
+    assert isinstance(mesh, EITMesh)
     assert mesh.mesh_name == "unit_square"
     assert mesh.exchange_format == STANDARD_INTEROP_FORMAT
     assert mesh.n_electrodes == 4
     assert mesh.num_vertices() == 4
     assert mesh.num_cells() == 2
-    np.testing.assert_allclose(np.asarray(payload["truth_elem_data"], dtype=float).reshape(-1), [1.0, 2.0])
+    assert mesh.facet_tags is not None
+    assert mesh.cell_tags is not None
+    assert mesh.association_table == {
+        "domain": 1,
+        "electrode_1": 2,
+        "electrode_2": 3,
+        "electrode_3": 4,
+        "electrode_4": 5,
+        "gaps": 6,
+    }
+
+    boundary_edges = build_boundary_edges(mesh)
+    assert {tuple(sorted(edge)) for edge in boundary_edges.tolist()} == {
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (1, 4),
+    }
+
+    electrode_nodes, electrode_counts = build_electrode_arrays(mesh)
+    assert electrode_counts.tolist() == [2, 2, 2, 2]
+    assert {
+        tuple(sorted(row[:count].tolist()))
+        for row, count in zip(electrode_nodes, electrode_counts)
+    } == {
+        (1, 2),
+        (2, 3),
+        (3, 4),
+        (1, 4),
+    }
+    np.testing.assert_allclose(
+        np.asarray(payload["truth_elem_data"], dtype=float).reshape(-1), [1.0, 2.0]
+    )

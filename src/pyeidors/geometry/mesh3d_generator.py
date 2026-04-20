@@ -30,7 +30,13 @@ from ..perf.policy import (
     SQUARE_TO_DISK_3D_GENERATOR_REVISION,
     normalize_mesh_family,
 )
-from ._helpers import association_from_mesh_data, write_association_table
+from ._helpers import (
+    add_named_physical_group,
+    assert_unique_physical_group_ownership,
+    validate_mesh_data_tags,
+    write_association_table,
+)
+from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
 
@@ -71,8 +77,7 @@ def normalize_electrode_level_fractions(
     for frac in seq:
         if not 0.0 < float(frac) < 1.0:
             raise ValueError(
-                "electrode_level_fractions entries must be in (0, 1), "
-                f"got {frac!r}."
+                "electrode_level_fractions entries must be in (0, 1), " f"got {frac!r}."
             )
     return seq
 
@@ -182,7 +187,9 @@ def _normalize_angle(theta: float) -> float:
     return value if value >= 0.0 else value + 2.0 * pi
 
 
-def _angle_in_arc(theta: float, start: float, end: float, *, tol: float = 1e-10) -> bool:
+def _angle_in_arc(
+    theta: float, start: float, end: float, *, tol: float = 1e-10
+) -> bool:
     theta_n = _normalize_angle(theta)
     start_n = _normalize_angle(start)
     end_n = _normalize_angle(end)
@@ -193,13 +200,13 @@ def _angle_in_arc(theta: float, start: float, end: float, *, tol: float = 1e-10)
     return (start_n - tol) <= theta_n <= (end_n + tol)
 
 
-def _classify_theta(theta: float, positions: Sequence[Tuple[float, float]]) -> int | None:
+def _classify_theta(
+    theta: float, positions: Sequence[Tuple[float, float]]
+) -> int | None:
     for idx, (start, end) in enumerate(positions, start=1):
         if _angle_in_arc(theta, start, end):
             return int(idx)
     return None
-
-
 
 
 def structured_sidecar_path_for_mesh(mesh_file: str | Path) -> Path:
@@ -232,16 +239,32 @@ def validate_structured_sidecar_payload(payload: dict) -> dict:
     if str(payload.get("mesh_family")).strip().lower() != "hex":
         raise ValueError("structured sidecar currently supports mesh_family='hex' only")
     if str(payload.get("geometry_version")).strip().lower() != "geomv2":
-        raise ValueError("structured sidecar currently supports geometry_version='geomv2' only")
+        raise ValueError(
+            "structured sidecar currently supports geometry_version='geomv2' only"
+        )
     if not isinstance(payload.get("blocks"), list) or not payload["blocks"]:
         raise ValueError("structured sidecar must include at least one block")
-    if not isinstance(payload.get("structured_node_to_mesh_node"), list) or not payload["structured_node_to_mesh_node"]:
-        raise ValueError("structured sidecar must include structured_node_to_mesh_node entries")
-    if not isinstance(payload.get("structured_cell_to_block"), list) or not payload["structured_cell_to_block"]:
-        raise ValueError("structured sidecar must include structured_cell_to_block entries")
+    if (
+        not isinstance(payload.get("structured_node_to_mesh_node"), list)
+        or not payload["structured_node_to_mesh_node"]
+    ):
+        raise ValueError(
+            "structured sidecar must include structured_node_to_mesh_node entries"
+        )
+    if (
+        not isinstance(payload.get("structured_cell_to_block"), list)
+        or not payload["structured_cell_to_block"]
+    ):
+        raise ValueError(
+            "structured sidecar must include structured_cell_to_block entries"
+        )
     if not isinstance(payload.get("structured_cell_local_ijk"), list):
-        raise ValueError("structured sidecar must include structured_cell_local_ijk entries")
-    if len(payload["structured_cell_to_block"]) != len(payload["structured_cell_local_ijk"]):
+        raise ValueError(
+            "structured sidecar must include structured_cell_local_ijk entries"
+        )
+    if len(payload["structured_cell_to_block"]) != len(
+        payload["structured_cell_local_ijk"]
+    ):
         raise ValueError(
             "structured sidecar cell metadata length mismatch between "
             "structured_cell_to_block and structured_cell_local_ijk"
@@ -285,7 +308,9 @@ def _prepare_output_paths(
     return output_dir, mesh_name, msh_path, assoc_path
 
 
-def _electrode_vertical_windows(config: Cylinder3DMeshConfig) -> list[tuple[float, float]]:
+def _electrode_vertical_windows(
+    config: Cylinder3DMeshConfig,
+) -> list[tuple[float, float]]:
     half_height = 0.5 * config.height * config.electrode_height_ratio
     windows: list[tuple[float, float]] = []
     for frac in config.electrode_level_fractions:
@@ -326,7 +351,10 @@ def _total_3d_electrode_count(
     electrodes: ElectrodeArcConfig,
 ) -> int:
     """Return the number of physical CEM electrode tags on the 3D mesh."""
-    if normalize_electrode_layout(config.electrode_layout) == ELECTRODE_LAYOUT_RING_MAJOR:
+    if (
+        normalize_electrode_layout(config.electrode_layout)
+        == ELECTRODE_LAYOUT_RING_MAJOR
+    ):
         return int(electrodes.n_elec) * len(_electrode_vertical_windows(config))
     return int(electrodes.n_elec)
 
@@ -395,7 +423,9 @@ def _classify_sidewall_patch(
 def _top_surface_from_extrusion(extruded: Sequence[tuple[int, int]]) -> int:
     candidates = [int(tag) for dim, tag in extruded if int(dim) == 2]
     if not candidates:
-        raise RuntimeError("Expected a top surface from extrusion, but none were returned.")
+        raise RuntimeError(
+            "Expected a top surface from extrusion, but none were returned."
+        )
     top_tag = int(candidates[0])
     xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, top_tag)
     top_z = float(0.5 * (zmin + zmax))
@@ -411,7 +441,9 @@ def _top_surface_from_extrusion(extruded: Sequence[tuple[int, int]]) -> int:
     return top_tag
 
 
-def _lateral_surfaces_from_extrusion(extruded: Sequence[tuple[int, int]], top_surface: int) -> list[int]:
+def _lateral_surfaces_from_extrusion(
+    extruded: Sequence[tuple[int, int]], top_surface: int
+) -> list[int]:
     surfaces: list[int] = []
     for dim, tag in extruded:
         if int(dim) != 2 or int(tag) == int(top_surface):
@@ -425,7 +457,9 @@ def _lateral_surfaces_from_extrusion(extruded: Sequence[tuple[int, int]], top_su
 class _LegacyTetraCylinder3DMeshGenerator:
     """Preserve the pre-geomv2 tetra generator for explicit legacy use."""
 
-    def __init__(self, config: Cylinder3DMeshConfig, electrodes: ElectrodeArcConfig) -> None:
+    def __init__(
+        self, config: Cylinder3DMeshConfig, electrodes: ElectrodeArcConfig
+    ) -> None:
         self.config = config
         self.electrodes = electrodes
 
@@ -436,7 +470,9 @@ class _LegacyTetraCylinder3DMeshGenerator:
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
         if not GMSH_AVAILABLE:
-            raise ImportError("gmsh Python bindings are required to generate 3D meshes.")
+            raise ImportError(
+                "gmsh Python bindings are required to generate 3D meshes."
+            )
 
         _, mesh_name, msh_path, assoc_path = _prepare_output_paths(
             output_dir=output_dir,
@@ -457,6 +493,7 @@ class _LegacyTetraCylinder3DMeshGenerator:
             gmsh.model.mesh.setSize(gmsh.model.getEntities(0), self.config.mesh_size)
             gmsh.model.mesh.generate(3)
             gmsh.write(str(msh_path))
+            assert_unique_physical_group_ownership(gmsh.model)
             mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=3)
         finally:
             if initialized_here:
@@ -464,8 +501,26 @@ class _LegacyTetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = association_from_mesh_data(mesh_data)
+        electrode_names = [
+            f"electrode_{idx}" for idx in range(1, int(self.electrodes.n_elec) + 1)
+        ]
+        facet_names = [*electrode_names, "gaps"]
+        association_table = validate_mesh_data_tags(
+            mesh_data,
+            gdim=3,
+            required_names=["domain", *facet_names],
+            required_facet_names=facet_names,
+        )
         write_association_table(assoc_path, association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=msh_path,
+            association_table=association_table,
+            gdim=3,
+            mesh_family="tetra",
+            geometry_version="legacy",
+            generator_revision=LEGACY_3D_GENERATOR_REVISION,
+        )
 
         return build_eit_mesh(
             mesh_data.mesh,
@@ -542,7 +597,9 @@ class _LegacyTetraCylinder3DMeshGenerator:
             xmin, ymin, zmin, xmax, ymax, zmax = gmsh.model.getBoundingBox(2, surf_tag)
             if (zmax - zmin) < max(1e-9, 0.5 * height):
                 continue
-            boundary = gmsh.model.getBoundary([(2, int(surf_tag))], oriented=False, recursive=False)
+            boundary = gmsh.model.getBoundary(
+                [(2, int(surf_tag))], oriented=False, recursive=False
+            )
             if any(int(dim) == 1 and int(tag) in line_set for dim, tag in boundary):
                 side_surfaces.append(int(surf_tag))
         return sorted(set(side_surfaces))
@@ -555,7 +612,9 @@ class _LegacyTetraCylinder3DMeshGenerator:
         line_set = set(int(line) for line in lines)
         side_by_line: dict[int, int] = {}
         for surf_tag in side_surfaces:
-            boundary = gmsh.model.getBoundary([(2, int(surf_tag))], oriented=False, recursive=False)
+            boundary = gmsh.model.getBoundary(
+                [(2, int(surf_tag))], oriented=False, recursive=False
+            )
             for dim, tag in boundary:
                 if int(dim) != 1:
                     continue
@@ -573,7 +632,7 @@ class _LegacyTetraCylinder3DMeshGenerator:
         side_surfaces: List[int] = list(geometry["side_surfaces"])  # type: ignore[assignment]
         side_by_line: dict[int, int] = dict(geometry["side_by_line"])  # type: ignore[assignment]
 
-        gmsh.model.addPhysicalGroup(3, [volume_tag], 1, name="domain")
+        add_named_physical_group(gmsh.model, 3, [volume_tag], 1, "domain")
 
         used_surfaces: set[int] = set()
         for i, (start, end) in enumerate(electrode_ranges):
@@ -585,18 +644,21 @@ class _LegacyTetraCylinder3DMeshGenerator:
                     electrode_surfaces.append(surf_tag)
             electrode_surfaces = sorted(set(electrode_surfaces))
             if not electrode_surfaces:
-                raise RuntimeError(f"Failed to resolve side surfaces for electrode_{i + 1}.")
-            gmsh.model.addPhysicalGroup(
+                raise RuntimeError(
+                    f"Failed to resolve side surfaces for electrode_{i + 1}."
+                )
+            add_named_physical_group(
+                gmsh.model,
                 2,
                 electrode_surfaces,
                 i + 2,
-                name=f"electrode_{i + 1}",
+                f"electrode_{i + 1}",
             )
             used_surfaces.update(electrode_surfaces)
 
         gap_surfaces = sorted(set(side_surfaces) - used_surfaces)
         if gap_surfaces:
-            gmsh.model.addPhysicalGroup(2, gap_surfaces, n_elec + 2, name="gaps")
+            add_named_physical_group(gmsh.model, 2, gap_surfaces, n_elec + 2, "gaps")
 
 
 class _GeomV2TetraCylinder3DMeshGenerator:
@@ -643,7 +705,9 @@ class _GeomV2TetraCylinder3DMeshGenerator:
         lines: list[int] = []
         for idx in range(len(boundary_points)):
             nxt = (idx + 1) % len(boundary_points)
-            lines.append(gmsh.model.occ.addLine(boundary_points[idx], boundary_points[nxt]))
+            lines.append(
+                gmsh.model.occ.addLine(boundary_points[idx], boundary_points[nxt])
+            )
 
         loop = gmsh.model.occ.addCurveLoop(lines)
         surface = gmsh.model.occ.addPlaneSurface([loop])
@@ -656,7 +720,9 @@ class _GeomV2TetraCylinder3DMeshGenerator:
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
         if not GMSH_AVAILABLE:
-            raise ImportError("gmsh Python bindings are required to generate 3D meshes.")
+            raise ImportError(
+                "gmsh Python bindings are required to generate 3D meshes."
+            )
 
         _, mesh_name, msh_path, assoc_path = _prepare_output_paths(
             output_dir=output_dir,
@@ -680,25 +746,38 @@ class _GeomV2TetraCylinder3DMeshGenerator:
                 delta_z = float(z_stop - z_start)
                 if delta_z <= 1e-12:
                     continue
-                extruded = gmsh.model.occ.extrude([(2, current_surface)], 0.0, 0.0, float(delta_z))
+                extruded = gmsh.model.occ.extrude(
+                    [(2, current_surface)], 0.0, 0.0, float(delta_z)
+                )
                 gmsh.model.occ.synchronize()
                 top_surface = _top_surface_from_extrusion(extruded)
-                lateral_surfaces = _lateral_surfaces_from_extrusion(extruded, top_surface)
+                lateral_surfaces = _lateral_surfaces_from_extrusion(
+                    extruded, top_surface
+                )
                 all_volumes.extend(int(tag) for dim, tag in extruded if int(dim) == 3)
-                if _find_electrode_window_index(0.5 * float(z_start + z_stop), self.config) is not None:
+                if (
+                    _find_electrode_window_index(
+                        0.5 * float(z_start + z_stop), self.config
+                    )
+                    is not None
+                ):
                     electrode_candidate_surfaces.extend(lateral_surfaces)
                 current_surface = int(top_surface)
 
             if not all_volumes:
                 raise RuntimeError("Failed to create 3D geomv2 tetra volume.")
 
-            gmsh.model.addPhysicalGroup(3, sorted(set(all_volumes)), 1, name="domain")
+            add_named_physical_group(
+                gmsh.model, 3, sorted(set(all_volumes)), 1, "domain"
+            )
 
             total_electrodes = _total_3d_electrode_count(
                 config=self.config,
                 electrodes=self.electrodes,
             )
-            groups: dict[int, list[int]] = {idx: [] for idx in range(1, total_electrodes + 1)}
+            groups: dict[int, list[int]] = {
+                idx: [] for idx in range(1, total_electrodes + 1)
+            }
             gap_surfaces: list[int] = []
             positions = self.electrodes.positions
             for surf_tag in sorted(set(electrode_candidate_surfaces)):
@@ -718,20 +797,30 @@ class _GeomV2TetraCylinder3DMeshGenerator:
             for idx in range(1, total_electrodes + 1):
                 surfaces = sorted(set(groups[idx]))
                 if not surfaces:
-                    raise RuntimeError(f"Failed to resolve geomv2 side surfaces for electrode_{idx}.")
-                gmsh.model.addPhysicalGroup(2, surfaces, idx + 1, name=f"electrode_{idx}")
+                    raise RuntimeError(
+                        f"Failed to resolve geomv2 side surfaces for electrode_{idx}."
+                    )
+                add_named_physical_group(
+                    gmsh.model,
+                    2,
+                    surfaces,
+                    idx + 1,
+                    f"electrode_{idx}",
+                )
 
             if gap_surfaces:
-                gmsh.model.addPhysicalGroup(
+                add_named_physical_group(
+                    gmsh.model,
                     2,
                     sorted(set(gap_surfaces)),
                     total_electrodes + 2,
-                    name="gaps",
+                    "gaps",
                 )
 
             gmsh.model.mesh.setSize(gmsh.model.getEntities(0), self.config.mesh_size)
             gmsh.model.mesh.generate(3)
             gmsh.write(str(msh_path))
+            assert_unique_physical_group_ownership(gmsh.model)
             mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=3)
         finally:
             if initialized_here:
@@ -739,8 +828,24 @@ class _GeomV2TetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        association_table = association_from_mesh_data(mesh_data)
+        electrode_names = [f"electrode_{idx}" for idx in range(1, total_electrodes + 1)]
+        facet_names = [*electrode_names, "gaps"]
+        association_table = validate_mesh_data_tags(
+            mesh_data,
+            gdim=3,
+            required_names=["domain", *facet_names],
+            required_facet_names=facet_names,
+        )
         write_association_table(assoc_path, association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=msh_path,
+            association_table=association_table,
+            gdim=3,
+            mesh_family="tetra",
+            geometry_version="geomv2",
+            generator_revision=self.generator_revision,
+        )
 
         return build_eit_mesh(
             mesh_data.mesh,
@@ -780,7 +885,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
     ) -> None:
         self.config = config
         self.electrodes = electrodes
-        self.generator_revision = str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
+        self.generator_revision = (
+            str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
+        )
 
     def _z_levels(self) -> np.ndarray:
         intervals = _z_stage_intervals(self.config)
@@ -806,7 +913,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
             levels.extend(segment.tolist())
         return np.asarray(levels, dtype=np.float64)
 
-    def _structured_geometry_square_to_disk(self) -> tuple[np.ndarray, np.ndarray, dict]:
+    def _structured_geometry_square_to_disk(
+        self,
+    ) -> tuple[np.ndarray, np.ndarray, dict]:
         n_side = max(8, self.electrodes.n_elec * max(1, self.config.refinement))
         x_grid = np.linspace(-1.0, 1.0, n_side + 1, dtype=np.float64)
         y_grid = np.linspace(-1.0, 1.0, n_side + 1, dtype=np.float64)
@@ -858,7 +967,11 @@ class _GeomV2HexCylinder3DMeshGenerator:
             ],
             "z_levels": z_grid.tolist(),
         }
-        return np.asarray(points, dtype=np.float64), np.asarray(cells, dtype=np.int32), metadata
+        return (
+            np.asarray(points, dtype=np.float64),
+            np.asarray(cells, dtype=np.int32),
+            metadata,
+        )
 
     @staticmethod
     def _signed_quad_area(points2d: np.ndarray) -> float:
@@ -891,13 +1004,19 @@ class _GeomV2HexCylinder3DMeshGenerator:
             ids = np.zeros(x_grid.shape, dtype=np.int32)
             for j in range(x_grid.shape[0]):
                 for i in range(x_grid.shape[1]):
-                    ids[j, i] = _add_base_point(float(x_grid[j, i]), float(y_grid[j, i]))
+                    ids[j, i] = _add_base_point(
+                        float(x_grid[j, i]), float(y_grid[j, i])
+                    )
             block_id = len(blocks)
             blocks.append(
                 {
                     "id": block_id,
                     "name": str(name),
-                    "logical_cells": [int(x_grid.shape[1] - 1), int(x_grid.shape[0] - 1), 0],
+                    "logical_cells": [
+                        int(x_grid.shape[1] - 1),
+                        int(x_grid.shape[0] - 1),
+                        0,
+                    ],
                     "logical_nodes": [int(x_grid.shape[1]), int(x_grid.shape[0]), 0],
                 }
             )
@@ -909,7 +1028,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
                         int(ids[j + 1, i + 1]),
                         int(ids[j + 1, i]),
                     ]
-                    coords = np.asarray([base_points[idx] for idx in quad], dtype=np.float64)
+                    coords = np.asarray(
+                        [base_points[idx] for idx in quad], dtype=np.float64
+                    )
                     if self._signed_quad_area(coords) < 0.0:
                         quad = [quad[0], quad[3], quad[2], quad[1]]
                     base_quads.append(quad)
@@ -933,8 +1054,12 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 outer_x = float(cos(theta))
                 outer_y = float(sin(theta))
                 for i, s_val in enumerate(rho):
-                    x_grid[j, i] = (1.0 - float(s_val)) * inner_x + float(s_val) * outer_x
-                    y_grid[j, i] = (1.0 - float(s_val)) * inner_y + float(s_val) * outer_y
+                    x_grid[j, i] = (1.0 - float(s_val)) * inner_x + float(
+                        s_val
+                    ) * outer_x
+                    y_grid[j, i] = (1.0 - float(s_val)) * inner_y + float(
+                        s_val
+                    ) * outer_y
             _add_block(name, x_grid, y_grid)
 
         _add_ring_block(
@@ -1005,7 +1130,11 @@ class _GeomV2HexCylinder3DMeshGenerator:
             "structured_cell_local_ijk": cell_local_ijk,
             "z_levels": z_grid.tolist(),
         }
-        return np.asarray(points, dtype=np.float64), np.asarray(hexes, dtype=np.int32), metadata
+        return (
+            np.asarray(points, dtype=np.float64),
+            np.asarray(hexes, dtype=np.int32),
+            metadata,
+        )
 
     def _structured_geometry(self) -> tuple[np.ndarray, np.ndarray, dict]:
         if self.generator_revision == SQUARE_TO_DISK_3D_GENERATOR_REVISION:
@@ -1094,7 +1223,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 {
                     "kind": face_kind,
                     "tag": int(face_tag),
-                    "electrode_index": None if electrode_idx is None else int(electrode_idx),
+                    "electrode_index": (
+                        None if electrode_idx is None else int(electrode_idx)
+                    ),
                     "vertices": [int(v) for v in face],
                 }
             )
@@ -1113,7 +1244,9 @@ class _GeomV2HexCylinder3DMeshGenerator:
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
         if not MESHIO_AVAILABLE:
-            raise ImportError("meshio is required to generate tensor-product hex meshes.")
+            raise ImportError(
+                "meshio is required to generate tensor-product hex meshes."
+            )
 
         _, _, msh_path, assoc_path = _prepare_output_paths(
             output_dir=output_dir,
@@ -1122,8 +1255,13 @@ class _GeomV2HexCylinder3DMeshGenerator:
         )
 
         points, hexes, structured_meta = self._structured_geometry()
-        quads, quad_tags, field_data, boundary_faces = self._boundary_quads(points, hexes)
+        quads, quad_tags, field_data, boundary_faces = self._boundary_quads(
+            points, hexes
+        )
         hex_tags = np.ones(hexes.shape[0], dtype=np.int32)
+        total_electrodes = int(
+            _total_3d_electrode_count(config=self.config, electrodes=self.electrodes)
+        )
 
         mesh = meshio.Mesh(
             points=points,
@@ -1148,9 +1286,11 @@ class _GeomV2HexCylinder3DMeshGenerator:
                 "generator_revision": self.generator_revision,
                 "mesh_name": msh_path.stem,
                 "mesh_file": str(msh_path),
-                "n_elec": int(_total_3d_electrode_count(config=self.config, electrodes=self.electrodes)),
+                "n_elec": total_electrodes,
                 "electrodes_per_ring": int(self.electrodes.n_elec),
-                "electrode_layout": normalize_electrode_layout(self.config.electrode_layout),
+                "electrode_layout": normalize_electrode_layout(
+                    self.config.electrode_layout
+                ),
                 "field_tags": {
                     name: int(value[0]) for name, value in field_data.items()
                 },
@@ -1160,8 +1300,26 @@ class _GeomV2HexCylinder3DMeshGenerator:
         )
 
         mesh_data = gmshio.read_from_msh(str(msh_path), MPI.COMM_WORLD, rank=0, gdim=3)
-        association_table = association_from_mesh_data(mesh_data)
+        electrode_names = [f"electrode_{idx}" for idx in range(1, total_electrodes + 1)]
+        facet_names = [*electrode_names, "gaps"]
+        association_table = validate_mesh_data_tags(
+            mesh_data,
+            gdim=3,
+            required_names=["domain", *facet_names],
+            required_facet_names=facet_names,
+        )
         write_association_table(assoc_path, association_table)
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=msh_path,
+            association_table=association_table,
+            gdim=3,
+            mesh_family="hex",
+            geometry_version="geomv2",
+            generator_revision=self.generator_revision,
+            structured_sidecar_file=sidecar_path,
+            structured_sidecar_version=STRUCTURED_SIDECAR_VERSION,
+        )
 
         return build_eit_mesh(
             mesh_data.mesh,
@@ -1200,7 +1358,9 @@ def create_cylinder_3d_eit_mesh(
 
     refinement_i = int(refinement)
     resolved_family = normalize_mesh_family(mesh_family, default=DEFAULT_MESH_FAMILY)
-    resolved_geometry = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    resolved_geometry = (
+        str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    )
     resolved_generator_revision = (
         str(generator_revision).strip().lower() or DEFAULT_3D_GENERATOR_REVISION
     )
@@ -1240,9 +1400,9 @@ def create_cylinder_3d_eit_mesh(
     arc_per_electrode = (
         2.0 * pi * float(radius) / max(electrodes_per_ring, 1)
     ) * float(electrode_coverage)
-    arc_per_gap = (
-        2.0 * pi * float(radius) / max(electrodes_per_ring, 1)
-    ) * (1.0 - float(electrode_coverage))
+    arc_per_gap = (2.0 * pi * float(radius) / max(electrodes_per_ring, 1)) * (
+        1.0 - float(electrode_coverage)
+    )
     electrode_vertices = max(2, min(6, ceil(arc_per_electrode / mesh_size_target) + 1))
     gap_vertices = max(0, min(2, ceil(arc_per_gap / mesh_size_target) - 1))
 
@@ -1257,19 +1417,25 @@ def create_cylinder_3d_eit_mesh(
         electrode_level_fractions=level_fractions,
         electrode_layout=resolved_layout,
     )
-    electrodes = ElectrodeArcConfig(n_elec=electrodes_per_ring, coverage=electrode_coverage)
+    electrodes = ElectrodeArcConfig(
+        n_elec=electrodes_per_ring, coverage=electrode_coverage
+    )
     output_path = Path(output_dir) if output_dir else None
 
     if resolved_family == "hex":
         if resolved_geometry != "geomv2":
-            raise ValueError("mesh_family='hex' currently supports geometry_version='geomv2' only.")
+            raise ValueError(
+                "mesh_family='hex' currently supports geometry_version='geomv2' only."
+            )
         generator = _GeomV2HexCylinder3DMeshGenerator(
             config=config,
             electrodes=electrodes,
             generator_revision=resolved_generator_revision,
         )
     elif resolved_geometry == "legacy":
-        generator = _LegacyTetraCylinder3DMeshGenerator(config=config, electrodes=electrodes)
+        generator = _LegacyTetraCylinder3DMeshGenerator(
+            config=config, electrodes=electrodes
+        )
     else:
         generator = _GeomV2TetraCylinder3DMeshGenerator(
             config=config,
@@ -1278,6 +1444,8 @@ def create_cylinder_3d_eit_mesh(
         )
     mesh = generator.generate(output_dir=output_path, mesh_name=mesh_name)
     mesh.generator_revision = (
-        LEGACY_3D_GENERATOR_REVISION if resolved_geometry == "legacy" else resolved_generator_revision
+        LEGACY_3D_GENERATOR_REVISION
+        if resolved_geometry == "legacy"
+        else resolved_generator_revision
     )
     return mesh

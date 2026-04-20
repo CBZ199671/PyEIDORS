@@ -7,14 +7,26 @@ import json
 import threading
 from collections import OrderedDict
 from pathlib import Path
+from typing import Sequence
 
-from ..cache.keys import hash_path
 from ..data.structures import EITMesh
-
 
 _PROCESS_MESH_CACHE_MAX_ITEMS = 8
 _PROCESS_MESH_CACHE: OrderedDict[str, EITMesh] = OrderedDict()
 _PROCESS_MESH_CACHE_LOCK = threading.Lock()
+
+
+def _path_signature(path: str | Path) -> str:
+    """Return a cheap process-cache signature for large mesh artifacts."""
+    mesh_path = Path(path)
+    try:
+        stat = mesh_path.stat()
+        return (
+            f"{mesh_path.resolve()}::{stat.st_size}::"
+            f"{stat.st_mtime_ns}::{int(mesh_path.is_dir())}"
+        )
+    except OSError:
+        return str(mesh_path)
 
 
 def build_process_mesh_cache_key(
@@ -24,12 +36,13 @@ def build_process_mesh_cache_key(
     n_elec: int | None = None,
     association_file: str | Path | None = None,
     sidecar_file: str | Path | None = None,
+    extra_files: Sequence[str | Path] | None = None,
     mesh_name: str | None = None,
 ) -> str:
     mesh_path = Path(mesh_file)
     payload: dict[str, object] = {
         "mesh_file": str(mesh_path.resolve()),
-        "mesh_sig": hash_path(mesh_path),
+        "mesh_sig": _path_signature(mesh_path),
         "gdim": int(gdim),
         "mesh_name": str(mesh_name or mesh_path.stem),
     }
@@ -37,11 +50,21 @@ def build_process_mesh_cache_key(
         payload["n_elec"] = int(n_elec)
     if association_file is not None:
         payload["association_file"] = str(Path(association_file).resolve())
-        payload["association_sig"] = hash_path(association_file)
+        payload["association_sig"] = _path_signature(association_file)
     if sidecar_file is not None:
         payload["sidecar_file"] = str(Path(sidecar_file).resolve())
-        payload["sidecar_sig"] = hash_path(sidecar_file)
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+        payload["sidecar_sig"] = _path_signature(sidecar_file)
+    if extra_files:
+        payload["extra_files"] = [
+            {
+                "file": str(Path(extra_file).resolve()),
+                "sig": _path_signature(extra_file),
+            }
+            for extra_file in sorted(extra_files, key=lambda item: str(item))
+        ]
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 

@@ -1,21 +1,9 @@
+# Deprecated dependency entrypoint.
 #
-# Minimal Python dependencies for running PyEIDORS.
+# PyEIDORS uses the locked Nix + uv environment:
 #
-# Recommended workflow:
-#   - Use the FEniCS Docker image listed in `README.md`
-#   - Install this project with `pip install -e .` (see `pyproject.toml`)
+#   nix develop
+#   uv sync
 #
-# NOTE: FEniCS/DOLFIN is provided by the Docker image and is not listed here.
-#
-
-numpy~=1.26.4
-scipy~=1.12.0
-matplotlib~=3.5.0
-pandas~=2.3.0
-h5py~=3.11.0
-pyyaml~=5.4.1
-
-# Mesh tooling (needed when generating meshes via Gmsh/meshio)
-meshio>=5.3.4
-gmsh>=4.11.1
-
+# See docs/NIX_FENICSX.md for the maintained setup. This file is intentionally
+# empty so pip-based installs do not recreate an unsupported runtime.
