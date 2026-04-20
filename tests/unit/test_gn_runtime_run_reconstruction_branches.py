@@ -382,6 +382,66 @@ def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
     assert backend["dense_jacobian_materialized"] is False
 
 
+def test_linearize_path_asserts_sigma_fingerprint(monkeypatch: pytest.MonkeyPatch):
+    """Operator path calls JacobianLinearization.assert_compatible(current sigma)."""
+    recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)
+    _install_common_runtime_stubs(monkeypatch, recon)
+
+    # Override _init_sigma_function to return a DOLFINx-Function-shaped stub so
+    # compute_sigma_fingerprint() can read sigma.x.array and emit a real hash.
+    class _FakeArrayHolder:
+        def __init__(self, values):
+            self.array = np.asarray(values, dtype=float)
+
+    class _FakeSigmaFunction:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+            self.x = _FakeArrayHolder(self.values)
+
+    monkeypatch.setattr(
+        gn_runtime,
+        "_init_sigma_function",
+        lambda _recon, initial: (_FakeSigmaFunction([1.0, 1.0]), float(initial)),
+    )
+
+    stale_linearization = JacobianLinearization(
+        grad_u_all=(np.ones((2, 1), dtype=float),),
+        adjoint_gradients=(
+            np.array([[1.0], [0.0]], dtype=float),
+            np.array([[0.0], [1.0]], dtype=float),
+        ),
+        cell_areas=np.ones(2, dtype=float),
+        n_meas_per_stim=(2,),
+        sign=1.0,
+        sigma_fingerprint="stale-fingerprint-not-matching-current",
+    )
+
+    def linearize(_sigma, method=None):
+        assert method == "efficient"
+        return stale_linearization
+
+    recon.jacobian_calculator = SimpleNamespace(
+        calculate=lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("dense calculate must not run")
+        ),
+        linearize=linearize,
+        block_tuning_info=lambda: {},
+        _last_cache_lookup={},
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "_startup_cache_lookup",
+        lambda *_args, **_kwargs: (None, {"hit": False}),
+    )
+
+    with pytest.raises(ValueError, match="sigma fingerprint mismatch"):
+        gn_runtime.run_reconstruction(
+            recon,
+            measured_data=np.array([1.0, 0.8], dtype=float),
+            jacobian_method="linearized",
+        )
+
+
 def test_run_reconstruction_reuses_linearized_jacobian_across_iterations(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],

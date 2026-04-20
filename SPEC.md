@@ -86,7 +86,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | T2 | . | Enable MPI size > 1: distributed Mat/Vec + `mpiexec -n 2` smoke; lift fail-fast guard | V18 |
 | T3 | . | Flip `matrix_free_ksp_backend` default to `auto` once 3D benchmark parity vs scipy holds | V12 |
 | T4 | . | Real 3D benchmark artifact proving G1 persistent-KSP setup-time saved (iter histogram + cumulative setup seconds) | V13,V14 |
-| T5 | . | Wire `JacobianLinearization.assert_compatible(sigma_fp)` at runtime reuse path; stored fingerprint currently inert | V9,V15 |
+| T5 | x | Wire `JacobianLinearization.assert_compatible(sigma_fp)` at runtime reuse path; stored fingerprint currently inert | V9,V15 |
 | T6 | . | Persistent across-iteration Jacobian cache keyed on `sigma_fingerprint` + mesh content hash | V9,V17 |
 | T7 | . | CUDA 3D inverse benchmark gated by `probe_petsc_cuda --require cuda` | V19 |
 | T8 | . | Guard canonical solver/PC matrix doc against preset-default drift (R11 hard gate) | V4,V5,V6 |

@@ -176,7 +176,7 @@ from ..reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
 from ..reduced.reduced_gn_step import build_reduced_operator, solve_reduced_step
 from ..reduced.snapshot_bank import SnapshotBank, select_snapshot_matrix
 from ..contracts import SolverOutput
-from ..jacobian.linearized import JacobianLinearization
+from ..jacobian.linearized import JacobianLinearization, compute_sigma_fingerprint
 from .gauss_newton_weights import build_weight_reference
 
 
@@ -1964,6 +1964,13 @@ def _calculate_iteration_jacobian(
                 "jacobian_method='linearized' requires jacobian_calculator.linearize()."
             )
         jacobian = linearize(sigma_current, method="efficient")
+        # Guard external cache / stale-linearization reuse.
+        if isinstance(jacobian, JacobianLinearization):
+            try:
+                current_fp = compute_sigma_fingerprint(sigma_current)
+            except Exception:
+                current_fp = ""
+            jacobian.assert_compatible(current_fp)
     else:
         jacobian = reconstructor.jacobian_calculator.calculate(
             sigma_current,
