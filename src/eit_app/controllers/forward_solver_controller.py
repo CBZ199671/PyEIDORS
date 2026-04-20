@@ -165,11 +165,14 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
         and mesh_family == "hex"
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
+    wants_3d_cuda = mesh_dim == 3 and (
+        wants_gpu_request or forward_backend == "cuda_structured"
+    )
 
     acceleration_profile = requested_profile
-    if wants_structured_gpu and acceleration_profile == "default":
+    if wants_3d_cuda and acceleration_profile == "default":
         acceleration_profile = "gpu3d"
-    if not wants_structured_gpu and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
+    if mesh_dim != 3 and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
         acceleration_profile = "default"
 
     if wants_structured_gpu and forward_backend == "dolfinx":
@@ -187,11 +190,38 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
         "preconditioner": _auto(forward_cfg.preconditioner, "auto"),
         "fast_linear_path": _auto(forward_cfg.fast_linear_path, "auto"),
         "forward_mat_solve": _auto(forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"),
-        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_structured_gpu else "auto"),
-        "device": _auto(forward_cfg.device, "cuda" if wants_structured_gpu else "auto"),
+        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_3d_cuda else "auto"),
+        "device": _auto(forward_cfg.device, "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
         "acceleration_profile": acceleration_profile,
+    }
+
+
+def _forward_runtime_diagnostics(system: Any) -> dict[str, Any]:
+    """Return the small runtime summary the GUI should surface to users."""
+    fwd_model = getattr(system, "fwd_model", None)
+    backend_diag = (
+        fwd_model.get_backend_diagnostics()
+        if fwd_model is not None and hasattr(fwd_model, "get_backend_diagnostics")
+        else {}
+    )
+    mesh = getattr(system, "mesh", None)
+    return {
+        "mesh_family": str(getattr(mesh, "mesh_family", "") or ""),
+        "forward_backend": str(getattr(system, "forward_backend", "") or ""),
+        "forward_backend_effective": str(
+            backend_diag.get(
+                "forward_backend_effective",
+                getattr(fwd_model, "forward_backend", "") if fwd_model is not None else "",
+            )
+        ),
+        "petsc_device_requested": str(backend_diag.get("petsc_device_requested", "")),
+        "petsc_device_effective": str(backend_diag.get("petsc_device_effective", "")),
+        "torch_device": str(getattr(system, "device", "") or ""),
+        "mesh_cache_hit": getattr(mesh, "_pyeidors_mesh_cache_hit", None),
+        "mesh_cache_layer": getattr(mesh, "_pyeidors_mesh_cache_layer", None),
+        "mesh_cache_name": getattr(mesh, "_pyeidors_mesh_cache_name", None),
     }
 
 
@@ -336,6 +366,7 @@ class _ForwardSolverWorker(QObject):
                 forward_model_config={
                     **forward_cfg.to_mapping(),
                     **runtime,
+                    "runtime_diagnostics": _forward_runtime_diagnostics(system),
                 },
             )
             self.progress.emit("Forward solve complete.")

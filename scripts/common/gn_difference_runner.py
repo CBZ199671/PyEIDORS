@@ -565,6 +565,8 @@ def build_shared_context(
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
 ) -> dict:
+    context_start = time.perf_counter()
+    build_seconds: dict[str, float] = {}
     if int(mesh_dim) not in {2, 3}:
         raise ValueError(f"mesh_dim must be 2 or 3, got {mesh_dim!r}")
     solver_mode = str(solver_mode).strip().lower()
@@ -647,6 +649,7 @@ def build_shared_context(
         electrode_layout=electrode_layout,
     )
 
+    mesh_start = time.perf_counter()
     mesh = load_or_create_mesh(
         mesh_dir=mesh_dir,
         mesh_name=mesh_name,
@@ -663,6 +666,10 @@ def build_shared_context(
         geometry_version=geometry_version,
         electrode_layout=electrode_layout,
     )
+    build_seconds["mesh"] = time.perf_counter() - mesh_start
+    mesh_cache_hit = getattr(mesh, "_pyeidors_mesh_cache_hit", None)
+    mesh_cache_layer = getattr(mesh, "_pyeidors_mesh_cache_layer", None)
+    mesh_cache_name = getattr(mesh, "_pyeidors_mesh_cache_name", None)
     pattern_cfg = PatternConfig(
         n_elec=pattern_n_elec,
         n_rings=pattern_n_rings,
@@ -693,7 +700,7 @@ def build_shared_context(
         backend_config={"mat_solve_mode": forward_mat_solve, "petsc_device": petsc_device},
         forward_backend=forward_backend,
     )
-    petsc_backend_info = getattr(fwd_model, "_petsc_backend_info", {}) or {}
+    petsc_backend_info = dict(getattr(fwd_model, "_petsc_backend_info", {}) or {})
     runtime_selection = resolve_torch_device(
         device,
         verbose=False,
@@ -707,7 +714,6 @@ def build_shared_context(
     sigma_bg = np.full(n_elem, background_sigma)
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
     print(f"[INFO] Background conductivity: {background_sigma}")
-    build_seconds: dict[str, float] = {}
 
     def _timed(name: str, fn: Callable[[], np.ndarray | dict]) -> np.ndarray | dict:
         start = time.perf_counter()
@@ -1177,9 +1183,13 @@ def build_shared_context(
         "mesh_family": mesh_family,
         "geometry_version": geometry_version,
         "petsc_device": petsc_device,
+        "petsc_backend_info": dict(petsc_backend_info),
         "device_requested": str(runtime_selection.requested),
         "device_effective": str(runtime_selection.effective),
         "torch_device": str(runtime_selection.torch_device),
+        "mesh_cache_hit": mesh_cache_hit,
+        "mesh_cache_layer": mesh_cache_layer,
+        "mesh_cache_name": mesh_cache_name,
         "execution_profile": (
             "cuda" if str(getattr(fwd_model, "_petsc_backend_info", {}).get("petsc_device_effective", "cpu")) == "cuda"
             and str(runtime_selection.effective) == "cuda" and bool(jac_calc.use_torch)
@@ -1192,6 +1202,7 @@ def build_shared_context(
         "stim_drive_mode": resolved_drive_mode,
         "stim_drive_value": stim_drive_value,
         "cache_build_seconds": dict(build_seconds),
+        "context_build_seconds": time.perf_counter() - context_start,
         "performance_capabilities": perf_caps,
         "cache_miss_reasons": {
             CACHE_NAME_BASE_MEAS: _lookup_miss_reason(base_meas_lookup, family=CACHE_NAME_BASE_MEAS),

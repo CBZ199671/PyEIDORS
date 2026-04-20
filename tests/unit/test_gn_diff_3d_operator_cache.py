@@ -49,6 +49,8 @@ def test_gn_difference_3d_context_cache_hits_and_background_invalidation(tmp_pat
         background_sigma=1.0,
         **kwargs,
     )
+    assert cold_ctx["mesh_cache_hit"] is False
+    assert cold_ctx["mesh_cache_layer"] == "generated"
     assert cold_ctx["cache_lookups"]["jacobian"]["hit"] is False
     for key in OPERATOR_CACHE_KEYS:
         assert cold_ctx["cache_lookups"][key]["hit"] is False
@@ -57,6 +59,8 @@ def test_gn_difference_3d_context_cache_hits_and_background_invalidation(tmp_pat
         background_sigma=1.0,
         **kwargs,
     )
+    assert warm_ctx["mesh_cache_hit"] is True
+    assert warm_ctx["mesh_cache_layer"] in {"disk", "process"}
     assert warm_ctx["cache_lookups"]["jacobian"]["hit"] is True
     for key in OPERATOR_CACHE_KEYS:
         assert warm_ctx["cache_lookups"][key]["hit"] is True

@@ -328,9 +328,9 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     )
     assert tetra["mesh_family"] == "tetra"
     assert tetra["forward_backend"] == "dolfinx"
-    assert tetra["petsc_device"] == "auto"
-    assert tetra["device"] == "auto"
-    assert tetra["acceleration_profile"] == "default"
+    assert tetra["petsc_device"] == "cuda"
+    assert tetra["device"] == "cuda"
+    assert tetra["acceleration_profile"] == "gpu3d"
 
     hex_cfg = _resolve_forward_runtime(
         ForwardModelConfig(mesh_dimension=3, mesh_family="hex")
@@ -349,13 +349,52 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     )
     assert tetra["mesh_family"] == "tetra"
     assert tetra["forward_backend"] == "dolfinx"
-    assert tetra["petsc_device"] == "auto"
-    assert tetra["device"] == "auto"
-    assert tetra["acceleration_profile"] == "default"
+    assert tetra["petsc_device"] == "cuda"
+    assert tetra["device"] == "cuda"
+    assert tetra["acceleration_profile"] == "gpu3d"
 
     hex_cfg = _resolve_reconstruction_runtime({"mesh_family": "hex"}, mesh_dim=3)
     assert hex_cfg["mesh_family"] == "hex"
     assert hex_cfg["forward_backend"] == "cuda_structured"
+
+
+def test_single_step_solver_diagnostics_exposes_runtime_summary():
+    diagnostics = rc._single_step_cached_solver_diagnostics(
+        {
+            "mesh_family": "tetra",
+            "forward_backend": "dolfinx",
+            "petsc_device": "cuda",
+            "petsc_backend_info": {
+                "forward_backend_effective": "dolfinx",
+                "petsc_device_requested": "cuda",
+                "petsc_device_effective": "cuda",
+            },
+            "device_requested": "cuda",
+            "device_effective": "cuda",
+            "torch_device": "cuda",
+            "mesh_cache_hit": True,
+            "mesh_cache_layer": "disk",
+            "mesh_cache_name": "mesh3d_demo",
+            "cache_lookups": {
+                "base_meas": {"hit": True, "layer": "disk"},
+                "operator_A": {"hit": False, "layer": "process"},
+                "operator_rom_reduced_rm": {"hit": False, "layer": "disabled"},
+            },
+            "cache_build_seconds": {},
+            "cache_miss_reasons": {},
+            "cache_manager": None,
+        },
+        strict_backend="measurement-exact",
+    )
+
+    runtime = diagnostics["runtime"]
+    assert runtime["mesh_family"] == "tetra"
+    assert runtime["forward_backend_effective"] == "dolfinx"
+    assert runtime["petsc_device_effective"] == "cuda"
+    assert runtime["torch_device"] == "cuda"
+    assert runtime["mesh_cache_hit"] is True
+    assert runtime["cache_hit"] is False
+    assert runtime["cache_hits"] == {"base_meas": True, "operator_A": False}
 
 
 def test_embedded_vtk_disabled_for_offscreen_qt(monkeypatch):

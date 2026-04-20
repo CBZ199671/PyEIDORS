@@ -92,11 +92,14 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
         and mesh_family == "hex"
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
+    wants_3d_cuda = int(mesh_dim) == 3 and (
+        wants_gpu_request or forward_backend == "cuda_structured"
+    )
 
     acceleration_profile = requested_profile
-    if wants_structured_gpu and acceleration_profile == "default":
+    if wants_3d_cuda and acceleration_profile == "default":
         acceleration_profile = "gpu3d"
-    if not wants_structured_gpu and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
+    if int(mesh_dim) != 3 and acceleration_profile in {"gpu3d", "gpu3d_fused"}:
         acceleration_profile = "default"
 
     if wants_structured_gpu and forward_backend == "dolfinx":
@@ -111,8 +114,8 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
         "preconditioner": _auto("preconditioner", "auto"),
         "fast_linear_path": _auto("fast_linear_path", "auto"),
         "forward_mat_solve": _auto("forward_mat_solve", "auto" if int(mesh_dim) == 3 else "off"),
-        "petsc_device": _auto("petsc_device", "cuda" if wants_structured_gpu else "auto"),
-        "device": _auto("device", "cuda" if wants_structured_gpu else "auto"),
+        "petsc_device": _auto("petsc_device", "cuda" if wants_3d_cuda else "auto"),
+        "device": _auto("device", "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
         "geometry_version": _auto("geometry_version", "geomv2"),
@@ -529,6 +532,46 @@ def get_single_step_cached_cache_key(req: ReconstructionRequest) -> tuple[Any, .
     return _prepare_single_step_cached_runtime(req).cache_key
 
 
+def _cache_hit_summary(cache_lookups: dict[str, Any]) -> tuple[bool | None, dict[str, bool]]:
+    hits: dict[str, bool] = {}
+    for key, value in cache_lookups.items():
+        if not isinstance(value, dict):
+            continue
+        layer = str(value.get("layer", "")).strip().lower()
+        if layer == "disabled":
+            continue
+        if "hit" in value:
+            hits[key] = bool(value.get("hit"))
+    if not hits:
+        return None, hits
+    return all(hits.values()), hits
+
+
+def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
+    cache_lookups = dict(ctx.get("cache_lookups", {}))
+    cache_hit, cache_hits = _cache_hit_summary(cache_lookups)
+    petsc_info = dict(ctx.get("petsc_backend_info", {}))
+    return {
+        "mesh_family": str(ctx.get("mesh_family", "")),
+        "forward_backend": str(ctx.get("forward_backend", "")),
+        "forward_backend_effective": str(
+            petsc_info.get("forward_backend_effective", ctx.get("forward_backend", ""))
+        ),
+        "petsc_device_requested": str(
+            petsc_info.get("petsc_device_requested", ctx.get("petsc_device", ""))
+        ),
+        "petsc_device_effective": str(petsc_info.get("petsc_device_effective", "")),
+        "torch_device": str(ctx.get("torch_device", "")),
+        "device_requested": str(ctx.get("device_requested", "")),
+        "device_effective": str(ctx.get("device_effective", "")),
+        "mesh_cache_hit": ctx.get("mesh_cache_hit"),
+        "mesh_cache_layer": ctx.get("mesh_cache_layer"),
+        "mesh_cache_name": ctx.get("mesh_cache_name"),
+        "cache_hit": cache_hit,
+        "cache_hits": cache_hits,
+    }
+
+
 def _single_step_cached_solver_diagnostics(
     ctx: dict[str, Any],
     *,
@@ -537,7 +580,10 @@ def _single_step_cached_solver_diagnostics(
     return {
         "path": "single_step_cached",
         "strict_solver_backend_effective": strict_backend,
+        "runtime": _single_step_runtime_diagnostics(ctx),
+        "cache_lookups": dict(ctx.get("cache_lookups", {})),
         "cache_build_seconds": dict(ctx.get("cache_build_seconds", {})),
+        "context_build_seconds": ctx.get("context_build_seconds"),
         "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
         "cache_stats": (
             ctx["cache_manager"].stats()

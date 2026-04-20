@@ -744,6 +744,9 @@ def load_or_create_mesh(
         process_mesh = get_process_cached_mesh(process_mesh_key)
         if process_mesh is not None:
             logger.info("Loaded process-cached mesh: %s", cache_name)
+            setattr(process_mesh, "_pyeidors_mesh_cache_hit", True)
+            setattr(process_mesh, "_pyeidors_mesh_cache_layer", "process")
+            setattr(process_mesh, "_pyeidors_mesh_cache_name", cache_name)
             return process_mesh
 
     cached_mesh = _load_cached_mesh(mesh_dir_path, cache_name, gdim=gdim, n_elec=n_elec)
@@ -773,6 +776,9 @@ def load_or_create_mesh(
             mesh_name=cache_name,
         )
         put_process_cached_mesh(process_mesh_key, cached_mesh)
+        setattr(cached_mesh, "_pyeidors_mesh_cache_hit", True)
+        setattr(cached_mesh, "_pyeidors_mesh_cache_layer", "disk")
+        setattr(cached_mesh, "_pyeidors_mesh_cache_name", cache_name)
         return cached_mesh
 
     logger.info("Cached mesh not found, generating: %s", cache_name)
@@ -833,4 +839,7 @@ def load_or_create_mesh(
             mesh_name=cache_name,
         )
         put_process_cached_mesh(process_mesh_key, created_mesh)
+    setattr(created_mesh, "_pyeidors_mesh_cache_hit", False)
+    setattr(created_mesh, "_pyeidors_mesh_cache_layer", "generated")
+    setattr(created_mesh, "_pyeidors_mesh_cache_name", cache_name)
     return created_mesh

@@ -80,6 +80,38 @@ from eit_app.models.frame_model import FrameData
 log = logging.getLogger(__name__)
 
 
+def _format_runtime_diagnostics(diag: dict | None) -> str:
+    if not isinstance(diag, dict):
+        return ""
+    mesh_family = str(diag.get("mesh_family", "") or "").strip()
+    forward_backend = str(
+        diag.get("forward_backend_effective", diag.get("forward_backend", "")) or ""
+    ).strip()
+    petsc_device = str(diag.get("petsc_device_effective", "") or "").strip()
+    torch_device = str(
+        diag.get("torch_device", diag.get("device_effective", "")) or ""
+    ).strip()
+    cache_value = diag.get("cache_hit", diag.get("mesh_cache_hit", None))
+    if cache_value is True:
+        cache_label = "hit"
+    elif cache_value is False:
+        cache_label = "miss"
+    else:
+        cache_label = "n/a"
+
+    parts = []
+    if mesh_family:
+        parts.append(f"mesh={mesh_family}")
+    if forward_backend:
+        parts.append(f"backend={forward_backend}")
+    if petsc_device:
+        parts.append(f"PETSc={petsc_device}")
+    if torch_device:
+        parts.append(f"Torch={torch_device}")
+    parts.append(f"cache={cache_label}")
+    return " | " + ", ".join(parts) if parts else ""
+
+
 def _is_wsl() -> bool:
     """Detect whether we are running inside a WSL distribution."""
     import os
@@ -3241,8 +3273,12 @@ class EITWorkstation(QMainWindow):
             return
 
         self._last_fwd_result = result
+        runtime_diag = {}
+        if isinstance(result.forward_model_config, dict):
+            runtime_diag = dict(result.forward_model_config.get("runtime_diagnostics", {}) or {})
         self._sim_tab.forward_problem_panel.set_status(
             f"Done: {result.n_elements} elements, {result.n_measurements} measurements"
+            f"{_format_runtime_diagnostics(runtime_diag)}"
         )
         self._sim_tab.metrics_panel.clear()
         self._sim_tab.results_widget.update_forward_result(result)
@@ -3378,7 +3414,14 @@ class EITWorkstation(QMainWindow):
                 )
                 return
 
-            self._sim_tab.inverse_problem_panel.set_status("Reconstruction complete.")
+            solver_diag = getattr(recon_result, "metadata", {}).get("solver_diagnostics", {})
+            runtime_diag = {}
+            if isinstance(solver_diag, dict):
+                runtime_diag = dict(solver_diag.get("runtime", {}) or {})
+            self._sim_tab.inverse_problem_panel.set_status(
+                "Reconstruction complete."
+                f"{_format_runtime_diagnostics(runtime_diag)}"
+            )
             self._sim_tab.inverse_problem_panel.set_save_enabled(True)
             self._sim_tab.results_widget.update_inverse_result(
                 reconstructed_conductivity=recon_result.conductivity,
