@@ -76,6 +76,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | V21 | Field-data golden metrics only ? — `correlation≈0.9888`, `RMSE≈4.45e-05`; no synthetic EIDORS hard-tol gate yet | reports/difference_single_step_golden_config.md:31-32, scripts/run_synthetic_parity.py |
 | V22 | Sharded unit runner: per-shard JSON summary + recoverable logs; default `gui` shard, opt-in `hardware` shard separate | tests/unit/test_ci_sharded_unit_validation.py, docs/VALIDATION_SHARDS.md |
 | V23 | Forward `KSPSetReusePreconditioner(True)` semantics: same KSP, new `setOperators(A_new)`, reuse holds until explicit refresh; iter-count-monitored | src/pyeidors/forward/eit_forward_model.py `ForwardKSPSession`, PETSc `KSPSetReusePreconditioner` manpage |
+| V24 | Direct PC (`ksp_type=="preonly"` AND `pc_type ∈ {lu, cholesky, qr}`) never reused across sigma — session forces PC refresh with `forward_pc_refresh_reason="direct_factor_requires_rebuild"`. `preonly` has no Krylov iteration to correct a stale exact factor, unlike iterative+AMG where reuse is a staleness penalty | src/pyeidors/forward/eit_forward_model.py `_decide_pc_reuse_for_session` |
 
 ## §T — tasks
 
@@ -94,8 +95,10 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | T11 | . | Research: PETSc/petsc4py structural reuse hints. `KSPSetOperators(ksp, Amat, Pmat)` has no `SAME_NONZERO_PATTERN` parameter in current API; `petsc4py.KSP.setOperators(A=None, P=None)` likewise. Current main line stays `setOperators(A_new)` + `KSPSetReusePreconditioner(True)` | V13 |
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |
 | T13 | . | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
+| T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
 
 ## §B — bugs
 
 | id | date | cause | fix |
 |----|------|-------|-----|
+| B1 | 2026-04-20 | `ForwardKSPSession` applied `setReusePreconditioner(True)` uniformly; for `ksp_type==preonly` + `pc_type∈{lu,cholesky,qr}` this silently reuses stale LU/Cholesky/QR factorisation across sigma updates, solving `A(σ_new) x = b` with `A(σ_old)^{-1}`. No Krylov iteration to correct the error (unlike iterative+AMG where reuse is a staleness penalty). | V24,T14 |

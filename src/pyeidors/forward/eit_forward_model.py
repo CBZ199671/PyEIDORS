@@ -1729,12 +1729,32 @@ class EITForwardModel:
     def _decide_pc_reuse_for_session(
         self, session: "ForwardKSPSession"
     ) -> tuple[bool, str | None]:
-        """Return ``(effective_reuse, refresh_reason)`` for the next solve."""
+        """Return ``(effective_reuse, refresh_reason)`` for the next solve.
+
+        Correctness gate: ``KSPSetReusePreconditioner(True)`` skips ``PCSetUp``
+        on subsequent solves. For iterative KSP + AMG/Hypre/ILU this is only a
+        staleness penalty — Krylov iterations correct the residual. But for
+        ``ksp_type="preonly"`` + ``pc_type ∈ {lu, cholesky, qr}`` the PC
+        application IS the solve; skipping ``PCSetUp`` after sigma changes
+        means applying ``A(σ_old)^{-1}`` to the new RHS, which is wrong, not
+        slow. We therefore never reuse direct factorisations across sigma
+        updates, regardless of ``forward_pc_refresh_policy``.
+        """
         policy, threshold, lag = self._resolve_forward_pc_refresh_policy()
-        if not bool(
-            getattr(getattr(self, "backend_config", None), "reuse_preconditioner", True)
-        ):
+        cfg = getattr(self, "backend_config", None)
+        if not bool(getattr(cfg, "reuse_preconditioner", True)):
             return False, "reuse_preconditioner_disabled"
+
+        ksp_type_cfg = str(getattr(cfg, "ksp_type", "")).strip().lower()
+        pc_type_cfg = str(getattr(cfg, "pc_type", "")).strip().lower()
+        ksp_type_session = str(getattr(session, "ksp_type", "")).strip().lower()
+        pc_type_session = str(getattr(session, "pc_type", "")).strip().lower()
+        effective_ksp_type = ksp_type_cfg or ksp_type_session
+        effective_pc_type = pc_type_cfg or pc_type_session
+        direct_pc_types = {"lu", "cholesky", "qr"}
+        if effective_ksp_type == "preonly" and effective_pc_type in direct_pc_types:
+            return False, "direct_factor_requires_rebuild"
+
         if policy == "never":
             return False, "policy_never"
         if policy == "always":

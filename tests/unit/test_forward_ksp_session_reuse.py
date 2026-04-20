@@ -303,6 +303,66 @@ def test_forward_ksp_session_reuse_disabled_rebuilds_pc_without_new_bundle(monke
     assert ksp.set_reuse_calls[-1] is False
 
 
+def test_direct_preset_forces_pc_refresh_across_sigma(monkeypatch):
+    """preonly + lu/cholesky/qr must NOT reuse factorization across sigma updates."""
+    model, ksp, calls = _build_model(
+        forward_pc_refresh_policy="auto",
+        forward_pc_refresh_iter_threshold=0,
+        forward_pc_refresh_lag=0,
+    )
+    # Switch the backend config to a direct-solve preset.
+    model.backend_config.ksp_type = "preonly"
+    model.backend_config.pc_type = "lu"
+    model.backend_config.solver_preset = "direct"
+    # Bundle factory also exposes the direct types so the session metadata matches.
+    original_bundle_factory = model._make_petsc_solver_bundle
+
+    def _direct_bundle(system_matrix):
+        bundle = original_bundle_factory(system_matrix)
+        bundle["ksp_type"] = "preonly"
+        bundle["pc_type"] = "lu"
+        return bundle
+
+    model._make_petsc_solver_bundle = _direct_bundle
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    patterns = np.array([[1.0]], dtype=float)
+
+    # First sigma — fresh bundle, PC setup runs (not a reuse decision).
+    model._solve_with_petsc(sigma=object(), pattern_matrix=patterns)
+    diag1 = dict(model.get_backend_diagnostics())
+    assert diag1["forward_pc_session_reused"] is False
+
+    # Second sigma — guard must fire: session reused, but PC FORCED to refresh.
+    model._solve_with_petsc(sigma=object(), pattern_matrix=patterns)
+    diag2 = dict(model.get_backend_diagnostics())
+
+    assert diag2["forward_pc_session_reused"] is True
+    assert diag2["forward_pc_refresh_triggered"] is True
+    assert diag2["forward_pc_refresh_reason"] == "direct_factor_requires_rebuild"
+    assert diag2["forward_reuse_preconditioner_requested"] is False
+    assert diag2["forward_reuse_preconditioner_applied"] is False
+    assert ksp.set_reuse_calls[-1] is False, (
+        "direct factor reuse must set reusePreconditioner(False)"
+    )
+
+
+def test_iterative_preset_still_reuses_pc_across_sigma(monkeypatch):
+    """Control: fgmres+gamg (iterative+AMG) retains reuse — only direct is guarded."""
+    model, ksp, _calls = _build_model(forward_pc_refresh_policy="auto")
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    patterns = np.array([[1.0]], dtype=float)
+    model._solve_with_petsc(sigma=object(), pattern_matrix=patterns)
+    model._solve_with_petsc(sigma=object(), pattern_matrix=patterns)
+    diag = dict(model.get_backend_diagnostics())
+
+    assert diag["forward_pc_session_reused"] is True
+    assert diag["forward_pc_refresh_triggered"] is False
+    assert diag["forward_pc_refresh_reason"] is None
+    assert ksp.set_reuse_calls[-1] is True
+
+
 def test_forward_ksp_session_as_bundle_and_record_solve_roundtrip():
     session = ForwardKSPSession(
         ksp=object(),
