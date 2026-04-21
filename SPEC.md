@@ -174,7 +174,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T13 | x | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
 | T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
 | T15 | x | Dual-mesh data structure + `coarse2fine` sparse map builder; fine CEM mesh and coarse inverse voxel / tetra mesh live side-by-side, map is linear projection (piecewise-constant fallback). Prepares V31 but does NOT own it — matrix-free Jv/JTr on dual mesh stays in T22 | V25 |
-| T16 | . | One-step GN RM builder: Tikhonov / NOSER / Laplace modes in a single entrypoint returning `RM`, metadata (mode, λ, condition estimate) | V26,V27,V28 |
+| T16 | x | One-step GN RM builder: Tikhonov / NOSER / Laplace modes in a single entrypoint returning `RM`, metadata (mode, λ, condition estimate) | V26,V27,V28 |
 | T17 | . | Measurement-space RM path `RM = P Jᵀ (J P Jᵀ + λ² Rn)⁻¹` when `M ≪ N`; dense-reference parity test on small dual mesh | V26 |
 | T18 | x | Normalized-time-difference front-end: reference-frame capture, `v_ref` zero-guard, `RM @ dv_norm` wiring through the existing difference-mode contract | V33 |
 | T19 | . | 3D GREIT RM builder: synthetic training targets (spheres / blobs at grid positions), offline precompute + persistence to disk artifact | V29 |

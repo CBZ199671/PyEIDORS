@@ -12,7 +12,12 @@ from .block_system import (
     scale_contact_impedance_update,
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
-from .reconstruction_matrix import reconstruct_difference
+from .prior import graph_laplacian
+from .reconstruction_matrix import (
+    OneStepRMResult,
+    build_one_step_rm,
+    reconstruct_difference,
+)
 from .workflows import (
     perform_absolute_reconstruction,
     perform_difference_reconstruction,
@@ -36,6 +41,9 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "graph_laplacian",
+    "OneStepRMResult",
+    "build_one_step_rm",
     "reconstruct_difference",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
