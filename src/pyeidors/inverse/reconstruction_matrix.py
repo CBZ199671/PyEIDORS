@@ -9,6 +9,10 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
+from pyeidors.data.channels import (
+    apply_measurement_contract_to_jacobian,
+    apply_measurement_contract_to_vector,
+)
 from pyeidors.data.difference import normalize_time_difference
 from pyeidors.utils.numeric_ops import safe_dot
 
@@ -160,6 +164,8 @@ def build_one_step_rm(
     *,
     mode: str = "tikhonov",
     form: str = "param",
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
     measurement_regularization: Any = None,
     noser_floor: float = 1e-12,
     noser_exponent: float = 1.0,
@@ -171,6 +177,11 @@ def build_one_step_rm(
     ``form="measurement"`` uses
     ``RM = P J.T (J P J.T + lambda_**2 Rn)^-1`` with ``P≈R^-1`` and
     identity ``Rn`` by default.
+
+    ``channel_mask`` uses the data-channel contract where ``True`` marks a
+    bad channel. ``measurement_weights`` is the symmetric precision matrix
+    ``W`` from ``J.T @ W @ J``; diagonal vectors are accepted. The returned
+    RM expects online residuals passed through the same contract.
     """
 
     resolved_form = str(form).strip().lower()
@@ -183,7 +194,12 @@ def build_one_step_rm(
     if lam < 0.0 or not np.isfinite(lam):
         raise ValueError("lambda_ must be finite and non-negative.")
 
-    jac = _as_jacobian(J)
+    jac_raw = _as_jacobian(J)
+    jac, measurement_contract = apply_measurement_contract_to_jacobian(
+        jac_raw,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
     reg, regularization_source = _regularization_for_mode(
         jac,
         regularization,
@@ -223,6 +239,9 @@ def build_one_step_rm(
             "lambda": lam,
             "n_measurements": int(jac.shape[0]),
             "n_parameters": int(jac.shape[1]),
+            "bad_channel_count": int(measurement_contract.bad_channel_count),
+            "measurement_weight_kind": measurement_contract.weight_kind,
+            "expects_measurement_contract": True,
             "inversion_dimension": inversion_dimension,
             "regularization_source": regularization_source,
             "regularization_nnz": int(np.count_nonzero(reg)),
@@ -272,6 +291,8 @@ def reconstruct_difference(
     normalize: bool = True,
     v_ref=None,
     floor: float | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
 ) -> np.ndarray:
     """Apply a precomputed reconstruction matrix to one difference frame.
 
@@ -286,6 +307,11 @@ def reconstruct_difference(
         measurement = normalize_time_difference(dv, v_ref, floor=floor)
     else:
         measurement = _as_measurement_vector(dv, name="dv")
+    measurement, _ = apply_measurement_contract_to_vector(
+        measurement,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
     return _matvec(rm, measurement)
 
 

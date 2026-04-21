@@ -169,6 +169,78 @@ def test_build_one_step_rm_measurement_form_accepts_measurement_regularization()
     assert rm.metadata["measurement_regularization_source"] == "provided"
 
 
+def test_build_one_step_rm_applies_bad_channels_and_weights_consistently() -> None:
+    jacobian = np.array(
+        [[1.0, 0.0], [5.0, 5.0], [0.0, 2.0]],
+        dtype=float,
+    )
+    dv = np.array([2.0, 100.0, -1.0], dtype=float)
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 1.0], dtype=float)
+    lam = 0.2
+
+    result = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        channel_mask=mask,
+        measurement_weights=weights,
+        return_metadata=True,
+    )
+    recon = reconstruct_difference(
+        result.rm,
+        dv,
+        normalize=False,
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+
+    sqrt_w = np.diag(np.sqrt([4.0, 0.0, 1.0]))
+    masked_j = jacobian.copy()
+    masked_j[1, :] = 0.0
+    masked_dv = dv.copy()
+    masked_dv[1] = 0.0
+    weighted_j = sqrt_w @ masked_j
+    weighted_dv = sqrt_w @ masked_dv
+    expected_rm = np.linalg.solve(
+        weighted_j.T @ weighted_j + lam**2 * np.eye(2),
+        weighted_j.T,
+    )
+
+    np.testing.assert_allclose(result.rm, expected_rm)
+    np.testing.assert_allclose(recon, expected_rm @ weighted_dv)
+    assert result.metadata["bad_channel_count"] == 1
+    assert result.metadata["measurement_weight_kind"] == "diagonal"
+
+
+def test_build_one_step_rm_measurement_form_honors_same_weight_contract() -> None:
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5], [0.0, 2.0, -1.0], [1.0, -0.5, 0.25]],
+        dtype=float,
+    )
+    mask = np.array([False, False, True], dtype=bool)
+    weights = np.array([2.0, 0.5, 7.0], dtype=float)
+    lam = 0.3
+
+    param_rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+    measurement_rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        form="measurement",
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-10, atol=1e-12)
+
+
 def test_build_one_step_rm_rejects_invalid_form_and_measurement_rn_shape() -> None:
     with pytest.raises(ValueError, match="form must be"):
         build_one_step_rm(np.eye(2), lambda_=0.1, form="bad")

@@ -24,6 +24,17 @@ from .difference import (
     project_measurement_jacobian,
     project_measurement_vector,
 )
+from .channels import (
+    MeasurementContract,
+    apply_measurement_contract_to_jacobian,
+    apply_measurement_contract_to_vector,
+    bad_channel_mask,
+    normalize_bad_channel_mask,
+    prepare_measurement_contract,
+    zero_bad_channel_rows,
+    zero_bad_channel_vector,
+    zero_bad_channel_weights,
+)
 
 __all__ = [
     "PatternConfig",
@@ -40,6 +51,15 @@ __all__ = [
     "normalize_time_difference",
     "project_measurement_jacobian",
     "project_measurement_vector",
+    "MeasurementContract",
+    "apply_measurement_contract_to_jacobian",
+    "apply_measurement_contract_to_vector",
+    "bad_channel_mask",
+    "normalize_bad_channel_mask",
+    "prepare_measurement_contract",
+    "zero_bad_channel_rows",
+    "zero_bad_channel_vector",
+    "zero_bad_channel_weights",
     "create_synthetic_data",
     "create_custom_phantom",
     "MeasurementDataset",

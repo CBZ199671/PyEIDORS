@@ -184,7 +184,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T23 | . | IRGNM / LM wrapper around matrix-free Hv for absolute-ish 3D reconstruction, reusing the existing `_solve_pcg` PETSc or SciPy backend | V12,V31,V35 |
 | T24 | . | TV PDHG / PDIPM refinement on ROI after one-step init; seeded by RM output, stops on ROI-restricted residual norm | V26,V28 |
 | T25 | . | Electrode-movement Jacobian + `prior_movement`; extends block metadata with `e` block and `H_σe`, `H_ze`, `H_ee` couplings | V20,V32 |
-| T26 | . | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
+| T26 | x | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
 | T27 | . | SBL / coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1 | V31 |
 | T28 | . | CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement | V29 |
 | T29 | . | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
