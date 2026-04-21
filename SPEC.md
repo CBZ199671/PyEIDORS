@@ -14,6 +14,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - DOLFINx / FEniCSx: nix devShell owns runtime (`nix develop`)
 - PETSc via `petsc4py`; MPI size == 1 enforced ? until distributed Mat/Vec lands
 - PyTorch ~2.10, optional CUDA via `nix develop .#cuda`
+- AmgX ? research-only: no FEniCSx version bump required; requires Nix rebuild of PETSc with PCAMGX + same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`
 - NumPy/SciPy/pandas/h5py/pyyaml mandatory; `pyamg`/`scikit-sparse` optional
 - Nix + uv dev path, WSL2 supported; GUI launcher `scripts/gui/run_eit_app.sh`
 - PySide6 GUI under `src/eit_app/`
@@ -74,6 +75,7 @@ Provisional module paths; see §T.T15..T32 for per-feature scope. All marked `?`
 - `pyeidors.data.difference.normalize_time_difference(v_t, v_ref, floor=...) -> dv_norm`
 - `pyeidors.data.channels.bad_channel_mask`: apply mask to `J`, `residual`, `W`
 - `pyeidors.perf.gpu_kernels.rm_matmul`: batched `RM @ ΔV` on GPU (torch / cupy)
+- Nix experimental profile `.#cuda-amgx`: PETSc configured with CUDA + PCAMGX (`--download-amgx=<src>` or `--with-amgx-dir=<path>`, `--with-64-bit-indices=0`), then rebuilds `petsc4py`, SLEPc, DOLFINx, `fenics-dolfinx` against same PETSc; FEniCSx version upgrade alone is neither required nor sufficient
 
 CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 
@@ -130,6 +132,7 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V40 | Offline (cold) RM-build time and online (warm) RM-apply time are recorded as separate fields in the benchmark artifact; online field dominated by a single dense matmul, cold field allowed arbitrary minutes | src/pyeidors/inverse/reconstruction_matrix.py:98-124; tests/unit/test_rm_v1_artifacts.py:90-105 |
 | V41 | 3D GREIT output emits the full metric set `{AR, PE, RES, SD, RNG}` per reconstruction — absence of any single metric fails the GREIT validation gate | src/pyeidors/inverse/greit.py:410-453,762-770; tests/unit/test_greit_rm.py:196-235 |
 | V42 | Forward `mat_solve_mode="off"` ! wins over CUDA/dense auto-routing (`forward_mat_solve_effective="vec-loop"`); `pc_type=="amgx"` / `solver_preset=="cuda_amgx"` with `petsc_amgx=false` fails during backend setup with explicit PCAMGX guidance | tests/unit/test_forward_mat_solve_policy.py |
+| V43 | AmgX experiment gate: `nix develop .#cuda-amgx` ! yields CUDA Mat/Vec/Dense + `PETSc.PC.Type.AMGX`; `PETSc.PC().setType("amgx")` succeeds; `benchmark_3d_runtime.py --forward-only on --forward-solver-preset cuda_amgx --petsc-device cuda --forward-mat-solve off` completes and reports speed/residual vs `spd_gamg + petsc_device=cuda`. Plain FEniCSx/DOLFINx upgrade does not satisfy this gate | future `.#cuda-amgx` profile + scripts/diagnostics/probe_petsc_cuda.py |
 
 ## §T — tasks
 
@@ -145,7 +148,7 @@ phase-2  (after v1 stable, higher-fidelity reconstruction):
     T22, T23, T25, T24, T21, T30
 
 research  (post-phase-2, opt-in enhancement):
-    T27, T28, T1, T11
+    T27, T28, T1, T11, T33
 
 infra / deferred  (hardware / design-heavy, unblock separately):
     T2, T3, T4, T6, T7, T10
@@ -192,6 +195,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T30 | x | Hypre `BoomerAMG` / NVIDIA AmgX CUDA path wiring for forward CG (extends T10), with capability-probe entries in `forward_solver_benchmark` artifact | V6,V13,T10 |
 | T31 | x | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
 | T32 | x | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
+| T33 | . | Research: `cuda-amgx` Nix profile. Rebuild PETSc with PCAMGX (CUDA + 32-bit `PetscInt` + AmgX external package), then rebuild same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`; benchmark against current safe route `spd_gamg + petsc_device=cuda`. Do not treat FEniCSx version upgrade as AmgX enablement | V19,V42,V43,B5 |
 
 ## §B — bugs
 
@@ -201,3 +205,4 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | B2 | 2026-04-21 | CUDA/dense `matSolve` auto override ignored explicit `mat_solve_mode="off"`; CUDA profile had `petsc_amgx=false` / PCAMGX absent, but `cuda_amgx` proceeded past setup toward solve | V42 |
 | B3 | 2026-04-21 | `/check §V` found V2 drift: CUDA auto `matSolve` branch (`effective_device=="cuda"` & `petsc_cuda_dense`) bypasses `performance_mode=="aggressive"` and `forward_mat_solve_min_patterns`; V2 says exact iff formula | V2 |
 | B4 | 2026-04-21 | `spd_hypre + petsc_device=cuda` forward benchmark SIGSEGV in PETSc/Hypre CUDA, even with `--forward-mat-solve off`; current measured safe CUDA forward route = `spd_gamg + petsc_device=cuda` | pending: add runtime policy guard / smoke before auto-selecting Hypre CUDA |
+| B5 | 2026-04-21 | AmgX cannot enable in current CUDA shell because PETSc has CUDA Mat/Vec/Dense (`aijcusparse`, `cuda`, `densecuda`) but PCAMGX is not compiled/registered: `PETSc.PC.Type.AMGX` is absent and `PCSetType("amgx")` returns error code 86 `Unable to find requested PC type amgx`; `flake.nix` CUDA PETSc override only adds CUDA/cuBLAS/cuSPARSE/cuSOLVER flags, with no AmgX package or `--with-amgx` / `--download-amgx` configure path; FEniCSx/DOLFINx latest release does not ship AmgX by itself | T33 |
