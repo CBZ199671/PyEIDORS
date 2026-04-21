@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,8 @@ from pyeidors.data.channels import apply_measurement_contract_to_jacobian
 from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
 from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 from pyeidors.perf.gpu_kernels import RMMatmulResult
+
+GREIT_METRIC_KEYS = ("AR", "PE", "RES", "SD", "RNG")
 
 
 @dataclass(frozen=True)
@@ -324,6 +327,132 @@ def load_greit_rm(path: str | Path) -> GREITRM:
     return GREITRM.load(path)
 
 
+def greit_metrics(
+    voxel_image: Any,
+    target_mask: Any,
+    *,
+    centers: Any | None = None,
+    target_values: Any | None = None,
+    cell_volumes: Any | None = None,
+    threshold_fraction: float = 0.25,
+) -> dict[str, float]:
+    """Compute EIDORS-style GREIT figures of merit.
+
+    The original GREIT evaluation reports amplitude response, position error,
+    resolution, shape deformation, and ringing. This helper applies the same
+    quarter-max idea to a discrete 3D voxel/cell image.
+    """
+
+    image, original_shape = _as_flat_image(voxel_image, name="voxel_image")
+    mask = np.asarray(target_mask, dtype=bool).reshape(-1)
+    if mask.size != image.size:
+        raise ValueError(
+            f"target_mask size {mask.size} does not match image size {image.size}."
+        )
+    if not np.any(mask):
+        raise ValueError("target_mask must mark at least one target cell.")
+    weights = _as_cell_volumes(cell_volumes, n_cells=image.size)
+    coords = _metric_centers(centers, original_shape, n_cells=image.size)
+    target = _as_target_values(target_values, mask=mask)
+
+    target_integral = float(np.sum(target * weights))
+    if abs(target_integral) <= np.finfo(np.float64).eps:
+        raise ValueError("target amplitude integral must be non-zero.")
+    ar = float(np.sum(image * weights) / target_integral)
+
+    signal_sign = 1.0 if target_integral >= 0.0 else -1.0
+    signed_image = signal_sign * image
+    positive = np.maximum(signed_image, 0.0)
+    centroid_weights = positive * weights
+    if float(np.sum(centroid_weights)) <= np.finfo(np.float64).eps:
+        recon_center = coords[int(np.argmax(np.abs(image)))]
+    else:
+        recon_center = _weighted_centroid(coords, centroid_weights)
+    target_center = _weighted_centroid(coords, np.abs(target) * weights)
+    pe = float(np.linalg.norm(recon_center - target_center))
+
+    threshold = _quarter_max_threshold(signed_image, threshold_fraction)
+    qmi = signed_image >= threshold
+    if not np.any(qmi):
+        qmi[int(np.argmax(signed_image))] = True
+    qmi_volume = float(np.sum(weights[qmi]))
+    domain_volume = float(np.sum(weights))
+    dimension = _metric_dimension(coords)
+    res = float((qmi_volume / domain_volume) ** (1.0 / dimension))
+
+    equivalent_ball = _equivalent_ball_mask(
+        coords,
+        weights,
+        center=recon_center,
+        target_volume=qmi_volume,
+    )
+    outside_ball_volume = float(np.sum(weights[qmi & ~equivalent_ball]))
+    sd = float(outside_ball_volume / qmi_volume) if qmi_volume > 0.0 else 0.0
+
+    qmi_signal = float(np.sum(signed_image[qmi] * weights[qmi]))
+    opposite = (signed_image < 0.0) & ~qmi
+    if qmi_signal <= np.finfo(np.float64).eps:
+        rng = 0.0
+    else:
+        rng = float(-np.sum(signed_image[opposite] * weights[opposite]) / qmi_signal)
+
+    metrics = {
+        "AR": ar,
+        "PE": pe,
+        "RES": res,
+        "SD": sd,
+        "RNG": max(rng, 0.0),
+    }
+    _ensure_greit_metric_keys(metrics)
+    return metrics
+
+
+def write_greit_metrics_artifact(
+    metrics: Any,
+    path: str | Path,
+    *,
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Write GREIT metrics to JSON or CSV.
+
+    The writer fails fast if any record lacks one of
+    ``{AR, PE, RES, SD, RNG}``, which is the validation gate in V41.
+    """
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    records = _as_metric_records(metrics)
+    suffix = target.suffix.lower()
+    if suffix == ".json":
+        payload = {
+            "schema": "pyeidors-greit-metrics-v1",
+            "metric_keys": list(GREIT_METRIC_KEYS),
+            "metadata": _json_ready(metadata or {}),
+            "records": [_json_ready(record) for record in records],
+        }
+        target.write_text(
+            json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8"
+        )
+    elif suffix == ".csv":
+        extra_keys = sorted(
+            {
+                key
+                for record in records
+                for key in record
+                if key not in GREIT_METRIC_KEYS
+            }
+        )
+        with target.open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(
+                handle, fieldnames=list(GREIT_METRIC_KEYS) + extra_keys
+            )
+            writer.writeheader()
+            writer.writerows(records)
+    else:
+        raise ValueError("GREIT metrics artifact path must end with .json or .csv.")
+    return target
+
+
 def _resolve_jacobian(fwd_model: Any, jacobian: Any | None) -> np.ndarray:
     source = jacobian if jacobian is not None else fwd_model
     if source is None:
@@ -528,10 +657,137 @@ def _reshape_reconstruction(
     return values
 
 
+def _as_flat_image(values: Any, *, name: str) -> tuple[np.ndarray, tuple[int, ...]]:
+    array = np.asarray(values, dtype=np.float64)
+    if array.size == 0:
+        raise ValueError(f"{name} must be non-empty.")
+    if not np.isfinite(array).all():
+        raise FloatingPointError(f"{name} contains non-finite values.")
+    return np.ascontiguousarray(array.reshape(-1), dtype=np.float64), tuple(array.shape)
+
+
+def _as_cell_volumes(values: Any | None, *, n_cells: int) -> np.ndarray:
+    if values is None:
+        return np.ones(n_cells, dtype=np.float64)
+    volumes = np.asarray(values, dtype=np.float64).reshape(-1)
+    if volumes.size != n_cells:
+        raise ValueError(
+            f"cell_volumes length {volumes.size} does not match {n_cells}."
+        )
+    if not np.isfinite(volumes).all():
+        raise FloatingPointError("cell_volumes contain non-finite values.")
+    if np.any(volumes <= 0.0):
+        raise ValueError("cell_volumes entries must be positive.")
+    return np.ascontiguousarray(volumes, dtype=np.float64)
+
+
+def _metric_centers(
+    centers: Any | None,
+    original_shape: tuple[int, ...],
+    *,
+    n_cells: int,
+) -> np.ndarray:
+    if centers is not None:
+        coords = np.asarray(centers, dtype=np.float64)
+        if coords.ndim != 2 or coords.shape[0] != n_cells or coords.shape[1] == 0:
+            raise ValueError(
+                "centers must have shape (n_cells, dimension); "
+                f"got {coords.shape}, expected first dimension {n_cells}."
+            )
+        if not np.isfinite(coords).all():
+            raise FloatingPointError("centers contain non-finite values.")
+        return np.ascontiguousarray(coords, dtype=np.float64)
+    if len(original_shape) <= 1:
+        return np.arange(n_cells, dtype=np.float64).reshape(-1, 1)
+    axes = [np.arange(size, dtype=np.float64) for size in original_shape]
+    grids = np.meshgrid(*axes, indexing="ij")
+    return np.stack([grid.ravel(order="C") for grid in grids], axis=1)
+
+
+def _as_target_values(values: Any | None, *, mask: np.ndarray) -> np.ndarray:
+    if values is None:
+        return mask.astype(np.float64)
+    target = np.asarray(values, dtype=np.float64).reshape(-1)
+    if target.size != mask.size:
+        raise ValueError(
+            f"target_values size {target.size} does not match mask size {mask.size}."
+        )
+    if not np.isfinite(target).all():
+        raise FloatingPointError("target_values contain non-finite values.")
+    return np.ascontiguousarray(target, dtype=np.float64)
+
+
+def _weighted_centroid(coords: np.ndarray, weights: np.ndarray) -> np.ndarray:
+    total = float(np.sum(weights))
+    if total <= np.finfo(np.float64).eps:
+        raise ValueError("centroid weights must have positive sum.")
+    return np.asarray((coords * weights[:, None]).sum(axis=0) / total, dtype=np.float64)
+
+
+def _quarter_max_threshold(image: np.ndarray, fraction: float) -> float:
+    frac = float(fraction)
+    if frac <= 0.0 or frac > 1.0 or not np.isfinite(frac):
+        raise ValueError("threshold_fraction must be in (0, 1].")
+    peak = float(np.max(image))
+    if peak <= np.finfo(np.float64).eps:
+        return peak
+    return frac * peak
+
+
+def _metric_dimension(coords: np.ndarray) -> int:
+    if coords.shape[1] <= 1:
+        return 1
+    span = np.ptp(coords, axis=0)
+    return max(1, int(np.count_nonzero(span > np.finfo(np.float64).eps)))
+
+
+def _equivalent_ball_mask(
+    coords: np.ndarray,
+    weights: np.ndarray,
+    *,
+    center: np.ndarray,
+    target_volume: float,
+) -> np.ndarray:
+    order = np.argsort(np.linalg.norm(coords - center.reshape(1, -1), axis=1))
+    selected = np.zeros(coords.shape[0], dtype=bool)
+    cumulative = 0.0
+    for idx in order:
+        selected[int(idx)] = True
+        cumulative += float(weights[int(idx)])
+        if cumulative + np.finfo(np.float64).eps >= target_volume:
+            break
+    return selected
+
+
+def _ensure_greit_metric_keys(record: dict[str, Any]) -> None:
+    missing = [key for key in GREIT_METRIC_KEYS if key not in record]
+    if missing:
+        raise ValueError(f"GREIT metrics record missing keys: {missing}.")
+    for key in GREIT_METRIC_KEYS:
+        value = float(record[key])
+        if not np.isfinite(value):
+            raise FloatingPointError(f"GREIT metric {key} is non-finite.")
+
+
+def _as_metric_records(metrics: Any) -> list[dict[str, Any]]:
+    if isinstance(metrics, dict):
+        records = [dict(metrics)]
+    else:
+        records = [dict(record) for record in metrics]
+    if not records:
+        raise ValueError("metrics must contain at least one record.")
+    for record in records:
+        _ensure_greit_metric_keys(record)
+    return records
+
+
 __all__ = [
+    "GREIT_METRIC_KEYS",
     "GREITRM",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
     "generate_spherical_targets",
+    "greit_metrics",
     "load_greit_rm",
+    "write_greit_metrics_artifact",
 ]

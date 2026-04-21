@@ -2,16 +2,22 @@
 
 from __future__ import annotations
 
+import csv
+import json
+
 import numpy as np
 import pytest
 
 from pyeidors.data.channels import bad_channel_mask
 from pyeidors.inverse import (
+    GREIT_METRIC_KEYS,
     GREITRM,
     VoxelGrid,
     build_3d_greit_rm,
     generate_spherical_targets,
+    greit_metrics,
     load_greit_rm,
+    write_greit_metrics_artifact,
 )
 
 
@@ -100,6 +106,15 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     assert reconstruction.metadata["algorithm"] == "greit-3d"
     assert reconstruction.metadata["online_hot_path"] == "rm_matmul"
     assert reconstruction.metadata["voxel_shape"] == grid.shape
+    metrics = greit_metrics(
+        reconstruction.values,
+        np.asarray(greit.training_targets[3], dtype=bool),
+        centers=grid.cell_centers(),
+    )
+    assert set(metrics) == set(GREIT_METRIC_KEYS)
+    assert metrics["AR"] == pytest.approx(1.0, abs=2e-8)
+    assert metrics["PE"] == pytest.approx(0.0, abs=2e-8)
+    assert metrics["RNG"] == pytest.approx(0.0, abs=2e-8)
 
     loaded = load_greit_rm(artifact_path)
     np.testing.assert_allclose(loaded.rm, greit.rm)
@@ -139,3 +154,82 @@ def test_build_3d_greit_rm_validates_inputs() -> None:
         )
     with pytest.raises(ValueError, match="targets parameter dimension"):
         build_3d_greit_rm(jacobian=np.eye(2), targets=np.ones((1, 3)))
+
+
+def test_greit_metrics_for_perfect_single_voxel_target() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [3.0, 3.0, 3.0],
+        shape=(3, 3, 3),
+    )
+    image = np.zeros(grid.shape, dtype=float)
+    image[1, 1, 1] = 1.0
+    target_mask = image.astype(bool)
+
+    metrics = greit_metrics(image, target_mask, centers=grid.cell_centers())
+
+    assert list(metrics.keys()) == list(GREIT_METRIC_KEYS)
+    assert metrics["AR"] == pytest.approx(1.0)
+    assert metrics["PE"] == pytest.approx(0.0)
+    assert metrics["RES"] == pytest.approx((1.0 / 27.0) ** (1.0 / 3.0))
+    assert metrics["SD"] == pytest.approx(0.0)
+    assert metrics["RNG"] == pytest.approx(0.0)
+
+
+def test_greit_metrics_detects_ringing_outside_quarter_max_set() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [3.0, 3.0, 3.0],
+        shape=(3, 3, 3),
+    )
+    image = np.full(grid.shape, -0.1, dtype=float)
+    image[1, 1, 1] = 1.0
+    target_mask = np.zeros(grid.shape, dtype=bool)
+    target_mask[1, 1, 1] = True
+
+    metrics = greit_metrics(image, target_mask, centers=grid.cell_centers())
+
+    assert metrics["RNG"] > 2.0
+    assert metrics["SD"] == pytest.approx(0.0)
+
+
+def test_write_greit_metrics_artifact_json_and_csv(tmp_path) -> None:
+    metrics = {
+        "AR": 1.0,
+        "PE": 0.0,
+        "RES": 0.25,
+        "SD": 0.0,
+        "RNG": 0.0,
+        "case": "perfect",
+    }
+    json_path = write_greit_metrics_artifact(
+        metrics,
+        tmp_path / "metrics.json",
+        metadata={"suite": "unit"},
+    )
+    csv_path = write_greit_metrics_artifact([metrics], tmp_path / "metrics.csv")
+
+    payload = json.loads(json_path.read_text(encoding="utf-8"))
+    assert payload["schema"] == "pyeidors-greit-metrics-v1"
+    assert payload["metric_keys"] == list(GREIT_METRIC_KEYS)
+    assert payload["metadata"] == {"suite": "unit"}
+    assert payload["records"][0]["case"] == "perfect"
+
+    with csv_path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.DictReader(handle))
+    assert rows[0]["case"] == "perfect"
+    for key in GREIT_METRIC_KEYS:
+        assert key in rows[0]
+
+
+def test_write_greit_metrics_artifact_requires_full_metric_set(tmp_path) -> None:
+    with pytest.raises(ValueError, match="missing keys"):
+        write_greit_metrics_artifact(
+            {"AR": 1.0, "PE": 0.0, "RES": 0.1, "SD": 0.0},
+            tmp_path / "bad.json",
+        )
+    with pytest.raises(ValueError, match="must end with"):
+        write_greit_metrics_artifact(
+            {key: 0.0 for key in GREIT_METRIC_KEYS},
+            tmp_path / "bad.txt",
+        )
