@@ -1007,6 +1007,7 @@ def build_shared_context(
     lowrank_rank: int = 16,
     lowrank_method: str = "tsvd",
     lowrank_energy: float = 0.995,
+    forward_solver_preset: str = "auto",
     forward_mat_solve: str = "off",
     petsc_device: str = "auto",
     device: str = "auto",
@@ -1030,6 +1031,7 @@ def build_shared_context(
     lowrank_mode = str(lowrank_mode).strip().lower()
     lowrank_method = str(lowrank_method).strip().lower()
     rom_snapshot_source = str(rom_snapshot_source).strip().lower()
+    forward_solver_preset = str(forward_solver_preset).strip().lower()
     forward_mat_solve = str(forward_mat_solve).strip().lower()
     petsc_device = str(petsc_device).strip().lower()
     device = str(device).strip().lower()
@@ -1165,7 +1167,11 @@ def build_shared_context(
         z=z_contact,
         mesh=mesh,
         cache_manager=cache_manager,
-        backend_config={"mat_solve_mode": forward_mat_solve, "petsc_device": petsc_device},
+        backend_config={
+            "solver_preset": forward_solver_preset,
+            "mat_solve_mode": forward_mat_solve,
+            "petsc_device": petsc_device,
+        },
         forward_backend=forward_backend,
     )
     petsc_backend_info = dict(getattr(fwd_model, "_petsc_backend_info", {}) or {})
@@ -1499,6 +1505,7 @@ def build_shared_context(
             "lowrank_rank": int(lowrank_rank),
             "lowrank_method": lowrank_method,
             "lowrank_energy": float(lowrank_energy),
+            "forward_solver_preset": forward_solver_preset,
             "forward_mat_solve": forward_mat_solve,
             "forward_backend": forward_backend,
             "mesh_family": mesh_family,

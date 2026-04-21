@@ -88,6 +88,10 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
         diag.get("forward_backend_effective", diag.get("forward_backend", "")) or ""
     ).strip()
     petsc_device = str(diag.get("petsc_device_effective", "") or "").strip()
+    solver_preset = str(
+        diag.get("forward_solver_preset", diag.get("solver_preset", "")) or ""
+    ).strip()
+    amgx_value = diag.get("petsc_amgx_available", diag.get("petsc_amgx", None))
     torch_device = str(
         diag.get("torch_device", diag.get("device_effective", "")) or ""
     ).strip()
@@ -110,6 +114,10 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
         parts.append(f"backend={forward_backend}")
     if petsc_device:
         parts.append(f"PETSc={petsc_device}")
+    if solver_preset:
+        parts.append(f"solver={solver_preset}")
+    if amgx_value is not None:
+        parts.append(f"AmgX={'true' if bool(amgx_value) else 'false'}")
     if torch_device:
         parts.append(f"Torch={torch_device}")
     if jacobian_repr:

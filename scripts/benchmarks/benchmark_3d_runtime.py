@@ -644,6 +644,7 @@ def main() -> None:
                     lowrank_rank=int(args.lowrank_rank),
                     lowrank_method=str(args.lowrank_method),
                     lowrank_energy=float(args.lowrank_energy),
+                    forward_solver_preset=str(args.forward_solver_preset),
                     forward_mat_solve=str(args.forward_mat_solve),
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
@@ -681,6 +682,7 @@ def main() -> None:
                     lowrank_rank=int(args.lowrank_rank),
                     lowrank_method=str(args.lowrank_method),
                     lowrank_energy=float(args.lowrank_energy),
+                    forward_solver_preset=str(args.forward_solver_preset),
                     forward_mat_solve=str(args.forward_mat_solve),
                     petsc_device=str(args.petsc_device),
                     device=str(args.device),
@@ -789,6 +791,7 @@ def main() -> None:
                     mesh_family=str(mesh_family),
                     acceleration_profile=str(args.acceleration_profile),
                     linear_backend_config={
+                        "solver_preset": str(args.forward_solver_preset),
                         "mat_solve_mode": str(args.forward_mat_solve),
                         "petsc_device": str(args.petsc_device),
                     },

@@ -7,6 +7,14 @@ from .capabilities import (
     select_fused_strategy,
     select_preconditioner,
 )
+from .forward_solver_policy import (
+    AMGX_DOWNGRADE_REASON,
+    CUDA_GAMG_DEFAULT_REASON,
+    CUDA_HYPRE_BLACKLIST_REASON,
+    CUDA_HYPRE_BLACKLISTED_PRESETS,
+    is_hypre_cuda_blacklisted_solver,
+    resolve_3d_cuda_forward_solver_policy,
+)
 from .gpu_kernels import RMMatmulResult, rm_matmul
 from .policy import (
     ACCELERATION_PROFILE_GPU3D,
@@ -115,6 +123,10 @@ __all__ = [
     "DEFAULT_ROM_SNAPSHOT_SOURCE",
     "DEFAULT_SOLVER_MODE_2D",
     "DEFAULT_SOLVER_MODE_3D",
+    "AMGX_DOWNGRADE_REASON",
+    "CUDA_GAMG_DEFAULT_REASON",
+    "CUDA_HYPRE_BLACKLIST_REASON",
+    "CUDA_HYPRE_BLACKLISTED_PRESETS",
     "EXPERIMENTAL_PERF_PROFILES",
     "FULL_PERF_PROFILES",
     "FORWARD_BACKEND_CUDA_STRUCTURED",
@@ -134,6 +146,7 @@ __all__ = [
     "QUICK_PERF_PROFILES",
     "SQUARE_TO_DISK_3D_GENERATOR_REVISION",
     "detect_performance_capabilities",
+    "is_hypre_cuda_blacklisted_solver",
     "is_experimental_profile",
     "normalize_acceleration_profile",
     "normalize_forward_backend",
@@ -147,6 +160,7 @@ __all__ = [
     "RMMatmulResult",
     "rm_matmul",
     "resolve_experimental_mode",
+    "resolve_3d_cuda_forward_solver_policy",
     "resolve_forward_mat_solve",
     "resolve_line_search_mode",
     "resolve_solver_mode",

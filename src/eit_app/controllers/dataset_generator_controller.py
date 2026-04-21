@@ -104,6 +104,7 @@ class _DatasetGeneratorWorker(QObject):
                 preconditioner=runtime["preconditioner"],
                 fast_linear_path=runtime["fast_linear_path"],
                 linear_backend_config={
+                    "solver_preset": runtime["forward_solver_preset"],
                     "mat_solve_mode": runtime["forward_mat_solve"],
                     "petsc_device": runtime["petsc_device"],
                 },

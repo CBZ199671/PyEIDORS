@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 import pyeidors.forward.eit_forward_model as forward_module
 
@@ -356,6 +357,40 @@ def test_resolve_petsc_backend_info_cuda_amgx_requires_pcamgx(monkeypatch):
 
     assert "当前 PETSc 未启用 AmgX" in message
     assert "PCAMGX unavailable" in message
+
+
+def test_resolve_petsc_backend_info_blacklists_hypre_cuda(monkeypatch):
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.linear_backend = "petsc"
+    model.backend_config = SimpleNamespace(
+        petsc_device="cuda",
+        solver_preset="spd_hypre",
+        pc_type="hypre",
+    )
+    monkeypatch.setattr(forward_module, "PETSc", object())
+    monkeypatch.setattr(
+        perf_caps,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_cuda_mat": True,
+            "petsc_cuda_vec": True,
+            "petsc_cuda_dense": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "densecuda",
+            "errors": {},
+        },
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        EITForwardModel._resolve_petsc_backend_info(model)
+
+    message = str(excinfo.value)
+    assert "Hypre CUDA route is blacklisted" in message
+    assert "spd_gamg" in message
 
 
 def test_should_use_mat_solve_respects_min_patterns_threshold():

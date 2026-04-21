@@ -35,6 +35,10 @@ from .process_setup_cache import (
     get_process_forward_setup_bundle,
     put_process_forward_setup_bundle,
 )
+from ..perf.forward_solver_policy import (
+    CUDA_HYPRE_BLACKLIST_REASON,
+    is_hypre_cuda_blacklisted_solver,
+)
 from ..perf.policy import DEFAULT_FORWARD_BACKEND, normalize_forward_backend
 from ..physics.current_drive import resolve_electrode_lengths_m
 
@@ -803,6 +807,7 @@ class EITForwardModel:
             "petsc_hypre_available": False,
             "petsc_amgx_available": False,
             "petsc_amgx_cuda_candidate": False,
+            "petsc_hypre_cuda_blacklisted": False,
         }
         info.update(mpi_info)
 
@@ -845,12 +850,28 @@ class EITForwardModel:
         solver_preset = self._solver_token(
             getattr(self.backend_config, "solver_preset", "")
         )
+        if (
+            requested in {"auto", "cuda"}
+            and bool(capability.get("petsc_cuda", False))
+            and is_hypre_cuda_blacklisted_solver(
+                solver_preset=solver_preset,
+                pc_type=pc_type,
+            )
+        ):
+            info["gpu_fallback_reason"] = CUDA_HYPRE_BLACKLIST_REASON
+            info["petsc_hypre_cuda_blacklisted"] = True
+            raise RuntimeError(
+                "PETSc Hypre CUDA route is blacklisted after B4 SIGSEGV "
+                "(pc_type='hypre' / spd_hypre+cuda). Use spd_gamg with "
+                "petsc_device='cuda', or force petsc_device='cpu' for Hypre."
+            )
         if (pc_type == "amgx" or solver_preset == "cuda_amgx") and not bool(
             capability.get("petsc_amgx", False)
         ):
             raise RuntimeError(
                 "当前 PETSc 未启用 AmgX (PETSc PCAMGX unavailable); "
-                "rebuild PETSc with AmgX support or choose spd_gamg/spd_hypre."
+                "rebuild PETSc with AmgX support or choose spd_gamg "
+                "(Hypre CUDA is blacklisted after B4)."
             )
         cuda_available = bool(capability.get("petsc_cuda", False))
         if requested == "cpu":

@@ -111,6 +111,7 @@ class ForwardModelConfig:
     linear_solver: str = "auto"
     preconditioner: str = "auto"
     fast_linear_path: str = "auto"
+    forward_solver_preset: str = "auto"
     forward_mat_solve: str = "auto"
     petsc_device: str = "auto"
     device: str = "auto"
@@ -200,6 +201,7 @@ class ForwardModelConfig:
             linear_solver=str(raw.get("linear_solver", "auto")),
             preconditioner=str(raw.get("preconditioner", "auto")),
             fast_linear_path=str(raw.get("fast_linear_path", "auto")),
+            forward_solver_preset=str(raw.get("forward_solver_preset", "auto")),
             forward_mat_solve=str(raw.get("forward_mat_solve", "auto")),
             petsc_device=str(raw.get("petsc_device", "auto")),
             device=str(raw.get("device", "auto")),
@@ -246,6 +248,7 @@ class ForwardModelConfig:
             "linear_solver": self.linear_solver,
             "preconditioner": self.preconditioner,
             "fast_linear_path": self.fast_linear_path,
+            "forward_solver_preset": self.forward_solver_preset,
             "forward_mat_solve": self.forward_mat_solve,
             "petsc_device": self.petsc_device,
             "device": self.device,

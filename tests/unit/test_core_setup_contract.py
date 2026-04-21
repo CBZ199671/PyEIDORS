@@ -323,6 +323,69 @@ def test_runtime_policy_gpu3d_fused_enables_fused_defaults():
     assert policy["lowrank_mode_effective"] == "auto"
 
 
+def test_runtime_policy_downgrades_missing_amgx_to_spd_gamg(monkeypatch):
+    monkeypatch.setattr(
+        "pyeidors.core_system.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+        },
+    )
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+        linear_backend_config={"solver_preset": "cuda_amgx"},
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d2",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["forward_solver_preset_requested"] == "cuda_amgx"
+    assert policy["forward_solver_preset_effective"] == "spd_gamg"
+    assert policy["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
+    assert policy["petsc_amgx_available"] is False
+
+
+def test_runtime_policy_blacklists_hypre_cuda_to_spd_gamg(monkeypatch):
+    monkeypatch.setattr(
+        "pyeidors.core_system.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+        },
+    )
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+        linear_backend_config={"solver_preset": "spd_hypre"},
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d2",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["forward_solver_preset_effective"] == "spd_gamg"
+    assert policy["forward_solver_policy_reason"] == "hypre_cuda_blacklisted_sigsegv_b4"
+    assert policy["petsc_hypre_cuda_blacklisted"] is True
+
+
 def test_system_cache_lifecycle_defaults_to_session_and_supports_persistent():
     system = _new_system()
     assert system.cache_lifecycle == "session"

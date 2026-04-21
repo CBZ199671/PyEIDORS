@@ -87,6 +87,8 @@ from .perf.policy import (
     prefers_3d_gpu_pipeline,
     prefers_fused_3d_gpu_pipeline,
 )
+from .perf.capabilities import probe_petsc_cuda_runtime
+from .perf.forward_solver_policy import resolve_3d_cuda_forward_solver_policy
 
 logger = logging.getLogger(__name__)
 
@@ -585,6 +587,9 @@ class EITSystem(CoreSystemFacadeMixin):
         requested_rom_mode = getattr(self, "rom_mode", DEFAULT_ROM_MODE)
         requested_inexact_mode = getattr(self, "inexact_mode", DEFAULT_INEXACT_MODE)
         requested_lowrank_mode = getattr(self, "lowrank_mode", DEFAULT_LOWRANK_MODE)
+        requested_solver_preset = str(
+            self.linear_backend_config.get("solver_preset", "auto")
+        )
         easy_gpu_profile = prefers_3d_gpu_pipeline(requested_profile)
         fused_gpu_profile = prefers_fused_3d_gpu_pipeline(requested_profile)
 
@@ -626,6 +631,21 @@ class EITSystem(CoreSystemFacadeMixin):
             if resolved_lowrank_mode == DEFAULT_LOWRANK_MODE:
                 resolved_lowrank_mode = "auto"
 
+        capability: dict[str, Any] = {}
+        if mesh_dim == 3 and resolved_petsc_device == PETSC_DEVICE_CUDA:
+            try:
+                capability = dict(probe_petsc_cuda_runtime())
+            except Exception as exc:
+                capability = {"errors": {"forward_solver_policy": str(exc)}}
+        solver_policy = resolve_3d_cuda_forward_solver_policy(
+            requested_solver_preset=requested_solver_preset,
+            mesh_dim=mesh_dim,
+            petsc_device=resolved_petsc_device,
+            forward_backend=resolved_forward_backend,
+            capability=capability,
+            prefer_amgx=True,
+        )
+
         effective_profile = requested_profile if easy_gpu_profile and mesh_dim == 3 else DEFAULT_ACCELERATION_PROFILE
         return {
             "mesh_dim": mesh_dim,
@@ -648,6 +668,7 @@ class EITSystem(CoreSystemFacadeMixin):
             "inexact_mode_effective": resolved_inexact_mode,
             "lowrank_mode_requested": requested_lowrank_mode,
             "lowrank_mode_effective": resolved_lowrank_mode,
+            **solver_policy,
         }
 
     def _initialize_components(self) -> None:
@@ -657,6 +678,9 @@ class EITSystem(CoreSystemFacadeMixin):
         self._resolved_runtime_policy = dict(runtime_policy)
         resolved_backend_config = dict(self.linear_backend_config)
         resolved_backend_config["petsc_device"] = runtime_policy["petsc_device_effective"]
+        resolved_backend_config["solver_preset"] = runtime_policy[
+            "forward_solver_preset_effective"
+        ]
         self.fwd_model = EITForwardModel(
             n_elec=self.n_elec,
             pattern_config=self.pattern_config,

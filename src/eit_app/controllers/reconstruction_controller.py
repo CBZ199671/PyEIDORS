@@ -27,6 +27,8 @@ from eit_app.models.forward_model_config import drive_mode_for_mesh_dimension
 from eit_app.models.frame_model import FrameData
 from pyeidors.data.difference import build_difference_vector
 from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
+from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
+from pyeidors.perf.forward_solver_policy import resolve_3d_cuda_forward_solver_policy
 
 log = logging.getLogger(__name__)
 
@@ -81,7 +83,7 @@ def _contact_impedance_vector_from_meta(meta: dict[str, Any], *, total_electrode
     return arr.astype(float, copy=False)
 
 
-def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> dict[str, str]:
+def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> dict[str, Any]:
     gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
 
     def _auto(key: str, default: str) -> str:
@@ -115,14 +117,43 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
     elif not wants_structured_gpu and forward_backend == "cuda_structured":
         forward_backend = "dolfinx"
 
+    petsc_device = _auto("petsc_device", "cuda" if wants_3d_cuda else "auto")
+    capability: dict[str, Any] = {}
+    if int(mesh_dim) == 3 and petsc_device == "cuda":
+        try:
+            capability = dict(probe_petsc_cuda_runtime())
+        except Exception as exc:
+            capability = {"errors": {"forward_solver_policy": str(exc)}}
+    solver_policy = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset=_auto("forward_solver_preset", "auto"),
+        mesh_dim=int(mesh_dim),
+        petsc_device=petsc_device,
+        forward_backend=forward_backend,
+        capability=capability,
+        prefer_amgx=True,
+    )
+
     return {
         "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),
         "line_search_mode": _auto("line_search_mode", "fast" if int(mesh_dim) == 3 else "full"),
         "linear_solver": _auto("linear_solver", "auto"),
         "preconditioner": _auto("preconditioner", "auto"),
         "fast_linear_path": _auto("fast_linear_path", "auto"),
+        "forward_solver_preset": str(solver_policy["forward_solver_preset_effective"]),
+        "forward_solver_preset_requested": str(
+            solver_policy["forward_solver_preset_requested"]
+        ),
+        "forward_solver_policy_reason": str(solver_policy["forward_solver_policy_reason"]),
+        "forward_solver_policy_warning": str(
+            solver_policy["forward_solver_policy_warning"]
+        ),
+        "petsc_amgx_available": bool(solver_policy["petsc_amgx_available"]),
+        "petsc_hypre_available": bool(solver_policy["petsc_hypre_available"]),
+        "petsc_hypre_cuda_blacklisted": bool(
+            solver_policy["petsc_hypre_cuda_blacklisted"]
+        ),
         "forward_mat_solve": _auto("forward_mat_solve", "auto" if int(mesh_dim) == 3 else "off"),
-        "petsc_device": _auto("petsc_device", "cuda" if wants_3d_cuda else "auto"),
+        "petsc_device": petsc_device,
         "device": _auto("device", "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
@@ -438,6 +469,7 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("linear_solver", "auto")
     meta.setdefault("preconditioner", "auto")
     meta.setdefault("fast_linear_path", "auto")
+    meta.setdefault("forward_solver_preset", "auto")
     meta.setdefault("forward_mat_solve", "auto")
     meta.setdefault("petsc_device", "auto")
     meta.setdefault("device", "auto")
@@ -552,6 +584,7 @@ def _prepare_single_step_cached_runtime(
         int(meta.get("linearized_maxiter", 0)),
         str(meta.get("lazy_preconditioner_mode", "auto")),
         int(meta.get("lazy_diag_batch_max_measurements", 512)),
+        str(meta.get("forward_solver_preset", "auto")),
         str(meta.get("forward_mat_solve", "auto")),
         str(meta.get("petsc_device", "auto")),
         str(meta.get("device", "auto")),
@@ -604,10 +637,41 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
         "forward_backend_effective": str(
             petsc_info.get("forward_backend_effective", ctx.get("forward_backend", ""))
         ),
+        "solver_preset": str(petsc_info.get("solver_preset", "")),
+        "forward_solver_preset": str(
+            petsc_info.get("solver_preset", ctx.get("forward_solver_preset", ""))
+        ),
+        "forward_solver_policy_reason": str(
+            petsc_info.get(
+                "forward_solver_policy_reason",
+                ctx.get("forward_solver_policy_reason", ""),
+            )
+        ),
+        "forward_solver_policy_warning": str(
+            petsc_info.get(
+                "forward_solver_policy_warning",
+                ctx.get("forward_solver_policy_warning", ""),
+            )
+        ),
         "petsc_device_requested": str(
             petsc_info.get("petsc_device_requested", ctx.get("petsc_device", ""))
         ),
         "petsc_device_effective": str(petsc_info.get("petsc_device_effective", "")),
+        "petsc_amgx_available": bool(
+            petsc_info.get("petsc_amgx_available", ctx.get("petsc_amgx_available", False))
+        ),
+        "petsc_hypre_available": bool(
+            petsc_info.get(
+                "petsc_hypre_available",
+                ctx.get("petsc_hypre_available", False),
+            )
+        ),
+        "petsc_hypre_cuda_blacklisted": bool(
+            petsc_info.get(
+                "petsc_hypre_cuda_blacklisted",
+                ctx.get("petsc_hypre_cuda_blacklisted", False),
+            )
+        ),
         "torch_device": str(ctx.get("torch_device", "")),
         "device_requested": str(ctx.get("device_requested", "")),
         "device_effective": str(ctx.get("device_effective", "")),
@@ -720,6 +784,7 @@ def _ensure_single_step_cached_context(
                 preconditioner=str(meta.get("preconditioner", "auto")),
                 rom_mode="off",
                 lowrank_mode="off",
+                forward_solver_preset=str(meta.get("forward_solver_preset", "auto")),
                 forward_mat_solve=str(meta.get("forward_mat_solve", "off")),
                 petsc_device=str(meta.get("petsc_device", "auto")),
                 device=str(meta.get("device", "auto")),
@@ -809,6 +874,7 @@ def _run_full_gn_request(
     meta.setdefault("linear_solver", "auto")
     meta.setdefault("preconditioner", "auto")
     meta.setdefault("fast_linear_path", "auto")
+    meta.setdefault("forward_solver_preset", "auto")
     meta.setdefault("forward_mat_solve", "auto")
     meta.setdefault("petsc_device", "auto")
     meta.setdefault("device", "auto")
@@ -890,6 +956,7 @@ def _run_full_gn_request(
         int(meta.get("linearized_maxiter", 0)),
         str(meta.get("lazy_preconditioner_mode", "auto")),
         int(meta.get("lazy_diag_batch_max_measurements", 512)),
+        str(meta.get("forward_solver_preset", "auto")),
         str(meta.get("forward_mat_solve", "auto")),
         str(meta.get("petsc_device", "auto")),
         str(meta.get("device", "auto")),
@@ -951,6 +1018,7 @@ def _run_full_gn_request(
             preconditioner=str(meta.get("preconditioner", "auto")),
             fast_linear_path=str(meta.get("fast_linear_path", "auto")),
             linear_backend_config={
+                "solver_preset": str(meta.get("forward_solver_preset", "auto")),
                 "mat_solve_mode": str(meta.get("forward_mat_solve", "off")),
                 "petsc_device": str(meta.get("petsc_device", "auto")),
             },

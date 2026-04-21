@@ -406,6 +406,14 @@ def test_mesh_setup_panel_exposes_tetra_and_hex_3d_families():
 
 def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setattr(
+        "eit_app.controllers.forward_solver_controller.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+        },
+    )
 
     tetra = _resolve_forward_runtime(
         ForwardModelConfig(mesh_dimension=3, mesh_family="tetra")
@@ -415,6 +423,8 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_device"] == "cuda"
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
+    assert tetra["forward_solver_preset"] == "spd_gamg"
+    assert tetra["petsc_amgx_available"] is False
 
     hex_cfg = _resolve_forward_runtime(
         ForwardModelConfig(mesh_dimension=3, mesh_family="hex")
@@ -426,6 +436,14 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
 
 def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setattr(
+        "eit_app.controllers.reconstruction_controller.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+        },
+    )
 
     tetra = _resolve_reconstruction_runtime(
         {"mesh_family": "tetra", "forward_backend": "cuda_structured"},
@@ -436,6 +454,16 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_device"] == "cuda"
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
+    assert tetra["forward_solver_preset"] == "spd_gamg"
+    assert tetra["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
+    assert tetra["petsc_amgx_available"] is False
+
+    requested_amgx = _resolve_reconstruction_runtime(
+        {"mesh_family": "tetra", "forward_solver_preset": "cuda_amgx"},
+        mesh_dim=3,
+    )
+    assert requested_amgx["forward_solver_preset_requested"] == "cuda_amgx"
+    assert requested_amgx["forward_solver_preset"] == "spd_gamg"
 
     hex_cfg = _resolve_reconstruction_runtime({"mesh_family": "hex"}, mesh_dim=3)
     assert hex_cfg["mesh_family"] == "hex"
@@ -450,6 +478,8 @@ def test_single_step_solver_diagnostics_exposes_runtime_summary():
             "petsc_device": "cuda",
             "petsc_backend_info": {
                 "forward_backend_effective": "dolfinx",
+                "solver_preset": "spd_gamg",
+                "petsc_amgx_available": False,
                 "petsc_device_requested": "cuda",
                 "petsc_device_effective": "cuda",
             },
@@ -475,6 +505,8 @@ def test_single_step_solver_diagnostics_exposes_runtime_summary():
     runtime = diagnostics["runtime"]
     assert runtime["mesh_family"] == "tetra"
     assert runtime["forward_backend_effective"] == "dolfinx"
+    assert runtime["forward_solver_preset"] == "spd_gamg"
+    assert runtime["petsc_amgx_available"] is False
     assert runtime["petsc_device_effective"] == "cuda"
     assert runtime["torch_device"] == "cuda"
     assert runtime["jacobian_representation"] == "linearized"

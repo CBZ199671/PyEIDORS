@@ -13,6 +13,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 from eit_app.models.precision import compute_dtype
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.models.forward_model_config import ForwardModelConfig
+from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
+from pyeidors.perf.forward_solver_policy import resolve_3d_cuda_forward_solver_policy
 
 log = logging.getLogger(__name__)
 
@@ -145,7 +147,7 @@ def _contact_impedance_vector(value: Any, *, total_electrodes: int) -> np.ndarra
     return arr.astype(float, copy=False)
 
 
-def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
+def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     mesh_dim = int(forward_cfg.mesh_dimension)
     gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
 
@@ -183,14 +185,43 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, str]:
         # same CEM/Jacobian convention.
         forward_backend = "dolfinx"
 
+    petsc_device = _auto(forward_cfg.petsc_device, "cuda" if wants_3d_cuda else "auto")
+    capability: dict[str, Any] = {}
+    if mesh_dim == 3 and petsc_device == "cuda":
+        try:
+            capability = dict(probe_petsc_cuda_runtime())
+        except Exception as exc:
+            capability = {"errors": {"forward_solver_policy": str(exc)}}
+    solver_policy = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset=_auto(forward_cfg.forward_solver_preset, "auto"),
+        mesh_dim=mesh_dim,
+        petsc_device=petsc_device,
+        forward_backend=forward_backend,
+        capability=capability,
+        prefer_amgx=True,
+    )
+
     return {
         "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
         "line_search_mode": _auto(forward_cfg.line_search_mode, "fast" if mesh_dim == 3 else "full"),
         "linear_solver": _auto(forward_cfg.linear_solver, "auto"),
         "preconditioner": _auto(forward_cfg.preconditioner, "auto"),
         "fast_linear_path": _auto(forward_cfg.fast_linear_path, "auto"),
+        "forward_solver_preset": str(solver_policy["forward_solver_preset_effective"]),
+        "forward_solver_preset_requested": str(
+            solver_policy["forward_solver_preset_requested"]
+        ),
+        "forward_solver_policy_reason": str(solver_policy["forward_solver_policy_reason"]),
+        "forward_solver_policy_warning": str(
+            solver_policy["forward_solver_policy_warning"]
+        ),
+        "petsc_amgx_available": bool(solver_policy["petsc_amgx_available"]),
+        "petsc_hypre_available": bool(solver_policy["petsc_hypre_available"]),
+        "petsc_hypre_cuda_blacklisted": bool(
+            solver_policy["petsc_hypre_cuda_blacklisted"]
+        ),
         "forward_mat_solve": _auto(forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"),
-        "petsc_device": _auto(forward_cfg.petsc_device, "cuda" if wants_3d_cuda else "auto"),
+        "petsc_device": petsc_device,
         "device": _auto(forward_cfg.device, "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
@@ -216,8 +247,21 @@ def _forward_runtime_diagnostics(system: Any) -> dict[str, Any]:
                 getattr(fwd_model, "forward_backend", "") if fwd_model is not None else "",
             )
         ),
+        "solver_preset": str(backend_diag.get("solver_preset", "")),
+        "forward_solver_preset": str(backend_diag.get("solver_preset", "")),
+        "forward_solver_policy_reason": str(
+            backend_diag.get("forward_solver_policy_reason", "")
+        ),
+        "forward_solver_policy_warning": str(
+            backend_diag.get("forward_solver_policy_warning", "")
+        ),
         "petsc_device_requested": str(backend_diag.get("petsc_device_requested", "")),
         "petsc_device_effective": str(backend_diag.get("petsc_device_effective", "")),
+        "petsc_amgx_available": bool(backend_diag.get("petsc_amgx_available", False)),
+        "petsc_hypre_available": bool(backend_diag.get("petsc_hypre_available", False)),
+        "petsc_hypre_cuda_blacklisted": bool(
+            backend_diag.get("petsc_hypre_cuda_blacklisted", False)
+        ),
         "torch_device": str(getattr(system, "device", "") or ""),
         "mesh_cache_hit": getattr(mesh, "_pyeidors_mesh_cache_hit", None),
         "mesh_cache_layer": getattr(mesh, "_pyeidors_mesh_cache_layer", None),
@@ -295,6 +339,7 @@ class _ForwardSolverWorker(QObject):
                 preconditioner=runtime["preconditioner"],
                 fast_linear_path=runtime["fast_linear_path"],
                 linear_backend_config={
+                    "solver_preset": runtime["forward_solver_preset"],
                     "mat_solve_mode": runtime["forward_mat_solve"],
                     "petsc_device": runtime["petsc_device"],
                 },
