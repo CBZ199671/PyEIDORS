@@ -371,6 +371,22 @@ def test_should_use_mat_solve_respects_min_patterns_threshold():
     assert model._should_use_mat_solve(16) is True
 
 
+def test_should_use_mat_solve_cuda_auto_still_respects_v2_formula():
+    model, _ksp = _make_model(mat_solve_mode="auto", mesh_tdim=3)
+    model._petsc_backend_info = {
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+
+    model.backend_config.forward_mat_solve_min_patterns = 4
+    assert model._should_use_mat_solve(2) is False
+    assert model._should_use_mat_solve(4) is True
+
+    model.backend_config.forward_mat_solve_min_patterns = 0
+    model.performance_mode = "conservative"
+    assert model._should_use_mat_solve(16) is False
+
+
 def test_should_use_mat_solve_min_patterns_ignored_in_on_mode():
     model, _ksp = _make_model(mat_solve_mode="on", mesh_tdim=3)
     model.backend_config.forward_mat_solve_min_patterns = 64

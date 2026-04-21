@@ -198,4 +198,6 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | id | date | cause | fix |
 |----|------|-------|-----|
 | B1 | 2026-04-20 | `ForwardKSPSession` applied `setReusePreconditioner(True)` uniformly; for `ksp_type==preonly` + `pc_type∈{lu,cholesky,qr}` this silently reuses stale LU/Cholesky/QR factorisation across sigma updates, solving `A(σ_new) x = b` with `A(σ_old)^{-1}`. No Krylov iteration to correct the error (unlike iterative+AMG where reuse is a staleness penalty). | V24,T14 |
-| B2 | 2026-04-21 | CUDA/dense `matSolve` auto override ignored explicit `mat_solve_mode="off"`; `cuda_amgx` proceeded to solve even when PETSc PCAMGX absent | V42 |
+| B2 | 2026-04-21 | CUDA/dense `matSolve` auto override ignored explicit `mat_solve_mode="off"`; CUDA profile had `petsc_amgx=false` / PCAMGX absent, but `cuda_amgx` proceeded past setup toward solve | V42 |
+| B3 | 2026-04-21 | `/check §V` found V2 drift: CUDA auto `matSolve` branch (`effective_device=="cuda"` & `petsc_cuda_dense`) bypasses `performance_mode=="aggressive"` and `forward_mat_solve_min_patterns`; V2 says exact iff formula | V2 |
+| B4 | 2026-04-21 | `spd_hypre + petsc_device=cuda` forward benchmark SIGSEGV in PETSc/Hypre CUDA, even with `--forward-mat-solve off`; current measured safe CUDA forward route = `spd_gamg + petsc_device=cuda` | pending: add runtime policy guard / smoke before auto-selecting Hypre CUDA |

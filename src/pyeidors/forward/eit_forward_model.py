@@ -1423,13 +1423,6 @@ class EITForwardModel:
         )
         has_cuda_dense = bool(capability.get("petsc_cuda_dense", False))
 
-        if (
-            mat_mode == "auto"
-            and effective_device == "cuda"
-            and n_patterns > 1
-            and has_cuda_dense
-        ):
-            use_mat_solve = True
         if effective_device == "cuda" and use_mat_solve and not has_cuda_dense:
             use_mat_solve = False
         return use_mat_solve
