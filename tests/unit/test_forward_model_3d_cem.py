@@ -14,6 +14,7 @@ from pyeidors.geometry.mesh3d_generator import (
     GMSH_AVAILABLE,
     create_cylinder_3d_eit_mesh,
 )
+from pyeidors.inverse.dual_mesh import DualMesh, VoxelGrid
 
 
 @pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
@@ -57,8 +58,33 @@ def test_forward_model_3d_solves_and_returns_finite_measurements(tmp_path):
     assert ref_data.meas.shape[0] == fwd.pattern_manager.n_meas_total
     assert np.all(np.isfinite(ref_data.meas))
 
+    coords = mesh.coordinates()
+    lower = coords.min(axis=0) - 1e-9
+    upper = coords.max(axis=0) + 1e-9
+    coarse = VoxelGrid.from_bounds(
+        lower,
+        upper,
+        shape=(2, 2, 2),
+        name="real-cem-coarse-inverse-voxels",
+    )
+    dual = DualMesh(fine_mesh=mesh, coarse_mesh=coarse)
+    assert dual.n_fine_cells == sigma.x.array.size
+    assert dual.n_fine_cells > dual.n_coarse_cells
+
+    occupancy = np.asarray(dual.coarse2fine.sum(axis=0)).reshape(-1)
+    active = np.flatnonzero(occupancy > 0.0)
+    assert active.size > 0
+    coarse_centers = coarse.cell_centers()
+    active_idx = int(active[np.argmax(coarse_centers[active, 0])])
+    coarse_delta = np.zeros(coarse.num_cells(), dtype=float)
+    coarse_delta[active_idx] = 0.8
+    fine_delta = dual.project_to_fine(coarse_delta)
+    restricted = dual.restrict_to_coarse(fine_delta)
+    assert np.count_nonzero(fine_delta) == int(occupancy[active_idx])
+    assert restricted[active_idx] == pytest.approx(coarse_delta[active_idx])
+
     sigma_perturbed = np.full_like(sigma.x.array, 1.0)
-    sigma_perturbed[: max(1, sigma_perturbed.size // 20)] = 1.8
+    sigma_perturbed[:] += fine_delta
     img_tgt = EITImage(elem_data=sigma_perturbed, fwd_model=fwd)
     tgt_data, _ = fwd.fwd_solve(img_tgt)
     assert np.all(np.isfinite(tgt_data.meas))
