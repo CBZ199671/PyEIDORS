@@ -215,6 +215,43 @@ def test_status_bar_reserves_error_tone_for_real_failures() -> None:
             assert len(tone_palette(tone)) == 3
 
 
+def test_runtime_diagnostics_are_hidden_for_regular_gui_users(monkeypatch) -> None:
+    monkeypatch.delenv("EIT_APP_SHOW_RUNTIME_DIAGNOSTICS", raising=False)
+
+    text = main_window_module._format_runtime_diagnostics(
+        {
+            "mesh_family": "tetra",
+            "forward_backend_effective": "dolfinx",
+            "petsc_device_effective": "cuda",
+            "forward_solver_preset": "spd_gamg",
+            "petsc_amgx_available": False,
+            "forward_solver_policy_reason": "amgx_unavailable_downgraded_to_spd_gamg",
+            "torch_device": "cuda",
+        }
+    )
+
+    assert text == ""
+
+
+def test_runtime_diagnostics_explains_amgx_cuda_downgrade_for_developers() -> None:
+    text = main_window_module._format_runtime_diagnostics(
+        {
+            "mesh_family": "tetra",
+            "forward_backend_effective": "dolfinx",
+            "petsc_device_effective": "cuda",
+            "forward_solver_preset": "spd_gamg",
+            "petsc_amgx_available": False,
+            "forward_solver_policy_reason": "amgx_unavailable_downgraded_to_spd_gamg",
+            "torch_device": "cuda",
+        },
+        developer=True,
+    )
+
+    assert "solver=spd_gamg" in text
+    assert "AmgX=false" in text
+    assert "AmgX 不可用时使用 spd_gamg CUDA" in text
+
+
 def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
     """Lint-style check: no bare QPushButton without set_button_role(...).
 

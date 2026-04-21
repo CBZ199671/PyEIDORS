@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -79,9 +80,25 @@ from eit_app.models.frame_model import FrameData
 
 log = logging.getLogger(__name__)
 
+_AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE = "AmgX 不可用时使用 spd_gamg CUDA"
+_RUNTIME_DIAGNOSTICS_ENV = "EIT_APP_SHOW_RUNTIME_DIAGNOSTICS"
 
-def _format_runtime_diagnostics(diag: dict | None) -> str:
+
+def _runtime_diagnostics_enabled() -> bool:
+    value = os.getenv(_RUNTIME_DIAGNOSTICS_ENV, "").strip().lower()
+    return value in {"1", "true", "yes", "on", "dev"}
+
+
+def _format_runtime_diagnostics(
+    diag: dict | None,
+    *,
+    developer: bool | None = None,
+) -> str:
     if not isinstance(diag, dict):
+        return ""
+    if developer is None:
+        developer = _runtime_diagnostics_enabled()
+    if not developer:
         return ""
     mesh_family = str(diag.get("mesh_family", "") or "").strip()
     forward_backend = str(
@@ -92,6 +109,7 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
         diag.get("forward_solver_preset", diag.get("solver_preset", "")) or ""
     ).strip()
     amgx_value = diag.get("petsc_amgx_available", diag.get("petsc_amgx", None))
+    policy_reason = str(diag.get("forward_solver_policy_reason", "") or "").strip()
     torch_device = str(
         diag.get("torch_device", diag.get("device_effective", "")) or ""
     ).strip()
@@ -118,6 +136,14 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
         parts.append(f"solver={solver_preset}")
     if amgx_value is not None:
         parts.append(f"AmgX={'true' if bool(amgx_value) else 'false'}")
+    amgx_downgraded = policy_reason == "amgx_unavailable_downgraded_to_spd_gamg"
+    amgx_cuda_default = (
+        bool(amgx_value) is False
+        and petsc_device.lower() == "cuda"
+        and solver_preset.lower() == "spd_gamg"
+    )
+    if amgx_downgraded or amgx_cuda_default:
+        parts.append(_AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE)
     if torch_device:
         parts.append(f"Torch={torch_device}")
     if jacobian_repr:
