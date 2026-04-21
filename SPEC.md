@@ -6,6 +6,8 @@ Source: distilled from code at `acc4281` on `dev/gui-integration`. Flag `?` = in
 
 Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel inverse + PETSc KSP/PC. EIDORS parity target; hard tolerance pending. Modern GPU/MPI path. Absolute + difference reconstruction, real-time mesh, benchmark.
 
+**v1 main line (current focus):** EIDORS-style dual-model 3D difference EIT — fine-CEM forward mesh, coarse inverse voxel/tetra mesh, offline one-step GN / NOSER / Laplace / 3D GREIT reconstruction matrix (`RM`), online `x = RM @ normalize(Δv)`. Matrix-free GN-CG / IRGNM / TV / SBL / CNN post-processing are phase-2 / research tiers, not v1 blockers.
+
 ## §C — constraints
 
 - Python 3.13.x, `>=3.13,<3.14`
@@ -49,6 +51,39 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - Inverse `_last_fast_linear_meta` keys: `path`, `resolved_preconditioner`, `fallback_reason`, `fast_linear_path_selected`, `fast_linear_path_reason`, `jacobian_representation`, `jacobian_shape`, `dense_jacobian_materialized`, `linear_iterations`, `matrix_free_pc_source`, `matrix_free_pc_mode`, `matrix_free_pc_floor`, `matrix_free_pc_min`, `matrix_free_pc_max`, `matrix_free_pc_reason`, `matrix_free_pmat_available`, `matrix_free_pmat_kind`, `matrix_free_pmat_attr`, `matrix_free_ksp_backend_requested`, `matrix_free_ksp_backend_effective`, `matrix_free_ksp_backend_fallback_reason`
 - Benchmark artifact `forward_solver_benchmark` JSON: mesh/RHS/solver/PC/Mat/Vec/timing/iterations/device/fallback/finite-output/CUDA-errors/MPI fields
 
+### §I.future — planned v1 surfaces (not yet implemented)
+
+Provisional module paths; see §T.T15..T32 for per-feature scope. All marked `?` until the corresponding `x` lands in §T.
+
+**Existing hooks v1 MUST build on (not replace):**
+- `src/pyeidors/data/difference.py:66` `build_difference_vector` / `project_measurement_jacobian` — existing normalized/raw difference math. V39 gates parity of the new `normalize_time_difference` against this.
+- `src/pyeidors/core_system.py:807` regularization dispatcher (NOSER / Tikhonov / Smoothness / TV) + `eidors_one_step_noser` preset — current "one-step NOSER on the current parameter mesh". v1 extends this to dual-mesh + offline RM form; V38 gates numerical parity with this baseline on small meshes.
+- `src/pyeidors/inverse/jacobian/linearized.py:333` lazy adjoint matrix-free path — retained for phase-2 (`T22`, `T23`); not a v1 main-line dependency. Cold-path slowness observed in `lazy_adjoint_matrix_free_experiment_log_20260421.md:1` is part of why v1 prefers offline RM + online matmul.
+
+- `pyeidors.inverse.dual_mesh`: `DualMesh(fine_mesh, coarse_mesh)`, `coarse2fine(mesh_fine, mesh_coarse) -> csr_matrix`
+- `pyeidors.inverse.reconstruction_matrix`:
+  - `build_one_step_rm(J, regularization, lambda_, mode="tikhonov"|"noser"|"laplace", form="param"|"measurement") -> ndarray`
+  - `reconstruct_difference(rm, dv, normalize=True, v_ref=None) -> ndarray`
+- `pyeidors.inverse.prior.laplace`: `graph_laplacian(mesh, weight="unit"|"volume") -> csr_matrix`
+- `pyeidors.inverse.greit`:
+  - `build_3d_greit_rm(fwd_model, targets, noise_figure, regularisation) -> GREITRM`
+  - `GREITRM.reconstruct(dv) -> voxel_image`
+  - `greit_metrics(voxel_image, target_mask) -> {AR, PE, RES, SD, RNG}`
+- `pyeidors.inverse.matrix_free.dual_mesh`: `DualMeshJacobianOperator(fwd_model, coarse2fine)` exposing `Jv`, `JTr`, `normal_matvec`
+- `pyeidors.inverse.block_system` (extended): `build_sigma_contact_movement_block_metadata(n_sigma, n_contact, n_electrodes_dofs)`; adds `H_sigma_e`, `H_z_e`, `H_e_e` couplings + `prior_movement` hook
+- `pyeidors.data.difference.normalize_time_difference(v_t, v_ref, floor=...) -> dv_norm`
+- `pyeidors.data.channels.bad_channel_mask`: apply mask to `J`, `residual`, `W`
+- `pyeidors.perf.gpu_kernels.rm_matmul`: batched `RM @ ΔV` on GPU (torch / cupy)
+
+CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
+
+- `--algorithm one-step-gn|noser|laplace|greit-3d|matrix-free-gn-cg|tv-pdhg`
+- `--dual-mesh on|off`, `--coarse-mesh <path>`
+- `--rm-cache <path>`: load / save precomputed RM
+- `--normalize-difference on|off`
+- `--greit-targets <path>`, `--greit-metrics-out <path>`
+- `--bad-channel-mask <csv|json>`
+
 ## §V — invariants
 
 | id | invariant | source |
@@ -77,8 +112,45 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | V22 | Sharded unit runner: per-shard JSON summary + recoverable logs; default `gui` shard, opt-in `hardware` shard separate | tests/unit/test_ci_sharded_unit_validation.py, docs/VALIDATION_SHARDS.md |
 | V23 | Forward `KSPSetReusePreconditioner(True)` semantics: same KSP, new `setOperators(A_new)`, reuse holds until explicit refresh; iter-count-monitored | src/pyeidors/forward/eit_forward_model.py `ForwardKSPSession`, PETSc `KSPSetReusePreconditioner` manpage |
 | V24 | Direct PC (`ksp_type=="preonly"` AND `pc_type ∈ {lu, cholesky, qr}`) never reused across sigma — session forces PC refresh with `forward_pc_refresh_reason="direct_factor_requires_rebuild"`. `preonly` has no Krylov iteration to correct a stale exact factor, unlike iterative+AMG where reuse is a staleness penalty | src/pyeidors/forward/eit_forward_model.py `_decide_pc_reuse_for_session` |
+| V25 | Dual-mesh separation: forward CEM assembly on fine 3D mesh; inverse unknowns on coarse voxel / tetra grid; `coarse2fine` linear map projects `Δσ_coarse → Δσ_fine` before fine forward solve (EIDORS dual-model parity) | future `pyeidors.inverse.dual_mesh` ? |
+| V26 | One-step GN RM (`M ≪ N` form): `RM = P Jᵀ (J P Jᵀ + λ² Rn)⁻¹` with `P ≈ R⁻¹`; inversion happens on `M×M` measurement-space system, not on `N×N` parameter-space system | future `pyeidors.inverse.reconstruction_matrix` ? |
+| V27 | NOSER RM variant: `R = diag(JᵀJ)`, `RM = (JᵀJ + h² R)⁻¹ Jᵀ`; row-normalized `normalize(Δv)` supported | future `pyeidors.inverse.reconstruction_matrix.noser` ? |
+| V28 | Laplace prior `R_L`: graph-Laplacian over inverse mesh cell neighbours; edge weight from adjacency + optional element-volume scaling | future `pyeidors.inverse.prior.laplace` ? |
+| V29 | 3D GREIT RM precomputed offline from synthetic targets; online reconstruction is `x = RM @ dv_norm` single matmul (no KSP solve per frame) | future `pyeidors.inverse.greit` ? |
+| V30 | GREIT metrics `{AR, PE, RES, SD, RNG}` computed per reconstruction against a target mask; documented per EIDORS GREIT evaluation protocol | future `pyeidors.inverse.greit.metrics` ? |
+| V31 | Matrix-free Jv/JTr on dual mesh: `Jv(δσ_coarse) = fine_forward(c2f @ δσ_coarse)`, `JTr(r) = c2f.T @ fine_adjoint_grad(r)`; parity against dense reference on small mesh inside tol | extends V7/V8 — future `pyeidors.inverse.matrix_free.dual_mesh` ? |
+| V32 | Joint parameter block `[σ, z_contact, e]` where `e` is electrode pose / motion nuisance; fieldsplit additive→multiplicative→Schur upgrade path extends V20 with `e` block; `prior_movement` regularizes `e` block | extends V20 — future `pyeidors.inverse.block_system` (σ+z exists; +e pending) ? |
+| V33 | Normalized time difference: `dv_norm = (v_t - v_ref) / v_ref`; `v_ref` zero-guard (floor or mask); sign orientation consistent with existing `difference_orientation` contract | future `pyeidors.data.difference.normalize_time_difference` ? |
+| V34 | Bad-channel mask `chan_mask` zeroes corresponding rows of `J`, residual entries, and measurement weights `W`; mask survives through offline RM build so precomputed `RM` respects the exact mask used at acquisition | future `pyeidors.data.channels.bad_channel_mask` ? |
+| V35 | Noise covariance `W` symmetric in Hv contract: `Hv = Jᵀ W J v + α R v`; identical `W` used during offline RM build and online residual weighting; diagonal `W = diag(1/σ²_m)` is the default, full cov ring-fenced for future work | extends V10,V11 — partial: `_solve_linear_system_fast` already threads `measurement_weight_np = W_sqrt`; needs RM-builder parity test ? |
+| V36 | RM cache signature includes ALL of: forward-mesh hash, inverse-mesh hash, `coarse2fine` hash, electrode geometry (count + ring layout), stim/meas protocol, background `(σ0, z0)`, difference mode (`raw` / `normalized`), bad-channel mask, noise covariance `W`, regularization type (`tikhonov` / `noser` / `laplace` / `greit`), λ / hyperparameter. Device/backend affect storage path only, NOT the mathematical signature. Any change in the above MUST invalidate the stored RM; device swap MUST NOT | future `pyeidors.inverse.reconstruction_matrix.rm_signature` ? |
+| V37 | Online reconstruction path executes exactly `RM @ dv` or `RM @ normalize_time_difference(v_t, v_ref)` — no Jacobian rebuild, no KSP solve, no forward/adjoint assembly in the hot path. Test asserts zero forward-solve counter ticks during `N` consecutive online frames | future `reconstruct_difference` ? |
+| V38 | Small-mesh numerical parity: `build_one_step_rm(mode="noser", form="param")` on a small mesh matches the existing dense one-step NOSER baseline (`eidors_one_step_noser`, `src/pyeidors/core_system.py:807`) within documented tolerance | future `tests/unit/test_one_step_rm_parity.py` ? |
+| V39 | Normalized-difference parity: `normalize_time_difference(v_t, v_ref)` returns the same Δv vector as the existing `build_difference_vector(..., mode="normalized")` at `src/pyeidors/data/difference.py:66` for the same inputs | future parity test ? |
+| V40 | Offline (cold) RM-build time and online (warm) RM-apply time are recorded as separate fields in the benchmark artifact; online field dominated by a single dense matmul, cold field allowed arbitrary minutes | future `forward_rm_benchmark` artifact field split ? |
+| V41 | 3D GREIT output emits the full metric set `{AR, PE, RES, SD, RNG}` per reconstruction — absence of any single metric fails the GREIT validation gate | ties V29, V30; future `greit_metrics` artifact ? |
 
 ## §T — tasks
+
+### §T.phase — v1 queue and tiering
+
+Current priority queue. Cavekit `/ck:make` MUST advance along the v1 queue before touching phase-2 / research tiers.
+
+```
+v1  (EIDORS-style dual-model offline-RM + online RM@normalize(Δv)):
+    T15  →  T18  →  T16  →  T17  →  T26  →  T29  →  T31  →  T32  →  T19  →  T20
+
+phase-2  (after v1 stable, higher-fidelity reconstruction):
+    T22, T23, T25, T24, T21, T30
+
+research  (post-phase-2, opt-in enhancement):
+    T27, T28, T1, T11
+
+infra / deferred  (hardware / design-heavy, unblock separately):
+    T2, T3, T4, T6, T7, T10
+```
+
+v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V41 must hold before T22+ are eligible.
 
 | id | status | desc | cites |
 |----|--------|------|-------|
@@ -96,6 +168,24 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |
 | T13 | x | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
 | T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
+| T15 | . | Dual-mesh data structure + `coarse2fine` sparse map builder; fine CEM mesh and coarse inverse voxel / tetra mesh live side-by-side, map is linear projection (piecewise-constant fallback) | V25,V31 |
+| T16 | . | One-step GN RM builder: Tikhonov / NOSER / Laplace modes in a single entrypoint returning `RM`, metadata (mode, λ, condition estimate) | V26,V27,V28 |
+| T17 | . | Measurement-space RM path `RM = P Jᵀ (J P Jᵀ + λ² Rn)⁻¹` when `M ≪ N`; dense-reference parity test on small dual mesh | V26 |
+| T18 | . | Normalized-time-difference front-end: reference-frame capture, `v_ref` zero-guard, `RM @ dv_norm` wiring through the existing difference-mode contract | V33 |
+| T19 | . | 3D GREIT RM builder: synthetic training targets (spheres / blobs at grid positions), offline precompute + persistence to disk artifact | V29 |
+| T20 | . | GREIT metrics module computing `{AR, PE, RES, SD, RNG}` with a reference target mask, plus CSV / JSON artifact writer | V30 |
+| T21 | . | Temporal smoothing + TV postprocess pipeline on RM output (moving-average, exponential decay, 3D TV regulariser on voxel grid) | V28 |
+| T22 | . | Matrix-free `Jv` / `JTr` extended over dual mesh (coarse inverse parameter → fine forward) with dense parity test on small mesh | V25,V31 |
+| T23 | . | IRGNM / LM wrapper around matrix-free Hv for absolute-ish 3D reconstruction, reusing the existing `_solve_pcg` PETSc or SciPy backend | V12,V31,V35 |
+| T24 | . | TV PDHG / PDIPM refinement on ROI after one-step init; seeded by RM output, stops on ROI-restricted residual norm | V26,V28 |
+| T25 | . | Electrode-movement Jacobian + `prior_movement`; extends block metadata with `e` block and `H_σe`, `H_ze`, `H_ee` couplings | V20,V32 |
+| T26 | . | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
+| T27 | . | SBL / coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1 | V31 |
+| T28 | . | CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement | V29 |
+| T29 | . | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
+| T30 | . | Hypre `BoomerAMG` / NVIDIA AmgX CUDA path wiring for forward CG (extends T10), with capability-probe entries in `forward_solver_benchmark` artifact | V6,V13,T10 |
+| T31 | . | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
+| T32 | . | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
 
 ## §B — bugs
 
