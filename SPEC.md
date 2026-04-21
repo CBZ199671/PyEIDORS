@@ -190,7 +190,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T29 | x | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
 | T30 | . | Hypre `BoomerAMG` / NVIDIA AmgX CUDA path wiring for forward CG (extends T10), with capability-probe entries in `forward_solver_benchmark` artifact | V6,V13,T10 |
 | T31 | x | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
-| T32 | . | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
+| T32 | x | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
 
 ## §B — bugs
 

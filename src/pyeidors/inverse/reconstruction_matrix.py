@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Any
 
@@ -31,6 +34,94 @@ class OneStepRMResult:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.rm, dtype=dtype)
+
+
+def rm_signature_payload(
+    *,
+    forward_mesh_hash: str,
+    inverse_mesh_hash: str,
+    electrode_geometry: Any,
+    stim_meas_protocol: Any,
+    background: Any,
+    difference_mode: str,
+    regularization_type: str,
+    hyperparameters: Any,
+    coarse2fine: Any | None = None,
+    coarse2fine_hash: str | None = None,
+    bad_channel_mask: Any | None = None,
+    noise_covariance: Any | None = None,
+    device: Any | None = None,
+    backend: Any | None = None,
+) -> dict[str, Any]:
+    """Return canonical mathematical RM-cache signature payload.
+
+    ``device`` and ``backend`` are accepted for callers that pass full runtime
+    context, but are intentionally excluded from the returned payload.
+    """
+
+    _ = (device, backend)
+    forward_hash = str(forward_mesh_hash or "").strip()
+    inverse_hash = str(inverse_mesh_hash or "").strip()
+    if not forward_hash:
+        raise ValueError("forward_mesh_hash is required for RM signature.")
+    if not inverse_hash:
+        raise ValueError("inverse_mesh_hash is required for RM signature.")
+    c2f_hash = str(coarse2fine_hash or "").strip()
+    if not c2f_hash:
+        if coarse2fine is None:
+            raise ValueError("coarse2fine or coarse2fine_hash is required.")
+        c2f_hash = _digest_value(coarse2fine)
+    return {
+        "schema": "pyeidors-rm-signature-v1",
+        "forward_mesh_hash": forward_hash,
+        "inverse_mesh_hash": inverse_hash,
+        "coarse2fine_hash": c2f_hash,
+        "electrode_geometry": _canonical_signature_value(electrode_geometry),
+        "stim_meas_protocol": _canonical_signature_value(stim_meas_protocol),
+        "background": _canonical_signature_value(background),
+        "difference_mode": str(difference_mode).strip().lower(),
+        "bad_channel_mask": _canonical_signature_value(bad_channel_mask),
+        "noise_covariance": _canonical_signature_value(noise_covariance),
+        "regularization_type": str(regularization_type).strip().lower(),
+        "hyperparameters": _canonical_signature_value(hyperparameters),
+    }
+
+
+def rm_signature(**kwargs) -> str:
+    """Hash the canonical mathematical RM-cache signature payload."""
+
+    payload = rm_signature_payload(**kwargs)
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def write_forward_rm_benchmark_artifact(
+    path: str | Path,
+    *,
+    offline_rm_build_seconds: float,
+    online_rm_apply_seconds: float,
+    online_hot_path: str = "rm_matmul",
+    metadata: dict[str, Any] | None = None,
+) -> Path:
+    """Write benchmark artifact with cold build and warm apply split."""
+
+    build_seconds = _nonnegative_seconds(
+        offline_rm_build_seconds, name="offline_rm_build_seconds"
+    )
+    apply_seconds = _nonnegative_seconds(
+        online_rm_apply_seconds, name="online_rm_apply_seconds"
+    )
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "schema": "pyeidors-forward-rm-benchmark-v1",
+        "offline_rm_build_seconds": build_seconds,
+        "online_rm_apply_seconds": apply_seconds,
+        "online_hot_path": str(online_hot_path),
+        "metadata": _canonical_signature_value(metadata or {}),
+    }
+    target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    return target
 
 
 def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
@@ -421,12 +512,98 @@ def reconstruct_difference_batch(
         payload = measurement_batch.reshape(-1)
     else:
         payload = measurement_batch
-    return rm_matmul(
+    result = rm_matmul(
         rm,
         payload,
         device=device,
         return_metadata=return_metadata,
     )
+    if return_metadata:
+        return _annotate_online_hot_path_metadata(result)
+    return result
+
+
+def _annotate_online_hot_path_metadata(result: RMMatmulResult) -> RMMatmulResult:
+    meta = dict(result.metadata)
+    meta.update(
+        {
+            "online_hot_path": "rm_matmul",
+            "forward_solve_count": 0,
+            "adjoint_solve_count": 0,
+            "ksp_solve_count": 0,
+            "jacobian_rebuild_count": 0,
+        }
+    )
+    return RMMatmulResult(
+        values=np.asarray(result.values, dtype=np.float64),
+        metadata=MappingProxyType(meta),
+    )
+
+
+def _canonical_signature_value(value: Any) -> Any:
+    if value is None:
+        return None
+    if sparse.issparse(value):
+        matrix = value.tocsr()
+        return {
+            "sparse": "csr",
+            "shape": [int(v) for v in matrix.shape],
+            "data_hash": _digest_value(matrix.data),
+            "indices_hash": _digest_value(matrix.indices),
+            "indptr_hash": _digest_value(matrix.indptr),
+        }
+    if isinstance(value, MappingProxyType):
+        return _canonical_signature_value(dict(value))
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_signature_value(value[key])
+            for key in sorted(value, key=str)
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_signature_value(item) for item in value]
+    array = np.asarray(value) if _looks_array_like(value) else None
+    if array is not None and array.ndim > 0:
+        return {
+            "shape": [int(v) for v in array.shape],
+            "dtype": str(array.dtype),
+            "hash": _digest_value(array),
+        }
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def _looks_array_like(value: Any) -> bool:
+    return isinstance(value, (np.ndarray, list, tuple)) and not isinstance(value, str)
+
+
+def _digest_value(value: Any) -> str:
+    if sparse.issparse(value):
+        return _digest_value(_canonical_signature_value(value))
+    array = np.asarray(value)
+    if array.dtype == object:
+        encoded = json.dumps(
+            _canonical_signature_value(array.tolist()),
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+    else:
+        contiguous = np.ascontiguousarray(array)
+        encoded = (
+            str(contiguous.dtype).encode()
+            + b"|"
+            + json.dumps([int(v) for v in contiguous.shape]).encode()
+            + b"|"
+            + contiguous.tobytes()
+        )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _nonnegative_seconds(value: float, *, name: str) -> float:
+    seconds = float(value)
+    if seconds < 0.0 or not np.isfinite(seconds):
+        raise ValueError(f"{name} must be finite and non-negative.")
+    return seconds
 
 
 __all__ = [
@@ -434,4 +611,7 @@ __all__ = [
     "build_one_step_rm",
     "reconstruct_difference",
     "reconstruct_difference_batch",
+    "rm_signature",
+    "rm_signature_payload",
+    "write_forward_rm_benchmark_artifact",
 ]

@@ -23,11 +23,15 @@ from .greit import (
     write_greit_metrics_artifact,
 )
 from .prior import graph_laplacian
+from .matrix_free import DualMeshJacobianOperator
 from .reconstruction_matrix import (
     OneStepRMResult,
     build_one_step_rm,
     reconstruct_difference,
     reconstruct_difference_batch,
+    rm_signature,
+    rm_signature_payload,
+    write_forward_rm_benchmark_artifact,
 )
 from .workflows import (
     perform_absolute_reconstruction,
@@ -61,10 +65,14 @@ __all__ = [
     "load_greit_rm",
     "write_greit_metrics_artifact",
     "graph_laplacian",
+    "DualMeshJacobianOperator",
     "OneStepRMResult",
     "build_one_step_rm",
     "reconstruct_difference",
     "reconstruct_difference_batch",
+    "rm_signature",
+    "rm_signature_payload",
+    "write_forward_rm_benchmark_artifact",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
     "perform_sparse_absolute_reconstruction",
