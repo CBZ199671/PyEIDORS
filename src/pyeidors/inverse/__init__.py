@@ -8,8 +8,10 @@ from .block_system import (
     BlockCoupling,
     JointInverseBlockMetadata,
     ParameterBlock,
+    build_electrode_movement_jacobian,
     build_sigma_contact_block_metadata,
     make_block_diagonal_inverse_action,
+    prior_movement,
     scale_contact_impedance_update,
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
@@ -52,8 +54,10 @@ __all__ = [
     "BlockCoupling",
     "JointInverseBlockMetadata",
     "ParameterBlock",
+    "build_electrode_movement_jacobian",
     "build_sigma_contact_block_metadata",
     "make_block_diagonal_inverse_action",
+    "prior_movement",
     "scale_contact_impedance_update",
     "CellMesh",
     "DualMesh",
