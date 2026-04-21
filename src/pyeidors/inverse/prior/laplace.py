@@ -36,6 +36,26 @@ def graph_laplacian(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
     )
 
 
+def graph_difference_operator(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
+    """Build oriented cell-neighbour difference operator for inverse meshes."""
+
+    resolved_weight = str(weight).strip().lower()
+    if resolved_weight not in {"unit", "volume"}:
+        raise ValueError("weight must be 'unit' or 'volume'.")
+    if isinstance(mesh, VoxelGrid):
+        edges = _voxel_edges(mesh.shape)
+        n_cells = mesh.num_cells()
+        volumes = np.full(n_cells, float(np.prod(mesh.spacing)), dtype=np.float64)
+    else:
+        cells = _cells(mesh)
+        n_cells = int(cells.shape[0])
+        edges = _cell_edges_from_shared_facets(cells)
+        volumes = _cell_volumes(mesh, cells, n_cells)
+    return _difference_from_edges(
+        n_cells, edges, volumes=volumes, weight=resolved_weight
+    )
+
+
 def _cells(mesh: Any) -> np.ndarray:
     if isinstance(mesh, CellMesh):
         cells = mesh.cells
@@ -155,4 +175,32 @@ def _laplacian_from_edges(
     return sparse.csr_matrix((data, (rows, cols)), shape=(n_cells, n_cells))
 
 
-__all__ = ["graph_laplacian"]
+def _difference_from_edges(
+    n_cells: int,
+    edges: list[tuple[int, int]],
+    *,
+    volumes: np.ndarray,
+    weight: str,
+) -> sparse.csr_matrix:
+    if n_cells <= 0:
+        raise ValueError("n_cells must be positive.")
+    rows: list[int] = []
+    cols: list[int] = []
+    data: list[float] = []
+    for row_idx, (i, j) in enumerate(edges):
+        if weight == "volume":
+            edge_weight = 2.0 / (float(volumes[i]) + float(volumes[j]))
+        else:
+            edge_weight = 1.0
+        scale = float(np.sqrt(edge_weight))
+        rows.extend([row_idx, row_idx])
+        cols.extend([int(i), int(j)])
+        data.extend([scale, -scale])
+    return sparse.csr_matrix(
+        (data, (rows, cols)),
+        shape=(len(edges), n_cells),
+        dtype=np.float64,
+    )
+
+
+__all__ = ["graph_difference_operator", "graph_laplacian"]

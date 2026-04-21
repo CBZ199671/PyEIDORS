@@ -25,7 +25,8 @@ from .greit import (
     load_greit_rm,
     write_greit_metrics_artifact,
 )
-from .prior import graph_laplacian
+from .prior import graph_difference_operator, graph_laplacian
+from .postprocess import TVRefinementResult, refine_tv_pdhg, total_variation_norm
 from .matrix_free import DualMeshJacobianOperator
 from .reconstruction_matrix import (
     OneStepRMResult,
@@ -71,7 +72,11 @@ __all__ = [
     "greit_metrics",
     "load_greit_rm",
     "write_greit_metrics_artifact",
+    "graph_difference_operator",
     "graph_laplacian",
+    "TVRefinementResult",
+    "refine_tv_pdhg",
+    "total_variation_norm",
     "DualMeshJacobianOperator",
     "OneStepRMResult",
     "build_one_step_rm",
