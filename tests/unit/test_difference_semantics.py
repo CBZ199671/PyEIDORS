@@ -6,6 +6,7 @@ import numpy as np
 
 from pyeidors.data.difference import (
     build_difference_vector,
+    normalize_time_difference,
     project_measurement_jacobian,
     project_measurement_vector,
 )
@@ -27,6 +28,34 @@ def test_build_difference_vector_raw_normalized_and_orientation():
     assert np.allclose(raw, np.array([1.0, 6.0, 0.5], dtype=float))
     assert np.allclose(normalized, np.array([0.5, 1.5, 1.0], dtype=float))
     assert np.allclose(reversed_normalized, -normalized)
+
+
+def test_normalize_time_difference_matches_existing_normalized_contract():
+    reference = np.array([2.0, -4.0, 0.0], dtype=float)
+    target = np.array([3.0, -2.0, 1.0], dtype=float)
+    floor = 0.5
+
+    expected = build_difference_vector(
+        target,
+        reference,
+        mode="normalized",
+        orientation="target_minus_reference",
+        floor=floor,
+    )
+
+    np.testing.assert_allclose(
+        normalize_time_difference(target, reference, floor=floor),
+        expected,
+    )
+    np.testing.assert_allclose(
+        normalize_time_difference(
+            target,
+            reference,
+            floor=floor,
+            orientation="reference_minus_target",
+        ),
+        -expected,
+    )
 
 
 def test_project_measurement_vector_and_jacobian_in_difference_space():

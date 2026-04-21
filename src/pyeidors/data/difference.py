@@ -6,7 +6,6 @@ from typing import Final
 
 import numpy as np
 
-
 DEFAULT_DIFFERENCE_MODE: Final[str] = "raw"
 DEFAULT_DIFFERENCE_ORIENTATION: Final[str] = "target_minus_reference"
 _VALID_DIFFERENCE_MODES: Final[set[str]] = {"raw", "normalized"}
@@ -16,7 +15,9 @@ _VALID_DIFFERENCE_ORIENTATIONS: Final[set[str]] = {
 }
 
 
-def normalize_difference_mode(mode: str | None, *, default: str = DEFAULT_DIFFERENCE_MODE) -> str:
+def normalize_difference_mode(
+    mode: str | None, *, default: str = DEFAULT_DIFFERENCE_MODE
+) -> str:
     """Return a validated difference mode."""
     fallback = str(default).strip().lower() or DEFAULT_DIFFERENCE_MODE
     resolved = fallback if mode is None else str(mode).strip().lower()
@@ -47,14 +48,22 @@ def normalize_difference_orientation(
 def _as_measurement_vector(values, *, name: str) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim > 2:
-        raise ValueError(f"{name} must be a 1D or 2D measurement vector, got {array.ndim}D.")
+        raise ValueError(
+            f"{name} must be a 1D or 2D measurement vector, got {array.ndim}D."
+        )
     return array.reshape(-1)
 
 
-def _safe_reference(reference_meas: np.ndarray, *, floor: float | None = None) -> np.ndarray:
+def _safe_reference(
+    reference_meas: np.ndarray, *, floor: float | None = None
+) -> np.ndarray:
     """Clamp near-zero reference values to ``+/-eps``, preserving sign."""
     safe = np.asarray(reference_meas, dtype=np.float64).copy()
-    eps = np.finfo(np.float64).eps if floor is None else float(max(floor, np.finfo(np.float64).eps))
+    eps = (
+        np.finfo(np.float64).eps
+        if floor is None
+        else float(max(floor, np.finfo(np.float64).eps))
+    )
     small = np.abs(safe) < eps
     # Preserve sign for tiny nonzero values; default to +eps for exact zeros
     signs = np.sign(safe[small])
@@ -89,6 +98,30 @@ def build_difference_vector(
     if resolved_orientation == "reference_minus_target":
         diff = -diff
     return np.asarray(diff, dtype=np.float64)
+
+
+def normalize_time_difference(
+    v_t,
+    v_ref,
+    *,
+    floor: float | None = None,
+    orientation: str = DEFAULT_DIFFERENCE_ORIENTATION,
+) -> np.ndarray:
+    """Return normalized time-difference data ``(v_t - v_ref) / v_ref``.
+
+    This is the public v1 front-end for offline-RM online reconstruction.
+    It intentionally delegates to :func:`build_difference_vector` so the
+    zero guard and orientation contract stay identical across legacy GN and
+    EIDORS-style one-step/GREIT paths.
+    """
+
+    return build_difference_vector(
+        v_t,
+        v_ref,
+        mode="normalized",
+        orientation=orientation,
+        floor=floor,
+    )
 
 
 def project_measurement_vector(

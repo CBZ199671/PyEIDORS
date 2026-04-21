@@ -12,6 +12,7 @@ from .block_system import (
     scale_contact_impedance_update,
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
+from .reconstruction_matrix import reconstruct_difference
 from .workflows import (
     perform_absolute_reconstruction,
     perform_difference_reconstruction,
@@ -35,6 +36,7 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "reconstruct_difference",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
     "perform_sparse_absolute_reconstruction",
