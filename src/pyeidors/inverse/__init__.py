@@ -17,6 +17,7 @@ from .reconstruction_matrix import (
     OneStepRMResult,
     build_one_step_rm,
     reconstruct_difference,
+    reconstruct_difference_batch,
 )
 from .workflows import (
     perform_absolute_reconstruction,
@@ -45,6 +46,7 @@ __all__ = [
     "OneStepRMResult",
     "build_one_step_rm",
     "reconstruct_difference",
+    "reconstruct_difference_batch",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
     "perform_sparse_absolute_reconstruction",

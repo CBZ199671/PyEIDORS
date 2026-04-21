@@ -7,6 +7,7 @@ from .capabilities import (
     select_fused_strategy,
     select_preconditioner,
 )
+from .gpu_kernels import RMMatmulResult, rm_matmul
 from .policy import (
     ACCELERATION_PROFILE_GPU3D,
     ACCELERATION_PROFILE_GPU3D_FUSED,
@@ -143,6 +144,8 @@ __all__ = [
     "prefers_3d_gpu_pipeline",
     "prefers_fused_3d_gpu_pipeline",
     "probe_petsc_cuda_runtime",
+    "RMMatmulResult",
+    "rm_matmul",
     "resolve_experimental_mode",
     "resolve_forward_mat_solve",
     "resolve_line_search_mode",

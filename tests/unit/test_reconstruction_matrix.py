@@ -10,6 +10,7 @@ from pyeidors.data.difference import normalize_time_difference
 from pyeidors.inverse.reconstruction_matrix import (
     build_one_step_rm,
     reconstruct_difference,
+    reconstruct_difference_batch,
 )
 
 
@@ -277,9 +278,48 @@ def test_reconstruct_difference_accepts_preprojected_dv_and_sparse_rm() -> None:
     )
 
 
+def test_reconstruct_difference_batch_reuses_normalization_and_weight_contract() -> (
+    None
+):
+    rm = np.array([[1.0, 0.0, 2.0], [-1.0, 3.0, 0.5]], dtype=float)
+    reference = np.array([2.0, 4.0, 1.0], dtype=float)
+    targets = np.array([[3.0, 8.0, 2.0], [1.0, 2.0, 5.0]], dtype=float)
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 0.25], dtype=float)
+
+    result = reconstruct_difference_batch(
+        rm,
+        targets,
+        normalize=True,
+        v_ref=reference,
+        channel_mask=mask,
+        measurement_weights=weights,
+        device="cpu",
+        return_metadata=True,
+    )
+
+    normalized = np.vstack(
+        [normalize_time_difference(row, reference) for row in targets]
+    )
+    normalized[:, 1] = 0.0
+    weighted = normalized @ np.diag(np.sqrt([4.0, 0.0, 0.25]))
+    np.testing.assert_allclose(result.values, weighted @ rm.T)
+    assert result.metadata["batched"] is True
+    assert result.metadata["device_effective"] == "cpu"
+
+
+def test_reconstruct_difference_batch_accepts_single_frame_vector() -> None:
+    rm = np.array([[1.0, 2.0], [3.0, -1.0]], dtype=float)
+    dv = np.array([0.5, 2.0], dtype=float)
+
+    out = reconstruct_difference_batch(rm, dv, normalize=False, device="cpu")
+
+    np.testing.assert_allclose(out, rm @ dv)
+
+
 def test_reconstruct_difference_validates_shapes_and_finite_values() -> None:
     rm = np.ones((2, 3), dtype=float)
-    with pytest.raises(ValueError, match="RM column count"):
+    with pytest.raises(ValueError, match="measurement dimension"):
         reconstruct_difference(rm, np.ones(2), normalize=False)
     with pytest.raises(FloatingPointError, match="dv contains non-finite"):
         reconstruct_difference(rm, np.array([1.0, np.nan, 2.0]), normalize=False)

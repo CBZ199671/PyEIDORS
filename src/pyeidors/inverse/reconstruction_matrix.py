@@ -14,6 +14,7 @@ from pyeidors.data.channels import (
     apply_measurement_contract_to_vector,
 )
 from pyeidors.data.difference import normalize_time_difference
+from pyeidors.perf.gpu_kernels import RMMatmulResult, rm_matmul
 from pyeidors.utils.numeric_ops import safe_dot
 
 
@@ -42,6 +43,77 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     if not np.isfinite(vector).all():
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
+
+
+def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim == 1:
+        frames = array.reshape(1, -1)
+        was_vector = True
+    elif array.ndim == 2:
+        frames = array
+        was_vector = False
+    else:
+        raise ValueError(f"{name} must be a 1D vector or 2D frame batch.")
+    if frames.shape[0] == 0 or frames.shape[1] == 0:
+        raise ValueError(f"{name} must be non-empty.")
+    if not np.isfinite(frames).all():
+        raise FloatingPointError(f"{name} contains non-finite values.")
+    return np.ascontiguousarray(frames, dtype=np.float64), was_vector
+
+
+def _reference_frames(
+    reference: Any, *, n_frames: int, n_measurements: int
+) -> np.ndarray:
+    ref = np.asarray(reference, dtype=np.float64)
+    if ref.ndim == 1:
+        if ref.size != n_measurements:
+            raise ValueError(
+                f"v_ref length {ref.size} does not match {n_measurements} measurements."
+            )
+        return np.broadcast_to(ref.reshape(1, -1), (n_frames, n_measurements)).copy()
+    if ref.ndim == 2:
+        if ref.shape != (n_frames, n_measurements):
+            raise ValueError(
+                f"v_ref shape {ref.shape} does not match {(n_frames, n_measurements)}."
+            )
+        return np.ascontiguousarray(ref, dtype=np.float64)
+    raise ValueError("v_ref must be a 1D reference vector or 2D frame batch.")
+
+
+def _normalize_time_difference_frames(
+    targets: np.ndarray,
+    reference: Any,
+    *,
+    floor: float | None,
+) -> np.ndarray:
+    refs = _reference_frames(
+        reference,
+        n_frames=targets.shape[0],
+        n_measurements=targets.shape[1],
+    )
+    rows = [
+        normalize_time_difference(targets[idx], refs[idx], floor=floor)
+        for idx in range(targets.shape[0])
+    ]
+    return np.vstack(rows)
+
+
+def _apply_measurement_contract_to_frames(
+    frames: np.ndarray,
+    *,
+    channel_mask: Any | None,
+    measurement_weights: Any | None,
+) -> np.ndarray:
+    rows = [
+        apply_measurement_contract_to_vector(
+            frames[idx],
+            channel_mask=channel_mask,
+            measurement_weights=measurement_weights,
+        )[0]
+        for idx in range(frames.shape[0])
+    ]
+    return np.vstack(rows)
 
 
 def _as_jacobian(jacobian: Any) -> np.ndarray:
@@ -293,6 +365,7 @@ def reconstruct_difference(
     floor: float | None = None,
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
+    device: str = "cpu",
 ) -> np.ndarray:
     """Apply a precomputed reconstruction matrix to one difference frame.
 
@@ -312,7 +385,53 @@ def reconstruct_difference(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    return _matvec(rm, measurement)
+    return np.asarray(rm_matmul(rm, measurement, device=device), dtype=np.float64)
 
 
-__all__ = ["OneStepRMResult", "build_one_step_rm", "reconstruct_difference"]
+def reconstruct_difference_batch(
+    rm: Any,
+    frames,
+    *,
+    normalize: bool = True,
+    v_ref=None,
+    floor: float | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+    device: str = "auto",
+    return_metadata: bool = False,
+) -> np.ndarray | RMMatmulResult:
+    """Apply a precomputed RM to one or more online difference frames."""
+
+    frame_batch, was_vector = _as_measurement_frames(frames, name="frames")
+    if normalize and v_ref is not None:
+        measurement_batch = _normalize_time_difference_frames(
+            frame_batch,
+            v_ref,
+            floor=floor,
+        )
+    else:
+        measurement_batch = frame_batch
+    measurement_batch = _apply_measurement_contract_to_frames(
+        measurement_batch,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    payload: np.ndarray
+    if was_vector:
+        payload = measurement_batch.reshape(-1)
+    else:
+        payload = measurement_batch
+    return rm_matmul(
+        rm,
+        payload,
+        device=device,
+        return_metadata=return_metadata,
+    )
+
+
+__all__ = [
+    "OneStepRMResult",
+    "build_one_step_rm",
+    "reconstruct_difference",
+    "reconstruct_difference_batch",
+]
