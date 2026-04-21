@@ -1,6 +1,7 @@
 """PyEIDORS inverse problem solver module."""
 
 from .solvers.gauss_newton import GaussNewtonReconstructor
+from .solvers.matrix_free_gn import MatrixFreeGNStepResult, solve_matrix_free_gn_step
 from .solvers.sparse_bayesian import SparseBayesianReconstructor, SparseBayesianConfig
 from .contracts import SolverOutput
 from .block_system import (
@@ -43,6 +44,8 @@ from .workflows import (
 
 __all__ = [
     "GaussNewtonReconstructor",
+    "MatrixFreeGNStepResult",
+    "solve_matrix_free_gn_step",
     "SparseBayesianReconstructor",
     "SparseBayesianConfig",
     "SolverOutput",
