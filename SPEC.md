@@ -129,6 +129,7 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V39 | Normalized-difference parity: `normalize_time_difference(v_t, v_ref)` returns the same Δv vector as the existing `build_difference_vector(..., mode="normalized", orientation="target_minus_reference")` at `src/pyeidors/data/difference.py:66` for the same inputs. Default orientation stays `target_minus_reference`; other orientations gated by explicit opt-in | src/pyeidors/data/difference.py:75-124; tests/unit/test_difference_semantics.py:33-58 |
 | V40 | Offline (cold) RM-build time and online (warm) RM-apply time are recorded as separate fields in the benchmark artifact; online field dominated by a single dense matmul, cold field allowed arbitrary minutes | src/pyeidors/inverse/reconstruction_matrix.py:98-124; tests/unit/test_rm_v1_artifacts.py:90-105 |
 | V41 | 3D GREIT output emits the full metric set `{AR, PE, RES, SD, RNG}` per reconstruction — absence of any single metric fails the GREIT validation gate | src/pyeidors/inverse/greit.py:410-453,762-770; tests/unit/test_greit_rm.py:196-235 |
+| V42 | Forward `mat_solve_mode="off"` ! wins over CUDA/dense auto-routing (`forward_mat_solve_effective="vec-loop"`); `pc_type=="amgx"` / `solver_preset=="cuda_amgx"` with `petsc_amgx=false` fails during backend setup with explicit PCAMGX guidance | tests/unit/test_forward_mat_solve_policy.py |
 
 ## §T — tasks
 
@@ -197,3 +198,4 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | id | date | cause | fix |
 |----|------|-------|-----|
 | B1 | 2026-04-20 | `ForwardKSPSession` applied `setReusePreconditioner(True)` uniformly; for `ksp_type==preonly` + `pc_type∈{lu,cholesky,qr}` this silently reuses stale LU/Cholesky/QR factorisation across sigma updates, solving `A(σ_new) x = b` with `A(σ_old)^{-1}`. No Krylov iteration to correct the error (unlike iterative+AMG where reuse is a staleness penalty). | V24,T14 |
+| B2 | 2026-04-21 | CUDA/dense `matSolve` auto override ignored explicit `mat_solve_mode="off"`; `cuda_amgx` proceeded to solve even when PETSc PCAMGX absent | V42 |

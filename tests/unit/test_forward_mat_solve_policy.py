@@ -85,7 +85,12 @@ class _FakeKSP:
         return self.converged_reason
 
 
-def _make_model(*, mat_solve_mode: str, mesh_tdim: int) -> tuple[EITForwardModel, _FakeKSP]:
+def _make_model(
+    *,
+    mat_solve_mode: str,
+    mesh_tdim: int,
+    solve_mat_type: str = "aij",
+) -> tuple[EITForwardModel, _FakeKSP]:
     model = EITForwardModel.__new__(EITForwardModel)
     model.cache_manager = None
     model.dofs = 2
@@ -119,7 +124,7 @@ def _make_model(*, mat_solve_mode: str, mesh_tdim: int) -> tuple[EITForwardModel
             "ksp_type": "cg",
             "pc_type": "gamg",
             "factor_solver_type": None,
-            "solve_mat_type": "aij",
+            "solve_mat_type": solve_mat_type,
             "ksp_setup_count": 1,
             "reuse_preconditioner": bool(model.backend_config.reuse_preconditioner),
             "reuse_preconditioner_applied": True,
@@ -158,6 +163,30 @@ def test_forward_mat_solve_mode_off_uses_vector_loop(monkeypatch):
     assert diag["forward_ksp_setup_attempts"] == 1
     assert diag["forward_reuse_preconditioner_requested"] is True
     assert diag["forward_reuse_preconditioner_applied"] is True
+
+
+def test_forward_mat_solve_mode_off_overrides_cuda_dense_auto(monkeypatch):
+    model, ksp = _make_model(
+        mat_solve_mode="off",
+        mesh_tdim=3,
+        solve_mat_type="densecuda",
+    )
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
+    _ = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert model._should_use_mat_solve(pattern_matrix.shape[0]) is False
+    assert ksp.mat_calls == 0
+    assert ksp.solve_calls == pattern_matrix.shape[0]
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_mat_solve_effective"] == "vec-loop"
+    assert diag["forward_ksp_mat_solve_count"] == 0
 
 
 def test_forward_mat_solve_mode_auto_prefers_mat_solve_for_3d(monkeypatch):
@@ -231,7 +260,9 @@ def test_forward_mat_solve_negative_reason_falls_back_to_vector_loop(monkeypatch
     assert diag["forward_mat_solve_effective"] == "vec-loop"
     assert diag["forward_ksp_converged_reason"] == 1
     assert diag["forward_ksp_converged"] is True
-    assert "negative convergence reason (-3)" in diag["forward_mat_solve_fallback_reason"]
+    assert (
+        "negative convergence reason (-3)" in diag["forward_mat_solve_fallback_reason"]
+    )
 
 
 def test_forward_reuse_preconditioner_disabled_is_diagnosed(monkeypatch):
@@ -274,7 +305,10 @@ def test_resolve_petsc_backend_info_cuda_requires_real_capability(monkeypatch):
     monkeypatch.setattr(
         perf_caps,
         "probe_petsc_cuda_runtime",
-        lambda: {"petsc_cuda": False, "errors": {"mat": "Unknown type", "vec": "Unknown type"}},
+        lambda: {
+            "petsc_cuda": False,
+            "errors": {"mat": "Unknown type", "vec": "Unknown type"},
+        },
     )
 
     try:
@@ -286,6 +320,42 @@ def test_resolve_petsc_backend_info_cuda_requires_real_capability(monkeypatch):
 
     assert "petsc_device='cuda'" in message
     assert "nix develop .#cuda" in message
+
+
+def test_resolve_petsc_backend_info_cuda_amgx_requires_pcamgx(monkeypatch):
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.linear_backend = "petsc"
+    model.backend_config = SimpleNamespace(
+        petsc_device="cuda",
+        solver_preset="cuda_amgx",
+        pc_type="amgx",
+    )
+    monkeypatch.setattr(forward_module, "PETSc", object())
+    monkeypatch.setattr(
+        perf_caps,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_cuda_mat": True,
+            "petsc_cuda_vec": True,
+            "petsc_cuda_dense": True,
+            "petsc_amgx": False,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "densecuda",
+            "errors": {},
+        },
+    )
+
+    try:
+        EITForwardModel._resolve_petsc_backend_info(model)
+    except RuntimeError as exc:
+        message = str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("Expected RuntimeError for missing PETSc PCAMGX")
+
+    assert "当前 PETSc 未启用 AmgX" in message
+    assert "PCAMGX unavailable" in message
 
 
 def test_should_use_mat_solve_respects_min_patterns_threshold():

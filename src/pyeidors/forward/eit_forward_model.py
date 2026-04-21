@@ -841,6 +841,17 @@ class EITForwardModel:
         info["petsc_amgx_cuda_candidate"] = bool(
             capability.get("petsc_amgx_cuda_candidate", False)
         )
+        pc_type = self._solver_token(getattr(self.backend_config, "pc_type", ""))
+        solver_preset = self._solver_token(
+            getattr(self.backend_config, "solver_preset", "")
+        )
+        if (pc_type == "amgx" or solver_preset == "cuda_amgx") and not bool(
+            capability.get("petsc_amgx", False)
+        ):
+            raise RuntimeError(
+                "当前 PETSc 未启用 AmgX (PETSc PCAMGX unavailable); "
+                "rebuild PETSc with AmgX support or choose spd_gamg/spd_hypre."
+            )
         cuda_available = bool(capability.get("petsc_cuda", False))
         if requested == "cpu":
             return _with_stable_cpu_types()
@@ -1412,7 +1423,12 @@ class EITForwardModel:
         )
         has_cuda_dense = bool(capability.get("petsc_cuda_dense", False))
 
-        if effective_device == "cuda" and n_patterns > 1 and has_cuda_dense:
+        if (
+            mat_mode == "auto"
+            and effective_device == "cuda"
+            and n_patterns > 1
+            and has_cuda_dense
+        ):
             use_mat_solve = True
         if effective_device == "cuda" and use_mat_solve and not has_cuda_dense:
             use_mat_solve = False
@@ -2003,7 +2019,11 @@ class EITForwardModel:
         use_mat_solve = self._should_use_mat_solve(n_patterns)
 
         solve_mat_type = str(bundle.get("solve_mat_type") or "").strip().lower()
-        if "dense" in solve_mat_type and hasattr(ksp, "matSolve"):
+        if (
+            self._resolve_mat_solve_mode() != "off"
+            and "dense" in solve_mat_type
+            and hasattr(ksp, "matSolve")
+        ):
             use_mat_solve = True
 
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
