@@ -103,7 +103,42 @@ def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
     assert runtime.meta["solver_mode"] == "fast"
     assert runtime.meta["forward_mat_solve"] == "auto"
     assert runtime.meta["mesh_family"] == "tetra"
+    assert runtime.meta["jacobian_representation"] == "linearized"
     assert runtime.refinement == 5
+
+
+def test_single_step_cached_runtime_keeps_large_3d_auto_on_dense_jacobian() -> None:
+    large_ref = FrameData(
+        real=np.ones(5936, dtype=float),
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    large_tgt = FrameData(
+        real=np.ones(5936, dtype=float) * 1.001,
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=1,
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=large_ref,
+        target_frame=large_tgt,
+        mesh_dimension=3,
+        mesh_refinement=0.1,
+        metadata={
+            "mesh_dimension": 3,
+            "mesh_size": 0.1,
+            "n_elec": 16,
+            "n_rings": 3,
+            "jacobian_representation": "auto",
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.meta["solver_mode"] == "fast"
+    assert runtime.meta["jacobian_representation"] == "dense"
+    assert runtime.meta["jacobian_representation_reason"] == "auto_dense_large_or_non3d"
 
 
 def test_single_step_cached_runtime_uses_request_alpha_when_lambda_is_absent() -> None:
@@ -118,6 +153,7 @@ def test_single_step_cached_runtime_uses_request_alpha_when_lambda_is_absent() -
 
     assert runtime.lam == pytest.approx(0.75)
     assert runtime.meta["difference_lambda"] == pytest.approx(0.75)
+    assert runtime.meta["jacobian_representation"] == "dense"
 
 
 def test_single_step_cached_runtime_prefers_explicit_difference_lambda() -> None:
@@ -568,6 +604,7 @@ def test_single_step_cached_3d_context_uses_total_current_multiring_layout(
     assert build_calls[0]["n_elec"] == 8
     assert build_calls[0]["n_rings"] == 2
     assert build_calls[0]["drive_mode"] == "total_current"
+    assert build_calls[0]["jacobian_representation"] == "linearized"
 
 
 def test_gn_difference_runner_3d_multiring_loads_ring_ordered_mesh(

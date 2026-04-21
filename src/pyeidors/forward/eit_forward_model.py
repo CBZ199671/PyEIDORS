@@ -1509,6 +1509,44 @@ class EITForwardModel:
         sol_matrix = lu.solve(rhs_matrix)
         return np.asarray(sol_matrix, dtype=float)
 
+    def _solve_full_rhs_with_scipy(
+        self,
+        sigma: fem.Function,
+        rhs_matrix: np.ndarray,
+        *,
+        rhs_kind: str = "custom",
+    ) -> np.ndarray:
+        n_rhs = int(rhs_matrix.shape[1])
+        sigma_hash = self._sigma_fingerprint(sigma)
+        payload = self._base_cache_payload(sigma_hash=sigma_hash, n_patterns=n_rhs)
+        payload["solver"] = "splu"
+        payload["rhs_kind"] = str(rhs_kind)
+
+        if self.cache_manager is not None and self.cache_manager.enabled:
+            lu, lookup = self.cache_manager.get_or_compute(
+                artifact="forward_factor",
+                payload=payload,
+                compute_fn=lambda: splu(self._create_full_matrix_scipy(sigma).tocsc()),
+                persist=False,
+                cost=16.0,
+            )
+            self._last_cache_lookup = {
+                "key": lookup.key,
+                "hit": lookup.hit,
+                "layer": lookup.layer,
+                "artifact": lookup.artifact,
+            }
+        else:
+            lu = splu(self._create_full_matrix_scipy(sigma).tocsc())
+            self._last_cache_lookup = {
+                "hit": False,
+                "layer": "disabled",
+                "artifact": "forward_factor",
+            }
+
+        rhs = self._apply_cuda_gauge_fix_rhs(np.asarray(rhs_matrix, dtype=float).copy())
+        return np.asarray(lu.solve(rhs), dtype=float)
+
     def _make_petsc_solver_bundle(self, system_matrix):
         if PETSc is None:
             raise RuntimeError("petsc4py is required for linear_backend='petsc'")
@@ -2197,6 +2235,178 @@ class EITForwardModel:
             forward_pc_last_iter_count=session.last_iter_count
         )
         return sol_matrix
+
+    def _solve_full_rhs_with_petsc(
+        self,
+        sigma: fem.Function,
+        rhs_matrix: np.ndarray,
+        *,
+        rhs_kind: str = "custom",
+    ) -> np.ndarray:
+        if PETSc is None:
+            raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
+        rhs = np.asarray(rhs_matrix, dtype=float)
+        if rhs.ndim == 1:
+            rhs = rhs.reshape(-1, 1)
+        full_size = self.dofs + self.n_elec + 1
+        if rhs.shape[0] != full_size:
+            raise ValueError(
+                f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
+            )
+        rhs = self._apply_cuda_gauge_fix_rhs(rhs.copy())
+        n_rhs = int(rhs.shape[1])
+
+        setup_t0 = time.perf_counter()
+        bundle, session, session_reused = self._acquire_forward_ksp_bundle(sigma)
+        setup_seconds = float(time.perf_counter() - setup_t0)
+
+        A = bundle["A"]
+        solve_A = bundle.get("solve_A", A)
+        ksp = bundle["ksp"]
+        refresh_triggered = bool(session.last_refresh_triggered)
+        cache_hit = bool(session_reused and not refresh_triggered)
+        policy_name = self._resolve_forward_pc_refresh_policy()[0]
+        self._set_backend_diagnostic(
+            forward_factor_backend=session.backend_name,
+            forward_factor_cache_hit=cache_hit,
+            forward_rhs_kind=str(rhs_kind),
+            forward_rhs_count=n_rhs,
+            forward_ksp_setup_count=0 if cache_hit else 1,
+            forward_ksp_setup_attempts=int(session.total_setups),
+            forward_reuse_preconditioner_requested=bool(session.reuse_requested),
+            forward_reuse_preconditioner_applied=bool(session.reuse_applied),
+            forward_pc_refresh_triggered=refresh_triggered,
+            forward_pc_refresh_reason=session.last_refresh_reason,
+            forward_pc_refresh_policy=policy_name,
+            forward_pc_session_reused=bool(session_reused),
+            forward_pc_session_solves=int(session.solves_since_setup),
+            forward_pc_session_total_setups=int(session.total_setups),
+            forward_pc_last_iter_count=session.last_iter_count,
+            ksp_type=session.ksp_type
+            or getattr(getattr(self, "backend_config", None), "ksp_type", None),
+            pc_type=session.pc_type
+            or getattr(getattr(self, "backend_config", None), "pc_type", None),
+            petsc_mat_type=(
+                str(A.getType())
+                if hasattr(A, "getType")
+                else getattr(self, "_petsc_backend_info", {}).get("petsc_mat_type")
+            ),
+            forward_setup_seconds=setup_seconds,
+            forward_mat_solve_effective="vec-loop",
+            forward_ksp_mat_solve_count=0,
+        )
+
+        def _ksp_iteration_number(ksp_obj) -> int | None:
+            if not hasattr(ksp_obj, "getIterationNumber"):
+                return None
+            try:
+                return int(ksp_obj.getIterationNumber())
+            except Exception:
+                return None
+
+        solve_t0 = time.perf_counter()
+        sol_matrix = np.zeros_like(rhs)
+        b = self._ensure_vec_type(
+            solve_A.createVecRight(), self._get_requested_petsc_vec_type()
+        )
+        x = self._ensure_vec_type(
+            solve_A.createVecRight(), self._get_requested_petsc_vec_type()
+        )
+        if hasattr(x, "getType"):
+            self._set_backend_diagnostic(petsc_vec_type=str(x.getType()))
+        b_array = b.getArray(readonly=False)
+        backend_info = getattr(self, "_petsc_backend_info", {}) or {}
+        effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
+        iterations_per_rhs: list[int | None] = []
+        reason = None
+        for i in range(n_rhs):
+            b_array[:] = rhs[:, i]
+            ksp.solve(b, x)
+            iterations_per_rhs.append(_ksp_iteration_number(ksp))
+            reason = int(ksp.getConvergedReason())
+            if reason < 0:
+                self._last_cache_lookup = {
+                    "hit": False,
+                    "layer": "compute",
+                    "artifact": "forward_factor",
+                    "petsc_reason": reason,
+                }
+                self._set_backend_diagnostic(
+                    fallback_reason=f"petsc_ksp_failed:{reason}",
+                    forward_ksp_solve_count=int(i + 1),
+                    forward_ksp_iterations_per_rhs=iterations_per_rhs,
+                    forward_ksp_iterations_total=sum(
+                        int(value)
+                        for value in iterations_per_rhs
+                        if value is not None
+                    ),
+                    forward_ksp_converged_reason=reason,
+                    forward_ksp_converged=False,
+                    forward_solve_seconds=float(time.perf_counter() - solve_t0),
+                )
+                self._dispose_forward_ksp_session(session)
+                if effective_device == "cuda":
+                    raise RuntimeError(
+                        "PETSc CUDA full RHS solve failed with a negative "
+                        f"convergence reason ({reason}). {self._actionable_cuda_guidance()}"
+                    )
+                return self._solve_full_rhs_with_scipy(
+                    sigma, rhs, rhs_kind=rhs_kind
+                )
+            sol_matrix[:, i] = x.getArray(readonly=True)
+
+        total_iterations = sum(
+            int(value) for value in iterations_per_rhs if value is not None
+        )
+        self._set_backend_diagnostic(
+            forward_ksp_solve_count=n_rhs,
+            forward_ksp_iterations_per_rhs=iterations_per_rhs,
+            forward_ksp_iterations_total=total_iterations,
+            forward_ksp_converged_reason=reason,
+            forward_ksp_converged=None if reason is None else bool(reason > 0),
+            forward_solve_seconds=float(time.perf_counter() - solve_t0),
+        )
+        session.record_solve(total_iterations if n_rhs else None)
+        self._set_backend_diagnostic(
+            forward_pc_last_iter_count=session.last_iter_count
+        )
+        return self._recenter_cuda_gauge_solution(sol_matrix)
+
+    def solve_full_rhs(
+        self,
+        sigma: fem.Function,
+        rhs_matrix: np.ndarray,
+        *,
+        rhs_kind: str = "custom",
+    ) -> np.ndarray:
+        """Solve the CEM system for arbitrary full RHS columns.
+
+        This is the low-level hook used by matrix-free sensitivity actions:
+        ``Jv`` has potential-space RHS columns, while ``J^T r`` can use
+        combined adjoint electrode-current RHS columns. The method deliberately
+        shares the forward KSP session so these auxiliary solves reuse the same
+        matrix and preconditioner lifecycle as ordinary CEM forward solves.
+        """
+        rhs = np.asarray(rhs_matrix, dtype=float)
+        if rhs.ndim == 1:
+            rhs = rhs.reshape(-1, 1)
+        full_size = self.dofs + self.n_elec + 1
+        if rhs.shape[0] != full_size:
+            raise ValueError(
+                f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
+            )
+        if self.linear_backend == "scipy":
+            return self._solve_full_rhs_with_scipy(
+                sigma, rhs, rhs_kind=rhs_kind
+            )
+        if self.linear_backend == "petsc":
+            return self._solve_full_rhs_with_petsc(
+                sigma, rhs, rhs_kind=rhs_kind
+            )
+        raise ValueError(
+            f"Unsupported linear_backend: {self.linear_backend}. "
+            "Expected one of: 'petsc', 'scipy'."
+        )
 
     def forward_solve(self, sigma: fem.Function, current_patterns=None):
         """Forward solve for given conductivity and stimulation patterns."""

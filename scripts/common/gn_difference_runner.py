@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 import time
+from types import SimpleNamespace
 from typing import Callable, Optional
 
 import matplotlib as mpl
@@ -31,12 +32,21 @@ from pyeidors.cache.object_signature import (
     model_signature_from_forward_model,
     pattern_signature_from_forward_model,
 )
-from pyeidors.data.difference import build_difference_vector, project_measurement_jacobian
+from pyeidors.data.difference import (
+    build_difference_vector,
+    normalize_difference_mode,
+    normalize_difference_orientation,
+    project_measurement_jacobian,
+)
 from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.linearized import (
+    JacobianLinearization,
+    LazyAdjointJacobianLinearization,
+)
 from pyeidors.perf.capabilities import detect_performance_capabilities, select_preconditioner
 from pyeidors.perf.policy import (
     DEFAULT_3D_GEOMETRY_VERSION,
@@ -108,6 +118,212 @@ def _build_noser_diag(
     diag_entries = np.maximum(diag_entries, effective_floor)
     scaled_diag = diag_entries**exponent
     return np.asarray(alpha * scaled_diag, dtype=np.float64)
+
+
+def _normalize_jacobian_representation(
+    value: str | None,
+    *,
+    mesh_dim: int,
+    solver_mode: str,
+) -> str:
+    raw = str(value or "dense").strip().lower().replace("_", "-")
+    if raw == "auto":
+        return "linearized" if int(mesh_dim) == 3 and str(solver_mode) == "fast" else "dense"
+    if raw in {"dense", "materialized"}:
+        return "dense"
+    if raw in {"linearized", "jacobian-linearization", "operator"}:
+        return "linearized"
+    if raw in {"lazy", "lazy-adjoint", "matrix-free", "matrixfree"}:
+        return "lazy"
+    raise ValueError(
+        "jacobian_representation must be one of 'dense', 'linearized', 'lazy', or 'auto', "
+        f"got {value!r}."
+    )
+
+
+def _difference_jacobian_weights(
+    reference_meas: np.ndarray,
+    *,
+    difference_mode: str,
+    difference_orientation: str,
+) -> np.ndarray:
+    reference = np.asarray(reference_meas, dtype=np.float64).reshape(-1)
+    weights = np.ones_like(reference, dtype=np.float64)
+    if normalize_difference_mode(difference_mode) == "normalized":
+        safe_ref = reference.copy()
+        eps = np.finfo(np.float64).eps
+        small = np.abs(safe_ref) < eps
+        signs = np.sign(safe_ref[small])
+        signs[signs == 0.0] = 1.0
+        safe_ref[small] = signs * eps
+        weights = weights / safe_ref
+    if normalize_difference_orientation(difference_orientation) == "reference_minus_target":
+        weights = -weights
+    return np.asarray(weights, dtype=np.float64)
+
+
+def _build_noser_diag_from_linearization(
+    linearization: JacobianLinearization | LazyAdjointJacobianLinearization,
+    *,
+    projection_weights: np.ndarray,
+    exponent: float = 0.5,
+    alpha: float = 1.0,
+    adaptive_floor: bool = True,
+    floor: float = 1e-12,
+    floor_fraction: float = 1e-6,
+    diag_mode: str | None = None,
+    diag_batch_max_measurements: int | None = None,
+) -> np.ndarray:
+    weights = np.asarray(projection_weights, dtype=np.float64).reshape(-1)
+    hessian_kwargs: dict[str, object] = {
+        "measurement_weights": weights * weights,
+    }
+    if isinstance(linearization, LazyAdjointJacobianLinearization):
+        hessian_kwargs["diag_mode"] = diag_mode
+        hessian_kwargs["diag_batch_max_measurements"] = diag_batch_max_measurements
+    diag_entries = linearization.hessian_diag(**hessian_kwargs)
+    if adaptive_floor:
+        adaptive_floor_value = np.max(diag_entries) * floor_fraction
+        effective_floor = max(adaptive_floor_value, 1e-100)
+    else:
+        effective_floor = floor
+    diag_entries = np.maximum(diag_entries, effective_floor)
+    return np.asarray(float(alpha) * (diag_entries ** float(exponent)), dtype=np.float64)
+
+
+def _linearized_matvec(
+    linearization: JacobianLinearization,
+    projection_weights: np.ndarray,
+    vector: np.ndarray,
+) -> np.ndarray:
+    return np.asarray(
+        np.asarray(projection_weights, dtype=np.float64) * linearization.matvec(vector),
+        dtype=np.float64,
+    )
+
+
+def _linearized_rmatvec(
+    linearization: JacobianLinearization,
+    projection_weights: np.ndarray,
+    residual: np.ndarray,
+) -> np.ndarray:
+    weighted = np.asarray(projection_weights, dtype=np.float64) * np.asarray(
+        residual, dtype=np.float64
+    ).reshape(-1)
+    return np.asarray(linearization.rmatvec(weighted), dtype=np.float64)
+
+
+def _disabled_lookup(artifact: str) -> SimpleNamespace:
+    return SimpleNamespace(hit=False, layer="disabled", artifact=artifact, key="")
+
+
+def _normalize_linearized_solver_strategy(
+    value: str | None,
+    *,
+    jacobian_representation: str = "linearized",
+) -> str:
+    raw = str(value or "auto").strip().lower().replace("_", "-")
+    if raw in {"", "auto"}:
+        return "cg-only" if str(jacobian_representation) == "lazy" else "cg-lsmr"
+    if raw in {"cg", "cg-only", "cgonly"}:
+        return "cg-only"
+    if raw in {"cg-lsmr", "cg+lsmr", "auto-lsmr"}:
+        return "cg-lsmr"
+    if raw in {"lsmr"}:
+        return "lsmr"
+    if raw in {"cgls", "cg-ls"}:
+        return "cgls"
+    raise ValueError(
+        "linearized_solver_strategy must be auto|cg_only|cg_lsmr|lsmr|cgls, "
+        f"got {value!r}."
+    )
+
+
+def _normalize_lazy_preconditioner_mode(value: str | None) -> str:
+    raw = str(value or "auto").strip().lower().replace("_", "-")
+    if raw in {"", "auto", "diag", "approx", "lazy-approx"}:
+        return "approx"
+    if raw in {"noser", "batch", "batch-noser", "sampled-noser"}:
+        return "batch-noser"
+    if raw in {"prior", "prior-precision", "r", "regularization"}:
+        return "prior"
+    if raw in {"coarse", "coarse-hessian", "coarse-diag"}:
+        return "coarse"
+    return "approx"
+
+
+def _build_linearized_preconditioner_diag(
+    linearization: JacobianLinearization | LazyAdjointJacobianLinearization,
+    *,
+    projection_weights: np.ndarray,
+    reg_diag: np.ndarray,
+    lam: float,
+    preconditioner: str,
+    lazy_preconditioner_mode: str,
+    lazy_diag_batch_max_measurements: int,
+) -> tuple[np.ndarray, dict[str, object]]:
+    reg = np.asarray(reg_diag, dtype=np.float64).reshape(-1)
+    pc = str(preconditioner or "auto").strip().lower()
+    if pc == "prior":
+        diag = np.maximum(float(lam) * reg, 1e-12)
+        return diag, {
+            "source": "prior",
+            "mode": "prior",
+            "reason": "preconditioner_prior",
+        }
+
+    if isinstance(linearization, LazyAdjointJacobianLinearization):
+        mode = str(lazy_preconditioner_mode or "approx")
+        if pc == "noser":
+            mode = "batch-noser"
+        elif pc == "coarse":
+            mode = "coarse"
+        elif pc in {"auto", "diag"}:
+            mode = _normalize_lazy_preconditioner_mode(mode)
+
+        if mode == "prior":
+            diag = np.maximum(float(lam) * reg, 1e-12)
+            return diag, {
+                "source": "prior",
+                "mode": "prior",
+                "reason": "lazy_preconditioner_mode_prior",
+            }
+
+        diag_mode = {
+            "approx": "approx",
+            "batch-noser": "batch-noser",
+            "coarse": "coarse",
+        }.get(mode, "approx")
+        batch_max = int(lazy_diag_batch_max_measurements)
+        if diag_mode == "coarse":
+            batch_max = min(batch_max, 128)
+        diag = linearization.hessian_diag(
+            measurement_weights=np.asarray(projection_weights, dtype=np.float64) ** 2,
+            alpha=float(lam),
+            regularization_diag=reg,
+            floor=1e-12,
+            diag_mode=diag_mode,
+            diag_batch_max_measurements=batch_max,
+        )
+        return np.asarray(diag, dtype=np.float64), {
+            "source": "lazy_hessian_diag",
+            "mode": str(diag_mode),
+            "reason": f"lazy_preconditioner_{mode}",
+            "diag_info": dict(getattr(linearization, "last_diag_info", {}) or {}),
+        }
+
+    diag = linearization.hessian_diag(
+        measurement_weights=np.asarray(projection_weights, dtype=np.float64) ** 2,
+        alpha=float(lam),
+        regularization_diag=reg,
+        floor=1e-12,
+    )
+    return np.asarray(diag, dtype=np.float64), {
+        "source": "linearized_hessian_diag",
+        "mode": "exact",
+        "reason": f"preconditioner_{pc}",
+        "diag_info": dict(getattr(linearization, "last_diag_info", {}) or {}),
+    }
 
 
 def _linux_mem_available_bytes() -> int | None:
@@ -187,6 +403,239 @@ def _measurement_space_delta(
         ),
         dtype=float,
     )
+
+
+def _solve_linearized_lsmr(
+    *,
+    linearization: JacobianLinearization,
+    projection_weights: np.ndarray,
+    rhs: np.ndarray,
+    reg_diag: np.ndarray,
+    lam: float,
+    maxiter: int,
+) -> np.ndarray:
+    n_param = int(linearization.n_parameters)
+    n_meas = int(linearization.n_measurements)
+    safe_reg = np.maximum(np.asarray(reg_diag, dtype=np.float64).reshape(-1), 1e-12)
+    sqrt_lam = float(np.sqrt(max(float(lam), 0.0)))
+    sqrt_reg = np.sqrt(safe_reg)
+
+    def _matvec(v: np.ndarray) -> np.ndarray:
+        vec = np.asarray(v, dtype=np.float64).reshape(-1)
+        return np.concatenate(
+            [
+                _linearized_matvec(linearization, projection_weights, vec),
+                sqrt_lam * sqrt_reg * vec,
+            ]
+        )
+
+    def _rmatvec(w: np.ndarray) -> np.ndarray:
+        arr = np.asarray(w, dtype=np.float64).reshape(-1)
+        return _linearized_rmatvec(
+            linearization,
+            projection_weights,
+            arr[:n_meas],
+        ) + sqrt_lam * sqrt_reg * arr[n_meas:]
+
+    augmented = sparse.linalg.LinearOperator(
+        (n_meas + n_param, n_param),
+        matvec=_matvec,
+        rmatvec=_rmatvec,
+        dtype=np.float64,
+    )
+    rhs_aug = np.concatenate([np.asarray(rhs, dtype=np.float64).reshape(-1), np.zeros(n_param)])
+    result = lsmr(
+        augmented,
+        rhs_aug,
+        atol=1e-7,
+        btol=1e-7,
+        maxiter=max(20, int(maxiter)),
+    )
+    return np.asarray(result[0], dtype=np.float64)
+
+
+def _solve_linearized_cgls(
+    *,
+    linearization,
+    projection_weights: np.ndarray,
+    rhs: np.ndarray,
+    reg_diag: np.ndarray,
+    lam: float,
+    maxiter: int,
+    rtol: float = 1e-7,
+    atol: float = 1e-10,
+) -> tuple[np.ndarray, dict[str, object]]:
+    n_param = int(linearization.n_parameters)
+    n_meas = int(linearization.n_measurements)
+    safe_reg = np.maximum(np.asarray(reg_diag, dtype=np.float64).reshape(-1), 1e-12)
+    sqrt_lam = float(np.sqrt(max(float(lam), 0.0)))
+    sqrt_reg = np.sqrt(safe_reg)
+    rhs_vec = np.asarray(rhs, dtype=np.float64).reshape(-1)
+
+    def _matvec(vec: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+        jv = _linearized_matvec(linearization, projection_weights, vec)
+        rv = sqrt_lam * sqrt_reg * vec
+        return jv, rv
+
+    def _rmatvec(j_res: np.ndarray, r_res: np.ndarray) -> np.ndarray:
+        return _linearized_rmatvec(
+            linearization,
+            projection_weights,
+            j_res,
+        ) + sqrt_lam * sqrt_reg * r_res
+
+    x = np.zeros(n_param, dtype=np.float64)
+    r_meas = rhs_vec.copy()
+    r_reg = np.zeros(n_param, dtype=np.float64)
+    s = _rmatvec(r_meas, r_reg)
+    p = s.copy()
+    gamma = float(np.dot(s, s))
+    rhs_norm = float(np.linalg.norm(rhs_vec))
+    tol = max(float(atol), float(rtol) * max(rhs_norm, 1e-18))
+    converged = False
+    iterations = 0
+    for iteration in range(1, max(1, int(maxiter)) + 1):
+        q_meas, q_reg = _matvec(p)
+        denom = float(np.dot(q_meas, q_meas) + np.dot(q_reg, q_reg))
+        if not np.isfinite(denom) or denom <= 1e-30:
+            break
+        alpha = gamma / denom
+        x = x + alpha * p
+        r_meas = r_meas - alpha * q_meas
+        r_reg = r_reg - alpha * q_reg
+        residual_norm = float(
+            np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg))
+        )
+        iterations = iteration
+        if residual_norm <= tol:
+            converged = True
+            break
+        s_next = _rmatvec(r_meas, r_reg)
+        gamma_next = float(np.dot(s_next, s_next))
+        if not np.isfinite(gamma_next) or gamma <= 1e-300:
+            break
+        p = s_next + (gamma_next / gamma) * p
+        s = s_next
+        gamma = gamma_next
+    return np.asarray(x, dtype=np.float64), {
+        "iterations": int(iterations),
+        "converged": bool(converged),
+        "residual_norm": float(
+            np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg))
+        ),
+    }
+
+
+def _solve_linearized_delta(
+    *,
+    operator_bundle: dict,
+    rhs: np.ndarray,
+) -> np.ndarray:
+    linearization = operator_bundle.get("linearization")
+    if not hasattr(linearization, "matvec") or not hasattr(linearization, "rmatvec"):
+        raise RuntimeError("linearized operator bundle requires a Jacobian action object.")
+
+    projection_weights = np.asarray(
+        operator_bundle.get("projection_weights"), dtype=np.float64
+    ).reshape(-1)
+    reg_diag = np.asarray(operator_bundle["reg_diag"], dtype=np.float64).reshape(-1)
+    lam = float(operator_bundle.get("lambda", 0.0))
+    n_param = int(linearization.n_parameters)
+    representation = str(operator_bundle.get("jacobian_representation", "linearized"))
+    strategy = _normalize_linearized_solver_strategy(
+        operator_bundle.get("linearized_solver_strategy", "auto"),
+        jacobian_representation=representation,
+    )
+
+    def _hessian_matvec(v: np.ndarray) -> np.ndarray:
+        vec = np.asarray(v, dtype=np.float64).reshape(-1)
+        jv = _linearized_matvec(linearization, projection_weights, vec)
+        return _linearized_rmatvec(
+            linearization,
+            projection_weights,
+            jv,
+        ) + lam * reg_diag * vec
+
+    hessian = sparse.linalg.LinearOperator(
+        (n_param, n_param),
+        matvec=_hessian_matvec,
+        dtype=np.float64,
+    )
+    precond_diag = np.asarray(
+        operator_bundle.get("precond_diag", reg_diag), dtype=np.float64
+    ).reshape(-1)
+    precond_diag = np.maximum(precond_diag, 1e-12)
+    preconditioner = sparse.linalg.LinearOperator(
+        (n_param, n_param),
+        matvec=lambda v: np.asarray(v, dtype=np.float64) / precond_diag,
+        dtype=np.float64,
+    )
+    default_maxiter = 80 if isinstance(linearization, LazyAdjointJacobianLinearization) else max(200, min(n_param * 2, 4000))
+    maxiter = int(operator_bundle.get("linearized_maxiter", default_maxiter) or default_maxiter)
+    maxiter = max(1, maxiter)
+
+    cg_info = 0
+    cgls_info: dict[str, object] = {}
+    if strategy == "lsmr":
+        x = _solve_linearized_lsmr(
+            linearization=linearization,
+            projection_weights=projection_weights,
+            rhs=rhs,
+            reg_diag=reg_diag,
+            lam=lam,
+            maxiter=maxiter,
+        )
+        method = "lsmr"
+        cg_info = -999
+    elif strategy == "cgls":
+        x, cgls_info = _solve_linearized_cgls(
+            linearization=linearization,
+            projection_weights=projection_weights,
+            rhs=rhs,
+            reg_diag=reg_diag,
+            lam=lam,
+            maxiter=maxiter,
+        )
+        method = "cgls"
+        cg_info = 0 if bool(cgls_info.get("converged", False)) else int(maxiter)
+    else:
+        b = _linearized_rmatvec(linearization, projection_weights, rhs)
+        x, cg_info = cg(
+            hessian,
+            b,
+            M=preconditioner,
+            rtol=1e-7,
+            atol=1e-10,
+            maxiter=maxiter,
+        )
+        method = "cg"
+        if (
+            (cg_info != 0 or not np.all(np.isfinite(x)))
+            and strategy == "cg-lsmr"
+        ):
+            x = _solve_linearized_lsmr(
+                linearization=linearization,
+                projection_weights=projection_weights,
+                rhs=rhs,
+                reg_diag=reg_diag,
+                lam=lam,
+                maxiter=maxiter,
+            )
+            method = "lsmr"
+    operator_bundle["linearized_last_solve"] = {
+        "method": method,
+        "strategy": strategy,
+        "cg_info": int(cg_info),
+        "converged": bool(cg_info == 0 and np.all(np.isfinite(x))),
+        "maxiter": int(maxiter),
+        "cgls_info": dict(cgls_info),
+        "preconditioner_info": dict(
+            operator_bundle.get("linearized_preconditioner_info", {})
+        ),
+        "action_info": dict(getattr(linearization, "last_action_info", {}) or {}),
+        "diag_info": dict(getattr(linearization, "last_diag_info", {}) or {}),
+    }
+    return np.asarray(x, dtype=np.float64)
 
 
 def _make_linear_solver(A: np.ndarray) -> Optional[Callable[[np.ndarray], np.ndarray]]:
@@ -561,6 +1010,11 @@ def build_shared_context(
     forward_mat_solve: str = "off",
     petsc_device: str = "auto",
     device: str = "auto",
+    jacobian_representation: str = "dense",
+    linearized_solver_strategy: str = "auto",
+    linearized_maxiter: int = 0,
+    lazy_preconditioner_mode: str = "auto",
+    lazy_diag_batch_max_measurements: int = 512,
     forward_backend: str = DEFAULT_FORWARD_BACKEND,
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
@@ -579,6 +1033,20 @@ def build_shared_context(
     forward_mat_solve = str(forward_mat_solve).strip().lower()
     petsc_device = str(petsc_device).strip().lower()
     device = str(device).strip().lower()
+    jacobian_representation = _normalize_jacobian_representation(
+        jacobian_representation,
+        mesh_dim=int(mesh_dim),
+        solver_mode=solver_mode,
+    )
+    linearized_solver_strategy = _normalize_linearized_solver_strategy(
+        linearized_solver_strategy,
+        jacobian_representation=jacobian_representation,
+    )
+    linearized_maxiter = max(0, int(linearized_maxiter))
+    lazy_preconditioner_mode = _normalize_lazy_preconditioner_mode(
+        lazy_preconditioner_mode
+    )
+    lazy_diag_batch_max_measurements = max(1, int(lazy_diag_batch_max_measurements))
     forward_backend = normalize_forward_backend(
         forward_backend,
         default=DEFAULT_FORWARD_BACKEND,
@@ -772,6 +1240,7 @@ def build_shared_context(
     jacobian_payload = {
         "solver": "gn_difference",
         "method": "adjoint",
+        "jacobian_representation": jacobian_representation,
         "mesh_dim": int(mesh_dim),
         "mesh_height": float(mesh_height),
         "electrode_height_ratio": float(electrode_height_ratio),
@@ -781,6 +1250,324 @@ def build_shared_context(
         "pattern_signature": pattern_signature_from_forward_model(fwd_model),
         "backend_signature": backend_signature_from_forward_model(fwd_model),
     }
+
+    if jacobian_representation in {"linearized", "lazy"}:
+        def _compute_linearization():
+            if jacobian_representation == "lazy":
+                return jac_calc.linearize_lazy_from_image(img_bg)
+            return jac_calc.linearize_from_image(img_bg)
+
+        linearization, jacobian_lookup = cache_manager.get_or_compute_semantic(
+            artifact="jacobian",
+            name=CACHE_NAME_JACOBIAN,
+            namespace=CACHE_NAMESPACE_DIFFERENCE,
+            cache_obj=jacobian_payload,
+            payload=jacobian_payload,
+            compute_fn=lambda: _timed(
+                "jacobian",
+                _compute_linearization,
+            ),
+            persist=jacobian_representation != "lazy",
+            cost=10.0,
+            effort_seconds=8.0,
+        )
+        if not hasattr(linearization, "matvec") or not hasattr(linearization, "rmatvec"):
+            raise RuntimeError("Cached linearized Jacobian payload has the wrong type.")
+        build_seconds.setdefault("jacobian", 0.0)
+
+        projection_weights = _difference_jacobian_weights(
+            base_meas,
+            difference_mode=difference_mode,
+            difference_orientation=difference_orientation,
+        )
+        jacobian_operator = sparse.linalg.LinearOperator(
+            linearization.shape,
+            matvec=lambda v: _linearized_matvec(linearization, projection_weights, v),
+            rmatvec=lambda r: _linearized_rmatvec(linearization, projection_weights, r),
+            dtype=np.float64,
+        )
+        strict_backend_info = (
+            _select_strict_solver_backend(
+                mesh_dim=int(mesh_dim),
+                n_param=int(linearization.n_parameters),
+                n_meas=int(linearization.n_measurements),
+            )
+            if solver_mode == "strict"
+            else {
+                "requested": STRICT_SOLVER_BACKEND_DENSE,
+                "effective": STRICT_SOLVER_BACKEND_DENSE,
+                "strict_memory_guard_triggered": False,
+                "strict_memory_guard_reason": "not_strict",
+                "strict_dense_estimated_peak_bytes": 0.0,
+                "strict_dense_estimated_peak_gib": 0.0,
+                "strict_memory_guard_limit_bytes": 0.0,
+                "strict_memory_guard_limit_gib": 0.0,
+                "strict_mem_available_bytes": 0,
+                "strict_mem_available_gib": 0.0,
+                "strict_mem_available_source": "not_strict",
+                "strict_measurement_system_shape": None,
+            }
+        )
+        operator_payload_base = {
+            "solver": "gn_difference",
+            "solver_mode": solver_mode,
+            "linear_solver": linear_solver,
+            "preconditioner": preconditioner,
+            "jacobian_representation": jacobian_representation,
+            "lazy_preconditioner_mode": lazy_preconditioner_mode,
+            "lazy_diag_batch_max_measurements": int(lazy_diag_batch_max_measurements),
+            "mesh_dim": int(mesh_dim),
+            "mesh_height": float(mesh_height),
+            "electrode_height_ratio": float(electrode_height_ratio),
+            "z_center": float(z_center),
+            "sigma_hash": sigma_hash,
+            "lambda": float(lam),
+            "model_signature": jacobian_payload["model_signature"],
+            "pattern_signature": jacobian_payload["pattern_signature"],
+            "backend_signature": jacobian_payload["backend_signature"],
+            "difference_mode": str(difference_mode),
+            "difference_orientation": str(difference_orientation),
+            "base_meas_hash": hash_array(np.ascontiguousarray(base_meas, dtype=np.float64)),
+            "projection_weights_hash": hash_array(
+                np.ascontiguousarray(projection_weights, dtype=np.float64)
+            ),
+            "strict_solver_backend_effective": str(
+                strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+            ),
+        }
+        reg_diag, reg_lookup = cache_manager.get_or_compute_semantic(
+            artifact="single_step_operator",
+            name=CACHE_NAME_OPERATOR_NOSER,
+            namespace=CACHE_NAMESPACE_DIFFERENCE,
+            cache_obj={**operator_payload_base, "part": "NOSER_DIAG_LINEARIZED"},
+            payload={**operator_payload_base, "part": "NOSER_DIAG_LINEARIZED"},
+            compute_fn=lambda: _timed(
+                "operator_noser",
+                lambda: _build_noser_diag_from_linearization(
+                    linearization,
+                    projection_weights=projection_weights,
+                    exponent=0.5,
+                    alpha=1.0,
+                    diag_mode=(
+                        "approx"
+                        if jacobian_representation == "lazy"
+                        else None
+                    ),
+                    diag_batch_max_measurements=int(
+                        lazy_diag_batch_max_measurements
+                    ),
+                ),
+            ),
+            persist=True,
+            cost=5.0,
+            effort_seconds=3.0,
+        )
+        build_seconds.setdefault("operator_noser", 0.0)
+        precond_diag, precond_lookup = cache_manager.get_or_compute_semantic(
+            artifact="single_step_operator",
+            name=CACHE_NAME_OPERATOR_PRECOND,
+            namespace=CACHE_NAMESPACE_DIFFERENCE,
+            cache_obj={**operator_payload_base, "part": "PRECOND_LINEARIZED"},
+            payload={**operator_payload_base, "part": "PRECOND_LINEARIZED"},
+            compute_fn=lambda: _timed(
+                "operator_precond",
+                lambda: _build_linearized_preconditioner_diag(
+                    linearization,
+                    projection_weights=projection_weights,
+                    reg_diag=np.asarray(reg_diag, dtype=np.float64),
+                    lam=float(lam),
+                    preconditioner=preconditioner,
+                    lazy_preconditioner_mode=lazy_preconditioner_mode,
+                    lazy_diag_batch_max_measurements=int(
+                        lazy_diag_batch_max_measurements
+                    ),
+                ),
+            ),
+            persist=True,
+            cost=2.0,
+            effort_seconds=1.0,
+        )
+        if isinstance(precond_diag, tuple):
+            precond_diag, precond_info = precond_diag
+        else:
+            precond_info = {
+                "source": "legacy_hessian_diag",
+                "mode": "exact",
+                "reason": "cached_payload_without_info",
+            }
+        build_seconds.setdefault("operator_precond", 0.0)
+        build_seconds.setdefault("operator_jt", 0.0)
+        build_seconds.setdefault("operator_A", 0.0)
+        build_seconds.setdefault("operator_lu", 0.0)
+        build_seconds.setdefault("operator_rom_snapshots", 0.0)
+        build_seconds.setdefault("operator_rom_reduced_rm", 0.0)
+        j_t_lookup = _disabled_lookup("single_step_operator")
+        a_lookup = _disabled_lookup("single_step_operator")
+        factor_lookup = _disabled_lookup("single_step_operator")
+        reduced_lookup = None
+        reduced_info = {
+            "enabled": False,
+            "rom_mode": rom_mode,
+            "lowrank_mode": lowrank_mode,
+            "ratio_n_over_m": float(linearization.n_parameters)
+            / max(float(linearization.n_measurements), 1.0),
+            "reason": "linearized_operator",
+        }
+        inv_reg_diag = np.asarray(1.0 / np.maximum(reg_diag, 1e-12), dtype=float)
+        operator_bundle = {
+            "mode": solver_mode,
+            "linear_solver": linear_solver,
+            "preconditioner": preconditioner,
+            "jacobian_representation": jacobian_representation,
+            "linearized_solver_strategy": linearized_solver_strategy,
+            "linearized_maxiter": int(linearized_maxiter),
+            "lazy_preconditioner_mode": lazy_preconditioner_mode,
+            "lazy_diag_batch_max_measurements": int(lazy_diag_batch_max_measurements),
+            "J": jacobian_operator,
+            "linearization": linearization,
+            "projection_weights": np.asarray(projection_weights, dtype=np.float64),
+            "reg_diag": np.asarray(reg_diag, dtype=float),
+            "inv_reg_diag": inv_reg_diag,
+            "precond_diag": np.asarray(precond_diag, dtype=float),
+            "linearized_preconditioner_info": dict(precond_info),
+            "lambda": float(lam),
+            "linearized_maxiter": (
+                int(linearized_maxiter)
+                if int(linearized_maxiter) > 0
+                else (80 if jacobian_representation == "lazy" else 0)
+            ),
+            "factor": {"method": "matrix-free"},
+            "reduced_rm": None,
+            "reduced_info": reduced_info,
+            "device_requested": str(runtime_selection.requested),
+            "device_effective": str(runtime_selection.effective),
+            "torch_device": str(runtime_selection.torch_device),
+            "strict_solver_backend_requested": str(
+                strict_backend_info.get("requested", STRICT_SOLVER_BACKEND_DENSE)
+            ),
+            "strict_solver_backend_effective": str(
+                strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+            ),
+            "strict_memory_guard_triggered": bool(
+                strict_backend_info.get("strict_memory_guard_triggered", False)
+            ),
+            "strict_memory_guard_reason": str(
+                strict_backend_info.get("strict_memory_guard_reason", "")
+            ),
+            "strict_dense_estimated_peak_gib": float(
+                strict_backend_info.get("strict_dense_estimated_peak_gib", 0.0)
+            ),
+            "strict_measurement_system_shape": strict_backend_info.get(
+                "strict_measurement_system_shape"
+            ),
+        }
+        perf_caps = detect_performance_capabilities()
+
+        return {
+            "mesh": mesh,
+            "fwd_model": fwd_model,
+            "cache_manager": cache_manager,
+            "cache_scope": cache_scope,
+            "mesh_dim": int(mesh_dim),
+            "mesh_height": float(mesh_height),
+            "electrode_height_ratio": float(electrode_height_ratio),
+            "z_center": float(z_center),
+            "sigma_bg": sigma_bg,
+            "img_bg": img_bg,
+            "base_meas": base_meas,
+            "difference_mode": str(difference_mode),
+            "difference_orientation": str(difference_orientation),
+            "n_stim": n_stim,
+            "n_meas_total": n_meas_total,
+            "n_meas_per_stim": n_meas_per_stim,
+            "J": jacobian_operator,
+            "jacobian_representation": jacobian_representation,
+            "operator_bundle": operator_bundle,
+            "strict_backend_info": dict(strict_backend_info),
+            "solver_mode": solver_mode,
+            "linear_solver": linear_solver,
+            "preconditioner": preconditioner,
+            "linearized_solver_strategy": linearized_solver_strategy,
+            "linearized_maxiter": int(linearized_maxiter),
+            "lazy_preconditioner_mode": lazy_preconditioner_mode,
+            "lazy_diag_batch_max_measurements": int(lazy_diag_batch_max_measurements),
+            "rom_mode": rom_mode,
+            "rom_rank_global": int(rom_rank_global),
+            "rom_rank_adaptive": int(rom_rank_adaptive),
+            "rom_snapshot_source": rom_snapshot_source,
+            "lowrank_mode": lowrank_mode,
+            "lowrank_rank": int(lowrank_rank),
+            "lowrank_method": lowrank_method,
+            "lowrank_energy": float(lowrank_energy),
+            "forward_mat_solve": forward_mat_solve,
+            "forward_backend": forward_backend,
+            "mesh_family": mesh_family,
+            "geometry_version": geometry_version,
+            "petsc_device": petsc_device,
+            "petsc_backend_info": dict(petsc_backend_info),
+            "device_requested": str(runtime_selection.requested),
+            "device_effective": str(runtime_selection.effective),
+            "torch_device": str(runtime_selection.torch_device),
+            "mesh_cache_hit": mesh_cache_hit,
+            "mesh_cache_layer": mesh_cache_layer,
+            "mesh_cache_name": mesh_cache_name,
+            "execution_profile": (
+                "mixed"
+                if str(
+                    getattr(fwd_model, "_petsc_backend_info", {}).get(
+                        "petsc_device_effective", "cpu"
+                    )
+                )
+                == "cuda"
+                or str(runtime_selection.effective) == "cuda"
+                else "cpu"
+            ),
+            "stim_drive_mode": resolved_drive_mode,
+            "stim_drive_value": stim_drive_value,
+            "cache_build_seconds": dict(build_seconds),
+            "context_build_seconds": time.perf_counter() - context_start,
+            "performance_capabilities": perf_caps,
+            "cache_miss_reasons": {
+                CACHE_NAME_BASE_MEAS: _lookup_miss_reason(
+                    base_meas_lookup, family=CACHE_NAME_BASE_MEAS
+                ),
+                CACHE_NAME_JACOBIAN: _lookup_miss_reason(
+                    jacobian_lookup, family=CACHE_NAME_JACOBIAN
+                ),
+                CACHE_NAME_OPERATOR_JT: _lookup_miss_reason(
+                    j_t_lookup, family=CACHE_NAME_OPERATOR_JT
+                ),
+                CACHE_NAME_OPERATOR_NOSER: _lookup_miss_reason(
+                    reg_lookup, family=CACHE_NAME_OPERATOR_NOSER
+                ),
+                CACHE_NAME_OPERATOR_A: _lookup_miss_reason(
+                    a_lookup, family=CACHE_NAME_OPERATOR_A
+                ),
+                CACHE_NAME_OPERATOR_PRECOND: _lookup_miss_reason(
+                    precond_lookup, family=CACHE_NAME_OPERATOR_PRECOND
+                ),
+                CACHE_NAME_OPERATOR_LU: _lookup_miss_reason(
+                    factor_lookup, family=CACHE_NAME_OPERATOR_LU
+                ),
+                CACHE_NAME_OPERATOR_REDUCED_RM: "disabled",
+            },
+            "cache_lookups": {
+                "base_meas": _to_lookup_payload(base_meas_lookup),
+                "jacobian": _to_lookup_payload(jacobian_lookup),
+                "operator_jt": _to_lookup_payload(j_t_lookup),
+                "operator_noser": _to_lookup_payload(reg_lookup),
+                "operator_A": _to_lookup_payload(a_lookup),
+                "operator_precond": _to_lookup_payload(precond_lookup),
+                "operator_lu": _to_lookup_payload(factor_lookup),
+                "operator_rom_reduced_rm": {
+                    "hit": False,
+                    "layer": "disabled",
+                    "artifact": "rom_reduced_rm_diff",
+                    "key": "",
+                },
+                "forward_factor": dict(getattr(fwd_model, "_last_cache_lookup", {})),
+            },
+        }
 
     raw_jacobian, jacobian_lookup = cache_manager.get_or_compute_semantic(
         artifact="jacobian",
@@ -829,6 +1616,7 @@ def build_shared_context(
         "solver_mode": solver_mode,
         "linear_solver": linear_solver,
         "preconditioner": preconditioner,
+        "jacobian_representation": jacobian_representation,
         "mesh_dim": int(mesh_dim),
         "mesh_height": float(mesh_height),
         "electrode_height_ratio": float(electrode_height_ratio),
@@ -1126,6 +1914,7 @@ def build_shared_context(
         "mode": solver_mode,
         "linear_solver": linear_solver,
         "preconditioner": preconditioner,
+        "jacobian_representation": jacobian_representation,
         "J": np.asarray(jacobian, dtype=float),
         "Jt": np.asarray(jacobian_t, dtype=float),
         "A": np.asarray(system_matrix, dtype=float),
@@ -1165,6 +1954,7 @@ def build_shared_context(
         "n_meas_total": n_meas_total,
         "n_meas_per_stim": n_meas_per_stim,
         "J": jacobian,
+        "jacobian_representation": jacobian_representation,
         "operator_bundle": operator_bundle,
         "strict_backend_info": dict(strict_backend_info),
         "solver_mode": solver_mode,
@@ -1272,7 +2062,14 @@ def process_frames(
         "forward_validate": 0.0,
     }
 
-    if mode == "fast":
+    if str(operator_bundle.get("jacobian_representation", "dense")) in {
+        "linearized",
+        "lazy",
+    }:
+        linear_start = time.perf_counter()
+        delta_sigma = _solve_linearized_delta(operator_bundle=operator_bundle, rhs=dv)
+        stage_timings["linear_solve"] += time.perf_counter() - linear_start
+    elif mode == "fast":
         reduced_rm = operator_bundle.get("reduced_rm")
         if isinstance(reduced_rm, dict) and isinstance(reduced_rm.get("RM_reduced"), np.ndarray):
             linear_start = time.perf_counter()
@@ -1479,12 +2276,50 @@ def process_frames(
         "solver_mode": str(ctx.get("solver_mode", "strict")),
         "linear_solver": str(ctx.get("linear_solver", "auto")),
         "preconditioner": str(ctx.get("preconditioner", "auto")),
+        "linearized_solver_strategy": str(
+            ctx.get(
+                "linearized_solver_strategy",
+                operator_bundle.get("linearized_solver_strategy", "auto"),
+            )
+        ),
+        "linearized_maxiter": int(
+            ctx.get(
+                "linearized_maxiter",
+                operator_bundle.get("linearized_maxiter", 0),
+            )
+            or 0
+        ),
+        "lazy_preconditioner_mode": str(
+            ctx.get(
+                "lazy_preconditioner_mode",
+                operator_bundle.get("lazy_preconditioner_mode", "auto"),
+            )
+        ),
         "forward_mat_solve": str(ctx.get("forward_mat_solve", "off")),
         "petsc_device": str(ctx.get("petsc_device", "auto")),
         "inverse_device_requested": str(ctx.get("device_requested", "auto")),
         "inverse_device_effective": str(ctx.get("device_effective", "cpu")),
         "execution_profile": str(ctx.get("execution_profile", "cpu")),
-        "jacobian_block_backend": "torch-cuda" if str(ctx.get("device_effective", "cpu")) == "cuda" else "numpy",
+        "jacobian_representation": str(
+            ctx.get(
+                "jacobian_representation",
+                operator_bundle.get("jacobian_representation", "dense"),
+            )
+        ),
+        "jacobian_block_backend": (
+            "linearized-operator"
+            if str(operator_bundle.get("jacobian_representation", "dense"))
+            in {"linearized", "lazy"}
+            else (
+                "torch-cuda"
+                if str(ctx.get("device_effective", "cpu")) == "cuda"
+                else "numpy"
+            )
+        ),
+        "linearized_last_solve": dict(operator_bundle.get("linearized_last_solve", {})),
+        "linearized_preconditioner_info": dict(
+            operator_bundle.get("linearized_preconditioner_info", {})
+        ),
         "strict_solver_backend_requested": str(operator_bundle.get("strict_solver_backend_requested", STRICT_SOLVER_BACKEND_DENSE)),
         "strict_solver_backend_effective": str(operator_bundle.get("strict_solver_backend_effective", STRICT_SOLVER_BACKEND_DENSE)),
         "strict_memory_guard_triggered": bool(operator_bundle.get("strict_memory_guard_triggered", False)),

@@ -91,6 +91,10 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
     torch_device = str(
         diag.get("torch_device", diag.get("device_effective", "")) or ""
     ).strip()
+    jacobian_repr = str(diag.get("jacobian_representation", "") or "").strip()
+    linear_strategy = str(diag.get("linearized_solver_strategy", "") or "").strip()
+    linear_maxiter = diag.get("linearized_maxiter")
+    lazy_pc = str(diag.get("lazy_preconditioner_mode", "") or "").strip()
     cache_value = diag.get("cache_hit", diag.get("mesh_cache_hit", None))
     if cache_value is True:
         cache_label = "hit"
@@ -108,6 +112,14 @@ def _format_runtime_diagnostics(diag: dict | None) -> str:
         parts.append(f"PETSc={petsc_device}")
     if torch_device:
         parts.append(f"Torch={torch_device}")
+    if jacobian_repr:
+        parts.append(f"J={jacobian_repr}")
+    if linear_strategy:
+        parts.append(f"lin={linear_strategy}")
+    if linear_maxiter not in {None, ""}:
+        parts.append(f"it={linear_maxiter}")
+    if lazy_pc:
+        parts.append(f"pc={lazy_pc}")
     parts.append(f"cache={cache_label}")
     return " | " + ", ".join(parts) if parts else ""
 
@@ -3381,6 +3393,10 @@ class EITWorkstation(QMainWindow):
             "absolute_preset": absolute_preset,
             "request_source": "simulation",
             "reconstruction_runtime": reconstruction_runtime,
+            "jacobian_representation": "auto",
+            "linearized_solver_strategy": "auto",
+            "linearized_maxiter": 0,
+            "lazy_preconditioner_mode": "auto",
         }
         if difference_lambda is not None:
             metadata["difference_lambda"] = difference_lambda

@@ -9,6 +9,11 @@ from dolfinx import fem
 import dolfinx.fem.petsc as fem_petsc
 
 from .base_jacobian import BaseJacobianCalculator
+from .linearized import (
+    JacobianLinearization,
+    LazyAdjointJacobianLinearization,
+    compute_sigma_fingerprint,
+)
 
 
 class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
@@ -79,6 +84,56 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         else:
             J = self._assemble_numpy(grad_u_all, grad_adj_all)
         return J
+
+    def linearize(self, sigma: fem.Function, **kwargs) -> JacobianLinearization:
+        """Return EIDORS-style ``Jv``/``J^T r`` actions without dense ``J``."""
+        u_all, _ = self.fwd_model.forward_solve(sigma)
+        grad_u_all = self._compute_field_gradients(u_all)
+
+        meas_curr = self._measurement_to_current_patterns()
+        adj_fields, _ = self.fwd_model.forward_solve(sigma, meas_curr)
+        grad_adj_all = self._compute_field_gradients(adj_fields)
+
+        return JacobianLinearization(
+            grad_u_all=tuple(grad_u_all),
+            adjoint_gradients=tuple(grad_adj_all),
+            cell_areas=np.asarray(self.cell_areas, dtype=np.float64),
+            n_meas_per_stim=tuple(self.fwd_model.pattern_manager.n_meas_per_stim),
+            sign=-1.0,
+            sigma_fingerprint=compute_sigma_fingerprint(sigma),
+        )
+
+    def linearize_from_image(self, img, **kwargs) -> JacobianLinearization:
+        sigma = fem.Function(self.fwd_model.V_sigma)
+        sigma.x.array[:] = img.get_conductivity()
+        return self.linearize(sigma, **kwargs)
+
+    def linearize_lazy(self, sigma: fem.Function, **kwargs) -> LazyAdjointJacobianLinearization:
+        """Return lazy ``Jv``/``J^T r`` actions without per-measurement adjoints."""
+        u_all, _ = self.fwd_model.forward_solve(sigma)
+        grad_u_all = self._compute_field_gradients(u_all)
+        return LazyAdjointJacobianLinearization(
+            fwd_model=self.fwd_model,
+            sigma_values=np.asarray(sigma.x.array, dtype=np.float64).copy(),
+            u_all=tuple(np.asarray(u, dtype=np.float64).copy() for u in u_all),
+            grad_u_all=tuple(grad_u_all),
+            cell_areas=np.asarray(self.cell_areas, dtype=np.float64),
+            n_meas_per_stim=tuple(self.fwd_model.pattern_manager.n_meas_per_stim),
+            meas_matrices=tuple(
+                np.asarray(matrix, dtype=np.float64)
+                for matrix in self.fwd_model.pattern_manager.meas_matrices
+            ),
+            gradient_callback=self._compute_field_gradients,
+            sign=-1.0,
+            sigma_fingerprint=compute_sigma_fingerprint(sigma),
+            diag_exact_max_measurements=int(kwargs.get("diag_exact_max_measurements", 512)),
+            diag_chunk_size=int(kwargs.get("diag_chunk_size", 128)),
+        )
+
+    def linearize_lazy_from_image(self, img, **kwargs) -> LazyAdjointJacobianLinearization:
+        sigma = fem.Function(self.fwd_model.V_sigma)
+        sigma.x.array[:] = img.get_conductivity()
+        return self.linearize_lazy(sigma, **kwargs)
 
     def _compute_field_gradients(self, field_solutions):
         gradients = []

@@ -37,10 +37,18 @@ _SYSTEM_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 _FAST_CONTEXT_CACHE_LOCK = threading.Lock()
 _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
 
 
 def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:
     return max(int(meta.get("n_elec", 16)), 1) * max(int(meta.get("n_rings", 1)), 1)
+
+
+def _request_measurement_count(req: ReconstructionRequest) -> int:
+    try:
+        return int(req.reference_frame.to_measurement_vector(req.use_part).size)
+    except Exception:
+        return 0
 
 
 def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
@@ -433,6 +441,11 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("forward_mat_solve", "auto")
     meta.setdefault("petsc_device", "auto")
     meta.setdefault("device", "auto")
+    meta.setdefault("jacobian_representation", "auto")
+    meta.setdefault("linearized_solver_strategy", "auto")
+    meta.setdefault("linearized_maxiter", 0)
+    meta.setdefault("lazy_preconditioner_mode", "auto")
+    meta.setdefault("lazy_diag_batch_max_measurements", 512)
     meta.setdefault("forward_backend", "dolfinx")
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
@@ -443,6 +456,35 @@ def _prepare_single_step_cached_runtime(
     meta["drive_value"] = _resolve_drive_value(meta)
     runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=mesh_dim)
     meta.update(runtime_options)
+    jac_repr = str(meta.get("jacobian_representation", "auto") or "auto").strip().lower()
+    jac_repr = jac_repr.replace("_", "-")
+    if jac_repr in {"", "auto"}:
+        measurement_count = _request_measurement_count(req)
+        use_linearized_auto = (
+            mesh_dim == 3
+            and meta["solver_mode"] == "fast"
+            and 0 < measurement_count <= LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS
+        )
+        jac_repr = "linearized" if use_linearized_auto else "dense"
+        meta["jacobian_representation_reason"] = (
+            "auto_small_3d_fast"
+            if use_linearized_auto
+            else "auto_dense_large_or_non3d"
+        )
+    elif jac_repr in {"jacobian-linearization", "operator"}:
+        jac_repr = "linearized"
+        meta["jacobian_representation_reason"] = "explicit_linearized"
+    elif jac_repr in {"lazy", "lazy-adjoint", "matrix-free", "matrixfree"}:
+        jac_repr = "lazy"
+        meta["jacobian_representation_reason"] = "explicit_lazy"
+    elif jac_repr not in {"dense", "linearized", "lazy"}:
+        raise ValueError(
+            "jacobian_representation must be auto|dense|linearized|lazy, "
+            f"got {meta.get('jacobian_representation')!r}."
+        )
+    else:
+        meta["jacobian_representation_reason"] = f"explicit_{jac_repr}"
+    meta["jacobian_representation"] = jac_repr
     radius = float(meta.get("radius", 1.0))
     refinement = _compute_effective_refinement(
         radius,
@@ -505,6 +547,11 @@ def _prepare_single_step_cached_runtime(
         str(meta.get("linear_solver", "auto")),
         str(meta.get("preconditioner", "auto")),
         str(meta.get("fast_linear_path", "auto")),
+        str(meta.get("jacobian_representation", "dense")),
+        str(meta.get("linearized_solver_strategy", "auto")),
+        int(meta.get("linearized_maxiter", 0)),
+        str(meta.get("lazy_preconditioner_mode", "auto")),
+        int(meta.get("lazy_diag_batch_max_measurements", 512)),
         str(meta.get("forward_mat_solve", "auto")),
         str(meta.get("petsc_device", "auto")),
         str(meta.get("device", "auto")),
@@ -564,6 +611,15 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
         "torch_device": str(ctx.get("torch_device", "")),
         "device_requested": str(ctx.get("device_requested", "")),
         "device_effective": str(ctx.get("device_effective", "")),
+        "jacobian_representation": str(ctx.get("jacobian_representation", "")),
+        "jacobian_representation_reason": str(
+            ctx.get("jacobian_representation_reason", "")
+        ),
+        "linearized_solver_strategy": str(
+            ctx.get("linearized_solver_strategy", "")
+        ),
+        "linearized_maxiter": ctx.get("linearized_maxiter"),
+        "lazy_preconditioner_mode": str(ctx.get("lazy_preconditioner_mode", "")),
         "mesh_cache_hit": ctx.get("mesh_cache_hit"),
         "mesh_cache_layer": ctx.get("mesh_cache_layer"),
         "mesh_cache_name": ctx.get("mesh_cache_name"),
@@ -667,6 +723,19 @@ def _ensure_single_step_cached_context(
                 forward_mat_solve=str(meta.get("forward_mat_solve", "off")),
                 petsc_device=str(meta.get("petsc_device", "auto")),
                 device=str(meta.get("device", "auto")),
+                jacobian_representation=str(
+                    meta.get("jacobian_representation", "dense")
+                ),
+                linearized_solver_strategy=str(
+                    meta.get("linearized_solver_strategy", "auto")
+                ),
+                linearized_maxiter=int(meta.get("linearized_maxiter", 0)),
+                lazy_preconditioner_mode=str(
+                    meta.get("lazy_preconditioner_mode", "auto")
+                ),
+                lazy_diag_batch_max_measurements=int(
+                    meta.get("lazy_diag_batch_max_measurements", 512)
+                ),
                 forward_backend=str(meta.get("forward_backend", "dolfinx")),
                 mesh_family=str(meta.get("mesh_family", "tetra")),
                 geometry_version=str(meta.get("geometry_version", "geomv2")),
@@ -681,6 +750,13 @@ def _ensure_single_step_cached_context(
         ctx["display_node_coords"] = np.asarray(mesh.coordinates(), dtype=np.float64)
     if "display_cell_connectivity" not in ctx:
         ctx["display_cell_connectivity"] = np.asarray(mesh.cells(), dtype=np.int32)
+    ctx.setdefault(
+        "jacobian_representation",
+        str(meta.get("jacobian_representation", "dense")),
+    )
+    ctx["jacobian_representation_reason"] = str(
+        meta.get("jacobian_representation_reason", "")
+    )
     return ctx
 
 
@@ -736,6 +812,10 @@ def _run_full_gn_request(
     meta.setdefault("forward_mat_solve", "auto")
     meta.setdefault("petsc_device", "auto")
     meta.setdefault("device", "auto")
+    meta.setdefault("linearized_solver_strategy", "auto")
+    meta.setdefault("linearized_maxiter", 0)
+    meta.setdefault("lazy_preconditioner_mode", "auto")
+    meta.setdefault("lazy_diag_batch_max_measurements", 512)
     meta.setdefault("forward_backend", "dolfinx")
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
@@ -806,6 +886,10 @@ def _run_full_gn_request(
         str(meta.get("linear_solver", "auto")),
         str(meta.get("preconditioner", "auto")),
         str(meta.get("fast_linear_path", "auto")),
+        str(meta.get("linearized_solver_strategy", "auto")),
+        int(meta.get("linearized_maxiter", 0)),
+        str(meta.get("lazy_preconditioner_mode", "auto")),
+        int(meta.get("lazy_diag_batch_max_measurements", 512)),
         str(meta.get("forward_mat_solve", "auto")),
         str(meta.get("petsc_device", "auto")),
         str(meta.get("device", "auto")),
@@ -962,6 +1046,7 @@ def _run_single_step_cached_request(
     _calibrate_step_size = diff_runner._calibrate_step_size
     _measurement_space_delta = diff_runner._measurement_space_delta
     _solve_linear_from_bundle = diff_runner._solve_linear_from_bundle
+    _solve_linearized_delta = getattr(diff_runner, "_solve_linearized_delta", None)
     runtime = _prepare_single_step_cached_runtime(req)
     meta = runtime.meta
     ctx = _ensure_single_step_cached_context(
@@ -1015,14 +1100,23 @@ def _run_single_step_cached_request(
             "dense-param",
         )
     )
-    operator_space = _single_step_operator_space(
-        operator_bundle,
-        dv,
-        measurement_backend=STRICT_SOLVER_BACKEND_MEASUREMENT,
-    )
+    if str(operator_bundle.get("jacobian_representation", "dense")) in {
+        "linearized",
+        "lazy",
+    }:
+        if _solve_linearized_delta is None:
+            raise RuntimeError("linearized single-step runtime is unavailable.")
+        operator_space = "linearized"
+        delta_sigma = _solve_linearized_delta(operator_bundle=operator_bundle, rhs=dv)
+    else:
+        operator_space = _single_step_operator_space(
+            operator_bundle,
+            dv,
+            measurement_backend=STRICT_SOLVER_BACKEND_MEASUREMENT,
+        )
     if operator_space == "measurement":
         delta_sigma = _measurement_space_delta(operator_bundle=operator_bundle, rhs=dv)
-    else:
+    elif operator_space != "linearized":
         rhs = np.asarray(
             safe_dot(operator_bundle["Jt"], dv, "eit_app.fast_recon.Jt_dv"),
             dtype=np.float64,

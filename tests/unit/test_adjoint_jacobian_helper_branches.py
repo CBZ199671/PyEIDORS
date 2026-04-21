@@ -157,6 +157,53 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(mon
     np.testing.assert_allclose(assembled_all, expected, atol=1e-6, rtol=1e-6)
 
 
+def test_linearize_returns_matrix_free_operator_matching_dense_assembly():
+    grad_u_all = [
+        np.array([[1.0, 2.0], [0.5, 1.0]], dtype=float),
+        np.array([[2.0, 1.0], [1.0, 0.5]], dtype=float),
+    ]
+    grad_adj_all = [
+        np.array([[0.5, 1.0], [1.0, 1.5]], dtype=float),
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
+        np.array([[1.5, 0.5], [0.5, 1.5]], dtype=float),
+    ]
+    calls = {"count": 0}
+
+    def fake_forward_solve(_sigma, current_patterns=None):
+        calls["count"] += 1
+        if current_patterns is None:
+            return [np.array([1.0], dtype=float), np.array([2.0], dtype=float)], None
+        return [
+            np.array([3.0], dtype=float),
+            np.array([4.0], dtype=float),
+            np.array([5.0], dtype=float),
+        ], None
+
+    jac = EidorsStyleAdjointJacobian.__new__(EidorsStyleAdjointJacobian)
+    jac.fwd_model = SimpleNamespace(
+        forward_solve=fake_forward_solve,
+        pattern_manager=SimpleNamespace(
+            n_meas_total=3,
+            n_stim=2,
+            n_meas_per_stim=[2, 1],
+        ),
+    )
+    jac.cell_areas = np.array([2.0, 3.0], dtype=float)
+    jac._measurement_to_current_patterns = lambda: np.eye(3, dtype=float)
+    jac._compute_field_gradients = (
+        lambda _fields: grad_u_all if calls["count"] == 1 else grad_adj_all
+    )
+    sigma = SimpleNamespace(x=SimpleNamespace(array=np.array([1.0, 1.0], dtype=float)))
+
+    linearization = EidorsStyleAdjointJacobian.linearize(jac, sigma)
+
+    expected = EidorsStyleAdjointJacobian._assemble_numpy(jac, grad_u_all, grad_adj_all)
+    np.testing.assert_allclose(linearization.to_dense(), expected)
+    np.testing.assert_allclose(linearization.matvec(np.array([0.25, 0.5])), expected @ np.array([0.25, 0.5]))
+    np.testing.assert_allclose(linearization.rmatvec(np.array([1.0, -2.0, 0.5])), expected.T @ np.array([1.0, -2.0, 0.5]))
+    assert linearization.sigma_fingerprint
+
+
 def test_calculate_dispatches_torch_path(monkeypatch: pytest.MonkeyPatch):
     grad_u_all = [np.array([[1.0, 0.0]], dtype=float)]
     grad_adj_all = [np.array([[0.5, 1.0]], dtype=float)]

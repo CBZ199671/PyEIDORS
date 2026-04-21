@@ -11,11 +11,13 @@ from mpi4py import MPI
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import build_eit_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
+from pyeidors.forward.process_setup_cache import clear_process_forward_setup_cache
 from pyeidors.geometry.mesh3d_generator import (
     GMSH_AVAILABLE,
     create_cylinder_3d_eit_mesh,
 )
 from pyeidors.inverse.regularization.smoothness import TikhonovRegularization
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
 from pyeidors.inverse.solvers.gauss_newton import GaussNewtonReconstructor
 
 
@@ -118,6 +120,76 @@ def _run_linearized_smoke(eit_mesh, *, n_elec: int) -> dict[str, object]:
 def test_gn_linearized_jacobian_smoke_2d_real_fem():
     backend_info = _run_linearized_smoke(_make_tagged_unit_square(n_elec=4), n_elec=4)
     assert backend_info["jacobian_shape"][1] > 0
+
+
+def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_real_fem():
+    clear_process_forward_setup_cache()
+    n_elec = 4
+    pattern = PatternConfig(
+        n_elec=n_elec,
+        stim_pattern="{ad}",
+        meas_pattern="{ad}",
+        drive_mode="total_current",
+        drive_value=1.0,
+        geometry_scale_to_m=1.0,
+    )
+    fwd = EITForwardModel(
+        n_elec=n_elec,
+        pattern_config=pattern,
+        z=np.full(n_elec, 1e-5, dtype=np.float64),
+        mesh=_make_tagged_unit_square(n_elec=n_elec),
+        linear_backend="scipy",
+    )
+    sigma = fem.Function(fwd.V_sigma)
+    sigma.x.array[:] = 1.0
+    jac_calc = EidorsStyleAdjointJacobian(fwd)
+
+    lazy = jac_calc.linearize_lazy(
+        sigma,
+        diag_exact_max_measurements=10_000,
+        diag_chunk_size=2,
+    )
+    vector = np.linspace(0.1, 0.9, lazy.shape[1], dtype=np.float64) * 1.0e4
+    residual = np.linspace(-0.2, 0.3, lazy.shape[0], dtype=np.float64)
+
+    base_data, _ = fwd.fwd_solve(EITImage(elem_data=np.ones(lazy.shape[1]), fwd_model=fwd))
+    eps = 1.0e-7
+    perturbed_data, _ = fwd.fwd_solve(
+        EITImage(elem_data=np.ones(lazy.shape[1]) + eps * vector, fwd_model=fwd)
+    )
+    finite_difference = (perturbed_data.meas - base_data.meas) / eps
+    jv = lazy.matvec(vector)
+    np.testing.assert_allclose(jv, finite_difference, rtol=2e-3, atol=2e-6)
+    np.testing.assert_allclose(
+        float(np.dot(jv, residual)),
+        float(np.dot(vector, lazy.rmatvec(residual))),
+        rtol=1e-8,
+        atol=1e-10,
+    )
+
+    eye = np.eye(lazy.shape[1], dtype=np.float64)
+    lazy_dense = np.column_stack([lazy.matvec(eye[:, idx]) for idx in range(lazy.shape[1])])
+    np.testing.assert_allclose(
+        lazy.hessian_diag(),
+        np.sum(lazy_dense * lazy_dense, axis=0),
+        rtol=1e-6,
+        atol=1e-8,
+    )
+    assert lazy.last_diag_info["mode"] == "lazy_chunked_exact"
+
+    approx_diag = lazy.hessian_diag(diag_mode="approx")
+    assert approx_diag.shape == (lazy.shape[1],)
+    assert np.all(np.isfinite(approx_diag))
+    assert lazy.last_diag_info["mode"] == "lazy_approx"
+
+    sampled_diag = lazy.hessian_diag(
+        diag_mode="batch_noser",
+        diag_batch_max_measurements=2,
+    )
+    assert sampled_diag.shape == (lazy.shape[1],)
+    assert np.all(np.isfinite(sampled_diag))
+    assert lazy.last_diag_info["mode"] == "lazy_batch_noser"
+    assert lazy.last_diag_info["sampled_measurements"] <= lazy.shape[0]
 
 
 @pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
