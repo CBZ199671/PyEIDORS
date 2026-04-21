@@ -125,8 +125,8 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V35 | Noise covariance `W` symmetric in Hv contract: `Hv = Jᵀ W J v + α R v`; identical `W` used during offline RM build and online residual weighting; diagonal `W = diag(1/σ²_m)` is the default, full cov ring-fenced for future work | extends V10,V11 — partial: `_solve_linear_system_fast` already threads `measurement_weight_np = W_sqrt`; needs RM-builder parity test ? |
 | V36 | RM cache signature includes ALL of: forward-mesh hash, inverse-mesh hash, `coarse2fine` hash, electrode geometry (count + ring layout), stim/meas protocol, background `(σ0, z0)`, difference mode (`raw` / `normalized`), bad-channel mask, noise covariance `W`, regularization type (`tikhonov` / `noser` / `laplace` / `greit`), λ / hyperparameter. Device/backend affect storage path only, NOT the mathematical signature. Any change in the above MUST invalidate the stored RM; device swap MUST NOT | future `pyeidors.inverse.reconstruction_matrix.rm_signature` ? |
 | V37 | Online reconstruction path executes exactly `RM @ dv` or `RM @ normalize_time_difference(v_t, v_ref)` — no Jacobian rebuild, no KSP solve, no forward/adjoint assembly in the hot path. Test asserts zero forward-solve counter ticks during `N` consecutive online frames | future `reconstruct_difference` ? |
-| V38 | Small-mesh numerical parity: `build_one_step_rm(mode="noser", form="param")` on a small mesh matches the existing dense one-step NOSER baseline (`eidors_one_step_noser`, `src/pyeidors/core_system.py:807`) within documented tolerance | future `tests/unit/test_one_step_rm_parity.py` ? |
-| V39 | Normalized-difference parity: `normalize_time_difference(v_t, v_ref)` returns the same Δv vector as the existing `build_difference_vector(..., mode="normalized")` at `src/pyeidors/data/difference.py:66` for the same inputs | future parity test ? |
+| V38 | Small-mesh numerical parity: `build_one_step_rm(mode="noser", form="param")` on a small mesh matches the existing dense one-step NOSER baseline (`eidors_one_step_noser`, `src/pyeidors/core_system.py:785`) with `step_size=1`, `line_search_mode="off"`, `difference_step_size_mode="off"`, `jacobian_update_every=1`, and identical normalized/raw difference projection. Parity test must isolate the RM formula from any step-size or line-search optimisation path | future `tests/unit/test_one_step_rm_parity.py` ? |
+| V39 | Normalized-difference parity: `normalize_time_difference(v_t, v_ref)` returns the same Δv vector as the existing `build_difference_vector(..., mode="normalized", orientation="target_minus_reference")` at `src/pyeidors/data/difference.py:66` for the same inputs. Default orientation stays `target_minus_reference`; other orientations gated by explicit opt-in | future parity test ? |
 | V40 | Offline (cold) RM-build time and online (warm) RM-apply time are recorded as separate fields in the benchmark artifact; online field dominated by a single dense matmul, cold field allowed arbitrary minutes | future `forward_rm_benchmark` artifact field split ? |
 | V41 | 3D GREIT output emits the full metric set `{AR, PE, RES, SD, RNG}` per reconstruction — absence of any single metric fails the GREIT validation gate | ties V29, V30; future `greit_metrics` artifact ? |
 
@@ -138,7 +138,7 @@ Current priority queue. Cavekit `/ck:make` MUST advance along the v1 queue befor
 
 ```
 v1  (EIDORS-style dual-model offline-RM + online RM@normalize(Δv)):
-    T15  →  T18  →  T16  →  T17  →  T26  →  T29  →  T31  →  T32  →  T19  →  T20
+    T15  →  T18  →  T16  →  T17  →  T26  →  T29  →  T31  →  T19  →  T20  →  T32
 
 phase-2  (after v1 stable, higher-fidelity reconstruction):
     T22, T23, T25, T24, T21, T30
@@ -149,6 +149,11 @@ research  (post-phase-2, opt-in enhancement):
 infra / deferred  (hardware / design-heavy, unblock separately):
     T2, T3, T4, T6, T7, T10
 ```
+
+T32 is the v1 closure milestone and ties in the GREIT metrics, so it
+MUST follow T19/T20. Earlier queue drafts put T32 before T19/T20 — do
+not reintroduce that ordering; the milestone cannot validate
+`{AR, PE, RES, SD, RNG}` before those tasks land.
 
 v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V41 must hold before T22+ are eligible.
 
@@ -168,7 +173,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |
 | T13 | x | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
 | T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
-| T15 | . | Dual-mesh data structure + `coarse2fine` sparse map builder; fine CEM mesh and coarse inverse voxel / tetra mesh live side-by-side, map is linear projection (piecewise-constant fallback) | V25,V31 |
+| T15 | . | Dual-mesh data structure + `coarse2fine` sparse map builder; fine CEM mesh and coarse inverse voxel / tetra mesh live side-by-side, map is linear projection (piecewise-constant fallback). Prepares V31 but does NOT own it — matrix-free Jv/JTr on dual mesh stays in T22 | V25 |
 | T16 | . | One-step GN RM builder: Tikhonov / NOSER / Laplace modes in a single entrypoint returning `RM`, metadata (mode, λ, condition estimate) | V26,V27,V28 |
 | T17 | . | Measurement-space RM path `RM = P Jᵀ (J P Jᵀ + λ² Rn)⁻¹` when `M ≪ N`; dense-reference parity test on small dual mesh | V26 |
 | T18 | . | Normalized-time-difference front-end: reference-frame capture, `v_ref` zero-guard, `RM @ dv_norm` wiring through the existing difference-mode contract | V33 |
