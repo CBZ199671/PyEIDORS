@@ -73,9 +73,112 @@ def test_build_one_step_rm_laplace_accepts_sparse_regularization() -> None:
     assert result.metadata["regularization_source"] == "provided_laplace"
 
 
-def test_build_one_step_rm_rejects_measurement_form_until_t17() -> None:
-    with pytest.raises(NotImplementedError, match="reserved for T17"):
-        build_one_step_rm(np.eye(2), lambda_=0.1, form="measurement")
+def test_build_one_step_rm_measurement_form_matches_param_for_tikhonov() -> None:
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5, -0.25], [0.5, 2.0, -1.0, 0.75]],
+        dtype=float,
+    )
+    lam = 0.3
+
+    param_rm = build_one_step_rm(jacobian, lambda_=lam, mode="tikhonov")
+    measurement = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        form="measurement",
+        return_metadata=True,
+    )
+
+    np.testing.assert_allclose(measurement.rm, param_rm, rtol=1e-10, atol=1e-12)
+    assert measurement.metadata["form"] == "measurement"
+    assert measurement.metadata["inversion_dimension"] == "measurement"
+    assert measurement.metadata["system_shape"] == (2, 2)
+    assert measurement.metadata["prior_inverse_solver"] == "solve"
+
+
+def test_build_one_step_rm_measurement_form_matches_param_for_noser() -> None:
+    jacobian = np.array(
+        [[1.0, 2.0, 0.5], [3.0, 0.5, -1.0]],
+        dtype=float,
+    )
+    lam = 0.15
+
+    param_rm = build_one_step_rm(jacobian, lambda_=lam, mode="noser")
+    measurement_rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        form="measurement",
+    )
+
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-10, atol=1e-12)
+
+
+def test_build_one_step_rm_measurement_form_matches_param_for_spd_laplace() -> None:
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5], [0.0, 1.0, -0.25]],
+        dtype=float,
+    )
+    laplace = sparse.csr_matrix(
+        np.array(
+            [
+                [1.5, -1.0, 0.0],
+                [-1.0, 2.5, -1.0],
+                [0.0, -1.0, 1.5],
+            ],
+            dtype=float,
+        )
+    )
+    lam = 0.2
+
+    param_rm = build_one_step_rm(
+        jacobian,
+        regularization=laplace,
+        lambda_=lam,
+        mode="laplace",
+    )
+    measurement_rm = build_one_step_rm(
+        jacobian,
+        regularization=laplace,
+        lambda_=lam,
+        mode="laplace",
+        form="measurement",
+    )
+
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-10, atol=1e-12)
+
+
+def test_build_one_step_rm_measurement_form_accepts_measurement_regularization() -> (
+    None
+):
+    jacobian = np.array([[1.0, 0.5, 0.0], [0.25, -1.0, 2.0]], dtype=float)
+    rn = np.diag([2.0, 3.0])
+    lam = 0.4
+
+    rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        form="measurement",
+        measurement_regularization=rn,
+        return_metadata=True,
+    )
+    expected = jacobian.T @ np.linalg.inv(jacobian @ jacobian.T + lam**2 * rn)
+
+    np.testing.assert_allclose(rm.rm, expected)
+    assert rm.metadata["measurement_regularization_source"] == "provided"
+
+
+def test_build_one_step_rm_rejects_invalid_form_and_measurement_rn_shape() -> None:
+    with pytest.raises(ValueError, match="form must be"):
+        build_one_step_rm(np.eye(2), lambda_=0.1, form="bad")
+    with pytest.raises(ValueError, match="measurement_regularization"):
+        build_one_step_rm(
+            np.eye(2),
+            lambda_=0.1,
+            form="measurement",
+            measurement_regularization=np.eye(3),
+        )
 
 
 def test_reconstruct_difference_applies_rm_to_normalized_time_difference() -> None:

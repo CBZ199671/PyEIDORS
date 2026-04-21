@@ -72,6 +72,30 @@ def _as_regularization_matrix(regularization: Any, *, n_parameters: int) -> np.n
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
 
+def _as_measurement_regularization(
+    measurement_regularization: Any,
+    *,
+    n_measurements: int,
+) -> tuple[np.ndarray, str]:
+    if measurement_regularization is None:
+        return np.eye(n_measurements, dtype=np.float64), "identity"
+    if sparse.issparse(measurement_regularization):
+        matrix = np.asarray(measurement_regularization.toarray(), dtype=np.float64)
+    else:
+        array = np.asarray(measurement_regularization, dtype=np.float64)
+        matrix = np.diag(array) if array.ndim == 1 else array
+    if matrix.shape != (n_measurements, n_measurements):
+        raise ValueError(
+            "measurement_regularization must have shape "
+            f"{(n_measurements, n_measurements)}, got {matrix.shape}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError(
+            "measurement_regularization contains non-finite values."
+        )
+    return np.ascontiguousarray(matrix, dtype=np.float64), "provided"
+
+
 def _noser_regularization(
     jacobian: np.ndarray,
     *,
@@ -89,6 +113,46 @@ def _noser_regularization(
     return np.diag(diag)
 
 
+def _regularization_for_mode(
+    jacobian: np.ndarray,
+    regularization: Any,
+    *,
+    mode: str,
+    noser_floor: float,
+    noser_exponent: float,
+) -> tuple[np.ndarray, str]:
+    n_parameters = int(jacobian.shape[1])
+    if mode == "noser":
+        return (
+            _noser_regularization(
+                jacobian,
+                floor=float(noser_floor),
+                exponent=float(noser_exponent),
+            ),
+            "diag_jtj",
+        )
+    if mode == "laplace":
+        if regularization is None:
+            raise ValueError(
+                "mode='laplace' requires a graph-Laplacian regularization."
+            )
+        return (
+            _as_regularization_matrix(regularization, n_parameters=n_parameters),
+            "provided_laplace",
+        )
+    return (
+        _as_regularization_matrix(regularization, n_parameters=n_parameters),
+        "identity" if regularization is None else "provided",
+    )
+
+
+def _solve_or_pinv(lhs: np.ndarray, rhs: np.ndarray) -> tuple[np.ndarray, str]:
+    try:
+        return np.linalg.solve(lhs, rhs), "solve"
+    except np.linalg.LinAlgError:
+        return np.linalg.pinv(lhs) @ rhs, "pinv"
+
+
 def build_one_step_rm(
     J: Any,
     regularization: Any = None,
@@ -96,23 +160,22 @@ def build_one_step_rm(
     *,
     mode: str = "tikhonov",
     form: str = "param",
+    measurement_regularization: Any = None,
     noser_floor: float = 1e-12,
     noser_exponent: float = 1.0,
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
     """Build a one-step GN/NOSER/Laplace reconstruction matrix.
 
-    T16 deliberately implements the parameter-space form
-    ``RM = (J.T @ J + lambda_**2 R)^-1 @ J.T``. The measurement-space
-    ``P J.T (J P J.T + lambda_**2 Rn)^-1`` path is T17 and therefore
-    raises until that task lands.
+    ``form="param"`` uses ``RM = (J.T @ J + lambda_**2 R)^-1 @ J.T``.
+    ``form="measurement"`` uses
+    ``RM = P J.T (J P J.T + lambda_**2 Rn)^-1`` with ``P≈R^-1`` and
+    identity ``Rn`` by default.
     """
 
     resolved_form = str(form).strip().lower()
-    if resolved_form != "param":
-        raise NotImplementedError(
-            "build_one_step_rm(form='measurement') is reserved for T17."
-        )
+    if resolved_form not in {"param", "measurement"}:
+        raise ValueError("form must be one of: 'param', 'measurement'.")
     resolved_mode = str(mode).strip().lower()
     if resolved_mode not in {"tikhonov", "noser", "laplace"}:
         raise ValueError("mode must be one of: 'tikhonov', 'noser', 'laplace'.")
@@ -121,33 +184,30 @@ def build_one_step_rm(
         raise ValueError("lambda_ must be finite and non-negative.")
 
     jac = _as_jacobian(J)
-    _, n_parameters = jac.shape
-    if resolved_mode == "noser":
-        reg = _noser_regularization(
-            jac,
-            floor=float(noser_floor),
-            exponent=float(noser_exponent),
-        )
-        regularization_source = "diag_jtj"
-    elif resolved_mode == "laplace":
-        if regularization is None:
-            raise ValueError(
-                "mode='laplace' requires a graph-Laplacian regularization."
-            )
-        reg = _as_regularization_matrix(regularization, n_parameters=n_parameters)
-        regularization_source = "provided_laplace"
-    else:
-        reg = _as_regularization_matrix(regularization, n_parameters=n_parameters)
-        regularization_source = "identity" if regularization is None else "provided"
+    reg, regularization_source = _regularization_for_mode(
+        jac,
+        regularization,
+        mode=resolved_mode,
+        noser_floor=float(noser_floor),
+        noser_exponent=float(noser_exponent),
+    )
 
-    lhs = np.asarray(jac.T @ jac + (lam * lam) * reg, dtype=np.float64)
-    rhs = jac.T
-    try:
-        rm = np.linalg.solve(lhs, rhs)
-        solver = "solve"
-    except np.linalg.LinAlgError:
-        rm = np.linalg.pinv(lhs) @ rhs
-        solver = "pinv"
+    if resolved_form == "measurement":
+        rn, rn_source = _as_measurement_regularization(
+            measurement_regularization,
+            n_measurements=int(jac.shape[0]),
+        )
+        p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac.T)
+        lhs = np.asarray(jac @ p_jt + (lam * lam) * rn, dtype=np.float64)
+        rm_t, solver = _solve_or_pinv(lhs.T, p_jt.T)
+        rm = rm_t.T
+        inversion_dimension = "measurement"
+    else:
+        rn_source = "unused"
+        prior_inverse_solver = "unused"
+        lhs = np.asarray(jac.T @ jac + (lam * lam) * reg, dtype=np.float64)
+        rm, solver = _solve_or_pinv(lhs, jac.T)
+        inversion_dimension = "parameter"
     rm = np.asarray(rm, dtype=np.float64)
     if not np.isfinite(rm).all():
         raise FloatingPointError("one-step RM contains non-finite values.")
@@ -163,10 +223,14 @@ def build_one_step_rm(
             "lambda": lam,
             "n_measurements": int(jac.shape[0]),
             "n_parameters": int(jac.shape[1]),
+            "inversion_dimension": inversion_dimension,
             "regularization_source": regularization_source,
             "regularization_nnz": int(np.count_nonzero(reg)),
+            "measurement_regularization_source": rn_source,
             "condition_estimate": condition_estimate,
             "solver": solver,
+            "prior_inverse_solver": prior_inverse_solver,
+            "system_shape": tuple(int(v) for v in lhs.shape),
             "rm_shape": tuple(int(v) for v in rm.shape),
         }
     )
