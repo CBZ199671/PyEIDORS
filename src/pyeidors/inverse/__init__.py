@@ -12,6 +12,13 @@ from .block_system import (
     scale_contact_impedance_update,
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
+from .greit import (
+    GREITRM,
+    GREITTrainingTargets,
+    build_3d_greit_rm,
+    generate_spherical_targets,
+    load_greit_rm,
+)
 from .prior import graph_laplacian
 from .reconstruction_matrix import (
     OneStepRMResult,
@@ -42,6 +49,11 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "GREITRM",
+    "GREITTrainingTargets",
+    "build_3d_greit_rm",
+    "generate_spherical_targets",
+    "load_greit_rm",
     "graph_laplacian",
     "OneStepRMResult",
     "build_one_step_rm",
