@@ -60,6 +60,7 @@ from pyeidors.perf.policy import (
     MESH_FAMILY_VALUES,
     parse_block_size_candidates,
 )
+
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
@@ -92,7 +93,11 @@ def _parse_args() -> argparse.Namespace:
         default=None,
         help="Explicit cache root. Defaults to an ephemeral /tmp directory for fair cold/warm runs.",
     )
-    parser.add_argument("--output-json", type=Path, default=Path("reports") / "benchmark_3d_runtime.json")
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=Path("reports") / "benchmark_3d_runtime.json",
+    )
     parser.add_argument("--perf-report", type=Path, default=None)
     parser.add_argument("--profile-label", type=str, default="default")
     parser.add_argument("--repeat", type=int, default=1)
@@ -135,25 +140,39 @@ def _parse_args() -> argparse.Namespace:
         choices=["auto", "woodbury", "pcg", "cholmod-direct", "strict"],
         default="auto",
     )
-    parser.add_argument("--rom-mode", choices=["off", "auto", "on"], default=DEFAULT_ROM_MODE)
+    parser.add_argument(
+        "--rom-mode", choices=["off", "auto", "on"], default=DEFAULT_ROM_MODE
+    )
     parser.add_argument("--rom-rank-global", type=int, default=DEFAULT_ROM_RANK_GLOBAL)
-    parser.add_argument("--rom-rank-adaptive", type=int, default=DEFAULT_ROM_RANK_ADAPTIVE)
-    parser.add_argument("--rom-refresh-every", type=int, default=DEFAULT_ROM_REFRESH_EVERY)
+    parser.add_argument(
+        "--rom-rank-adaptive", type=int, default=DEFAULT_ROM_RANK_ADAPTIVE
+    )
+    parser.add_argument(
+        "--rom-refresh-every", type=int, default=DEFAULT_ROM_REFRESH_EVERY
+    )
     parser.add_argument(
         "--rom-snapshot-source",
         choices=["cache", "synthetic", "hybrid"],
         default=DEFAULT_ROM_SNAPSHOT_SOURCE,
     )
-    parser.add_argument("--inexact-mode", choices=["off", "auto", "on"], default=DEFAULT_INEXACT_MODE)
+    parser.add_argument(
+        "--inexact-mode", choices=["off", "auto", "on"], default=DEFAULT_INEXACT_MODE
+    )
     parser.add_argument(
         "--inexact-forcing",
         choices=["fixed", "eisenstat-walker"],
         default=DEFAULT_INEXACT_FORCING,
     )
     parser.add_argument("--inexact-eta0", type=float, default=DEFAULT_INEXACT_ETA0)
-    parser.add_argument("--inexact-eta-min", type=float, default=DEFAULT_INEXACT_ETA_MIN)
-    parser.add_argument("--inexact-eta-max", type=float, default=DEFAULT_INEXACT_ETA_MAX)
-    parser.add_argument("--lowrank-mode", choices=["off", "auto", "on"], default=DEFAULT_LOWRANK_MODE)
+    parser.add_argument(
+        "--inexact-eta-min", type=float, default=DEFAULT_INEXACT_ETA_MIN
+    )
+    parser.add_argument(
+        "--inexact-eta-max", type=float, default=DEFAULT_INEXACT_ETA_MAX
+    )
+    parser.add_argument(
+        "--lowrank-mode", choices=["off", "auto", "on"], default=DEFAULT_LOWRANK_MODE
+    )
     parser.add_argument("--lowrank-rank", type=int, default=DEFAULT_LOWRANK_RANK)
     parser.add_argument(
         "--lowrank-method",
@@ -219,7 +238,9 @@ def _parse_args() -> argparse.Namespace:
         default=",".join(str(value) for value in DEFAULT_JACOBIAN_BLOCK_CANDIDATES),
     )
     parser.add_argument("--cholmod-max-n", type=int, default=DEFAULT_CHOLMOD_MAX_N)
-    parser.add_argument("--cholmod-max-memory-gib", type=float, default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB)
+    parser.add_argument(
+        "--cholmod-max-memory-gib", type=float, default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB
+    )
     parser.add_argument(
         "--absolute-startup-cache",
         choices=["on", "off"],
@@ -250,7 +271,11 @@ def _timed(name: str, fn):
     elapsed = float(time.perf_counter() - t0)
     _, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
-    return out, {"stage": name, "elapsed_sec": elapsed, "peak_mib": float(peak / (1024 * 1024))}
+    return out, {
+        "stage": name,
+        "elapsed_sec": elapsed,
+        "peak_mib": float(peak / (1024 * 1024)),
+    }
 
 
 def _build_phantom_sigma(system: EITSystem, *, background: float) -> np.ndarray:
@@ -296,6 +321,18 @@ def _first_nonempty(*values: Any) -> Any:
     return None
 
 
+def _forward_amg_backend(pc_type: Any, pc_subtype: Any) -> str | None:
+    pc = str(pc_type).strip().lower() if pc_type not in (None, "") else ""
+    subtype = str(pc_subtype).strip().lower() if pc_subtype not in (None, "") else ""
+    if pc == "hypre" and subtype == "boomeramg":
+        return "hypre-boomeramg"
+    if pc == "amgx":
+        return "amgx"
+    if pc == "gamg":
+        return f"gamg-{subtype}" if subtype else "gamg"
+    return pc or None
+
+
 def _build_forward_solver_benchmark_artifact(
     *,
     args: argparse.Namespace,
@@ -335,6 +372,10 @@ def _build_forward_solver_benchmark_artifact(
         "ksp_type": backend_info.get("ksp_type"),
         "pc_type": backend_info.get("pc_type"),
         "pc_subtype": pc_subtype,
+        "forward_amg_backend": _forward_amg_backend(
+            backend_info.get("pc_type"),
+            pc_subtype,
+        ),
         "mat_type": backend_info.get("petsc_mat_type"),
         "vec_type": backend_info.get("petsc_vec_type"),
         "dense_mat_type": backend_info.get("petsc_dense_mat_type"),
@@ -368,6 +409,24 @@ def _build_forward_solver_benchmark_artifact(
         "petsc_cuda_mat_available": bool(capability.get("petsc_cuda_mat", False)),
         "petsc_cuda_vec_available": bool(capability.get("petsc_cuda_vec", False)),
         "petsc_cuda_dense_available": bool(capability.get("petsc_cuda_dense", False)),
+        "petsc_hypre_available": bool(
+            capability.get(
+                "petsc_hypre",
+                backend_info.get("petsc_hypre_available", False),
+            )
+        ),
+        "petsc_amgx_available": bool(
+            capability.get(
+                "petsc_amgx",
+                backend_info.get("petsc_amgx_available", False),
+            )
+        ),
+        "petsc_amgx_cuda_candidate": bool(
+            capability.get(
+                "petsc_amgx_cuda_candidate",
+                backend_info.get("petsc_amgx_cuda_candidate", False),
+            )
+        ),
         "petsc_cuda_errors": capability.get("errors", {}),
         "gpu_transfer_risk": backend_info.get("gpu_transfer_risk"),
         "mpi_size": int(backend_info.get("mpi_size") or 1),
@@ -384,7 +443,9 @@ def _build_forward_solver_benchmark_artifact(
         or "not-run",
         "petsc_solve_mat_type": backend_info.get("petsc_solve_mat_type"),
         "forward_factor_backend": backend_info.get("forward_factor_backend"),
-        "forward_ksp_solve_count": int(backend_info.get("forward_ksp_solve_count") or 0),
+        "forward_ksp_solve_count": int(
+            backend_info.get("forward_ksp_solve_count") or 0
+        ),
         "forward_ksp_mat_solve_count": int(
             backend_info.get("forward_ksp_mat_solve_count") or 0
         ),
@@ -398,7 +459,9 @@ def main() -> None:
         raise ValueError("--repeat must be a positive integer.")
     if int(args.warm_forward_repeats) <= 0:
         raise ValueError("--warm-forward-repeats must be a positive integer.")
-    jacobian_block_candidates = parse_block_size_candidates(args.jacobian_block_candidates)
+    jacobian_block_candidates = parse_block_size_candidates(
+        args.jacobian_block_candidates
+    )
     ephemeral_cache_root = None
     ephemeral_mesh_root = None
     if args.cache_dir is None:
@@ -422,7 +485,9 @@ def main() -> None:
     )
 
     def _run_once(run_index: int) -> dict:
-        run_cache_dir = cache_dir if int(args.repeat) == 1 else cache_dir / f"run_{run_index:02d}"
+        run_cache_dir = (
+            cache_dir if int(args.repeat) == 1 else cache_dir / f"run_{run_index:02d}"
+        )
         if run_cache_dir.exists():
             shutil.rmtree(run_cache_dir)
         run_cache_dir.mkdir(parents=True, exist_ok=True)
@@ -528,9 +593,13 @@ def main() -> None:
                 timing=forward_timing,
             )
             forward_artifact["output_shape"] = list(electrode_voltages.shape)
-            forward_artifact["output_finite"] = bool(np.all(np.isfinite(electrode_voltages)))
+            forward_artifact["output_finite"] = bool(
+                np.all(np.isfinite(electrode_voltages))
+            )
             forward_artifact["returned_solution_count"] = int(len(u_all))
-            stages.extend([forward_mesh_stage, forward_setup_stage, forward_solve_stage])
+            stages.extend(
+                [forward_mesh_stage, forward_setup_stage, forward_solve_stage]
+            )
             return {
                 "run_index": int(run_index),
                 "stages": stages,
@@ -672,11 +741,14 @@ def main() -> None:
                 drive_value=1.0,
                 geometry_scale_to_m=1.0,
             )
+
             def _build_system() -> EITSystem:
                 system = EITSystem(
                     n_elec=int(args.n_elec),
                     pattern_config=pattern,
-                    contact_impedance=np.full(int(args.n_elec), float(args.contact_impedance), dtype=float),
+                    contact_impedance=np.full(
+                        int(args.n_elec), float(args.contact_impedance), dtype=float
+                    ),
                     base_conductivity=float(args.background),
                     regularization_type="noser",
                     regularization_alpha=1.0,
@@ -686,7 +758,9 @@ def main() -> None:
                     linear_solver=str(args.linear_solver),
                     jacobian_update_every=2,
                     jacobian_reuse_tol=1e-3,
-                    line_search_mode="fast" if str(args.solver_mode) == "fast" else "full",
+                    line_search_mode=(
+                        "fast" if str(args.solver_mode) == "fast" else "full"
+                    ),
                     preconditioner=str(args.preconditioner),
                     fast_linear_path=str(args.fast_linear_path),
                     rom_mode=str(args.rom_mode),
@@ -743,16 +817,23 @@ def main() -> None:
                 "generator_revision": getattr(mesh, "generator_revision", None),
             }
 
-            baseline = system.create_homogeneous_image(conductivity=float(args.background))
+            baseline = system.create_homogeneous_image(
+                conductivity=float(args.background)
+            )
             baseline_data, absolute_first_forward_stage = _timed(
                 "absolute_first_forward",
                 lambda: system.forward_solve(baseline),
             )
             _, absolute_forward_probe_stage = _timed(
                 "absolute_warm_forward",
-                lambda: [system.forward_solve(baseline) for _ in range(int(absolute_forward_probe_repeats))],
+                lambda: [
+                    system.forward_solve(baseline)
+                    for _ in range(int(absolute_forward_probe_repeats))
+                ],
             )
-            phantom_sigma = _build_phantom_sigma(system, background=float(args.background))
+            phantom_sigma = _build_phantom_sigma(
+                system, background=float(args.background)
+            )
             phantom = EITImage(elem_data=phantom_sigma, fwd_model=system.fwd_model)
             target_data, absolute_target_forward_stage = _timed(
                 "absolute_target_forward",
@@ -762,7 +843,9 @@ def main() -> None:
 
             absolute_result, absolute_stage = _timed(
                 "absolute_reconstruct",
-                lambda: system.inverse_solve(data=target_data, reference_data=baseline_data),
+                lambda: system.inverse_solve(
+                    data=target_data, reference_data=baseline_data
+                ),
             )
             stages.extend(
                 [
@@ -774,7 +857,9 @@ def main() -> None:
                     absolute_stage,
                 ]
             )
-            if hasattr(absolute_result, "diagnostics") and isinstance(absolute_result.diagnostics, dict):
+            if hasattr(absolute_result, "diagnostics") and isinstance(
+                absolute_result.diagnostics, dict
+            ):
                 absolute_timing = absolute_result.diagnostics.get("timing", {})
                 backend = absolute_result.diagnostics.get("backend_info", {})
                 if isinstance(backend, dict):
@@ -783,16 +868,24 @@ def main() -> None:
                     absolute_backend_info = merged_backend
 
         if absolute_forward_probe_stage is not None:
-            absolute_timing = dict(absolute_timing) if isinstance(absolute_timing, dict) else {}
-            absolute_timing["mesh_load_elapsed_sec"] = float(
-                absolute_mesh_stage.get("elapsed_sec", 0.0)
-            ) if absolute_mesh_stage is not None else 0.0
-            absolute_timing["system_setup_elapsed_sec"] = float(
-                absolute_setup_stage.get("elapsed_sec", 0.0)
-            ) if absolute_setup_stage is not None else 0.0
-            absolute_timing["first_forward_elapsed_sec"] = float(
-                absolute_first_forward_stage.get("elapsed_sec", 0.0)
-            ) if absolute_first_forward_stage is not None else 0.0
+            absolute_timing = (
+                dict(absolute_timing) if isinstance(absolute_timing, dict) else {}
+            )
+            absolute_timing["mesh_load_elapsed_sec"] = (
+                float(absolute_mesh_stage.get("elapsed_sec", 0.0))
+                if absolute_mesh_stage is not None
+                else 0.0
+            )
+            absolute_timing["system_setup_elapsed_sec"] = (
+                float(absolute_setup_stage.get("elapsed_sec", 0.0))
+                if absolute_setup_stage is not None
+                else 0.0
+            )
+            absolute_timing["first_forward_elapsed_sec"] = (
+                float(absolute_first_forward_stage.get("elapsed_sec", 0.0))
+                if absolute_first_forward_stage is not None
+                else 0.0
+            )
             absolute_timing["warm_forward_total_sec"] = float(
                 absolute_forward_probe_stage.get("elapsed_sec", 0.0)
             )
@@ -800,14 +893,20 @@ def main() -> None:
                 float(absolute_forward_probe_stage.get("elapsed_sec", 0.0))
                 / max(1, int(absolute_forward_probe_repeats))
             )
-            absolute_timing["target_forward_elapsed_sec"] = float(
-                absolute_target_forward_stage.get("elapsed_sec", 0.0)
-            ) if absolute_target_forward_stage is not None else 0.0
-            absolute_timing["absolute_reconstruct_elapsed_sec"] = float(
-                absolute_stage.get("elapsed_sec", 0.0)
-            ) if run_absolute else 0.0
-            absolute_timing["forward_probe"] = float(absolute_forward_probe_stage.get("elapsed_sec", 0.0))
-            absolute_timing["forward_probe_repeats"] = int(absolute_forward_probe_repeats)
+            absolute_timing["target_forward_elapsed_sec"] = (
+                float(absolute_target_forward_stage.get("elapsed_sec", 0.0))
+                if absolute_target_forward_stage is not None
+                else 0.0
+            )
+            absolute_timing["absolute_reconstruct_elapsed_sec"] = (
+                float(absolute_stage.get("elapsed_sec", 0.0)) if run_absolute else 0.0
+            )
+            absolute_timing["forward_probe"] = float(
+                absolute_forward_probe_stage.get("elapsed_sec", 0.0)
+            )
+            absolute_timing["forward_probe_repeats"] = int(
+                absolute_forward_probe_repeats
+            )
 
         return {
             "run_index": int(run_index),
@@ -815,47 +914,113 @@ def main() -> None:
             "stage_breakdown": {
                 "difference": (
                     {
-                        **(diff_metrics.get("stage_timings", {}) if isinstance(diff_metrics, dict) else {}),
-                        "context_cold_elapsed_sec": float(cold_stage.get("elapsed_sec", 0.0))
-                        if run_diff
-                        else 0.0,
-                        "context_warm_elapsed_sec": float(warm_stage.get("elapsed_sec", 0.0))
-                        if run_diff
-                        else 0.0,
+                        **(
+                            diff_metrics.get("stage_timings", {})
+                            if isinstance(diff_metrics, dict)
+                            else {}
+                        ),
+                        "context_cold_elapsed_sec": (
+                            float(cold_stage.get("elapsed_sec", 0.0))
+                            if run_diff
+                            else 0.0
+                        ),
+                        "context_warm_elapsed_sec": (
+                            float(warm_stage.get("elapsed_sec", 0.0))
+                            if run_diff
+                            else 0.0
+                        ),
                     }
                 ),
                 "absolute": absolute_timing,
             },
             "mesh_info": absolute_mesh_info,
             "difference_solver": {
-                "solver_mode": diff_metrics.get("solver_mode") if isinstance(diff_metrics, dict) else None,
-                "linear_solver": diff_metrics.get("linear_solver") if isinstance(diff_metrics, dict) else None,
-                "preconditioner": diff_metrics.get("preconditioner") if isinstance(diff_metrics, dict) else None,
-                "strict_solver_backend_requested": diff_metrics.get("strict_solver_backend_requested") if isinstance(diff_metrics, dict) else None,
-                "strict_solver_backend_effective": diff_metrics.get("strict_solver_backend_effective") if isinstance(diff_metrics, dict) else None,
-                "strict_memory_guard_triggered": diff_metrics.get("strict_memory_guard_triggered") if isinstance(diff_metrics, dict) else None,
-                "strict_memory_guard_reason": diff_metrics.get("strict_memory_guard_reason") if isinstance(diff_metrics, dict) else None,
-                "strict_dense_estimated_peak_gib": diff_metrics.get("strict_dense_estimated_peak_gib") if isinstance(diff_metrics, dict) else None,
-                "strict_measurement_system_shape": diff_metrics.get("strict_measurement_system_shape") if isinstance(diff_metrics, dict) else None,
-                "inverse_device_requested": diff_metrics.get("inverse_device_requested") if isinstance(diff_metrics, dict) else None,
-                "inverse_device_effective": diff_metrics.get("inverse_device_effective") if isinstance(diff_metrics, dict) else None,
-                "execution_profile": diff_metrics.get("execution_profile") if isinstance(diff_metrics, dict) else None,
-                "jacobian_block_backend": diff_metrics.get("jacobian_block_backend") if isinstance(diff_metrics, dict) else None,
-                "difference_context_cold_elapsed_sec": float(cold_stage.get("elapsed_sec", 0.0))
-                if run_diff
-                else 0.0,
-                "difference_context_warm_elapsed_sec": float(warm_stage.get("elapsed_sec", 0.0))
-                if run_diff
-                else 0.0,
-                "difference_reconstruct_elapsed_sec": float(
-                    sum(
-                        float(value)
-                        for value in (diff_metrics.get("stage_timings", {}) if isinstance(diff_metrics, dict) else {}).values()
-                        if isinstance(value, (int, float))
+                "solver_mode": (
+                    diff_metrics.get("solver_mode")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "linear_solver": (
+                    diff_metrics.get("linear_solver")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "preconditioner": (
+                    diff_metrics.get("preconditioner")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_solver_backend_requested": (
+                    diff_metrics.get("strict_solver_backend_requested")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_solver_backend_effective": (
+                    diff_metrics.get("strict_solver_backend_effective")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_memory_guard_triggered": (
+                    diff_metrics.get("strict_memory_guard_triggered")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_memory_guard_reason": (
+                    diff_metrics.get("strict_memory_guard_reason")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_dense_estimated_peak_gib": (
+                    diff_metrics.get("strict_dense_estimated_peak_gib")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "strict_measurement_system_shape": (
+                    diff_metrics.get("strict_measurement_system_shape")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "inverse_device_requested": (
+                    diff_metrics.get("inverse_device_requested")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "inverse_device_effective": (
+                    diff_metrics.get("inverse_device_effective")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "execution_profile": (
+                    diff_metrics.get("execution_profile")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "jacobian_block_backend": (
+                    diff_metrics.get("jacobian_block_backend")
+                    if isinstance(diff_metrics, dict)
+                    else None
+                ),
+                "difference_context_cold_elapsed_sec": (
+                    float(cold_stage.get("elapsed_sec", 0.0)) if run_diff else 0.0
+                ),
+                "difference_context_warm_elapsed_sec": (
+                    float(warm_stage.get("elapsed_sec", 0.0)) if run_diff else 0.0
+                ),
+                "difference_reconstruct_elapsed_sec": (
+                    float(
+                        sum(
+                            float(value)
+                            for value in (
+                                diff_metrics.get("stage_timings", {})
+                                if isinstance(diff_metrics, dict)
+                                else {}
+                            ).values()
+                            if isinstance(value, (int, float))
+                        )
                     )
-                )
-                if run_diff
-                else 0.0,
+                    if run_diff
+                    else 0.0
+                ),
             },
             "absolute_solver": {
                 "forward_backend_requested": absolute_backend_info.get(
@@ -866,47 +1031,99 @@ def main() -> None:
                     "forward_backend_effective",
                     str(args.forward_backend),
                 ),
-                "mesh_family": absolute_mesh_info.get("mesh_family", str(args.mesh_family)),
-                "geometry_version": absolute_mesh_info.get("geometry_version", str(args.geometry_version)),
+                "mesh_family": absolute_mesh_info.get(
+                    "mesh_family", str(args.mesh_family)
+                ),
+                "geometry_version": absolute_mesh_info.get(
+                    "geometry_version", str(args.geometry_version)
+                ),
                 "generator_revision": absolute_mesh_info.get(
                     "generator_revision",
                     DEFAULT_3D_GENERATOR_REVISION,
                 ),
-                "drive_mode_requested": absolute_backend_info.get("drive_mode_requested"),
-                "drive_mode_effective": absolute_backend_info.get("drive_mode_effective"),
+                "drive_mode_requested": absolute_backend_info.get(
+                    "drive_mode_requested"
+                ),
+                "drive_mode_effective": absolute_backend_info.get(
+                    "drive_mode_effective"
+                ),
                 "solve_mode": absolute_backend_info.get("solve_mode"),
                 "h1_solver": absolute_backend_info.get("h1_solver"),
                 "h1_preconditioner": absolute_backend_info.get("h1_preconditioner"),
-                "partial_probe_passed": absolute_backend_info.get("partial_probe_passed"),
-                "partial_probe_detail": absolute_backend_info.get("partial_probe_detail"),
-                "nonfinite_guard_triggered": absolute_backend_info.get("nonfinite_guard_triggered"),
-                "mesh_quality_min_volume": absolute_backend_info.get("mesh_quality_min_volume"),
-                "electrode_measure_min": absolute_backend_info.get("electrode_measure_min"),
-                "structured_backend_version": absolute_backend_info.get("structured_backend_version"),
-                "structured_sidecar_loaded": absolute_backend_info.get("structured_sidecar_loaded"),
-                "structured_sidecar_file": absolute_backend_info.get("structured_sidecar_file"),
-                "structured_sidecar_version": absolute_backend_info.get("structured_sidecar_version"),
+                "partial_probe_passed": absolute_backend_info.get(
+                    "partial_probe_passed"
+                ),
+                "partial_probe_detail": absolute_backend_info.get(
+                    "partial_probe_detail"
+                ),
+                "nonfinite_guard_triggered": absolute_backend_info.get(
+                    "nonfinite_guard_triggered"
+                ),
+                "mesh_quality_min_volume": absolute_backend_info.get(
+                    "mesh_quality_min_volume"
+                ),
+                "electrode_measure_min": absolute_backend_info.get(
+                    "electrode_measure_min"
+                ),
+                "structured_backend_version": absolute_backend_info.get(
+                    "structured_backend_version"
+                ),
+                "structured_sidecar_loaded": absolute_backend_info.get(
+                    "structured_sidecar_loaded"
+                ),
+                "structured_sidecar_file": absolute_backend_info.get(
+                    "structured_sidecar_file"
+                ),
+                "structured_sidecar_version": absolute_backend_info.get(
+                    "structured_sidecar_version"
+                ),
                 "operator_backend": absolute_backend_info.get("operator_backend"),
                 "mg_levels": absolute_backend_info.get("mg_levels"),
                 "pcg_iterations": absolute_backend_info.get("pcg_iterations"),
                 "batched_rhs_count": absolute_backend_info.get("batched_rhs_count"),
-                "forward_reuse_state_hit": absolute_backend_info.get("forward_reuse_state_hit"),
-                "resolved_preconditioner": absolute_backend_info.get("resolved_preconditioner"),
+                "forward_reuse_state_hit": absolute_backend_info.get(
+                    "forward_reuse_state_hit"
+                ),
+                "resolved_preconditioner": absolute_backend_info.get(
+                    "resolved_preconditioner"
+                ),
                 "fast_solver_path": absolute_backend_info.get("fast_solver_path"),
-                "fast_linear_path_selected": absolute_backend_info.get("fast_linear_path_selected"),
-                "fast_linear_path_reason": absolute_backend_info.get("fast_linear_path_reason"),
+                "fast_linear_path_selected": absolute_backend_info.get(
+                    "fast_linear_path_selected"
+                ),
+                "fast_linear_path_reason": absolute_backend_info.get(
+                    "fast_linear_path_reason"
+                ),
                 "fallback_reason": absolute_backend_info.get("fallback_reason"),
-                "rom_enabled_effective": absolute_backend_info.get("rom_enabled_effective", False),
-                "rom_rank_effective": absolute_backend_info.get("rom_rank_effective", 0),
-                "lowrank_rank_effective": absolute_backend_info.get("lowrank_rank_effective", 0),
-                "inexact_eta_history": absolute_backend_info.get("inexact_eta_history", []),
-                "degrade_stage_counts": absolute_backend_info.get("degrade_stage_counts", {}),
-                "effective_solver_path_counts": absolute_backend_info.get("effective_solver_path_counts", {}),
-                "petsc_device_requested": absolute_backend_info.get("petsc_device_requested"),
-                "petsc_device_effective": absolute_backend_info.get("petsc_device_effective"),
+                "rom_enabled_effective": absolute_backend_info.get(
+                    "rom_enabled_effective", False
+                ),
+                "rom_rank_effective": absolute_backend_info.get(
+                    "rom_rank_effective", 0
+                ),
+                "lowrank_rank_effective": absolute_backend_info.get(
+                    "lowrank_rank_effective", 0
+                ),
+                "inexact_eta_history": absolute_backend_info.get(
+                    "inexact_eta_history", []
+                ),
+                "degrade_stage_counts": absolute_backend_info.get(
+                    "degrade_stage_counts", {}
+                ),
+                "effective_solver_path_counts": absolute_backend_info.get(
+                    "effective_solver_path_counts", {}
+                ),
+                "petsc_device_requested": absolute_backend_info.get(
+                    "petsc_device_requested"
+                ),
+                "petsc_device_effective": absolute_backend_info.get(
+                    "petsc_device_effective"
+                ),
                 "petsc_mat_type": absolute_backend_info.get("petsc_mat_type"),
                 "petsc_vec_type": absolute_backend_info.get("petsc_vec_type"),
-                "petsc_dense_mat_type": absolute_backend_info.get("petsc_dense_mat_type"),
+                "petsc_dense_mat_type": absolute_backend_info.get(
+                    "petsc_dense_mat_type"
+                ),
                 "gpu_fallback_reason": absolute_backend_info.get("gpu_fallback_reason"),
                 "gpu_transfer_risk": absolute_backend_info.get("gpu_transfer_risk"),
                 "mpi_size": absolute_backend_info.get("mpi_size"),
@@ -914,49 +1131,97 @@ def main() -> None:
                 "mpi_parallel": absolute_backend_info.get("mpi_parallel"),
                 "mpi_size_supported": absolute_backend_info.get("mpi_size_supported"),
                 "mpi_fallback_reason": absolute_backend_info.get("mpi_fallback_reason"),
-                "forward_factor_backend": absolute_backend_info.get("forward_factor_backend"),
-                "forward_mat_solve_effective": absolute_backend_info.get("forward_mat_solve_effective"),
-                "inverse_device_requested": absolute_backend_info.get("inverse_device_requested"),
-                "inverse_device_effective": absolute_backend_info.get("inverse_device_effective"),
+                "forward_factor_backend": absolute_backend_info.get(
+                    "forward_factor_backend"
+                ),
+                "forward_mat_solve_effective": absolute_backend_info.get(
+                    "forward_mat_solve_effective"
+                ),
+                "inverse_device_requested": absolute_backend_info.get(
+                    "inverse_device_requested"
+                ),
+                "inverse_device_effective": absolute_backend_info.get(
+                    "inverse_device_effective"
+                ),
                 "execution_profile": absolute_backend_info.get("execution_profile"),
-                "jacobian_backend_requested": absolute_backend_info.get("jacobian_backend_requested"),
-                "jacobian_backend_effective": absolute_backend_info.get("jacobian_backend_effective"),
-                "jacobian_block_backend": absolute_backend_info.get("jacobian_block_backend"),
-                "jacobian_transfer_estimate": absolute_backend_info.get("jacobian_transfer_estimate"),
-                "jacobian_cuda_threshold_hit": absolute_backend_info.get("jacobian_cuda_threshold_hit"),
-                "jacobian_block_tune": absolute_backend_info.get("jacobian_block_tune", {}),
-                "jacobian_assembly_elapsed_only": absolute_backend_info.get("jacobian_assembly_elapsed_only", 0.0),
-                "startup_jacobian_elapsed": float(absolute_timing.get("jacobian", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "mesh_load_elapsed_sec": float(absolute_timing.get("mesh_load_elapsed_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "system_setup_elapsed_sec": float(absolute_timing.get("system_setup_elapsed_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "first_forward_elapsed_sec": float(absolute_timing.get("first_forward_elapsed_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "warm_forward_total_sec": float(absolute_timing.get("warm_forward_total_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "warm_forward_avg_sec": float(absolute_timing.get("warm_forward_avg_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "target_forward_elapsed_sec": float(absolute_timing.get("target_forward_elapsed_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "absolute_reconstruct_elapsed_sec": float(absolute_timing.get("absolute_reconstruct_elapsed_sec", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "forward_probe_elapsed_sec": float(absolute_timing.get("forward_probe", 0.0))
-                if isinstance(absolute_timing, dict)
-                else 0.0,
-                "forward_probe_repeats": int(absolute_timing.get("forward_probe_repeats", absolute_forward_probe_repeats))
-                if isinstance(absolute_timing, dict)
-                else int(absolute_forward_probe_repeats),
-                "startup_cache_lookup": absolute_backend_info.get("startup_cache_lookup", {}),
+                "jacobian_backend_requested": absolute_backend_info.get(
+                    "jacobian_backend_requested"
+                ),
+                "jacobian_backend_effective": absolute_backend_info.get(
+                    "jacobian_backend_effective"
+                ),
+                "jacobian_block_backend": absolute_backend_info.get(
+                    "jacobian_block_backend"
+                ),
+                "jacobian_transfer_estimate": absolute_backend_info.get(
+                    "jacobian_transfer_estimate"
+                ),
+                "jacobian_cuda_threshold_hit": absolute_backend_info.get(
+                    "jacobian_cuda_threshold_hit"
+                ),
+                "jacobian_block_tune": absolute_backend_info.get(
+                    "jacobian_block_tune", {}
+                ),
+                "jacobian_assembly_elapsed_only": absolute_backend_info.get(
+                    "jacobian_assembly_elapsed_only", 0.0
+                ),
+                "startup_jacobian_elapsed": (
+                    float(absolute_timing.get("jacobian", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "mesh_load_elapsed_sec": (
+                    float(absolute_timing.get("mesh_load_elapsed_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "system_setup_elapsed_sec": (
+                    float(absolute_timing.get("system_setup_elapsed_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "first_forward_elapsed_sec": (
+                    float(absolute_timing.get("first_forward_elapsed_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "warm_forward_total_sec": (
+                    float(absolute_timing.get("warm_forward_total_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "warm_forward_avg_sec": (
+                    float(absolute_timing.get("warm_forward_avg_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "target_forward_elapsed_sec": (
+                    float(absolute_timing.get("target_forward_elapsed_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "absolute_reconstruct_elapsed_sec": (
+                    float(absolute_timing.get("absolute_reconstruct_elapsed_sec", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "forward_probe_elapsed_sec": (
+                    float(absolute_timing.get("forward_probe", 0.0))
+                    if isinstance(absolute_timing, dict)
+                    else 0.0
+                ),
+                "forward_probe_repeats": (
+                    int(
+                        absolute_timing.get(
+                            "forward_probe_repeats", absolute_forward_probe_repeats
+                        )
+                    )
+                    if isinstance(absolute_timing, dict)
+                    else int(absolute_forward_probe_repeats)
+                ),
+                "startup_cache_lookup": absolute_backend_info.get(
+                    "startup_cache_lookup", {}
+                ),
             },
             "forward_solver_benchmark": (
                 _build_forward_solver_benchmark_artifact(
@@ -971,9 +1236,21 @@ def main() -> None:
             "cache": {
                 "root": str(run_cache_dir),
                 "ephemeral_root": bool(ephemeral_cache_root is not None),
-                "cold_build": cold_ctx.get("cache_build_seconds", {}) if isinstance(cold_ctx, dict) else {},
-                "warm_build": warm_ctx.get("cache_build_seconds", {}) if isinstance(warm_ctx, dict) else {},
-                "warm_lookups": warm_ctx.get("cache_lookups", {}) if isinstance(warm_ctx, dict) else {},
+                "cold_build": (
+                    cold_ctx.get("cache_build_seconds", {})
+                    if isinstance(cold_ctx, dict)
+                    else {}
+                ),
+                "warm_build": (
+                    warm_ctx.get("cache_build_seconds", {})
+                    if isinstance(warm_ctx, dict)
+                    else {}
+                ),
+                "warm_lookups": (
+                    warm_ctx.get("cache_lookups", {})
+                    if isinstance(warm_ctx, dict)
+                    else {}
+                ),
             },
         }
 
@@ -1034,8 +1311,12 @@ def main() -> None:
         },
         "profile_label": str(args.profile_label),
         "repeat": int(args.repeat),
-        "cache_root_mode": "ephemeral" if ephemeral_cache_root is not None else "explicit",
-        "mesh_root_mode": "ephemeral" if ephemeral_mesh_root is not None else "explicit",
+        "cache_root_mode": (
+            "ephemeral" if ephemeral_cache_root is not None else "explicit"
+        ),
+        "mesh_root_mode": (
+            "ephemeral" if ephemeral_mesh_root is not None else "explicit"
+        ),
         "capabilities": detect_performance_capabilities(),
         "stages": median_run.get("stages", []),
         "stage_breakdown": median_run.get("stage_breakdown", {}),

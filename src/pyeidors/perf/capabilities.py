@@ -6,7 +6,6 @@ from functools import lru_cache
 
 from .policy import FEATURE_MODE_AUTO, normalize_feature_mode
 
-
 MPI_SINGLE_RANK_FALLBACK_REASON = "mpi_size_gt_1_not_supported_phase2_single_rank_only"
 MPI_SINGLE_RANK_GUIDANCE = (
     "PyEIDORS phase-2 CEM forward currently supports MPI size=1 only; "
@@ -54,12 +53,24 @@ def _has_petsc_mat_solve() -> bool:
     return hasattr(PETSc.KSP, "matSolve")
 
 
-def _has_petsc_gamg() -> bool:
+def _has_petsc_pc_type(type_attr: str) -> bool:
     PETSc = _load_petsc_runtime()
     if PETSc is None:
         return False
     pc_type = getattr(getattr(PETSc, "PC", None), "Type", None)
-    return pc_type is not None and hasattr(pc_type, "GAMG")
+    return pc_type is not None and hasattr(pc_type, type_attr)
+
+
+def _has_petsc_gamg() -> bool:
+    return _has_petsc_pc_type("GAMG")
+
+
+def _has_petsc_hypre() -> bool:
+    return _has_petsc_pc_type("HYPRE")
+
+
+def _has_petsc_amgx() -> bool:
+    return _has_petsc_pc_type("AMGX")
 
 
 def _load_mpi_comm_world():
@@ -222,12 +233,16 @@ def _petsc_runtime_cache_key() -> tuple[object, ...]:
         _enum_name(getattr(getattr(PETSc, "Vec", None), "Type", None), "CUDA"),
         _enum_name(getattr(getattr(PETSc, "Mat", None), "Type", None), "DENSECUDA"),
         bool(hasattr(getattr(PETSc, "KSP", None), "matSolve")),
-        bool(hasattr(getattr(getattr(PETSc, "PC", None), "Type", None), "GAMG")),
+        bool(_has_petsc_gamg()),
+        bool(_has_petsc_hypre()),
+        bool(_has_petsc_amgx()),
     )
 
 
 @lru_cache(maxsize=8)
-def _probe_petsc_cuda_runtime_cached(runtime_key: tuple[object, ...]) -> dict[str, object]:
+def _probe_petsc_cuda_runtime_cached(
+    runtime_key: tuple[object, ...],
+) -> dict[str, object]:
     del runtime_key
     PETSc = _load_petsc_runtime()
     if PETSc is None:
@@ -237,15 +252,22 @@ def _probe_petsc_cuda_runtime_cached(runtime_key: tuple[object, ...]) -> dict[st
             "petsc_cuda_mat": False,
             "petsc_cuda_vec": False,
             "petsc_cuda_dense": False,
+            "petsc_hypre": False,
+            "petsc_amgx": False,
+            "petsc_amgx_cuda_candidate": False,
             "mat_type_name": None,
             "vec_type_name": None,
             "dense_mat_type_name": None,
             "errors": {"petsc": "petsc_unavailable"},
         }
 
-    mat_type = _enum_name(getattr(getattr(PETSc, "Mat", None), "Type", None), "AIJCUSPARSE")
+    mat_type = _enum_name(
+        getattr(getattr(PETSc, "Mat", None), "Type", None), "AIJCUSPARSE"
+    )
     vec_type = _enum_name(getattr(getattr(PETSc, "Vec", None), "Type", None), "CUDA")
-    dense_type = _enum_name(getattr(getattr(PETSc, "Mat", None), "Type", None), "DENSECUDA")
+    dense_type = _enum_name(
+        getattr(getattr(PETSc, "Mat", None), "Type", None), "DENSECUDA"
+    )
 
     mat_ok, mat_error = _probe_petsc_mat_type(mat_type)
     vec_ok, vec_error = _probe_petsc_vec_type(vec_type)
@@ -265,6 +287,9 @@ def _probe_petsc_cuda_runtime_cached(runtime_key: tuple[object, ...]) -> dict[st
         "petsc_cuda_mat": bool(mat_ok),
         "petsc_cuda_vec": bool(vec_ok),
         "petsc_cuda_dense": bool(dense_ok),
+        "petsc_hypre": bool(_has_petsc_hypre()),
+        "petsc_amgx": bool(_has_petsc_amgx()),
+        "petsc_amgx_cuda_candidate": bool(_has_petsc_amgx() and mat_ok and vec_ok),
         "mat_type_name": mat_type,
         "vec_type_name": vec_type,
         "dense_mat_type_name": dense_type,
@@ -287,7 +312,9 @@ probe_petsc_cuda_runtime.cache_info = _probe_petsc_cuda_runtime_cached.cache_inf
 
 
 @lru_cache(maxsize=8)
-def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> dict[str, bool]:
+def _detect_performance_capabilities_cached(
+    cache_key: tuple[object, ...],
+) -> dict[str, bool]:
     del cache_key
     cuda_probe = probe_petsc_cuda_runtime()
     mpi_probe = probe_mpi_runtime()
@@ -297,6 +324,11 @@ def _detect_performance_capabilities_cached(cache_key: tuple[object, ...]) -> di
         "cuda_structured": _has_cuda_structured(),
         "petsc_mat_solve": _has_petsc_mat_solve(),
         "petsc_gamg": _has_petsc_gamg(),
+        "petsc_hypre": _has_petsc_hypre(),
+        "petsc_amgx": _has_petsc_amgx(),
+        "petsc_amgx_cuda_candidate": bool(
+            cuda_probe.get("petsc_amgx_cuda_candidate", False)
+        ),
         "petsc_cuda_mat": bool(cuda_probe.get("petsc_cuda_mat", False)),
         "petsc_cuda_vec": bool(cuda_probe.get("petsc_cuda_vec", False)),
         "petsc_cuda_dense": bool(cuda_probe.get("petsc_cuda_dense", False)),
@@ -319,8 +351,12 @@ def detect_performance_capabilities() -> dict[str, bool]:
     )
 
 
-detect_performance_capabilities.cache_clear = _detect_performance_capabilities_cached.cache_clear
-detect_performance_capabilities.cache_info = _detect_performance_capabilities_cached.cache_info
+detect_performance_capabilities.cache_clear = (
+    _detect_performance_capabilities_cached.cache_clear
+)
+detect_performance_capabilities.cache_info = (
+    _detect_performance_capabilities_cached.cache_info
+)
 
 
 def select_preconditioner(
@@ -331,7 +367,11 @@ def select_preconditioner(
     resolved_mode = str(mode).strip().lower()
     if capabilities is None:
         capabilities = detect_performance_capabilities()
-    mode_capability = {"pyamg": "pyamg", "cholmod": "cholmod", "petsc-gamg": "petsc_gamg"}
+    mode_capability = {
+        "pyamg": "pyamg",
+        "cholmod": "cholmod",
+        "petsc-gamg": "petsc_gamg",
+    }
     if resolved_mode in {"diag", "noser", "prior", "pmat", "coarse", "custom"}:
         return resolved_mode
     if resolved_mode in mode_capability:

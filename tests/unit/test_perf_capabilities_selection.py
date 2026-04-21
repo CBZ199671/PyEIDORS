@@ -26,21 +26,36 @@ def test_select_preconditioner_auto_fallback_chain():
     assert (
         select_preconditioner(
             "auto",
-            {"pyamg": True, "cholmod": False, "petsc_mat_solve": False, "petsc_gamg": True},
+            {
+                "pyamg": True,
+                "cholmod": False,
+                "petsc_mat_solve": False,
+                "petsc_gamg": True,
+            },
         )
         == "pyamg"
     )
     assert (
         select_preconditioner(
             "auto",
-            {"pyamg": False, "cholmod": False, "petsc_mat_solve": False, "petsc_gamg": True},
+            {
+                "pyamg": False,
+                "cholmod": False,
+                "petsc_mat_solve": False,
+                "petsc_gamg": True,
+            },
         )
         == "petsc-gamg"
     )
     assert (
         select_preconditioner(
             "auto",
-            {"pyamg": False, "cholmod": False, "petsc_mat_solve": False, "petsc_gamg": False},
+            {
+                "pyamg": False,
+                "cholmod": False,
+                "petsc_mat_solve": False,
+                "petsc_gamg": False,
+            },
         )
         == "diag"
     )
@@ -247,6 +262,8 @@ class _FailingCudaPETSc:
     class PC:
         class Type:
             GAMG = "gamg"
+            HYPRE = "hypre"
+            AMGX = "amgx"
 
 
 class _WorkingCudaPETSc:
@@ -260,6 +277,8 @@ class _WorkingCudaPETSc:
     class PC:
         class Type:
             GAMG = "gamg"
+            HYPRE = "hypre"
+            AMGX = "amgx"
 
 
 class _FakeMPIComm:
@@ -285,6 +304,9 @@ def test_probe_petsc_cuda_runtime_rejects_unknown_type_symbols(monkeypatch):
     assert probe["petsc_cuda"] is False
     assert probe["petsc_cuda_mat"] is False
     assert probe["petsc_cuda_vec"] is False
+    assert probe["petsc_hypre"] is True
+    assert probe["petsc_amgx"] is True
+    assert probe["petsc_amgx_cuda_candidate"] is False
     assert "Unknown Mat type" in probe["errors"]["mat"]
     assert "Unknown vector type" in probe["errors"]["vec"]
 
@@ -300,6 +322,9 @@ def test_probe_petsc_cuda_runtime_accepts_working_types(monkeypatch):
     assert probe["petsc_cuda"] is True
     assert probe["petsc_cuda_mat"] is True
     assert probe["petsc_cuda_vec"] is True
+    assert probe["petsc_hypre"] is True
+    assert probe["petsc_amgx"] is True
+    assert probe["petsc_amgx_cuda_candidate"] is True
 
 
 def test_probe_petsc_cuda_runtime_cache_tracks_runtime_identity(monkeypatch):
@@ -336,7 +361,6 @@ def test_probe_mpi_runtime_reports_single_rank_limit():
     assert supported["mpi_fallback_reason"] is None
 
 
-
 def test_detect_performance_capabilities_cache_tracks_runtime_identity(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()
@@ -349,5 +373,11 @@ def test_detect_performance_capabilities_cache_tracks_runtime_identity(monkeypat
     caps_working = perf_caps.detect_performance_capabilities()
 
     assert caps_fail["petsc_cuda"] is False
+    assert caps_fail["petsc_hypre"] is True
+    assert caps_fail["petsc_amgx"] is True
+    assert caps_fail["petsc_amgx_cuda_candidate"] is False
     assert caps_working["petsc_cuda"] is True
+    assert caps_working["petsc_hypre"] is True
+    assert caps_working["petsc_amgx"] is True
+    assert caps_working["petsc_amgx_cuda_candidate"] is True
     assert "mpi_size_supported" in caps_working

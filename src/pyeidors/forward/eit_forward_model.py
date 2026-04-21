@@ -99,13 +99,14 @@ class LinearBackendConfig:
             petsc_options=dict(payload.get("petsc_options") or {}),
             forward_pc_refresh_policy=str(
                 payload.get("forward_pc_refresh_policy", "auto")
-            ).strip().lower() or "auto",
+            )
+            .strip()
+            .lower()
+            or "auto",
             forward_pc_refresh_iter_threshold=int(
                 payload.get("forward_pc_refresh_iter_threshold", 0) or 0
             ),
-            forward_pc_refresh_lag=int(
-                payload.get("forward_pc_refresh_lag", 0) or 0
-            ),
+            forward_pc_refresh_lag=int(payload.get("forward_pc_refresh_lag", 0) or 0),
             forward_mat_solve_min_patterns=int(
                 payload.get("forward_mat_solve_min_patterns", 0) or 0
             ),
@@ -493,6 +494,20 @@ class EITForwardModel:
                 "pc_type": "hypre",
                 "pc_hypre_type": "boomeramg",
             },
+            "cg_hypre": {
+                "ksp_type": "cg",
+                "pc_type": "hypre",
+                "pc_hypre_type": "boomeramg",
+            },
+            "amgx": {
+                "ksp_type": "cg",
+                "pc_type": "amgx",
+            },
+            "cuda_amgx": {
+                "ksp_type": "cg",
+                "pc_type": "amgx",
+                "petsc_device": "cuda",
+            },
         }
         if preset not in presets:
             raise ValueError(
@@ -548,6 +563,11 @@ class EITForwardModel:
                     if template.get("pc_gamg_type") is None
                     else str(template.get("pc_gamg_type"))
                 )
+            ),
+            petsc_device=(
+                config.petsc_device
+                if self._solver_token(config.petsc_device) != "auto"
+                else str(template.get("petsc_device", config.petsc_device))
             ),
             petsc_options=resolved_options,
         )
@@ -780,6 +800,9 @@ class EITForwardModel:
             "forward_pc_session_total_setups": None,
             "forward_pc_last_iter_count": None,
             "capability": {},
+            "petsc_hypre_available": False,
+            "petsc_amgx_available": False,
+            "petsc_amgx_cuda_candidate": False,
         }
         info.update(mpi_info)
 
@@ -813,6 +836,11 @@ class EITForwardModel:
 
         capability = probe_petsc_cuda_runtime()
         info["capability"] = capability
+        info["petsc_hypre_available"] = bool(capability.get("petsc_hypre", False))
+        info["petsc_amgx_available"] = bool(capability.get("petsc_amgx", False))
+        info["petsc_amgx_cuda_candidate"] = bool(
+            capability.get("petsc_amgx_cuda_candidate", False)
+        )
         cuda_available = bool(capability.get("petsc_cuda", False))
         if requested == "cpu":
             return _with_stable_cpu_types()
@@ -1449,18 +1477,14 @@ class EITForwardModel:
                     self.backend_config, "forward_pc_refresh_policy", "auto"
                 ),
                 "forward_pc_refresh_iter_threshold": int(
-                    getattr(
-                        self.backend_config, "forward_pc_refresh_iter_threshold", 0
-                    )
+                    getattr(self.backend_config, "forward_pc_refresh_iter_threshold", 0)
                     or 0
                 ),
                 "forward_pc_refresh_lag": int(
                     getattr(self.backend_config, "forward_pc_refresh_lag", 0) or 0
                 ),
                 "forward_mat_solve_min_patterns": int(
-                    getattr(
-                        self.backend_config, "forward_mat_solve_min_patterns", 0
-                    )
+                    getattr(self.backend_config, "forward_mat_solve_min_patterns", 0)
                     or 0
                 ),
             },
@@ -1722,7 +1746,9 @@ class EITForwardModel:
             "solver_preset": str(getattr(cfg, "solver_preset", "auto")),
             "ksp_type": str(getattr(cfg, "ksp_type", "auto")),
             "pc_type": str(getattr(cfg, "pc_type", "auto")),
-            "pc_factor_mat_solver_type": getattr(cfg, "pc_factor_mat_solver_type", None),
+            "pc_factor_mat_solver_type": getattr(
+                cfg, "pc_factor_mat_solver_type", None
+            ),
             "pc_hypre_type": getattr(cfg, "pc_hypre_type", None),
             "pc_gamg_type": getattr(cfg, "pc_gamg_type", None),
             "petsc_options": dict(getattr(cfg, "petsc_options", {}) or {}),
@@ -1821,9 +1847,7 @@ class EITForwardModel:
         # when solve_A is A itself (primary AIJ/dense-first path).
         return session.current_solve_A is session.current_A
 
-    def _dispose_forward_ksp_session(
-        self, session: "ForwardKSPSession | None"
-    ) -> None:
+    def _dispose_forward_ksp_session(self, session: "ForwardKSPSession | None") -> None:
         if session is None:
             return
         ksp = getattr(session, "ksp", None)
@@ -2119,12 +2143,16 @@ class EITForwardModel:
                                 forward_ksp_mat_solve_count=1,
                                 forward_ksp_solve_count=0,
                                 forward_ksp_iterations_per_rhs=(
-                                    [] if dense_iterations is None else [dense_iterations]
+                                    []
+                                    if dense_iterations is None
+                                    else [dense_iterations]
                                 ),
                                 forward_ksp_iterations_total=dense_iterations,
                                 forward_ksp_converged_reason=dense_reason,
                                 forward_ksp_converged=(
-                                    None if dense_reason is None else bool(dense_reason > 0)
+                                    None
+                                    if dense_reason is None
+                                    else bool(dense_reason > 0)
                                 ),
                                 forward_solve_seconds=float(
                                     time.perf_counter() - solve_t0
@@ -2205,9 +2233,7 @@ class EITForwardModel:
                     forward_ksp_solve_count=int(i + 1),
                     forward_ksp_iterations_per_rhs=iterations_per_rhs,
                     forward_ksp_iterations_total=sum(
-                        int(value)
-                        for value in iterations_per_rhs
-                        if value is not None
+                        int(value) for value in iterations_per_rhs if value is not None
                     ),
                     forward_ksp_converged_reason=reason,
                     forward_ksp_converged=False,
@@ -2231,9 +2257,7 @@ class EITForwardModel:
             if n_patterns
             else None
         )
-        self._set_backend_diagnostic(
-            forward_pc_last_iter_count=session.last_iter_count
-        )
+        self._set_backend_diagnostic(forward_pc_last_iter_count=session.last_iter_count)
         return sol_matrix
 
     def _solve_full_rhs_with_petsc(
@@ -2336,9 +2360,7 @@ class EITForwardModel:
                     forward_ksp_solve_count=int(i + 1),
                     forward_ksp_iterations_per_rhs=iterations_per_rhs,
                     forward_ksp_iterations_total=sum(
-                        int(value)
-                        for value in iterations_per_rhs
-                        if value is not None
+                        int(value) for value in iterations_per_rhs if value is not None
                     ),
                     forward_ksp_converged_reason=reason,
                     forward_ksp_converged=False,
@@ -2350,9 +2372,7 @@ class EITForwardModel:
                         "PETSc CUDA full RHS solve failed with a negative "
                         f"convergence reason ({reason}). {self._actionable_cuda_guidance()}"
                     )
-                return self._solve_full_rhs_with_scipy(
-                    sigma, rhs, rhs_kind=rhs_kind
-                )
+                return self._solve_full_rhs_with_scipy(sigma, rhs, rhs_kind=rhs_kind)
             sol_matrix[:, i] = x.getArray(readonly=True)
 
         total_iterations = sum(
@@ -2367,9 +2387,7 @@ class EITForwardModel:
             forward_solve_seconds=float(time.perf_counter() - solve_t0),
         )
         session.record_solve(total_iterations if n_rhs else None)
-        self._set_backend_diagnostic(
-            forward_pc_last_iter_count=session.last_iter_count
-        )
+        self._set_backend_diagnostic(forward_pc_last_iter_count=session.last_iter_count)
         return self._recenter_cuda_gauge_solution(sol_matrix)
 
     def solve_full_rhs(
@@ -2396,13 +2414,9 @@ class EITForwardModel:
                 f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
             )
         if self.linear_backend == "scipy":
-            return self._solve_full_rhs_with_scipy(
-                sigma, rhs, rhs_kind=rhs_kind
-            )
+            return self._solve_full_rhs_with_scipy(sigma, rhs, rhs_kind=rhs_kind)
         if self.linear_backend == "petsc":
-            return self._solve_full_rhs_with_petsc(
-                sigma, rhs, rhs_kind=rhs_kind
-            )
+            return self._solve_full_rhs_with_petsc(sigma, rhs, rhs_kind=rhs_kind)
         raise ValueError(
             f"Unsupported linear_backend: {self.linear_backend}. "
             "Expected one of: 'petsc', 'scipy'."

@@ -37,7 +37,9 @@ def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
     assert args.acceleration_profile == "gpu3d_fused"
 
 
-def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(monkeypatch):
+def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(
+    monkeypatch,
+):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
     monkeypatch.setattr(
         sys,
@@ -100,6 +102,9 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact():
                 "petsc_cuda_mat": False,
                 "petsc_cuda_vec": False,
                 "petsc_cuda_dense": False,
+                "petsc_hypre": True,
+                "petsc_amgx": False,
+                "petsc_amgx_cuda_candidate": False,
                 "errors": {"mat": "Unknown type"},
             },
             "mpi_size": 1,
@@ -123,6 +128,7 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact():
     assert artifact["ksp_type"] == "fgmres"
     assert artifact["pc_type"] == "gamg"
     assert artifact["pc_subtype"] == "agg"
+    assert artifact["forward_amg_backend"] == "gamg-agg"
     assert artifact["mat_type"] == "seqaij"
     assert artifact["vec_type"] == "seq"
     assert artifact["setup_seconds"] == 0.25
@@ -138,6 +144,9 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact():
     assert artifact["mat_solve_effective"] == "vec-loop"
     assert artifact["petsc_device_effective"] == "cpu"
     assert artifact["petsc_cuda_available"] is False
+    assert artifact["petsc_hypre_available"] is True
+    assert artifact["petsc_amgx_available"] is False
+    assert artifact["petsc_amgx_cuda_candidate"] is False
     assert artifact["petsc_cuda_errors"] == {"mat": "Unknown type"}
     assert artifact["mpi_size"] == 1
     assert artifact["mpi_size_supported"] is True
@@ -145,6 +154,60 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact():
     assert artifact["fallback_reason"] == "petsc_cuda_not_available"
     assert artifact["forward_backend"] == "dolfinx"
     assert artifact["jacobian_backend"] == "matrix-free"
+
+
+def test_benchmark_3d_runtime_forward_artifact_reports_amgx_cuda_capability():
+    module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
+    args = Namespace(
+        n_elec=8,
+        forward_solver_preset="cuda_amgx",
+        forward_backend="dolfinx",
+    )
+
+    artifact = module._build_forward_solver_benchmark_artifact(
+        args=args,
+        mesh_info={"mesh_dim": 3, "elements": 42, "potential_dofs": 100},
+        backend_info={
+            "forward_rhs_count": 8,
+            "solver_preset": "cuda_amgx",
+            "ksp_type": "cg",
+            "pc_type": "amgx",
+            "petsc_mat_type": "aijcusparse",
+            "petsc_vec_type": "cuda",
+            "petsc_dense_mat_type": "densecuda",
+            "petsc_device_requested": "cuda",
+            "petsc_device_effective": "cuda",
+            "capability": {
+                "petsc_cuda": True,
+                "petsc_cuda_mat": True,
+                "petsc_cuda_vec": True,
+                "petsc_cuda_dense": True,
+                "petsc_hypre": True,
+                "petsc_amgx": True,
+                "petsc_amgx_cuda_candidate": True,
+                "errors": {},
+            },
+            "mpi_size": 1,
+            "mpi_rank": 0,
+            "mpi_parallel": False,
+            "mpi_size_supported": True,
+            "forward_ksp_solve_count": 8,
+            "forward_ksp_mat_solve_count": 0,
+        },
+        timing={},
+    )
+
+    assert artifact["solver_preset"] == "cuda_amgx"
+    assert artifact["ksp_type"] == "cg"
+    assert artifact["pc_type"] == "amgx"
+    assert artifact["forward_amg_backend"] == "amgx"
+    assert artifact["petsc_device_effective"] == "cuda"
+    assert artifact["petsc_cuda_available"] is True
+    assert artifact["petsc_hypre_available"] is True
+    assert artifact["petsc_amgx_available"] is True
+    assert artifact["petsc_amgx_cuda_candidate"] is True
+    assert artifact["mat_type"] == "aijcusparse"
+    assert artifact["vec_type"] == "cuda"
 
 
 def test_probe_petsc_cuda_script_includes_mpi_diagnostics(monkeypatch, capsys):
@@ -169,8 +232,12 @@ def test_probe_petsc_cuda_script_includes_mpi_diagnostics(monkeypatch, capsys):
     assert payload["mpi"]["mpi_size_supported"] is True
 
 
-def test_benchmark_3d_fair_compare_forwards_acceleration_profile(monkeypatch, tmp_path: Path):
-    module = _load_script_module("scripts", "benchmarks", "benchmark_3d_fair_compare.py")
+def test_benchmark_3d_fair_compare_forwards_acceleration_profile(
+    monkeypatch, tmp_path: Path
+):
+    module = _load_script_module(
+        "scripts", "benchmarks", "benchmark_3d_fair_compare.py"
+    )
     report_path = tmp_path / "runtime_report.json"
     report_path.write_text(json.dumps({"stages": []}), encoding="utf-8")
     captured: dict[str, object] = {}
@@ -227,7 +294,9 @@ def test_benchmark_3d_fair_compare_forwards_acceleration_profile(monkeypatch, tm
 
 
 def test_benchmark_difference_runtime_parser_accepts_acceleration_profile(monkeypatch):
-    module = _load_script_module("scripts", "benchmarks", "benchmark_difference_runtime.py")
+    module = _load_script_module(
+        "scripts", "benchmarks", "benchmark_difference_runtime.py"
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -243,8 +312,12 @@ def test_benchmark_difference_runtime_parser_accepts_acceleration_profile(monkey
     assert args.acceleration_profile == "gpu3d"
 
 
-def test_profile_reconstruction_pipeline_parser_accepts_acceleration_profile(monkeypatch):
-    module = _load_script_module("scripts", "benchmarks", "profile_reconstruction_pipeline.py")
+def test_profile_reconstruction_pipeline_parser_accepts_acceleration_profile(
+    monkeypatch,
+):
+    module = _load_script_module(
+        "scripts", "benchmarks", "profile_reconstruction_pipeline.py"
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -260,7 +333,9 @@ def test_profile_reconstruction_pipeline_parser_accepts_acceleration_profile(mon
     assert args.acceleration_profile == "gpu3d"
 
 
-def test_run_synthetic_parity_forwards_acceleration_profile(monkeypatch, tmp_path: Path):
+def test_run_synthetic_parity_forwards_acceleration_profile(
+    monkeypatch, tmp_path: Path
+):
     module = _load_script_module("scripts", "run_synthetic_parity.py")
     captured: dict[str, object] = {}
 

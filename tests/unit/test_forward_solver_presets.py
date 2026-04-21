@@ -46,6 +46,17 @@ def test_explicit_hypre_preset_sets_boomeramg() -> None:
     assert config.pc_hypre_type == "boomeramg"
 
 
+def test_cuda_amgx_preset_requests_cuda_cg_amgx() -> None:
+    config = EITForwardModel._resolve_linear_backend_config(
+        _model_with_dim(3),
+        LinearBackendConfig.from_dict({"solver_preset": "cuda_amgx"}),
+    )
+
+    assert config.ksp_type == "cg"
+    assert config.pc_type == "amgx"
+    assert config.petsc_device == "cuda"
+
+
 def test_explicit_ksp_pc_are_not_overridden_by_auto_preset() -> None:
     config = EITForwardModel._resolve_linear_backend_config(
         _model_with_dim(3),
@@ -65,18 +76,111 @@ def test_explicit_ksp_pc_are_not_overridden_by_auto_preset() -> None:
 # Full expected preset shape. KSP/PC values use "?" when the preset can ride on
 # the auto defaults; non-None entries hard-lock the driver/AMG type.
 _CANONICAL_PRESET_MATRIX: dict[str, dict[str, str | None]] = {
-    "custom":         {"ksp_type": None,      "pc_type": None,   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "direct":         {"ksp_type": "preonly", "pc_type": "lu",   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "legacy_direct":  {"ksp_type": "preonly", "pc_type": "lu",   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "debug_direct":   {"ksp_type": "preonly", "pc_type": "lu",   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "mumps":          {"ksp_type": "preonly", "pc_type": "lu",   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": "mumps"},
-    "debug_mumps":    {"ksp_type": "preonly", "pc_type": "lu",   "pc_gamg_type": None,  "pc_hypre_type": None,  "pc_factor_mat_solver_type": "mumps"},
-    "3d_gamg":        {"ksp_type": "fgmres",  "pc_type": "gamg", "pc_gamg_type": "agg", "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "3d_amg":         {"ksp_type": "fgmres",  "pc_type": "gamg", "pc_gamg_type": "agg", "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "3d_hypre":       {"ksp_type": "fgmres",  "pc_type": "hypre","pc_gamg_type": None,  "pc_hypre_type": "boomeramg", "pc_factor_mat_solver_type": None},
-    "hypre_boomeramg":{"ksp_type": "fgmres",  "pc_type": "hypre","pc_gamg_type": None,  "pc_hypre_type": "boomeramg", "pc_factor_mat_solver_type": None},
-    "spd_gamg":       {"ksp_type": "cg",      "pc_type": "gamg", "pc_gamg_type": "agg", "pc_hypre_type": None,  "pc_factor_mat_solver_type": None},
-    "spd_hypre":      {"ksp_type": "cg",      "pc_type": "hypre","pc_gamg_type": None,  "pc_hypre_type": "boomeramg", "pc_factor_mat_solver_type": None},
+    "custom": {
+        "ksp_type": None,
+        "pc_type": None,
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "direct": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "legacy_direct": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "debug_direct": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "mumps": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    "debug_mumps": {
+        "ksp_type": "preonly",
+        "pc_type": "lu",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": "mumps",
+    },
+    "3d_gamg": {
+        "ksp_type": "fgmres",
+        "pc_type": "gamg",
+        "pc_gamg_type": "agg",
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "3d_amg": {
+        "ksp_type": "fgmres",
+        "pc_type": "gamg",
+        "pc_gamg_type": "agg",
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "3d_hypre": {
+        "ksp_type": "fgmres",
+        "pc_type": "hypre",
+        "pc_gamg_type": None,
+        "pc_hypre_type": "boomeramg",
+        "pc_factor_mat_solver_type": None,
+    },
+    "hypre_boomeramg": {
+        "ksp_type": "fgmres",
+        "pc_type": "hypre",
+        "pc_gamg_type": None,
+        "pc_hypre_type": "boomeramg",
+        "pc_factor_mat_solver_type": None,
+    },
+    "spd_gamg": {
+        "ksp_type": "cg",
+        "pc_type": "gamg",
+        "pc_gamg_type": "agg",
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "spd_hypre": {
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "pc_gamg_type": None,
+        "pc_hypre_type": "boomeramg",
+        "pc_factor_mat_solver_type": None,
+    },
+    "cg_hypre": {
+        "ksp_type": "cg",
+        "pc_type": "hypre",
+        "pc_gamg_type": None,
+        "pc_hypre_type": "boomeramg",
+        "pc_factor_mat_solver_type": None,
+    },
+    "amgx": {
+        "ksp_type": "cg",
+        "pc_type": "amgx",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "cuda_amgx": {
+        "ksp_type": "cg",
+        "pc_type": "amgx",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
 }
 
 
@@ -123,7 +227,12 @@ def test_unknown_preset_still_raises_with_sorted_choices() -> None:
 
 def test_auto_dispatch_matches_canonical_decision() -> None:
     """T8: auto dispatch rule (V6) stays 3d_gamg for tdim>=3 and direct otherwise."""
-    for tdim, expected in ((1, "direct"), (2, "direct"), (3, "3d_gamg"), (4, "3d_gamg")):
+    for tdim, expected in (
+        (1, "direct"),
+        (2, "direct"),
+        (3, "3d_gamg"),
+        (4, "3d_gamg"),
+    ):
         config = EITForwardModel._resolve_linear_backend_config(
             _model_with_dim(tdim),
             LinearBackendConfig(),
