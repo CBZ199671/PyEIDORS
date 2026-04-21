@@ -10,6 +10,7 @@ CUDA_HYPRE_BLACKLISTED_PRESETS = frozenset(
 CUDA_HYPRE_BLACKLIST_REASON = "hypre_cuda_blacklisted_sigsegv_b4"
 AMGX_DOWNGRADE_REASON = "amgx_unavailable_downgraded_to_spd_gamg"
 CUDA_GAMG_DEFAULT_REASON = "3d_cuda_spd_gamg_default"
+CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON = "cuda_spd_gamg_matsolve_disabled_b6"
 
 
 def _token(value: Any, default: str = "auto") -> str:
@@ -92,11 +93,52 @@ def resolve_3d_cuda_forward_solver_policy(
     }
 
 
+def resolve_3d_cuda_mat_solve_policy(
+    *,
+    requested_mat_solve: Any = "auto",
+    mesh_dim: int,
+    petsc_device: Any,
+    forward_backend: Any,
+    solver_preset: Any,
+) -> dict[str, Any]:
+    """Resolve high-level 3D CUDA multi-RHS policy.
+
+    PETSc ``KSPMatSolve`` is not a stable production default for the current
+    ``spd_gamg + CUDA`` route. Keep explicit ``on`` available for experiments,
+    but make GUI/runtime ``auto`` use the proven vector RHS loop.
+    """
+    requested = _token(requested_mat_solve)
+    device = _token(petsc_device)
+    backend = _token(forward_backend, "dolfinx")
+    solver = _token(solver_preset)
+
+    effective = requested
+    reason = ""
+    warning = ""
+    active = int(mesh_dim) == 3 and device == "cuda" and backend == "dolfinx"
+    if active and requested == "auto" and solver == "spd_gamg":
+        effective = "off"
+        reason = CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON
+        warning = (
+            "PETSc KSPMatSolve is disabled for spd_gamg CUDA after B6; "
+            "using vector RHS loop."
+        )
+
+    return {
+        "forward_mat_solve_requested": requested,
+        "forward_mat_solve_effective_policy": effective,
+        "forward_mat_solve_policy_reason": reason,
+        "forward_mat_solve_policy_warning": warning,
+    }
+
+
 __all__ = [
     "AMGX_DOWNGRADE_REASON",
     "CUDA_GAMG_DEFAULT_REASON",
     "CUDA_HYPRE_BLACKLIST_REASON",
     "CUDA_HYPRE_BLACKLISTED_PRESETS",
+    "CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON",
     "is_hypre_cuda_blacklisted_solver",
     "resolve_3d_cuda_forward_solver_policy",
+    "resolve_3d_cuda_mat_solve_policy",
 ]

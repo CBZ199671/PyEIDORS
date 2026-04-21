@@ -14,7 +14,10 @@ from eit_app.models.precision import compute_dtype
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.models.forward_model_config import ForwardModelConfig
 from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
-from pyeidors.perf.forward_solver_policy import resolve_3d_cuda_forward_solver_policy
+from pyeidors.perf.forward_solver_policy import (
+    resolve_3d_cuda_forward_solver_policy,
+    resolve_3d_cuda_mat_solve_policy,
+)
 
 log = logging.getLogger(__name__)
 
@@ -200,6 +203,15 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         capability=capability,
         prefer_amgx=True,
     )
+    mat_solve_policy = resolve_3d_cuda_mat_solve_policy(
+        requested_mat_solve=_auto(
+            forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"
+        ),
+        mesh_dim=mesh_dim,
+        petsc_device=petsc_device,
+        forward_backend=forward_backend,
+        solver_preset=solver_policy["forward_solver_preset_effective"],
+    )
 
     return {
         "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
@@ -220,7 +232,18 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         "petsc_hypre_cuda_blacklisted": bool(
             solver_policy["petsc_hypre_cuda_blacklisted"]
         ),
-        "forward_mat_solve": _auto(forward_cfg.forward_mat_solve, "auto" if mesh_dim == 3 else "off"),
+        "forward_mat_solve": str(
+            mat_solve_policy["forward_mat_solve_effective_policy"]
+        ),
+        "forward_mat_solve_requested": str(
+            mat_solve_policy["forward_mat_solve_requested"]
+        ),
+        "forward_mat_solve_policy_reason": str(
+            mat_solve_policy["forward_mat_solve_policy_reason"]
+        ),
+        "forward_mat_solve_policy_warning": str(
+            mat_solve_policy["forward_mat_solve_policy_warning"]
+        ),
         "petsc_device": petsc_device,
         "device": _auto(forward_cfg.device, "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
@@ -261,6 +284,12 @@ def _forward_runtime_diagnostics(system: Any) -> dict[str, Any]:
         "petsc_hypre_available": bool(backend_diag.get("petsc_hypre_available", False)),
         "petsc_hypre_cuda_blacklisted": bool(
             backend_diag.get("petsc_hypre_cuda_blacklisted", False)
+        ),
+        "forward_mat_solve_effective": str(
+            backend_diag.get("forward_mat_solve_effective", "")
+        ),
+        "forward_mat_solve_policy_reason": str(
+            backend_diag.get("forward_mat_solve_policy_reason", "")
         ),
         "torch_device": str(getattr(system, "device", "") or ""),
         "mesh_cache_hit": getattr(mesh, "_pyeidors_mesh_cache_hit", None),

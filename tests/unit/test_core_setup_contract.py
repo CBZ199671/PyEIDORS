@@ -353,6 +353,11 @@ def test_runtime_policy_downgrades_missing_amgx_to_spd_gamg(monkeypatch):
     assert policy["forward_solver_preset_effective"] == "spd_gamg"
     assert policy["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
     assert policy["petsc_amgx_available"] is False
+    assert policy["forward_mat_solve_effective_policy"] == "off"
+    assert (
+        policy["forward_mat_solve_policy_reason"]
+        == "cuda_spd_gamg_matsolve_disabled_b6"
+    )
 
 
 def test_runtime_policy_blacklists_hypre_cuda_to_spd_gamg(monkeypatch):
@@ -384,6 +389,42 @@ def test_runtime_policy_blacklists_hypre_cuda_to_spd_gamg(monkeypatch):
     assert policy["forward_solver_preset_effective"] == "spd_gamg"
     assert policy["forward_solver_policy_reason"] == "hypre_cuda_blacklisted_sigsegv_b4"
     assert policy["petsc_hypre_cuda_blacklisted"] is True
+    assert policy["forward_mat_solve_effective_policy"] == "off"
+
+
+def test_runtime_policy_preserves_explicit_cuda_matsolve_on(monkeypatch):
+    monkeypatch.setattr(
+        "pyeidors.core_system.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+        },
+    )
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+        linear_backend_config={
+            "solver_preset": "spd_gamg",
+            "mat_solve_mode": "on",
+        },
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="tetra",
+        geometry_version="geomv2",
+        generator_revision="g3d2",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["forward_solver_preset_effective"] == "spd_gamg"
+    assert policy["forward_mat_solve_requested"] == "on"
+    assert policy["forward_mat_solve_effective_policy"] == "on"
+    assert policy["forward_mat_solve_policy_reason"] == ""
 
 
 def test_system_cache_lifecycle_defaults_to_session_and_supports_persistent():

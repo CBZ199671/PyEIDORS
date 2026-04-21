@@ -12,8 +12,10 @@ from .forward_solver_policy import (
     CUDA_GAMG_DEFAULT_REASON,
     CUDA_HYPRE_BLACKLIST_REASON,
     CUDA_HYPRE_BLACKLISTED_PRESETS,
+    CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON,
     is_hypre_cuda_blacklisted_solver,
     resolve_3d_cuda_forward_solver_policy,
+    resolve_3d_cuda_mat_solve_policy,
 )
 from .gpu_kernels import RMMatmulResult, rm_matmul
 from .policy import (
@@ -127,6 +129,7 @@ __all__ = [
     "CUDA_GAMG_DEFAULT_REASON",
     "CUDA_HYPRE_BLACKLIST_REASON",
     "CUDA_HYPRE_BLACKLISTED_PRESETS",
+    "CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON",
     "EXPERIMENTAL_PERF_PROFILES",
     "FULL_PERF_PROFILES",
     "FORWARD_BACKEND_CUDA_STRUCTURED",
@@ -161,6 +164,7 @@ __all__ = [
     "rm_matmul",
     "resolve_experimental_mode",
     "resolve_3d_cuda_forward_solver_policy",
+    "resolve_3d_cuda_mat_solve_policy",
     "resolve_forward_mat_solve",
     "resolve_line_search_mode",
     "resolve_solver_mode",

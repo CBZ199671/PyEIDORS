@@ -425,6 +425,11 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["acceleration_profile"] == "gpu3d"
     assert tetra["forward_solver_preset"] == "spd_gamg"
     assert tetra["petsc_amgx_available"] is False
+    assert tetra["forward_mat_solve"] == "off"
+    assert (
+        tetra["forward_mat_solve_policy_reason"]
+        == "cuda_spd_gamg_matsolve_disabled_b6"
+    )
 
     hex_cfg = _resolve_forward_runtime(
         ForwardModelConfig(mesh_dimension=3, mesh_family="hex")
@@ -457,6 +462,11 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["forward_solver_preset"] == "spd_gamg"
     assert tetra["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
     assert tetra["petsc_amgx_available"] is False
+    assert tetra["forward_mat_solve"] == "off"
+    assert (
+        tetra["forward_mat_solve_policy_reason"]
+        == "cuda_spd_gamg_matsolve_disabled_b6"
+    )
 
     requested_amgx = _resolve_reconstruction_runtime(
         {"mesh_family": "tetra", "forward_solver_preset": "cuda_amgx"},
@@ -464,6 +474,19 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     )
     assert requested_amgx["forward_solver_preset_requested"] == "cuda_amgx"
     assert requested_amgx["forward_solver_preset"] == "spd_gamg"
+    assert requested_amgx["forward_mat_solve"] == "off"
+
+    explicit_matsolve = _resolve_reconstruction_runtime(
+        {
+            "mesh_family": "tetra",
+            "forward_solver_preset": "spd_gamg",
+            "forward_mat_solve": "on",
+        },
+        mesh_dim=3,
+    )
+    assert explicit_matsolve["forward_mat_solve_requested"] == "on"
+    assert explicit_matsolve["forward_mat_solve"] == "on"
+    assert explicit_matsolve["forward_mat_solve_policy_reason"] == ""
 
     hex_cfg = _resolve_reconstruction_runtime({"mesh_family": "hex"}, mesh_dim=3)
     assert hex_cfg["mesh_family"] == "hex"

@@ -88,7 +88,10 @@ from .perf.policy import (
     prefers_fused_3d_gpu_pipeline,
 )
 from .perf.capabilities import probe_petsc_cuda_runtime
-from .perf.forward_solver_policy import resolve_3d_cuda_forward_solver_policy
+from .perf.forward_solver_policy import (
+    resolve_3d_cuda_forward_solver_policy,
+    resolve_3d_cuda_mat_solve_policy,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -590,6 +593,9 @@ class EITSystem(CoreSystemFacadeMixin):
         requested_solver_preset = str(
             self.linear_backend_config.get("solver_preset", "auto")
         )
+        requested_mat_solve = str(
+            self.linear_backend_config.get("mat_solve_mode", "auto")
+        )
         easy_gpu_profile = prefers_3d_gpu_pipeline(requested_profile)
         fused_gpu_profile = prefers_fused_3d_gpu_pipeline(requested_profile)
 
@@ -645,6 +651,13 @@ class EITSystem(CoreSystemFacadeMixin):
             capability=capability,
             prefer_amgx=True,
         )
+        mat_solve_policy = resolve_3d_cuda_mat_solve_policy(
+            requested_mat_solve=requested_mat_solve,
+            mesh_dim=mesh_dim,
+            petsc_device=resolved_petsc_device,
+            forward_backend=resolved_forward_backend,
+            solver_preset=solver_policy["forward_solver_preset_effective"],
+        )
 
         effective_profile = requested_profile if easy_gpu_profile and mesh_dim == 3 else DEFAULT_ACCELERATION_PROFILE
         return {
@@ -669,6 +682,7 @@ class EITSystem(CoreSystemFacadeMixin):
             "lowrank_mode_requested": requested_lowrank_mode,
             "lowrank_mode_effective": resolved_lowrank_mode,
             **solver_policy,
+            **mat_solve_policy,
         }
 
     def _initialize_components(self) -> None:
@@ -680,6 +694,9 @@ class EITSystem(CoreSystemFacadeMixin):
         resolved_backend_config["petsc_device"] = runtime_policy["petsc_device_effective"]
         resolved_backend_config["solver_preset"] = runtime_policy[
             "forward_solver_preset_effective"
+        ]
+        resolved_backend_config["mat_solve_mode"] = runtime_policy[
+            "forward_mat_solve_effective_policy"
         ]
         self.fwd_model = EITForwardModel(
             n_elec=self.n_elec,
