@@ -11,6 +11,7 @@ from .block_system import (
     make_block_diagonal_inverse_action,
     scale_contact_impedance_update,
 )
+from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
 from .workflows import (
     perform_absolute_reconstruction,
     perform_difference_reconstruction,
@@ -30,6 +31,10 @@ __all__ = [
     "build_sigma_contact_block_metadata",
     "make_block_diagonal_inverse_action",
     "scale_contact_impedance_update",
+    "CellMesh",
+    "DualMesh",
+    "VoxelGrid",
+    "coarse2fine",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
     "perform_sparse_absolute_reconstruction",
