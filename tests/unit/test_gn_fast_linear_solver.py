@@ -10,6 +10,7 @@ from scipy.sparse import diags
 from scipy.sparse.linalg import LinearOperator
 
 import pyeidors.inverse.solvers.gauss_newton_runtime as gn_runtime
+from pyeidors.inverse import CellMesh, DualMesh, DualMeshJacobianOperator, VoxelGrid
 from pyeidors.inverse.jacobian.linearized import JacobianLinearization
 from pyeidors.inverse.solvers.gauss_newton_runtime import _solve_linear_system_fast
 
@@ -33,7 +34,9 @@ def _dummy_reconstructor(
     )
 
 
-def _expected_solution(J: np.ndarray, residual: np.ndarray, de: np.ndarray, lam: float) -> np.ndarray:
+def _expected_solution(
+    J: np.ndarray, residual: np.ndarray, de: np.ndarray, lam: float
+) -> np.ndarray:
     R = np.diag([1.0, 2.0, 3.0])
     A = J.T @ J + lam * R
     rhs = -(J.T @ residual + lam * (R @ de))
@@ -44,7 +47,9 @@ def _make_linearization_from_dense(J: np.ndarray) -> JacobianLinearization:
     # Use a single spatial component so the synthetic gradients encode J exactly.
     n_meas, n_param = J.shape
     grad_u = np.ones((n_param, 1), dtype=float)
-    adjoint_gradients = tuple(np.asarray(row, dtype=float).reshape(n_param, 1) for row in J)
+    adjoint_gradients = tuple(
+        np.asarray(row, dtype=float).reshape(n_param, 1) for row in J
+    )
     return JacobianLinearization(
         grad_u_all=(grad_u,),
         adjoint_gradients=adjoint_gradients,
@@ -52,6 +57,26 @@ def _make_linearization_from_dense(J: np.ndarray) -> JacobianLinearization:
         n_meas_per_stim=(n_meas,),
         sign=1.0,
     )
+
+
+def _cell_mesh_from_centers(centers: np.ndarray, *, name: str) -> CellMesh:
+    centers = np.asarray(centers, dtype=float)
+    offsets = np.array(
+        [
+            [-1e-3, -1e-3, -1e-3],
+            [1e-3, 0.0, 0.0],
+            [0.0, 1e-3, 0.0],
+            [0.0, 0.0, 1e-3],
+        ],
+        dtype=float,
+    )
+    coordinates: list[np.ndarray] = []
+    cells: list[list[int]] = []
+    for center in centers:
+        start = len(coordinates)
+        coordinates.extend(center + offsets)
+        cells.append(list(range(start, start + offsets.shape[0])))
+    return CellMesh(np.asarray(coordinates), np.asarray(cells), name=name)
 
 
 def test_fast_solver_auto_woodbury_matches_dense_reference():
@@ -137,9 +162,78 @@ def test_fast_solver_linear_operator_pcg_matches_dense_reference():
         iteration=2,
     )
 
-    np.testing.assert_allclose(delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta = getattr(recon, "_last_fast_linear_meta", {})
     assert meta["jacobian_representation"] == "linear_operator"
+    assert meta["dense_jacobian_materialized"] is False
+    assert isinstance(meta["linear_iterations"], int)
+
+
+def test_fast_solver_accepts_dual_mesh_jacobian_operator_without_dense_materialization():
+    coarse = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 1.0, 1.0],
+        shape=(2, 1, 1),
+    )
+    fine = _cell_mesh_from_centers(
+        np.array(
+            [
+                [0.25, 0.5, 0.5],
+                [0.75, 0.5, 0.5],
+                [1.25, 0.5, 0.5],
+                [1.75, 0.5, 0.5],
+            ],
+            dtype=float,
+        ),
+        name="fine-cem-surrogate",
+    )
+    dual = DualMesh(fine, coarse)
+    fine_j = np.array(
+        [
+            [1.0, 2.0, 0.0, -1.0],
+            [0.5, -0.25, 3.0, 1.5],
+            [-2.0, 1.0, 0.75, 0.25],
+            [0.25, 0.5, -0.5, 1.25],
+        ],
+        dtype=float,
+    )
+    dense = fine_j @ dual.coarse2fine.toarray()
+    operator = DualMeshJacobianOperator(dual, fine_j)
+    residual = np.array([0.08, -0.03, 0.05, -0.02], dtype=float)
+    de = np.array([0.2, -0.1], dtype=float)
+    lam = 0.09
+    reg_diag = np.array([1.0, 1.8], dtype=float)
+    expected = np.linalg.solve(
+        dense.T @ dense + lam * np.diag(reg_diag),
+        -(dense.T @ residual + lam * (reg_diag * de)),
+    )
+    recon = SimpleNamespace(
+        R_matrix=diags(reg_diag, 0, format="csr"),
+        R_diag=reg_diag,
+        use_prior_term=True,
+        performance_mode="aggressive",
+        linear_solver="auto",
+        preconditioner="diag",
+        fast_linear_path="pcg",
+        cholmod_max_n=12000,
+        cholmod_max_memory_gib=4.0,
+    )
+
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=operator,
+        weighted_residual_np=residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=4,
+    )
+
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+    meta = getattr(recon, "_last_fast_linear_meta", {})
+    assert meta["jacobian_representation"] == "dual_mesh_jacobian_operator"
+    assert meta["jacobian_shape"] == [4, 2]
     assert meta["dense_jacobian_materialized"] is False
     assert isinstance(meta["linear_iterations"], int)
 
@@ -367,7 +461,9 @@ def test_matrix_free_ksp_backend_petsc_falls_back_when_unavailable(monkeypatch):
     meta = recon._last_fast_linear_meta
     assert meta["matrix_free_ksp_backend_requested"] == "petsc"
     assert meta["matrix_free_ksp_backend_effective"] == "scipy"
-    assert meta["matrix_free_ksp_backend_fallback_reason"] == "petsc_backend_unavailable"
+    assert (
+        meta["matrix_free_ksp_backend_fallback_reason"] == "petsc_backend_unavailable"
+    )
 
 
 def test_fast_solver_pyamg_matches_dense_reference():
@@ -418,9 +514,9 @@ def test_fast_solver_pyamg_matches_dense_reference():
     path = str(meta.get("path", ""))
     source = str(meta.get("matrix_free_pc_source", ""))
     if source == "identity":
-        assert meta.get("matrix_free_pc_reason"), (
-            "pyamg fallback must surface a reason, not silently pick identity."
-        )
+        assert meta.get(
+            "matrix_free_pc_reason"
+        ), "pyamg fallback must surface a reason, not silently pick identity."
     else:
         assert path in {"pcg-pyamg-precond", "pcg-diag-precond"}
 
@@ -482,12 +578,14 @@ def test_solve_matrix_free_hessian_via_petsc_direct_call():
         dtype=np.float64,
     )
 
-    delta, iterations, converged, reason = gn_runtime._solve_matrix_free_hessian_via_petsc(
-        h_op,
-        b,
-        None,
-        rtol=1e-10,
-        maxiter=200,
+    delta, iterations, converged, reason = (
+        gn_runtime._solve_matrix_free_hessian_via_petsc(
+            h_op,
+            b,
+            None,
+            rtol=1e-10,
+            maxiter=200,
+        )
     )
 
     np.testing.assert_allclose(delta, np.linalg.solve(A, b), rtol=1e-6, atol=1e-8)
@@ -538,7 +636,9 @@ def test_fast_solver_matrix_free_noser_and_prior_pc_metadata():
         dtype=np.float64,
     )
 
-    recon_noser = _dummy_reconstructor("auto", preconditioner="noser", fast_linear_path="pcg")
+    recon_noser = _dummy_reconstructor(
+        "auto", preconditioner="noser", fast_linear_path="pcg"
+    )
     recon_noser.regularization_type = "noser"
     delta_noser, _, _ = _solve_linear_system_fast(
         recon_noser,
@@ -548,13 +648,17 @@ def test_fast_solver_matrix_free_noser_and_prior_pc_metadata():
         lambda_eff=lam,
         iteration=4,
     )
-    np.testing.assert_allclose(delta_noser, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta_noser, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta_noser = getattr(recon_noser, "_last_fast_linear_meta", {})
     assert meta_noser["resolved_preconditioner"] == "noser"
     assert meta_noser["matrix_free_pc_source"] == "noser"
     assert meta_noser["dense_jacobian_materialized"] is False
 
-    recon_prior = _dummy_reconstructor("auto", preconditioner="prior", fast_linear_path="pcg")
+    recon_prior = _dummy_reconstructor(
+        "auto", preconditioner="prior", fast_linear_path="pcg"
+    )
     delta_prior, _, _ = _solve_linear_system_fast(
         recon_prior,
         J_weighted_np=op,
@@ -563,14 +667,18 @@ def test_fast_solver_matrix_free_noser_and_prior_pc_metadata():
         lambda_eff=lam,
         iteration=5,
     )
-    np.testing.assert_allclose(delta_prior, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta_prior, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta_prior = getattr(recon_prior, "_last_fast_linear_meta", {})
     assert meta_prior["resolved_preconditioner"] == "prior"
     assert meta_prior["matrix_free_pc_source"] == "prior"
     assert meta_prior["matrix_free_pmat_available"] is False
 
 
-def test_fast_solver_matrix_free_petsc_gamg_requires_pmat_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_fast_solver_matrix_free_petsc_gamg_requires_pmat_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     J = np.array(
         [
             [0.8, -0.2, 0.5],
@@ -600,7 +708,9 @@ def test_fast_solver_matrix_free_petsc_gamg_requires_pmat_fallback(monkeypatch: 
         },
     )
 
-    recon = _dummy_reconstructor("auto", preconditioner="petsc-gamg", fast_linear_path="pcg")
+    recon = _dummy_reconstructor(
+        "auto", preconditioner="petsc-gamg", fast_linear_path="pcg"
+    )
     delta, _, _ = _solve_linear_system_fast(
         recon,
         J_weighted_np=op,
@@ -610,7 +720,9 @@ def test_fast_solver_matrix_free_petsc_gamg_requires_pmat_fallback(monkeypatch: 
         iteration=6,
     )
 
-    np.testing.assert_allclose(delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta = getattr(recon, "_last_fast_linear_meta", {})
     assert meta["resolved_preconditioner"] == "diag"
     assert meta["matrix_free_pmat_available"] is False
@@ -648,7 +760,9 @@ def test_fast_solver_matrix_free_sparse_pmat_smoke_matches_dense_reference():
         iteration=7,
     )
 
-    np.testing.assert_allclose(delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta = getattr(recon, "_last_fast_linear_meta", {})
     assert meta["resolved_preconditioner"] == "pmat"
     assert meta["path"] == "pcg-pmat-precond"
@@ -678,7 +792,9 @@ def test_fast_solver_matrix_free_coarse_pmat_and_custom_pc_smokes():
     )
     expected = _expected_solution(J, residual, de, lam)
 
-    recon_coarse = _dummy_reconstructor("auto", preconditioner="coarse", fast_linear_path="pcg")
+    recon_coarse = _dummy_reconstructor(
+        "auto", preconditioner="coarse", fast_linear_path="pcg"
+    )
     recon_coarse.matrix_free_coarse_pmat = np.diag([1.2, 1.8, 2.6])
     delta_coarse, _, _ = _solve_linear_system_fast(
         recon_coarse,
@@ -694,8 +810,12 @@ def test_fast_solver_matrix_free_coarse_pmat_and_custom_pc_smokes():
     assert meta_coarse["path"] == "pcg-coarse-pmat-precond"
     assert meta_coarse["matrix_free_pc_source"] == "coarse-pmat"
 
-    recon_custom = _dummy_reconstructor("auto", preconditioner="custom", fast_linear_path="pcg")
-    recon_custom.matrix_free_pc_action = lambda x: np.asarray(x, dtype=float) / np.array([1.2, 1.8, 2.6])
+    recon_custom = _dummy_reconstructor(
+        "auto", preconditioner="custom", fast_linear_path="pcg"
+    )
+    recon_custom.matrix_free_pc_action = lambda x: np.asarray(
+        x, dtype=float
+    ) / np.array([1.2, 1.8, 2.6])
     delta_custom, _, _ = _solve_linear_system_fast(
         recon_custom,
         J_weighted_np=op,
@@ -711,7 +831,9 @@ def test_fast_solver_matrix_free_coarse_pmat_and_custom_pc_smokes():
     assert meta_custom["matrix_free_pc_source"] == "custom-pcshell"
 
 
-def test_fast_solver_matrix_free_petsc_gamg_with_pmat_uses_compatible_pmat(monkeypatch: pytest.MonkeyPatch):
+def test_fast_solver_matrix_free_petsc_gamg_with_pmat_uses_compatible_pmat(
+    monkeypatch: pytest.MonkeyPatch,
+):
     J = np.array(
         [
             [0.8, -0.2, 0.5],
@@ -741,7 +863,9 @@ def test_fast_solver_matrix_free_petsc_gamg_with_pmat_uses_compatible_pmat(monke
         },
     )
 
-    recon = _dummy_reconstructor("auto", preconditioner="petsc-gamg", fast_linear_path="pcg")
+    recon = _dummy_reconstructor(
+        "auto", preconditioner="petsc-gamg", fast_linear_path="pcg"
+    )
     recon.matrix_free_pmat = diags([1.2, 1.8, 2.6], 0, format="csr")
     delta, _, _ = _solve_linear_system_fast(
         recon,
@@ -752,12 +876,16 @@ def test_fast_solver_matrix_free_petsc_gamg_with_pmat_uses_compatible_pmat(monke
         iteration=10,
     )
 
-    np.testing.assert_allclose(delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7)
+    np.testing.assert_allclose(
+        delta, _expected_solution(J, residual, de, lam), rtol=1e-5, atol=1e-7
+    )
     meta = getattr(recon, "_last_fast_linear_meta", {})
     assert meta["resolved_preconditioner"] == "pmat"
     assert meta["matrix_free_pc_source"] == "pmat"
     assert meta["matrix_free_pmat_requested_preconditioner"] == "petsc-gamg"
-    assert "petsc_gamg_not_supported_in_matrix_free" not in str(meta.get("fallback_reason"))
+    assert "petsc_gamg_not_supported_in_matrix_free" not in str(
+        meta.get("fallback_reason")
+    )
 
 
 def test_fast_solver_jacobian_linearization_supports_weights_and_callable_regularization():
@@ -802,7 +930,9 @@ def test_fast_solver_jacobian_linearization_supports_weights_and_callable_regula
     assert isinstance(meta["linear_iterations"], int)
 
 
-def test_fast_solver_cholmod_preconditioner_and_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_fast_solver_cholmod_preconditioner_and_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     J = np.array(
         [
             [0.8, -0.2, 0.5],
@@ -836,7 +966,9 @@ def test_fast_solver_cholmod_preconditioner_and_fallback(monkeypatch: pytest.Mon
         },
     )
 
-    recon = _dummy_reconstructor("auto", preconditioner="cholmod", fast_linear_path="pcg")
+    recon = _dummy_reconstructor(
+        "auto", preconditioner="cholmod", fast_linear_path="pcg"
+    )
     monkeypatch.setattr(gn_runtime, "cholmod_cholesky", lambda mat: _FakeFactor(mat))
     delta, _, _ = _solve_linear_system_fast(
         recon,
@@ -856,7 +988,9 @@ def test_fast_solver_cholmod_preconditioner_and_fallback(monkeypatch: pytest.Mon
         "cholmod_cholesky",
         lambda _mat: (_ for _ in ()).throw(RuntimeError("fail")),
     )
-    recon2 = _dummy_reconstructor("auto", preconditioner="cholmod", fast_linear_path="pcg")
+    recon2 = _dummy_reconstructor(
+        "auto", preconditioner="cholmod", fast_linear_path="pcg"
+    )
     delta2, _, _ = _solve_linear_system_fast(
         recon2,
         J_weighted_np=J,
