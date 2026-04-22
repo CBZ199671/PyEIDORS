@@ -276,7 +276,9 @@ def test_single_step_cached_uses_measurement_space_when_operator_shape_matches(
         _solve_linear_from_bundle=_solve_linear_from_bundle,
         build_shared_context=lambda **_kwargs: None,
     )
-    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", lambda: fake_diff_runner)
+    monkeypatch.setattr(
+        rc, "_load_gn_difference_runner_module", lambda: fake_diff_runner
+    )
     monkeypatch.setattr(
         rc,
         "_ensure_single_step_cached_context",
@@ -304,7 +306,99 @@ def test_single_step_cached_uses_measurement_space_when_operator_shape_matches(
     assert result.metadata["single_step_operator_space"] == "measurement"
 
 
-def test_single_step_cached_uses_linearized_operator_solver(monkeypatch: pytest.MonkeyPatch):
+def test_single_step_cached_limits_alpha_before_forward_validation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    reference = FrameData(
+        real=np.array([1.0, 2.0, 3.0], dtype=float),
+        imag=np.zeros(3, dtype=float),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    target = FrameData(
+        real=np.array([2.0, 4.0, 6.0], dtype=float),
+        imag=np.zeros(3, dtype=float),
+        timestamp=0.0,
+        frame_index=1,
+    )
+    delta_sigma = np.array([-2.0, 0.1], dtype=float)
+    sigma_bg = np.ones_like(delta_sigma)
+    sigma_floor = 0.2
+    base_meas = np.array([10.0, 20.0, 30.0], dtype=float)
+    pred_diff = np.array([0.05, 0.1, 0.15], dtype=float)
+    captured_sigma: list[np.ndarray] = []
+
+    class _StubForwardModel:
+        def fwd_solve(self, image):
+            sigma = np.asarray(image.elem_data, dtype=float)
+            captured_sigma.append(sigma.copy())
+            assert np.all(np.isfinite(sigma))
+            assert float(np.min(sigma)) > sigma_floor
+            return SimpleNamespace(meas=base_meas + pred_diff), None
+
+    ctx = {
+        "mesh": object(),
+        "display_node_coords": np.array(
+            [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            dtype=float,
+        ),
+        "display_cell_connectivity": np.array([[0, 1, 2]], dtype=int),
+        "operator_bundle": {
+            "strict_solver_backend_effective": "measurement-exact",
+        },
+        "sigma_bg": sigma_bg,
+        "fwd_model": _StubForwardModel(),
+        "base_meas": base_meas,
+        "cache_build_seconds": {},
+        "cache_miss_reasons": {},
+        "cache_manager": None,
+    }
+
+    def _calibration_failed(**_kwargs):
+        raise RuntimeError("candidate sigma was infeasible")
+
+    fake_diff_runner = SimpleNamespace(
+        STRICT_SOLVER_BACKEND_MEASUREMENT="measurement-exact",
+        _calibrate_step_size=_calibration_failed,
+        _measurement_space_delta=lambda *, operator_bundle, rhs: delta_sigma,
+        _solve_linear_from_bundle=lambda *_args, **_kwargs: delta_sigma,
+        build_shared_context=lambda **_kwargs: None,
+    )
+    monkeypatch.setattr(
+        rc, "_load_gn_difference_runner_module", lambda: fake_diff_runner
+    )
+    monkeypatch.setattr(
+        rc,
+        "_ensure_single_step_cached_context",
+        lambda _runtime, *, emit, build_shared_context: ctx,
+    )
+
+    result = rc._run_single_step_cached_request(
+        rc.ReconstructionRequest(
+            reference_frame=reference,
+            target_frame=target,
+            mesh_dimension=3,
+            metadata={
+                "reconstruction_runtime": "single_step_cached",
+                "step_size_calib": True,
+                "sigma_floor": sigma_floor,
+                "n_elec": 8,
+                "n_rings": 2,
+            },
+        )
+    )
+
+    assert captured_sigma
+    assert float(np.min(captured_sigma[-1])) > sigma_floor
+    assert 0.0 < result.metadata["step_size_alpha"] < 0.4
+    assert result.metadata["step_size_alpha_requested"] == pytest.approx(1.0)
+    assert result.metadata["step_size_alpha_limited"] is True
+    np.testing.assert_allclose(result.conductivity, captured_sigma[-1] - sigma_bg)
+
+
+def test_single_step_cached_uses_linearized_operator_solver(
+    monkeypatch: pytest.MonkeyPatch,
+):
     reference = FrameData(
         real=np.array([1.0, 2.0, 3.0], dtype=float),
         imag=np.zeros(3, dtype=float),
@@ -358,11 +452,15 @@ def test_single_step_cached_uses_linearized_operator_solver(monkeypatch: pytest.
         STRICT_SOLVER_BACKEND_MEASUREMENT="measurement-exact",
         _calibrate_step_size=lambda **_kwargs: 1.0,
         _measurement_space_delta=lambda **_kwargs: calls.__setitem__("measurement", 1),
-        _solve_linear_from_bundle=lambda *_args, **_kwargs: calls.__setitem__("parameter", 1),
+        _solve_linear_from_bundle=lambda *_args, **_kwargs: calls.__setitem__(
+            "parameter", 1
+        ),
         _solve_linearized_delta=_solve_linearized_delta,
         build_shared_context=lambda **_kwargs: None,
     )
-    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", lambda: fake_diff_runner)
+    monkeypatch.setattr(
+        rc, "_load_gn_difference_runner_module", lambda: fake_diff_runner
+    )
     monkeypatch.setattr(
         rc,
         "_ensure_single_step_cached_context",
@@ -427,8 +525,7 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_amgx_available"] is False
     assert tetra["forward_mat_solve"] == "off"
     assert (
-        tetra["forward_mat_solve_policy_reason"]
-        == "cuda_spd_gamg_matsolve_disabled_b6"
+        tetra["forward_mat_solve_policy_reason"] == "cuda_spd_gamg_matsolve_disabled_b6"
     )
 
     hex_cfg = _resolve_forward_runtime(
@@ -460,12 +557,14 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
     assert tetra["forward_solver_preset"] == "spd_gamg"
-    assert tetra["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
+    assert (
+        tetra["forward_solver_policy_reason"]
+        == "amgx_unavailable_downgraded_to_spd_gamg"
+    )
     assert tetra["petsc_amgx_available"] is False
     assert tetra["forward_mat_solve"] == "off"
     assert (
-        tetra["forward_mat_solve_policy_reason"]
-        == "cuda_spd_gamg_matsolve_disabled_b6"
+        tetra["forward_mat_solve_policy_reason"] == "cuda_spd_gamg_matsolve_disabled_b6"
     )
 
     requested_amgx = _resolve_reconstruction_runtime(
@@ -665,7 +764,9 @@ def test_pyvista_offscreen_controls_keep_rendered_canvas(monkeypatch):
     QApplication.processEvents()
     assert widget._offscreen_label.pixmap() is not None
     assert widget._offscreen_mesh_actor is not None
-    assert widget._offscreen_mesh_actor.GetProperty().GetOpacity() == pytest.approx(0.30)
+    assert widget._offscreen_mesh_actor.GetProperty().GetOpacity() == pytest.approx(
+        0.30
+    )
 
     assert widget._offscreen_highlight_actor is not None
     widget._highlight_check.setChecked(False)
@@ -683,6 +784,57 @@ def test_pyvista_offscreen_controls_keep_rendered_canvas(monkeypatch):
     QApplication.processEvents()
     assert widget._offscreen_label.pixmap() is not None
     assert widget._stack.currentWidget() is widget._offscreen_host
+    widget.close()
+
+
+def test_pyvista_offscreen_drag_frames_keep_logical_canvas_size(monkeypatch):
+    _get_app()
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+
+    class FakePlotter:
+        def __init__(self) -> None:
+            self.window_size = (0, 0)
+            self.screenshot_sizes: list[tuple[int, int]] = []
+
+        def render(self) -> None:
+            pass
+
+        def screenshot(self, *, return_img: bool):  # noqa: ANN001
+            assert return_img is True
+            width, height = self.window_size
+            self.screenshot_sizes.append((width, height))
+            return np.zeros((height, width, 3), dtype=np.uint8)
+
+    widget = Conductivity3DWidget("Conductivity")
+    widget._offscreen_label.resize(800, 600)
+    plotter = FakePlotter()
+    widget._offscreen_plotter = plotter
+    widget._render_backend = "pyvista_offscreen"
+
+    widget._is_dragging_offscreen = False
+    widget._refresh_offscreen_pixmap()
+    idle_pixmap = widget._offscreen_label.pixmap()
+    assert idle_pixmap is not None
+    idle_logical = (
+        idle_pixmap.width() / idle_pixmap.devicePixelRatioF(),
+        idle_pixmap.height() / idle_pixmap.devicePixelRatioF(),
+    )
+
+    widget._is_dragging_offscreen = True
+    widget._refresh_offscreen_pixmap()
+    drag_pixmap = widget._offscreen_label.pixmap()
+    assert drag_pixmap is not None
+    drag_logical = (
+        drag_pixmap.width() / drag_pixmap.devicePixelRatioF(),
+        drag_pixmap.height() / drag_pixmap.devicePixelRatioF(),
+    )
+
+    assert plotter.screenshot_sizes[1][0] < plotter.screenshot_sizes[0][0]
+    assert drag_pixmap.width() == idle_pixmap.width()
+    assert drag_pixmap.height() == idle_pixmap.height()
+    assert drag_logical == pytest.approx(idle_logical)
+    assert drag_logical == pytest.approx((800.0, 600.0))
+
     widget.close()
 
 

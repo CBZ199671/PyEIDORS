@@ -47,7 +47,10 @@ from pyeidors.inverse.jacobian.linearized import (
     JacobianLinearization,
     LazyAdjointJacobianLinearization,
 )
-from pyeidors.perf.capabilities import detect_performance_capabilities, select_preconditioner
+from pyeidors.perf.capabilities import (
+    detect_performance_capabilities,
+    select_preconditioner,
+)
 from pyeidors.perf.policy import (
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_FORWARD_BACKEND,
@@ -56,7 +59,10 @@ from pyeidors.perf.policy import (
     normalize_mesh_family,
 )
 from pyeidors.inverse.reduced.lowrank_subspace import build_lowrank_subspace
-from pyeidors.inverse.reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
+from pyeidors.inverse.reduced.pod_basis import (
+    compute_pod_basis,
+    merge_orthonormal_bases,
+)
 from pyeidors.inverse.reduced.snapshot_bank import select_snapshot_matrix
 from pyeidors.inverse.solvers.gauss_newton_device import resolve_torch_device
 from pyeidors.utils.numeric_ops import safe_dot
@@ -98,6 +104,113 @@ STRICT_SOLVER_BACKEND_MEASUREMENT = "measurement-exact"
 STRICT_MEMORY_FALLBACK_BYTES = 8 * 1024**3
 STRICT_MEMORY_GUARD_CAP_BYTES = 12 * 1024**3
 STRICT_MEMORY_GUARD_FRACTION = 0.60
+DEFAULT_SIGMA_FLOOR = 1.0e-6
+SIGMA_STEP_MARGIN = 1.0e-9
+
+
+def _normalize_sigma_floor(value: object = DEFAULT_SIGMA_FLOOR) -> float:
+    try:
+        floor = float(value)
+    except (TypeError, ValueError):
+        return DEFAULT_SIGMA_FLOOR
+    if not np.isfinite(floor) or floor <= 0.0:
+        return DEFAULT_SIGMA_FLOOR
+    return floor
+
+
+def _sigma_candidate_is_feasible(
+    sigma_values: np.ndarray,
+    *,
+    sigma_floor: float = DEFAULT_SIGMA_FLOOR,
+) -> bool:
+    arr = np.asarray(sigma_values, dtype=np.float64).reshape(-1)
+    floor = _normalize_sigma_floor(sigma_floor)
+    return (
+        arr.size > 0 and bool(np.all(np.isfinite(arr))) and float(np.min(arr)) > floor
+    )
+
+
+def _limit_step_size_for_sigma_floor(
+    sigma_bg: np.ndarray,
+    delta_sigma: np.ndarray,
+    alpha: float,
+    *,
+    sigma_floor: float = DEFAULT_SIGMA_FLOOR,
+) -> float:
+    try:
+        requested = float(alpha)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(requested) or requested <= 0.0:
+        return 0.0
+
+    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
+    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    if sigma.shape != delta.shape:
+        raise ValueError(
+            "sigma_bg and delta_sigma shape mismatch: "
+            f"{sigma.shape} != {delta.shape}"
+        )
+    if (
+        sigma.size == 0
+        or not np.all(np.isfinite(sigma))
+        or not np.all(np.isfinite(delta))
+    ):
+        return 0.0
+
+    floor = _normalize_sigma_floor(sigma_floor)
+    negative_update = delta < 0.0
+    if not bool(np.any(negative_update)):
+        return requested
+
+    margin = sigma[negative_update] - floor
+    if not bool(np.all(margin > 0.0)):
+        return 0.0
+
+    max_alpha = float(np.min(margin / (-delta[negative_update])))
+    if not np.isfinite(max_alpha) or max_alpha <= 0.0:
+        return 0.0
+    interior_alpha = max_alpha * (1.0 - SIGMA_STEP_MARGIN)
+    if not np.isfinite(interior_alpha) or interior_alpha <= 0.0:
+        interior_alpha = np.nextafter(max_alpha, 0.0)
+    return max(0.0, min(requested, float(interior_alpha)))
+
+
+def _floored_sigma_update(
+    sigma_bg: np.ndarray,
+    delta_sigma: np.ndarray,
+    alpha: float,
+    *,
+    sigma_floor: float = DEFAULT_SIGMA_FLOOR,
+) -> tuple[float, np.ndarray, np.ndarray, bool]:
+    limited_alpha = _limit_step_size_for_sigma_floor(
+        sigma_bg,
+        delta_sigma,
+        alpha,
+        sigma_floor=sigma_floor,
+    )
+    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
+    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    if sigma.shape != delta.shape:
+        raise ValueError(
+            "sigma_bg and delta_sigma shape mismatch: "
+            f"{sigma.shape} != {delta.shape}"
+        )
+    if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
+        raise RuntimeError(
+            "single-step conductivity update contains non-finite values."
+        )
+
+    floor = _normalize_sigma_floor(sigma_floor)
+    raw_sigma_est = sigma + float(limited_alpha) * delta
+    if not np.all(np.isfinite(raw_sigma_est)):
+        raise RuntimeError("single-step conductivity estimate is non-finite.")
+
+    floor_value = np.nextafter(floor, np.inf)
+    sigma_est = np.maximum(raw_sigma_est, floor_value)
+    floor_applied = bool(np.any(sigma_est != raw_sigma_est))
+    display_delta = sigma_est - sigma
+    return float(limited_alpha), display_delta, sigma_est, floor_applied
 
 
 def _build_noser_diag(
@@ -128,7 +241,11 @@ def _normalize_jacobian_representation(
 ) -> str:
     raw = str(value or "dense").strip().lower().replace("_", "-")
     if raw == "auto":
-        return "linearized" if int(mesh_dim) == 3 and str(solver_mode) == "fast" else "dense"
+        return (
+            "linearized"
+            if int(mesh_dim) == 3 and str(solver_mode) == "fast"
+            else "dense"
+        )
     if raw in {"dense", "materialized"}:
         return "dense"
     if raw in {"linearized", "jacobian-linearization", "operator"}:
@@ -157,7 +274,10 @@ def _difference_jacobian_weights(
         signs[signs == 0.0] = 1.0
         safe_ref[small] = signs * eps
         weights = weights / safe_ref
-    if normalize_difference_orientation(difference_orientation) == "reference_minus_target":
+    if (
+        normalize_difference_orientation(difference_orientation)
+        == "reference_minus_target"
+    ):
         weights = -weights
     return np.asarray(weights, dtype=np.float64)
 
@@ -188,7 +308,9 @@ def _build_noser_diag_from_linearization(
     else:
         effective_floor = floor
     diag_entries = np.maximum(diag_entries, effective_floor)
-    return np.asarray(float(alpha) * (diag_entries ** float(exponent)), dtype=np.float64)
+    return np.asarray(
+        float(alpha) * (diag_entries ** float(exponent)), dtype=np.float64
+    )
 
 
 def _linearized_matvec(
@@ -350,15 +472,30 @@ def _select_strict_solver_backend(
     n_meas: int,
     mem_available_bytes: int | None = None,
 ) -> dict[str, object]:
-    mem_available = int(mem_available_bytes) if mem_available_bytes is not None else _linux_mem_available_bytes()
-    mem_available_source = "linux-memavailable" if mem_available_bytes is None and mem_available is not None else "provided"
+    mem_available = (
+        int(mem_available_bytes)
+        if mem_available_bytes is not None
+        else _linux_mem_available_bytes()
+    )
+    mem_available_source = (
+        "linux-memavailable"
+        if mem_available_bytes is None and mem_available is not None
+        else "provided"
+    )
     if mem_available is None:
         mem_available = int(STRICT_MEMORY_FALLBACK_BYTES)
         mem_available_source = "fallback"
     estimated_peak_bytes = float(_estimate_strict_dense_peak_bytes(int(n_param)))
-    guard_limit_bytes = float(min(float(mem_available) * STRICT_MEMORY_GUARD_FRACTION, float(STRICT_MEMORY_GUARD_CAP_BYTES)))
+    guard_limit_bytes = float(
+        min(
+            float(mem_available) * STRICT_MEMORY_GUARD_FRACTION,
+            float(STRICT_MEMORY_GUARD_CAP_BYTES),
+        )
+    )
     triggered = bool(int(mesh_dim) == 3 and estimated_peak_bytes > guard_limit_bytes)
-    effective = STRICT_SOLVER_BACKEND_MEASUREMENT if triggered else STRICT_SOLVER_BACKEND_DENSE
+    effective = (
+        STRICT_SOLVER_BACKEND_MEASUREMENT if triggered else STRICT_SOLVER_BACKEND_DENSE
+    )
     if int(mesh_dim) != 3:
         reason = "dense_allowed_non3d"
     elif triggered:
@@ -377,7 +514,9 @@ def _select_strict_solver_backend(
         "strict_mem_available_bytes": int(mem_available),
         "strict_mem_available_gib": float(mem_available / (1024.0**3)),
         "strict_mem_available_source": mem_available_source,
-        "strict_measurement_system_shape": [int(n_meas), int(n_meas)] if triggered else None,
+        "strict_measurement_system_shape": (
+            [int(n_meas), int(n_meas)] if triggered else None
+        ),
     }
 
 
@@ -390,10 +529,16 @@ def _measurement_space_delta(
     torch_device = str(operator_bundle.get("torch_device", "cuda"))
     y = _solve_linear_from_bundle(operator_bundle, np.asarray(rhs, dtype=float))
     if runtime_device == "cuda" and torch is not None:
-        inv_reg_diag_t = _bundle_torch_tensor(operator_bundle, "inv_reg_diag", operator_bundle["inv_reg_diag"])
+        inv_reg_diag_t = _bundle_torch_tensor(
+            operator_bundle, "inv_reg_diag", operator_bundle["inv_reg_diag"]
+        )
         Jt_t = _bundle_torch_tensor(operator_bundle, "Jt", operator_bundle["Jt"])
-        y_t = torch.as_tensor(np.asarray(y, dtype=np.float64), device=torch_device, dtype=torch.float64)
-        return np.asarray((inv_reg_diag_t * torch.mv(Jt_t, y_t)).detach().cpu().numpy(), dtype=float)
+        y_t = torch.as_tensor(
+            np.asarray(y, dtype=np.float64), device=torch_device, dtype=torch.float64
+        )
+        return np.asarray(
+            (inv_reg_diag_t * torch.mv(Jt_t, y_t)).detach().cpu().numpy(), dtype=float
+        )
     return np.asarray(
         operator_bundle["inv_reg_diag"]
         * safe_dot(
@@ -431,11 +576,14 @@ def _solve_linearized_lsmr(
 
     def _rmatvec(w: np.ndarray) -> np.ndarray:
         arr = np.asarray(w, dtype=np.float64).reshape(-1)
-        return _linearized_rmatvec(
-            linearization,
-            projection_weights,
-            arr[:n_meas],
-        ) + sqrt_lam * sqrt_reg * arr[n_meas:]
+        return (
+            _linearized_rmatvec(
+                linearization,
+                projection_weights,
+                arr[:n_meas],
+            )
+            + sqrt_lam * sqrt_reg * arr[n_meas:]
+        )
 
     augmented = sparse.linalg.LinearOperator(
         (n_meas + n_param, n_param),
@@ -443,7 +591,9 @@ def _solve_linearized_lsmr(
         rmatvec=_rmatvec,
         dtype=np.float64,
     )
-    rhs_aug = np.concatenate([np.asarray(rhs, dtype=np.float64).reshape(-1), np.zeros(n_param)])
+    rhs_aug = np.concatenate(
+        [np.asarray(rhs, dtype=np.float64).reshape(-1), np.zeros(n_param)]
+    )
     result = lsmr(
         augmented,
         rhs_aug,
@@ -478,11 +628,14 @@ def _solve_linearized_cgls(
         return jv, rv
 
     def _rmatvec(j_res: np.ndarray, r_res: np.ndarray) -> np.ndarray:
-        return _linearized_rmatvec(
-            linearization,
-            projection_weights,
-            j_res,
-        ) + sqrt_lam * sqrt_reg * r_res
+        return (
+            _linearized_rmatvec(
+                linearization,
+                projection_weights,
+                j_res,
+            )
+            + sqrt_lam * sqrt_reg * r_res
+        )
 
     x = np.zeros(n_param, dtype=np.float64)
     r_meas = rhs_vec.copy()
@@ -503,9 +656,7 @@ def _solve_linearized_cgls(
         x = x + alpha * p
         r_meas = r_meas - alpha * q_meas
         r_reg = r_reg - alpha * q_reg
-        residual_norm = float(
-            np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg))
-        )
+        residual_norm = float(np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg)))
         iterations = iteration
         if residual_norm <= tol:
             converged = True
@@ -520,9 +671,7 @@ def _solve_linearized_cgls(
     return np.asarray(x, dtype=np.float64), {
         "iterations": int(iterations),
         "converged": bool(converged),
-        "residual_norm": float(
-            np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg))
-        ),
+        "residual_norm": float(np.sqrt(np.dot(r_meas, r_meas) + np.dot(r_reg, r_reg))),
     }
 
 
@@ -533,7 +682,9 @@ def _solve_linearized_delta(
 ) -> np.ndarray:
     linearization = operator_bundle.get("linearization")
     if not hasattr(linearization, "matvec") or not hasattr(linearization, "rmatvec"):
-        raise RuntimeError("linearized operator bundle requires a Jacobian action object.")
+        raise RuntimeError(
+            "linearized operator bundle requires a Jacobian action object."
+        )
 
     projection_weights = np.asarray(
         operator_bundle.get("projection_weights"), dtype=np.float64
@@ -550,11 +701,14 @@ def _solve_linearized_delta(
     def _hessian_matvec(v: np.ndarray) -> np.ndarray:
         vec = np.asarray(v, dtype=np.float64).reshape(-1)
         jv = _linearized_matvec(linearization, projection_weights, vec)
-        return _linearized_rmatvec(
-            linearization,
-            projection_weights,
-            jv,
-        ) + lam * reg_diag * vec
+        return (
+            _linearized_rmatvec(
+                linearization,
+                projection_weights,
+                jv,
+            )
+            + lam * reg_diag * vec
+        )
 
     hessian = sparse.linalg.LinearOperator(
         (n_param, n_param),
@@ -570,8 +724,14 @@ def _solve_linearized_delta(
         matvec=lambda v: np.asarray(v, dtype=np.float64) / precond_diag,
         dtype=np.float64,
     )
-    default_maxiter = 80 if isinstance(linearization, LazyAdjointJacobianLinearization) else max(200, min(n_param * 2, 4000))
-    maxiter = int(operator_bundle.get("linearized_maxiter", default_maxiter) or default_maxiter)
+    default_maxiter = (
+        80
+        if isinstance(linearization, LazyAdjointJacobianLinearization)
+        else max(200, min(n_param * 2, 4000))
+    )
+    maxiter = int(
+        operator_bundle.get("linearized_maxiter", default_maxiter) or default_maxiter
+    )
     maxiter = max(1, maxiter)
 
     cg_info = 0
@@ -609,10 +769,7 @@ def _solve_linearized_delta(
             maxiter=maxiter,
         )
         method = "cg"
-        if (
-            (cg_info != 0 or not np.all(np.isfinite(x)))
-            and strategy == "cg-lsmr"
-        ):
+        if (cg_info != 0 or not np.all(np.isfinite(x))) and strategy == "cg-lsmr":
             x = _solve_linearized_lsmr(
                 linearization=linearization,
                 projection_weights=projection_weights,
@@ -721,7 +878,9 @@ def _bundle_torch_tensor(bundle: dict, name: str, values: np.ndarray):
     device = str(bundle.get("torch_device", "cuda"))
     tensor = cache.get(name)
     if tensor is None:
-        tensor = torch.as_tensor(np.asarray(values, dtype=np.float64), device=device, dtype=torch.float64)
+        tensor = torch.as_tensor(
+            np.asarray(values, dtype=np.float64), device=device, dtype=torch.float64
+        )
         cache[name] = tensor
     return tensor
 
@@ -768,20 +927,32 @@ def _solve_linear_torch_cg(
 
     if b_t.ndim == 1:
         return _solve_one(b_t)
-    return torch.stack([_solve_one(b_t[:, idx]) for idx in range(int(b_t.shape[1]))], dim=1)
+    return torch.stack(
+        [_solve_one(b_t[:, idx]) for idx in range(int(b_t.shape[1]))], dim=1
+    )
 
 
 def _solve_linear_torch(A: np.ndarray, b: np.ndarray, *, device: str) -> np.ndarray:
     if torch is None:
         raise RuntimeError("Torch runtime is unavailable for CUDA linear solve")
-    A_t = torch.as_tensor(np.asarray(A, dtype=np.float64), device=device, dtype=torch.float64)
-    b_t = torch.as_tensor(np.asarray(b, dtype=np.float64), device=device, dtype=torch.float64)
+    A_t = torch.as_tensor(
+        np.asarray(A, dtype=np.float64), device=device, dtype=torch.float64
+    )
+    b_t = torch.as_tensor(
+        np.asarray(b, dtype=np.float64), device=device, dtype=torch.float64
+    )
     try:
         x_t = torch.linalg.solve(A_t, b_t)
     except Exception as exc:
         message = str(exc).lower()
         runtime_linalg_unavailable = any(
-            token in message for token in ("libtorch_cuda_linalg", "cusolver", "undefined symbol", "dlopen")
+            token in message
+            for token in (
+                "libtorch_cuda_linalg",
+                "cusolver",
+                "undefined symbol",
+                "dlopen",
+            )
         )
         if runtime_linalg_unavailable and device.startswith("cuda"):
             x_t = _solve_linear_torch_cg(
@@ -870,7 +1041,10 @@ def _solve_measurement_space(
             return np.asarray(np.linalg.lstsq(A, b, rcond=None)[0], dtype=np.float64)
 
     if solver == "scipy-lsmr":
-        return np.asarray(lsmr(A, b, atol=1e-8, btol=1e-8, maxiter=max(200, A.shape[0] * 4))[0], dtype=np.float64)
+        return np.asarray(
+            lsmr(A, b, atol=1e-8, btol=1e-8, maxiter=max(200, A.shape[0] * 4))[0],
+            dtype=np.float64,
+        )
 
     if solver == "pyamg-cg" or (solver == "auto" and preconditioner_choice == "pyamg"):
         mat = sparse.csr_matrix(A)
@@ -891,14 +1065,19 @@ def _solve_measurement_space(
             if info == 0:
                 return np.asarray(x, dtype=np.float64)
 
-    if solver == "auto" and preconditioner is not None and preconditioner_choice in {
-        "diag",
-        "noser",
-        "prior",
-        "pmat",
-        "coarse",
-        "custom",
-    }:
+    if (
+        solver == "auto"
+        and preconditioner is not None
+        and preconditioner_choice
+        in {
+            "diag",
+            "noser",
+            "prior",
+            "pmat",
+            "coarse",
+            "custom",
+        }
+    ):
         mat = sparse.csr_matrix(A)
         pinv = np.asarray(preconditioner, dtype=np.float64)
         M = sparse.linalg.LinearOperator(
@@ -928,11 +1107,31 @@ def _calibrate_step_size(
     step_size_maxiter: int,
     difference_mode: str = "raw",
     difference_orientation: str = "target_minus_reference",
+    sigma_floor: float = DEFAULT_SIGMA_FLOOR,
 ) -> float:
+    floor = _normalize_sigma_floor(sigma_floor)
+    requested_min = max(0.0, float(step_size_min))
+    requested_max = max(requested_min, float(step_size_max))
+    feasible_max = _limit_step_size_for_sigma_floor(
+        sigma_bg,
+        delta_sigma,
+        requested_max,
+        sigma_floor=floor,
+    )
+    if feasible_max <= 0.0:
+        return 0.0
+    if feasible_max <= requested_min:
+        return feasible_max
+
     def _objective(scale: float) -> float:
         sigma_try = sigma_bg + scale * delta_sigma
+        if not _sigma_candidate_is_feasible(sigma_try, sigma_floor=floor):
+            return float("inf")
         img_try = EITImage(elem_data=sigma_try, fwd_model=fwd_model)
-        pred_vi_try, _ = fwd_model.fwd_solve(img_try)
+        try:
+            pred_vi_try, _ = fwd_model.fwd_solve(img_try)
+        except Exception:
+            return float("inf")
         pred_diff_try = build_difference_vector(
             pred_vi_try.meas,
             base_meas,
@@ -944,18 +1143,30 @@ def _calibrate_step_size(
 
     result = minimize_scalar(
         _objective,
-        bounds=(step_size_min, step_size_max),
+        bounds=(requested_min, feasible_max),
         method="bounded",
         options={"maxiter": int(max(1, step_size_maxiter))},
     )
-    if result.success:
-        print(
-            f"[INFO] Step-size calibration: alpha={result.x:.3g}, diff residual={result.fun:.3e}"
+    if result.success and np.isfinite(float(result.fun)):
+        alpha = _limit_step_size_for_sigma_floor(
+            sigma_bg,
+            delta_sigma,
+            float(result.x),
+            sigma_floor=floor,
         )
-        return float(result.x)
+        print(
+            f"[INFO] Step-size calibration: alpha={alpha:.3g}, diff residual={result.fun:.3e}"
+        )
+        return float(alpha)
 
-    print("[WARN] Step-size calibration failed, fallback alpha=1.0")
-    return 1.0
+    fallback_alpha = _limit_step_size_for_sigma_floor(
+        sigma_bg,
+        delta_sigma,
+        min(1.0, requested_max),
+        sigma_floor=floor,
+    )
+    print(f"[WARN] Step-size calibration failed, fallback alpha={fallback_alpha:.3g}")
+    return float(fallback_alpha)
 
 
 def build_shared_context(
@@ -1057,7 +1268,9 @@ def build_shared_context(
         mesh_family,
         default=DEFAULT_MESH_FAMILY,
     )
-    geometry_version = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    geometry_version = (
+        str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    )
     if solver_mode not in {"strict", "fast"}:
         raise ValueError(f"solver_mode must be 'strict' or 'fast', got {solver_mode!r}")
     if preconditioner not in {
@@ -1090,13 +1303,17 @@ def build_shared_context(
     if not (0.0 < float(lowrank_energy) <= 1.0):
         raise ValueError("lowrank_energy must be in (0, 1]")
     if forward_mat_solve not in {"auto", "off", "on"}:
-        raise ValueError(f"forward_mat_solve must be auto|off|on, got {forward_mat_solve!r}")
+        raise ValueError(
+            f"forward_mat_solve must be auto|off|on, got {forward_mat_solve!r}"
+        )
     if petsc_device not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"petsc_device must be auto|cpu|cuda, got {petsc_device!r}")
     if device not in {"auto", "cpu", "cuda"}:
         raise ValueError(f"device must be auto|cpu|cuda, got {device!r}")
     stim_drive_value = drive_value if drive_value is not None else 1.0
-    resolved_drive_mode = _mesh_compatible_drive_mode(drive_mode, mesh_dim=int(mesh_dim))
+    resolved_drive_mode = _mesh_compatible_drive_mode(
+        drive_mode, mesh_dim=int(mesh_dim)
+    )
     print(
         f"[INFO] Diff imaging drive_mode={resolved_drive_mode}, "
         f"drive_value={stim_drive_value:.2e}"
@@ -1178,7 +1395,9 @@ def build_shared_context(
     runtime_selection = resolve_torch_device(
         device,
         verbose=False,
-        petsc_device_effective=str(petsc_backend_info.get("petsc_device_effective", "cpu")),
+        petsc_device_effective=str(
+            petsc_backend_info.get("petsc_device_effective", "cpu")
+        ),
     )
 
     n_elem = int(
@@ -1258,6 +1477,7 @@ def build_shared_context(
     }
 
     if jacobian_representation in {"linearized", "lazy"}:
+
         def _compute_linearization():
             if jacobian_representation == "lazy":
                 return jac_calc.linearize_lazy_from_image(img_bg)
@@ -1277,7 +1497,9 @@ def build_shared_context(
             cost=10.0,
             effort_seconds=8.0,
         )
-        if not hasattr(linearization, "matvec") or not hasattr(linearization, "rmatvec"):
+        if not hasattr(linearization, "matvec") or not hasattr(
+            linearization, "rmatvec"
+        ):
             raise RuntimeError("Cached linearized Jacobian payload has the wrong type.")
         build_seconds.setdefault("jacobian", 0.0)
 
@@ -1333,7 +1555,9 @@ def build_shared_context(
             "backend_signature": jacobian_payload["backend_signature"],
             "difference_mode": str(difference_mode),
             "difference_orientation": str(difference_orientation),
-            "base_meas_hash": hash_array(np.ascontiguousarray(base_meas, dtype=np.float64)),
+            "base_meas_hash": hash_array(
+                np.ascontiguousarray(base_meas, dtype=np.float64)
+            ),
             "projection_weights_hash": hash_array(
                 np.ascontiguousarray(projection_weights, dtype=np.float64)
             ),
@@ -1354,14 +1578,8 @@ def build_shared_context(
                     projection_weights=projection_weights,
                     exponent=0.5,
                     alpha=1.0,
-                    diag_mode=(
-                        "approx"
-                        if jacobian_representation == "lazy"
-                        else None
-                    ),
-                    diag_batch_max_measurements=int(
-                        lazy_diag_batch_max_measurements
-                    ),
+                    diag_mode=("approx" if jacobian_representation == "lazy" else None),
+                    diag_batch_max_measurements=int(lazy_diag_batch_max_measurements),
                 ),
             ),
             persist=True,
@@ -1599,24 +1817,28 @@ def build_shared_context(
         difference_orientation=difference_orientation,
     )
 
-    strict_backend_info = _select_strict_solver_backend(
-        mesh_dim=int(mesh_dim),
-        n_param=int(jacobian.shape[1]),
-        n_meas=int(jacobian.shape[0]),
-    ) if solver_mode == "strict" else {
-        "requested": STRICT_SOLVER_BACKEND_DENSE,
-        "effective": STRICT_SOLVER_BACKEND_DENSE,
-        "strict_memory_guard_triggered": False,
-        "strict_memory_guard_reason": "not_strict",
-        "strict_dense_estimated_peak_bytes": 0.0,
-        "strict_dense_estimated_peak_gib": 0.0,
-        "strict_memory_guard_limit_bytes": 0.0,
-        "strict_memory_guard_limit_gib": 0.0,
-        "strict_mem_available_bytes": 0,
-        "strict_mem_available_gib": 0.0,
-        "strict_mem_available_source": "not_strict",
-        "strict_measurement_system_shape": None,
-    }
+    strict_backend_info = (
+        _select_strict_solver_backend(
+            mesh_dim=int(mesh_dim),
+            n_param=int(jacobian.shape[1]),
+            n_meas=int(jacobian.shape[0]),
+        )
+        if solver_mode == "strict"
+        else {
+            "requested": STRICT_SOLVER_BACKEND_DENSE,
+            "effective": STRICT_SOLVER_BACKEND_DENSE,
+            "strict_memory_guard_triggered": False,
+            "strict_memory_guard_reason": "not_strict",
+            "strict_dense_estimated_peak_bytes": 0.0,
+            "strict_dense_estimated_peak_gib": 0.0,
+            "strict_memory_guard_limit_bytes": 0.0,
+            "strict_memory_guard_limit_gib": 0.0,
+            "strict_mem_available_bytes": 0,
+            "strict_mem_available_gib": 0.0,
+            "strict_mem_available_source": "not_strict",
+            "strict_measurement_system_shape": None,
+        }
+    )
 
     operator_payload_base = {
         "solver": "gn_difference",
@@ -1637,7 +1859,9 @@ def build_shared_context(
         "difference_mode": str(difference_mode),
         "difference_orientation": str(difference_orientation),
         "base_meas_hash": hash_array(np.ascontiguousarray(base_meas, dtype=np.float64)),
-        "strict_solver_backend_effective": str(strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)),
+        "strict_solver_backend_effective": str(
+            strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+        ),
     }
 
     jacobian_t, j_t_lookup = cache_manager.get_or_compute_semantic(
@@ -1683,9 +1907,14 @@ def build_shared_context(
             compute_fn=lambda: _timed(
                 "operator_A",
                 lambda: np.asarray(
-                    safe_dot(jacobian * inv_reg_diag[None, :], jacobian_t, "gn_difference.operator.measurement_H"),
+                    safe_dot(
+                        jacobian * inv_reg_diag[None, :],
+                        jacobian_t,
+                        "gn_difference.operator.measurement_H",
+                    ),
                     dtype=float,
-                ) + float(lam) * np.eye(jacobian.shape[0], dtype=float),
+                )
+                + float(lam) * np.eye(jacobian.shape[0], dtype=float),
             ),
             persist=True,
             cost=6.0,
@@ -1699,14 +1928,18 @@ def build_shared_context(
             payload={**operator_payload_base, "part": "PRECOND_FAST"},
             compute_fn=lambda: _timed(
                 "operator_precond",
-                lambda: np.asarray(np.maximum(np.diag(system_matrix), 1e-12), dtype=float),
+                lambda: np.asarray(
+                    np.maximum(np.diag(system_matrix), 1e-12), dtype=float
+                ),
             ),
             persist=True,
             cost=2.0,
             effort_seconds=1.0,
         )
     else:
-        strict_backend_effective = str(strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE))
+        strict_backend_effective = str(
+            strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+        )
         if strict_backend_effective == STRICT_SOLVER_BACKEND_MEASUREMENT:
             system_matrix, a_lookup = cache_manager.get_or_compute_semantic(
                 artifact="single_step_operator",
@@ -1717,9 +1950,14 @@ def build_shared_context(
                 compute_fn=lambda: _timed(
                     "operator_A",
                     lambda: np.asarray(
-                        safe_dot(jacobian * inv_reg_diag[None, :], jacobian_t, "gn_difference.operator.strict_measurement_H"),
+                        safe_dot(
+                            jacobian * inv_reg_diag[None, :],
+                            jacobian_t,
+                            "gn_difference.operator.strict_measurement_H",
+                        ),
                         dtype=float,
-                    ) + float(lam) * np.eye(jacobian.shape[0], dtype=float),
+                    )
+                    + float(lam) * np.eye(jacobian.shape[0], dtype=float),
                 ),
                 persist=True,
                 cost=6.0,
@@ -1729,11 +1967,16 @@ def build_shared_context(
                 artifact="single_step_operator",
                 name=CACHE_NAME_OPERATOR_PRECOND,
                 namespace=CACHE_NAMESPACE_DIFFERENCE,
-                cache_obj={**operator_payload_base, "part": "PRECOND_STRICT_MEASUREMENT"},
+                cache_obj={
+                    **operator_payload_base,
+                    "part": "PRECOND_STRICT_MEASUREMENT",
+                },
                 payload={**operator_payload_base, "part": "PRECOND_STRICT_MEASUREMENT"},
                 compute_fn=lambda: _timed(
                     "operator_precond",
-                    lambda: np.asarray(np.maximum(np.diag(system_matrix), 1e-12), dtype=float),
+                    lambda: np.asarray(
+                        np.maximum(np.diag(system_matrix), 1e-12), dtype=float
+                    ),
                 ),
                 persist=True,
                 cost=2.0,
@@ -1751,7 +1994,8 @@ def build_shared_context(
                     lambda: np.asarray(
                         safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
                         dtype=float,
-                    ) + float(lam) * np.diag(reg_diag),
+                    )
+                    + float(lam) * np.diag(reg_diag),
                 ),
                 persist=True,
                 cost=10.0,
@@ -1765,7 +2009,9 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "PRECOND_STRICT"},
                 compute_fn=lambda: _timed(
                     "operator_precond",
-                    lambda: np.asarray(np.maximum(np.diag(system_matrix), 1e-12), dtype=float),
+                    lambda: np.asarray(
+                        np.maximum(np.diag(system_matrix), 1e-12), dtype=float
+                    ),
                 ),
                 persist=True,
                 cost=2.0,
@@ -1780,7 +2026,9 @@ def build_shared_context(
         **operator_payload_base,
         "part": "LU",
         "solver_mode": solver_mode,
-        "strict_solver_backend_effective": str(strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)),
+        "strict_solver_backend_effective": str(
+            strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+        ),
         "A_hash": hash_array(np.ascontiguousarray(system_matrix, dtype=np.float64)),
     }
     factor, factor_lookup = cache_manager.get_or_compute_semantic(
@@ -1802,8 +2050,10 @@ def build_shared_context(
     n_param = int(jacobian.shape[1])
     n_meas = int(jacobian.shape[0])
     ratio_n_over_m = float(n_param) / max(float(n_meas), 1.0)
-    enable_rom = solver_mode == "fast" and int(mesh_dim) == 3 and (
-        rom_mode == "on" or (rom_mode == "auto" and ratio_n_over_m >= 4.0)
+    enable_rom = (
+        solver_mode == "fast"
+        and int(mesh_dim) == 3
+        and (rom_mode == "on" or (rom_mode == "auto" and ratio_n_over_m >= 4.0))
     )
     enable_lowrank = enable_rom and (
         lowrank_mode == "on" or (lowrank_mode == "auto" and ratio_n_over_m >= 5.0)
@@ -1834,19 +2084,21 @@ def build_shared_context(
             "rom_rank_global": int(rom_rank_global),
             "rom_rank_adaptive": int(max(0, rom_rank_adaptive)),
         }
-        cached_snapshot_matrix, _snapshot_lookup = cache_manager.get_or_compute_semantic(
-            artifact="rom_snapshot_bank",
-            name="gn_diff_rom_snapshot_bank",
-            namespace=CACHE_NAMESPACE_DIFFERENCE,
-            cache_obj=snapshot_payload,
-            payload=snapshot_payload,
-            compute_fn=lambda: _timed(
-                "operator_rom_snapshots",
-                lambda: synthetic_snapshots,
-            ),
-            persist=True,
-            cost=3.0,
-            effort_seconds=1.0,
+        cached_snapshot_matrix, _snapshot_lookup = (
+            cache_manager.get_or_compute_semantic(
+                artifact="rom_snapshot_bank",
+                name="gn_diff_rom_snapshot_bank",
+                namespace=CACHE_NAMESPACE_DIFFERENCE,
+                cache_obj=snapshot_payload,
+                payload=snapshot_payload,
+                compute_fn=lambda: _timed(
+                    "operator_rom_snapshots",
+                    lambda: synthetic_snapshots,
+                ),
+                persist=True,
+                cost=3.0,
+                effort_seconds=1.0,
+            )
         )
         snapshot_matrix = select_snapshot_matrix(
             rom_snapshot_source,
@@ -1868,7 +2120,9 @@ def build_shared_context(
                 energy=float(lowrank_energy),
                 method=str(lowrank_method),
             )
-            if int(rom_rank_adaptive) > 0 and adaptive_basis.shape[1] > int(rom_rank_adaptive):
+            if int(rom_rank_adaptive) > 0 and adaptive_basis.shape[1] > int(
+                rom_rank_adaptive
+            ):
                 adaptive_basis = np.asarray(
                     adaptive_basis[:, : int(rom_rank_adaptive)],
                     dtype=np.float64,
@@ -1884,7 +2138,9 @@ def build_shared_context(
                 **operator_payload_base,
                 "part": "ROM_REDUCED_RM",
                 "rom_rank": int(reduced_basis.shape[1]),
-                "basis_hash": hash_array(np.ascontiguousarray(reduced_basis, dtype=np.float64)),
+                "basis_hash": hash_array(
+                    np.ascontiguousarray(reduced_basis, dtype=np.float64)
+                ),
                 "rom_snapshot_source": rom_snapshot_source,
                 "lowrank_method": lowrank_method,
                 "lowrank_rank": int(lowrank_rank),
@@ -1934,12 +2190,24 @@ def build_shared_context(
         "device_requested": str(runtime_selection.requested),
         "device_effective": str(runtime_selection.effective),
         "torch_device": str(runtime_selection.torch_device),
-        "strict_solver_backend_requested": str(strict_backend_info.get("requested", STRICT_SOLVER_BACKEND_DENSE)),
-        "strict_solver_backend_effective": str(strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)),
-        "strict_memory_guard_triggered": bool(strict_backend_info.get("strict_memory_guard_triggered", False)),
-        "strict_memory_guard_reason": str(strict_backend_info.get("strict_memory_guard_reason", "")),
-        "strict_dense_estimated_peak_gib": float(strict_backend_info.get("strict_dense_estimated_peak_gib", 0.0)),
-        "strict_measurement_system_shape": strict_backend_info.get("strict_measurement_system_shape"),
+        "strict_solver_backend_requested": str(
+            strict_backend_info.get("requested", STRICT_SOLVER_BACKEND_DENSE)
+        ),
+        "strict_solver_backend_effective": str(
+            strict_backend_info.get("effective", STRICT_SOLVER_BACKEND_DENSE)
+        ),
+        "strict_memory_guard_triggered": bool(
+            strict_backend_info.get("strict_memory_guard_triggered", False)
+        ),
+        "strict_memory_guard_reason": str(
+            strict_backend_info.get("strict_memory_guard_reason", "")
+        ),
+        "strict_dense_estimated_peak_gib": float(
+            strict_backend_info.get("strict_dense_estimated_peak_gib", 0.0)
+        ),
+        "strict_measurement_system_shape": strict_backend_info.get(
+            "strict_measurement_system_shape"
+        ),
     }
     perf_caps = detect_performance_capabilities()
 
@@ -1988,11 +2256,25 @@ def build_shared_context(
         "mesh_cache_layer": mesh_cache_layer,
         "mesh_cache_name": mesh_cache_name,
         "execution_profile": (
-            "cuda" if str(getattr(fwd_model, "_petsc_backend_info", {}).get("petsc_device_effective", "cpu")) == "cuda"
-            and str(runtime_selection.effective) == "cuda" and bool(jac_calc.use_torch)
+            "cuda"
+            if str(
+                getattr(fwd_model, "_petsc_backend_info", {}).get(
+                    "petsc_device_effective", "cpu"
+                )
+            )
+            == "cuda"
+            and str(runtime_selection.effective) == "cuda"
+            and bool(jac_calc.use_torch)
             else (
-                "mixed" if str(getattr(fwd_model, "_petsc_backend_info", {}).get("petsc_device_effective", "cpu")) == "cuda"
-                or str(runtime_selection.effective) == "cuda" or bool(jac_calc.use_torch)
+                "mixed"
+                if str(
+                    getattr(fwd_model, "_petsc_backend_info", {}).get(
+                        "petsc_device_effective", "cpu"
+                    )
+                )
+                == "cuda"
+                or str(runtime_selection.effective) == "cuda"
+                or bool(jac_calc.use_torch)
                 else "cpu"
             )
         ),
@@ -2002,15 +2284,31 @@ def build_shared_context(
         "context_build_seconds": time.perf_counter() - context_start,
         "performance_capabilities": perf_caps,
         "cache_miss_reasons": {
-            CACHE_NAME_BASE_MEAS: _lookup_miss_reason(base_meas_lookup, family=CACHE_NAME_BASE_MEAS),
-            CACHE_NAME_JACOBIAN: _lookup_miss_reason(jacobian_lookup, family=CACHE_NAME_JACOBIAN),
-            CACHE_NAME_OPERATOR_JT: _lookup_miss_reason(j_t_lookup, family=CACHE_NAME_OPERATOR_JT),
-            CACHE_NAME_OPERATOR_NOSER: _lookup_miss_reason(reg_lookup, family=CACHE_NAME_OPERATOR_NOSER),
-            CACHE_NAME_OPERATOR_A: _lookup_miss_reason(a_lookup, family=CACHE_NAME_OPERATOR_A),
-            CACHE_NAME_OPERATOR_PRECOND: _lookup_miss_reason(precond_lookup, family=CACHE_NAME_OPERATOR_PRECOND),
-            CACHE_NAME_OPERATOR_LU: _lookup_miss_reason(factor_lookup, family=CACHE_NAME_OPERATOR_LU),
+            CACHE_NAME_BASE_MEAS: _lookup_miss_reason(
+                base_meas_lookup, family=CACHE_NAME_BASE_MEAS
+            ),
+            CACHE_NAME_JACOBIAN: _lookup_miss_reason(
+                jacobian_lookup, family=CACHE_NAME_JACOBIAN
+            ),
+            CACHE_NAME_OPERATOR_JT: _lookup_miss_reason(
+                j_t_lookup, family=CACHE_NAME_OPERATOR_JT
+            ),
+            CACHE_NAME_OPERATOR_NOSER: _lookup_miss_reason(
+                reg_lookup, family=CACHE_NAME_OPERATOR_NOSER
+            ),
+            CACHE_NAME_OPERATOR_A: _lookup_miss_reason(
+                a_lookup, family=CACHE_NAME_OPERATOR_A
+            ),
+            CACHE_NAME_OPERATOR_PRECOND: _lookup_miss_reason(
+                precond_lookup, family=CACHE_NAME_OPERATOR_PRECOND
+            ),
+            CACHE_NAME_OPERATOR_LU: _lookup_miss_reason(
+                factor_lookup, family=CACHE_NAME_OPERATOR_LU
+            ),
             CACHE_NAME_OPERATOR_REDUCED_RM: (
-                _lookup_miss_reason(reduced_lookup, family=CACHE_NAME_OPERATOR_REDUCED_RM)
+                _lookup_miss_reason(
+                    reduced_lookup, family=CACHE_NAME_OPERATOR_REDUCED_RM
+                )
                 if reduced_lookup is not None
                 else "disabled"
             ),
@@ -2023,9 +2321,16 @@ def build_shared_context(
             "operator_A": _to_lookup_payload(a_lookup),
             "operator_precond": _to_lookup_payload(precond_lookup),
             "operator_lu": _to_lookup_payload(factor_lookup),
-            "operator_rom_reduced_rm": _to_lookup_payload(reduced_lookup)
-            if reduced_lookup is not None
-            else {"hit": False, "layer": "disabled", "artifact": "rom_reduced_rm_diff", "key": ""},
+            "operator_rom_reduced_rm": (
+                _to_lookup_payload(reduced_lookup)
+                if reduced_lookup is not None
+                else {
+                    "hit": False,
+                    "layer": "disabled",
+                    "artifact": "rom_reduced_rm_diff",
+                    "key": "",
+                }
+            ),
             "forward_factor": dict(getattr(fwd_model, "_last_cache_lookup", {})),
         },
     }
@@ -2078,13 +2383,25 @@ def process_frames(
         stage_timings["linear_solve"] += time.perf_counter() - linear_start
     elif mode == "fast":
         reduced_rm = operator_bundle.get("reduced_rm")
-        if isinstance(reduced_rm, dict) and isinstance(reduced_rm.get("RM_reduced"), np.ndarray):
+        if isinstance(reduced_rm, dict) and isinstance(
+            reduced_rm.get("RM_reduced"), np.ndarray
+        ):
             linear_start = time.perf_counter()
             runtime_device = str(operator_bundle.get("device_effective", "cpu"))
             if runtime_device == "cuda" and torch is not None:
-                rm_t = _bundle_torch_tensor(operator_bundle, "RM_reduced", np.asarray(reduced_rm["RM_reduced"], dtype=np.float64))
-                dv_t = torch.as_tensor(np.asarray(dv, dtype=np.float64), device=str(operator_bundle.get("torch_device", "cuda")), dtype=torch.float64)
-                delta_sigma = np.asarray(torch.mv(rm_t, dv_t).detach().cpu().numpy(), dtype=float)
+                rm_t = _bundle_torch_tensor(
+                    operator_bundle,
+                    "RM_reduced",
+                    np.asarray(reduced_rm["RM_reduced"], dtype=np.float64),
+                )
+                dv_t = torch.as_tensor(
+                    np.asarray(dv, dtype=np.float64),
+                    device=str(operator_bundle.get("torch_device", "cuda")),
+                    dtype=torch.float64,
+                )
+                delta_sigma = np.asarray(
+                    torch.mv(rm_t, dv_t).detach().cpu().numpy(), dtype=float
+                )
             else:
                 delta_sigma = np.asarray(
                     safe_dot(
@@ -2114,10 +2431,21 @@ def process_frames(
             )
             stage_timings["linear_solve"] += time.perf_counter() - linear_start
             if runtime_device == "cuda" and torch is not None:
-                inv_reg_diag_t = _bundle_torch_tensor(operator_bundle, "inv_reg_diag", operator_bundle["inv_reg_diag"])
-                Jt_t = _bundle_torch_tensor(operator_bundle, "Jt", operator_bundle["Jt"])
-                y_t = torch.as_tensor(np.asarray(y, dtype=np.float64), device=torch_device, dtype=torch.float64)
-                delta_sigma = np.asarray((inv_reg_diag_t * torch.mv(Jt_t, y_t)).detach().cpu().numpy(), dtype=float)
+                inv_reg_diag_t = _bundle_torch_tensor(
+                    operator_bundle, "inv_reg_diag", operator_bundle["inv_reg_diag"]
+                )
+                Jt_t = _bundle_torch_tensor(
+                    operator_bundle, "Jt", operator_bundle["Jt"]
+                )
+                y_t = torch.as_tensor(
+                    np.asarray(y, dtype=np.float64),
+                    device=torch_device,
+                    dtype=torch.float64,
+                )
+                delta_sigma = np.asarray(
+                    (inv_reg_diag_t * torch.mv(Jt_t, y_t)).detach().cpu().numpy(),
+                    dtype=float,
+                )
             else:
                 delta_sigma = np.asarray(
                     operator_bundle["inv_reg_diag"]
@@ -2130,7 +2458,11 @@ def process_frames(
                 )
     else:
         linear_start = time.perf_counter()
-        strict_backend = str(operator_bundle.get("strict_solver_backend_effective", STRICT_SOLVER_BACKEND_DENSE))
+        strict_backend = str(
+            operator_bundle.get(
+                "strict_solver_backend_effective", STRICT_SOLVER_BACKEND_DENSE
+            )
+        )
         runtime_device = str(operator_bundle.get("device_effective", "cpu"))
         if strict_backend == STRICT_SOLVER_BACKEND_MEASUREMENT:
             delta_sigma = _measurement_space_delta(
@@ -2139,8 +2471,14 @@ def process_frames(
             )
         else:
             if runtime_device == "cuda" and torch is not None:
-                Jt_t = _bundle_torch_tensor(operator_bundle, "Jt", operator_bundle["Jt"])
-                dv_t = torch.as_tensor(np.asarray(dv, dtype=np.float64), device=str(operator_bundle.get("torch_device", "cuda")), dtype=torch.float64)
+                Jt_t = _bundle_torch_tensor(
+                    operator_bundle, "Jt", operator_bundle["Jt"]
+                )
+                dv_t = torch.as_tensor(
+                    np.asarray(dv, dtype=np.float64),
+                    device=str(operator_bundle.get("torch_device", "cuda")),
+                    dtype=torch.float64,
+                )
                 b = np.asarray(torch.mv(Jt_t, dv_t).detach().cpu().numpy(), dtype=float)
             else:
                 b = np.asarray(
@@ -2163,10 +2501,15 @@ def process_frames(
             step_size_maxiter=step_size_maxiter,
             difference_mode=difference_mode,
             difference_orientation=difference_orientation,
+            sigma_floor=DEFAULT_SIGMA_FLOOR,
         )
 
-    sigma_est = ctx["sigma_bg"] + alpha * delta_sigma
-    delta_sigma_scaled = alpha * delta_sigma
+    alpha, delta_sigma_scaled, sigma_est, _sigma_floor_applied = _floored_sigma_update(
+        ctx["sigma_bg"],
+        delta_sigma,
+        alpha,
+        sigma_floor=DEFAULT_SIGMA_FLOOR,
+    )
     img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
     forward_start = time.perf_counter()
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
@@ -2327,12 +2670,28 @@ def process_frames(
         "linearized_preconditioner_info": dict(
             operator_bundle.get("linearized_preconditioner_info", {})
         ),
-        "strict_solver_backend_requested": str(operator_bundle.get("strict_solver_backend_requested", STRICT_SOLVER_BACKEND_DENSE)),
-        "strict_solver_backend_effective": str(operator_bundle.get("strict_solver_backend_effective", STRICT_SOLVER_BACKEND_DENSE)),
-        "strict_memory_guard_triggered": bool(operator_bundle.get("strict_memory_guard_triggered", False)),
-        "strict_memory_guard_reason": str(operator_bundle.get("strict_memory_guard_reason", "")),
-        "strict_dense_estimated_peak_gib": float(operator_bundle.get("strict_dense_estimated_peak_gib", 0.0)),
-        "strict_measurement_system_shape": operator_bundle.get("strict_measurement_system_shape"),
+        "strict_solver_backend_requested": str(
+            operator_bundle.get(
+                "strict_solver_backend_requested", STRICT_SOLVER_BACKEND_DENSE
+            )
+        ),
+        "strict_solver_backend_effective": str(
+            operator_bundle.get(
+                "strict_solver_backend_effective", STRICT_SOLVER_BACKEND_DENSE
+            )
+        ),
+        "strict_memory_guard_triggered": bool(
+            operator_bundle.get("strict_memory_guard_triggered", False)
+        ),
+        "strict_memory_guard_reason": str(
+            operator_bundle.get("strict_memory_guard_reason", "")
+        ),
+        "strict_dense_estimated_peak_gib": float(
+            operator_bundle.get("strict_dense_estimated_peak_gib", 0.0)
+        ),
+        "strict_measurement_system_shape": operator_bundle.get(
+            "strict_measurement_system_shape"
+        ),
         "cache_build_seconds": dict(ctx.get("cache_build_seconds", {})),
         "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
         "cache_lookups": {

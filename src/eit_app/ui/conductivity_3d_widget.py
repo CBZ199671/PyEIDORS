@@ -894,11 +894,28 @@ class Conductivity3DWidget(QWidget):
         dpr = max(float(self.devicePixelRatioF()), 1.0)
         # Drop render resolution by ~40% during drag so VTK + screenshot
         # roundtrip stays under one frame at 30 fps even on bigger meshes.
-        # Idle frames render at full DPR.
+        # Idle frames render at full DPR.  _refresh_offscreen_pixmap()
+        # then scales the final pixmap to the QLabel's target physical
+        # size so the logical on-screen size stays fixed while dragging.
         scale = 0.6 if self._is_dragging_offscreen else 1.0
         width = max(320, int(round(max(self._offscreen_label.width(), 1) * dpr * scale)))
         height = max(240, int(round(max(self._offscreen_label.height(), 1) * dpr * scale)))
         return min(width, 2400), min(height, 1800)
+
+    def _offscreen_pixmap_target(self) -> tuple[int, int, float]:
+        """Return physical pixmap size + DPR for stable QLabel display.
+
+        During drag we deliberately render fewer physical pixels.  If the
+        pixmap keeps the widget DPR, Qt treats that smaller framebuffer as
+        a smaller logical image and the scene visibly shrinks until the
+        final full-resolution frame arrives.
+        """
+        dpr = max(float(self.devicePixelRatioF()), 1.0)
+        label_width = max(float(self._offscreen_label.width()), 1.0)
+        label_height = max(float(self._offscreen_label.height()), 1.0)
+        width = min(max(1, int(round(label_width * dpr))), 2400)
+        height = min(max(1, int(round(label_height * dpr))), 1800)
+        return width, height, dpr
 
     def _refresh_offscreen_pixmap(self) -> None:
         plotter = self._offscreen_plotter
@@ -923,7 +940,15 @@ class Conductivity3DWidget(QWidget):
             QImage.Format.Format_RGB888,
         ).copy()
         pixmap = QPixmap.fromImage(qimage)
-        pixmap.setDevicePixelRatio(max(float(self.devicePixelRatioF()), 1.0))
+        target_width, target_height, target_dpr = self._offscreen_pixmap_target()
+        if pixmap.width() != target_width or pixmap.height() != target_height:
+            pixmap = pixmap.scaled(
+                target_width,
+                target_height,
+                Qt.AspectRatioMode.IgnoreAspectRatio,
+                Qt.TransformationMode.FastTransformation,
+            )
+        pixmap.setDevicePixelRatio(target_dpr)
         self._offscreen_label.setPixmap(pixmap)
 
     def _render_pyvista_offscreen_scene(

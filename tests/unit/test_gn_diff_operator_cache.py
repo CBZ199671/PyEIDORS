@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -115,7 +116,37 @@ def _build_ctx(cache_dir: Path, background_sigma: float) -> dict:
     )
 
 
-def test_gn_difference_context_cache_hits_and_invalidates_with_background(tmp_path: Path):
+def test_step_size_calibration_keeps_candidates_above_sigma_floor():
+    sigma_floor = 0.2
+    sigma_seen: list[np.ndarray] = []
+
+    class _ForwardModel:
+        def fwd_solve(self, image):
+            sigma = np.asarray(image.elem_data, dtype=float)
+            sigma_seen.append(sigma.copy())
+            assert float(np.min(sigma)) > sigma_floor
+            return SimpleNamespace(meas=np.array([1.0, 2.0], dtype=float)), None
+
+    alpha = gn_difference_runner._calibrate_step_size(
+        fwd_model=_ForwardModel(),
+        sigma_bg=np.array([1.0], dtype=float),
+        delta_sigma=np.array([-2.0], dtype=float),
+        dv=np.array([0.1, 0.2], dtype=float),
+        base_meas=np.array([0.9, 1.8], dtype=float),
+        step_size_min=0.0,
+        step_size_max=1.0,
+        step_size_maxiter=8,
+        sigma_floor=sigma_floor,
+    )
+
+    assert sigma_seen
+    assert 0.0 <= alpha < 0.4
+    assert all(float(np.min(sigma)) > sigma_floor for sigma in sigma_seen)
+
+
+def test_gn_difference_context_cache_hits_and_invalidates_with_background(
+    tmp_path: Path,
+):
     cache_dir = tmp_path / "diff-cache"
 
     cold_ctx = _build_ctx(cache_dir, background_sigma=1.0)
@@ -192,7 +223,9 @@ def test_linearized_solver_cg_only_does_not_fallback_to_lsmr(monkeypatch):
         raise AssertionError("cg_only must not invoke LSMR fallback")
 
     monkeypatch.setattr(gn_difference_runner, "cg", _fake_cg)
-    monkeypatch.setattr(gn_difference_runner, "_solve_linearized_lsmr", _unexpected_lsmr)
+    monkeypatch.setattr(
+        gn_difference_runner, "_solve_linearized_lsmr", _unexpected_lsmr
+    )
 
     actual = gn_difference_runner._solve_linearized_delta(
         operator_bundle=bundle,
