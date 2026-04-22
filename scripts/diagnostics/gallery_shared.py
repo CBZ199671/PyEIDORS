@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from scripts.common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bundle
+
 
 def jsonable(value: Any) -> Any:
     if isinstance(value, dict):
@@ -134,4 +136,10 @@ def consistency_metrics(
 def save_case_data(path: Path, payload: dict[str, Any]) -> None:
     arrays = {k: v for k, v in payload.items() if isinstance(v, np.ndarray)}
     scalars = {k: v for k, v in payload.items() if not isinstance(v, np.ndarray)}
-    np.savez_compressed(path, **arrays, meta=np.array(json.dumps(jsonable(scalars)), dtype=object))
+    arrays["meta"] = np.array(json.dumps(jsonable(scalars)), dtype=object)
+    write_output_bundle(
+        path,
+        arrays,
+        {"package_role": "gallery_case_data", "case_metadata": jsonable(scalars)},
+        schema=GALLERY_ARRAYS_SCHEMA,
+    )

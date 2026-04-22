@@ -149,7 +149,7 @@ def _dataset_kwargs(
 
 def _dataset_data(arr: np.ndarray) -> tuple[Any, Any | None]:
     if arr.dtype.kind in {"U", "O"}:
-        return arr.astype(str), h5py.string_dtype(encoding="utf-8")
+        return arr.astype(str).astype(object), h5py.string_dtype(encoding="utf-8")
     return arr, None
 
 

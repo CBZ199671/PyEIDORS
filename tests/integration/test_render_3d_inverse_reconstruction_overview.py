@@ -8,10 +8,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 
 from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
+from scripts.common.hdf5_outputs import read_output_bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "diagnostics" / "render_3d_inverse_reconstruction_overview.py"
@@ -56,7 +56,7 @@ def test_render_3d_overview_exports_difference_artifacts(tmp_path: Path):
     assert run.returncode == 0, run.stderr
 
     metrics_path = output_dir / "inverse_3d_overview_metrics.json"
-    data_path = output_dir / "inverse_3d_overview_data.npz"
+    data_path = output_dir / "inverse_3d_overview_data.h5"
     assert metrics_path.exists()
     assert data_path.exists()
 
@@ -81,7 +81,7 @@ def test_render_3d_overview_exports_difference_artifacts(tmp_path: Path):
     ):
         assert key in metrics["wall_time_breakdown"]
 
-    payload = np.load(data_path)
+    payload = read_output_bundle(data_path)
     for key in (
         "coords",
         "truth_sigma",
@@ -97,7 +97,7 @@ def test_render_3d_overview_exports_difference_artifacts(tmp_path: Path):
         "prediction_vector",
         "residual_vector",
     ):
-        assert key in payload.files
+        assert key in payload
 
 
 @pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
@@ -131,7 +131,7 @@ def test_render_3d_overview_exports_absolute_artifacts(tmp_path: Path):
     assert "best_homog" in metrics
     assert "wall_time_breakdown" in metrics
 
-    payload = np.load(output_dir / "inverse_3d_overview_data.npz")
+    payload = read_output_bundle(output_dir / "inverse_3d_overview_data.h5")
     for key in (
         "coords",
         "truth_sigma",
@@ -144,7 +144,7 @@ def test_render_3d_overview_exports_absolute_artifacts(tmp_path: Path):
         "target_mask",
         "background_mask",
     ):
-        assert key in payload.files
+        assert key in payload
 
 
 @pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")

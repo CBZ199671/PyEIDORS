@@ -52,17 +52,6 @@ NUMPY_READER_NAMES = {"load"}
 # Frozen snapshot of production NumPy writers that existed before the HDF5
 # migration. T51 forbids new production writers while T53..T56 migrate these.
 LEGACY_NUMPY_WRITER_ALLOWLIST = {
-    "scripts/common/gn_absolute_runner.py|run_absolute_reconstruction|np.savez|output_dir / 'result_arrays.npz'",
-    "scripts/common/gn_difference_runner.py|process_frames|np.savez|output_dir / 'outputs.npz'",
-    "scripts/common/io_utils.py|save_reconstruction_results|np.savez|output_dir / 'result_arrays.npz'",
-    "scripts/common/method_runners.py|_save_sparse_outputs_no_plots|np.savez|output_dir / 'result_arrays.npz'",
-    "scripts/demos/demo_dolfinx_random_sim.py|main|np.savez|out_dir / 'simulation_outputs.npz'",
-    "scripts/demos/demo_dolfinx_single_step_diff.py|main|np.savez|out_dir / 'single_step_outputs.npz'",
-    "scripts/diagnostics/gallery_shared.py|save_case_data|np.savez_compressed|path",
-    "scripts/diagnostics/render_3d_inverse_reconstruction_overview.py|run_case|np.savez|output_dir / 'inverse_3d_overview_data.npz'",
-    "scripts/diagnostics/run_real_reconstruction_gallery.py|main|np.savez_compressed|data_dir / '2d_fields.npz'",
-    "scripts/diagnostics/run_real_reconstruction_gallery.py|main|np.savez_compressed|data_dir / '3d_slices.npz'",
-    "scripts/diagnostics/run_real_reconstruction_gallery_worker.py|main|np.savez_compressed|bundle_path",
     "scripts/mesh_tools/convert_matlab_mesh.py|main|np.savez|args.out_dir / 'mesh.npz'",
 }
 

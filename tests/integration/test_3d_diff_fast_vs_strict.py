@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 
 from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
+from scripts.common.hdf5_outputs import read_output_bundle
 from scripts.common.gn_difference_runner import build_shared_context, process_frames
 
 
@@ -70,8 +71,8 @@ def test_diff_3d_fast_vs_strict_rmse(tmp_path: Path):
         measurement_gain=1.0,
     )
 
-    strict_delta = np.load(tmp_path / "strict" / "outputs.npz")["delta_sigma"]
-    fast_delta = np.load(tmp_path / "fast" / "outputs.npz")["delta_sigma"]
+    strict_delta = read_output_bundle(tmp_path / "strict" / "outputs.h5")["delta_sigma"]
+    fast_delta = read_output_bundle(tmp_path / "fast" / "outputs.h5")["delta_sigma"]
     rmse = float(np.sqrt(np.mean((strict_delta - fast_delta) ** 2)))
 
     assert strict_out["solver_mode"] == "strict"

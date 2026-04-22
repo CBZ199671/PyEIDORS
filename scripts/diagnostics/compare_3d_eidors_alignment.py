@@ -69,7 +69,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-save-data",
         action="store_true",
-        help="Skip writing per-case JSON/NPZ outputs and final alignment_summary.json.",
+        help="Skip writing per-case JSON/HDF5 outputs and final alignment_summary.json.",
     )
     return parser.parse_args()
 

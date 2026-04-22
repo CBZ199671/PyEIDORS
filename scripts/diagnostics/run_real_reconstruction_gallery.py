@@ -35,6 +35,11 @@ from scripts.common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
 )
+from scripts.common.hdf5_outputs import (
+    GALLERY_ARRAYS_SCHEMA,
+    read_output_bundle,
+    write_output_bundle,
+)
 from scripts.diagnostics.gallery_shared import (
     consistency_metrics as _shared_consistency_metrics,
     jsonable as _jsonable,
@@ -714,7 +719,7 @@ def _run_correctness_pair(args: argparse.Namespace, *, dim: int, output_dir: Pat
             backend_order="cpu-first",
             clean_output_dir=True,
         )
-        bundle = dict(np.load(output_dir / summary["bundle_path"]))
+        bundle = read_output_bundle(output_dir / summary["bundle_path"])
         bundles = {
             "cpu": {
                 "coords": np.asarray(bundle["coords"], dtype=np.float64),
@@ -745,14 +750,16 @@ def _run_correctness_pair(args: argparse.Namespace, *, dim: int, output_dir: Pat
         backend_key="gpu",
         clean_output_dir=False,
     )
-    cpu_bundle = dict(np.load(output_dir / cpu_summary["bundle_path"]))
-    gpu_bundle = dict(np.load(output_dir / gpu_summary["bundle_path"]))
+    cpu_bundle = read_output_bundle(output_dir / cpu_summary["bundle_path"])
+    gpu_bundle = read_output_bundle(output_dir / gpu_summary["bundle_path"])
+    cpu_case = read_output_bundle(output_dir / cpu_summary["case"]["data_path"])
+    gpu_case = read_output_bundle(output_dir / gpu_summary["case"]["data_path"])
     consistency = _consistency_metrics(
         dim=dim,
-        baseline_cpu_meas=np.load(output_dir / cpu_summary["case"]["data_path"])["baseline_measured"],
-        baseline_gpu_meas=np.load(output_dir / gpu_summary["case"]["data_path"])["baseline_measured"],
-        target_cpu_meas=np.load(output_dir / cpu_summary["case"]["data_path"])["measured"],
-        target_gpu_meas=np.load(output_dir / gpu_summary["case"]["data_path"])["measured"],
+        baseline_cpu_meas=cpu_case["baseline_measured"],
+        baseline_gpu_meas=gpu_case["baseline_measured"],
+        target_cpu_meas=cpu_case["measured"],
+        target_gpu_meas=gpu_case["measured"],
         cpu_recon=np.asarray(cpu_bundle["reconstruction"], dtype=np.float64),
         gpu_recon=np.asarray(gpu_bundle["reconstruction"], dtype=np.float64),
     )
@@ -942,13 +949,17 @@ def main() -> None:
     profile_x, profile_truth = _sample_2d_profile(x_grid=x2, y_grid=y2, field=truth2)
     _, profile_cpu = _sample_2d_profile(x_grid=x2, y_grid=y2, field=cpu2)
     _, profile_gpu = _sample_2d_profile(x_grid=x2, y_grid=y2, field=gpu2)
-    np.savez_compressed(
-        data_dir / "2d_fields.npz",
-        x_grid=x2,
-        y_grid=y2,
-        truth=truth2,
-        cpu=cpu2,
-        gpu=gpu2,
+    write_output_bundle(
+        data_dir / "2d_fields.h5",
+        {
+            "x_grid": x2,
+            "y_grid": y2,
+            "truth": truth2,
+            "cpu": cpu2,
+            "gpu": gpu2,
+        },
+        {"package_role": "gallery_2d_fields"},
+        schema=GALLERY_ARRAYS_SCHEMA,
     )
 
     coords3 = np.asarray(dim3_bundles["cpu"]["coords"], dtype=np.float64)
@@ -993,13 +1004,18 @@ def main() -> None:
         slice_payload[f"{slice_key}_truth"] = truth_slice
         slice_payload[f"{slice_key}_cpu"] = cpu_slice
         slice_payload[f"{slice_key}_gpu"] = gpu_slice
-    np.savez_compressed(data_dir / "3d_slices.npz", **slice_payload)
+    write_output_bundle(
+        data_dir / "3d_slices.h5",
+        slice_payload,
+        {"package_role": "gallery_3d_slices"},
+        schema=GALLERY_ARRAYS_SCHEMA,
+    )
 
     copied_case_paths = {
-        "2d_cpu": data_dir / "2d_cpu_case.npz",
-        "2d_gpu": data_dir / "2d_gpu_case.npz",
-        "3d_cpu": data_dir / "3d_cpu_case.npz",
-        "3d_gpu": data_dir / "3d_gpu_case.npz",
+        "2d_cpu": data_dir / "2d_cpu_case.h5",
+        "2d_gpu": data_dir / "2d_gpu_case.h5",
+        "3d_cpu": data_dir / "3d_cpu_case.h5",
+        "3d_gpu": data_dir / "3d_gpu_case.h5",
     }
     shutil.copy2((workers_dir / "correctness_2d") / dim2_cpu_summary["case"]["data_path"], copied_case_paths["2d_cpu"])
     shutil.copy2((workers_dir / "correctness_2d") / dim2_gpu_summary["case"]["data_path"], copied_case_paths["2d_gpu"])

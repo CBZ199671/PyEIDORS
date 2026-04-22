@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 
+from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
+
 try:
     import yaml
 except ImportError as exc:
@@ -179,12 +181,16 @@ def save_reconstruction_results(
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Save numerical data
-    np.savez(
-        output_dir / "result_arrays.npz",
-        conductivity=conductivity,
-        measured=measured,
-        predicted=predicted,
-        residual=np.asarray(predicted) - np.asarray(measured),
+    write_output_bundle(
+        output_dir / "result_arrays.h5",
+        {
+            "conductivity": conductivity,
+            "measured": measured,
+            "predicted": predicted,
+            "residual": np.asarray(predicted) - np.asarray(measured),
+        },
+        {"package_role": "reconstruction_result_arrays"},
+        schema=RECONSTRUCTION_ARRAYS_SCHEMA,
     )
 
     # Save metadata

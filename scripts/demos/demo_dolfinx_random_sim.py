@@ -6,7 +6,7 @@ Workflow:
 2) Construct adjacent drive/measurement patterns, contact impedance matching MATLAB example (1e-6).
 3) Generate random circular anomaly (random position, radius, contrast), forward solve for baseline/target voltages.
 4) Use modular Gauss-Newton reconstruction (NOSER regularization, default settings) to estimate conductivity.
-5) Compute simple metrics against ground truth/measurements, write results to results/demo_random_dolfinx/*.npz.
+5) Compute simple metrics against ground truth/measurements, write results to results/demo_random_dolfinx/*.h5.
 
 Run:
     python scripts/demos/demo_dolfinx_random_sim.py
@@ -33,6 +33,7 @@ from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.visualization import create_visualizer
+from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
 from scripts.demos._shared import cell_to_node, make_random_anomaly, save_voltage_comparison_figure
 
 
@@ -107,20 +108,24 @@ def main() -> None:
     # 7) Save results
     out_dir = Path("results/demo_random_dolfinx")
     out_dir.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        out_dir / "simulation_outputs.npz",
-        sigma_bg=sigma_bg,
-        sigma_true=sigma_true,
-        sigma_est=sigma_est,
-        anomaly_center=np.array(anomaly["center"]),
-        anomaly_radius=anomaly["radius"],
-        anomaly_conductivity=anomaly["conductivity"],
-        meas_bg=data_bg.meas,
-        meas_true=data_true.meas,
-        meas_est=data_est.meas,
-        diff_meas=diff_meas,
-        metrics=np.array(list(metrics.values())),
-        metric_names=np.array(list(metrics.keys())),
+    outputs_path = write_output_bundle(
+        out_dir / "simulation_outputs.h5",
+        {
+            "sigma_bg": sigma_bg,
+            "sigma_true": sigma_true,
+            "sigma_est": sigma_est,
+            "anomaly_center": np.array(anomaly["center"]),
+            "anomaly_radius": anomaly["radius"],
+            "anomaly_conductivity": anomaly["conductivity"],
+            "meas_bg": data_bg.meas,
+            "meas_true": data_true.meas,
+            "meas_est": data_est.meas,
+            "diff_meas": diff_meas,
+            "metrics": np.array(list(metrics.values())),
+            "metric_names": np.array(list(metrics.keys())),
+        },
+        {"package_role": "demo_random_simulation_outputs"},
+        schema=DEMO_ARRAYS_SCHEMA,
     )
 
     # 8) Visualization: ground truth vs reconstructed conductivity, measurement comparison
@@ -146,7 +151,7 @@ def main() -> None:
 
     print("Random anomaly:", anomaly)
     print("Metrics:", metrics)
-    print(f"Results saved to {out_dir / 'simulation_outputs.npz'}")
+    print(f"Results saved to {outputs_path}")
     print(f"Conductivity comparison: {out_dir / 'conductivity_comparison.png'}")
     print(f"Voltage comparison: {out_dir / 'voltage_comparison.png'}")
 

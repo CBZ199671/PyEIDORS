@@ -56,6 +56,7 @@ from .case_loader import (
     load_paired_frames,
 )
 from .io_utils import align_frames_polarity, align_measurement_polarity, load_metadata
+from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .recon_cli_models import (
     CaseResult,
     InputMode,
@@ -69,9 +70,13 @@ def _default(value: Optional[float], fallback: float) -> float:
 
 
 def _should_skip_case(output_dir: Path, overwrite: bool) -> bool:
-    result_file = output_dir / "result_arrays.npz"
-    outputs_file = output_dir / "outputs.npz"
-    has_outputs = result_file.exists() or outputs_file.exists()
+    candidate_files = (
+        output_dir / "result_arrays.h5",
+        output_dir / "outputs.h5",
+        output_dir / "result_arrays.npz",
+        output_dir / "outputs.npz",
+    )
+    has_outputs = any(path.exists() for path in candidate_files)
     return has_outputs and not overwrite
 
 
@@ -434,12 +439,16 @@ def run_gn_difference_cases(
 
 def _save_sparse_outputs_no_plots(result, output_dir: Path, mode: str) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    np.savez(
-        output_dir / "result_arrays.npz",
-        conductivity=result.conductivity,
-        measured=result.measured,
-        predicted=result.simulated,
-        residual=result.residual,
+    write_output_bundle(
+        output_dir / "result_arrays.h5",
+        {
+            "conductivity": result.conductivity,
+            "measured": result.measured,
+            "predicted": result.simulated,
+            "residual": result.residual,
+        },
+        {"mode": mode, "package_role": "reconstruction_result_arrays"},
+        schema=RECONSTRUCTION_ARRAYS_SCHEMA,
     )
     summary = {
         "mode": mode,

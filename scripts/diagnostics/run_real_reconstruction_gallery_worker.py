@@ -24,6 +24,7 @@ from scripts.common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
 )
+from scripts.common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bundle
 from scripts.diagnostics.gallery_shared import (
     consistency_metrics as _shared_consistency_metrics,
     jsonable as _jsonable,
@@ -751,13 +752,17 @@ def main() -> None:
 
     if args.backend_key != "both":
         result = _run_single_backend_correctness(args, output_dir, dim=dim, backend_key=str(args.backend_key))
-        bundle_path = output_dir / "data" / f"{dim}d_{args.backend_key}_bundle.npz"
-        case_path = output_dir / "data" / f"{dim}d_{args.backend_key}_case.npz"
-        np.savez_compressed(
+        bundle_path = output_dir / "data" / f"{dim}d_{args.backend_key}_bundle.h5"
+        case_path = output_dir / "data" / f"{dim}d_{args.backend_key}_case.h5"
+        write_output_bundle(
             bundle_path,
-            coords=np.asarray(result["coords"], dtype=np.float64),
-            truth_values=np.asarray(result["truth_values"], dtype=np.float64),
-            reconstruction=np.asarray(result["reconstruction"], dtype=np.float64),
+            {
+                "coords": np.asarray(result["coords"], dtype=np.float64),
+                "truth_values": np.asarray(result["truth_values"], dtype=np.float64),
+                "reconstruction": np.asarray(result["reconstruction"], dtype=np.float64),
+            },
+            {"package_role": "gallery_backend_bundle"},
+            schema=GALLERY_ARRAYS_SCHEMA,
         )
         _save_case_data(case_path, {
             "coords": np.asarray(result["coords"], dtype=np.float64),
@@ -780,15 +785,19 @@ def main() -> None:
         return
 
     result = _run_correctness(args, output_dir, dim=dim)
-    bundle_path = output_dir / "data" / f"{dim}d_worker_bundle.npz"
-    cpu_case_path = output_dir / "data" / f"{dim}d_cpu_case.npz"
-    gpu_case_path = output_dir / "data" / f"{dim}d_gpu_case.npz"
-    np.savez_compressed(
+    bundle_path = output_dir / "data" / f"{dim}d_worker_bundle.h5"
+    cpu_case_path = output_dir / "data" / f"{dim}d_cpu_case.h5"
+    gpu_case_path = output_dir / "data" / f"{dim}d_gpu_case.h5"
+    write_output_bundle(
         bundle_path,
-        coords=np.asarray(result["coords"], dtype=np.float64),
-        truth_values=np.asarray(result["truth_values"], dtype=np.float64),
-        cpu_reconstruction=np.asarray(result["cpu_reconstruction"], dtype=np.float64),
-        gpu_reconstruction=np.asarray(result["gpu_reconstruction"], dtype=np.float64),
+        {
+            "coords": np.asarray(result["coords"], dtype=np.float64),
+            "truth_values": np.asarray(result["truth_values"], dtype=np.float64),
+            "cpu_reconstruction": np.asarray(result["cpu_reconstruction"], dtype=np.float64),
+            "gpu_reconstruction": np.asarray(result["gpu_reconstruction"], dtype=np.float64),
+        },
+        {"package_role": "gallery_worker_bundle"},
+        schema=GALLERY_ARRAYS_SCHEMA,
     )
     _save_case_data(cpu_case_path, {
         "coords": np.asarray(result["coords"], dtype=np.float64),

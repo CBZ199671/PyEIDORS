@@ -48,6 +48,7 @@ from pyeidors.perf.policy import (
 from pyeidors.physics.current_drive import normalize_pattern_config_for_mesh
 from pyeidors.visualization import EITVisualizer
 
+from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .io_utils import align_measurement_polarity
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -419,12 +420,16 @@ def run_absolute_reconstruction(
     fig_cmp.savefig(output_dir / "prediction_vs_measurement.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cmp)
 
-    np.savez(
-        output_dir / "result_arrays.npz",
-        conductivity=conductivity_vec,
-        measured=measured_vec,
-        predicted=predicted_vec,
-        residual=np.asarray(predicted_vec) - np.asarray(measured_vec),
+    write_output_bundle(
+        output_dir / "result_arrays.h5",
+        {
+            "conductivity": conductivity_vec,
+            "measured": measured_vec,
+            "predicted": predicted_vec,
+            "residual": np.asarray(predicted_vec) - np.asarray(measured_vec),
+        },
+        {"package_role": "reconstruction_result_arrays", "mode": "absolute"},
+        schema=RECONSTRUCTION_ARRAYS_SCHEMA,
     )
 
     summary_payload = {

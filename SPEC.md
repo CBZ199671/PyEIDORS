@@ -177,6 +177,7 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V66 | Mesh first-load policy: if XDMF/HDF5 cache exists, `MeshLoader` loads it first even when source `.msh` missing; metadata/freshness may use explicit mesh content hash or cache manifest, not mandatory `.msh` mtime. If only `.msh` exists, import once → write XDMF/HDF5 → subsequent loads never parse `.msh`. Mesh geometry, cell tags, facet tags, physical group association, structured sidecar fields must round-trip | src/pyeidors/geometry/mesh_loader.py; src/pyeidors/geometry/dolfinx_mesh_cache.py; local benchmark 2026-04-22 |
 | V67 | Project binary array persistence default = HDF5 `.h5`: RM/GREIT artifacts, dataset generator outputs, GUI simulation exports, diagnostics bundles, benchmark arrays, MATLAB mesh bridge arrays, reconstruction outputs. `.npz/.npy` creation forbidden outside tests/legacy adapters unless task explicitly marks small fixture. JSON/CSV stay for metadata/tables only | future scan gate; B12 |
 | V68 | Mesh IO benchmark gate: for representative 2D + 3D meshes, HDF5 load median ≤ `.msh` import median or regression explained; equality checks: vertices/cells count, topology dim, geometry dim, facet tags, cell tags, association table. Local 2026-04-22 48e 3D samples: `.msh 0.0747s` vs HDF5 `0.0429s`; `.msh 0.0314s` vs HDF5 `0.0276s` | future `scripts/benchmarks/benchmark_mesh_io_formats.py`; B12 |
+| V69 | GUI 3D PyVista offscreen interaction defaults to high-performance machines: drag/zoom timer targets 60 fps and full-DPR framebuffer (`EIT_APP_3D_DRAG_RENDER_SCALE=1.0` effective); repeated frames at the same size must not force a PyVista/VTK window resize. Users may explicitly lower `EIT_APP_3D_DRAG_FPS` or `EIT_APP_3D_DRAG_RENDER_SCALE`; logical canvas size remains stable per V54 | tests/unit/test_conductivity_3d_widget_runtime.py; B13 |
 
 ## §T — tasks
 
@@ -189,7 +190,7 @@ v1  (EIDORS-style dual-model offline-RM + online RM@normalize(Δv)):
     T15  →  T18  →  T16  →  T17  →  T26  →  T29  →  T31  →  T19  →  T20  →  T32
 
 hotfix  (regression / safety):
-    T38, T39
+    T38, T39, T58
 
 greit-parity  (EIDORS-complete 3D GREIT; unlock "EIDORS同款" claim):
     T40  →  T41  →  T42  →  T43  →  T44  →  T45  →  T46  →  T50  →  T47  →  T48  →  T49
@@ -274,9 +275,10 @@ HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold befo
 | T52 | x | Mesh HDF5-first hardening: support `.xdmf/.h5` cache load without source `.msh`; store source hash/provenance optional; generator writes XDMF/HDF5 from in-memory mesh even when `save_msh=false`; round-trip facet/cell tags + physical groups | V66,V68 |
 | T53 | x | Convert RM/GREIT/one-step artifacts from `.npz` to HDF5 `.h5`; keep `.npz` loader read-only + migration helper; update GUI cached-RM loader | V36,V37,V61,V64,V65,V67 |
 | T54 | x | Convert dataset generator + GUI simulation export from `mesh_info.npz` / `sample_*.npz` / "NumPy archive" to HDF5 package; update i18n labels and file dialogs | V65,V67 |
-| T55 | . | Convert diagnostics/benchmark/reconstruction output bundles (`outputs.npz`, `result_arrays.npz`, `inverse_3d_overview_data.npz`, gallery bundles) to HDF5; JSON/CSV summaries remain | V40,V65,V67 |
+| T55 | x | Convert diagnostics/benchmark/reconstruction output bundles (`outputs.npz`, `result_arrays.npz`, `inverse_3d_overview_data.npz`, gallery bundles) to HDF5; JSON/CSV summaries remain | V40,V65,V67 |
 | T56 | . | Convert MATLAB/interop mesh bridge arrays from `.npz` default to HDF5/v7.3-compatible `.h5`; retain `.mat`/legacy `.npz` import adapters only | V63,V65,V67 |
 | T57 | . | Add mesh IO format benchmark + regression test: compare `.msh` import vs XDMF/HDF5 load on representative meshes; store JSON artifact with speed ratio and tag equality | V66,V68 |
+| T58 | x | Raise GUI 3D offscreen drag defaults to 60 fps + full-DPR framebuffer; skip redundant offscreen window resizes; keep env-controlled lower-fps/downsample mode for constrained machines without reintroducing V54 size jitter | V69,B13 |
 
 ## §B — bugs
 
@@ -294,3 +296,4 @@ HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold befo
 | B10 | 2026-04-22 | GUI 3D PyVista offscreen drag path rendered at 60% physical size for responsiveness but set the pixmap DPR to the widget DPR; Qt therefore displayed drag frames as smaller logical images, then snapped back on the idle full-resolution frame | V54,T39 |
 | B11 | 2026-04-22 | SPEC/bench text overclaimed 3D GREIT as official-aligned; code is linearized GREIT-RM v0 (`Y=T@J.T`, `D≈T`) and lacks EIDORS finite-target `vh/vi`, `desired_solution_fn`, NF weight search, HDF5 model-component parity artifacts | V50,V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65,T40,T41,T42,T43,T44,T45,T46,T47,T48,T49,T50 |
 | B12 | 2026-04-22 | Project persistence still mixed: mesh cache already prefers XDMF/HDF5 but freshness tied to source `.msh`; many production writers still emit `.npz/.npy` (`greit_rm.npz`, `one_step_*_rm.npz`, `outputs.npz`, `result_arrays.npz`, dataset `mesh_info.npz`/`sample_*.npz`, GUI "NumPy archive"). This conflicts with FEniCSx-aligned HDF5-unified cache/save target | V65,V66,V67,V68,T51,T52,T53,T54,T55,T56,T57 |
+| B13 | 2026-04-22 | After fixing 3D offscreen drag size jitter, the interaction path still defaulted to ~30 fps and 0.6× drag framebuffer scale; on high-resource GPU/WSLg machines that made rotation feel visibly choppy and low-fidelity | V69,T58 |

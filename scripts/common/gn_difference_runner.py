@@ -68,6 +68,7 @@ from pyeidors.inverse.solvers.gauss_newton_device import resolve_torch_device
 from pyeidors.utils.numeric_ops import safe_dot
 from pyeidors.visualization import create_visualizer
 
+from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .mesh_utils import cell_to_node
 
 mpl.rcParams.update(
@@ -2602,20 +2603,24 @@ def process_frames(
         fig.savefig(output_dir / "voltage_comparison.png", dpi=300, bbox_inches="tight")
         plt.close(fig)
 
-    np.savez(
-        output_dir / "outputs.npz",
-        sigma_est=sigma_est,
-        delta_sigma=delta_sigma_scaled,
-        sigma_bg=ctx["sigma_bg"],
-        dv=meas_diff,
-        pred_diff=pred_diff,
-        vi=vi,
-        pred_vi=pred_vi.meas,
-        lambda_=lam,
-        rmse_abs=rmse_abs,
-        step_size_alpha=alpha,
-        drive_value=ctx["stim_drive_value"],
-        measurement_gain=measurement_gain,
+    write_output_bundle(
+        output_dir / "outputs.h5",
+        {
+            "sigma_est": sigma_est,
+            "delta_sigma": delta_sigma_scaled,
+            "sigma_bg": ctx["sigma_bg"],
+            "dv": meas_diff,
+            "pred_diff": pred_diff,
+            "vi": vi,
+            "pred_vi": pred_vi.meas,
+            "lambda_": lam,
+            "rmse_abs": rmse_abs,
+            "step_size_alpha": alpha,
+            "drive_value": ctx["stim_drive_value"],
+            "measurement_gain": measurement_gain,
+        },
+        {"package_role": "difference_reconstruction_outputs"},
+        schema=RECONSTRUCTION_ARRAYS_SCHEMA,
     )
     cache_manager = ctx.get("cache_manager")
     cache_stats = cache_manager.stats() if cache_manager is not None else {}

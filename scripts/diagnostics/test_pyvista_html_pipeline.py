@@ -3,7 +3,7 @@
 
 This script is intentionally lightweight:
 1. create a simple sphere smoke-test scene
-2. load an existing NPZ produced by the 3D inverse demo
+2. load an existing HDF5 package produced by the 3D inverse demo
 3. export interactive HTML scenes for manual inspection
 """
 
@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -20,9 +21,13 @@ import vtk
 from scipy.interpolate import griddata
 from scipy.ndimage import gaussian_filter
 
-
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_INPUT = REPO_ROOT / "results" / "figures_3d_inverse_demo" / "inverse_3d_overview_data.npz"
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from scripts.common.hdf5_outputs import read_output_bundle
+
+DEFAULT_INPUT = REPO_ROOT / "results" / "figures_3d_inverse_demo" / "inverse_3d_overview_data.h5"
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo" / "pyvista_html_test"
 
 
@@ -114,8 +119,8 @@ def add_cylinder_outline(plotter: pv.Plotter, bounds: dict[str, float]) -> None:
     plotter.add_mesh(cyl.extract_feature_edges(), color="black", line_width=1.0, opacity=0.18)
 
 
-def build_scene_html(npz_path: Path, output_dir: Path) -> dict[str, str]:
-    payload = np.load(npz_path)
+def build_scene_html(package_path: Path, output_dir: Path) -> dict[str, str]:
+    payload = read_output_bundle(package_path)
     coords = np.asarray(payload["coords"], dtype=float)
     truth = np.asarray(payload["truth_sigma"], dtype=float)
     recon = np.asarray(payload["recon_sigma"], dtype=float)

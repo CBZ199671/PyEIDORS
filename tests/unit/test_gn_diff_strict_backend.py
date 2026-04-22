@@ -14,6 +14,7 @@ if str(SCRIPTS_PATH) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_PATH))
 
 from common import gn_difference_runner
+from common.hdf5_outputs import read_output_bundle
 
 GIB = float(1024**3)
 
@@ -139,11 +140,26 @@ def test_measurement_exact_strict_matches_dense_param_on_small_problem(tmp_path:
         measurement_gain=1.0,
     )
 
-    dense_npz = np.load(tmp_path / "dense-out" / "outputs.npz")
-    exact_npz = np.load(tmp_path / "measurement-out" / "outputs.npz")
-    np.testing.assert_allclose(dense_npz["delta_sigma"], exact_npz["delta_sigma"], rtol=1e-9, atol=1e-11)
-    np.testing.assert_allclose(dense_npz["pred_diff"], exact_npz["pred_diff"], rtol=1e-9, atol=1e-11)
-    np.testing.assert_allclose(dense_npz["pred_vi"], exact_npz["pred_vi"], rtol=1e-9, atol=1e-11)
+    dense_bundle = read_output_bundle(tmp_path / "dense-out" / "outputs.h5")
+    exact_bundle = read_output_bundle(tmp_path / "measurement-out" / "outputs.h5")
+    np.testing.assert_allclose(
+        dense_bundle["delta_sigma"],
+        exact_bundle["delta_sigma"],
+        rtol=1e-9,
+        atol=1e-11,
+    )
+    np.testing.assert_allclose(
+        dense_bundle["pred_diff"],
+        exact_bundle["pred_diff"],
+        rtol=1e-9,
+        atol=1e-11,
+    )
+    np.testing.assert_allclose(
+        dense_bundle["pred_vi"],
+        exact_bundle["pred_vi"],
+        rtol=1e-9,
+        atol=1e-11,
+    )
     assert dense_metrics["strict_solver_backend_effective"] == "dense-param"
     assert exact_metrics["strict_solver_backend_effective"] == "measurement-exact"
 

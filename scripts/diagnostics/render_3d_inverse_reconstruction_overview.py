@@ -52,6 +52,7 @@ from common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
 )
+from common.hdf5_outputs import DIAGNOSTICS_ARRAYS_SCHEMA, write_output_bundle
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo"
 
 
@@ -644,23 +645,27 @@ def run_case(
         fig.savefig(svg_path, bbox_inches="tight")
         plt.close(fig)
     if save_data:
-        np.savez(
-            output_dir / "inverse_3d_overview_data.npz",
-            coords=coords,
-            truth_sigma=truth_sigma,
-            recon_sigma=recon_sigma,
-            vh=vh,
-            vi=vi,
-            dv_raw=dv_raw,
-            dv_norm=dv_norm,
-            dv_measurement_space=dv_data_space,
-            pred_vi=pred_vi,
-            pred_dv_measurement_space=pred_dv_data_space,
-            measurement_vector=measurement_vector,
-            prediction_vector=prediction_vector,
-            residual_vector=residual_vector,
-            target_mask=target_mask,
-            background_mask=background_mask,
+        write_output_bundle(
+            output_dir / "inverse_3d_overview_data.h5",
+            {
+                "coords": coords,
+                "truth_sigma": truth_sigma,
+                "recon_sigma": recon_sigma,
+                "vh": vh,
+                "vi": vi,
+                "dv_raw": dv_raw,
+                "dv_norm": dv_norm,
+                "dv_measurement_space": dv_data_space,
+                "pred_vi": pred_vi,
+                "pred_dv_measurement_space": pred_dv_data_space,
+                "measurement_vector": measurement_vector,
+                "prediction_vector": prediction_vector,
+                "residual_vector": residual_vector,
+                "target_mask": target_mask,
+                "background_mask": background_mask,
+            },
+            {"package_role": "inverse_3d_overview_data"},
+            schema=DIAGNOSTICS_ARRAYS_SCHEMA,
         )
     if should_create_output_dir:
         wall_time_breakdown["save_elapsed_sec"] = perf_counter() - save_start
@@ -728,7 +733,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--no-save-data",
         action="store_true",
-        help="Skip JSON/NPZ summary export; plot files are still written unless --no-plot is also set.",
+        help="Skip JSON/HDF5 summary export; plot files are still written unless --no-plot is also set.",
     )
     return parser.parse_args()
 
@@ -761,7 +766,7 @@ def main() -> None:
         print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.svg'}")
     if not args.no_save_data:
         print(f"Saved metrics to: {args.output_dir / 'inverse_3d_overview_metrics.json'}")
-        print(f"Saved data to: {args.output_dir / 'inverse_3d_overview_data.npz'}")
+        print(f"Saved data to: {args.output_dir / 'inverse_3d_overview_data.h5'}")
 
 
 if __name__ == "__main__":

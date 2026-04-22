@@ -37,6 +37,7 @@ from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
+from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
 from scripts.demos._shared import cell_to_node, make_random_anomaly, save_voltage_comparison_figure
 
 
@@ -139,25 +140,29 @@ def main() -> None:
     )
 
     # Save data
-    np.savez(
-        out_dir / "single_step_outputs.npz",
-        sigma_bg=sigma_bg,
-        sigma_true=sigma_true,
-        sigma_est=sigma_est,
-        anomaly_center=np.array(anomaly["center"]),
-        anomaly_radius=anomaly["radius"],
-        anomaly_conductivity=anomaly["conductivity"],
-        meas_bg=data_bg.meas,
-        meas_true=data_true.meas,
-        meas_est=data_est.meas,
-        dv=dv,
-        metrics=np.array(list(metrics.values())),
-        metric_names=np.array(list(metrics.keys())),
+    outputs_path = write_output_bundle(
+        out_dir / "single_step_outputs.h5",
+        {
+            "sigma_bg": sigma_bg,
+            "sigma_true": sigma_true,
+            "sigma_est": sigma_est,
+            "anomaly_center": np.array(anomaly["center"]),
+            "anomaly_radius": anomaly["radius"],
+            "anomaly_conductivity": anomaly["conductivity"],
+            "meas_bg": data_bg.meas,
+            "meas_true": data_true.meas,
+            "meas_est": data_est.meas,
+            "dv": dv,
+            "metrics": np.array(list(metrics.values())),
+            "metric_names": np.array(list(metrics.keys())),
+        },
+        {"package_role": "demo_single_step_difference_outputs"},
+        schema=DEMO_ARRAYS_SCHEMA,
     )
 
     print("Random anomaly:", anomaly)
     print("Metrics:", metrics)
-    print(f"Results saved to {out_dir / 'single_step_outputs.npz'}")
+    print(f"Results saved to {outputs_path}")
     print(f"Conductivity comparison: {out_dir / 'conductivity_comparison.png'}")
     print(f"Voltage comparison: {out_dir / 'voltage_comparison.png'}")
 
