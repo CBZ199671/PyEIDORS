@@ -39,31 +39,21 @@ def _running_under_wsl() -> bool:
 
 
 def _configure_qt_platform_for_embedded_vtk() -> None:
-    """Pin Qt to XCB on WSLg by default; allow Wayland opt-in.
+    """Prefer native Wayland on WSLg for crisp HiDPI rendering.
 
-    Two reasons the default flipped from Wayland → XCB on WSLg:
+    XWayland/XCB is stable for embedded VTK, but it is visibly soft on
+    HiDPI Windows displays because WSLg has to scale the X11 surface.
+    The 3D widget already keeps the unsafe embedded-VTK path disabled
+    on WSLg unless XCB is explicitly requested, so the main window can
+    stay on Qt/Wayland by default.
 
-    1. **Hard hang.**  ``QApplication(sys.argv)`` stalls indefinitely on
-       current WSLg builds when Qt picks the Wayland platform plugin —
-       confirmed locally with a 10-line PySide6 hello-world that prints
-       "imports done" then never reaches "qapp ok".  ``QT_QPA_PLATFORM=xcb``
-       resolves it cleanly, which makes the launcher actually open a
-       window instead of looking like a frozen GUI.
+    ``QT_QPA_PLATFORM`` is still honoured when the caller pins it.  For
+    legacy VTK/X11 experiments set ``EIT_APP_USE_QT_XCB=1``; the older
+    ``EIT_APP_USE_QT_WAYLAND=1`` remains accepted but is now the default
+    when WSLg exposes ``WAYLAND_DISPLAY``.
 
-    2. **Embedded VTK stability.**  VTK's Python Qt interactor passes
-       ``QWidget.winId()`` to ``vtkXOpenGLRenderWindow.SetWindowInfo``.
-       On Qt/Wayland that id is not an X11 ``Window`` handle, and VTK
-       can abort the whole GUI with ``BadWindow / X_ConfigureWindow``.
-       WSLg still exposes XWayland via ``DISPLAY``, so XCB keeps the
-       embedded PyVistaQt route stable.
-
-    Trade-off: XWayland is visibly slightly softer than native Wayland
-    on HiDPI WSLg — but a soft window is strictly better than no window.
-    Users on a WSLg release where Wayland actually works can opt back
-    in via ``EIT_APP_USE_QT_WAYLAND=1``.
-
-    Outside WSL, Linux defaults follow whatever PySide6 picks (no env
-    is set).  macOS / Windows are unaffected.
+    Outside WSL, Linux defaults follow whatever PySide6 picks (no env is
+    set).  macOS / Windows are unaffected.
     """
     # Honour anything the user has already pinned — we only fill the
     # blanks here, never override an explicit choice.
@@ -71,22 +61,40 @@ def _configure_qt_platform_for_embedded_vtk() -> None:
         return
     if not _running_under_wsl():
         return
-    if _env_flag("EIT_APP_USE_QT_WAYLAND"):
-        # Explicit Wayland opt-in; trust the user.
-        return
-    if not os.environ.get("DISPLAY"):
-        # No XWayland endpoint — let Qt fall back to whatever it can
-        # find rather than forcing an unreachable platform.
+
+    # Qt 6 is HiDPI-aware by default, but keeping fractional scale factors
+    # unrounded avoids subtle size mismatches on common 125% / 150% Windows
+    # display scales.
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
+    if _env_flag("EIT_APP_USE_QT_XCB") or _env_flag("EIT_APP_DISABLE_QT_WAYLAND"):
+        if not os.environ.get("DISPLAY"):
+            return
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        # Disable MIT-SHM: WSLg's XWayland doesn't support shared-memory
+        # pixmaps and Qt's BadAccess complaints flood the journal otherwise.
+        os.environ.setdefault("QT_X11_NO_MITSHM", "1")
+        logging.getLogger(__name__).info(
+            "WSLg detected; using Qt XCB platform because XCB was requested"
+        )
         return
 
-    os.environ["QT_QPA_PLATFORM"] = "xcb"
-    # Disable MIT-SHM: WSLg's XWayland doesn't support shared-memory
-    # pixmaps and Qt's BadAccess complaints flood the journal otherwise.
-    os.environ.setdefault("QT_X11_NO_MITSHM", "1")
-    logging.getLogger(__name__).info(
-        "WSLg detected; pinning Qt to XCB platform "
-        "(set EIT_APP_USE_QT_WAYLAND=1 to opt back into Wayland)"
-    )
+    if os.environ.get("WAYLAND_DISPLAY"):
+        # The semicolon form lets Qt fall back to XCB if the Wayland plugin
+        # is unavailable, while keeping Wayland first for crisp text.
+        os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
+        logging.getLogger(__name__).info(
+            "WSLg detected; using Qt Wayland platform for crisp HiDPI rendering "
+            "(set EIT_APP_USE_QT_XCB=1 to force XCB)"
+        )
+        return
+
+    if os.environ.get("DISPLAY"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+        os.environ.setdefault("QT_X11_NO_MITSHM", "1")
+        logging.getLogger(__name__).info(
+            "WSLg detected without WAYLAND_DISPLAY; falling back to Qt XCB platform"
+        )
 
 
 def main() -> int:

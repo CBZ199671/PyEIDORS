@@ -26,13 +26,6 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from eit_app.models.forward_model_config import drive_mode_for_mesh_dimension
 from eit_app.models.frame_model import FrameData
-from pyeidors.data.difference import build_difference_vector
-from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
-from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
-from pyeidors.perf.forward_solver_policy import (
-    resolve_3d_cuda_forward_solver_policy,
-    resolve_3d_cuda_mat_solve_policy,
-)
 
 log = logging.getLogger(__name__)
 
@@ -53,6 +46,42 @@ _RM_ARTIFACT_META_KEYS = (
     "greit_rm_path",
     "reconstruction_matrix_path",
 )
+
+
+def build_difference_vector(*args, **kwargs):
+    from pyeidors.data.difference import build_difference_vector as _build
+
+    return _build(*args, **kwargs)
+
+
+def effective_pattern_layout_for_3d_mesh(*args, **kwargs):
+    from pyeidors.electrodes.layout import (
+        effective_pattern_layout_for_3d_mesh as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
+
+
+def probe_petsc_cuda_runtime() -> dict[str, Any]:
+    from pyeidors.perf.capabilities import probe_petsc_cuda_runtime as _probe
+
+    return _probe()
+
+
+def resolve_3d_cuda_forward_solver_policy(*args, **kwargs) -> dict[str, Any]:
+    from pyeidors.perf.forward_solver_policy import (
+        resolve_3d_cuda_forward_solver_policy as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
+
+
+def resolve_3d_cuda_mat_solve_policy(*args, **kwargs) -> dict[str, Any]:
+    from pyeidors.perf.forward_solver_policy import (
+        resolve_3d_cuda_mat_solve_policy as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
 
 
 def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:

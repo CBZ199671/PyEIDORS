@@ -13,13 +13,30 @@ from PySide6.QtCore import QObject, QThread, Signal
 from eit_app.models.precision import compute_dtype
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.models.forward_model_config import ForwardModelConfig
-from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
-from pyeidors.perf.forward_solver_policy import (
-    resolve_3d_cuda_forward_solver_policy,
-    resolve_3d_cuda_mat_solve_policy,
-)
 
 log = logging.getLogger(__name__)
+
+
+def probe_petsc_cuda_runtime() -> dict[str, Any]:
+    from pyeidors.perf.capabilities import probe_petsc_cuda_runtime as _probe
+
+    return _probe()
+
+
+def resolve_3d_cuda_forward_solver_policy(*args, **kwargs) -> dict[str, Any]:
+    from pyeidors.perf.forward_solver_policy import (
+        resolve_3d_cuda_forward_solver_policy as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
+
+
+def resolve_3d_cuda_mat_solve_policy(*args, **kwargs) -> dict[str, Any]:
+    from pyeidors.perf.forward_solver_policy import (
+        resolve_3d_cuda_mat_solve_policy as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
 
 
 @dataclass

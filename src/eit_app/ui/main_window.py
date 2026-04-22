@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import numpy as np
@@ -40,14 +41,6 @@ from eit_app.hardware.connection_preflight import preflight_connection_target
 from eit_app.hardware.factory import create_device_from_config, normalize_device_config
 from eit_app.hardware.types import STIM_AMP_VALUES_UA, voltage_amp_label
 from eit_app.i18n import current_language, set_language, t, translator
-from eit_app.interop import (
-    EidorsScriptCaptureService,
-    InteropBundleExporter,
-    InteropBundleImporter,
-    InteropSmokeValidator,
-    ReconstructionPreset,
-    build_geometry_payload_from_result,
-)
 from eit_app.measurement_layout import (
     measurement_layout_from_config,
 )
@@ -79,6 +72,9 @@ from eit_app.ui.theme import current_theme_mode, set_theme_mode
 from eit_app.models.frame_model import FrameData
 
 log = logging.getLogger(__name__)
+
+if TYPE_CHECKING:
+    from eit_app.interop.models import ReconstructionPreset
 
 _AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE = "AmgX 不可用时使用 spd_gamg CUDA"
 _RUNTIME_DIAGNOSTICS_ENV = "EIT_APP_SHOW_RUNTIME_DIAGNOSTICS"
@@ -361,10 +357,10 @@ class EITWorkstation(QMainWindow):
         self._fwd_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
-        self._interop_capture_service = EidorsScriptCaptureService()
-        self._interop_importer = InteropBundleImporter()
-        self._interop_exporter = InteropBundleExporter()
-        self._interop_smoke_validator = InteropSmokeValidator()
+        self._interop_capture_service = None
+        self._interop_importer = None
+        self._interop_exporter = None
+        self._interop_smoke_validator = None
         self._sim_forward_model_config = ForwardModelConfig()
         self._dataset_forward_model_config = ForwardModelConfig()
         self._sim_use_interactive_3d_geometry_defaults = True
@@ -2930,7 +2926,24 @@ class EITWorkstation(QMainWindow):
             enabled=self._dataset_use_interactive_3d_geometry_defaults,
         )
 
-    def _interop_reconstruction_preset(self) -> ReconstructionPreset:
+    def _ensure_interop_services(self) -> None:
+        if self._interop_capture_service is not None:
+            return
+        from eit_app.interop import (
+            EidorsScriptCaptureService,
+            InteropBundleExporter,
+            InteropBundleImporter,
+            InteropSmokeValidator,
+        )
+
+        self._interop_capture_service = EidorsScriptCaptureService()
+        self._interop_importer = InteropBundleImporter()
+        self._interop_exporter = InteropBundleExporter()
+        self._interop_smoke_validator = InteropSmokeValidator()
+
+    def _interop_reconstruction_preset(self) -> "ReconstructionPreset":
+        from eit_app.interop.models import ReconstructionPreset
+
         rc = self._state.reconstruction_config
         return ReconstructionPreset(
             method=rc.method,
@@ -2978,6 +2991,8 @@ class EITWorkstation(QMainWindow):
         simulation_notes: list[str] = []
         if self._last_fwd_result is not None and not self._last_fwd_result.error_msg:
             try:
+                from eit_app.interop import build_geometry_payload_from_result
+
                 simulation_geometry = build_geometry_payload_from_result(
                     node_coords=self._last_fwd_result.node_coords,
                     cell_connectivity=self._last_fwd_result.cell_connectivity,
@@ -3025,7 +3040,7 @@ class EITWorkstation(QMainWindow):
         }
         return snapshots
 
-    def _apply_reconstruction_preset(self, preset: ReconstructionPreset | None) -> None:
+    def _apply_reconstruction_preset(self, preset: "ReconstructionPreset | None") -> None:
         if preset is None:
             return
         self._state.reconstruction_config.method = preset.method
@@ -3040,6 +3055,7 @@ class EITWorkstation(QMainWindow):
         )
 
     def _apply_interop_import(self, target: str, loaded_bundle) -> str:
+        self._ensure_interop_services()
         preview = self._interop_importer.preview_loaded_package(loaded_bundle)
         config = preview.forward_model_config
         self._last_imported_bundle = loaded_bundle
@@ -3158,6 +3174,7 @@ class EITWorkstation(QMainWindow):
         raise RuntimeError(t("main.interop.unknown_target", target=target))
 
     def _run_interop_smoke_validation(self, loaded_bundle) -> str:
+        self._ensure_interop_services()
         preset = loaded_bundle.reconstruction_preset or self._interop_reconstruction_preset()
         result = self._interop_smoke_validator.validate(
             loaded_bundle,
@@ -3168,6 +3185,7 @@ class EITWorkstation(QMainWindow):
     def _open_interop_hub(self) -> None:
         from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
 
+        self._ensure_interop_services()
         dialog = InteropHubDialog(
             self,
             capture_service=self._interop_capture_service,

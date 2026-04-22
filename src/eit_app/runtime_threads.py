@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import sys
 from typing import Any
 
 _THREAD_ENV_KEYS = (
@@ -41,10 +42,16 @@ def configure_realtime_thread_env(*, force: bool = False, default: int = 1) -> i
     return threads
 
 
-def configure_realtime_compute_threads(*, default: int = 1) -> dict[str, Any]:
+def configure_realtime_compute_threads(
+    *, default: int = 1, import_torch: bool = False
+) -> dict[str, Any]:
     """Apply best-effort runtime thread limits for already-imported backends."""
     threads = get_realtime_thread_count(default=default)
     applied: dict[str, Any] = {"threads": threads}
+
+    if "torch" not in sys.modules and not import_torch:
+        applied["torch"] = "deferred_until_import"
+        return applied
 
     try:
         import torch

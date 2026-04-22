@@ -1,5 +1,6 @@
 """Serial/4G connection panel with guided discovery hints."""
 
+import os
 import re
 
 from PySide6.QtCore import Signal
@@ -11,6 +12,11 @@ from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
 _WINDOWS_COM_RE = re.compile(r"(COM\d+)", re.IGNORECASE)
+_TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+
+
+def _env_flag(name: str) -> bool:
+    return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
 class ConnectionPanel(QGroupBox):
@@ -29,6 +35,8 @@ class ConnectionPanel(QGroupBox):
         # Title is assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
         self._serial_ports: list[SerialPortDescriptor] = []
+        self._ports_scanned = False
+        self._suppress_transport_refresh = False
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -128,8 +136,13 @@ class ConnectionPanel(QGroupBox):
         btn_layout.addWidget(self._disconnect_btn)
         layout.addRow(btn_layout)
 
+        self._suppress_transport_refresh = True
         self._on_transport_changed(0)
-        self._refresh_ports()
+        self._suppress_transport_refresh = False
+        if _env_flag("EIT_APP_SCAN_SERIAL_ON_STARTUP"):
+            self._refresh_ports()
+        else:
+            self._set_initial_serial_hint()
 
     def _on_transport_changed(self, index: int) -> None:
         is_serial = index == 0
@@ -143,11 +156,15 @@ class ConnectionPanel(QGroupBox):
         self._set_row_visible(self._user_id, is_relay)
         self._set_row_visible(self._transport_hint, is_relay)
         if is_serial:
-            self._refresh_ports()
+            if self._suppress_transport_refresh:
+                self._set_initial_serial_hint()
+            else:
+                self._refresh_ports()
         else:
             self._update_relay_hint()
 
     def _refresh_ports(self) -> None:
+        self._ports_scanned = True
         current_port = self.selected_serial_port()
         self._port_combo.clear()
         ports = discover_serial_ports()
@@ -292,6 +309,10 @@ class ConnectionPanel(QGroupBox):
 
     # ── i18n ──
 
+    def _set_initial_serial_hint(self) -> None:
+        if not self._ports_scanned:
+            self._port_hint.setText(t("hw.connection.port_hint.scan_prompt"))
+
     def _retranslate(self) -> None:
         """Refresh all user-visible strings to the active language."""
         self.setTitle(t("hw.connection.title"))
@@ -312,7 +333,9 @@ class ConnectionPanel(QGroupBox):
         self._disconnect_btn.setText(t("hw.connection.disconnect_button"))
         # Refresh dynamic hint (serial discovery vs relay target)
         if self._transport_combo.currentIndex() == 0:
-            if self._serial_ports:
+            if not self._ports_scanned:
+                self._set_initial_serial_hint()
+            elif self._serial_ports:
                 self._update_serial_hint()
             else:
                 self._port_hint.setText(t("hw.connection.port_hint.no_ports"))

@@ -131,6 +131,7 @@ TRANSLATIONS: dict[str, str] = {
     "hw.connection.connect_button_tooltip": "Connect and verify the device link",
     "hw.connection.disconnect_button": "Disconnect",
     "hw.connection.port_hint.no_ports": "No serial ports detected. The launcher checks both local Linux ports and the Windows COM bridge; verify the USB cable, driver, and device power, then click Scan.",
+    "hw.connection.port_hint.scan_prompt": "Serial ports are scanned on demand to keep the GUI startup fast. Click Scan, or Connect to scan before opening the device.",
     "hw.connection.port_hint.still_no_ports": "Still no serial ports detected \u2014 holding off on connecting. Check USB cable, driver, and device power.",
     "hw.connection.port_hint.single_port_bridge": "Auto-selected the only port: {port}. Will use the Windows COM bridge on connect.",
     "hw.connection.port_hint.single_port": "Auto-selected the only port: {port}.",

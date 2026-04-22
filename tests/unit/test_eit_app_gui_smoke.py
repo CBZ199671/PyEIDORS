@@ -1193,6 +1193,7 @@ def test_conductivity_image_widget_renders_3d_tetra_projection() -> None:
 def test_connection_panel_auto_selects_unique_windows_serial_port(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    monkeypatch.setenv("EIT_APP_SCAN_SERIAL_ON_STARTUP", "1")
     monkeypatch.setattr(
         "eit_app.ui.hardware.connection_panel.discover_serial_ports",
         lambda: [
@@ -1215,6 +1216,41 @@ def test_connection_panel_auto_selects_unique_windows_serial_port(
 
     window._conn_panel._port_combo.setCurrentText("COM4 -> /dev/ttyS3 - USB-SERIAL CH340")
     assert window._conn_panel.selected_serial_port() == "COM4"
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_connection_panel_defers_serial_scan_on_startup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("EIT_APP_SCAN_SERIAL_ON_STARTUP", raising=False)
+    calls = {"count": 0}
+
+    def _fake_discover() -> list[SerialPortDescriptor]:
+        calls["count"] += 1
+        return [
+            SerialPortDescriptor(
+                device="COM7",
+                display_name="COM7 - USB Serial",
+                source="windows-com",
+            )
+        ]
+
+    monkeypatch.setattr(
+        "eit_app.ui.hardware.connection_panel.discover_serial_ports",
+        _fake_discover,
+    )
+
+    window = EITWorkstation()
+    _show_window(window)
+
+    assert calls["count"] == 0
+    assert window._conn_panel.serial_port_count() == 0
+
+    window._conn_panel.refresh_serial_ports()
+    assert calls["count"] == 1
+    assert window._conn_panel.selected_serial_port() == "COM7"
 
     _close_window(window)
 
@@ -2276,6 +2312,7 @@ def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
         measurements=None,
         reconstruction_preset=None,
     )
+    window._ensure_interop_services()
     monkeypatch.setattr(
         window._interop_importer,
         "preview_loaded_package",
