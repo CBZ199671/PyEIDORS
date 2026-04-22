@@ -43,10 +43,12 @@ from pyeidors.inverse import (
     graph_laplacian,
     greit_metrics,
     load_greit_rm,
+    load_rm_artifact as load_hdf5_rm_artifact,
     reconstruct_difference_batch,
     rm_signature,
     write_forward_rm_benchmark_artifact,
     write_greit_metrics_artifact,
+    write_rm_artifact as write_hdf5_rm_artifact,
 )
 from pyeidors.perf.gpu_kernels import prepare_rm_matmul
 
@@ -220,25 +222,16 @@ def _measurement_frames(
 
 
 def _write_rm_artifact(path: Path, rm: np.ndarray, metadata: dict[str, Any]) -> Path:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    np.savez_compressed(
+    return write_hdf5_rm_artifact(
         path,
-        rm=np.asarray(rm, dtype=np.float64),
-        metadata_json=np.asarray(json.dumps(_jsonable(metadata), sort_keys=True)),
+        rm,
+        metadata=metadata,
     )
-    return path
 
 
 def _load_rm_artifact(path: Path) -> tuple[np.ndarray, dict[str, Any]]:
-    with np.load(path, allow_pickle=False) as payload:
-        rm = np.asarray(payload["rm"], dtype=np.float64)
-        metadata: dict[str, Any] = {}
-        if "metadata_json" in payload:
-            try:
-                metadata = json.loads(str(payload["metadata_json"].item()))
-            except json.JSONDecodeError:
-                metadata = {"metadata_json": str(payload["metadata_json"].item())}
-    return rm, metadata
+    artifact = load_hdf5_rm_artifact(path)
+    return artifact.rm, dict(artifact.metadata)
 
 
 def _sync_cuda() -> None:
@@ -693,7 +686,7 @@ def main() -> int:
             "metadata": _jsonable(dict(result.metadata)),
         }
         rm_artifacts[mode] = _write_rm_artifact(
-            out_dir / f"one_step_{mode}_rm.npz",
+            out_dir / f"one_step_{mode}_rm.h5",
             result.rm,
             {
                 "algorithm": f"one-step-{mode}",
@@ -701,7 +694,7 @@ def main() -> int:
             },
         )
 
-    greit_path = out_dir / "greit_rm.npz"
+    greit_path = out_dir / "greit_rm.h5"
     greit, greit_seconds = _timed(
         lambda: build_3d_greit_rm(
             jacobian=coarse_j,

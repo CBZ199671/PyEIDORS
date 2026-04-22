@@ -9,10 +9,13 @@ import pytest
 from scipy import sparse
 
 from pyeidors.inverse import (
+    load_rm_artifact,
+    migrate_rm_artifact_to_hdf5,
     reconstruct_difference_batch,
     rm_signature,
     rm_signature_payload,
     write_forward_rm_benchmark_artifact,
+    write_rm_artifact,
 )
 
 
@@ -109,3 +112,41 @@ def test_forward_rm_benchmark_artifact_splits_cold_build_and_warm_apply(
     assert payload["online_hot_path"] == "rm_matmul"
     assert payload["env_path"] == "/home/tom/.local/bin/env"
     assert payload["metadata"] == {"case": "unit"}
+
+
+def test_rm_artifact_hdf5_roundtrip_and_legacy_migration(tmp_path) -> None:
+    rm = np.arange(6, dtype=np.float64).reshape(2, 3)
+    path = write_rm_artifact(
+        tmp_path / "one_step_rm.h5",
+        rm,
+        metadata={"algorithm": "one-step-noser"},
+        voxel_shape=(2, 1, 1),
+        channel_mask=np.array([False, True, False]),
+        measurement_weights=np.array([1.0, 2.0, 3.0]),
+    )
+
+    loaded = load_rm_artifact(path)
+
+    assert path.suffix == ".h5"
+    assert loaded.schema == "pyeidors-rm-hdf5-v1"
+    assert loaded.metadata["artifact_format"] == "hdf5"
+    assert loaded.metadata["online_hot_path"] == "rm_matmul"
+    assert loaded.voxel_shape == (2, 1, 1)
+    np.testing.assert_allclose(loaded.rm, rm)
+    np.testing.assert_array_equal(loaded.channel_mask, [False, True, False])
+    np.testing.assert_allclose(loaded.measurement_weights, [1.0, 2.0, 3.0])
+
+    legacy_path = tmp_path / "legacy_rm.npz"
+    np.savez_compressed(
+        legacy_path,
+        rm=rm,
+        voxel_shape=np.asarray([2, 1, 1], dtype=np.int64),
+        metadata_json=np.asarray(json.dumps({"algorithm": "legacy-one-step"})),
+    )
+    migrated_path = migrate_rm_artifact_to_hdf5(legacy_path)
+    migrated = load_rm_artifact(migrated_path)
+
+    assert migrated_path.suffix == ".h5"
+    assert migrated.metadata["migrated_from"] == str(legacy_path)
+    assert migrated.metadata["legacy_format"] == "npz"
+    np.testing.assert_allclose(migrated.rm, rm)

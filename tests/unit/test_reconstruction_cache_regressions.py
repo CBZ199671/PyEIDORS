@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 import sys
@@ -57,7 +56,9 @@ def test_mesh_loader_default_mesh_skips_incompatible_3d_candidates(
 
     def _fake_load_mesh(name: str):
         if name == "mesh3d_first":
-            raise ValueError("Topological dimension cannot be larger than geometric dimension.")
+            raise ValueError(
+                "Topological dimension cannot be larger than geometric dimension."
+            )
         if name == "mesh_2d_second":
             return sentinel
         raise AssertionError(f"Unexpected mesh candidate: {name}")
@@ -195,7 +196,9 @@ def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     )
 
     def _unexpected_full(*_args, **_kwargs):
-        raise AssertionError("full GN path should not be used for realtime single-step requests")
+        raise AssertionError(
+            "full GN path should not be used for realtime single-step requests"
+        )
 
     monkeypatch.setattr(rc, "_run_full_gn_request", _unexpected_full)
 
@@ -368,12 +371,14 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
         ],
         dtype=np.float64,
     )
-    artifact = tmp_path / "one_step_rm.npz"
-    np.savez_compressed(
+    from pyeidors.inverse import write_rm_artifact
+
+    artifact = tmp_path / "one_step_rm.h5"
+    write_rm_artifact(
         artifact,
         rm=rm,
         voxel_shape=np.asarray([2, 1, 1], dtype=np.int64),
-        metadata_json=np.asarray(json.dumps({"algorithm": "one-step-noser"})),
+        metadata={"algorithm": "one-step-noser"},
     )
     request = rc.ReconstructionRequest(
         reference_frame=FrameData(
@@ -532,7 +537,7 @@ def test_single_step_cached_request_scales_display_by_calibrated_alpha(
 ) -> None:
     import scripts.common.gn_difference_runner as diff_runner
 
-    delta_sigma = np.array([2.0, -4.0], dtype=float)
+    delta_sigma = np.array([2.0, -2.0], dtype=float)
     base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
     captured_sigmas: list[np.ndarray] = []
 
@@ -583,7 +588,9 @@ def test_single_step_cached_request_scales_display_by_calibrated_alpha(
 
     expected_display = delta_sigma * 0.25
     assert np.allclose(result.conductivity, expected_display)
-    assert np.allclose(captured_sigmas[-1], np.ones_like(delta_sigma) + expected_display)
+    assert np.allclose(
+        captured_sigmas[-1], np.ones_like(delta_sigma) + expected_display
+    )
     assert result.metadata["step_size_alpha"] == pytest.approx(0.25)
 
 
@@ -620,7 +627,9 @@ def test_single_step_cached_request_warmup_only_primes_context_without_solving(
     monkeypatch.setattr(
         diff_runner,
         "_measurement_space_delta",
-        lambda **kwargs: (_ for _ in ()).throw(AssertionError("warmup should not solve")),
+        lambda **kwargs: (_ for _ in ()).throw(
+            AssertionError("warmup should not solve")
+        ),
     )
 
     request = rc.ReconstructionRequest(
@@ -637,7 +646,10 @@ def test_single_step_cached_request_warmup_only_primes_context_without_solving(
     assert len(build_calls) == 1
     assert result.conductivity.size == 0
     assert result.metadata["cache_warmup_only"] is True
-    assert result.metadata["solver_diagnostics"]["strict_solver_backend_effective"] == "warmup_only"
+    assert (
+        result.metadata["solver_diagnostics"]["strict_solver_backend_effective"]
+        == "warmup_only"
+    )
 
 
 def test_single_step_cached_3d_context_uses_total_current_multiring_layout(
@@ -754,7 +766,11 @@ def test_load_gn_difference_runner_module_falls_back_to_repo_root(
         return sentinel
 
     monkeypatch.setattr(rc.importlib, "import_module", _fake_import)
-    sys.path[:] = [entry for entry in original_sys_path if Path(entry or ".").resolve() != repo_root]
+    sys.path[:] = [
+        entry
+        for entry in original_sys_path
+        if Path(entry or ".").resolve() != repo_root
+    ]
     try:
         loaded = rc._load_gn_difference_runner_module()
     finally:

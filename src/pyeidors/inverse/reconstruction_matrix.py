@@ -8,7 +8,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 from scipy import sparse
@@ -38,6 +38,21 @@ class OneStepRMResult:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.rm, dtype=dtype)
+
+
+@dataclass(frozen=True)
+class RMArtifact:
+    """Persisted reconstruction matrix artifact payload."""
+
+    rm: np.ndarray
+    metadata: MappingProxyType
+    voxel_shape: tuple[int, ...] = ()
+    node_coords: np.ndarray | None = None
+    cell_connectivity: np.ndarray | None = None
+    channel_mask: np.ndarray | None = None
+    measurement_weights: np.ndarray | None = None
+    path: str | None = None
+    schema: str | None = None
 
 
 def rm_signature_payload(
@@ -129,6 +144,99 @@ def write_forward_rm_benchmark_artifact(
     return target
 
 
+def write_rm_artifact(
+    path: str | Path,
+    rm: Any,
+    *,
+    metadata: dict[str, Any] | None = None,
+    voxel_shape: Any | None = None,
+    node_coords: Any | None = None,
+    cell_connectivity: Any | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+) -> Path:
+    """Write a reconstruction matrix artifact in HDF5 format."""
+
+    from pyeidors.io.hdf5_artifacts import write_hdf5_artifact
+
+    matrix = _as_rm_matrix(rm)
+    meta = dict(metadata or {})
+    meta.setdefault("artifact_schema", "pyeidors-rm-hdf5-v1")
+    meta.setdefault("artifact_format", "hdf5")
+    meta.setdefault("online_hot_path", "rm_matmul")
+    meta["rm_shape"] = [int(v) for v in matrix.shape]
+    arrays: dict[str, Any] = {"rm": matrix}
+    shape = _positive_int_shape(voxel_shape)
+    if shape:
+        arrays["voxel_shape"] = np.asarray(shape, dtype=np.int64)
+    for key, value in (
+        ("node_coords", node_coords),
+        ("cell_connectivity", cell_connectivity),
+        ("channel_mask", channel_mask),
+        ("measurement_weights", measurement_weights),
+    ):
+        if value is not None:
+            arrays[key] = np.asarray(value)
+    return write_hdf5_artifact(
+        path,
+        arrays,
+        meta,
+        schema="pyeidors-rm-hdf5-v1",
+    )
+
+
+def load_rm_artifact(path: str | Path) -> RMArtifact:
+    """Load an HDF5 RM artifact, or read a legacy NPZ/NPY artifact."""
+
+    source = Path(path)
+    suffix = source.suffix.lower()
+    if suffix in {".h5", ".hdf5"}:
+        return _load_hdf5_rm_artifact(source)
+    if suffix == ".npz":
+        return _load_legacy_npz_rm_artifact(source)
+    if suffix == ".npy":
+        rm = _as_rm_matrix(np.load(source, allow_pickle=False))
+        return RMArtifact(
+            rm=rm,
+            metadata=MappingProxyType(
+                {"artifact_format": "legacy-npy", "legacy_read_only": True}
+            ),
+            path=str(source),
+            schema="legacy-npy",
+        )
+    raise ValueError(
+        f"Unsupported RM artifact suffix {suffix!r}; expected .h5, .npz, or .npy."
+    )
+
+
+def migrate_rm_artifact_to_hdf5(
+    src: str | Path,
+    dst: str | Path | None = None,
+) -> Path:
+    """Migrate a legacy RM artifact into HDF5 without deleting the source."""
+
+    source = Path(src)
+    artifact = load_rm_artifact(source)
+    target = Path(dst) if dst is not None else source.with_suffix(".h5")
+    metadata = dict(artifact.metadata)
+    metadata.update(
+        {
+            "migrated_from": str(source),
+            "legacy_format": source.suffix.lower().lstrip("."),
+        }
+    )
+    return write_rm_artifact(
+        target,
+        artifact.rm,
+        metadata=metadata,
+        voxel_shape=artifact.voxel_shape,
+        node_coords=artifact.node_coords,
+        cell_connectivity=artifact.cell_connectivity,
+        channel_mask=artifact.channel_mask,
+        measurement_weights=artifact.measurement_weights,
+    )
+
+
 def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     vector = np.asarray(values, dtype=np.float64)
     if vector.ndim > 2:
@@ -139,6 +247,102 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     if not np.isfinite(vector).all():
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
+
+
+def _as_rm_matrix(values: Any) -> np.ndarray:
+    matrix = np.asarray(values, dtype=np.float64)
+    if matrix.ndim != 2 or 0 in matrix.shape:
+        raise ValueError(f"RM artifact matrix must be non-empty 2D, got {matrix.shape}.")
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("RM artifact matrix contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=np.float64)
+
+
+def _positive_int_shape(value: Any) -> tuple[int, ...]:
+    if value is None:
+        return ()
+    try:
+        arr = np.asarray(value, dtype=np.int64).reshape(-1)
+    except (TypeError, ValueError):
+        return ()
+    return tuple(int(v) for v in arr if int(v) > 0)
+
+
+def _optional_artifact_array(
+    arrays: Mapping[str, Any], key: str, *, dtype: Any
+) -> np.ndarray | None:
+    if key not in arrays:
+        return None
+    arr = np.asarray(arrays[key], dtype=dtype)
+    if arr.size == 0:
+        return None
+    return arr
+
+
+def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
+    from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+
+    artifact = read_hdf5_artifact(path)
+    arrays = dict(artifact.arrays)
+    if "rm" not in arrays:
+        raise ValueError(f"RM artifact is missing 'rm': {path}")
+    return RMArtifact(
+        rm=_as_rm_matrix(arrays["rm"]),
+        metadata=MappingProxyType(dict(artifact.metadata)),
+        voxel_shape=_positive_int_shape(arrays.get("voxel_shape")),
+        node_coords=_optional_artifact_array(arrays, "node_coords", dtype=np.float64),
+        cell_connectivity=_optional_artifact_array(
+            arrays, "cell_connectivity", dtype=np.int32
+        ),
+        channel_mask=_optional_artifact_array(arrays, "channel_mask", dtype=bool),
+        measurement_weights=_optional_artifact_array(
+            arrays, "measurement_weights", dtype=np.float64
+        ),
+        path=str(path),
+        schema=artifact.schema,
+    )
+
+
+def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
+    with np.load(path, allow_pickle=False) as payload:
+        if "rm" not in payload:
+            raise ValueError(f"RM artifact is missing 'rm': {path}")
+        metadata: dict[str, Any] = {
+            "artifact_format": "legacy-npz",
+            "legacy_read_only": True,
+        }
+        if "metadata_json" in payload:
+            raw = str(payload["metadata_json"].item())
+            try:
+                metadata.update(json.loads(raw))
+            except json.JSONDecodeError:
+                metadata["metadata_json"] = raw
+        arrays = {str(name): np.asarray(payload[name]) for name in payload.files}
+    node_coords = _optional_artifact_array(arrays, "node_coords", dtype=np.float64)
+    if node_coords is None:
+        node_coords = _optional_artifact_array(
+            arrays, "display_node_coords", dtype=np.float64
+        )
+    cell_connectivity = _optional_artifact_array(
+        arrays, "cell_connectivity", dtype=np.int32
+    )
+    if cell_connectivity is None:
+        cell_connectivity = _optional_artifact_array(
+            arrays, "display_cell_connectivity", dtype=np.int32
+        )
+    return RMArtifact(
+        rm=_as_rm_matrix(arrays["rm"]),
+        metadata=MappingProxyType(metadata),
+        voxel_shape=_positive_int_shape(arrays.get("voxel_shape")),
+        node_coords=node_coords,
+        cell_connectivity=cell_connectivity,
+        channel_mask=_optional_artifact_array(arrays, "channel_mask", dtype=bool),
+        measurement_weights=_optional_artifact_array(
+            arrays, "measurement_weights", dtype=np.float64
+        ),
+        path=str(path),
+        schema="legacy-npz",
+    )
 
 
 def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]:
@@ -637,10 +841,14 @@ def _nonnegative_seconds(value: float, *, name: str) -> float:
 
 __all__ = [
     "OneStepRMResult",
+    "RMArtifact",
     "build_one_step_rm",
+    "load_rm_artifact",
+    "migrate_rm_artifact_to_hdf5",
     "reconstruct_difference",
     "reconstruct_difference_batch",
     "rm_signature",
     "rm_signature_payload",
     "write_forward_rm_benchmark_artifact",
+    "write_rm_artifact",
 ]

@@ -127,19 +127,27 @@ class GREITRM:
         return values
 
     def save(self, path: str | Path) -> Path:
-        """Persist the RM and offline training artifact to a compressed NPZ."""
+        """Persist the RM and offline training artifact to HDF5."""
 
-        target = Path(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        np.savez_compressed(
+        from pyeidors.io.hdf5_artifacts import write_hdf5_artifact
+
+        target = _greit_hdf5_path(path)
+        metadata = dict(self.metadata)
+        metadata.setdefault("legacy_artifact_schema", metadata.get("artifact_schema"))
+        metadata["artifact_schema"] = "pyeidors-greit-rm-hdf5-v1"
+        metadata["artifact_format"] = "hdf5"
+        write_hdf5_artifact(
             target,
-            rm=np.asarray(self.rm, dtype=np.float64),
-            metadata_json=np.asarray(json.dumps(_json_ready(dict(self.metadata)))),
-            voxel_shape=np.asarray(self.voxel_shape or (), dtype=np.int64),
-            channel_mask=_optional_array(self.channel_mask, dtype=bool),
-            measurement_weights=_optional_array(self.measurement_weights),
-            training_targets=_optional_array(self.training_targets),
-            training_responses=_optional_array(self.training_responses),
+            {
+                "rm": np.asarray(self.rm, dtype=np.float64),
+                "voxel_shape": np.asarray(self.voxel_shape or (), dtype=np.int64),
+                "channel_mask": _optional_array(self.channel_mask, dtype=bool),
+                "measurement_weights": _optional_array(self.measurement_weights),
+                "training_targets": _optional_array(self.training_targets),
+                "training_responses": _optional_array(self.training_responses),
+            },
+            metadata,
+            schema="pyeidors-greit-rm-hdf5-v1",
         )
         return target
 
@@ -147,8 +155,39 @@ class GREITRM:
     def load(cls, path: str | Path) -> "GREITRM":
         """Load a GREIT RM artifact written by :meth:`save`."""
 
-        with np.load(Path(path), allow_pickle=False) as payload:
+        source = Path(path)
+        suffix = source.suffix.lower()
+        if suffix in {".h5", ".hdf5"}:
+            return cls._load_hdf5(source)
+        if suffix == ".npz":
+            return cls._load_legacy_npz(source)
+        raise ValueError(f"Unsupported GREIT RM suffix {suffix!r}; expected .h5.")
+
+    @classmethod
+    def _load_hdf5(cls, path: Path) -> "GREITRM":
+        from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+
+        artifact = read_hdf5_artifact(path)
+        arrays = dict(artifact.arrays)
+        if "rm" not in arrays:
+            raise ValueError(f"GREIT artifact is missing 'rm': {path}")
+        voxel_raw = np.asarray(arrays.get("voxel_shape", ()), dtype=np.int64)
+        return cls(
+            rm=np.asarray(arrays["rm"], dtype=np.float64),
+            metadata=MappingProxyType(dict(artifact.metadata)),
+            voxel_shape=tuple(int(v) for v in voxel_raw) if voxel_raw.size else None,
+            channel_mask=_empty_to_none_array(arrays.get("channel_mask"), dtype=bool),
+            measurement_weights=_empty_to_none_array(arrays.get("measurement_weights")),
+            training_targets=_empty_to_none_array(arrays.get("training_targets")),
+            training_responses=_empty_to_none_array(arrays.get("training_responses")),
+        )
+
+    @classmethod
+    def _load_legacy_npz(cls, path: Path) -> "GREITRM":
+        with np.load(path, allow_pickle=False) as payload:
             metadata = json.loads(str(payload["metadata_json"].item()))
+            metadata.setdefault("artifact_format", "legacy-npz")
+            metadata.setdefault("legacy_read_only", True)
             voxel_raw = np.asarray(payload["voxel_shape"], dtype=np.int64)
             return cls(
                 rm=np.asarray(payload["rm"], dtype=np.float64),
@@ -310,7 +349,10 @@ def build_3d_greit_rm(
         "rm_shape": tuple(int(v) for v in rm.shape),
         "solver": solver,
         "online_hot_path": "rm_matmul",
-        "artifact_schema": "pyeidors-greit-rm-v1",
+        "artifact_schema": "pyeidors-greit-rm-hdf5-v1",
+        "artifact_format": "hdf5",
+        "eidors_parity": False,
+        "training_mode": "linearized",
         "voxel_shape": voxel_shape,
     }
     if metadata:
@@ -345,6 +387,23 @@ def load_greit_rm(path: str | Path) -> GREITRM:
     """Load a persisted GREIT RM artifact."""
 
     return GREITRM.load(path)
+
+
+def migrate_greit_rm_to_hdf5(src: str | Path, dst: str | Path | None = None) -> Path:
+    """Migrate a legacy GREIT NPZ artifact into HDF5 without deleting source."""
+
+    source = Path(src)
+    target = _greit_hdf5_path(dst if dst is not None else source.with_suffix(".h5"))
+    greit = GREITRM.load(source)
+    meta = dict(greit.metadata)
+    meta.update(
+        {
+            "migrated_from": str(source),
+            "legacy_format": source.suffix.lower().lstrip("."),
+        }
+    )
+    greit = replace(greit, metadata=MappingProxyType(meta))
+    return greit.save(target)
 
 
 def greit_metrics(
@@ -631,6 +690,23 @@ def _empty_to_none(values: Any, *, dtype=np.float64) -> np.ndarray | None:
     return array
 
 
+def _empty_to_none_array(values: Any | None, *, dtype=np.float64) -> np.ndarray | None:
+    if values is None:
+        return None
+    return _empty_to_none(values, dtype=dtype)
+
+
+def _greit_hdf5_path(path: str | Path) -> Path:
+    target = Path(path)
+    if target.suffix == "":
+        return target.with_suffix(".h5")
+    if target.suffix.lower() not in {".h5", ".hdf5"}:
+        raise ValueError(
+            f"GREIT RM artifacts are written as HDF5 .h5 files, got {target}"
+        )
+    return target
+
+
 def _json_ready(value: Any) -> Any:
     if isinstance(value, MappingProxyType):
         return _json_ready(dict(value))
@@ -809,5 +885,6 @@ __all__ = [
     "generate_spherical_targets",
     "greit_metrics",
     "load_greit_rm",
+    "migrate_greit_rm_to_hdf5",
     "write_greit_metrics_artifact",
 ]

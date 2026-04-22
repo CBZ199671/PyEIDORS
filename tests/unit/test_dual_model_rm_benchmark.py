@@ -136,6 +136,9 @@ def test_dual_model_rm_benchmark_writes_t36_report(
     assert summary["forward_reference"]["lazy_context"]["n_meas_total"] == 12
     assert set(summary["rm_builds"]) == {"noser", "laplace"}
     assert set(summary["artifact_load"]) == {"noser", "laplace", "greit"}
+    assert summary["artifacts"]["greit_rm"].endswith(".h5")
+    assert summary["artifacts"]["one_step_noser_rm"].endswith(".h5")
+    assert summary["artifacts"]["one_step_laplace_rm"].endswith(".h5")
     assert set(summary["online_apply"]) == {"noser", "laplace", "greit"}
     assert set(summary["greit"]["metric_keys"]) == {"AR", "PE", "RES", "SD", "RNG"}
     assert summary["previous_greit_reference"]["found"] is True

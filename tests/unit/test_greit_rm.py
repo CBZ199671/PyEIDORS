@@ -17,6 +17,7 @@ from pyeidors.inverse import (
     generate_spherical_targets,
     greit_metrics,
     load_greit_rm,
+    migrate_greit_rm_to_hdf5,
     write_greit_metrics_artifact,
 )
 
@@ -63,7 +64,7 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     )
     mask = bad_channel_mask(jacobian.shape[0], bad_channels=[8])
     weights = np.array([2.0, 1.0, 0.75, 1.5, 3.0, 0.5, 2.5, 1.25, 1e6])
-    artifact_path = tmp_path / "greit_rm.npz"
+    artifact_path = tmp_path / "greit_rm.h5"
 
     greit = build_3d_greit_rm(
         jacobian=jacobian,
@@ -81,7 +82,8 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     assert greit.metadata["algorithm"] == "greit-3d"
     assert greit.metadata["synthetic_target_count"] == 8
     assert greit.metadata["online_hot_path"] == "rm_matmul"
-    assert greit.metadata["artifact_schema"] == "pyeidors-greit-rm-v1"
+    assert greit.metadata["artifact_schema"] == "pyeidors-greit-rm-hdf5-v1"
+    assert greit.metadata["artifact_format"] == "hdf5"
     assert greit.metadata["bad_channel_count"] == 1
 
     target = np.asarray(greit.training_targets[3], dtype=float)
@@ -146,6 +148,32 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
         target.reshape(grid.shape),
         atol=2e-8,
     )
+
+
+def test_load_greit_rm_reads_legacy_npz_and_migrates_to_hdf5(tmp_path) -> None:
+    legacy_path = tmp_path / "legacy_greit_rm.npz"
+    rm = np.eye(2, dtype=np.float64)
+    np.savez_compressed(
+        legacy_path,
+        rm=rm,
+        metadata_json=np.asarray(json.dumps({"algorithm": "greit-3d"})),
+        voxel_shape=np.asarray([2], dtype=np.int64),
+        channel_mask=np.asarray([], dtype=bool),
+        measurement_weights=np.asarray([], dtype=np.float64),
+        training_targets=np.eye(2, dtype=np.float64),
+        training_responses=np.eye(2, dtype=np.float64),
+    )
+
+    legacy = load_greit_rm(legacy_path)
+    assert legacy.metadata["legacy_read_only"] is True
+    np.testing.assert_allclose(legacy.rm, rm)
+
+    migrated_path = migrate_greit_rm_to_hdf5(legacy_path)
+    migrated = load_greit_rm(migrated_path)
+    assert migrated_path.suffix == ".h5"
+    assert migrated.metadata["artifact_schema"] == "pyeidors-greit-rm-hdf5-v1"
+    assert migrated.metadata["migrated_from"] == str(legacy_path)
+    np.testing.assert_allclose(migrated.rm, rm)
 
 
 def test_build_3d_greit_rm_accepts_explicit_target_matrix() -> None:

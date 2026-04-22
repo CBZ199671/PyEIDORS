@@ -107,7 +107,9 @@ def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
     return float(arr[0])
 
 
-def _contact_impedance_vector_from_meta(meta: dict[str, Any], *, total_electrodes: int) -> np.ndarray:
+def _contact_impedance_vector_from_meta(
+    meta: dict[str, Any], *, total_electrodes: int
+) -> np.ndarray:
     raw = meta.get("contact_impedance", 0.01)
     total = max(int(total_electrodes), 1)
     if raw is None or raw == "":
@@ -125,7 +127,107 @@ def _contact_impedance_vector_from_meta(meta: dict[str, Any], *, total_electrode
     return arr.astype(float, copy=False)
 
 
-def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> dict[str, Any]:
+_DEFAULT_SINGLE_STEP_SIGMA_FLOOR = 1.0e-6
+_SINGLE_STEP_SIGMA_STEP_MARGIN = 1.0e-9
+
+
+def _single_step_sigma_floor(meta: dict[str, Any]) -> float:
+    raw = meta.get(
+        "sigma_floor", meta.get("conductivity_floor", _DEFAULT_SINGLE_STEP_SIGMA_FLOOR)
+    )
+    try:
+        floor = float(raw)
+    except (TypeError, ValueError):
+        return _DEFAULT_SINGLE_STEP_SIGMA_FLOOR
+    if not np.isfinite(floor) or floor <= 0.0:
+        return _DEFAULT_SINGLE_STEP_SIGMA_FLOOR
+    return floor
+
+
+def _limit_single_step_alpha_for_sigma_floor(
+    sigma_bg: np.ndarray,
+    delta_sigma: np.ndarray,
+    alpha: float,
+    *,
+    sigma_floor: float,
+) -> float:
+    try:
+        requested = float(alpha)
+    except (TypeError, ValueError):
+        return 0.0
+    if not np.isfinite(requested) or requested <= 0.0:
+        return 0.0
+
+    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
+    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    if sigma.shape != delta.shape:
+        raise ValueError(
+            "sigma_bg and delta_sigma shape mismatch: "
+            f"{sigma.shape} != {delta.shape}"
+        )
+    if (
+        sigma.size == 0
+        or not np.all(np.isfinite(sigma))
+        or not np.all(np.isfinite(delta))
+    ):
+        return 0.0
+
+    negative_update = delta < 0.0
+    if not bool(np.any(negative_update)):
+        return requested
+
+    margin = sigma[negative_update] - float(sigma_floor)
+    if not bool(np.all(margin > 0.0)):
+        return 0.0
+
+    max_alpha = float(np.min(margin / (-delta[negative_update])))
+    if not np.isfinite(max_alpha) or max_alpha <= 0.0:
+        return 0.0
+    interior_alpha = max_alpha * (1.0 - _SINGLE_STEP_SIGMA_STEP_MARGIN)
+    if not np.isfinite(interior_alpha) or interior_alpha <= 0.0:
+        interior_alpha = np.nextafter(max_alpha, 0.0)
+    return max(0.0, min(requested, float(interior_alpha)))
+
+
+def _constrain_single_step_sigma_update(
+    sigma_bg: np.ndarray,
+    delta_sigma: np.ndarray,
+    alpha: float,
+    *,
+    sigma_floor: float,
+) -> tuple[float, np.ndarray, np.ndarray, bool]:
+    limited_alpha = _limit_single_step_alpha_for_sigma_floor(
+        sigma_bg,
+        delta_sigma,
+        alpha,
+        sigma_floor=sigma_floor,
+    )
+    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
+    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    if sigma.shape != delta.shape:
+        raise ValueError(
+            "sigma_bg and delta_sigma shape mismatch: "
+            f"{sigma.shape} != {delta.shape}"
+        )
+    if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
+        raise RuntimeError(
+            "single-step conductivity update contains non-finite values."
+        )
+
+    raw_sigma_est = sigma + float(limited_alpha) * delta
+    if not np.all(np.isfinite(raw_sigma_est)):
+        raise RuntimeError("single-step conductivity estimate is non-finite.")
+
+    floor_value = np.nextafter(float(sigma_floor), np.inf)
+    sigma_est = np.maximum(raw_sigma_est, floor_value)
+    floor_applied = bool(np.any(sigma_est != raw_sigma_est))
+    display_delta = sigma_est - sigma
+    return float(limited_alpha), display_delta, sigma_est, floor_applied
+
+
+def _resolve_reconstruction_runtime(
+    meta: dict[str, Any], *, mesh_dim: int
+) -> dict[str, Any]:
     gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
 
     def _auto(key: str, default: str) -> str:
@@ -186,7 +288,9 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
 
     return {
         "solver_mode": _auto("solver_mode", "fast" if int(mesh_dim) == 3 else "strict"),
-        "line_search_mode": _auto("line_search_mode", "fast" if int(mesh_dim) == 3 else "full"),
+        "line_search_mode": _auto(
+            "line_search_mode", "fast" if int(mesh_dim) == 3 else "full"
+        ),
         "linear_solver": _auto("linear_solver", "auto"),
         "preconditioner": _auto("preconditioner", "auto"),
         "fast_linear_path": _auto("fast_linear_path", "auto"),
@@ -194,7 +298,9 @@ def _resolve_reconstruction_runtime(meta: dict[str, Any], *, mesh_dim: int) -> d
         "forward_solver_preset_requested": str(
             solver_policy["forward_solver_preset_requested"]
         ),
-        "forward_solver_policy_reason": str(solver_policy["forward_solver_policy_reason"]),
+        "forward_solver_policy_reason": str(
+            solver_policy["forward_solver_policy_reason"]
+        ),
         "forward_solver_policy_warning": str(
             solver_policy["forward_solver_policy_warning"]
         ),
@@ -384,7 +490,9 @@ def _recover_nix_runtime_site_packages(missing_name: str) -> tuple[str, ...]:
     if added:
         current = os.environ.get("PYTHONPATH", "")
         prefix = os.pathsep.join(added)
-        os.environ["PYTHONPATH"] = prefix if not current else f"{prefix}{os.pathsep}{current}"
+        os.environ["PYTHONPATH"] = (
+            prefix if not current else f"{prefix}{os.pathsep}{current}"
+        )
         log.info(
             "Recovered nix runtime site-packages for realtime reconstruction (%s): %s",
             missing,
@@ -526,7 +634,11 @@ def _parse_int_shape(value: Any) -> tuple[int, ...]:
             return ()
         for sep in ("x", "X", ",", " "):
             if sep in raw:
-                parts = [part for part in raw.replace("x", sep).replace("X", sep).split(sep) if part]
+                parts = [
+                    part
+                    for part in raw.replace("x", sep).replace("X", sep).split(sep)
+                    if part
+                ]
                 break
         else:
             parts = [raw]
@@ -549,46 +661,49 @@ def _rm_shape_from_meta(meta: dict[str, Any]) -> tuple[int, ...]:
     return ()
 
 
-def _optional_npz_array(payload: Any, key: str, *, dtype: Any) -> np.ndarray | None:
-    if key not in payload:
-        return None
-    arr = np.asarray(payload[key], dtype=dtype)
-    if arr.size == 0:
-        return None
-    return arr
-
-
 def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     suffix = path.suffix.lower()
-    if suffix == ".npy":
-        rm = np.asarray(np.load(path, allow_pickle=False), dtype=np.float64)
-        artifact_meta: dict[str, Any] = {}
+    if suffix in {".h5", ".hdf5"}:
+        from pyeidors.inverse.reconstruction_matrix import (
+            load_rm_artifact as _load_hdf5_rm_artifact,
+        )
+
+        artifact = _load_hdf5_rm_artifact(path)
+        rm = artifact.rm
+        artifact_meta = dict(artifact.metadata)
+        voxel_shape = tuple(int(v) for v in artifact.voxel_shape) or _rm_shape_from_meta(
+            meta
+        )
+        node_coords = artifact.node_coords
+        cell_connectivity = artifact.cell_connectivity
+    elif suffix == ".npy":
+        from pyeidors.inverse.reconstruction_matrix import (
+            load_rm_artifact as _load_legacy_rm_artifact,
+        )
+
+        artifact = _load_legacy_rm_artifact(path)
+        rm = artifact.rm
+        artifact_meta = dict(artifact.metadata)
         voxel_shape = _rm_shape_from_meta(meta)
         node_coords = None
         cell_connectivity = None
     elif suffix == ".npz":
-        with np.load(path, allow_pickle=False) as payload:
-            if "rm" not in payload:
-                raise ValueError(f"RM artifact is missing 'rm': {path}")
-            rm = np.asarray(payload["rm"], dtype=np.float64)
-            artifact_meta = {}
-            if "metadata_json" in payload:
-                raw_meta = str(payload["metadata_json"].item())
-                try:
-                    artifact_meta = json.loads(raw_meta)
-                except json.JSONDecodeError:
-                    artifact_meta = {"metadata_json": raw_meta}
-            voxel_shape = _parse_int_shape(payload["voxel_shape"]) if "voxel_shape" in payload else ()
-            if not voxel_shape:
-                voxel_shape = _rm_shape_from_meta(meta)
-            node_coords = _optional_npz_array(payload, "node_coords", dtype=np.float64)
-            if node_coords is None:
-                node_coords = _optional_npz_array(payload, "display_node_coords", dtype=np.float64)
-            cell_connectivity = _optional_npz_array(payload, "cell_connectivity", dtype=np.int32)
-            if cell_connectivity is None:
-                cell_connectivity = _optional_npz_array(payload, "display_cell_connectivity", dtype=np.int32)
+        from pyeidors.inverse.reconstruction_matrix import (
+            load_rm_artifact as _load_legacy_rm_artifact,
+        )
+
+        artifact = _load_legacy_rm_artifact(path)
+        rm = artifact.rm
+        artifact_meta = dict(artifact.metadata)
+        voxel_shape = tuple(int(v) for v in artifact.voxel_shape) or _rm_shape_from_meta(
+            meta
+        )
+        node_coords = artifact.node_coords
+        cell_connectivity = artifact.cell_connectivity
     else:
-        raise ValueError(f"Unsupported RM artifact suffix {suffix!r}; expected .npz or .npy.")
+        raise ValueError(
+            f"Unsupported RM artifact suffix {suffix!r}; expected .h5, .npz, or .npy."
+        )
     if rm.ndim != 2 or 0 in rm.shape:
         raise ValueError(f"RM artifact matrix must be non-empty 2D, got {rm.shape}.")
     return {
@@ -653,12 +768,18 @@ def _voxel_bounds_from_meta(meta: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
     raw_bounds = meta.get("rm_voxel_bounds", meta.get("inverse_bounds"))
     try:
         bounds = np.asarray(raw_bounds, dtype=np.float64)
-        if bounds.shape == (2, 3) and np.all(np.isfinite(bounds)) and np.all(bounds[1] > bounds[0]):
+        if (
+            bounds.shape == (2, 3)
+            and np.all(np.isfinite(bounds))
+            and np.all(bounds[1] > bounds[0])
+        ):
             return bounds[0], bounds[1]
     except (TypeError, ValueError):
         pass
     radius = float(meta.get("radius", 1.0) or 1.0)
-    height = float(meta.get("mesh_height", meta.get("height", 2.0 * radius)) or (2.0 * radius))
+    height = float(
+        meta.get("mesh_height", meta.get("height", 2.0 * radius)) or (2.0 * radius)
+    )
     lower = np.asarray([-radius, -radius, -0.5 * height], dtype=np.float64)
     upper = np.asarray([radius, radius, 0.5 * height], dtype=np.float64)
     return lower, upper
@@ -745,8 +866,12 @@ def _try_run_cached_rm_request(
         dtype=dtype,
     )
     node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
-    ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64)
-    tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
+    ref_vec = np.asarray(
+        req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64
+    )
+    tgt_vec = np.asarray(
+        req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64
+    )
     difference_mode = str(runtime.meta.get("difference_mode", "raw"))
     difference_orientation = str(
         runtime.meta.get("difference_orientation", "target_minus_reference")
@@ -790,24 +915,42 @@ def _try_run_cached_rm_request(
                     "adjoint_solve_count": 0,
                     "jacobian_rebuild_count": 0,
                     "ksp_solve_count": 0,
-                    "device_requested": str(rm_result.metadata.get("device_requested", device)),
-                    "device_effective": str(rm_result.metadata.get("device_effective", "")),
+                    "device_requested": str(
+                        rm_result.metadata.get("device_requested", device)
+                    ),
+                    "device_effective": str(
+                        rm_result.metadata.get("device_effective", "")
+                    ),
                     "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
-                    "rm_persistent": bool(rm_result.metadata.get("rm_persistent", False)),
-                    "rm_tensor_reused": bool(rm_result.metadata.get("rm_tensor_reused", False)),
-                    "rm_prepare_mode": str(rm_result.metadata.get("rm_prepare_mode", "")),
-                    "host_device_transfer": str(rm_result.metadata.get("host_device_transfer", "")),
-                    "rm_artifact_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
+                    "rm_persistent": bool(
+                        rm_result.metadata.get("rm_persistent", False)
+                    ),
+                    "rm_tensor_reused": bool(
+                        rm_result.metadata.get("rm_tensor_reused", False)
+                    ),
+                    "rm_prepare_mode": str(
+                        rm_result.metadata.get("rm_prepare_mode", "")
+                    ),
+                    "host_device_transfer": str(
+                        rm_result.metadata.get("host_device_transfer", "")
+                    ),
+                    "rm_artifact_cache_hit": bool(
+                        artifact.get("rm_artifact_cache_hit", False)
+                    ),
                     "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
                     "rm_artifact_path": str(path),
                 },
                 "cache_lookups": {
                     "rm_artifact": {
                         "hit": True,
-                        "layer": "process"
-                        if bool(artifact.get("rm_artifact_cache_hit", False))
-                        else "artifact",
-                        "process_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
+                        "layer": (
+                            "process"
+                            if bool(artifact.get("rm_artifact_cache_hit", False))
+                            else "artifact"
+                        ),
+                        "process_cache_hit": bool(
+                            artifact.get("rm_artifact_cache_hit", False)
+                        ),
                         "artifact": "reconstruction_matrix",
                         "key": str(path),
                     }
@@ -858,6 +1001,7 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("step_size_min", 1.0e-6)
     meta.setdefault("step_size_max", 1.0)
     meta.setdefault("step_size_maxiter", 64)
+    meta["sigma_floor"] = _single_step_sigma_floor(meta)
     meta.setdefault("solver_mode", "auto")
     meta.setdefault("linear_solver", "auto")
     meta.setdefault("preconditioner", "auto")
@@ -881,7 +1025,9 @@ def _prepare_single_step_cached_runtime(
     meta["drive_value"] = _resolve_drive_value(meta)
     runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=mesh_dim)
     meta.update(runtime_options)
-    jac_repr = str(meta.get("jacobian_representation", "auto") or "auto").strip().lower()
+    jac_repr = (
+        str(meta.get("jacobian_representation", "auto") or "auto").strip().lower()
+    )
     jac_repr = jac_repr.replace("_", "-")
     if jac_repr in {"", "auto"}:
         measurement_count = _request_measurement_count(req)
@@ -892,9 +1038,7 @@ def _prepare_single_step_cached_runtime(
         )
         jac_repr = "linearized" if use_linearized_auto else "dense"
         meta["jacobian_representation_reason"] = (
-            "auto_small_3d_fast"
-            if use_linearized_auto
-            else "auto_dense_large_or_non3d"
+            "auto_small_3d_fast" if use_linearized_auto else "auto_dense_large_or_non3d"
         )
     elif jac_repr in {"jacobian-linearization", "operator"}:
         jac_repr = "linearized"
@@ -1005,7 +1149,9 @@ def get_single_step_cached_cache_key(req: ReconstructionRequest) -> tuple[Any, .
     return _prepare_single_step_cached_runtime(req).cache_key
 
 
-def _cache_hit_summary(cache_lookups: dict[str, Any]) -> tuple[bool | None, dict[str, bool]]:
+def _cache_hit_summary(
+    cache_lookups: dict[str, Any],
+) -> tuple[bool | None, dict[str, bool]]:
     hits: dict[str, bool] = {}
     for key, value in cache_lookups.items():
         if not isinstance(value, dict):
@@ -1051,7 +1197,9 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
         ),
         "petsc_device_effective": str(petsc_info.get("petsc_device_effective", "")),
         "petsc_amgx_available": bool(
-            petsc_info.get("petsc_amgx_available", ctx.get("petsc_amgx_available", False))
+            petsc_info.get(
+                "petsc_amgx_available", ctx.get("petsc_amgx_available", False)
+            )
         ),
         "petsc_hypre_available": bool(
             petsc_info.get(
@@ -1081,9 +1229,7 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
         "jacobian_representation_reason": str(
             ctx.get("jacobian_representation_reason", "")
         ),
-        "linearized_solver_strategy": str(
-            ctx.get("linearized_solver_strategy", "")
-        ),
+        "linearized_solver_strategy": str(ctx.get("linearized_solver_strategy", "")),
         "linearized_maxiter": ctx.get("linearized_maxiter"),
         "lazy_preconditioner_mode": str(ctx.get("lazy_preconditioner_mode", "")),
         "mesh_cache_hit": ctx.get("mesh_cache_hit"),
@@ -1108,9 +1254,7 @@ def _single_step_cached_solver_diagnostics(
         "context_build_seconds": ctx.get("context_build_seconds"),
         "cache_miss_reasons": dict(ctx.get("cache_miss_reasons", {})),
         "cache_stats": (
-            ctx["cache_manager"].stats()
-            if ctx.get("cache_manager") is not None
-            else {}
+            ctx["cache_manager"].stats() if ctx.get("cache_manager") is not None else {}
         ),
     }
 
@@ -1126,7 +1270,10 @@ def _single_step_operator_space(
     a_shape = tuple(int(dim) for dim in np.shape(operator_bundle.get("A")))
     if len(a_shape) >= 2 and a_shape[-2] == dv_len and a_shape[-1] == dv_len:
         return "measurement"
-    if str(operator_bundle.get("strict_solver_backend_effective", "")) == measurement_backend:
+    if (
+        str(operator_bundle.get("strict_solver_backend_effective", ""))
+        == measurement_backend
+    ):
         return "measurement"
     if str(operator_bundle.get("mode", "")).strip().lower() == "fast":
         return "measurement"
@@ -1151,7 +1298,9 @@ def _ensure_single_step_cached_context(
                 mesh_height=runtime.mesh_height,
                 electrode_height_ratio=runtime.electrode_height_ratio,
                 z_center=runtime.z_center,
-                electrode_level_fractions=meta.get("electrode_level_fractions", (0.25, 0.75)),
+                electrode_level_fractions=meta.get(
+                    "electrode_level_fractions", (0.25, 0.75)
+                ),
                 refinement=runtime.refinement,
                 n_elec=int(meta["n_elec"]),
                 radius=float(meta.get("radius", 1.0)),
@@ -1163,7 +1312,9 @@ def _ensure_single_step_cached_context(
                 geometry_scale_to_m=float(meta.get("geometry_scale_to_m", 1.0)),
                 n_rings=int(meta.get("n_rings", 1)),
                 electrode_layout=str(meta.get("electrode_layout", "ring_major")),
-                measurement_protocol=str(meta.get("measurement_protocol", "eidors_full_3d")),
+                measurement_protocol=str(
+                    meta.get("measurement_protocol", "eidors_full_3d")
+                ),
                 custom_stim_matrix=meta.get("custom_stim_matrix"),
                 custom_meas_matrices=meta.get("custom_meas_matrices"),
                 stim_pattern=str(meta.get("stim_pattern", "{ad}")),
@@ -1290,7 +1441,9 @@ def _run_full_gn_request(
     meta.setdefault("acceleration_profile", "default")
     meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=int(req.mesh_dimension))
     meta["drive_value"] = _resolve_drive_value(meta)
-    runtime_options = _resolve_reconstruction_runtime(meta, mesh_dim=int(req.mesh_dimension))
+    runtime_options = _resolve_reconstruction_runtime(
+        meta, mesh_dim=int(req.mesh_dimension)
+    )
     meta.update(runtime_options)
 
     emit("Building measurement datasets...")
@@ -1382,7 +1535,9 @@ def _run_full_gn_request(
             stim_pattern=meta["stim_pattern"],
             meas_pattern=meta["meas_pattern"],
             electrode_layout=str(meta.get("electrode_layout", "ring_major")),
-            measurement_protocol=str(meta.get("measurement_protocol", "eidors_full_3d")),
+            measurement_protocol=str(
+                meta.get("measurement_protocol", "eidors_full_3d")
+            ),
             custom_stim_matrix=meta.get("custom_stim_matrix"),
             custom_meas_matrices=meta.get("custom_meas_matrices"),
             drive_mode=meta["drive_mode"],
@@ -1408,7 +1563,9 @@ def _run_full_gn_request(
             hyperparameter=hyperparameter,
             difference_mode=meta["difference_mode"],
             difference_orientation=meta["difference_orientation"],
-            difference_preset=str(meta.get("difference_preset", "eidors_one_step_noser")),
+            difference_preset=str(
+                meta.get("difference_preset", "eidors_one_step_noser")
+            ),
             absolute_preset=str(meta.get("absolute_preset", "eidors_abs_gn")),
             contact_impedance=_contact_impedance_vector_from_meta(
                 meta,
@@ -1439,7 +1596,9 @@ def _run_full_gn_request(
             electrode_coverage=float(meta.get("electrode_coverage", 0.5)),
             height=float(meta.get("mesh_height", meta.get("height", 1.0))),
             electrode_height_ratio=float(meta.get("electrode_height_ratio", 0.2)),
-            electrode_level_fractions=meta.get("electrode_level_fractions", (0.25, 0.75)),
+            electrode_level_fractions=meta.get(
+                "electrode_level_fractions", (0.25, 0.75)
+            ),
             z_center=float(meta.get("z_center", 0.0)),
             mesh_family=str(meta.get("mesh_family", "tetra")),
             geometry_version=str(meta.get("geometry_version", "geomv2")),
@@ -1458,6 +1617,7 @@ def _run_full_gn_request(
         from pyeidors.inverse.workflows.sparse_bayesian import (
             perform_sparse_absolute_reconstruction,
         )
+
         recon = perform_sparse_absolute_reconstruction(
             eit_system=system,
             measurement_data=tgt_eit,
@@ -1466,6 +1626,7 @@ def _run_full_gn_request(
         from pyeidors.inverse.workflows.sparse_bayesian import (
             perform_sparse_difference_reconstruction,
         )
+
         recon = perform_sparse_difference_reconstruction(
             eit_system=system,
             measurement_data=tgt_eit,
@@ -1489,9 +1650,9 @@ def _run_full_gn_request(
     if diagnostics is not None:
         result_meta["solver_diagnostics"] = diagnostics
     return ReconstructionResult(
-        conductivity=recon.conductivity
-        if hasattr(recon, "conductivity")
-        else np.asarray([]),
+        conductivity=(
+            recon.conductivity if hasattr(recon, "conductivity") else np.asarray([])
+        ),
         node_coords=coords,
         cell_connectivity=cells,
         measured=getattr(recon, "measured", None),
@@ -1555,12 +1716,18 @@ def _run_single_step_cached_request(
     from pyeidors.data.structures import EITImage
     from pyeidors.utils.numeric_ops import safe_dot
 
-    ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64)
-    tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
+    ref_vec = np.asarray(
+        req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64
+    )
+    tgt_vec = np.asarray(
+        req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64
+    )
 
     emit("Running cached single-step reconstruction...")
     difference_mode = str(meta.get("difference_mode", "raw"))
-    difference_orientation = str(meta.get("difference_orientation", "target_minus_reference"))
+    difference_orientation = str(
+        meta.get("difference_orientation", "target_minus_reference")
+    )
     dv = build_difference_vector(
         tgt_vec,
         ref_vec,
@@ -1597,6 +1764,7 @@ def _run_single_step_cached_request(
         )
         delta_sigma = _solve_linear_from_bundle(operator_bundle, rhs)
 
+    sigma_floor = _single_step_sigma_floor(meta)
     alpha = 1.0
     if bool(meta.get("step_size_calib", True)):
         try:
@@ -1612,6 +1780,7 @@ def _run_single_step_cached_request(
                     step_size_maxiter=int(meta.get("step_size_maxiter", 64)),
                     difference_mode=difference_mode,
                     difference_orientation=difference_orientation,
+                    sigma_floor=sigma_floor,
                 )
             )
         except Exception as exc:
@@ -1620,8 +1789,15 @@ def _run_single_step_cached_request(
         if not np.isfinite(alpha) or alpha <= 0.0:
             alpha = 1.0
 
-    display_delta = np.asarray(alpha * delta_sigma, dtype=np.float64)
-    sigma_est = np.asarray(ctx["sigma_bg"] + display_delta, dtype=np.float64)
+    alpha_requested = float(alpha)
+    alpha, display_delta, sigma_est, sigma_floor_applied = (
+        _constrain_single_step_sigma_update(
+            ctx["sigma_bg"],
+            delta_sigma,
+            alpha,
+            sigma_floor=sigma_floor,
+        )
+    )
     img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
     pred_diff = build_difference_vector(
@@ -1639,6 +1815,10 @@ def _run_single_step_cached_request(
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
             "step_size_alpha": alpha,
+            "step_size_alpha_requested": alpha_requested,
+            "step_size_alpha_limited": bool(alpha < alpha_requested),
+            "sigma_floor": sigma_floor,
+            "sigma_floor_applied": sigma_floor_applied,
             "single_step_operator_space": operator_space,
             "solver_diagnostics": _single_step_cached_solver_diagnostics(
                 ctx,
@@ -1665,7 +1845,9 @@ def run_reconstruction_request(
 ) -> ReconstructionResult:
     """Execute a reconstruction request synchronously using the realtime app pipeline."""
     try:
-        runtime_path = str((req.metadata or {}).get("reconstruction_runtime", "")).strip().lower()
+        runtime_path = (
+            str((req.metadata or {}).get("reconstruction_runtime", "")).strip().lower()
+        )
         method_lc = req.method.strip().lower()
         log.info(
             "[recon-dispatch] method=%r use_part=%r runtime_path=%r source=%r",

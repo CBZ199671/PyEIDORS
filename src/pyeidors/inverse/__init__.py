@@ -23,6 +23,7 @@ from .greit import (
     generate_spherical_targets,
     greit_metrics,
     load_greit_rm,
+    migrate_greit_rm_to_hdf5,
     write_greit_metrics_artifact,
 )
 from .prior import graph_difference_operator, graph_laplacian
@@ -38,12 +39,16 @@ from .postprocess import (
 from .matrix_free import DualMeshJacobianOperator
 from .reconstruction_matrix import (
     OneStepRMResult,
+    RMArtifact,
     build_one_step_rm,
+    load_rm_artifact,
+    migrate_rm_artifact_to_hdf5,
     reconstruct_difference,
     reconstruct_difference_batch,
     rm_signature,
     rm_signature_payload,
     write_forward_rm_benchmark_artifact,
+    write_rm_artifact,
 )
 from .workflows import (
     perform_absolute_reconstruction,
@@ -79,6 +84,7 @@ __all__ = [
     "generate_spherical_targets",
     "greit_metrics",
     "load_greit_rm",
+    "migrate_greit_rm_to_hdf5",
     "write_greit_metrics_artifact",
     "graph_difference_operator",
     "graph_laplacian",
@@ -91,12 +97,16 @@ __all__ = [
     "total_variation_norm",
     "DualMeshJacobianOperator",
     "OneStepRMResult",
+    "RMArtifact",
     "build_one_step_rm",
+    "load_rm_artifact",
+    "migrate_rm_artifact_to_hdf5",
     "reconstruct_difference",
     "reconstruct_difference_batch",
     "rm_signature",
     "rm_signature_payload",
     "write_forward_rm_benchmark_artifact",
+    "write_rm_artifact",
     "perform_absolute_reconstruction",
     "perform_difference_reconstruction",
     "perform_sparse_absolute_reconstruction",
