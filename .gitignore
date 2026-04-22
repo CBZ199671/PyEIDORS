@@ -88,6 +88,8 @@ archived/
 scripts/archived/
 
 # Generated experiment artifacts
+outputs/
+
 # Measurements (private by default; allowlist paper/demo inputs below)
 data/measurements/
 !data/measurements/

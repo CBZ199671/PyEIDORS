@@ -35,6 +35,18 @@ from .channels import (
     zero_bad_channel_vector,
     zero_bad_channel_weights,
 )
+from .adc_quantization import (
+    DEFAULT_BOUNDARY_VOLTAGES,
+    ADCQuantizationSummary,
+    adc_lsb,
+    effective_digits_from_rmse,
+    ideal_decimal_digits,
+    pointwise_effective_digits,
+    quantize_voltages,
+    rmse,
+    summarize_adc_quantization,
+    summarize_adc_sweep,
+)
 
 __all__ = [
     "PatternConfig",
@@ -60,6 +72,16 @@ __all__ = [
     "zero_bad_channel_rows",
     "zero_bad_channel_vector",
     "zero_bad_channel_weights",
+    "DEFAULT_BOUNDARY_VOLTAGES",
+    "ADCQuantizationSummary",
+    "adc_lsb",
+    "effective_digits_from_rmse",
+    "ideal_decimal_digits",
+    "pointwise_effective_digits",
+    "quantize_voltages",
+    "rmse",
+    "summarize_adc_quantization",
+    "summarize_adc_sweep",
     "create_synthetic_data",
     "create_custom_phantom",
     "MeasurementDataset",
