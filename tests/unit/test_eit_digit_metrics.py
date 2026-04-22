@@ -9,11 +9,13 @@ import subprocess
 import sys
 
 import numpy as np
+import pytest
 
 from pyeidors.data.eit_digit_metrics import (
     build_surrogate_sensitivity,
     default_sigma_true,
     forward_surrogate,
+    inverse_pyeidors_rm,
     inverse_surrogate,
     summarize_eit_digit_sweep,
 )
@@ -35,10 +37,29 @@ def test_surrogate_forward_inverse_round_trips_without_adc_error() -> None:
     np.testing.assert_allclose(reconstructed, sigma, rtol=1e-10, atol=1e-10)
 
 
+def test_pyeidors_rm_inverse_round_trips_without_adc_error() -> None:
+    sigma = default_sigma_true(5)
+    sensitivity = build_surrogate_sensitivity(
+        n_measurements=8,
+        n_parameters=sigma.size,
+        seed=123,
+    )
+    voltages = forward_surrogate(sigma, sensitivity)
+    reconstructed = inverse_pyeidors_rm(
+        voltages,
+        sensitivity,
+        lambda_=0.0,
+        mode="tikhonov",
+    )
+
+    np.testing.assert_allclose(reconstructed, sigma, rtol=1e-10, atol=1e-10)
+
+
 def test_eit_digit_sweep_reports_hypothesis_delta() -> None:
     rows = summarize_eit_digit_sweep(
         bits=[12, 16],
         full_scale_range=100.0,
+        inverse_backend="pyeidors-rm",
         n_measurements=8,
         n_parameters=5,
         model_seed=123,
@@ -62,6 +83,7 @@ def test_eit_digit_sweep_supports_noise_and_enob() -> None:
         noise_std=0.001,
         noise_relative=0.001,
         seed=7,
+        inverse_backend="pyeidors-rm",
         n_measurements=8,
         n_parameters=5,
         model_seed=123,
@@ -70,6 +92,26 @@ def test_eit_digit_sweep_supports_noise_and_enob() -> None:
     assert len(rows) == 2
     assert rows[0].voltage_rmse == rows[1].voltage_rmse
     assert rows[0].sigma_rmse == rows[1].sigma_rmse
+
+
+def test_pyeidors_fem_digit_sweep_smoke() -> None:
+    pytest.importorskip("dolfinx")
+
+    rows = summarize_eit_digit_sweep(
+        bits=[12],
+        full_scale_range=10.0,
+        forward_backend="pyeidors-fem",
+        fem_n_elec=8,
+        fem_grid=2,
+        inverse_backend="pyeidors-rm",
+        ridge=1e-2,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].bit == 12
+    assert math.isfinite(rows[0].voltage_rmse)
+    assert math.isfinite(rows[0].sigma_rmse)
+    assert math.isfinite(rows[0].hypothesis_delta_digits)
 
 
 def test_eit_end_to_end_cli_writes_expected_csv(tmp_path) -> None:
@@ -91,6 +133,10 @@ def test_eit_end_to_end_cli_writes_expected_csv(tmp_path) -> None:
             "8",
             "--n-parameters",
             "5",
+            "--forward-backend",
+            "surrogate",
+            "--inverse-backend",
+            "pyeidors-rm",
             "--output",
             str(output),
         ],
@@ -100,7 +146,8 @@ def test_eit_end_to_end_cli_writes_expected_csv(tmp_path) -> None:
         capture_output=True,
     )
 
-    assert "model=linear-surrogate" in completed.stdout
+    assert "model=surrogate+pyeidors-rm" in completed.stdout
+    assert "rm_mode=tikhonov" in completed.stdout
     assert "hypothesis_delta_digits" in completed.stdout
     with output.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

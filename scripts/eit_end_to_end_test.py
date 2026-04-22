@@ -75,9 +75,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Run sigma_true -> forward -> ADC/noise -> inverse -> metrics. "
-            "Default model is a deterministic linear EIT surrogate; real PyEIDORS "
-            "solver hookup is reserved for the next integration step."
+            "Default model uses a deterministic linear forward surrogate; "
+            "use --forward-backend pyeidors-fem for a small real PyEIDORS FEM "
+            "forward model."
         ),
+    )
+    parser.add_argument(
+        "--forward-backend",
+        choices=["surrogate", "pyeidors-fem"],
+        default="surrogate",
+        help="Forward model backend.",
     )
     parser.add_argument(
         "--bits",
@@ -139,10 +146,40 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Surrogate conductivity parameter count.",
     )
     parser.add_argument(
+        "--fem-n-elec",
+        type=int,
+        default=8,
+        help="PyEIDORS FEM electrode count when --forward-backend pyeidors-fem.",
+    )
+    parser.add_argument(
+        "--fem-grid",
+        type=int,
+        default=2,
+        help="PyEIDORS FEM unit-square grid when --forward-backend pyeidors-fem.",
+    )
+    parser.add_argument(
         "--ridge",
         type=float,
         default=1e-8,
-        help="Ridge parameter for surrogate inverse solve.",
+        help="Inverse regularization parameter. Used as RM lambda for pyeidors-rm.",
+    )
+    parser.add_argument(
+        "--inverse-backend",
+        choices=["pyeidors-rm", "least-squares"],
+        default="pyeidors-rm",
+        help="Inverse backend for sigma reconstruction.",
+    )
+    parser.add_argument(
+        "--rm-mode",
+        choices=["tikhonov", "noser"],
+        default="tikhonov",
+        help="PyEIDORS RM regularization mode.",
+    )
+    parser.add_argument(
+        "--rm-form",
+        choices=["param", "measurement"],
+        default="param",
+        help="PyEIDORS RM construction form.",
     )
     parser.add_argument(
         "--output",
@@ -164,19 +201,28 @@ def main(argv: list[str] | None = None) -> int:
         noise_relative=noise_relative,
         seed=args.seed,
         ridge=args.ridge,
+        inverse_backend=args.inverse_backend,
+        rm_mode=args.rm_mode,
+        rm_form=args.rm_form,
         n_measurements=args.n_measurements,
         n_parameters=args.n_parameters,
         model_seed=args.model_seed,
+        forward_backend=args.forward_backend,
+        fem_n_elec=args.fem_n_elec,
+        fem_grid=args.fem_grid,
     )
     _write_csv(args.output, rows)
+    model_label = f"{args.forward_backend}+{args.inverse_backend}"
     print(
         "settings: "
-        "model=linear-surrogate, "
+        f"model={model_label}, "
         f"full_scale={_format_float(args.full_scale)}, "
         f"enob={_format_float(args.enob)}, "
         f"noise_std={_format_float(args.noise_std)}, "
         f"noise_relative={_format_float(noise_relative)}, "
-        f"seed={args.seed}, model_seed={args.model_seed}, ridge={_format_float(args.ridge)}"
+        f"seed={args.seed}, model_seed={args.model_seed}, ridge={_format_float(args.ridge)}, "
+        f"fem_n_elec={args.fem_n_elec}, fem_grid={args.fem_grid}, "
+        f"rm_mode={args.rm_mode}, rm_form={args.rm_form}"
     )
     print(_format_table(rows))
     print(f"Wrote {args.output}")
