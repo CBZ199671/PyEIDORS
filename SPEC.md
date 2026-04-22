@@ -8,6 +8,17 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 
 **v1 main line (current focus):** EIDORS-style dual-model 3D difference EIT — fine-CEM forward mesh, coarse inverse voxel/tetra mesh, offline one-step GN / NOSER / Laplace / 3D GREIT reconstruction matrix (`RM`), online `x = RM @ normalize(Δv)`. Matrix-free GN-CG / IRGNM / TV / SBL / CNN post-processing are phase-2 / research tiers, not v1 blockers.
 
+**Current 3D repo decision:** production/default path = `spd_gamg + petsc_device=cuda + forward_mat_solve=off` forward, cached dual-model one-step RM/NOSER/Laplace first, 3D GREIT next after RM hot-path optimization. Dense-J GN, direct LU/MUMPS, CUDA `KSPMatSolve`, matrix-free GN-CG, TV, SBL are baseline / debug / phase-2 / research, not realtime 48e/5936 default.
+
+**3D route tiers (final):**
+- v1 production: dual-model + one-step GN/NOSER/Laplace RM; online `RM @ normalized ΔV`.
+- v1 enhancement: 3D GREIT RM; best for fixed geometry/protocol + multi-frame dynamic EIT.
+- forward production default: 3D DOLFINx CEM + PETSc `spd_gamg` CUDA + vec-loop; reuse multi-RHS/KSP/PC/cache.
+- phase-2 quality: matrix-free GN-CG/IRGNM + dual mesh + explicit Pmat/NOSER/prior preconditioner.
+- postprocess/robustness: TV/PDHG, bad-channel mask, noise covariance, temporal prior.
+- research: SBL/sparse Bayesian, self-built PETSc AmgX, full-chain GPU Jacobian.
+- not mainline: full 3D dense-J absolute GN, full 3D direct LU/Cholesky, per-frame forward+Jacobian+GN.
+
 ## §C — constraints
 
 - Python 3.13.x, `>=3.13,<3.14`
@@ -135,6 +146,11 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V43 | AmgX experiment gate: `nix develop .#cuda-amgx` ! yields CUDA Mat/Vec/Dense + `PETSc.PC.Type.AMGX`; `PETSc.PC().setType("amgx")` succeeds; `benchmark_3d_runtime.py --forward-only on --forward-solver-preset cuda_amgx --petsc-device cuda --forward-mat-solve off` completes and reports speed/residual vs `spd_gamg + petsc_device=cuda`. Plain FEniCSx/DOLFINx upgrade does not satisfy this gate | future `.#cuda-amgx` profile + scripts/diagnostics/probe_petsc_cuda.py |
 | V44 | GUI/runtime 3D CUDA forward policy: if auto/`cuda_amgx` and `petsc_amgx=false` → `forward_solver_preset="spd_gamg"` + diag `petsc_amgx_available=false`; `spd_hypre`/`cg_hypre`/`3d_hypre`/`hypre_boomeramg` + CUDA blacklisted → warning/downgrade in high-level runtime, fail-fast in low-level `EITForwardModel`, never reaches PETSc solve | tests/unit/test_core_setup_contract.py, tests/unit/test_conductivity_3d_widget_runtime.py, tests/unit/test_forward_mat_solve_policy.py |
 | V45 | GUI/runtime 3D CUDA production default: when effective forward solver is `spd_gamg` on PETSc CUDA/DOLFINx and requested `forward_mat_solve="auto"`, high-level runtime resolves `forward_mat_solve="off"` with reason `cuda_spd_gamg_matsolve_disabled_b6`; explicit `forward_mat_solve="on"` remains opt-in for experiments. This prevents unstable/slow PETSc `KSPMatSolve` on current 48-electrode 3D config | tests/unit/test_core_setup_contract.py, tests/unit/test_conductivity_3d_widget_runtime.py |
+| V46 | Current 3D production route: online hot path ! cached `RM @ normalize(Δv)` on coarse inverse grid; no `DirectJacobianCalculator`, no forward/adjoint/KSP, no dense-J rebuild per frame after RM artifact exists | V25,V26,V29,V37,V45; reports/runtime_benchmarks/dual_model_rm_v1_20260421/summary.json |
+| V47 | Current 3D forward default: PETSc sparse `spd_gamg + petsc_device=cuda + forward_mat_solve=off`; direct LU/MUMPS allowed for 2D, tiny 3D, debug/reference only; Hypre CUDA blacklisted; AmgX research gated by V43 | V6,V42,V43,V44,V45; reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json |
+| V48 | Dense-J GN status: implemented and valid as baseline/RM-build/reference; 48e/5936 cold path dominated by Jacobian build, not realtime default. Warm semantic cache may be fast, but cache hit cannot be required for first-frame usability | src/pyeidors/core_system.py:716; src/pyeidors/inverse/jacobian/direct_jacobian.py; reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json |
+| V49 | Inverse sparse/matrix-free status: `JacobianLinearization`, lazy adjoint, dual-mesh operator, PETSc/Scipy matrix-free PCG, sparse priors, TV, SBL exist as phase-2/research. They must not replace cached RM as v1 realtime default until end-to-end 48e/5936 benchmark beats RM hot path | src/pyeidors/inverse/jacobian/linearized.py; src/pyeidors/inverse/matrix_free/dual_mesh.py; src/pyeidors/inverse/solvers/gauss_newton_runtime.py; tests/unit/test_gn_fast_linear_solver.py |
+| V50 | 3D GREIT current status: official-aligned and implemented, but 48e/5936 online apply still needs RM hot-path optimization. Production claim requires persistent RM/tensor, batched frames, minimized CPU↔GPU copies, and cold/warm report beating current GREIT RM-layer artifact | src/pyeidors/inverse/greit.py; src/pyeidors/perf/gpu_kernels.py; reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json |
 
 ## §T — tasks
 
@@ -198,6 +214,9 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T31 | x | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
 | T32 | x | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
 | T33 | . | Research: `cuda-amgx` Nix profile. Rebuild PETSc with PCAMGX (CUDA + 32-bit `PetscInt` + AmgX external package), then rebuild same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`; benchmark against current safe route `spd_gamg + petsc_device=cuda`. Do not treat FEniCSx version upgrade as AmgX enablement | V19,V42,V43,B5 |
+| T34 | . | Switch GUI/default 3D difference route to cached dual-model RM reconstruction when RM artifact exists; cold path may build/load RM, hot path must bypass `DirectJacobianCalculator` | V37,V46,V48 |
+| T35 | . | Optimize RM hot path for 48e/5936: persistent RM on device, batched frames, no per-call tensor rebuild, minimal CPU↔GPU copy, float64/float32 policy recorded | V29,V37,V50 |
+| T36 | . | Real 48e/5936 dual-model report: compare one-step NOSER/Laplace RM and 3D GREIT RM, split fine-CEM/J build, RM build, artifact load, 1-frame apply, 512-frame apply, GPU/CPU paths | V40,V46,V47,V50 |
 
 ## §B — bugs
 
