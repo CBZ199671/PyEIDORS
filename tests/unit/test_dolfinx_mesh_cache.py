@@ -11,6 +11,7 @@ from mpi4py import MPI
 
 from pyeidors.geometry.dolfinx_mesh_cache import (
     dolfinx_cache_metadata_path_for_mesh,
+    load_dolfinx_mesh_cache,
     write_dolfinx_mesh_cache,
     xdmf_cache_path_for_mesh,
 )
@@ -82,3 +83,58 @@ def test_mesh_loader_prefers_dolfinx_xdmf_cache_over_gmsh(tmp_path: Path, monkey
     assert loaded.facet_tags is not None
     assert loaded.cell_tags is not None
     assert loaded.association_table == {"domain": 1, "electrode_1": 2}
+
+
+def test_xdmf_cache_loads_after_source_msh_is_removed(tmp_path: Path, monkeypatch):
+    source_msh = tmp_path / "hdf5_only.msh"
+    source_msh.write_text("placeholder source", encoding="utf-8")
+    sidecar = tmp_path / "hdf5_only_structured_sidecar.json"
+    sidecar.write_text("{}", encoding="utf-8")
+    mesh_data = _unit_square_mesh_data()
+    association = {"domain": 1, "electrode_1": 2}
+
+    assert write_dolfinx_mesh_cache(
+        mesh_data,
+        source_msh_file=source_msh,
+        association_table=association,
+        gdim=2,
+        mesh_family="hex",
+        geometry_version="geomv2",
+        generator_revision="test-rev",
+        structured_sidecar_file=sidecar,
+        structured_sidecar_version="test-sidecar-v1",
+    )
+    xdmf_file = xdmf_cache_path_for_mesh(source_msh)
+    source_msh.unlink()
+
+    direct = load_dolfinx_mesh_cache(xdmf_file, gdim=2)
+    assert direct is not None
+    assert direct.source_msh_file is None
+    assert direct.association_table == association
+    assert direct.physical_groups["electrode_1"].tag == 2
+    assert direct.facet_tags is not None
+    assert direct.cell_tags is not None
+    assert direct.metadata["structured_sidecar_file"] == str(sidecar)
+
+    direct_from_h5 = load_dolfinx_mesh_cache(xdmf_file.with_suffix(".h5"), gdim=2)
+    assert direct_from_h5 is not None
+    assert direct_from_h5.association_table == association
+
+    monkeypatch.setattr(
+        mesh_loader_module.gmshio,
+        "read_from_msh",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("Gmsh .msh import should not run")
+        ),
+    )
+
+    loaded = mesh_loader_module.MeshLoader(mesh_dir=str(tmp_path), gdim=2).load_mesh(
+        "hdf5_only"
+    )
+    assert loaded.mesh_file == str(xdmf_file)
+    assert loaded.association_table == association
+    assert loaded.mesh_family == "hex"
+    assert loaded.geometry_version == "geomv2"
+    assert loaded.generator_revision == "test-rev"
+    assert loaded.structured_sidecar_file == str(sidecar)
+    assert loaded.structured_sidecar_version == "test-sidecar-v1"

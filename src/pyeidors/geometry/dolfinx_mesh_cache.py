@@ -9,6 +9,7 @@ reload source.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import json
 import logging
 import os
@@ -82,7 +83,29 @@ def _truthy_env(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
-def _source_signature(path: str | Path | None) -> dict[str, Any] | None:
+def _cache_paths_for_mesh(mesh_file: str | Path) -> tuple[Path, Path, Path]:
+    mesh_path = Path(mesh_file)
+    xdmf_file = (
+        mesh_path if mesh_path.suffix == ".xdmf" else xdmf_cache_path_for_mesh(mesh_path)
+    )
+    metadata_file = dolfinx_cache_metadata_path_for_mesh(mesh_path)
+    return xdmf_file, xdmf_file.with_suffix(".h5"), metadata_file
+
+
+def _sha256_file(path: Path) -> str | None:
+    try:
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        return digest.hexdigest()
+    except OSError:
+        return None
+
+
+def _source_signature(
+    path: str | Path | None, *, include_hash: bool = False
+) -> dict[str, Any] | None:
     if path is None:
         return None
     mesh_path = Path(path)
@@ -90,11 +113,14 @@ def _source_signature(path: str | Path | None) -> dict[str, Any] | None:
         stat = mesh_path.stat()
     except OSError:
         return None
-    return {
+    signature = {
         "path": str(mesh_path.resolve()),
         "size": int(stat.st_size),
         "mtime_ns": int(stat.st_mtime_ns),
     }
+    if include_hash:
+        signature["sha256"] = _sha256_file(mesh_path)
+    return signature
 
 
 def _json_safe(value: Any) -> Any:
@@ -147,10 +173,8 @@ def _metadata_physical_groups(metadata: dict[str, Any]) -> dict[str, Any]:
 
 def dolfinx_cache_is_fresh(mesh_file: str | Path) -> bool:
     """Return True when the paired XDMF/HDF5 cache exists and matches source metadata."""
-    source_msh = Path(mesh_file)
-    xdmf_file = xdmf_cache_path_for_mesh(source_msh)
-    metadata_file = dolfinx_cache_metadata_path_for_mesh(source_msh)
-    h5_file = xdmf_file.with_suffix(".h5")
+    mesh_path = Path(mesh_file)
+    xdmf_file, h5_file, metadata_file = _cache_paths_for_mesh(mesh_path)
     if not xdmf_file.exists() or not metadata_file.exists() or not h5_file.exists():
         return False
 
@@ -160,13 +184,23 @@ def dolfinx_cache_is_fresh(mesh_file: str | Path) -> bool:
     if int(metadata.get("version", -1)) != DOLFINX_MESH_CACHE_VERSION:
         return False
 
+    source_payload = metadata.get("source_msh_file")
+    source_msh = Path(source_payload) if source_payload else mesh_path
+    if mesh_path.suffix == ".xdmf" and not source_payload:
+        return True
+
     current_source = _source_signature(source_msh)
     recorded_source = metadata.get("source_msh_signature")
     if current_source is not None and isinstance(recorded_source, dict):
-        return (
-            int(recorded_source.get("size", -1)) == current_source["size"]
-            and int(recorded_source.get("mtime_ns", -1)) == current_source["mtime_ns"]
+        same_size = int(recorded_source.get("size", -1)) == current_source["size"]
+        same_mtime = (
+            int(recorded_source.get("mtime_ns", -1)) == current_source["mtime_ns"]
         )
+        if same_size and same_mtime:
+            return True
+        if same_size and recorded_source.get("sha256"):
+            return recorded_source["sha256"] == _sha256_file(source_msh)
+        return False
 
     if current_source is not None:
         source_mtime = source_msh.stat().st_mtime
@@ -205,12 +239,11 @@ def load_dolfinx_mesh_cache(
     required_facet_names: list[str] | tuple[str, ...] = (),
 ) -> DolfinxMeshCacheData | None:
     """Load a paired XDMF/HDF5 mesh cache, returning None if unavailable or stale."""
-    source_msh = Path(mesh_file)
-    if not dolfinx_cache_is_fresh(source_msh):
+    mesh_path = Path(mesh_file)
+    if not dolfinx_cache_is_fresh(mesh_path):
         return None
 
-    xdmf_file = xdmf_cache_path_for_mesh(source_msh)
-    metadata_file = dolfinx_cache_metadata_path_for_mesh(source_msh)
+    xdmf_file, _, metadata_file = _cache_paths_for_mesh(mesh_path)
     metadata = _read_metadata(metadata_file)
     if metadata is None or int(metadata.get("gdim", gdim)) != int(gdim):
         return None
@@ -251,7 +284,13 @@ def load_dolfinx_mesh_cache(
             for name, value in (metadata.get("association_table") or {}).items()
         }
 
-    source_msh_file = str(source_msh) if source_msh.exists() else None
+    source_payload = metadata.get("source_msh_file")
+    source_path = Path(source_payload) if source_payload else mesh_path
+    source_msh_file = (
+        str(source_path)
+        if source_path.suffix == ".msh" and source_path.exists()
+        else None
+    )
     return DolfinxMeshCacheData(
         mesh=mesh,
         facet_tags=facet_tags,
@@ -298,7 +337,8 @@ def _write_adios2_mesh_cache(mesh: Any, path: Path) -> bool:
 def write_dolfinx_mesh_cache(
     mesh_data,
     *,
-    source_msh_file: str | Path,
+    source_msh_file: str | Path | None,
+    cache_base_file: str | Path | None = None,
     association_table: dict[str, int] | None = None,
     gdim: int,
     mesh_family: str | None = None,
@@ -310,10 +350,15 @@ def write_dolfinx_mesh_cache(
     extra_metadata: dict[str, Any] | None = None,
 ) -> bool:
     """Write the DOLFINx-native XDMF/HDF5 cache for a Gmsh-imported mesh."""
-    source_msh = Path(source_msh_file)
-    xdmf_file = xdmf_cache_path_for_mesh(source_msh)
-    metadata_file = dolfinx_cache_metadata_path_for_mesh(source_msh)
-    adios2_file = adios2_cache_path_for_mesh(source_msh)
+    if source_msh_file is None and cache_base_file is None:
+        raise ValueError("source_msh_file or cache_base_file is required")
+    source_msh = None if source_msh_file is None else Path(source_msh_file)
+    cache_base = (
+        Path(cache_base_file) if cache_base_file is not None else Path(source_msh_file)
+    )
+    xdmf_file = xdmf_cache_path_for_mesh(cache_base)
+    metadata_file = dolfinx_cache_metadata_path_for_mesh(cache_base)
+    adios2_file = adios2_cache_path_for_mesh(cache_base)
 
     try:
         mesh = mesh_data.mesh
@@ -353,7 +398,7 @@ def write_dolfinx_mesh_cache(
         if _truthy_env(ADIOS4DOLFINX_CHECKPOINT_ENV):
             adios4dolfinx_file = write_adios4dolfinx_checkpoint(
                 mesh_data,
-                source_msh_file=source_msh,
+                source_msh_file=cache_base,
                 engine=adios4dolfinx_engine,
             )
 
@@ -364,8 +409,8 @@ def write_dolfinx_mesh_cache(
             "mesh_name": MESH_NAME,
             "facet_tags_name": FACET_TAGS_NAME,
             "cell_tags_name": CELL_TAGS_NAME,
-            "source_msh_file": str(source_msh),
-            "source_msh_signature": _source_signature(source_msh),
+            "source_msh_file": None if source_msh is None else str(source_msh),
+            "source_msh_signature": _source_signature(source_msh, include_hash=True),
             "xdmf_file": str(xdmf_file),
             "hdf5_file": str(xdmf_file.with_suffix(".h5")),
             "adios2_file": str(adios2_file) if adios2_written else None,
@@ -397,5 +442,5 @@ def write_dolfinx_mesh_cache(
         MPI.COMM_WORLD.barrier()
         return True
     except Exception as exc:
-        logger.warning("Unable to write DOLFINx mesh cache for %s: %s", source_msh, exc)
+        logger.warning("Unable to write DOLFINx mesh cache for %s: %s", cache_base, exc)
         return False

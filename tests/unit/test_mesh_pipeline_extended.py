@@ -15,6 +15,11 @@ from pyeidors.data.structures import ElectrodePosition, MeshConfig
 from pyeidors.geometry import mesh_generator as mesh_gen_module
 from pyeidors.geometry import mesh_loader as mesh_loader_module
 from pyeidors.geometry import optimized_mesh_generator as opt_mesh_module
+from pyeidors.geometry.dolfinx_mesh_cache import (
+    dolfinx_cache_metadata_path_for_mesh,
+    xdmf_cache_path_for_mesh,
+    xdmf_h5_path_for_mesh,
+)
 from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 from pyeidors.geometry.process_mesh_cache import clear_process_mesh_cache
 
@@ -176,9 +181,14 @@ def test_mesh_generator_generate_uses_defaults_without_saving(monkeypatch, tmp_p
     mesh = generator.generate(
         output_dir=None, return_metadata=False, save_msh=False, mesh_name=None
     )
+    cache_base = tmp_path / "mesh_456789.msh"
     assert mesh.num_cells() > 0
-    assert mesh.mesh_file is None
+    assert mesh.mesh_file == str(xdmf_cache_path_for_mesh(cache_base))
     assert fake_gmsh.written_files == []
+    assert not cache_base.exists()
+    assert xdmf_cache_path_for_mesh(cache_base).exists()
+    assert xdmf_h5_path_for_mesh(cache_base).exists()
+    assert dolfinx_cache_metadata_path_for_mesh(cache_base).exists()
 
 
 def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):

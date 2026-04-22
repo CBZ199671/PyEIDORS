@@ -22,7 +22,7 @@ from ._helpers import (
     assert_unique_physical_group_ownership,
     validate_mesh_data_tags,
 )
-from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
+from .dolfinx_mesh_cache import write_dolfinx_mesh_cache, xdmf_cache_path_for_mesh
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +56,8 @@ class MeshGenerator:
         Args:
             output_dir: Directory for optional ``.msh`` output.
             return_metadata: If True, return metadata dict including generated EITMesh.
-            save_msh: Whether to persist a ``.msh`` file.
+            save_msh: Whether to persist a ``.msh`` source file. The
+                DOLFINx XDMF/HDF5 cache is always written for reload.
             mesh_name: Optional base name for generated files.
         """
 
@@ -92,18 +93,19 @@ class MeshGenerator:
             required_names=["domain", *facet_names],
             required_facet_names=facet_names,
         )
-        if save_msh:
-            write_dolfinx_mesh_cache(
-                mesh_data,
-                source_msh_file=mesh_file,
-                association_table=association_table,
-                gdim=2,
-            )
+        write_dolfinx_mesh_cache(
+            mesh_data,
+            source_msh_file=mesh_file if save_msh else None,
+            cache_base_file=mesh_file,
+            association_table=association_table,
+            gdim=2,
+        )
 
         electrode_vertices = [
             np.asarray(v, dtype=float)
             for v in self.mesh_data.get("electrode_vertices", [])
         ]
+        persisted_mesh_file = mesh_file if save_msh else xdmf_cache_path_for_mesh(mesh_file)
         mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
@@ -111,7 +113,7 @@ class MeshGenerator:
             association_table=association_table,
             physical_groups=mesh_data.physical_groups,
             radius=self.config.radius,
-            mesh_file=str(mesh_file) if save_msh else None,
+            mesh_file=str(persisted_mesh_file),
             electrode_vertices=electrode_vertices,
         )
 
