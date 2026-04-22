@@ -80,6 +80,9 @@ log = logging.getLogger(__name__)
 
 
 _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
+_OFFSCREEN_DRAG_FPS_ENV = "EIT_APP_3D_DRAG_FPS"
+_OFFSCREEN_DRAG_RENDER_SCALE_ENV = "EIT_APP_3D_DRAG_RENDER_SCALE"
+_OFFSCREEN_DRAG_IDLE_MS_ENV = "EIT_APP_3D_DRAG_IDLE_MS"
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
 _MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
@@ -99,6 +102,24 @@ _CELL_FACE_OFFSETS = {
 
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
+
+
+def _env_float(name: str, default: float, *, lower: float, upper: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return float(default)
+    try:
+        value = float(raw)
+    except ValueError:
+        return float(default)
+    if not np.isfinite(value):
+        return float(default)
+    return min(max(value, lower), upper)
+
+
+def _env_int(name: str, default: int, *, lower: int, upper: int) -> int:
+    value = _env_float(name, float(default), lower=float(lower), upper=float(upper))
+    return int(round(value))
 
 
 def _plot_font_families() -> list[str]:
@@ -273,7 +294,9 @@ class Conductivity3DWidget(QWidget):
     ``SimulationResultsWidget``.
     """
 
-    def __init__(self, title: str = "Conductivity", parent: QWidget | None = None) -> None:
+    def __init__(
+        self, title: str = "Conductivity", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._default_title = title
 
@@ -303,15 +326,19 @@ class Conductivity3DWidget(QWidget):
         # Cached "fresh-render" view bounds for the matplotlib 3D
         # backend so the reset-view button can restore the data extent
         # the user saw on first render, not just the camera angle.
-        self._mpl3d_initial_bounds: tuple[
-            tuple[float, float],
-            tuple[float, float],
-            tuple[float, float],
-        ] | None = None
+        self._mpl3d_initial_bounds: (
+            tuple[
+                tuple[float, float],
+                tuple[float, float],
+                tuple[float, float],
+            ]
+            | None
+        ) = None
         self._offscreen_plotter = None
         self._offscreen_mesh_actor = None
         self._offscreen_highlight_actor = None
         self._offscreen_wire_actor = None
+        self._offscreen_window_size: tuple[int, int] | None = None
 
         self._plotter = None
         self._plotter_ready = False
@@ -323,19 +350,40 @@ class Conductivity3DWidget(QWidget):
             tuple[np.ndarray, np.ndarray, np.ndarray, str | None]
         ] = None
 
-        # Drag throttle: coalesce up to ~30 fps for the offscreen
-        # backend.  Without this, every mouseMove event triggers a full
-        # screenshot which limits perceived smoothness on bigger meshes.
+        # Drag throttle: coalesce rapid mouseMove events for the
+        # offscreen backend.  Default to a high-performance 60 fps,
+        # full-resolution interaction path; users on constrained
+        # machines can lower EIT_APP_3D_DRAG_FPS or
+        # EIT_APP_3D_DRAG_RENDER_SCALE.
+        self._offscreen_drag_fps = _env_float(
+            _OFFSCREEN_DRAG_FPS_ENV,
+            60.0,
+            lower=1.0,
+            upper=120.0,
+        )
+        self._offscreen_drag_interval_ms = max(
+            1, int(round(1000.0 / self._offscreen_drag_fps))
+        )
+        self._offscreen_drag_render_scale = _env_float(
+            _OFFSCREEN_DRAG_RENDER_SCALE_ENV,
+            1.0,
+            lower=0.25,
+            upper=1.0,
+        )
         self._offscreen_render_timer = QTimer(self)
+        self._offscreen_render_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._offscreen_render_timer.setSingleShot(True)
-        self._offscreen_render_timer.setInterval(33)
+        self._offscreen_render_timer.setInterval(self._offscreen_drag_interval_ms)
         self._offscreen_render_timer.timeout.connect(self._refresh_offscreen_pixmap)
-        # Track render quality during drag so the screenshot pipeline
-        # uses a smaller window while the user is actively rotating.
+        # Track drag state so optional render-scale downsampling applies
+        # only while the user is actively rotating / zooming.
         self._is_dragging_offscreen = False
         self._drag_release_timer = QTimer(self)
+        self._drag_release_timer.setTimerType(Qt.TimerType.PreciseTimer)
         self._drag_release_timer.setSingleShot(True)
-        self._drag_release_timer.setInterval(120)
+        self._drag_release_timer.setInterval(
+            _env_int(_OFFSCREEN_DRAG_IDLE_MS_ENV, 80, lower=16, upper=1000)
+        )
         self._drag_release_timer.timeout.connect(self._on_drag_idle)
 
         self._build_ui()
@@ -393,9 +441,7 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_ax = self._mpl3d_figure.add_axes(
             _MPL3D_AX_POSITION, projection="3d"
         )
-        self._mpl3d_colorbar_ax = self._mpl3d_figure.add_axes(
-            _MPL3D_COLORBAR_POSITION
-        )
+        self._mpl3d_colorbar_ax = self._mpl3d_figure.add_axes(_MPL3D_COLORBAR_POSITION)
         self._mpl3d_colorbar_ax.set_visible(False)
         self._stack.addWidget(self._mpl3d_host)
 
@@ -516,6 +562,7 @@ class Conductivity3DWidget(QWidget):
         try:
             import pyvista  # noqa: F401  (side-effect: VTK init)
             from pyvistaqt import QtInteractor
+
             _configure_vtk_logging()
         except Exception as exc:  # pragma: no cover — env without VTK
             log.warning("pyvistaqt unavailable; using safe 3D renderer: %s", exc)
@@ -581,9 +628,7 @@ class Conductivity3DWidget(QWidget):
 
         sigma = np.asarray(conductivity, dtype=float)
         if sigma.shape[0] not in (cells.shape[0], coords.shape[0]):
-            self._show_caption(
-                t("sim.results.viewer3d_size_mismatch"), kind="error"
-            )
+            self._show_caption(t("sim.results.viewer3d_size_mismatch"), kind="error")
             return
 
         if title is not None:
@@ -661,7 +706,10 @@ class Conductivity3DWidget(QWidget):
             except Exception:  # pragma: no cover — VTK quirk
                 pass
         self._electrode_actor = None
-        if self._offscreen_plotter is not None and self._offscreen_electrode_actor is not None:
+        if (
+            self._offscreen_plotter is not None
+            and self._offscreen_electrode_actor is not None
+        ):
             try:
                 self._offscreen_plotter.remove_actor(
                     self._offscreen_electrode_actor, render=False
@@ -889,26 +937,32 @@ class Conductivity3DWidget(QWidget):
         self._offscreen_highlight_actor = None
         self._offscreen_wire_actor = None
         self._offscreen_electrode_actor = None
+        self._offscreen_window_size = None
 
     def _offscreen_render_size(self) -> tuple[int, int]:
         dpr = max(float(self.devicePixelRatioF()), 1.0)
-        # Drop render resolution by ~40% during drag so VTK + screenshot
-        # roundtrip stays under one frame at 30 fps even on bigger meshes.
-        # Idle frames render at full DPR.  _refresh_offscreen_pixmap()
-        # then scales the final pixmap to the QLabel's target physical
-        # size so the logical on-screen size stays fixed while dragging.
-        scale = 0.6 if self._is_dragging_offscreen else 1.0
-        width = max(320, int(round(max(self._offscreen_label.width(), 1) * dpr * scale)))
-        height = max(240, int(round(max(self._offscreen_label.height(), 1) * dpr * scale)))
+        # Full-resolution drag is the default for high-performance
+        # workstations.  Optional downsampling is still available via
+        # EIT_APP_3D_DRAG_RENDER_SCALE for constrained machines.
+        scale = (
+            self._offscreen_drag_render_scale if self._is_dragging_offscreen else 1.0
+        )
+        width = max(
+            320,
+            int(round(max(self._offscreen_label.width(), 1) * dpr * scale)),
+        )
+        height = max(
+            240,
+            int(round(max(self._offscreen_label.height(), 1) * dpr * scale)),
+        )
         return min(width, 2400), min(height, 1800)
 
     def _offscreen_pixmap_target(self) -> tuple[int, int, float]:
         """Return physical pixmap size + DPR for stable QLabel display.
 
-        During drag we deliberately render fewer physical pixels.  If the
-        pixmap keeps the widget DPR, Qt treats that smaller framebuffer as
-        a smaller logical image and the scene visibly shrinks until the
-        final full-resolution frame arrives.
+        If drag downsampling is enabled, Qt would otherwise treat the
+        smaller framebuffer as a smaller logical image and the scene would
+        visibly shrink until the final full-resolution frame arrives.
         """
         dpr = max(float(self.devicePixelRatioF()), 1.0)
         label_width = max(float(self._offscreen_label.width()), 1.0)
@@ -923,7 +977,10 @@ class Conductivity3DWidget(QWidget):
             return
         width, height = self._offscreen_render_size()
         try:
-            plotter.window_size = (width, height)
+            window_size = (width, height)
+            if self._offscreen_window_size != window_size:
+                plotter.window_size = window_size
+                self._offscreen_window_size = window_size
             plotter.render()
             image = np.ascontiguousarray(plotter.screenshot(return_img=True))
         except Exception as exc:  # pragma: no cover — VTK runtime edge case
@@ -1008,6 +1065,7 @@ class Conductivity3DWidget(QWidget):
         plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#ffffff")))
         plotter.add_axes()
         self._offscreen_plotter = plotter
+        self._offscreen_window_size = (width, height)
 
         opacity = self._opacity_slider.value() / 100.0
         text_color = _hex_to_rgb(palette.get("text", "#222"))
@@ -1174,10 +1232,15 @@ class Conductivity3DWidget(QWidget):
         cmap = colormaps["viridis"]
         norm = Normalize(vmin=sigma_min, vmax=sigma_max)
         opacity = self._opacity_slider.value() / 100.0
-        face_vertices = [coords[np.asarray(face, dtype=np.int64), :3] for face, _ in valid_face_payload]
+        face_vertices = [
+            coords[np.asarray(face, dtype=np.int64), :3]
+            for face, _ in valid_face_payload
+        ]
         colors = cmap(norm(face_values))
         colors[:, 3] = opacity
-        edge_color = palette.get("border", "#888") if self._wire_check.isChecked() else "none"
+        edge_color = (
+            palette.get("border", "#888") if self._wire_check.isChecked() else "none"
+        )
 
         mesh = Poly3DCollection(
             face_vertices,
@@ -1408,9 +1471,7 @@ class Conductivity3DWidget(QWidget):
                 opacity=0.4,
                 show_scalar_bar=False,
             )
-            self._wire_actor.SetVisibility(
-                bool(self._wire_check.isChecked())
-            )
+            self._wire_actor.SetVisibility(bool(self._wire_check.isChecked()))
 
         # Re-attach electrode patch actor if we already have geometry —
         # _discard_actors() above wiped the cached pointer.
@@ -1538,21 +1599,27 @@ class Conductivity3DWidget(QWidget):
             self._plotter.render()
 
     def _on_offscreen_dragged(self, dx: float, dy: float) -> None:
-        if self._render_backend != "pyvista_offscreen" or self._offscreen_plotter is None:
+        if (
+            self._render_backend != "pyvista_offscreen"
+            or self._offscreen_plotter is None
+        ):
             return
         camera = self._offscreen_plotter.camera
         camera.Azimuth(-dx * 0.45)
         camera.Elevation(dy * 0.45)
         camera.OrthogonalizeViewUp()
-        # Mark drag-active so the render path drops resolution; reset
-        # after the user pauses for ~120 ms so the final framebuffer
-        # snaps back to crisp.
+        # Mark drag-active so the optional render-scale profile applies;
+        # reset shortly after the user pauses so any downsampled profile
+        # gets one final full-resolution frame.
         self._is_dragging_offscreen = True
         self._drag_release_timer.start()
         self._schedule_offscreen_refresh()
 
     def _on_offscreen_zoomed(self, delta_y: float) -> None:
-        if self._render_backend != "pyvista_offscreen" or self._offscreen_plotter is None:
+        if (
+            self._render_backend != "pyvista_offscreen"
+            or self._offscreen_plotter is None
+        ):
             return
         self._offscreen_plotter.camera.Zoom(1.12 if delta_y > 0 else 0.89)
         self._is_dragging_offscreen = True
@@ -1560,7 +1627,7 @@ class Conductivity3DWidget(QWidget):
         self._schedule_offscreen_refresh()
 
     def _schedule_offscreen_refresh(self) -> None:
-        """Coalesce rapid drag events into ~30 fps refresh."""
+        """Coalesce rapid drag events into the configured refresh rate."""
         if not self._offscreen_render_timer.isActive():
             self._offscreen_render_timer.start()
 
@@ -1629,9 +1696,7 @@ class Conductivity3DWidget(QWidget):
         self._electrode_check.setText(t("sim.results.electrodes_toggle"))
         self._reset_btn.setText(t("sim.results.viewer3d_reset"))
         if self._last_image is None and not self._caption_label.text():
-            self._show_caption(
-                t("sim.results.viewer3d_no_data"), kind="placeholder"
-            )
+            self._show_caption(t("sim.results.viewer3d_no_data"), kind="placeholder")
 
     # ------------------------------------------------------------------
     # Lifecycle

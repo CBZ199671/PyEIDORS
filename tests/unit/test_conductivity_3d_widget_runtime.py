@@ -787,14 +787,26 @@ def test_pyvista_offscreen_controls_keep_rendered_canvas(monkeypatch):
     widget.close()
 
 
-def test_pyvista_offscreen_drag_frames_keep_logical_canvas_size(monkeypatch):
+def test_pyvista_offscreen_drag_defaults_to_full_resolution_60fps(monkeypatch):
     _get_app()
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.delenv("EIT_APP_3D_DRAG_FPS", raising=False)
+    monkeypatch.delenv("EIT_APP_3D_DRAG_RENDER_SCALE", raising=False)
 
     class FakePlotter:
         def __init__(self) -> None:
-            self.window_size = (0, 0)
+            self._window_size = (0, 0)
+            self.window_size_sets = 0
             self.screenshot_sizes: list[tuple[int, int]] = []
+
+        @property
+        def window_size(self) -> tuple[int, int]:
+            return self._window_size
+
+        @window_size.setter
+        def window_size(self, value: tuple[int, int]) -> None:
+            self.window_size_sets += 1
+            self._window_size = value
 
         def render(self) -> None:
             pass
@@ -829,11 +841,79 @@ def test_pyvista_offscreen_drag_frames_keep_logical_canvas_size(monkeypatch):
         drag_pixmap.height() / drag_pixmap.devicePixelRatioF(),
     )
 
-    assert plotter.screenshot_sizes[1][0] < plotter.screenshot_sizes[0][0]
+    assert widget._offscreen_render_timer.interval() == 17
+    assert widget._offscreen_drag_render_scale == pytest.approx(1.0)
+    assert plotter.screenshot_sizes[1] == plotter.screenshot_sizes[0]
+    assert plotter.window_size_sets == 1
     assert drag_pixmap.width() == idle_pixmap.width()
     assert drag_pixmap.height() == idle_pixmap.height()
     assert drag_logical == pytest.approx(idle_logical)
     assert drag_logical == pytest.approx((800.0, 600.0))
+
+    widget.close()
+
+
+def test_pyvista_offscreen_drag_scale_can_be_reduced_without_size_jitter(monkeypatch):
+    _get_app()
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("EIT_APP_3D_DRAG_FPS", "30")
+    monkeypatch.setenv("EIT_APP_3D_DRAG_RENDER_SCALE", "0.5")
+
+    class FakePlotter:
+        def __init__(self) -> None:
+            self._window_size = (0, 0)
+            self.window_size_sets = 0
+            self.screenshot_sizes: list[tuple[int, int]] = []
+
+        @property
+        def window_size(self) -> tuple[int, int]:
+            return self._window_size
+
+        @window_size.setter
+        def window_size(self, value: tuple[int, int]) -> None:
+            self.window_size_sets += 1
+            self._window_size = value
+
+        def render(self) -> None:
+            pass
+
+        def screenshot(self, *, return_img: bool):  # noqa: ANN001
+            assert return_img is True
+            width, height = self.window_size
+            self.screenshot_sizes.append((width, height))
+            return np.zeros((height, width, 3), dtype=np.uint8)
+
+    widget = Conductivity3DWidget("Conductivity")
+    widget._offscreen_label.resize(800, 600)
+    plotter = FakePlotter()
+    widget._offscreen_plotter = plotter
+    widget._render_backend = "pyvista_offscreen"
+
+    widget._is_dragging_offscreen = False
+    widget._refresh_offscreen_pixmap()
+    idle_pixmap = widget._offscreen_label.pixmap()
+    assert idle_pixmap is not None
+    idle_logical = (
+        idle_pixmap.width() / idle_pixmap.devicePixelRatioF(),
+        idle_pixmap.height() / idle_pixmap.devicePixelRatioF(),
+    )
+
+    widget._is_dragging_offscreen = True
+    widget._refresh_offscreen_pixmap()
+    drag_pixmap = widget._offscreen_label.pixmap()
+    assert drag_pixmap is not None
+    drag_logical = (
+        drag_pixmap.width() / drag_pixmap.devicePixelRatioF(),
+        drag_pixmap.height() / drag_pixmap.devicePixelRatioF(),
+    )
+
+    assert widget._offscreen_render_timer.interval() == 33
+    assert widget._offscreen_drag_render_scale == pytest.approx(0.5)
+    assert plotter.screenshot_sizes[1][0] < plotter.screenshot_sizes[0][0]
+    assert plotter.window_size_sets == 2
+    assert drag_pixmap.width() == idle_pixmap.width()
+    assert drag_pixmap.height() == idle_pixmap.height()
+    assert drag_logical == pytest.approx(idle_logical)
 
     widget.close()
 
