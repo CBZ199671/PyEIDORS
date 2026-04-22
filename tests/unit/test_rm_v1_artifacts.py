@@ -89,7 +89,12 @@ def test_online_rm_apply_metadata_reports_zero_forward_work() -> None:
 
 def test_forward_rm_benchmark_artifact_splits_cold_build_and_warm_apply(
     tmp_path,
+    monkeypatch,
 ) -> None:
+    monkeypatch.setattr(
+        "pyeidors.inverse.reconstruction_matrix.shutil.which",
+        lambda name: "/home/tom/.local/bin/env" if name == "env" else None,
+    )
     path = write_forward_rm_benchmark_artifact(
         tmp_path / "forward_rm_benchmark.json",
         offline_rm_build_seconds=12.5,
@@ -102,4 +107,5 @@ def test_forward_rm_benchmark_artifact_splits_cold_build_and_warm_apply(
     assert payload["offline_rm_build_seconds"] == pytest.approx(12.5)
     assert payload["online_rm_apply_seconds"] == pytest.approx(0.03)
     assert payload["online_hot_path"] == "rm_matmul"
+    assert payload["env_path"] == "/home/tom/.local/bin/env"
     assert payload["metadata"] == {"case": "unit"}

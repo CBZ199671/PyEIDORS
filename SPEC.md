@@ -152,6 +152,7 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V49 | Inverse sparse/matrix-free status: `JacobianLinearization`, lazy adjoint, dual-mesh operator, PETSc/Scipy matrix-free PCG, sparse priors, TV, SBL exist as phase-2/research. They must not replace cached RM as v1 realtime default until end-to-end 48e/5936 benchmark beats RM hot path | src/pyeidors/inverse/jacobian/linearized.py; src/pyeidors/inverse/matrix_free/dual_mesh.py; src/pyeidors/inverse/solvers/gauss_newton_runtime.py; tests/unit/test_gn_fast_linear_solver.py |
 | V50 | 3D GREIT current status: official-aligned + optimized for 48e/5936 online apply. Production claim requires persistent RM/tensor, batched frames, minimized CPU↔GPU copies, and T36 cold/warm report beating previous GREIT RM-layer artifact | src/pyeidors/inverse/greit.py; src/pyeidors/perf/gpu_kernels.py; reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json; reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/summary.json |
 | V51 | WSLg GUI launch default keeps the main PySide6 surface on Wayland-first Qt (`QT_QPA_PLATFORM=wayland;xcb`) when `WAYLAND_DISPLAY` exists, preserving crisp HiDPI text; XCB is explicit opt-in (`EIT_APP_USE_QT_XCB=1`) or no-Wayland fallback. GUI launch defaults to cached env sync + skipped PETSc CUDA probe; lock/config changes invalidate cache and `--probe-cuda` / `--full-env-check` restore full verification. First paint must not synchronously load the heavy pyeidors/PETSc/Torch/CUQI runtime or block on Windows COM discovery; those run on demand | tests/unit/test_eit_app_bootstrap.py; tests/unit/test_env_sync_script.py; tests/unit/test_script_entrypoint_acceleration_profiles.py; tests/unit/test_eit_app_gui_smoke.py |
+| V52 | Benchmark / launch timing harness ! immune to PATH-shadowed coreutils: timing commands use `/usr/bin/env` explicitly OR first assert `command -v env == /usr/bin/env`; artifact records `env_path`. `/home/tom/.local/bin/env` or any user shim must not make benchmark/GUI launch appear as `real 0.00` without executing payload | future benchmark-env guard; B8,T37 |
 
 ## §T — tasks
 
@@ -170,7 +171,7 @@ research  (post-phase-2, opt-in enhancement):
     T27, T28, T1, T11, T33
 
 infra / deferred  (hardware / design-heavy, unblock separately):
-    T2, T3, T4, T6, T7, T10
+    T2, T3, T4, T6, T7, T10, T37
 ```
 
 T32 is the v1 closure milestone and ties in the GREIT metrics, so it
@@ -218,6 +219,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T34 | x | Switch GUI/default 3D difference route to cached dual-model RM reconstruction when RM artifact exists; cold path may build/load RM, hot path must bypass `DirectJacobianCalculator` | V37,V46,V48 |
 | T35 | x | Optimize RM hot path for 48e/5936: persistent RM on device, batched frames, no per-call tensor rebuild, minimal CPU↔GPU copy, float64/float32 policy recorded | V29,V37,V50 |
 | T36 | x | Real 48e/5936 dual-model report: compare one-step NOSER/Laplace RM and 3D GREIT RM, split fine-CEM/J build, RM build, artifact load, 1-frame apply, 512-frame apply, GPU/CPU paths | V40,V46,V47,V50 |
+| T37 | x | Harden benchmark / GUI timing harness against PATH-shadowed `env`: prefer `/usr/bin/env`, add guard test, record `env_path` in timing artifacts | V52,B8 |
 
 ## §B — bugs
 
@@ -230,3 +232,4 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | B5 | 2026-04-21 | AmgX cannot enable in current CUDA shell because PETSc has CUDA Mat/Vec/Dense (`aijcusparse`, `cuda`, `densecuda`) but PCAMGX is not compiled/registered: `PETSc.PC.Type.AMGX` is absent and `PCSetType("amgx")` returns error code 86 `Unable to find requested PC type amgx`; `flake.nix` CUDA PETSc override only adds CUDA/cuBLAS/cuSPARSE/cuSOLVER flags, with no AmgX package or `--with-amgx` / `--download-amgx` configure path; FEniCSx/DOLFINx latest release does not ship AmgX by itself | T33 |
 | B6 | 2026-04-21 | GUI 3D CUDA policy downgraded unavailable AmgX/Hypre CUDA to `spd_gamg` but left `forward_mat_solve=auto`; PETSc `KSPMatSolve` on current `spd_gamg + cuda` 48-electrode/5936-measurement config failed after a long solve attempt with negative convergence reason `-10`. Stable measured route is `spd_gamg + petsc_device=cuda + forward_mat_solve=off` | V45 |
 | B7 | 2026-04-22 | WSLg GUI bootstrap pinned Qt to XCB to protect embedded VTK, so Windows HiDPI scaled the whole app through XWayland blur; launcher also repeated full uv/import sync and PETSc CUDA probe on every GUI start, then imported heavy pyeidors/PETSc/Torch/CUQI paths and synchronously queried Windows COM ports before first paint | V51 |
+| B8 | 2026-04-22 | User PATH shadows coreutils `env`: `/home/tom/.local/bin/env` intercepted `env EIT_APP_AUTO_QUIT_MS=5000 bash scripts/gui/run_eit_app.sh --gpu`, returned success without running payload, and produced bogus `real 0.00` GUI timing. `/usr/bin/env ...` executed correctly | V52,T37 |

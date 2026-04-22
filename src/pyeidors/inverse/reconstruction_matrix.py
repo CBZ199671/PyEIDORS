@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -121,6 +122,7 @@ def write_forward_rm_benchmark_artifact(
         "offline_rm_build_seconds": build_seconds,
         "online_rm_apply_seconds": apply_seconds,
         "online_hot_path": str(online_hot_path),
+        "env_path": shutil.which("env") or "",
         "metadata": _canonical_signature_value(metadata or {}),
     }
     target.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")

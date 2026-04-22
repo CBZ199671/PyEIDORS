@@ -59,6 +59,16 @@ nix_daemon_proxy_unreachable() {
   return 0
 }
 
+warn_path_shadowed_env() {
+  local env_path
+  env_path="$(command -v env 2>/dev/null || true)"
+  if [[ -n "$env_path" && "$env_path" != "/usr/bin/env" ]]; then
+    echo "[run_eit_app] WARNING: PATH resolves env to $env_path; use /usr/bin/env for launch timing to avoid bogus real 0.00 measurements" >&2
+  fi
+}
+
+warn_path_shadowed_env
+
 if nix_daemon_proxy_unreachable; then
   # The daemon-level proxy is outside this script's environment.  When it
   # points at a closed localhost port, Nix emits repeated cache.nixos.org

@@ -360,6 +360,7 @@ def _build_forward_solver_benchmark_artifact(
     )
     return {
         "schema_version": 1,
+        "env_path": shutil.which("env") or "",
         "mesh_dim": int(mesh_info.get("mesh_dim") or 3),
         "n_cells": int(mesh_info.get("elements") or mesh_info.get("n_cells") or 0),
         "n_dofs": int(mesh_info.get("n_dofs") or (potential_dofs + n_elec + 1)),

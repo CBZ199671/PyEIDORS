@@ -29,6 +29,15 @@ def test_v51_gui_launcher_defaults_to_fast_startup_contract():
     assert "PYEIDORS_ENV_SYNC_CACHE" in text
 
 
+def test_v52_gui_launcher_warns_about_path_shadowed_env():
+    launcher = Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    text = launcher.read_text(encoding="utf-8")
+
+    assert "warn_path_shadowed_env" in text
+    assert '"/usr/bin/env"' in text
+    assert "bogus real 0.00" in text
+
+
 def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
     monkeypatch.setattr(
@@ -68,8 +77,13 @@ def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(
     assert args.forward_solver_preset == "3d_gamg"
 
 
-def test_benchmark_3d_runtime_builds_forward_solver_artifact():
+def test_benchmark_3d_runtime_builds_forward_solver_artifact(monkeypatch):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
+    monkeypatch.setattr(
+        module.shutil,
+        "which",
+        lambda name: "/home/tom/.local/bin/env" if name == "env" else None,
+    )
     args = Namespace(
         n_elec=8,
         forward_solver_preset="3d_gamg",
@@ -130,6 +144,7 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact():
     )
 
     assert artifact["mesh_dim"] == 3
+    assert artifact["env_path"] == "/home/tom/.local/bin/env"
     assert artifact["n_cells"] == 42
     assert artifact["n_dofs"] == 109
     assert artifact["n_patterns"] == 8
