@@ -16,6 +16,10 @@ from eit_app.controllers.forward_solver_controller import (
     _resolve_forward_runtime,
     _total_electrode_count,
 )
+from eit_app.io.hdf5_packages import (
+    write_dataset_mesh_info_package,
+    write_dataset_sample_package,
+)
 from eit_app.models.forward_model_config import ForwardModelConfig
 from eit_app.models.simulation_state import DatasetGeneratorConfig, InhomogeneitySpec
 
@@ -151,8 +155,8 @@ class _DatasetGeneratorWorker(QObject):
             out_dir.mkdir(parents=True, exist_ok=True)
 
             # Save mesh info once
-            np.savez(
-                out_dir / "mesh_info.npz",
+            write_dataset_mesh_info_package(
+                out_dir,
                 node_coords=node_coords,
                 cell_connectivity=cell_connectivity,
                 n_electrodes=forward_cfg.n_elec,
@@ -227,8 +231,9 @@ class _DatasetGeneratorWorker(QObject):
                     voltages += noise_std * rng.standard_normal(voltages.shape)
 
                 # Save sample
-                np.savez(
-                    out_dir / f"sample_{i:06d}.npz",
+                write_dataset_sample_package(
+                    out_dir,
+                    i,
                     ground_truth=sigma,
                     boundary_voltages=voltages,
                     background_conductivity=bg,

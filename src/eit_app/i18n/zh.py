@@ -454,6 +454,9 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "sim.results.ground_truth_title": "\u771f\u503c",                                              # 真值
     "sim.results.reconstruction_title": "\u91cd\u6784\u7ed3\u679c",                                # 重构结果
+    "sim.results.save_dialog_title": "\u4fdd\u5b58\u4eff\u771f\u7ed3\u679c",                         # 保存仿真结果
+    "sim.results.save_dialog_filter": "HDF5 \u5305 (*.h5 *.hdf5)",                                  # HDF5 包 (*.h5 *.hdf5)
+    "sim.results.save_status": "\u5df2\u4fdd\u5b58 HDF5 \u5305\u5230 {path}",                        # 已保存 HDF5 包到 {path}
 
     # ==================================================================
     # Dataset Generator tab — Step labels
@@ -469,9 +472,9 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.hero.title_text": "\u6309\u6b65\u9aa4\u751f\u6210\u7f51\u683c\u611f\u77e5\u7684\u7535\u5bfc\u7387\u76ee\u6807\u4e0e\u8fb9\u754c\u7535\u538b\u914d\u5bf9\u3002",  # 按步骤生成网格感知的电导率目标与边界电压配对。
     "dataset.hero.hint": "\u4f7f\u7528\u5de6\u4fa7\u7684\u6b65\u9aa4\u5b9a\u4e49\u7f51\u683c\u3001\u968f\u673a\u5316\u8303\u56f4\u548c\u6279\u91cf\u8f93\u51fa\u76ee\u6807\u3002\u53f3\u4fa7\u7684\u6458\u8981\u9762\u677f\u4f1a\u540c\u6b65\u5f53\u524d\u8fd0\u884c\u72b6\u6001\u3002",  # 使用左侧的步骤定义网格、随机化范围和批量输出目标。右侧的摘要面板会同步当前运行状态。
     "dataset.artifacts.title": "\u751f\u6210\u7684\u4ea7\u7269",                                     # 生成的产物
-    "dataset.artifacts.item1": "mesh_info.npz\uff1a\u8282\u70b9\u5750\u6807\u3001\u5355\u5143\u62d3\u6251\u4e0e\u5747\u5300\u7535\u538b",  # mesh_info.npz：节点坐标、单元拓扑与均匀电压
-    "dataset.artifacts.item2": "sample_000000.npz\uff1a\u6bcf\u6837\u672c\u7684\u7535\u5bfc\u7387\u4e0e\u8fb9\u754c\u7535\u538b\u914d\u5bf9",  # sample_000000.npz：每样本的电导率与边界电压配对
-    "dataset.artifacts.item3": "\u8f93\u51fa\u76ee\u5f55\u6210\u4e3a\u81ea\u5305\u542b\u7684\u6570\u636e\u96c6\u5305",  # 输出目录成为自包含的数据集包
+    "dataset.artifacts.item1": "mesh_info.h5\uff1a\u8282\u70b9\u5750\u6807\u3001\u5355\u5143\u62d3\u6251\u4e0e\u5747\u5300\u7535\u538b",  # mesh_info.h5：节点坐标、单元拓扑与均匀电压
+    "dataset.artifacts.item2": "sample_000000.h5\uff1a\u6bcf\u6837\u672c\u7684\u7535\u5bfc\u7387\u4e0e\u8fb9\u754c\u7535\u538b\u914d\u5bf9",  # sample_000000.h5：每样本的电导率与边界电压配对
+    "dataset.artifacts.item3": "\u8f93\u51fa\u76ee\u5f55\u6210\u4e3a\u81ea\u5305\u542b\u7684 HDF5 \u6570\u636e\u96c6\u5305",  # 输出目录成为自包含的 HDF5 数据集包
     "dataset.notes.title": "\u4f7f\u7528\u8bf4\u660e",                                               # 使用说明
     "dataset.notes.item1": "\u6b64\u5904\u7684\u7f51\u683c\u8bbe\u7f6e\u72ec\u7acb\u4e8e\u4ea4\u4e92\u4eff\u771f Tab\u3002",  # 此处的网格设置独立于交互仿真 Tab。
     "dataset.notes.item2": "\u5f62\u72b6\u5f00\u5173\u5b9a\u4e49\u968f\u673a\u5bb6\u65cf\u6c60\uff1b\u5982\u679c\u672a\u52fe\u9009\u5219\u9ed8\u8ba4\u4f7f\u7528\u5706\u5f62\u3002",  # 形状开关定义随机家族池；如果未勾选则默认使用圆形。

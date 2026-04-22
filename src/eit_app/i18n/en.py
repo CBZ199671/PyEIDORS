@@ -450,6 +450,9 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "sim.results.ground_truth_title": "Ground Truth",
     "sim.results.reconstruction_title": "Reconstruction",
+    "sim.results.save_dialog_title": "Save Simulation Results",
+    "sim.results.save_dialog_filter": "HDF5 package (*.h5 *.hdf5)",
+    "sim.results.save_status": "Saved HDF5 package to {path}",
 
     # ==================================================================
     # Dataset Generator tab — Step labels
@@ -465,9 +468,9 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.hero.title_text": "Generate mesh-aware conductivity targets and boundary-voltage pairs with a cleaner, step-by-step workflow.",
     "dataset.hero.hint": "Use the left-side steps to define mesh, randomization ranges, and the batch output target. The summary panel on the right mirrors the active run.",
     "dataset.artifacts.title": "Generated Artifacts",
-    "dataset.artifacts.item1": "mesh_info.npz with node coordinates, cell connectivity, and homogeneous voltages",
-    "dataset.artifacts.item2": "sample_000000.npz style per-sample conductivity and boundary-voltage pairs",
-    "dataset.artifacts.item3": "The configured output directory becomes a self-contained dataset package",
+    "dataset.artifacts.item1": "mesh_info.h5 with node coordinates, cell connectivity, and homogeneous voltages",
+    "dataset.artifacts.item2": "sample_000000.h5 style per-sample conductivity and boundary-voltage pairs",
+    "dataset.artifacts.item3": "The configured output directory becomes a self-contained HDF5 dataset package",
     "dataset.notes.title": "Operating Notes",
     "dataset.notes.item1": "Mesh settings here are independent from the interactive Simulation tab.",
     "dataset.notes.item2": "Shape toggles define the random family pool; if none are checked, circle is used by default.",

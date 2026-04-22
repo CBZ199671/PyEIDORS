@@ -3536,24 +3536,35 @@ class EITWorkstation(QMainWindow):
             return
 
         from PySide6.QtWidgets import QFileDialog
-        import numpy as np
+
+        from eit_app.io.hdf5_packages import write_simulation_results_package
 
         path, _ = QFileDialog.getSaveFileName(
-            self, "Save Simulation Results", "", "NumPy archive (*.npz)"
+            self,
+            t("sim.results.save_dialog_title"),
+            "",
+            t("sim.results.save_dialog_filter"),
         )
         if not path:
             return
 
         result = self._last_fwd_result
-        np.savez(
-            path,
-            ground_truth=result.ground_truth_conductivity,
-            boundary_voltages=result.boundary_voltages,
-            homogeneous_voltages=result.homogeneous_voltages,
-            node_coords=result.node_coords,
-            cell_connectivity=result.cell_connectivity,
+        try:
+            saved_path = write_simulation_results_package(
+                path,
+                ground_truth=result.ground_truth_conductivity,
+                boundary_voltages=result.boundary_voltages,
+                homogeneous_voltages=result.homogeneous_voltages,
+                node_coords=result.node_coords,
+                cell_connectivity=result.cell_connectivity,
+            )
+        except ValueError as exc:
+            self._on_error(str(exc))
+            return
+        self._status_bar.showMessage(
+            t("sim.results.save_status", path=str(saved_path)),
+            5000,
         )
-        self._status_bar.showMessage(f"Saved to {path}", 5000)
 
     @Slot()
     def _on_generate_dataset(self) -> None:

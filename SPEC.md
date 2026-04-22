@@ -273,7 +273,7 @@ HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold befo
 | T51 | x | Repo persistence inventory + blocklist: classify all `.npz/.npy/.msh/.xdmf/.h5/.mat` writers/readers; mark legacy/test-only exemptions; add CI scan forbidding new production `.npz/.npy` writes | V65,V67,B12 |
 | T52 | x | Mesh HDF5-first hardening: support `.xdmf/.h5` cache load without source `.msh`; store source hash/provenance optional; generator writes XDMF/HDF5 from in-memory mesh even when `save_msh=false`; round-trip facet/cell tags + physical groups | V66,V68 |
 | T53 | x | Convert RM/GREIT/one-step artifacts from `.npz` to HDF5 `.h5`; keep `.npz` loader read-only + migration helper; update GUI cached-RM loader | V36,V37,V61,V64,V65,V67 |
-| T54 | . | Convert dataset generator + GUI simulation export from `mesh_info.npz` / `sample_*.npz` / "NumPy archive" to HDF5 package; update i18n labels and file dialogs | V65,V67 |
+| T54 | x | Convert dataset generator + GUI simulation export from `mesh_info.npz` / `sample_*.npz` / "NumPy archive" to HDF5 package; update i18n labels and file dialogs | V65,V67 |
 | T55 | . | Convert diagnostics/benchmark/reconstruction output bundles (`outputs.npz`, `result_arrays.npz`, `inverse_3d_overview_data.npz`, gallery bundles) to HDF5; JSON/CSV summaries remain | V40,V65,V67 |
 | T56 | . | Convert MATLAB/interop mesh bridge arrays from `.npz` default to HDF5/v7.3-compatible `.h5`; retain `.mat`/legacy `.npz` import adapters only | V63,V65,V67 |
 | T57 | . | Add mesh IO format benchmark + regression test: compare `.msh` import vs XDMF/HDF5 load on representative meshes; store JSON artifact with speed ratio and tag equality | V66,V68 |

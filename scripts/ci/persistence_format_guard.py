@@ -64,9 +64,6 @@ LEGACY_NUMPY_WRITER_ALLOWLIST = {
     "scripts/diagnostics/run_real_reconstruction_gallery.py|main|np.savez_compressed|data_dir / '3d_slices.npz'",
     "scripts/diagnostics/run_real_reconstruction_gallery_worker.py|main|np.savez_compressed|bundle_path",
     "scripts/mesh_tools/convert_matlab_mesh.py|main|np.savez|args.out_dir / 'mesh.npz'",
-    "src/eit_app/controllers/dataset_generator_controller.py|_DatasetGeneratorWorker.run|np.savez|out_dir / 'mesh_info.npz'",
-    "src/eit_app/controllers/dataset_generator_controller.py|_DatasetGeneratorWorker.run|np.savez|out_dir / f'sample_{i:06d}.npz'",
-    "src/eit_app/ui/main_window.py|EITWorkstation._on_save_sim_results|np.savez|path",
 }
 
 
