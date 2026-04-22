@@ -11,9 +11,14 @@ import sys
 import numpy as np
 
 from pyeidors.data.adc_quantization import (
+    ADCInjectionConfig,
     adc_lsb,
+    add_voltage_noise,
     effective_digits_from_rmse,
+    effective_adc_bits,
     ideal_decimal_digits,
+    inject_adc_measurement,
+    noise_standard_deviation,
     pointwise_effective_digits,
     quantize_voltages,
     rmse,
@@ -27,6 +32,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 def test_ideal_decimal_digits_and_lsb_follow_adc_formula() -> None:
     assert ideal_decimal_digits(12) == 12 * math.log10(2.0)
     assert adc_lsb(10.0, 12) == 10.0 / (2**12)
+    assert effective_adc_bits(12) == 12.0
+    assert effective_adc_bits(12, enob=10.5) == 10.5
+    assert adc_lsb(10.0, 12, enob=10.0) == 10.0 / (2**10)
 
 
 def test_quantize_voltages_uses_round_to_nearest_lsb() -> None:
@@ -35,6 +43,36 @@ def test_quantize_voltages_uses_round_to_nearest_lsb() -> None:
     np.testing.assert_allclose(
         quantize_voltages(voltages, bit=2, full_scale_range=1.0),
         np.array([0.25, 0.25, -0.25, -0.25]),
+    )
+
+
+def test_noise_layer_supports_absolute_relative_and_seeded_noise() -> None:
+    voltages = np.array([3.0, 4.0])
+
+    assert noise_standard_deviation(voltages) == 0.0
+    assert noise_standard_deviation(voltages, noise_std=0.2) == 0.2
+    assert (
+        noise_standard_deviation(voltages, noise_relative=0.1) == math.sqrt(12.5) * 0.1
+    )
+
+    first = add_voltage_noise(voltages, noise_std=0.1, seed=123)
+    second = add_voltage_noise(voltages, noise_std=0.1, seed=123)
+    np.testing.assert_allclose(first, second)
+    assert not np.allclose(first, voltages)
+
+
+def test_adc_injection_applies_noise_then_enob_quantization() -> None:
+    voltages = np.array([0.24, 0.26])
+    config = ADCInjectionConfig(
+        bit=4,
+        full_scale_range=1.0,
+        enob=2.0,
+        noise_std=0.0,
+    )
+
+    np.testing.assert_allclose(
+        inject_adc_measurement(voltages, config),
+        np.array([0.25, 0.25]),
     )
 
 
@@ -65,6 +103,17 @@ def test_adc_sweep_summarizes_requested_bit_depths() -> None:
     assert rows[1].voltage_rmse <= rows[0].voltage_rmse
     assert rows[1].voltage_effective_digits >= rows[0].voltage_effective_digits
 
+    noisy_rows = summarize_adc_sweep(
+        [473.345698734, 42.3456987378],
+        bits=[12, 16],
+        full_scale_range=10000.0,
+        enob=10.0,
+        noise_std=0.01,
+        seed=7,
+    )
+    assert noisy_rows[0].lsb == 10000.0 / (2**10)
+    assert noisy_rows[1].lsb == 10000.0 / (2**10)
+
 
 def test_adc_quant_cli_writes_expected_csv(tmp_path) -> None:
     output = tmp_path / "adc_quant.csv"
@@ -77,6 +126,14 @@ def test_adc_quant_cli_writes_expected_csv(tmp_path) -> None:
             "16",
             "--full-scale",
             "10000",
+            "--enob",
+            "11",
+            "--noise-std",
+            "0.01",
+            "--noise-relative",
+            "0.001",
+            "--seed",
+            "42",
             "--voltages",
             "473.345698734",
             "42.3456987378",
@@ -89,6 +146,8 @@ def test_adc_quant_cli_writes_expected_csv(tmp_path) -> None:
         capture_output=True,
     )
 
+    assert "enob=11" in completed.stdout
+    assert "noise_std=0.01" in completed.stdout
     assert "voltage_effective_digits" in completed.stdout
     with output.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

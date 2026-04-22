@@ -97,6 +97,29 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="ADC full-scale range width in volts, e.g. 10 for +/-5 V.",
     )
     parser.add_argument(
+        "--enob",
+        type=float,
+        help="Optional effective number of bits. Must be <= every requested bit.",
+    )
+    parser.add_argument(
+        "--noise-std",
+        type=float,
+        default=0.0,
+        help="Absolute Gaussian noise standard deviation in volts.",
+    )
+    parser.add_argument(
+        "--noise-relative",
+        type=float,
+        default=0.0,
+        help="RMS-relative Gaussian noise level, e.g. 0.001 for 0.1%.",
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=0,
+        help="Random seed for noise injection.",
+    )
+    parser.add_argument(
         "--voltages",
         nargs="+",
         type=float,
@@ -135,8 +158,20 @@ def main(argv: list[str] | None = None) -> int:
         voltages,
         bits=args.bits,
         full_scale_range=args.full_scale,
+        enob=args.enob,
+        noise_std=args.noise_std,
+        noise_relative=args.noise_relative,
+        seed=args.seed,
     )
     _write_csv(args.output, rows)
+    print(
+        "settings: "
+        f"full_scale={_format_float(args.full_scale)}, "
+        f"enob={_format_float(args.enob) if args.enob is not None else 'nominal'}, "
+        f"noise_std={_format_float(args.noise_std)}, "
+        f"noise_relative={_format_float(args.noise_relative)}, "
+        f"seed={args.seed}"
+    )
     print(_format_table(rows))
     print(f"Wrote {args.output}")
     return 0
