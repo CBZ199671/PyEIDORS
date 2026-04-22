@@ -10,6 +10,7 @@ import contextlib
 import glob
 import importlib
 import io
+import json
 import logging
 from functools import lru_cache
 import os
@@ -43,6 +44,12 @@ _FAST_CONTEXT_CACHE_LOCK = threading.Lock()
 _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
+_RM_ARTIFACT_META_KEYS = (
+    "rm_artifact_path",
+    "dual_model_rm_path",
+    "greit_rm_path",
+    "reconstruction_matrix_path",
+)
 
 
 def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:
@@ -457,6 +464,266 @@ def _resolve_drive_value(
         return stim_uA * 1.0e-6
 
     return float(default)
+
+
+def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
+    for key in _RM_ARTIFACT_META_KEYS:
+        raw = meta.get(key)
+        if raw is None:
+            continue
+        text = str(raw).strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        if path.exists():
+            return path
+        if not path.is_absolute():
+            repo_relative = Path(__file__).resolve().parents[3] / path
+            if repo_relative.exists():
+                return repo_relative
+        raise FileNotFoundError(f"RM artifact path does not exist: {text}")
+    return None
+
+
+def _parse_int_shape(value: Any) -> tuple[int, ...]:
+    if value is None:
+        return ()
+    if isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return ()
+        for sep in ("x", "X", ",", " "):
+            if sep in raw:
+                parts = [part for part in raw.replace("x", sep).replace("X", sep).split(sep) if part]
+                break
+        else:
+            parts = [raw]
+        try:
+            return tuple(int(part) for part in parts if str(part).strip())
+        except ValueError:
+            return ()
+    try:
+        arr = np.asarray(value, dtype=np.int64).reshape(-1)
+    except (TypeError, ValueError):
+        return ()
+    return tuple(int(v) for v in arr if int(v) > 0)
+
+
+def _rm_shape_from_meta(meta: dict[str, Any]) -> tuple[int, ...]:
+    for key in ("rm_voxel_shape", "inverse_voxel_shape", "coarse_shape", "voxel_shape"):
+        shape = _parse_int_shape(meta.get(key))
+        if shape:
+            return shape
+    return ()
+
+
+def _optional_npz_array(payload: Any, key: str, *, dtype: Any) -> np.ndarray | None:
+    if key not in payload:
+        return None
+    arr = np.asarray(payload[key], dtype=dtype)
+    if arr.size == 0:
+        return None
+    return arr
+
+
+def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
+    suffix = path.suffix.lower()
+    if suffix == ".npy":
+        rm = np.asarray(np.load(path, allow_pickle=False), dtype=np.float64)
+        artifact_meta: dict[str, Any] = {}
+        voxel_shape = _rm_shape_from_meta(meta)
+        node_coords = None
+        cell_connectivity = None
+    elif suffix == ".npz":
+        with np.load(path, allow_pickle=False) as payload:
+            if "rm" not in payload:
+                raise ValueError(f"RM artifact is missing 'rm': {path}")
+            rm = np.asarray(payload["rm"], dtype=np.float64)
+            artifact_meta = {}
+            if "metadata_json" in payload:
+                raw_meta = str(payload["metadata_json"].item())
+                try:
+                    artifact_meta = json.loads(raw_meta)
+                except json.JSONDecodeError:
+                    artifact_meta = {"metadata_json": raw_meta}
+            voxel_shape = _parse_int_shape(payload["voxel_shape"]) if "voxel_shape" in payload else ()
+            if not voxel_shape:
+                voxel_shape = _rm_shape_from_meta(meta)
+            node_coords = _optional_npz_array(payload, "node_coords", dtype=np.float64)
+            if node_coords is None:
+                node_coords = _optional_npz_array(payload, "display_node_coords", dtype=np.float64)
+            cell_connectivity = _optional_npz_array(payload, "cell_connectivity", dtype=np.int32)
+            if cell_connectivity is None:
+                cell_connectivity = _optional_npz_array(payload, "display_cell_connectivity", dtype=np.int32)
+    else:
+        raise ValueError(f"Unsupported RM artifact suffix {suffix!r}; expected .npz or .npy.")
+    if rm.ndim != 2 or 0 in rm.shape:
+        raise ValueError(f"RM artifact matrix must be non-empty 2D, got {rm.shape}.")
+    return {
+        "path": str(path),
+        "rm": np.ascontiguousarray(rm, dtype=np.float64),
+        "metadata": artifact_meta,
+        "voxel_shape": tuple(int(v) for v in voxel_shape),
+        "node_coords": node_coords,
+        "cell_connectivity": cell_connectivity,
+    }
+
+
+def _voxel_bounds_from_meta(meta: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
+    raw_bounds = meta.get("rm_voxel_bounds", meta.get("inverse_bounds"))
+    try:
+        bounds = np.asarray(raw_bounds, dtype=np.float64)
+        if bounds.shape == (2, 3) and np.all(np.isfinite(bounds)) and np.all(bounds[1] > bounds[0]):
+            return bounds[0], bounds[1]
+    except (TypeError, ValueError):
+        pass
+    radius = float(meta.get("radius", 1.0) or 1.0)
+    height = float(meta.get("mesh_height", meta.get("height", 2.0 * radius)) or (2.0 * radius))
+    lower = np.asarray([-radius, -radius, -0.5 * height], dtype=np.float64)
+    upper = np.asarray([radius, radius, 0.5 * height], dtype=np.float64)
+    return lower, upper
+
+
+def _voxel_grid_geometry(
+    shape: tuple[int, ...],
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    if len(shape) != 3 or any(int(v) <= 0 for v in shape):
+        return None
+    nx, ny, nz = (int(v) for v in shape)
+    lower, upper = _voxel_bounds_from_meta(meta)
+    axes = [np.linspace(lower[axis], upper[axis], shape[axis] + 1) for axis in range(3)]
+    coords = np.asarray(
+        [[x, y, z] for z in axes[2] for y in axes[1] for x in axes[0]],
+        dtype=np.float64,
+    )
+
+    def node(ix: int, iy: int, iz: int) -> int:
+        return iz * (ny + 1) * (nx + 1) + iy * (nx + 1) + ix
+
+    cells: list[list[int]] = []
+    for iz in range(nz):
+        for iy in range(ny):
+            for ix in range(nx):
+                cells.append(
+                    [
+                        node(ix, iy, iz),
+                        node(ix + 1, iy, iz),
+                        node(ix + 1, iy + 1, iz),
+                        node(ix, iy + 1, iz),
+                        node(ix, iy, iz + 1),
+                        node(ix + 1, iy, iz + 1),
+                        node(ix + 1, iy + 1, iz + 1),
+                        node(ix, iy + 1, iz + 1),
+                    ]
+                )
+    return coords, np.asarray(cells, dtype=np.int32)
+
+
+def _rm_artifact_geometry(
+    artifact: dict[str, Any],
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray]:
+    coords = artifact.get("node_coords")
+    cells = artifact.get("cell_connectivity")
+    if coords is not None and cells is not None:
+        return np.asarray(coords, dtype=np.float64), np.asarray(cells, dtype=np.int32)
+    generated = _voxel_grid_geometry(tuple(artifact.get("voxel_shape", ())), meta)
+    if generated is not None:
+        return generated
+    raise ValueError(
+        "RM artifact hot path requires node/cell geometry or a 3D voxel_shape."
+    )
+
+
+def _try_run_cached_rm_request(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    progress_cb: Callable[[str], None] | None = None,
+) -> ReconstructionResult | None:
+    path = _resolve_rm_artifact_path(runtime.meta)
+    if path is None:
+        return None
+
+    if progress_cb is not None:
+        progress_cb("Loading cached reconstruction matrix...")
+
+    from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
+
+    artifact = _load_rm_artifact(path, runtime.meta)
+    node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
+    ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64)
+    tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
+    difference_mode = str(runtime.meta.get("difference_mode", "raw"))
+    difference_orientation = str(
+        runtime.meta.get("difference_orientation", "target_minus_reference")
+    )
+    dv = build_difference_vector(
+        tgt_vec,
+        ref_vec,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
+    device = str(runtime.meta.get("rm_device", runtime.meta.get("device", "auto")))
+    rm_result = reconstruct_difference_batch(
+        artifact["rm"],
+        dv,
+        normalize=False,
+        device=device,
+        return_metadata=True,
+    )
+    conductivity = np.asarray(rm_result.values, dtype=np.float64).reshape(-1)
+    result_meta = dict(runtime.meta)
+    result_meta.update(
+        {
+            "n_elec": int(runtime.meta["n_elec"]),
+            "reconstruction_runtime": "single_step_cached",
+            "single_step_operator_space": "rm",
+            "online_hot_path": "rm_matmul",
+            "rm_artifact_path": str(path),
+            "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
+            "rm_voxel_shape": tuple(int(v) for v in artifact.get("voxel_shape", ())),
+            "difference_lambda": runtime.lam,
+            "effective_refinement": runtime.refinement,
+            "solver_diagnostics": {
+                "path": "single_step_cached_rm",
+                "strict_solver_backend_effective": "rm",
+                "runtime": {
+                    "online_hot_path": "rm_matmul",
+                    "single_step_operator_space": "rm",
+                    "forward_solve_count": 0,
+                    "adjoint_solve_count": 0,
+                    "jacobian_rebuild_count": 0,
+                    "ksp_solve_count": 0,
+                    "device_requested": str(rm_result.metadata.get("device_requested", device)),
+                    "device_effective": str(rm_result.metadata.get("device_effective", "")),
+                    "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
+                    "rm_artifact_path": str(path),
+                },
+                "cache_lookups": {
+                    "rm_artifact": {
+                        "hit": True,
+                        "layer": "artifact",
+                        "artifact": "reconstruction_matrix",
+                        "key": str(path),
+                    }
+                },
+                "rm_metadata": dict(artifact.get("metadata", {}) or {}),
+                "rm_matmul": dict(rm_result.metadata),
+            },
+        }
+    )
+    if progress_cb is not None:
+        progress_cb("Reconstruction complete")
+    return ReconstructionResult(
+        conductivity=conductivity,
+        node_coords=node_coords,
+        cell_connectivity=cell_connectivity,
+        measured=dv,
+        simulated=None,
+        metadata=result_meta,
+    )
 
 
 def _prepare_single_step_cached_runtime(
@@ -1141,13 +1408,17 @@ def _run_single_step_cached_request(
         if progress_cb is not None:
             progress_cb(message)
 
+    runtime = _prepare_single_step_cached_runtime(req)
+    rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
+    if rm_result is not None:
+        return rm_result
+
     diff_runner = _load_gn_difference_runner_module()
     STRICT_SOLVER_BACKEND_MEASUREMENT = diff_runner.STRICT_SOLVER_BACKEND_MEASUREMENT
     _calibrate_step_size = diff_runner._calibrate_step_size
     _measurement_space_delta = diff_runner._measurement_space_delta
     _solve_linear_from_bundle = diff_runner._solve_linear_from_bundle
     _solve_linearized_delta = getattr(diff_runner, "_solve_linearized_delta", None)
-    runtime = _prepare_single_step_cached_runtime(req)
     meta = runtime.meta
     ctx = _ensure_single_step_cached_context(
         runtime,

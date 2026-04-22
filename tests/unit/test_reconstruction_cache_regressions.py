@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 import sys
@@ -352,6 +353,82 @@ def test_single_step_cached_request_uses_normalized_difference_space(
     assert np.allclose(captured_rhs[0], expected_measured)
     assert np.allclose(result.measured, expected_measured)
     assert np.allclose(result.simulated, expected_simulated)
+
+
+def test_single_step_cached_request_uses_rm_artifact_hot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array([2.0, 4.0, -8.0], dtype=float)
+    target = np.array([3.0, 8.0, -4.0], dtype=float)
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+        ],
+        dtype=np.float64,
+    )
+    artifact = tmp_path / "one_step_rm.npz"
+    np.savez_compressed(
+        artifact,
+        rm=rm,
+        voxel_shape=np.asarray([2, 1, 1], dtype=np.int64),
+        metadata_json=np.asarray(json.dumps({"algorithm": "one-step-noser"})),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "difference_mode": "normalized",
+            "difference_orientation": "target_minus_reference",
+            "dual_model_rm_path": str(artifact),
+            "device": "cpu",
+            "n_elec": 8,
+            "n_rings": 2,
+            "radius": 0.18,
+            "height": 0.16,
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("RM hot path must not build GN context/Jacobian.")
+
+    def _unexpected_runner():
+        raise AssertionError("RM hot path must not import the GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_dv = (target - reference) / reference
+    expected_sigma = rm @ expected_dv
+    assert np.allclose(result.conductivity, expected_sigma)
+    assert np.allclose(result.measured, expected_dv)
+    assert result.simulated is None
+    assert result.node_coords.shape[1] == 3
+    assert result.cell_connectivity.shape == (2, 8)
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["adjoint_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["runtime"]["ksp_solve_count"] == 0
+    assert diagnostics["rm_metadata"]["algorithm"] == "one-step-noser"
 
 
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(
