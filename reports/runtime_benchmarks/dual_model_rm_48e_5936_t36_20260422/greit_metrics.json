@@ -1,0 +1,22 @@
+{
+  "metadata": {
+    "case": "dual_model_rm_v1_synthetic"
+  },
+  "metric_keys": [
+    "AR",
+    "PE",
+    "RES",
+    "SD",
+    "RNG"
+  ],
+  "records": [
+    {
+      "AR": 0.03999997046219719,
+      "PE": 0.03705085140112853,
+      "RES": 0.5263632998046983,
+      "RNG": 0.2351136505301192,
+      "SD": 0.047619047619047616
+    }
+  ],
+  "schema": "pyeidors-greit-metrics-v1"
+}

@@ -15,6 +15,9 @@ from scipy import sparse
 from pyeidors.data.channels import (
     apply_measurement_contract_to_jacobian,
     apply_measurement_contract_to_vector,
+    normalize_bad_channel_mask,
+    prepare_measurement_contract,
+    zero_bad_channel_weights,
 )
 from pyeidors.data.difference import normalize_time_difference
 from pyeidors.perf.gpu_kernels import RMMatmulResult, rm_matmul
@@ -183,11 +186,18 @@ def _normalize_time_difference_frames(
         n_frames=targets.shape[0],
         n_measurements=targets.shape[1],
     )
-    rows = [
-        normalize_time_difference(targets[idx], refs[idx], floor=floor)
-        for idx in range(targets.shape[0])
-    ]
-    return np.vstack(rows)
+    safe = refs.copy()
+    eps = (
+        np.finfo(np.float64).eps
+        if floor is None
+        else float(max(floor, np.finfo(np.float64).eps))
+    )
+    small = np.abs(safe) < eps
+    if np.any(small):
+        signs = np.sign(safe[small])
+        signs[signs == 0.0] = 1.0
+        safe[small] = signs * eps
+    return np.asarray((targets - refs) / safe, dtype=np.float64)
 
 
 def _apply_measurement_contract_to_frames(
@@ -196,15 +206,26 @@ def _apply_measurement_contract_to_frames(
     channel_mask: Any | None,
     measurement_weights: Any | None,
 ) -> np.ndarray:
-    rows = [
-        apply_measurement_contract_to_vector(
-            frames[idx],
-            channel_mask=channel_mask,
-            measurement_weights=measurement_weights,
-        )[0]
-        for idx in range(frames.shape[0])
-    ]
-    return np.vstack(rows)
+    n_measurements = int(frames.shape[1])
+    mask = normalize_bad_channel_mask(channel_mask, n_measurements=n_measurements)
+    out = np.asarray(frames, dtype=np.float64).copy()
+    if np.any(mask):
+        out[:, mask] = 0.0
+    weights, _ = zero_bad_channel_weights(
+        measurement_weights,
+        mask,
+        n_measurements=n_measurements,
+    )
+    if weights.ndim == 1:
+        out *= np.sqrt(weights).reshape(1, -1)
+        return np.ascontiguousarray(out, dtype=np.float64)
+
+    contract = prepare_measurement_contract(
+        n_measurements=n_measurements,
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+    return np.asarray(out @ contract.weight_transform.T, dtype=np.float64)
 
 
 def _as_jacobian(jacobian: Any) -> np.ndarray:

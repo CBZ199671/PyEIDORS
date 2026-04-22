@@ -1,0 +1,804 @@
+{
+  "artifact_load": {
+    "greit": {
+      "metadata": {
+        "algorithm": "greit-3d",
+        "artifact_schema": "pyeidors-greit-rm-v1",
+        "bad_channel_count": 192,
+        "measurement_weight_kind": "diagonal",
+        "n_measurements": 5936,
+        "n_parameters": 144,
+        "noise_figure": 0.01,
+        "online_hot_path": "rm_matmul",
+        "regularisation_source": "identity",
+        "rm_shape": [
+          144,
+          5936
+        ],
+        "solver": "solve",
+        "synthetic_target_count": 144,
+        "system_shape": [
+          5936,
+          5936
+        ],
+        "target_kind": "sphere",
+        "voxel_shape": [
+          6,
+          6,
+          4
+        ]
+      },
+      "path": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/greit_rm.npz",
+      "seconds": 0.05751716700615361
+    },
+    "laplace": {
+      "metadata": {
+        "algorithm": "one-step-laplace",
+        "metadata": {
+          "bad_channel_count": 192,
+          "condition_estimate": 9.24988819020935e+16,
+          "expects_measurement_contract": true,
+          "form": "measurement",
+          "inversion_dimension": "measurement",
+          "lambda": 0.01,
+          "measurement_regularization_source": "identity",
+          "measurement_weight_kind": "diagonal",
+          "mode": "laplace",
+          "n_measurements": 5936,
+          "n_parameters": 144,
+          "prior_inverse_solver": "solve",
+          "regularization_nnz": 840,
+          "regularization_source": "provided_laplace",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "solver": "solve",
+          "system_shape": [
+            5936,
+            5936
+          ]
+        }
+      },
+      "path": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/one_step_laplace_rm.npz",
+      "seconds": 0.028112393978517503
+    },
+    "noser": {
+      "metadata": {
+        "algorithm": "one-step-noser",
+        "metadata": {
+          "bad_channel_count": 192,
+          "condition_estimate": 257106.46747202455,
+          "expects_measurement_contract": true,
+          "form": "measurement",
+          "inversion_dimension": "measurement",
+          "lambda": 0.01,
+          "measurement_regularization_source": "identity",
+          "measurement_weight_kind": "diagonal",
+          "mode": "noser",
+          "n_measurements": 5936,
+          "n_parameters": 144,
+          "prior_inverse_solver": "solve",
+          "regularization_nnz": 144,
+          "regularization_source": "diag_jtj",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "solver": "solve",
+          "system_shape": [
+            5936,
+            5936
+          ]
+        }
+      },
+      "path": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/one_step_noser_rm.npz",
+      "seconds": 0.030399559007491916
+    }
+  },
+  "artifacts": {
+    "forward_rm_benchmark": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/forward_rm_benchmark.json",
+    "greit_metrics": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/greit_metrics.json",
+    "greit_rm": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/greit_rm.npz",
+    "markdown_report": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/README.md",
+    "one_step_laplace_rm": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/one_step_laplace_rm.npz",
+    "one_step_noser_rm": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/one_step_noser_rm.npz",
+    "summary_json": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/summary.json"
+  },
+  "config": {
+    "coarse_shape": [
+      6,
+      6,
+      4
+    ],
+    "devices": [
+      "cpu",
+      "cuda"
+    ],
+    "dtype": "float32",
+    "fine_per_coarse": 4,
+    "lambda": 0.01,
+    "n_elec": 48,
+    "n_frames": 512,
+    "n_measurements": 5936,
+    "n_rings": 3,
+    "noise_figure": 0.01,
+    "seed": 20260421
+  },
+  "dual_mesh": {
+    "method": "piecewise_constant",
+    "n_coarse_cells": 144,
+    "n_fine_cells": 576,
+    "outside": "nearest",
+    "projection_nnz": 576
+  },
+  "forward_reference": {
+    "forward_mesh": {
+      "elements": 8912,
+      "geometry_version": "geomv2",
+      "mesh_family": "tetra",
+      "nodes": 1989,
+      "potential_dofs": 1989,
+      "sigma_dofs": 8912
+    },
+    "forward_reference_found": true,
+    "forward_reference_path": "reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json",
+    "forward_solver": {
+      "dense_mat_type": "densecuda",
+      "ksp_type": "cg",
+      "mat_solve_effective": "vec-loop",
+      "mat_type": "seqaijcusparse",
+      "n_patterns": 48,
+      "pc_subtype": "agg",
+      "pc_type": "gamg",
+      "petsc_device_effective": "cuda",
+      "setup_seconds": 0.11107550899032503,
+      "solve_seconds": 4.768244678998599,
+      "solver_preset": "spd_gamg",
+      "vec_type": "seqcuda"
+    },
+    "lazy_context": {
+      "cache_build_seconds": {
+        "base_meas": 1.1535906289936975,
+        "jacobian": 1.2330169979832135,
+        "mesh": 0.3322829959797673,
+        "operator_noser": 0.006817812012741342,
+        "operator_precond": 0.006979747005971149
+      },
+      "context_build_seconds": 3.384370838990435,
+      "forward_policy": {
+        "forward_mat_solve_effective": null,
+        "pc_gamg_type": "agg",
+        "pc_type": "gamg",
+        "petsc_device_effective": "cuda",
+        "solver_preset": "spd_gamg"
+      },
+      "jacobian_shape": [
+        5936,
+        5166
+      ],
+      "mesh_cache_hit": false,
+      "mesh_cache_layer": "generated",
+      "n_meas_total": 5936,
+      "torch_device": "cuda"
+    },
+    "lazy_reference_found": true,
+    "lazy_reference_path": "reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json"
+  },
+  "git_commit": "1709304",
+  "greit": {
+    "metadata": {
+      "algorithm": "greit-3d",
+      "artifact_path": "reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/greit_rm.npz",
+      "artifact_schema": "pyeidors-greit-rm-v1",
+      "bad_channel_count": 192,
+      "measurement_weight_kind": "diagonal",
+      "n_measurements": 5936,
+      "n_parameters": 144,
+      "noise_figure": 0.01,
+      "online_hot_path": "rm_matmul",
+      "regularisation_source": "identity",
+      "rm_shape": [
+        144,
+        5936
+      ],
+      "solver": "solve",
+      "synthetic_target_count": 144,
+      "system_shape": [
+        5936,
+        5936
+      ],
+      "target_kind": "sphere",
+      "voxel_shape": [
+        6,
+        6,
+        4
+      ]
+    },
+    "metric_keys": [
+      "AR",
+      "PE",
+      "RES",
+      "SD",
+      "RNG"
+    ],
+    "metrics": {
+      "AR": 0.03999997046219719,
+      "PE": 0.03705085140112853,
+      "RES": 0.5263632998046983,
+      "RNG": 0.2351136505301192,
+      "SD": 0.047619047619047616
+    }
+  },
+  "online_apply": {
+    "greit": {
+      "cpu": {
+        "apply_1_frame_seconds": 0.013911981979617849,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.08579723999719135,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "algorithm": "greit-3d",
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "greit:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false,
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ]
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "algorithm": "greit-3d",
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "greit:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false,
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ]
+        },
+        "output_norm_1_frame": 0.14482305449275007,
+        "output_norm_batch": 3.2782795795871693,
+        "prepare_seconds": 0.013481847010552883
+      },
+      "cuda": {
+        "apply_1_frame_seconds": 0.0013524829992093146,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.033325144002446905,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "algorithm": "greit-3d",
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "greit:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true,
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ]
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "algorithm": "greit-3d",
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "greit:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true,
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ]
+        },
+        "output_norm_1_frame": 0.14482303536659236,
+        "output_norm_batch": 3.278279560920984,
+        "prepare_seconds": 0.002769741986412555
+      }
+    },
+    "laplace": {
+      "cpu": {
+        "apply_1_frame_seconds": 0.004874583013588563,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.06991905701579526,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "one-step:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "one-step:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false
+        },
+        "output_norm_1_frame": 0.13469943905313927,
+        "output_norm_batch": 3.0491168589985906,
+        "prepare_seconds": 0.003860663011437282
+      },
+      "cuda": {
+        "apply_1_frame_seconds": 0.001757107995217666,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.03695750798215158,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "one-step:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "one-step:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true
+        },
+        "output_norm_1_frame": 0.134699442893663,
+        "output_norm_batch": 3.049116864803354,
+        "prepare_seconds": 0.0028846230125054717
+      }
+    },
+    "noser": {
+      "cpu": {
+        "apply_1_frame_seconds": 0.03026061598211527,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.1789170429983642,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "one-step:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "backend": "numpy",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cpu",
+          "device_requested": "cpu",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "none",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "one-step:cpu:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "cpu",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": false
+        },
+        "output_norm_1_frame": 0.13072477823059575,
+        "output_norm_batch": 2.9591446993763033,
+        "prepare_seconds": 0.003996566025307402
+      },
+      "cuda": {
+        "apply_1_frame_seconds": 0.10349696199409664,
+        "apply_batch_n_frames": 512,
+        "apply_batch_seconds": 0.05105673600337468,
+        "metadata_1_frame": {
+          "adjoint_solve_count": 0,
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            1,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 1,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            1,
+            144
+          ],
+          "rm_cache_key": "one-step:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true
+        },
+        "metadata_batch": {
+          "adjoint_solve_count": 0,
+          "backend": "torch",
+          "batched": true,
+          "delta_v_shape": [
+            512,
+            5936
+          ],
+          "device_effective": "cuda",
+          "device_requested": "cuda",
+          "fallback_reason": null,
+          "forward_solve_count": 0,
+          "host_device_transfer": "delta_v_to_device+output_to_host",
+          "jacobian_rebuild_count": 0,
+          "ksp_solve_count": 0,
+          "n_frames": 512,
+          "online_hot_path": "rm_matmul",
+          "output_shape": [
+            512,
+            144
+          ],
+          "rm_cache_key": "one-step:cuda:float32",
+          "rm_dtype": "float32",
+          "rm_matrix_resident": "device",
+          "rm_persistent": true,
+          "rm_prepare_mode": "reused_handle",
+          "rm_shape": [
+            144,
+            5936
+          ],
+          "rm_tensor_reused": true
+        },
+        "output_norm_1_frame": 0.13072479244655932,
+        "output_norm_batch": 2.9591447203109644,
+        "prepare_seconds": 0.07154380599968135
+      }
+    }
+  },
+  "operator_dense_check": {
+    "max_abs_error": 0.0
+  },
+  "previous_greit_reference": {
+    "comparisons": {
+      "cpu": {
+        "current_batch_seconds": 0.08579723999719135,
+        "previous_batch_seconds": 36.75269284599926,
+        "speedup": 428.36684311992315
+      },
+      "cuda": {
+        "current_batch_seconds": 0.033325144002446905,
+        "previous_batch_seconds": 35.92763138900045,
+        "speedup": 1078.093807677544
+      }
+    },
+    "found": true,
+    "path": "reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json",
+    "previous_warm_seconds": {
+      "apply_auto_1_frame": 0.4069385649927426,
+      "apply_auto_512_frames": 35.92763138900045,
+      "apply_cpu_1_frame": 0.06068810398573987,
+      "apply_cpu_512_frames": 36.75269284599926,
+      "artifact_load": 0.060473150020698085
+    }
+  },
+  "rm_builds": {
+    "laplace": {
+      "metadata": {
+        "bad_channel_count": 192,
+        "condition_estimate": 9.24988819020935e+16,
+        "expects_measurement_contract": true,
+        "form": "measurement",
+        "inversion_dimension": "measurement",
+        "lambda": 0.01,
+        "measurement_regularization_source": "identity",
+        "measurement_weight_kind": "diagonal",
+        "mode": "laplace",
+        "n_measurements": 5936,
+        "n_parameters": 144,
+        "prior_inverse_solver": "solve",
+        "regularization_nnz": 840,
+        "regularization_source": "provided_laplace",
+        "rm_shape": [
+          144,
+          5936
+        ],
+        "solver": "solve",
+        "system_shape": [
+          5936,
+          5936
+        ]
+      },
+      "seconds": 73.07597473799251
+    },
+    "noser": {
+      "metadata": {
+        "bad_channel_count": 192,
+        "condition_estimate": 257106.46747202455,
+        "expects_measurement_contract": true,
+        "form": "measurement",
+        "inversion_dimension": "measurement",
+        "lambda": 0.01,
+        "measurement_regularization_source": "identity",
+        "measurement_weight_kind": "diagonal",
+        "mode": "noser",
+        "n_measurements": 5936,
+        "n_parameters": 144,
+        "prior_inverse_solver": "solve",
+        "regularization_nnz": 144,
+        "regularization_source": "diag_jtj",
+        "rm_shape": [
+          144,
+          5936
+        ],
+        "solver": "solve",
+        "system_shape": [
+          5936,
+          5936
+        ]
+      },
+      "seconds": 84.92592572499416
+    }
+  },
+  "schema": "pyeidors-dual-model-rm-v1-benchmark",
+  "scope": "48e/5936 RM-layer benchmark; forward/J cold path cited from real spd_gamg CUDA reports",
+  "sizes": {
+    "bad_channels": 192,
+    "coarse2fine_nnz": 576,
+    "coarse2fine_shape": [
+      576,
+      144
+    ],
+    "coarse_unknowns": 144,
+    "fine_cells": 576,
+    "frames": 512,
+    "measurements": 5936
+  },
+  "timestamp_utc": "2026-04-22T03:32:03.775333+00:00",
+  "timings_seconds": {
+    "coarse2fine_projection": 0.0006813020154368132,
+    "dual_operator_materialize_dense_check": 0.39471586298896,
+    "fine_j_projection": 0.025733515998581424,
+    "fine_mesh_setup": 0.0032895689946599305,
+    "greit_rm_build": 2.606760533002671,
+    "synthetic_coarse_j_build": 0.05115155398380011
+  }
+}

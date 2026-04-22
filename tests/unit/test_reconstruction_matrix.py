@@ -308,6 +308,44 @@ def test_reconstruct_difference_batch_reuses_normalization_and_weight_contract()
     assert result.metadata["device_effective"] == "cpu"
 
 
+def test_reconstruct_difference_batch_matches_rowwise_contract_with_large_diagonal() -> (
+    None
+):
+    n_measurements = 32
+    n_frames = 7
+    rm = np.arange(4 * n_measurements, dtype=float).reshape(4, n_measurements) / 100.0
+    reference = np.linspace(2.0, 4.0, n_measurements)
+    targets = np.vstack(
+        [reference * (1.0 + 0.001 * (idx + 1)) for idx in range(n_frames)]
+    )
+    mask = np.zeros(n_measurements, dtype=bool)
+    mask[::5] = True
+    weights = np.linspace(0.5, 2.0, n_measurements)
+
+    result = reconstruct_difference_batch(
+        rm,
+        targets,
+        normalize=True,
+        v_ref=reference,
+        channel_mask=mask,
+        measurement_weights=weights,
+        device="cpu",
+        return_metadata=True,
+    )
+
+    normalized = np.vstack(
+        [normalize_time_difference(row, reference) for row in targets]
+    )
+    expected_payload = normalized.copy()
+    expected_payload[:, mask] = 0.0
+    masked_weights = weights.copy()
+    masked_weights[mask] = 0.0
+    expected_payload *= np.sqrt(masked_weights).reshape(1, -1)
+    np.testing.assert_allclose(result.values, expected_payload @ rm.T)
+    assert result.metadata["forward_solve_count"] == 0
+    assert result.metadata["ksp_solve_count"] == 0
+
+
 def test_reconstruct_difference_batch_accepts_single_frame_vector() -> None:
     rm = np.array([[1.0, 2.0], [3.0, -1.0]], dtype=float)
     dv = np.array([0.5, 2.0], dtype=float)

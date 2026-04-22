@@ -1,0 +1,10 @@
+{
+  "metadata": {
+    "case": "dual_model_rm_v1_synthetic",
+    "rm_signature": "dc0895b74c759264222506fcd88cf5178bd984595dfd4a92bfb416a7a0b1c33d"
+  },
+  "offline_rm_build_seconds": 84.92592572499416,
+  "online_hot_path": "rm_matmul",
+  "online_rm_apply_seconds": 0.1789170429983642,
+  "schema": "pyeidors-forward-rm-benchmark-v1"
+}
