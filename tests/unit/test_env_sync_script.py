@@ -161,3 +161,37 @@ def test_check_mode_defaults_to_active_profile_venv(tmp_path: Path):
     uv_log = (repo / "uv.log").read_text(encoding="utf-8")
     assert "--python .venv-cuda/bin/python" in uv_log
     assert "--active" in uv_log
+
+
+def test_check_mode_uses_fresh_cache_when_enabled(tmp_path: Path):
+    repo, env = _build_fake_repo(tmp_path)
+    env["PYEIDORS_ENV_SYNC_CACHE"] = "1"
+
+    first = _run(repo, env, "--check")
+    assert first.returncode == 0
+    assert (repo / "uv.log").exists()
+
+    (repo / "uv.log").unlink()
+    second = _run(repo, env, "--check")
+
+    assert second.returncode == 0
+    assert "cached locked environment check is fresh" in second.stdout
+    assert not (repo / "uv.log").exists()
+
+
+def test_check_mode_cache_invalidates_when_lock_changes(tmp_path: Path):
+    repo, env = _build_fake_repo(tmp_path)
+    env["PYEIDORS_ENV_SYNC_CACHE"] = "1"
+    (repo / "uv.lock").write_text("version = 1\n", encoding="utf-8")
+
+    first = _run(repo, env, "--check")
+    assert first.returncode == 0
+
+    (repo / "uv.log").unlink()
+    (repo / "uv.lock").write_text("version = 2\n", encoding="utf-8")
+    second = _run(repo, env, "--check")
+
+    assert second.returncode == 0
+    uv_log = (repo / "uv.log").read_text(encoding="utf-8")
+    assert "lock --check" in uv_log
+    assert "sync" in uv_log

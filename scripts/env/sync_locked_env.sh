@@ -8,6 +8,9 @@ readonly EXPECTED_PY_MM="3.13"
 readonly ACTIVE_VENV_DIR="${PYEIDORS_ACTIVE_VENV:-.venv}"
 readonly PYTHON_BIN="${PYTHON_BIN:-${ACTIVE_VENV_DIR}/bin/python}"
 readonly ALLOW_INEXACT_SYNC="${PYEIDORS_ENV_SYNC_INEXACT:-0}"
+readonly CACHE_ENABLED="${PYEIDORS_ENV_SYNC_CACHE:-0}"
+readonly CACHE_TTL_SECONDS="${PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS:-43200}"
+readonly CACHE_DIR="${PYEIDORS_ENV_SYNC_CACHE_DIR:-.pyeidors_cache/v2/env-sync}"
 readonly PROFILE_EXTRAS=(torch cuqi dev eit-app)
 readonly OPTIONAL_PERF_EXTRAS=(performance)
 
@@ -43,6 +46,17 @@ EOF
 
 perf_enabled() {
   [ "${ENABLE_PERFORMANCE_EXTRAS:-0}" = "1" ]
+}
+
+env_flag_enabled() {
+  case "${1:-}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
 }
 
 ensure_commands() {
@@ -175,6 +189,80 @@ else:
 PY
 }
 
+file_cache_digest() {
+  local path="$1"
+  if [ -f "$path" ]; then
+    sha256sum "$path" | awk '{print $1}'
+  else
+    printf 'missing:%s' "$path"
+  fi
+}
+
+sync_cache_ttl_seconds() {
+  case "$CACHE_TTL_SECONDS" in
+    ''|*[!0-9]*)
+      printf '0'
+      ;;
+    *)
+      printf '%s' "$CACHE_TTL_SECONDS"
+      ;;
+  esac
+}
+
+sync_cache_key() {
+  {
+    printf 'active_venv=%s\n' "$ACTIVE_VENV_DIR"
+    printf 'python_bin=%s\n' "$PYTHON_BIN"
+    printf 'expected_python=%s\n' "$EXPECTED_PY_MM"
+    printf 'env_profile=%s\n' "${PYEIDORS_ENV_PROFILE:-}"
+    printf 'allow_inexact=%s\n' "$ALLOW_INEXACT_SYNC"
+    printf 'perf_extras=%s\n' "${ENABLE_PERFORMANCE_EXTRAS:-0}"
+    printf 'uv_path=%s\n' "$(command -v uv 2>/dev/null || true)"
+    printf 'pyproject=%s\n' "$(file_cache_digest pyproject.toml)"
+    printf 'uv_lock=%s\n' "$(file_cache_digest uv.lock)"
+    printf 'flake=%s\n' "$(file_cache_digest flake.nix)"
+    printf 'sync_script=%s\n' "$(file_cache_digest scripts/env/sync_locked_env.sh)"
+    printf 'pyvenv=%s\n' "$(file_cache_digest "${ACTIVE_VENV_DIR}/pyvenv.cfg")"
+  } | sha256sum | awk '{print $1}'
+}
+
+sync_cache_path() {
+  local key
+  key="$(sync_cache_key)"
+  printf '%s/%s.stamp' "$CACHE_DIR" "$key"
+}
+
+sync_cache_is_fresh() {
+  env_flag_enabled "$CACHE_ENABLED" || return 1
+
+  local ttl now stamp_path stamp age
+  ttl="$(sync_cache_ttl_seconds)"
+  [ "$ttl" -gt 0 ] || return 1
+
+  stamp_path="$(sync_cache_path)"
+  [ -f "$stamp_path" ] || return 1
+
+  stamp="$(cat "$stamp_path" 2>/dev/null || true)"
+  case "$stamp" in
+    ''|*[!0-9]*)
+      return 1
+      ;;
+  esac
+
+  now="$(date +%s)"
+  age=$((now - stamp))
+  [ "$age" -ge 0 ] && [ "$age" -le "$ttl" ]
+}
+
+write_sync_cache_stamp() {
+  env_flag_enabled "$CACHE_ENABLED" || return 0
+
+  local stamp_path
+  mkdir -p "$CACHE_DIR"
+  stamp_path="$(sync_cache_path)"
+  date +%s > "$stamp_path"
+}
+
 lock_freshness_check() {
   if run_with_log uv lock --check; then
     return 0
@@ -187,6 +275,11 @@ lock_freshness_check() {
 run_check() {
   ensure_commands
   ensure_python_version
+  if sync_cache_is_fresh; then
+    echo "[env-sync] cached locked environment check is fresh"
+    return 0
+  fi
+
   lock_freshness_check
   build_sync_cmd
 
@@ -203,6 +296,8 @@ run_check() {
     echo "[env-sync] Repair command: scripts/env/sync_locked_env.sh --repair" >&2
     return 1
   }
+
+  write_sync_cache_stamp
 }
 
 run_repair() {
@@ -214,6 +309,7 @@ run_repair() {
   echo "[env-sync] repairing environment with locked profile..."
   "${SYNC_CMD[@]}"
   run_import_checks
+  write_sync_cache_stamp
   echo "[env-sync] repair completed"
 }
 

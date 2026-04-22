@@ -44,7 +44,8 @@ if [[ -f "$REPO_ROOT/.git" ]]; then
 fi
 
 PROFILE="cpu"
-SKIP_CUDA_PROBE="0"
+SKIP_CUDA_PROBE="1"
+ENV_SYNC_CACHE="${PYEIDORS_ENV_SYNC_CACHE:-1}"
 APP_ARGS=()
 NIX_OPTS=(--option warn-dirty false)
 
@@ -81,6 +82,14 @@ while (($# > 0)); do
       SKIP_CUDA_PROBE="1"
       shift
       ;;
+    --probe-cuda|--check-cuda|--verify-cuda)
+      SKIP_CUDA_PROBE="0"
+      shift
+      ;;
+    --full-env-check)
+      ENV_SYNC_CACHE="0"
+      shift
+      ;;
     --)
       shift
       APP_ARGS+=("$@")
@@ -104,6 +113,9 @@ INNER_SCRIPT="$REPO_ROOT/scripts/gui/run_eit_app_inner.sh"
 # snippet (instead of via `env VAR=val`) because the `env`-prefix form
 # interacts badly with nix develop on some hosts.
 # `printf '%q'` safely quotes each value against spaces / special chars.
+export PYEIDORS_ENV_SYNC_CACHE="$ENV_SYNC_CACHE"
+export PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS="${PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS:-43200}"
+
 BASH_PAYLOAD=$(cat <<EOF
 set -euo pipefail
 export EIT_APP_GUI_PROFILE=$(printf '%q' "$PROFILE")

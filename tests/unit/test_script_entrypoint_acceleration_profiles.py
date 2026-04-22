@@ -20,6 +20,15 @@ def _load_script_module(*parts: str):
     return module
 
 
+def test_v51_gui_launcher_defaults_to_fast_startup_contract():
+    launcher = Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    text = launcher.read_text(encoding="utf-8")
+
+    assert 'SKIP_CUDA_PROBE="1"' in text
+    assert "--probe-cuda" in text
+    assert "PYEIDORS_ENV_SYNC_CACHE" in text
+
+
 def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
     monkeypatch.setattr(
