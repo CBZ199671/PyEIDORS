@@ -19,6 +19,8 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - research: SBL/sparse Bayesian, self-built PETSc AmgX, full-chain GPU Jacobian.
 - not mainline: full 3D dense-J absolute GN, full 3D direct LU/Cholesky, per-frame forward+Jacobian+GN.
 
+**3D GREIT parity note:** current code = linearized 3D GREIT-RM v0 (`Y = T @ J.T`, `D ≈ T`). EIDORS-complete target = `GREIT3D_distribution` + finite-target forward training `vh/vi` + `desired_solution_fn` + `calc_GREIT_RM` + NF weight search + MATLAB parity gates + HDF5 large-cache artifact. No UI/docs may claim "EIDORS同款 / official-equivalent / perfect stable 3D GREIT" until T40..T50 x and V55..V65 hold.
+
 ## §C — constraints
 
 - Python 3.13.x, `>=3.13,<3.14`
@@ -27,6 +29,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - PyTorch ~2.10, optional CUDA via `nix develop .#cuda`
 - AmgX ? research-only: no FEniCSx version bump required; requires Nix rebuild of PETSc with PCAMGX + same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`
 - NumPy/SciPy/pandas/h5py/pyyaml mandatory; `pyamg`/`scikit-sparse` optional
+- Large FEM / RM / GREIT cache artifacts target HDF5 `.h5`; DOLFINx mesh-coupled cache uses XDMF + HDF5 sidecar; `.npz` allowed only legacy / small unit-test fixtures
 - Nix + uv dev path, WSL2 supported; GUI launcher `scripts/gui/run_eit_app.sh`
 - PySide6 GUI under `src/eit_app/`
 - MIT license
@@ -81,6 +84,8 @@ Provisional module paths; see §T.T15..T32 for per-feature scope. All marked `?`
   - `build_3d_greit_rm(fwd_model, targets, noise_figure, regularisation) -> GREITRM`
   - `GREITRM.reconstruct(dv) -> voxel_image`
   - `greit_metrics(voxel_image, target_mask) -> {AR, PE, RES, SD, RNG}`
+  - planned EIDORS parity: `build_eidors_3d_greit_model(config) -> GREITRM`; config covers `imgsz/xvec/yvec/zvec`, `distr`, `Nsim`, `target_size`, `target_plane`, `target_offset`, `noise_figure|weight`, `noise_covar`, `desired_solution_fn`, `training_mode="forward"|"linearized"`, `keep_model_components`
+  - planned EIDORS parity artifact: HDF5 `.h5` stores `RM`, `PJt`, `M`, `noiselev`, `weight_chosen`, `vh`, `vi`, `xyzr`, `D`, `Y`, `rec_model`, cache signature; `.npz` is legacy/small-test only
 - `pyeidors.inverse.matrix_free.dual_mesh`: `DualMeshJacobianOperator(fwd_model, coarse2fine)` exposing `Jv`, `JTr`, `normal_matvec`
 - `pyeidors.inverse.block_system` (extended): `build_sigma_contact_movement_block_metadata(n_sigma, n_contact, n_electrodes_dofs)`; adds `H_sigma_e`, `H_z_e`, `H_e_e` couplings + `prior_movement` hook
 - `pyeidors.data.difference.normalize_time_difference(v_t, v_ref, floor=...) -> dv_norm`
@@ -96,6 +101,9 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 - `--normalize-difference on|off`
 - `--greit-targets <path>`, `--greit-metrics-out <path>`
 - `--bad-channel-mask <csv|json>`
+- `scripts/benchmarks/benchmark_mesh_io_formats.py --mesh <path.msh|path.xdmf> --repeats N --output-json <path>` — compare `.msh` import vs XDMF/HDF5 load, verify cells/vertices/facet-tags/cell-tags equal
+- `scripts/cache/migrate_artifacts_to_hdf5.py --root <path> --dry-run|--apply` — migrate legacy `.npz/.npy` numeric artifacts to `.h5`, leave source read-only backup, emit manifest
+- `pyeidors.io.hdf5_artifacts`: `write_hdf5_artifact(path, arrays, metadata, chunks, compression)`, `read_hdf5_artifact(path, lazy=True)`, `migrate_npz_to_hdf5(src, dst)`
 
 ## §V — invariants
 
@@ -150,9 +158,25 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V47 | Current 3D forward default: PETSc sparse `spd_gamg + petsc_device=cuda + forward_mat_solve=off`; direct LU/MUMPS allowed for 2D, tiny 3D, debug/reference only; Hypre CUDA blacklisted; AmgX research gated by V43 | V6,V42,V43,V44,V45; reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json |
 | V48 | Dense-J GN status: implemented and valid as baseline/RM-build/reference; 48e/5936 cold path dominated by Jacobian build, not realtime default. Warm semantic cache may be fast, but cache hit cannot be required for first-frame usability | src/pyeidors/core_system.py:716; src/pyeidors/inverse/jacobian/direct_jacobian.py; reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json |
 | V49 | Inverse sparse/matrix-free status: `JacobianLinearization`, lazy adjoint, dual-mesh operator, PETSc/Scipy matrix-free PCG, sparse priors, TV, SBL exist as phase-2/research. They must not replace cached RM as v1 realtime default until end-to-end 48e/5936 benchmark beats RM hot path | src/pyeidors/inverse/jacobian/linearized.py; src/pyeidors/inverse/matrix_free/dual_mesh.py; src/pyeidors/inverse/solvers/gauss_newton_runtime.py; tests/unit/test_gn_fast_linear_solver.py |
-| V50 | 3D GREIT current status: official-aligned + optimized for 48e/5936 online apply. Production claim requires persistent RM/tensor, batched frames, minimized CPU↔GPU copies, and T36 cold/warm report beating previous GREIT RM-layer artifact | src/pyeidors/inverse/greit.py; src/pyeidors/perf/gpu_kernels.py; reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json; reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/summary.json |
+| V50 | 3D GREIT current status: linearized RM v0, optimized for 48e/5936 online apply, NOT EIDORS-complete. `training_responses = T @ J.T`, `D≈T`, no finite-target `vh/vi`, no `desired_solution_fn`, no NF weight search, no official MATLAB parity gate, no HDF5 large-cache artifact yet. Production "EIDORS同款" claim ! forbidden until V55..V65 + T40..T50 | src/pyeidors/inverse/greit.py; tests/unit/test_greit_rm.py; reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/summary.json; B11 |
 | V51 | WSLg GUI launch default keeps the main PySide6 surface on Wayland-first Qt (`QT_QPA_PLATFORM=wayland;xcb`) when `WAYLAND_DISPLAY` exists, preserving crisp HiDPI text; XCB is explicit opt-in (`EIT_APP_USE_QT_XCB=1`) or no-Wayland fallback. GUI launch defaults to cached env sync + skipped PETSc CUDA probe; lock/config changes invalidate cache and `--probe-cuda` / `--full-env-check` restore full verification. First paint must not synchronously load the heavy pyeidors/PETSc/Torch/CUQI runtime or block on Windows COM discovery; those run on demand | tests/unit/test_eit_app_bootstrap.py; tests/unit/test_env_sync_script.py; tests/unit/test_script_entrypoint_acceleration_profiles.py; tests/unit/test_eit_app_gui_smoke.py |
 | V52 | Benchmark / launch timing harness ! immune to PATH-shadowed coreutils: timing commands use `/usr/bin/env` explicitly OR first assert `command -v env == /usr/bin/env`; artifact records `env_path`. `/home/tom/.local/bin/env` or any user shim must not make benchmark/GUI launch appear as `real 0.00` without executing payload | future benchmark-env guard; B8,T37 |
+| V53 | GUI `single_step_cached` difference path ! only call `fwd_solve` with finite `sigma_est = sigma_bg + alpha * delta_sigma` and `min(sigma_est) > sigma_floor`; step-size calibration candidates with nonfinite or floor-violating `sigma_try` return `inf` objective; fallback alpha ! preserve feasible sigma. `cuda_structured` invalid-diagonal guard stays fail-fast | future tests/unit/test_conductivity_3d_widget_runtime.py; B9,T38 |
+| V54 | GUI 3D PyVista offscreen drag frames may lower render framebuffer resolution for responsiveness, but the QLabel pixmap logical size MUST stay constant across drag and idle frames; rotating/zooming 3D truth or reconstruction views must not visibly shrink/grow/flicker | tests/unit/test_conductivity_3d_widget_runtime.py |
+| V55 | EIDORS-parity 3D GREIT target distribution ! match `GREIT3D_distribution`: voxel volume rec model via `imgsz` or explicit `xvec/yvec/zvec`, one target per valid voxel by default, `downsample` support, point-in-volume mask, 3D `xyz` centers inside rec volume. 2D `xg/yg` raster path ⊥ for parity mode | future `src/pyeidors/inverse/greit.py`; EIDORS `GREIT3D_distribution` |
+| V56 | EIDORS-parity training response mode ! use finite target perturbation forward solves: homogeneous `vh` + inhomogeneous `vi` for each `xyzr` target on fine CEM model. Linearized shortcut `Y = T @ J.T` allowed only as `training_mode="linearized"` and artifact labels `eidors_parity=false` | future `src/pyeidors/inverse/greit.py`; EIDORS `mk_GREIT_model` `stim_targets` |
+| V57 | Difference normalization parity: if `normalize=1`, `Y = vi ./ vh - 1`; else `Y = vi - vh`. Same mode used for offline RM build and online `GREITRM.reconstruct`; channel ordering and bad-channel deletion/zeroing deterministic | future tests/unit/test_greit_eidors_parity.py; EIDORS `calc_GREIT_RM` |
+| V58 | Desired image parity: `D = desired_solution_fn(xyz, radius, options)`; default approximates EIDORS `GREIT_desired_img` over 3D rec model. `D` shape = `n_rec_parameters × n_targets`; `D≈T` only explicit opt-in, never default parity mode | future `src/pyeidors/inverse/greit.py`; EIDORS `calc_GREIT_RM` |
+| V59 | RM formula parity: `PJt = D @ Y.T`; `noiselev = weight * mean(abs(Y))`; `Sn = I * noise_covar` or provided covariance; `M = Y @ Y.T + noiselev² * Sn`; `RM = solve(M.T, PJt.T).T`; use transpose, not conjugate transpose; singular fallback emits diagnostic | future tests/unit/test_greit_calc_rm_parity.py; EIDORS `calc_GREIT_RM` |
+| V60 | NF / image-SNR weight selection parity: if `noise_figure` or `image_SNR` set and scalar `weight` absent, bounded log10 search chooses scalar weight; objective uses simulated NF/SNR target measurements; chosen weight, achieved metric, tolerance, search bracket stored in artifact | future tests/unit/test_greit_noise_figure.py; EIDORS `mk_GREIT_model` |
+| V61 | `keep_model_components` parity: HDF5 artifact stores `RM`, `PJt`, `M`, `noiselev`, `weight`, `vh`, `vi`, `xyzr`, `D`, `Y`, `rec_model`, `fwd_model_signature`; expensive `PJt` cache independent of weight so NF search does not recompute desired-image product | future artifact schema `pyeidors-greit-eidors-hdf5-v1`; EIDORS `mk_GREIT_model` |
+| V62 | GREIT RM cache signature ! include V55..V61 math inputs: target distribution grid/downsample, finite target contrast/size/radius/plane/offset, `desired_solution_fn` identity + params, `normalize`, `noise_covar`, scalar weight or target NF/SNR, training mode, forward solver signature. Device/dtype affect storage only | future tests/unit/test_greit_cache_signature.py; V36 |
+| V63 | MATLAB EIDORS parity gate: same bridge geometry/protocol/background/targets in MATLAB EIDORS and PyEIDORS; compare `Y`, `D`, `PJt`, `M`, `noiselev`, `RM @ dv`, GREIT metrics. Hard tolerances must be recorded per fixture; unknown tolerance marked `?` until first official fixture | future scripts/diagnostics/compare_greit_eidors_parity.py |
+| V64 | After EIDORS-parity RM artifact exists, online path remains one matmul: load HDF5 `RM` + metadata, normalize/weight `dv`, apply `RM @ dv`; no forward solve/Jacobian/KSP per frame. Common hardware configs may be precomputed offline; warm use = `.h5` load + optional GPU handle | future GUI/CLI warmup tests; V37,V40 |
+| V65 | Large cache format: DOLFINx/FEniCSx mesh-coupled artifacts use XDMF + HDF5; GREIT/RM/training-response caches use HDF5 `.h5` with chunking/compression/checksum metadata. `.npz` must not be default for large 3D caches; legacy `.npz` loaders remain read-only compatibility | DOLFINx `XDMFFile` HDF5 default; src/pyeidors/geometry/dolfinx_mesh_cache.py; future `pyeidors.cache.hdf5_artifacts` |
+| V66 | Mesh first-load policy: if XDMF/HDF5 cache exists, `MeshLoader` loads it first even when source `.msh` missing; metadata/freshness may use explicit mesh content hash or cache manifest, not mandatory `.msh` mtime. If only `.msh` exists, import once → write XDMF/HDF5 → subsequent loads never parse `.msh`. Mesh geometry, cell tags, facet tags, physical group association, structured sidecar fields must round-trip | src/pyeidors/geometry/mesh_loader.py; src/pyeidors/geometry/dolfinx_mesh_cache.py; local benchmark 2026-04-22 |
+| V67 | Project binary array persistence default = HDF5 `.h5`: RM/GREIT artifacts, dataset generator outputs, GUI simulation exports, diagnostics bundles, benchmark arrays, MATLAB mesh bridge arrays, reconstruction outputs. `.npz/.npy` creation forbidden outside tests/legacy adapters unless task explicitly marks small fixture. JSON/CSV stay for metadata/tables only | future scan gate; B12 |
+| V68 | Mesh IO benchmark gate: for representative 2D + 3D meshes, HDF5 load median ≤ `.msh` import median or regression explained; equality checks: vertices/cells count, topology dim, geometry dim, facet tags, cell tags, association table. Local 2026-04-22 48e 3D samples: `.msh 0.0747s` vs HDF5 `0.0429s`; `.msh 0.0314s` vs HDF5 `0.0276s` | future `scripts/benchmarks/benchmark_mesh_io_formats.py`; B12 |
 
 ## §T — tasks
 
@@ -163,6 +187,15 @@ Current priority queue. Cavekit `/ck:make` MUST advance along the v1 queue befor
 ```
 v1  (EIDORS-style dual-model offline-RM + online RM@normalize(Δv)):
     T15  →  T18  →  T16  →  T17  →  T26  →  T29  →  T31  →  T19  →  T20  →  T32
+
+hotfix  (regression / safety):
+    T38, T39
+
+greit-parity  (EIDORS-complete 3D GREIT; unlock "EIDORS同款" claim):
+    T40  →  T41  →  T42  →  T43  →  T44  →  T45  →  T46  →  T50  →  T47  →  T48  →  T49
+
+hdf5-unification  (project-wide binary cache/save format):
+    T51  →  T52  →  T53  →  T54  →  T55  →  T56  →  T57
 
 phase-2  (after v1 stable, higher-fidelity reconstruction):
     T22, T23, T25, T24, T21, T30
@@ -180,6 +213,10 @@ not reintroduce that ordering; the milestone cannot validate
 `{AR, PE, RES, SD, RNG}` before those tasks land.
 
 v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V41 must hold before T22+ are eligible.
+
+3D GREIT official-equivalence gate: all rows T40..T50 must be `x` AND V55..V65 must hold before UI/docs/papers may say "EIDORS同款", "official-equivalent", "perfect stable 3D GREIT".
+
+HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold before new binary cache/save code may land with `.npz/.npy` default.
 
 | id | status | desc | cites |
 |----|--------|------|-------|
@@ -220,6 +257,26 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | T35 | x | Optimize RM hot path for 48e/5936: persistent RM on device, batched frames, no per-call tensor rebuild, minimal CPU↔GPU copy, float64/float32 policy recorded | V29,V37,V50 |
 | T36 | x | Real 48e/5936 dual-model report: compare one-step NOSER/Laplace RM and 3D GREIT RM, split fine-CEM/J build, RM build, artifact load, 1-frame apply, 512-frame apply, GPU/CPU paths | V40,V46,V47,V50 |
 | T37 | x | Harden benchmark / GUI timing harness against PATH-shadowed `env`: prefer `/usr/bin/env`, add guard test, record `env_path` in timing artifacts | V52,B8 |
+| T38 | x | Guard GUI `single_step_cached`: feasible-step alpha bound by `sigma_floor`, illegal `sigma_try` → `inf`, final `sigma_est` finite & floored before `fwd_solve`; add CUDA/DOLFINx parity regression | V53,B9 |
+| T39 | x | Stabilize GUI 3D PyVista offscreen drag display: low-res drag frame is scaled to the same QLabel physical target before DPR assignment, so visual canvas size is invariant | V54,B10 |
+| T40 | . | Build EIDORS GREIT source map + golden fixture capture: MATLAB script exports `vh`, `vi`, `xyzr`, `D`, `Y`, `PJt`, `M`, `noiselev`, `RM`, `weight`; include tiny 3D cylinder + 48e/5936 reduced case | V50,V55,V63,B11 |
+| T41 | . | Implement `GREIT3D_distribution` parity builder: `imgsz/xvec/yvec/zvec`, `downsample`, point-in-volume, target centers, volume/inside mask, deterministic order | V55 |
+| T42 | . | Implement finite-target training response engine: homogeneous `vh`, per-target `vi`, target radius/size/plane/offset, contrast, batching/cache; keep linearized shortcut explicit non-parity mode | V56,V57 |
+| T43 | . | Implement desired image stack: default EIDORS-like `GREIT_desired_img` for 3D rec model + custom `desired_solution_fn`; output `D` independent from raw target `T` | V58 |
+| T44 | . | Rework `calc_GREIT_RM` parity core: `PJt`, `noiselev` scaling, `Sn`, `M`, transpose solve, diagnostics, singular fallback; unit compare against exported EIDORS components | V57,V58,V59 |
+| T45 | . | Implement NF/image-SNR scalar-weight optimizer: target simulation, bounded log10 search, achieved metric/tolerance metadata, failure diagnostics | V60 |
+| T46 | . | Add EIDORS-parity GREIT HDF5 artifact/cache schema: store model components in `.h5`, cache `PJt` across weight search, signature includes V55..V61 inputs | V61,V62,V65 |
+| T47 | . | Add MATLAB EIDORS parity diagnostics + tests: compare PyEIDORS vs official EIDORS `Y/D/PJt/M/RM/recon/metrics`; record tolerances and drift report | V63 |
+| T48 | . | Add common-config offline warmup CLI/GUI path: precompute/load 16/32/48e 3D GREIT `.h5` artifacts; online load+matmul only; no routine cold build for known hardware | V64,V65 |
+| T49 | . | Run final 48e/5936 EIDORS-parity 3D GREIT benchmark: cold build, HDF5 artifact load, 1-frame/512-frame online apply, metrics, bad-channel/W cases, GPU/CPU stability | V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65 |
+| T50 | . | Implement large-cache HDF5 IO layer: chunked/compressed datasets for `RM/Y/D/PJt/M/vh/vi/xyzr`, JSON metadata attrs, checksum, lazy dataset reads, legacy `.npz` read-only import/migration path | V61,V62,V65 |
+| T51 | x | Repo persistence inventory + blocklist: classify all `.npz/.npy/.msh/.xdmf/.h5/.mat` writers/readers; mark legacy/test-only exemptions; add CI scan forbidding new production `.npz/.npy` writes | V65,V67,B12 |
+| T52 | x | Mesh HDF5-first hardening: support `.xdmf/.h5` cache load without source `.msh`; store source hash/provenance optional; generator writes XDMF/HDF5 from in-memory mesh even when `save_msh=false`; round-trip facet/cell tags + physical groups | V66,V68 |
+| T53 | x | Convert RM/GREIT/one-step artifacts from `.npz` to HDF5 `.h5`; keep `.npz` loader read-only + migration helper; update GUI cached-RM loader | V36,V37,V61,V64,V65,V67 |
+| T54 | . | Convert dataset generator + GUI simulation export from `mesh_info.npz` / `sample_*.npz` / "NumPy archive" to HDF5 package; update i18n labels and file dialogs | V65,V67 |
+| T55 | . | Convert diagnostics/benchmark/reconstruction output bundles (`outputs.npz`, `result_arrays.npz`, `inverse_3d_overview_data.npz`, gallery bundles) to HDF5; JSON/CSV summaries remain | V40,V65,V67 |
+| T56 | . | Convert MATLAB/interop mesh bridge arrays from `.npz` default to HDF5/v7.3-compatible `.h5`; retain `.mat`/legacy `.npz` import adapters only | V63,V65,V67 |
+| T57 | . | Add mesh IO format benchmark + regression test: compare `.msh` import vs XDMF/HDF5 load on representative meshes; store JSON artifact with speed ratio and tag equality | V66,V68 |
 
 ## §B — bugs
 
@@ -233,3 +290,7 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 | B6 | 2026-04-21 | GUI 3D CUDA policy downgraded unavailable AmgX/Hypre CUDA to `spd_gamg` but left `forward_mat_solve=auto`; PETSc `KSPMatSolve` on current `spd_gamg + cuda` 48-electrode/5936-measurement config failed after a long solve attempt with negative convergence reason `-10`. Stable measured route is `spd_gamg + petsc_device=cuda + forward_mat_solve=off` | V45 |
 | B7 | 2026-04-22 | WSLg GUI bootstrap pinned Qt to XCB to protect embedded VTK, so Windows HiDPI scaled the whole app through XWayland blur; launcher also repeated full uv/import sync and PETSc CUDA probe on every GUI start, then imported heavy pyeidors/PETSc/Torch/CUQI paths and synchronously queried Windows COM ports before first paint | V51 |
 | B8 | 2026-04-22 | User PATH shadows coreutils `env`: `/home/tom/.local/bin/env` intercepted `env EIT_APP_AUTO_QUIT_MS=5000 bash scripts/gui/run_eit_app.sh --gpu`, returned success without running payload, and produced bogus `real 0.00` GUI timing. `/usr/bin/env ...` executed correctly | V52,T37 |
+| B9 | 2026-04-22 | GUI 3D `single_step_cached` accepted unconstrained `sigma_bg + alpha * delta_sigma`; calibration candidate failure swallowed then `alpha=1.0`; `cuda_structured` correctly rejected nonphysical FEM top-left diagonal (`NaN/Inf` or `<=0`) during forward validation | V53,T38 |
+| B10 | 2026-04-22 | GUI 3D PyVista offscreen drag path rendered at 60% physical size for responsiveness but set the pixmap DPR to the widget DPR; Qt therefore displayed drag frames as smaller logical images, then snapped back on the idle full-resolution frame | V54,T39 |
+| B11 | 2026-04-22 | SPEC/bench text overclaimed 3D GREIT as official-aligned; code is linearized GREIT-RM v0 (`Y=T@J.T`, `D≈T`) and lacks EIDORS finite-target `vh/vi`, `desired_solution_fn`, NF weight search, HDF5 model-component parity artifacts | V50,V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65,T40,T41,T42,T43,T44,T45,T46,T47,T48,T49,T50 |
+| B12 | 2026-04-22 | Project persistence still mixed: mesh cache already prefers XDMF/HDF5 but freshness tied to source `.msh`; many production writers still emit `.npz/.npy` (`greit_rm.npz`, `one_step_*_rm.npz`, `outputs.npz`, `result_arrays.npz`, dataset `mesh_info.npz`/`sample_*.npz`, GUI "NumPy archive"). This conflicts with FEniCSx-aligned HDF5-unified cache/save target | V65,V66,V67,V68,T51,T52,T53,T54,T55,T56,T57 |
