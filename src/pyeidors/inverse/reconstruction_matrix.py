@@ -457,6 +457,7 @@ def reconstruct_difference(
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
     device: str = "cpu",
+    dtype: str | np.dtype[Any] = "float64",
 ) -> np.ndarray:
     """Apply a precomputed reconstruction matrix to one difference frame.
 
@@ -476,7 +477,10 @@ def reconstruct_difference(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    return np.asarray(rm_matmul(rm, measurement, device=device), dtype=np.float64)
+    return np.asarray(
+        rm_matmul(rm, measurement, device=device, dtype=dtype),
+        dtype=np.float64,
+    )
 
 
 def reconstruct_difference_batch(
@@ -489,6 +493,7 @@ def reconstruct_difference_batch(
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
     device: str = "auto",
+    dtype: str | np.dtype[Any] = "float64",
     return_metadata: bool = False,
 ) -> np.ndarray | RMMatmulResult:
     """Apply a precomputed RM to one or more online difference frames."""
@@ -516,6 +521,7 @@ def reconstruct_difference_batch(
         rm,
         payload,
         device=device,
+        dtype=dtype,
         return_metadata=return_metadata,
     )
     if return_metadata:

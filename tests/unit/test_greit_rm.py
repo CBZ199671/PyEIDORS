@@ -106,6 +106,27 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     assert reconstruction.metadata["algorithm"] == "greit-3d"
     assert reconstruction.metadata["online_hot_path"] == "rm_matmul"
     assert reconstruction.metadata["voxel_shape"] == grid.shape
+    prepared = greit.prepare_online(
+        device="cpu",
+        dtype="float32",
+        cache_key="unit-greit-rm",
+    )
+    prepared_reconstruction = prepared.reconstruct(
+        frame,
+        normalize=True,
+        v_ref=reference,
+        device="cpu",
+        dtype="float32",
+        return_metadata=True,
+    )
+    np.testing.assert_allclose(
+        prepared_reconstruction.values,
+        target.reshape(grid.shape),
+        atol=1e-6,
+    )
+    assert prepared_reconstruction.metadata["rm_prepare_mode"] == "reused_handle"
+    assert prepared_reconstruction.metadata["rm_dtype"] == "float32"
+    assert prepared_reconstruction.metadata["rm_cache_key"] == "unit-greit-rm"
     metrics = greit_metrics(
         reconstruction.values,
         np.asarray(greit.training_targets[3], dtype=bool),

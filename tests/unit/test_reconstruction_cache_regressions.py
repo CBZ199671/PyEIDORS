@@ -428,7 +428,19 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert diagnostics["runtime"]["adjoint_solve_count"] == 0
     assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
     assert diagnostics["runtime"]["ksp_solve_count"] == 0
+    assert diagnostics["runtime"]["rm_persistent"] is True
+    assert diagnostics["runtime"]["rm_prepare_mode"] == "reused_handle"
+    assert diagnostics["runtime"]["rm_dtype"] == "float64"
+    assert diagnostics["runtime"]["rm_artifact_cache_hit"] is False
+    assert diagnostics["cache_lookups"]["rm_artifact"]["layer"] == "artifact"
     assert diagnostics["rm_metadata"]["algorithm"] == "one-step-noser"
+
+    result_warm = rc._run_single_step_cached_request(request)
+    warm_diagnostics = result_warm.metadata["solver_diagnostics"]
+    assert np.allclose(result_warm.conductivity, expected_sigma)
+    assert warm_diagnostics["runtime"]["rm_artifact_cache_hit"] is True
+    assert warm_diagnostics["cache_lookups"]["rm_artifact"]["layer"] == "process"
+    assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
 
 
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(

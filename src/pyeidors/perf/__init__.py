@@ -17,7 +17,7 @@ from .forward_solver_policy import (
     resolve_3d_cuda_forward_solver_policy,
     resolve_3d_cuda_mat_solve_policy,
 )
-from .gpu_kernels import RMMatmulResult, rm_matmul
+from .gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul, rm_matmul
 from .policy import (
     ACCELERATION_PROFILE_GPU3D,
     ACCELERATION_PROFILE_GPU3D_FUSED,
@@ -160,7 +160,9 @@ __all__ = [
     "prefers_3d_gpu_pipeline",
     "prefers_fused_3d_gpu_pipeline",
     "probe_petsc_cuda_runtime",
+    "RMMatmulHandle",
     "RMMatmulResult",
+    "prepare_rm_matmul",
     "rm_matmul",
     "resolve_experimental_mode",
     "resolve_3d_cuda_forward_solver_policy",

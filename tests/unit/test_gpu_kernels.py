@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 import pyeidors.perf.gpu_kernels as gpu_kernels
-from pyeidors.perf.gpu_kernels import rm_matmul
+from pyeidors.perf.gpu_kernels import prepare_rm_matmul, rm_matmul
 
 
 class _FakeTensor:
@@ -36,6 +36,7 @@ class _FakeCuda:
 class _FakeTorch:
     cuda = _FakeCuda()
     float64 = np.float64
+    float32 = np.float32
 
     @staticmethod
     def as_tensor(values, *, device=None, dtype=None):
@@ -92,8 +93,57 @@ def test_rm_matmul_cuda_path_uses_torch_backend(monkeypatch) -> None:
     assert result.metadata["device_effective"] == "cuda"
 
 
+def test_prepare_rm_matmul_reuses_cuda_matrix_tensor(monkeypatch) -> None:
+    class _CountingFakeTorch(_FakeTorch):
+        tensor_shapes: list[tuple[int, ...]] = []
+
+        @staticmethod
+        def as_tensor(values, *, device=None, dtype=None):
+            _ = (device, dtype)
+            _CountingFakeTorch.tensor_shapes.append(tuple(np.asarray(values).shape))
+            return _FakeTensor(values)
+
+    monkeypatch.setattr(gpu_kernels, "torch", _CountingFakeTorch)
+    rm = np.array([[1.0, 2.0], [-1.0, 0.5]], dtype=float)
+    batch = np.array([[3.0, 4.0], [1.0, -2.0]], dtype=float)
+
+    handle = prepare_rm_matmul(rm, device="cuda", cache_key="unit-rm")
+    first = rm_matmul(handle, batch, device="cuda", return_metadata=True)
+    second = rm_matmul(handle, batch * 2.0, device="cuda", return_metadata=True)
+
+    np.testing.assert_allclose(first.values, batch @ rm.T)
+    np.testing.assert_allclose(second.values, (batch * 2.0) @ rm.T)
+    assert _CountingFakeTorch.tensor_shapes == [rm.shape, batch.shape, batch.shape]
+    assert first.metadata["rm_prepare_mode"] == "reused_handle"
+    assert first.metadata["rm_tensor_reused"] is True
+    assert first.metadata["rm_cache_key"] == "unit-rm"
+    assert first.metadata["host_device_transfer"] == "delta_v_to_device+output_to_host"
+
+
+def test_prepare_rm_matmul_records_cpu_dtype_policy() -> None:
+    rm = np.array([[1.0, 2.0], [-1.0, 0.5]], dtype=float)
+    batch = np.array([[3.0, 4.0], [1.0, -2.0]], dtype=float)
+
+    handle = prepare_rm_matmul(rm, device="cpu", dtype="float32")
+    result = rm_matmul(
+        handle,
+        batch,
+        device="cpu",
+        dtype="float32",
+        return_metadata=True,
+    )
+
+    np.testing.assert_allclose(result.values, batch @ rm.T, rtol=1e-6)
+    assert result.metadata["backend"] == "numpy"
+    assert result.metadata["rm_dtype"] == "float32"
+    assert result.metadata["rm_matrix_resident"] == "cpu"
+    assert result.metadata["rm_prepare_mode"] == "reused_handle"
+
+
 def test_rm_matmul_validates_shapes_and_device() -> None:
     with pytest.raises(ValueError, match="measurement dimension"):
         rm_matmul(np.eye(3), np.ones((2, 2)), device="cpu")
     with pytest.raises(ValueError, match="device must be"):
         rm_matmul(np.eye(2), np.ones(2), device="bad")
+    with pytest.raises(ValueError, match="dtype must be"):
+        rm_matmul(np.eye(2), np.ones(2), device="cpu", dtype="float16")

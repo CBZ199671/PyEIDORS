@@ -44,6 +44,9 @@ _FAST_CONTEXT_CACHE_LOCK = threading.Lock()
 _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
+_RM_ARTIFACT_CACHE_LOCK = threading.Lock()
+_RM_ARTIFACT_CACHE_MAX_ITEMS = 4
+_RM_ARTIFACT_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
 _RM_ARTIFACT_META_KEYS = (
     "rm_artifact_path",
     "dual_model_rm_path",
@@ -569,6 +572,54 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _rm_artifact_cache_key(path: Path, *, device: str, dtype: str) -> tuple[Any, ...]:
+    stat = path.stat()
+    return (
+        str(path.resolve()),
+        int(stat.st_mtime_ns),
+        int(stat.st_size),
+        str(device).strip().lower(),
+        str(dtype).strip().lower(),
+    )
+
+
+def _load_cached_rm_artifact(
+    path: Path,
+    meta: dict[str, Any],
+    *,
+    device: str,
+    dtype: str,
+) -> dict[str, Any]:
+    from pyeidors.perf.gpu_kernels import prepare_rm_matmul
+
+    key = _rm_artifact_cache_key(path, device=device, dtype=dtype)
+    with _RM_ARTIFACT_CACHE_LOCK:
+        cached = _RM_ARTIFACT_CACHE.get(key)
+        if cached is not None:
+            _RM_ARTIFACT_CACHE.move_to_end(key)
+            result = dict(cached)
+            result["rm_artifact_cache_hit"] = True
+            result["rm_artifact_cache_key"] = key
+            return result
+
+    artifact = _load_rm_artifact(path, meta)
+    artifact["rm_handle"] = prepare_rm_matmul(
+        artifact["rm"],
+        device=device,
+        dtype=dtype,
+        cache_key=str(path),
+    )
+    with _RM_ARTIFACT_CACHE_LOCK:
+        _RM_ARTIFACT_CACHE[key] = dict(artifact)
+        _RM_ARTIFACT_CACHE.move_to_end(key)
+        while len(_RM_ARTIFACT_CACHE) > _RM_ARTIFACT_CACHE_MAX_ITEMS:
+            _RM_ARTIFACT_CACHE.popitem(last=False)
+    result = dict(artifact)
+    result["rm_artifact_cache_hit"] = False
+    result["rm_artifact_cache_key"] = key
+    return result
+
+
 def _voxel_bounds_from_meta(meta: dict[str, Any]) -> tuple[np.ndarray, np.ndarray]:
     raw_bounds = meta.get("rm_voxel_bounds", meta.get("inverse_bounds"))
     try:
@@ -651,7 +702,19 @@ def _try_run_cached_rm_request(
 
     from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 
-    artifact = _load_rm_artifact(path, runtime.meta)
+    device = str(runtime.meta.get("rm_device", runtime.meta.get("device", "auto")))
+    dtype = str(
+        runtime.meta.get(
+            "rm_dtype",
+            runtime.meta.get("rm_matmul_dtype", "float64"),
+        )
+    )
+    artifact = _load_cached_rm_artifact(
+        path,
+        runtime.meta,
+        device=device,
+        dtype=dtype,
+    )
     node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
     ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64)
     tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64)
@@ -665,12 +728,12 @@ def _try_run_cached_rm_request(
         mode=difference_mode,
         orientation=difference_orientation,
     )
-    device = str(runtime.meta.get("rm_device", runtime.meta.get("device", "auto")))
     rm_result = reconstruct_difference_batch(
-        artifact["rm"],
+        artifact.get("rm_handle", artifact["rm"]),
         dv,
         normalize=False,
         device=device,
+        dtype=dtype,
         return_metadata=True,
     )
     conductivity = np.asarray(rm_result.values, dtype=np.float64).reshape(-1)
@@ -684,6 +747,8 @@ def _try_run_cached_rm_request(
             "rm_artifact_path": str(path),
             "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
             "rm_voxel_shape": tuple(int(v) for v in artifact.get("voxel_shape", ())),
+            "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
+            "rm_artifact_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
             "solver_diagnostics": {
@@ -698,13 +763,22 @@ def _try_run_cached_rm_request(
                     "ksp_solve_count": 0,
                     "device_requested": str(rm_result.metadata.get("device_requested", device)),
                     "device_effective": str(rm_result.metadata.get("device_effective", "")),
+                    "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
+                    "rm_persistent": bool(rm_result.metadata.get("rm_persistent", False)),
+                    "rm_tensor_reused": bool(rm_result.metadata.get("rm_tensor_reused", False)),
+                    "rm_prepare_mode": str(rm_result.metadata.get("rm_prepare_mode", "")),
+                    "host_device_transfer": str(rm_result.metadata.get("host_device_transfer", "")),
+                    "rm_artifact_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
                     "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
                     "rm_artifact_path": str(path),
                 },
                 "cache_lookups": {
                     "rm_artifact": {
                         "hit": True,
-                        "layer": "artifact",
+                        "layer": "process"
+                        if bool(artifact.get("rm_artifact_cache_hit", False))
+                        else "artifact",
+                        "process_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
                         "artifact": "reconstruction_matrix",
                         "key": str(path),
                     }

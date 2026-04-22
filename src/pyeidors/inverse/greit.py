@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import MappingProxyType
 from typing import Any
@@ -15,7 +15,7 @@ from scipy import sparse
 from pyeidors.data.channels import apply_measurement_contract_to_jacobian
 from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
 from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
-from pyeidors.perf.gpu_kernels import RMMatmulResult
+from pyeidors.perf.gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul
 
 GREIT_METRIC_KEYS = ("AR", "PE", "RES", "SD", "RNG")
 
@@ -54,6 +54,7 @@ class GREITRM:
     measurement_weights: np.ndarray | None = None
     training_targets: np.ndarray | None = None
     training_responses: np.ndarray | None = None
+    rm_handle: RMMatmulHandle | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -61,6 +62,23 @@ class GREITRM:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.rm, dtype=dtype)
+
+    def prepare_online(
+        self,
+        *,
+        device: str = "auto",
+        dtype: str | np.dtype[Any] = "float64",
+        cache_key: str | None = None,
+    ) -> "GREITRM":
+        """Return a GREIT RM with its online matmul matrix preloaded."""
+
+        handle = prepare_rm_matmul(
+            self.rm,
+            device=device,
+            dtype=dtype,
+            cache_key=cache_key,
+        )
+        return replace(self, rm_handle=handle)
 
     def reconstruct(
         self,
@@ -72,6 +90,7 @@ class GREITRM:
         channel_mask: Any | None = None,
         measurement_weights: Any | None = None,
         device: str = "auto",
+        dtype: str | np.dtype[Any] = "float64",
         return_metadata: bool = False,
     ) -> np.ndarray | RMMatmulResult:
         """Apply this GREIT RM to one frame or a frame batch."""
@@ -83,7 +102,7 @@ class GREITRM:
             else measurement_weights
         )
         result = reconstruct_difference_batch(
-            self.rm,
+            self.rm_handle if self.rm_handle is not None else self.rm,
             dv,
             normalize=normalize,
             v_ref=v_ref,
@@ -91,6 +110,7 @@ class GREITRM:
             channel_mask=resolved_mask,
             measurement_weights=resolved_weights,
             device=device,
+            dtype=dtype,
             return_metadata=True,
         )
         values = _reshape_reconstruction(np.asarray(result.values), self.voxel_shape)
