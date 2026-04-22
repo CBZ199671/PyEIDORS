@@ -52,6 +52,15 @@ from .adc_quantization import (
     summarize_adc_quantization,
     summarize_adc_sweep,
 )
+from .eit_digit_metrics import (
+    EITDigitSummary,
+    build_surrogate_sensitivity,
+    default_sigma_true,
+    forward_surrogate,
+    inverse_surrogate,
+    summarize_eit_digit_run,
+    summarize_eit_digit_sweep,
+)
 
 __all__ = [
     "PatternConfig",
@@ -92,6 +101,13 @@ __all__ = [
     "rmse",
     "summarize_adc_quantization",
     "summarize_adc_sweep",
+    "EITDigitSummary",
+    "build_surrogate_sensitivity",
+    "default_sigma_true",
+    "forward_surrogate",
+    "inverse_surrogate",
+    "summarize_eit_digit_run",
+    "summarize_eit_digit_sweep",
     "create_synthetic_data",
     "create_custom_phantom",
     "MeasurementDataset",
