@@ -105,4 +105,4 @@ def test_current_repo_legacy_allowlist_has_no_numpy_writer_violations():
     findings = module.scan_repo(REPO_ROOT)
 
     assert module.guard_violations(findings) == []
-    assert module.summary(findings)["legacy-production:numpy_writer"] >= 1
+    assert module.summary(findings).get("legacy-production:numpy_writer", 0) == 0

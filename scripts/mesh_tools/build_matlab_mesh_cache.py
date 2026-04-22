@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Convert MATLAB mesh.npz + electrodes.json into .msh cache usable by PyEIDORS."""
+"""Convert MATLAB mesh.h5 + electrodes.json into .msh cache usable by PyEIDORS."""
 
 from __future__ import annotations
 
@@ -7,10 +7,17 @@ import argparse
 import json
 from configparser import ConfigParser
 from pathlib import Path
+import sys
 from typing import Dict, Iterable, List, Sequence, Tuple
 
 import meshio
 import numpy as np
+
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
+
+from matlab_mesh_hdf5 import load_matlab_mesh_arrays
 
 
 def _sorted_edge(a: int, b: int) -> Tuple[int, int]:
@@ -123,15 +130,22 @@ def write_cache(
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-npz", type=Path, required=True)
+    parser.add_argument("--mesh-h5", type=Path, help="HDF5 MATLAB mesh bridge arrays.")
+    parser.add_argument(
+        "--mesh-npz",
+        type=Path,
+        help="Legacy read-only NumPy MATLAB mesh bridge arrays.",
+    )
     parser.add_argument("--electrodes-json", type=Path, required=True)
     parser.add_argument("--out-dir", type=Path, required=True)
     parser.add_argument("--mesh-name", type=str, default="matlab_import")
     args = parser.parse_args()
 
-    data = np.load(args.mesh_npz)
-    nodes = np.asarray(data["nodes"], dtype=float)
-    elements = np.asarray(data["elements"], dtype=np.int32) - 1  # MATLAB -> 0-based
+    if args.mesh_h5 is None and args.mesh_npz is None:
+        parser.error("--mesh-h5 is required; --mesh-npz is legacy read-only fallback.")
+    mesh_arrays_path = args.mesh_h5 if args.mesh_h5 is not None else args.mesh_npz
+    nodes, raw_elements = load_matlab_mesh_arrays(mesh_arrays_path)
+    elements = np.asarray(raw_elements, dtype=np.int32) - 1  # MATLAB -> 0-based
 
     electrodes = json.loads(args.electrodes_json.read_text(encoding="utf-8"))
     for electrode in electrodes:

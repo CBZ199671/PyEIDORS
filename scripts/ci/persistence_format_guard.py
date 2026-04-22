@@ -50,10 +50,8 @@ NUMPY_WRITER_NAMES = {"save", "savez", "savez_compressed"}
 NUMPY_READER_NAMES = {"load"}
 
 # Frozen snapshot of production NumPy writers that existed before the HDF5
-# migration. T51 forbids new production writers while T53..T56 migrate these.
-LEGACY_NUMPY_WRITER_ALLOWLIST = {
-    "scripts/mesh_tools/convert_matlab_mesh.py|main|np.savez|args.out_dir / 'mesh.npz'",
-}
+# migration. T53..T56 cleared the snapshot; future production writers fail.
+LEGACY_NUMPY_WRITER_ALLOWLIST: set[str] = set()
 
 
 @dataclass(frozen=True)
