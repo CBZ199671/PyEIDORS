@@ -26,6 +26,12 @@ jobs:
           nix --extra-experimental-features "nix-command flakes" develop -c \
             python scripts/ci/fenicsx_hardcut_guard.py
 
+      - name: Run persistence format guard
+        run: |
+          nix --extra-experimental-features "nix-command flakes" develop -c \
+            python scripts/ci/persistence_format_guard.py \
+              --inventory-json test_results/persistence-format/inventory.json
+
   tests-core:
     name: Core Tests (${{ matrix.os }})
     needs: lint-guard
