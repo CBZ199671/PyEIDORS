@@ -83,6 +83,12 @@ from .digit_report import (
     read_eit_digit_cases,
     write_report_files,
 )
+from .factor_sweep import (
+    FactorSweepRow,
+    format_factor_sweep_report,
+    normalize_enob_level,
+    run_factor_sweep,
+)
 
 __all__ = [
     "PatternConfig",
@@ -148,6 +154,10 @@ __all__ = [
     "read_eit_digit_case",
     "read_eit_digit_cases",
     "write_report_files",
+    "FactorSweepRow",
+    "format_factor_sweep_report",
+    "normalize_enob_level",
+    "run_factor_sweep",
     "create_synthetic_data",
     "create_custom_phantom",
     "MeasurementDataset",
