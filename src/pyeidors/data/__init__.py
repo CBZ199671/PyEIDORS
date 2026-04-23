@@ -65,6 +65,15 @@ from .eit_digit_metrics import (
     summarize_eit_digit_run,
     summarize_eit_digit_sweep,
 )
+from .digit_report import (
+    DigitReportCase,
+    DigitReportRow,
+    format_markdown_report,
+    format_markdown_table,
+    read_eit_digit_case,
+    read_eit_digit_cases,
+    write_report_files,
+)
 
 __all__ = [
     "PatternConfig",
@@ -116,6 +125,13 @@ __all__ = [
     "inverse_surrogate",
     "summarize_eit_digit_run",
     "summarize_eit_digit_sweep",
+    "DigitReportCase",
+    "DigitReportRow",
+    "format_markdown_report",
+    "format_markdown_table",
+    "read_eit_digit_case",
+    "read_eit_digit_cases",
+    "write_report_files",
     "create_synthetic_data",
     "create_custom_phantom",
     "MeasurementDataset",
