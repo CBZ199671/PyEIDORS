@@ -130,6 +130,7 @@ def test_one_step_noser_rm_matches_legacy_dense_eidors_baseline(
         lambda_=hyperparameter,
         mode="noser",
         form="param",
+        noser_exponent=1.0,
     )
     legacy_delta = _legacy_dense_noser_delta(
         projected_jacobian,

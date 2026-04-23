@@ -560,7 +560,7 @@ def build_one_step_rm(
     measurement_weights: Any | None = None,
     measurement_regularization: Any = None,
     noser_floor: float = 1e-12,
-    noser_exponent: float = 1.0,
+    noser_exponent: float = 0.5,
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
     """Build a one-step GN/NOSER/Laplace reconstruction matrix.
@@ -569,6 +569,9 @@ def build_one_step_rm(
     ``form="measurement"`` uses
     ``RM = P J.T (J P J.T + lambda_**2 Rn)^-1`` with ``P≈R^-1`` and
     identity ``Rn`` by default.
+    ``mode="noser"`` defaults to the EIDORS-style
+    ``R = diag(J.T @ J)**0.5``; pass ``noser_exponent=1.0`` to reproduce the
+    legacy dense ``diag(J.T @ J)`` variant.
 
     ``channel_mask`` uses the data-channel contract where ``True`` marks a
     bad channel. ``measurement_weights`` is the symmetric precision matrix
@@ -626,17 +629,32 @@ def build_one_step_rm(
 
     metadata = MappingProxyType(
         {
+            "algorithm": "one-step-gn",
+            "solver_family": "gauss-newton",
             "mode": resolved_mode,
+            "regularization_type": resolved_mode,
             "form": resolved_form,
             "lambda": lam,
+            "hyperparameter_name": "hp",
+            "hyperparameter": lam,
+            "hp": lam,
+            "hp_squared": lam * lam,
+            "lambda_squared": lam * lam,
             "n_measurements": int(jac.shape[0]),
             "n_parameters": int(jac.shape[1]),
             "bad_channel_count": int(measurement_contract.bad_channel_count),
             "measurement_weight_kind": measurement_contract.weight_kind,
             "expects_measurement_contract": True,
+            "normal_equation_formula": "JtWJ_plus_hp2_RtR",
+            "regularization_matrix_role": "RtR",
+            "RtR_shape": tuple(int(v) for v in reg.shape),
+            "RtR_nnz": int(np.count_nonzero(reg)),
             "inversion_dimension": inversion_dimension,
             "regularization_source": regularization_source,
             "regularization_nnz": int(np.count_nonzero(reg)),
+            "noser_exponent": float(noser_exponent)
+            if resolved_mode == "noser"
+            else None,
             "measurement_regularization_source": rn_source,
             "condition_estimate": condition_estimate,
             "solver": solver,

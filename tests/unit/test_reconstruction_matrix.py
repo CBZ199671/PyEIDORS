@@ -37,11 +37,27 @@ def test_build_one_step_rm_tikhonov_matches_dense_formula() -> None:
     assert result.metadata["condition_estimate"] >= 1.0
 
 
-def test_build_one_step_rm_noser_uses_diag_jtj_regularization() -> None:
+def test_build_one_step_rm_noser_defaults_to_eidors_sqrt_diag_jtj() -> None:
     jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=float)
     lam = 0.1
 
     rm = build_one_step_rm(jacobian, lambda_=lam, mode="noser")
+    noser = np.diag(np.sum(jacobian * jacobian, axis=0) ** 0.5)
+    expected = np.linalg.solve(jacobian.T @ jacobian + lam**2 * noser, jacobian.T)
+
+    np.testing.assert_allclose(rm, expected)
+
+
+def test_build_one_step_rm_noser_supports_legacy_exponent_one() -> None:
+    jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=float)
+    lam = 0.1
+
+    rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        noser_exponent=1.0,
+    )
     noser = np.diag(np.sum(jacobian * jacobian, axis=0))
     expected = np.linalg.solve(jacobian.T @ jacobian + lam**2 * noser, jacobian.T)
 
@@ -72,6 +88,61 @@ def test_build_one_step_rm_laplace_accepts_sparse_regularization() -> None:
 
     np.testing.assert_allclose(result.rm, expected)
     assert result.metadata["regularization_source"] == "provided_laplace"
+
+
+@pytest.mark.parametrize("mode", ["tikhonov", "noser", "laplace"])
+def test_build_one_step_rm_uses_official_hp2_rtr_weighted_fixture(mode: str) -> None:
+    jacobian = np.array(
+        [[1.0, -0.25, 0.5], [0.0, 1.5, -1.0], [2.0, 0.75, 0.25]],
+        dtype=float,
+    )
+    weights = np.array([4.0, 0.25, 2.0], dtype=float)
+    laplace = sparse.csr_matrix(
+        np.array(
+            [
+                [1.0, -1.0, 0.0],
+                [-1.0, 2.0, -1.0],
+                [0.0, -1.0, 1.0],
+            ],
+            dtype=float,
+        )
+    )
+    hp = 0.17
+    regularization = laplace if mode == "laplace" else None
+
+    result = build_one_step_rm(
+        jacobian,
+        regularization=regularization,
+        lambda_=hp,
+        mode=mode,
+        measurement_weights=weights,
+        return_metadata=True,
+    )
+
+    weighted_j = np.diag(np.sqrt(weights)) @ jacobian
+    if mode == "noser":
+        rtr = np.diag(np.sum(weighted_j * weighted_j, axis=0) ** 0.5)
+    elif mode == "laplace":
+        rtr = laplace.toarray()
+    else:
+        rtr = np.eye(jacobian.shape[1])
+    expected_lhs = weighted_j.T @ weighted_j + hp**2 * rtr
+    expected_rm = np.linalg.solve(expected_lhs, weighted_j.T)
+
+    np.testing.assert_allclose(result.rm, expected_rm)
+    assert result.metadata["algorithm"] == "one-step-gn"
+    assert result.metadata["solver_family"] == "gauss-newton"
+    assert result.metadata["regularization_type"] == mode
+    assert result.metadata["normal_equation_formula"] == "JtWJ_plus_hp2_RtR"
+    assert result.metadata["regularization_matrix_role"] == "RtR"
+    assert result.metadata["hyperparameter_name"] == "hp"
+    assert result.metadata["hp"] == pytest.approx(hp)
+    assert result.metadata["hp_squared"] == pytest.approx(hp**2)
+    assert result.metadata["lambda_squared"] == pytest.approx(hp**2)
+    assert result.metadata["RtR_shape"] == rtr.shape
+    assert result.metadata["RtR_nnz"] == int(np.count_nonzero(rtr))
+    if mode == "noser":
+        assert result.metadata["noser_exponent"] == pytest.approx(0.5)
 
 
 def test_build_one_step_rm_measurement_form_matches_param_for_tikhonov() -> None:

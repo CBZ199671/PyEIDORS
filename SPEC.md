@@ -198,11 +198,20 @@ greit-parity  (EIDORS-complete 3D GREIT; unlock "EIDORS同款" claim):
 hdf5-unification  (project-wide binary cache/save format):
     T51  →  T52  →  T53  →  T54  →  T55  →  T56  →  T57
 
+regularization-foundation  (official baseline + extensible prior core):
+    T59  →  T60  →  T61  →  T62
+
+dynamic-foundation  (neural / plant continuous EIT):
+    T64  →  T63  →  T69  →  T65
+
+dynamic-quality  (after dynamic foundation metrics stable):
+    T66  →  T67
+
 phase-2  (after v1 stable, higher-fidelity reconstruction):
     T22, T23, T25, T24, T21, T30
 
 research  (post-phase-2, opt-in enhancement):
-    T27, T28, T1, T11, T33
+    T27, T70, T68, T28, T1, T11, T33
 
 infra / deferred  (hardware / design-heavy, unblock separately):
     T2, T3, T4, T6, T7, T10, T37
@@ -218,6 +227,10 @@ v1 graduation gate: all rows T15..T20, T26, T29, T31, T32 must be `x` AND V36..V
 3D GREIT official-equivalence gate: all rows T40..T50 must be `x` AND V55..V65 must hold before UI/docs/papers may say "EIDORS同款", "official-equivalent", "perfect stable 3D GREIT".
 
 HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold before new binary cache/save code may land with `.npz/.npy` default.
+
+Regularization foundation gate: T59..T62 must be `x` before new inverse solvers claim interchangeable `RtR/R_prior` support across RM, GN runtime, matrix-free, cache signatures.
+
+Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant continuous-EIT docs claim 4D prior, propagation-speed preservation, or realtime dynamic reconstruction.
 
 | id | status | desc | cites |
 |----|--------|------|-------|
@@ -247,7 +260,7 @@ HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold befo
 | T24 | x | TV PDHG / PDIPM refinement on ROI after one-step init; seeded by RM output, stops on ROI-restricted residual norm | V26,V28 |
 | T25 | x | Electrode-movement Jacobian + `prior_movement`; extends block metadata with `e` block and `H_σe`, `H_ze`, `H_ee` couplings | V20,V32 |
 | T26 | x | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
-| T27 | . | SBL / coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1 | V31 |
+| T27 | . | SBL / BSBL / SA-SBL coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1; no default use until T70 benchmark wins | V31 |
 | T28 | . | CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement | V29 |
 | T29 | x | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
 | T30 | x | Hypre `BoomerAMG` / NVIDIA AmgX CUDA path wiring for forward CG (extends T10), with capability-probe entries in `forward_solver_benchmark` artifact | V6,V13,T10 |
@@ -279,6 +292,18 @@ HDF5 unification gate: all rows T51..T57 must be `x` AND V65..V68 must hold befo
 | T56 | x | Convert MATLAB/interop mesh bridge arrays from `.npz` default to HDF5/v7.3-compatible `.h5`; retain `.mat`/legacy `.npz` import adapters only | V63,V65,V67 |
 | T57 | x | Add mesh IO format benchmark + regression test: compare `.msh` import vs XDMF/HDF5 load on representative meshes; store JSON artifact with speed ratio and tag equality | V66,V68 |
 | T58 | x | Raise GUI 3D offscreen drag defaults to 60 fps + full-DPR framebuffer; skip redundant offscreen window resizes; keep env-controlled lower-fps/downsample mode for constrained machines without reintroducing V54 size jitter | V69,B13 |
+| T59 | x | Baseline alignment freeze: official-style framewise GN/NOSER/Laplace checklist + tiny fixtures; verify `Jᵀ W J + hp² RtR` formula, `hp²` scaling, normalized/raw difference parity, artifact metadata names | V26,V27,V28,V38,V40 |
+| T60 | . | General `RtR/R_prior` prior contract: dense/sparse/`LinearOperator`/callable inputs, `apply(v)`, `diag()`, `as_RtR()`, signature hash, metadata, HDF5 persistence; wire through RM builder + GN runtime without forced dense materialization on large 3D | V26,V28,V35,V36,V49 |
+| T61 | . | Curvature prior mode: expose `L = graph_difference_operator(mesh)`, `RtR = L.T @ L` as named `curvature` / `graph_ltl` prior; compare vs Laplace smoothing on same mesh; cache signature distinguishes `laplace` vs `LᵀL` | V28,V35,V36,V49 |
+| T62 | . | TV-IRLS inverse prior: iterative `RtR(x)=L.T @ diag(1/sqrt((Lx)^2+β)) @ L`; β/floor finite guard, max outer iterations, stale-RM invalidation, monotone objective smoke; keep TV-PDHG postprocess as separate seeded refinement | V28,V35,V49 |
+| T63 | . | Measurement-domain temporal filtering before reconstruction: causal EMA/moving-average + optional bandpass/lock-in hook over `Δv`/raw frames; channel mask + `W` applied deterministically; filter state stored in metadata, no smoothing of timestamps | V33,V34,V35,V37,V40 |
+| T64 | . | Dynamic sequence data contract: frames carry `t`, `dt`, sampling rate, frame id, reference policy, stim/meas signature, bad-channel mask, `W`, frequency/context metadata; HDF5 package round-trips multi-frame arrays + metadata; `MeasurementDataset` remains single-frame-compatible | V33,V34,V35,V37,V65,V67 |
+| T65 | . | Batch spatiotemporal GN / 4D prior: windowed solve over `X[t,param]` with spatial prior `Rs`, temporal `Dt` first/second difference, block normal operator, λ_s/λ_t metadata, rowwise RM baseline comparison | V25,V31,V35,V49 |
+| T66 | . | Spatiotemporal TV / Huber prior: separable spatial graph + temporal difference penalties; preserves abrupt wavefront/onset better than L2 time smoothing; ROI support; compare against T65 on travelling-wave fixture | V28,V31,V35,V49 |
+| T67 | . | Online Kalman + fixed-lag smoother prototype: state model `x_t=A x_{t-1}+q`, measurement `y_t=Jx_t+n` or RM-observation shortcut; latency/lag metadata, `Q/R` estimation hooks, no default until T69 metrics pass | V35,V37,V49 |
+| T68 | . | Propagation-aware prior research: directed anatomical/vascular graph, velocity-range prior, path-constrained smoothness for nerve / plant conduction; opt-in only, never required for baseline parity | V31,V49 |
+| T69 | . | Dynamic validation benchmark: synthetic travelling wave + plant slow-pulse fixtures; report onset-time error, peak-time error, propagation-speed error, amplitude attenuation, SNR gain, spatial metrics; fail if regularization delays peak beyond tolerance ? | V30,V40,V41,V49 |
+| T70 | . | SBL/BSBL acceptance benchmark: compare SBL/BSBL/SA-SBL vs GN/NOSER/Laplace/TV-IRLS/4D prior on sparse anomaly + frequency-difference + propagating sparse events; promote only if accuracy/latency win recorded | V31,V35,V49,T27 |
 
 ## §B — bugs
 
