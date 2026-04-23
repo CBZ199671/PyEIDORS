@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
-from typing import Iterable
+from typing import Callable, Iterable
 
 import numpy as np
 
@@ -66,6 +66,7 @@ class EITLinearizedModel:
     parameter_points: np.ndarray | None = None
     mesh_points: np.ndarray | None = None
     mesh_cells: np.ndarray | None = None
+    forward_solver: Callable[[np.ndarray], np.ndarray] | None = None
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:
@@ -102,6 +103,77 @@ def default_sigma_true(n_parameters: int = 8) -> np.ndarray:
         sigma[1] += 0.12
         sigma[-2] -= 0.08
     return sigma
+
+
+def _fallback_parameter_points(n_parameters: int) -> np.ndarray:
+    count = int(n_parameters)
+    if count <= 0:
+        raise ValueError("n_parameters must be positive")
+    side = int(math.ceil(math.sqrt(count)))
+    xs = (np.arange(side, dtype=float) + 0.5) / side
+    ys = (np.arange(side, dtype=float) + 0.5) / side
+    xx, yy = np.meshgrid(xs, ys[::-1], indexing="xy")
+    return np.column_stack([xx.ravel(), yy.ravel()])[:count]
+
+
+def sigma_true_from_anomaly_rule(
+    n_parameters: int,
+    *,
+    parameter_points: Iterable[Iterable[float]] | np.ndarray | None = None,
+    rule: str = "default",
+) -> np.ndarray:
+    """Return deterministic conductivity fields for T17 anomaly-rule sweeps."""
+
+    count = int(n_parameters)
+    if count <= 0:
+        raise ValueError("n_parameters must be positive")
+
+    rule_name = str(rule).strip().lower().replace("-", "_")
+    if rule_name in {"", "default", "linear"}:
+        return default_sigma_true(count)
+
+    if parameter_points is None:
+        points = _fallback_parameter_points(count)
+    else:
+        points = np.asarray(parameter_points, dtype=float)
+        if points.ndim != 2 or points.shape[0] != count or points.shape[1] < 2:
+            raise ValueError("parameter_points must have shape (n_parameters, >=2)")
+        points = points[:, :2]
+
+    x = points[:, 0]
+    y = points[:, 1]
+    sigma = np.ones(count, dtype=float)
+
+    if rule_name == "center_high":
+        radius = 0.34
+        mask = (x - 0.5) ** 2 + (y - 0.5) ** 2 <= radius**2
+        if not np.any(mask):
+            mask[int(np.argmin((x - 0.5) ** 2 + (y - 0.5) ** 2))] = True
+        sigma[mask] = 1.35
+        return sigma
+
+    if rule_name == "dual_contrast":
+        high = (x - 0.35) ** 2 + (y - 0.35) ** 2 <= 0.28**2
+        low = (x - 0.70) ** 2 + (y - 0.70) ** 2 <= 0.25**2
+        if not np.any(high):
+            high[int(np.argmin((x - 0.35) ** 2 + (y - 0.35) ** 2))] = True
+        if not np.any(low):
+            low[int(np.argmin((x - 0.70) ** 2 + (y - 0.70) ** 2))] = True
+        sigma[high] = 1.30
+        sigma[low] = 0.72
+        return sigma
+
+    if rule_name == "edge_low":
+        edge_distance = np.minimum.reduce([x, y, 1.0 - x, 1.0 - y])
+        mask = edge_distance <= 0.18
+        if not np.any(mask):
+            mask[int(np.argmin(edge_distance))] = True
+        sigma[mask] = 0.76
+        return sigma
+
+    raise ValueError(
+        "anomaly rule must be one of: default, center_high, dual_contrast, edge_low"
+    )
 
 
 def build_surrogate_sensitivity(
@@ -155,12 +227,13 @@ def build_surrogate_linearized_model(
     n_parameters: int = 8,
     seed: int = 20260422,
     sigma_true: Iterable[float] | np.ndarray | None = None,
+    sigma_rule: str = "default",
     sensitivity: Iterable[Iterable[float]] | np.ndarray | None = None,
 ) -> EITLinearizedModel:
     """Build the deterministic linear-surrogate model used by quick smokes."""
 
     if sigma_true is None:
-        sigma_vec = default_sigma_true(n_parameters)
+        sigma_vec = sigma_true_from_anomaly_rule(n_parameters, rule=sigma_rule)
     else:
         sigma_vec = _as_float_vector(sigma_true, name="sigma_true")
     if sensitivity is None:
@@ -182,6 +255,7 @@ def build_surrogate_linearized_model(
         sensitivity=sens,
         label="linear-surrogate",
         n_measurements=int(sens.shape[0]),
+        forward_solver=lambda sigma: forward_surrogate(sigma, sens),
     )
 
 
@@ -277,6 +351,8 @@ def build_pyeidors_fem_linearized_model(
     n_elec: int = 8,
     grid: int = 2,
     expected_measurements: int | None = None,
+    sigma_true: Iterable[float] | np.ndarray | None = None,
+    sigma_rule: str = "default",
 ) -> EITLinearizedModel:
     """Build a small real PyEIDORS FEM forward/Jacobian model for T12 smokes."""
 
@@ -306,13 +382,22 @@ def build_pyeidors_fem_linearized_model(
     sigma_ref_fun = fem.Function(fwd_model.V_sigma)
     sigma_reference = np.ones(sigma_ref_fun.x.array.size, dtype=float)
     sigma_ref_fun.x.array[:] = sigma_reference
-    sigma_true = default_sigma_true(sigma_reference.size)
     parameter_points, mesh_points, mesh_cells = _pyeidors_parameter_geometry(mesh)
     if parameter_points.shape[0] != sigma_reference.size:
         raise RuntimeError("PyEIDORS FEM parameter geometry does not match sigma size")
+    if sigma_true is None:
+        sigma_true_vec = sigma_true_from_anomaly_rule(
+            sigma_reference.size,
+            parameter_points=parameter_points,
+            rule=sigma_rule,
+        )
+    else:
+        sigma_true_vec = _as_float_vector(sigma_true, name="sigma_true")
+        if sigma_true_vec.size != sigma_reference.size:
+            raise ValueError("sigma_true size must match FEM parameter count")
 
     voltage_reference = _pyeidors_forward_vector(fwd_model, sigma_reference)
-    voltage_true = _pyeidors_forward_vector(fwd_model, sigma_true)
+    voltage_true = _pyeidors_forward_vector(fwd_model, sigma_true_vec)
     actual_measurements = int(voltage_reference.size)
     if expected_measurements is not None and actual_measurements != int(
         expected_measurements
@@ -330,7 +415,7 @@ def build_pyeidors_fem_linearized_model(
             "PyEIDORS FEM sensitivity shape does not match voltage/sigma sizes"
         )
     return EITLinearizedModel(
-        sigma_true=sigma_true,
+        sigma_true=sigma_true_vec,
         sigma_reference=sigma_reference,
         voltage_true=voltage_true,
         voltage_reference=voltage_reference,
@@ -343,6 +428,7 @@ def build_pyeidors_fem_linearized_model(
         parameter_points=parameter_points,
         mesh_points=mesh_points,
         mesh_cells=mesh_cells,
+        forward_solver=lambda sigma: _pyeidors_forward_vector(fwd_model, sigma),
     )
 
 

@@ -125,10 +125,33 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="RMS-relative voltage noise levels.",
     )
     parser.add_argument(
+        "--full-scale-levels",
+        nargs="+",
+        type=float,
+        default=None,
+        help="Optional T17 full-scale levels for a single-factor sweep.",
+    )
+    parser.add_argument(
         "--enob-levels",
         nargs="+",
         default=["nominal", "11"],
         help="ENOB levels. Use 'nominal' for no ENOB clamp.",
+    )
+    parser.add_argument(
+        "--rm-mode-levels",
+        nargs="+",
+        choices=["tikhonov", "noser"],
+        default=None,
+        help="Optional T17 RM regularization modes for a single-factor sweep.",
+    )
+    parser.add_argument(
+        "--anomaly-rule-levels",
+        nargs="+",
+        default=None,
+        help=(
+            "Optional T17 conductivity anomaly rules: default, center_high, "
+            "dual_contrast, edge_low."
+        ),
     )
     parser.add_argument(
         "--forward-backend",
@@ -175,6 +198,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--baseline-enob",
         default="nominal",
         help="Baseline ENOB level.",
+    )
+    parser.add_argument(
+        "--baseline-anomaly-rule",
+        default="default",
+        help="Baseline conductivity anomaly rule.",
     )
     parser.add_argument(
         "--full-scale",
@@ -254,6 +282,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=200,
         help="PNG plot DPI.",
     )
+    parser.add_argument(
+        "--report-title",
+        default="T15 多因素控制变量实验报告",
+        help="Markdown report title.",
+    )
     return parser.parse_args(argv)
 
 
@@ -265,6 +298,9 @@ def main(argv: list[str] | None = None) -> int:
         target_digits=args.target_digits,
         noise_relative_levels=args.noise_relative_levels,
         enob_levels=args.enob_levels,
+        full_scale_levels=args.full_scale_levels,
+        rm_mode_levels=args.rm_mode_levels,
+        anomaly_rule_levels=args.anomaly_rule_levels,
         forward_backend=args.forward_backend,
         n_elec=args.fem_n_elec,
         expected_measurements=args.expected_fem_measurements,
@@ -273,6 +309,7 @@ def main(argv: list[str] | None = None) -> int:
         baseline_target_digits=args.baseline_target_digits,
         baseline_noise_relative=args.baseline_noise_relative,
         baseline_enob=args.baseline_enob,
+        baseline_anomaly_rule=args.baseline_anomaly_rule,
         full_scale_range=args.full_scale,
         adc_bit=args.adc_bit,
         seed=args.seed,
@@ -288,6 +325,9 @@ def main(argv: list[str] | None = None) -> int:
         rows,
         full_scale_range=args.full_scale,
         adc_bit=args.adc_bit,
+        title=args.report_title,
+        rm_mode=args.rm_mode,
+        baseline_anomaly_rule=args.baseline_anomaly_rule,
     )
     _write_text(args.report_output, report)
     plot_path = plot_factor_sweep(
@@ -307,9 +347,11 @@ def main(argv: list[str] | None = None) -> int:
         f"baseline_ridge={_format_float(args.baseline_ridge)}, "
         f"baseline_target_digits={args.baseline_target_digits}, "
         f"baseline_enob={args.baseline_enob}, "
+        f"baseline_anomaly_rule={args.baseline_anomaly_rule}, "
         f"baseline_noise_relative={_format_float(args.baseline_noise_relative)}, "
         f"full_scale={_format_float(args.full_scale)}, "
         f"adc_bit={args.adc_bit}, "
+        f"rm_mode={args.rm_mode}, "
         "stim_pattern={ad}, meas_pattern={ad}"
     )
     print(_format_table(rows))

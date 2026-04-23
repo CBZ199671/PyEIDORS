@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import math
 from pathlib import Path
 from typing import Iterable
@@ -21,6 +21,7 @@ from .eit_digit_metrics import (
     build_pyeidors_fem_linearized_model,
     build_surrogate_linearized_model,
     reconstruct_linearized_sigma,
+    sigma_true_from_anomaly_rule,
 )
 from .voltage_digit_sweep import keep_significant_digits
 
@@ -184,6 +185,32 @@ def _build_model_for_grid(
     raise ValueError("forward_backend must be one of: surrogate, pyeidors-fem")
 
 
+def _model_with_anomaly_rule(
+    model: EITLinearizedModel,
+    anomaly_rule: str,
+) -> EITLinearizedModel:
+    rule = str(anomaly_rule).strip().lower().replace("-", "_")
+    sigma = sigma_true_from_anomaly_rule(
+        model.sigma_reference.size,
+        parameter_points=model.parameter_points,
+        rule=rule,
+    )
+    if np.array_equal(sigma, model.sigma_true):
+        return model
+    if model.forward_solver is None:
+        voltage_true = model.voltage_reference + model.sensitivity @ (
+            sigma - model.sigma_reference
+        )
+    else:
+        voltage_true = model.forward_solver(sigma)
+    return replace(
+        model,
+        sigma_true=sigma,
+        voltage_true=np.asarray(voltage_true, dtype=float),
+        label=f"{model.label}:{rule}",
+    )
+
+
 def _measured_voltage(
     *,
     voltage_true: np.ndarray,
@@ -283,6 +310,9 @@ def run_factor_sweep(
     target_digits: Iterable[int],
     noise_relative_levels: Iterable[float],
     enob_levels: Iterable[str | float | int],
+    full_scale_levels: Iterable[float] | None = None,
+    rm_mode_levels: Iterable[str] | None = None,
+    anomaly_rule_levels: Iterable[str] | None = None,
     forward_backend: str = "pyeidors-fem",
     n_elec: int = 16,
     expected_measurements: int | None = None,
@@ -291,6 +321,7 @@ def run_factor_sweep(
     baseline_target_digits: int = 6,
     baseline_noise_relative: float = 0.0,
     baseline_enob: str | float | int | None = "nominal",
+    baseline_anomaly_rule: str = "default",
     full_scale_range: float = 10.0,
     adc_bit: int = 16,
     seed: int | None = 0,
@@ -301,7 +332,7 @@ def run_factor_sweep(
     n_parameters: int = 8,
     model_seed: int = 20260422,
 ) -> list[FactorSweepRow]:
-    """Run T15 single-factor and grid-ridge interaction sweeps."""
+    """Run T15/T17 single-factor and grid-ridge interaction sweeps."""
 
     grids = _positive_int_levels(fem_grid_levels, name="fem_grid_levels")
     ridges = _non_negative_float_levels(ridge_levels, name="ridge_levels")
@@ -315,15 +346,32 @@ def run_factor_sweep(
         raise ValueError("enob_levels must not be empty")
     for level in enobs:
         normalize_enob_level(level)
+    full_scales = (
+        []
+        if full_scale_levels is None
+        else _non_negative_float_levels(full_scale_levels, name="full_scale_levels")
+    )
+    if any(value <= 0.0 for value in full_scales):
+        raise ValueError("full_scale_levels must all be positive")
+    rm_modes = (
+        [] if rm_mode_levels is None else [str(value) for value in rm_mode_levels]
+    )
+    anomaly_rules = (
+        []
+        if anomaly_rule_levels is None
+        else [str(value) for value in anomaly_rule_levels]
+    )
 
     full_scale = float(full_scale_range)
     if not math.isfinite(full_scale) or full_scale <= 0.0:
         raise ValueError("full_scale_range must be positive and finite")
 
     model_cache: dict[int, EITLinearizedModel] = {}
+    anomaly_model_cache: dict[tuple[int, str], EITLinearizedModel] = {}
 
-    def model_for(grid: int) -> EITLinearizedModel:
+    def model_for(grid: int, anomaly_rule: str) -> EITLinearizedModel:
         grid_int = int(grid)
+        rule = str(anomaly_rule).strip().lower().replace("-", "_")
         if grid_int not in model_cache:
             model_cache[grid_int] = _build_model_for_grid(
                 forward_backend=forward_backend,
@@ -334,7 +382,13 @@ def run_factor_sweep(
                 n_parameters=n_parameters,
                 model_seed=model_seed,
             )
-        return model_cache[grid_int]
+        key = (grid_int, rule)
+        if key not in anomaly_model_cache:
+            anomaly_model_cache[key] = _model_with_anomaly_rule(
+                model_cache[grid_int],
+                rule,
+            )
+        return anomaly_model_cache[key]
 
     rows: list[FactorSweepRow] = []
 
@@ -348,10 +402,13 @@ def run_factor_sweep(
         target_voltage_digits: int,
         enob_level: str | float | int | None,
         noise_relative: float,
+        full_scale_range: float,
+        rm_mode: str,
+        anomaly_rule: str,
     ) -> None:
         rows.append(
             _evaluate_case(
-                model=model_for(int(fem_grid)),
+                model=model_for(int(fem_grid), anomaly_rule),
                 sweep=sweep,
                 changed_factor=changed_factor,
                 level=level,
@@ -361,7 +418,7 @@ def run_factor_sweep(
                 target_voltage_digits=int(target_voltage_digits),
                 enob_level=enob_level,
                 noise_relative=float(noise_relative),
-                full_scale_range=full_scale,
+                full_scale_range=float(full_scale_range),
                 adc_bit=int(adc_bit),
                 seed=seed,
                 inverse_backend=inverse_backend,
@@ -379,6 +436,9 @@ def run_factor_sweep(
         target_voltage_digits=baseline_target_digits,
         enob_level=baseline_enob,
         noise_relative=baseline_noise_relative,
+        full_scale_range=full_scale,
+        rm_mode=rm_mode,
+        anomaly_rule=baseline_anomaly_rule,
     )
 
     for grid in grids:
@@ -391,6 +451,9 @@ def run_factor_sweep(
             target_voltage_digits=baseline_target_digits,
             enob_level=baseline_enob,
             noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
         )
 
     for ridge in ridges:
@@ -403,6 +466,9 @@ def run_factor_sweep(
             target_voltage_digits=baseline_target_digits,
             enob_level=baseline_enob,
             noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
         )
 
     for digit_count in digits:
@@ -415,6 +481,9 @@ def run_factor_sweep(
             target_voltage_digits=digit_count,
             enob_level=baseline_enob,
             noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
         )
 
     for noise in noise_levels:
@@ -427,6 +496,9 @@ def run_factor_sweep(
             target_voltage_digits=baseline_target_digits,
             enob_level=baseline_enob,
             noise_relative=noise,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
         )
 
     for enob in enobs:
@@ -440,6 +512,54 @@ def run_factor_sweep(
             target_voltage_digits=baseline_target_digits,
             enob_level=enob,
             noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
+        )
+
+    for scale in full_scales:
+        append_case(
+            sweep="single_factor",
+            changed_factor="full_scale",
+            level=_format_level(scale),
+            fem_grid=baseline_fem_grid,
+            ridge=baseline_ridge,
+            target_voltage_digits=baseline_target_digits,
+            enob_level=baseline_enob,
+            noise_relative=baseline_noise_relative,
+            full_scale_range=scale,
+            rm_mode=rm_mode,
+            anomaly_rule=baseline_anomaly_rule,
+        )
+
+    for mode in rm_modes:
+        append_case(
+            sweep="single_factor",
+            changed_factor="rm_mode",
+            level=mode,
+            fem_grid=baseline_fem_grid,
+            ridge=baseline_ridge,
+            target_voltage_digits=baseline_target_digits,
+            enob_level=baseline_enob,
+            noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=mode,
+            anomaly_rule=baseline_anomaly_rule,
+        )
+
+    for rule in anomaly_rules:
+        append_case(
+            sweep="single_factor",
+            changed_factor="anomaly_rule",
+            level=rule,
+            fem_grid=baseline_fem_grid,
+            ridge=baseline_ridge,
+            target_voltage_digits=baseline_target_digits,
+            enob_level=baseline_enob,
+            noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode=rm_mode,
+            anomaly_rule=rule,
         )
 
     for grid in grids:
@@ -453,6 +573,9 @@ def run_factor_sweep(
                 target_voltage_digits=baseline_target_digits,
                 enob_level=baseline_enob,
                 noise_relative=baseline_noise_relative,
+                full_scale_range=full_scale,
+                rm_mode=rm_mode,
+                anomaly_rule=baseline_anomaly_rule,
             )
 
     return rows
@@ -478,6 +601,8 @@ def format_factor_sweep_report(
     full_scale_range: float,
     adc_bit: int,
     title: str = "T15 多因素控制变量实验报告",
+    rm_mode: str | None = None,
+    baseline_anomaly_rule: str | None = None,
 ) -> str:
     """Format the T15 CSV rows into a compact Markdown ranking report."""
 
@@ -508,12 +633,20 @@ def format_factor_sweep_report(
         f"| noise_relative | {baseline.noise_relative:.12g} |",
         f"| full_scale_range | {float(full_scale_range):.12g} |",
         f"| adc_bit | {int(adc_bit)} |",
-        "",
-        "## 主效应排序",
-        "",
-        "| changed_factor | level | sigma_relative_rmse | delta_sigma_relative_rmse | sigma_effective_digits | delta_sigma_effective_digits |",
-        "|---|---:|---:|---:|---:|---:|",
     ]
+    if rm_mode is not None:
+        lines.append(f"| rm_mode | {rm_mode} |")
+    if baseline_anomaly_rule is not None:
+        lines.append(f"| anomaly_rule | {baseline_anomaly_rule} |")
+    lines.extend(
+        [
+            "",
+            "## 主效应排序",
+            "",
+            "| changed_factor | level | sigma_relative_rmse | delta_sigma_relative_rmse | sigma_effective_digits | delta_sigma_effective_digits |",
+            "|---|---:|---:|---:|---:|---:|",
+        ]
+    )
     for row in ranked:
         delta_rel, delta_digits = _delta_row(row, baseline)
         lines.append(

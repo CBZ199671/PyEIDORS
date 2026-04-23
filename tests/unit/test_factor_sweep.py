@@ -16,6 +16,7 @@ from pyeidors.data.factor_sweep import (
     plot_factor_sweep,
     run_factor_sweep,
 )
+from pyeidors.data.eit_digit_metrics import sigma_true_from_anomaly_rule
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -76,12 +77,122 @@ def test_factor_sweep_rows_keep_control_variables_fixed() -> None:
     assert {row.ridge for row in target_rows} == {1e-2}
 
 
+def test_anomaly_rules_build_distinct_sigma_fields() -> None:
+    points = np.array(
+        [
+            [0.2, 0.2],
+            [0.5, 0.5],
+            [0.75, 0.75],
+            [0.95, 0.5],
+        ],
+        dtype=float,
+    )
+
+    default = sigma_true_from_anomaly_rule(4, parameter_points=points, rule="default")
+    center = sigma_true_from_anomaly_rule(
+        4,
+        parameter_points=points,
+        rule="center_high",
+    )
+    dual = sigma_true_from_anomaly_rule(
+        4,
+        parameter_points=points,
+        rule="dual_contrast",
+    )
+
+    assert not np.allclose(center, default)
+    assert not np.allclose(dual, default)
+
+
+def test_factor_sweep_t17_extended_factors_are_optional() -> None:
+    rows = run_factor_sweep(
+        fem_grid_levels=[4, 6],
+        ridge_levels=[1e-2, 1e-1],
+        target_digits=[5, 6],
+        noise_relative_levels=[0.0, 0.001],
+        enob_levels=["nominal", "5"],
+        full_scale_levels=[5.0, 10.0],
+        rm_mode_levels=["tikhonov", "noser"],
+        anomaly_rule_levels=["default", "center_high"],
+        forward_backend="surrogate",
+        inverse_backend="pyeidors-rm",
+        n_elec=16,
+        baseline_fem_grid=4,
+        baseline_ridge=1e-2,
+        baseline_target_digits=6,
+        baseline_enob="5",
+        full_scale_range=10.0,
+        adc_bit=8,
+        n_measurements=10,
+        n_parameters=5,
+        model_seed=123,
+    )
+
+    assert len(rows) == 21
+    assert {row.changed_factor for row in rows} == {
+        "baseline",
+        "fem_grid",
+        "ridge",
+        "target_voltage_digits",
+        "noise_relative",
+        "enob",
+        "full_scale",
+        "rm_mode",
+        "anomaly_rule",
+        "grid_x_ridge",
+    }
+    assert [row.changed_factor for row in rows].count("full_scale") == 2
+    assert [row.changed_factor for row in rows].count("rm_mode") == 2
+    assert [row.changed_factor for row in rows].count("anomaly_rule") == 2
+    assert all(np.isfinite(row.sigma_relative_rmse) for row in rows)
+
+
+def test_v20_anomaly_rule_sweep_reuses_grid_model(monkeypatch) -> None:
+    from pyeidors.data import factor_sweep as factor_sweep_module
+
+    calls: list[int] = []
+    original = factor_sweep_module._build_model_for_grid
+
+    def counted_build_model_for_grid(**kwargs):
+        calls.append(int(kwargs["fem_grid"]))
+        return original(**kwargs)
+
+    monkeypatch.setattr(
+        factor_sweep_module,
+        "_build_model_for_grid",
+        counted_build_model_for_grid,
+    )
+
+    run_factor_sweep(
+        fem_grid_levels=[4, 6],
+        ridge_levels=[1e-2],
+        target_digits=[6],
+        noise_relative_levels=[0.0],
+        enob_levels=["nominal"],
+        anomaly_rule_levels=["default", "center_high", "dual_contrast"],
+        forward_backend="surrogate",
+        inverse_backend="least-squares",
+        n_elec=16,
+        baseline_fem_grid=4,
+        baseline_ridge=1e-2,
+        baseline_target_digits=6,
+        n_measurements=10,
+        n_parameters=5,
+        model_seed=123,
+    )
+
+    assert calls.count(4) == 1
+    assert calls.count(6) == 1
+
+
 def test_factor_sweep_report_and_plot_outputs(tmp_path) -> None:
     rows = _small_surrogate_rows()
     report = format_factor_sweep_report(
         rows,
         full_scale_range=10.0,
         adc_bit=8,
+        rm_mode="tikhonov",
+        baseline_anomaly_rule="default",
     )
     plot_path = plot_factor_sweep(rows, tmp_path / "factor.png", dpi=80)
 

@@ -64,6 +64,7 @@ from .eit_digit_metrics import (
     inverse_pyeidors_rm,
     inverse_surrogate,
     reconstruct_linearized_sigma,
+    sigma_true_from_anomaly_rule,
     summarize_eit_digit_run,
     summarize_eit_digit_sweep,
 )
@@ -147,6 +148,7 @@ __all__ = [
     "inverse_pyeidors_rm",
     "inverse_surrogate",
     "reconstruct_linearized_sigma",
+    "sigma_true_from_anomaly_rule",
     "summarize_eit_digit_run",
     "summarize_eit_digit_sweep",
     "VoltageDigitFieldRow",
