@@ -10,7 +10,11 @@ import sys
 
 import numpy as np
 
-from pyeidors.data.eit_digit_metrics import EITDigitSummary, summarize_eit_digit_sweep
+from pyeidors.data.eit_digit_metrics import (
+    EITDigitSummary,
+    adjacent_measurement_count,
+    summarize_eit_digit_sweep,
+)
 
 
 CSV_FIELDS = [
@@ -158,6 +162,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PyEIDORS FEM unit-square grid when --forward-backend pyeidors-fem.",
     )
     parser.add_argument(
+        "--expected-fem-measurements",
+        type=int,
+        help="Expected PyEIDORS FEM measurement count; checked before reporting.",
+    )
+    parser.add_argument(
         "--ridge",
         type=float,
         default=1e-8,
@@ -193,6 +202,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     noise_relative = args.noise if args.noise_relative is None else args.noise_relative
+    fem_measurements = None
+    if args.forward_backend == "pyeidors-fem":
+        fem_measurements = (
+            args.expected_fem_measurements
+            if args.expected_fem_measurements is not None
+            else adjacent_measurement_count(args.fem_n_elec)
+        )
     rows = summarize_eit_digit_sweep(
         bits=args.bits,
         full_scale_range=args.full_scale,
@@ -210,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         forward_backend=args.forward_backend,
         fem_n_elec=args.fem_n_elec,
         fem_grid=args.fem_grid,
+        expected_fem_measurements=args.expected_fem_measurements,
     )
     _write_csv(args.output, rows)
     model_label = f"{args.forward_backend}+{args.inverse_backend}"
@@ -222,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
         f"noise_relative={_format_float(noise_relative)}, "
         f"seed={args.seed}, model_seed={args.model_seed}, ridge={_format_float(args.ridge)}, "
         f"fem_n_elec={args.fem_n_elec}, fem_grid={args.fem_grid}, "
+        f"stim_pattern={{ad}}, meas_pattern={{ad}}, "
+        f"fem_n_measurements={_format_float(fem_measurements)}, "
         f"rm_mode={args.rm_mode}, rm_form={args.rm_form}"
     )
     print(_format_table(rows))

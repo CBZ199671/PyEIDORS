@@ -12,6 +12,7 @@ import numpy as np
 import pytest
 
 from pyeidors.data.eit_digit_metrics import (
+    adjacent_measurement_count,
     build_surrogate_sensitivity,
     default_sigma_true,
     forward_surrogate,
@@ -22,6 +23,11 @@ from pyeidors.data.eit_digit_metrics import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_adjacent_measurement_count_matches_ad_pattern_frame_sizes() -> None:
+    assert adjacent_measurement_count(8) == 40
+    assert adjacent_measurement_count(16) == 208
 
 
 def test_surrogate_forward_inverse_round_trips_without_adc_error() -> None:
@@ -103,6 +109,7 @@ def test_pyeidors_fem_digit_sweep_smoke() -> None:
         forward_backend="pyeidors-fem",
         fem_n_elec=8,
         fem_grid=2,
+        expected_fem_measurements=40,
         inverse_backend="pyeidors-rm",
         ridge=1e-2,
     )

@@ -55,6 +55,7 @@ from .adc_quantization import (
 from .eit_digit_metrics import (
     EITDigitSummary,
     EITLinearizedModel,
+    adjacent_measurement_count,
     build_pyeidors_fem_linearized_model,
     build_surrogate_sensitivity,
     build_surrogate_linearized_model,
@@ -116,6 +117,7 @@ __all__ = [
     "summarize_adc_sweep",
     "EITDigitSummary",
     "EITLinearizedModel",
+    "adjacent_measurement_count",
     "build_pyeidors_fem_linearized_model",
     "build_surrogate_sensitivity",
     "build_surrogate_linearized_model",

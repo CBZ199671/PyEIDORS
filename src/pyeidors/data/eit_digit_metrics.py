@@ -22,6 +22,9 @@ from .adc_quantization import (
 )
 
 
+ADJACENT_PATTERN = "{ad}"
+
+
 @dataclass(frozen=True)
 class EITDigitSummary:
     """Summary metrics for one ADC bit in an end-to-end EIT run."""
@@ -56,6 +59,10 @@ class EITLinearizedModel:
     voltage_reference: np.ndarray
     sensitivity: np.ndarray
     label: str
+    n_elec: int | None = None
+    stim_pattern: str = ""
+    meas_pattern: str = ""
+    n_measurements: int = 0
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:
@@ -130,6 +137,15 @@ def forward_surrogate(
     return sens @ sigma_vec
 
 
+def adjacent_measurement_count(n_elec: int) -> int:
+    """Expected `{ad}`/`{ad}` frame length for adjacent EIT patterns."""
+
+    count = int(n_elec)
+    if count < 4:
+        raise ValueError("n_elec must be >= 4 for adjacent measurement count")
+    return count * (count - 3)
+
+
 def build_surrogate_linearized_model(
     *,
     n_measurements: int = 16,
@@ -162,6 +178,7 @@ def build_surrogate_linearized_model(
         voltage_reference=np.zeros(sens.shape[0], dtype=float),
         sensitivity=sens,
         label="linear-surrogate",
+        n_measurements=int(sens.shape[0]),
     )
 
 
@@ -244,6 +261,7 @@ def build_pyeidors_fem_linearized_model(
     *,
     n_elec: int = 8,
     grid: int = 2,
+    expected_measurements: int | None = None,
 ) -> EITLinearizedModel:
     """Build a small real PyEIDORS FEM forward/Jacobian model for T12 smokes."""
 
@@ -256,8 +274,8 @@ def build_pyeidors_fem_linearized_model(
     mesh = _create_pyeidors_square_mesh(n_elec=int(n_elec), grid=int(grid))
     pattern = PatternConfig(
         n_elec=int(n_elec),
-        stim_pattern="{ad}",
-        meas_pattern="{ad}",
+        stim_pattern=ADJACENT_PATTERN,
+        meas_pattern=ADJACENT_PATTERN,
         drive_mode="total_current",
         drive_value=1.0,
         geometry_scale_to_m=1.0,
@@ -277,6 +295,14 @@ def build_pyeidors_fem_linearized_model(
 
     voltage_reference = _pyeidors_forward_vector(fwd_model, sigma_reference)
     voltage_true = _pyeidors_forward_vector(fwd_model, sigma_true)
+    actual_measurements = int(voltage_reference.size)
+    if expected_measurements is not None and actual_measurements != int(
+        expected_measurements
+    ):
+        raise RuntimeError(
+            "PyEIDORS FEM measurement count mismatch: "
+            f"expected {int(expected_measurements)}, got {actual_measurements}"
+        )
     sensitivity = np.asarray(
         EidorsStyleAdjointJacobian(fwd_model).calculate(sigma_ref_fun),
         dtype=float,
@@ -292,6 +318,10 @@ def build_pyeidors_fem_linearized_model(
         voltage_reference=voltage_reference,
         sensitivity=sensitivity,
         label="pyeidors-fem",
+        n_elec=int(n_elec),
+        stim_pattern=ADJACENT_PATTERN,
+        meas_pattern=ADJACENT_PATTERN,
+        n_measurements=actual_measurements,
     )
 
 
@@ -496,6 +526,7 @@ def summarize_eit_digit_sweep(
     forward_backend: str = "surrogate",
     fem_n_elec: int = 8,
     fem_grid: int = 2,
+    expected_fem_measurements: int | None = None,
 ) -> list[EITDigitSummary]:
     """Run an ADC bit sweep through the EIT digit pipeline."""
 
@@ -514,9 +545,15 @@ def summarize_eit_digit_sweep(
                 "sigma_true and sensitivity overrides are only supported "
                 "for forward_backend='surrogate'"
             )
+        expected_measurements = (
+            adjacent_measurement_count(fem_n_elec)
+            if expected_fem_measurements is None
+            else int(expected_fem_measurements)
+        )
         model = build_pyeidors_fem_linearized_model(
             n_elec=fem_n_elec,
             grid=fem_grid,
+            expected_measurements=expected_measurements,
         )
     else:
         raise ValueError("forward_backend must be one of: surrogate, pyeidors-fem")
