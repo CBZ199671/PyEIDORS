@@ -1,0 +1,213 @@
+{
+  "schema": "pyeidors-eidors-greit-source-map-v1",
+  "official_docs_generated": "2024-12-29",
+  "purpose": "Map official EIDORS 3D GREIT components needed for PyEIDORS parity fixtures.",
+  "required_exports": [
+    "vh",
+    "vi",
+    "xyzr",
+    "D",
+    "Y",
+    "PJt",
+    "M",
+    "noiselev",
+    "RM",
+    "weight"
+  ],
+  "parity_status": {
+    "current_pyeidors_greit": "linearized-rm-v0",
+    "eidors_complete_claim_allowed": false,
+    "unlock_requires_tasks": [
+      "T40",
+      "T41",
+      "T42",
+      "T43",
+      "T44",
+      "T45",
+      "T46",
+      "T47",
+      "T48",
+      "T49",
+      "T50"
+    ]
+  },
+  "official_functions": [
+    {
+      "id": "GREIT3D_distribution",
+      "role": "3D reconstruction voxel volume and target distribution builder.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/models/GREIT3D_distribution.html",
+      "official_signature": "function [imdl,distr] = GREIT3D_distribution(fmdl, vopt)",
+      "source_lines": "0001-0045",
+      "parity_fields": [
+        "imgsz",
+        "xvec",
+        "yvec",
+        "zvec",
+        "downsample",
+        "distr"
+      ],
+      "cites": [
+        "V55"
+      ]
+    },
+    {
+      "id": "mk_GREIT_model",
+      "role": "Official GREIT inverse model builder and optional NF/image-SNR weight optimizer.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/models/mk_GREIT_model.html",
+      "official_signature": "function [imdl, weight]= mk_GREIT_model(fmdl, radius, weight, options)",
+      "source_lines": "0096-0204",
+      "parity_fields": [
+        "vh",
+        "vi",
+        "xyz",
+        "weight",
+        "RM",
+        "PJt",
+        "M",
+        "noiselev"
+      ],
+      "cites": [
+        "V50",
+        "V63"
+      ]
+    },
+    {
+      "id": "mk_GREIT_model/stim_targets",
+      "role": "Official private training-target forward-solve path inside mk_GREIT_model.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/models/mk_GREIT_model.html",
+      "official_signature": "function [vi,vh,xyz,opt]= stim_targets(imgs, Nsim, opt)",
+      "source_lines": "0261-0289",
+      "parity_fields": [
+        "vh",
+        "vi",
+        "xyzr",
+        "xyz"
+      ],
+      "cites": [
+        "V55",
+        "V63"
+      ]
+    },
+    {
+      "id": "simulate_movement",
+      "role": "Finite target perturbation forward solves used by stim_targets.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/models/simulate_movement.html",
+      "official_signature": "[vh,vi,xyzr] = simulate_movement(imgs, xyzr)",
+      "source_lines": "0001-0095",
+      "parity_fields": [
+        "vh",
+        "vi",
+        "xyzr"
+      ],
+      "cites": [
+        "V63"
+      ]
+    },
+    {
+      "id": "calc_GREIT_RM",
+      "role": "Official GREIT reconstruction matrix computation.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/solvers/inverse/calc_GREIT_RM.html",
+      "official_signature": "function [RM, PJt, M, noiselev] = calc_GREIT_RM(vh,vi, xyc, radius, weight, options)",
+      "source_lines": "0001-0078",
+      "parity_fields": [
+        "Y",
+        "D",
+        "PJt",
+        "M",
+        "noiselev",
+        "RM"
+      ],
+      "cites": [
+        "V63"
+      ]
+    },
+    {
+      "id": "calc_GREIT_RM/calc_PJt",
+      "role": "Expensive desired-image product cached independently from scalar weight.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/solvers/inverse/calc_GREIT_RM.html",
+      "official_signature": "function PJt = calc_PJt(Y,D)",
+      "source_lines": "0055-0058,0096-0097",
+      "parity_fields": [
+        "D",
+        "Y",
+        "PJt"
+      ],
+      "cites": [
+        "V63"
+      ]
+    },
+    {
+      "id": "ng_mk_cyl_models",
+      "role": "Official Netgen cylindrical forward model generator used by both fixture cases.",
+      "official_url": "https://eidors3d.sourceforge.net/doc/eidors/meshing/netgen/ng_mk_cyl_models.html",
+      "official_signature": "function [fmdl,mat_idx] = ng_mk_cyl_models(cyl_shape, elec_pos, elec_shape, extra_ng_code)",
+      "source_lines": "0001-0085",
+      "parity_fields": [
+        "fwd_model",
+        "electrode_count",
+        "mesh_element_count"
+      ],
+      "cites": [
+        "V63"
+      ]
+    }
+  ],
+  "fixture_cases": [
+    {
+      "case_id": "tiny_3d_cylinder",
+      "role": "Fast official EIDORS smoke fixture for source-map and component-shape validation.",
+      "electrode_count": 8,
+      "target_mesh": "small Netgen 3D cylinder",
+      "target_distribution": {
+        "imgsz": [
+          5,
+          5
+        ],
+        "zvec": [
+          0.15,
+          0.35,
+          0.55,
+          0.75
+        ],
+        "downsample": [
+          2,
+          0
+        ]
+      },
+      "expected_tolerance_status": "unknown_until_first_official_fixture"
+    },
+    {
+      "case_id": "reduced_48e_5936",
+      "role": "Reduced 48-electrode, three-ring cylinder aligned with PyEIDORS 48e/5936 production geometry family.",
+      "electrode_count": 48,
+      "target_mesh": "reduced Netgen 3D cylinder; PyEIDORS matching mesh lives under eit_meshes/mesh3d_48e_*",
+      "target_distribution": {
+        "xvec": [
+          -0.16,
+          -0.08,
+          0.0,
+          0.08,
+          0.16
+        ],
+        "yvec": [
+          -0.16,
+          -0.08,
+          0.0,
+          0.08,
+          0.16
+        ],
+        "zvec": [
+          0.02,
+          0.06,
+          0.1,
+          0.14
+        ],
+        "downsample": [
+          2,
+          0
+        ]
+      },
+      "expected_tolerance_status": "unknown_until_first_official_fixture"
+    }
+  ]
+}
