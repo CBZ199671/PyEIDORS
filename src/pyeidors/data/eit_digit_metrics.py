@@ -63,6 +63,9 @@ class EITLinearizedModel:
     stim_pattern: str = ""
     meas_pattern: str = ""
     n_measurements: int = 0
+    parameter_points: np.ndarray | None = None
+    mesh_points: np.ndarray | None = None
+    mesh_cells: np.ndarray | None = None
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:
@@ -257,6 +260,18 @@ def _pyeidors_forward_vector(fwd_model, sigma: np.ndarray) -> np.ndarray:
     return _as_float_vector(data.meas, name="fem voltages")
 
 
+def _pyeidors_parameter_geometry(eit_mesh) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    coords = np.asarray(eit_mesh.coordinates(), dtype=float)
+    cells = np.asarray(eit_mesh.cells(), dtype=np.int32)
+    if coords.ndim != 2 or coords.shape[0] == 0:
+        raise RuntimeError("PyEIDORS mesh coordinates must be a non-empty 2D array")
+    if cells.ndim != 2 or cells.shape[0] == 0:
+        raise RuntimeError("PyEIDORS mesh cells must be a non-empty 2D array")
+    mesh_points = coords[:, :2].copy()
+    centers = mesh_points[cells].mean(axis=1)
+    return centers, mesh_points, cells
+
+
 def build_pyeidors_fem_linearized_model(
     *,
     n_elec: int = 8,
@@ -292,6 +307,9 @@ def build_pyeidors_fem_linearized_model(
     sigma_reference = np.ones(sigma_ref_fun.x.array.size, dtype=float)
     sigma_ref_fun.x.array[:] = sigma_reference
     sigma_true = default_sigma_true(sigma_reference.size)
+    parameter_points, mesh_points, mesh_cells = _pyeidors_parameter_geometry(mesh)
+    if parameter_points.shape[0] != sigma_reference.size:
+        raise RuntimeError("PyEIDORS FEM parameter geometry does not match sigma size")
 
     voltage_reference = _pyeidors_forward_vector(fwd_model, sigma_reference)
     voltage_true = _pyeidors_forward_vector(fwd_model, sigma_true)
@@ -322,6 +340,9 @@ def build_pyeidors_fem_linearized_model(
         stim_pattern=ADJACENT_PATTERN,
         meas_pattern=ADJACENT_PATTERN,
         n_measurements=actual_measurements,
+        parameter_points=parameter_points,
+        mesh_points=mesh_points,
+        mesh_cells=mesh_cells,
     )
 
 
