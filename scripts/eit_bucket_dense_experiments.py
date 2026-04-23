@@ -84,7 +84,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=0.1,
         help="Dense circle-bucket mesh spacing. 0.1 gives about 800 cells.",
     )
-    parser.add_argument("--ridge", type=float, default=0.01)
+    parser.add_argument("--ridge", type=float, default=1e-4)
     parser.add_argument(
         "--target-digits",
         nargs="+",

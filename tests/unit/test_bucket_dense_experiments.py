@@ -72,7 +72,9 @@ def test_measurement_rm_backend_reconstructs_dense_bucket_without_param_solve() 
     assert np.std(sigma_recon) > 0.0
 
 
-def test_bucket_dense_experiment_outputs_voltage_and_holdout_rows(tmp_path) -> None:
+def test_v37_bucket_dense_experiment_outputs_and_recovers_visible_anomaly(
+    tmp_path,
+) -> None:
     case = run_bucket_dense_experiments(
         mesh_h=0.16,
         target_digits=[5],
@@ -95,11 +97,15 @@ def test_bucket_dense_experiment_outputs_voltage_and_holdout_rows(tmp_path) -> N
         coarse_structure_csv=None,
         dpi=70,
     )
+    reference = case.model.sigma_reference
+    truth_contrast = float(np.max(case.bucket.sigma_true - reference))
+    full_contrast = float(np.max(case.holdout_case.sigma_recon_full - reference))
 
     assert {row.experiment for row in case.summaries} == {
         "voltage_digit_sweep",
         "holdout_far3",
     }
+    assert full_contrast >= 0.6 * truth_contrast
     assert {row.recon_method for row in case.summaries} == {
         "digits_5",
         "full_208",

@@ -573,7 +573,7 @@ def run_bucket_dense_experiments(
     bucket_radius: float = 1.0,
     n_elec: int = 16,
     mesh_h: float = 0.1,
-    ridge: float = 0.01,
+    ridge: float = 1e-4,
     target_digits: Iterable[int] = (4, 5, 6, 7),
     holdout: str = "far3",
     raw_160_baseline: bool = True,
@@ -963,6 +963,7 @@ def format_bucket_dense_report(
     holdout_rows = [row for row in case.summaries if row.experiment == "holdout_far3"]
     best_voltage = min(voltage_rows, key=lambda row: row.sigma_relative_rmse)
     best_holdout = min(holdout_rows, key=lambda row: row.sigma_relative_rmse)
+    ridge = case.summaries[0].ridge if case.summaries else math.nan
     row_norms = np.linalg.norm(np.asarray(case.model.sensitivity, dtype=float), axis=1)
     positive_norms = row_norms[row_norms > 0.0]
     row_normalized = bool(
@@ -985,6 +986,7 @@ def format_bucket_dense_report(
         f"- voltage model: nonzero homogeneous reference="
         f"`{bool(np.max(np.abs(case.model.voltage_reference)) > 0.0)}`，"
         f"row_normalized=`{row_normalized}`。",
+        f"- inverse: backend `measurement-rm`，ridge `{ridge:.12g}`。",
         f"- voltage sweep 最小相对误差：`{best_voltage.recon_method}`，"
         f"sigma_relative_rmse `{best_voltage.sigma_relative_rmse:.12g}`。",
         f"- holdout 最小相对误差：`{best_holdout.recon_method}`，"
