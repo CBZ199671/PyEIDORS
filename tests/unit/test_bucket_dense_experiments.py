@@ -36,6 +36,21 @@ def test_circle_bucket_linearized_model_uses_dense_circle_geometry() -> None:
     np.testing.assert_allclose(model.mesh_points, bucket.nodes)
     assert np.max(np.linalg.norm(model.parameter_points, axis=1)) <= 1.0 + 1e-10
     assert np.max(np.abs(model.voltage_true)) > 0.0
+    assert np.max(np.abs(model.voltage_reference)) > 0.0
+
+
+def test_v36_circle_bucket_reference_voltage_is_rotated_local_u_curve() -> None:
+    bucket = build_circle_bucket_domain(mesh_h=0.16, n_elec=16, allow_coarse_smoke=True)
+    model = build_circle_bucket_linearized_model(bucket=bucket)
+
+    reference_frames = model.voltage_reference.reshape(16, 13)
+    np.testing.assert_allclose(reference_frames[0], reference_frames[1])
+    np.testing.assert_allclose(reference_frames[0], reference_frames[8])
+    assert reference_frames[0][0] > reference_frames[0][6]
+    assert reference_frames[0][-1] > reference_frames[0][6]
+    assert np.max(np.abs(model.voltage_true - model.voltage_reference)) < np.max(
+        np.abs(model.voltage_reference)
+    )
 
 
 def test_measurement_rm_backend_reconstructs_dense_bucket_without_param_solve() -> None:

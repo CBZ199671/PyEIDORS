@@ -110,9 +110,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="Allow mesh below dense threshold for tests or explicit smokes.",
     )
     parser.add_argument(
+        "--row-normalize",
+        action="store_true",
+        help="Enable row normalization in the analytic circle-bucket sensitivity.",
+    )
+    parser.add_argument(
         "--no-row-normalize",
         action="store_true",
-        help="Disable row normalization in the analytic circle-bucket sensitivity.",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--output",
@@ -189,7 +194,7 @@ def main(argv: list[str] | None = None) -> int:
         fit_methods=args.fit_methods,
         inverse_backend=args.inverse_backend,
         allow_coarse_smoke=args.allow_coarse_smoke,
-        normalize_rows=not args.no_row_normalize,
+        normalize_rows=bool(args.row_normalize and not args.no_row_normalize),
     )
     written = write_bucket_dense_outputs(
         case,
@@ -212,6 +217,7 @@ def main(argv: list[str] | None = None) -> int:
         f"mesh_h={case.bucket.mesh_h}, n_cells={case.bucket.n_cells}, "
         f"n_dofs={case.bucket.n_dofs}, n_measurements={case.bucket.n_measurements}, "
         f"ridge={_format_float(args.ridge)}, inverse_backend={args.inverse_backend}, "
+        f"row_normalize={bool(args.row_normalize and not args.no_row_normalize)}, "
         f"raw_160={include_raw}, fit_methods={','.join(args.fit_methods)}"
     )
     print(_format_table(case))

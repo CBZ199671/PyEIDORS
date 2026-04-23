@@ -203,6 +203,17 @@ def _source_gradient(
     return diff / (2.0 * math.pi * r2[:, None])
 
 
+def _source_potential(
+    points: np.ndarray,
+    electrode_point: np.ndarray,
+    *,
+    softening: float,
+) -> np.ndarray:
+    diff = np.asarray(points, dtype=float) - np.asarray(electrode_point, dtype=float)
+    r2 = np.sum(diff * diff, axis=1) + float(softening) ** 2
+    return 0.5 * np.log(r2) / (2.0 * math.pi)
+
+
 def _pair_gradient(
     points: np.ndarray,
     electrode_points: np.ndarray,
@@ -222,10 +233,63 @@ def _pair_gradient(
     )
 
 
+def _pair_potential(
+    points: np.ndarray,
+    electrode_points: np.ndarray,
+    *,
+    e1: int,
+    e2: int,
+    softening: float,
+) -> np.ndarray:
+    return _source_potential(
+        points,
+        electrode_points[int(e1) % electrode_points.shape[0]],
+        softening=softening,
+    ) - _source_potential(
+        points,
+        electrode_points[int(e2) % electrode_points.shape[0]],
+        softening=softening,
+    )
+
+
+def _build_circle_bucket_reference_voltage(bucket: CircleBucketDomain) -> np.ndarray:
+    point_rows, summary = build_holdout_point_audit(n_elec=bucket.n_elec)
+    kept_rows = [row for row in point_rows if row.point_status != "drive_removed"]
+    if len(kept_rows) != summary.kept_208_count:
+        raise RuntimeError("kept adjacent measurement count mismatch")
+
+    electrodes = _electrode_center_points(bucket)
+    softening = max(bucket.mesh_h * 0.2, bucket.bucket_radius * 1e-3)
+    rows: list[float] = []
+    for row in kept_rows:
+        electrode_voltage = _pair_potential(
+            electrodes,
+            electrodes,
+            e1=row.stim_e1,
+            e2=row.stim_e2,
+            softening=softening,
+        )
+        rows.append(
+            float(
+                (
+                    electrode_voltage[int(row.meas_e1) % bucket.n_elec]
+                    - electrode_voltage[int(row.meas_e2) % bucket.n_elec]
+                )
+                / bucket.background_conductivity
+            )
+        )
+    voltage = np.asarray(rows, dtype=float)
+    if voltage.shape != (bucket.n_measurements,):
+        raise RuntimeError("circle bucket reference voltage shape mismatch")
+    if not np.all(np.isfinite(voltage)):
+        raise RuntimeError("circle bucket reference voltage contains non-finite values")
+    return voltage
+
+
 def _build_circle_bucket_sensitivity(
     bucket: CircleBucketDomain,
     *,
-    normalize_rows: bool = True,
+    normalize_rows: bool = False,
 ) -> np.ndarray:
     point_rows, summary = build_holdout_point_audit(n_elec=bucket.n_elec)
     kept_rows = [row for row in point_rows if row.point_status != "drive_removed"]
@@ -269,7 +333,7 @@ def _build_circle_bucket_sensitivity(
 def build_circle_bucket_linearized_model(
     *,
     bucket: CircleBucketDomain,
-    normalize_rows: bool = True,
+    normalize_rows: bool = False,
 ) -> EITLinearizedModel:
     """Build a dense circular-bucket linearized difference model."""
 
@@ -283,8 +347,8 @@ def build_circle_bucket_linearized_model(
         normalize_rows=normalize_rows,
     )
     contrast = bucket.sigma_true - sigma_reference
-    voltage_reference = np.zeros(bucket.n_measurements, dtype=float)
-    voltage_true = sensitivity @ contrast
+    voltage_reference = _build_circle_bucket_reference_voltage(bucket)
+    voltage_true = voltage_reference + sensitivity @ contrast
 
     def forward_solver(sigma: np.ndarray) -> np.ndarray:
         sigma_vec = np.asarray(sigma, dtype=float)
@@ -516,7 +580,7 @@ def run_bucket_dense_experiments(
     fit_methods: Iterable[str] = ("poly2", "poly3", "spline"),
     inverse_backend: str = "measurement-rm",
     allow_coarse_smoke: bool = False,
-    normalize_rows: bool = True,
+    normalize_rows: bool = False,
 ) -> BucketDenseExperimentCase:
     """Run voltage-digit and holdout experiments on one dense circle bucket."""
 
@@ -901,6 +965,11 @@ def format_bucket_dense_report(
     holdout_rows = [row for row in case.summaries if row.experiment == "holdout_far3"]
     best_voltage = min(voltage_rows, key=lambda row: row.sigma_relative_rmse)
     best_holdout = min(holdout_rows, key=lambda row: row.sigma_relative_rmse)
+    row_norms = np.linalg.norm(np.asarray(case.model.sensitivity, dtype=float), axis=1)
+    positive_norms = row_norms[row_norms > 0.0]
+    row_normalized = bool(
+        positive_norms.size and np.allclose(positive_norms, 1.0, rtol=1e-6, atol=1e-9)
+    )
     coarse_voltage = _read_csv_rows(coarse_voltage_csv) if coarse_voltage_csv else []
     coarse_holdout = _read_csv_rows(coarse_holdout_csv) if coarse_holdout_csv else []
     coarse_note = (
@@ -915,6 +984,9 @@ def format_bucket_dense_report(
         f"- domain: `{case.bucket.domain}`，mesh_h `{case.bucket.mesh_h}`，"
         f"n_cells/n_dofs `{case.bucket.n_cells}`，n_measurements "
         f"`{case.bucket.n_measurements}`。",
+        f"- voltage model: nonzero homogeneous reference="
+        f"`{bool(np.max(np.abs(case.model.voltage_reference)) > 0.0)}`，"
+        f"row_normalized=`{row_normalized}`。",
         f"- voltage sweep 最小相对误差：`{best_voltage.recon_method}`，"
         f"sigma_relative_rmse `{best_voltage.sigma_relative_rmse:.12g}`。",
         f"- holdout 最小相对误差：`{best_holdout.recon_method}`，"

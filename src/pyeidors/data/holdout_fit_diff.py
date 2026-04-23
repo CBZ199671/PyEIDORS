@@ -192,9 +192,13 @@ class HoldoutFitFrameCurve:
 
     stim_index: int
     x_all: np.ndarray
+    voltage_reference_full: np.ndarray
+    voltage_anomaly_full: np.ndarray
     diff_full: np.ndarray
     train_mask: np.ndarray
     holdout_mask: np.ndarray
+    fitted_reference_by_method: dict[str, np.ndarray]
+    fitted_anomaly_by_method: dict[str, np.ndarray]
     fitted_diff_by_method: dict[str, np.ndarray]
 
 
@@ -416,9 +420,13 @@ def _fit_full_model_data(
             HoldoutFitFrameCurve(
                 stim_index=stim_index,
                 x_all=x_all,
+                voltage_reference_full=v_ref[frame_indices],
+                voltage_anomaly_full=v_true[frame_indices],
                 diff_full=v_true[frame_indices] - v_ref[frame_indices],
                 train_mask=train_mask,
                 holdout_mask=holdout_mask,
+                fitted_reference_by_method={method: ref_frame},
+                fitted_anomaly_by_method={method: true_frame},
                 fitted_diff_by_method={method: true_frame - ref_frame},
             )
         )
@@ -818,10 +826,16 @@ def run_holdout_fit_diff(
             if existing is None:
                 frame_curve_lookup[curve.stim_index] = curve
             else:
+                merged_ref = dict(existing.fitted_reference_by_method)
+                merged_ref.update(curve.fitted_reference_by_method)
+                merged_true = dict(existing.fitted_anomaly_by_method)
+                merged_true.update(curve.fitted_anomaly_by_method)
                 merged = dict(existing.fitted_diff_by_method)
                 merged.update(curve.fitted_diff_by_method)
                 frame_curve_lookup[curve.stim_index] = replace(
                     existing,
+                    fitted_reference_by_method=merged_ref,
+                    fitted_anomaly_by_method=merged_true,
                     fitted_diff_by_method=merged,
                 )
 
@@ -1011,19 +1025,28 @@ def plot_holdout_fit_curves(
         squeeze=False,
         constrained_layout=True,
     )
-    fig.suptitle("Holdout fit curves: 13-point U curves, 10 train, 3 predicted")
+    fig.suptitle("Holdout fit curves: absolute 13-point U curves")
     colors = {"poly2": "#9467bd", "poly3": "#8c564b", "spline": "#17becf"}
     for ax, curve in zip(axes.ravel(), case.frame_curves, strict=False):
+        if np.max(np.abs(curve.voltage_reference_full)) > 0.0:
+            ax.plot(
+                curve.x_all,
+                curve.voltage_reference_full,
+                color="#7f7f7f",
+                linestyle="--",
+                linewidth=0.9,
+                label="reference full",
+            )
         ax.plot(
             curve.x_all,
-            curve.diff_full,
+            curve.voltage_anomaly_full,
             color="#1f77b4",
             linewidth=1.2,
-            label="full diff",
+            label="target full",
         )
         ax.scatter(
             curve.x_all[curve.train_mask],
-            curve.diff_full[curve.train_mask],
+            curve.voltage_anomaly_full[curve.train_mask],
             color="#2ca02c",
             s=20,
             label="train 10",
@@ -1031,14 +1054,14 @@ def plot_holdout_fit_curves(
         )
         ax.scatter(
             curve.x_all[curve.holdout_mask],
-            curve.diff_full[curve.holdout_mask],
+            curve.voltage_anomaly_full[curve.holdout_mask],
             color="#ff7f0e",
             marker="x",
             s=28,
             label="holdout true",
             zorder=4,
         )
-        for method, fitted in sorted(curve.fitted_diff_by_method.items()):
+        for method, fitted in sorted(curve.fitted_anomaly_by_method.items()):
             ax.scatter(
                 curve.x_all[curve.holdout_mask],
                 fitted[curve.holdout_mask],

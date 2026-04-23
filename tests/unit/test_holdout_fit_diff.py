@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from dataclasses import replace
 from pathlib import Path
 import subprocess
 import sys
@@ -169,3 +170,47 @@ def test_eit_holdout_fit_diff_cli_writes_expected_outputs(tmp_path) -> None:
     assert list(structure_rows[0].keys()) == STRUCTURE_FIELDS
     for path in [point_plot, curve_plot, recon_plot, summary_plot]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_v36_fit_curves_keep_absolute_voltage_separate_from_diff() -> None:
+    model = _surrogate_model()
+    u_curve = np.array(
+        [
+            0.045,
+            0.02,
+            0.012,
+            0.009,
+            0.007,
+            0.006,
+            0.0058,
+            0.006,
+            0.007,
+            0.009,
+            0.012,
+            0.02,
+            0.045,
+        ],
+        dtype=float,
+    )
+    reference = np.tile(u_curve, 16)
+    absolute_model = replace(
+        model,
+        voltage_reference=reference,
+        voltage_true=reference + model.voltage_true,
+    )
+
+    case = run_holdout_fit_diff(
+        model=absolute_model,
+        fit_methods=["poly2"],
+        raw_160_baseline=True,
+        inverse_backend="least-squares",
+        ridge=1e-4,
+    )
+    curve = case.frame_curves[0]
+
+    np.testing.assert_allclose(curve.voltage_reference_full, reference[:13])
+    np.testing.assert_allclose(
+        curve.voltage_anomaly_full, reference[:13] + model.voltage_true[:13]
+    )
+    assert not np.allclose(curve.voltage_anomaly_full, curve.diff_full)
+    assert "poly2" in curve.fitted_anomaly_by_method

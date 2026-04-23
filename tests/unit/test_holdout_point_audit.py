@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import numpy as np
+
+from pyeidors.data.structures import PatternConfig
+from pyeidors.electrodes.patterns import StimMeasPatternManager
 from pyeidors.data.holdout_point_audit import (
     build_holdout_point_audit,
     drive_removed_frame_indices,
@@ -61,3 +65,35 @@ def test_holdout_point_audit_frame_indices_match_far3_rule() -> None:
     assert {
         row.frame_index_10 for row in frame0 if row.point_status == "fit_train_160"
     } == set(range(10))
+
+
+def test_v36_holdout_frames_match_rotated_pattern_manager_order() -> None:
+    rows, _ = build_holdout_point_audit(n_elec=16, holdout="far3")
+    manager = StimMeasPatternManager(
+        PatternConfig(
+            n_elec=16,
+            stim_pattern="{ad}",
+            meas_pattern="{ad}",
+            drive_mode="total_current",
+            drive_value=1.0,
+        )
+    )
+
+    for stim_index in range(16):
+        pattern_pairs = []
+        for meas_row in manager.meas_matrices[stim_index]:
+            pos = int(np.flatnonzero(meas_row > 0)[0])
+            neg = int(np.flatnonzero(meas_row < 0)[0])
+            pattern_pairs.append((pos, neg))
+
+        audit_rows = [
+            row
+            for row in rows
+            if row.stim_index == stim_index and row.point_status != "drive_removed"
+        ]
+        audit_pairs = [(row.meas_e1, row.meas_e2) for row in audit_rows]
+
+        assert audit_pairs == pattern_pairs
+        assert audit_pairs[0] == ((stim_index + 2) % 16, (stim_index + 3) % 16)
+        assert audit_pairs[-1] == ((stim_index + 14) % 16, (stim_index + 15) % 16)
+        assert [row.frame_index_13 for row in audit_rows] == list(range(13))
