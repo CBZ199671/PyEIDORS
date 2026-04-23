@@ -21,6 +21,7 @@ from pyeidors.data.channels import (
     zero_bad_channel_weights,
 )
 from pyeidors.data.difference import normalize_time_difference
+from pyeidors.inverse.prior import RtRPrior, as_rtr_prior
 from pyeidors.perf.gpu_kernels import RMMatmulResult, rm_matmul
 from pyeidors.utils.numeric_ops import safe_dot
 
@@ -450,21 +451,39 @@ def _as_jacobian(jacobian: Any) -> np.ndarray:
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
 
-def _as_regularization_matrix(regularization: Any, *, n_parameters: int) -> np.ndarray:
-    if regularization is None:
-        return np.eye(n_parameters, dtype=np.float64)
-    if sparse.issparse(regularization):
-        matrix = np.asarray(regularization.toarray(), dtype=np.float64)
-    else:
-        array = np.asarray(regularization, dtype=np.float64)
-        matrix = np.diag(array) if array.ndim == 1 else array
-    if matrix.shape != (n_parameters, n_parameters):
+def _as_regularization_prior(
+    regularization: Any,
+    *,
+    n_parameters: int,
+    name: str,
+    metadata: Mapping[str, Any] | None = None,
+) -> RtRPrior:
+    prior = as_rtr_prior(
+        regularization,
+        n_parameters=n_parameters,
+        name=name,
+        metadata=metadata,
+    )
+    if prior.shape != (n_parameters, n_parameters):
         raise ValueError(
             "regularization must have shape "
-            f"{(n_parameters, n_parameters)}, got {matrix.shape}."
+            f"{(n_parameters, n_parameters)}, got {prior.shape}."
         )
+    return prior
+
+
+def _prior_to_dense_matrix(prior: RtRPrior, *, name: str) -> np.ndarray:
+    explicit = prior.as_RtR(dense=True)
+    if sparse.issparse(explicit):
+        matrix = np.asarray(explicit.toarray(), dtype=np.float64)
+    elif isinstance(explicit, np.ndarray):
+        matrix = np.asarray(explicit, dtype=np.float64)
+    else:
+        raise TypeError(f"{name} RtR prior did not produce an explicit matrix.")
+    if matrix.shape != prior.shape:
+        raise ValueError(f"{name} RtR shape mismatch: expected {prior.shape}.")
     if not np.isfinite(matrix).all():
-        raise FloatingPointError("regularization contains non-finite values.")
+        raise FloatingPointError(f"{name} RtR contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
 
@@ -506,7 +525,7 @@ def _noser_regularization(
     diag = np.maximum(diag, float(floor))
     if exponent != 1.0:
         diag = diag ** float(exponent)
-    return np.diag(diag)
+    return diag
 
 
 def _regularization_for_mode(
@@ -516,14 +535,22 @@ def _regularization_for_mode(
     mode: str,
     noser_floor: float,
     noser_exponent: float,
-) -> tuple[np.ndarray, str]:
+) -> tuple[RtRPrior, str]:
     n_parameters = int(jacobian.shape[1])
     if mode == "noser":
         return (
-            _noser_regularization(
-                jacobian,
-                floor=float(noser_floor),
-                exponent=float(noser_exponent),
+            as_rtr_prior(
+                _noser_regularization(
+                    jacobian,
+                    floor=float(noser_floor),
+                    exponent=float(noser_exponent),
+                ),
+                n_parameters=n_parameters,
+                name="noser",
+                metadata={
+                    "regularization_source": "diag_jtj",
+                    "noser_exponent": float(noser_exponent),
+                },
             ),
             "diag_jtj",
         )
@@ -533,11 +560,25 @@ def _regularization_for_mode(
                 "mode='laplace' requires a graph-Laplacian regularization."
             )
         return (
-            _as_regularization_matrix(regularization, n_parameters=n_parameters),
+            _as_regularization_prior(
+                regularization,
+                n_parameters=n_parameters,
+                name="laplace",
+                metadata={"regularization_source": "provided_laplace"},
+            ),
             "provided_laplace",
         )
     return (
-        _as_regularization_matrix(regularization, n_parameters=n_parameters),
+        _as_regularization_prior(
+            regularization,
+            n_parameters=n_parameters,
+            name="tikhonov",
+            metadata={
+                "regularization_source": "identity"
+                if regularization is None
+                else "provided"
+            },
+        ),
         "identity" if regularization is None else "provided",
     )
 
@@ -595,13 +636,14 @@ def build_one_step_rm(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    reg, regularization_source = _regularization_for_mode(
+    reg_prior, regularization_source = _regularization_for_mode(
         jac,
         regularization,
         mode=resolved_mode,
         noser_floor=float(noser_floor),
         noser_exponent=float(noser_exponent),
     )
+    reg = _prior_to_dense_matrix(reg_prior, name=resolved_mode)
 
     if resolved_form == "measurement":
         rn, rn_source = _as_measurement_regularization(
@@ -648,10 +690,17 @@ def build_one_step_rm(
             "normal_equation_formula": "JtWJ_plus_hp2_RtR",
             "regularization_matrix_role": "RtR",
             "RtR_shape": tuple(int(v) for v in reg.shape),
-            "RtR_nnz": int(np.count_nonzero(reg)),
+            "RtR_nnz": int(
+                reg_prior.nnz if reg_prior.nnz is not None else np.count_nonzero(reg)
+            ),
+            "RtR_kind": reg_prior.kind,
+            "RtR_signature_hash": reg_prior.signature_hash,
+            "RtR_metadata": dict(reg_prior.metadata),
             "inversion_dimension": inversion_dimension,
             "regularization_source": regularization_source,
-            "regularization_nnz": int(np.count_nonzero(reg)),
+            "regularization_nnz": int(
+                reg_prior.nnz if reg_prior.nnz is not None else np.count_nonzero(reg)
+            ),
             "noser_exponent": float(noser_exponent)
             if resolved_mode == "noser"
             else None,

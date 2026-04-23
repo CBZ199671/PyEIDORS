@@ -348,6 +348,9 @@ def _apply_regularization_np(reconstructor, vector: np.ndarray) -> np.ndarray:
         raise RuntimeError("Regularization matrix is not initialized.")
 
     vec = np.asarray(vector, dtype=np.float64)
+    apply = getattr(matrix, "apply", None)
+    if callable(apply):
+        return np.asarray(apply(vec), dtype=np.float64)
     if isspmatrix(matrix):
         return np.asarray(matrix.dot(vec), dtype=np.float64)
     if isinstance(matrix, LinearOperator):
@@ -356,6 +359,18 @@ def _apply_regularization_np(reconstructor, vector: np.ndarray) -> np.ndarray:
         return np.asarray(matrix(vec), dtype=np.float64)
     dense = np.asarray(matrix, dtype=np.float64)
     return np.asarray(dense @ vec, dtype=np.float64)
+
+
+def _as_sparse_regularization_matrix(matrix) -> sparse.spmatrix | None:
+    if isspmatrix(matrix):
+        return matrix
+    as_rtr = getattr(matrix, "as_RtR", None)
+    if not callable(as_rtr):
+        as_rtr = getattr(matrix, "as_rtr", None)
+    if not callable(as_rtr):
+        return None
+    explicit = as_rtr(dense=False)
+    return explicit if isspmatrix(explicit) else None
 
 
 def _diag_preconditioner(
@@ -1077,6 +1092,9 @@ def _solve_linear_system_fast(
         reg = getattr(reconstructor, "R_matrix", None)
         if reg is None:
             return "none"
+        signature_hash = getattr(reg, "signature_hash", None)
+        if signature_hash:
+            return str(signature_hash)
         if isspmatrix(reg):
             mat = reg.tocsr()
             payload = {
@@ -1115,10 +1133,11 @@ def _solve_linear_system_fast(
             "is_sparse_spd": False,
             "diag_vector": None,
         }
+        reg_sparse = _as_sparse_regularization_matrix(reg) if reg is not None else None
         if reg is None:
             pass
-        elif isspmatrix(reg):
-            reg_csr = reg.tocsr()
+        elif reg_sparse is not None:
+            reg_csr = reg_sparse.tocsr()
             diag_vec = np.asarray(reg_csr.diagonal(), dtype=np.float64)
             coo = reg_csr.tocoo(copy=False)
             is_diag = bool(coo.nnz <= n_param and np.all(coo.row == coo.col))
@@ -1143,7 +1162,31 @@ def _solve_linear_system_fast(
                 {"is_diagonal": False, "is_sparse_spd": False, "diag_vector": None}
             )
         else:
-            dense = np.asarray(reg, dtype=np.float64)
+            as_rtr = getattr(reg, "as_RtR", None)
+            explicit = as_rtr(dense=False) if callable(as_rtr) else reg
+            if isinstance(explicit, LinearOperator):
+                diag_fn = getattr(reg, "diag", None)
+                raw_diag = diag_fn() if callable(diag_fn) else None
+                diag_vec = (
+                    None
+                    if raw_diag is None
+                    else np.asarray(raw_diag, dtype=np.float64).reshape(-1)
+                )
+                meta.update(
+                    {
+                        "is_diagonal": False,
+                        "is_sparse_spd": False,
+                        "diag_vector": diag_vec
+                        if diag_vec is not None and diag_vec.size == n_param
+                        else None,
+                    }
+                )
+                reconstructor._regularization_meta_cache = {
+                    "token": cache_token,
+                    "meta": meta,
+                }
+                return dict(meta)
+            dense = np.asarray(explicit, dtype=np.float64)
             diag_vec = np.asarray(np.diag(dense), dtype=np.float64)
             is_diag = bool(dense.ndim == 2 and dense.shape == (n_param, n_param))
             if is_diag:
@@ -1204,14 +1247,15 @@ def _solve_linear_system_fast(
             return None, "cholmod_unavailable"
 
         reg = getattr(reconstructor, "R_matrix", None)
-        if not isspmatrix(reg):
+        reg_sparse = _as_sparse_regularization_matrix(reg)
+        if reg_sparse is None:
             return None, "regularization_not_sparse"
 
         max_n = int(getattr(reconstructor, "cholmod_max_n", 50000))
         if max_n > 0 and n_param > max_n:
             return None, "cholmod_n_limit"
 
-        reg_csc = reg.tocsc().astype(np.float64)
+        reg_csc = reg_sparse.tocsc().astype(np.float64)
         max_memory_gib = float(getattr(reconstructor, "cholmod_max_memory_gib", 4.0))
         estimated_bytes = float(reg_csc.nnz) * 24.0 + float(n_param) * 64.0
         if estimated_bytes > max_memory_gib * (1024.0**3):
@@ -1304,9 +1348,10 @@ def _solve_linear_system_fast(
                 choice = "diag"
             else:
                 reg = getattr(reconstructor, "R_matrix", None)
-                if isspmatrix(reg):
+                reg_sparse = _as_sparse_regularization_matrix(reg)
+                if reg_sparse is not None:
                     try:
-                        amg_mat = reg.tocsr().astype(np.float64)
+                        amg_mat = reg_sparse.tocsr().astype(np.float64)
                         amg_mat = (
                             amg_mat
                             + sparse.identity(amg_mat.shape[0], format="csr") * 1e-12
@@ -1407,7 +1452,8 @@ def _solve_linear_system_fast(
         if cholmod_cholesky is None:
             return None, "cholmod_unavailable"
         reg = getattr(reconstructor, "R_matrix", None)
-        if not isspmatrix(reg):
+        reg_sparse = _as_sparse_regularization_matrix(reg)
+        if reg_sparse is None:
             return None, "regularization_not_sparse"
         max_n = int(getattr(reconstructor, "cholmod_max_n", 50000))
         if max_n > 0 and n_param > max_n:
@@ -1424,7 +1470,7 @@ def _solve_linear_system_fast(
                     "gauss_newton.fast.cholmod_direct.jtj",
                 )
             )
-            h_sparse = h_sparse + float(lambda_eff) * reg.tocsc()
+            h_sparse = h_sparse + float(lambda_eff) * reg_sparse.tocsc()
             factor = cholmod_cholesky(h_sparse)
             return np.asarray(factor.solve_A(rhs), dtype=np.float64), None
         except Exception as exc:  # pragma: no cover - guarded fallback

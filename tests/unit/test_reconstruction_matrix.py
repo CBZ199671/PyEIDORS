@@ -7,6 +7,7 @@ import pytest
 from scipy import sparse
 
 from pyeidors.data.difference import normalize_time_difference
+from pyeidors.inverse.prior import as_rtr_prior
 from pyeidors.inverse.reconstruction_matrix import (
     build_one_step_rm,
     reconstruct_difference,
@@ -88,6 +89,37 @@ def test_build_one_step_rm_laplace_accepts_sparse_regularization() -> None:
 
     np.testing.assert_allclose(result.rm, expected)
     assert result.metadata["regularization_source"] == "provided_laplace"
+    assert result.metadata["RtR_kind"] == "sparse"
+    assert result.metadata["RtR_signature_hash"]
+    assert result.metadata["RtR_metadata"]["name"] == "laplace"
+
+
+def test_build_one_step_rm_accepts_rtr_prior_contract() -> None:
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5], [0.0, 1.0, -0.25], [1.0, 1.0, 0.0]],
+        dtype=float,
+    )
+    laplace = sparse.csr_matrix(
+        np.array([[1.0, -1.0, 0.0], [-1.0, 2.0, -1.0], [0.0, -1.0, 1.0]])
+    )
+    prior = as_rtr_prior(laplace, n_parameters=3, name="laplace-prior")
+    lam = 0.2
+
+    result = build_one_step_rm(
+        jacobian,
+        regularization=prior,
+        lambda_=lam,
+        mode="laplace",
+        return_metadata=True,
+    )
+    expected = np.linalg.solve(
+        jacobian.T @ jacobian + lam**2 * laplace.toarray(),
+        jacobian.T,
+    )
+
+    np.testing.assert_allclose(result.rm, expected)
+    assert result.metadata["RtR_signature_hash"] == prior.signature_hash
+    assert result.metadata["RtR_kind"] == prior.kind
 
 
 @pytest.mark.parametrize("mode", ["tikhonov", "noser", "laplace"])
@@ -141,6 +173,8 @@ def test_build_one_step_rm_uses_official_hp2_rtr_weighted_fixture(mode: str) -> 
     assert result.metadata["lambda_squared"] == pytest.approx(hp**2)
     assert result.metadata["RtR_shape"] == rtr.shape
     assert result.metadata["RtR_nnz"] == int(np.count_nonzero(rtr))
+    assert result.metadata["RtR_signature_hash"]
+    assert result.metadata["RtR_metadata"]["schema"] == "pyeidors-rtr-prior-v1"
     if mode == "noser":
         assert result.metadata["noser_exponent"] == pytest.approx(0.5)
 

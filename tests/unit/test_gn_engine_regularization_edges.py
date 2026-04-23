@@ -11,6 +11,7 @@ from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
 import pyeidors.inverse.solvers.gauss_newton_engine as gn_engine
+from pyeidors.inverse.prior import as_rtr_prior
 
 
 def _make_reconstructor(
@@ -88,6 +89,37 @@ def test_ensure_regularization_ready_handles_linear_operator_modes():
         _make_reconstructor(
             finite_op, solver_mode="strict"
         ).ensure_regularization_ready()
+
+
+def test_ensure_regularization_ready_accepts_rtr_prior_without_dense_tensor():
+    prior = as_rtr_prior(
+        LinearOperator(
+            (2, 2),
+            matvec=lambda x: np.array(
+                [
+                    2.0 * np.asarray(x, dtype=float)[0],
+                    3.0 * np.asarray(x, dtype=float)[1],
+                ]
+            ),
+        ),
+        metadata={"diag": [2.0, 3.0], "signature_hint": "diag-operator"},
+        name="operator-prior",
+    )
+    reconstructor = _make_reconstructor(
+        prior,
+        solver_mode="fast",
+        line_search_mode="fast",
+    )
+
+    reconstructor.ensure_regularization_ready()
+
+    assert reconstructor.R_matrix is prior
+    np.testing.assert_allclose(
+        reconstructor.R_linear_operator.matvec(np.array([1.0, 1.0])),
+        np.array([2.0, 3.0]),
+    )
+    np.testing.assert_allclose(reconstructor.R_diag, np.array([2.0, 3.0]))
+    assert reconstructor.R_torch is None
 
 
 def test_ensure_regularization_ready_rejects_nonfinite_dense_and_transfer_failures(

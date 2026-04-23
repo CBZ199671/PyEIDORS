@@ -18,6 +18,7 @@ from ...data.difference import (
 )
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
+from ..prior import RtRPrior
 from ..regularization.base_regularization import BaseRegularization
 from ..regularization.smoothness import SmoothnessRegularization
 from .gauss_newton_device import resolve_torch_device
@@ -77,6 +78,13 @@ def _validate_option(name: str, value: str, allowed: set[str]) -> None:
     if value not in allowed:
         options = ", ".join(repr(v) for v in sorted(allowed))
         raise ValueError(f"Unsupported {name}={value!r}. Expected one of: {options}.")
+
+
+def _is_rtr_prior_contract(value: Any) -> bool:
+    return isinstance(value, RtRPrior) or all(
+        callable(getattr(value, attr, None))
+        for attr in ("apply", "diag", "as_RtR", "as_linear_operator")
+    )
 
 
 class GaussNewtonReconstructor:
@@ -384,6 +392,49 @@ class GaussNewtonReconstructor:
                 "Regularization matrix shape mismatch: "
                 f"expected {expected_shape}, got {matrix_shape}."
             )
+
+        if _is_rtr_prior_contract(matrix):
+            self.R_matrix = matrix
+            self.R_linear_operator = matrix.as_linear_operator()
+            probe = np.ones(self.n_elements, dtype=np.float64)
+            check = np.asarray(matrix.apply(probe), dtype=np.float64)
+            if not np.isfinite(check).all():
+                raise FloatingPointError(
+                    "Regularization RtRPrior produces non-finite values."
+                )
+            diag = matrix.diag()
+            self.R_diag = (
+                None if diag is None else np.asarray(diag, dtype=np.float64).reshape(-1)
+            )
+            if self.R_diag is not None and not np.isfinite(self.R_diag).all():
+                raise FloatingPointError("Regularization RtRPrior diag is non-finite.")
+            if needs_dense_tensor and self.solver_mode == "strict":
+                dense_like = matrix.as_RtR(dense=True)
+                if isspmatrix(dense_like):
+                    dense = dense_like.toarray()
+                elif isinstance(dense_like, LinearOperator):
+                    raise RuntimeError(
+                        "solver_mode='strict' requires explicit dense/sparse regularization matrix, "
+                        "matrix-free RtRPrior is not supported."
+                    )
+                else:
+                    dense = np.asarray(dense_like, dtype=np.float64)
+                if not np.isfinite(dense).all():
+                    raise FloatingPointError(
+                        "Regularization RtRPrior dense view contains non-finite values."
+                    )
+                self.R_torch = torch.from_numpy(dense).to(
+                    self.device,
+                    dtype=self._torch_dtype,
+                )
+                if not torch.isfinite(self.R_torch).all():
+                    raise FloatingPointError(
+                        "Regularization tensor contains non-finite values after transfer."
+                    )
+            else:
+                self.R_torch = None
+            return
+
         self.R_matrix = matrix
         as_linear_operator = getattr(self.regularization, "as_linear_operator", None)
         if callable(as_linear_operator):

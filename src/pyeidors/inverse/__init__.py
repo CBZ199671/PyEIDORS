@@ -28,7 +28,14 @@ from .greit import (
     migrate_greit_rm_to_hdf5,
     write_greit_metrics_artifact,
 )
-from .prior import graph_difference_operator, graph_laplacian
+from .prior import (
+    RtRPrior,
+    as_rtr_prior,
+    graph_difference_operator,
+    graph_laplacian,
+    load_rtr_prior_artifact,
+    write_rtr_prior_artifact,
+)
 from .postprocess import (
     TemporalTVPipelineResult,
     TVRefinementResult,
@@ -90,8 +97,12 @@ __all__ = [
     "load_greit_rm",
     "migrate_greit_rm_to_hdf5",
     "write_greit_metrics_artifact",
+    "RtRPrior",
+    "as_rtr_prior",
     "graph_difference_operator",
     "graph_laplacian",
+    "load_rtr_prior_artifact",
+    "write_rtr_prior_artifact",
     "TemporalTVPipelineResult",
     "TVRefinementResult",
     "exponential_smooth_frames",

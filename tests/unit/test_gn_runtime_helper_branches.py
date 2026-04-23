@@ -11,6 +11,7 @@ from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
 import pyeidors.inverse.solvers.gauss_newton_runtime as gn_runtime
+from pyeidors.inverse.prior import as_rtr_prior
 
 
 class _Lookup:
@@ -199,6 +200,19 @@ def test_apply_regularization_np_and_diag_preconditioner_cover_all_matrix_kinds(
     np.testing.assert_allclose(
         gn_runtime._apply_regularization_np(dense_rec, vec),
         np.array([4.0, -10.0, 3.0], dtype=float),
+    )
+
+    prior = as_rtr_prior(
+        lambda v: np.array(
+            [8.0 * v[0], 9.0 * v[1], 10.0 * v[2]],
+            dtype=float,
+        ),
+        shape=(3, 3),
+        metadata={"diag": [8.0, 9.0, 10.0], "signature_hint": "callable-runtime"},
+    )
+    np.testing.assert_allclose(
+        gn_runtime._apply_regularization_np(SimpleNamespace(R_matrix=prior), vec),
+        np.array([8.0, -18.0, 5.0], dtype=float),
     )
 
     J = np.array([[1.0, 2.0, 3.0], [0.5, -1.0, 2.0]], dtype=float)
