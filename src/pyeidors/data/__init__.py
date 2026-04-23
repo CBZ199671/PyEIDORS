@@ -63,8 +63,16 @@ from .eit_digit_metrics import (
     forward_surrogate,
     inverse_pyeidors_rm,
     inverse_surrogate,
+    reconstruct_linearized_sigma,
     summarize_eit_digit_run,
     summarize_eit_digit_sweep,
+)
+from .voltage_digit_sweep import (
+    VoltageDigitFieldRow,
+    VoltageDigitSweepSummary,
+    keep_significant_digits,
+    run_voltage_digit_sweep,
+    run_voltage_digit_sweep_from_backend,
 )
 from .digit_report import (
     DigitReportCase,
@@ -125,8 +133,14 @@ __all__ = [
     "forward_surrogate",
     "inverse_pyeidors_rm",
     "inverse_surrogate",
+    "reconstruct_linearized_sigma",
     "summarize_eit_digit_run",
     "summarize_eit_digit_sweep",
+    "VoltageDigitFieldRow",
+    "VoltageDigitSweepSummary",
+    "keep_significant_digits",
+    "run_voltage_digit_sweep",
+    "run_voltage_digit_sweep_from_backend",
     "DigitReportCase",
     "DigitReportRow",
     "format_markdown_report",

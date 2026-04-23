@@ -404,6 +404,37 @@ def _inverse(
     raise ValueError("inverse_backend must be one of: pyeidors-rm, least-squares")
 
 
+def reconstruct_linearized_sigma(
+    *,
+    model: EITLinearizedModel,
+    voltages: Iterable[float] | np.ndarray,
+    ridge: float = 1e-8,
+    inverse_backend: str = "pyeidors-rm",
+    rm_mode: str = "tikhonov",
+    rm_form: str = "param",
+) -> np.ndarray:
+    """Reconstruct absolute conductivity from a linearized model voltage vector."""
+
+    sigma_ref = _as_float_vector(model.sigma_reference, name="model.sigma_reference")
+    voltage_vec = _as_float_vector(voltages, name="voltages")
+    v_ref = _as_float_vector(model.voltage_reference, name="model.voltage_reference")
+    sens = _as_float_matrix(model.sensitivity, name="model.sensitivity")
+    if voltage_vec.size != v_ref.size:
+        raise ValueError("voltages size must match model voltage_reference size")
+    if sens.shape != (v_ref.size, sigma_ref.size):
+        raise ValueError("model sensitivity shape must match voltage/sigma sizes")
+
+    sigma_delta = _inverse(
+        voltage_vec - v_ref,
+        sens,
+        inverse_backend=inverse_backend,
+        ridge=ridge,
+        rm_mode=rm_mode,
+        rm_form=rm_form,
+    )
+    return sigma_ref + sigma_delta
+
+
 def _hypothesis_delta(sigma_digits: float, voltage_digits: float) -> float:
     if math.isfinite(sigma_digits) and math.isfinite(voltage_digits):
         return sigma_digits - voltage_digits
