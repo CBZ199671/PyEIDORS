@@ -39,6 +39,30 @@ class GREITTrainingTargets:
 
 
 @dataclass(frozen=True)
+class GREIT3DDistribution:
+    """EIDORS ``GREIT3D_distribution`` target-center volume."""
+
+    centers: np.ndarray
+    distr: np.ndarray
+    candidate_centers: np.ndarray
+    inside_mask: np.ndarray
+    volume_mask: np.ndarray
+    x_pts: np.ndarray
+    y_pts: np.ndarray
+    z_pts: np.ndarray
+    xvec: np.ndarray
+    yvec: np.ndarray
+    zvec: np.ndarray
+    metadata: MappingProxyType
+
+    def cell_centers(self) -> np.ndarray:
+        return np.ascontiguousarray(self.centers, dtype=np.float64)
+
+    def num_cells(self) -> int:
+        return int(self.centers.shape[0])
+
+
+@dataclass(frozen=True)
 class GREITRM:
     """Precomputed GREIT RM plus artifact metadata.
 
@@ -259,6 +283,97 @@ def generate_spherical_targets(
         masks=np.asarray(masks, dtype=bool),
         centers=np.asarray(target_centers, dtype=np.float64),
         radii=np.full(len(values), resolved_radius, dtype=np.float64),
+        metadata=metadata,
+    )
+
+
+def build_greit3d_distribution(
+    fwd_model: Any | None = None,
+    *,
+    imgsz: Any | None = None,
+    xvec: Any | None = None,
+    yvec: Any | None = None,
+    zvec: Any | None = None,
+    bounds: Any | None = None,
+    downsample: Any | None = None,
+    point_in_volume: Any | None = None,
+) -> GREIT3DDistribution:
+    """Build EIDORS-style 3D GREIT target centers.
+
+    EIDORS creates a voxel rec model, extracts ``x_pts/y_pts/z_pts``,
+    optionally downsamples them, then flattens ``ndgrid`` output with the
+    x-axis changing fastest.  This helper mirrors that ordering and returns
+    both the full candidate volume mask and the valid target-center list.
+    """
+
+    bounds_arr = _resolve_distribution_bounds(fwd_model, bounds)
+    x_edges, y_edges, z_edges, axis_source = _resolve_distribution_edges(
+        imgsz=imgsz,
+        xvec=xvec,
+        yvec=yvec,
+        zvec=zvec,
+        bounds=bounds_arr,
+    )
+    raw_x_pts = _edge_centers(x_edges, name="xvec")
+    raw_y_pts = _edge_centers(y_edges, name="yvec")
+    raw_z_pts = _edge_centers(z_edges, name="zvec")
+    factors, phases = _parse_downsample(downsample)
+    x_pts = _downsample_axis(raw_x_pts, factor=factors[0], phase=phases[0], name="x")
+    y_pts = _downsample_axis(raw_y_pts, factor=factors[1], phase=phases[1], name="y")
+    z_pts = _downsample_axis(raw_z_pts, factor=factors[2], phase=phases[2], name="z")
+
+    grids = np.meshgrid(x_pts, y_pts, z_pts, indexing="ij")
+    candidate_shape = tuple(int(grid.shape[axis]) for axis, grid in enumerate(grids))
+    candidate_centers = np.stack(
+        [grid.ravel(order="F") for grid in grids],
+        axis=1,
+    )
+    inside_mask = _distribution_inside_mask(
+        candidate_centers,
+        candidate_shape=candidate_shape,
+        fwd_model=fwd_model,
+        point_in_volume=point_in_volume,
+    )
+    if not bool(np.any(inside_mask)):
+        raise ValueError("GREIT3D_distribution produced no target centers inside volume.")
+
+    centers = np.ascontiguousarray(candidate_centers[inside_mask], dtype=np.float64)
+    distr = np.ascontiguousarray(centers.T, dtype=np.float64)
+    volume_mask = np.ascontiguousarray(
+        inside_mask.reshape(candidate_shape, order="F"),
+        dtype=bool,
+    )
+    metadata = MappingProxyType(
+        {
+            "builder": "GREIT3D_distribution",
+            "eidors_component_parity": True,
+            "parameter_order": "eidors_ndgrid_x_fastest",
+            "axis_source": axis_source,
+            "downsample_factors": tuple(int(v) for v in factors),
+            "downsample_phases": tuple(int(v) for v in phases),
+            "candidate_shape": candidate_shape,
+            "n_candidate_voxels": int(candidate_centers.shape[0]),
+            "n_targets": int(centers.shape[0]),
+            "xvec": tuple(float(v) for v in x_edges),
+            "yvec": tuple(float(v) for v in y_edges),
+            "zvec": tuple(float(v) for v in z_edges),
+            "x_pts": tuple(float(v) for v in x_pts),
+            "y_pts": tuple(float(v) for v in y_pts),
+            "z_pts": tuple(float(v) for v in z_pts),
+        }
+    )
+    return GREIT3DDistribution(
+        centers=centers,
+        distr=distr,
+        candidate_centers=np.ascontiguousarray(candidate_centers, dtype=np.float64),
+        inside_mask=np.ascontiguousarray(inside_mask, dtype=bool),
+        volume_mask=volume_mask,
+        x_pts=np.ascontiguousarray(x_pts, dtype=np.float64),
+        y_pts=np.ascontiguousarray(y_pts, dtype=np.float64),
+        z_pts=np.ascontiguousarray(z_pts, dtype=np.float64),
+        xvec=np.ascontiguousarray(x_edges, dtype=np.float64),
+        yvec=np.ascontiguousarray(y_edges, dtype=np.float64),
+        zvec=np.ascontiguousarray(z_edges, dtype=np.float64),
         metadata=metadata,
     )
 
@@ -600,7 +715,262 @@ def _resolve_targets(
     )
 
 
+def _resolve_distribution_bounds(
+    fwd_model: Any | None,
+    bounds: Any | None,
+) -> np.ndarray | None:
+    if bounds is not None:
+        arr = np.asarray(bounds, dtype=np.float64)
+        if arr.shape != (2, 3):
+            raise ValueError("bounds must have shape (2, 3).")
+        if not np.isfinite(arr).all():
+            raise FloatingPointError("bounds contain non-finite values.")
+        if np.any(arr[1] <= arr[0]):
+            raise ValueError("bounds upper row must exceed lower row.")
+        return np.ascontiguousarray(arr, dtype=np.float64)
+
+    nodes = _model_nodes(fwd_model)
+    if nodes is None:
+        return None
+    lower = np.min(nodes[:, :3], axis=0)
+    upper = np.max(nodes[:, :3], axis=0)
+    if np.any(upper <= lower):
+        return None
+    return np.ascontiguousarray(np.vstack([lower, upper]), dtype=np.float64)
+
+
+def _resolve_distribution_edges(
+    *,
+    imgsz: Any | None,
+    xvec: Any | None,
+    yvec: Any | None,
+    zvec: Any | None,
+    bounds: np.ndarray | None,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, str]:
+    img_counts = _parse_imgsz(imgsz)
+    x_edges, x_source = _resolve_axis_edges(
+        xvec,
+        axis=0,
+        name="xvec",
+        imgsz_count=img_counts[0],
+        bounds=bounds,
+    )
+    y_edges, y_source = _resolve_axis_edges(
+        yvec,
+        axis=1,
+        name="yvec",
+        imgsz_count=img_counts[1],
+        bounds=bounds,
+    )
+    z_edges, z_source = _resolve_axis_edges(
+        zvec,
+        axis=2,
+        name="zvec",
+        imgsz_count=img_counts[2],
+        bounds=bounds,
+    )
+    return x_edges, y_edges, z_edges, f"{x_source},{y_source},{z_source}"
+
+
+def _parse_imgsz(imgsz: Any | None) -> tuple[int | None, int | None, int | None]:
+    if imgsz is None:
+        return None, None, None
+    arr = np.asarray(imgsz, dtype=np.int64).reshape(-1)
+    if arr.size not in {2, 3}:
+        raise ValueError("imgsz must contain 2 or 3 entries.")
+    if np.any(arr <= 0):
+        raise ValueError("imgsz entries must be positive.")
+    if arr.size == 2:
+        return int(arr[0]), int(arr[1]), None
+    return int(arr[0]), int(arr[1]), int(arr[2])
+
+
+def _resolve_axis_edges(
+    value: Any | None,
+    *,
+    axis: int,
+    name: str,
+    imgsz_count: int | None,
+    bounds: np.ndarray | None,
+) -> tuple[np.ndarray, str]:
+    if value is None:
+        if imgsz_count is None:
+            raise ValueError(f"{name} or imgsz entry is required.")
+        if bounds is None:
+            raise ValueError(f"bounds or fwd_model nodes are required for {name}.")
+        return (
+            np.linspace(
+                float(bounds[0, axis]),
+                float(bounds[1, axis]),
+                int(imgsz_count) + 1,
+                dtype=np.float64,
+            ),
+            "imgsz",
+        )
+
+    arr = np.asarray(value, dtype=np.float64).reshape(-1)
+    if arr.size == 1:
+        if bounds is None:
+            raise ValueError(f"bounds or fwd_model nodes are required for scalar {name}.")
+        n_planes = int(round(float(arr[0])))
+        if n_planes < 2 or not np.isclose(float(arr[0]), float(n_planes)):
+            raise ValueError(f"scalar {name} must be an integer >= 2.")
+        return (
+            np.linspace(
+                float(bounds[0, axis]),
+                float(bounds[1, axis]),
+                n_planes,
+                dtype=np.float64,
+            ),
+            f"{name}:scalar",
+        )
+    if arr.size < 2:
+        raise ValueError(f"{name} must contain at least two cut planes.")
+    if not np.isfinite(arr).all():
+        raise FloatingPointError(f"{name} contains non-finite values.")
+    if np.any(np.diff(arr) <= 0.0):
+        raise ValueError(f"{name} cut planes must be strictly increasing.")
+    return np.ascontiguousarray(arr, dtype=np.float64), f"{name}:explicit"
+
+
+def _edge_centers(edges: np.ndarray, *, name: str) -> np.ndarray:
+    arr = np.asarray(edges, dtype=np.float64).reshape(-1)
+    if arr.size < 2:
+        raise ValueError(f"{name} must contain at least two cut planes.")
+    return np.ascontiguousarray((arr[:-1] + arr[1:]) * 0.5, dtype=np.float64)
+
+
+def _parse_downsample(downsample: Any | None) -> tuple[np.ndarray, np.ndarray]:
+    if downsample is None:
+        return np.ones(3, dtype=np.int64), np.zeros(3, dtype=np.int64)
+    arr = np.asarray(downsample, dtype=np.int64)
+    if arr.ndim == 0:
+        factors = np.full(3, int(arr), dtype=np.int64)
+        phases = np.zeros(3, dtype=np.int64)
+    elif arr.shape == (2,):
+        factors = np.full(3, int(arr[0]), dtype=np.int64)
+        phases = np.full(3, int(arr[1]), dtype=np.int64)
+    elif arr.shape == (3,):
+        factors = np.asarray(arr, dtype=np.int64)
+        phases = np.zeros(3, dtype=np.int64)
+    elif arr.shape == (3, 2):
+        factors = np.asarray(arr[:, 0], dtype=np.int64)
+        phases = np.asarray(arr[:, 1], dtype=np.int64)
+    elif arr.size == 6:
+        reshaped = arr.reshape(3, 2)
+        factors = np.asarray(reshaped[:, 0], dtype=np.int64)
+        phases = np.asarray(reshaped[:, 1], dtype=np.int64)
+    else:
+        raise ValueError("downsample must be scalar, [N, PHASE], length-3, or 3x2.")
+    if np.any(factors <= 0):
+        raise ValueError("downsample factors must be positive.")
+    if np.any(phases < 0) or np.any(phases >= factors):
+        raise ValueError("downsample phases must satisfy 0 <= phase < factor.")
+    return factors, phases
+
+
+def _downsample_axis(
+    values: np.ndarray,
+    *,
+    factor: int,
+    phase: int,
+    name: str,
+) -> np.ndarray:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    selected = arr[int(phase) :: int(factor)]
+    if selected.size == 0:
+        raise ValueError(f"downsample removed all {name}-axis points.")
+    return np.ascontiguousarray(selected, dtype=np.float64)
+
+
+def _distribution_inside_mask(
+    candidate_centers: np.ndarray,
+    *,
+    candidate_shape: tuple[int, int, int],
+    fwd_model: Any | None,
+    point_in_volume: Any | None,
+) -> np.ndarray:
+    centers = np.asarray(candidate_centers, dtype=np.float64)
+    source = point_in_volume
+    if source is None:
+        source = getattr(fwd_model, "point_in_volume", None)
+        if source is None and isinstance(fwd_model, dict):
+            source = fwd_model.get("point_in_volume")
+    if callable(source):
+        mask = np.asarray(source(centers), dtype=bool).reshape(-1)
+    elif source is not None:
+        mask = np.asarray(source, dtype=bool)
+        if mask.shape == candidate_shape:
+            mask = mask.reshape(-1, order="F")
+        else:
+            mask = mask.reshape(-1)
+    else:
+        mask = _inside_mask_from_model_nodes(fwd_model, centers)
+    if mask.size != centers.shape[0]:
+        raise ValueError(
+            f"point_in_volume mask length {mask.size} does not match "
+            f"{centers.shape[0]} candidate centers."
+        )
+    return np.ascontiguousarray(mask, dtype=bool)
+
+
+def _model_nodes(fwd_model: Any | None) -> np.ndarray | None:
+    if fwd_model is None:
+        return None
+    raw = None
+    if isinstance(fwd_model, dict):
+        raw = fwd_model.get("nodes")
+    if raw is None:
+        for name in ("nodes", "coordinates"):
+            attr = getattr(fwd_model, name, None)
+            if attr is not None:
+                raw = attr() if callable(attr) else attr
+                break
+    if raw is None:
+        mesh = getattr(fwd_model, "mesh", None)
+        if mesh is not None:
+            raw = getattr(mesh, "coordinates", None)
+            if raw is None and hasattr(mesh, "geometry"):
+                raw = getattr(mesh.geometry, "x", None)
+    if raw is None:
+        return None
+    nodes = np.asarray(raw, dtype=np.float64)
+    if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] < 3:
+        return None
+    if not np.isfinite(nodes).all():
+        return None
+    return np.ascontiguousarray(nodes[:, :3], dtype=np.float64)
+
+
+def _inside_mask_from_model_nodes(
+    fwd_model: Any | None,
+    centers: np.ndarray,
+) -> np.ndarray:
+    nodes = _model_nodes(fwd_model)
+    if nodes is None:
+        return np.ones(centers.shape[0], dtype=bool)
+    try:
+        from scipy.spatial import Delaunay
+
+        hull = Delaunay(nodes)
+        return np.asarray(hull.find_simplex(centers[:, :3]) >= 0, dtype=bool)
+    except Exception:
+        lower = np.min(nodes, axis=0)
+        upper = np.max(nodes, axis=0)
+        eps = np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(upper - lower))))
+        return np.asarray(
+            np.all(
+                (centers[:, :3] >= lower - eps)
+                & (centers[:, :3] <= upper + eps),
+                axis=1,
+            ),
+            dtype=bool,
+        )
+
+
 def _cell_centers(mesh: Any) -> np.ndarray:
+    if isinstance(mesh, GREIT3DDistribution):
+        return mesh.cell_centers()
     if isinstance(mesh, VoxelGrid):
         return mesh.cell_centers()
     if isinstance(mesh, CellMesh):
@@ -878,10 +1248,12 @@ def _as_metric_records(metrics: Any) -> list[dict[str, Any]]:
 
 
 __all__ = [
+    "GREIT3DDistribution",
     "GREIT_METRIC_KEYS",
     "GREITRM",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
+    "build_greit3d_distribution",
     "generate_spherical_targets",
     "greit_metrics",
     "load_greit_rm",

@@ -10,16 +10,70 @@ import pytest
 
 from pyeidors.data.channels import bad_channel_mask
 from pyeidors.inverse import (
+    GREIT3DDistribution,
     GREIT_METRIC_KEYS,
     GREITRM,
     VoxelGrid,
     build_3d_greit_rm,
+    build_greit3d_distribution,
     generate_spherical_targets,
     greit_metrics,
     load_greit_rm,
     migrate_greit_rm_to_hdf5,
     write_greit_metrics_artifact,
 )
+
+
+def test_greit3d_distribution_explicit_planes_use_eidors_x_fastest_order() -> None:
+    distribution = build_greit3d_distribution(
+        xvec=[0.0, 1.0, 2.0],
+        yvec=[10.0, 20.0, 30.0],
+        zvec=[100.0, 200.0],
+    )
+
+    assert isinstance(distribution, GREIT3DDistribution)
+    np.testing.assert_allclose(
+        distribution.centers,
+        np.array(
+            [
+                [0.5, 15.0, 150.0],
+                [1.5, 15.0, 150.0],
+                [0.5, 25.0, 150.0],
+                [1.5, 25.0, 150.0],
+            ],
+            dtype=float,
+        ),
+    )
+    np.testing.assert_allclose(distribution.distr, distribution.centers.T)
+    assert distribution.volume_mask.shape == (2, 2, 1)
+    assert distribution.metadata["parameter_order"] == "eidors_ndgrid_x_fastest"
+    assert distribution.metadata["n_targets"] == 4
+
+
+def test_greit3d_distribution_imgsz_downsample_and_point_in_volume() -> None:
+    distribution = build_greit3d_distribution(
+        imgsz=[4, 4, 4],
+        bounds=[[-1.0, -1.0, 0.0], [1.0, 1.0, 2.0]],
+        downsample=[2, 1],
+        point_in_volume=lambda xyz: np.linalg.norm(xyz[:, :2], axis=1) <= 0.8,
+    )
+
+    assert distribution.metadata["downsample_factors"] == (2, 2, 2)
+    assert distribution.metadata["downsample_phases"] == (1, 1, 1)
+    np.testing.assert_allclose(distribution.x_pts, [-0.25, 0.75])
+    np.testing.assert_allclose(distribution.y_pts, [-0.25, 0.75])
+    np.testing.assert_allclose(distribution.z_pts, [0.75, 1.75])
+    assert distribution.volume_mask.shape == (2, 2, 2)
+    assert distribution.inside_mask.shape == (8,)
+    assert 0 < distribution.num_cells() < 8
+    assert np.all(np.linalg.norm(distribution.centers[:, :2], axis=1) <= 0.8)
+
+
+def test_greit3d_distribution_rejects_2d_raster_parity_options() -> None:
+    with pytest.raises(TypeError):
+        build_greit3d_distribution(xg=[0.0, 1.0], yg=[0.0, 1.0])  # type: ignore[call-arg]
+    with pytest.raises(ValueError, match="xvec or imgsz"):
+        build_greit3d_distribution(yvec=[0.0, 1.0], zvec=[0.0, 1.0])
 
 
 def test_generate_spherical_targets_for_3d_voxel_grid() -> None:

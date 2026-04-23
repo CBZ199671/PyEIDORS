@@ -16,10 +16,12 @@ from .block_system import (
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
 from .greit import (
+    GREIT3DDistribution,
     GREIT_METRIC_KEYS,
     GREITRM,
     GREITTrainingTargets,
     build_3d_greit_rm,
+    build_greit3d_distribution,
     generate_spherical_targets,
     greit_metrics,
     load_greit_rm,
@@ -77,10 +79,12 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "GREIT3DDistribution",
     "GREIT_METRIC_KEYS",
     "GREITRM",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
+    "build_greit3d_distribution",
     "generate_spherical_targets",
     "greit_metrics",
     "load_greit_rm",
