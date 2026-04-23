@@ -466,6 +466,7 @@ def plot_bucket_domain_audit(
     bucket: CircleBucketDomain,
     output_path: Path,
     *,
+    title: str = "T22 circle bucket domain audit",
     dpi: int = 200,
 ) -> Path:
     """Render mesh, electrode arcs, density, and sigma truth audit."""
@@ -493,7 +494,7 @@ def plot_bucket_domain_audit(
         figsize=(10.8, 9.2),
         constrained_layout=True,
     )
-    fig.suptitle("T22 circle bucket domain audit", fontsize=14)
+    fig.suptitle(title, fontsize=14)
 
     mesh_ax = axes[0, 0]
     mesh_ax.triplot(

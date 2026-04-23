@@ -462,6 +462,7 @@ def inverse_pyeidors_rm(
     lambda_: float = 1e-8,
     mode: str = "tikhonov",
     form: str = "param",
+    noser_exponent: float = 0.5,
 ) -> np.ndarray:
     """Reconstruct conductivity with PyEIDORS one-step RM helpers."""
 
@@ -482,10 +483,40 @@ def inverse_pyeidors_rm(
         lambda_=float(lambda_),
         mode=mode,
         form=form,
+        noser_exponent=float(noser_exponent),
     )
     return np.asarray(
         reconstruct_difference(rm, voltage_vec, normalize=False), dtype=float
     )
+
+
+def inverse_measurement_rm(
+    voltages: Iterable[float] | np.ndarray,
+    sensitivity: Iterable[Iterable[float]] | np.ndarray,
+    *,
+    lambda_: float = 1e-8,
+) -> np.ndarray:
+    """Reconstruct with a measurement-space Tikhonov RM.
+
+    This computes ``J.T @ (J @ J.T + lambda_**2 I)^-1 @ voltages`` and keeps
+    dense-bucket experiments in the 208-channel measurement space.
+    """
+
+    voltage_vec = _as_float_vector(voltages, name="voltages")
+    sens = _as_float_matrix(sensitivity, name="sensitivity")
+    if sens.shape[0] != voltage_vec.size:
+        raise ValueError("sensitivity row count must match voltage size")
+    lam = float(lambda_)
+    if lam < 0.0 or not np.isfinite(lam):
+        raise ValueError("lambda_ must be finite and non-negative.")
+    lhs = np.asarray(sens @ sens.T, dtype=float)
+    if lam > 0.0:
+        lhs = lhs + (lam * lam) * np.eye(lhs.shape[0], dtype=float)
+    try:
+        weights = np.linalg.solve(lhs, voltage_vec)
+    except np.linalg.LinAlgError:
+        weights = np.linalg.pinv(lhs) @ voltage_vec
+    return np.asarray(sens.T @ weights, dtype=float)
 
 
 def _inverse(
@@ -496,6 +527,7 @@ def _inverse(
     ridge: float,
     rm_mode: str,
     rm_form: str,
+    noser_exponent: float,
 ) -> np.ndarray:
     backend = str(inverse_backend).strip().lower()
     if backend in {"pyeidors-rm", "rm"}:
@@ -505,10 +537,15 @@ def _inverse(
             lambda_=ridge,
             mode=rm_mode,
             form=rm_form,
+            noser_exponent=noser_exponent,
         )
+    if backend in {"measurement-rm", "fast-measurement-rm"}:
+        return inverse_measurement_rm(voltages, sensitivity, lambda_=ridge)
     if backend in {"least-squares", "surrogate"}:
         return inverse_surrogate(voltages, sensitivity, ridge=ridge)
-    raise ValueError("inverse_backend must be one of: pyeidors-rm, least-squares")
+    raise ValueError(
+        "inverse_backend must be one of: pyeidors-rm, measurement-rm, least-squares"
+    )
 
 
 def reconstruct_linearized_sigma(
@@ -519,6 +556,7 @@ def reconstruct_linearized_sigma(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
 ) -> np.ndarray:
     """Reconstruct absolute conductivity from a linearized model voltage vector."""
 
@@ -538,6 +576,7 @@ def reconstruct_linearized_sigma(
         ridge=ridge,
         rm_mode=rm_mode,
         rm_form=rm_form,
+        noser_exponent=noser_exponent,
     )
     return sigma_ref + sigma_delta
 
@@ -562,6 +601,7 @@ def summarize_eit_digit_run(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
 ) -> EITDigitSummary:
     """Run one end-to-end precision case and return digit metrics."""
 
@@ -581,6 +621,7 @@ def summarize_eit_digit_run(
         inverse_backend=inverse_backend,
         rm_mode=rm_mode,
         rm_form=rm_form,
+        noser_exponent=noser_exponent,
     )
 
 
@@ -597,6 +638,7 @@ def _summarize_linearized_digit_run(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
 ) -> EITDigitSummary:
     sigma_vec = _as_float_vector(model.sigma_true, name="model.sigma_true")
     sigma_ref = _as_float_vector(model.sigma_reference, name="model.sigma_reference")
@@ -629,6 +671,7 @@ def _summarize_linearized_digit_run(
         ridge=ridge,
         rm_mode=rm_mode,
         rm_form=rm_form,
+        noser_exponent=noser_exponent,
     )
     sigma_recon = sigma_ref + sigma_recon
     voltage_digits = effective_digits_from_rmse(v_true, v_adc)
@@ -656,6 +699,7 @@ def summarize_eit_digit_sweep(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
     n_measurements: int = 16,
     n_parameters: int = 8,
     model_seed: int = 20260422,
@@ -709,6 +753,7 @@ def summarize_eit_digit_sweep(
             inverse_backend=inverse_backend,
             rm_mode=rm_mode,
             rm_form=rm_form,
+            noser_exponent=noser_exponent,
         )
         for bit in bits
     ]

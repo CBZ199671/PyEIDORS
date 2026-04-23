@@ -1,0 +1,1021 @@
+"""Dense circular-bucket EIT voltage and holdout experiments."""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import csv
+import math
+from pathlib import Path
+from typing import Iterable
+
+import numpy as np
+
+from .adc_quantization import effective_digits_from_rmse, rmse
+from .bucket_domain_audit import (
+    CircleBucketDomain,
+    build_circle_bucket_domain,
+    plot_bucket_domain_audit,
+)
+from .eit_digit_metrics import ADJACENT_PATTERN, EITLinearizedModel
+from .holdout_fit_diff import (
+    HoldoutFitDiffCase,
+    HoldoutStructureMetricRow,
+    plot_holdout_fit_curves,
+    plot_holdout_fit_summary,
+    run_holdout_fit_diff,
+)
+from .holdout_point_audit import build_holdout_point_audit
+from .voltage_digit_sweep import keep_significant_digits
+
+
+BUCKET_DENSE_SUMMARY_FIELDS = [
+    "experiment",
+    "domain",
+    "mesh_h",
+    "n_cells",
+    "n_dofs",
+    "n_elec",
+    "n_measurements",
+    "ridge",
+    "recon_method",
+    "target_voltage_digits",
+    "holdout_voltage_rmse",
+    "diff_voltage_rmse",
+    "sigma_rmse",
+    "sigma_relative_rmse",
+    "sigma_mae",
+    "sigma_max_abs_error",
+    "sigma_effective_digits",
+    "centroid_error",
+    "eccentricity",
+    "artifact_area",
+    "artifact_energy",
+    "artifact_peak",
+]
+
+BUCKET_DENSE_FIELD_FIELDS = [
+    "experiment",
+    "recon_method",
+    "cell_index",
+    "cell_x",
+    "cell_y",
+    "sigma_true",
+    "sigma_recon",
+    "sigma_error",
+    "inside_bucket",
+]
+
+
+@dataclass(frozen=True)
+class BucketDenseSummaryRow:
+    """One dense-bucket summary row for voltage or holdout experiments."""
+
+    experiment: str
+    domain: str
+    mesh_h: float
+    n_cells: int
+    n_dofs: int
+    n_elec: int
+    n_measurements: int
+    ridge: float
+    recon_method: str
+    target_voltage_digits: int | None
+    holdout_voltage_rmse: float | None
+    diff_voltage_rmse: float | None
+    sigma_rmse: float
+    sigma_relative_rmse: float
+    sigma_mae: float
+    sigma_max_abs_error: float
+    sigma_effective_digits: float
+    centroid_error: float
+    eccentricity: float
+    artifact_area: float
+    artifact_energy: float
+    artifact_peak: float
+
+    def as_csv_row(self) -> dict[str, float | int | str]:
+        def optional(value: float | int | None) -> float | int | str:
+            return "" if value is None else value
+
+        return {
+            "experiment": self.experiment,
+            "domain": self.domain,
+            "mesh_h": self.mesh_h,
+            "n_cells": self.n_cells,
+            "n_dofs": self.n_dofs,
+            "n_elec": self.n_elec,
+            "n_measurements": self.n_measurements,
+            "ridge": self.ridge,
+            "recon_method": self.recon_method,
+            "target_voltage_digits": optional(self.target_voltage_digits),
+            "holdout_voltage_rmse": optional(self.holdout_voltage_rmse),
+            "diff_voltage_rmse": optional(self.diff_voltage_rmse),
+            "sigma_rmse": self.sigma_rmse,
+            "sigma_relative_rmse": self.sigma_relative_rmse,
+            "sigma_mae": self.sigma_mae,
+            "sigma_max_abs_error": self.sigma_max_abs_error,
+            "sigma_effective_digits": self.sigma_effective_digits,
+            "centroid_error": self.centroid_error,
+            "eccentricity": self.eccentricity,
+            "artifact_area": self.artifact_area,
+            "artifact_energy": self.artifact_energy,
+            "artifact_peak": self.artifact_peak,
+        }
+
+
+@dataclass(frozen=True)
+class BucketDenseFieldRow:
+    """One per-cell dense-bucket reconstructed conductivity row."""
+
+    experiment: str
+    recon_method: str
+    cell_index: int
+    cell_x: float
+    cell_y: float
+    sigma_true: float
+    sigma_recon: float
+    sigma_error: float
+    inside_bucket: bool
+
+    def as_csv_row(self) -> dict[str, float | int | str]:
+        return {
+            "experiment": self.experiment,
+            "recon_method": self.recon_method,
+            "cell_index": self.cell_index,
+            "cell_x": self.cell_x,
+            "cell_y": self.cell_y,
+            "sigma_true": self.sigma_true,
+            "sigma_recon": self.sigma_recon,
+            "sigma_error": self.sigma_error,
+            "inside_bucket": str(bool(self.inside_bucket)).lower(),
+        }
+
+
+@dataclass(frozen=True)
+class BucketDenseExperimentCase:
+    """Full dense bucket experiment bundle."""
+
+    bucket: CircleBucketDomain
+    model: EITLinearizedModel
+    summaries: list[BucketDenseSummaryRow]
+    field_rows: list[BucketDenseFieldRow]
+    voltage_recon_by_method: dict[str, np.ndarray]
+    holdout_case: HoldoutFitDiffCase
+
+
+@dataclass(frozen=True)
+class _StructureMetrics:
+    centroid_error: float
+    equivalent_area: float
+    eccentricity: float
+    major_axis: float
+    minor_axis: float
+    artifact_area: float
+    artifact_energy: float
+    artifact_peak: float
+    sigma_rmse: float
+    sigma_relative_rmse: float
+    sigma_mae: float
+    sigma_max_abs_error: float
+    sigma_effective_digits: float
+
+
+def _relative_rmse(reference: np.ndarray, observed: np.ndarray) -> float:
+    ref_rms = float(np.sqrt(np.mean(reference**2)))
+    if ref_rms == 0.0:
+        return math.nan
+    return rmse(reference, observed) / ref_rms
+
+
+def _electrode_center_points(bucket: CircleBucketDomain) -> np.ndarray:
+    angles = np.radians([item.center_angle_deg for item in bucket.electrodes])
+    return bucket.bucket_radius * np.column_stack([np.cos(angles), np.sin(angles)])
+
+
+def _source_gradient(
+    points: np.ndarray,
+    electrode_point: np.ndarray,
+    *,
+    softening: float,
+) -> np.ndarray:
+    diff = np.asarray(points, dtype=float) - np.asarray(electrode_point, dtype=float)
+    r2 = np.sum(diff * diff, axis=1) + float(softening) ** 2
+    return diff / (2.0 * math.pi * r2[:, None])
+
+
+def _pair_gradient(
+    points: np.ndarray,
+    electrode_points: np.ndarray,
+    *,
+    e1: int,
+    e2: int,
+    softening: float,
+) -> np.ndarray:
+    return _source_gradient(
+        points,
+        electrode_points[int(e1) % electrode_points.shape[0]],
+        softening=softening,
+    ) - _source_gradient(
+        points,
+        electrode_points[int(e2) % electrode_points.shape[0]],
+        softening=softening,
+    )
+
+
+def _build_circle_bucket_sensitivity(
+    bucket: CircleBucketDomain,
+    *,
+    normalize_rows: bool = True,
+) -> np.ndarray:
+    point_rows, summary = build_holdout_point_audit(n_elec=bucket.n_elec)
+    kept_rows = [row for row in point_rows if row.point_status != "drive_removed"]
+    if len(kept_rows) != summary.kept_208_count:
+        raise RuntimeError("kept adjacent measurement count mismatch")
+
+    centers = bucket.cell_centers
+    areas = bucket.cell_areas
+    electrodes = _electrode_center_points(bucket)
+    softening = max(bucket.mesh_h * 0.75, bucket.bucket_radius * 1e-3)
+    rows: list[np.ndarray] = []
+    for row in kept_rows:
+        stim_grad = _pair_gradient(
+            centers,
+            electrodes,
+            e1=row.stim_e1,
+            e2=row.stim_e2,
+            softening=softening,
+        )
+        meas_grad = _pair_gradient(
+            centers,
+            electrodes,
+            e1=row.meas_e1,
+            e2=row.meas_e2,
+            softening=softening,
+        )
+        sensitivity_row = -np.einsum("ij,ij->i", stim_grad, meas_grad) * areas
+        rows.append(sensitivity_row)
+    sensitivity = np.vstack(rows).astype(float)
+    if normalize_rows:
+        scales = np.linalg.norm(sensitivity, axis=1)
+        good = scales > 0.0
+        sensitivity[good, :] = sensitivity[good, :] / scales[good, None]
+    if sensitivity.shape != (bucket.n_measurements, bucket.n_dofs):
+        raise RuntimeError("circle bucket sensitivity shape mismatch")
+    if not np.all(np.isfinite(sensitivity)):
+        raise RuntimeError("circle bucket sensitivity contains non-finite values")
+    return sensitivity
+
+
+def build_circle_bucket_linearized_model(
+    *,
+    bucket: CircleBucketDomain,
+    normalize_rows: bool = True,
+) -> EITLinearizedModel:
+    """Build a dense circular-bucket linearized difference model."""
+
+    sigma_reference = np.full(
+        bucket.n_dofs,
+        bucket.background_conductivity,
+        dtype=float,
+    )
+    sensitivity = _build_circle_bucket_sensitivity(
+        bucket,
+        normalize_rows=normalize_rows,
+    )
+    contrast = bucket.sigma_true - sigma_reference
+    voltage_reference = np.zeros(bucket.n_measurements, dtype=float)
+    voltage_true = sensitivity @ contrast
+
+    def forward_solver(sigma: np.ndarray) -> np.ndarray:
+        sigma_vec = np.asarray(sigma, dtype=float)
+        if sigma_vec.shape != sigma_reference.shape:
+            raise ValueError("sigma shape must match circle bucket dofs")
+        return voltage_reference + sensitivity @ (sigma_vec - sigma_reference)
+
+    return EITLinearizedModel(
+        sigma_true=bucket.sigma_true.copy(),
+        sigma_reference=sigma_reference,
+        voltage_true=voltage_true,
+        voltage_reference=voltage_reference,
+        sensitivity=sensitivity,
+        label="circle_bucket_dense",
+        n_elec=bucket.n_elec,
+        stim_pattern=ADJACENT_PATTERN,
+        meas_pattern=ADJACENT_PATTERN,
+        n_measurements=bucket.n_measurements,
+        parameter_points=bucket.cell_centers.copy(),
+        mesh_points=bucket.nodes.copy(),
+        mesh_cells=bucket.cells.copy(),
+        forward_solver=forward_solver,
+    )
+
+
+def _weighted_structure(
+    *,
+    values: np.ndarray,
+    points: np.ndarray,
+    areas: np.ndarray,
+    threshold: float,
+) -> tuple[np.ndarray, float, float, float, float, float, float]:
+    weights_raw = np.abs(values)
+    mask = weights_raw >= threshold
+    if not np.any(mask):
+        mask[int(np.argmax(weights_raw))] = True
+    weights = weights_raw[mask] * areas[mask]
+    if float(np.sum(weights)) <= 0.0:
+        weights = areas[mask]
+    coords = points[mask, :2]
+    weight_sum = float(np.sum(weights))
+    centroid = np.sum(coords * weights[:, None], axis=0) / weight_sum
+    centered = coords - centroid
+    covariance = (centered * weights[:, None]).T @ centered / weight_sum
+    eigvals = np.sort(np.linalg.eigvalsh(covariance))
+    minor_var = max(float(eigvals[0]), 0.0)
+    major_var = max(float(eigvals[-1]), 0.0)
+    eccentricity = (
+        0.0 if major_var <= 0.0 else math.sqrt(max(0.0, 1.0 - minor_var / major_var))
+    )
+    major_axis = 4.0 * math.sqrt(major_var)
+    minor_axis = 4.0 * math.sqrt(minor_var)
+    equivalent_area = float(np.sum(areas[mask]))
+    return (
+        mask,
+        float(centroid[0]),
+        float(centroid[1]),
+        equivalent_area,
+        eccentricity,
+        major_axis,
+        minor_axis,
+    )
+
+
+def _structure_metrics(
+    *,
+    bucket: CircleBucketDomain,
+    sigma_recon: np.ndarray,
+) -> _StructureMetrics:
+    sigma_true = bucket.sigma_true
+    sigma_ref = np.full_like(sigma_true, bucket.background_conductivity)
+    points = bucket.cell_centers
+    areas = bucket.cell_areas
+    truth_contrast = sigma_true - sigma_ref
+    max_truth = float(np.max(np.abs(truth_contrast)))
+    threshold = max(0.5 * max_truth, 1e-12)
+    truth_mask, truth_x, truth_y, *_ = _weighted_structure(
+        values=truth_contrast,
+        points=points,
+        areas=areas,
+        threshold=threshold,
+    )
+    contrast = np.asarray(sigma_recon, dtype=float) - sigma_ref
+    mask, cx, cy, area, ecc, major, minor = _weighted_structure(
+        values=contrast,
+        points=points,
+        areas=areas,
+        threshold=threshold,
+    )
+    outside = ~truth_mask
+    artifact_values = np.abs(contrast[outside])
+    artifact_active = mask & outside
+    artifact_area = float(np.sum(areas[artifact_active]))
+    artifact_energy = float(np.sum((contrast[outside] ** 2) * areas[outside]))
+    artifact_peak = float(np.max(artifact_values)) if artifact_values.size else 0.0
+    error = np.asarray(sigma_recon, dtype=float) - sigma_true
+    abs_error = np.abs(error)
+    return _StructureMetrics(
+        centroid_error=math.hypot(cx - truth_x, cy - truth_y),
+        equivalent_area=area,
+        eccentricity=ecc,
+        major_axis=major,
+        minor_axis=minor,
+        artifact_area=artifact_area,
+        artifact_energy=artifact_energy,
+        artifact_peak=artifact_peak,
+        sigma_rmse=rmse(sigma_true, sigma_recon),
+        sigma_relative_rmse=_relative_rmse(sigma_true, sigma_recon),
+        sigma_mae=float(np.mean(abs_error)),
+        sigma_max_abs_error=float(np.max(abs_error)),
+        sigma_effective_digits=effective_digits_from_rmse(sigma_true, sigma_recon),
+    )
+
+
+def _summary_from_metrics(
+    *,
+    experiment: str,
+    bucket: CircleBucketDomain,
+    ridge: float,
+    recon_method: str,
+    target_voltage_digits: int | None,
+    holdout_voltage_rmse: float | None,
+    diff_voltage_rmse: float | None,
+    metrics: _StructureMetrics,
+) -> BucketDenseSummaryRow:
+    return BucketDenseSummaryRow(
+        experiment=experiment,
+        domain=bucket.domain,
+        mesh_h=bucket.mesh_h,
+        n_cells=bucket.n_cells,
+        n_dofs=bucket.n_dofs,
+        n_elec=bucket.n_elec,
+        n_measurements=bucket.n_measurements,
+        ridge=float(ridge),
+        recon_method=recon_method,
+        target_voltage_digits=target_voltage_digits,
+        holdout_voltage_rmse=holdout_voltage_rmse,
+        diff_voltage_rmse=diff_voltage_rmse,
+        sigma_rmse=metrics.sigma_rmse,
+        sigma_relative_rmse=metrics.sigma_relative_rmse,
+        sigma_mae=metrics.sigma_mae,
+        sigma_max_abs_error=metrics.sigma_max_abs_error,
+        sigma_effective_digits=metrics.sigma_effective_digits,
+        centroid_error=metrics.centroid_error,
+        eccentricity=metrics.eccentricity,
+        artifact_area=metrics.artifact_area,
+        artifact_energy=metrics.artifact_energy,
+        artifact_peak=metrics.artifact_peak,
+    )
+
+
+def _field_rows_for_sigma(
+    *,
+    bucket: CircleBucketDomain,
+    experiment: str,
+    recon_method: str,
+    sigma_recon: np.ndarray,
+) -> list[BucketDenseFieldRow]:
+    error = np.asarray(sigma_recon, dtype=float) - bucket.sigma_true
+    inside = np.linalg.norm(bucket.cell_centers, axis=1) <= bucket.bucket_radius + 1e-10
+    return [
+        BucketDenseFieldRow(
+            experiment=experiment,
+            recon_method=recon_method,
+            cell_index=int(index),
+            cell_x=float(point[0]),
+            cell_y=float(point[1]),
+            sigma_true=float(true_value),
+            sigma_recon=float(recon_value),
+            sigma_error=float(error_value),
+            inside_bucket=bool(inside_value),
+        )
+        for index, (point, true_value, recon_value, error_value, inside_value) in (
+            enumerate(
+                zip(
+                    bucket.cell_centers,
+                    bucket.sigma_true,
+                    sigma_recon,
+                    error,
+                    inside,
+                    strict=True,
+                )
+            )
+        )
+    ]
+
+
+def _finite_or_none(value: float) -> float | None:
+    number = float(value)
+    return number if math.isfinite(number) else None
+
+
+def _structure_lookup(
+    rows: Iterable[HoldoutStructureMetricRow],
+) -> dict[str, HoldoutStructureMetricRow]:
+    return {row.recon_kind: row for row in rows}
+
+
+def _metrics_from_holdout_structure(
+    row: HoldoutStructureMetricRow,
+) -> _StructureMetrics:
+    return _StructureMetrics(
+        centroid_error=row.centroid_error,
+        equivalent_area=row.equivalent_area,
+        eccentricity=row.eccentricity,
+        major_axis=row.major_axis,
+        minor_axis=row.minor_axis,
+        artifact_area=row.artifact_area,
+        artifact_energy=row.artifact_energy,
+        artifact_peak=row.artifact_peak,
+        sigma_rmse=row.sigma_rmse,
+        sigma_relative_rmse=row.sigma_relative_rmse,
+        sigma_mae=row.sigma_mae,
+        sigma_max_abs_error=row.sigma_max_abs_error,
+        sigma_effective_digits=row.sigma_effective_digits,
+    )
+
+
+def run_bucket_dense_experiments(
+    *,
+    domain: str = "circle_bucket",
+    bucket_radius: float = 1.0,
+    n_elec: int = 16,
+    mesh_h: float = 0.1,
+    ridge: float = 0.01,
+    target_digits: Iterable[int] = (4, 5, 6, 7),
+    holdout: str = "far3",
+    raw_160_baseline: bool = True,
+    fit_methods: Iterable[str] = ("poly2", "poly3", "spline"),
+    inverse_backend: str = "measurement-rm",
+    allow_coarse_smoke: bool = False,
+    normalize_rows: bool = True,
+) -> BucketDenseExperimentCase:
+    """Run voltage-digit and holdout experiments on one dense circle bucket."""
+
+    bucket = build_circle_bucket_domain(
+        domain=domain,
+        bucket_radius=bucket_radius,
+        n_elec=n_elec,
+        mesh_h=mesh_h,
+        allow_coarse_smoke=allow_coarse_smoke,
+    )
+    model = build_circle_bucket_linearized_model(
+        bucket=bucket,
+        normalize_rows=normalize_rows,
+    )
+    summaries: list[BucketDenseSummaryRow] = []
+    field_rows: list[BucketDenseFieldRow] = []
+    voltage_recon_by_method: dict[str, np.ndarray] = {}
+
+    for target in [int(value) for value in target_digits]:
+        voltage_digit = keep_significant_digits(model.voltage_true, target)
+        from .eit_digit_metrics import reconstruct_linearized_sigma
+
+        sigma_recon = reconstruct_linearized_sigma(
+            model=model,
+            voltages=voltage_digit,
+            ridge=ridge,
+            inverse_backend=inverse_backend,
+        )
+        method = f"digits_{target}"
+        voltage_recon_by_method[method] = sigma_recon
+        metrics = _structure_metrics(bucket=bucket, sigma_recon=sigma_recon)
+        summaries.append(
+            _summary_from_metrics(
+                experiment="voltage_digit_sweep",
+                bucket=bucket,
+                ridge=ridge,
+                recon_method=method,
+                target_voltage_digits=target,
+                holdout_voltage_rmse=None,
+                diff_voltage_rmse=rmse(model.voltage_true, voltage_digit),
+                metrics=metrics,
+            )
+        )
+        field_rows.extend(
+            _field_rows_for_sigma(
+                bucket=bucket,
+                experiment="voltage_digit_sweep",
+                recon_method=method,
+                sigma_recon=sigma_recon,
+            )
+        )
+
+    holdout_case = run_holdout_fit_diff(
+        model=model,
+        holdout=holdout,
+        fit_methods=fit_methods,
+        raw_160_baseline=raw_160_baseline,
+        ridge=ridge,
+        inverse_backend=inverse_backend,
+    )
+    structure = _structure_lookup(holdout_case.structure_rows)
+    full_metrics = _metrics_from_holdout_structure(structure["full_208"])
+    summaries.append(
+        _summary_from_metrics(
+            experiment="holdout_far3",
+            bucket=bucket,
+            ridge=ridge,
+            recon_method="full_208",
+            target_voltage_digits=None,
+            holdout_voltage_rmse=0.0,
+            diff_voltage_rmse=0.0,
+            metrics=full_metrics,
+        )
+    )
+    field_rows.extend(
+        _field_rows_for_sigma(
+            bucket=bucket,
+            experiment="holdout_far3",
+            recon_method="full_208",
+            sigma_recon=holdout_case.sigma_recon_full,
+        )
+    )
+    for row in holdout_case.summaries:
+        metrics = _metrics_from_holdout_structure(structure[row.recon_method])
+        summaries.append(
+            _summary_from_metrics(
+                experiment="holdout_far3",
+                bucket=bucket,
+                ridge=ridge,
+                recon_method=row.recon_method,
+                target_voltage_digits=None,
+                holdout_voltage_rmse=_finite_or_none(row.holdout_voltage_rmse),
+                diff_voltage_rmse=_finite_or_none(row.diff_voltage_rmse),
+                metrics=metrics,
+            )
+        )
+        field_rows.extend(
+            _field_rows_for_sigma(
+                bucket=bucket,
+                experiment="holdout_far3",
+                recon_method=row.recon_method,
+                sigma_recon=holdout_case.sigma_recon_by_method[row.recon_method],
+            )
+        )
+
+    return BucketDenseExperimentCase(
+        bucket=bucket,
+        model=model,
+        summaries=summaries,
+        field_rows=field_rows,
+        voltage_recon_by_method=voltage_recon_by_method,
+        holdout_case=holdout_case,
+    )
+
+
+def _draw_circle(ax, radius: float) -> None:
+    import matplotlib.patches as patches
+
+    ax.add_patch(
+        patches.Circle(
+            (0.0, 0.0),
+            radius,
+            fill=False,
+            edgecolor="#111111",
+            linewidth=0.9,
+            zorder=4,
+        )
+    )
+
+
+def _tripcolor_field(
+    ax,
+    case: BucketDenseExperimentCase,
+    values: np.ndarray,
+    *,
+    vmin: float,
+    vmax: float,
+    cmap: str,
+):
+    import matplotlib.tri as mtri
+
+    bucket = case.bucket
+    triangulation = mtri.Triangulation(
+        bucket.nodes[:, 0],
+        bucket.nodes[:, 1],
+        bucket.cells,
+    )
+    image = ax.tripcolor(
+        triangulation,
+        facecolors=values,
+        shading="flat",
+        cmap=cmap,
+        vmin=vmin,
+        vmax=vmax,
+        edgecolors="#ffffff",
+        linewidth=0.05,
+    )
+    _draw_circle(ax, bucket.bucket_radius)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_xticks([])
+    ax.set_yticks([])
+    return image
+
+
+def plot_bucket_dense_recon_compare(
+    case: BucketDenseExperimentCase,
+    output_path: Path,
+    *,
+    dpi: int = 200,
+) -> Path:
+    """Plot dense-bucket truth, full 208, raw 160, fitted 208, and errors."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from .digit_plot import configure_times_new_roman
+
+    configure_times_new_roman()
+    output = Path(output_path).with_suffix(".png")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    fields: list[tuple[str, np.ndarray]] = [
+        ("truth", case.bucket.sigma_true),
+        ("full_208", case.holdout_case.sigma_recon_full),
+    ]
+    fields.extend(case.holdout_case.sigma_recon_by_method.items())
+    sigma_values = np.concatenate([values for _, values in fields])
+    sigma_min = float(np.min(sigma_values))
+    sigma_max = float(np.max(sigma_values))
+    errors = [values - case.bucket.sigma_true for _, values in fields[1:]]
+    error_lim = max(float(max(np.max(np.abs(error)) for error in errors)), 1e-12)
+
+    n_cols = len(fields)
+    fig, axes = plt.subplots(
+        2,
+        n_cols,
+        figsize=(2.5 * n_cols, 5.6),
+        squeeze=False,
+        constrained_layout=True,
+    )
+    fig.suptitle("T23 dense circle bucket recon compare", fontsize=14)
+    for col_idx, (label, values) in enumerate(fields):
+        image = _tripcolor_field(
+            axes[0, col_idx],
+            case,
+            np.asarray(values, dtype=float),
+            vmin=sigma_min,
+            vmax=sigma_max,
+            cmap="viridis",
+        )
+        axes[0, col_idx].set_title(label, fontsize=9)
+        fig.colorbar(image, ax=axes[0, col_idx], fraction=0.046, pad=0.02)
+        error_values = (
+            np.zeros_like(case.bucket.sigma_true)
+            if col_idx == 0
+            else np.asarray(values) - case.bucket.sigma_true
+        )
+        err_image = _tripcolor_field(
+            axes[1, col_idx],
+            case,
+            error_values,
+            vmin=-error_lim,
+            vmax=error_lim,
+            cmap="coolwarm",
+        )
+        axes[1, col_idx].set_title("error", fontsize=9)
+        fig.colorbar(err_image, ax=axes[1, col_idx], fraction=0.046, pad=0.02)
+
+    fig.savefig(output, dpi=int(dpi), bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def _read_csv_rows(path: Path) -> list[dict[str, str]]:
+    if not Path(path).exists():
+        return []
+    with Path(path).open(newline="", encoding="utf-8") as handle:
+        return list(csv.DictReader(handle))
+
+
+def plot_bucket_dense_summary(
+    case: BucketDenseExperimentCase,
+    output_path: Path,
+    *,
+    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
+    coarse_structure_csv: Path | None = Path(
+        "outputs/eit_holdout_structure_metrics_16e.csv"
+    ),
+    dpi: int = 200,
+) -> Path:
+    """Plot dense-bucket metrics against available coarse-grid references."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from .digit_plot import configure_times_new_roman
+
+    configure_times_new_roman()
+    output = Path(output_path).with_suffix(".png")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    voltage_rows = [
+        row for row in case.summaries if row.experiment == "voltage_digit_sweep"
+    ]
+    holdout_rows = [row for row in case.summaries if row.experiment == "holdout_far3"]
+    coarse_voltage = _read_csv_rows(coarse_voltage_csv) if coarse_voltage_csv else []
+    coarse_holdout = _read_csv_rows(coarse_holdout_csv) if coarse_holdout_csv else []
+    coarse_structure = (
+        _read_csv_rows(coarse_structure_csv) if coarse_structure_csv else []
+    )
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.2, 4.2), constrained_layout=True)
+    fig.suptitle("T23 coarse vs dense circle bucket summary", fontsize=14)
+
+    targets = [int(row.target_voltage_digits or 0) for row in voltage_rows]
+    rel = [row.sigma_relative_rmse for row in voltage_rows]
+    axes[0].plot(
+        targets,
+        rel,
+        marker="o",
+        linewidth=1.8,
+        label="circle_bucket_dense",
+        color="#1f77b4",
+    )
+    if coarse_voltage:
+        axes[0].plot(
+            [int(row["target_voltage_digits"]) for row in coarse_voltage],
+            [float(row["sigma_relative_rmse"]) for row in coarse_voltage],
+            marker="s",
+            linestyle="--",
+            linewidth=1.4,
+            label="coarse previous",
+            color="#ff7f0e",
+        )
+    axes[0].set_title("Voltage digits")
+    axes[0].set_xlabel("Target digits")
+    axes[0].set_ylabel("Sigma relative RMSE")
+    axes[0].grid(True, alpha=0.25)
+    axes[0].legend(fontsize=8)
+
+    labels = [row.recon_method for row in holdout_rows]
+    x = np.arange(len(labels), dtype=float)
+    axes[1].bar(
+        x - 0.18,
+        [row.sigma_relative_rmse for row in holdout_rows],
+        width=0.36,
+        label="circle_bucket_dense",
+        color="#2ca02c",
+    )
+    coarse_map = {row["recon_method"]: row for row in coarse_holdout}
+    if coarse_map:
+        axes[1].bar(
+            x + 0.18,
+            [
+                float(coarse_map[label]["recon_sigma_relative_rmse"])
+                if label in coarse_map
+                else math.nan
+                for label in labels
+            ],
+            width=0.36,
+            label="coarse previous",
+            color="#d62728",
+            alpha=0.75,
+        )
+    axes[1].set_title("Holdout recon")
+    axes[1].set_ylabel("Sigma relative RMSE")
+    axes[1].set_xticks(x)
+    axes[1].set_xticklabels(labels, rotation=35, ha="right")
+    axes[1].grid(True, axis="y", alpha=0.25)
+    axes[1].legend(fontsize=8)
+
+    dense_artifact = {row.recon_method: row.artifact_energy for row in holdout_rows}
+    coarse_artifact = {
+        row["recon_kind"]: float(row["artifact_energy"]) for row in coarse_structure
+    }
+    art_labels = [label for label in labels if label != "full_208"]
+    art_x = np.arange(len(art_labels), dtype=float)
+    axes[2].bar(
+        art_x - 0.18,
+        [dense_artifact[label] for label in art_labels],
+        width=0.36,
+        label="circle_bucket_dense",
+        color="#9467bd",
+    )
+    if coarse_artifact:
+        axes[2].bar(
+            art_x + 0.18,
+            [coarse_artifact.get(label, math.nan) for label in art_labels],
+            width=0.36,
+            label="coarse previous",
+            color="#8c564b",
+            alpha=0.75,
+        )
+    axes[2].set_title("Artifact energy")
+    axes[2].set_ylabel("Energy")
+    axes[2].set_xticks(art_x)
+    axes[2].set_xticklabels(art_labels, rotation=35, ha="right")
+    axes[2].grid(True, axis="y", alpha=0.25)
+    axes[2].legend(fontsize=8)
+
+    fig.savefig(output, dpi=int(dpi), bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
+def format_bucket_dense_report(
+    case: BucketDenseExperimentCase,
+    *,
+    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
+) -> str:
+    """Format a Chinese dense-bucket comparison report."""
+
+    voltage_rows = [
+        row for row in case.summaries if row.experiment == "voltage_digit_sweep"
+    ]
+    holdout_rows = [row for row in case.summaries if row.experiment == "holdout_far3"]
+    best_voltage = min(voltage_rows, key=lambda row: row.sigma_relative_rmse)
+    best_holdout = min(holdout_rows, key=lambda row: row.sigma_relative_rmse)
+    coarse_voltage = _read_csv_rows(coarse_voltage_csv) if coarse_voltage_csv else []
+    coarse_holdout = _read_csv_rows(coarse_holdout_csv) if coarse_holdout_csv else []
+    coarse_note = (
+        f"已读取 coarse voltage `{coarse_voltage_csv}` {len(coarse_voltage)} rows；"
+        f"coarse holdout `{coarse_holdout_csv}` {len(coarse_holdout)} rows。"
+        if coarse_voltage or coarse_holdout
+        else "未找到 coarse 参考 CSV；本报告仅列 dense bucket 结果。"
+    )
+    lines = [
+        "# T23 密集圆形小水桶复测报告",
+        "",
+        f"- domain: `{case.bucket.domain}`，mesh_h `{case.bucket.mesh_h}`，"
+        f"n_cells/n_dofs `{case.bucket.n_cells}`，n_measurements "
+        f"`{case.bucket.n_measurements}`。",
+        f"- voltage sweep 最小相对误差：`{best_voltage.recon_method}`，"
+        f"sigma_relative_rmse `{best_voltage.sigma_relative_rmse:.12g}`。",
+        f"- holdout 最小相对误差：`{best_holdout.recon_method}`，"
+        f"sigma_relative_rmse `{best_holdout.sigma_relative_rmse:.12g}`。",
+        f"- 粗网格对比：{coarse_note}",
+        "- 结论边界：本轮使用密集圆形域与 measurement-space RM；"
+        "若与旧粗网格结论冲突，以 dense bucket 可视化/指标为主。",
+        "",
+    ]
+    return "\n".join(lines)
+
+
+def write_bucket_dense_outputs(
+    case: BucketDenseExperimentCase,
+    *,
+    summary_output: Path,
+    field_output: Path,
+    report_output: Path,
+    domain_plot_output: Path,
+    recon_plot_output: Path,
+    summary_plot_output: Path,
+    curve_plot_output: Path,
+    holdout_summary_plot_output: Path,
+    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
+    coarse_structure_csv: Path | None = Path(
+        "outputs/eit_holdout_structure_metrics_16e.csv"
+    ),
+    dpi: int = 200,
+) -> dict[str, Path]:
+    """Write all T23 dense-bucket CSV, report, and visual outputs."""
+
+    summary_output.parent.mkdir(parents=True, exist_ok=True)
+    with summary_output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=BUCKET_DENSE_SUMMARY_FIELDS)
+        writer.writeheader()
+        for row in case.summaries:
+            writer.writerow(row.as_csv_row())
+
+    field_output.parent.mkdir(parents=True, exist_ok=True)
+    with field_output.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=BUCKET_DENSE_FIELD_FIELDS)
+        writer.writeheader()
+        for row in case.field_rows:
+            writer.writerow(row.as_csv_row())
+
+    report_output.parent.mkdir(parents=True, exist_ok=True)
+    report_output.write_text(
+        format_bucket_dense_report(
+            case,
+            coarse_voltage_csv=coarse_voltage_csv,
+            coarse_holdout_csv=coarse_holdout_csv,
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "summary": summary_output,
+        "fields": field_output,
+        "report": report_output,
+        "domain_plot": plot_bucket_domain_audit(
+            case.bucket,
+            domain_plot_output,
+            title="T23 dense circle bucket domain audit",
+            dpi=dpi,
+        ),
+        "recon_plot": plot_bucket_dense_recon_compare(
+            case,
+            recon_plot_output,
+            dpi=dpi,
+        ),
+        "summary_plot": plot_bucket_dense_summary(
+            case,
+            summary_plot_output,
+            coarse_voltage_csv=coarse_voltage_csv,
+            coarse_holdout_csv=coarse_holdout_csv,
+            coarse_structure_csv=coarse_structure_csv,
+            dpi=dpi,
+        ),
+        "curve_plot": plot_holdout_fit_curves(
+            case.holdout_case,
+            curve_plot_output,
+            dpi=dpi,
+        ),
+        "holdout_summary_plot": plot_holdout_fit_summary(
+            case.holdout_case,
+            holdout_summary_plot_output,
+            dpi=dpi,
+        ),
+    }
+
+
+__all__ = [
+    "BUCKET_DENSE_FIELD_FIELDS",
+    "BUCKET_DENSE_SUMMARY_FIELDS",
+    "BucketDenseExperimentCase",
+    "BucketDenseFieldRow",
+    "BucketDenseSummaryRow",
+    "build_circle_bucket_linearized_model",
+    "format_bucket_dense_report",
+    "plot_bucket_dense_recon_compare",
+    "plot_bucket_dense_summary",
+    "run_bucket_dense_experiments",
+    "write_bucket_dense_outputs",
+]
