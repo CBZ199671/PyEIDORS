@@ -3,13 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Optional, List
 from unittest import mock
 
 import numpy as np
 import pytest
-
-from pyeidors.utils.numeric_ops import safe_dot
 
 
 # --- sparse_projection tests ---
@@ -118,7 +115,10 @@ class TestReducedGNStep:
 
         J = np.random.randn(5, 10)
         U = np.random.randn(10, 3)
-        R_apply = lambda x: 0.01 * x
+
+        def R_apply(x):
+            return 0.01 * x
+
         result = build_reduced_operator(
             jacobian=J, basis=U, regularization_apply=R_apply, lambda_eff=0.01
         )
@@ -134,7 +134,10 @@ class TestReducedGNStep:
 
         J = np.random.randn(5, 10)
         U = np.random.randn(10, 3)
-        R_apply = lambda x: 0.01 * x
+
+        def R_apply(x):
+            return 0.01 * x
+
         op_data = build_reduced_operator(
             jacobian=J, basis=U, regularization_apply=R_apply, lambda_eff=0.01
         )
@@ -151,7 +154,10 @@ class TestReducedGNStep:
 
         J = np.random.randn(5, 10)
         U = np.random.randn(10, 3)
-        R_apply = lambda x: 0.01 * x
+
+        def R_apply(x):
+            return 0.01 * x
+
         op_data = build_reduced_operator(
             jacobian=J, basis=U, regularization_apply=R_apply, lambda_eff=0.01
         )

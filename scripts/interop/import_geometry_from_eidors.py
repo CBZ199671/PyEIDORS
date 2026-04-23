@@ -20,7 +20,7 @@ if str(BENCHMARK_SCRIPT_DIR) not in sys.path:
     sys.path.insert(0, str(BENCHMARK_SCRIPT_DIR))
 
 from pyeidors import EITSystem
-from pyeidors.data.structures import EITImage, PatternConfig
+from pyeidors.data.structures import PatternConfig
 from pyeidors.interop import (
     STANDARD_INTEROP_FORMAT,
     build_mesh_from_exchange_mat,
@@ -83,7 +83,6 @@ def main() -> None:
     system.setup(mesh=imported_mesh)
 
     baseline_image = system.create_homogeneous_image(conductivity=background)
-    truth_image = EITImage(elem_data=truth_elem_data, fwd_model=system.fwd_model)
 
     single_step_args = build_single_step_namespace(
         system,

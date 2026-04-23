@@ -10,7 +10,6 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from pyeidors.perf.policy import (
-    EXPERIMENTAL_PERF_PROFILES,
     PERF_GATE_AUTOTUNE_JACOBIAN_SPEEDUP_REF2,
     PERF_GATE_COMBINED_TOTAL_TARGETS,
     PERF_GATE_PEAK_MEMORY_LIMIT_RATIO,

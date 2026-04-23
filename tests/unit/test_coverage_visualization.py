@@ -5,7 +5,6 @@ from __future__ import annotations
 from unittest import mock
 
 import numpy as np
-import pytest
 
 
 class TestEITPlots:

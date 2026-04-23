@@ -12,7 +12,7 @@ overlay must never rebuild the conductivity scene.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from math import cos, pi, sin
+from math import pi
 from typing import Any, Sequence
 
 import numpy as np

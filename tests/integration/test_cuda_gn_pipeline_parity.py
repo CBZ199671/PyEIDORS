@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 
 import numpy as np
 import pytest
@@ -11,7 +10,7 @@ from dolfinx import fem
 
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
-from pyeidors.femx import function_get_array, function_set_array
+from pyeidors.femx import function_set_array
 from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import probe_petsc_cuda_runtime

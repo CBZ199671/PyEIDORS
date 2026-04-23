@@ -615,7 +615,6 @@ def _solve_linearized_cgls(
     atol: float = 1e-10,
 ) -> tuple[np.ndarray, dict[str, object]]:
     n_param = int(linearization.n_parameters)
-    n_meas = int(linearization.n_measurements)
     safe_reg = np.maximum(np.asarray(reg_diag, dtype=np.float64).reshape(-1), 1e-12)
     sqrt_lam = float(np.sqrt(max(float(lam), 0.0)))
     sqrt_reg = np.sqrt(safe_reg)
@@ -1643,7 +1642,6 @@ def build_shared_context(
             "preconditioner": preconditioner,
             "jacobian_representation": jacobian_representation,
             "linearized_solver_strategy": linearized_solver_strategy,
-            "linearized_maxiter": int(linearized_maxiter),
             "lazy_preconditioner_mode": lazy_preconditioner_mode,
             "lazy_diag_batch_max_measurements": int(lazy_diag_batch_max_measurements),
             "J": jacobian_operator,

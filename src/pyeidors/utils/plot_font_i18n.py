@@ -12,7 +12,6 @@ import locale
 import logging
 import os
 from pathlib import Path
-from typing import Any
 
 import matplotlib.pyplot as plt
 from matplotlib import font_manager

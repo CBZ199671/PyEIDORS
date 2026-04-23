@@ -15,8 +15,7 @@ import pytest
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.data.structures import EITData, EITImage, PatternConfig
-    from pyeidors.core_system import EITSystem
+    from pyeidors.data.structures import EITData
 except Exception as exc:
     _TEST_STACK_IMPORT_ERROR = exc
 

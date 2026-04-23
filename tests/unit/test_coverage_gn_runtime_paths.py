@@ -5,18 +5,13 @@ Uses the eit_system fixture to exercise deep runtime code paths.
 
 from __future__ import annotations
 
-import os
-import sys
-from pathlib import Path
-from unittest import mock
 
 import numpy as np
 import pytest
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.core_system import EITSystem
-    from pyeidors.data.structures import PatternConfig, EITData, EITImage
+    from pyeidors.data.structures import EITData
     from pyeidors.inverse.solvers.gauss_newton_runtime import (
         _regularization_signature,
         _add_fallback,
@@ -101,7 +96,7 @@ class TestGNRuntimeFastPaths:
                 n_meas=n_meas,
             )
             try:
-                result = eit_system.inverse_solve(data)
+                eit_system.inverse_solve(data)
             except Exception:
                 pass  # May fail but exercises the code path
         finally:
@@ -135,7 +130,7 @@ class TestGNRuntimeFastPaths:
                 n_meas=n_meas,
             )
             try:
-                result = eit_system.inverse_solve(data)
+                eit_system.inverse_solve(data)
             except Exception:
                 pass
         finally:
@@ -168,7 +163,7 @@ class TestGNRuntimeDifferencePaths:
             n_meas=n_meas,
         )
         try:
-            result = eit_system.inverse_solve(target_data, reference_data=ref_data)
+            eit_system.inverse_solve(target_data, reference_data=ref_data)
         except Exception:
             pass  # May fail but exercises the code path
 
@@ -194,7 +189,7 @@ class TestGNRuntimeVerboseOutput:
                 n_meas=n_meas,
             )
             try:
-                result = eit_system.inverse_solve(data)
+                eit_system.inverse_solve(data)
             except Exception:
                 pass
         finally:

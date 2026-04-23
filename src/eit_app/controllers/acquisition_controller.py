@@ -17,7 +17,6 @@ from eit_app.models.frame_model import FrameData
 if TYPE_CHECKING:
     from eit_app.acquisition.acquisition_process import AcquisitionProcess
     from eit_app.acquisition.ring_buffer import FrameRingBuffer
-    from eit_app.acquisition.ipc_protocol import AcquisitionCommand
 
 log = logging.getLogger(__name__)
 

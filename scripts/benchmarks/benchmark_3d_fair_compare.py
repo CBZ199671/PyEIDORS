@@ -498,6 +498,7 @@ def _run_profiles(
     repeat: int,
     run_diff: bool,
     run_absolute: bool,
+    acceleration_profile: str,
 ) -> dict[str, Any]:
     ref_profiles: dict[str, Any] = {}
     for profile_name, profile_cfg in profiles.items():
@@ -557,7 +558,7 @@ def _run_profiles(
                     ),
                     run_diff="on",
                     run_absolute="off",
-                    acceleration_profile=str(args.acceleration_profile),
+                    acceleration_profile=str(acceleration_profile),
                 )
                 source_reports["diff"] = str(diff_json)
 
@@ -612,7 +613,7 @@ def _run_profiles(
                     ),
                     run_diff="off",
                     run_absolute="on",
-                    acceleration_profile=str(args.acceleration_profile),
+                    acceleration_profile=str(acceleration_profile),
                 )
                 source_reports["absolute"] = str(absolute_json)
 
@@ -719,6 +720,7 @@ def main() -> None:
             repeat=repeat,
             run_diff=False,
             run_absolute=True,
+            acceleration_profile=str(args.acceleration_profile),
         )
         speedup = _compute_speedup_block(ref_profiles)
 
@@ -788,6 +790,7 @@ def main() -> None:
                 repeat=int(args.repeat),
                 run_diff=True,
                 run_absolute=True,
+                acceleration_profile=str(args.acceleration_profile),
             )
             results[f"ref_{refinement}"] = {
                 "profiles": ref_profiles,

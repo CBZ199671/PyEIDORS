@@ -8,7 +8,6 @@ from matplotlib.collections import LineCollection
 from matplotlib.figure import Figure
 from matplotlib.font_manager import FontProperties
 from matplotlib.tri import Triangulation
-from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator

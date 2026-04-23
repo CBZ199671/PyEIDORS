@@ -12,6 +12,8 @@ import matplotlib.tri as tri
 import numpy as np
 from scipy.io import loadmat
 
+plt.rcParams["font.family"] = ["Times New Roman", "DejaVu Sans"]
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
@@ -44,6 +46,7 @@ def main() -> None:
     conductivity_rmse = float(np.asarray(details["conductivity_rmse"]).reshape(-1)[0])
 
     title_prefix = args.title_prefix.replace("_", " ").strip()
+    report_title = title_prefix or mesh_name
     coordinates = mesh.coordinates()
     cells = mesh.cells()
     triangulation = tri.Triangulation(coordinates[:, 0], coordinates[:, 1], cells)
@@ -96,11 +99,14 @@ def main() -> None:
         im_err = axes[2].tripcolor(triangulation, error, cmap="hot", shading="gouraud")
 
     images = [im_true, im_recon, im_err]
+    for ax, title in zip(axes, ["Truth", "Reconstruction", "Absolute error"]):
+        ax.set_title(title)
     for ax, image in zip(axes, images):
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])
         fig.colorbar(image, ax=ax, shrink=0.82)
+    fig.suptitle(f"{report_title} conductivity")
 
     fig.text(
         0.5,
@@ -126,6 +132,7 @@ def main() -> None:
     ax.plot(predicted_diff, color="#d62728", linewidth=1.8, label="Predicted ΔV")
     ax.set_xlabel("Measurement index")
     ax.set_ylabel("Voltage (V)")
+    ax.set_title(f"{report_title} voltage fit")
     ax.grid(True, alpha=0.25)
     ax.legend()
     ax.text(

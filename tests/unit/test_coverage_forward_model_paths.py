@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from unittest import mock
 
 import numpy as np
 import pytest
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.data.structures import EITData, EITImage
+    from pyeidors.data.structures import EITImage
 except Exception as exc:
     _TEST_STACK_IMPORT_ERROR = exc
 

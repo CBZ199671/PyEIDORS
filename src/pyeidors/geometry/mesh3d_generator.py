@@ -9,7 +9,7 @@ import time
 from dataclasses import dataclass
 from math import atan2, ceil, cos, pi, sin
 from pathlib import Path
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
 from dolfinx.io import gmsh as gmshio

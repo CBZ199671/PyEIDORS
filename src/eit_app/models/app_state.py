@@ -6,9 +6,8 @@ that emit the corresponding signal.
 """
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-from typing import Any
 
 from PySide6.QtCore import QObject, Signal
 

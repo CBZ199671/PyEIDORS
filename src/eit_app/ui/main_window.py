@@ -2797,7 +2797,6 @@ class EITWorkstation(QMainWindow):
         previously every label was hard-coded in English even when the
         rest of the GUI was running in Chinese.
         """
-        from PySide6.QtWidgets import QMessageBox
 
         msg = QMessageBox(self)
         msg.setWindowTitle(t("main.popup.recon_complete.title"))
@@ -3755,7 +3754,6 @@ class EITWorkstation(QMainWindow):
     @Slot()
     def _on_generate_dataset(self) -> None:
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
-        mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
 
         if not panel_cfg["output_dir"]:
             self._on_error("Please specify an output directory for the dataset.")

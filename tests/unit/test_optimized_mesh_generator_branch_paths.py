@@ -6,7 +6,6 @@ import configparser
 from pathlib import Path
 from types import SimpleNamespace
 
-import numpy as np
 import pytest
 
 from pyeidors.geometry import optimized_mesh_generator as opt_mesh_module

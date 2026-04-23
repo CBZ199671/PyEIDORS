@@ -11,12 +11,10 @@ import numpy as np
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.measurement_dataset import MeasurementDataset
-from pyeidors.data.structures import EITData, PatternConfig
-from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.data.structures import EITData
 
 # Re-export solver classes for the unified CLI runner module.
 from pyeidors.inverse import (
-    SparseBayesianConfig,
     SparseBayesianReconstructor,
     perform_sparse_difference_reconstruction,
 )

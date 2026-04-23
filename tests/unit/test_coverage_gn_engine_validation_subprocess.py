@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
 
 from tests.utils import run_python
 

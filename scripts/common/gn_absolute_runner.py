@@ -447,7 +447,7 @@ def run_absolute_reconstruction(
         "csv": str(csv_path),
         "metadata": str(metadata_path),
         "use_col": int(col_idx),
-        "n_elec": n_elec,
+        "n_elec": int(total_electrodes),
         "mesh_radius": mesh_radius,
         "refinement": refinement,
         "regularization": "NOSER",

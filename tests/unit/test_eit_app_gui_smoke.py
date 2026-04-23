@@ -480,7 +480,8 @@ def test_frame_database_range_filters_on_n_elec_and_stim_amp(tmp_path: Path) -> 
                 },
             )
 
-        names = lambda rows: sorted(r["name"] for r in rows)
+        def names(rows):
+            return sorted(r["name"] for r in rows)
 
         # n_elec inclusive range
         assert names(db.query_sessions(n_elec_min=32)) == ["B", "C"]

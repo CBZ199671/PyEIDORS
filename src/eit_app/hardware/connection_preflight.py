@@ -10,7 +10,6 @@ from typing import Any
 
 from .serial_port_discovery import discover_serial_ports, running_in_wsl
 from .serial_transport import SerialTransport
-from .windows_serial_transport import WindowsSerialTransport
 
 _WINDOWS_COM_RE = re.compile(r"COM\d+$", re.IGNORECASE)
 
@@ -55,7 +54,7 @@ def _preflight_serial(config: dict[str, Any]) -> ConnectionPreflightResult:
             return ConnectionPreflightResult(
                 False,
                 f"Windows 当前未检测到串口 {display_name}。",
-                f"请确认设备仍然插着，必要时重新插拔 USB 后点击 Scan；如果你刚关闭软件，请等待 1-2 秒再重试。",
+                "请确认设备仍然插着，必要时重新插拔 USB 后点击 Scan；如果你刚关闭软件，请等待 1-2 秒再重试。",
             )
         return ConnectionPreflightResult(
             True,

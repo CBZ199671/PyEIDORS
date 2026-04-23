@@ -28,17 +28,15 @@ class TestPerfCapabilities:
             "sys.modules", {"pyeidors.forward.cuda_structured_backend": None}
         ):
             result = mod._has_cuda_structured()
-        # Just verify code path runs
+        assert isinstance(result, bool)
 
     def test_has_pyamg_import_error(self, monkeypatch):
-        from pyeidors.perf import capabilities as mod
 
         with mock.patch.dict("sys.modules", {"pyamg": None}):
             # Force fresh check
             pass
 
     def test_has_cholmod_import_error(self, monkeypatch):
-        from pyeidors.perf import capabilities as mod
 
         with mock.patch.dict(
             "sys.modules", {"sksparse": None, "sksparse.cholmod": None}

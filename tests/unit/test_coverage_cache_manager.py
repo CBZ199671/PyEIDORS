@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import time
 
 import numpy as np
 import pytest
@@ -30,7 +29,6 @@ class TestSharedProcessStore:
     """Cover line 42 in manager.py: max_bytes upgrade."""
 
     def test_max_bytes_upgraded(self, tmp_path):
-        from pathlib import Path
 
         store1 = _get_shared_process_store(
             cache_dir=tmp_path / "test_shared",

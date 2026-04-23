@@ -190,7 +190,6 @@ def test_inverse_dolfinx_vs_cuda_structured_parity(
     )
 
     baseline_cpu = cpu.create_homogeneous_image(conductivity=1.0)
-    baseline_gpu = gpu.create_homogeneous_image(conductivity=1.0)
     phantom_cpu = _make_phantom(cpu)
     baseline_data = cpu.forward_solve(baseline_cpu)
     target_data = cpu.forward_solve(phantom_cpu)

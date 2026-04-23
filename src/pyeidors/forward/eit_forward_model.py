@@ -1697,7 +1697,6 @@ class EITForwardModel:
 
         direct_pc = requested_pc_type in {"lu", "cholesky"}
         if cuda_enabled and direct_pc:
-            last_error = None
             for candidate in ("cusparse", "cuda"):
                 try:
                     ksp = PETSc.KSP().create(self.mesh.comm)
@@ -1709,8 +1708,8 @@ class EITForwardModel:
                         backend_name=f"petsc-ksp-{candidate}-{requested_pc_type}",
                         factor_solver_type=candidate,
                     )
-                except Exception as exc:
-                    last_error = exc
+                except Exception:
+                    pass
             dense_type = self._get_requested_dense_mat_type()
             if dense_type is not None:
                 try:
@@ -1726,11 +1725,9 @@ class EITForwardModel:
                         backend_name=f"petsc-ksp-{str(dense_type).lower()}-{requested_pc_type}",
                         factor_solver_type=None,
                     )
-                except Exception as exc:
-                    last_error = exc
-            setup_error = last_error or RuntimeError("petsc_cuda_direct_setup_failed")
+                except Exception:
+                    pass
         else:
-            setup_error = None
             try:
                 ksp = PETSc.KSP().create(self.mesh.comm)
                 _configure(ksp, A)
@@ -1738,8 +1735,8 @@ class EITForwardModel:
                 return _bundle_from(
                     ksp, A, backend_name="petsc-ksp", factor_solver_type=None
                 )
-            except Exception as exc:
-                setup_error = exc
+            except Exception:
+                pass
 
         ksp = PETSc.KSP().create(self.mesh.comm)
         ksp.setOperators(A)

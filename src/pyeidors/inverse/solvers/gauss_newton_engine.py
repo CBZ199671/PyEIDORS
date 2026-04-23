@@ -16,7 +16,6 @@ from ...data.difference import (
     normalize_difference_mode,
     normalize_difference_orientation,
 )
-from ...femx import function_set_array
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
 from ..regularization.base_regularization import BaseRegularization

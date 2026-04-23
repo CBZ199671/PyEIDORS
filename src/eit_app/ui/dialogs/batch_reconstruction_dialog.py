@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDialog,
@@ -30,7 +30,7 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
-from eit_app.ui.theme import set_button_role, set_hint_text
+from eit_app.ui.theme import set_button_role
 
 
 # (display, method_key, requires_reference)

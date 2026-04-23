@@ -29,7 +29,6 @@ from .protocol import (
 )
 from .types import (
     FRAME_HEAD,
-    FRAME_END,
     AcquisitionMode,
     Command,
     DEFAULT_FRAME_SPEC,

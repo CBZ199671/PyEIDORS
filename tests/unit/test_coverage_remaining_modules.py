@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from unittest import mock
 
 import numpy as np
 import pytest
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.data.structures import EITData, EITImage, EITMesh
-    from pyeidors.core_system import EITSystem
+    from pyeidors.data.structures import EITData
 except Exception as exc:
     _TEST_STACK_IMPORT_ERROR = exc
 
@@ -214,13 +212,6 @@ class TestEITPlotsMethods:
 
         matplotlib.use("Agg")
         from pyeidors.visualization.eit_plots import EITVisualizer
-        from pyeidors.visualization.eit_plot_helpers import (
-            raw_mesh,
-            coordinates,
-            cells,
-            num_cells,
-            num_vertices,
-        )
 
         viz = EITVisualizer(style="default")
 

@@ -4,7 +4,6 @@ PyEIDORS Basic Usage Example
 Demonstrates how to use the modular EIT system for forward solving and inverse reconstruction.
 """
 
-import numpy as np
 import sys
 import os
 

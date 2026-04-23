@@ -2,15 +2,13 @@
 
 from __future__ import annotations
 
-from unittest import mock
 
 import numpy as np
 import pytest
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.data.structures import EITData, EITImage, PatternConfig
-    from pyeidors.core_system import EITSystem
+    from pyeidors.data.structures import EITData, EITImage
 except Exception as exc:
     _TEST_STACK_IMPORT_ERROR = exc
 
@@ -115,7 +113,7 @@ class TestInverseSolveVariants:
             ref = _make_data_from_system(eit_system, value=1.0, noise=0)
             target = _make_data_from_system(eit_system, value=1.05)
             try:
-                result = eit_system.inverse_solve(target, reference_data=ref)
+                eit_system.inverse_solve(target, reference_data=ref)
             except Exception:
                 pass  # May fail on first iteration
         finally:

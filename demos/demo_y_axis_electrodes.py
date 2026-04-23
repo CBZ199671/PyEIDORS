@@ -5,7 +5,7 @@ Demonstrate modified electrode positions (starting from positive Y-axis).
 
 import numpy as np
 import matplotlib.pyplot as plt
-from math import pi, cos, sin
+from math import pi
 import sys
 from pathlib import Path
 

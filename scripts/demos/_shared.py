@@ -8,8 +8,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 
-from scripts.common.mesh_utils import cell_to_node
-
 
 def make_random_anomaly(rng: np.random.Generator) -> dict[str, object]:
     """Sample a circular anomaly with moderate random position and contrast."""

@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as tri

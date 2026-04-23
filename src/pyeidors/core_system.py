@@ -49,8 +49,6 @@ from .inverse.solvers.gauss_newton_device import normalize_runtime_device
 from .physics import UnitCheckReport, run_unit_consistency_checks
 from .physics.current_drive import normalize_pattern_config_for_mesh
 from .perf.policy import (
-    ACCELERATION_PROFILE_GPU3D,
-    ACCELERATION_PROFILE_GPU3D_FUSED,
     ACCELERATION_PROFILE_VALUES,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_ACCELERATION_PROFILE,

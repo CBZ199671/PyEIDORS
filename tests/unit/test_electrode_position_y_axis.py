@@ -3,7 +3,6 @@
 Test electrode default position on positive Y-axis.
 """
 
-import numpy as np
 import sys
 from pathlib import Path
 from math import pi, cos, sin

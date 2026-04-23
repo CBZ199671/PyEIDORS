@@ -7,7 +7,6 @@ from pathlib import Path
 from unittest import mock
 
 import numpy as np
-import pytest
 
 from pyeidors.cache.store_disk import DiskCacheStore
 from pyeidors.cache.store_process import ProcessCacheStore

@@ -31,9 +31,9 @@ import hashlib
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 from dolfinx import fem
@@ -53,7 +53,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from pyeidors import EITSystem
 from pyeidors.cache import hash_array
 from pyeidors.data.synthetic_data import create_custom_phantom
-from pyeidors.data.structures import EITData, EITImage, PatternConfig
+from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
@@ -1245,7 +1245,6 @@ def main() -> None:
         if run_index >= warmup_runs:
             measured_runs.append({"run_index": run_index - warmup_runs, **payload})
 
-    final_run = measured_runs[-1]
     if args.perf_report is not None:
         sorted_runs = sorted(
             measured_runs,

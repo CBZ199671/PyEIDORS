@@ -97,7 +97,7 @@ class TestRunner:
         print("🏆 PyEIDORS Test Suite Complete")
         print(f"{'=' * 80}")
 
-        print(f"\n📊 Test Results:")
+        print("\n📊 Test Results:")
         print(f"{'Test Name':<30} {'Status':<10} {'Time(s)':<10}")
         print(f"{'-' * 55}")
 
@@ -127,7 +127,7 @@ class TestRunner:
 
         total_tests = len(self.results)
 
-        print(f"\n📈 Overall Statistics:")
+        print("\n📈 Overall Statistics:")
         print(f"   Total tests: {total_tests}")
         print(f"   Passed: {passed}")
         print(f"   Failed: {failed}")
@@ -142,7 +142,7 @@ class TestRunner:
         print(f"   Total time: {total_time:.2f} seconds")
 
         # Provide suggestions
-        print(f"\n💡 Suggestions:")
+        print("\n💡 Suggestions:")
         if failed > 0:
             print(
                 "   - Check failed tests, may need to fix dependencies or configuration issues"

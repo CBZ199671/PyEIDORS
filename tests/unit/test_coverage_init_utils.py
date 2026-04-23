@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import importlib
-import sys
 from unittest import mock
 
 import numpy as np
@@ -111,7 +109,6 @@ class TestChineseFontConfig:
     """Cover line 26 in chinese_font_config.py."""
 
     def test_reset_font_config(self):
-        import matplotlib.pyplot as plt
         from pyeidors.utils.chinese_font_config import reset_font_config
 
         reset_font_config()

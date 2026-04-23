@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
 import shutil
-import time
 from pathlib import Path
 from unittest import mock
 
-import pytest
 
 from pyeidors.cache.lifecycle import (
     _parse_session_pid,
@@ -115,7 +112,6 @@ class TestCleanupStaleSessions:
         child = session_root / "unknown-session"
         child.mkdir()
         # Remove after listing to trigger FileNotFoundError on stat
-        import shutil
 
         original_iterdir = Path.iterdir
 

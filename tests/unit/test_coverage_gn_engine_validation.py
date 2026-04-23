@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import sys
 from unittest import mock
 
-import numpy as np
 import pytest
 
 
@@ -32,7 +30,7 @@ def _make_solver(**overrides):
     with mock.patch.object(
         GaussNewtonReconstructor, "__init__", lambda self, **kw: None
     ):
-        solver = GaussNewtonReconstructor.__new__(GaussNewtonReconstructor)
+        _ = GaussNewtonReconstructor.__new__(GaussNewtonReconstructor)
 
     # Manually set the validated fields:
     defaults = dict(

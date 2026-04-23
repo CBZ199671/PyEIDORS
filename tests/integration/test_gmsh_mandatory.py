@@ -6,7 +6,6 @@ abort on one platform does not crash the whole pytest worker.
 
 from __future__ import annotations
 
-from pathlib import Path
 
 from tests.utils import run_python
 

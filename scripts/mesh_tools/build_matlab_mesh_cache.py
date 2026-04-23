@@ -8,7 +8,7 @@ import json
 from configparser import ConfigParser
 from pathlib import Path
 import sys
-from typing import Dict, Iterable, List, Sequence, Tuple
+from typing import Dict, List, Sequence, Tuple
 
 import meshio
 import numpy as np

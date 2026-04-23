@@ -5,8 +5,6 @@ from __future__ import annotations
 import argparse
 
 from pyeidors.perf import (
-    ACCELERATION_PROFILE_GPU3D,
-    ACCELERATION_PROFILE_GPU3D_FUSED,
     ACCELERATION_PROFILE_VALUES,
     DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_ACCELERATION_PROFILE,

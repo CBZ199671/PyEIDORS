@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from pyeidors.data.structures import EITData
 from pyeidors.inverse.contracts import SolverOutput
 from pyeidors.inverse.solvers import eit_pde as eit_pde_module
 from pyeidors.inverse.workflows.sparse_bayesian import (

@@ -14,7 +14,7 @@ import logging
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal
@@ -178,7 +178,7 @@ class _BatchWorker(QObject):
 
                     _save_outputs(result, tgt_path, req, stamp)
                     succeeded += 1
-                except Exception as exc:
+                except Exception:
                     failed += 1
                     log.exception("Batch item %s crashed", tgt_path.name)
 

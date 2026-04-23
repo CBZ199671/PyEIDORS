@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from unittest import mock
 
-import numpy as np
 import pytest
-from scipy.sparse import eye as speye
 from scipy.sparse.linalg import LinearOperator
 
 _TEST_STACK_IMPORT_ERROR = None
 try:
-    from pyeidors.inverse.solvers.gauss_newton_engine import GaussNewtonReconstructor
+    pass
 except Exception as exc:
     _TEST_STACK_IMPORT_ERROR = exc
 
@@ -87,4 +84,5 @@ class TestGNEngineRegularizationMatrix:
         # Create a LinearOperator regularization
         op = LinearOperator((n, n), matvec=lambda x: 0.01 * x)
         # Can't easily swap regularization without rebuilding, but verify the path exists
+        assert op.shape == (n, n)
         assert n > 0

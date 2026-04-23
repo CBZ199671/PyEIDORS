@@ -12,7 +12,6 @@ import pytest
 
 import pyeidors.inverse.solvers.sparse_projection as sparse_projection
 import pyeidors.utils.plot_font_i18n as font_i18n
-from pyeidors.data.structures import EITImage
 from pyeidors.inverse.reduced.inexact_controller import InexactController
 from pyeidors.inverse.contracts import SolverOutput
 from pyeidors.inverse.workflows.base import resolve_reconstruction_output

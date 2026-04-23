@@ -28,7 +28,6 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # no
 
 from benchmark_difference_runtime import (  # noqa: E402
     build_single_step_namespace,
-    compute_difference,
     run_single_step_benchmark,
 )
 from benchmark_reviewer_case import (  # noqa: E402

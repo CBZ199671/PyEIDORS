@@ -43,10 +43,6 @@ from scripts.common.hdf5_outputs import (
 from scripts.diagnostics.gallery_shared import (
     consistency_metrics as _shared_consistency_metrics,
     jsonable as _jsonable,
-    relative_l2 as _relative_l2,
-    rmse as _rmse,
-    safe_pearson as _safe_pearson,
-    save_case_data as _save_case_data,
 )
 
 
@@ -670,9 +666,9 @@ def _write_report(
             "",
             "## Setup",
             "",
-            f"- Mode: `absolute`, `real-valued`, `noise-free`",
-            f"- 2D backends: `dolfinx/cpu` vs `dolfinx/cuda`",
-            f"- 3D backends: `dolfinx/cpu` vs `cuda_structured`",
+            "- Mode: `absolute`, `real-valued`, `noise-free`",
+            "- 2D backends: `dolfinx/cpu` vs `dolfinx/cuda`",
+            "- 3D backends: `dolfinx/cpu` vs `cuda_structured`",
             f"- 3D mesh: `{mesh_family} + {geometry_version} + {generator_revision}`, refinement `{config['refinement_3d']}`",
             "",
             "## Quick Summary",

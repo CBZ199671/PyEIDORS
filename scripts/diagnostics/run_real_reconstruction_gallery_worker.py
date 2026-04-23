@@ -7,7 +7,7 @@ import argparse
 import json
 import sys
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -28,9 +28,6 @@ from scripts.common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bund
 from scripts.diagnostics.gallery_shared import (
     consistency_metrics as _shared_consistency_metrics,
     jsonable as _jsonable,
-    relative_l2 as _relative_l2,
-    rmse as _rmse,
-    safe_pearson as _safe_pearson,
     save_case_data as _save_case_data,
     truth_metrics as _truth_metrics,
 )

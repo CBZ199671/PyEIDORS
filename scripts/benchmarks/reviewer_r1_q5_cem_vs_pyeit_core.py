@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import csv
 import json
-import math
 import statistics
 import sys
 import time
@@ -338,6 +337,8 @@ def build_row(
     *,
     source_framework: str,
     source_z: str,
+    source_background: float,
+    source_phantom_contrast: float,
     source_csv: Path,
     reconstructor: str,
     reconstruction_z: str | None,
@@ -359,9 +360,9 @@ def build_row(
         "source_framework": source_framework,
         "source_model": "CEM",
         "source_z": source_z,
-        "source_background": args.background,
+        "source_background": source_background,
         "source_contact_impedance": SOURCE_ZS[source_z],
-        "source_phantom_contrast": args.phantom_conductivity,
+        "source_phantom_contrast": source_phantom_contrast,
         "source_csv": format_rel_path(source_csv),
         "reconstructor": reconstructor,
         "reconstructor_model": reconstructor_model,
@@ -504,6 +505,8 @@ def main() -> None:
                     build_row(
                         source_framework=source_framework,
                         source_z=source_z,
+                        source_background=float(args.background),
+                        source_phantom_contrast=float(args.phantom_conductivity),
                         source_csv=source_csv,
                         reconstructor=reconstructor_name,
                         reconstruction_z=reconstruction_z,

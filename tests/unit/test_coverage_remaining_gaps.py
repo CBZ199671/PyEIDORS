@@ -2,13 +2,10 @@
 
 from __future__ import annotations
 
-import os
-import shutil
 from pathlib import Path
 from unittest import mock
 
 import numpy as np
-import pytest
 
 
 # --- __init__.py import guards (lines 20-21, 29-32, 39-40) ---
@@ -233,25 +230,6 @@ class TestCapabilityDetection:
 
     def test_has_pyamg_false(self, monkeypatch):
         from pyeidors.perf import capabilities as mod
-
-        original = mod._has_pyamg
-
-        def fake():
-            import builtins
-
-            real_import = builtins.__import__
-
-            def block_pyamg(name, *args, **kwargs):
-                if name == "pyamg":
-                    raise ImportError
-                return real_import(name, *args, **kwargs)
-
-            with mock.patch("builtins.__import__", side_effect=block_pyamg):
-                try:
-                    import pyamg
-                except ImportError:
-                    return False
-            return True
 
         # Just call the real one
         result = mod._has_pyamg()

@@ -118,6 +118,12 @@ extend-exclude = '''
 )/
 '''
 
+[tool.ruff.lint.per-file-ignores]
+"scripts/**/*.py" = ["E402"]
+"tests/**/*.py" = ["E402"]
+"src/eit_app/app.py" = ["E402"]
+"src/pyeidors/inverse/solvers/gauss_newton_runtime.py" = ["E402"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
