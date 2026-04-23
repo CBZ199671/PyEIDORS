@@ -7,8 +7,15 @@ import pytest
 
 from pyeidors.inverse.reduced import lowrank_subspace as lowrank_module
 from pyeidors.inverse.reduced import pod_basis as pod_module
-from pyeidors.inverse.reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
-from pyeidors.inverse.reduced.snapshot_bank import SnapshotBank, _as_matrix, select_snapshot_matrix
+from pyeidors.inverse.reduced.pod_basis import (
+    compute_pod_basis,
+    merge_orthonormal_bases,
+)
+from pyeidors.inverse.reduced.snapshot_bank import (
+    SnapshotBank,
+    _as_matrix,
+    select_snapshot_matrix,
+)
 
 
 def test_pod_snapshot_normalization_and_rank_helpers_cover_edge_cases():
@@ -16,17 +23,27 @@ def test_pod_snapshot_normalization_and_rank_helpers_cover_edge_cases():
         pod_module._normalize_snapshot_matrix(np.array([1.0, 2.0], dtype=float)),
         np.array([[1.0], [2.0]], dtype=float),
     )
-    assert pod_module._normalize_snapshot_matrix(np.zeros((3, 0), dtype=float)).shape == (3, 0)
+    assert pod_module._normalize_snapshot_matrix(
+        np.zeros((3, 0), dtype=float)
+    ).shape == (3, 0)
     with pytest.raises(ValueError, match="snapshots must be a 2D array"):
         pod_module._normalize_snapshot_matrix(np.zeros((2, 2, 2), dtype=float))
 
     assert pod_module._rank_from_energy(np.zeros(0, dtype=float), 0.9, 4) == 0
     assert pod_module._rank_from_energy(np.array([0.0, 0.0], dtype=float), 0.9, 4) == 0
-    assert pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 0.5, 3) == 1
-    assert pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 1.0, 2) == 2
+    assert (
+        pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 0.5, 3)
+        == 1
+    )
+    assert (
+        pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 1.0, 2)
+        == 2
+    )
 
 
-def test_compute_pod_basis_handles_empty_zero_singular_values_and_energy_selection(monkeypatch: pytest.MonkeyPatch):
+def test_compute_pod_basis_handles_empty_zero_singular_values_and_energy_selection(
+    monkeypatch: pytest.MonkeyPatch,
+):
     assert compute_pod_basis(np.zeros((4, 0), dtype=float)).shape == (4, 0)
 
     monkeypatch.setattr(
@@ -96,7 +113,9 @@ def test_snapshot_bank_matrix_hash_and_selection_cover_edge_cases():
 
     no_norm = SnapshotBank(max_snapshots=3, normalize=False)
     no_norm.add(np.array([2.0, 0.0], dtype=float))
-    np.testing.assert_allclose(no_norm.matrix()[:, 0], np.array([2.0, 0.0], dtype=float))
+    np.testing.assert_allclose(
+        no_norm.matrix()[:, 0], np.array([2.0, 0.0], dtype=float)
+    )
 
     assert _as_matrix(None, n_param=2).shape == (2, 0)
     assert _as_matrix(np.array([1.0, 2.0], dtype=float), n_param=2).shape == (2, 1)
@@ -147,7 +166,9 @@ def test_snapshot_bank_matrix_hash_and_selection_cover_edge_cases():
 
 def test_lowrank_subspace_helpers_cover_invalid_empty_and_randomized_paths():
     assert lowrank_module._rank_from_energy(np.zeros(0, dtype=float), 0.9, 4) == 0
-    assert lowrank_module._rank_from_energy(np.array([0.0, 0.0], dtype=float), 0.9, 4) == 0
+    assert (
+        lowrank_module._rank_from_energy(np.array([0.0, 0.0], dtype=float), 0.9, 4) == 0
+    )
 
     singular_values, vt_mat = lowrank_module._randomized_right_svd(np.eye(4), 2)
     assert singular_values.shape[0] >= 2
@@ -156,7 +177,9 @@ def test_lowrank_subspace_helpers_cover_invalid_empty_and_randomized_paths():
     with pytest.raises(ValueError, match="jacobian must be 2D"):
         lowrank_module.build_lowrank_subspace(np.array([1.0, 2.0], dtype=float))
 
-    empty_basis, empty_sv = lowrank_module.build_lowrank_subspace(np.zeros((3, 0), dtype=float))
+    empty_basis, empty_sv = lowrank_module.build_lowrank_subspace(
+        np.zeros((3, 0), dtype=float)
+    )
     assert empty_basis.shape == (0, 0)
     assert empty_sv.shape == (0,)
 
@@ -171,13 +194,21 @@ def test_lowrank_subspace_helpers_cover_invalid_empty_and_randomized_paths():
     assert sv_rand.shape[0] == basis_rand.shape[1]
 
 
-def test_reduced_helper_remaining_rank_and_single_column_edges(monkeypatch: pytest.MonkeyPatch):
-    assert lowrank_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 3.0, 2) == 2
+def test_reduced_helper_remaining_rank_and_single_column_edges(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    assert (
+        lowrank_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 3.0, 2)
+        == 2
+    )
 
     monkeypatch.setattr(
         lowrank_module,
         "_randomized_right_svd",
-        lambda _jacobian, _rank: (np.array([1.0], dtype=float), np.zeros((0, 3), dtype=float)),
+        lambda _jacobian, _rank: (
+            np.array([1.0], dtype=float),
+            np.zeros((0, 3), dtype=float),
+        ),
     )
     empty_basis, empty_sv = lowrank_module.build_lowrank_subspace(
         np.ones((2, 3), dtype=float),
@@ -187,7 +218,10 @@ def test_reduced_helper_remaining_rank_and_single_column_edges(monkeypatch: pyte
     assert empty_basis.shape == (3, 0)
     assert empty_sv.shape == (0,)
 
-    assert pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 5.0, 2) == 2
+    assert (
+        pod_module._rank_from_energy(np.array([3.0, 2.0, 1.0], dtype=float), 5.0, 2)
+        == 2
+    )
 
     monkeypatch.setattr(pod_module, "_rank_from_energy", lambda *_args, **_kwargs: 0)
     zero_rank_basis = compute_pod_basis(np.eye(2, dtype=float), rank=None, energy=0.8)

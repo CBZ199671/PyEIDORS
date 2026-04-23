@@ -136,7 +136,9 @@ class RelayTransport(AbstractTransport):
                     del self._rx_buffer[:-keep]
 
             if len(self._rx_buffer) >= len(FRAME_HEAD) + 2:
-                len_field = struct.unpack_from(">H", self._rx_buffer, len(FRAME_HEAD))[0]
+                len_field = struct.unpack_from(">H", self._rx_buffer, len(FRAME_HEAD))[
+                    0
+                ]
                 frame_total = len_field + 7
                 if len_field < 3:
                     del self._rx_buffer[:1]
@@ -176,4 +178,6 @@ class RelayTransport(AbstractTransport):
                 continue
             if parsed.device_cmd is None:
                 continue
-            return relay_device_payload_to_frame(parsed.device_cmd, parsed.device_payload)
+            return relay_device_payload_to_frame(
+                parsed.device_cmd, parsed.device_payload
+            )

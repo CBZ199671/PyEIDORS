@@ -16,7 +16,9 @@ def test_measurement_projection_matches_manual_loop(eit_system):
     voltages = rng.normal(size=(manager.n_stim, manager.tn_elec))
 
     expected = np.zeros(manager.n_meas_total, dtype=float)
-    for i, (start_idx, meas_mat) in enumerate(zip(manager.meas_start_indices, manager.meas_matrices)):
+    for i, (start_idx, meas_mat) in enumerate(
+        zip(manager.meas_start_indices, manager.meas_matrices)
+    ):
         n_meas = meas_mat.shape[0]
         expected[start_idx : start_idx + n_meas] = meas_mat @ voltages[i]
 
@@ -43,7 +45,9 @@ def test_forward_solve_vectorized_matches_per_pattern_solve(eit_system):
         sol = lu.solve(rhs)
         manual_voltages[i, :] = sol[model.dofs : model.dofs + model.n_elec]
 
-    np.testing.assert_allclose(electrode_voltages, manual_voltages, atol=1e-10, rtol=1e-10)
+    np.testing.assert_allclose(
+        electrode_voltages, manual_voltages, atol=1e-10, rtol=1e-10
+    )
 
 
 def test_forward_backends_match(eit_mesh):

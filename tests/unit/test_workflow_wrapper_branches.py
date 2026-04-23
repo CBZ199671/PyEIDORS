@@ -14,7 +14,10 @@ from pyeidors.inverse.workflows import difference as difference_workflow
 def _stub_system(*, initialized: bool = True):
     baseline = SimpleNamespace(elem_data=np.array([1.0, 1.1], dtype=float))
     fwd_model = SimpleNamespace(
-        fwd_solve=lambda _img: (SimpleNamespace(meas=np.array([0.7, 0.8], dtype=float)), {"ok": True}),
+        fwd_solve=lambda _img: (
+            SimpleNamespace(meas=np.array([0.7, 0.8], dtype=float)),
+            {"ok": True},
+        ),
     )
     reconstruction = SimpleNamespace(
         diagnostics={"solver": "stub"},
@@ -30,7 +33,9 @@ def _stub_system(*, initialized: bool = True):
     )
 
 
-def test_absolute_workflow_init_guard_and_metadata_merge(monkeypatch: pytest.MonkeyPatch):
+def test_absolute_workflow_init_guard_and_metadata_merge(
+    monkeypatch: pytest.MonkeyPatch,
+):
     with pytest.raises(RuntimeError, match="not initialized"):
         absolute_workflow.perform_absolute_reconstruction(
             _stub_system(initialized=False),
@@ -62,10 +67,14 @@ def test_absolute_workflow_init_guard_and_metadata_merge(monkeypatch: pytest.Mon
     assert result.mode == "absolute"
     assert result.metadata["case"] == "absolute"
     assert result.metadata["solver_diagnostics"]["solver"] == "stub"
-    np.testing.assert_allclose(result.metadata["baseline_used"], np.array([1.0, 1.1], dtype=float))
+    np.testing.assert_allclose(
+        result.metadata["baseline_used"], np.array([1.0, 1.1], dtype=float)
+    )
 
 
-def test_difference_workflow_init_guard_and_metadata_merge(monkeypatch: pytest.MonkeyPatch):
+def test_difference_workflow_init_guard_and_metadata_merge(
+    monkeypatch: pytest.MonkeyPatch,
+):
     with pytest.raises(RuntimeError, match="not initialized"):
         difference_workflow.perform_difference_reconstruction(
             _stub_system(initialized=False),

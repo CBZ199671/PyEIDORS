@@ -24,7 +24,10 @@ def _make_stub_system(*, initialized: bool = True):
     baseline = SimpleNamespace(elem_data=np.array([1.0, 1.5], dtype=float))
     simulated = np.array([0.2, 0.4], dtype=float)
     fwd_model = SimpleNamespace(
-        fwd_solve=lambda _img: (SimpleNamespace(meas=simulated.copy()), {"source": "fallback"}),
+        fwd_solve=lambda _img: (
+            SimpleNamespace(meas=simulated.copy()),
+            {"source": "fallback"},
+        ),
     )
     return SimpleNamespace(
         _is_initialized=initialized,
@@ -63,7 +66,9 @@ def test_sparse_difference_requires_initialized_system():
         )
 
 
-def test_sparse_absolute_uses_factory_fallback_and_metadata(monkeypatch: pytest.MonkeyPatch):
+def test_sparse_absolute_uses_factory_fallback_and_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+):
     output = SolverOutput(
         conductivity=np.array([1.1, 1.2], dtype=float),
         simulated_measurement=None,
@@ -119,7 +124,9 @@ def test_sparse_absolute_uses_factory_fallback_and_metadata(monkeypatch: pytest.
     assert result.metadata["solver"] == "sparse_bayesian"
 
 
-def test_sparse_difference_type_guard_and_projection_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_sparse_difference_type_guard_and_projection_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     eit_system = _make_stub_system()
     measurement_data = SimpleNamespace(meas=np.array([1.4, 1.8], dtype=float))
     reference_data = SimpleNamespace(meas=np.array([1.0, 1.1], dtype=float))
@@ -185,6 +192,8 @@ def test_sparse_difference_type_guard_and_projection_fallback(monkeypatch: pytes
 
     np.testing.assert_allclose(result.measured, np.array([0.4, 0.7], dtype=float))
     np.testing.assert_allclose(result.simulated, np.array([-0.8, -0.7], dtype=float))
-    np.testing.assert_allclose(result.metadata["reference_measured"], reference_data.meas)
+    np.testing.assert_allclose(
+        result.metadata["reference_measured"], reference_data.meas
+    )
     assert result.metadata["solver_meta"] == "difference"
     assert result.metadata["user_meta"] == "diff"

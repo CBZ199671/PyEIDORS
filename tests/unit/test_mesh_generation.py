@@ -6,7 +6,12 @@ import numpy as np
 from dolfinx import mesh as dmesh
 from mpi4py import MPI
 
-from pyeidors.femx import build_eit_mesh, cell_midpoints, mesh_cell_vertices, mesh_coordinates
+from pyeidors.femx import (
+    build_eit_mesh,
+    cell_midpoints,
+    mesh_cell_vertices,
+    mesh_coordinates,
+)
 from tests.utils import run_python
 
 
@@ -49,7 +54,9 @@ def test_build_eit_mesh_from_local_unit_square():
     mesh = dmesh.create_unit_square(MPI.COMM_WORLD, 4, 4)
     tdim = mesh.topology.dim
     fdim = tdim - 1
-    facets = dmesh.locate_entities_boundary(mesh, fdim, lambda x: np.full(x.shape[1], True, dtype=bool))
+    facets = dmesh.locate_entities_boundary(
+        mesh, fdim, lambda x: np.full(x.shape[1], True, dtype=bool)
+    )
     facets = np.asarray(facets, dtype=np.int32)
     tags = np.full(facets.shape, 2, dtype=np.int32)
     order = np.argsort(facets)

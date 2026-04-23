@@ -138,7 +138,7 @@ class _DatasetGeneratorWorker(QObject):
 
             # Extract mesh geometry once
             mesh = system.mesh
-            node_coords = mesh.geometry.x[:, :cfg.mesh_dimension].copy()
+            node_coords = mesh.geometry.x[:, : cfg.mesh_dimension].copy()
             cells_conn = mesh.topology.connectivity(mesh.topology.dim, 0)
             n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
             cell_connectivity = np.array(
@@ -192,20 +192,40 @@ class _DatasetGeneratorWorker(QObject):
                     if int(forward_cfg.mesh_dimension) == 3:
                         radial_scale = max(float(forward_cfg.radius), 1.0e-12)
                         half_height = max(float(forward_cfg.height) * 0.5, 1.0e-12)
-                        cx = rng.uniform(cfg.position_min, cfg.position_max) * radial_scale
-                        cy = rng.uniform(cfg.position_min, cfg.position_max) * radial_scale
-                        cz = float(forward_cfg.z_center) + rng.uniform(
-                            cfg.position_min, cfg.position_max
-                        ) * half_height
+                        cx = (
+                            rng.uniform(cfg.position_min, cfg.position_max)
+                            * radial_scale
+                        )
+                        cy = (
+                            rng.uniform(cfg.position_min, cfg.position_max)
+                            * radial_scale
+                        )
+                        cz = (
+                            float(forward_cfg.z_center)
+                            + rng.uniform(cfg.position_min, cfg.position_max)
+                            * half_height
+                        )
                         sx = rng.uniform(cfg.size_min, cfg.size_max) * radial_scale
-                        sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max) * radial_scale
-                        sz = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max) * half_height
+                        sy = (
+                            sx
+                            if shape == "circle"
+                            else rng.uniform(cfg.size_min, cfg.size_max) * radial_scale
+                        )
+                        sz = (
+                            sx
+                            if shape == "circle"
+                            else rng.uniform(cfg.size_min, cfg.size_max) * half_height
+                        )
                     else:
                         cx = rng.uniform(cfg.position_min, cfg.position_max)
                         cy = rng.uniform(cfg.position_min, cfg.position_max)
                         cz = 0.0
                         sx = rng.uniform(cfg.size_min, cfg.size_max)
-                        sy = sx if shape == "circle" else rng.uniform(cfg.size_min, cfg.size_max)
+                        sy = (
+                            sx
+                            if shape == "circle"
+                            else rng.uniform(cfg.size_min, cfg.size_max)
+                        )
                         sz = sx
                     cond = rng.uniform(cfg.conductivity_min, cfg.conductivity_max)
                     spec = InhomogeneitySpec(
@@ -219,7 +239,9 @@ class _DatasetGeneratorWorker(QObject):
                         conductivity=float(cond),
                     )
                     specs.append(spec)
-                    _paint_shape(sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension)
+                    _paint_shape(
+                        sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension
+                    )
 
                 # Forward solve
                 data = system.forward_solve(sigma)

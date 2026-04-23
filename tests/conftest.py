@@ -132,11 +132,15 @@ def eit_mesh(gmsh_mesh_artifacts):
     t[right] = 2.0 + (1.0 - y[right])
     t[bottom] = 3.0 + (1.0 - x[bottom])
     seg_len = 4.0 / 16
-    tags = (np.floor(np.clip(t, 0.0, 4.0 - eps) / seg_len).astype(np.int32) + 2).astype(np.int32)
+    tags = (np.floor(np.clip(t, 0.0, 4.0 - eps) / seg_len).astype(np.int32) + 2).astype(
+        np.int32
+    )
     order = np.argsort(boundary_facets)
     facet_tags = dmesh.meshtags(mesh, fdim, boundary_facets[order], tags[order])
     association = {f"electrode_{idx + 1}": idx + 2 for idx in range(16)}
-    return build_eit_mesh(mesh, facet_tags=facet_tags, association_table=association, radius=1.0)
+    return build_eit_mesh(
+        mesh, facet_tags=facet_tags, association_table=association, radius=1.0
+    )
 
 
 @pytest.fixture(scope="session")

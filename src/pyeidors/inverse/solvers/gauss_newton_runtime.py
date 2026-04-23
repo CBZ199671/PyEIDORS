@@ -1197,9 +1197,9 @@ def _solve_linear_system_fast(
         )
         return np.asarray(u - correction, dtype=np.float64)
 
-    def _build_cholmod_preconditioner_from_R() -> (
-        tuple[LinearOperator | None, str | None]
-    ):
+    def _build_cholmod_preconditioner_from_R() -> tuple[
+        LinearOperator | None, str | None
+    ]:
         if cholmod_cholesky is None:
             return None, "cholmod_unavailable"
 
@@ -2206,14 +2206,18 @@ def _scale_jacobian_action(jacobian, scale: float):
         shape = _jv_jtr_action_shape(jacobian)
         return LinearOperator(
             shape,
-            matvec=lambda x: scale
-            * np.asarray(
-                jacobian.Jv(np.asarray(x, dtype=np.float64)), dtype=np.float64
+            matvec=lambda x: (
+                scale
+                * np.asarray(
+                    jacobian.Jv(np.asarray(x, dtype=np.float64)), dtype=np.float64
+                )
             ),
-            rmatvec=lambda x: scale
-            * np.asarray(
-                jacobian.JTr(np.asarray(x, dtype=np.float64)),
-                dtype=np.float64,
+            rmatvec=lambda x: (
+                scale
+                * np.asarray(
+                    jacobian.JTr(np.asarray(x, dtype=np.float64)),
+                    dtype=np.float64,
+                )
             ),
             dtype=np.float64,
         )

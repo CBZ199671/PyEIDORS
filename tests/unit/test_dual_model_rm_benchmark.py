@@ -23,7 +23,9 @@ def test_dual_model_rm_benchmark_writes_t36_report(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
-    module = _load_script_module("scripts", "benchmarks", "benchmark_dual_model_rm_v1.py")
+    module = _load_script_module(
+        "scripts", "benchmarks", "benchmark_dual_model_rm_v1.py"
+    )
     out_dir = tmp_path / "bench"
     forward_ref = tmp_path / "forward.json"
     lazy_ref = tmp_path / "lazy.json"

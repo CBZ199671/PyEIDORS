@@ -93,7 +93,9 @@ def _normalize_existing_directory(path: str | Path) -> str:
     raw = str(path).strip()
     if not raw:
         return ""
-    normalized = Path(to_windows_path(raw) if running_on_windows() else to_posix_path(raw))
+    normalized = Path(
+        to_windows_path(raw) if running_on_windows() else to_posix_path(raw)
+    )
     if normalized.exists():
         return str(normalized if normalized.is_dir() else normalized.parent)
     return ""
@@ -187,7 +189,9 @@ def _save_dialog_geometry(dialog: QFileDialog) -> None:
 def _existing_sidebar_urls(initial_path: str = "") -> list[QUrl]:
     urls: list[QUrl] = []
     sidebar_paths = _dedupe_existing_directories(
-        [root for _label, root in visual_path_roots()] + _recent_directories() + [initial_path]
+        [root for _label, root in visual_path_roots()]
+        + _recent_directories()
+        + [initial_path]
     )
     for root in sidebar_paths:
         urls.append(QUrl.fromLocalFile(str(root)))
@@ -219,8 +223,12 @@ def _configure_dialog_appearance(dialog: QFileDialog) -> None:
     dialog.setViewMode(QFileDialog.ViewMode.Detail)
     dialog.setIconProvider(QFileIconProvider())
     dialog.setLabelText(QFileDialog.DialogLabel.LookIn, t("path_picker.label.look_in"))
-    dialog.setLabelText(QFileDialog.DialogLabel.FileName, t("path_picker.label.file_name"))
-    dialog.setLabelText(QFileDialog.DialogLabel.FileType, t("path_picker.label.file_type"))
+    dialog.setLabelText(
+        QFileDialog.DialogLabel.FileName, t("path_picker.label.file_name")
+    )
+    dialog.setLabelText(
+        QFileDialog.DialogLabel.FileType, t("path_picker.label.file_type")
+    )
     dialog.setLabelText(QFileDialog.DialogLabel.Accept, t("path_picker.label.accept"))
     dialog.setLabelText(QFileDialog.DialogLabel.Reject, t("path_picker.label.reject"))
     # Pick the palette at dialog-open time rather than subscribing
@@ -232,17 +240,17 @@ def _configure_dialog_appearance(dialog: QFileDialog) -> None:
     # button min sizes) which QFileDialog paints via its own sub-
     # stylesheet override.
     if current_theme_mode() == "dark":
-        dialog_bg    = "#1a1f26"
-        view_bg      = "#222831"
-        view_border  = "#3e4754"
-        sel_bg       = "#1e4870"
-        sel_fg       = "#ecf4fb"
+        dialog_bg = "#1a1f26"
+        view_bg = "#222831"
+        view_border = "#3e4754"
+        sel_bg = "#1e4870"
+        sel_fg = "#ecf4fb"
     else:
-        dialog_bg    = "#f5f8fc"
-        view_bg      = "#ffffff"
-        view_border  = "#d5e0ee"
-        sel_bg       = "#dbe9fb"
-        sel_fg       = "#22364f"
+        dialog_bg = "#f5f8fc"
+        view_bg = "#ffffff"
+        view_border = "#d5e0ee"
+        sel_bg = "#dbe9fb"
+        sel_fg = "#22364f"
     dialog.setStyleSheet(
         f"""
         QFileDialog {{

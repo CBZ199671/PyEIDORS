@@ -55,7 +55,9 @@ def test_process_store_clear_max_prefers_high_score_entries():
 
 
 def test_disk_store_clear_max_prefers_high_score_entries(tmp_path: Path):
-    store = DiskCacheStore(tmp_path / "cache", max_bytes=10 * 1024 * 1024, compress_payloads=False)
+    store = DiskCacheStore(
+        tmp_path / "cache", max_bytes=10 * 1024 * 1024, compress_payloads=False
+    )
     payload = np.ones(1024, dtype=np.float64)
 
     store.put(
@@ -96,4 +98,3 @@ def test_disk_store_clear_max_prefers_high_score_entries(tmp_path: Path):
     entries = store.list_entries()
     keys = {item["key"] for item in entries}
     assert "high-effort" in keys
-

@@ -72,19 +72,25 @@ def _resolve_electrode_length_override(
 ) -> float:
     if explicit_length:
         return max(
-            _coerce_scalar_float(source.get("electrode_length_m_override"), math.pi / 16.0),
+            _coerce_scalar_float(
+                source.get("electrode_length_m_override"), math.pi / 16.0
+            ),
             1e-9,
         )
 
     coverage = max(
         _coerce_scalar_float(
             source.get("electrode_coverage"),
-            0.5 if explicit_coverage else DEFAULT_MEASUREMENT_LAYOUT["electrode_coverage"],
+            0.5
+            if explicit_coverage
+            else DEFAULT_MEASUREMENT_LAYOUT["electrode_coverage"],
         ),
         1e-6,
     )
     radius = max(_coerce_scalar_float(source.get("radius"), 1.0), 1e-9)
-    geometry_scale_to_m = max(_coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9)
+    geometry_scale_to_m = max(
+        _coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9
+    )
     circumference_m = 2.0 * math.pi * radius * geometry_scale_to_m
     return max(circumference_m * coverage / max(int(n_elec), 1), 1e-9)
 
@@ -99,7 +105,9 @@ def _resolve_electrode_coverage(
 ) -> float:
     if explicit_length:
         radius = max(_coerce_scalar_float(source.get("radius"), 1.0), 1e-9)
-        geometry_scale_to_m = max(_coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9)
+        geometry_scale_to_m = max(
+            _coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9
+        )
         pitch_m = 2.0 * math.pi * radius * geometry_scale_to_m / max(int(n_elec), 1)
         if pitch_m <= 0.0:
             return 0.5
@@ -107,10 +115,14 @@ def _resolve_electrode_coverage(
         return min(max(coverage, 1e-6), 1.0)
 
     if explicit_coverage:
-        return min(max(_coerce_scalar_float(source["electrode_coverage"], 0.5), 1e-6), 1.0)
+        return min(
+            max(_coerce_scalar_float(source["electrode_coverage"], 0.5), 1e-6), 1.0
+        )
 
     radius = max(_coerce_scalar_float(source.get("radius"), 1.0), 1e-9)
-    geometry_scale_to_m = max(_coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9)
+    geometry_scale_to_m = max(
+        _coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0), 1e-9
+    )
     pitch_m = 2.0 * math.pi * radius * geometry_scale_to_m / max(int(n_elec), 1)
     if pitch_m <= 0.0:
         return 0.5
@@ -137,11 +149,12 @@ def estimate_measurement_point_count(
 ) -> int:
     """Estimate boundary-voltage sample count for the configured pattern layout."""
     total_electrodes = max(int(n_electrodes), 1) * max(int(n_rings), 1)
-    protocol = str(measurement_protocol or "eidors_full_3d").strip().lower().replace("-", "_")
+    protocol = (
+        str(measurement_protocol or "eidors_full_3d").strip().lower().replace("-", "_")
+    )
     if (
         protocol in {"eidors_full_3d", "full_3d", "true_3d"}
-        and
-        _is_adjacent_pattern(stim_pattern)
+        and _is_adjacent_pattern(stim_pattern)
         and _is_adjacent_pattern(meas_pattern)
         and not bool(use_meas_current)
     ):
@@ -179,7 +192,9 @@ def estimate_measurement_point_count(
         return max(total_electrodes * max(total_electrodes - excluded, 1), 1)
 
 
-def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> dict[str, Any]:
+def measurement_layout_from_config(
+    config: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
     """Normalize measurement-layout keys and derive the expected point count.
 
     The hardware path still defaults to the current 16-electrode adjacent layout,
@@ -209,11 +224,12 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
         _coerce_scalar_float(source.get("geometry_scale_to_m"), 1.0),
         1e-9,
     )
-    explicit_length = (
-        "electrode_length_m_override" in raw
-        and raw["electrode_length_m_override"] not in (None, "")
-    )
-    explicit_coverage = "electrode_coverage" in raw and raw["electrode_coverage"] not in (None, "")
+    explicit_length = "electrode_length_m_override" in raw and raw[
+        "electrode_length_m_override"
+    ] not in (None, "")
+    explicit_coverage = "electrode_coverage" in raw and raw[
+        "electrode_coverage"
+    ] not in (None, "")
     electrode_length_m_override = _resolve_electrode_length_override(
         source,
         n_elec=electrodes_per_circumference,
@@ -233,7 +249,9 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
         "stim_pattern": source.get("stim_pattern", "{ad}"),
         "meas_pattern": source.get("meas_pattern", "{ad}"),
         "electrode_layout": str(source.get("electrode_layout", "ring_major")),
-        "measurement_protocol": str(source.get("measurement_protocol", "eidors_full_3d")),
+        "measurement_protocol": str(
+            source.get("measurement_protocol", "eidors_full_3d")
+        ),
         "custom_pattern_json": str(source.get("custom_pattern_json", "")),
         "custom_stim_matrix": source.get("custom_stim_matrix"),
         "custom_meas_matrices": source.get("custom_meas_matrices"),
@@ -247,7 +265,9 @@ def measurement_layout_from_config(config: Mapping[str, Any] | None = None) -> d
         "geometry_scale_to_m": geometry_scale_to_m,
         "electrode_length_m_override": electrode_length_m_override,
         "electrode_coverage": electrode_coverage,
-        "contact_impedance": max(_coerce_scalar_float(source.get("contact_impedance"), 0.01), 0.0),
+        "contact_impedance": max(
+            _coerce_scalar_float(source.get("contact_impedance"), 0.01), 0.0
+        ),
     }
     explicit_points = int(raw.get("points_per_frame_override", 0) or 0)
     custom_payload = _parse_custom_pattern_payload(layout["custom_pattern_json"])

@@ -119,28 +119,36 @@ def _normalize_choice(
     resolved = str(value or default).strip().lower()
     if resolved not in valid:
         options = ", ".join(f"'{v}'" for v in sorted(valid))
-        raise ValueError(f"Unsupported {param_name}={value!r}. Expected one of: {options}.")
+        raise ValueError(
+            f"Unsupported {param_name}={value!r}. Expected one of: {options}."
+        )
     return resolved
 
 
 def _normalize_difference_preset(name: str | None) -> str:
     return _normalize_choice(
-        name, default=DEFAULT_DIFFERENCE_PRESET,
-        valid=_VALID_DIFFERENCE_PRESETS, param_name="difference_preset",
+        name,
+        default=DEFAULT_DIFFERENCE_PRESET,
+        valid=_VALID_DIFFERENCE_PRESETS,
+        param_name="difference_preset",
     )
 
 
 def _normalize_absolute_preset(name: str | None) -> str:
     return _normalize_choice(
-        name, default=DEFAULT_ABSOLUTE_PRESET,
-        valid=_VALID_ABSOLUTE_PRESETS, param_name="absolute_preset",
+        name,
+        default=DEFAULT_ABSOLUTE_PRESET,
+        valid=_VALID_ABSOLUTE_PRESETS,
+        param_name="absolute_preset",
     )
 
 
 def _normalize_difference_step_size_mode(mode: str | None) -> str:
     return _normalize_choice(
-        mode, default="off",
-        valid=_VALID_DIFFERENCE_STEP_SIZE_MODES, param_name="difference_step_size_mode",
+        mode,
+        default="off",
+        valid=_VALID_DIFFERENCE_STEP_SIZE_MODES,
+        param_name="difference_step_size_mode",
     )
 
 
@@ -149,19 +157,25 @@ def _normalize_best_homog_mode(mode: str | None) -> str:
     if resolved == "on":
         return "optimize"
     return _normalize_choice(
-        resolved, default="off",
-        valid=_VALID_BEST_HOMOG_MODES, param_name="best_homog_mode",
+        resolved,
+        default="off",
+        valid=_VALID_BEST_HOMOG_MODES,
+        param_name="best_homog_mode",
     )
 
 
-def _normalize_bounds(bounds: tuple[float, float] | list[float] | None) -> tuple[float, float]:
+def _normalize_bounds(
+    bounds: tuple[float, float] | list[float] | None,
+) -> tuple[float, float]:
     if bounds is None:
         return (0.0, 4.0)
     if len(bounds) != 2:
         raise ValueError("difference_step_size_bounds must contain exactly two values.")
     lower, upper = float(bounds[0]), float(bounds[1])
     if not np.isfinite(lower) or not np.isfinite(upper) or upper <= lower:
-        raise ValueError("difference_step_size_bounds must satisfy finite lower < upper.")
+        raise ValueError(
+            "difference_step_size_bounds must satisfy finite lower < upper."
+        )
     return (lower, upper)
 
 
@@ -238,7 +252,8 @@ class EITSystem(CoreSystemFacadeMixin):
         cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
         jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
         jacobian_block_size: int = DEFAULT_JACOBIAN_BLOCK_SIZE,
-        jacobian_block_candidates: tuple[int, ...] | list[int] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+        jacobian_block_candidates: tuple[int, ...]
+        | list[int] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
         cache_scope: CacheScope = "both",
         cache_dir: str = ".pyeidors_cache/v2",
         cache_lifecycle: str | None = None,
@@ -284,14 +299,20 @@ class EITSystem(CoreSystemFacadeMixin):
         self.noser_exponent = float(noser_exponent)
         self.noser_floor = float(noser_floor)
         self._difference_step_size_mode_explicit = difference_step_size_mode is not None
-        self.difference_step_size_mode = _normalize_difference_step_size_mode(difference_step_size_mode)
+        self.difference_step_size_mode = _normalize_difference_step_size_mode(
+            difference_step_size_mode
+        )
         self.difference_step_size_value = (
             None
             if difference_step_size_value is None
             else float(difference_step_size_value)
         )
-        self.difference_step_size_bounds = _normalize_bounds(difference_step_size_bounds)
-        self.difference_step_size_fmin_options = dict(difference_step_size_fmin_options or {})
+        self.difference_step_size_bounds = _normalize_bounds(
+            difference_step_size_bounds
+        )
+        self.difference_step_size_fmin_options = dict(
+            difference_step_size_fmin_options or {}
+        )
         self.difference_preset = _normalize_difference_preset(difference_preset)
         self.absolute_preset = _normalize_absolute_preset(absolute_preset)
         self._best_homog_mode_explicit = best_homog_mode is not None
@@ -305,18 +326,24 @@ class EITSystem(CoreSystemFacadeMixin):
             mesh_family,
             default=DEFAULT_MESH_FAMILY,
         )
-        self.petsc_device = normalize_petsc_device(petsc_device, default=DEFAULT_PETSC_DEVICE)
+        self.petsc_device = normalize_petsc_device(
+            petsc_device, default=DEFAULT_PETSC_DEVICE
+        )
         self.device = normalize_runtime_device(device, default="auto")
         self.acceleration_profile = _normalize_choice(
-            normalize_acceleration_profile(acceleration_profile, default=DEFAULT_ACCELERATION_PROFILE),
+            normalize_acceleration_profile(
+                acceleration_profile, default=DEFAULT_ACCELERATION_PROFILE
+            ),
             default=DEFAULT_ACCELERATION_PROFILE,
             valid=set(ACCELERATION_PROFILE_VALUES),
             param_name="acceleration_profile",
         )
         self.linear_backend_config = dict(linear_backend_config or {})
         self.performance_mode = _normalize_choice(
-            performance_mode, default="aggressive",
-            valid={"safe", "aggressive"}, param_name="performance_mode",
+            performance_mode,
+            default="aggressive",
+            valid={"safe", "aggressive"},
+            param_name="performance_mode",
         )
         self.solver_mode = str(solver_mode).strip().lower()
         self.linear_solver = str(linear_solver).strip().lower()
@@ -343,8 +370,10 @@ class EITSystem(CoreSystemFacadeMixin):
         self.cholmod_max_n = int(max(1, cholmod_max_n))
         self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
         self.jacobian_block_tune = _normalize_choice(
-            jacobian_block_tune, default="auto",
-            valid={"auto", "off"}, param_name="jacobian_block_tune",
+            jacobian_block_tune,
+            default="auto",
+            valid={"auto", "off"},
+            param_name="jacobian_block_tune",
         )
         self.jacobian_block_size = int(max(0, jacobian_block_size))
         self.jacobian_block_candidates = tuple(
@@ -414,15 +443,17 @@ class EITSystem(CoreSystemFacadeMixin):
             self.setup_with_mesh(mesh)
             return
         if mesh_source == "cache":
-            resolved_gdim = int(gdim if gdim is not None
-                                else dimension if dimension is not None
-                                else 2)
-            self.setup_from_cache(mesh_dir=mesh_dir, mesh_name=mesh_name, gdim=resolved_gdim)
+            resolved_gdim = int(
+                gdim if gdim is not None else dimension if dimension is not None else 2
+            )
+            self.setup_from_cache(
+                mesh_dir=mesh_dir, mesh_name=mesh_name, gdim=resolved_gdim
+            )
             return
         if mesh_source == "generated":
-            resolved_dim = int(dimension if dimension is not None
-                               else gdim if gdim is not None
-                               else 2)
+            resolved_dim = int(
+                dimension if dimension is not None else gdim if gdim is not None else 2
+            )
             self.setup_generated_mesh(
                 radius=radius,
                 mesh_size=mesh_size,
@@ -461,8 +492,15 @@ class EITSystem(CoreSystemFacadeMixin):
         gdim: int = 2,
     ) -> None:
         loader = MeshLoader(mesh_dir=mesh_dir, gdim=gdim)
-        selected = loader.load_mesh(mesh_name) if mesh_name else loader.get_default_mesh()
-        logger.info("Loaded cached mesh from %s (mesh_name=%s, gdim=%d)", mesh_dir, mesh_name, gdim)
+        selected = (
+            loader.load_mesh(mesh_name) if mesh_name else loader.get_default_mesh()
+        )
+        logger.info(
+            "Loaded cached mesh from %s (mesh_name=%s, gdim=%d)",
+            mesh_dir,
+            mesh_name,
+            gdim,
+        )
         self.setup_with_mesh(selected)
 
     def setup_generated_mesh(
@@ -483,7 +521,9 @@ class EITSystem(CoreSystemFacadeMixin):
             raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
 
         resolved_radius = self.mesh_config.radius if radius is None else float(radius)
-        resolved_mesh_size = self.mesh_config.mesh_size if mesh_size is None else float(mesh_size)
+        resolved_mesh_size = (
+            self.mesh_config.mesh_size if mesh_size is None else float(mesh_size)
+        )
         if int(dimension) == 2:
             generated = create_simple_eit_mesh(
                 n_elec=self.n_elec,
@@ -491,7 +531,9 @@ class EITSystem(CoreSystemFacadeMixin):
                 mesh_size=resolved_mesh_size,
             )
         else:
-            resolved_height = self.mesh_config.height if height is None else float(height)
+            resolved_height = (
+                self.mesh_config.height if height is None else float(height)
+            )
             resolved_ratio = (
                 self.mesh_config.electrode_height_ratio
                 if electrode_height_ratio is None
@@ -502,15 +544,19 @@ class EITSystem(CoreSystemFacadeMixin):
                 if electrode_level_fractions is None
                 else tuple(float(v) for v in electrode_level_fractions)
             )
-            resolved_z = self.mesh_config.z_center if z_center is None else float(z_center)
+            resolved_z = (
+                self.mesh_config.z_center if z_center is None else float(z_center)
+            )
             resolved_electrode_layout = (
                 self.mesh_config.electrode_layout
                 if electrode_layout is None
                 else str(electrode_layout)
             )
-            resolved_mesh_family, resolved_geometry_version = self._resolve_generated_3d_mesh_preferences(
-                mesh_family=mesh_family,
-                geometry_version=geometry_version,
+            resolved_mesh_family, resolved_geometry_version = (
+                self._resolve_generated_3d_mesh_preferences(
+                    mesh_family=mesh_family,
+                    geometry_version=geometry_version,
+                )
             )
             resolved_refinement = max(
                 2,
@@ -543,10 +589,17 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_family: str | None,
         geometry_version: str | None,
     ) -> tuple[str, str]:
-        requested_profile = getattr(self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
-        requested_forward_backend = getattr(self, "forward_backend", DEFAULT_FORWARD_BACKEND)
+        requested_profile = getattr(
+            self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE
+        )
+        requested_forward_backend = getattr(
+            self, "forward_backend", DEFAULT_FORWARD_BACKEND
+        )
         wants_easy_gpu = prefers_3d_gpu_pipeline(requested_profile)
-        wants_structured_mesh = wants_easy_gpu or requested_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        wants_structured_mesh = (
+            wants_easy_gpu
+            or requested_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        )
         if wants_structured_mesh and mesh_family is None:
             resolved_mesh_family = MESH_FAMILY_HEX
         else:
@@ -569,10 +622,18 @@ class EITSystem(CoreSystemFacadeMixin):
             return False
         return bool(
             int(self.mesh.topology.dim) == 3
-            and str(getattr(self.mesh, "mesh_family", "")).strip().lower() == MESH_FAMILY_HEX
-            and str(getattr(self.mesh, "geometry_version", "")).strip().lower() == DEFAULT_3D_GEOMETRY_VERSION
-            and str(getattr(self.mesh, "generator_revision", "")).strip().lower().startswith("g3d3")
-            and str(getattr(self.mesh, "mesh_file", "")).strip().lower().endswith(".msh")
+            and str(getattr(self.mesh, "mesh_family", "")).strip().lower()
+            == MESH_FAMILY_HEX
+            and str(getattr(self.mesh, "geometry_version", "")).strip().lower()
+            == DEFAULT_3D_GEOMETRY_VERSION
+            and str(getattr(self.mesh, "generator_revision", ""))
+            .strip()
+            .lower()
+            .startswith("g3d3")
+            and str(getattr(self.mesh, "mesh_file", ""))
+            .strip()
+            .lower()
+            .endswith(".msh")
         )
 
     def _resolve_runtime_policy(self) -> dict[str, Any]:
@@ -581,8 +642,12 @@ class EITSystem(CoreSystemFacadeMixin):
 
         mesh_dim = int(self.mesh.topology.dim)
         structured_supported = self._supports_cuda_structured_backend()
-        requested_profile = getattr(self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
-        requested_forward_backend = getattr(self, "forward_backend", DEFAULT_FORWARD_BACKEND)
+        requested_profile = getattr(
+            self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE
+        )
+        requested_forward_backend = getattr(
+            self, "forward_backend", DEFAULT_FORWARD_BACKEND
+        )
         requested_petsc_device = getattr(self, "petsc_device", DEFAULT_PETSC_DEVICE)
         requested_device = getattr(self, "device", "auto")
         requested_solver_mode = getattr(self, "solver_mode", "strict")
@@ -659,7 +724,11 @@ class EITSystem(CoreSystemFacadeMixin):
             solver_preset=solver_policy["forward_solver_preset_effective"],
         )
 
-        effective_profile = requested_profile if easy_gpu_profile and mesh_dim == 3 else DEFAULT_ACCELERATION_PROFILE
+        effective_profile = (
+            requested_profile
+            if easy_gpu_profile and mesh_dim == 3
+            else DEFAULT_ACCELERATION_PROFILE
+        )
         return {
             "mesh_dim": mesh_dim,
             "acceleration_profile_requested": requested_profile,
@@ -691,7 +760,9 @@ class EITSystem(CoreSystemFacadeMixin):
         runtime_policy = self._resolve_runtime_policy()
         self._resolved_runtime_policy = dict(runtime_policy)
         resolved_backend_config = dict(self.linear_backend_config)
-        resolved_backend_config["petsc_device"] = runtime_policy["petsc_device_effective"]
+        resolved_backend_config["petsc_device"] = runtime_policy[
+            "petsc_device_effective"
+        ]
         resolved_backend_config["solver_preset"] = runtime_policy[
             "forward_solver_preset_effective"
         ]
@@ -767,7 +838,9 @@ class EITSystem(CoreSystemFacadeMixin):
         self._last_reconstructor_controls = self._capture_reconstructor_controls()
         self._is_initialized = True
 
-    def _build_regularization(self, jacobian_calculator, *, regularization_type: Optional[str] = None):
+    def _build_regularization(
+        self, jacobian_calculator, *, regularization_type: Optional[str] = None
+    ):
         resolved_type = (regularization_type or self.regularization_type).lower()
         if resolved_type == "noser":
             return NOSERRegularization(
@@ -779,9 +852,13 @@ class EITSystem(CoreSystemFacadeMixin):
                 floor=self.noser_floor,
             )
         if resolved_type == "tikhonov":
-            return TikhonovRegularization(self.fwd_model, alpha=self.regularization_alpha)
+            return TikhonovRegularization(
+                self.fwd_model, alpha=self.regularization_alpha
+            )
         if resolved_type == "smoothness":
-            return SmoothnessRegularization(self.fwd_model, alpha=self.regularization_alpha)
+            return SmoothnessRegularization(
+                self.fwd_model, alpha=self.regularization_alpha
+            )
         if resolved_type == "tv":
             return TotalVariationRegularization(
                 self.fwd_model,
@@ -840,7 +917,9 @@ class EITSystem(CoreSystemFacadeMixin):
                 ),
                 "difference_step_size_value": self.difference_step_size_value,
                 "difference_step_size_bounds": self.difference_step_size_bounds,
-                "difference_step_size_fmin_options": dict(self.difference_step_size_fmin_options),
+                "difference_step_size_fmin_options": dict(
+                    self.difference_step_size_fmin_options
+                ),
                 "best_homog_mode": self.best_homog_mode,
                 "min_step": 0.0,
                 "max_step": 1.0,
@@ -869,7 +948,9 @@ class EITSystem(CoreSystemFacadeMixin):
             "difference_step_size_mode": "off",
             "difference_step_size_value": self.difference_step_size_value,
             "difference_step_size_bounds": self.difference_step_size_bounds,
-            "difference_step_size_fmin_options": dict(self.difference_step_size_fmin_options),
+            "difference_step_size_fmin_options": dict(
+                self.difference_step_size_fmin_options
+            ),
             "best_homog_mode": (
                 self.best_homog_mode if self._best_homog_mode_explicit else "optimize"
             ),
@@ -882,7 +963,9 @@ class EITSystem(CoreSystemFacadeMixin):
             raise RuntimeError("Reconstructor is not initialized.")
 
         config = self._preset_config(inverse_mode)
-        regularization_type = str(config.pop("regularization_type", self.regularization_type)).lower()
+        regularization_type = str(
+            config.pop("regularization_type", self.regularization_type)
+        ).lower()
         if regularization_type != self.regularization_type or not isinstance(
             self.reconstructor.regularization,
             {
@@ -909,14 +992,20 @@ class EITSystem(CoreSystemFacadeMixin):
                 setattr(self.reconstructor, field, value)
                 self._last_reconstructor_controls[field] = value
 
-        self.reconstructor.jacobian_background_conductivity = self.jacobian_background_conductivity
+        self.reconstructor.jacobian_background_conductivity = (
+            self.jacobian_background_conductivity
+        )
         self.reconstructor.difference_preset = self.difference_preset
         self.reconstructor.absolute_preset = self.absolute_preset
         self.reconstructor.active_preset_name = str(config["preset_name"])
         self._active_inverse_preset_name = str(config["preset_name"])
 
     def _require_initialized(self) -> None:
-        if not self._is_initialized or self.fwd_model is None or self.reconstructor is None:
+        if (
+            not self._is_initialized
+            or self.fwd_model is None
+            or self.reconstructor is None
+        ):
             raise RuntimeError("System not initialized. Please call setup(...) first.")
 
     def forward_solve(self, conductivity: np.ndarray | EITImage | Any) -> EITData:

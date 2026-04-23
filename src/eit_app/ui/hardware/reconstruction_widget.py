@@ -134,9 +134,7 @@ class ReconstructionWidget(QWidget):
         self._plot_widget.setBackground(self._plot_bg)
         # Re-pen the static scene items so they match the new palette.
         self._boundary_item.setPen(pg.mkPen(self._domain_border, width=2.0))
-        self._electrode_arc_item.setPen(
-            pg.mkPen(self._electrode_border, width=4.0)
-        )
+        self._electrode_arc_item.setPen(pg.mkPen(self._electrode_border, width=4.0))
         # Refresh title HTML (uses _label_color) and electrode label
         # text colors via the standard retranslate / scene rebuild.
         self._retranslate()
@@ -219,7 +217,9 @@ class ReconstructionWidget(QWidget):
         self._image_item.setRect(self._grid_rect)
         self._empty_overlay.hide()
 
-    def configure_layout(self, *, n_elec: int, radius: float = 1.0, electrode_coverage: float = 0.5) -> None:
+    def configure_layout(
+        self, *, n_elec: int, radius: float = 1.0, electrode_coverage: float = 0.5
+    ) -> None:
         """Pre-render the static domain, electrodes, and labels before the first frame."""
         self._prepare_domain_outline(
             center=(0.0, 0.0),
@@ -247,7 +247,7 @@ class ReconstructionWidget(QWidget):
     def _retranslate(self) -> None:
         """Rebuild the plot title HTML and reset the empty-state overlay."""
         self._plot_item_ref.setTitle(
-            f"<span style=\"color:{self._label_color};"
+            f'<span style="color:{self._label_color};'
             f"font-family:'{self._font_family}';font-size:14pt;\">"
             f"{t('hw.reconstruction.title')}"
             "</span>"
@@ -387,9 +387,13 @@ class ReconstructionWidget(QWidget):
         self._grid_weights = weights
         self._grid_valid_mask = valid_mask
         self._grid_shape = grid_x.shape
-        self._grid_rect = QRectF(float(xmin), float(ymax), float(xmax - xmin), float(ymin - ymax))
+        self._grid_rect = QRectF(
+            float(xmin), float(ymax), float(xmax - xmin), float(ymin - ymax)
+        )
 
-    def _to_node_values(self, sigma: np.ndarray, cells: np.ndarray, n_nodes: int) -> np.ndarray:
+    def _to_node_values(
+        self, sigma: np.ndarray, cells: np.ndarray, n_nodes: int
+    ) -> np.ndarray:
         if sigma.size == n_nodes:
             return sigma
         if sigma.size != len(cells):

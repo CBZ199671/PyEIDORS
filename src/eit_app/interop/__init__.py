@@ -1,6 +1,10 @@
 """Public interop services for the EIDORS <-> PyEIDORS workflow."""
 
-from .bridge_package import LoadedBridgePackage, load_bridge_package, save_bridge_package
+from .bridge_package import (
+    LoadedBridgePackage,
+    load_bridge_package,
+    save_bridge_package,
+)
 from .environment import EidorsEnvironmentDetector, InteropSettingsStore
 from .models import (
     BRIDGE_PACKAGE_FORMAT_V2,

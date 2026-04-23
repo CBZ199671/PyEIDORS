@@ -50,17 +50,27 @@ class _FrameTableModel(QAbstractTableModel):
         return len(self._COLUMN_KEYS)
 
     def headerData(
-        self, section: int, orientation: Qt.Orientation, role: int = Qt.ItemDataRole.DisplayRole
+        self,
+        section: int,
+        orientation: Qt.Orientation,
+        role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+        ):
             return t(self._COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role: int = Qt.ItemDataRole.DisplayRole) -> Any:
         if not index.isValid():
             return None
-        if role == Qt.ItemDataRole.BackgroundRole and index.row() == self._reference_row:
+        if (
+            role == Qt.ItemDataRole.BackgroundRole
+            and index.row() == self._reference_row
+        ):
             from PySide6.QtGui import QColor
+
             return QColor("#d9e8f7")
         if role != Qt.ItemDataRole.DisplayRole:
             return None
@@ -71,7 +81,9 @@ class _FrameTableModel(QAbstractTableModel):
         if col == 1:
             ts = entry.get("timestamp", 0.0)
             if isinstance(ts, (int, float)) and ts > 0:
-                return datetime.fromtimestamp(ts, tz=timezone.utc).strftime("%H:%M:%S.%f")[:-3]
+                return datetime.fromtimestamp(ts, tz=timezone.utc).strftime(
+                    "%H:%M:%S.%f"
+                )[:-3]
             return str(ts)
         if col == 2:
             return entry.get("file_path", "")
@@ -183,7 +195,9 @@ class FrameBrowserWidget(QGroupBox):
         layout.addLayout(btn_grid)
         self._update_action_state()
 
-    def add_frame_entry(self, frame_index: int, timestamp: float, file_path: str) -> None:
+    def add_frame_entry(
+        self, frame_index: int, timestamp: float, file_path: str
+    ) -> None:
         """Add a recorded frame to the browser."""
         self._model.add_entry(
             {"frame_index": frame_index, "timestamp": timestamp, "file_path": file_path}

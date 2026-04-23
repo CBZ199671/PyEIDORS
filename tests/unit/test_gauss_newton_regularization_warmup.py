@@ -32,7 +32,9 @@ def test_ensure_regularization_ready_is_idempotent(eit_system, monkeypatch):
         calls.count += 1
         return np.eye(n_elem, dtype=float)
 
-    monkeypatch.setattr(rec.regularization, "get_regularization_matrix", _fake_regularization_matrix)
+    monkeypatch.setattr(
+        rec.regularization, "get_regularization_matrix", _fake_regularization_matrix
+    )
     rec.R_torch = None
 
     rec.ensure_regularization_ready()
@@ -53,7 +55,9 @@ def test_ensure_regularization_ready_rejects_non_finite(eit_system, monkeypatch)
         matrix[0, 0] = np.nan
         return matrix
 
-    monkeypatch.setattr(rec.regularization, "get_regularization_matrix", _non_finite_matrix)
+    monkeypatch.setattr(
+        rec.regularization, "get_regularization_matrix", _non_finite_matrix
+    )
     rec.R_torch = None
 
     with pytest.raises(FloatingPointError, match="non-finite"):
@@ -83,6 +87,8 @@ def test_inverse_solve_warms_regularization_before_reconstruct(eit_system, monke
     monkeypatch.setattr(rec, "ensure_regularization_ready", _warmup)
     monkeypatch.setattr(rec, "reconstruct", _reconstruct)
 
-    _ = eit_system.inverse_solve(data=target, reference_data=background, initial_guess=None)
+    _ = eit_system.inverse_solve(
+        data=target, reference_data=background, initial_guess=None
+    )
 
     assert calls == ["warmup", "reconstruct"]

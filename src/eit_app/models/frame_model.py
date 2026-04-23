@@ -46,11 +46,13 @@ class FrameData:
             return self.imag.copy()
         if use_part == "mag":
             return np.abs(self.real + 1j * self.imag)
-        raise ValueError(f"Unknown use_part: {use_part!r}. Expected 'real', 'imag', or 'mag'.")
+        raise ValueError(
+            f"Unknown use_part: {use_part!r}. Expected 'real', 'imag', or 'mag'."
+        )
 
     def amplitude(self) -> np.ndarray:
         """Compute calibrated amplitude: 2 * sqrt(R^2 + I^2) * 1.10."""
-        return 2.0 * np.sqrt(self.real ** 2 + self.imag ** 2) * 1.10
+        return 2.0 * np.sqrt(self.real**2 + self.imag**2) * 1.10
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (for YAML sidecar writing)."""

@@ -57,7 +57,9 @@ def compute_pod_basis(
 
     max_rank = int(np.count_nonzero(stable))
     if rank is None or int(rank) <= 0:
-        chosen_rank = _rank_from_energy(singular_values[stable], float(energy), max_rank)
+        chosen_rank = _rank_from_energy(
+            singular_values[stable], float(energy), max_rank
+        )
     else:
         chosen_rank = int(min(int(rank), max_rank))
 

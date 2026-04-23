@@ -36,6 +36,7 @@ class TestRegularizationSignature:
     def test_signature_with_sparse_matrix(self, eit_system):
         _skip_if_no_stack()
         from scipy.sparse import eye
+
         sig = _regularization_signature(eye(10, format="csr"))
         assert isinstance(sig, dict)
         assert sig["kind"] in {"diagonal_sparse", "sparse"}
@@ -49,6 +50,7 @@ class TestRegularizationSignature:
     def test_signature_with_linear_operator(self, eit_system):
         _skip_if_no_stack()
         from scipy.sparse.linalg import LinearOperator
+
         op = LinearOperator((5, 5), matvec=lambda x: x)
         sig = _regularization_signature(op)
         assert isinstance(sig, dict)
@@ -94,7 +96,9 @@ class TestGNRuntimeFastPaths:
             data = EITData(
                 meas=np.random.randn(n_meas) * 0.01 + 1.0,
                 stim_pattern=np.eye(n_meas),
-                n_elec=16, n_stim=16, n_meas=n_meas,
+                n_elec=16,
+                n_stim=16,
+                n_meas=n_meas,
             )
             try:
                 result = eit_system.inverse_solve(data)
@@ -126,7 +130,9 @@ class TestGNRuntimeFastPaths:
             data = EITData(
                 meas=np.random.randn(n_meas) * 0.01 + 1.0,
                 stim_pattern=np.eye(n_meas),
-                n_elec=16, n_stim=16, n_meas=n_meas,
+                n_elec=16,
+                n_stim=16,
+                n_meas=n_meas,
             )
             try:
                 result = eit_system.inverse_solve(data)
@@ -150,12 +156,16 @@ class TestGNRuntimeDifferencePaths:
         ref_data = EITData(
             meas=np.ones(n_meas),
             stim_pattern=np.eye(n_meas),
-            n_elec=16, n_stim=16, n_meas=n_meas,
+            n_elec=16,
+            n_stim=16,
+            n_meas=n_meas,
         )
         target_data = EITData(
             meas=np.ones(n_meas) * 1.1,
             stim_pattern=np.eye(n_meas),
-            n_elec=16, n_stim=16, n_meas=n_meas,
+            n_elec=16,
+            n_stim=16,
+            n_meas=n_meas,
         )
         try:
             result = eit_system.inverse_solve(target_data, reference_data=ref_data)
@@ -179,7 +189,9 @@ class TestGNRuntimeVerboseOutput:
             data = EITData(
                 meas=np.random.randn(n_meas) * 0.01 + 1.0,
                 stim_pattern=np.eye(n_meas),
-                n_elec=16, n_stim=16, n_meas=n_meas,
+                n_elec=16,
+                n_stim=16,
+                n_meas=n_meas,
             )
             try:
                 result = eit_system.inverse_solve(data)

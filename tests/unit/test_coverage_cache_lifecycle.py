@@ -116,13 +116,16 @@ class TestCleanupStaleSessions:
         child.mkdir()
         # Remove after listing to trigger FileNotFoundError on stat
         import shutil
+
         original_iterdir = Path.iterdir
+
         def mock_iterdir(self_path):
             result = list(original_iterdir(self_path))
             # Remove child so stat fails
             if child.exists():
                 shutil.rmtree(child)
             return iter(result)
+
         with mock.patch.object(Path, "iterdir", mock_iterdir):
             removed = cleanup_stale_session_caches(tmp_path, max_age_seconds=0)
         assert removed == 0
@@ -173,7 +176,9 @@ class TestResolveCacheDirectory:
         session_dir.mkdir()
         monkeypatch.setenv("PYEIDORS_CACHE_SESSION_ID", "test-id")
         monkeypatch.setenv("PYEIDORS_CACHE_SESSION_DIR", str(session_dir))
-        monkeypatch.setenv("PYEIDORS_CACHE_REQUESTED_ROOT", str(tmp_path / "nonexistent_root"))
+        monkeypatch.setenv(
+            "PYEIDORS_CACHE_REQUESTED_ROOT", str(tmp_path / "nonexistent_root")
+        )
         monkeypatch.setenv("PYEIDORS_CACHE_OWNER_PID", "")
 
         cache_root = tmp_path / "cache_resolve_test"
@@ -235,7 +240,9 @@ class TestResolveCacheDirectory:
         with _LOCK:
             _REGISTERED_SPECS.pop(key, None)
 
-    def test_relative_shell_session_path_forces_same_root_false(self, tmp_path, monkeypatch):
+    def test_relative_shell_session_path_forces_same_root_false(
+        self, tmp_path, monkeypatch
+    ):
         cache_root = tmp_path / "cache_relative_test"
         cache_root.mkdir()
         relative_session_dir = Path("relative-session")

@@ -90,7 +90,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("docs/benchmarks/reconstruction_cache_paths_session_20260413_140902.json"),
+        default=Path(
+            "docs/benchmarks/reconstruction_cache_paths_session_20260413_140902.json"
+        ),
         help="Output JSON path.",
     )
     return parser.parse_args()
@@ -162,7 +164,9 @@ def _build_metadata(session_meta: dict[str, Any], mesh_dir: Path) -> dict[str, A
     return {
         "difference_mode": "raw",
         "difference_orientation": "target_minus_reference",
-        "n_elec": int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+        "n_elec": int(
+            session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+        ),
         "stim_pattern": session_meta.get("stim_pattern", "{ad}"),
         "meas_pattern": session_meta.get("meas_pattern", "{ad}"),
         "drive_mode": "total_current",
@@ -276,7 +280,9 @@ def _benchmark_gui_default(
         except Exception as exc:  # pragma: no cover
             cache_stats = {"error": str(exc)}
 
-    solver_diag = getattr(last_result, "metadata", {}).get("solver_diagnostics", {}) or {}
+    solver_diag = (
+        getattr(last_result, "metadata", {}).get("solver_diagnostics", {}) or {}
+    )
     return {
         "cold_ms": float(cold_elapsed * 1000.0),
         "warm": _stats(warm_times),
@@ -366,7 +372,9 @@ def _benchmark_direct_gn_variant(
             warm_times.append(elapsed)
             last_result = result
 
-    solver_diag = getattr(last_result, "metadata", {}).get("solver_diagnostics", {}) or {}
+    solver_diag = (
+        getattr(last_result, "metadata", {}).get("solver_diagnostics", {}) or {}
+    )
     return {
         "variant": name,
         "cold_ms": float(cold_elapsed * 1000.0),
@@ -401,7 +409,9 @@ def _benchmark_single_step_paths(
             electrode_height_ratio=0.2,
             z_center=0.0,
             refinement=int(effective_refinement),
-            n_elec=int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+            n_elec=int(
+                session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+            ),
             radius=float(session_meta.get("radius", 1.0)),
             drive_value=1.0e-5,
             contact_impedance=0.01,
@@ -495,9 +505,7 @@ def _benchmark_single_step_paths(
         for _ in range(compute_cycles):
             for target_frame in target_frames:
                 _, elapsed = _time_call(
-                    lambda frame=target_frame: _quiet(
-                        lambda: _solve_delta(frame.real)
-                    )
+                    lambda frame=target_frame: _quiet(lambda: _solve_delta(frame.real))
                 )
                 pure_warm_times.append(elapsed)
 
@@ -509,8 +517,12 @@ def _benchmark_single_step_paths(
                 key: float(value * 1000.0)
                 for key, value in (last_full_result.get("stage_timings") or {}).items()
             },
-            "cache_build_seconds": dict(last_full_result.get("cache_build_seconds") or {}),
-            "cache_miss_reasons": dict(last_full_result.get("cache_miss_reasons") or {}),
+            "cache_build_seconds": dict(
+                last_full_result.get("cache_build_seconds") or {}
+            ),
+            "cache_miss_reasons": dict(
+                last_full_result.get("cache_miss_reasons") or {}
+            ),
             "strict_backend": strict_backend,
         },
         "pure_single_step_core": {
@@ -547,8 +559,12 @@ def main() -> None:
         "session": {
             "frame_count": int(len(frames)),
             "target_count": int(len(target_frames)),
-            "points_per_frame": int(session_meta.get("points_per_frame", reference_frame.n_meas)),
-            "n_elec": int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+            "points_per_frame": int(
+                session_meta.get("points_per_frame", reference_frame.n_meas)
+            ),
+            "n_elec": int(
+                session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+            ),
             "frequency_hz": float(session_meta.get("frequency_hz", 0.0)),
             "stim_amp_uA": float(session_meta.get("stim_amp_uA", 0.0)),
             "use_part": args.use_part,
@@ -619,7 +635,9 @@ def main() -> None:
     gui_fps = float(report["gui_default"]["warm"]["fps"])
     no_step_fps = float(report["gn_variant_no_step_search"]["warm"]["fps"])
     single_step_fps = float(report["single_step_cached"]["full_process"]["warm"]["fps"])
-    pure_core_fps = float(report["single_step_cached"]["pure_single_step_core"]["warm"]["fps"])
+    pure_core_fps = float(
+        report["single_step_cached"]["pure_single_step_core"]["warm"]["fps"]
+    )
     report["summary"] = {
         "gui_default_fps": gui_fps,
         "gn_default_fps": float(report["gn_variant_default"]["warm"]["fps"]),
@@ -629,7 +647,9 @@ def main() -> None:
         "single_step_pure_core_fps": pure_core_fps,
         "speedup_vs_gui": {
             "gn_no_step_search": (no_step_fps / gui_fps) if gui_fps > 0 else 0.0,
-            "single_step_cached_full": (single_step_fps / gui_fps) if gui_fps > 0 else 0.0,
+            "single_step_cached_full": (single_step_fps / gui_fps)
+            if gui_fps > 0
+            else 0.0,
             "single_step_pure_core": (pure_core_fps / gui_fps) if gui_fps > 0 else 0.0,
         },
     }

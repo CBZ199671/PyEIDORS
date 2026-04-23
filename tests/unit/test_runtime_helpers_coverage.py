@@ -57,7 +57,9 @@ def test_resolve_torch_device_cpu_cuda_mps_paths(monkeypatch):
     assert cpu_dev.type == "cpu"
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
-    monkeypatch.setattr(torch.cuda, "get_device_name", lambda *_args, **_kwargs: "fake-cuda")
+    monkeypatch.setattr(
+        torch.cuda, "get_device_name", lambda *_args, **_kwargs: "fake-cuda"
+    )
     cuda_dev = resolve_torch_device("cuda:0", verbose=False)
     assert cuda_dev.type == "cuda"
 
@@ -81,8 +83,12 @@ def test_sparse_optimizers_gpu_flag_falls_back_to_cpu(monkeypatch):
     b = np.linspace(-0.2, 0.2, 6)
     warm = np.zeros(6, dtype=float)
 
-    x_fista = solve_fista(A, b, noise_sigma=0.1, prior_scale=0.4, warm_start=warm, config=cfg)
-    x_irls = solve_irls(A, b, noise_sigma=0.1, prior_scale=0.4, warm_start=warm, config=cfg)
+    x_fista = solve_fista(
+        A, b, noise_sigma=0.1, prior_scale=0.4, warm_start=warm, config=cfg
+    )
+    x_irls = solve_irls(
+        A, b, noise_sigma=0.1, prior_scale=0.4, warm_start=warm, config=cfg
+    )
 
     assert x_fista.shape == (6,)
     assert x_irls.shape == (6,)

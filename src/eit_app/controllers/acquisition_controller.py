@@ -106,7 +106,9 @@ class AcquisitionController(QObject):
         self._poll_timer.start(_POLL_INTERVAL_MS)
         self._is_active = True
         self.status_changed.emit("single_shot")
-        log.info("Single-frame acquisition started, polling at %d ms", _POLL_INTERVAL_MS)
+        log.info(
+            "Single-frame acquisition started, polling at %d ms", _POLL_INTERVAL_MS
+        )
 
     def stop(self, *, deactivate_device: bool = True) -> None:
         """Stop acquisition and polling."""

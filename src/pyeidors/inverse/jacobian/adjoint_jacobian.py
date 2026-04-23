@@ -69,7 +69,9 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         self.cell_areas = np.asarray(cell_vec.array, dtype=float)
 
         if self.use_torch:
-            self.cell_areas_t = torch.from_numpy(self.cell_areas).to(self.torch_device, dtype=self.torch_dtype)
+            self.cell_areas_t = torch.from_numpy(self.cell_areas).to(
+                self.torch_device, dtype=self.torch_dtype
+            )
 
     def calculate(self, sigma: fem.Function, **kwargs) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)
@@ -108,7 +110,9 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         sigma.x.array[:] = img.get_conductivity()
         return self.linearize(sigma, **kwargs)
 
-    def linearize_lazy(self, sigma: fem.Function, **kwargs) -> LazyAdjointJacobianLinearization:
+    def linearize_lazy(
+        self, sigma: fem.Function, **kwargs
+    ) -> LazyAdjointJacobianLinearization:
         """Return lazy ``Jv``/``J^T r`` actions without per-measurement adjoints."""
         u_all, _ = self.fwd_model.forward_solve(sigma)
         grad_u_all = self._compute_field_gradients(u_all)
@@ -126,11 +130,15 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             gradient_callback=self._compute_field_gradients,
             sign=-1.0,
             sigma_fingerprint=compute_sigma_fingerprint(sigma),
-            diag_exact_max_measurements=int(kwargs.get("diag_exact_max_measurements", 512)),
+            diag_exact_max_measurements=int(
+                kwargs.get("diag_exact_max_measurements", 512)
+            ),
             diag_chunk_size=int(kwargs.get("diag_chunk_size", 128)),
         )
 
-    def linearize_lazy_from_image(self, img, **kwargs) -> LazyAdjointJacobianLinearization:
+    def linearize_lazy_from_image(
+        self, img, **kwargs
+    ) -> LazyAdjointJacobianLinearization:
         sigma = fem.Function(self.fwd_model.V_sigma)
         sigma.x.array[:] = img.get_conductivity()
         return self.linearize_lazy(sigma, **kwargs)
@@ -166,7 +174,9 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             meas_idx += n_meas_this
         return current_patterns
 
-    def _assemble_numpy(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
+    def _assemble_numpy(
+        self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]
+    ) -> np.ndarray:
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
         J = np.zeros((n_meas, n_elem), dtype=float)
@@ -181,26 +191,40 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
             meas_idx += n_meas_this
         return J
 
-    def _assemble_torch(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
+    def _assemble_torch(
+        self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]
+    ) -> np.ndarray:
         if self.torch_batch_all:
             return self._assemble_torch_all(grad_u_all, grad_adj_all)
 
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
-        J_t = torch.zeros((n_meas, n_elem), device=self.torch_device, dtype=self.torch_dtype)
+        J_t = torch.zeros(
+            (n_meas, n_elem), device=self.torch_device, dtype=self.torch_dtype
+        )
 
         meas_idx = 0
         for stim_idx, grad_u in enumerate(grad_u_all):
             n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
-            grad_u_t = torch.from_numpy(grad_u).to(self.torch_device, dtype=self.torch_dtype)
-            adj_block = np.stack(grad_adj_all[meas_idx : meas_idx + n_meas_this], axis=0)
-            adj_block_t = torch.from_numpy(adj_block).to(self.torch_device, dtype=self.torch_dtype)
-            sensitivity = -(adj_block_t * grad_u_t.unsqueeze(0)).sum(dim=2) * self.cell_areas_t
+            grad_u_t = torch.from_numpy(grad_u).to(
+                self.torch_device, dtype=self.torch_dtype
+            )
+            adj_block = np.stack(
+                grad_adj_all[meas_idx : meas_idx + n_meas_this], axis=0
+            )
+            adj_block_t = torch.from_numpy(adj_block).to(
+                self.torch_device, dtype=self.torch_dtype
+            )
+            sensitivity = (
+                -(adj_block_t * grad_u_t.unsqueeze(0)).sum(dim=2) * self.cell_areas_t
+            )
             J_t[meas_idx : meas_idx + n_meas_this, :] = sensitivity
             meas_idx += n_meas_this
         return J_t.cpu().numpy()
 
-    def _assemble_torch_all(self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]) -> np.ndarray:
+    def _assemble_torch_all(
+        self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]
+    ) -> np.ndarray:
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
         np_dtype = np.float32 if self.torch_dtype == torch.float32 else np.float64
@@ -211,10 +235,16 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         meas_idx = 0
         for stim_idx, grad_u in enumerate(grad_u_all):
             n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
-            grad_u_block[meas_idx : meas_idx + n_meas_this] = grad_u.astype(np_dtype, copy=False)
+            grad_u_block[meas_idx : meas_idx + n_meas_this] = grad_u.astype(
+                np_dtype, copy=False
+            )
             meas_idx += n_meas_this
 
-        grad_u_t = torch.from_numpy(grad_u_block).to(self.torch_device, dtype=self.torch_dtype)
-        adj_block_t = torch.from_numpy(adj_block).to(self.torch_device, dtype=self.torch_dtype)
+        grad_u_t = torch.from_numpy(grad_u_block).to(
+            self.torch_device, dtype=self.torch_dtype
+        )
+        adj_block_t = torch.from_numpy(adj_block).to(
+            self.torch_device, dtype=self.torch_dtype
+        )
         sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * self.cell_areas_t
         return sensitivity.cpu().numpy()

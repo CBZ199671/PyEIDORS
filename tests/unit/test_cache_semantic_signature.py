@@ -124,7 +124,6 @@ def test_backend_signature_is_stable_across_cuda_petsc_alias_resolution():
         },
     )
 
-    assert (
-        backend_signature_from_forward_model(pre_solve)
-        == backend_signature_from_forward_model(post_solve)
-    )
+    assert backend_signature_from_forward_model(
+        pre_solve
+    ) == backend_signature_from_forward_model(post_solve)

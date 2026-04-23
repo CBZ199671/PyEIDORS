@@ -303,7 +303,7 @@ def test_cached_3d_mesh_validator_shortcuts_and_sidecar_success(
         mesh_file=None,
     )
     monkeypatch.setattr(
-        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag))
+        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
     )
     monkeypatch.setattr(
         opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)
@@ -342,7 +342,7 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag))
+        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
     )
     monkeypatch.setattr(
         opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)

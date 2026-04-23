@@ -50,7 +50,9 @@ def extract_boundary_triangles(
     cells = np.asarray(cell_connectivity, dtype=np.int64)
     if cells.ndim != 2 or cells.shape[0] == 0:
         empty = np.empty((0, 3), dtype=np.int32)
-        return (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        return (
+            (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        )
 
     if cells.shape[1] == 3:
         triangles = cells.astype(np.int32, copy=False)
@@ -60,7 +62,9 @@ def extract_boundary_triangles(
 
     if cells.shape[1] != 4:
         empty = np.empty((0, 3), dtype=np.int32)
-        return (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        return (
+            (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        )
 
     # Tetra path: dict-of-sorted-keys to detect faces shared by exactly
     # one cell.  Python loop because mesh sizes are typically O(10k)
@@ -74,7 +78,9 @@ def extract_boundary_triangles(
     kept = [payload for payload in faces.values() if payload is not None]
     if not kept:
         empty = np.empty((0, 3), dtype=np.int32)
-        return (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        return (
+            (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
+        )
     triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
     if return_sources:
         sources = np.asarray([idx for _, idx in kept], dtype=np.int32)

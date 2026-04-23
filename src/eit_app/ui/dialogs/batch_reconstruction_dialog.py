@@ -69,8 +69,12 @@ class BatchReconstructionDialog(QDialog):
         self._last_output_folder: str | None = None
         # Cached "finished" state so language switch re-renders the summary
         # line in the active locale.
-        self._finished_state: tuple[str, int, int] | None = None  # (tone, succeeded, failed)
-        self._progress_cache: tuple[int, int, str] | None = None  # (current, total, raw_msg)
+        self._finished_state: tuple[str, int, int] | None = (
+            None  # (tone, succeeded, failed)
+        )
+        self._progress_cache: tuple[int, int, str] | None = (
+            None  # (current, total, raw_msg)
+        )
         # ETA tracking — stamped the moment the first frame arrives
         # after _set_running(True), and used to estimate remaining
         # time off the rate so far.  `_progress_baseline` handles the
@@ -110,8 +114,7 @@ class BatchReconstructionDialog(QDialog):
         self._subtitle_label = QLabel("")
         self._subtitle_label.setWordWrap(True)
         self._subtitle_label.setStyleSheet(
-            "background: transparent; color: #dbe8f4;"
-            " font-size: 12px; border: none;"
+            "background: transparent; color: #dbe8f4; font-size: 12px; border: none;"
         )
         header_layout.addWidget(self._subtitle_label)
         root.addWidget(header)
@@ -321,7 +324,8 @@ class BatchReconstructionDialog(QDialog):
 
     def _on_browse_input(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, t("dlg.batch.file_dialog.input"),
+            self,
+            t("dlg.batch.file_dialog.input"),
             self._input_edit.text() or str(Path.home()),
         )
         if path:
@@ -329,7 +333,8 @@ class BatchReconstructionDialog(QDialog):
 
     def _on_browse_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, t("dlg.batch.file_dialog.output"),
+            self,
+            t("dlg.batch.file_dialog.output"),
             self._output_edit.text() or str(Path.home()),
         )
         if path:
@@ -379,6 +384,7 @@ class BatchReconstructionDialog(QDialog):
             # may carry a non-zero current if the controller processed
             # a few items before emitting.
             import time as _time
+
             self._run_started_at = _time.monotonic()
             self._progress_baseline = 0
         else:
@@ -503,14 +509,13 @@ class BatchReconstructionDialog(QDialog):
         }
         key = key_map.get(kind)
         if key:
-            self._progress_label.setText(
-                t(key, succeeded=succeeded, failed=failed)
-            )
+            self._progress_label.setText(t(key, succeeded=succeeded, failed=failed))
 
     def _on_open_output_folder(self) -> None:
         if not self._last_output_folder:
             return
         from eit_app.ui.main_window import _open_folder_in_file_manager
+
         _open_folder_in_file_manager(self._last_output_folder)
 
     # ── i18n ──

@@ -15,7 +15,9 @@ def _load_module():
         / "common"
         / "acceleration_profiles.py"
     )
-    spec = importlib.util.spec_from_file_location("script_acceleration_profiles", script)
+    spec = importlib.util.spec_from_file_location(
+        "script_acceleration_profiles", script
+    )
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise AssertionError("failed to load acceleration_profiles.py")
     module = importlib.util.module_from_spec(spec)

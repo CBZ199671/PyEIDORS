@@ -86,12 +86,15 @@ def test_probe_type_destroy_cleanup_and_selection_defaults(monkeypatch):
         lambda: {"cholmod": False, "pyamg": True, "petsc_gamg": False},
     )
     assert perf_caps.select_preconditioner("auto") == "pyamg"
-    assert perf_caps.select_fast_linear_path(
-        "weird",
-        regularization_is_diagonal=False,
-        regularization_is_sparse_spd=False,
-        capabilities=None,
-    ) == "pcg"
+    assert (
+        perf_caps.select_fast_linear_path(
+            "weird",
+            regularization_is_diagonal=False,
+            regularization_is_sparse_spd=False,
+            capabilities=None,
+        )
+        == "pcg"
+    )
 
 
 def test_fused_strategy_reason_branches_and_detect_cache(monkeypatch):

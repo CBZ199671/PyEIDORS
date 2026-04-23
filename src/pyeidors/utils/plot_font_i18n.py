@@ -151,7 +151,10 @@ def _register_optional_fonts() -> None:
         try:
             font_manager.fontManager.addfont(str(path))
         except Exception as exc:  # pragma: no cover - optional registration
-            _warn_once(f"font-register-{path}", f"Failed to register optional font {path}: {exc}")
+            _warn_once(
+                f"font-register-{path}",
+                f"Failed to register optional font {path}: {exc}",
+            )
 
 
 def _available_font_names() -> set[str]:
@@ -187,7 +190,9 @@ def configure_plot_fonts(language: str | None = None) -> PlotFontConfigResult:
     if requested == "zh":
         zh_fonts = _pick_existing(_ZH_FONT_CANDIDATES, available)
         if zh_fonts:
-            selected = zh_fonts + [font for font in english_fonts if font not in zh_fonts]
+            selected = zh_fonts + [
+                font for font in english_fonts if font not in zh_fonts
+            ]
             effective = "zh"
         else:
             selected = english_fonts

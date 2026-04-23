@@ -25,14 +25,18 @@ def _config(**kwargs) -> PatternConfig:
     return PatternConfig(**payload)
 
 
-def test_resolve_electrode_lengths_and_parse_error_paths(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_electrode_lengths_and_parse_error_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     manager = StimMeasPatternManager.__new__(StimMeasPatternManager)
     manager.n_elec = 4
     manager.n_rings = 2
     manager.tn_elec = 8
     manager.drive_mode = "line_current_density"
 
-    np.testing.assert_allclose(manager._resolve_electrode_lengths(None), np.ones(8, dtype=float))
+    np.testing.assert_allclose(
+        manager._resolve_electrode_lengths(None), np.ones(8, dtype=float)
+    )
     np.testing.assert_allclose(
         manager._resolve_electrode_lengths(np.array([1.0, 2.0, 3.0, 4.0], dtype=float)),
         np.array([1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0], dtype=float),
@@ -42,7 +46,9 @@ def test_resolve_electrode_lengths_and_parse_error_paths(monkeypatch: pytest.Mon
     with pytest.raises(ValueError, match="must be positive"):
         manager._resolve_electrode_lengths(np.array([1.0, -1.0, 1.0, 1.0], dtype=float))
 
-    monkeypatch.setattr(patterns_module, "validate_drive_config", lambda **kwargs: "total_current")
+    monkeypatch.setattr(
+        patterns_module, "validate_drive_config", lambda **kwargs: "total_current"
+    )
     with pytest.raises(ValueError, match="Unknown stimulation pattern"):
         StimMeasPatternManager(_config(stim_pattern="{bad}"))
     with pytest.raises(ValueError, match="Unknown measurement pattern"):
@@ -51,7 +57,9 @@ def test_resolve_electrode_lengths_and_parse_error_paths(monkeypatch: pytest.Mon
     monkeypatch.setattr(
         patterns_module,
         "build_stim_currents",
-        lambda **kwargs: np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"],
+        lambda **kwargs: (
+            np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"]
+        ),
     )
     single = StimMeasPatternManager(
         _config(stim_pattern=[0], meas_pattern=[0], use_meas_current=True),
@@ -62,11 +70,15 @@ def test_resolve_electrode_lengths_and_parse_error_paths(monkeypatch: pytest.Mon
 
 
 def test_selector_hash_filter_and_getter_branches(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(patterns_module, "validate_drive_config", lambda **kwargs: "total_current")
+    monkeypatch.setattr(
+        patterns_module, "validate_drive_config", lambda **kwargs: "total_current"
+    )
     monkeypatch.setattr(
         patterns_module,
         "build_stim_currents",
-        lambda **kwargs: np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"],
+        lambda **kwargs: (
+            np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"]
+        ),
     )
     manager = StimMeasPatternManager(
         _config(
@@ -86,7 +98,10 @@ def test_selector_hash_filter_and_getter_branches(monkeypatch: pytest.MonkeyPatc
 
     empty_hash = manager._create_meas_hash(np.empty((0, manager.tn_elec), dtype=float))
     assert empty_hash.size == 0
-    assert manager._finite_summary(np.array([np.nan, np.inf], dtype=float)) == "finite_count=0"
+    assert (
+        manager._finite_summary(np.array([np.nan, np.inf], dtype=float))
+        == "finite_count=0"
+    )
 
     meas_mat = manager._make_meas_matrix(elec=1, ring=0)
     assert meas_mat.shape == (manager.tn_elec, manager.tn_elec)
@@ -94,11 +109,15 @@ def test_selector_hash_filter_and_getter_branches(monkeypatch: pytest.MonkeyPatc
 
 
 def test_opposite_patterns_and_positive_first_branch(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(patterns_module, "validate_drive_config", lambda **kwargs: "total_current")
+    monkeypatch.setattr(
+        patterns_module, "validate_drive_config", lambda **kwargs: "total_current"
+    )
     monkeypatch.setattr(
         patterns_module,
         "build_stim_currents",
-        lambda **kwargs: np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"],
+        lambda **kwargs: (
+            np.asarray(kwargs["inj_weights"], dtype=float) * kwargs["drive_value"]
+        ),
     )
     manager = StimMeasPatternManager(
         _config(

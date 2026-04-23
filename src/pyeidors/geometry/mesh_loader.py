@@ -77,7 +77,9 @@ class MeshLoader:
             association_file=(
                 metadata_file
                 if metadata_file.exists()
-                else association_file if association_file.exists() else None
+                else association_file
+                if association_file.exists()
+                else None
             ),
             sidecar_file=sidecar_path if sidecar_path.exists() else None,
             extra_files=extra_files,

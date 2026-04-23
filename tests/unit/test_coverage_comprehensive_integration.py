@@ -62,7 +62,7 @@ class TestForwardSolveDeep:
         fwd = eit_system.fwd_model
         n = fwd.V_sigma.dofmap.index_map.size_local
         sigma = np.ones(n, dtype=float)
-        sigma[:n // 3] = 2.0
+        sigma[: n // 3] = 2.0
         img = EITImage(elem_data=sigma, fwd_model=fwd)
         data, info = fwd.fwd_solve(img)
         assert data.meas is not None
@@ -75,9 +75,15 @@ class TestInverseSolveVariants:
         """Cover strict mode absolute reconstruction."""
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "solver_mode", "verbose", "max_iterations", "min_iterations",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "solver_mode",
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+            ]
+        }
         try:
             recon.solver_mode = "strict"
             recon.verbose = False
@@ -94,9 +100,14 @@ class TestInverseSolveVariants:
         """Cover difference mode reconstruction."""
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "verbose", "max_iterations", "min_iterations",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+            ]
+        }
         try:
             recon.verbose = False
             recon.max_iterations = 1
@@ -115,10 +126,17 @@ class TestInverseSolveVariants:
         """Cover fast mode with pyamg preconditioner."""
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "solver_mode", "fast_linear_path", "preconditioner",
-            "verbose", "max_iterations", "min_iterations",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "solver_mode",
+                "fast_linear_path",
+                "preconditioner",
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+            ]
+        }
         try:
             recon.solver_mode = "fast"
             recon.fast_linear_path = "pcg"
@@ -139,9 +157,14 @@ class TestInverseSolveVariants:
         """Cover verbose output paths."""
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "verbose", "max_iterations", "min_iterations",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+            ]
+        }
         try:
             recon.verbose = True
             recon.max_iterations = 2
@@ -160,9 +183,11 @@ class TestVisualizationHelperDeep:
     def test_plot_electrode_labels(self, eit_mesh):
         _skip()
         import matplotlib
+
         matplotlib.use("Agg")
         import matplotlib.pyplot as plt
         from pyeidors.visualization.eit_plot_helpers import overlay_electrode_labels
+
         fig, ax = plt.subplots()
         try:
             overlay_electrode_labels(ax, eit_mesh)
@@ -173,8 +198,10 @@ class TestVisualizationHelperDeep:
     def test_plot_mesh_with_viz(self, eit_mesh):
         _skip()
         import matplotlib
+
         matplotlib.use("Agg")
         from pyeidors.visualization.eit_plots import EITVisualizer
+
         viz = EITVisualizer(style="default")
         # Exercise helper method paths
         try:
@@ -189,6 +216,7 @@ class TestUnitConsistencyChecks:
     def test_unit_checks(self, eit_system):
         _skip()
         from pyeidors.physics.unit_consistency import run_unit_consistency_checks
+
         report = run_unit_consistency_checks(eit_system.fwd_model)
         assert len(report.items) > 0
         assert report.items[0].passed  # Drive config should be valid
@@ -200,6 +228,7 @@ class TestSmoothnessRegDeep:
     def test_smoothness_matrix_shape(self, eit_system):
         _skip()
         from pyeidors.inverse.regularization.smoothness import SmoothnessRegularization
+
         reg = SmoothnessRegularization(eit_system.fwd_model, alpha=0.01)
         mat = reg.get_regularization_matrix()
         n = eit_system.fwd_model.V_sigma.dofmap.index_map.size_local
@@ -208,7 +237,10 @@ class TestSmoothnessRegDeep:
     def test_tv_regularization(self, eit_system):
         """Cover TotalVariationRegularization."""
         _skip()
-        from pyeidors.inverse.regularization.smoothness import TotalVariationRegularization
+        from pyeidors.inverse.regularization.smoothness import (
+            TotalVariationRegularization,
+        )
+
         try:
             reg = TotalVariationRegularization(eit_system.fwd_model, alpha=0.01)
             mat = reg.create_matrix()
@@ -223,6 +255,7 @@ class TestCacheObjectSignatureDeep:
     def test_signature_with_eit_mesh(self, eit_system):
         _skip()
         from pyeidors.cache.object_signature import model_signature_from_forward_model
+
         sig = model_signature_from_forward_model(eit_system.fwd_model)
         assert isinstance(sig, str)
         assert len(sig) > 10

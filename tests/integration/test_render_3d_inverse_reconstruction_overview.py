@@ -14,10 +14,17 @@ from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
 from scripts.common.hdf5_outputs import read_output_bundle
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-SCRIPT = REPO_ROOT / "scripts" / "diagnostics" / "render_3d_inverse_reconstruction_overview.py"
+SCRIPT = (
+    REPO_ROOT
+    / "scripts"
+    / "diagnostics"
+    / "render_3d_inverse_reconstruction_overview.py"
+)
 
 
-def _run(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    args: list[str], *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     merged_env = dict(os.environ)
     merged_env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     merged_env.setdefault("OMP_NUM_THREADS", "1")
@@ -123,7 +130,9 @@ def test_render_3d_overview_exports_absolute_artifacts(tmp_path: Path):
     )
     assert run.returncode == 0, run.stderr
 
-    metrics = json.loads((output_dir / "inverse_3d_overview_metrics.json").read_text(encoding="utf-8"))
+    metrics = json.loads(
+        (output_dir / "inverse_3d_overview_metrics.json").read_text(encoding="utf-8")
+    )
     assert metrics["inverse_mode"] == "absolute"
     assert metrics["measurement_space"]["type"] == "real"
     assert metrics["inverse_target"] == "eidors_abs_gn_prior"

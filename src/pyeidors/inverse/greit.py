@@ -335,7 +335,9 @@ def build_greit3d_distribution(
         point_in_volume=point_in_volume,
     )
     if not bool(np.any(inside_mask)):
-        raise ValueError("GREIT3D_distribution produced no target centers inside volume.")
+        raise ValueError(
+            "GREIT3D_distribution produced no target centers inside volume."
+        )
 
     centers = np.ascontiguousarray(candidate_centers[inside_mask], dtype=np.float64)
     distr = np.ascontiguousarray(centers.T, dtype=np.float64)
@@ -811,7 +813,9 @@ def _resolve_axis_edges(
     arr = np.asarray(value, dtype=np.float64).reshape(-1)
     if arr.size == 1:
         if bounds is None:
-            raise ValueError(f"bounds or fwd_model nodes are required for scalar {name}.")
+            raise ValueError(
+                f"bounds or fwd_model nodes are required for scalar {name}."
+            )
         n_planes = int(round(float(arr[0])))
         if n_planes < 2 or not np.isclose(float(arr[0]), float(n_planes)):
             raise ValueError(f"scalar {name} must be an integer >= 2.")
@@ -960,8 +964,7 @@ def _inside_mask_from_model_nodes(
         eps = np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(upper - lower))))
         return np.asarray(
             np.all(
-                (centers[:, :3] >= lower - eps)
-                & (centers[:, :3] <= upper + eps),
+                (centers[:, :3] >= lower - eps) & (centers[:, :3] <= upper + eps),
                 axis=1,
             ),
             dtype=bool,

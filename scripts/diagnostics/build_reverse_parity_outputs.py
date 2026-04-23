@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Build reverse-parity comparison assets (PyEIDORS on EIDORS data)."""
+
 from __future__ import annotations
 
 import argparse
@@ -11,7 +12,9 @@ import matplotlib.pyplot as plt
 from PIL import Image
 
 
-def load_forward_csv(path: Path, delimiter: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
+def load_forward_csv(
+    path: Path, delimiter: str
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     with path.open("r", encoding="utf-8") as handle:
         first_line = handle.readline().strip()
     tokens = [token.strip() for token in first_line.split(delimiter) if token.strip()]
@@ -26,7 +29,9 @@ def load_forward_csv(path: Path, delimiter: str) -> Tuple[np.ndarray, np.ndarray
     data = np.loadtxt(path, delimiter=delimiter, skiprows=1 if has_header else 0)
     data = np.atleast_2d(data)
     if data.shape[1] < 2:
-        raise ValueError(f"Expected at least 2 columns in {path}; got shape {data.shape}.")
+        raise ValueError(
+            f"Expected at least 2 columns in {path}; got shape {data.shape}."
+        )
 
     baseline = data[:, 0]
     phantom = data[:, 1]
@@ -113,16 +118,25 @@ def rotate_reconstruction_only(image_path: Path, output_path: Path) -> None:
     Image.fromarray(out).save(output_path)
 
 
-def build_delta_v_plot(measured: np.ndarray,
-                        eidors_pred: np.ndarray,
-                        pyeidors_pred: np.ndarray,
-                        output_path: Path) -> None:
+def build_delta_v_plot(
+    measured: np.ndarray,
+    eidors_pred: np.ndarray,
+    pyeidors_pred: np.ndarray,
+    output_path: Path,
+) -> None:
     idx = np.arange(1, measured.size + 1)
 
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(idx, measured, label="Measured ΔV", color="black", linewidth=1.0)
     ax.plot(idx, eidors_pred, label="EIDORS ΔV_pred", color="tab:red", linewidth=1.2)
-    ax.plot(idx, pyeidors_pred, label="PyEIDORS ΔV_pred", color="tab:green", linestyle="--", linewidth=1.2)
+    ax.plot(
+        idx,
+        pyeidors_pred,
+        label="PyEIDORS ΔV_pred",
+        color="tab:green",
+        linestyle="--",
+        linewidth=1.2,
+    )
     ax.set_xlabel("Measurement index")
     ax.set_ylabel("Voltage (V)")
     ax.set_title("Boundary voltage differences")
@@ -136,27 +150,51 @@ def build_delta_v_plot(measured: np.ndarray,
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--eidors-forward", type=Path, required=True,
-                        help="CSV with baseline + phantom voltages from EIDORS.")
-    parser.add_argument("--eidors-pred-diff", type=Path, required=True,
-                        help="CSV with EIDORS-predicted difference voltages.")
-    parser.add_argument("--pyeidors-output", type=Path, required=True,
-                        help="Output directory from run_synthetic_parity.py.")
-    parser.add_argument("--output-dir", type=Path, required=True,
-                        help="Directory to store comparison assets.")
+    parser.add_argument(
+        "--eidors-forward",
+        type=Path,
+        required=True,
+        help="CSV with baseline + phantom voltages from EIDORS.",
+    )
+    parser.add_argument(
+        "--eidors-pred-diff",
+        type=Path,
+        required=True,
+        help="CSV with EIDORS-predicted difference voltages.",
+    )
+    parser.add_argument(
+        "--pyeidors-output",
+        type=Path,
+        required=True,
+        help="Output directory from run_synthetic_parity.py.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        required=True,
+        help="Directory to store comparison assets.",
+    )
     parser.add_argument("--delimiter", type=str, default=",")
     args = parser.parse_args()
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
 
     _, _, measured_diff = load_forward_csv(args.eidors_forward, args.delimiter)
-    eidors_pred = np.loadtxt(args.eidors_pred_diff, delimiter=args.delimiter).reshape(-1)
+    eidors_pred = np.loadtxt(args.eidors_pred_diff, delimiter=args.delimiter).reshape(
+        -1
+    )
 
-    pyeidors_pred_path = args.pyeidors_output / "difference" / "predicted_difference.csv"
+    pyeidors_pred_path = (
+        args.pyeidors_output / "difference" / "predicted_difference.csv"
+    )
     pyeidors_pred = np.loadtxt(pyeidors_pred_path, delimiter=",").reshape(-1)
 
-    np.savetxt(args.output_dir / "eidors_measured_diff.csv", measured_diff, delimiter=",")
-    np.savetxt(args.output_dir / "pyeidors_predicted_diff.csv", pyeidors_pred, delimiter=",")
+    np.savetxt(
+        args.output_dir / "eidors_measured_diff.csv", measured_diff, delimiter=","
+    )
+    np.savetxt(
+        args.output_dir / "pyeidors_predicted_diff.csv", pyeidors_pred, delimiter=","
+    )
 
     raw_py = args.pyeidors_output / "difference" / "reconstruction.png"
     raw_dst = args.output_dir / "pyeidors_reconstruction_raw.png"

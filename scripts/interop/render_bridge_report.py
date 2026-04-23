@@ -55,14 +55,44 @@ def main() -> None:
     if len(truth) == mesh.num_cells():
         vmin = min(float(np.min(truth)), float(np.min(recon)))
         vmax = max(float(np.max(truth)), float(np.max(recon)))
-        im_true = axes[0].tripcolor(triangulation, facecolors=truth, cmap="viridis", shading="flat", vmin=vmin, vmax=vmax)
-        im_recon = axes[1].tripcolor(triangulation, facecolors=recon, cmap="viridis", shading="flat", vmin=vmin, vmax=vmax)
-        im_err = axes[2].tripcolor(triangulation, facecolors=error, cmap="hot", shading="flat")
+        im_true = axes[0].tripcolor(
+            triangulation,
+            facecolors=truth,
+            cmap="viridis",
+            shading="flat",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        im_recon = axes[1].tripcolor(
+            triangulation,
+            facecolors=recon,
+            cmap="viridis",
+            shading="flat",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        im_err = axes[2].tripcolor(
+            triangulation, facecolors=error, cmap="hot", shading="flat"
+        )
     else:
         vmin = min(float(np.min(truth)), float(np.min(recon)))
         vmax = max(float(np.max(truth)), float(np.max(recon)))
-        im_true = axes[0].tripcolor(triangulation, truth, cmap="viridis", shading="gouraud", vmin=vmin, vmax=vmax)
-        im_recon = axes[1].tripcolor(triangulation, recon, cmap="viridis", shading="gouraud", vmin=vmin, vmax=vmax)
+        im_true = axes[0].tripcolor(
+            triangulation,
+            truth,
+            cmap="viridis",
+            shading="gouraud",
+            vmin=vmin,
+            vmax=vmax,
+        )
+        im_recon = axes[1].tripcolor(
+            triangulation,
+            recon,
+            cmap="viridis",
+            shading="gouraud",
+            vmin=vmin,
+            vmax=vmax,
+        )
         im_err = axes[2].tripcolor(triangulation, error, cmap="hot", shading="gouraud")
 
     images = [im_true, im_recon, im_err]
@@ -79,7 +109,12 @@ def main() -> None:
         ha="center",
         va="center",
         fontsize=13,
-        bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "edgecolor": "0.6", "alpha": 0.92},
+        bbox={
+            "boxstyle": "round,pad=0.3",
+            "facecolor": "white",
+            "edgecolor": "0.6",
+            "alpha": 0.92,
+        },
     )
     fig.tight_layout()
     fig.savefig(cond_path, dpi=300, bbox_inches="tight")
@@ -101,7 +136,12 @@ def main() -> None:
         ha="left",
         va="top",
         fontsize=12,
-        bbox={"boxstyle": "round,pad=0.25", "facecolor": "white", "edgecolor": "0.6", "alpha": 0.92},
+        bbox={
+            "boxstyle": "round,pad=0.25",
+            "facecolor": "white",
+            "edgecolor": "0.6",
+            "alpha": 0.92,
+        },
     )
     fig.tight_layout()
     fig.savefig(voltage_path, dpi=300, bbox_inches="tight")

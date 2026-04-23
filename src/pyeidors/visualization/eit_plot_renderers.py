@@ -69,7 +69,11 @@ def render_conductivity(
     if transparent:
         fig.patch.set_alpha(0.0)
 
-    conductivity_values = conductivity.x.array if isinstance(conductivity, Function) else np.asarray(conductivity)
+    conductivity_values = (
+        conductivity.x.array
+        if isinstance(conductivity, Function)
+        else np.asarray(conductivity)
+    )
     coords = coordinates(mesh)
     mesh_cells = cells(mesh)
     triangulation = tri.Triangulation(coords[:, 0], coords[:, 1], mesh_cells)
@@ -165,7 +169,14 @@ def render_measurements(viz, data, title: str, save_path: str | None):
     ax1.set_ylabel(viz._text("voltage"))
     ax1.grid(True, alpha=0.3)
 
-    ax2.hist(measurements, bins=50, density=True, alpha=0.7, color="skyblue", edgecolor="black")
+    ax2.hist(
+        measurements,
+        bins=50,
+        density=True,
+        alpha=0.7,
+        color="skyblue",
+        edgecolor="black",
+    )
     ax2.set_title(viz._text("measurement_distribution"), fontweight="bold")
     ax2.set_xlabel(viz._text("voltage"))
     ax2.set_ylabel(viz._text("probability_density"))
@@ -173,7 +184,9 @@ def render_measurements(viz, data, title: str, save_path: str | None):
 
     mean_val = np.mean(measurements)
     std_val = np.std(measurements)
-    ax2.axvline(mean_val, color="red", linestyle="--", label=viz._text("mean", value=mean_val))
+    ax2.axvline(
+        mean_val, color="red", linestyle="--", label=viz._text("mean", value=mean_val)
+    )
     ax2.axvline(
         mean_val + std_val,
         color="orange",
@@ -201,7 +214,11 @@ def render_reconstruction_comparison(
 ):
     fig, axes = plt.subplots(1, 3, figsize=(18, 6))
 
-    true_values = true_conductivity.x.array if isinstance(true_conductivity, Function) else np.asarray(true_conductivity)
+    true_values = (
+        true_conductivity.x.array
+        if isinstance(true_conductivity, Function)
+        else np.asarray(true_conductivity)
+    )
     recon_values = (
         reconstructed_conductivity.x.array
         if isinstance(reconstructed_conductivity, Function)
@@ -212,17 +229,42 @@ def render_reconstruction_comparison(
     mesh_cells = cells(mesh)
     triangulation = tri.Triangulation(coords[:, 0], coords[:, 1], mesh_cells)
 
-    true_plot_values = interpolate_cell_to_node(mesh, true_values) if len(true_values) == num_cells(mesh) else true_values
-    recon_plot_values = interpolate_cell_to_node(mesh, recon_values) if len(recon_values) == num_cells(mesh) else recon_values
+    true_plot_values = (
+        interpolate_cell_to_node(mesh, true_values)
+        if len(true_values) == num_cells(mesh)
+        else true_values
+    )
+    recon_plot_values = (
+        interpolate_cell_to_node(mesh, recon_values)
+        if len(recon_values) == num_cells(mesh)
+        else recon_values
+    )
 
-    vmin, vmax = min(np.min(true_plot_values), np.min(recon_plot_values)), max(np.max(true_plot_values), np.max(recon_plot_values))
+    vmin, vmax = (
+        min(np.min(true_plot_values), np.min(recon_plot_values)),
+        max(np.max(true_plot_values), np.max(recon_plot_values)),
+    )
 
-    im1 = axes[0].tripcolor(triangulation, true_plot_values, cmap="viridis", vmin=vmin, vmax=vmax, shading="gouraud")
+    im1 = axes[0].tripcolor(
+        triangulation,
+        true_plot_values,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        shading="gouraud",
+    )
     axes[0].set_title(viz._text("true_distribution"), fontweight="bold")
     axes[0].set_aspect("equal")
     plt.colorbar(im1, ax=axes[0], shrink=0.8)
 
-    im2 = axes[1].tripcolor(triangulation, recon_plot_values, cmap="viridis", vmin=vmin, vmax=vmax, shading="gouraud")
+    im2 = axes[1].tripcolor(
+        triangulation,
+        recon_plot_values,
+        cmap="viridis",
+        vmin=vmin,
+        vmax=vmax,
+        shading="gouraud",
+    )
     axes[1].set_title(viz._text("reconstructed_distribution"), fontweight="bold")
     axes[1].set_aspect("equal")
     plt.colorbar(im2, ax=axes[1], shrink=0.8)

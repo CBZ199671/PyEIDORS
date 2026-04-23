@@ -77,10 +77,18 @@ def build_parser() -> argparse.ArgumentParser:
         help="Reconstruction method",
     )
 
-    parser.add_argument("--input-dir", type=Path, default=None, help="Directory of CSV files")
-    parser.add_argument("--glob", type=str, default="*.csv", help="Glob pattern under input-dir")
-    parser.add_argument("--csv", type=Path, action="append", default=None, help="Explicit CSV path(s)")
-    parser.add_argument("--include-ad", action="store_true", help="Include *_AD.csv files")
+    parser.add_argument(
+        "--input-dir", type=Path, default=None, help="Directory of CSV files"
+    )
+    parser.add_argument(
+        "--glob", type=str, default="*.csv", help="Glob pattern under input-dir"
+    )
+    parser.add_argument(
+        "--csv", type=Path, action="append", default=None, help="Explicit CSV path(s)"
+    )
+    parser.add_argument(
+        "--include-ad", action="store_true", help="Include *_AD.csv files"
+    )
 
     parser.add_argument(
         "--input-mode",
@@ -88,8 +96,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=InputMode.PAIRED.value,
         help="paired: reference/target in one CSV, frame: one CSV per frame",
     )
-    parser.add_argument("--reference-csv", type=Path, default=None, help="Reference frame CSV (frame mode)")
-    parser.add_argument("--reference-index", type=int, default=None, help="Reference index in discovered files")
+    parser.add_argument(
+        "--reference-csv",
+        type=Path,
+        default=None,
+        help="Reference frame CSV (frame mode)",
+    )
+    parser.add_argument(
+        "--reference-index",
+        type=int,
+        default=None,
+        help="Reference index in discovered files",
+    )
     parser.add_argument(
         "--frame-layout",
         choices=["auto", "stim-meas", "meas-stim", "vector"],
@@ -97,38 +115,98 @@ def build_parser() -> argparse.ArgumentParser:
         help="Frame CSV layout interpretation in frame mode",
     )
 
-    parser.add_argument("--output-root", type=Path, required=True, help="Output root directory")
-    parser.add_argument("--overwrite", action="store_true", help="Overwrite existing case outputs")
-    parser.add_argument("--continue-on-error", action="store_true", help="Continue batch if a case fails")
-    parser.add_argument("--dry-run", action="store_true", help="List resolved cases and exit")
-    parser.add_argument("--no-plots", action="store_true", help="Skip plot generation when supported")
+    parser.add_argument(
+        "--output-root", type=Path, required=True, help="Output root directory"
+    )
+    parser.add_argument(
+        "--overwrite", action="store_true", help="Overwrite existing case outputs"
+    )
+    parser.add_argument(
+        "--continue-on-error",
+        action="store_true",
+        help="Continue batch if a case fails",
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="List resolved cases and exit"
+    )
+    parser.add_argument(
+        "--no-plots", action="store_true", help="Skip plot generation when supported"
+    )
 
-    parser.add_argument("--metadata", type=Path, default=None, help="Metadata YAML/JSON path")
-    parser.add_argument("--measurement-gain", type=float, default=10.0, help="Measurement gain divisor")
+    parser.add_argument(
+        "--metadata", type=Path, default=None, help="Metadata YAML/JSON path"
+    )
+    parser.add_argument(
+        "--measurement-gain", type=float, default=10.0, help="Measurement gain divisor"
+    )
     parser.add_argument("--use-part", choices=["real", "imag", "mag"], default="real")
 
-    parser.add_argument("--absolute-col", type=int, default=2, help="Column index for absolute reconstruction")
-    parser.add_argument("--reference-col", type=int, default=0, help="Reference column index in paired CSV")
-    parser.add_argument("--target-col", type=int, default=2, help="Target column index in paired CSV")
+    parser.add_argument(
+        "--absolute-col",
+        type=int,
+        default=2,
+        help="Column index for absolute reconstruction",
+    )
+    parser.add_argument(
+        "--reference-col",
+        type=int,
+        default=0,
+        help="Reference column index in paired CSV",
+    )
+    parser.add_argument(
+        "--target-col", type=int, default=2, help="Target column index in paired CSV"
+    )
 
-    parser.add_argument("--lambda", dest="lam", type=float, default=None, help="Regularization lambda")
-    parser.add_argument("--max-iter", type=int, default=None, help="Maximum GN iterations (absolute)")
-    parser.add_argument("--background-sigma", type=float, default=None, help="Background conductivity")
-    parser.add_argument("--contact-impedance", type=float, default=None, help="Contact impedance")
-    parser.add_argument("--refinement", type=int, default=None, help="Mesh refinement level")
-    parser.add_argument("--mesh-radius", type=float, default=None, help="Mesh radius used by method")
+    parser.add_argument(
+        "--lambda", dest="lam", type=float, default=None, help="Regularization lambda"
+    )
+    parser.add_argument(
+        "--max-iter", type=int, default=None, help="Maximum GN iterations (absolute)"
+    )
+    parser.add_argument(
+        "--background-sigma", type=float, default=None, help="Background conductivity"
+    )
+    parser.add_argument(
+        "--contact-impedance", type=float, default=None, help="Contact impedance"
+    )
+    parser.add_argument(
+        "--refinement", type=int, default=None, help="Mesh refinement level"
+    )
+    parser.add_argument(
+        "--mesh-radius", type=float, default=None, help="Mesh radius used by method"
+    )
 
-    parser.add_argument("--mesh-dir", type=Path, default=REPO_ROOT / "eit_meshes", help="Mesh cache directory")
-    parser.add_argument("--mesh-name", type=str, default="mesh_16e_r0p025_ref10_cov0p5", help="Mesh cache name")
-    parser.add_argument("--mesh-dim", type=int, choices=[2, 3], default=2, help="Mesh geometric dimension")
-    parser.add_argument("--mesh-height", type=float, default=1.0, help="3D cylinder height")
+    parser.add_argument(
+        "--mesh-dir",
+        type=Path,
+        default=REPO_ROOT / "eit_meshes",
+        help="Mesh cache directory",
+    )
+    parser.add_argument(
+        "--mesh-name",
+        type=str,
+        default="mesh_16e_r0p025_ref10_cov0p5",
+        help="Mesh cache name",
+    )
+    parser.add_argument(
+        "--mesh-dim",
+        type=int,
+        choices=[2, 3],
+        default=2,
+        help="Mesh geometric dimension",
+    )
+    parser.add_argument(
+        "--mesh-height", type=float, default=1.0, help="3D cylinder height"
+    )
     parser.add_argument(
         "--electrode-height-ratio",
         type=float,
         default=0.2,
         help="3D electrode height ratio (reserved for mesh signature)",
     )
-    parser.add_argument("--z-center", type=float, default=0.0, help="3D cylinder z-center")
+    parser.add_argument(
+        "--z-center", type=float, default=0.0, help="3D cylinder z-center"
+    )
     add_acceleration_profile_argument(
         parser,
         default=DEFAULT_ACCELERATION_PROFILE,
@@ -175,9 +253,24 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_ROM_MODE,
         help="Experimental reduced-order model acceleration mode for 3D fast paths",
     )
-    parser.add_argument("--rom-rank-global", type=int, default=DEFAULT_ROM_RANK_GLOBAL, help="Global POD basis rank cap")
-    parser.add_argument("--rom-rank-adaptive", type=int, default=DEFAULT_ROM_RANK_ADAPTIVE, help="Adaptive low-rank basis rank cap")
-    parser.add_argument("--rom-refresh-every", type=int, default=DEFAULT_ROM_REFRESH_EVERY, help="Adaptive ROM refresh interval")
+    parser.add_argument(
+        "--rom-rank-global",
+        type=int,
+        default=DEFAULT_ROM_RANK_GLOBAL,
+        help="Global POD basis rank cap",
+    )
+    parser.add_argument(
+        "--rom-rank-adaptive",
+        type=int,
+        default=DEFAULT_ROM_RANK_ADAPTIVE,
+        help="Adaptive low-rank basis rank cap",
+    )
+    parser.add_argument(
+        "--rom-refresh-every",
+        type=int,
+        default=DEFAULT_ROM_REFRESH_EVERY,
+        help="Adaptive ROM refresh interval",
+    )
     parser.add_argument(
         "--rom-snapshot-source",
         choices=["cache", "synthetic", "hybrid"],
@@ -196,23 +289,48 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_INEXACT_FORCING,
         help="Inexact GN forcing-term policy",
     )
-    parser.add_argument("--inexact-eta0", type=float, default=DEFAULT_INEXACT_ETA0, help="Initial inexact forcing eta")
-    parser.add_argument("--inexact-eta-min", type=float, default=DEFAULT_INEXACT_ETA_MIN, help="Minimum inexact forcing eta")
-    parser.add_argument("--inexact-eta-max", type=float, default=DEFAULT_INEXACT_ETA_MAX, help="Maximum inexact forcing eta")
+    parser.add_argument(
+        "--inexact-eta0",
+        type=float,
+        default=DEFAULT_INEXACT_ETA0,
+        help="Initial inexact forcing eta",
+    )
+    parser.add_argument(
+        "--inexact-eta-min",
+        type=float,
+        default=DEFAULT_INEXACT_ETA_MIN,
+        help="Minimum inexact forcing eta",
+    )
+    parser.add_argument(
+        "--inexact-eta-max",
+        type=float,
+        default=DEFAULT_INEXACT_ETA_MAX,
+        help="Maximum inexact forcing eta",
+    )
     parser.add_argument(
         "--lowrank-mode",
         choices=["off", "auto", "on"],
         default=DEFAULT_LOWRANK_MODE,
         help="Experimental low-rank Jacobian subspace mode for fused acceleration",
     )
-    parser.add_argument("--lowrank-rank", type=int, default=DEFAULT_LOWRANK_RANK, help="Low-rank subspace rank cap")
+    parser.add_argument(
+        "--lowrank-rank",
+        type=int,
+        default=DEFAULT_LOWRANK_RANK,
+        help="Low-rank subspace rank cap",
+    )
     parser.add_argument(
         "--lowrank-method",
         choices=["tsvd", "randomized"],
         default=DEFAULT_LOWRANK_METHOD,
         help="Low-rank subspace extraction method",
     )
-    parser.add_argument("--lowrank-energy", type=float, default=DEFAULT_LOWRANK_ENERGY, help="Energy threshold for low-rank subspace")
+    parser.add_argument(
+        "--lowrank-energy",
+        type=float,
+        default=DEFAULT_LOWRANK_ENERGY,
+        help="Energy threshold for low-rank subspace",
+    )
     parser.add_argument(
         "--cholmod-max-n",
         type=int,
@@ -318,15 +436,40 @@ def build_parser() -> argparse.ArgumentParser:
         default="warn",
         help="Performance gate behavior when --perf-report is enabled",
     )
-    parser.add_argument("--n-elec", type=int, default=16, help="Number of electrodes (GN diff)")
-    parser.add_argument("--radius", type=float, default=0.025, help="Mesh radius for GN diff")
-    parser.add_argument("--drive-value", type=float, default=None, help="Drive value override (GN diff)")
-    parser.add_argument("--step-size-calibration", action="store_true", help="Enable one-step alpha search")
-    parser.add_argument("--step-size-min", type=float, default=1e-3, help="Lower bound for alpha search")
-    parser.add_argument("--step-size-max", type=float, default=1e1, help="Upper bound for alpha search")
-    parser.add_argument("--step-size-maxiter", type=int, default=50, help="Max iterations for alpha search")
-    parser.add_argument("--colormap", type=str, default="viridis", help="Colormap for reconstruction")
-    parser.add_argument("--colorbar-scientific", action="store_true", help="Scientific notation colorbar")
+    parser.add_argument(
+        "--n-elec", type=int, default=16, help="Number of electrodes (GN diff)"
+    )
+    parser.add_argument(
+        "--radius", type=float, default=0.025, help="Mesh radius for GN diff"
+    )
+    parser.add_argument(
+        "--drive-value", type=float, default=None, help="Drive value override (GN diff)"
+    )
+    parser.add_argument(
+        "--step-size-calibration",
+        action="store_true",
+        help="Enable one-step alpha search",
+    )
+    parser.add_argument(
+        "--step-size-min", type=float, default=1e-3, help="Lower bound for alpha search"
+    )
+    parser.add_argument(
+        "--step-size-max", type=float, default=1e1, help="Upper bound for alpha search"
+    )
+    parser.add_argument(
+        "--step-size-maxiter",
+        type=int,
+        default=50,
+        help="Max iterations for alpha search",
+    )
+    parser.add_argument(
+        "--colormap", type=str, default="viridis", help="Colormap for reconstruction"
+    )
+    parser.add_argument(
+        "--colorbar-scientific",
+        action="store_true",
+        help="Scientific notation colorbar",
+    )
     parser.add_argument(
         "--colorbar-format",
         type=str,
@@ -334,9 +477,15 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["plain", "scientific", "matlab_short"],
         help="Colorbar format",
     )
-    parser.add_argument("--transparent", action="store_true", help="Save plots with transparent background")
+    parser.add_argument(
+        "--transparent",
+        action="store_true",
+        help="Save plots with transparent background",
+    )
 
-    parser.add_argument("--difference-calibration", choices=["before", "after", "none"], default="after")
+    parser.add_argument(
+        "--difference-calibration", choices=["before", "after", "none"], default="after"
+    )
     parser.add_argument("--calibration-col", type=int, default=-1)
     parser.add_argument("--prior-scale", type=float, default=None)
     parser.add_argument("--noise-std", type=float, default=None)
@@ -395,9 +544,14 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         if args.metadata is None:
             parser.error("gn-absolute requires --metadata.")
         if args.reference_csv is not None or args.reference_index is not None:
-            parser.error("gn-absolute does not accept --reference-csv or --reference-index.")
+            parser.error(
+                "gn-absolute does not accept --reference-csv or --reference-index."
+            )
 
-    if method in {ReconstructionMethod.GN_DIFFERENCE, ReconstructionMethod.SPARSE_BAYES}:
+    if method in {
+        ReconstructionMethod.GN_DIFFERENCE,
+        ReconstructionMethod.SPARSE_BAYES,
+    }:
         if input_mode == InputMode.PAIRED and args.reference_col == args.target_col:
             parser.error(
                 "In paired mode, --reference-col and --target-col must be different."
@@ -416,7 +570,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
 
     apply_acceleration_profile_overrides(args, mesh_dim=mesh_dim)
     args.solver_mode = resolve_solver_mode(args.solver_mode, mesh_dim=mesh_dim)
-    args.line_search_mode = resolve_line_search_mode(args.line_search_mode, mesh_dim=mesh_dim)
+    args.line_search_mode = resolve_line_search_mode(
+        args.line_search_mode, mesh_dim=mesh_dim
+    )
     args.rom_mode = resolve_experimental_mode(args.rom_mode)
     args.inexact_mode = resolve_experimental_mode(args.inexact_mode)
     args.lowrank_mode = resolve_experimental_mode(args.lowrank_mode)
@@ -425,7 +581,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         mesh_dim=mesh_dim,
         solver_mode=args.solver_mode,
     )
-    args.petsc_device = normalize_petsc_device(args.petsc_device, default=DEFAULT_PETSC_DEVICE)
+    args.petsc_device = normalize_petsc_device(
+        args.petsc_device, default=DEFAULT_PETSC_DEVICE
+    )
     args.forward_backend = normalize_forward_backend(
         args.forward_backend,
         default=DEFAULT_FORWARD_BACKEND,
@@ -434,7 +592,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
         args.mesh_family,
         default=DEFAULT_MESH_FAMILY,
     )
-    args.geometry_version = str(args.geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    args.geometry_version = (
+        str(args.geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    )
     if int(args.cholmod_max_n) <= 0:
         parser.error("--cholmod-max-n must be positive.")
     if float(args.cholmod_max_memory_gib) <= 0:
@@ -458,7 +618,9 @@ def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> 
     if int(args.jacobian_block_size) < 0:
         parser.error("--jacobian-block-size must be >= 0.")
     try:
-        args.jacobian_block_candidates = parse_block_size_candidates(args.jacobian_block_candidates)
+        args.jacobian_block_candidates = parse_block_size_candidates(
+            args.jacobian_block_candidates
+        )
     except ValueError as exc:
         parser.error(f"--jacobian-block-candidates {exc}")
 
@@ -510,7 +672,9 @@ def _collect_perf_metrics(results) -> dict[str, Any]:
     }
 
 
-def _write_perf_report(path: Path, *, method: ReconstructionMethod, summary_path: Path, results, args) -> dict[str, Any]:
+def _write_perf_report(
+    path: Path, *, method: ReconstructionMethod, summary_path: Path, results, args
+) -> dict[str, Any]:
     report = {
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),
         "method": method.value,
@@ -600,12 +764,14 @@ def run(argv: List[str] | None = None) -> int:
         )
         stage_totals = perf_report.get("metrics", {}).get("stage_totals", {})
         linear_total = _safe_float(stage_totals.get("linear_solve"))
-        if linear_total is not None and linear_total > 0 and args.perf_gate in {"warn", "strict"}:
+        if (
+            linear_total is not None
+            and linear_total > 0
+            and args.perf_gate in {"warn", "strict"}
+        ):
             threshold = 120.0
             if linear_total > threshold:
-                message = (
-                    f"performance gate exceeded: linear_solve total {linear_total:.3f}s > {threshold:.3f}s"
-                )
+                message = f"performance gate exceeded: linear_solve total {linear_total:.3f}s > {threshold:.3f}s"
                 if args.perf_gate == "strict":
                     raise RuntimeError(message)
                 LOGGER.warning(message)

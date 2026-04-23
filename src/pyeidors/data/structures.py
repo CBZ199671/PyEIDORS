@@ -14,10 +14,11 @@ if TYPE_CHECKING:
 @dataclass
 class PatternConfig:
     """Stimulation and measurement pattern configuration."""
+
     n_elec: int
     n_rings: int = 1
-    stim_pattern: str | list[int] = '{ad}'
-    meas_pattern: str | list[int] = '{ad}'
+    stim_pattern: str | list[int] = "{ad}"
+    meas_pattern: str | list[int] = "{ad}"
     electrode_layout: Literal["ring_major", "zigzag"] = "ring_major"
     measurement_protocol: Literal[
         "layer_local_2p5d",
@@ -28,43 +29,47 @@ class PatternConfig:
     ] = "eidors_full_3d"
     custom_stim_matrix: Any | None = None
     custom_meas_matrices: Any | None = None
-    drive_mode: Literal["line_current_density", "total_current", "normalized"] = "line_current_density"
+    drive_mode: Literal["line_current_density", "total_current", "normalized"] = (
+        "line_current_density"
+    )
     drive_value: float = 1.0
     geometry_scale_to_m: float = 1.0
     electrode_length_m_override: float | list[float] | None = None
     use_meas_current: bool = False
     use_meas_current_next: int = 0
     rotate_meas: bool = True
-    stim_direction: str = 'ccw'  # 'ccw' or 'cw'
-    meas_direction: str = 'ccw'
+    stim_direction: str = "ccw"  # 'ccw' or 'cw'
+    meas_direction: str = "ccw"
     stim_first_positive: bool = False
 
 
 @dataclass
 class EITData:
     """EIT data container."""
+
     meas: np.ndarray
     stim_pattern: np.ndarray
     n_elec: int
     n_stim: int
     n_meas: int
-    type: str = 'real'
+    type: str = "real"
     reference_meas: np.ndarray | None = None
     target_meas: np.ndarray | None = None
-    difference_mode: str = 'raw'
-    difference_orientation: str = 'target_minus_reference'
+    difference_mode: str = "raw"
+    difference_orientation: str = "target_minus_reference"
 
 
 @dataclass
 class EITImage:
     """EIT image container."""
+
     elem_data: np.ndarray
     fwd_model: Any
-    type: str = 'conductivity'
-    name: str = ''
+    type: str = "conductivity"
+    name: str = ""
 
     def get_conductivity(self) -> np.ndarray:
-        if self.type == 'resistivity':
+        if self.type == "resistivity":
             return 1.0 / self.elem_data
         return self.elem_data
 
@@ -72,6 +77,7 @@ class EITImage:
 @dataclass
 class MeshConfig:
     """Mesh configuration parameters."""
+
     dimension: int = 2
     radius: float = 1.0
     height: float = 1.0
@@ -91,11 +97,14 @@ class MeshConfig:
 @dataclass
 class ElectrodePosition:
     """Electrode position information."""
+
     L: int  # Number of electrodes
     positions: list[tuple[float, float]]  # Electrode angular positions (start, end)
 
     @classmethod
-    def create_circular(cls, n_elec: int = 16, radius: float = 1.0) -> 'ElectrodePosition':
+    def create_circular(
+        cls, n_elec: int = 16, radius: float = 1.0
+    ) -> "ElectrodePosition":
         """Create circular electrode positions."""
         import math
 
@@ -177,8 +186,14 @@ class EITMesh:
 
     def get_info(self) -> dict[str, Any]:
         coords = self.coordinates()
-        center = coords.mean(axis=0) if coords.size else np.zeros((self.mesh.geometry.dim,))
-        n_elec = sum(1 for k in self.association_table if isinstance(k, str) and k.lower().startswith("electrode"))
+        center = (
+            coords.mean(axis=0) if coords.size else np.zeros((self.mesh.geometry.dim,))
+        )
+        n_elec = sum(
+            1
+            for k in self.association_table
+            if isinstance(k, str) and k.lower().startswith("electrode")
+        )
         return {
             "num_vertices": self.num_vertices(),
             "num_cells": self.num_cells(),

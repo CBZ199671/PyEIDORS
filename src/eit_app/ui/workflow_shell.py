@@ -76,7 +76,9 @@ class WorkflowShell(QWidget):
         self._toolbox = QToolBox()
         self._toolbox.setObjectName(toolbox_name)
         toolbox_v_policy = (
-            QSizePolicy.Policy.Maximum if compact_toolbox else QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Maximum
+            if compact_toolbox
+            else QSizePolicy.Policy.Expanding
         )
         self._toolbox.setSizePolicy(QSizePolicy.Policy.Preferred, toolbox_v_policy)
         for title, panel in steps:

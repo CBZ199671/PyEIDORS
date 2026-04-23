@@ -23,7 +23,9 @@ def test_visualizer_plotting_branches(eit_system, tmp_path):
     sigma_arr = sigma_fn.x.array.copy()
 
     viz = EITVisualizer(style="default", figsize=(8, 6))
-    mesh_fig = viz.plot_mesh(mesh, show_electrodes=True, save_path=str(tmp_path / "mesh.png"))
+    mesh_fig = viz.plot_mesh(
+        mesh, show_electrodes=True, save_path=str(tmp_path / "mesh.png")
+    )
     cond_fig_plain = viz.plot_conductivity(
         mesh,
         sigma_arr,
@@ -52,7 +54,9 @@ def test_visualizer_plotting_branches(eit_system, tmp_path):
         colorbar_format="matlab_short",
     )
 
-    measurements = np.linspace(-0.3, 0.3, eit_system.fwd_model.pattern_manager.n_meas_total)
+    measurements = np.linspace(
+        -0.3, 0.3, eit_system.fwd_model.pattern_manager.n_meas_total
+    )
     meas_fig = viz.plot_measurements(measurements, save_path=str(tmp_path / "meas.png"))
     cmp_fig = viz.plot_reconstruction_comparison(mesh, sigma_arr, sigma_arr * 1.1)
     conv_fig = viz.plot_convergence(np.arange(5), np.linspace(1.0, 0.1, 5))
@@ -81,17 +85,23 @@ def test_visualizer_static_helpers_and_factory(eit_system):
     cmap = EITVisualizer._resolve_colormap("eidors_diff")
     assert cmap is not None
 
-    vmin, vmax = EITVisualizer._resolve_eidors_diff_limits(np.array([0.0, 2.0, -1.0]), None, None)
+    vmin, vmax = EITVisualizer._resolve_eidors_diff_limits(
+        np.array([0.0, 2.0, -1.0]), None, None
+    )
     assert vmin < 0 < vmax
     vmin2, vmax2 = EITVisualizer._resolve_eidors_diff_limits(np.array([1.0]), None, 0.7)
     assert vmin2 == -0.7 and vmax2 == 0.7
-    vmin3, vmax3 = EITVisualizer._resolve_eidors_diff_limits(np.array([1.0]), -0.2, None)
+    vmin3, vmax3 = EITVisualizer._resolve_eidors_diff_limits(
+        np.array([1.0]), -0.2, None
+    )
     assert vmin3 == -0.2 and vmax3 == 0.2
 
     ticks = EITVisualizer._eidors_tick_vals(max_scale=0.3, ref_lev=0.0)
     assert ticks.size > 0
 
-    fig = viz.plot_conductivity(eit_system.mesh, np.ones(eit_system.mesh.num_cells(), dtype=float))
+    fig = viz.plot_conductivity(
+        eit_system.mesh, np.ones(eit_system.mesh.num_cells(), dtype=float)
+    )
     cbar = fig.axes[-1]
     assert cbar is not None
 

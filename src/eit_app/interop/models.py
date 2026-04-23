@@ -89,7 +89,9 @@ class InteropBridgeManifest:
         return asdict(self)
 
     @classmethod
-    def from_mapping(cls, mapping: dict[str, Any] | None = None) -> "InteropBridgeManifest":
+    def from_mapping(
+        cls, mapping: dict[str, Any] | None = None
+    ) -> "InteropBridgeManifest":
         raw = dict(mapping or {})
         return cls(
             exchange_format=str(raw.get("exchange_format", BRIDGE_PACKAGE_FORMAT_V2)),

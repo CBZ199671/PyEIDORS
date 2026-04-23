@@ -34,8 +34,18 @@ from scripts.common.acceleration_profiles import (
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-dir", type=Path, default=None, help="Explicit mesh root. Defaults to ephemeral /tmp.")
-    parser.add_argument("--cache-root", type=Path, default=None, help="Explicit cache root. Defaults to ephemeral /tmp.")
+    parser.add_argument(
+        "--mesh-dir",
+        type=Path,
+        default=None,
+        help="Explicit mesh root. Defaults to ephemeral /tmp.",
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=None,
+        help="Explicit cache root. Defaults to ephemeral /tmp.",
+    )
     parser.add_argument(
         "--refinements",
         type=str,
@@ -49,7 +59,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--electrode-height-ratio", type=float, default=0.2)
     parser.add_argument("--electrode-coverage", type=float, default=0.5)
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
-    parser.add_argument("--output-json", type=Path, default=Path("reports") / "cuda_structured_scaling.json")
+    parser.add_argument(
+        "--output-json",
+        type=Path,
+        default=Path("reports") / "cuda_structured_scaling.json",
+    )
     parser.add_argument("--gate", choices=["strict", "off"], default="strict")
     add_acceleration_profile_argument(
         parser,
@@ -136,7 +150,10 @@ def _build_system(
 
 
 def _clone_image(system: EITSystem, values: np.ndarray) -> EITImage:
-    return EITImage(elem_data=np.asarray(values, dtype=np.float64).copy(), fwd_model=system.fwd_model)
+    return EITImage(
+        elem_data=np.asarray(values, dtype=np.float64).copy(),
+        fwd_model=system.fwd_model,
+    )
 
 
 def _make_phantom(system: EITSystem) -> EITImage:
@@ -146,11 +163,19 @@ def _make_phantom(system: EITSystem) -> EITImage:
     return _clone_image(system, sigma)
 
 
-def _evaluate_gate(refinement: int, *, first_forward_speedup: float, warm_forward_speedup: float) -> dict[str, object]:
+def _evaluate_gate(
+    refinement: int, *, first_forward_speedup: float, warm_forward_speedup: float
+) -> dict[str, object]:
     first_required = 3.0 if refinement in {3, 8} else None
     warm_required = 5.0 if refinement in {3, 4, 8} else None
-    first_ok = True if first_required is None else bool(first_forward_speedup >= first_required)
-    warm_ok = True if warm_required is None else bool(warm_forward_speedup >= warm_required)
+    first_ok = (
+        True
+        if first_required is None
+        else bool(first_forward_speedup >= first_required)
+    )
+    warm_ok = (
+        True if warm_required is None else bool(warm_forward_speedup >= warm_required)
+    )
     return {
         "first_forward_required_x": first_required,
         "warm_forward_required_x": warm_required,
@@ -160,7 +185,9 @@ def _evaluate_gate(refinement: int, *, first_forward_speedup: float, warm_forwar
     }
 
 
-def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Path, cache_root: Path) -> dict[str, object]:
+def _run_refinement(
+    args: argparse.Namespace, *, refinement: int, mesh_root: Path, cache_root: Path
+) -> dict[str, object]:
     mesh_dir = mesh_root / f"ref{refinement}"
     cpu_cache = cache_root / f"ref{refinement}" / "cpu"
     gpu_cache = cache_root / f"ref{refinement}" / "gpu"
@@ -227,10 +254,16 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
     _, gpu_first = _timed(lambda: gpu.forward_solve(gpu_baseline))
 
     _, cpu_warm_total = _timed(
-        lambda: [cpu.forward_solve(cpu_baseline) for _ in range(int(args.warm_forward_repeats))]
+        lambda: [
+            cpu.forward_solve(cpu_baseline)
+            for _ in range(int(args.warm_forward_repeats))
+        ]
     )
     _, gpu_warm_total = _timed(
-        lambda: [gpu.forward_solve(gpu_baseline) for _ in range(int(args.warm_forward_repeats))]
+        lambda: [
+            gpu.forward_solve(gpu_baseline)
+            for _ in range(int(args.warm_forward_repeats))
+        ]
     )
     _, cpu_target = _timed(lambda: cpu.forward_solve(cpu_phantom))
     _, gpu_target = _timed(lambda: gpu.forward_solve(gpu_phantom))
@@ -239,7 +272,9 @@ def _run_refinement(args: argparse.Namespace, *, refinement: int, mesh_root: Pat
     gpu_warm_avg = float(gpu_warm_total / max(1, int(args.warm_forward_repeats)))
     speedup = {
         "first_forward_x": float(cpu_first / gpu_first) if gpu_first > 0 else 0.0,
-        "warm_forward_avg_x": float(cpu_warm_avg / gpu_warm_avg) if gpu_warm_avg > 0 else 0.0,
+        "warm_forward_avg_x": float(cpu_warm_avg / gpu_warm_avg)
+        if gpu_warm_avg > 0
+        else 0.0,
         "target_forward_x": float(cpu_target / gpu_target) if gpu_target > 0 else 0.0,
     }
     return {
@@ -288,14 +323,23 @@ def main() -> None:
     mesh_root = args.mesh_dir
     cache_root = args.cache_root
     if mesh_root is None:
-        ephemeral_mesh_root = Path(tempfile.mkdtemp(prefix="pyeidors-cuda-structured-mesh-", dir="/tmp"))
+        ephemeral_mesh_root = Path(
+            tempfile.mkdtemp(prefix="pyeidors-cuda-structured-mesh-", dir="/tmp")
+        )
         mesh_root = ephemeral_mesh_root
     if cache_root is None:
-        ephemeral_cache_root = Path(tempfile.mkdtemp(prefix="pyeidors-cuda-structured-cache-", dir="/tmp"))
+        ephemeral_cache_root = Path(
+            tempfile.mkdtemp(prefix="pyeidors-cuda-structured-cache-", dir="/tmp")
+        )
         cache_root = ephemeral_cache_root
 
     try:
-        results = [_run_refinement(args, refinement=refinement, mesh_root=mesh_root, cache_root=cache_root) for refinement in refinements]
+        results = [
+            _run_refinement(
+                args, refinement=refinement, mesh_root=mesh_root, cache_root=cache_root
+            )
+            for refinement in refinements
+        ]
         payload = {
             "config": {
                 "refinements": refinements,
@@ -311,10 +355,16 @@ def main() -> None:
                 "geometry_version": str(geometry_version),
                 "generator_revision": str(generator_revision),
             },
-            "mesh_root_mode": "ephemeral" if ephemeral_mesh_root is not None else "explicit",
-            "cache_root_mode": "ephemeral" if ephemeral_cache_root is not None else "explicit",
+            "mesh_root_mode": "ephemeral"
+            if ephemeral_mesh_root is not None
+            else "explicit",
+            "cache_root_mode": "ephemeral"
+            if ephemeral_cache_root is not None
+            else "explicit",
             "results": results,
-            "all_gates_passed": bool(all(bool(result["gate"]["passed"]) for result in results)),
+            "all_gates_passed": bool(
+                all(bool(result["gate"]["passed"]) for result in results)
+            ),
         }
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(payload, indent=2), encoding="utf-8")

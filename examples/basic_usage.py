@@ -7,7 +7,9 @@ Demonstrates how to use the modular EIT system for forward solving and inverse r
 import numpy as np
 import sys
 import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
 
 def basic_usage_example():
     """Basic usage example."""
@@ -23,7 +25,7 @@ def basic_usage_example():
     print(f"   DOLFINx available: {env['dolfinx_available']}")
     print(f"   PyTorch available: {env['torch_available']}")
     print(f"   CUDA available: {env['cuda_available']}")
-    if env['torch_available']:
+    if env["torch_available"]:
         print(f"   PyTorch version: {env['torch_version']}")
         print(f"   GPU count: {env['cuda_device_count']}")
     print()
@@ -35,25 +37,23 @@ def basic_usage_example():
     # Stimulation/measurement pattern configuration
     pattern_config = PatternConfig(
         n_elec=n_elec,
-        stim_pattern='{ad}',  # Adjacent stimulation pattern
-        meas_pattern='{ad}',  # Adjacent measurement pattern
-        drive_mode='normalized',
+        stim_pattern="{ad}",  # Adjacent stimulation pattern
+        meas_pattern="{ad}",  # Adjacent measurement pattern
+        drive_mode="normalized",
         drive_value=1.0,
         geometry_scale_to_m=1.0,
     )
 
     # Mesh configuration
     mesh_config = MeshConfig(
-        radius=1.0,          # Circular domain radius
-        refinement=8,        # Mesh refinement level
-        mesh_size=0.1       # Mesh element size
+        radius=1.0,  # Circular domain radius
+        refinement=8,  # Mesh refinement level
+        mesh_size=0.1,  # Mesh element size
     )
 
     # Create EIT system
     eit_system = EITSystem(
-        n_elec=n_elec,
-        pattern_config=pattern_config,
-        mesh_config=mesh_config
+        n_elec=n_elec, pattern_config=pattern_config, mesh_config=mesh_config
     )
 
     print(f"   Number of electrodes: {n_elec}")
@@ -65,7 +65,7 @@ def basic_usage_example():
     print("3. System Information")
     info = eit_system.get_system_info()
     for key, value in info.items():
-        if key != 'pattern_config' and key != 'mesh_config':
+        if key != "pattern_config" and key != "mesh_config":
             print(f"   {key}: {value}")
     print()
 
@@ -75,6 +75,7 @@ def basic_usage_example():
     print("   - Can use existing mesh files or custom mesh generator")
     print("   - Example mesh files located in eit_meshes/ directory")
     print()
+
 
 def show_module_structure():
     """Show module structure."""
@@ -86,7 +87,7 @@ def show_module_structure():
             "core_system.py": "Core EIT system class",
             "data/": {
                 "structures.py": "Data structure definitions (EITData, EITImage, config classes)",
-                "synthetic_data.py": "Synthetic data generation"
+                "synthetic_data.py": "Synthetic data generation",
             },
             "forward/": {
                 "eit_forward_model.py": "EIT forward model (Complete Electrode Model)"
@@ -94,25 +95,21 @@ def show_module_structure():
             "inverse/": {
                 "jacobian/": {
                     "base_jacobian.py": "Jacobian calculator base class",
-                    "direct_jacobian.py": "Direct method Jacobian calculator"
+                    "direct_jacobian.py": "Direct method Jacobian calculator",
                 },
                 "regularization/": {
                     "base_regularization.py": "Regularization base class",
-                    "smoothness.py": "Smoothness regularization"
+                    "smoothness.py": "Smoothness regularization",
                 },
-                "solvers/": {
-                    "gauss_newton.py": "Modular Gauss-Newton solver"
-                }
+                "solvers/": {"gauss_newton.py": "Modular Gauss-Newton solver"},
             },
-            "electrodes/": {
-                "patterns.py": "Stimulation/measurement pattern manager"
-            },
+            "electrodes/": {"patterns.py": "Stimulation/measurement pattern manager"},
             "geometry/": {
                 "mesh_generator.py": "Mesh generator",
-                "mesh_converter.py": "Mesh format converter"
+                "mesh_converter.py": "Mesh format converter",
             },
             "utils/": "Utility functions",
-            "visualization/": "Visualization module"
+            "visualization/": "Visualization module",
         }
     }
 
@@ -126,6 +123,7 @@ def show_module_structure():
 
     print_structure(structure)
     print()
+
 
 def show_key_features():
     """Show key features."""
@@ -155,12 +153,13 @@ def show_key_features():
         "📊 Extensibility",
         "   - Support for multiple stimulation/measurement patterns",
         "   - Integrable with CUQI Bayesian inference framework",
-        "   - Flexible visualization interface"
+        "   - Flexible visualization interface",
     ]
 
     for feature in features:
         print(feature)
     print()
+
 
 if __name__ == "__main__":
     basic_usage_example()

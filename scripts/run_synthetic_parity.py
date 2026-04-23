@@ -23,6 +23,7 @@ Example usage comparing against EIDORS voltages:
       --output-root results/simulation_parity/eidors_cmp \
       --eidors-csv external/eidors_diff_voltages.csv
 """
+
 from __future__ import annotations
 
 import argparse
@@ -85,119 +86,327 @@ class Metrics:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--output-root", type=Path, default=Path("results/simulation_parity"),
-                        help="Directory where metrics, figures and CSV files will be stored.")
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"),
-                        help="Directory containing cached meshes (passed to load_or_create_mesh).")
-    parser.add_argument("--mesh-name", type=str, default=None,
-                        help="Optional mesh name to reuse; if omitted a mesh will be created.")
-    parser.add_argument("--n-elec", type=int, default=16,
-                        help="Number of electrodes for the synthetic test.")
-    parser.add_argument("--refinement", type=int, default=12,
-                        help="Mesh refinement passed to load_or_create_mesh when generating a mesh.")
-    parser.add_argument("--mesh-radius", type=float, default=1.0,
-                        help="Radius passed to load_or_create_mesh (used for caching key).")
-    parser.add_argument("--electrode-coverage", type=float, default=0.5,
-                        help="Fraction of perimeter covered by each electrode (affects cache key).")
-    parser.add_argument("--background", type=float, default=1.0,
-                        help="Background conductivity used for simulations.")
-    parser.add_argument("--phantom-center", type=float, nargs=2, default=(0.3, 0.2),
-                        help="Center (x, y) of the circular phantom.")
-    parser.add_argument("--phantom-radius", type=float, default=0.2,
-                        help="Radius of the circular phantom.")
-    parser.add_argument("--phantom-contrast", type=float, default=1.5,
-                        help="Conductivity inside the phantom (absolute units).")
-    parser.add_argument("--mode", choices=["difference", "absolute", "both"], default="both",
-                        help="Which reconstruction pipeline(s) to execute.")
-    parser.add_argument("--eidors-csv", type=Path,
-                        help="Optional CSV file produced by EIDORS to compare voltages against.")
-    parser.add_argument("--csv-delimiter", type=str, default=",",
-                        help="Delimiter used when parsing --eidors-csv (default ',').")
-    parser.add_argument("--save-forward-csv", action="store_true",
-                        help="Whether to save synthetic voltages (baseline & phantom) to CSV.")
-    parser.add_argument("--figure-dpi", type=int, default=300,
-                        help="DPI used when saving matplotlib figures.")
-    parser.add_argument("--gn-max-iterations", type=int, default=None,
-                        help="Override Gauss-Newton max iterations (absolute + GN difference).")
-    parser.add_argument("--gn-min-iterations", type=int, default=None,
-                        help="Override Gauss-Newton minimum iterations.")
-    parser.add_argument("--gn-convergence-tol", type=float, default=None,
-                        help="Override Gauss-Newton convergence tolerance.")
-    parser.add_argument("--gn-regularization", type=float, default=None,
-                        help="Override Gauss-Newton regularization strength (lambda).")
-    parser.add_argument("--gn-max-step", type=float, default=None,
-                        help="Override Gauss-Newton line search maximum step.")
-    parser.add_argument("--gn-min-step", type=float, default=None,
-                        help="Override Gauss-Newton line search minimum step (set 0 to allow tiny steps).")
-    parser.add_argument("--gn-clip-values", type=float, nargs=2, metavar=("MIN", "MAX"), default=None,
-                        help="Override Gauss-Newton conductivity clipping bounds.")
+    parser.add_argument(
+        "--output-root",
+        type=Path,
+        default=Path("results/simulation_parity"),
+        help="Directory where metrics, figures and CSV files will be stored.",
+    )
+    parser.add_argument(
+        "--mesh-dir",
+        type=Path,
+        default=Path("eit_meshes"),
+        help="Directory containing cached meshes (passed to load_or_create_mesh).",
+    )
+    parser.add_argument(
+        "--mesh-name",
+        type=str,
+        default=None,
+        help="Optional mesh name to reuse; if omitted a mesh will be created.",
+    )
+    parser.add_argument(
+        "--n-elec",
+        type=int,
+        default=16,
+        help="Number of electrodes for the synthetic test.",
+    )
+    parser.add_argument(
+        "--refinement",
+        type=int,
+        default=12,
+        help="Mesh refinement passed to load_or_create_mesh when generating a mesh.",
+    )
+    parser.add_argument(
+        "--mesh-radius",
+        type=float,
+        default=1.0,
+        help="Radius passed to load_or_create_mesh (used for caching key).",
+    )
+    parser.add_argument(
+        "--electrode-coverage",
+        type=float,
+        default=0.5,
+        help="Fraction of perimeter covered by each electrode (affects cache key).",
+    )
+    parser.add_argument(
+        "--background",
+        type=float,
+        default=1.0,
+        help="Background conductivity used for simulations.",
+    )
+    parser.add_argument(
+        "--phantom-center",
+        type=float,
+        nargs=2,
+        default=(0.3, 0.2),
+        help="Center (x, y) of the circular phantom.",
+    )
+    parser.add_argument(
+        "--phantom-radius",
+        type=float,
+        default=0.2,
+        help="Radius of the circular phantom.",
+    )
+    parser.add_argument(
+        "--phantom-contrast",
+        type=float,
+        default=1.5,
+        help="Conductivity inside the phantom (absolute units).",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["difference", "absolute", "both"],
+        default="both",
+        help="Which reconstruction pipeline(s) to execute.",
+    )
+    parser.add_argument(
+        "--eidors-csv",
+        type=Path,
+        help="Optional CSV file produced by EIDORS to compare voltages against.",
+    )
+    parser.add_argument(
+        "--csv-delimiter",
+        type=str,
+        default=",",
+        help="Delimiter used when parsing --eidors-csv (default ',').",
+    )
+    parser.add_argument(
+        "--save-forward-csv",
+        action="store_true",
+        help="Whether to save synthetic voltages (baseline & phantom) to CSV.",
+    )
+    parser.add_argument(
+        "--figure-dpi",
+        type=int,
+        default=300,
+        help="DPI used when saving matplotlib figures.",
+    )
+    parser.add_argument(
+        "--gn-max-iterations",
+        type=int,
+        default=None,
+        help="Override Gauss-Newton max iterations (absolute + GN difference).",
+    )
+    parser.add_argument(
+        "--gn-min-iterations",
+        type=int,
+        default=None,
+        help="Override Gauss-Newton minimum iterations.",
+    )
+    parser.add_argument(
+        "--gn-convergence-tol",
+        type=float,
+        default=None,
+        help="Override Gauss-Newton convergence tolerance.",
+    )
+    parser.add_argument(
+        "--gn-regularization",
+        type=float,
+        default=None,
+        help="Override Gauss-Newton regularization strength (lambda).",
+    )
+    parser.add_argument(
+        "--gn-max-step",
+        type=float,
+        default=None,
+        help="Override Gauss-Newton line search maximum step.",
+    )
+    parser.add_argument(
+        "--gn-min-step",
+        type=float,
+        default=None,
+        help="Override Gauss-Newton line search minimum step (set 0 to allow tiny steps).",
+    )
+    parser.add_argument(
+        "--gn-clip-values",
+        type=float,
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        default=None,
+        help="Override Gauss-Newton conductivity clipping bounds.",
+    )
     prior_group = parser.add_mutually_exclusive_group()
-    prior_group.add_argument("--gn-use-prior-term", action="store_true",
-                             help="Force Gauss-Newton to include the prior term.")
-    prior_group.add_argument("--gn-no-prior-term", action="store_true",
-                             help="Disable Gauss-Newton prior term.")
-    parser.add_argument("--absolute-save-frames", action="store_true",
-                        help="Save per-iteration conductivity frames for the absolute reconstruction.")
-    parser.add_argument("--absolute-frames-subdir", type=str, default="absolute/iterations",
-                        help="Subdirectory under --output-root to store iteration frames (default: absolute/iterations).")
-    parser.add_argument("--absolute-make-gif", action="store_true",
-                        help="Create an animated GIF from the saved absolute iteration frames.")
-    parser.add_argument("--absolute-gif-path", type=Path, default=None,
-                        help="Output path for the GIF (defaults to absolute/reconstruction_iterations.gif under --output-root).")
-    parser.add_argument("--gif-fps", type=float, default=4.0,
-                        help="Frames per second for the generated GIF.")
-    parser.add_argument("--gif-max-frames", type=int, default=None,
-                        help="Optional cap on the number of frames included in the GIF.")
-    parser.add_argument("--absolute-frame-dpi", type=int, default=150,
-                        help="DPI used when saving iteration frames (lower reduces GIF size).")
-    parser.add_argument("--absolute-frame-vmin", type=float, default=None,
-                        help="Color scale minimum for iteration frames (default: min(background, phantom_contrast)).")
-    parser.add_argument("--absolute-frame-vmax", type=float, default=None,
-                        help="Color scale maximum for iteration frames (default: max(background, phantom_contrast)).")
-    parser.add_argument("--difference-solver", choices=["gauss-newton", "single-step"], default="gauss-newton",
-                        help="Select PyEIDORS' iterative GN solver or an EIDORS-style single-step solve.")
-    parser.add_argument("--difference-max-iterations", type=int, default=None,
-                        help="Override the Gauss–Newton iteration count when using the iterative solver.")
-    parser.add_argument("--difference-hyperparameter", type=float, default=1e-2,
-                        help="Spatial hyperparameter (hp) applied as hp^2 * RtR in single-step solves.")
-    parser.add_argument("--noser-exponent", type=float, default=0.5,
-                        help="Exponent applied to diag(J'WJ) when forming the NOSER prior (default 0.5 like EIDORS).")
-    parser.add_argument("--noser-floor", type=float, default=1e-12,
-                        help="Numerical floor for NOSER diagonal entries before applying the exponent.")
-    parser.add_argument("--meas-weight-strategy", choices=["baseline", "difference", "none"], default="baseline",
-                        help="Strategy for estimating measurement inverse covariance weights.")
-    parser.add_argument("--meas-weight-floor", type=float, default=1e-9,
-                        help="Minimum allowable measurement weight to avoid singular systems.")
-    parser.add_argument("--single-step-jacobian-method", choices=["efficient", "traditional"], default="efficient",
-                        help="Jacobian calculator mode for the single-step solver.")
-    parser.add_argument("--single-step-negate-jacobian", action="store_true",
-                        help="Match PyEIDORS' sign convention by negating the Jacobian before solving.")
-    parser.add_argument("--single-step-space", choices=["parameter", "measurement"], default="measurement",
-                        help="Solve single-step in parameter space (J^T J) or measurement space (J J^T).")
-    parser.add_argument("--conductivity-bounds", type=float, nargs=2, metavar=("MIN", "MAX"),
-                        default=(1e-6, 10.0),
-                        help="Bounds enforced on reconstructed conductivities in single-step mode.")
-    parser.add_argument("--step-size-calibration", action="store_true",
-                        help="Enable 1-D scale search (fminbnd-style) on the single-step update.")
-    parser.add_argument("--step-size-min", type=float, default=1e-5,
-                        help="Lower bound for the step-size calibration interval.")
-    parser.add_argument("--step-size-max", type=float, default=1e1,
-                        help="Upper bound for the step-size calibration interval.")
-    parser.add_argument("--step-size-maxiter", type=int, default=50,
-                        help="Maximum iterations passed to the bounded step-size optimizer.")
-    parser.add_argument("--petsc-device", choices=["auto", "cpu", "cuda"], default="auto",
-                        help="PETSc/DOLFINx FEM device policy.")
-    parser.add_argument("--device", choices=["auto", "cpu", "cuda"], default="auto",
-                        help="Torch/GN inverse runtime device policy.")
+    prior_group.add_argument(
+        "--gn-use-prior-term",
+        action="store_true",
+        help="Force Gauss-Newton to include the prior term.",
+    )
+    prior_group.add_argument(
+        "--gn-no-prior-term",
+        action="store_true",
+        help="Disable Gauss-Newton prior term.",
+    )
+    parser.add_argument(
+        "--absolute-save-frames",
+        action="store_true",
+        help="Save per-iteration conductivity frames for the absolute reconstruction.",
+    )
+    parser.add_argument(
+        "--absolute-frames-subdir",
+        type=str,
+        default="absolute/iterations",
+        help="Subdirectory under --output-root to store iteration frames (default: absolute/iterations).",
+    )
+    parser.add_argument(
+        "--absolute-make-gif",
+        action="store_true",
+        help="Create an animated GIF from the saved absolute iteration frames.",
+    )
+    parser.add_argument(
+        "--absolute-gif-path",
+        type=Path,
+        default=None,
+        help="Output path for the GIF (defaults to absolute/reconstruction_iterations.gif under --output-root).",
+    )
+    parser.add_argument(
+        "--gif-fps",
+        type=float,
+        default=4.0,
+        help="Frames per second for the generated GIF.",
+    )
+    parser.add_argument(
+        "--gif-max-frames",
+        type=int,
+        default=None,
+        help="Optional cap on the number of frames included in the GIF.",
+    )
+    parser.add_argument(
+        "--absolute-frame-dpi",
+        type=int,
+        default=150,
+        help="DPI used when saving iteration frames (lower reduces GIF size).",
+    )
+    parser.add_argument(
+        "--absolute-frame-vmin",
+        type=float,
+        default=None,
+        help="Color scale minimum for iteration frames (default: min(background, phantom_contrast)).",
+    )
+    parser.add_argument(
+        "--absolute-frame-vmax",
+        type=float,
+        default=None,
+        help="Color scale maximum for iteration frames (default: max(background, phantom_contrast)).",
+    )
+    parser.add_argument(
+        "--difference-solver",
+        choices=["gauss-newton", "single-step"],
+        default="gauss-newton",
+        help="Select PyEIDORS' iterative GN solver or an EIDORS-style single-step solve.",
+    )
+    parser.add_argument(
+        "--difference-max-iterations",
+        type=int,
+        default=None,
+        help="Override the Gauss–Newton iteration count when using the iterative solver.",
+    )
+    parser.add_argument(
+        "--difference-hyperparameter",
+        type=float,
+        default=1e-2,
+        help="Spatial hyperparameter (hp) applied as hp^2 * RtR in single-step solves.",
+    )
+    parser.add_argument(
+        "--noser-exponent",
+        type=float,
+        default=0.5,
+        help="Exponent applied to diag(J'WJ) when forming the NOSER prior (default 0.5 like EIDORS).",
+    )
+    parser.add_argument(
+        "--noser-floor",
+        type=float,
+        default=1e-12,
+        help="Numerical floor for NOSER diagonal entries before applying the exponent.",
+    )
+    parser.add_argument(
+        "--meas-weight-strategy",
+        choices=["baseline", "difference", "none"],
+        default="baseline",
+        help="Strategy for estimating measurement inverse covariance weights.",
+    )
+    parser.add_argument(
+        "--meas-weight-floor",
+        type=float,
+        default=1e-9,
+        help="Minimum allowable measurement weight to avoid singular systems.",
+    )
+    parser.add_argument(
+        "--single-step-jacobian-method",
+        choices=["efficient", "traditional"],
+        default="efficient",
+        help="Jacobian calculator mode for the single-step solver.",
+    )
+    parser.add_argument(
+        "--single-step-negate-jacobian",
+        action="store_true",
+        help="Match PyEIDORS' sign convention by negating the Jacobian before solving.",
+    )
+    parser.add_argument(
+        "--single-step-space",
+        choices=["parameter", "measurement"],
+        default="measurement",
+        help="Solve single-step in parameter space (J^T J) or measurement space (J J^T).",
+    )
+    parser.add_argument(
+        "--conductivity-bounds",
+        type=float,
+        nargs=2,
+        metavar=("MIN", "MAX"),
+        default=(1e-6, 10.0),
+        help="Bounds enforced on reconstructed conductivities in single-step mode.",
+    )
+    parser.add_argument(
+        "--step-size-calibration",
+        action="store_true",
+        help="Enable 1-D scale search (fminbnd-style) on the single-step update.",
+    )
+    parser.add_argument(
+        "--step-size-min",
+        type=float,
+        default=1e-5,
+        help="Lower bound for the step-size calibration interval.",
+    )
+    parser.add_argument(
+        "--step-size-max",
+        type=float,
+        default=1e1,
+        help="Upper bound for the step-size calibration interval.",
+    )
+    parser.add_argument(
+        "--step-size-maxiter",
+        type=int,
+        default=50,
+        help="Maximum iterations passed to the bounded step-size optimizer.",
+    )
+    parser.add_argument(
+        "--petsc-device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="PETSc/DOLFINx FEM device policy.",
+    )
+    parser.add_argument(
+        "--device",
+        choices=["auto", "cpu", "cuda"],
+        default="auto",
+        help="Torch/GN inverse runtime device policy.",
+    )
     add_acceleration_profile_argument(
         parser,
         default=DEFAULT_ACCELERATION_PROFILE,
         help_suffix="For this 2D parity script the profile is accepted mainly for CLI consistency.",
     )
-    parser.add_argument("--perf-report", type=Path, default=None,
-                        help="Optional JSON report path for repeated parity/performance runs.")
-    parser.add_argument("--repeat", type=int, default=1,
-                        help="Number of measured runs. When >1, one extra warmup run is performed first.")
+    parser.add_argument(
+        "--perf-report",
+        type=Path,
+        default=None,
+        help="Optional JSON report path for repeated parity/performance runs.",
+    )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Number of measured runs. When >1, one extra warmup run is performed first.",
+    )
     return parser.parse_args()
 
 
@@ -227,9 +436,14 @@ def setup_eit_system(args: argparse.Namespace) -> Tuple[EITSystem, object]:
         device=str(args.device),
         acceleration_profile=str(args.acceleration_profile),
     )
-    mesh = load_or_create_mesh(mesh_dir=str(args.mesh_dir), mesh_name=args.mesh_name,
-                               n_elec=args.n_elec, refinement=args.refinement,
-                               radius=args.mesh_radius, electrode_coverage=args.electrode_coverage)
+    mesh = load_or_create_mesh(
+        mesh_dir=str(args.mesh_dir),
+        mesh_name=args.mesh_name,
+        n_elec=args.n_elec,
+        refinement=args.refinement,
+        radius=args.mesh_radius,
+        electrode_coverage=args.electrode_coverage,
+    )
     eit_system.setup(mesh=mesh)
     return eit_system, mesh
 
@@ -242,17 +456,19 @@ def make_phantom_image(system: EITSystem, args: argparse.Namespace) -> EITImage:
             "conductivity": args.phantom_contrast,
         }
     ]
-    sigma = create_custom_phantom(system.fwd_model,
-                                  background_conductivity=args.background,
-                                  anomalies=anomalies)
-    return EITImage(elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model)
+    sigma = create_custom_phantom(
+        system.fwd_model, background_conductivity=args.background, anomalies=anomalies
+    )
+    return EITImage(
+        elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model
+    )
 
 
 def compute_metrics(measured: np.ndarray, predicted: np.ndarray) -> Metrics:
     measured = measured.reshape(-1)
     predicted = predicted.reshape(-1)
     error = predicted - measured
-    rmse = float(np.sqrt(np.mean(error ** 2)))
+    rmse = float(np.sqrt(np.mean(error**2)))
     mae = float(np.mean(np.abs(error)))
     max_abs = float(np.max(np.abs(error)))
     # Avoid division by zero when computing relative error
@@ -260,11 +476,15 @@ def compute_metrics(measured: np.ndarray, predicted: np.ndarray) -> Metrics:
     safe_measured[np.abs(safe_measured) < np.finfo(float).eps] = np.finfo(float).eps
     relative = np.abs(error / safe_measured) * 100.0
     rel_mean = float(np.mean(relative))
-    if np.std(measured) < np.finfo(float).eps or np.std(predicted) < np.finfo(float).eps:
+    if (
+        np.std(measured) < np.finfo(float).eps
+        or np.std(predicted) < np.finfo(float).eps
+    ):
         corr = None
     else:
         corr = float(np.corrcoef(predicted, measured)[0, 1])
     return Metrics(rmse, mae, max_abs, rel_mean, corr)
+
 
 def compute_scale_bias(measured: np.ndarray, model: np.ndarray) -> Tuple[float, float]:
     x = np.asarray(model, dtype=float)
@@ -287,27 +507,28 @@ def apply_calibration(vector: np.ndarray, scale: float, bias: float) -> np.ndarr
     return (arr - bias) / safe_scale
 
 
-def simulate_calibrated_difference(system: EITSystem,
-                                   image: EITImage,
-                                   scale: float,
-                                   bias: float,
-                                   baseline_calibrated: np.ndarray) -> np.ndarray:
+def simulate_calibrated_difference(
+    system: EITSystem,
+    image: EITImage,
+    scale: float,
+    bias: float,
+    baseline_calibrated: np.ndarray,
+) -> np.ndarray:
     sim_recon, _ = system.fwd_model.fwd_solve(image)
     calibrated = apply_calibration(sim_recon.meas, scale, bias)
     return calibrated - baseline_calibrated
 
 
-def build_measurement_weights(baseline_vector: np.ndarray,
-                              diff_vector: np.ndarray,
-                              strategy: str,
-                              floor: float) -> Optional[np.ndarray]:
+def build_measurement_weights(
+    baseline_vector: np.ndarray, diff_vector: np.ndarray, strategy: str, floor: float
+) -> Optional[np.ndarray]:
     if strategy == "none":
         return None
     if strategy == "difference":
         reference = np.asarray(diff_vector, dtype=float)
     else:
         reference = np.asarray(baseline_vector, dtype=float)
-    weights = reference ** 2
+    weights = reference**2
     weights = np.where(np.isfinite(weights), weights, 0.0)
     weights = np.maximum(weights, floor)
     return weights
@@ -349,27 +570,35 @@ def _solve_with_cached_factor(
     return np.asarray(out, dtype=float)
 
 
-def solve_single_step_delta(system: EITSystem,
-                            baseline_image: EITImage,
-                            raw_diff: np.ndarray,
-                            raw_baseline: np.ndarray,
-                            args: argparse.Namespace) -> Tuple[np.ndarray, Optional[np.ndarray]]:
-    jacobian_calculator = getattr(getattr(system, "reconstructor", None),
-                                  "jacobian_calculator", None)
+def solve_single_step_delta(
+    system: EITSystem,
+    baseline_image: EITImage,
+    raw_diff: np.ndarray,
+    raw_baseline: np.ndarray,
+    args: argparse.Namespace,
+) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+    jacobian_calculator = getattr(
+        getattr(system, "reconstructor", None), "jacobian_calculator", None
+    )
     if jacobian_calculator is None:
         jacobian_calculator = DirectJacobianCalculator(system.fwd_model)
 
     sigma_fn = fem.Function(system.fwd_model.V_sigma)
     function_set_array(sigma_fn, baseline_image.elem_data)
-    jacobian = jacobian_calculator.calculate(sigma_fn, method=args.single_step_jacobian_method)
+    jacobian = jacobian_calculator.calculate(
+        sigma_fn, method=args.single_step_jacobian_method
+    )
     negate = args.single_step_negate_jacobian
-    recon_negate = getattr(getattr(system, "reconstructor", None), "negate_jacobian", False)
+    recon_negate = getattr(
+        getattr(system, "reconstructor", None), "negate_jacobian", False
+    )
     negate = negate or recon_negate
     if negate:
         jacobian = -jacobian
 
-    weights = build_measurement_weights(raw_baseline, raw_diff, args.meas_weight_strategy,
-                                        args.meas_weight_floor)
+    weights = build_measurement_weights(
+        raw_baseline, raw_diff, args.meas_weight_strategy, args.meas_weight_floor
+    )
     dv = np.asarray(raw_diff, dtype=float)
     if weights is None:
         jacobian_weighted = jacobian
@@ -379,18 +608,20 @@ def solve_single_step_delta(system: EITSystem,
         jacobian_weighted = jacobian * sqrt_weights[:, None]
         dv_weighted = dv * sqrt_weights
 
-    diag_entries = np.sum(jacobian_weighted ** 2, axis=0)
+    diag_entries = np.sum(jacobian_weighted**2, axis=0)
     diag_entries = np.maximum(diag_entries, args.noser_floor)
-    noser_diag = diag_entries ** args.noser_exponent
+    noser_diag = diag_entries**args.noser_exponent
     hp = max(args.difference_hyperparameter, 0.0)
     jac_hash = hash_array(np.ascontiguousarray(jacobian_weighted, dtype=np.float64))
-    noser_hash = hashlib.sha256(np.ascontiguousarray(noser_diag, dtype=np.float64).tobytes()).hexdigest()
+    noser_hash = hashlib.sha256(
+        np.ascontiguousarray(noser_diag, dtype=np.float64).tobytes()
+    ).hexdigest()
     if args.single_step_space == "measurement":
         inv_noser = 1.0 / noser_diag
         jw_scaled = jacobian_weighted * inv_noser[None, :]
         lhs = jw_scaled @ jacobian_weighted.T
         if hp > 0:
-            lhs = lhs + (hp ** 2) * np.eye(lhs.shape[0])
+            lhs = lhs + (hp**2) * np.eye(lhs.shape[0])
         rhs = dv_weighted
         y = _solve_with_cached_factor(
             system,
@@ -408,7 +639,7 @@ def solve_single_step_delta(system: EITSystem,
         delta = inv_noser * (jacobian_weighted.T @ y)
     else:
         RtR = np.diag(noser_diag)
-        lhs = jacobian_weighted.T @ jacobian_weighted + (hp ** 2) * RtR
+        lhs = jacobian_weighted.T @ jacobian_weighted + (hp**2) * RtR
         rhs = jacobian_weighted.T @ dv_weighted
         delta = _solve_with_cached_factor(
             system,
@@ -427,57 +658,85 @@ def solve_single_step_delta(system: EITSystem,
     return delta, weights
 
 
-def build_single_step_image(system: EITSystem,
-                            baseline_image: EITImage,
-                            delta: np.ndarray,
-                            step_size: float,
-                            bounds: Tuple[float, float]) -> EITImage:
+def build_single_step_image(
+    system: EITSystem,
+    baseline_image: EITImage,
+    delta: np.ndarray,
+    step_size: float,
+    bounds: Tuple[float, float],
+) -> EITImage:
     min_cond, max_cond = bounds
     elem = baseline_image.elem_data + step_size * delta
     elem = np.clip(elem, min_cond, max_cond)
     return EITImage(elem_data=elem, fwd_model=system.fwd_model)
 
 
-def optimize_step_size(system: EITSystem,
-                       baseline_image: EITImage,
-                       delta: np.ndarray,
-                       target_diff: np.ndarray,
-                       baseline_calibrated: np.ndarray,
-                       scale: float,
-                       bias: float,
-                       args: argparse.Namespace) -> float:
+def optimize_step_size(
+    system: EITSystem,
+    baseline_image: EITImage,
+    delta: np.ndarray,
+    target_diff: np.ndarray,
+    baseline_calibrated: np.ndarray,
+    scale: float,
+    bias: float,
+    args: argparse.Namespace,
+) -> float:
     bounds = (args.step_size_min, args.step_size_max)
 
     def objective(step: float) -> float:
-        test_img = build_single_step_image(system, baseline_image, delta, step, args.conductivity_bounds)
-        pred = simulate_calibrated_difference(system, test_img, scale, bias, baseline_calibrated)
+        test_img = build_single_step_image(
+            system, baseline_image, delta, step, args.conductivity_bounds
+        )
+        pred = simulate_calibrated_difference(
+            system, test_img, scale, bias, baseline_calibrated
+        )
         residual = pred - target_diff
-        return float(np.mean(residual ** 2))
+        return float(np.mean(residual**2))
 
-    result = minimize_scalar(objective, bounds=bounds, method="bounded",
-                             options={"maxiter": args.step_size_maxiter})
+    result = minimize_scalar(
+        objective,
+        bounds=bounds,
+        method="bounded",
+        options={"maxiter": args.step_size_maxiter},
+    )
     if result.success:
         return float(result.x)
     return 1.0
 
 
-def run_single_step_difference(system: EITSystem,
-                               baseline_image: EITImage,
-                               raw_diff: np.ndarray,
-                               raw_baseline: np.ndarray,
-                               target_diff: np.ndarray,
-                               baseline_calibrated: np.ndarray,
-                               scale: float,
-                               bias: float,
-                               args: argparse.Namespace) -> Tuple[EITImage, np.ndarray, Dict[str, object]]:
-    delta, weights = solve_single_step_delta(system, baseline_image, raw_diff, raw_baseline, args)
+def run_single_step_difference(
+    system: EITSystem,
+    baseline_image: EITImage,
+    raw_diff: np.ndarray,
+    raw_baseline: np.ndarray,
+    target_diff: np.ndarray,
+    baseline_calibrated: np.ndarray,
+    scale: float,
+    bias: float,
+    args: argparse.Namespace,
+) -> Tuple[EITImage, np.ndarray, Dict[str, object]]:
+    delta, weights = solve_single_step_delta(
+        system, baseline_image, raw_diff, raw_baseline, args
+    )
     step_size = 1.0
     if args.step_size_calibration:
-        step_size = optimize_step_size(system, baseline_image, delta, target_diff,
-                                       baseline_calibrated, scale, bias, args)
+        step_size = optimize_step_size(
+            system,
+            baseline_image,
+            delta,
+            target_diff,
+            baseline_calibrated,
+            scale,
+            bias,
+            args,
+        )
 
-    recon_image = build_single_step_image(system, baseline_image, delta, step_size, args.conductivity_bounds)
-    predicted_diff = simulate_calibrated_difference(system, recon_image, scale, bias, baseline_calibrated)
+    recon_image = build_single_step_image(
+        system, baseline_image, delta, step_size, args.conductivity_bounds
+    )
+    predicted_diff = simulate_calibrated_difference(
+        system, recon_image, scale, bias, baseline_calibrated
+    )
 
     metadata: Dict[str, object] = {
         "step_size": step_size,
@@ -499,24 +758,38 @@ def run_single_step_difference(system: EITSystem,
     return recon_image, predicted_diff, metadata
 
 
-def save_conductivity_figures(system: EITSystem,
-                              ground_truth: EITImage,
-                              reconstruction: EITImage,
-                              output_dir: Path,
-                              dpi: int) -> None:
+def save_conductivity_figures(
+    system: EITSystem,
+    ground_truth: EITImage,
+    reconstruction: EITImage,
+    output_dir: Path,
+    dpi: int,
+) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
     visualizer = create_visualizer()
-    fig_gt = visualizer.plot_conductivity(system.mesh, ground_truth.elem_data,
-                                          title=None, minimal=True, show_electrodes=True)
-    fig_rec = visualizer.plot_conductivity(system.mesh, reconstruction.elem_data,
-                                           title=None, minimal=True, show_electrodes=True)
+    fig_gt = visualizer.plot_conductivity(
+        system.mesh,
+        ground_truth.elem_data,
+        title=None,
+        minimal=True,
+        show_electrodes=True,
+    )
+    fig_rec = visualizer.plot_conductivity(
+        system.mesh,
+        reconstruction.elem_data,
+        title=None,
+        minimal=True,
+        show_electrodes=True,
+    )
     fig_gt.savefig(output_dir / "phantom_ground_truth.png", dpi=dpi)
     fig_rec.savefig(output_dir / "reconstruction.png", dpi=dpi)
     plt.close(fig_gt)
     plt.close(fig_rec)
 
 
-def apply_gn_overrides(reconstructor: Optional[object], args: argparse.Namespace) -> None:
+def apply_gn_overrides(
+    reconstructor: Optional[object], args: argparse.Namespace
+) -> None:
     if reconstructor is None:
         return
     if args.gn_max_iterations is not None:
@@ -573,7 +846,12 @@ def save_absolute_iteration_frames(
                 fontsize=14,
                 fontweight="bold",
                 color="white",
-                bbox={"facecolor": "black", "alpha": 0.45, "edgecolor": "none", "pad": 3},
+                bbox={
+                    "facecolor": "black",
+                    "alpha": 0.45,
+                    "edgecolor": "none",
+                    "pad": 3,
+                },
             )
         except Exception:
             pass
@@ -622,11 +900,9 @@ def write_gif_from_png_frames(
     )
 
 
-def save_voltage_comparison(measured: np.ndarray,
-                            predicted: np.ndarray,
-                            output_path: Path,
-                            title: str,
-                            dpi: int) -> None:
+def save_voltage_comparison(
+    measured: np.ndarray, predicted: np.ndarray, output_path: Path, title: str, dpi: int
+) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
     idx = np.arange(measured.size)
     fig, ax = plt.subplots(figsize=(8, 3))
@@ -642,8 +918,11 @@ def save_voltage_comparison(measured: np.ndarray,
     plt.close(fig)
 
 
-def save_metrics(metrics: Dict[str, Metrics], output_path: Path,
-                 extra: Optional[Dict[str, object]] = None) -> None:
+def save_metrics(
+    metrics: Dict[str, Metrics],
+    output_path: Path,
+    extra: Optional[Dict[str, object]] = None,
+) -> None:
     payload: Dict[str, object] = {mode: m.to_dict() for mode, m in metrics.items()}
     if extra:
         payload.update(extra)
@@ -664,7 +943,9 @@ def _maybe_cuda_sync() -> None:
         return
 
 
-def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: bool) -> dict[str, object]:
+def _run_once(
+    args: argparse.Namespace, output_dir: Path, *, persist_artifacts: bool
+) -> dict[str, object]:
     output_dir.mkdir(parents=True, exist_ok=True)
 
     system, _ = setup_eit_system(args)
@@ -702,9 +983,16 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
 
     if persist_artifacts and args.save_forward_csv:
         header = "meas_homogeneous,meas_phantom,difference"
-        forward_matrix = np.column_stack([meas_homogeneous.meas, meas_phantom.meas, diff_vector])
-        np.savetxt(output_dir / "synthetic_forward_data.csv",
-                   forward_matrix, delimiter=",", header=header, comments="")
+        forward_matrix = np.column_stack(
+            [meas_homogeneous.meas, meas_phantom.meas, diff_vector]
+        )
+        np.savetxt(
+            output_dir / "synthetic_forward_data.csv",
+            forward_matrix,
+            delimiter=",",
+            header=header,
+            comments="",
+        )
 
     metrics: Dict[str, Metrics] = {}
     extra_payload: Dict[str, object] = {
@@ -746,13 +1034,22 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
                 reconstructor.max_iterations = args.difference_max_iterations
             result = system.difference_reconstruct(meas_phantom, meas_homogeneous)
             recon_image = result.conductivity_image
-            predicted_diff = simulate_calibrated_difference(system, recon_image, scale, bias, meas_h_calibrated)
+            predicted_diff = simulate_calibrated_difference(
+                system, recon_image, scale, bias, meas_h_calibrated
+            )
             history = result.residual_history or []
-            diff_meta.update({
-                "iterations": len(history),
-                "final_residual": history[-1] if history else None,
-            })
-            difference_backend = dict((result.metadata or {}).get("solver_diagnostics", {}).get("backend_info", {}) or {})
+            diff_meta.update(
+                {
+                    "iterations": len(history),
+                    "final_residual": history[-1] if history else None,
+                }
+            )
+            difference_backend = dict(
+                (result.metadata or {})
+                .get("solver_diagnostics", {})
+                .get("backend_info", {})
+                or {}
+            )
             if reconstructor is not None and base_max_iterations is not None:
                 reconstructor.max_iterations = base_max_iterations
         _maybe_cuda_sync()
@@ -761,8 +1058,18 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
         metrics["difference"] = compute_metrics(diff_vector, predicted_diff)
         diff_meta["rmse"] = metrics["difference"].rmse
         if persist_artifacts:
-            save_conductivity_figures(system, phantom_img, recon_image, output_dir / "difference", args.figure_dpi)
-            np.savetxt(output_dir / "difference" / "predicted_difference.csv", predicted_diff, delimiter=",")
+            save_conductivity_figures(
+                system,
+                phantom_img,
+                recon_image,
+                output_dir / "difference",
+                args.figure_dpi,
+            )
+            np.savetxt(
+                output_dir / "difference" / "predicted_difference.csv",
+                predicted_diff,
+                delimiter=",",
+            )
             save_voltage_comparison(
                 measured=diff_vector,
                 predicted=predicted_diff,
@@ -773,7 +1080,9 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
         extra_payload["difference_metadata"] = diff_meta
 
     if args.mode in {"absolute", "both"}:
-        want_frames = bool(persist_artifacts and (args.absolute_save_frames or args.absolute_make_gif))
+        want_frames = bool(
+            persist_artifacts and (args.absolute_save_frames or args.absolute_make_gif)
+        )
         _maybe_cuda_sync()
         t0 = time.perf_counter()
         abs_raw = system.reconstructor.reconstruct(
@@ -785,7 +1094,9 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
         stage_timings["absolute_reconstruct"] = float(time.perf_counter() - t0)
 
         sigma_fn = abs_raw.conductivity
-        recon_image = EITImage(elem_data=function_get_array(sigma_fn).copy(), fwd_model=system.fwd_model)
+        recon_image = EITImage(
+            elem_data=function_get_array(sigma_fn).copy(), fwd_model=system.fwd_model
+        )
         sim_abs, _ = system.fwd_model.fwd_solve(recon_image)
         metrics["absolute"] = compute_metrics(meas_phantom.meas, sim_abs.meas)
         absolute_backend = dict(abs_raw.diagnostics.get("backend_info", {}) or {})
@@ -821,8 +1132,18 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
                 )
 
         if persist_artifacts:
-            save_conductivity_figures(system, phantom_img, recon_image, output_dir / "absolute", args.figure_dpi)
-            np.savetxt(output_dir / "absolute" / "predicted_absolute.csv", sim_abs.meas, delimiter=",")
+            save_conductivity_figures(
+                system,
+                phantom_img,
+                recon_image,
+                output_dir / "absolute",
+                args.figure_dpi,
+            )
+            np.savetxt(
+                output_dir / "absolute" / "predicted_absolute.csv",
+                sim_abs.meas,
+                delimiter=",",
+            )
             save_voltage_comparison(
                 measured=meas_phantom.meas,
                 predicted=sim_abs.meas,
@@ -833,34 +1154,62 @@ def _run_once(args: argparse.Namespace, output_dir: Path, *, persist_artifacts: 
 
     if args.eidors_csv:
         reference_vector = load_eidors_vector(args.eidors_csv, args.csv_delimiter)
-        extra_payload["eidors_reference"] = compute_metrics(diff_vector, reference_vector).to_dict()
+        extra_payload["eidors_reference"] = compute_metrics(
+            diff_vector, reference_vector
+        ).to_dict()
 
-    petsc_backend_info = dict(getattr(system.fwd_model, "_petsc_backend_info", {}) or {})
+    petsc_backend_info = dict(
+        getattr(system.fwd_model, "_petsc_backend_info", {}) or {}
+    )
     preferred_backend = absolute_backend or difference_backend
-    execution_profile = str(preferred_backend.get("execution_profile") or (
-        "cuda" if str(petsc_backend_info.get("petsc_device_effective", "cpu")) == "cuda"
-        and str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
-        else (
-            "mixed" if str(petsc_backend_info.get("petsc_device_effective", "cpu")) == "cuda"
-            or str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
-            else "cpu"
+    execution_profile = str(
+        preferred_backend.get("execution_profile")
+        or (
+            "cuda"
+            if str(petsc_backend_info.get("petsc_device_effective", "cpu")) == "cuda"
+            and str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
+            else (
+                "mixed"
+                if str(petsc_backend_info.get("petsc_device_effective", "cpu"))
+                == "cuda"
+                or str(getattr(reconstructor, "device_effective", "cpu")) == "cuda"
+                else "cpu"
+            )
         )
-    ))
+    )
 
     perf_summary = {
-        "petsc_device_requested": str(petsc_backend_info.get("petsc_device_requested", args.petsc_device)),
-        "petsc_device_effective": str(petsc_backend_info.get("petsc_device_effective", "cpu")),
+        "petsc_device_requested": str(
+            petsc_backend_info.get("petsc_device_requested", args.petsc_device)
+        ),
+        "petsc_device_effective": str(
+            petsc_backend_info.get("petsc_device_effective", "cpu")
+        ),
         "petsc_mat_type": petsc_backend_info.get("petsc_mat_type"),
         "petsc_vec_type": petsc_backend_info.get("petsc_vec_type"),
-        "forward_mat_solve_effective": petsc_backend_info.get("forward_mat_solve_effective"),
+        "forward_mat_solve_effective": petsc_backend_info.get(
+            "forward_mat_solve_effective"
+        ),
         "gpu_fallback_reason": petsc_backend_info.get("gpu_fallback_reason"),
         "forward_factor_backend": petsc_backend_info.get("forward_factor_backend"),
-        "inverse_device_requested": str(getattr(reconstructor, "device_requested", args.device)) if reconstructor is not None else str(args.device),
-        "inverse_device_effective": str(getattr(reconstructor, "device_effective", "cpu")) if reconstructor is not None else "cpu",
+        "inverse_device_requested": str(
+            getattr(reconstructor, "device_requested", args.device)
+        )
+        if reconstructor is not None
+        else str(args.device),
+        "inverse_device_effective": str(
+            getattr(reconstructor, "device_effective", "cpu")
+        )
+        if reconstructor is not None
+        else "cpu",
         "execution_profile": execution_profile,
         "jacobian_block_backend": preferred_backend.get("jacobian_block_backend"),
-        "jacobian_backend_requested": preferred_backend.get("jacobian_backend_requested"),
-        "jacobian_backend_effective": preferred_backend.get("jacobian_backend_effective"),
+        "jacobian_backend_requested": preferred_backend.get(
+            "jacobian_backend_requested"
+        ),
+        "jacobian_backend_effective": preferred_backend.get(
+            "jacobian_backend_effective"
+        ),
     }
     extra_payload["perf_summary"] = perf_summary
     extra_payload["stage_timings"] = stage_timings
@@ -889,7 +1238,9 @@ def main() -> None:
 
     for run_index in range(total_runs):
         persist_artifacts = run_index == total_runs - 1
-        run_output_dir = output_dir if persist_artifacts else temp_root / f"run_{run_index:02d}"
+        run_output_dir = (
+            output_dir if persist_artifacts else temp_root / f"run_{run_index:02d}"
+        )
         payload = _run_once(args, run_output_dir, persist_artifacts=persist_artifacts)
         if run_index >= warmup_runs:
             measured_runs.append({"run_index": run_index - warmup_runs, **payload})
@@ -919,7 +1270,9 @@ def main() -> None:
             "runs": measured_runs if int(args.repeat) > 1 else [],
         }
         args.perf_report.parent.mkdir(parents=True, exist_ok=True)
-        args.perf_report.write_text(json.dumps(report_payload, indent=2), encoding="utf-8")
+        args.perf_report.write_text(
+            json.dumps(report_payload, indent=2), encoding="utf-8"
+        )
 
     print(f"Synthetic parity results stored in {output_dir}")
 

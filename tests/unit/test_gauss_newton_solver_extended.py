@@ -46,7 +46,9 @@ class _LinearForwardModel:
         self._raise_after: int | None = None
 
     def set_sequence(self, sequence: list[np.ndarray] | None) -> None:
-        self._seq = [np.asarray(v, dtype=float).ravel() for v in sequence] if sequence else None
+        self._seq = (
+            [np.asarray(v, dtype=float).ravel() for v in sequence] if sequence else None
+        )
         self._call_count = 0
 
     def set_raise_after(self, call_index: int | None) -> None:
@@ -73,7 +75,9 @@ def _make_solver(eit_system, n_meas: int = 8):
     jacobian = rng.normal(scale=0.2, size=(n_meas, n_elem))
     jacobian += np.eye(n_meas, n_elem) * 0.8
 
-    fwd_model = _LinearForwardModel(V_sigma=V_sigma, jacobian=jacobian, bias=np.linspace(0.01, 0.02, n_meas))
+    fwd_model = _LinearForwardModel(
+        V_sigma=V_sigma, jacobian=jacobian, bias=np.linspace(0.01, 0.02, n_meas)
+    )
     reconstructor = GaussNewtonReconstructor(
         fwd_model=fwd_model,
         jacobian_calculator=_DummyJacobian(jacobian),
@@ -137,7 +141,9 @@ def test_measurement_length_mismatch_raises(eit_system):
         raise AssertionError("Expected ValueError for measurement length mismatch")
 
 
-def test_reconstruct_difference_modes_project_residual_and_jacobian(eit_system, monkeypatch):
+def test_reconstruct_difference_modes_project_residual_and_jacobian(
+    eit_system, monkeypatch
+):
     monkeypatch.setattr(torch.linalg, "solve", _safe_torch_solve)
     V_sigma = eit_system.fwd_model.V_sigma
     n_elem = int(fem.Function(V_sigma).x.array.size)
@@ -245,8 +251,12 @@ def test_line_search_and_perturb_updates(eit_system):
     sigma_current.x.array[:] = 1.0
     reconstructor.R_torch = torch.eye(n_elem, dtype=torch.float64)
 
-    target = torch.from_numpy(np.dot(jacobian, np.ones(n_elem, dtype=float))).to(dtype=torch.float64)
-    delta = torch.from_numpy(np.full(n_elem, -0.05, dtype=float)).to(dtype=torch.float64)
+    target = torch.from_numpy(np.dot(jacobian, np.ones(n_elem, dtype=float))).to(
+        dtype=torch.float64
+    )
+    delta = torch.from_numpy(np.full(n_elem, -0.05, dtype=float)).to(
+        dtype=torch.float64
+    )
     prior = torch.from_numpy(np.ones(n_elem, dtype=float)).to(dtype=torch.float64)
 
     step = reconstructor._line_search_torch(
@@ -289,7 +299,9 @@ def test_line_search_handles_forward_failures(eit_system):
     step = reconstructor._line_search_torch(
         sigma_current=sigma_current,
         delta_sigma_torch=torch.ones(n_elem, dtype=torch.float64) * 0.2,
-        meas_target_torch=torch.zeros(reconstructor.n_measurements, dtype=torch.float64),
+        meas_target_torch=torch.zeros(
+            reconstructor.n_measurements, dtype=torch.float64
+        ),
         current_weighted_residual=1.0,
         weight_vector=None,
         prior_torch=torch.zeros(n_elem, dtype=torch.float64),
@@ -405,7 +417,9 @@ def test_best_homog_optimize_fits_homogeneous_absolute_data(eit_system, monkeypa
     reconstructor, _, jacobian = _make_solver(eit_system, n_meas=6)
     n_elem = jacobian.shape[1]
     target_sigma = 1.7
-    measured = np.dot(jacobian, np.full(n_elem, target_sigma, dtype=float)) + np.linspace(0.01, 0.02, 6)
+    measured = np.dot(
+        jacobian, np.full(n_elem, target_sigma, dtype=float)
+    ) + np.linspace(0.01, 0.02, 6)
 
     reconstructor.max_iterations = 1
     reconstructor.regularization_param = 0.0

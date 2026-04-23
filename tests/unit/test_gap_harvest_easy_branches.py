@@ -70,10 +70,16 @@ def test_eit_mesh_cells_handles_missing_connectivity_and_zero_cells():
 
 
 def test_total_variation_reference_vector_accepts_matching_array():
-    fake_space = SimpleNamespace(dofmap=SimpleNamespace(index_map=SimpleNamespace(size_local=3), index_map_bs=1))
+    fake_space = SimpleNamespace(
+        dofmap=SimpleNamespace(index_map=SimpleNamespace(size_local=3), index_map_bs=1)
+    )
     fake_model = SimpleNamespace(mesh="mesh", V_sigma=fake_space)
-    reg = TotalVariationRegularization(fake_model, reference_conductivity=np.array([1.0, 1.2, 0.8], dtype=float))
-    np.testing.assert_allclose(reg._reference_vector(), np.array([1.0, 1.2, 0.8], dtype=float))
+    reg = TotalVariationRegularization(
+        fake_model, reference_conductivity=np.array([1.0, 1.2, 0.8], dtype=float)
+    )
+    np.testing.assert_allclose(
+        reg._reference_vector(), np.array([1.0, 1.2, 0.8], dtype=float)
+    )
 
 
 def test_model_signature_from_forward_model_handles_bad_coordinate_fallback():
@@ -90,13 +96,20 @@ def test_model_signature_from_forward_model_handles_bad_coordinate_fallback():
         cells=lambda: (_ for _ in ()).throw(RuntimeError("bad cells")),
     )
     signature = sig_module.model_signature_from_forward_model(
-        SimpleNamespace(n_elec=4, z=np.ones(4, dtype=float), geometry_scale_to_m=1.0, eit_mesh=bad_mesh)
+        SimpleNamespace(
+            n_elec=4,
+            z=np.ones(4, dtype=float),
+            geometry_scale_to_m=1.0,
+            eit_mesh=bad_mesh,
+        )
     )
     assert isinstance(signature, str)
     assert signature
 
 
-def test_cleanup_stale_session_caches_ignores_children_vanishing_before_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def test_cleanup_stale_session_caches_ignores_children_vanishing_before_stat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     class _VanishingChild:
         name = "stale_session"
 
@@ -118,11 +131,15 @@ def test_cleanup_stale_session_caches_ignores_children_vanishing_before_stat(tmp
         return original_iterdir(self)
 
     monkeypatch.setattr(Path, "iterdir", _fake_iterdir)
-    assert lifecycle_mod.cleanup_stale_session_caches(tmp_path, max_age_seconds=0.0) == 0
+    assert (
+        lifecycle_mod.cleanup_stale_session_caches(tmp_path, max_age_seconds=0.0) == 0
+    )
     assert keep.exists()
 
 
-def test_perf_capability_import_guards_and_fast_path_selection(monkeypatch: pytest.MonkeyPatch):
+def test_perf_capability_import_guards_and_fast_path_selection(
+    monkeypatch: pytest.MonkeyPatch,
+):
     real_import = builtins.__import__
 
     def _fake_import(name, globals=None, locals=None, fromlist=(), level=0):
@@ -134,7 +151,9 @@ def test_perf_capability_import_guards_and_fast_path_selection(monkeypatch: pyte
             raise ImportError("blocked cholmod")
         return real_import(name, globals, locals, fromlist, level)
 
-    monkeypatch.delitem(sys.modules, "pyeidors.forward.eit_forward_model", raising=False)
+    monkeypatch.delitem(
+        sys.modules, "pyeidors.forward.eit_forward_model", raising=False
+    )
     monkeypatch.setattr(builtins, "__import__", _fake_import)
     assert perf_caps._load_petsc_runtime() is None
     assert perf_caps._has_pyamg() is False
@@ -207,15 +226,21 @@ def _fake_unit_model(
 
 
 def test_unit_consistency_checks_cover_error_paths():
-    bad_drive = _fake_unit_model(np.array([[0.0, 0.0], [1.0, 0.0]], dtype=float), drive_mode="invalid")
+    bad_drive = _fake_unit_model(
+        np.array([[0.0, 0.0], [1.0, 0.0]], dtype=float), drive_mode="invalid"
+    )
     report = run_unit_consistency_checks(bad_drive)
     assert len(report.items) == 1
     assert report.items[0].name == "drive_config_validity"
     assert report.items[0].level == UnitCheckLevel.ERROR
 
-    empty_coords = _fake_unit_model(np.empty((0, 2), dtype=float), drive_mode="normalized")
+    empty_coords = _fake_unit_model(
+        np.empty((0, 2), dtype=float), drive_mode="normalized"
+    )
     empty_report = run_unit_consistency_checks(empty_coords)
-    empty_geom = next(item for item in empty_report.items if item.name == "geometry_scale_consistency")
+    empty_geom = next(
+        item for item in empty_report.items if item.name == "geometry_scale_consistency"
+    )
     assert empty_geom.level == UnitCheckLevel.ERROR
     assert "Mesh has no coordinates" in empty_geom.message
 
@@ -226,13 +251,21 @@ def test_unit_consistency_checks_cover_error_paths():
         drive_mode="normalized",
     )
     zero_report = run_unit_consistency_checks(zero_extent)
-    geom_item = next(item for item in zero_report.items if item.name == "geometry_scale_consistency")
-    length_item = next(item for item in zero_report.items if item.name == "electrode_length_physical_consistency")
+    geom_item = next(
+        item for item in zero_report.items if item.name == "geometry_scale_consistency"
+    )
+    length_item = next(
+        item
+        for item in zero_report.items
+        if item.name == "electrode_length_physical_consistency"
+    )
     assert geom_item.level == UnitCheckLevel.ERROR
     assert length_item.level == UnitCheckLevel.ERROR
 
 
-def test_plot_helper_branches_and_visualizer_import_guard(eit_mesh, monkeypatch: pytest.MonkeyPatch):
+def test_plot_helper_branches_and_visualizer_import_guard(
+    eit_mesh, monkeypatch: pytest.MonkeyPatch
+):
     ax = mock.MagicMock()
     plot_electrodes(
         ax,
@@ -284,7 +317,11 @@ def test_plot_helper_branches_and_visualizer_import_guard(eit_mesh, monkeypatch:
     cbar2.ax.yaxis.get_offset_text.return_value = mock.MagicMock()
     viz._apply_eidors_ticks(cbar2, -1.0, 1.0)
     viz._format_colorbar(cbar2, "plain")
-    values = viz._interpolate_cell_to_node(eit_mesh, np.ones(eit_mesh.num_cells(), dtype=float))
+    values = viz._interpolate_cell_to_node(
+        eit_mesh, np.ones(eit_mesh.num_cells(), dtype=float)
+    )
     assert values.shape[0] == eit_mesh.num_vertices()
-    vmin, vmax = viz._resolve_eidors_diff_limits(np.array([1.0, -2.0], dtype=float), None, None)
+    vmin, vmax = viz._resolve_eidors_diff_limits(
+        np.array([1.0, -2.0], dtype=float), None, None
+    )
     assert vmin < 0 < vmax

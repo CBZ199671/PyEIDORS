@@ -39,7 +39,7 @@ class ReconstructionResult:
 
     @property
     def mse(self) -> float:
-        return float(np.mean(self.residual ** 2))
+        return float(np.mean(self.residual**2))
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for script-facing serialization."""
@@ -99,5 +99,5 @@ def compute_residuals(
     residual_vector = simulated_vector - measured_vector
     l2_error = float(np.linalg.norm(residual_vector))
     rel_error = float(l2_error / (np.linalg.norm(measured_vector) + 1e-12))
-    mse = float(np.mean(residual_vector ** 2))
+    mse = float(np.mean(residual_vector**2))
     return residual_vector, l2_error, rel_error, mse

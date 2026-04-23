@@ -86,7 +86,9 @@ def _truthy_env(name: str) -> bool:
 def _cache_paths_for_mesh(mesh_file: str | Path) -> tuple[Path, Path, Path]:
     mesh_path = Path(mesh_file)
     xdmf_file = (
-        mesh_path if mesh_path.suffix == ".xdmf" else xdmf_cache_path_for_mesh(mesh_path)
+        mesh_path
+        if mesh_path.suffix == ".xdmf"
+        else xdmf_cache_path_for_mesh(mesh_path)
     )
     metadata_file = dolfinx_cache_metadata_path_for_mesh(mesh_path)
     return xdmf_file, xdmf_file.with_suffix(".h5"), metadata_file

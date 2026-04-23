@@ -23,7 +23,9 @@ try:
 
     _TORCH_AVAILABLE = True
     _CUDA_AVAILABLE = torch.cuda.is_available()
-    _MPS_AVAILABLE = bool(getattr(torch.backends, "mps", None) and torch.backends.mps.is_available())
+    _MPS_AVAILABLE = bool(
+        getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
+    )
 except ImportError:
     _TORCH_AVAILABLE = False
     _CUDA_AVAILABLE = False
@@ -36,6 +38,7 @@ try:
     _CUQI_AVAILABLE = True
 except ImportError:
     _CUQI_AVAILABLE = False
+
 
 # Environment info
 def check_environment() -> dict[str, object]:

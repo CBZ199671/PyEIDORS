@@ -162,8 +162,7 @@ def _limit_single_step_alpha_for_sigma_floor(
     delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
     if sigma.shape != delta.shape:
         raise ValueError(
-            "sigma_bg and delta_sigma shape mismatch: "
-            f"{sigma.shape} != {delta.shape}"
+            f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
     if (
         sigma.size == 0
@@ -206,8 +205,7 @@ def _constrain_single_step_sigma_update(
     delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
     if sigma.shape != delta.shape:
         raise ValueError(
-            "sigma_bg and delta_sigma shape mismatch: "
-            f"{sigma.shape} != {delta.shape}"
+            f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
     if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
         raise RuntimeError(
@@ -671,9 +669,9 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         artifact = _load_hdf5_rm_artifact(path)
         rm = artifact.rm
         artifact_meta = dict(artifact.metadata)
-        voxel_shape = tuple(int(v) for v in artifact.voxel_shape) or _rm_shape_from_meta(
-            meta
-        )
+        voxel_shape = tuple(
+            int(v) for v in artifact.voxel_shape
+        ) or _rm_shape_from_meta(meta)
         node_coords = artifact.node_coords
         cell_connectivity = artifact.cell_connectivity
     elif suffix == ".npy":
@@ -695,9 +693,9 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         artifact = _load_legacy_rm_artifact(path)
         rm = artifact.rm
         artifact_meta = dict(artifact.metadata)
-        voxel_shape = tuple(int(v) for v in artifact.voxel_shape) or _rm_shape_from_meta(
-            meta
-        )
+        voxel_shape = tuple(
+            int(v) for v in artifact.voxel_shape
+        ) or _rm_shape_from_meta(meta)
         node_coords = artifact.node_coords
         cell_connectivity = artifact.cell_connectivity
     else:

@@ -29,14 +29,14 @@ class TestRunner:
         Returns:
             Whether the test passed.
         """
-        print(f"\n{'='*60}")
+        print(f"\n{'=' * 60}")
         print(f"Running: {test_name}")
         print(f"Script: {test_script}")
-        print(f"{'='*60}")
+        print(f"{'=' * 60}")
 
         if not Path(test_script).exists():
             print(f"❌ Test script not found: {test_script}")
-            self.results[test_name] = {'status': 'missing', 'time': 0}
+            self.results[test_name] = {"status": "missing", "time": 0}
             return False
 
         start_time = time.time()
@@ -47,18 +47,18 @@ class TestRunner:
                 [sys.executable, test_script],
                 capture_output=True,
                 text=True,
-                timeout=300  # 5 minute timeout
+                timeout=300,  # 5 minute timeout
             )
 
             test_time = time.time() - start_time
 
             if result.returncode == 0:
                 print(f"✅ {test_name} test passed")
-                self.results[test_name] = {'status': 'passed', 'time': test_time}
+                self.results[test_name] = {"status": "passed", "time": test_time}
 
                 # Show last few lines of output if available
                 if result.stdout:
-                    output_lines = result.stdout.strip().split('\n')
+                    output_lines = result.stdout.strip().split("\n")
                     print("📋 Test output summary:")
                     for line in output_lines[-5:]:  # Show last 5 lines
                         print(f"   {line}")
@@ -66,12 +66,12 @@ class TestRunner:
                 return True
             else:
                 print(f"❌ {test_name} test failed (exit code: {result.returncode})")
-                self.results[test_name] = {'status': 'failed', 'time': test_time}
+                self.results[test_name] = {"status": "failed", "time": test_time}
 
                 # Show error messages
                 if result.stderr:
                     print("🔍 Error messages:")
-                    error_lines = result.stderr.strip().split('\n')
+                    error_lines = result.stderr.strip().split("\n")
                     for line in error_lines[-10:]:  # Show last 10 error lines
                         print(f"   {line}")
 
@@ -80,43 +80,43 @@ class TestRunner:
         except subprocess.TimeoutExpired:
             test_time = time.time() - start_time
             print(f"⏰ {test_name} test timed out")
-            self.results[test_name] = {'status': 'timeout', 'time': test_time}
+            self.results[test_name] = {"status": "timeout", "time": test_time}
             return False
 
         except Exception as e:
             test_time = time.time() - start_time
             print(f"💥 {test_name} test execution error: {e}")
-            self.results[test_name] = {'status': 'error', 'time': test_time}
+            self.results[test_name] = {"status": "error", "time": test_time}
             return False
 
     def print_summary(self):
         """Print test summary."""
         total_time = time.time() - self.start_time
 
-        print(f"\n{'='*80}")
+        print(f"\n{'=' * 80}")
         print("🏆 PyEIDORS Test Suite Complete")
-        print(f"{'='*80}")
+        print(f"{'=' * 80}")
 
         print(f"\n📊 Test Results:")
         print(f"{'Test Name':<30} {'Status':<10} {'Time(s)':<10}")
-        print(f"{'-'*55}")
+        print(f"{'-' * 55}")
 
         passed = failed = timeout = error = missing = 0
 
         for test_name, result in self.results.items():
-            status = result['status']
-            test_time = result['time']
+            status = result["status"]
+            test_time = result["time"]
 
-            if status == 'passed':
+            if status == "passed":
                 status_emoji = "✅ Passed"
                 passed += 1
-            elif status == 'failed':
+            elif status == "failed":
                 status_emoji = "❌ Failed"
                 failed += 1
-            elif status == 'timeout':
+            elif status == "timeout":
                 status_emoji = "⏰ Timeout"
                 timeout += 1
-            elif status == 'error':
+            elif status == "error":
                 status_emoji = "💥 Error"
                 error += 1
             else:
@@ -134,15 +134,23 @@ class TestRunner:
         print(f"   Timeout: {timeout}")
         print(f"   Error: {error}")
         print(f"   Missing: {missing}")
-        print(f"   Success rate: {passed/total_tests*100:.1f}%" if total_tests > 0 else "   Success rate: 0%")
+        print(
+            f"   Success rate: {passed / total_tests * 100:.1f}%"
+            if total_tests > 0
+            else "   Success rate: 0%"
+        )
         print(f"   Total time: {total_time:.2f} seconds")
 
         # Provide suggestions
         print(f"\n💡 Suggestions:")
         if failed > 0:
-            print("   - Check failed tests, may need to fix dependencies or configuration issues")
+            print(
+                "   - Check failed tests, may need to fix dependencies or configuration issues"
+            )
         if timeout > 0:
-            print("   - Timed out tests may need performance optimization or increased timeout")
+            print(
+                "   - Timed out tests may need performance optimization or increased timeout"
+            )
         if error > 0:
             print("   - Tests with errors need code debugging")
         if missing > 0:
@@ -192,7 +200,7 @@ def create_test_report(results):
 
     report_file = output_dir / "test_report.md"
 
-    with open(report_file, 'w', encoding='utf-8') as f:
+    with open(report_file, "w", encoding="utf-8") as f:
         f.write("# PyEIDORS Test Report\n\n")
         f.write(f"Generated: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
@@ -201,15 +209,15 @@ def create_test_report(results):
         f.write("|----------|------|----------|\n")
 
         for test_name, result in results.items():
-            status = result['status']
-            test_time = result['time']
+            status = result["status"]
+            test_time = result["time"]
 
             status_map = {
-                'passed': '✅ Passed',
-                'failed': '❌ Failed',
-                'timeout': '⏰ Timeout',
-                'error': '💥 Error',
-                'missing': '❓ Missing'
+                "passed": "✅ Passed",
+                "failed": "❌ Failed",
+                "timeout": "⏰ Timeout",
+                "error": "💥 Error",
+                "missing": "❓ Missing",
             }
 
             status_text = status_map.get(status, status)
@@ -223,12 +231,13 @@ def create_test_report(results):
         f.write("\n## Module Status\n\n")
         try:
             import pyeidors
+
             env = pyeidors.check_environment()
             f.write(f"- DOLFINx: {'✅' if env['dolfinx_available'] else '❌'}\n")
             f.write(f"- PyTorch: {'✅' if env['torch_available'] else '❌'}\n")
             f.write(f"- CUDA: {'✅' if env['cuda_available'] else '❌'}\n")
             f.write(f"- CUQIpy: {'✅' if env['cuqi_available'] else '❌'}\n")
-            if env['torch_available']:
+            if env["torch_available"]:
                 f.write(f"- PyTorch version: {env['torch_version']}\n")
                 f.write(f"- GPU count: {env['cuda_device_count']}\n")
         except Exception as e:

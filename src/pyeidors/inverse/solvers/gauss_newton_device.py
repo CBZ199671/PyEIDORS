@@ -28,7 +28,9 @@ RUNTIME_DEVICE_CUDA = "cuda"
 RUNTIME_DEVICE_VALUES = (RUNTIME_DEVICE_AUTO, RUNTIME_DEVICE_CPU, RUNTIME_DEVICE_CUDA)
 
 
-def normalize_runtime_device(value: object, *, default: str = RUNTIME_DEVICE_AUTO) -> str:
+def normalize_runtime_device(
+    value: object, *, default: str = RUNTIME_DEVICE_AUTO
+) -> str:
     """Normalize public runtime device values while preserving explicit CUDA indices."""
     normalized = str(value if value is not None else default).strip().lower()
     if not normalized:
@@ -42,7 +44,9 @@ def normalize_runtime_device(value: object, *, default: str = RUNTIME_DEVICE_AUT
     return str(default).strip().lower() or RUNTIME_DEVICE_AUTO
 
 
-def normalize_runtime_device_label(value: object, *, default: str = RUNTIME_DEVICE_CPU) -> str:
+def normalize_runtime_device_label(
+    value: object, *, default: str = RUNTIME_DEVICE_CPU
+) -> str:
     """Collapse explicit runtime devices to stable diagnostics labels."""
     normalized = normalize_runtime_device(value, default=default)
     if normalized.startswith("cuda"):
@@ -75,7 +79,9 @@ def resolve_torch_device(
 ) -> ResolvedTorchDevice:
     """Resolve inverse runtime device with explicit auto/cpu/cuda semantics."""
     normalized = normalize_runtime_device(requested, default=RUNTIME_DEVICE_AUTO)
-    petsc_effective = normalize_runtime_device_label(petsc_device_effective, default=RUNTIME_DEVICE_CPU)
+    petsc_effective = normalize_runtime_device_label(
+        petsc_device_effective, default=RUNTIME_DEVICE_CPU
+    )
 
     if normalized == RUNTIME_DEVICE_AUTO:
         if petsc_effective == RUNTIME_DEVICE_CUDA and torch.cuda.is_available():
@@ -109,11 +115,15 @@ def resolve_torch_device(
                 "device='cuda' requires torch.cuda.is_available(). Enter `nix develop .#cuda` and retry."
             )
         _disable_tf32()
-        device = torch.device(normalized if normalized.startswith("cuda:") else RUNTIME_DEVICE_CUDA)
+        device = torch.device(
+            normalized if normalized.startswith("cuda:") else RUNTIME_DEVICE_CUDA
+        )
         if verbose:
             print(f"Using GPU: {torch.cuda.get_device_name(device)}")
         return ResolvedTorchDevice(
-            requested=normalize_runtime_device_label(normalized, default=RUNTIME_DEVICE_CUDA),
+            requested=normalize_runtime_device_label(
+                normalized, default=RUNTIME_DEVICE_CUDA
+            ),
             effective=RUNTIME_DEVICE_CUDA,
             torch_device=device,
             fallback_reason=None,
@@ -130,7 +140,9 @@ def resolve_torch_device(
                 torch_device=device,
                 fallback_reason=None,
             )
-        raise RuntimeError("device='mps' requested, but torch MPS runtime is unavailable.")
+        raise RuntimeError(
+            "device='mps' requested, but torch MPS runtime is unavailable."
+        )
 
     if verbose:
         print("Using CPU for computation")

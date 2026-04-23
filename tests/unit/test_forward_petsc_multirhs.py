@@ -62,7 +62,10 @@ def test_solve_with_petsc_uses_mat_solve_when_available(monkeypatch):
     }
     ksp = _FakeKSP()
     model._create_full_matrix_petsc = lambda sigma: _FakeA()
-    model._make_petsc_solver_bundle = lambda system_matrix: {"A": system_matrix, "ksp": ksp}
+    model._make_petsc_solver_bundle = lambda system_matrix: {
+        "A": system_matrix,
+        "ksp": ksp,
+    }
     model._last_cache_lookup = {}
     monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
 

@@ -58,12 +58,18 @@ class _InhomogeneityTableModel(QAbstractTableModel):
         return len(_COLUMN_KEYS)
 
     def headerData(self, section, orientation, role=Qt.ItemDataRole.DisplayRole):
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+        ):
             return t(_COLUMN_KEYS[section])
         return None
 
     def data(self, index: QModelIndex, role=Qt.ItemDataRole.DisplayRole):
-        if not index.isValid() or role not in (Qt.ItemDataRole.DisplayRole, Qt.ItemDataRole.EditRole):
+        if not index.isValid() or role not in (
+            Qt.ItemDataRole.DisplayRole,
+            Qt.ItemDataRole.EditRole,
+        ):
             return None
         spec = self._data[index.row()]
         col = index.column()
@@ -233,11 +239,15 @@ class InhomogeneityEditor(QGroupBox):
 
     def _retranslate(self) -> None:
         """Refresh all user-visible strings to the active language."""
-        title_key = "sim.inhom.title_3d" if self._mesh_dimension == 3 else "sim.inhom.title_2d"
+        title_key = (
+            "sim.inhom.title_3d" if self._mesh_dimension == 3 else "sim.inhom.title_2d"
+        )
         self.setTitle(t(title_key))
         self._units_hint.setText(t("sim.inhom.units_hint"))
         button_keys = (
-            _SHAPE_BUTTON_KEYS_3D if self._mesh_dimension == 3 else _SHAPE_BUTTON_KEYS_2D
+            _SHAPE_BUTTON_KEYS_3D
+            if self._mesh_dimension == 3
+            else _SHAPE_BUTTON_KEYS_2D
         )
         for shape, btn in self._shape_buttons.items():
             btn.setText(t(button_keys[shape]))

@@ -15,7 +15,9 @@ def _load_module():
         / "benchmarks"
         / "benchmark_cuda_structured_scaling.py"
     )
-    spec = importlib.util.spec_from_file_location("benchmark_cuda_structured_scaling", script)
+    spec = importlib.util.spec_from_file_location(
+        "benchmark_cuda_structured_scaling", script
+    )
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise AssertionError("failed to load benchmark_cuda_structured_scaling.py")
     module = importlib.util.module_from_spec(spec)
@@ -30,9 +32,15 @@ def test_parse_refinements_normalizes_and_sorts():
 
 def test_ref8_gate_requires_first_and_warm_speedups():
     module = _load_module()
-    passed = module._evaluate_gate(8, first_forward_speedup=3.1, warm_forward_speedup=5.1)
-    failed_first = module._evaluate_gate(8, first_forward_speedup=2.9, warm_forward_speedup=5.1)
-    failed_warm = module._evaluate_gate(8, first_forward_speedup=3.1, warm_forward_speedup=4.9)
+    passed = module._evaluate_gate(
+        8, first_forward_speedup=3.1, warm_forward_speedup=5.1
+    )
+    failed_first = module._evaluate_gate(
+        8, first_forward_speedup=2.9, warm_forward_speedup=5.1
+    )
+    failed_warm = module._evaluate_gate(
+        8, first_forward_speedup=3.1, warm_forward_speedup=4.9
+    )
 
     assert passed["passed"] is True
     assert failed_first["passed"] is False

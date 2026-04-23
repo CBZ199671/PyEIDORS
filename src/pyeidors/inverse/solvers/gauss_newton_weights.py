@@ -33,7 +33,10 @@ def difference_with_baseline(
     """Difference-magnitude weighting mode."""
     if measured_vector is None:
         return baseline_vector
-    diff = np.abs(np.asarray(measured_vector, dtype=float) - np.asarray(baseline_vector, dtype=float))
+    diff = np.abs(
+        np.asarray(measured_vector, dtype=float)
+        - np.asarray(baseline_vector, dtype=float)
+    )
     return np.where(diff > floor, diff, floor)
 
 

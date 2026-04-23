@@ -57,10 +57,9 @@ def _paint_ellipse(
         values[norm < 1.0] = conductivity
         return
     center_vec = _center_vector(center, ndim=2)
-    norm = (
-        ((centers[:, 0] - center_vec[0]) / rx) ** 2
-        + ((centers[:, 1] - center_vec[1]) / ry) ** 2
-    )
+    norm = ((centers[:, 0] - center_vec[0]) / rx) ** 2 + (
+        (centers[:, 1] - center_vec[1]) / ry
+    ) ** 2
     values[norm < 1.0] = conductivity
 
 
@@ -86,9 +85,8 @@ def _paint_rectangle(
         )
     else:
         center_vec = _center_vector(center, ndim=2)
-        mask = (
-            (np.abs(centers[:, 0] - center_vec[0]) < half_w)
-            & (np.abs(centers[:, 1] - center_vec[1]) < half_h)
+        mask = (np.abs(centers[:, 0] - center_vec[0]) < half_w) & (
+            np.abs(centers[:, 1] - center_vec[1]) < half_h
         )
     values[mask] = conductivity
 
@@ -115,7 +113,9 @@ def create_synthetic_data(
     data_clean, _ = fwd_model.fwd_solve(img_true)
 
     np.random.seed(42)
-    noise = noise_level * np.std(data_clean.meas) * np.random.randn(len(data_clean.meas))
+    noise = (
+        noise_level * np.std(data_clean.meas) * np.random.randn(len(data_clean.meas))
+    )
     data_noisy = EITData(
         meas=data_clean.meas + noise,
         stim_pattern=data_clean.stim_pattern,

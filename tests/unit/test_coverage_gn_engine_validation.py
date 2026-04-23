@@ -29,7 +29,9 @@ def _make_solver(**overrides):
     fwd.n_elec = 4
     fwd.mesh.topology.dim = 2
 
-    with mock.patch.object(GaussNewtonReconstructor, "__init__", lambda self, **kw: None):
+    with mock.patch.object(
+        GaussNewtonReconstructor, "__init__", lambda self, **kw: None
+    ):
         solver = GaussNewtonReconstructor.__new__(GaussNewtonReconstructor)
 
     # Manually set the validated fields:
@@ -70,6 +72,7 @@ class TestGNEngineParameterValidation:
 
     def test_invalid_performance_mode(self):
         from tests.utils import run_python
+
         code = """
 from unittest import mock
 import sys
@@ -98,6 +101,7 @@ except Exception as e:
 
     def test_invalid_solver_mode(self):
         from tests.utils import run_python
+
         code = """
 from unittest import mock
 fm = mock.MagicMock()
@@ -114,6 +118,7 @@ except Exception as e:
 
     def test_invalid_linear_solver(self):
         from tests.utils import run_python
+
         code = """
 from unittest import mock
 fm = mock.MagicMock()
@@ -130,6 +135,7 @@ except Exception as e:
 
     def test_invalid_rom_mode(self):
         from tests.utils import run_python
+
         code = """
 from unittest import mock
 fm = mock.MagicMock()
@@ -146,6 +152,7 @@ except Exception as e:
 
     def test_invalid_lowrank_energy(self):
         from tests.utils import run_python
+
         code = """
 from unittest import mock
 fm = mock.MagicMock()

@@ -78,19 +78,25 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--forward-reference",
         type=Path,
-        default=Path("reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json"),
+        default=Path(
+            "reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json"
+        ),
         help="Existing real forward-solver benchmark JSON to cite in the report.",
     )
     parser.add_argument(
         "--lazy-reference",
         type=Path,
-        default=Path("reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json"),
+        default=Path(
+            "reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json"
+        ),
         help="Existing real 48e context/Jacobian benchmark JSON to cite in the report.",
     )
     parser.add_argument(
         "--previous-greit-reference",
         type=Path,
-        default=Path("reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json"),
+        default=Path(
+            "reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json"
+        ),
         help="Previous GREIT RM-layer benchmark JSON used for hot-path speedup comparison.",
     )
     return parser.parse_args()
@@ -332,7 +338,9 @@ def _forward_reference_summary(
             "forward_policy": {
                 "solver_preset": backend.get("solver_preset"),
                 "petsc_device_effective": backend.get("petsc_device_effective"),
-                "forward_mat_solve_effective": backend.get("forward_mat_solve_effective"),
+                "forward_mat_solve_effective": backend.get(
+                    "forward_mat_solve_effective"
+                ),
                 "pc_type": backend.get("pc_type"),
                 "pc_gamg_type": backend.get("pc_gamg_type"),
             },
@@ -366,10 +374,18 @@ def _previous_greit_summary(
         if not isinstance(current, dict) or current.get("error"):
             continue
         current_batch = current.get("apply_batch_seconds")
-        old_key = "apply_auto_512_frames" if device in {"cuda", "auto"} else "apply_cpu_512_frames"
+        old_key = (
+            "apply_auto_512_frames"
+            if device in {"cuda", "auto"}
+            else "apply_cpu_512_frames"
+        )
         old_batch = warm.get(old_key)
         try:
-            if old_batch is not None and current_batch is not None and float(current_batch) > 0.0:
+            if (
+                old_batch is not None
+                and current_batch is not None
+                and float(current_batch) > 0.0
+            ):
                 comparisons[device] = {
                     "previous_batch_seconds": float(old_batch),
                     "current_batch_seconds": float(current_batch),
@@ -543,7 +559,9 @@ def _write_markdown_report(path: Path, payload: dict[str, Any]) -> Path:
         else:
             build_s = payload["rm_builds"][name].get("seconds")
         load_s = artifact_load.get(name, {}).get("seconds")
-        lines.append(f"| {name} | {_format_seconds(build_s)} | {_format_seconds(load_s)} |")
+        lines.append(
+            f"| {name} | {_format_seconds(build_s)} | {_format_seconds(load_s)} |"
+        )
     lines.extend(
         [
             "",
@@ -556,7 +574,9 @@ def _write_markdown_report(path: Path, payload: dict[str, Any]) -> Path:
     for algorithm, by_device in payload.get("online_apply", {}).items():
         for device, entry in by_device.items():
             if entry.get("error"):
-                lines.append(f"| {algorithm} | {device} | n/a | n/a | n/a | n/a | error | {entry['error']} |")
+                lines.append(
+                    f"| {algorithm} | {device} | n/a | n/a | n/a | n/a | error | {entry['error']} |"
+                )
                 continue
             meta = entry.get("metadata_batch", {})
             lines.append(

@@ -16,7 +16,9 @@ def _load_module():
         / "diagnostics"
         / "run_real_reconstruction_gallery.py"
     )
-    spec = importlib.util.spec_from_file_location("run_real_reconstruction_gallery", script)
+    spec = importlib.util.spec_from_file_location(
+        "run_real_reconstruction_gallery", script
+    )
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise AssertionError("failed to load run_real_reconstruction_gallery.py")
     module = importlib.util.module_from_spec(spec)
@@ -66,7 +68,10 @@ def test_write_report_embeds_expected_figure_links(tmp_path: Path):
     module._write_report(
         output_path=report_path,
         title="Gallery",
-        figures={"2d_overview": "figures/2d_overview.png", "3d_overview": "figures/3d_overview.png"},
+        figures={
+            "2d_overview": "figures/2d_overview.png",
+            "3d_overview": "figures/3d_overview.png",
+        },
         config={
             "refinement_3d": 3,
             "mesh_family_3d": "hex_custom",
@@ -74,7 +79,12 @@ def test_write_report_embeds_expected_figure_links(tmp_path: Path):
             "generator_revision_3d": "g3d9",
         },
         case_rows=[
-            {"case": "2D CPU", "forward_backend": "dolfinx", "forward_sec": 1.0, "inverse_sec": 2.0},
+            {
+                "case": "2D CPU",
+                "forward_backend": "dolfinx",
+                "forward_sec": 1.0,
+                "inverse_sec": 2.0,
+            },
         ],
         consistency_rows=[
             {"passed": True},

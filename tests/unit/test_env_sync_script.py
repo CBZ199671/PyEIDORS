@@ -72,9 +72,13 @@ exit 0
     return repo, env
 
 
-def _run(repo: Path, env: dict[str, str], mode: str) -> subprocess.CompletedProcess[str]:
+def _run(
+    repo: Path, env: dict[str, str], mode: str
+) -> subprocess.CompletedProcess[str]:
     cmd = [str(repo / "scripts" / "env" / "sync_locked_env.sh"), mode]
-    return subprocess.run(cmd, cwd=repo, env=env, text=True, capture_output=True, check=False)
+    return subprocess.run(
+        cmd, cwd=repo, env=env, text=True, capture_output=True, check=False
+    )
 
 
 def test_print_profile_outputs_expected_contract(tmp_path: Path):

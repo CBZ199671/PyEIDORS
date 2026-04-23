@@ -264,9 +264,7 @@ def test_forward_ksp_session_iter_threshold_triggers_refresh(monkeypatch):
     assert calls["bundle"] == 1
     assert diag1["forward_pc_last_iter_count"] == 12
     assert diag2["forward_pc_refresh_triggered"] is True
-    assert diag2["forward_pc_refresh_reason"] == (
-        "iter_count_12_gt_threshold_5"
-    )
+    assert diag2["forward_pc_refresh_reason"] == ("iter_count_12_gt_threshold_5")
     assert ksp.set_reuse_calls[-1] is False
 
 

@@ -39,7 +39,9 @@ class SimpleEITMeshGenerator:
         """
 
         if not save_files:
-            logger.info("save_files=False is ignored; mesh cache file is always written in DOLFINx mode")
+            logger.info(
+                "save_files=False is ignored; mesh cache file is always written in DOLFINx mode"
+            )
 
         return create_eit_mesh(
             n_elec=self.n_elec,

@@ -49,7 +49,9 @@ def _build_3d_phantom(
     image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
     sigma = np.asarray(image.elem_data, dtype=float).copy()
     coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
-    distances = np.linalg.norm(coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1)
+    distances = np.linalg.norm(
+        coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1
+    )
     sigma[distances <= float(radius)] = float(phantom_conductivity)
     return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
 
@@ -110,10 +112,16 @@ def run_test(
     ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
     one = fem.Constant(mesh.mesh, 1.0)
     electrode_measures = [
-        float(mesh.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        float(
+            mesh.comm.allreduce(
+                fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
+            )
+        )
         for tag in range(2, 2 + n_elec)
     ]
-    print(f"Electrode boundary measures min/max: {min(electrode_measures):.6e} / {max(electrode_measures):.6e}")
+    print(
+        f"Electrode boundary measures min/max: {min(electrode_measures):.6e} / {max(electrode_measures):.6e}"
+    )
 
     reference_img = eit_system.create_homogeneous_image(conductivity=1.0)
     reference_data = eit_system.forward_solve(reference_img)
@@ -127,8 +135,12 @@ def run_test(
     )
     phantom_data = eit_system.forward_solve(phantom_img)
 
-    print(f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]")
-    print(f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]")
+    print(
+        f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]"
+    )
+    print(
+        f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]"
+    )
 
     if skip_inverse:
         print("Inverse reconstruction is skipped (requested by --skip-inverse).")
@@ -142,7 +154,9 @@ def run_test(
     try:
         eit_system.reconstructor.ensure_regularization_ready()
     except Exception as exc:
-        raise RuntimeError(f"regularization warmup failed in 3D run_cem: {exc}") from exc
+        raise RuntimeError(
+            f"regularization warmup failed in 3D run_cem: {exc}"
+        ) from exc
 
     # 3D smoke keeps single update step for deterministic runtime.
     eit_system.reconstructor.max_iterations = 1
@@ -162,7 +176,9 @@ def run_test(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="3D CEM cylinder forward/inverse smoke test")
+    parser = argparse.ArgumentParser(
+        description="3D CEM cylinder forward/inverse smoke test"
+    )
     add_acceleration_profile_argument(
         parser,
         default=DEFAULT_ACCELERATION_PROFILE,
@@ -184,7 +200,10 @@ def main() -> None:
             acceleration_profile=str(args.acceleration_profile),
         )
     except Exception as exc:
-        print(f"[ERROR] 3D CEM cylinder test failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"[ERROR] 3D CEM cylinder test failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc
 
 

@@ -6,7 +6,14 @@ from dataclasses import dataclass
 
 from PySide6.QtCore import QEvent, QPoint, QSize, Qt
 from PySide6.QtGui import QColor, QCursor, QFont, QIcon, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QToolButton, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
+)
 
 from eit_app.i18n import t, translator
 from eit_app.ui.theme import current_theme_mode, subscribe_theme_mode
@@ -96,7 +103,13 @@ def _eye_icon(*, visible: bool, compact: bool) -> QIcon:
 class LegendToggleButton(QToolButton):
     """Checkable legend item with an eye indicator."""
 
-    def __init__(self, entry: LegendEntry, *, compact: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        entry: LegendEntry,
+        *,
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self._entry = entry
         self._compact = compact
@@ -142,7 +155,13 @@ class LegendToggleButton(QToolButton):
 
 
 class _LegendInteractiveRow(QWidget):
-    def __init__(self, entry: LegendEntry, *, compact: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        entry: LegendEntry,
+        *,
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -166,7 +185,13 @@ class _LegendInteractiveRow(QWidget):
 
 
 class _LegendIndicatorRow(QWidget):
-    def __init__(self, entry: LegendEntry, *, compact: bool = False, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        entry: LegendEntry,
+        *,
+        compact: bool = False,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
@@ -222,14 +247,23 @@ class PlotLegendOverlay(QFrame):
         self._draggable = draggable
         self._drag_offset: QPoint | None = None
         self._drag_margin = 8
-        self._alpha = background_alpha if background_alpha is not None else (196 if compact else 204)
+        self._alpha = (
+            background_alpha
+            if background_alpha is not None
+            else (196 if compact else 204)
+        )
         self.setObjectName("plotLegendOverlay")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._apply_card_stylesheet()
         # Tooltip is assigned by _retranslate() below so it follows UI language.
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(8 if not compact else 6, 8 if not compact else 6, 8 if not compact else 6, 8 if not compact else 6)
+        layout.setContentsMargins(
+            8 if not compact else 6,
+            8 if not compact else 6,
+            8 if not compact else 6,
+            8 if not compact else 6,
+        )
         layout.setSpacing(4 if not compact else 2)
 
         for entry in entries:
@@ -258,7 +292,7 @@ class PlotLegendOverlay(QFrame):
         still hinting at the plot underneath.
         """
         if current_theme_mode() == "dark":
-            bg = f"rgba(34, 40, 49, {self._alpha})"    # #222831 with alpha
+            bg = f"rgba(34, 40, 49, {self._alpha})"  # #222831 with alpha
             border = "#3e4754"
         else:
             bg = f"rgba(255, 255, 255, {self._alpha})"
@@ -317,7 +351,10 @@ class PlotLegendOverlay(QFrame):
             return super().eventFilter(watched, event)
 
         event_type = event.type()
-        if event_type == QEvent.Type.MouseButtonPress and event.button() == Qt.MouseButton.LeftButton:
+        if (
+            event_type == QEvent.Type.MouseButtonPress
+            and event.button() == Qt.MouseButton.LeftButton
+        ):
             self._drag_offset = event.globalPosition().toPoint() - self.pos()
             self.raise_()
             self._apply_drag_cursor(closed=True)
@@ -334,7 +371,10 @@ class PlotLegendOverlay(QFrame):
             event.accept()
             return True
 
-        if event_type == QEvent.Type.MouseButtonRelease and self._drag_offset is not None:
+        if (
+            event_type == QEvent.Type.MouseButtonRelease
+            and self._drag_offset is not None
+        ):
             self._drag_offset = None
             self._apply_drag_cursor(closed=False)
             event.accept()
@@ -356,7 +396,9 @@ class PlotLegendOverlay(QFrame):
     def _apply_drag_cursor(self, *, closed: bool) -> None:
         if not self._draggable:
             return
-        cursor_shape = Qt.CursorShape.ClosedHandCursor if closed else Qt.CursorShape.OpenHandCursor
+        cursor_shape = (
+            Qt.CursorShape.ClosedHandCursor if closed else Qt.CursorShape.OpenHandCursor
+        )
         self.setCursor(QCursor(cursor_shape))
 
     def _clamp_to_parent(self, pos: QPoint) -> QPoint:

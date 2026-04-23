@@ -95,7 +95,9 @@ def test_estimate_object_size_and_process_store_eviction():
 
 def test_disk_store_ttl_invalidate_and_corruption_recovery(tmp_path: Path):
     cache_root = tmp_path / "disk-cache"
-    store = DiskCacheStore(cache_root, max_bytes=1024**2, compress_payloads=False, default_ttl_seconds=0.01)
+    store = DiskCacheStore(
+        cache_root, max_bytes=1024**2, compress_payloads=False, default_ttl_seconds=0.01
+    )
 
     assert store.put("k1", {"v": 1}, artifact="jacobian", cost=1.0)
     assert store.get("k1") == {"v": 1}

@@ -12,16 +12,27 @@ from typing import Dict, Iterable, Tuple
 
 def _parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--baseline", type=Path, required=True, help="Baseline metrics JSON.")
-    parser.add_argument("--optimized", type=Path, required=True, help="Optimized metrics JSON.")
-    parser.add_argument("--report", type=Path, required=True, help="Markdown report output path.")
+    parser.add_argument(
+        "--baseline", type=Path, required=True, help="Baseline metrics JSON."
+    )
+    parser.add_argument(
+        "--optimized", type=Path, required=True, help="Optimized metrics JSON."
+    )
+    parser.add_argument(
+        "--report", type=Path, required=True, help="Markdown report output path."
+    )
     parser.add_argument(
         "--min-improvement",
         type=float,
         default=0.50,
         help="Required median improvement ratio ((baseline-optimized)/baseline). 0.50 == 2x speedup.",
     )
-    parser.add_argument("--max-regression", type=float, default=0.05, help="Allowed worst-case regression ratio.")
+    parser.add_argument(
+        "--max-regression",
+        type=float,
+        default=0.05,
+        help="Allowed worst-case regression ratio.",
+    )
     return parser.parse_args()
 
 
@@ -78,7 +89,9 @@ def main() -> int:
         rows.append((name, base, opt, _improvement_ratio(base, opt)))
 
     if not rows:
-        raise SystemExit("No overlapping benchmark cases found between baseline and optimized snapshots.")
+        raise SystemExit(
+            "No overlapping benchmark cases found between baseline and optimized snapshots."
+        )
 
     improvements = [row[3] for row in rows]
     median_improvement = float(median(improvements))

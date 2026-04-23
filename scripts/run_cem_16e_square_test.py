@@ -89,7 +89,9 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
         centroids[i, :] = coords[vertices].mean(axis=0)
 
     seg_len = 4.0 / n_elec
-    tags = (np.floor(_edge_parameter(centroids) / seg_len).astype(np.int32) + 2).astype(np.int32)
+    tags = (np.floor(_edge_parameter(centroids) / seg_len).astype(np.int32) + 2).astype(
+        np.int32
+    )
 
     # meshtags require sorted entity indices
     order = np.argsort(boundary_facets)
@@ -106,7 +108,11 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
     return eit_mesh
 
 
-def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE):
+def run_test(
+    *,
+    skip_inverse: bool = False,
+    acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
+):
     n_elec = 16
     # Keep the mesh moderately fine for signal quality while avoiding
     # unnecessary solver pressure in local/CI smoke runs.
@@ -139,10 +145,16 @@ def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_
     ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
     one = fem.Constant(mesh.mesh, 1.0)
     electrode_measures = [
-        float(mesh.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        float(
+            mesh.comm.allreduce(
+                fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
+            )
+        )
         for tag in range(2, 2 + n_elec)
     ]
-    print(f"Electrode boundary measures min/max: {min(electrode_measures):.6f} / {max(electrode_measures):.6f}")
+    print(
+        f"Electrode boundary measures min/max: {min(electrode_measures):.6f} / {max(electrode_measures):.6f}"
+    )
 
     reference_img = eit_system.create_homogeneous_image(conductivity=1.0)
     reference_data = eit_system.forward_solve(reference_img)
@@ -155,8 +167,12 @@ def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_
     )
     phantom_data = eit_system.forward_solve(phantom_img)
 
-    print(f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]")
-    print(f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]")
+    print(
+        f"Reference meas range: [{reference_data.meas.min():.6e}, {reference_data.meas.max():.6e}]"
+    )
+    print(
+        f"Phantom meas range:   [{phantom_data.meas.min():.6e}, {phantom_data.meas.max():.6e}]"
+    )
 
     if skip_inverse:
         print("Inverse reconstruction is skipped (requested by --skip-inverse).")
@@ -173,7 +189,9 @@ def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_
         raise RuntimeError(f"regularization warmup failed in run_cem: {exc}") from exc
 
     # Use a fixed step schedule for deterministic script behavior.
-    eit_system.reconstructor.step_schedule = [0.25] * eit_system.reconstructor.max_iterations
+    eit_system.reconstructor.step_schedule = [
+        0.25
+    ] * eit_system.reconstructor.max_iterations
 
     recon_result = eit_system.inverse_solve(
         data=phantom_data,
@@ -190,7 +208,9 @@ def run_test(*, skip_inverse: bool = False, acceleration_profile: str = DEFAULT_
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="CEM square forward/inverse smoke test")
+    parser = argparse.ArgumentParser(
+        description="CEM square forward/inverse smoke test"
+    )
     parser.add_argument(
         "--skip-inverse",
         action="store_true",
@@ -212,7 +232,10 @@ def main() -> None:
             acceleration_profile=str(args.acceleration_profile),
         )
     except Exception as exc:
-        print(f"[ERROR] CEM square test failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        print(
+            f"[ERROR] CEM square test failed: {type(exc).__name__}: {exc}",
+            file=sys.stderr,
+        )
         raise SystemExit(1) from exc
 
 

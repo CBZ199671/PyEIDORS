@@ -26,13 +26,16 @@ def line_search_torch(
     current_residual = float(current_weighted_residual)
     x = function_get_array(sigma_current).copy()
 
-    if not hasattr(reconstructor, "_line_search_perturb") or reconstructor._line_search_perturb is None:
+    if (
+        not hasattr(reconstructor, "_line_search_perturb")
+        or reconstructor._line_search_perturb is None
+    ):
         base_perturb = np.array([0, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1])
         reconstructor._line_search_perturb = base_perturb * reconstructor.max_step
 
     perturb = calc_perturb_limits(reconstructor, x, delta_sigma_np)
     mlist = np.full(len(perturb), np.nan)
-    baseline_objective = current_residual ** 2 * 0.5
+    baseline_objective = current_residual**2 * 0.5
 
     for i, alpha in enumerate(perturb):
         if i == 0:
@@ -41,7 +44,11 @@ def line_search_torch(
 
         sigma_test_np = x + alpha * delta_sigma_np
         if reconstructor.clip_values is not None:
-            sigma_test_np = np.clip(sigma_test_np, reconstructor.clip_values[0], reconstructor.clip_values[1])
+            sigma_test_np = np.clip(
+                sigma_test_np,
+                reconstructor.clip_values[0],
+                reconstructor.clip_values[1],
+            )
 
         img_test = EITImage(elem_data=sigma_test_np, fwd_model=reconstructor.fwd_model)
         try:
@@ -58,7 +65,11 @@ def line_search_torch(
             data_test_torch.detach().cpu().numpy(),
             measurement_type=getattr(reconstructor, "_measurement_space_type", "real"),
             reference_meas=getattr(reconstructor, "_difference_reference_meas", None),
-            difference_mode=getattr(reconstructor, "_difference_mode_effective", reconstructor.difference_mode),
+            difference_mode=getattr(
+                reconstructor,
+                "_difference_mode_effective",
+                reconstructor.difference_mode,
+            ),
             difference_orientation=getattr(
                 reconstructor,
                 "_difference_orientation_effective",
@@ -70,11 +81,17 @@ def line_search_torch(
             dtype=reconstructor._torch_dtype,
         )
         dv_torch = data_test_projected_torch - meas_target_torch
-        weighted_dv = dv_torch * weight_vector if weight_vector is not None else dv_torch
+        weighted_dv = (
+            dv_torch * weight_vector if weight_vector is not None else dv_torch
+        )
 
         meas_misfit = 0.5 * torch.dot(weighted_dv, weighted_dv).item()
         prior_misfit = 0.0
-        if reconstructor.use_prior_term and prior_torch is not None and lambda_eff is not None:
+        if (
+            reconstructor.use_prior_term
+            and prior_torch is not None
+            and lambda_eff is not None
+        ):
             sigma_test_torch = torch.from_numpy(sigma_test_np).to(
                 reconstructor.device,
                 dtype=reconstructor._torch_dtype,
@@ -163,7 +180,7 @@ def calc_perturb_limits(reconstructor, x: np.ndarray, dx: np.ndarray) -> np.ndar
         elif log_p[0] < log_min:
             log_p = log_p + (log_min - log_p[0])
 
-        perturb = np.concatenate([[0], 10 ** log_p])
+        perturb = np.concatenate([[0], 10**log_p])
 
     return perturb
 
@@ -185,7 +202,9 @@ def update_perturb_eidors_style(
         elif perturb[-1] > 1.0 - 1e-9:
             pass
         elif perturb[-1] * 10 > 1.0 - 1e-9:
-            reconstructor._line_search_perturb = reconstructor._line_search_perturb / perturb[-1]
+            reconstructor._line_search_perturb = (
+                reconstructor._line_search_perturb / perturb[-1]
+            )
         else:
             reconstructor._line_search_perturb = reconstructor._line_search_perturb * 10
     else:

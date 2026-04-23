@@ -46,7 +46,9 @@ def _read_single_warm_metric(csv_path: Path) -> float:
     with csv_path.open("r", encoding="utf-8", newline="") as f:
         rows = list(csv.DictReader(f))
     if len(rows) != 1:
-        raise RuntimeError(f"Expected exactly one warm row in {csv_path}, got {len(rows)}")
+        raise RuntimeError(
+            f"Expected exactly one warm row in {csv_path}, got {len(rows)}"
+        )
     warm_raw = rows[0].get("warm_sec")
     if warm_raw is None or warm_raw == "":
         raise RuntimeError(f"Missing warm_sec in {csv_path}")

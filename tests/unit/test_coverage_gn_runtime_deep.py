@@ -47,10 +47,17 @@ class TestGNRuntimeFastWoodbury:
     def test_fast_woodbury(self, eit_system):
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "solver_mode", "fast_linear_path", "verbose",
-            "max_iterations", "min_iterations", "performance_mode",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "solver_mode",
+                "fast_linear_path",
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+                "performance_mode",
+            ]
+        }
         try:
             recon.solver_mode = "fast"
             recon.fast_linear_path = "woodbury"
@@ -75,10 +82,17 @@ class TestGNRuntimeFastPCG:
     def test_fast_pcg(self, eit_system):
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "solver_mode", "fast_linear_path", "verbose",
-            "max_iterations", "min_iterations", "preconditioner",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "solver_mode",
+                "fast_linear_path",
+                "verbose",
+                "max_iterations",
+                "min_iterations",
+                "preconditioner",
+            ]
+        }
         try:
             recon.solver_mode = "fast"
             recon.fast_linear_path = "pcg"
@@ -106,9 +120,14 @@ class TestGNRuntimeDifference:
         data = _make_data(eit_system, value=1.1)
         ref = _make_data(eit_system, value=1.0, noise=0)
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "max_iterations", "min_iterations", "verbose",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "max_iterations",
+                "min_iterations",
+                "verbose",
+            ]
+        }
         try:
             recon.max_iterations = 1
             recon.min_iterations = 1
@@ -156,9 +175,15 @@ class TestGNRuntimeBestHomog:
         """Cover lines 1316-1375: best_homog_mode=optimize."""
         _skip()
         recon = eit_system.reconstructor
-        saved = {k: getattr(recon, k) for k in [
-            "max_iterations", "min_iterations", "verbose", "best_homog_mode",
-        ]}
+        saved = {
+            k: getattr(recon, k)
+            for k in [
+                "max_iterations",
+                "min_iterations",
+                "verbose",
+                "best_homog_mode",
+            ]
+        }
         try:
             recon.max_iterations = 1
             recon.min_iterations = 1

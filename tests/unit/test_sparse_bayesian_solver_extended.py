@@ -67,8 +67,12 @@ class _FakePDE:
         return self._jacobian.copy()
 
 
-def _new_reconstructor(eit_system, config: sparse_module.SparseBayesianConfig | None = None):
-    rec = sparse_module.SparseBayesianReconstructor.__new__(sparse_module.SparseBayesianReconstructor)
+def _new_reconstructor(
+    eit_system, config: sparse_module.SparseBayesianConfig | None = None
+):
+    rec = sparse_module.SparseBayesianReconstructor.__new__(
+        sparse_module.SparseBayesianReconstructor
+    )
     rec.eit_system = eit_system
     rec.fwd_model = eit_system.fwd_model
     rec.verbose = False
@@ -101,7 +105,9 @@ def test_reconstruct_absolute_and_difference_modes(eit_system):
     observed = np.linspace(-0.1, 0.2, n_meas)
 
     rec._prepare_jacobian = lambda baseline_values: jacobian.copy()
-    rec._forward_measurement = lambda values: np.dot(jacobian, np.asarray(values, dtype=float))
+    rec._forward_measurement = lambda values: np.dot(
+        jacobian, np.asarray(values, dtype=float)
+    )
     rec._solve_sparse_map = lambda J, d, n, p: np.full(n_elem, 0.05, dtype=float)
     rec._estimate_noise_level = lambda dv: 1e-3
 
@@ -123,7 +129,9 @@ def test_reconstruct_absolute_and_difference_modes(eit_system):
     )
     baseline_image = EITImage(elem_data=baseline.copy(), fwd_model=eit_system.fwd_model)
 
-    absolute = rec.reconstruct(measurement_data=measurement, baseline_image=baseline_image)
+    absolute = rec.reconstruct(
+        measurement_data=measurement, baseline_image=baseline_image
+    )
     difference = rec.reconstruct(
         measurement_data=measurement,
         baseline_image=baseline_image,
@@ -151,7 +159,9 @@ def test_forward_measurement_and_jacobian_cache(eit_system):
         def to_numpy(self):
             return self._arr
 
-    rec._cuqi_model = lambda conductivity: _ToNumpyResult(np.asarray(conductivity, dtype=float)[: rec.n_measurements])
+    rec._cuqi_model = lambda conductivity: _ToNumpyResult(
+        np.asarray(conductivity, dtype=float)[: rec.n_measurements]
+    )
 
     measurement = rec._forward_measurement(np.arange(n_elem, dtype=float))
     assert measurement.shape[0] == rec.n_measurements
@@ -263,9 +273,13 @@ def test_sparse_map_solver_branches_with_fake_cuqi(eit_system, monkeypatch):
     rec = _new_reconstructor(eit_system, config=config)
 
     monkeypatch.setattr(sparse_module, "LinearModel", _FakeLinearModel, raising=False)
-    monkeypatch.setattr(sparse_module, "SmoothedLaplace", _FakeSmoothedLaplace, raising=False)
+    monkeypatch.setattr(
+        sparse_module, "SmoothedLaplace", _FakeSmoothedLaplace, raising=False
+    )
     monkeypatch.setattr(sparse_module, "Gaussian", _FakeGaussian, raising=False)
-    monkeypatch.setattr(sparse_module, "BayesianProblem", _FakeBayesianProblem, raising=False)
+    monkeypatch.setattr(
+        sparse_module, "BayesianProblem", _FakeBayesianProblem, raising=False
+    )
 
     jacobian = np.eye(rec.n_measurements, rec.n_elements)
     data = np.linspace(-0.05, 0.05, rec.n_measurements)

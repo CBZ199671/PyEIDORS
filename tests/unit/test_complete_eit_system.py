@@ -61,12 +61,16 @@ def test_difference_inverse_smoke(eit_system, monkeypatch):
     assert conductivity.size == eit_system.get_system_info()["n_elements"]
     assert np.isfinite(conductivity).all()
 
-    recon_image = EITImage(elem_data=conductivity.copy(), fwd_model=eit_system.fwd_model)
+    recon_image = EITImage(
+        elem_data=conductivity.copy(), fwd_model=eit_system.fwd_model
+    )
     recon_data = eit_system.forward_solve(recon_image)
     assert recon_data.meas.shape == target.meas.shape
 
 
-def test_inverse_solve_builds_configured_difference_measurement(eit_system, monkeypatch):
+def test_inverse_solve_builds_configured_difference_measurement(
+    eit_system, monkeypatch
+):
     baseline = eit_system.create_homogeneous_image(1.0)
     background = eit_system.forward_solve(baseline)
 

@@ -22,7 +22,9 @@ def normalize_drive_mode(mode: str) -> DriveMode:
     normalized = str(mode).strip().lower()
     if normalized not in _VALID_DRIVE_MODES:
         allowed = ", ".join(_VALID_DRIVE_MODES)
-        raise ValueError(f"Unsupported drive_mode={mode!r}. Expected one of: {allowed}.")
+        raise ValueError(
+            f"Unsupported drive_mode={mode!r}. Expected one of: {allowed}."
+        )
     return normalized  # type: ignore[return-value]
 
 
@@ -45,9 +47,15 @@ def validate_drive_config(
 
     scale = float(geometry_scale_to_m)
     if scale <= 0.0:
-        raise ValueError(f"geometry_scale_to_m must be positive, got {geometry_scale_to_m!r}")
+        raise ValueError(
+            f"geometry_scale_to_m must be positive, got {geometry_scale_to_m!r}"
+        )
 
-    if normalized_mode == "line_current_density" and mesh_tdim is not None and int(mesh_tdim) != 2:
+    if (
+        normalized_mode == "line_current_density"
+        and mesh_tdim is not None
+        and int(mesh_tdim) != 2
+    ):
         raise ValueError(
             "drive_mode='line_current_density' is supported for 2D meshes only "
             f"(got topological dim={mesh_tdim})."
@@ -67,9 +75,13 @@ def normalize_pattern_config_for_mesh(
     effective_mode = requested_mode
     if int(mesh_tdim) == 3 and requested_mode == "line_current_density":
         effective_mode = "total_current"
-    normalized = pattern_config if effective_mode == requested_mode else replace(
-        pattern_config,
-        drive_mode=effective_mode,
+    normalized = (
+        pattern_config
+        if effective_mode == requested_mode
+        else replace(
+            pattern_config,
+            drive_mode=effective_mode,
+        )
     )
     return normalized, {
         "drive_mode_requested": requested_mode,
@@ -77,7 +89,9 @@ def normalize_pattern_config_for_mesh(
     }
 
 
-def _as_positive_array(values: Sequence[float], *, n_elec: int, name: str) -> np.ndarray:
+def _as_positive_array(
+    values: Sequence[float], *, n_elec: int, name: str
+) -> np.ndarray:
     arr = np.asarray(values, dtype=float).reshape(-1)
     if arr.size != n_elec:
         raise ValueError(f"{name} length mismatch: expected {n_elec}, got {arr.size}.")
@@ -101,7 +115,9 @@ def resolve_electrode_lengths_m(
 
     scale = float(geometry_scale_to_m)
     if scale <= 0.0:
-        raise ValueError(f"geometry_scale_to_m must be positive, got {geometry_scale_to_m!r}")
+        raise ValueError(
+            f"geometry_scale_to_m must be positive, got {geometry_scale_to_m!r}"
+        )
 
     if electrode_length_m_override is None:
         mesh_lengths = _as_positive_array(
@@ -168,6 +184,8 @@ def build_stim_currents(
             )
         length = float(lengths[idx])
         if length <= 0.0:
-            raise ValueError(f"electrode_lengths_m[{idx}] must be positive, got {length!r}.")
+            raise ValueError(
+                f"electrode_lengths_m[{idx}] must be positive, got {length!r}."
+            )
         out[i] = value * length * weights[i]
     return out

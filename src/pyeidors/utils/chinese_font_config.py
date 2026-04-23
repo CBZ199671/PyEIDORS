@@ -26,4 +26,9 @@ def reset_font_config() -> None:
     plt.rcdefaults()
 
 
-__all__ = ["configure_chinese_font", "reset_font_config", "configure_plot_fonts", "PlotFontConfigResult"]
+__all__ = [
+    "configure_chinese_font",
+    "reset_font_config",
+    "configure_plot_fonts",
+    "PlotFontConfigResult",
+]

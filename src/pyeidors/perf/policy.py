@@ -147,12 +147,16 @@ def normalize_feature_mode(value: object, *, default: str = FEATURE_MODE_OFF) ->
     return normalize_mode(value, valid=FEATURE_MODE_VALUES, default=default)
 
 
-def normalize_petsc_device(value: object, *, default: str = DEFAULT_PETSC_DEVICE) -> str:
+def normalize_petsc_device(
+    value: object, *, default: str = DEFAULT_PETSC_DEVICE
+) -> str:
     """Normalize PETSc FEM device policy to ``auto|cpu|cuda``."""
     return normalize_mode(value, valid=PETSC_DEVICE_VALUES, default=default)
 
 
-def normalize_forward_backend(value: object, *, default: str = DEFAULT_FORWARD_BACKEND) -> str:
+def normalize_forward_backend(
+    value: object, *, default: str = DEFAULT_FORWARD_BACKEND
+) -> str:
     """Normalize forward discretization backend to a supported runtime label."""
     return normalize_mode(value, valid=FORWARD_BACKEND_VALUES, default=default)
 
@@ -175,7 +179,11 @@ def resolve_line_search_mode(value: object, *, mesh_dim: int) -> str:
     mode = normalize_mode(value, valid=("auto", "full", "fast"), default="auto")
     if mode != "auto":
         return mode
-    return DEFAULT_LINE_SEARCH_MODE_3D if int(mesh_dim) == 3 else DEFAULT_LINE_SEARCH_MODE_2D
+    return (
+        DEFAULT_LINE_SEARCH_MODE_3D
+        if int(mesh_dim) == 3
+        else DEFAULT_LINE_SEARCH_MODE_2D
+    )
 
 
 def resolve_experimental_mode(value: object) -> str:
@@ -211,7 +219,9 @@ def parse_block_size_candidates(value: object) -> list[int]:
     except ValueError as exc:
         raise ValueError(f"invalid block-size candidate list: {value!r}") from exc
     if not candidates:
-        raise ValueError("block-size candidate list must include at least one positive integer")
+        raise ValueError(
+            "block-size candidate list must include at least one positive integer"
+        )
     return candidates
 
 

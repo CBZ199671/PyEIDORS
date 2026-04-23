@@ -21,7 +21,9 @@ from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 
 
-CUDA_STRUCTURED_AVAILABLE = bool(torch is not None and torch.cuda.is_available() and GMSH_AVAILABLE)
+CUDA_STRUCTURED_AVAILABLE = bool(
+    torch is not None and torch.cuda.is_available() and GMSH_AVAILABLE
+)
 FORWARD_REL_L2_TOL = 2.0e-6
 DIFFERENCE_INVERSE_RMSE_TOL = 1.5e-5
 ABSOLUTE_INVERSE_RMSE_TOL = 2.0e-5
@@ -44,7 +46,9 @@ def _pattern() -> PatternConfig:
     )
 
 
-def _make_system(mesh, *, forward_backend: str, petsc_device: str, device: str) -> EITSystem:
+def _make_system(
+    mesh, *, forward_backend: str, petsc_device: str, device: str
+) -> EITSystem:
     system = EITSystem(
         n_elec=16,
         pattern_config=_pattern(),
@@ -72,7 +76,10 @@ def _make_system(mesh, *, forward_backend: str, petsc_device: str, device: str) 
 
 
 def _clone_image(system: EITSystem, elem_data: np.ndarray) -> EITImage:
-    return EITImage(elem_data=np.asarray(elem_data, dtype=np.float64).copy(), fwd_model=system.fwd_model)
+    return EITImage(
+        elem_data=np.asarray(elem_data, dtype=np.float64).copy(),
+        fwd_model=system.fwd_model,
+    )
 
 
 def _make_phantom(system: EITSystem) -> EITImage:
@@ -114,8 +121,12 @@ def _relative_l2(left: np.ndarray, right: np.ndarray) -> float:
 @pytest.mark.parametrize("refinement", [1, 2, 3])
 def test_forward_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: int):
     mesh = _load_mesh(mesh_root, refinement)
-    cpu = _make_system(mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu")
-    gpu = _make_system(mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda")
+    cpu = _make_system(
+        mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu"
+    )
+    gpu = _make_system(
+        mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda"
+    )
     phantom_cpu = _make_phantom(cpu)
     phantom_gpu = _clone_image(gpu, phantom_cpu.elem_data)
 
@@ -133,10 +144,16 @@ def test_forward_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: 
 @pytest.mark.parametrize("refinement", [1, 2])
 def test_jacobian_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: int):
     mesh = _load_mesh(mesh_root, refinement)
-    cpu = _make_system(mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu")
-    gpu = _make_system(mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda")
+    cpu = _make_system(
+        mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu"
+    )
+    gpu = _make_system(
+        mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda"
+    )
 
-    sigma_values = np.asarray(cpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=np.float64)
+    sigma_values = np.asarray(
+        cpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=np.float64
+    )
     cpu_sigma = fem.Function(cpu.fwd_model.V_sigma)
     gpu_sigma = fem.Function(gpu.fwd_model.V_sigma)
     function_set_array(cpu_sigma, sigma_values)
@@ -149,18 +166,28 @@ def test_jacobian_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement:
     assert len(cpu_grad) == len(gpu_grad)
     assert cpu_grad[0].shape == gpu_grad[0].shape
 
-    cpu_jac = cpu.reconstructor.jacobian_calculator.calculate(cpu_sigma, method="efficient")
-    gpu_jac = gpu.reconstructor.jacobian_calculator.calculate(gpu_sigma, method="efficient")
+    cpu_jac = cpu.reconstructor.jacobian_calculator.calculate(
+        cpu_sigma, method="efficient"
+    )
+    gpu_jac = gpu.reconstructor.jacobian_calculator.calculate(
+        gpu_sigma, method="efficient"
+    )
     rel_fro = np.linalg.norm(cpu_jac - gpu_jac) / (np.linalg.norm(cpu_jac) + 1e-12)
     assert rel_fro <= 1e-5
 
 
 @pytest.mark.parametrize("mode", ["difference", "absolute"])
 @pytest.mark.parametrize("refinement", [1, 2])
-def test_inverse_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: int, mode: str):
+def test_inverse_dolfinx_vs_cuda_structured_parity(
+    mesh_root: Path, refinement: int, mode: str
+):
     mesh = _load_mesh(mesh_root, refinement)
-    cpu = _make_system(mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu")
-    gpu = _make_system(mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda")
+    cpu = _make_system(
+        mesh, forward_backend="dolfinx", petsc_device="cpu", device="cpu"
+    )
+    gpu = _make_system(
+        mesh, forward_backend="cuda_structured", petsc_device="cuda", device="cuda"
+    )
 
     baseline_cpu = cpu.create_homogeneous_image(conductivity=1.0)
     baseline_gpu = gpu.create_homogeneous_image(conductivity=1.0)
@@ -181,5 +208,9 @@ def test_inverse_dolfinx_vs_cuda_structured_parity(mesh_root: Path, refinement: 
     rel_l2 = _relative_l2(cpu_sigma, gpu_sigma)
 
     assert rel_l2 <= 5e-5
-    rmse_tol = DIFFERENCE_INVERSE_RMSE_TOL if mode == "difference" else ABSOLUTE_INVERSE_RMSE_TOL
+    rmse_tol = (
+        DIFFERENCE_INVERSE_RMSE_TOL
+        if mode == "difference"
+        else ABSOLUTE_INVERSE_RMSE_TOL
+    )
     assert rmse <= rmse_tol

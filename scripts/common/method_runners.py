@@ -108,30 +108,59 @@ def _safe_load_metrics(output_dir: Path) -> Dict[str, Any]:
 
 def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
     mesh_dim = int(getattr(args, "mesh_dim", 2))
-    solver_mode = resolve_solver_mode(getattr(args, "solver_mode", "auto"), mesh_dim=mesh_dim)
+    solver_mode = resolve_solver_mode(
+        getattr(args, "solver_mode", "auto"), mesh_dim=mesh_dim
+    )
     return {
         "solver_mode": solver_mode,
         "linear_solver": str(getattr(args, "linear_solver", DEFAULT_LINEAR_SOLVER)),
         "jacobian_update_every": int(getattr(args, "jacobian_update_every", 1)),
         "jacobian_reuse_tol": float(getattr(args, "jacobian_reuse_tol", 0.0)),
-        "line_search_mode": resolve_line_search_mode(getattr(args, "line_search_mode", "auto"), mesh_dim=mesh_dim),
+        "line_search_mode": resolve_line_search_mode(
+            getattr(args, "line_search_mode", "auto"), mesh_dim=mesh_dim
+        ),
         "preconditioner": str(getattr(args, "preconditioner", DEFAULT_PRECONDITIONER)),
         "fast_linear_path": str(getattr(args, "fast_linear_path", "auto")),
-        "rom_mode": resolve_experimental_mode(getattr(args, "rom_mode", DEFAULT_ROM_MODE)),
-        "rom_rank_global": int(getattr(args, "rom_rank_global", DEFAULT_ROM_RANK_GLOBAL)),
-        "rom_rank_adaptive": int(getattr(args, "rom_rank_adaptive", DEFAULT_ROM_RANK_ADAPTIVE)),
-        "rom_refresh_every": int(getattr(args, "rom_refresh_every", DEFAULT_ROM_REFRESH_EVERY)),
-        "rom_snapshot_source": str(getattr(args, "rom_snapshot_source", DEFAULT_ROM_SNAPSHOT_SOURCE)),
-        "inexact_mode": resolve_experimental_mode(getattr(args, "inexact_mode", DEFAULT_INEXACT_MODE)),
-        "inexact_forcing": str(getattr(args, "inexact_forcing", DEFAULT_INEXACT_FORCING)),
+        "rom_mode": resolve_experimental_mode(
+            getattr(args, "rom_mode", DEFAULT_ROM_MODE)
+        ),
+        "rom_rank_global": int(
+            getattr(args, "rom_rank_global", DEFAULT_ROM_RANK_GLOBAL)
+        ),
+        "rom_rank_adaptive": int(
+            getattr(args, "rom_rank_adaptive", DEFAULT_ROM_RANK_ADAPTIVE)
+        ),
+        "rom_refresh_every": int(
+            getattr(args, "rom_refresh_every", DEFAULT_ROM_REFRESH_EVERY)
+        ),
+        "rom_snapshot_source": str(
+            getattr(args, "rom_snapshot_source", DEFAULT_ROM_SNAPSHOT_SOURCE)
+        ),
+        "inexact_mode": resolve_experimental_mode(
+            getattr(args, "inexact_mode", DEFAULT_INEXACT_MODE)
+        ),
+        "inexact_forcing": str(
+            getattr(args, "inexact_forcing", DEFAULT_INEXACT_FORCING)
+        ),
         "inexact_eta0": float(getattr(args, "inexact_eta0", DEFAULT_INEXACT_ETA0)),
-        "inexact_eta_min": float(getattr(args, "inexact_eta_min", DEFAULT_INEXACT_ETA_MIN)),
-        "inexact_eta_max": float(getattr(args, "inexact_eta_max", DEFAULT_INEXACT_ETA_MAX)),
-        "lowrank_mode": resolve_experimental_mode(getattr(args, "lowrank_mode", DEFAULT_LOWRANK_MODE)),
+        "inexact_eta_min": float(
+            getattr(args, "inexact_eta_min", DEFAULT_INEXACT_ETA_MIN)
+        ),
+        "inexact_eta_max": float(
+            getattr(args, "inexact_eta_max", DEFAULT_INEXACT_ETA_MAX)
+        ),
+        "lowrank_mode": resolve_experimental_mode(
+            getattr(args, "lowrank_mode", DEFAULT_LOWRANK_MODE)
+        ),
         "lowrank_rank": int(getattr(args, "lowrank_rank", DEFAULT_LOWRANK_RANK)),
         "lowrank_method": str(getattr(args, "lowrank_method", DEFAULT_LOWRANK_METHOD)),
-        "lowrank_energy": float(getattr(args, "lowrank_energy", DEFAULT_LOWRANK_ENERGY)),
-        "absolute_startup_cache": str(getattr(args, "absolute_startup_cache", DEFAULT_ABSOLUTE_STARTUP_CACHE)).lower() != "off",
+        "lowrank_energy": float(
+            getattr(args, "lowrank_energy", DEFAULT_LOWRANK_ENERGY)
+        ),
+        "absolute_startup_cache": str(
+            getattr(args, "absolute_startup_cache", DEFAULT_ABSOLUTE_STARTUP_CACHE)
+        ).lower()
+        != "off",
         "forward_mat_solve": resolve_forward_mat_solve(
             getattr(args, "forward_mat_solve", DEFAULT_FORWARD_MAT_SOLVE),
             mesh_dim=mesh_dim,
@@ -151,7 +180,9 @@ def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
         ),
         "geometry_version": str(
             getattr(args, "geometry_version", DEFAULT_3D_GEOMETRY_VERSION)
-        ).strip().lower()
+        )
+        .strip()
+        .lower()
         or DEFAULT_3D_GEOMETRY_VERSION,
         "device": str(getattr(args, "device", "auto")).strip().lower() or "auto",
         "cholmod_max_n": int(getattr(args, "cholmod_max_n", DEFAULT_CHOLMOD_MAX_N)),
@@ -160,12 +191,20 @@ def _collect_absolute_runtime_kwargs(args) -> Dict[str, Any]:
         ),
         "acceleration_profile": str(
             getattr(args, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE)
-        ).strip().lower()
+        )
+        .strip()
+        .lower()
         or DEFAULT_ACCELERATION_PROFILE,
-        "jacobian_block_tune": str(getattr(args, "jacobian_block_tune", DEFAULT_JACOBIAN_BLOCK_TUNE)),
-        "jacobian_block_size": int(getattr(args, "jacobian_block_size", DEFAULT_JACOBIAN_BLOCK_SIZE)),
+        "jacobian_block_tune": str(
+            getattr(args, "jacobian_block_tune", DEFAULT_JACOBIAN_BLOCK_TUNE)
+        ),
+        "jacobian_block_size": int(
+            getattr(args, "jacobian_block_size", DEFAULT_JACOBIAN_BLOCK_SIZE)
+        ),
         "jacobian_block_candidates": parse_block_size_candidates(
-            getattr(args, "jacobian_block_candidates", DEFAULT_JACOBIAN_BLOCK_CANDIDATES)
+            getattr(
+                args, "jacobian_block_candidates", DEFAULT_JACOBIAN_BLOCK_CANDIDATES
+            )
         ),
     }
 
@@ -226,7 +265,9 @@ def run_gn_absolute_cases(
                 refinement=int(args.refinement if args.refinement is not None else 12),
                 mesh_dim=int(getattr(args, "mesh_dim", 2)),
                 mesh_height=float(getattr(args, "mesh_height", 1.0)),
-                electrode_height_ratio=float(getattr(args, "electrode_height_ratio", 0.2)),
+                electrode_height_ratio=float(
+                    getattr(args, "electrode_height_ratio", 0.2)
+                ),
                 z_center=float(getattr(args, "z_center", 0.0)),
                 mesh_dir=Path(args.mesh_dir),
                 mesh_name=str(args.mesh_name) if args.mesh_name else None,
@@ -262,6 +303,8 @@ def run_gn_absolute_cases(
             )
 
     return results
+
+
 def run_gn_difference_cases(
     *,
     cases: Iterable[ReconstructionCase],
@@ -280,7 +323,9 @@ def run_gn_difference_cases(
         else str(getattr(args, "solver_mode", "strict"))
     )
     forward_mat_solve = str(getattr(args, "forward_mat_solve", "off"))
-    if forward_mat_solve == "auto" and not (mesh_dim == 3 and resolved_solver_mode == "fast"):
+    if forward_mat_solve == "auto" and not (
+        mesh_dim == 3 and resolved_solver_mode == "fast"
+    ):
         forward_mat_solve = "off"
     petsc_device = normalize_petsc_device(
         getattr(args, "petsc_device", DEFAULT_PETSC_DEVICE),
@@ -294,9 +339,12 @@ def run_gn_difference_cases(
         getattr(args, "mesh_family", DEFAULT_MESH_FAMILY),
         default=DEFAULT_MESH_FAMILY,
     )
-    geometry_version = str(
-        getattr(args, "geometry_version", DEFAULT_3D_GEOMETRY_VERSION)
-    ).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    geometry_version = (
+        str(getattr(args, "geometry_version", DEFAULT_3D_GEOMETRY_VERSION))
+        .strip()
+        .lower()
+        or DEFAULT_3D_GEOMETRY_VERSION
+    )
 
     ctx = gn_difference_runner.build_shared_context(
         mesh_dir=str(args.mesh_dir),
@@ -570,7 +618,9 @@ def run_sparse_bayes_difference_cases(
                     if raw_measurements.ndim == 1:
                         raw_measurements = raw_measurements[:, np.newaxis]
                     if args.measurement_gain and float(args.measurement_gain) != 1.0:
-                        raw_measurements = raw_measurements / float(args.measurement_gain)
+                        raw_measurements = raw_measurements / float(
+                            args.measurement_gain
+                        )
 
                     calib_col = (
                         args.calibration_col
@@ -632,7 +682,9 @@ def run_sparse_bayes_difference_cases(
                     diff_measurements,
                     dict(metadata),
                 )
-                calibration_frame = args.calibration_col if args.calibration_col >= 0 else 0
+                calibration_frame = (
+                    args.calibration_col if args.calibration_col >= 0 else 0
+                )
                 if not 0 <= calibration_frame < diff_dataset.measurements.shape[0]:
                     raise IndexError(
                         "calibration_col must map to one of the selected difference frames."

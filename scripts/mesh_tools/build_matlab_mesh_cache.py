@@ -48,13 +48,17 @@ def _wrap_diff(a: float, b: float) -> float:
     return abs(diff)
 
 
-def _nearest_electrode(angle: float, electrode_angles: np.ndarray, order: np.ndarray) -> int:
+def _nearest_electrode(
+    angle: float, electrode_angles: np.ndarray, order: np.ndarray
+) -> int:
     diffs = [_wrap_diff(angle, a) for a in electrode_angles]
     return int(order[int(np.argmin(diffs))])
 
 
 def build_boundary_tags(
-    nodes: np.ndarray, boundary_edges: np.ndarray, electrodes: Sequence[Dict[str, object]]
+    nodes: np.ndarray,
+    boundary_edges: np.ndarray,
+    electrodes: Sequence[Dict[str, object]],
 ) -> np.ndarray:
     center = nodes.mean(axis=0)
     electrode_angles: List[float] = []
@@ -153,7 +157,15 @@ def main() -> None:
 
     boundary_edges = _boundary_edges(elements)
     boundary_tags = build_boundary_tags(nodes, boundary_edges, electrodes)
-    write_cache(nodes, elements, boundary_edges, boundary_tags, args.out_dir, args.mesh_name, len(electrodes))
+    write_cache(
+        nodes,
+        elements,
+        boundary_edges,
+        boundary_tags,
+        args.out_dir,
+        args.mesh_name,
+        len(electrodes),
+    )
 
 
 if __name__ == "__main__":

@@ -18,7 +18,11 @@ def _resolve_gpu_context(config):
     if not torch.cuda.is_available():
         return None
 
-    dtype_map = {"float64": torch.float64, "float16": torch.float16, "half": torch.float16}
+    dtype_map = {
+        "float64": torch.float64,
+        "float16": torch.float16,
+        "half": torch.float16,
+    }
     dtype = dtype_map.get(str(config.gpu_dtype).lower(), torch.float32)
     return torch, torch.device("cuda"), dtype
 
@@ -59,7 +63,9 @@ def solve_fista(
             z = y_t - grad / L_t
             x_new = torch.sign(z) * torch.clamp(torch.abs(z) - lam_over_L, min=0.0)
 
-            if torch.norm(x_new - x_t) <= config.linear_tolerance * (torch.norm(x_t) + 1e-12):
+            if torch.norm(x_new - x_t) <= config.linear_tolerance * (
+                torch.norm(x_t) + 1e-12
+            ):
                 x_t = x_new
                 break
 
@@ -75,7 +81,9 @@ def solve_fista(
         z = y - grad / L
         x_new = np.sign(z) * np.maximum(np.abs(z) - lambda_reg / L, 0.0)
 
-        if np.linalg.norm(x_new - x) <= config.linear_tolerance * (np.linalg.norm(x) + 1e-12):
+        if np.linalg.norm(x_new - x) <= config.linear_tolerance * (
+            np.linalg.norm(x) + 1e-12
+        ):
             x = x_new
             break
 
@@ -123,7 +131,9 @@ def solve_irls(
             except RuntimeError:
                 x_new = torch.linalg.lstsq(M, rhs).solution
 
-            if torch.norm(x_new - x_t) <= config.linear_tolerance * (torch.norm(x_t) + 1e-12):
+            if torch.norm(x_new - x_t) <= config.linear_tolerance * (
+                torch.norm(x_t) + 1e-12
+            ):
                 x_t = x_new
                 break
             x_t = x_new
@@ -141,7 +151,9 @@ def solve_irls(
         except np.linalg.LinAlgError:
             x_new = np.linalg.lstsq(M, rhs, rcond=None)[0]
 
-        if np.linalg.norm(x_new - x) <= config.linear_tolerance * (np.linalg.norm(x) + 1e-12):
+        if np.linalg.norm(x_new - x) <= config.linear_tolerance * (
+            np.linalg.norm(x) + 1e-12
+        ):
             x = x_new
             break
         x = x_new

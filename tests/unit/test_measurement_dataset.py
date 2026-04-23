@@ -95,7 +95,9 @@ def test_measurement_dataset_validation_errors():
     unsupported_metadata = dict(metadata)
     unsupported_metadata["amplitude"] = 1.0
     with pytest.raises(ValueError, match="amplitude"):
-        MeasurementDataset.from_metadata(np.zeros((1, pattern_mgr.n_meas_total)), unsupported_metadata)
+        MeasurementDataset.from_metadata(
+            np.zeros((1, pattern_mgr.n_meas_total)), unsupported_metadata
+        )
 
     dataset = MeasurementDataset.from_metadata(
         np.zeros((1, pattern_mgr.n_meas_total)),

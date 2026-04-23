@@ -175,7 +175,9 @@ class SimulatorDevice(AbstractHardwareDevice):
         )
 
     def measure_contact_impedance(self) -> np.ndarray:
-        return self._rng.uniform(50.0, 200.0, size=int(self._layout["total_electrodes"]))
+        return self._rng.uniform(
+            50.0, 200.0, size=int(self._layout["total_electrodes"])
+        )
 
     def single_point_test(self) -> tuple[float, float]:
         return 0.5 + self._rng.normal(0, 0.01), 0.05 + self._rng.normal(0, 0.001)

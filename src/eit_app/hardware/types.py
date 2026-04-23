@@ -127,6 +127,7 @@ def voltage_amp_label(level: object, *, fallback: str = "?") -> str:
         return VOLTAGE_AMP_LABELS[idx]
     return fallback
 
+
 DEFAULT_SERVER_PORT = 4555
 DEFAULT_BOARD_ID = 1
 DEFAULT_USER_ID = 1

@@ -22,7 +22,9 @@ def _rank_from_energy(singular_values: np.ndarray, energy: float, max_rank: int)
     return chosen
 
 
-def _randomized_right_svd(jacobian: np.ndarray, q_rank: int) -> tuple[np.ndarray, np.ndarray]:
+def _randomized_right_svd(
+    jacobian: np.ndarray, q_rank: int
+) -> tuple[np.ndarray, np.ndarray]:
     m_rows, n_cols = jacobian.shape
     oversample = min(8, max(2, q_rank // 2))
     sample_rank = int(min(n_cols, max(1, q_rank + oversample)))
@@ -51,7 +53,9 @@ def build_lowrank_subspace(
     if j_mat.ndim != 2:
         raise ValueError("jacobian must be 2D")
     if j_mat.size == 0:
-        return np.zeros((j_mat.shape[-1], 0), dtype=np.float64), np.zeros(0, dtype=np.float64)
+        return np.zeros((j_mat.shape[-1], 0), dtype=np.float64), np.zeros(
+            0, dtype=np.float64
+        )
 
     method_norm = str(method).strip().lower()
     cap_rank = int(max(1, rank))
@@ -64,7 +68,9 @@ def build_lowrank_subspace(
 
     max_rank = int(min(cap_rank, vt_mat.shape[0]))
     if max_rank <= 0:
-        return np.zeros((j_mat.shape[1], 0), dtype=np.float64), np.zeros(0, dtype=np.float64)
+        return np.zeros((j_mat.shape[1], 0), dtype=np.float64), np.zeros(
+            0, dtype=np.float64
+        )
 
     energy_rank = _rank_from_energy(singular_values, energy, max_rank)
     keep = int(min(max_rank, max(1, energy_rank)))

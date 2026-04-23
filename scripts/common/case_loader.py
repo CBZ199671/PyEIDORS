@@ -10,7 +10,9 @@ import numpy as np
 from .io_utils import load_csv_measurements, load_single_frame
 
 
-def _select_complex_part(real: np.ndarray, imag: np.ndarray, use_part: str) -> np.ndarray:
+def _select_complex_part(
+    real: np.ndarray, imag: np.ndarray, use_part: str
+) -> np.ndarray:
     if use_part == "real":
         return real
     if use_part == "imag":
@@ -42,7 +44,9 @@ def _reshape_frame_matrix(
             else (n_meas_per_stim, n_stim)
         )
         if arr.shape != expected_shape:
-            raise ValueError(f"Expected shape {expected_shape} for {layout}, got {arr.shape}")
+            raise ValueError(
+                f"Expected shape {expected_shape} for {layout}, got {arr.shape}"
+            )
         return arr.reshape(-1) if layout == "stim-meas" else arr.T.reshape(-1)
 
     if layout != "auto":

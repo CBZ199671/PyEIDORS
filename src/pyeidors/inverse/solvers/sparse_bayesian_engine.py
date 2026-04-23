@@ -144,7 +144,11 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
             return self._cached_jacobian
 
         cache_manager = getattr(self.eit_system, "cache_manager", None)
-        if cache_manager is not None and cache_manager.enabled and self.config.cache_jacobian:
+        if (
+            cache_manager is not None
+            and cache_manager.enabled
+            and self.config.cache_jacobian
+        ):
             baseline = np.ascontiguousarray(baseline_values, dtype=np.float64)
             payload = {
                 "solver": "sparse_bayesian",
@@ -154,8 +158,12 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
                 "subspace_rank": self.config.subspace_rank,
                 "coarse_levels": tuple(self.config.coarse_levels or ()),
                 "model_signature": model_signature_from_forward_model(self.fwd_model),
-                "pattern_signature": pattern_signature_from_forward_model(self.fwd_model),
-                "backend_signature": backend_signature_from_forward_model(self.fwd_model),
+                "pattern_signature": pattern_signature_from_forward_model(
+                    self.fwd_model
+                ),
+                "backend_signature": backend_signature_from_forward_model(
+                    self.fwd_model
+                ),
             }
             jacobian, _ = cache_manager.get_or_compute_semantic(
                 artifact="jacobian",
@@ -163,7 +171,9 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
                 namespace="sparse",
                 cache_obj=payload,
                 payload=payload,
-                compute_fn=lambda: self._eit_pde.jacobian_wrt_parameter(baseline_values),
+                compute_fn=lambda: self._eit_pde.jacobian_wrt_parameter(
+                    baseline_values
+                ),
                 persist=True,
                 cost=10.0,
             )
@@ -185,7 +195,9 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
         return jacobian
 
     def _estimate_noise_level(self, data_vector: np.ndarray) -> float:
-        noise_sigma = max(float(np.std(data_vector) * self.config.noise_rel), self.config.noise_floor)
+        noise_sigma = max(
+            float(np.std(data_vector) * self.config.noise_rel), self.config.noise_floor
+        )
         if not np.isfinite(noise_sigma) or noise_sigma <= 0:
             noise_sigma = self.config.noise_floor
         return noise_sigma

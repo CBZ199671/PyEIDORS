@@ -113,8 +113,12 @@ def test_measurement_layout_counts_three_ring_hybrid_full_3d_mode() -> None:
     assert layout["points_per_frame"] == 1368
 
 
-def test_measurement_layout_accepts_explicit_points_override_for_future_protocols() -> None:
-    layout = measurement_layout_from_config({"n_elec": 32, "points_per_frame_override": 960})
+def test_measurement_layout_accepts_explicit_points_override_for_future_protocols() -> (
+    None
+):
+    layout = measurement_layout_from_config(
+        {"n_elec": 32, "points_per_frame_override": 960}
+    )
 
     assert layout["n_elec"] == 32
     assert layout["points_per_frame"] == 960

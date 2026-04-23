@@ -10,6 +10,7 @@ from pathlib import Path
 
 from tests.utils import run_python
 
+
 def test_gmsh_create_eit_mesh_subprocess(tmp_path):
     mesh_dir = tmp_path / "gmsh_subprocess"
     mesh_dir.mkdir(parents=True, exist_ok=True)
@@ -31,7 +32,9 @@ print(mesh.mesh_file)
 """
 
     proc = run_python(code)
-    assert proc.returncode == 0, f"gmsh subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    assert proc.returncode == 0, (
+        f"gmsh subprocess failed:\nSTDOUT:\n{proc.stdout}\nSTDERR:\n{proc.stderr}"
+    )
 
     msh_file = mesh_dir / f"{mesh_name}.msh"
     assoc_file = mesh_dir / f"{mesh_name}_association_table.ini"

@@ -11,7 +11,9 @@ from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.physics import UnitCheckLevel, run_unit_consistency_checks
 
 
-def _build_forward_model(eit_mesh, *, drive_mode: str = "line_current_density") -> EITForwardModel:
+def _build_forward_model(
+    eit_mesh, *, drive_mode: str = "line_current_density"
+) -> EITForwardModel:
     config = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
@@ -31,13 +33,17 @@ def test_unit_consistency_checks_happy_path(eit_mesh):
     report = run_unit_consistency_checks(model, expected_domain_size_m=1.0)
     assert len(report.items) == 5
     assert report.has_errors is False
-    assert all(item.passed for item in report.items if item.level != UnitCheckLevel.WARN)
+    assert all(
+        item.passed for item in report.items if item.level != UnitCheckLevel.WARN
+    )
 
 
 def test_geometry_size_mismatch_reports_error(eit_mesh):
     model = _build_forward_model(eit_mesh)
     report = run_unit_consistency_checks(model, expected_domain_size_m=0.2)
-    geom_item = next(item for item in report.items if item.name == "geometry_scale_consistency")
+    geom_item = next(
+        item for item in report.items if item.name == "geometry_scale_consistency"
+    )
     assert geom_item.level == UnitCheckLevel.ERROR
     assert report.has_errors is True
 

@@ -22,9 +22,7 @@ def normalize_hdf5_package_path(path: str | Path) -> Path:
     if target.suffix == "":
         return target.with_suffix(".h5")
     if target.suffix.lower() not in _HDF5_SUFFIXES:
-        raise ValueError(
-            f"HDF5 package path must end with .h5 or .hdf5, got {target}"
-        )
+        raise ValueError(f"HDF5 package path must end with .h5 or .hdf5, got {target}")
     return target
 
 

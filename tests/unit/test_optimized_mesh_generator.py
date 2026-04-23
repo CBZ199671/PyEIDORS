@@ -31,7 +31,9 @@ def test_mesh_config_size_formula():
 
 
 def test_cache_name_encoding():
-    name = _build_cache_name(n_elec=16, radius=1.25, refinement=6, electrode_coverage=0.5)
+    name = _build_cache_name(
+        n_elec=16, radius=1.25, refinement=6, electrode_coverage=0.5
+    )
     assert name.startswith("mesh_16e_")
     assert "_ref6_" in name
 

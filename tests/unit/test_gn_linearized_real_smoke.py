@@ -152,7 +152,9 @@ def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_r
     vector = np.linspace(0.1, 0.9, lazy.shape[1], dtype=np.float64) * 1.0e4
     residual = np.linspace(-0.2, 0.3, lazy.shape[0], dtype=np.float64)
 
-    base_data, _ = fwd.fwd_solve(EITImage(elem_data=np.ones(lazy.shape[1]), fwd_model=fwd))
+    base_data, _ = fwd.fwd_solve(
+        EITImage(elem_data=np.ones(lazy.shape[1]), fwd_model=fwd)
+    )
     eps = 1.0e-7
     perturbed_data, _ = fwd.fwd_solve(
         EITImage(elem_data=np.ones(lazy.shape[1]) + eps * vector, fwd_model=fwd)
@@ -168,7 +170,9 @@ def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_r
     )
 
     eye = np.eye(lazy.shape[1], dtype=np.float64)
-    lazy_dense = np.column_stack([lazy.matvec(eye[:, idx]) for idx in range(lazy.shape[1])])
+    lazy_dense = np.column_stack(
+        [lazy.matvec(eye[:, idx]) for idx in range(lazy.shape[1])]
+    )
     np.testing.assert_allclose(
         lazy.hessian_diag(),
         np.sum(lazy_dense * lazy_dense, axis=0),

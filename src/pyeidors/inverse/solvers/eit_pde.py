@@ -29,9 +29,12 @@ from ..jacobian.direct_jacobian import DirectJacobianCalculator
 if cuqi_pde is not None:
     _PDEBase = cuqi_pde.PDE
 else:  # pragma: no cover
+
     class _PDEBase:  # type: ignore[no-redef]
         def __init__(self, *args, **kwargs):
-            raise ImportError("CUQIpy is required for EITPDE. Install cuqipy to use sparse Bayesian solvers.")
+            raise ImportError(
+                "CUQIpy is required for EITPDE. Install cuqipy to use sparse Bayesian solvers."
+            )
 
 
 @dataclass
@@ -47,7 +50,9 @@ class EITPDE(_PDEBase):
 
     def __init__(self, eit_system):
         if cuqi_pde is None:  # pragma: no cover
-            raise ImportError("CUQIpy is required for EITPDE. Install cuqipy to use sparse Bayesian solvers.")
+            raise ImportError(
+                "CUQIpy is required for EITPDE. Install cuqipy to use sparse Bayesian solvers."
+            )
         super().__init__(PDE_form=None)
         self._eit_system = eit_system
         self._fwd_model = eit_system.fwd_model
@@ -115,7 +120,9 @@ class EITPDE(_PDEBase):
         return (
             self._cached_jacobian is not None
             and self._cached_sigma_vector is not None
-            and np.allclose(self._cached_sigma_vector, wrt_array, atol=1e-14, rtol=1e-12)
+            and np.allclose(
+                self._cached_sigma_vector, wrt_array, atol=1e-14, rtol=1e-12
+            )
         )
 
     def _set_cache(self, wrt_array: np.ndarray, jacobian: np.ndarray) -> None:

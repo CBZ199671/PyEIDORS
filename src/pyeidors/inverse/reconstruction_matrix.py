@@ -252,7 +252,9 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
 def _as_rm_matrix(values: Any) -> np.ndarray:
     matrix = np.asarray(values, dtype=np.float64)
     if matrix.ndim != 2 or 0 in matrix.shape:
-        raise ValueError(f"RM artifact matrix must be non-empty 2D, got {matrix.shape}.")
+        raise ValueError(
+            f"RM artifact matrix must be non-empty 2D, got {matrix.shape}."
+        )
     if not np.isfinite(matrix).all():
         raise FloatingPointError("RM artifact matrix contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)

@@ -234,15 +234,13 @@ class JacobianLinearization:
                 dtype=np.float64,
             )
             # Per (measurement m, element e) sensitivity before cell_area scaling.
-            contrib = np.einsum(
-                "eg,meg->me", grad_u, adjoint_block, optimize=True
-            )
+            contrib = np.einsum("eg,meg->me", grad_u, adjoint_block, optimize=True)
             contrib_sq = contrib * contrib
             if weights is not None:
                 contrib_sq = contrib_sq * weights[meas_idx : meas_idx + n_meas, None]
             diag += contrib_sq.sum(axis=0)
             meas_idx += n_meas
-        diag = diag * (float(self.sign) ** 2) * (self.cell_areas ** 2)
+        diag = diag * (float(self.sign) ** 2) * (self.cell_areas**2)
 
         if float(alpha) != 0.0 and regularization_diag is not None:
             reg = np.asarray(regularization_diag, dtype=np.float64).reshape(-1)
@@ -628,9 +626,7 @@ class LazyAdjointJacobianLinearization:
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
-            block_weight = float(
-                np.mean(np.abs(weights[meas_idx : meas_idx + n_meas]))
-            )
+            block_weight = float(np.mean(np.abs(weights[meas_idx : meas_idx + n_meas])))
             diag += block_weight * np.einsum(
                 "eg,eg,e->e",
                 grad_u,

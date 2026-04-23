@@ -11,14 +11,22 @@ from .lifecycle import resolve_cache_directory
 from .object_signature import signature_of_cache_obj
 from .store_disk import DiskCacheStore
 from .store_process import ProcessCacheStore, estimate_object_size_bytes
-from .types import CacheLookup, CachePolicy, CacheScope, CacheStats, normalize_cache_lifecycle
+from .types import (
+    CacheLookup,
+    CachePolicy,
+    CacheScope,
+    CacheStats,
+    normalize_cache_lifecycle,
+)
 
 
 _SHARED_PROCESS_STORES: dict[tuple[str, str], ProcessCacheStore] = {}
 _SHARED_PROCESS_STORES_LOCK = threading.Lock()
 
 
-def _shared_process_store_key(*, cache_dir: Path, code_fingerprint: str) -> tuple[str, str]:
+def _shared_process_store_key(
+    *, cache_dir: Path, code_fingerprint: str
+) -> tuple[str, str]:
     return (str(cache_dir.resolve()), str(code_fingerprint or "unknown"))
 
 
@@ -58,7 +66,9 @@ class CacheManager:
         self.policy = policy or CachePolicy()
         self.code_fingerprint = code_fingerprint
         self.requested_cache_dir = Path(cache_dir)
-        self.disk_lifecycle = normalize_cache_lifecycle(getattr(self.policy, "disk_lifecycle", "session"))
+        self.disk_lifecycle = normalize_cache_lifecycle(
+            getattr(self.policy, "disk_lifecycle", "session")
+        )
         if scope in {"disk", "both"}:
             self._cache_dir_spec = resolve_cache_directory(
                 self.requested_cache_dir,
@@ -68,13 +78,17 @@ class CacheManager:
                     getattr(self.policy, "cleanup_stale_sessions_on_startup", True)
                 ),
                 stale_session_max_age_seconds=float(
-                    getattr(self.policy, "stale_session_max_age_seconds", 7 * 24 * 60 * 60)
+                    getattr(
+                        self.policy, "stale_session_max_age_seconds", 7 * 24 * 60 * 60
+                    )
                 ),
             )
         else:
             self._cache_dir_spec = None
         self.cache_dir = Path(
-            self._cache_dir_spec.effective_dir if self._cache_dir_spec is not None else self.requested_cache_dir
+            self._cache_dir_spec.effective_dir
+            if self._cache_dir_spec is not None
+            else self.requested_cache_dir
         )
 
         self._cache_enable: float = 0.0 if scope == "off" else 1.0
@@ -112,7 +126,9 @@ class CacheManager:
     def session_cache_enabled(self) -> bool:
         return bool(self.disk_lifecycle == "session" and self.scope in {"disk", "both"})
 
-    def build_key(self, artifact: str, payload: dict[str, Any], namespace: str = "default") -> str:
+    def build_key(
+        self, artifact: str, payload: dict[str, Any], namespace: str = "default"
+    ) -> str:
         return build_cache_key(
             CacheKeyParts(
                 artifact=artifact,
@@ -207,14 +223,18 @@ class CacheManager:
         effective_name = name or artifact
         if not self._is_enabled_for(effective_name):
             value = compute_fn()
-            return value, CacheLookup(key=cache_key, hit=False, layer="disabled", artifact=artifact)
+            return value, CacheLookup(
+                key=cache_key, hit=False, layer="disabled", artifact=artifact
+            )
 
         effective_priority = float(priority_boost) + float(self._priority_boost)
 
         if self._process is not None:
             value = self._process.get(cache_key)
             if value is not None:
-                return value, CacheLookup(key=cache_key, hit=True, layer="process", artifact=artifact)
+                return value, CacheLookup(
+                    key=cache_key, hit=True, layer="process", artifact=artifact
+                )
 
         if persist and self._disk is not None:
             value = self._disk.get(cache_key)
@@ -231,7 +251,9 @@ class CacheManager:
                         effort=effort_seconds,
                         priority=effective_priority,
                     )
-                return value, CacheLookup(key=cache_key, hit=True, layer="disk", artifact=artifact)
+                return value, CacheLookup(
+                    key=cache_key, hit=True, layer="disk", artifact=artifact
+                )
 
         value = compute_fn()
         use_cost = self._resolve_cost(artifact, value, cost)
@@ -258,7 +280,9 @@ class CacheManager:
                 effort=effort_seconds,
                 priority=effective_priority,
             )
-        return value, CacheLookup(key=cache_key, hit=False, layer="compute", artifact=artifact)
+        return value, CacheLookup(
+            key=cache_key, hit=False, layer="compute", artifact=artifact
+        )
 
     def get_or_compute_semantic(
         self,
@@ -295,7 +319,9 @@ class CacheManager:
             persist=persist,
         )
 
-    def _resolve_cost(self, artifact: str, value: Any, explicit_cost: float | None) -> float:
+    def _resolve_cost(
+        self, artifact: str, value: Any, explicit_cost: float | None
+    ) -> float:
         if explicit_cost is not None:
             return float(explicit_cost)
         base = float(self.policy.artifact_cost.get(artifact, 1.0))
@@ -392,7 +418,9 @@ class CacheManager:
                     )
                 )
 
-            entries.sort(key=lambda item: float(item.get("last_access", 0.0)), reverse=True)
+            entries.sort(
+                key=lambda item: float(item.get("last_access", 0.0)), reverse=True
+            )
             selected: list[dict[str, Any]] = []
             seen_keys: set[str] = set()
             for entry in entries:
@@ -405,15 +433,21 @@ class CacheManager:
                     break
             records: list[dict[str, Any]] = []
             for entry in selected:
-                value = self._entry_value_for_layer(
-                    key=str(entry.get("key")),
-                    layer=str(entry.get("layer")),
-                ) if include_value else None
+                value = (
+                    self._entry_value_for_layer(
+                        key=str(entry.get("key")),
+                        layer=str(entry.get("layer")),
+                    )
+                    if include_value
+                    else None
+                )
                 records.append(self._snapshot_record(entry, value))
             collected[name] = records
         return collected
 
-    def install_to_cache(self, snapshot: Any, target_layers: CacheScope = "both") -> int:
+    def install_to_cache(
+        self, snapshot: Any, target_layers: CacheScope = "both"
+    ) -> int:
         """Install exported cache snapshot entries back to cache stores."""
 
         if target_layers not in {"process", "disk", "both"}:
@@ -494,7 +528,9 @@ class CacheManager:
                 self._process.list_entries(name=name, namespace=namespace, limit=None)
             )
         if self._disk is not None:
-            entries.extend(self._disk.list_entries(name=name, namespace=namespace, limit=None))
+            entries.extend(
+                self._disk.list_entries(name=name, namespace=namespace, limit=None)
+            )
         entries.sort(key=lambda item: float(item.get("last_access", 0.0)), reverse=True)
         if limit is not None and limit > 0:
             entries = entries[:limit]

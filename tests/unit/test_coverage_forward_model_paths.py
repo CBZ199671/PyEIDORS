@@ -39,7 +39,7 @@ class TestForwardModelPaths:
         fwd = eit_system.fwd_model
         n_cells = fwd.V_sigma.dofmap.index_map.size_local
         sigma = np.ones(n_cells, dtype=float)
-        sigma[:n_cells // 4] = 2.0  # anomaly
+        sigma[: n_cells // 4] = 2.0  # anomaly
         img = EITImage(elem_data=sigma, fwd_model=fwd)
         data, info = fwd.fwd_solve(img)
         assert data.meas is not None

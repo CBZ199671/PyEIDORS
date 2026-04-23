@@ -209,7 +209,9 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._empty_overlay.hide()
         self._curve_primary.setData(x, ground_truth)
         self._curve_primary.setVisible(True)
-        self._set_reconstructed_overlay(x, reconstructed, expected_size=len(ground_truth))
+        self._set_reconstructed_overlay(
+            x, reconstructed, expected_size=len(ground_truth)
+        )
 
     def update_voltages(
         self,
@@ -355,7 +357,9 @@ class BoundaryVoltagePlotWidget(QWidget):
         marker_idx = np.arange(0, reconstructed_arr.size, marker_step, dtype=np.int32)
         if marker_idx.size == 0 or marker_idx[-1] != reconstructed_arr.size - 1:
             marker_idx = np.append(marker_idx, reconstructed_arr.size - 1)
-        self._curve_reconstructed_markers.setData(x[marker_idx], reconstructed_arr[marker_idx])
+        self._curve_reconstructed_markers.setData(
+            x[marker_idx], reconstructed_arr[marker_idx]
+        )
         self._curve_reconstructed_markers.setVisible(True)
 
     def _hide_reconstructed_overlay(self) -> None:
@@ -367,9 +371,11 @@ class BoundaryVoltagePlotWidget(QWidget):
 
     def _retranslate(self) -> None:
         """Refresh title, axis labels, empty-overlay, and legend labels."""
-        self._plot_widget.setLabel("left", t("hw.boundary.y_label"), **self._label_style)
+        self._plot_widget.setLabel(
+            "left", t("hw.boundary.y_label"), **self._label_style
+        )
         self._plot_widget.setTitle(
-            f"<span style=\"color:{self._plot_text};"
+            f'<span style="color:{self._plot_text};'
             f"font-family:'{self._serif}';font-size:13pt;\">"
             f"{self._plot_title()}"
             "</span>"
@@ -409,7 +415,13 @@ class BoundaryVoltagePlotWidget(QWidget):
     def _major_ticks(count: int) -> list[tuple[int, str]]:
         if count <= 1:
             return [(1, "1")]
-        candidates = [1, round(count * 0.25), round(count * 0.5), round(count * 0.75), count]
+        candidates = [
+            1,
+            round(count * 0.25),
+            round(count * 0.5),
+            round(count * 0.75),
+            count,
+        ]
         ticks: list[tuple[int, str]] = []
         seen: set[int] = set()
         for value in candidates:

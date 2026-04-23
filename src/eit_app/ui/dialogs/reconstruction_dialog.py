@@ -123,8 +123,7 @@ class ReconstructionDialog(QDialog):
         self._subtitle_label = QLabel("")
         self._subtitle_label.setWordWrap(True)
         self._subtitle_label.setStyleSheet(
-            "background: transparent; color: #dbe8f4;"
-            " font-size: 12px; border: none;"
+            "background: transparent; color: #dbe8f4; font-size: 12px; border: none;"
         )
         header_layout.addWidget(self._subtitle_label)
         root.addWidget(header)
@@ -280,7 +279,8 @@ class ReconstructionDialog(QDialog):
 
     def _on_browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
-            self, t("hw.acquisition.file_dialog_title"),
+            self,
+            t("hw.acquisition.file_dialog_title"),
             self._dir_edit.text() or str(Path.home()),
         )
         if path:

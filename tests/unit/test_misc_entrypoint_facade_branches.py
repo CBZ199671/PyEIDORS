@@ -29,7 +29,9 @@ def test_main_module_runs_script_entrypoint(capsys):
     assert "Hello from pyeidors!" in captured.out
 
 
-def test_core_system_facade_uses_default_baseline_and_helpers(monkeypatch: pytest.MonkeyPatch):
+def test_core_system_facade_uses_default_baseline_and_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calls = {}
 
     class _ReconFacade(CoreSystemFacadeMixin):
@@ -53,15 +55,29 @@ def test_core_system_facade_uses_default_baseline_and_helpers(monkeypatch: pytes
         "perform_difference_reconstruction",
         lambda **kwargs: calls.setdefault("difference", kwargs) or "difference-out",
     )
-    monkeypatch.setattr(facade_module, "create_homogeneous_image", lambda eit_system, conductivity=None: np.array([conductivity or 1.0], dtype=float))
-    monkeypatch.setattr(facade_module, "add_circular_phantom", lambda eit_system, **kwargs: ("phantom", kwargs))
-    monkeypatch.setattr(facade_module, "collect_system_info", lambda eit_system: {"ok": True})
+    monkeypatch.setattr(
+        facade_module,
+        "create_homogeneous_image",
+        lambda eit_system, conductivity=None: np.array(
+            [conductivity or 1.0], dtype=float
+        ),
+    )
+    monkeypatch.setattr(
+        facade_module,
+        "add_circular_phantom",
+        lambda eit_system, **kwargs: ("phantom", kwargs),
+    )
+    monkeypatch.setattr(
+        facade_module, "collect_system_info", lambda eit_system: {"ok": True}
+    )
 
     abs_out = system.absolute_reconstruct(measurement_data="meas", baseline_image=None)
     assert calls["absolute"]["baseline_image"] == "baseline:None"
     assert abs_out == calls["absolute"]
 
-    diff_out = system.difference_reconstruct(measurement_data="meas", reference_data="ref")
+    diff_out = system.difference_reconstruct(
+        measurement_data="meas", reference_data="ref"
+    )
     assert diff_out == calls["difference"]
 
     class _HelperFacade(CoreSystemFacadeMixin):
@@ -72,7 +88,9 @@ def test_core_system_facade_uses_default_baseline_and_helpers(monkeypatch: pytes
             return None
 
     helper = _HelperFacade()
-    np.testing.assert_allclose(helper.create_homogeneous_image(2.0), np.array([2.0], dtype=float))
+    np.testing.assert_allclose(
+        helper.create_homogeneous_image(2.0), np.array([2.0], dtype=float)
+    )
     phantom = helper.add_phantom(phantom_conductivity=3.0)
     assert phantom[0] == "phantom"
     assert helper.get_system_info() == {"ok": True}

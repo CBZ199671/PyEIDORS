@@ -21,7 +21,9 @@ def _make_reconstructor(
     line_search_mode: str = "fast",
     as_linear_operator=None,
 ):
-    reconstructor = gn_engine.GaussNewtonReconstructor.__new__(gn_engine.GaussNewtonReconstructor)
+    reconstructor = gn_engine.GaussNewtonReconstructor.__new__(
+        gn_engine.GaussNewtonReconstructor
+    )
     reconstructor.n_elements = int(n_elements)
     reconstructor.solver_mode = solver_mode
     reconstructor.line_search_mode = line_search_mode
@@ -55,7 +57,9 @@ def test_ensure_regularization_ready_rejects_empty_and_nonfinite_sparse():
     with pytest.raises(FloatingPointError, match="sparse matrix is empty"):
         empty_sparse.ensure_regularization_ready()
 
-    nonfinite_sparse = _make_reconstructor(sparse.csr_matrix(np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=float)))
+    nonfinite_sparse = _make_reconstructor(
+        sparse.csr_matrix(np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=float))
+    )
     with pytest.raises(FloatingPointError, match="contains non-finite values"):
         nonfinite_sparse.ensure_regularization_ready()
 
@@ -74,22 +78,36 @@ def test_ensure_regularization_ready_handles_linear_operator_modes():
     assert reconstructor.R_diag is None
     assert reconstructor.R_torch is None
 
-    bad_op = LinearOperator((2, 2), matvec=lambda _x: np.array([np.nan, 0.0], dtype=float))
+    bad_op = LinearOperator(
+        (2, 2), matvec=lambda _x: np.array([np.nan, 0.0], dtype=float)
+    )
     with pytest.raises(FloatingPointError, match="LinearOperator produces non-finite"):
         _make_reconstructor(bad_op, solver_mode="fast").ensure_regularization_ready()
 
     with pytest.raises(RuntimeError, match="LinearOperator is not supported"):
-        _make_reconstructor(finite_op, solver_mode="strict").ensure_regularization_ready()
+        _make_reconstructor(
+            finite_op, solver_mode="strict"
+        ).ensure_regularization_ready()
 
 
-def test_ensure_regularization_ready_rejects_nonfinite_dense_and_transfer_failures(monkeypatch: pytest.MonkeyPatch):
-    nonfinite_dense = _make_reconstructor(np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=float), solver_mode="strict")
-    with pytest.raises(FloatingPointError, match="Regularization matrix contains non-finite values"):
+def test_ensure_regularization_ready_rejects_nonfinite_dense_and_transfer_failures(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    nonfinite_dense = _make_reconstructor(
+        np.array([[np.nan, 0.0], [0.0, 1.0]], dtype=float), solver_mode="strict"
+    )
+    with pytest.raises(
+        FloatingPointError, match="Regularization matrix contains non-finite values"
+    ):
         nonfinite_dense.ensure_regularization_ready()
 
     reconstructor = _make_reconstructor(np.eye(2, dtype=float), solver_mode="strict")
-    monkeypatch.setattr(gn_engine.torch, "isfinite", lambda _tensor: torch.tensor([False]))
-    with pytest.raises(FloatingPointError, match="contains non-finite values after transfer"):
+    monkeypatch.setattr(
+        gn_engine.torch, "isfinite", lambda _tensor: torch.tensor([False])
+    )
+    with pytest.raises(
+        FloatingPointError, match="contains non-finite values after transfer"
+    ):
         reconstructor.ensure_regularization_ready()
 
 

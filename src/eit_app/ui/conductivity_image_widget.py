@@ -20,7 +20,9 @@ from eit_app.ui.fonts import plot_font_families, serif_font_family
 from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
 
 
-def _triangle_area_xy(triangles: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+def _triangle_area_xy(
+    triangles: np.ndarray, x: np.ndarray, y: np.ndarray
+) -> np.ndarray:
     x0 = x[triangles[:, 0]]
     y0 = y[triangles[:, 0]]
     x1 = x[triangles[:, 1]]
@@ -85,7 +87,9 @@ def _project_cells_to_triangles(
 class ConductivityImageWidget(QWidget):
     """Displays a conductivity distribution as a matplotlib tripcolor plot."""
 
-    def __init__(self, title: str = "Conductivity", parent: QWidget | None = None) -> None:
+    def __init__(
+        self, title: str = "Conductivity", parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self._serif = serif_font_family()
         # Title uses a FontProperties with a Latin-serif-first family list
@@ -97,8 +101,12 @@ class ConductivityImageWidget(QWidget):
         # Cache the most recent rendered state so dark-mode toggles can
         # repaint without losing the conductivity field.  None means
         # "currently showing the placeholder".
-        self._last_image: tuple[np.ndarray, np.ndarray, np.ndarray, str | None] | None = None
-        self._last_caption: tuple[str, str] | None = None  # (text, kind: 'placeholder'|'loading'|'error')
+        self._last_image: (
+            tuple[np.ndarray, np.ndarray, np.ndarray, str | None] | None
+        ) = None
+        self._last_caption: tuple[str, str] | None = (
+            None  # (text, kind: 'placeholder'|'loading'|'error')
+        )
 
         # Electrode overlay state.  Cached LineCollection lives on the
         # axes; toggling visibility never rebuilds geometry.
@@ -133,7 +141,9 @@ class ConductivityImageWidget(QWidget):
 
         self._ax = self._figure.add_subplot(111)
         self._ax.set_facecolor(palette["axes_bg"])
-        self._ax.set_title(title, fontproperties=self._title_font, color=palette["text"])
+        self._ax.set_title(
+            title, fontproperties=self._title_font, color=palette["text"]
+        )
         self._ax.set_aspect("equal")
         self._colorbar = None
         self._show_placeholder()
@@ -165,7 +175,11 @@ class ConductivityImageWidget(QWidget):
             self._draw_caption(text, kind)
         else:
             # Re-apply the title color even when nothing is rendered.
-            self._ax.set_title(self._default_title, fontproperties=self._title_font, color=palette["text"])
+            self._ax.set_title(
+                self._default_title,
+                fontproperties=self._title_font,
+                color=palette["text"],
+            )
             self._canvas.draw_idle()
 
     def _apply_axes_chrome(self) -> None:
@@ -189,7 +203,9 @@ class ConductivityImageWidget(QWidget):
         """Update the plot title (used by i18n retranslate pipelines)."""
         self._default_title = title
         palette = plot_palette()
-        self._ax.set_title(title, fontproperties=self._title_font, color=palette["text"])
+        self._ax.set_title(
+            title, fontproperties=self._title_font, color=palette["text"]
+        )
         self._canvas.draw_idle()
 
     def update_image(
@@ -231,7 +247,9 @@ class ConductivityImageWidget(QWidget):
             face_values = np.asarray(conductivity, dtype=float)[source_cells]
             tpc = self._ax.tripcolor(tri, face_values, shading="flat", cmap="viridis")
         elif len(conductivity) == len(x):
-            tpc = self._ax.tripcolor(tri, conductivity, shading="gouraud", cmap="viridis")
+            tpc = self._ax.tripcolor(
+                tri, conductivity, shading="gouraud", cmap="viridis"
+            )
         else:
             self._show_error(
                 f"Size mismatch: sigma={len(conductivity)}, "
@@ -252,8 +270,12 @@ class ConductivityImageWidget(QWidget):
         # keeps it slim, pad=0.04 pulls it closer to the image so the
         # matplotlib auto-layout does not leave a huge right-hand gap.
         self._colorbar = self._figure.colorbar(
-            tpc, ax=self._ax, label="S/m",
-            shrink=0.72, aspect=16, pad=0.04,
+            tpc,
+            ax=self._ax,
+            label="S/m",
+            shrink=0.72,
+            aspect=16,
+            pad=0.04,
         )
         self._colorbar.ax.yaxis.label.set_fontname(self._serif)
         self._colorbar.ax.yaxis.label.set_size(10)
@@ -425,8 +447,8 @@ class ConductivityImageWidget(QWidget):
         palette = plot_palette()
         color = {
             "placeholder": palette["caption"],
-            "loading":     palette["caption_loading"],
-            "error":       palette["caption_error"],
+            "loading": palette["caption_loading"],
+            "error": palette["caption_error"],
         }.get(kind, palette["caption"])
         # Make sure background colors track the theme even when the
         # caption pre-empts a render that would otherwise call
@@ -453,10 +475,14 @@ class ConductivityImageWidget(QWidget):
             fontsize = 12
             fontweight = "bold"
         self._ax.text(
-            0.5, 0.5, text,
+            0.5,
+            0.5,
+            text,
             transform=self._ax.transAxes,
-            ha="center", va="center",
-            fontsize=fontsize, color=color,
+            ha="center",
+            va="center",
+            fontsize=fontsize,
+            color=color,
             fontweight=fontweight,
             fontproperties=self._title_font,
             bbox=bbox,

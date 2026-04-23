@@ -27,7 +27,9 @@ def _reconstructor(measurements, *, perturb=None):
 
     reconstructor = SimpleNamespace(
         max_step=1.0,
-        _line_search_perturb=np.array([0.0, 0.5, 1.0], dtype=float) if perturb is None else np.asarray(perturb, dtype=float),
+        _line_search_perturb=np.array([0.0, 0.5, 1.0], dtype=float)
+        if perturb is None
+        else np.asarray(perturb, dtype=float),
         clip_values=None,
         fwd_model=SimpleNamespace(fwd_solve=_fwd_solve),
         device="cpu",
@@ -46,7 +48,9 @@ def _reconstructor(measurements, *, perturb=None):
     return reconstructor
 
 
-def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(monkeypatch: pytest.MonkeyPatch):
+def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(
+    monkeypatch: pytest.MonkeyPatch,
+):
     reconstructor = _reconstructor([np.array([0.0], dtype=float)], perturb=[0.2, 2.0])
     perturb = calc_perturb_limits(
         reconstructor,
@@ -66,7 +70,9 @@ def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(monk
         mlist=np.array([1.0, 1.2, 1.3], dtype=float),
         valid_idx=np.array([0, 1, 2], dtype=int),
     )
-    np.testing.assert_allclose(reconstructor._line_search_perturb, np.array([0.0, 0.01, 0.02], dtype=float))
+    np.testing.assert_allclose(
+        reconstructor._line_search_perturb, np.array([0.0, 0.01, 0.02], dtype=float)
+    )
 
     reconstructor._line_search_perturb = np.array([0.0, 0.1, 0.2], dtype=float)
     update_perturb_eidors_style(
@@ -76,7 +82,9 @@ def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(monk
         mlist=np.array([1.0, 1.01, 1.02], dtype=float),
         valid_idx=np.array([0, 1, 2], dtype=int),
     )
-    np.testing.assert_allclose(reconstructor._line_search_perturb, np.array([0.0, 0.5, 1.0], dtype=float))
+    np.testing.assert_allclose(
+        reconstructor._line_search_perturb, np.array([0.0, 0.5, 1.0], dtype=float)
+    )
 
     reconstructor._line_search_perturb = np.array([0.0, 0.02, 0.05], dtype=float)
     update_perturb_eidors_style(
@@ -86,7 +94,9 @@ def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(monk
         mlist=np.array([1.0, 0.999, 0.998], dtype=float),
         valid_idx=np.array([0, 1, 2], dtype=int),
     )
-    np.testing.assert_allclose(reconstructor._line_search_perturb, np.array([0.0, 0.2, 0.5], dtype=float))
+    np.testing.assert_allclose(
+        reconstructor._line_search_perturb, np.array([0.0, 0.2, 0.5], dtype=float)
+    )
 
     negative = _reconstructor([np.array([0.0], dtype=float)], perturb=[-1.0])
     neg_perturb = calc_perturb_limits(
@@ -108,9 +118,19 @@ def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(monk
     assert scaled_perturb[-1] <= 1.0 + 1e-12
 
 
-def test_line_search_torch_handles_inf_objective_break_and_no_valid_idx(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(line_search_module, "function_get_array", lambda sigma_current: np.asarray(sigma_current.array, dtype=float))
-    monkeypatch.setattr(line_search_module, "project_measurement_vector", lambda values, **kwargs: np.asarray(values, dtype=float))
+def test_line_search_torch_handles_inf_objective_break_and_no_valid_idx(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        line_search_module,
+        "function_get_array",
+        lambda sigma_current: np.asarray(sigma_current.array, dtype=float),
+    )
+    monkeypatch.setattr(
+        line_search_module,
+        "project_measurement_vector",
+        lambda values, **kwargs: np.asarray(values, dtype=float),
+    )
 
     sigma_current = SimpleNamespace(array=np.array([1.0], dtype=float))
     delta = torch.tensor([0.25], dtype=torch.float64)

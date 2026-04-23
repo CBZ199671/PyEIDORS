@@ -33,7 +33,7 @@ class ElectrodeArcSpec:
     """A 2D boundary electrode arc (used by the matplotlib widget)."""
 
     theta_start: float  # radians
-    theta_end: float    # radians
+    theta_end: float  # radians
 
 
 @dataclass(frozen=True)

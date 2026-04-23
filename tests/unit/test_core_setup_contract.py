@@ -166,7 +166,9 @@ def test_setup_from_cache_calls_loader_paths(monkeypatch):
             return "mesh:default"
 
     monkeypatch.setattr("pyeidors.core_system.MeshLoader", _FakeLoader)
-    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: captured.__setitem__("mesh", mesh))
+    monkeypatch.setattr(
+        system, "setup_with_mesh", lambda mesh: captured.__setitem__("mesh", mesh)
+    )
 
     system.setup_from_cache(mesh_dir="cache_dir", mesh_name="foo")
     assert captured["mesh_dir"] == "cache_dir"
@@ -187,7 +189,9 @@ def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
         "pyeidors.core_system.create_simple_eit_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-mesh",
     )
-    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+    monkeypatch.setattr(
+        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+    )
 
     system.setup_generated_mesh()
     system.setup_generated_mesh(radius=2.0, mesh_size=0.05)
@@ -241,7 +245,9 @@ def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
         "pyeidors.core_system.create_cylinder_3d_eit_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
-    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+    monkeypatch.setattr(
+        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+    )
 
     system.setup_generated_mesh(dimension=3)
 
@@ -261,7 +267,9 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
         "pyeidors.core_system.create_cylinder_3d_eit_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
-    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh}))
+    monkeypatch.setattr(
+        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+    )
 
     system.setup_generated_mesh(
         dimension=3,
@@ -351,7 +359,10 @@ def test_runtime_policy_downgrades_missing_amgx_to_spd_gamg(monkeypatch):
 
     assert policy["forward_solver_preset_requested"] == "cuda_amgx"
     assert policy["forward_solver_preset_effective"] == "spd_gamg"
-    assert policy["forward_solver_policy_reason"] == "amgx_unavailable_downgraded_to_spd_gamg"
+    assert (
+        policy["forward_solver_policy_reason"]
+        == "amgx_unavailable_downgraded_to_spd_gamg"
+    )
     assert policy["petsc_amgx_available"] is False
     assert policy["forward_mat_solve_effective_policy"] == "off"
     assert (

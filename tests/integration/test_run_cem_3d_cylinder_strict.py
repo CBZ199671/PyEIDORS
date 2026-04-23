@@ -15,7 +15,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = REPO_ROOT / "scripts" / "run_cem_16e_cylinder_3d_test.py"
 
 
-def _run(args: list[str], *, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def _run(
+    args: list[str], *, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     merged_env = dict(os.environ)
     merged_env.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
     merged_env.setdefault("OMP_NUM_THREADS", "1")

@@ -38,9 +38,15 @@ def _fake_sigma(values: np.ndarray):
 
 
 def test_startup_cache_lookup_uses_cache_manager(monkeypatch):
-    monkeypatch.setattr(gn_runtime, "model_signature_from_forward_model", lambda _: "model")
-    monkeypatch.setattr(gn_runtime, "pattern_signature_from_forward_model", lambda _: "pattern")
-    monkeypatch.setattr(gn_runtime, "backend_signature_from_forward_model", lambda _: "backend")
+    monkeypatch.setattr(
+        gn_runtime, "model_signature_from_forward_model", lambda _: "model"
+    )
+    monkeypatch.setattr(
+        gn_runtime, "pattern_signature_from_forward_model", lambda _: "pattern"
+    )
+    monkeypatch.setattr(
+        gn_runtime, "backend_signature_from_forward_model", lambda _: "backend"
+    )
 
     cache = _FakeCacheManager()
     jacobian = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=float)

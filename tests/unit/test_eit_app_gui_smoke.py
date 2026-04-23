@@ -198,7 +198,13 @@ def test_status_bar_reserves_error_tone_for_real_failures() -> None:
     tab, implying (e.g.) the Dataset tab carried a warning and the
     Database tab was dormant.  Both are regular operating modes.
     """
-    from eit_app.ui.status_bar import _ACQ_KEYS, _LINK_KEYS, _MODE_KEYS, _POWER_KEYS, _RECORD_KEYS
+    from eit_app.ui.status_bar import (
+        _ACQ_KEYS,
+        _LINK_KEYS,
+        _MODE_KEYS,
+        _POWER_KEYS,
+        _RECORD_KEYS,
+    )
 
     # recording == "recording" must be the 'active' tone, not 'error'.
     assert _RECORD_KEYS["recording"][1] == "active"
@@ -275,7 +281,9 @@ def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
                 rf"set_button_role\(\s*{re.escape(name)}\s*,\s*['\"](\w+)['\"]\)"
             )
             if not re.search(role_pattern, text):
-                missing.append(f"{py_file.relative_to(ui_dir.parent.parent.parent)}: {name}")
+                missing.append(
+                    f"{py_file.relative_to(ui_dir.parent.parent.parent)}: {name}"
+                )
 
     assert not missing, (
         f"Found {len(missing)} QPushButton(s) without set_button_role "
@@ -370,10 +378,7 @@ def test_workflow_shell_tabs_share_right_context_minimum() -> None:
         assert sim_splitter.widget(2).minimumWidth() == expected_context_min
 
         # Dataset → DatasetSummaryPanel is the context widget
-        assert (
-            window._dataset_tab._summary_panel.minimumWidth()
-            == expected_context_min
-        )
+        assert window._dataset_tab._summary_panel.minimumWidth() == expected_context_min
 
         # All three WorkflowShell tabs request the same right-pane
         # default so the pane width doesn't visibly jump as the user
@@ -419,6 +424,7 @@ def test_batch_reconstruction_dialog_shows_eta_after_enough_samples(
         # Hit both the module-local import (inside _set_running /
         # _format_eta, which does ``import time as _time``).
         import eit_app.ui.dialogs.batch_reconstruction_dialog as mod
+
         monkeypatch.setattr(mod, "__name__", mod.__name__)
 
         dialog._set_running(True)
@@ -427,14 +433,20 @@ def test_batch_reconstruction_dialog_shows_eta_after_enough_samples(
         # Too early: only 1 item done, elapsed < 1s → no ETA suffix.
         clock["now"] = 1000.5
         dialog.set_progress(1, 10)
-        assert "ETA" not in dialog._progress_label.text() and "剩余" not in dialog._progress_label.text()
+        assert (
+            "ETA" not in dialog._progress_label.text()
+            and "剩余" not in dialog._progress_label.text()
+        )
 
         # 2 items done after 2s elapsed → rate 1/s → ETA for the
         # remaining 8 items ≈ 8s.  The label must contain a
         # localised "remaining" phrase.
         clock["now"] = 1002.0
         dialog.set_progress(2, 10)
-        assert "remaining" in dialog._progress_label.text() or "剩余" in dialog._progress_label.text()
+        assert (
+            "remaining" in dialog._progress_label.text()
+            or "剩余" in dialog._progress_label.text()
+        )
 
         # Non-empty message must bypass ETA decoration (used for
         # cancel / error paths).
@@ -481,9 +493,7 @@ def test_frame_database_range_filters_on_n_elec_and_stim_amp(tmp_path: Path) -> 
 
         # Combined
         assert names(
-            db.query_sessions(
-                n_elec_min=16, n_elec_max=32, stim_amp_ua_max=500
-            )
+            db.query_sessions(n_elec_min=16, n_elec_max=32, stim_amp_ua_max=500)
         ) == ["A", "B"]
 
         # Empty result when ranges don't overlap any row
@@ -765,10 +775,13 @@ def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
     def _decode(url: str) -> str:
         prefix = 'url("data:image/svg+xml;base64,'
         assert url.startswith(prefix), f"unexpected URL form: {url[:60]}"
-        b64 = url[len(prefix):].rstrip('")')
+        b64 = url[len(prefix) :].rstrip('")')
         return base64.b64decode(b64).decode("utf-8")
 
-    for name, url in {**_ARROW_URLS_LIGHT, **{f"dk_{k}": v for k, v in _ARROW_URLS_DARK.items()}}.items():
+    for name, url in {
+        **_ARROW_URLS_LIGHT,
+        **{f"dk_{k}": v for k, v in _ARROW_URLS_DARK.items()},
+    }.items():
         svg = _decode(url)
         # Level 1: viewBox-only, no intrinsic raster size.
         assert "viewBox=" in svg, f"{name}: missing viewBox"
@@ -875,7 +888,9 @@ def test_inline_card_stylesheets_follow_dark_mode_palette() -> None:
     try:
         # Initial state: every card stylesheet contains the LIGHT bg color.
         sample_session_value = next(iter(window._summary_panel._values.values()))
-        sample_dataset_value = next(iter(window._dataset_tab._summary_panel._values.values()))
+        sample_dataset_value = next(
+            iter(window._dataset_tab._summary_panel._values.values())
+        )
         assert light_value_bg in sample_session_value.styleSheet()
         assert light_value_bg in sample_dataset_value.styleSheet()
         assert light_value_bg.lower() != "#262d38"
@@ -891,7 +906,10 @@ def test_inline_card_stylesheets_follow_dark_mode_palette() -> None:
             assert dark_value_bg in value.styleSheet(), (
                 "SessionSummaryPanel field value should follow dark mode"
             )
-        assert dark_palette["next_action_bg"] in window._summary_panel._next_action.styleSheet()
+        assert (
+            dark_palette["next_action_bg"]
+            in window._summary_panel._next_action.styleSheet()
+        )
 
         # DatasetSummaryPanel: field value boxes
         for value in window._dataset_tab._summary_panel._values.values():
@@ -900,7 +918,10 @@ def test_inline_card_stylesheets_follow_dark_mode_palette() -> None:
         # Database tab: stats card + selection status
         assert dark_palette["info_bg"] in window._db_tab._stats_card.styleSheet()
         assert dark_palette["info_accent"] in window._db_tab._count_label.styleSheet()
-        assert dark_palette["selection_bg"] in window._db_tab._selection_status.styleSheet()
+        assert (
+            dark_palette["selection_bg"]
+            in window._db_tab._selection_status.styleSheet()
+        )
 
         # Light mode reverts the same paths.
         set_theme_mode(app, "light", persist=False)
@@ -981,11 +1002,11 @@ def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
 @pytest.mark.gui
 def test_dark_mode_toggle_swaps_stylesheet_and_tone_palette() -> None:
     """The View → Dark Theme action must:
-      1. switch current_theme_mode() to 'dark'
-      2. append the dark overlay QSS to the application stylesheet
-      3. flip tone_palette('idle') to the dark-variant triplet
-      4. survive another toggle back to light without leaking the
-         overlay into the light stylesheet
+    1. switch current_theme_mode() to 'dark'
+    2. append the dark overlay QSS to the application stylesheet
+    3. flip tone_palette('idle') to the dark-variant triplet
+    4. survive another toggle back to light without leaking the
+       overlay into the light stylesheet
     """
     from eit_app.ui.theme import (
         apply_app_theme,
@@ -1064,7 +1085,9 @@ def test_app_theme_publishes_accessibility_selectors() -> None:
 
 
 @pytest.mark.gui
-def test_reconstruction_widget_pre_renders_static_layout_and_refreshes_internal_image() -> None:
+def test_reconstruction_widget_pre_renders_static_layout_and_refreshes_internal_image() -> (
+    None
+):
     _get_app()
     widget = ReconstructionWidget()
     widget.configure_layout(n_elec=8, radius=1.0)
@@ -1210,11 +1233,15 @@ def test_connection_panel_auto_selects_unique_windows_serial_port(
 
     assert window._conn_panel.serial_port_count() == 1
     assert window._conn_panel.selected_serial_port() == "COM4"
-    assert window._conn_panel.selected_serial_display_name() == "COM4 - USB-SERIAL CH340"
+    assert (
+        window._conn_panel.selected_serial_display_name() == "COM4 - USB-SERIAL CH340"
+    )
     assert "Auto-selected the only port" in window._conn_panel._port_hint.text()
     assert "Windows COM bridge" in window._conn_panel._port_hint.text()
 
-    window._conn_panel._port_combo.setCurrentText("COM4 -> /dev/ttyS3 - USB-SERIAL CH340")
+    window._conn_panel._port_combo.setCurrentText(
+        "COM4 -> /dev/ttyS3 - USB-SERIAL CH340"
+    )
     assert window._conn_panel.selected_serial_port() == "COM4"
 
     _close_window(window)
@@ -1293,11 +1320,15 @@ def test_relay_preflight_failure_is_reported_before_device_connect(
             "relay.example:4555 当前不可达，请先确认服务已启动。",
         )
 
-    monkeypatch.setattr(main_window_module, "preflight_connection_target", _fake_preflight)
+    monkeypatch.setattr(
+        main_window_module, "preflight_connection_target", _fake_preflight
+    )
 
     window = EITWorkstation()
     _show_window(window)
-    monkeypatch.setattr(window._device_ctrl, "connect_device", lambda: connect_calls.append(True))
+    monkeypatch.setattr(
+        window._device_ctrl, "connect_device", lambda: connect_calls.append(True)
+    )
 
     window._conn_panel._transport_combo.setCurrentIndex(1)
     window._conn_panel._server_host.setText("relay.example")
@@ -1307,7 +1338,10 @@ def test_relay_preflight_failure_is_reported_before_device_connect(
 
     assert connect_calls == []
     assert window._state.connection_status is ConnectionStatus.ERROR
-    assert "无法连接到 4G Relay 服务器 relay.example:4555" in window._status_bar.currentMessage()
+    assert (
+        "无法连接到 4G Relay 服务器 relay.example:4555"
+        in window._status_bar.currentMessage()
+    )
     assert "当前不可达" in window._conn_panel._transport_hint.text()
 
     _close_window(window)
@@ -1345,7 +1379,9 @@ def test_dataset_generation_uses_dedicated_tab_configuration(
     assert captured["config"].mesh_dimension == 3
     assert captured["config"].n_electrodes == 24
     assert set(captured["config"].shapes) == {"circle", "ellipse", "rectangle"}
-    assert window._dataset_tab.summary_panel._values["output_dir"].text() == str(dataset_dir)
+    assert window._dataset_tab.summary_panel._values["output_dir"].text() == str(
+        dataset_dir
+    )
     assert window._dataset_tab.summary_panel._values["samples"].text() == "12"
     assert window._dataset_tab.summary_panel._state_chip.text() == "Generating"
 
@@ -1425,12 +1461,18 @@ def test_simulator_scheduled_acquisition_smoke() -> None:
     assert window._summary_panel._state_badge.text() == "ACQUIRING"
     assert window._summary_panel._indicator_values["acq"].text() == "STEP"
     assert window._summary_panel._values["transport"].text() == "Simulator"
-    assert "Stepped Run | 0/3 | every 0.2s | 1000→1200 Hz" == window._summary_panel._values["plan"].text()
+    assert (
+        "Stepped Run | 0/3 | every 0.2s | 1000→1200 Hz"
+        == window._summary_panel._values["plan"].text()
+    )
     assert _wait_until(lambda: window._state.frame_count == 3, timeout=8.0)
     assert _wait_until(lambda: window._plan_active is False, timeout=8.0)
     assert window._control_panel._freq_spin.value() == 1200
     assert window._status_bar._acq_label.text() == "Acq: Idle"
-    assert window._summary_panel._values["plan"].text() == "Idle | Stepped Run 3x | every 0.2s | 1000→1200 Hz"
+    assert (
+        window._summary_panel._values["plan"].text()
+        == "Idle | Stepped Run 3x | every 0.2s | 1000→1200 Hz"
+    )
 
     window._on_stop_acquisition()
     app.processEvents()
@@ -1442,7 +1484,9 @@ def test_simulator_scheduled_acquisition_smoke() -> None:
 
 
 @pytest.mark.gui
-def test_fixed_frequency_timed_run_uses_step2_drive_frequency_and_keeps_live_outputs() -> None:
+def test_fixed_frequency_timed_run_uses_step2_drive_frequency_and_keeps_live_outputs() -> (
+    None
+):
     _get_app()
     window = EITWorkstation()
     _show_window(window)
@@ -1467,7 +1511,9 @@ def test_fixed_frequency_timed_run_uses_step2_drive_frequency_and_keeps_live_out
     window._on_acquisition_plan_changed(window._acq_panel.acquisition_plan())
 
     assert window._build_planned_frequencies() == [2500, 2500, 2500]
-    window._recon_prewarm_ready_signature = window._build_realtime_recon_prewarm_payload()[1]
+    window._recon_prewarm_ready_signature = (
+        window._build_realtime_recon_prewarm_payload()[1]
+    )
 
     def _fake_reconstruct(request) -> bool:
         measured = np.asarray(
@@ -1498,11 +1544,17 @@ def test_fixed_frequency_timed_run_uses_step2_drive_frequency_and_keeps_live_out
 
     assert window._auto_reconstruct is True
     assert window._status_bar._acq_label.text() == "Acq: Finite Run"
-    assert window._summary_panel._values["plan"].text() == "Finite Run | 0/3 | every 0.2s | 2500 Hz"
+    assert (
+        window._summary_panel._values["plan"].text()
+        == "Finite Run | 0/3 | every 0.2s | 2500 Hz"
+    )
     assert _wait_until(lambda: window._voltage_plot._has_data is True, timeout=8.0)
     assert _wait_until(lambda: window._state.frame_count == 3, timeout=8.0)
     assert window._summary_panel._values["drive"].text().startswith("2500 Hz")
-    assert window._summary_panel._values["plan"].text() == "Idle | Finite Run 3x | every 0.2s | 2500 Hz"
+    assert (
+        window._summary_panel._values["plan"].text()
+        == "Idle | Finite Run 3x | every 0.2s | 2500 Hz"
+    )
 
     _close_window(window)
 
@@ -1549,7 +1601,9 @@ def test_frequency_stepped_run_keeps_auto_reconstruction_enabled_and_updates_out
     window._hw_recon_ctrl._busy = True
     window._db_recon_ctrl._busy = True
     window._sim_recon_ctrl._busy = True
-    window._recon_prewarm_ready_signature = window._build_realtime_recon_prewarm_payload()[1]
+    window._recon_prewarm_ready_signature = (
+        window._build_realtime_recon_prewarm_payload()[1]
+    )
 
     window._auto_reconstruct = True
     window._plan_active = True
@@ -1730,11 +1784,11 @@ def test_simulator_single_frame_capture_stops_automatically(tmp_path: Path) -> N
 @pytest.mark.gui
 def test_auto_close_combo_box_hides_popup_on_disable_clear_and_focus_loss() -> None:
     """Edge cases around the dropdown auto-hide:
-      1. Calling setEnabled(False) while the popup is visible must hide it.
-      2. Replacing the item list via clear() + addItems() must close a
-         stale open popup so it doesn't show ghost entries.
-      3. App focus moving to an unrelated widget must close the popup
-         (keyboard Tab-away path, not just click-outside).
+    1. Calling setEnabled(False) while the popup is visible must hide it.
+    2. Replacing the item list via clear() + addItems() must close a
+       stale open popup so it doesn't show ghost entries.
+    3. App focus moving to an unrelated widget must close the popup
+       (keyboard Tab-away path, not just click-outside).
     """
     from PySide6.QtWidgets import QPushButton, QWidget, QVBoxLayout
 
@@ -1838,8 +1892,10 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
     window._control_panel._freq_spin.setValue(2500)
     _click(window._control_panel._freq_apply)
     assert _wait_until(
-        lambda: window._device_config["frequency_hz"] == 2500
-        and "set_frequency" in window._status_bar.currentMessage(),
+        lambda: (
+            window._device_config["frequency_hz"] == 2500
+            and "set_frequency" in window._status_bar.currentMessage()
+        ),
         timeout=3.0,
     )
     assert "2500 Hz" in window._summary_panel._values["drive"].text()
@@ -1847,9 +1903,11 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
     window._control_panel._stim_combo.setCurrentIndex(3)
     _click(window._control_panel._stim_apply)
     assert _wait_until(
-        lambda: window._device_config["stim_amp_level"] == 3
-        and window._device_config["stim_amp_uA"] == 500
-        and "set_stim_amplitude" in window._status_bar.currentMessage(),
+        lambda: (
+            window._device_config["stim_amp_level"] == 3
+            and window._device_config["stim_amp_uA"] == 500
+            and "set_stim_amplitude" in window._status_bar.currentMessage()
+        ),
         timeout=3.0,
     )
     assert "500 uA" in window._summary_panel._values["drive"].text()
@@ -1857,9 +1915,11 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
     window._control_panel._vamp_combo.setCurrentIndex(2)
     _click(window._control_panel._vamp_apply)
     assert _wait_until(
-        lambda: window._device_config["voltage_amp_level_1"] == 2
-        and window._device_config["voltage_amp_level_2"] == 2
-        and "set_voltage_amp_levels" in window._status_bar.currentMessage(),
+        lambda: (
+            window._device_config["voltage_amp_level_1"] == 2
+            and window._device_config["voltage_amp_level_2"] == 2
+            and "set_voltage_amp_levels" in window._status_bar.currentMessage()
+        ),
         timeout=3.0,
     )
     assert "0.32x" in window._summary_panel._values["drive"].text()
@@ -1872,8 +1932,11 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
 
     _click(window._control_panel._power_on_btn)
     assert _wait_until(
-        lambda: window._status_bar._power_label.text() == "Power: ON"
-        and "Measurement power switched to ON" in window._status_bar.currentMessage(),
+        lambda: (
+            window._status_bar._power_label.text() == "Power: ON"
+            and "Measurement power switched to ON"
+            in window._status_bar.currentMessage()
+        ),
         timeout=3.0,
     )
     assert window._workflow_toolbox.currentIndex() == 1
@@ -1895,8 +1958,11 @@ def test_button_clicks_update_status_bar_and_device_profile() -> None:
 
     _click(window._control_panel._power_off_btn)
     assert _wait_until(
-        lambda: window._status_bar._power_label.text() == "Power: OFF"
-        and "Measurement power switched to OFF" in window._status_bar.currentMessage(),
+        lambda: (
+            window._status_bar._power_label.text() == "Power: OFF"
+            and "Measurement power switched to OFF"
+            in window._status_bar.currentMessage()
+        ),
         timeout=3.0,
     )
     assert window._summary_panel._state_badge.text() == "READY FOR ACQUISITION"
@@ -1960,16 +2026,23 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     output_dir = tmp_path / "gui-recordings"
     window._acq_panel._dir_edit.setText(str(output_dir))
     _click(window._acq_panel._rec_check)
-    assert _wait_until(lambda: window._acq_panel._rec_check.isChecked() is True, timeout=2.0)
+    assert _wait_until(
+        lambda: window._acq_panel._rec_check.isChecked() is True, timeout=2.0
+    )
     assert window._acq_panel._rec_check.isEnabled() is True
-    assert "Recording enabled; captures will be saved to" in window._status_bar.currentMessage()
+    assert (
+        "Recording enabled; captures will be saved to"
+        in window._status_bar.currentMessage()
+    )
     assert window._status_bar._rec_label.text() == "Record: Armed"
     assert window._workflow_toolbox.currentIndex() == 1
     assert window._summary_panel._state_badge.text() == "READY FOR ACQUISITION"
     assert window._summary_panel._indicator_values["record"].text() == "ARM"
     assert "Armed" in window._summary_panel._values["record"].text()
     assert str(output_dir) in window._summary_panel._values["record"].text()
-    window._recon_prewarm_ready_signature = window._build_realtime_recon_prewarm_payload()[1]
+    window._recon_prewarm_ready_signature = (
+        window._build_realtime_recon_prewarm_payload()[1]
+    )
 
     def _fake_reconstruct(request) -> bool:
         measured = np.asarray(
@@ -1997,7 +2070,9 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     monkeypatch.setattr(window._recon_ctrl, "reconstruct", _fake_reconstruct)
 
     _click(window._acq_panel._start_btn)
-    assert _wait_until(lambda: window._status_bar._rec_label.text() == "Record: Writing", timeout=2.0)
+    assert _wait_until(
+        lambda: window._status_bar._rec_label.text() == "Record: Writing", timeout=2.0
+    )
     assert window._workflow_toolbox.currentIndex() == 2
     assert window._status_bar._acq_label.text() == "Acq: Continuous"
     assert window._status_bar._power_label.text() == "Power: ON"
@@ -2007,7 +2082,9 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     assert window._summary_panel._values["plan"].text() == "Continuous"
     assert _wait_until(lambda: window._state.frame_count > 0, timeout=8.0)
     assert _wait_until(lambda: _fps_value(window) > 0.0, timeout=8.0)
-    assert _wait_until(lambda: window._frame_browser._model.rowCount() >= 2, timeout=8.0)
+    assert _wait_until(
+        lambda: window._frame_browser._model.rowCount() >= 2, timeout=8.0
+    )
 
     assert window._status_bar._frame_label.text().startswith("Frames: ")
     assert window._acq_panel._frame_label.text() == str(window._state.frame_count)
@@ -2024,20 +2101,26 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     window._frame_browser._table.selectRow(0)
     _click(window._frame_browser._ref_btn)
     assert _wait_until(
-        lambda: window._selected_reference_entry is not None
-            and window._selected_reference_entry.get("file_path") == first_entry["file_path"]
+        lambda: (
+            window._selected_reference_entry is not None
+            and window._selected_reference_entry.get("file_path")
+            == first_entry["file_path"]
             and (
                 "Reference frame selected" in window._status_bar.currentMessage()
                 or "Reference frame updated" in window._status_bar.currentMessage()
-            ),
+            )
+        ),
         timeout=2.0,
     )
 
     window._frame_browser.target_selected.emit(second_entry)
     assert _wait_until(
-        lambda: window._selected_target_entry is not None
-        and window._selected_target_entry.get("file_path") == second_entry["file_path"]
-        and "Target frame selected" in window._status_bar.currentMessage(),
+        lambda: (
+            window._selected_target_entry is not None
+            and window._selected_target_entry.get("file_path")
+            == second_entry["file_path"]
+            and "Target frame selected" in window._status_bar.currentMessage()
+        ),
         timeout=2.0,
     )
 
@@ -2064,7 +2147,9 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
     assert window._acq_panel._stop_btn.isEnabled() is False
 
     _click(window._frame_browser._clear_btn)
-    assert _wait_until(lambda: window._frame_browser._model.rowCount() == 0, timeout=2.0)
+    assert _wait_until(
+        lambda: window._frame_browser._model.rowCount() == 0, timeout=2.0
+    )
     assert window._selected_reference_entry is None
     assert window._selected_target_entry is None
     assert "Recorded frame list cleared" in window._status_bar.currentMessage()
@@ -2092,7 +2177,9 @@ def test_record_checkbox_reverts_when_recording_start_fails(tmp_path: Path) -> N
     _click(window._acq_panel._rec_check)
     _click(window._acq_panel._start_btn)
 
-    assert _wait_until(lambda: window._acq_panel._rec_check.isChecked() is False, timeout=2.0)
+    assert _wait_until(
+        lambda: window._acq_panel._rec_check.isChecked() is False, timeout=2.0
+    )
     assert window._state.recording_active is False
     assert window._status_bar._rec_label.text() == "Record: Off"
 
@@ -2108,17 +2195,25 @@ def test_record_checkbox_prefills_default_output_dir_when_empty() -> None:
     _click(window._acq_panel._rec_check)
 
     assert _wait_until(
-        lambda: window._acq_panel.output_dir() == str(window._acq_panel.default_output_dir()),
+        lambda: (
+            window._acq_panel.output_dir()
+            == str(window._acq_panel.default_output_dir())
+        ),
         timeout=2.0,
     )
-    assert "Recording enabled; captures will be saved to" in window._status_bar.currentMessage()
+    assert (
+        "Recording enabled; captures will be saved to"
+        in window._status_bar.currentMessage()
+    )
     assert window._status_bar._rec_label.text() == "Record: Armed"
 
     _close_window(window)
 
 
 @pytest.mark.gui
-def test_recording_supports_unc_output_path_and_uses_latest_directory(tmp_path: Path) -> None:
+def test_recording_supports_unc_output_path_and_uses_latest_directory(
+    tmp_path: Path,
+) -> None:
     window = EITWorkstation()
     _show_window(window)
 
@@ -2133,7 +2228,9 @@ def test_recording_supports_unc_output_path_and_uses_latest_directory(tmp_path: 
     window._acq_panel._dir_edit.setText(unc_path)
 
     _click(window._acq_panel._rec_check)
-    assert _wait_until(lambda: window._acq_panel._dir_edit.text() == str(output_dir), timeout=2.0)
+    assert _wait_until(
+        lambda: window._acq_panel._dir_edit.text() == str(output_dir), timeout=2.0
+    )
 
     _click(window._acq_panel._start_btn)
     assert _wait_until(lambda: window._rec_ctrl.frames_recorded > 0, timeout=8.0)
@@ -2148,7 +2245,9 @@ def test_recording_supports_unc_output_path_and_uses_latest_directory(tmp_path: 
 
 
 @pytest.mark.gui
-def test_close_event_powers_off_connected_device(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_close_event_powers_off_connected_device(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     window = EITWorkstation()
     _show_window(window)
 
@@ -2519,7 +2618,9 @@ def test_hardware_layout_controls_update_expected_counts(
 ) -> None:
     window = EITWorkstation()
     _show_window(window)
-    monkeypatch.setattr(window, "_schedule_realtime_recon_prewarm", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        window, "_schedule_realtime_recon_prewarm", lambda *args, **kwargs: None
+    )
 
     window._on_connected()
     initial_arc_span = _first_electrode_arc_span(window._recon_widget)

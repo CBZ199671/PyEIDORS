@@ -89,6 +89,7 @@ class _ConductivityViewSlot(QWidget):
         # the splitter distribute space evenly while the inner
         # widget happily renders into whatever space it gets.
         from PySide6.QtCore import QSize
+
         return QSize(80, 80)
 
     # Public API mirrors ConductivityImageWidget so the parent stays simple.
@@ -263,7 +264,7 @@ class SimulationResultsWidget(QWidget):
         node_coords: np.ndarray,
         cell_connectivity: np.ndarray,
         reconstructed_voltages: np.ndarray | None = None,
-        ) -> None:
+    ) -> None:
         """Show reconstruction alongside ground truth."""
         self._reconstruction_widget.update_image(
             reconstructed_conductivity,
@@ -298,9 +299,7 @@ class SimulationResultsWidget(QWidget):
         slots so the plots advertise that work is in flight.
         """
         if on:
-            self._ground_truth_widget.set_loading(
-                t("sim.results.ground_truth_loading")
-            )
+            self._ground_truth_widget.set_loading(t("sim.results.ground_truth_loading"))
             # When a fresh forward run starts, yesterday's reconstruction
             # is no longer meaningful.
             self._reconstruction_widget.clear()

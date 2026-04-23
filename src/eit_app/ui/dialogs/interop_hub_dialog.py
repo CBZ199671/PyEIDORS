@@ -91,7 +91,9 @@ class InteropHubDialog(QDialog):
         # Track which rows are in the "pending" sentinel state so
         # retranslation can keep them in that state rather than snapping
         # them to "未指定 / Not set" whenever the language flips.
-        self._status_row_states: dict[str, str] = {row: "unspecified" for row in _STATUS_ROW_IDS}
+        self._status_row_states: dict[str, str] = {
+            row: "unspecified" for row in _STATUS_ROW_IDS
+        }
 
         self._build_ui()
         self._load_profiles_into_list()
@@ -271,7 +273,9 @@ class InteropHubDialog(QDialog):
         )
 
         self._capture_output_edit = QLineEdit()
-        self._capture_output_edit.setText(str((Path.cwd() / "data" / "interop").resolve()))
+        self._capture_output_edit.setText(
+            str((Path.cwd() / "data" / "interop").resolve())
+        )
         self._lbl_capture = QLabel("")
         source_layout.addRow(
             self._lbl_capture,
@@ -337,16 +341,24 @@ class InteropHubDialog(QDialog):
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._source_table = QTableWidget(0, 2)
-        self._source_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._source_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._source_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._source_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
         self._source_table.horizontalHeader().setMinimumSectionSize(120)
         self._source_table.verticalHeader().setVisible(False)
         self._source_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._source_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
 
         self._mapping_table = QTableWidget(0, 2)
-        self._mapping_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self._mapping_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self._mapping_table.horizontalHeader().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self._mapping_table.horizontalHeader().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
         self._mapping_table.horizontalHeader().setMinimumSectionSize(120)
         self._mapping_table.verticalHeader().setVisible(False)
         self._mapping_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
@@ -433,7 +445,9 @@ class InteropHubDialog(QDialog):
         form.addRow(self._lbl_export_source, self._export_source_combo)
 
         self._export_dir_edit = QLineEdit()
-        self._export_dir_edit.setText(str((Path.cwd() / "data" / "interop_export").resolve()))
+        self._export_dir_edit.setText(
+            str((Path.cwd() / "data" / "interop_export").resolve())
+        )
         self._lbl_export_output = QLabel("")
         form.addRow(
             self._lbl_export_output,
@@ -654,7 +668,9 @@ class InteropHubDialog(QDialog):
     def _generate_preview(self) -> None:
         source_text = self._source_edit.text().strip()
         if not source_text:
-            QMessageBox.warning(self, t("dlg.interop.title"), t("dlg.interop.msg.no_source"))
+            QMessageBox.warning(
+                self, t("dlg.interop.title"), t("dlg.interop.msg.no_source")
+            )
             return
 
         source = Path(source_text)
@@ -705,13 +721,17 @@ class InteropHubDialog(QDialog):
                 t("dlg.interop.title"),
                 t("dlg.interop.msg.preview_failed", error=str(exc)),
             )
-            self._import_status.setText(t("dlg.interop.msg.preview_failed", error=str(exc)))
+            self._import_status.setText(
+                t("dlg.interop.msg.preview_failed", error=str(exc))
+            )
             self._set_status("bridge_package", "failed")
             return
 
         self._update_preview(loaded, preview)
 
-    def _update_preview(self, loaded: LoadedBridgePackage, preview: EidorsImportPreview) -> None:
+    def _update_preview(
+        self, loaded: LoadedBridgePackage, preview: EidorsImportPreview
+    ) -> None:
         self._loaded_bundle = loaded
         self._preview = preview
         self._apply_import_btn.setEnabled(True)
@@ -729,9 +749,14 @@ class InteropHubDialog(QDialog):
         for key, value in preview.inferred_fields.items():
             mapping_rows.append((f"Inferred \u00b7 {key}", str(value)))
         for key in preview.missing_fields:
-            mapping_rows.append((f"Missing \u00b7 {key}", t("dlg.interop.preview.missing_fallback")))
+            mapping_rows.append(
+                (f"Missing \u00b7 {key}", t("dlg.interop.preview.missing_fallback"))
+            )
 
-        for table, rows in ((self._source_table, source_rows), (self._mapping_table, mapping_rows)):
+        for table, rows in (
+            (self._source_table, source_rows),
+            (self._mapping_table, mapping_rows),
+        ):
             table.setRowCount(len(rows))
             for row_index, (left, right) in enumerate(rows):
                 table.setItem(row_index, 0, QTableWidgetItem(left))
@@ -772,7 +797,9 @@ class InteropHubDialog(QDialog):
         if self._loaded_bundle is None:
             return
         if self._apply_import_callback is None:
-            QMessageBox.information(self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_import"))
+            QMessageBox.information(
+                self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_import")
+            )
             return
 
         target = str(self._import_target_combo.currentData())
@@ -784,15 +811,22 @@ class InteropHubDialog(QDialog):
                 t("dlg.interop.title"),
                 t("dlg.interop.msg.import_failed", error=str(exc)),
             )
-            self._import_status.setText(t("dlg.interop.msg.import_failed", error=str(exc)))
+            self._import_status.setText(
+                t("dlg.interop.msg.import_failed", error=str(exc))
+            )
             return
 
         smoke_message = ""
-        if self._auto_smoke_check.isChecked() and self._smoke_validate_callback is not None:
+        if (
+            self._auto_smoke_check.isChecked()
+            and self._smoke_validate_callback is not None
+        ):
             smoke_message = self._run_smoke_validation(show_dialog=False)
 
         self._import_status.setText(message)
-        final_message = message if not smoke_message else f"{message}\n\n{smoke_message}"
+        final_message = (
+            message if not smoke_message else f"{message}\n\n{smoke_message}"
+        )
         QMessageBox.information(self, t("dlg.interop.title"), final_message)
 
     def _run_smoke_validation(self, *, show_dialog: bool = True) -> str:
@@ -819,13 +853,17 @@ class InteropHubDialog(QDialog):
 
     def _generate_export(self) -> None:
         if self._export_snapshot_provider is None:
-            QMessageBox.information(self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_export"))
+            QMessageBox.information(
+                self, t("dlg.interop.title"), t("dlg.interop.msg.no_callback_export")
+            )
             return
         snapshots = self._export_snapshot_provider()
         source_kind = str(self._export_source_combo.currentData())
         snapshot = snapshots.get(source_kind)
         if not snapshot:
-            QMessageBox.warning(self, t("dlg.interop.title"), t("dlg.interop.msg.no_snapshot"))
+            QMessageBox.warning(
+                self, t("dlg.interop.title"), t("dlg.interop.msg.no_snapshot")
+            )
             return
 
         environment = self._manual_environment_from_fields()
@@ -856,8 +894,12 @@ class InteropHubDialog(QDialog):
             self._export_log.appendPlainText(f"[ERROR] {exc}")
             return
 
-        self._export_log.appendPlainText(t("dlg.interop.export.success", root=str(root)))
-        self._export_log.appendPlainText(t("dlg.interop.export.source_tag", source_kind=source_kind))
+        self._export_log.appendPlainText(
+            t("dlg.interop.export.success", root=str(root))
+        )
+        self._export_log.appendPlainText(
+            t("dlg.interop.export.source_tag", source_kind=source_kind)
+        )
         self._export_log.appendPlainText("")
 
     # ------------------------------------------------------------------
@@ -930,7 +972,9 @@ class InteropHubDialog(QDialog):
         if not isinstance(profile, EidorsEnvironment):
             return
         profiles = [
-            item for item in self._capture_service.load_profiles() if item.name != profile.name
+            item
+            for item in self._capture_service.load_profiles()
+            if item.name != profile.name
         ]
         self._capture_service.save_profiles(profiles)
         self._load_profiles_into_list()
@@ -1001,13 +1045,23 @@ class InteropHubDialog(QDialog):
         if not self._preview_overview.text():
             self._preview_overview.setText(t("dlg.interop.preview.waiting"))
         self._source_table.setHorizontalHeaderLabels(
-            [t("dlg.interop.preview.source_col_header"), t("dlg.interop.preview.value_col_header")]
+            [
+                t("dlg.interop.preview.source_col_header"),
+                t("dlg.interop.preview.value_col_header"),
+            ]
         )
         self._mapping_table.setHorizontalHeaderLabels(
-            [t("dlg.interop.preview.mapping_col_header"), t("dlg.interop.preview.value_col_header")]
+            [
+                t("dlg.interop.preview.mapping_col_header"),
+                t("dlg.interop.preview.value_col_header"),
+            ]
         )
-        self._warnings_box.setPlaceholderText(t("dlg.interop.preview.warnings_placeholder"))
-        self._validation_log.setPlaceholderText(t("dlg.interop.preview.smoke_placeholder"))
+        self._warnings_box.setPlaceholderText(
+            t("dlg.interop.preview.warnings_placeholder")
+        )
+        self._validation_log.setPlaceholderText(
+            t("dlg.interop.preview.smoke_placeholder")
+        )
 
         # Import target combo labels
         target_keys = [

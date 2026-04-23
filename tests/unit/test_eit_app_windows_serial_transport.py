@@ -4,7 +4,9 @@ import eit_app.hardware.windows_serial_transport as bridge_module
 from eit_app.hardware.windows_serial_transport import WindowsSerialTransport
 
 
-def test_windows_serial_transport_open_retries_transient_access_denied(monkeypatch) -> None:
+def test_windows_serial_transport_open_retries_transient_access_denied(
+    monkeypatch,
+) -> None:
     transport = WindowsSerialTransport("COM4", 115200)
     attempts = {"count": 0}
     sleeps: list[float] = []
@@ -14,12 +16,14 @@ def test_windows_serial_transport_open_retries_transient_access_denied(monkeypat
         attempts["count"] += 1
         if attempts["count"] < 3:
             raise RuntimeError(
-                'Windows serial bridge failed: ERROR 使用“0”个参数调用“Open”时发生异常:“对端口“COM4”的访问被拒绝。”'
+                "Windows serial bridge failed: ERROR 使用“0”个参数调用“Open”时发生异常:“对端口“COM4”的访问被拒绝。”"
             )
 
     monkeypatch.setattr(transport, "_open_once", _fake_open_once)
     monkeypatch.setattr(transport, "close", lambda: closes.append("close"))
-    monkeypatch.setattr(bridge_module.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(
+        bridge_module.time, "sleep", lambda seconds: sleeps.append(seconds)
+    )
 
     transport.open()
 
@@ -28,13 +32,17 @@ def test_windows_serial_transport_open_retries_transient_access_denied(monkeypat
     assert closes == ["close", "close", "close", "close", "close"]
 
 
-def test_windows_serial_transport_open_does_not_retry_non_retryable_error(monkeypatch) -> None:
+def test_windows_serial_transport_open_does_not_retry_non_retryable_error(
+    monkeypatch,
+) -> None:
     transport = WindowsSerialTransport("COM4", 115200)
     attempts = {"count": 0}
 
     def _fake_open_once() -> None:
         attempts["count"] += 1
-        raise RuntimeError("Windows serial bridge failed: ERROR Cannot find the file specified.")
+        raise RuntimeError(
+            "Windows serial bridge failed: ERROR Cannot find the file specified."
+        )
 
     monkeypatch.setattr(transport, "_open_once", _fake_open_once)
     monkeypatch.setattr(transport, "close", lambda: None)

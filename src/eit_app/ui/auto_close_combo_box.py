@@ -39,7 +39,9 @@ class AutoCloseComboBox(QWidget):
         self._line_edit.setObjectName("selectorDisplay")
         self._line_edit.setReadOnly(True)
         self._line_edit.textEdited.connect(self._on_text_edited)
-        self._line_edit.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self._line_edit.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self._line_edit.setFixedHeight(self._CONTROL_HEIGHT)
         layout.addWidget(self._line_edit, 1)
 
@@ -222,7 +224,9 @@ class AutoCloseComboBox(QWidget):
                 )
             )
 
-    def _set_index(self, index: int, *, emit_changed: bool, emit_activated: bool) -> None:
+    def _set_index(
+        self, index: int, *, emit_changed: bool, emit_activated: bool
+    ) -> None:
         if not (0 <= index < len(self._items)):
             return
         changed = index != self._current_index

@@ -69,7 +69,9 @@ def test_eitsystem_access_normalizes_import_runtime_errors(monkeypatch):
 def test_removed_solver_alias_is_unavailable():
     removed_name = "Standard" + "GaussNewtonReconstructor"
     with pytest.raises((ImportError, KeyError, AttributeError)):
-        __import__("pyeidors.inverse.solvers", fromlist=[removed_name]).__dict__[removed_name]
+        __import__("pyeidors.inverse.solvers", fromlist=[removed_name]).__dict__[
+            removed_name
+        ]
 
 
 def test_public_inverse_solver_name():

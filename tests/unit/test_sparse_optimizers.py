@@ -126,7 +126,9 @@ def test_solve_irls_gpu_requested_without_cuda_falls_back_to_cpu():
 
 
 def test_sparse_optimizer_forced_gpu_tensor_paths(monkeypatch):
-    cfg = _config(use_gpu=True, gpu_dtype="float64", linear_max_iterations=2, linear_tolerance=0.0)
+    cfg = _config(
+        use_gpu=True, gpu_dtype="float64", linear_max_iterations=2, linear_tolerance=0.0
+    )
     monkeypatch.setattr(
         sparse_opt_module,
         "_resolve_gpu_context",
@@ -155,7 +157,9 @@ def test_sparse_optimizer_forced_gpu_tensor_paths(monkeypatch):
     monkeypatch.setattr(
         torch.linalg,
         "lstsq",
-        lambda *_args, **_kwargs: SimpleNamespace(solution=torch.zeros(2, dtype=torch.float64)),
+        lambda *_args, **_kwargs: SimpleNamespace(
+            solution=torch.zeros(2, dtype=torch.float64)
+        ),
     )
     x_irls = solve_irls(
         linear_matrix=A,

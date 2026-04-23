@@ -93,8 +93,12 @@ class LivePlotWidget(QWidget):
         self._curve_imag = self._plot_widget.plot(pen=pg.mkPen("#4ecdc4", width=1.9))
         self._legend_frame = PlotLegendOverlay(
             [
-                LegendEntry("real", t("hw.live_plot.curve.real"), "#f4d35e", 2.2, checked=True),
-                LegendEntry("imag", t("hw.live_plot.curve.imag"), "#4ecdc4", 1.9, checked=False),
+                LegendEntry(
+                    "real", t("hw.live_plot.curve.real"), "#f4d35e", 2.2, checked=True
+                ),
+                LegendEntry(
+                    "imag", t("hw.live_plot.curve.imag"), "#4ecdc4", 1.9, checked=False
+                ),
             ],
             interactive=True,
             compact=False,
@@ -238,7 +242,7 @@ class LivePlotWidget(QWidget):
             "left", t("hw.live_plot.y_label"), **self._axis_label_style
         )
         self._plot_widget.setTitle(
-            f"<span style=\"color:{self._plot_text};"
+            f'<span style="color:{self._plot_text};'
             f"font-family:'{self._serif_family}';font-size:14pt;\">"
             f"{t('hw.live_plot.title')}"
             "</span>"
@@ -277,7 +281,13 @@ class LivePlotWidget(QWidget):
     def _major_ticks(count: int) -> list[tuple[int, str]]:
         if count <= 1:
             return [(1, "1")]
-        candidates = [1, round(count * 0.25), round(count * 0.5), round(count * 0.75), count]
+        candidates = [
+            1,
+            round(count * 0.25),
+            round(count * 0.5),
+            round(count * 0.75),
+            count,
+        ]
         ticks: list[tuple[int, str]] = []
         seen: set[int] = set()
         for value in candidates:

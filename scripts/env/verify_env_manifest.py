@@ -20,7 +20,12 @@ from export_env_manifest import (
 
 
 def default_manifest_path(root: Path, *, profile_name: str | None = None) -> Path:
-    return root / "env" / "manifests" / default_manifest_filename(current_platform_id(), profile_name=profile_name)
+    return (
+        root
+        / "env"
+        / "manifests"
+        / default_manifest_filename(current_platform_id(), profile_name=profile_name)
+    )
 
 
 def load_manifest(path: Path) -> Dict[str, Any]:
@@ -35,7 +40,12 @@ def _cmp_field(diffs: List[str], key: str, actual: Any, expected: Any) -> None:
 def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[str]:
     diffs: List[str] = []
 
-    _cmp_field(diffs, "schema_version", actual.get("schema_version"), expected.get("schema_version"))
+    _cmp_field(
+        diffs,
+        "schema_version",
+        actual.get("schema_version"),
+        expected.get("schema_version"),
+    )
     _cmp_field(diffs, "project", actual.get("project"), expected.get("project"))
 
     _cmp_field(
@@ -92,7 +102,12 @@ def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[
         expected.get("python", {}).get("version"),
     )
 
-    for lock_key in ("nixpkgs_rev", "flake_lock_sha256", "uv_lock_sha256", "pyproject_sha256"):
+    for lock_key in (
+        "nixpkgs_rev",
+        "flake_lock_sha256",
+        "uv_lock_sha256",
+        "pyproject_sha256",
+    ):
         _cmp_field(
             diffs,
             f"locks.{lock_key}",
@@ -114,7 +129,9 @@ def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Verify current environment against lock manifest")
+    parser = argparse.ArgumentParser(
+        description="Verify current environment against lock manifest"
+    )
     parser.add_argument(
         "--manifest",
         type=Path,
@@ -134,7 +151,11 @@ def main() -> None:
     args = parse_args()
     root = repo_root()
     resolved_profile = resolve_profile_name(args.profile)
-    manifest_path = args.manifest if args.manifest is not None else default_manifest_path(root, profile_name=resolved_profile)
+    manifest_path = (
+        args.manifest
+        if args.manifest is not None
+        else default_manifest_path(root, profile_name=resolved_profile)
+    )
 
     if not manifest_path.exists():
         raise FileNotFoundError(
@@ -143,14 +164,19 @@ def main() -> None:
         )
 
     expected = load_manifest(manifest_path)
-    actual = build_manifest(root, platform_id=current_platform_id(), profile_name=resolved_profile)
+    actual = build_manifest(
+        root, platform_id=current_platform_id(), profile_name=resolved_profile
+    )
     diffs = compare_manifests(actual, expected)
 
     if diffs:
         print("[env-verify] environment mismatch detected:", file=sys.stderr)
         for item in diffs:
             print(f"  - {item}", file=sys.stderr)
-        print("[env-verify] repair command: scripts/env/sync_locked_env.sh --repair", file=sys.stderr)
+        print(
+            "[env-verify] repair command: scripts/env/sync_locked_env.sh --repair",
+            file=sys.stderr,
+        )
         raise SystemExit(1)
 
     print(f"[env-verify] OK: {manifest_path}")

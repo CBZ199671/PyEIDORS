@@ -25,9 +25,13 @@ def run_sparse_reconstruction(
 ) -> SolverOutput:
     """Compute one sparse Bayesian reconstruction step."""
     mode = "difference" if reference_data is not None else "absolute"
-    clip_bounds = clip_values if clip_values is not None else reconstructor.config.clip_values
+    clip_bounds = (
+        clip_values if clip_values is not None else reconstructor.config.clip_values
+    )
 
-    baseline_image = baseline_image or reconstructor._create_homogeneous_image(initial_conductivity)
+    baseline_image = baseline_image or reconstructor._create_homogeneous_image(
+        initial_conductivity
+    )
     baseline_values = baseline_image.elem_data.copy()
 
     baseline_meas = reconstructor._forward_measurement(baseline_values)
@@ -43,11 +47,15 @@ def run_sparse_reconstruction(
 
     noise_sigma = noise_std or reconstructor._estimate_noise_level(data_vector)
     prior_scale = prior_scale or reconstructor.config.prior_scale
-    map_delta = reconstructor._solve_sparse_map(jacobian, data_vector, noise_sigma, prior_scale)
+    map_delta = reconstructor._solve_sparse_map(
+        jacobian, data_vector, noise_sigma, prior_scale
+    )
 
     conductivity_values = baseline_values + map_delta
     if clip_bounds is not None:
-        conductivity_values = np.clip(conductivity_values, clip_bounds[0], clip_bounds[1])
+        conductivity_values = np.clip(
+            conductivity_values, clip_bounds[0], clip_bounds[1]
+        )
 
     conductivity_function = fem.Function(reconstructor.fwd_model.V_sigma)
     function_set_array(conductivity_function, conductivity_values)
@@ -80,8 +88,12 @@ def run_sparse_reconstruction(
             "cache_misses": cache_stats.get("total_misses", 0),
             "cache_stats": cache_stats,
             "backend_info": {
-                "linear_backend": getattr(reconstructor.fwd_model, "linear_backend", "unknown"),
-                "performance_mode": getattr(reconstructor.eit_system, "performance_mode", "aggressive"),
+                "linear_backend": getattr(
+                    reconstructor.fwd_model, "linear_backend", "unknown"
+                ),
+                "performance_mode": getattr(
+                    reconstructor.eit_system, "performance_mode", "aggressive"
+                ),
             },
         }
     )
@@ -93,7 +105,9 @@ def run_sparse_reconstruction(
         iterations=1,
         converged=True,
         final_residual=float(np.linalg.norm(residual_vector)),
-        final_relative_change=float(np.linalg.norm(map_delta) / (np.linalg.norm(conductivity_values) + 1e-12)),
+        final_relative_change=float(
+            np.linalg.norm(map_delta) / (np.linalg.norm(conductivity_values) + 1e-12)
+        ),
         simulated_measurement=simulated_vector,
         baseline_measurement=baseline_meas,
         likelihood_noise_std=noise_sigma,

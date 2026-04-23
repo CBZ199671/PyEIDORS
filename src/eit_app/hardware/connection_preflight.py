@@ -145,9 +145,7 @@ def _serial_bridge_failure_hint(port: str, exc: Exception) -> str:
             "如果你刚关闭本软件，也请等待 1-2 秒让 Windows 释放串口后再重试。"
         )
     if "cannot find" in text or "could not find" in text or "not found" in text:
-        return (
-            f"Windows 当前找不到 {port}。请重新插拔 USB 线，确认设备管理器里还能看到这个 COM 口，再点 Scan。"
-        )
+        return f"Windows 当前找不到 {port}。请重新插拔 USB 线，确认设备管理器里还能看到这个 COM 口，再点 Scan。"
     return (
         f"Windows 主机串口桥接未能打开 {port}。"
         "请检查驱动、USB 连接和设备供电，必要时重新插拔后再试。"

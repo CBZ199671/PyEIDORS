@@ -23,7 +23,9 @@ from .windows_serial_transport import WindowsSerialTransport
 _WINDOWS_COM_RE = re.compile(r"COM\d+$", re.IGNORECASE)
 
 
-def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict[str, Any]:
+def normalize_device_config(
+    transport_type: str, config: dict[str, Any]
+) -> dict[str, Any]:
     """Fill in missing device configuration with runtime defaults."""
     normalized = dict(config)
     raw_port = str(normalized.get("port", "")).strip()
@@ -51,7 +53,9 @@ def normalize_device_config(transport_type: str, config: dict[str, Any]) -> dict
     )
     normalized.setdefault("voltage_amp_level_1", 7)
     normalized.setdefault("voltage_amp_level_2", 7)
-    normalized.setdefault("contact_impedance_amp_level", normalized["voltage_amp_level_1"])
+    normalized.setdefault(
+        "contact_impedance_amp_level", normalized["voltage_amp_level_1"]
+    )
     normalized.setdefault("protocol_version", "legacy-v1")
     normalized.setdefault("command_retries", 2)
     normalized.setdefault("legacy_frame_timeout_sec", 20.0)
@@ -79,7 +83,9 @@ def create_device_from_config(
             fps=float(normalized.get("simulator_fps", 30.0)),
             noise_std=float(normalized.get("simulator_noise_std", 0.002)),
             seed=normalized.get("simulator_seed"),
-            n_electrodes=int(normalized.get("n_elec", normalized.get("n_electrodes", 16))),
+            n_electrodes=int(
+                normalized.get("n_elec", normalized.get("n_electrodes", 16))
+            ),
             n_rings=int(normalized.get("n_rings", 1)),
             stim_pattern=normalized.get("stim_pattern", "{ad}"),
             meas_pattern=normalized.get("meas_pattern", "{ad}"),

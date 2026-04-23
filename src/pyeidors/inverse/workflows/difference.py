@@ -37,9 +37,7 @@ def perform_difference_reconstruction(
     if not eit_system._is_initialized:  # pylint: disable=protected-access
         raise RuntimeError("EITSystem not initialized, please call setup() first.")
 
-    initial_guess = (
-        initial_image.elem_data if initial_image is not None else None
-    )
+    initial_guess = initial_image.elem_data if initial_image is not None else None
 
     reconstruction = eit_system.inverse_solve(
         data=measurement_data,
@@ -70,9 +68,7 @@ def perform_difference_reconstruction(
             difference_orientation=diff_data.difference_orientation,
         )
     )
-    residual_vector, _, _, _ = compute_residuals(
-        measured_vector, simulated_vector
-    )
+    residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
 
     result_metadata: dict[str, Any] = {
         "reference_measured": reference_data.meas,

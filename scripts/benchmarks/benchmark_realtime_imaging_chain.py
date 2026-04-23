@@ -205,7 +205,9 @@ def main() -> None:
     widget = ReconstructionWidget()
     widget.resize(640, 640)
     widget.configure_layout(
-        n_elec=int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+        n_elec=int(
+            session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+        ),
         radius=float(session_meta.get("radius", 1.0)),
     )
     widget.show()
@@ -213,7 +215,9 @@ def main() -> None:
 
     static_prepare_started = time.perf_counter()
     widget.configure_layout(
-        n_elec=int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+        n_elec=int(
+            session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+        ),
         radius=float(session_meta.get("radius", 1.0)),
     )
     app.processEvents()
@@ -252,7 +256,9 @@ def main() -> None:
                 use_part=args.use_part,
             )
             result, elapsed = _time_call(
-                lambda req=request: _run_quietly(lambda: run_reconstruction_request(req))
+                lambda req=request: _run_quietly(
+                    lambda: run_reconstruction_request(req)
+                )
             )
             if result.error_msg:
                 raise RuntimeError(f"缓存后重构失败: {result.error_msg}")
@@ -265,7 +271,10 @@ def main() -> None:
     for _ in range(args.render_cycles):
         for result in render_results:
             _, elapsed = _time_call(
-                lambda res=result: (widget.update_reconstruction(res), app.processEvents())
+                lambda res=result: (
+                    widget.update_reconstruction(res),
+                    app.processEvents(),
+                )
             )
             render_times.append(elapsed)
 
@@ -302,8 +311,12 @@ def main() -> None:
             "reference_frame_index": int(reference_frame.frame_index),
             "target_frames": [int(frame.frame_index) for frame in target_frames],
             "frame_count": int(len(frames)),
-            "points_per_frame": int(session_meta.get("points_per_frame", reference_frame.n_meas)),
-            "n_elec": int(session_meta.get("n_elec", session_meta.get("total_electrodes", 16))),
+            "points_per_frame": int(
+                session_meta.get("points_per_frame", reference_frame.n_meas)
+            ),
+            "n_elec": int(
+                session_meta.get("n_elec", session_meta.get("total_electrodes", 16))
+            ),
             "frequency_hz": float(session_meta.get("frequency_hz", 0.0)),
             "stim_amp_uA": float(session_meta.get("stim_amp_uA", 0.0)),
             "use_part": args.use_part,

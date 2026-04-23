@@ -169,9 +169,7 @@ class Translator(QObject):
             try:
                 value = value.format(**kwargs)
             except (KeyError, IndexError, ValueError) as exc:
-                log.warning(
-                    "Format error for key=%r kwargs=%r: %s", key, kwargs, exc
-                )
+                log.warning("Format error for key=%r kwargs=%r: %s", key, kwargs, exc)
         return value
 
 

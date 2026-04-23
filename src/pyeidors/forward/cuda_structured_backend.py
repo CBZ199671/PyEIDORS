@@ -9,6 +9,7 @@ from typing import Any
 import warnings
 
 from dolfinx import fem
+
 try:  # pragma: no cover - optional in lean test stubs
     import meshio
 except Exception:  # pragma: no cover
@@ -17,6 +18,7 @@ import numpy as np
 from scipy.linalg import lu_factor, lu_solve
 from scipy.sparse import csr_matrix
 from scipy.spatial import cKDTree
+
 try:  # pragma: no cover - optional in lean test stubs
     import torch
 except Exception:  # pragma: no cover
@@ -33,7 +35,9 @@ CUDA_STRUCTURED_BACKEND_VERSION = "cuda-structured-v1"
 
 
 def _torch_cuda_available() -> bool:
-    return bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
+    return bool(
+        torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()
+    )
 
 
 def _norm(value: object) -> str:
@@ -53,17 +57,25 @@ def resolve_cuda_structured_runtime(
     mesh_comm_size: int,
 ) -> dict[str, Any]:
     if int(mesh_dim) != 3:
-        raise ValueError("forward_backend='cuda_structured' currently supports 3D meshes only.")
+        raise ValueError(
+            "forward_backend='cuda_structured' currently supports 3D meshes only."
+        )
     if _norm(scalar_type) != "real":
         raise ValueError(
             "forward_backend='cuda_structured' currently supports real-valued conductivity only."
         )
     if int(mesh_comm_size) != 1:
-        raise ValueError("forward_backend='cuda_structured' supports single-rank execution only.")
+        raise ValueError(
+            "forward_backend='cuda_structured' supports single-rank execution only."
+        )
     if not mesh_file:
-        raise ValueError("forward_backend='cuda_structured' requires a file-backed 3D mesh (.msh).")
+        raise ValueError(
+            "forward_backend='cuda_structured' requires a file-backed 3D mesh (.msh)."
+        )
     if _norm(mesh_family) != "hex":
-        raise ValueError("forward_backend='cuda_structured' currently supports mesh_family='hex' only.")
+        raise ValueError(
+            "forward_backend='cuda_structured' currently supports mesh_family='hex' only."
+        )
     if _norm(geometry_version) != "geomv2":
         raise ValueError(
             "forward_backend='cuda_structured' currently supports geometry_version='geomv2' only."
@@ -81,14 +93,18 @@ def resolve_cuda_structured_runtime(
         )
     mesh_path = Path(mesh_file)
     if mesh_path.suffix.lower() != ".msh":
-        raise ValueError("forward_backend='cuda_structured' requires a Gmsh .msh mesh file.")
+        raise ValueError(
+            "forward_backend='cuda_structured' requires a Gmsh .msh mesh file."
+        )
     if not _torch_cuda_available():
         raise RuntimeError(
             "forward_backend='cuda_structured' requires torch.cuda in the active runtime. "
             "Use `nix develop .#cuda` on this machine."
         )
     if meshio is None:
-        raise RuntimeError("forward_backend='cuda_structured' requires meshio for structured mesh metadata.")
+        raise RuntimeError(
+            "forward_backend='cuda_structured' requires meshio for structured mesh metadata."
+        )
 
     sidecar_path = structured_sidecar_path_for_mesh(mesh_path)
     if not sidecar_path.exists():
@@ -139,7 +155,9 @@ class CudaStructuredForwardBackend:
         self.sidecar = load_structured_sidecar(self._sidecar_file)
         self._structured_backend_version = str(runtime["structured_backend_version"])
         self._dof_bijection = self._build_dof_bijection()
-        self._top_left_robin, self._coupling_columns, self._electrode_diag = self._extract_cem_blocks()
+        self._top_left_robin, self._coupling_columns, self._electrode_diag = (
+            self._extract_cem_blocks()
+        )
         self._mg_levels = self._estimate_mg_levels()
         self._sigma_state: _CudaStructuredSigmaState | None = None
         self._diagnostics: dict[str, object] = {
@@ -179,7 +197,9 @@ class CudaStructuredForwardBackend:
 
     def _load_mesh_points(self) -> np.ndarray:
         mesh = meshio.read(self.mesh_file)
-        return np.asarray(mesh.points[:, : self.model.mesh.geometry.dim], dtype=np.float64)
+        return np.asarray(
+            mesh.points[:, : self.model.mesh.geometry.dim], dtype=np.float64
+        )
 
     def _build_dof_bijection(self) -> np.ndarray:
         structured_to_mesh = np.asarray(
@@ -188,7 +208,9 @@ class CudaStructuredForwardBackend:
         )
         mesh_points = self._load_mesh_points()
         if structured_to_mesh.size == 0:
-            raise RuntimeError("cuda_structured sidecar is missing structured_node_to_mesh_node entries.")
+            raise RuntimeError(
+                "cuda_structured sidecar is missing structured_node_to_mesh_node entries."
+            )
         structured_points = mesh_points[structured_to_mesh]
         dolfinx_coords = np.asarray(
             self.model.V.tabulate_dof_coordinates()[:, : self.model.mesh.geometry.dim],
@@ -214,7 +236,9 @@ class CudaStructuredForwardBackend:
         full = self.model._ensure_electrode_matrix().tocsr()
         top_left = full[: self.model.dofs, : self.model.dofs].tocsr()
         coupling = np.asarray(
-            full[: self.model.dofs, self.model.dofs : self.model.dofs + self.model.n_elec].toarray(),
+            full[
+                : self.model.dofs, self.model.dofs : self.model.dofs + self.model.n_elec
+            ].toarray(),
             dtype=np.float64,
         )
         electrode_diag = np.asarray(
@@ -230,7 +254,9 @@ class CudaStructuredForwardBackend:
     def _csr_to_torch(mat: csr_matrix, device) -> Any:
         csr = mat.tocsr()
         indptr = torch.as_tensor(csr.indptr.astype(np.int64, copy=False), device=device)
-        indices = torch.as_tensor(csr.indices.astype(np.int64, copy=False), device=device)
+        indices = torch.as_tensor(
+            csr.indices.astype(np.int64, copy=False), device=device
+        )
         values = torch.as_tensor(csr.data.astype(np.float64, copy=False), device=device)
         with warnings.catch_warnings():
             warnings.filterwarnings(
@@ -312,7 +338,9 @@ class CudaStructuredForwardBackend:
     def _assemble_top_left_matrix(self, sigma_values: np.ndarray) -> csr_matrix:
         sigma = fem.Function(self.model.V_sigma)
         sigma.x.array[:] = np.asarray(sigma_values, dtype=np.float64)
-        conductivity = self.model._petsc_to_csr(self.model._assemble_conductivity_matrix(sigma))
+        conductivity = self.model._petsc_to_csr(
+            self.model._assemble_conductivity_matrix(sigma)
+        )
         top_left = (conductivity + self._top_left_robin).tocsr()
         top_left = ((top_left + top_left.T) * 0.5).tocsr()
         top_left.eliminate_zeros()
@@ -329,12 +357,22 @@ class CudaStructuredForwardBackend:
 
         top_left = self._assemble_top_left_matrix(sigma_values)
         diag = np.asarray(top_left.diagonal(), dtype=np.float64)
-        if diag.size != self.model.dofs or not np.all(np.isfinite(diag)) or float(np.min(diag)) <= 0.0:
-            raise RuntimeError("cuda_structured top-left system has an invalid diagonal.")
+        if (
+            diag.size != self.model.dofs
+            or not np.all(np.isfinite(diag))
+            or float(np.min(diag)) <= 0.0
+        ):
+            raise RuntimeError(
+                "cuda_structured top-left system has an invalid diagonal."
+            )
 
         A_gpu = self._csr_to_torch(top_left, self.device)
-        coupling_gpu = torch.as_tensor(self._coupling_columns, device=self.device, dtype=torch.float64)
-        diag_inv = torch.as_tensor((1.0 / diag)[:, None], device=self.device, dtype=torch.float64)
+        coupling_gpu = torch.as_tensor(
+            self._coupling_columns, device=self.device, dtype=torch.float64
+        )
+        diag_inv = torch.as_tensor(
+            (1.0 / diag)[:, None], device=self.device, dtype=torch.float64
+        )
 
         response_basis_gpu, pcg_iterations = self._block_pcg(
             A_gpu,
@@ -363,11 +401,13 @@ class CudaStructuredForwardBackend:
             rhs_count=n_elec,
         )
         self._sigma_state = state
-        self._diagnostics.update({
-            "pcg_iterations": int(pcg_iterations),
-            "batched_rhs_count": n_elec,
-            "forward_reuse_state_hit": False,
-        })
+        self._diagnostics.update(
+            {
+                "pcg_iterations": int(pcg_iterations),
+                "batched_rhs_count": n_elec,
+                "forward_reuse_state_hit": False,
+            }
+        )
         return state
 
     def backend_diagnostics(self) -> dict[str, object]:
@@ -388,7 +428,9 @@ class CudaStructuredForwardBackend:
             result[key] = self.runtime.get(key)
         return result
 
-    def solve_batch(self, sigma_values: np.ndarray, pattern_matrix: np.ndarray) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
+    def solve_batch(
+        self, sigma_values: np.ndarray, pattern_matrix: np.ndarray
+    ) -> tuple[tuple[np.ndarray, ...], np.ndarray]:
         sigma_f64 = np.asarray(sigma_values, dtype=np.float64)
         state = self._build_sigma_state(sigma_f64)
         n_patterns = int(pattern_matrix.shape[0])
@@ -397,14 +439,22 @@ class CudaStructuredForwardBackend:
         rhs[: self.model.n_elec, :] = np.asarray(pattern_matrix, dtype=np.float64).T
 
         schur_solution = lu_solve(state.schur_factor, rhs)
-        electrode_block = np.asarray(schur_solution[: self.model.n_elec, :].T, dtype=np.float64)
+        electrode_block = np.asarray(
+            schur_solution[: self.model.n_elec, :].T, dtype=np.float64
+        )
 
-        electrode_gpu = torch.as_tensor(electrode_block.T, device=self.device, dtype=torch.float64)
+        electrode_gpu = torch.as_tensor(
+            electrode_block.T, device=self.device, dtype=torch.float64
+        )
         potentials_gpu = -(state.response_basis_gpu @ electrode_gpu)
-        potentials = potentials_gpu.detach().cpu().numpy().astype(np.float64, copy=False)
+        potentials = (
+            potentials_gpu.detach().cpu().numpy().astype(np.float64, copy=False)
+        )
 
         self._diagnostics["batched_rhs_count"] = n_patterns
-        self._diagnostics["forward_reuse_state_hit"] = bool(state.forward_reuse_state_hit)
+        self._diagnostics["forward_reuse_state_hit"] = bool(
+            state.forward_reuse_state_hit
+        )
         self._diagnostics["pcg_iterations"] = int(state.pcg_iterations)
 
         u_all = tuple(potentials[:, idx] for idx in range(n_patterns))

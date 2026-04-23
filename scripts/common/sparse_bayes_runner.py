@@ -13,6 +13,7 @@ from pyeidors.core_system import EITSystem
 from pyeidors.data.measurement_dataset import MeasurementDataset
 from pyeidors.data.structures import EITData, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+
 # Re-export solver classes for the unified CLI runner module.
 from pyeidors.inverse import (
     SparseBayesianConfig,
@@ -118,7 +119,10 @@ def calibrate_difference_after_subtraction(
     calibrated_diff = (diff_vector - bias) / scale
     adjusted_target = reference_data.meas + calibrated_diff
 
-    return clone_eit_data(target_data, adjusted_target), {"diff_scale": scale, "diff_bias": bias}
+    return clone_eit_data(target_data, adjusted_target), {
+        "diff_scale": scale,
+        "diff_bias": bias,
+    }
 
 
 def run_difference_pipeline(
@@ -218,10 +222,16 @@ def save_result_outputs(result, output_dir: Path, mode: str) -> None:
     if "calibration_scale" in metadata and metadata["calibration_scale"] is not None:
         scale_for_plot = float(metadata["calibration_scale"])
         bias_for_plot = float(metadata.get("calibration_bias", 0.0))
-    elif metadata.get("difference_calibration") == "after" and metadata.get("diff_scale") is not None:
+    elif (
+        metadata.get("difference_calibration") == "after"
+        and metadata.get("diff_scale") is not None
+    ):
         scale_for_plot = float(metadata.get("diff_scale"))
         bias_for_plot = float(metadata.get("diff_bias", 0.0))
-    elif metadata.get("difference_calibration") == "before" and metadata.get("pre_scale") is not None:
+    elif (
+        metadata.get("difference_calibration") == "before"
+        and metadata.get("pre_scale") is not None
+    ):
         scale_for_plot = float(metadata.get("pre_scale"))
         bias_for_plot = float(metadata.get("pre_bias", 0.0))
 
@@ -253,7 +263,9 @@ def save_result_outputs(result, output_dir: Path, mode: str) -> None:
     ax.grid(True, alpha=0.3)
     ax.legend()
     fig.tight_layout()
-    fig.savefig(output_dir / "measurements_comparison.png", dpi=300, bbox_inches="tight")
+    fig.savefig(
+        output_dir / "measurements_comparison.png", dpi=300, bbox_inches="tight"
+    )
     plt.close(fig)
 
     fig_res = visualizer.plot_measurements(

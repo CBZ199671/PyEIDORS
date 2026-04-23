@@ -57,12 +57,32 @@ class AnomalySpec:
 
 
 ANOMALIES_2D = (
-    AnomalySpec(label="high", center_norm=(0.35, 0.0), radius_norm=0.18, conductivity=REAL_PHANTOM_HIGH),
-    AnomalySpec(label="low", center_norm=(-0.35, 0.0), radius_norm=0.18, conductivity=REAL_PHANTOM_LOW),
+    AnomalySpec(
+        label="high",
+        center_norm=(0.35, 0.0),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_HIGH,
+    ),
+    AnomalySpec(
+        label="low",
+        center_norm=(-0.35, 0.0),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_LOW,
+    ),
 )
 ANOMALIES_3D = (
-    AnomalySpec(label="high", center_norm=(0.35, 0.0, 0.22), radius_norm=0.18, conductivity=REAL_PHANTOM_HIGH),
-    AnomalySpec(label="low", center_norm=(-0.35, 0.0, -0.22), radius_norm=0.18, conductivity=REAL_PHANTOM_LOW),
+    AnomalySpec(
+        label="high",
+        center_norm=(0.35, 0.0, 0.22),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_HIGH,
+    ),
+    AnomalySpec(
+        label="low",
+        center_norm=(-0.35, 0.0, -0.22),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_LOW,
+    ),
 )
 
 
@@ -95,8 +115,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--dim", type=int, choices=[2, 3], required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--worker-output-json", type=Path, required=True)
-    parser.add_argument("--run-kind", choices=["correctness", "fairness"], default="correctness")
-    parser.add_argument("--backend-order", choices=["cpu-first", "gpu-first"], default="cpu-first")
+    parser.add_argument(
+        "--run-kind", choices=["correctness", "fairness"], default="correctness"
+    )
+    parser.add_argument(
+        "--backend-order", choices=["cpu-first", "gpu-first"], default="cpu-first"
+    )
     parser.add_argument("--backend-key", choices=["cpu", "gpu", "both"], default="both")
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--mesh-size-2d", type=float, default=0.08)
@@ -141,7 +165,9 @@ def _timed(fn, *, sync_cuda: bool = False):
 
 
 def _sigma_coordinates(system: EITSystem) -> np.ndarray:
-    coords = np.asarray(system.fwd_model.V_sigma.tabulate_dof_coordinates(), dtype=np.float64)
+    coords = np.asarray(
+        system.fwd_model.V_sigma.tabulate_dof_coordinates(), dtype=np.float64
+    )
     return coords[:, : system.mesh.geometry.dim]
 
 
@@ -196,7 +222,9 @@ def _actual_anomalies(system: EITSystem, *, dim: int) -> list[dict[str, Any]]:
     return actual
 
 
-def _build_truth_values(system: EITSystem, *, dim: int) -> tuple[np.ndarray, list[dict[str, Any]]]:
+def _build_truth_values(
+    system: EITSystem, *, dim: int
+) -> tuple[np.ndarray, list[dict[str, Any]]]:
     coords = _sigma_coordinates(system)
     values = np.full(coords.shape[0], BACKGROUND_CONDUCTIVITY, dtype=np.float64)
     anomalies = _actual_anomalies(system, dim=dim)
@@ -207,7 +235,9 @@ def _build_truth_values(system: EITSystem, *, dim: int) -> tuple[np.ndarray, lis
     return values, anomalies
 
 
-def _summary_case(case: dict[str, Any], *, data_path: Path, output_dir: Path) -> dict[str, Any]:
+def _summary_case(
+    case: dict[str, Any], *, data_path: Path, output_dir: Path
+) -> dict[str, Any]:
     return {
         "label": case["label"],
         "forward_backend": case["forward_backend"],
@@ -223,7 +253,9 @@ def _summary_case(case: dict[str, Any], *, data_path: Path, output_dir: Path) ->
     }
 
 
-def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backend_order: str) -> dict[str, Any]:
+def _run_2d_stable_combined(
+    args: argparse.Namespace, output_dir: Path, *, backend_order: str
+) -> dict[str, Any]:
     mesh = create_simple_eit_mesh(
         n_elec=int(args.n_elec),
         radius=float(args.radius_2d),
@@ -244,7 +276,9 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
         system = EITSystem(
             n_elec=int(args.n_elec),
             pattern_config=pattern,
-            contact_impedance=np.full(int(args.n_elec), float(args.contact_impedance), dtype=np.float64),
+            contact_impedance=np.full(
+                int(args.n_elec), float(args.contact_impedance), dtype=np.float64
+            ),
             base_conductivity=BACKGROUND_CONDUCTIVITY,
             regularization_type="noser",
             regularization_alpha=1.0,
@@ -284,9 +318,13 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
 
     def _run_cpu() -> None:
         print("[gallery-worker] 2D CPU: forward baseline", flush=True)
-        baseline_cpu_data, cpu_forward_baseline_elapsed = _timed(lambda: cpu.forward_solve(baseline_cpu))
+        baseline_cpu_data, cpu_forward_baseline_elapsed = _timed(
+            lambda: cpu.forward_solve(baseline_cpu)
+        )
         print("[gallery-worker] 2D CPU: forward target", flush=True)
-        target_cpu_data, cpu_forward_target_elapsed = _timed(lambda: cpu.forward_solve(truth_cpu))
+        target_cpu_data, cpu_forward_target_elapsed = _timed(
+            lambda: cpu.forward_solve(truth_cpu)
+        )
         state.update(
             {
                 "baseline_cpu_data": baseline_cpu_data,
@@ -298,7 +336,9 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
 
     def _run_gpu() -> None:
         print("[gallery-worker] 2D GPU: forward target", flush=True)
-        target_gpu_data, gpu_forward_target_elapsed = _timed(lambda: gpu.forward_solve(truth_gpu))
+        target_gpu_data, gpu_forward_target_elapsed = _timed(
+            lambda: gpu.forward_solve(truth_gpu)
+        )
         state.update(
             {
                 "target_gpu_data": target_gpu_data,
@@ -315,14 +355,20 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
 
     print("[gallery-worker] 2D CPU: inverse absolute", flush=True)
     cpu_recon, cpu_inverse_elapsed = _timed(
-        lambda: cpu.absolute_reconstruct(state["target_cpu_data"], baseline_image=baseline_cpu)
+        lambda: cpu.absolute_reconstruct(
+            state["target_cpu_data"], baseline_image=baseline_cpu
+        )
     )
     print("[gallery-worker] 2D GPU: inverse absolute", flush=True)
     gpu_recon, gpu_inverse_elapsed = _timed(
-        lambda: gpu.absolute_reconstruct(state["target_cpu_data"], baseline_image=baseline_gpu)
+        lambda: gpu.absolute_reconstruct(
+            state["target_cpu_data"], baseline_image=baseline_gpu
+        )
     )
     print("[gallery-worker] 2D GPU: forward baseline (post-inverse)", flush=True)
-    baseline_gpu_data, gpu_forward_baseline_elapsed = _timed(lambda: gpu.forward_solve(baseline_gpu))
+    baseline_gpu_data, gpu_forward_baseline_elapsed = _timed(
+        lambda: gpu.forward_solve(baseline_gpu)
+    )
     state.update(
         {
             "baseline_gpu_data": baseline_gpu_data,
@@ -371,7 +417,9 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
             "backend_info": cpu.fwd_model.get_backend_diagnostics(),
             "measurement_backend_info": cpu.fwd_model.get_backend_diagnostics(),
             "truth_metrics": cpu_truth_metrics,
-            "baseline_measured": np.asarray(state["baseline_cpu_data"].meas, dtype=np.float64),
+            "baseline_measured": np.asarray(
+                state["baseline_cpu_data"].meas, dtype=np.float64
+            ),
             "measured": np.asarray(state["target_cpu_data"].meas, dtype=np.float64),
             "simulated": np.asarray(cpu_recon.simulated, dtype=np.float64),
             "residual": np.asarray(cpu_recon.residual, dtype=np.float64),
@@ -387,7 +435,9 @@ def _run_2d_stable_combined(args: argparse.Namespace, output_dir: Path, *, backe
             "backend_info": gpu.fwd_model.get_backend_diagnostics(),
             "measurement_backend_info": gpu.fwd_model.get_backend_diagnostics(),
             "truth_metrics": gpu_truth_metrics,
-            "baseline_measured": np.asarray(state["baseline_gpu_data"].meas, dtype=np.float64),
+            "baseline_measured": np.asarray(
+                state["baseline_gpu_data"].meas, dtype=np.float64
+            ),
             "measured": np.asarray(state["target_gpu_data"].meas, dtype=np.float64),
             "simulated": np.asarray(gpu_recon.simulated, dtype=np.float64),
             "residual": np.asarray(gpu_recon.residual, dtype=np.float64),
@@ -407,12 +457,27 @@ def _backend_settings(
 ) -> dict[str, str]:
     if int(dim) == 2:
         if backend_key == "cpu":
-            return {"label": "2D CPU", "forward_backend": "dolfinx", "device": "cpu", "petsc_device": "cpu"}
+            return {
+                "label": "2D CPU",
+                "forward_backend": "dolfinx",
+                "device": "cpu",
+                "petsc_device": "cpu",
+            }
         if backend_key == "gpu":
-            return {"label": "2D GPU", "forward_backend": "dolfinx", "device": "cuda", "petsc_device": "cuda"}
+            return {
+                "label": "2D GPU",
+                "forward_backend": "dolfinx",
+                "device": "cuda",
+                "petsc_device": "cuda",
+            }
     if int(dim) == 3:
         if backend_key == "cpu":
-            return {"label": "3D CPU", "forward_backend": "dolfinx", "device": "cpu", "petsc_device": "cpu"}
+            return {
+                "label": "3D CPU",
+                "forward_backend": "dolfinx",
+                "device": "cpu",
+                "petsc_device": "cpu",
+            }
         if backend_key == "gpu":
             return {
                 "label": "3D GPU",
@@ -480,7 +545,9 @@ def _build_system(
     kwargs: dict[str, Any] = {
         "n_elec": int(args.n_elec),
         "pattern_config": pattern,
-        "contact_impedance": np.full(int(args.n_elec), float(args.contact_impedance), dtype=np.float64),
+        "contact_impedance": np.full(
+            int(args.n_elec), float(args.contact_impedance), dtype=np.float64
+        ),
         "base_conductivity": BACKGROUND_CONDUCTIVITY,
         "regularization_type": "noser",
         "regularization_alpha": 1.0,
@@ -499,7 +566,9 @@ def _build_system(
     }
     if int(dim) == 3:
         mesh_family, geometry_version, generator_revision = resolve_3d_mesh_contract(
-            acceleration_profile=settings.get("acceleration_profile", DEFAULT_ACCELERATION_PROFILE),
+            acceleration_profile=settings.get(
+                "acceleration_profile", DEFAULT_ACCELERATION_PROFILE
+            ),
         )
         kwargs.update(
             {
@@ -538,22 +607,39 @@ def _run_backend_case(
     inverse_cache.mkdir(parents=True, exist_ok=True)
 
     print(f"[gallery-worker] {settings['label']}: build measurement system", flush=True)
-    measure_system = _build_system(dim=dim, args=args, mesh=mesh, cache_dir=measure_cache, backend_key=backend_key)
+    measure_system = _build_system(
+        dim=dim, args=args, mesh=mesh, cache_dir=measure_cache, backend_key=backend_key
+    )
     print(f"[gallery-worker] {settings['label']}: build inverse system", flush=True)
-    inverse_system = _build_system(dim=dim, args=args, mesh=mesh, cache_dir=inverse_cache, backend_key=backend_key)
+    inverse_system = _build_system(
+        dim=dim, args=args, mesh=mesh, cache_dir=inverse_cache, backend_key=backend_key
+    )
 
-    truth_measure = EITImage(elem_data=np.asarray(truth_values, dtype=np.float64).copy(), fwd_model=measure_system.fwd_model)
-    baseline_measure = measure_system.create_homogeneous_image(conductivity=BACKGROUND_CONDUCTIVITY)
-    baseline_inverse = inverse_system.create_homogeneous_image(conductivity=BACKGROUND_CONDUCTIVITY)
+    truth_measure = EITImage(
+        elem_data=np.asarray(truth_values, dtype=np.float64).copy(),
+        fwd_model=measure_system.fwd_model,
+    )
+    baseline_measure = measure_system.create_homogeneous_image(
+        conductivity=BACKGROUND_CONDUCTIVITY
+    )
+    baseline_inverse = inverse_system.create_homogeneous_image(
+        conductivity=BACKGROUND_CONDUCTIVITY
+    )
     sync_cuda = settings["forward_backend"] == "cuda_structured"
 
     print(f"[gallery-worker] {settings['label']}: forward baseline", flush=True)
-    baseline_data, baseline_elapsed = _timed(lambda: measure_system.forward_solve(baseline_measure), sync_cuda=sync_cuda)
+    baseline_data, baseline_elapsed = _timed(
+        lambda: measure_system.forward_solve(baseline_measure), sync_cuda=sync_cuda
+    )
     print(f"[gallery-worker] {settings['label']}: forward target", flush=True)
-    target_data, target_elapsed = _timed(lambda: measure_system.forward_solve(truth_measure), sync_cuda=sync_cuda)
+    target_data, target_elapsed = _timed(
+        lambda: measure_system.forward_solve(truth_measure), sync_cuda=sync_cuda
+    )
     print(f"[gallery-worker] {settings['label']}: inverse absolute", flush=True)
     recon, inverse_elapsed = _timed(
-        lambda: inverse_system.absolute_reconstruct(target_data, baseline_image=baseline_inverse),
+        lambda: inverse_system.absolute_reconstruct(
+            target_data, baseline_image=baseline_inverse
+        ),
         sync_cuda=sync_cuda,
     )
 
@@ -586,9 +672,13 @@ def _run_backend_case(
     }
 
 
-def _run_correctness(args: argparse.Namespace, output_dir: Path, *, dim: int) -> dict[str, Any]:
+def _run_correctness(
+    args: argparse.Namespace, output_dir: Path, *, dim: int
+) -> dict[str, Any]:
     if int(dim) == 2:
-        return _run_2d_stable_combined(args, output_dir, backend_order=str(args.backend_order))
+        return _run_2d_stable_combined(
+            args, output_dir, backend_order=str(args.backend_order)
+        )
     mesh = _build_mesh(dim=dim, args=args, output_dir=output_dir)
     bootstrap = _build_system(
         dim=dim,
@@ -680,7 +770,9 @@ def _run_single_backend_correctness(
     }
 
 
-def _run_fairness(args: argparse.Namespace, output_dir: Path, *, dim: int, backend_order: str) -> dict[str, Any]:
+def _run_fairness(
+    args: argparse.Namespace, output_dir: Path, *, dim: int, backend_order: str
+) -> dict[str, Any]:
     mesh = _build_mesh(dim=dim, args=args, output_dir=output_dir)
     bootstrap = _build_system(
         dim=dim,
@@ -744,14 +836,20 @@ def main() -> None:
 
     dim = int(args.dim)
     if args.run_kind == "fairness":
-        summary = _run_fairness(args, output_dir, dim=dim, backend_order=str(args.backend_order))
+        summary = _run_fairness(
+            args, output_dir, dim=dim, backend_order=str(args.backend_order)
+        )
         args.worker_output_json.parent.mkdir(parents=True, exist_ok=True)
-        args.worker_output_json.write_text(json.dumps(_jsonable(summary), indent=2), encoding="utf-8")
+        args.worker_output_json.write_text(
+            json.dumps(_jsonable(summary), indent=2), encoding="utf-8"
+        )
         print(json.dumps(_jsonable(summary), indent=2))
         return
 
     if args.backend_key != "both":
-        result = _run_single_backend_correctness(args, output_dir, dim=dim, backend_key=str(args.backend_key))
+        result = _run_single_backend_correctness(
+            args, output_dir, dim=dim, backend_key=str(args.backend_key)
+        )
         bundle_path = output_dir / "data" / f"{dim}d_{args.backend_key}_bundle.h5"
         case_path = output_dir / "data" / f"{dim}d_{args.backend_key}_case.h5"
         write_output_bundle(
@@ -759,28 +857,45 @@ def main() -> None:
             {
                 "coords": np.asarray(result["coords"], dtype=np.float64),
                 "truth_values": np.asarray(result["truth_values"], dtype=np.float64),
-                "reconstruction": np.asarray(result["reconstruction"], dtype=np.float64),
+                "reconstruction": np.asarray(
+                    result["reconstruction"], dtype=np.float64
+                ),
             },
             {"package_role": "gallery_backend_bundle"},
             schema=GALLERY_ARRAYS_SCHEMA,
         )
-        _save_case_data(case_path, {
-            "coords": np.asarray(result["coords"], dtype=np.float64),
-            "truth": np.asarray(result["truth_values"], dtype=np.float64),
-            "reconstruction": np.asarray(result["reconstruction"], dtype=np.float64),
-            **{k: v for k, v in result["case"].items() if isinstance(v, np.ndarray) or not isinstance(v, dict)},
-        })
+        _save_case_data(
+            case_path,
+            {
+                "coords": np.asarray(result["coords"], dtype=np.float64),
+                "truth": np.asarray(result["truth_values"], dtype=np.float64),
+                "reconstruction": np.asarray(
+                    result["reconstruction"], dtype=np.float64
+                ),
+                **{
+                    k: v
+                    for k, v in result["case"].items()
+                    if isinstance(v, np.ndarray) or not isinstance(v, dict)
+                },
+            },
+        )
         summary = {
             "dim": dim,
             "backend_key": str(args.backend_key),
             "anomalies": _jsonable(result["anomalies"]),
             "truth_metrics": _jsonable(result["truth_metrics"]),
-            "case": _jsonable(_summary_case(result["case"], data_path=case_path, output_dir=output_dir)),
+            "case": _jsonable(
+                _summary_case(
+                    result["case"], data_path=case_path, output_dir=output_dir
+                )
+            ),
             "bundle_path": str(bundle_path.relative_to(output_dir)),
             "mesh_radius": float(result["mesh"].radius),
         }
         args.worker_output_json.parent.mkdir(parents=True, exist_ok=True)
-        args.worker_output_json.write_text(json.dumps(summary, indent=2), encoding="utf-8")
+        args.worker_output_json.write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
         print(json.dumps(summary, indent=2))
         return
 
@@ -793,24 +908,46 @@ def main() -> None:
         {
             "coords": np.asarray(result["coords"], dtype=np.float64),
             "truth_values": np.asarray(result["truth_values"], dtype=np.float64),
-            "cpu_reconstruction": np.asarray(result["cpu_reconstruction"], dtype=np.float64),
-            "gpu_reconstruction": np.asarray(result["gpu_reconstruction"], dtype=np.float64),
+            "cpu_reconstruction": np.asarray(
+                result["cpu_reconstruction"], dtype=np.float64
+            ),
+            "gpu_reconstruction": np.asarray(
+                result["gpu_reconstruction"], dtype=np.float64
+            ),
         },
         {"package_role": "gallery_worker_bundle"},
         schema=GALLERY_ARRAYS_SCHEMA,
     )
-    _save_case_data(cpu_case_path, {
-        "coords": np.asarray(result["coords"], dtype=np.float64),
-        "truth": np.asarray(result["truth_values"], dtype=np.float64),
-        "reconstruction": np.asarray(result["cpu_reconstruction"], dtype=np.float64),
-        **{k: v for k, v in result["cpu_case"].items() if isinstance(v, np.ndarray) or not isinstance(v, dict)},
-    })
-    _save_case_data(gpu_case_path, {
-        "coords": np.asarray(result["coords"], dtype=np.float64),
-        "truth": np.asarray(result["truth_values"], dtype=np.float64),
-        "reconstruction": np.asarray(result["gpu_reconstruction"], dtype=np.float64),
-        **{k: v for k, v in result["gpu_case"].items() if isinstance(v, np.ndarray) or not isinstance(v, dict)},
-    })
+    _save_case_data(
+        cpu_case_path,
+        {
+            "coords": np.asarray(result["coords"], dtype=np.float64),
+            "truth": np.asarray(result["truth_values"], dtype=np.float64),
+            "reconstruction": np.asarray(
+                result["cpu_reconstruction"], dtype=np.float64
+            ),
+            **{
+                k: v
+                for k, v in result["cpu_case"].items()
+                if isinstance(v, np.ndarray) or not isinstance(v, dict)
+            },
+        },
+    )
+    _save_case_data(
+        gpu_case_path,
+        {
+            "coords": np.asarray(result["coords"], dtype=np.float64),
+            "truth": np.asarray(result["truth_values"], dtype=np.float64),
+            "reconstruction": np.asarray(
+                result["gpu_reconstruction"], dtype=np.float64
+            ),
+            **{
+                k: v
+                for k, v in result["gpu_case"].items()
+                if isinstance(v, np.ndarray) or not isinstance(v, dict)
+            },
+        },
+    )
 
     summary = {
         "dim": dim,
@@ -818,8 +955,16 @@ def main() -> None:
         "cpu_truth_metrics": _jsonable(result["cpu_truth_metrics"]),
         "gpu_truth_metrics": _jsonable(result["gpu_truth_metrics"]),
         "consistency": _jsonable(result["consistency"]),
-        "cpu_case": _jsonable(_summary_case(result["cpu_case"], data_path=cpu_case_path, output_dir=output_dir)),
-        "gpu_case": _jsonable(_summary_case(result["gpu_case"], data_path=gpu_case_path, output_dir=output_dir)),
+        "cpu_case": _jsonable(
+            _summary_case(
+                result["cpu_case"], data_path=cpu_case_path, output_dir=output_dir
+            )
+        ),
+        "gpu_case": _jsonable(
+            _summary_case(
+                result["gpu_case"], data_path=gpu_case_path, output_dir=output_dir
+            )
+        ),
         "bundle_path": str(bundle_path.relative_to(output_dir)),
         "mesh_radius": float(result["mesh"].radius),
     }

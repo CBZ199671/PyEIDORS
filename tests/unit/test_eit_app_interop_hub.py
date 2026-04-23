@@ -15,7 +15,11 @@ from eit_app.interop import (
     EidorsExportJob,
     EidorsScriptCaptureService,
 )
-from eit_app.interop import InteropBundleExporter, InteropBundleImporter, save_bridge_package
+from eit_app.interop import (
+    InteropBundleExporter,
+    InteropBundleImporter,
+    save_bridge_package,
+)
 from eit_app.interop.bridge_package import default_manifest
 from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
@@ -46,7 +50,9 @@ def _standard_geometry_payload(*, n_elec: int = 8) -> dict:
         [[index + 2, ((index + 1) % n_elec) + 2] for index in range(n_elec)],
         dtype=np.int64,
     )
-    electrode_nodes = np.asarray([[index + 2] for index in range(n_elec)], dtype=np.int64)
+    electrode_nodes = np.asarray(
+        [[index + 2] for index in range(n_elec)], dtype=np.int64
+    )
     electrode_counts = np.ones(n_elec, dtype=np.int64)
     return {
         "exchange_format": "eidors_pyeidors_bridge_v1",
@@ -97,7 +103,9 @@ def test_interop_import_preview_round_trip(tmp_path: Path) -> None:
     assert preview.forward_model_config.n_elec == 8
     assert preview.capability_report.can_import_geometry is True
     assert preview.capability_report.can_import_measurements is True
-    assert preview.measurement_summary["points"] == str(preview.forward_model_config.point_count())
+    assert preview.measurement_summary["points"] == str(
+        preview.forward_model_config.point_count()
+    )
     assert preview.geometry_summary["electrodes"] == "8"
 
 
@@ -150,9 +158,17 @@ def test_interop_hub_can_preview_and_import_into_simulation(
     window.show()
     _get_app().processEvents()
 
-    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
-    monkeypatch.setattr(QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
-    monkeypatch.setattr(QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
+    )
+    monkeypatch.setattr(
+        QMessageBox, "warning", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
+    monkeypatch.setattr(
+        QMessageBox, "critical", lambda *args, **kwargs: QMessageBox.StandardButton.Ok
+    )
 
     dialog = InteropHubDialog(
         window,
@@ -185,7 +201,9 @@ def test_interop_hub_can_preview_and_import_into_simulation(
 
 
 @pytest.mark.gui
-def test_interop_hub_manual_smoke_callback_runs(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_interop_hub_manual_smoke_callback_runs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _get_app()
     called: list[bool] = []
 
@@ -211,7 +229,11 @@ def test_interop_hub_manual_smoke_callback_runs(monkeypatch: pytest.MonkeyPatch)
     dialog._loaded_bundle = object()  # type: ignore[assignment]
     dialog._run_smoke_btn.setEnabled(True)
 
-    monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: QMessageBox.StandardButton.Ok)
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
+    )
     message = dialog._run_smoke_validation(show_dialog=False)
 
     assert called == [True]
@@ -242,7 +264,9 @@ def test_interop_hub_uses_single_qt_path_picker_buttons() -> None:
 
 
 @pytest.mark.gui
-def test_interop_hub_open_does_not_auto_detect_environments_and_has_no_diagnostics_tab() -> None:
+def test_interop_hub_open_does_not_auto_detect_environments_and_has_no_diagnostics_tab() -> (
+    None
+):
     _get_app()
     called = {"detect": 0}
 
@@ -287,10 +311,14 @@ def test_interop_hub_open_does_not_auto_detect_environments_and_has_no_diagnosti
     dialog.close()
 
 
-def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(path_explorer_module, "running_in_wsl", lambda: True)
     monkeypatch.setattr(path_explorer_module, "running_on_windows", lambda: False)
-    monkeypatch.setattr(path_explorer_module, "_available_windows_drives", lambda: ["/mnt/c", "/mnt/d"])
+    monkeypatch.setattr(
+        path_explorer_module, "_available_windows_drives", lambda: ["/mnt/c", "/mnt/d"]
+    )
 
     roots = path_explorer_module.visual_path_roots()
 
@@ -300,10 +328,14 @@ def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(monkeypatch: py
     assert ("Windows D:", "/mnt/d") in roots
 
 
-def test_visual_path_roots_include_only_windows_entries_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_visual_path_roots_include_only_windows_entries_on_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     monkeypatch.setattr(path_explorer_module, "running_in_wsl", lambda: False)
     monkeypatch.setattr(path_explorer_module, "running_on_windows", lambda: True)
-    monkeypatch.setattr(path_explorer_module, "_available_windows_drives", lambda: ["C:\\", "D:\\"])
+    monkeypatch.setattr(
+        path_explorer_module, "_available_windows_drives", lambda: ["C:\\", "D:\\"]
+    )
 
     roots = path_explorer_module.visual_path_roots()
 

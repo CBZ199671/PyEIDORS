@@ -22,7 +22,9 @@ def _run_bash(script: str, *, env: dict[str, str]) -> subprocess.CompletedProces
     )
 
 
-def test_shell_helper_exports_session_env_and_reuses_it_within_one_shell(tmp_path: Path):
+def test_shell_helper_exports_session_env_and_reuses_it_within_one_shell(
+    tmp_path: Path,
+):
     cache_root = tmp_path / "cache-root"
     env = os.environ.copy()
     env["CACHE_ROOT"] = str(cache_root)
@@ -65,7 +67,9 @@ test "$(cat "$OUT1")" = "$(cat "$OUT2")"
     assert (tmp_path / "out2.txt").read_text(encoding="utf-8").strip() == meta[1]
 
 
-def test_shell_helper_cleans_session_on_deactivate_and_keeps_terminals_isolated(tmp_path: Path):
+def test_shell_helper_cleans_session_on_deactivate_and_keeps_terminals_isolated(
+    tmp_path: Path,
+):
     cache_root = tmp_path / "cache-root"
     env = os.environ.copy()
     env["CACHE_ROOT"] = str(cache_root)

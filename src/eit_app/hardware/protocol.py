@@ -185,7 +185,9 @@ def build_sweep_set(
 ) -> bytes:
     return build_frame(
         Command.SWEEP_SET,
-        bytes([sti_1 & 0xFF, sti_2 & 0xFF, mea_1 & 0xFF, mea_2 & 0xFF, amp_level & 0xFF]),
+        bytes(
+            [sti_1 & 0xFF, sti_2 & 0xFF, mea_1 & 0xFF, mea_2 & 0xFF, amp_level & 0xFF]
+        ),
     )
 
 
@@ -198,9 +200,13 @@ def build_start_measurement(hz: int) -> bytes:
     return build_frame(Command.START_MEA, _encode_freq_word(hz))
 
 
-def build_start_measurement_with_mode(hz: int, mea_mode: int = DEFAULT_MEA_MODE) -> bytes:
+def build_start_measurement_with_mode(
+    hz: int, mea_mode: int = DEFAULT_MEA_MODE
+) -> bytes:
     """Build the 3-byte acquisition command expected by the checked-in C8051 code."""
-    return build_frame(Command.START_MEA, bytes([mea_mode & 0xFF]) + _encode_freq_word(hz))
+    return build_frame(
+        Command.START_MEA, bytes([mea_mode & 0xFF]) + _encode_freq_word(hz)
+    )
 
 
 def build_contact_impedance_mea(voltage_amp_level: int = 0) -> bytes:
@@ -212,7 +218,9 @@ def build_capability_query() -> bytes:
 
 
 def build_stream_start(hz: int, mea_mode: int = DEFAULT_MEA_MODE) -> bytes:
-    return build_frame(Command.STREAM_START, bytes([mea_mode & 0xFF]) + _encode_freq_word(hz))
+    return build_frame(
+        Command.STREAM_START, bytes([mea_mode & 0xFF]) + _encode_freq_word(hz)
+    )
 
 
 def build_stream_stop() -> bytes:
@@ -230,7 +238,9 @@ def build_relay_transmit(
     board_id: int = DEFAULT_BOARD_ID,
     user_id: int = DEFAULT_USER_ID,
 ) -> bytes:
-    payload = bytes([board_id & 0xFF, user_id & 0xFF, device_cmd & 0xFF]) + device_payload
+    payload = (
+        bytes([board_id & 0xFF, user_id & 0xFF, device_cmd & 0xFF]) + device_payload
+    )
     return _build_raw_frame(RelayCommand.TRANSMIT, payload)
 
 
@@ -257,8 +267,12 @@ def adc_to_voltage(
     """Convert one 4-byte ADC sample to calibrated real/imag voltage components."""
     adc0 = (adc0_h << 8) | adc0_l
     adc1 = (adc1_h << 8) | adc1_l
-    real = (adc0 * params.vref / params.max_value) - params.offset_v - params.real_offset
-    imag = (adc1 * params.vref / params.max_value) - params.offset_v - params.imag_offset
+    real = (
+        (adc0 * params.vref / params.max_value) - params.offset_v - params.real_offset
+    )
+    imag = (
+        (adc1 * params.vref / params.max_value) - params.offset_v - params.imag_offset
+    )
     scale = _component_scale(gain, params)
     return real * scale, imag * scale
 

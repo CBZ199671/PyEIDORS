@@ -48,7 +48,7 @@ def _ensure_atexit_cleanup() -> None:
 def _parse_session_pid(name: str) -> int | None:
     for prefix in (SHELL_SESSION_PREFIX, PROCESS_SESSION_PREFIX):
         if name.startswith(prefix):
-            pid_text = name[len(prefix):].split("-", 1)[0].strip()
+            pid_text = name[len(prefix) :].split("-", 1)[0].strip()
             if not pid_text:
                 return None
             try:
@@ -94,7 +94,9 @@ def _shell_session_registry_path(default_session_dir: Path) -> Path:
     return default_session_dir / SHELL_SESSION_REGISTRY
 
 
-def _register_shell_session_dir(default_session_dir: Path | None, effective_dir: Path) -> None:
+def _register_shell_session_dir(
+    default_session_dir: Path | None, effective_dir: Path
+) -> None:
     if default_session_dir is None:
         return
     registry_path = _shell_session_registry_path(default_session_dir)
@@ -187,7 +189,9 @@ def resolve_cache_directory(
     shell_session = _shell_session_env()
     shell_managed = shell_session is not None
     if shell_session is not None:
-        session_id, default_session_dir, shell_requested_root, _owner_pid = shell_session
+        session_id, default_session_dir, shell_requested_root, _owner_pid = (
+            shell_session
+        )
         session_root = requested_dir / session_root_name
         session_root.mkdir(parents=True, exist_ok=True)
         if (
@@ -202,7 +206,11 @@ def resolve_cache_directory(
                 same_root = False
         else:
             same_root = False
-        effective_dir = default_session_dir if same_root and default_session_dir is not None else session_root / session_id
+        effective_dir = (
+            default_session_dir
+            if same_root and default_session_dir is not None
+            else session_root / session_id
+        )
         effective_dir.mkdir(parents=True, exist_ok=True)
         _register_shell_session_dir(default_session_dir, effective_dir)
         spec = CacheDirectorySpec(

@@ -412,7 +412,7 @@ def test_cached_3d_validator_covers_nonfinite_measure_and_sidecar_exception_path
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag))
+        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
     )
     monkeypatch.setattr(
         opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)

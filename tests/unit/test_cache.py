@@ -17,7 +17,9 @@ def check_tmp_filesystem():
             command = "df /tmp"
 
         if "tmpfs" in output.lower():
-            print("/tmp uses tmpfs (memory filesystem) - extremely fast IO performance!")
+            print(
+                "/tmp uses tmpfs (memory filesystem) - extremely fast IO performance!"
+            )
         else:
             print("/tmp uses regular disk filesystem")
         print(output)

@@ -73,7 +73,9 @@ def build_process_forward_setup_key(
         "z_hash": hash_array(np.asarray(z, dtype=np.float64).reshape(-1)),
         "pattern_config": _pattern_signature(pattern_config),
     }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded = json.dumps(
+        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 
@@ -86,11 +88,15 @@ def get_process_forward_setup_bundle(key: str) -> ForwardStaticSetupBundle | Non
         return bundle
 
 
-def put_process_forward_setup_bundle(key: str, bundle: ForwardStaticSetupBundle) -> None:
+def put_process_forward_setup_bundle(
+    key: str, bundle: ForwardStaticSetupBundle
+) -> None:
     with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
         _PROCESS_FORWARD_SETUP_CACHE.pop(key, None)
         _PROCESS_FORWARD_SETUP_CACHE[key] = bundle
-        while len(_PROCESS_FORWARD_SETUP_CACHE) > _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS:
+        while (
+            len(_PROCESS_FORWARD_SETUP_CACHE) > _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS
+        ):
             _PROCESS_FORWARD_SETUP_CACHE.popitem(last=False)
 
 
@@ -101,4 +107,7 @@ def clear_process_forward_setup_cache() -> None:
 
 def process_forward_setup_cache_stats() -> dict[str, int]:
     with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
-        return {"items": len(_PROCESS_FORWARD_SETUP_CACHE), "max_items": _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS}
+        return {
+            "items": len(_PROCESS_FORWARD_SETUP_CACHE),
+            "max_items": _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS,
+        }

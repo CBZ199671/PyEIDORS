@@ -61,7 +61,9 @@ class RMMatmulHandle:
                 "rm_shape": self.matrix_shape,
                 "rm_dtype": self.dtype,
                 "rm_persistent": True,
-                "rm_matrix_resident": "device" if self.matrix_tensor is not None else "cpu",
+                "rm_matrix_resident": "device"
+                if self.matrix_tensor is not None
+                else "cpu",
                 "rm_cache_key": self.cache_key,
             }
         )
@@ -134,9 +136,7 @@ def rm_matmul(
         dtype_name=dtype_name,
     )
     handle = (
-        rm
-        if reused_handle
-        else prepare_rm_matmul(rm, device=requested, dtype=np_dtype)
+        rm if reused_handle else prepare_rm_matmul(rm, device=requested, dtype=np_dtype)
     )
     batch, was_vector = _as_delta_batch(
         delta_v,

@@ -23,7 +23,9 @@ from common.recon_cli_models import ReconstructionMethod
 
 def test_dispatch_maps_methods_to_expected_runners():
     assert get_method_runner(ReconstructionMethod.GN_ABSOLUTE) is run_gn_absolute_cases
-    assert get_method_runner(ReconstructionMethod.GN_DIFFERENCE) is run_gn_difference_cases
+    assert (
+        get_method_runner(ReconstructionMethod.GN_DIFFERENCE) is run_gn_difference_cases
+    )
     assert (
         get_method_runner(ReconstructionMethod.SPARSE_BAYES)
         is run_sparse_bayes_difference_cases

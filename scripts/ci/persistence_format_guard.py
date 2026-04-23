@@ -220,7 +220,10 @@ class PersistenceVisitor(ast.NodeVisitor):
         if "." not in api:
             return api
         base, _, attr = api.rpartition(".")
-        if base in self.numpy_modules and attr in NUMPY_WRITER_NAMES | NUMPY_READER_NAMES:
+        if (
+            base in self.numpy_modules
+            and attr in NUMPY_WRITER_NAMES | NUMPY_READER_NAMES
+        ):
             return f"np.{attr}"
         if base in self.gmsh_modules and attr == "write":
             return "gmsh.write"
@@ -234,7 +237,9 @@ class PersistenceVisitor(ast.NodeVisitor):
         if isinstance(node.value, str):
             suffixes = _suffixes_from_strings((node.value,))
             if suffixes:
-                self._add(node, api="literal", target=repr(node.value), suffixes=suffixes)
+                self._add(
+                    node, api="literal", target=repr(node.value), suffixes=suffixes
+                )
 
     def _add(
         self,
@@ -277,7 +282,9 @@ def iter_python_files(root: Path, scan_roots: Iterable[str]) -> Iterable[Path]:
             yield path
 
 
-def scan_repo(root: Path, scan_roots: Iterable[str] = DEFAULT_SCAN_ROOTS) -> list[PersistenceFinding]:
+def scan_repo(
+    root: Path, scan_roots: Iterable[str] = DEFAULT_SCAN_ROOTS
+) -> list[PersistenceFinding]:
     findings: list[PersistenceFinding] = []
     for path in sorted(iter_python_files(root, scan_roots)):
         rel = _relpath(path, root)
@@ -288,10 +295,14 @@ def scan_repo(root: Path, scan_roots: Iterable[str] = DEFAULT_SCAN_ROOTS) -> lis
         visitor = PersistenceVisitor(rel)
         visitor.visit(tree)
         findings.extend(visitor.findings)
-    return sorted(findings, key=lambda item: (item.path, item.line, item.kind, item.api))
+    return sorted(
+        findings, key=lambda item: (item.path, item.line, item.kind, item.api)
+    )
 
 
-def guard_violations(findings: Iterable[PersistenceFinding]) -> list[PersistenceFinding]:
+def guard_violations(
+    findings: Iterable[PersistenceFinding],
+) -> list[PersistenceFinding]:
     violations: list[PersistenceFinding] = []
     for finding in findings:
         if finding.kind != "numpy_writer":
@@ -349,7 +360,12 @@ def main(argv: list[str] | None = None) -> int:
             if finding.kind == "numpy_writer" and finding.classification != "test-only":
                 print(finding.legacy_id)
 
-    print(json.dumps({"summary": summary(findings), "violations": len(violations)}, sort_keys=True))
+    print(
+        json.dumps(
+            {"summary": summary(findings), "violations": len(violations)},
+            sort_keys=True,
+        )
+    )
     if violations and not args.no_fail:
         for finding in violations:
             print(

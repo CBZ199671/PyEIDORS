@@ -21,7 +21,9 @@ def test_tsvd_subspace_shape_and_orthogonality():
 def test_randomized_subspace_shape():
     rng = np.random.default_rng(3)
     j_mat = rng.standard_normal((32, 96))
-    basis, s_val = build_lowrank_subspace(j_mat, rank=10, energy=0.98, method="randomized")
+    basis, s_val = build_lowrank_subspace(
+        j_mat, rank=10, energy=0.98, method="randomized"
+    )
     assert basis.shape[0] == 96
     assert 1 <= basis.shape[1] <= 10
     assert s_val.shape[0] == basis.shape[1]

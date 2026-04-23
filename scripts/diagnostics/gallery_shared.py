@@ -111,17 +111,23 @@ def consistency_metrics(
     target_rel = relative_l2(target_cpu_meas, target_gpu_meas)
     image_rel = relative_l2(cpu_recon, gpu_recon)
     image_rmse = rmse(cpu_recon, gpu_recon)
-    baseline_pass = bool(baseline_rel is None or float(baseline_rel) <= measurement_rel_tol)
+    baseline_pass = bool(
+        baseline_rel is None or float(baseline_rel) <= measurement_rel_tol
+    )
     target_pass = bool(float(target_rel) <= measurement_rel_tol)
     measurement_pass = bool(baseline_pass and target_pass)
-    image_pass = bool(image_rel <= image_rel_tol and image_rmse <= image_rmse_tol_by_dim[int(dim)])
+    image_pass = bool(
+        image_rel <= image_rel_tol and image_rmse <= image_rmse_tol_by_dim[int(dim)]
+    )
     return {
         "baseline_measurement_relative_l2": baseline_rel,
         "target_measurement_relative_l2": target_rel,
         "image_relative_l2": image_rel,
         "image_rmse": image_rmse,
         "image_pearson": safe_pearson(cpu_recon, gpu_recon),
-        "image_max_abs_diff": float(np.max(np.abs(np.asarray(cpu_recon) - np.asarray(gpu_recon)))),
+        "image_max_abs_diff": float(
+            np.max(np.abs(np.asarray(cpu_recon) - np.asarray(gpu_recon)))
+        ),
         "measurement_threshold": measurement_rel_tol,
         "image_relative_l2_threshold": image_rel_tol,
         "image_rmse_threshold": image_rmse_tol_by_dim[int(dim)],

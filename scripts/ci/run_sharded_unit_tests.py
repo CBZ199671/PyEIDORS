@@ -256,7 +256,9 @@ def build_smoke_shards() -> tuple[Shard, ...]:
     shards: list[Shard] = []
     for name, (description, rel_files) in SMOKE_SHARDS.items():
         files = tuple(REPO_ROOT / rel for rel in rel_files)
-        shards.append(Shard(name=name, description=description, files=files, virtual=True))
+        shards.append(
+            Shard(name=name, description=description, files=files, virtual=True)
+        )
     return tuple(shards)
 
 
@@ -286,11 +288,15 @@ def select_shards(
     missing = [name for name in names if name not in by_name]
     if missing:
         known = ", ".join(sorted(by_name))
-        raise ValueError(f"unknown shard(s): {', '.join(missing)}; known shards: {known}")
+        raise ValueError(
+            f"unknown shard(s): {', '.join(missing)}; known shards: {known}"
+        )
     return tuple(by_name[name] for name in names)
 
 
-def emitted_shell_command(shard: Shard, extra_pytest_args: Sequence[str] = ()) -> list[str]:
+def emitted_shell_command(
+    shard: Shard, extra_pytest_args: Sequence[str] = ()
+) -> list[str]:
     return [
         "nix",
         "develop",
@@ -309,7 +315,9 @@ def format_shell_command(command: Sequence[str]) -> str:
     return shlex.join(command)
 
 
-def current_python_command(shard: Shard, extra_pytest_args: Sequence[str] = ()) -> list[str]:
+def current_python_command(
+    shard: Shard, extra_pytest_args: Sequence[str] = ()
+) -> list[str]:
     return [
         sys.executable,
         "-m",
@@ -330,7 +338,14 @@ def _command_for_runner(
     if runner == "nix":
         return emitted_shell_command(shard, extra_pytest_args)
     if runner == "uv":
-        return ["uv", "run", *PYTEST_BASE_ARGS, *shard.relative_files, *extra_pytest_args, "-q"]
+        return [
+            "uv",
+            "run",
+            *PYTEST_BASE_ARGS,
+            *shard.relative_files,
+            *extra_pytest_args,
+            "-q",
+        ]
     raise ValueError(f"unsupported runner: {runner}")
 
 
@@ -448,10 +463,16 @@ def _json_shards(shards: Sequence[Shard]) -> str:
 def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--list", action="store_true", help="List available shards.")
-    parser.add_argument("--json", action="store_true", help="Use JSON for --list output.")
-    parser.add_argument("--dry-run", action="store_true", help="Print commands without running.")
+    parser.add_argument(
+        "--json", action="store_true", help="Use JSON for --list output."
+    )
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Print commands without running."
+    )
     parser.add_argument("--run", action="store_true", help="Run selected shards.")
-    parser.add_argument("--all", action="store_true", help="Select all category shards.")
+    parser.add_argument(
+        "--all", action="store_true", help="Select all category shards."
+    )
     parser.add_argument(
         "--include-smoke",
         action="store_true",
@@ -521,7 +542,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             print(format_shell_command(emitted_shell_command(shard, args.pytest_arg)))
         return 0
 
-    report_dir = _normalize_report_dir(args.report_dir or (DEFAULT_REPORT_ROOT / _iso_timestamp()))
+    report_dir = _normalize_report_dir(
+        args.report_dir or (DEFAULT_REPORT_ROOT / _iso_timestamp())
+    )
     report_dir.mkdir(parents=True, exist_ok=True)
 
     results = [

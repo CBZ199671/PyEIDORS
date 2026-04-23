@@ -68,7 +68,9 @@ def test_hash_mesh_content_detects_coordinate_change():
     class _FakeTopology:
         def __init__(self, cells):
             self.dim = 2
-            self._connectivity = SimpleNamespace(array=np.asarray(cells, dtype=np.int64))
+            self._connectivity = SimpleNamespace(
+                array=np.asarray(cells, dtype=np.int64)
+            )
 
         def create_connectivity(self, _tdim, _vdim):
             return None

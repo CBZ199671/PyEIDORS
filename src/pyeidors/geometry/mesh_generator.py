@@ -105,7 +105,9 @@ class MeshGenerator:
             np.asarray(v, dtype=float)
             for v in self.mesh_data.get("electrode_vertices", [])
         ]
-        persisted_mesh_file = mesh_file if save_msh else xdmf_cache_path_for_mesh(mesh_file)
+        persisted_mesh_file = (
+            mesh_file if save_msh else xdmf_cache_path_for_mesh(mesh_file)
+        )
         mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,

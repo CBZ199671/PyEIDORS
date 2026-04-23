@@ -22,8 +22,8 @@ class StimMeasPatternManager:
         self.n_elec = config.n_elec
         self.n_rings = config.n_rings
         self.tn_elec = self.n_elec * self.n_rings
-        self.stim_direction = 1 if self.config.stim_direction.lower() == 'ccw' else -1
-        self.meas_direction = 1 if self.config.meas_direction.lower() == 'ccw' else -1
+        self.stim_direction = 1 if self.config.stim_direction.lower() == "ccw" else -1
+        self.meas_direction = 1 if self.config.meas_direction.lower() == "ccw" else -1
         self.drive_mode = validate_drive_config(
             drive_mode=self.config.drive_mode,
             drive_value=self.config.drive_value,
@@ -80,7 +80,9 @@ class StimMeasPatternManager:
                 "cross_layer_full, hybrid_full_3d, or custom."
             ) from exc
 
-    def _resolve_electrode_lengths(self, electrode_lengths_m: np.ndarray | None) -> np.ndarray | None:
+    def _resolve_electrode_lengths(
+        self, electrode_lengths_m: np.ndarray | None
+    ) -> np.ndarray | None:
         if electrode_lengths_m is None:
             if self.drive_mode == "line_current_density":
                 # Allow pattern construction without mesh in metadata-only paths.
@@ -97,18 +99,22 @@ class StimMeasPatternManager:
             )
         if np.any(lengths <= 0.0):
             bad = int(np.nonzero(lengths <= 0.0)[0][0])
-            raise ValueError(f"electrode_lengths_m[{bad}] must be positive, got {lengths[bad]!r}.")
+            raise ValueError(
+                f"electrode_lengths_m[{bad}] must be positive, got {lengths[bad]!r}."
+            )
         return lengths
 
     def _parse_patterns(self) -> None:
         # Parse stimulation pattern
         if isinstance(self.config.stim_pattern, str):
-            if self.config.stim_pattern == '{ad}':
+            if self.config.stim_pattern == "{ad}":
                 self.inj_electrodes = [0, 1]
-            elif self.config.stim_pattern == '{op}':
+            elif self.config.stim_pattern == "{op}":
                 self.inj_electrodes = [0, self.n_elec // 2]
             else:
-                raise ValueError(f"Unknown stimulation pattern: {self.config.stim_pattern}")
+                raise ValueError(
+                    f"Unknown stimulation pattern: {self.config.stim_pattern}"
+                )
         else:
             self.inj_electrodes = self.config.stim_pattern
 
@@ -122,16 +128,20 @@ class StimMeasPatternManager:
 
         # Parse measurement pattern
         if isinstance(self.config.meas_pattern, str):
-            if self.config.meas_pattern == '{ad}':
+            if self.config.meas_pattern == "{ad}":
                 self.meas_electrodes = [0, 1]
-            elif self.config.meas_pattern == '{op}':
+            elif self.config.meas_pattern == "{op}":
                 self.meas_electrodes = [0, self.n_elec // 2]
             else:
-                raise ValueError(f"Unknown measurement pattern: {self.config.meas_pattern}")
+                raise ValueError(
+                    f"Unknown measurement pattern: {self.config.meas_pattern}"
+                )
         else:
             self.meas_electrodes = self.config.meas_pattern
 
-        self.meas_weights = np.array([1, -1]) if len(self.meas_electrodes) == 2 else np.array([1])
+        self.meas_weights = (
+            np.array([1, -1]) if len(self.meas_electrodes) == 2 else np.array([1])
+        )
 
     def _generate_patterns(self) -> None:
         self.stim_matrix = []
@@ -175,23 +185,29 @@ class StimMeasPatternManager:
 
     def _iter_stimulation_records(self) -> list[tuple[int, int, list[int]]]:
         records: list[tuple[int, int, list[int]]] = []
-        if self.measurement_protocol in {"cross_layer_full", "hybrid_full_3d"} and self.n_rings > 1:
+        if (
+            self.measurement_protocol in {"cross_layer_full", "hybrid_full_3d"}
+            and self.n_rings > 1
+        ):
             if self.measurement_protocol == "hybrid_full_3d":
                 for ring in range(self.n_rings):
                     for elec in range(self.n_elec):
                         inj_indices = []
                         for inj_elec in self.inj_electrodes:
                             idx = (
-                                (inj_elec + self.stim_direction * elec) % self.n_elec
-                                + ring * self.n_elec
-                            )
+                                inj_elec + self.stim_direction * elec
+                            ) % self.n_elec + ring * self.n_elec
                             inj_indices.append(idx)
                         records.append((elec, ring, inj_indices))
 
             for ring in range(self.n_rings - 1):
                 for elec in range(self.n_elec):
-                    lower = (self.stim_direction * elec) % self.n_elec + ring * self.n_elec
-                    upper = (self.stim_direction * elec) % self.n_elec + (ring + 1) * self.n_elec
+                    lower = (
+                        self.stim_direction * elec
+                    ) % self.n_elec + ring * self.n_elec
+                    upper = (self.stim_direction * elec) % self.n_elec + (
+                        ring + 1
+                    ) * self.n_elec
                     records.append((elec, ring, [lower, upper]))
             return records
 
@@ -199,7 +215,9 @@ class StimMeasPatternManager:
             for elec in range(self.n_elec):
                 inj_indices = []
                 for inj_elec in self.inj_electrodes:
-                    idx = (inj_elec + self.stim_direction * elec) % self.n_elec + ring * self.n_elec
+                    idx = (
+                        inj_elec + self.stim_direction * elec
+                    ) % self.n_elec + ring * self.n_elec
                     inj_indices.append(idx)
                 records.append((elec, ring, inj_indices))
         return records
@@ -224,7 +242,10 @@ class StimMeasPatternManager:
         self.meas_selector = np.concatenate(selector)
 
     def _load_custom_patterns(self) -> None:
-        if self.config.custom_stim_matrix is None or self.config.custom_meas_matrices is None:
+        if (
+            self.config.custom_stim_matrix is None
+            or self.config.custom_meas_matrices is None
+        ):
             raise ValueError(
                 "measurement_protocol='custom' requires custom_stim_matrix "
                 "and custom_meas_matrices."
@@ -274,8 +295,12 @@ class StimMeasPatternManager:
 
     def _build_measurement_projection(self) -> None:
         """Build a dense projection matrix to avoid per-pattern matmul loops."""
-        projection = np.zeros((self.n_meas_total, self.n_stim * self.tn_elec), dtype=float)
-        for i, (start_idx, meas_mat) in enumerate(zip(self.meas_start_indices, self.meas_matrices)):
+        projection = np.zeros(
+            (self.n_meas_total, self.n_stim * self.tn_elec), dtype=float
+        )
+        for i, (start_idx, meas_mat) in enumerate(
+            zip(self.meas_start_indices, self.meas_matrices)
+        ):
             n_meas = meas_mat.shape[0]
             row_slice = slice(start_idx, start_idx + n_meas)
             col_start = i * self.tn_elec
@@ -353,10 +378,13 @@ class StimMeasPatternManager:
     ) -> np.ndarray:
         if stim_indices is None:
             if elec is None:
-                raise TypeError("_filter_measurements requires stim_indices or elec/ring")
+                raise TypeError(
+                    "_filter_measurements requires stim_indices or elec/ring"
+                )
             ring_offset = int(ring or 0) * self.n_elec
             stim_indices = [
-                (int(inj_elec) + self.stim_direction * int(elec)) % self.n_elec + ring_offset
+                (int(inj_elec) + self.stim_direction * int(elec)) % self.n_elec
+                + ring_offset
                 for inj_elec in self.inj_electrodes
             ]
         stim_indices = [int(idx) for idx in stim_indices]
@@ -365,8 +393,10 @@ class StimMeasPatternManager:
             for idx in stim_indices:
                 base = idx % self.n_elec
                 ring_base = idx - base
-                for offset in range(-self.config.use_meas_current_next,
-                                  self.config.use_meas_current_next + 1):
+                for offset in range(
+                    -self.config.use_meas_current_next,
+                    self.config.use_meas_current_next + 1,
+                ):
                     extended.append((base + offset) % self.n_elec + ring_base)
             stim_indices = list(set(extended))
 

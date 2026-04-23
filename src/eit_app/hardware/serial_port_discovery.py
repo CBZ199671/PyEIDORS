@@ -26,9 +26,10 @@ def running_in_wsl() -> bool:
     if os.getenv("WSL_DISTRO_NAME"):
         return True
     try:
-        return "microsoft" in Path("/proc/sys/kernel/osrelease").read_text(
-            encoding="utf-8"
-        ).lower()
+        return (
+            "microsoft"
+            in Path("/proc/sys/kernel/osrelease").read_text(encoding="utf-8").lower()
+        )
     except OSError:
         return False
 

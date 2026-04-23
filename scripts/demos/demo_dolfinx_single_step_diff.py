@@ -38,13 +38,19 @@ from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobia
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
 from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
-from scripts.demos._shared import cell_to_node, make_random_anomaly, save_voltage_comparison_figure
+from scripts.demos._shared import (
+    cell_to_node,
+    make_random_anomaly,
+    save_voltage_comparison_figure,
+)
 
 
 def main() -> None:
     rng = np.random.default_rng(20241116)
     # 1) Mesh and patterns
-    mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16)
+    mesh = load_or_create_mesh(
+        mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16
+    )
     pattern_cfg = PatternConfig(
         n_elec=16,
         stim_pattern="{ad}",
@@ -91,7 +97,9 @@ def main() -> None:
     # EIDORS sign convention is built into EidorsStyleAdjointJacobian, no extra negation needed.
 
     # W = I (unweighted), prior uses NOSER, exponent=0.5 (EIDORS default)
-    reg = NOSERRegularization(fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0, exponent=0.5)
+    reg = NOSERRegularization(
+        fwd_model, jac_calc, base_conductivity=1.0, alpha=1.0, exponent=0.5
+    )
     R = reg.get_regularization_matrix()  # already numpy, shape (n_elem, n_elem)
     lam = 1e-2  # adjustable
 
@@ -121,15 +129,25 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     viz = create_visualizer()
-    sigma_true_nodes = cell_to_node(mesh, sigma_true) if len(sigma_true) == mesh.num_cells() else sigma_true
-    sigma_est_nodes = cell_to_node(mesh, sigma_est) if len(sigma_est) == mesh.num_cells() else sigma_est
+    sigma_true_nodes = (
+        cell_to_node(mesh, sigma_true)
+        if len(sigma_true) == mesh.num_cells()
+        else sigma_true
+    )
+    sigma_est_nodes = (
+        cell_to_node(mesh, sigma_est)
+        if len(sigma_est) == mesh.num_cells()
+        else sigma_est
+    )
     fig_cmp = viz.plot_reconstruction_comparison(
         mesh,
         sigma_true_nodes,
         sigma_est_nodes,
-        title="Single-Step Difference: Ground Truth vs Reconstructed Conductivity"
+        title="Single-Step Difference: Ground Truth vs Reconstructed Conductivity",
     )
-    fig_cmp.savefig(out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight")
+    fig_cmp.savefig(
+        out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight"
+    )
     plt.close(fig_cmp)
 
     save_voltage_comparison_figure(

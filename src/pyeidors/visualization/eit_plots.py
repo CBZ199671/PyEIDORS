@@ -24,7 +24,11 @@ from .eit_plot_helpers import (
     resolve_colormap,
     resolve_eidors_diff_limits,
 )
-from ..utils.plot_font_i18n import configure_plot_fonts, get_plot_texts, resolve_plot_language
+from ..utils.plot_font_i18n import (
+    configure_plot_fonts,
+    get_plot_texts,
+    resolve_plot_language,
+)
 from .eit_plot_renderers import (
     render_conductivity,
     render_convergence,
@@ -38,10 +42,12 @@ logger = logging.getLogger(__name__)
 try:
     import matplotlib.pyplot as plt
     from dolfinx import fem
+
     Function = fem.Function
     MATPLOTLIB_AVAILABLE = True
 except ImportError:
     MATPLOTLIB_AVAILABLE = False
+
 
 class EITVisualizer:
     """Visualize mesh, conductivity and measurement diagnostics."""
@@ -74,7 +80,13 @@ class EITVisualizer:
         save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("mesh_title") if title is None else title
-        return render_mesh(self, mesh, title=resolved_title, show_electrodes=show_electrodes, save_path=save_path)
+        return render_mesh(
+            self,
+            mesh,
+            title=resolved_title,
+            show_electrodes=show_electrodes,
+            save_path=save_path,
+        )
 
     def plot_conductivity(
         self,
@@ -115,7 +127,9 @@ class EITVisualizer:
         save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("measurement_title") if title is None else title
-        return render_measurements(self, data, title=resolved_title, save_path=save_path)
+        return render_measurements(
+            self, data, title=resolved_title, save_path=save_path
+        )
 
     def plot_reconstruction_comparison(
         self,
@@ -143,7 +157,9 @@ class EITVisualizer:
         save_path: str | None = None,
     ) -> plt.Figure:
         resolved_title = self._text("convergence") if title is None else title
-        return render_convergence(self, iterations, errors, title=resolved_title, save_path=save_path)
+        return render_convergence(
+            self, iterations, errors, title=resolved_title, save_path=save_path
+        )
 
     def _text(self, key: str, **kwargs) -> str:
         template = self._texts.get(key, key)
@@ -167,15 +183,25 @@ class EITVisualizer:
         return resolve_colormap(colormap)
 
     @staticmethod
-    def _resolve_eidors_diff_limits(values: np.ndarray, vmin: float | None, vmax: float | None):
+    def _resolve_eidors_diff_limits(
+        values: np.ndarray, vmin: float | None, vmax: float | None
+    ):
         return resolve_eidors_diff_limits(values, vmin, vmax)
 
     @staticmethod
-    def _apply_eidors_ticks(cbar: Any, vmin: float | None, vmax: float | None, ref_lev: float = 0.0, tick_div: int | None = None) -> None:
+    def _apply_eidors_ticks(
+        cbar: Any,
+        vmin: float | None,
+        vmax: float | None,
+        ref_lev: float = 0.0,
+        tick_div: int | None = None,
+    ) -> None:
         apply_eidors_ticks(cbar, vmin, vmax, ref_lev, tick_div)
 
     @staticmethod
-    def _eidors_tick_vals(max_scale: float, ref_lev: float, tick_div_in: int | None = None):
+    def _eidors_tick_vals(
+        max_scale: float, ref_lev: float, tick_div_in: int | None = None
+    ):
         return eidors_tick_vals(max_scale, ref_lev, tick_div_in)
 
     @staticmethod
@@ -205,5 +231,7 @@ class EITVisualizer:
         return num_vertices(mesh)
 
 
-def create_visualizer(style: str = "seaborn", language: str | None = None) -> EITVisualizer:
+def create_visualizer(
+    style: str = "seaborn", language: str | None = None
+) -> EITVisualizer:
     return EITVisualizer(style=style, language=language)

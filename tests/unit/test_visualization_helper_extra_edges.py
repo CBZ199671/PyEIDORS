@@ -36,9 +36,13 @@ def test_eidors_tick_vals_forced_high_branches(monkeypatch: pytest.MonkeyPatch):
     _run_with_forced_second_floor(8.0)
 
 
-def test_apply_ticks_and_matlab_short_formatter_edge_paths(monkeypatch: pytest.MonkeyPatch):
+def test_apply_ticks_and_matlab_short_formatter_edge_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     cbar = mock.MagicMock()
-    monkeypatch.setattr(helper, "eidors_tick_vals", lambda *args, **kwargs: np.array([], dtype=float))
+    monkeypatch.setattr(
+        helper, "eidors_tick_vals", lambda *args, **kwargs: np.array([], dtype=float)
+    )
     helper.apply_eidors_ticks(cbar, vmin=-1.0, vmax=1.0)
     cbar.set_ticks.assert_not_called()
 
@@ -73,7 +77,9 @@ def _make_overlay_mesh(
 
 
 def test_extract_tags_and_overlay_error_paths(monkeypatch: pytest.MonkeyPatch):
-    tags = helper.extract_electrode_tags(SimpleNamespace(association_table={2: 10, np.int32(5): 11, "x": "bad"}))
+    tags = helper.extract_electrode_tags(
+        SimpleNamespace(association_table={2: 10, np.int32(5): 11, "x": "bad"})
+    )
     assert tags == [10, 11]
 
     mesh_no_tags = _make_overlay_mesh(
@@ -96,7 +102,9 @@ def test_extract_tags_and_overlay_error_paths(monkeypatch: pytest.MonkeyPatch):
 
     mesh_no_conn = _make_overlay_mesh(
         association_table={"electrode_1": 2},
-        facet_tags=SimpleNamespace(indices=np.array([0], dtype=int), values=np.array([2], dtype=int)),
+        facet_tags=SimpleNamespace(
+            indices=np.array([0], dtype=int), values=np.array([2], dtype=int)
+        ),
         coords=np.array([[0.0, 0.0], [1.0, 0.0]], dtype=float),
         connectivity_obj=None,
     )
@@ -104,20 +112,26 @@ def test_extract_tags_and_overlay_error_paths(monkeypatch: pytest.MonkeyPatch):
         helper.overlay_electrode_labels(mock.MagicMock(), mesh_no_conn)
 
 
-def test_overlay_electrode_labels_handles_empty_segments_and_zero_norm(monkeypatch: pytest.MonkeyPatch):
+def test_overlay_electrode_labels_handles_empty_segments_and_zero_norm(
+    monkeypatch: pytest.MonkeyPatch,
+):
     class _Connectivity:
         @staticmethod
         def links(_idx):
             return np.array([0, 1], dtype=np.int32)
 
-    monkeypatch.setattr(helper.ufl, "Measure", lambda *args, **kwargs: (lambda tag: float(tag)))
+    monkeypatch.setattr(
+        helper.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
+    )
     monkeypatch.setattr(helper.fem, "Constant", lambda _mesh, value: float(value))
     monkeypatch.setattr(helper.fem, "form", lambda expr: expr)
     monkeypatch.setattr(helper.fem, "assemble_scalar", lambda expr: expr)
 
     mesh_empty = _make_overlay_mesh(
         association_table={"electrode_1": 2},
-        facet_tags=SimpleNamespace(indices=np.array([0], dtype=int), values=np.array([99], dtype=int)),
+        facet_tags=SimpleNamespace(
+            indices=np.array([0], dtype=int), values=np.array([99], dtype=int)
+        ),
         coords=np.array([[0.0, 0.0], [1.0, 0.0]], dtype=float),
         connectivity_obj=_Connectivity(),
     )
@@ -128,7 +142,9 @@ def test_overlay_electrode_labels_handles_empty_segments_and_zero_norm(monkeypat
 
     mesh_zero_norm = _make_overlay_mesh(
         association_table={"electrode_1": 2},
-        facet_tags=SimpleNamespace(indices=np.array([0], dtype=int), values=np.array([2], dtype=int)),
+        facet_tags=SimpleNamespace(
+            indices=np.array([0], dtype=int), values=np.array([2], dtype=int)
+        ),
         coords=np.array([[0.0, 0.0], [0.0, 0.0]], dtype=float),
         connectivity_obj=_Connectivity(),
     )

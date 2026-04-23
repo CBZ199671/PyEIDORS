@@ -44,7 +44,9 @@ def _resolve_reference_path(
     reference_index: Optional[int],
 ) -> Path:
     if reference_csv is not None and reference_index is not None:
-        raise ValueError("Use only one of reference_csv or reference_index in frame mode.")
+        raise ValueError(
+            "Use only one of reference_csv or reference_index in frame mode."
+        )
     if reference_csv is None and reference_index is None:
         raise ValueError(
             "Frame mode requires reference_csv or reference_index for difference reconstruction."
@@ -52,7 +54,9 @@ def _resolve_reference_path(
 
     if reference_index is not None:
         if reference_index < 0 or reference_index >= len(input_files):
-            raise IndexError("reference_index is out of range for discovered input files.")
+            raise IndexError(
+                "reference_index is out of range for discovered input files."
+            )
         return input_files[reference_index]
 
     resolved = reference_csv.expanduser() if reference_csv is not None else None

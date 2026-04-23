@@ -59,19 +59,29 @@ def _fake_model(*, n_elements: int = 3, mesh=None):
 
 
 def test_cell_difference_operator_handles_missing_and_empty_connectivity():
-    mesh_missing = SimpleNamespace(topology=_FakeTopology(dim=2, facet_size=1, connectivity=None))
+    mesh_missing = SimpleNamespace(
+        topology=_FakeTopology(dim=2, facet_size=1, connectivity=None)
+    )
     assert _cell_difference_operator(mesh_missing, 3).shape == (0, 3)
 
-    mesh_missing_map = SimpleNamespace(topology=_FakeTopology(dim=2, facet_size=None, connectivity=_FakeConnectivity({0: [0, 1]})))
+    mesh_missing_map = SimpleNamespace(
+        topology=_FakeTopology(
+            dim=2, facet_size=None, connectivity=_FakeConnectivity({0: [0, 1]})
+        )
+    )
     assert _cell_difference_operator(mesh_missing_map, 3).shape == (0, 3)
 
     mesh_boundary_only = SimpleNamespace(
-        topology=_FakeTopology(dim=2, facet_size=2, connectivity=_FakeConnectivity({0: [0], 1: [1]}))
+        topology=_FakeTopology(
+            dim=2, facet_size=2, connectivity=_FakeConnectivity({0: [0], 1: [1]})
+        )
     )
     assert _cell_difference_operator(mesh_boundary_only, 3).shape == (0, 3)
 
 
-def test_cell_difference_operator_builds_rows_and_smoothness_identity(monkeypatch: pytest.MonkeyPatch):
+def test_cell_difference_operator_builds_rows_and_smoothness_identity(
+    monkeypatch: pytest.MonkeyPatch,
+):
     mesh = SimpleNamespace(
         topology=_FakeTopology(
             dim=2,
@@ -81,15 +91,23 @@ def test_cell_difference_operator_builds_rows_and_smoothness_identity(monkeypatc
     )
     L = _cell_difference_operator(mesh, 3)
     assert L.shape == (2, 3)
-    np.testing.assert_allclose(L.toarray(), np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0]], dtype=float))
+    np.testing.assert_allclose(
+        L.toarray(), np.array([[1.0, -1.0, 0.0], [0.0, 1.0, -1.0]], dtype=float)
+    )
 
-    monkeypatch.setattr(smooth_module, "_cell_difference_operator", lambda _mesh, n: csr_matrix((0, n), dtype=np.float64))
+    monkeypatch.setattr(
+        smooth_module,
+        "_cell_difference_operator",
+        lambda _mesh, n: csr_matrix((0, n), dtype=np.float64),
+    )
     reg = SmoothnessRegularization(_fake_model(n_elements=3, mesh=mesh), alpha=0.5)
     matrix = reg.create_matrix()
     np.testing.assert_allclose(matrix.toarray(), 0.5 * np.eye(3))
 
 
-def test_total_variation_reference_validation_identity_and_nonlinear(monkeypatch: pytest.MonkeyPatch):
+def test_total_variation_reference_validation_identity_and_nonlinear(
+    monkeypatch: pytest.MonkeyPatch,
+):
     reg_bad = TotalVariationRegularization(
         _fake_model(n_elements=3),
         reference_conductivity=np.array([1.0, 2.0], dtype=float),
@@ -97,8 +115,14 @@ def test_total_variation_reference_validation_identity_and_nonlinear(monkeypatch
     with pytest.raises(ValueError, match="must match the number of elements"):
         reg_bad._reference_vector()
 
-    monkeypatch.setattr(smooth_module, "_cell_difference_operator", lambda _mesh, n: csr_matrix((0, n), dtype=np.float64))
-    reg = TotalVariationRegularization(_fake_model(n_elements=3), alpha=2.0, epsilon=1e-3, reference_conductivity=1.0)
+    monkeypatch.setattr(
+        smooth_module,
+        "_cell_difference_operator",
+        lambda _mesh, n: csr_matrix((0, n), dtype=np.float64),
+    )
+    reg = TotalVariationRegularization(
+        _fake_model(n_elements=3), alpha=2.0, epsilon=1e-3, reference_conductivity=1.0
+    )
     matrix = reg.create_matrix()
     np.testing.assert_allclose(matrix.toarray(), 2.0 * np.eye(3))
 
@@ -116,7 +140,9 @@ def test_noser_floor_paths(monkeypatch: pytest.MonkeyPatch):
 
     reg = NOSERRegularization(
         _fake_model(n_elements=3),
-        jacobian_calculator=SimpleNamespace(calculate=lambda _sigma: np.zeros((2, 3), dtype=float)),
+        jacobian_calculator=SimpleNamespace(
+            calculate=lambda _sigma: np.zeros((2, 3), dtype=float)
+        ),
         base_conductivity=1.0,
         alpha=1.5,
         exponent=0.5,
@@ -128,4 +154,6 @@ def test_noser_floor_paths(monkeypatch: pytest.MonkeyPatch):
 
     reg._baseline_diag = np.array([1.0, 4.0, 9.0], dtype=float)
     matrix = reg.create_matrix()
-    np.testing.assert_allclose(matrix.diagonal(), 1.5 * np.array([1.0, 2.0, 3.0], dtype=float))
+    np.testing.assert_allclose(
+        matrix.diagonal(), 1.5 * np.array([1.0, 2.0, 3.0], dtype=float)
+    )

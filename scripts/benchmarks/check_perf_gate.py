@@ -84,20 +84,26 @@ def _evaluate(payload: dict) -> list[GateResult]:
     config = payload.get("config", {})
     refinement = _safe_float(config.get("refinement")) or 1.0
     problem_scale = max(1.0, refinement)
-    diff_scale = max(1.0, refinement ** 1.5)
+    diff_scale = max(1.0, refinement**1.5)
     diff_cold = _cache_build_elapsed(payload, "cold_build")
     if diff_cold is None:
         diff_cold = _safe_float(stage.get("diff_context_cold", {}).get("elapsed_sec"))
     diff_warm = _cache_build_elapsed(payload, "warm_build")
     if diff_warm is None:
         diff_warm = _safe_float(stage.get("diff_context_warm", {}).get("elapsed_sec"))
-    absolute_total = _safe_float(stage.get("absolute_reconstruct", {}).get("elapsed_sec"))
+    absolute_total = _safe_float(
+        stage.get("absolute_reconstruct", {}).get("elapsed_sec")
+    )
     absolute_peak = _safe_float(stage.get("absolute_reconstruct", {}).get("peak_mib"))
 
     results: list[GateResult] = []
 
     if diff_cold is None:
-        results.append(GateResult("diff_cold_speedup", False, "missing diff_context_cold.elapsed_sec"))
+        results.append(
+            GateResult(
+                "diff_cold_speedup", False, "missing diff_context_cold.elapsed_sec"
+            )
+        )
     else:
         threshold = (BASELINE_DIFF_COLD_SEC / 2.5) * diff_scale
         results.append(
@@ -109,7 +115,11 @@ def _evaluate(payload: dict) -> list[GateResult]:
         )
 
     if diff_cold is None or diff_warm is None:
-        results.append(GateResult("diff_warm_cold_ratio", False, "missing diff warm/cold elapsed_sec"))
+        results.append(
+            GateResult(
+                "diff_warm_cold_ratio", False, "missing diff warm/cold elapsed_sec"
+            )
+        )
     else:
         ratio = diff_cold / max(diff_warm, 1e-12)
         results.append(
@@ -121,7 +131,13 @@ def _evaluate(payload: dict) -> list[GateResult]:
         )
 
     if absolute_total is None:
-        results.append(GateResult("absolute_iter_speedup", False, "missing absolute_reconstruct.elapsed_sec"))
+        results.append(
+            GateResult(
+                "absolute_iter_speedup",
+                False,
+                "missing absolute_reconstruct.elapsed_sec",
+            )
+        )
     else:
         current_per_iter = absolute_total / max(
             1,
@@ -138,7 +154,11 @@ def _evaluate(payload: dict) -> list[GateResult]:
         )
 
     if absolute_peak is None:
-        results.append(GateResult("absolute_peak_memory", False, "missing absolute_reconstruct.peak_mib"))
+        results.append(
+            GateResult(
+                "absolute_peak_memory", False, "missing absolute_reconstruct.peak_mib"
+            )
+        )
     else:
         threshold = (BASELINE_ABSOLUTE_PEAK_MIB * 0.70) * problem_scale
         results.append(
@@ -151,15 +171,21 @@ def _evaluate(payload: dict) -> list[GateResult]:
 
     capabilities = payload.get("capabilities")
     absolute_solver = payload.get("absolute_solver")
-    cholmod_available = isinstance(capabilities, dict) and bool(capabilities.get("cholmod", False))
+    cholmod_available = isinstance(capabilities, dict) and bool(
+        capabilities.get("cholmod", False)
+    )
     if cholmod_available:
         fast_solver_path = None
         fallback_reason = None
         if isinstance(absolute_solver, dict):
             fast_solver_path = absolute_solver.get("fast_solver_path")
             fallback_reason = absolute_solver.get("fallback_reason")
-        has_cholmod_path = isinstance(fast_solver_path, str) and "cholmod" in fast_solver_path.lower()
-        has_fallback = isinstance(fallback_reason, str) and len(fallback_reason.strip()) > 0
+        has_cholmod_path = (
+            isinstance(fast_solver_path, str) and "cholmod" in fast_solver_path.lower()
+        )
+        has_fallback = (
+            isinstance(fallback_reason, str) and len(fallback_reason.strip()) > 0
+        )
         results.append(
             GateResult(
                 "absolute_solver_path_cholmod",
@@ -190,7 +216,9 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
             return [GateResult("quick.metrics", False, "missing quick_eval metrics")]
 
         peak_limit = min(float(peak_th), QUICK_BENCHMARK_PEAK_OVERHEAD_LIMIT)
-        passed = (total_improve >= total_th) or (linear_improve >= linear_th and peak_delta <= peak_limit)
+        passed = (total_improve >= total_th) or (
+            linear_improve >= linear_th and peak_delta <= peak_limit
+        )
         declared_pass = bool(payload.get("quick_pass", False))
         results.append(
             GateResult(
@@ -219,19 +247,35 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
         profiles = block.get("profiles", {})
         speedup = block.get("speedup_vs_A", {})
         if not isinstance(profiles, dict) or not isinstance(speedup, dict):
-            results.append(GateResult(f"{ref_key}.profiles", False, "missing profiles or speedup_vs_A"))
+            results.append(
+                GateResult(
+                    f"{ref_key}.profiles", False, "missing profiles or speedup_vs_A"
+                )
+            )
             continue
         baseline = profiles.get(PROFILE_A_BASELINE, {}).get("median", {})
-        baseline_peak = _safe_float(baseline.get("absolute_peak_mib")) if isinstance(baseline, dict) else None
+        baseline_peak = (
+            _safe_float(baseline.get("absolute_peak_mib"))
+            if isinstance(baseline, dict)
+            else None
+        )
         if baseline_peak is None:
-            results.append(GateResult(f"{ref_key}.baseline_peak", False, f"missing {PROFILE_A_BASELINE}.absolute_peak_mib"))
+            results.append(
+                GateResult(
+                    f"{ref_key}.baseline_peak",
+                    False,
+                    f"missing {PROFILE_A_BASELINE}.absolute_peak_mib",
+                )
+            )
             continue
 
         ref_num = int(ref_key.split("_")[-1]) if "_" in ref_key else 0
         b_profile = profiles.get(PROFILE_B_CHOLMOD_ONLY, {}).get("median", {})
         b_path = str(b_profile.get("fast_solver_path", "") or "")
         b_fallback = str(b_profile.get("fallback_reason", "") or "")
-        used_cholmod_precond = "cholmod-precond" in b_path.lower() or "cholmod" in b_path.lower()
+        used_cholmod_precond = (
+            "cholmod-precond" in b_path.lower() or "cholmod" in b_path.lower()
+        )
         results.append(
             GateResult(
                 f"{ref_key}.cholmod_path_or_fallback",
@@ -242,7 +286,9 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
 
         if ref_num == 2:
             jacobian_speed = _safe_float(
-                speedup.get(PROFILE_C_AUTOTUNE_ONLY, {}).get("absolute_jacobian_assembly_speedup_x")
+                speedup.get(PROFILE_C_AUTOTUNE_ONLY, {}).get(
+                    "absolute_jacobian_assembly_speedup_x"
+                )
             )
             if jacobian_speed is None:
                 results.append(
@@ -261,10 +307,18 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
                     )
                 )
 
-        combined_total = _safe_float(speedup.get(PROFILE_D_COMBINED, {}).get("absolute_total_speedup_x"))
+        combined_total = _safe_float(
+            speedup.get(PROFILE_D_COMBINED, {}).get("absolute_total_speedup_x")
+        )
         combined_target = PERF_GATE_COMBINED_TOTAL_TARGETS.get(ref_num, 1.0)
         if combined_total is None:
-            results.append(GateResult(f"{ref_key}.combined_total_speedup", False, f"missing {PROFILE_D_COMBINED} speedup"))
+            results.append(
+                GateResult(
+                    f"{ref_key}.combined_total_speedup",
+                    False,
+                    f"missing {PROFILE_D_COMBINED} speedup",
+                )
+            )
         else:
             results.append(
                 GateResult(
@@ -275,10 +329,18 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
             )
 
         combined_peak = _safe_float(
-            profiles.get(PROFILE_D_COMBINED, {}).get("median", {}).get("absolute_peak_mib")
+            profiles.get(PROFILE_D_COMBINED, {})
+            .get("median", {})
+            .get("absolute_peak_mib")
         )
         if combined_peak is None:
-            results.append(GateResult(f"{ref_key}.combined_peak_memory", False, f"missing {PROFILE_D_COMBINED} peak"))
+            results.append(
+                GateResult(
+                    f"{ref_key}.combined_peak_memory",
+                    False,
+                    f"missing {PROFILE_D_COMBINED} peak",
+                )
+            )
         else:
             peak_limit = baseline_peak * PERF_GATE_PEAK_MEMORY_LIMIT_RATIO
             results.append(
@@ -293,7 +355,13 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
             profiles.get(PROFILE_E_FUSED, {}).get("median", {}).get("absolute_peak_mib")
         )
         if fused_peak is None:
-            results.append(GateResult(f"{ref_key}.fused_peak_memory", False, f"missing {PROFILE_E_FUSED} peak"))
+            results.append(
+                GateResult(
+                    f"{ref_key}.fused_peak_memory",
+                    False,
+                    f"missing {PROFILE_E_FUSED} peak",
+                )
+            )
         else:
             peak_limit = baseline_peak * PERF_GATE_PEAK_MEMORY_LIMIT_RATIO
             results.append(
@@ -311,7 +379,9 @@ def _evaluate_fair_compare(payload: dict) -> list[GateResult]:
         results.append(
             GateResult(
                 f"{ref_key}.fused_path_or_rom_enabled",
-                fused_rom or fused_path.startswith("fused-") or len(fused_fallback.strip()) > 0,
+                fused_rom
+                or fused_path.startswith("fused-")
+                or len(fused_fallback.strip()) > 0,
                 f"rom_enabled={fused_rom} path={fused_path!r} fallback_reason={fused_fallback!r}",
             )
         )
@@ -346,7 +416,9 @@ def main() -> None:
         print(f"[WARN] performance gate failed for {len(failed)} checks")
         return
     if failed:
-        print(f"[ERROR] performance gate failed for {len(failed)} checks", file=sys.stderr)
+        print(
+            f"[ERROR] performance gate failed for {len(failed)} checks", file=sys.stderr
+        )
         raise SystemExit(1)
     print("[OK] performance gate passed")
 

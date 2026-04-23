@@ -28,7 +28,7 @@ def parse_length(value: str | None) -> float:
     }
     for suffix, scale in units.items():
         if value.endswith(suffix):
-            return float(value[:-len(suffix)]) * scale
+            return float(value[: -len(suffix)]) * scale
     return float(value)
 
 
@@ -36,7 +36,9 @@ def load_svg(path: Path) -> tuple[ET.Element, float, float]:
     tree = ET.parse(path)
     root = tree.getroot()
     width = parse_length(root.get("width") or root.get("viewBox", "0 0 1 1").split()[2])
-    height = parse_length(root.get("height") or root.get("viewBox", "0 0 1 1").split()[3])
+    height = parse_length(
+        root.get("height") or root.get("viewBox", "0 0 1 1").split()[3]
+    )
     return root, width, height
 
 
@@ -105,21 +107,35 @@ def compose_svg(top_png: Path, bottom_svg: Path, output_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--top", type=Path, required=True, help="Path to reconstruction comparison PNG")
-    parser.add_argument("--bottom-svg", type=Path, required=True, help="Path to edited deltaV SVG")
-    parser.add_argument("--bottom-png", type=Path, help="Path to PNG version of deltaV plot")
-    parser.add_argument("--output-prefix", type=Path, default=Path("results/simulation_parity/run02/synthetic_combined"),
-                        help="Prefix for combined outputs (without extension)")
+    parser.add_argument(
+        "--top", type=Path, required=True, help="Path to reconstruction comparison PNG"
+    )
+    parser.add_argument(
+        "--bottom-svg", type=Path, required=True, help="Path to edited deltaV SVG"
+    )
+    parser.add_argument(
+        "--bottom-png", type=Path, help="Path to PNG version of deltaV plot"
+    )
+    parser.add_argument(
+        "--output-prefix",
+        type=Path,
+        default=Path("results/simulation_parity/run02/synthetic_combined"),
+        help="Prefix for combined outputs (without extension)",
+    )
     args = parser.parse_args()
 
     bottom_png = args.bottom_png or args.bottom_svg.with_suffix(".png")
     if not bottom_png.exists():
-        raise FileNotFoundError(f"Bottom PNG not found: {bottom_png}. Please export your SVG to PNG first.")
+        raise FileNotFoundError(
+            f"Bottom PNG not found: {bottom_png}. Please export your SVG to PNG first."
+        )
 
     args.output_prefix.parent.mkdir(parents=True, exist_ok=True)
     compose_png(args.top, bottom_png, args.output_prefix.with_suffix(".png"))
     compose_svg(args.top, args.bottom_svg, args.output_prefix.with_suffix(".svg"))
-    print(f"Combined figures written to {args.output_prefix.with_suffix('.png')} and .svg")
+    print(
+        f"Combined figures written to {args.output_prefix.with_suffix('.png')} and .svg"
+    )
 
 
 if __name__ == "__main__":

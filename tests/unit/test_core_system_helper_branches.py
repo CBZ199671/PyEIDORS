@@ -177,7 +177,9 @@ def test_constructor_validation_and_cache_policy_override():
     assert policy.disk_lifecycle == "persistent"
 
 
-def test_setup_generated_mesh_3d_and_initialize_components_branches(monkeypatch: pytest.MonkeyPatch):
+def test_setup_generated_mesh_3d_and_initialize_components_branches(
+    monkeypatch: pytest.MonkeyPatch,
+):
     system = _new_system()
     system.mesh_config.height = 0.3
     system.mesh_config.electrode_height_ratio = 0.2
@@ -193,7 +195,9 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(monkeypatch:
         lambda **kwargs: generated_calls.append(dict(kwargs)) or "mesh3d",
     )
     captured_mesh = {}
-    monkeypatch.setattr(system, "setup_with_mesh", lambda mesh: captured_mesh.__setitem__("mesh", mesh))
+    monkeypatch.setattr(
+        system, "setup_with_mesh", lambda mesh: captured_mesh.__setitem__("mesh", mesh)
+    )
 
     system.setup_generated_mesh(dimension=3, radius=0.4, mesh_size=0.04)
     assert captured_mesh["mesh"] == "mesh3d"
@@ -239,7 +243,9 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(monkeypatch:
             self.min_step = 0.0
             self.max_step = 1.0
             self.line_search_mode = kwargs["line_search_mode"]
-            self.difference_step_size_fmin_options = dict(kwargs["difference_step_size_fmin_options"])
+            self.difference_step_size_fmin_options = dict(
+                kwargs["difference_step_size_fmin_options"]
+            )
             self.best_homog_mode = kwargs["best_homog_mode"]
 
         def set_regularization(self, regularization):
@@ -247,7 +253,13 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(monkeypatch:
 
     monkeypatch.setattr(core_module, "EITForwardModel", _FakeForward)
     monkeypatch.setattr(core_module, "DirectJacobianCalculator", _FakeJacobian)
-    monkeypatch.setattr(bare, "_build_regularization", lambda jac, regularization_type=None: _FakeRegularization(regularization_type or "noser"))
+    monkeypatch.setattr(
+        bare,
+        "_build_regularization",
+        lambda jac, regularization_type=None: _FakeRegularization(
+            regularization_type or "noser"
+        ),
+    )
     monkeypatch.setattr(core_module, "GaussNewtonReconstructor", _FakeReconstructor)
 
     bare._initialize_components()
@@ -268,15 +280,37 @@ def test_regularization_and_preset_application_helpers(monkeypatch: pytest.Monke
     system = _bare_system()
     system.fwd_model = SimpleNamespace(name="fwd")
 
-    monkeypatch.setattr(core_module, "NOSERRegularization", lambda *args, **kwargs: ("noser", args, kwargs))
-    monkeypatch.setattr(core_module, "TikhonovRegularization", lambda *args, **kwargs: ("tikhonov", args, kwargs))
-    monkeypatch.setattr(core_module, "SmoothnessRegularization", lambda *args, **kwargs: ("smoothness", args, kwargs))
-    monkeypatch.setattr(core_module, "TotalVariationRegularization", lambda *args, **kwargs: ("tv", args, kwargs))
+    monkeypatch.setattr(
+        core_module,
+        "NOSERRegularization",
+        lambda *args, **kwargs: ("noser", args, kwargs),
+    )
+    monkeypatch.setattr(
+        core_module,
+        "TikhonovRegularization",
+        lambda *args, **kwargs: ("tikhonov", args, kwargs),
+    )
+    monkeypatch.setattr(
+        core_module,
+        "SmoothnessRegularization",
+        lambda *args, **kwargs: ("smoothness", args, kwargs),
+    )
+    monkeypatch.setattr(
+        core_module,
+        "TotalVariationRegularization",
+        lambda *args, **kwargs: ("tv", args, kwargs),
+    )
 
     jac = SimpleNamespace(name="jac")
     assert system._build_regularization(jac)[0] == "noser"
-    assert system._build_regularization(jac, regularization_type="tikhonov")[0] == "tikhonov"
-    assert system._build_regularization(jac, regularization_type="smoothness")[0] == "smoothness"
+    assert (
+        system._build_regularization(jac, regularization_type="tikhonov")[0]
+        == "tikhonov"
+    )
+    assert (
+        system._build_regularization(jac, regularization_type="smoothness")[0]
+        == "smoothness"
+    )
     assert system._build_regularization(jac, regularization_type="tv")[0] == "tv"
     with pytest.raises(ValueError, match="Unsupported regularization_type"):
         system._build_regularization(jac, regularization_type="bad")
@@ -285,7 +319,9 @@ def test_regularization_and_preset_application_helpers(monkeypatch: pytest.Monke
     assert system._capture_reconstructor_controls() == {}
     assert system._default_hyperparameter("eidors_one_step_noser") == 1e-1
     assert np.isclose(system._default_hyperparameter("eidors_abs_gn"), np.sqrt(1e-3))
-    assert np.isclose(system._default_hyperparameter("sphere_multistep_noser"), np.sqrt(1e-3))
+    assert np.isclose(
+        system._default_hyperparameter("sphere_multistep_noser"), np.sqrt(1e-3)
+    )
     assert system._default_hyperparameter("eidors_demo3d_tv") == 1e-2
     system.hyperparameter = 0.25
     assert system._default_hyperparameter("anything") == 0.25
@@ -346,7 +382,11 @@ def test_regularization_and_preset_application_helpers(monkeypatch: pytest.Monke
         "min_step": 0.0,
         "max_step": 1.0,
     }
-    monkeypatch.setattr(system, "_build_regularization", lambda jacobian_calculator, regularization_type=None: _FakeTVReg())
+    monkeypatch.setattr(
+        system,
+        "_build_regularization",
+        lambda jacobian_calculator, regularization_type=None: _FakeTVReg(),
+    )
     monkeypatch.setattr(core_module, "TotalVariationRegularization", _FakeTVReg)
 
     system._apply_inverse_preset("difference")
@@ -366,14 +406,26 @@ def test_runtime_wrappers_precheck_and_cache_helpers(monkeypatch: pytest.MonkeyP
     system.fwd_model = SimpleNamespace(fwd_solve=lambda image: ("data-out", "voltages"))
     system.reconstructor = SimpleNamespace(
         ensure_regularization_ready=lambda: None,
-        reconstruct=lambda diff_data, initial_guess: ("recon", diff_data, initial_guess),
+        reconstruct=lambda diff_data, initial_guess: (
+            "recon",
+            diff_data,
+            initial_guess,
+        ),
     )
 
-    monkeypatch.setattr(core_module, "conductivity_to_image", lambda fwd_model, conductivity: ("image", conductivity))
+    monkeypatch.setattr(
+        core_module,
+        "conductivity_to_image",
+        lambda fwd_model, conductivity: ("image", conductivity),
+    )
     assert system.forward_solve(np.array([1.0], dtype=float)) == "data-out"
 
     applied_modes: list[str] = []
-    monkeypatch.setattr(system, "_apply_inverse_preset", lambda inverse_mode: applied_modes.append(inverse_mode))
+    monkeypatch.setattr(
+        system,
+        "_apply_inverse_preset",
+        lambda inverse_mode: applied_modes.append(inverse_mode),
+    )
     monkeypatch.setattr(
         core_module,
         "difference_measurement",
@@ -384,7 +436,9 @@ def test_runtime_wrappers_precheck_and_cache_helpers(monkeypatch: pytest.MonkeyP
             "orientation": orientation,
         },
     )
-    diff_out = system.inverse_solve("target", reference_data="reference", initial_guess=np.array([0.2], dtype=float))
+    diff_out = system.inverse_solve(
+        "target", reference_data="reference", initial_guess=np.array([0.2], dtype=float)
+    )
     assert applied_modes[-1] == "difference"
     assert diff_out[1]["reference_data"] == "reference"
 
@@ -392,12 +446,18 @@ def test_runtime_wrappers_precheck_and_cache_helpers(monkeypatch: pytest.MonkeyP
     assert applied_modes[-1] == "absolute"
     assert abs_out[1]["reference_data"] is None
 
-    system.reconstructor.ensure_regularization_ready = lambda: (_ for _ in ()).throw(ValueError("boom"))
+    system.reconstructor.ensure_regularization_ready = lambda: (_ for _ in ()).throw(
+        ValueError("boom")
+    )
     with pytest.raises(RuntimeError, match="regularization warmup failed: boom"):
         system.inverse_solve("target")
 
     report = SimpleNamespace(has_errors=True, summary_lines=lambda: ["bad-a", "bad-b"])
-    monkeypatch.setattr(core_module, "run_unit_consistency_checks", lambda fwd_model, expected_domain_size_m=None: report)
+    monkeypatch.setattr(
+        core_module,
+        "run_unit_consistency_checks",
+        lambda fwd_model, expected_domain_size_m=None: report,
+    )
     assert system.run_unit_precheck(expected_domain_size_m=0.2, strict=False) is report
     with pytest.raises(ValueError, match="bad-a \\| bad-b"):
         system.run_unit_precheck(expected_domain_size_m=0.2, strict=True)
@@ -407,10 +467,21 @@ def test_runtime_wrappers_precheck_and_cache_helpers(monkeypatch: pytest.MonkeyP
         stats=lambda: {"disk_hits": 2},
         clear=lambda scope="both": clear_calls.append(f"cache:{scope}"),
     )
-    monkeypatch.setattr(core_module, "process_forward_setup_cache_stats", lambda: {"warm": 1})
-    monkeypatch.setattr(core_module, "clear_process_mesh_cache", lambda: clear_calls.append("mesh"))
-    monkeypatch.setattr(core_module, "clear_process_forward_setup_cache", lambda: clear_calls.append("forward"))
-    assert system.get_cache_stats() == {"disk_hits": 2, "process_forward_setup_cache": {"warm": 1}}
+    monkeypatch.setattr(
+        core_module, "process_forward_setup_cache_stats", lambda: {"warm": 1}
+    )
+    monkeypatch.setattr(
+        core_module, "clear_process_mesh_cache", lambda: clear_calls.append("mesh")
+    )
+    monkeypatch.setattr(
+        core_module,
+        "clear_process_forward_setup_cache",
+        lambda: clear_calls.append("forward"),
+    )
+    assert system.get_cache_stats() == {
+        "disk_hits": 2,
+        "process_forward_setup_cache": {"warm": 1},
+    }
 
     system.clear_cache(scope="disk")
     assert clear_calls == ["cache:disk"]

@@ -22,9 +22,19 @@ def _demo_callable(value):
     return value + 1
 
 
-def test_normalize_callable_and_signature_payload_cover_edge_types(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(sig_module.inspect, "getsourcefile", lambda _func: (_ for _ in ()).throw(RuntimeError("no src")))
-    monkeypatch.setattr(sig_module.inspect, "getfile", lambda _func: (_ for _ in ()).throw(RuntimeError("no file")))
+def test_normalize_callable_and_signature_payload_cover_edge_types(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        sig_module.inspect,
+        "getsourcefile",
+        lambda _func: (_ for _ in ()).throw(RuntimeError("no src")),
+    )
+    monkeypatch.setattr(
+        sig_module.inspect,
+        "getfile",
+        lambda _func: (_ for _ in ()).throw(RuntimeError("no file")),
+    )
     payload = sig_module._normalize_callable(_demo_callable)
     assert payload["module"] == __name__
     assert "source_hash" not in payload
@@ -49,7 +59,9 @@ def test_normalize_callable_and_signature_payload_cover_edge_types(tmp_path: Pat
     assert normalized["callable"]["__callable__"]["qualname"].endswith("_demo_callable")
 
 
-def test_forward_model_signature_helpers_cover_comm_backend_and_model_paths(monkeypatch: pytest.MonkeyPatch):
+def test_forward_model_signature_helpers_cover_comm_backend_and_model_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     pattern_manager = SimpleNamespace(
         stim_matrix=np.array([[1.0, -1.0]], dtype=float),
         meas_matrices=[np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float)],
@@ -57,20 +69,45 @@ def test_forward_model_signature_helpers_cover_comm_backend_and_model_paths(monk
         n_meas_total=2,
         n_meas_per_stim=[2],
     )
-    assert sig_module.pattern_signature_from_forward_model(SimpleNamespace(pattern_manager=pattern_manager))
+    assert sig_module.pattern_signature_from_forward_model(
+        SimpleNamespace(pattern_manager=pattern_manager)
+    )
 
-    assert sig_module._forward_model_comm_size(SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(Get_size=lambda: 4)))) == 4
-    assert sig_module._forward_model_comm_size(SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=3)))) == 3
+    assert (
+        sig_module._forward_model_comm_size(
+            SimpleNamespace(
+                mesh=SimpleNamespace(comm=SimpleNamespace(Get_size=lambda: 4))
+            )
+        )
+        == 4
+    )
+    assert (
+        sig_module._forward_model_comm_size(
+            SimpleNamespace(mesh=SimpleNamespace(comm=SimpleNamespace(size=3)))
+        )
+        == 3
+    )
 
     class _BadComm:
         def Get_size(self):
             raise RuntimeError("boom")
 
-    assert sig_module._forward_model_comm_size(SimpleNamespace(mesh=SimpleNamespace(comm=_BadComm()))) == 1
+    assert (
+        sig_module._forward_model_comm_size(
+            SimpleNamespace(mesh=SimpleNamespace(comm=_BadComm()))
+        )
+        == 1
+    )
 
     assert sig_module._canonicalize_cuda_mat_type(None, comm_size=1) is None
-    assert sig_module._canonicalize_cuda_mat_type("AIJCUSPARSE", comm_size=1) == "seqaijcusparse"
-    assert sig_module._canonicalize_cuda_mat_type("densecuda", comm_size=4) == "mpidensecuda"
+    assert (
+        sig_module._canonicalize_cuda_mat_type("AIJCUSPARSE", comm_size=1)
+        == "seqaijcusparse"
+    )
+    assert (
+        sig_module._canonicalize_cuda_mat_type("densecuda", comm_size=4)
+        == "mpidensecuda"
+    )
     assert sig_module._canonicalize_cuda_mat_type("custom", comm_size=1) == "custom"
 
     backend_cfg = SimpleNamespace(
@@ -100,7 +137,9 @@ def test_forward_model_signature_helpers_cover_comm_backend_and_model_paths(monk
     assert cpu_sig
 
     bad_cpu_model = SimpleNamespace(**cpu_model.__dict__)
-    bad_cpu_model._stable_cpu_petsc_types = lambda: (_ for _ in ()).throw(RuntimeError("bad stable types"))
+    bad_cpu_model._stable_cpu_petsc_types = lambda: (_ for _ in ()).throw(
+        RuntimeError("bad stable types")
+    )
     assert sig_module.backend_signature_from_forward_model(bad_cpu_model)
 
     cuda_model = SimpleNamespace(
@@ -145,11 +184,17 @@ def test_model_signature_from_forward_model_covers_cached_mesh_file_array_and_mi
         structured_sidecar_file=None,
         structured_sidecar_version="v1",
     )
-    model = SimpleNamespace(n_elec=16, z=np.ones(16, dtype=float), geometry_scale_to_m=1.0, eit_mesh=mesh)
+    model = SimpleNamespace(
+        n_elec=16, z=np.ones(16, dtype=float), geometry_scale_to_m=1.0, eit_mesh=mesh
+    )
     sig = sig_module.model_signature_from_forward_model(model)
     assert sig == model._semantic_model_signature
 
-    monkeypatch.setattr(sig_module, "hash_path", lambda _path: (_ for _ in ()).throw(RuntimeError("hash failed")))
+    monkeypatch.setattr(
+        sig_module,
+        "hash_path",
+        lambda _path: (_ for _ in ()).throw(RuntimeError("hash failed")),
+    )
     sig_fallback = sig_module.model_signature_from_forward_model(
         SimpleNamespace(
             n_elec=8,
@@ -173,10 +218,17 @@ def test_model_signature_from_forward_model_covers_cached_mesh_file_array_and_mi
         cells=lambda: np.array([[0, 1]], dtype=np.int32),
     )
     assert sig_module.model_signature_from_forward_model(
-        SimpleNamespace(n_elec=4, z=np.ones(4, dtype=float), geometry_scale_to_m=1.0, eit_mesh=coord_mesh)
+        SimpleNamespace(
+            n_elec=4,
+            z=np.ones(4, dtype=float),
+            geometry_scale_to_m=1.0,
+            eit_mesh=coord_mesh,
+        )
     )
 
     missing_mesh_sig = sig_module.model_signature_from_forward_model(
-        SimpleNamespace(n_elec=2, z=np.ones(2, dtype=float), geometry_scale_to_m=1.0, eit_mesh=None)
+        SimpleNamespace(
+            n_elec=2, z=np.ones(2, dtype=float), geometry_scale_to_m=1.0, eit_mesh=None
+        )
     )
     assert missing_mesh_sig

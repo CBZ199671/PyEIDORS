@@ -18,7 +18,9 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "benchmarks" / "benchmark_mesh_io_formats.
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("benchmark_mesh_io_formats", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "benchmark_mesh_io_formats", SCRIPT_PATH
+    )
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None

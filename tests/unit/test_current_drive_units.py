@@ -51,20 +51,27 @@ def _build_square_eit_mesh(scale: float):
     t[right] = 2.0 + (ymax - y[right]) / (ymax - ymin)
     t[bottom] = 3.0 + (xmax - x[bottom]) / (xmax - xmin)
     seg_len = 4.0 / 16
-    tags = (np.floor(np.clip(t, 0.0, 4.0 - 1e-12) / seg_len).astype(np.int32) + 2).astype(np.int32)
+    tags = (
+        np.floor(np.clip(t, 0.0, 4.0 - 1e-12) / seg_len).astype(np.int32) + 2
+    ).astype(np.int32)
     order = np.argsort(boundary_facets)
     facet_tags = dmesh.meshtags(mesh, fdim, boundary_facets[order], tags[order])
     association = {f"electrode_{idx + 1}": idx + 2 for idx in range(16)}
-    return build_eit_mesh(mesh, facet_tags=facet_tags, association_table=association, radius=float(scale))
+    return build_eit_mesh(
+        mesh, facet_tags=facet_tags, association_table=association, radius=float(scale)
+    )
 
 
 def test_validate_drive_config_rules():
-    assert validate_drive_config(
-        drive_mode="line_current_density",
-        drive_value=1.0,
-        geometry_scale_to_m=1.0,
-        mesh_tdim=2,
-    ) == "line_current_density"
+    assert (
+        validate_drive_config(
+            drive_mode="line_current_density",
+            drive_value=1.0,
+            geometry_scale_to_m=1.0,
+            mesh_tdim=2,
+        )
+        == "line_current_density"
+    )
     with pytest.raises(ValueError, match="drive_value"):
         validate_drive_config(
             drive_mode="total_current",
@@ -206,8 +213,18 @@ def test_line_current_density_voltage_invariance_m_vs_cm():
     model_m = EITForwardModel(n_elec=16, pattern_config=config_m, z=z, mesh=mesh_m)
     model_cm = EITForwardModel(n_elec=16, pattern_config=config_cm, z=z, mesh=mesh_cm)
 
-    sigma_m = np.ones(int(model_m.V_sigma.dofmap.index_map.size_local * model_m.V_sigma.dofmap.index_map_bs))
-    sigma_cm = np.ones(int(model_cm.V_sigma.dofmap.index_map.size_local * model_cm.V_sigma.dofmap.index_map_bs))
+    sigma_m = np.ones(
+        int(
+            model_m.V_sigma.dofmap.index_map.size_local
+            * model_m.V_sigma.dofmap.index_map_bs
+        )
+    )
+    sigma_cm = np.ones(
+        int(
+            model_cm.V_sigma.dofmap.index_map.size_local
+            * model_cm.V_sigma.dofmap.index_map_bs
+        )
+    )
 
     data_m, _ = model_m.fwd_solve(EITImage(elem_data=sigma_m, fwd_model=model_m))
     data_cm, _ = model_cm.fwd_solve(EITImage(elem_data=sigma_cm, fwd_model=model_cm))

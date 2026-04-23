@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from pyeidors.inverse.reduced.pod_basis import compute_pod_basis, merge_orthonormal_bases
+from pyeidors.inverse.reduced.pod_basis import (
+    compute_pod_basis,
+    merge_orthonormal_bases,
+)
 from pyeidors.inverse.reduced.snapshot_bank import SnapshotBank, select_snapshot_matrix
 
 

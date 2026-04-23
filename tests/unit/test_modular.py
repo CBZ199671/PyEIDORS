@@ -40,11 +40,17 @@ def test_regularization_matrix_shapes(eit_system):
     sigma = _baseline_sigma(eit_system)
     jac = DirectJacobianCalculator(eit_system.fwd_model)
 
-    noser = NOSERRegularization(eit_system.fwd_model, jacobian_calculator=jac, base_conductivity=1.0)
+    noser = NOSERRegularization(
+        eit_system.fwd_model, jacobian_calculator=jac, base_conductivity=1.0
+    )
     smooth = SmoothnessRegularization(eit_system.fwd_model, alpha=0.5)
     tik = TikhonovRegularization(eit_system.fwd_model, alpha=0.25)
 
-    for mat in (noser.get_regularization_matrix(), smooth.get_regularization_matrix(), tik.get_regularization_matrix()):
+    for mat in (
+        noser.get_regularization_matrix(),
+        smooth.get_regularization_matrix(),
+        tik.get_regularization_matrix(),
+    ):
         assert mat.shape[0] == mat.shape[1] == sigma.x.array.size
         if isspmatrix(mat):
             assert np.isfinite(mat.data).all()

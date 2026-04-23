@@ -70,19 +70,31 @@ def _reconstructor(**overrides):
         ),
         _linear_model=lambda matrix: _FakeLinearModel(matrix),
         _sparse_prior=lambda dim, prior_scale: ("prior", int(dim), float(prior_scale)),
-        _gaussian_likelihood=lambda latent, noise_sigma: ("gaussian", latent, float(noise_sigma)),
+        _gaussian_likelihood=lambda latent, noise_sigma: (
+            "gaussian",
+            latent,
+            float(noise_sigma),
+        ),
         _bayesian_problem=lambda y, x: _FakeProblem(np.linspace(0.1, 0.2, 4)),
-        _solve_with_cuqi_map=lambda problem, warm_start: np.asarray([0.1, 0.2], dtype=float)
-        if warm_start is not None
-        else np.asarray([0.0, 0.1], dtype=float),
+        _solve_with_cuqi_map=lambda problem, warm_start: (
+            np.asarray([0.1, 0.2], dtype=float)
+            if warm_start is not None
+            else np.asarray([0.0, 0.1], dtype=float)
+        ),
         _solve_fista=lambda *args, **kwargs: np.asarray([0.3, 0.4], dtype=float),
         _solve_irls=lambda *args, **kwargs: np.asarray([0.5, 0.6], dtype=float),
         _build_coarse_hierarchy=lambda: [],
-        _multilevel_correction=lambda jacobian, data_vector, noise_sigma, prior_scale, solution, hierarchy: solution,
-        _block_refinement=lambda jacobian, data_vector, noise_sigma, prior_scale, solution: solution,
-        _get_coarse_matrix=lambda jacobian, groups, group_size: np.column_stack(
-            [np.sum(jacobian[:, idx], axis=1) for idx in groups]
-        ) if groups else np.zeros((jacobian.shape[0], 0), dtype=float),
+        _multilevel_correction=lambda jacobian, data_vector, noise_sigma, prior_scale, solution, hierarchy: (
+            solution
+        ),
+        _block_refinement=lambda jacobian, data_vector, noise_sigma, prior_scale, solution: (
+            solution
+        ),
+        _get_coarse_matrix=lambda jacobian, groups, group_size: (
+            np.column_stack([np.sum(jacobian[:, idx], axis=1) for idx in groups])
+            if groups
+            else np.zeros((jacobian.shape[0], 0), dtype=float)
+        ),
     )
     for key, value in overrides.items():
         setattr(recon, key, value)
@@ -94,23 +106,31 @@ def test_projection_and_warm_start_helper_branches():
     recon = _reconstructor()
     recon.config.subspace_rank = 2
 
-    linear_matrix, target_dim, basis, U_k, s_k = sparse_map_module._resolve_projection(recon, jac)
+    linear_matrix, target_dim, basis, U_k, s_k = sparse_map_module._resolve_projection(
+        recon, jac
+    )
     assert target_dim == 2
     assert basis.shape == (4, 2)
     assert recon._cached_basis is not None
 
-    linear_cached, _, basis_cached, _, _ = sparse_map_module._resolve_projection(recon, jac)
+    linear_cached, _, basis_cached, _, _ = sparse_map_module._resolve_projection(
+        recon, jac
+    )
     assert basis_cached is recon._cached_basis
     np.testing.assert_allclose(linear_cached, recon._cached_reduced_matrix)
 
     recon.config.subspace_rank = 10
-    linear_full, target_full, basis_none, _, _ = sparse_map_module._resolve_projection(recon, jac)
+    linear_full, target_full, basis_none, _, _ = sparse_map_module._resolve_projection(
+        recon, jac
+    )
     assert target_full == 4
     assert basis_none is None
     np.testing.assert_allclose(linear_full, jac)
 
     coarse = np.array([1.0, 2.0], dtype=float)
-    np.testing.assert_allclose(sparse_map_module._coarse_warm_start(None, coarse), coarse)
+    np.testing.assert_allclose(
+        sparse_map_module._coarse_warm_start(None, coarse), coarse
+    )
     np.testing.assert_allclose(
         sparse_map_module._coarse_warm_start(np.eye(2, dtype=float), coarse),
         coarse,
@@ -124,16 +144,19 @@ def test_projection_and_warm_start_helper_branches():
     np.testing.assert_allclose(warm_sub, np.array([2.0, 0.0], dtype=float))
 
     recon.config.use_linear_warm_start = False
-    assert sparse_map_module._resolve_warm_start(
-        reconstructor=recon,
-        basis=None,
-        coarse_init=None,
-        data_vector=np.array([1.0, 2.0], dtype=float),
-        hierarchy=[],
-        linear_matrix=np.eye(2, dtype=float),
-        U_k=None,
-        s_k=None,
-    ) is None
+    assert (
+        sparse_map_module._resolve_warm_start(
+            reconstructor=recon,
+            basis=None,
+            coarse_init=None,
+            data_vector=np.array([1.0, 2.0], dtype=float),
+            hierarchy=[],
+            linear_matrix=np.eye(2, dtype=float),
+            U_k=None,
+            s_k=None,
+        )
+        is None
+    )
 
     recon.config.use_linear_warm_start = True
     warm_subspace = sparse_map_module._resolve_warm_start(
@@ -161,19 +184,30 @@ def test_projection_and_warm_start_helper_branches():
     )
     np.testing.assert_allclose(full_warm, np.array([1.5, 1.0], dtype=float))
 
-    assert sparse_map_module._resolve_warm_start(
-        reconstructor=recon,
-        basis=None,
-        coarse_init=None,
-        data_vector=np.array([1.0, 2.0], dtype=float),
-        hierarchy=[(2, [np.array([0, 1])])],
-        linear_matrix=np.eye(2, dtype=float),
-        U_k=None,
-        s_k=None,
-    ) is None
+    assert (
+        sparse_map_module._resolve_warm_start(
+            reconstructor=recon,
+            basis=None,
+            coarse_init=None,
+            data_vector=np.array([1.0, 2.0], dtype=float),
+            hierarchy=[(2, [np.array([0, 1])])],
+            linear_matrix=np.eye(2, dtype=float),
+            U_k=None,
+            s_k=None,
+        )
+        is None
+    )
 
-    assert sparse_map_module._resolve_solver_type(SimpleNamespace(solver="fista"), [(2, [])]) == "map"
-    assert sparse_map_module._resolve_solver_type(SimpleNamespace(solver="irls"), []) == "irls"
+    assert (
+        sparse_map_module._resolve_solver_type(
+            SimpleNamespace(solver="fista"), [(2, [])]
+        )
+        == "map"
+    )
+    assert (
+        sparse_map_module._resolve_solver_type(SimpleNamespace(solver="irls"), [])
+        == "irls"
+    )
 
 
 def test_coarse_initialization_and_solve_sparse_map_paths():
@@ -200,7 +234,9 @@ def test_coarse_initialization_and_solve_sparse_map_paths():
     recon_map = _reconstructor()
     recon_map.config.subspace_rank = None
     recon_map.config.use_linear_warm_start = False
-    recon_map._solve_with_cuqi_map = lambda problem, warm_start: np.asarray([0.0, 0.1, 0.2, 0.3], dtype=float)
+    recon_map._solve_with_cuqi_map = lambda problem, warm_start: np.asarray(
+        [0.0, 0.1, 0.2, 0.3], dtype=float
+    )
     result_map = sparse_map_module.solve_sparse_map(
         recon_map,
         jacobian=np.eye(4, dtype=float),
@@ -212,7 +248,9 @@ def test_coarse_initialization_and_solve_sparse_map_paths():
 
     recon_fista = _reconstructor()
     recon_fista.config.solver = "fista"
-    recon_fista._solve_fista = lambda *args, **kwargs: np.asarray([0.3, 0.4, 0.5, 0.6], dtype=float)
+    recon_fista._solve_fista = lambda *args, **kwargs: np.asarray(
+        [0.3, 0.4, 0.5, 0.6], dtype=float
+    )
     result_fista = sparse_map_module.solve_sparse_map(
         recon_fista,
         jacobian=np.eye(4, dtype=float),
@@ -224,7 +262,9 @@ def test_coarse_initialization_and_solve_sparse_map_paths():
 
     recon_irls = _reconstructor()
     recon_irls.config.solver = "irls"
-    recon_irls._solve_irls = lambda *args, **kwargs: np.asarray([0.5, 0.6, 0.7, 0.8], dtype=float)
+    recon_irls._solve_irls = lambda *args, **kwargs: np.asarray(
+        [0.5, 0.6, 0.7, 0.8], dtype=float
+    )
     result_irls = sparse_map_module.solve_sparse_map(
         recon_irls,
         jacobian=np.eye(4, dtype=float),
@@ -246,7 +286,9 @@ def test_coarse_initialization_and_solve_sparse_map_paths():
         )
 
 
-def test_multilevel_and_block_refinement_fallback_paths(monkeypatch: pytest.MonkeyPatch):
+def test_multilevel_and_block_refinement_fallback_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     jac = np.eye(4, dtype=float)
     data = np.array([0.1, 0.2, 0.3, 0.4], dtype=float)
     solution = np.zeros(4, dtype=float)
@@ -275,7 +317,12 @@ def test_multilevel_and_block_refinement_fallback_paths(monkeypatch: pytest.Monk
     monkeypatch.setattr(
         sparse_map_module.np.linalg,
         "lstsq",
-        lambda H, rhs, rcond=None: (np.ones(rhs.shape[0], dtype=float) * 0.2, None, None, None),
+        lambda H, rhs, rcond=None: (
+            np.ones(rhs.shape[0], dtype=float) * 0.2,
+            None,
+            None,
+            None,
+        ),
     )
 
     corrected = sparse_map_module.multilevel_correction(
@@ -345,14 +392,18 @@ def test_multilevel_and_block_refinement_fallback_paths(monkeypatch: pytest.Monk
     assert empty.size == 0
 
 
-def test_multilevel_and_block_refinement_remaining_skip_branches(monkeypatch: pytest.MonkeyPatch):
+def test_multilevel_and_block_refinement_remaining_skip_branches(
+    monkeypatch: pytest.MonkeyPatch,
+):
     jac = np.eye(4, dtype=float)
     data = np.zeros(4, dtype=float)
     solution = np.zeros(4, dtype=float)
 
     recon = _reconstructor()
     recon.config.coarse_iterations = 1
-    recon._get_coarse_matrix = lambda _jacobian, _groups, _size: np.zeros((jac.shape[0], 0), dtype=float)
+    recon._get_coarse_matrix = lambda _jacobian, _groups, _size: np.zeros(
+        (jac.shape[0], 0), dtype=float
+    )
     out_skip_A = sparse_map_module.multilevel_correction(
         recon,
         jacobian=jac,
@@ -366,8 +417,14 @@ def test_multilevel_and_block_refinement_remaining_skip_branches(monkeypatch: py
 
     recon_empty_delta = _reconstructor()
     recon_empty_delta.config.coarse_iterations = 1
-    recon_empty_delta._get_coarse_matrix = lambda _jacobian, groups, _size: np.eye(len(groups), dtype=float)
-    monkeypatch.setattr(sparse_map_module.np.linalg, "solve", lambda *_args, **_kwargs: np.array([], dtype=float))
+    recon_empty_delta._get_coarse_matrix = lambda _jacobian, groups, _size: np.eye(
+        len(groups), dtype=float
+    )
+    monkeypatch.setattr(
+        sparse_map_module.np.linalg,
+        "solve",
+        lambda *_args, **_kwargs: np.array([], dtype=float),
+    )
     out_empty_delta = sparse_map_module.multilevel_correction(
         recon_empty_delta,
         jacobian=jac,
@@ -394,7 +451,11 @@ def test_multilevel_and_block_refinement_remaining_skip_branches(monkeypatch: py
     )
     np.testing.assert_allclose(no_row_refine, np.zeros(4, dtype=float))
 
-    monkeypatch.setattr(sparse_map_module.np.linalg, "solve", lambda *_args, **_kwargs: np.array([], dtype=float))
+    monkeypatch.setattr(
+        sparse_map_module.np.linalg,
+        "solve",
+        lambda *_args, **_kwargs: np.array([], dtype=float),
+    )
     empty_delta_refine = sparse_map_module.block_refinement(
         recon_blocks,
         jacobian=np.eye(4, dtype=float),
@@ -405,7 +466,11 @@ def test_multilevel_and_block_refinement_remaining_skip_branches(monkeypatch: py
     )
     np.testing.assert_allclose(empty_delta_refine, np.zeros(4, dtype=float))
 
-    monkeypatch.setattr(sparse_map_module.np.linalg, "solve", lambda *_args, **_kwargs: np.array([1e-6, 1e-6], dtype=float))
+    monkeypatch.setattr(
+        sparse_map_module.np.linalg,
+        "solve",
+        lambda *_args, **_kwargs: np.array([1e-6, 1e-6], dtype=float),
+    )
     recon_small_delta = _reconstructor()
     recon_small_delta.config.block_iterations = 1
     recon_small_delta.config.block_size = 2
@@ -432,4 +497,6 @@ def test_multilevel_and_block_refinement_remaining_skip_branches(monkeypatch: py
         prior_scale=1.0,
         solution=np.array([1.0, 0.0, 0.0, 0.0], dtype=float),
     )
-    np.testing.assert_allclose(zero_row_refine, np.array([1.0, 0.0, 0.0, 0.0], dtype=float))
+    np.testing.assert_allclose(
+        zero_row_refine, np.array([1.0, 0.0, 0.0, 0.0], dtype=float)
+    )

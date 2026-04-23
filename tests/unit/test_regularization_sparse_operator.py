@@ -52,8 +52,12 @@ def test_noser_returns_sparse_diagonal_when_baseline_is_ready():
 def test_as_linear_operator_supports_dense_sparse_and_linearop():
     fwd_model = _fake_model(4)
     dense_reg = _DummyRegularization(fwd_model, np.eye(4, dtype=float))
-    sparse_reg = _DummyRegularization(fwd_model, diags([1.0, 2.0, 3.0, 4.0], 0, format="csr"))
-    base_linear = LinearOperator((4, 4), matvec=lambda v: np.asarray(v, dtype=float) * 3.0)
+    sparse_reg = _DummyRegularization(
+        fwd_model, diags([1.0, 2.0, 3.0, 4.0], 0, format="csr")
+    )
+    base_linear = LinearOperator(
+        (4, 4), matvec=lambda v: np.asarray(v, dtype=float) * 3.0
+    )
     lop_reg = _DummyRegularization(fwd_model, base_linear)
 
     x = np.array([1.0, 2.0, 3.0, 4.0], dtype=float)
@@ -62,7 +66,9 @@ def test_as_linear_operator_supports_dense_sparse_and_linearop():
     linear_op = lop_reg.as_linear_operator(lop_reg.get_regularization_matrix())
 
     assert np.allclose(dense_op.matvec(x), x)
-    assert np.allclose(sparse_op.matvec(x), np.array([1.0, 4.0, 9.0, 16.0], dtype=float))
+    assert np.allclose(
+        sparse_op.matvec(x), np.array([1.0, 4.0, 9.0, 16.0], dtype=float)
+    )
     assert np.allclose(linear_op.matvec(x), x * 3.0)
 
     csr_payload = csr_matrix(np.eye(4))
@@ -78,7 +84,10 @@ def test_total_variation_regularization_returns_sparse_matrix(eit_system):
     )
     matrix = reg.get_regularization_matrix(cache=False)
     assert isspmatrix(matrix)
-    assert matrix.shape == (eit_system.reconstructor.n_elements, eit_system.reconstructor.n_elements)
+    assert matrix.shape == (
+        eit_system.reconstructor.n_elements,
+        eit_system.reconstructor.n_elements,
+    )
     diag = np.asarray(matrix.diagonal(), dtype=float)
     assert np.isfinite(diag).all()
     assert np.all(diag >= 0.0)

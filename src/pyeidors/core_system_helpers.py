@@ -19,7 +19,9 @@ from .data.difference import (
 from .data.structures import EITData, EITImage
 
 
-def conductivity_to_image(fwd_model, conductivity: np.ndarray | fem.Function | EITImage) -> EITImage:
+def conductivity_to_image(
+    fwd_model, conductivity: np.ndarray | fem.Function | EITImage
+) -> EITImage:
     """Normalize conductivity inputs to ``EITImage`` for forward solving."""
     if isinstance(conductivity, EITImage):
         return conductivity
@@ -61,9 +63,13 @@ def difference_measurement(
     )
 
 
-def create_homogeneous_image(eit_system, conductivity: Optional[float] = None) -> EITImage:
+def create_homogeneous_image(
+    eit_system, conductivity: Optional[float] = None
+) -> EITImage:
     """Create a homogeneous conductivity image for an initialized system."""
-    value = eit_system.base_conductivity if conductivity is None else float(conductivity)
+    value = (
+        eit_system.base_conductivity if conductivity is None else float(conductivity)
+    )
     n_elements = int(fem.Function(eit_system.fwd_model.V_sigma).x.array.size)
     elem_data = np.full(n_elements, value, dtype=float)
     return EITImage(elem_data=elem_data, fwd_model=eit_system.fwd_model)
@@ -99,19 +105,24 @@ def collect_system_info(eit_system) -> dict[str, Any]:
             "difference_orientation",
             "target_minus_reference",
         ),
-        "difference_preset": getattr(eit_system, "difference_preset", "eidors_one_step_noser"),
+        "difference_preset": getattr(
+            eit_system, "difference_preset", "eidors_one_step_noser"
+        ),
         "absolute_preset": getattr(eit_system, "absolute_preset", "eidors_abs_gn"),
         "acceleration_profile": getattr(eit_system, "acceleration_profile", "default"),
         "hyperparameter": getattr(eit_system, "hyperparameter", None),
         "jacobian_background_conductivity": getattr(
-            eit_system, "jacobian_background_conductivity",
+            eit_system,
+            "jacobian_background_conductivity",
             getattr(eit_system, "base_conductivity", 1.0),
         ),
         "performance_mode": getattr(eit_system, "performance_mode", "aggressive"),
         "linear_backend": getattr(eit_system, "linear_backend", "scipy"),
         "cache_scope": getattr(eit_system, "cache_scope", "off"),
         "cache_stats": getattr(eit_system, "get_cache_stats", lambda: {})(),
-        "runtime_policy": dict(getattr(eit_system, "_resolved_runtime_policy", {}) or {}),
+        "runtime_policy": dict(
+            getattr(eit_system, "_resolved_runtime_policy", {}) or {}
+        ),
         "initialized": eit_system._is_initialized,
     }
     if not eit_system._is_initialized:

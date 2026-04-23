@@ -104,7 +104,14 @@ def _measurement_summary(measurements: dict[str, np.ndarray] | None) -> dict[str
     if not measurements:
         return {"status": "No boundary-voltage arrays found in this package."}
     keys = sorted(measurements)
-    first_key = next((key for key in ("target", "ground_truth", "difference", "homogeneous") if key in measurements), keys[0])
+    first_key = next(
+        (
+            key
+            for key in ("target", "ground_truth", "difference", "homogeneous")
+            if key in measurements
+        ),
+        keys[0],
+    )
     first = np.asarray(measurements[first_key]).reshape(-1)
     return {
         "arrays": ", ".join(keys),
@@ -152,7 +159,9 @@ def _config_from_loaded_package(loaded: LoadedBridgePackage) -> ForwardModelConf
         {
             "mesh_dimension": 3 if nodes.ndim == 2 and nodes.shape[1] >= 3 else 2,
             "n_elec": int(np.asarray(geometry.get("n_elec", 16)).reshape(-1)[0]),
-            "contact_impedance": _normalize_contact_impedance(geometry.get("contact_impedance")),
+            "contact_impedance": _normalize_contact_impedance(
+                geometry.get("contact_impedance")
+            ),
         }
     )
 
@@ -181,7 +190,9 @@ def _build_preview(loaded: LoadedBridgePackage) -> EidorsImportPreview:
     }
     inferred: dict[str, Any] = {}
     if "config" not in loaded.manifest.files:
-        inferred["source"] = "No config.json found; values were inferred from geometry and defaults."
+        inferred["source"] = (
+            "No config.json found; values were inferred from geometry and defaults."
+        )
 
     missing: list[str] = []
     if loaded.geometry_payload is None:
@@ -250,7 +261,9 @@ def _boundary_entities_from_cells(cell_connectivity: np.ndarray) -> np.ndarray:
     return np.asarray(boundary, dtype=np.int64) + 1
 
 
-def _infer_electrode_node_groups(node_coords: np.ndarray, boundary_entities: np.ndarray, n_elec: int) -> tuple[np.ndarray, np.ndarray]:
+def _infer_electrode_node_groups(
+    node_coords: np.ndarray, boundary_entities: np.ndarray, n_elec: int
+) -> tuple[np.ndarray, np.ndarray]:
     if node_coords.shape[1] < 2:
         raise ValueError("至少需要二维节点坐标才能推断电极节点。")
 
@@ -297,7 +310,10 @@ def build_geometry_payload_from_result(
         forward_model_config.n_elec * max(forward_model_config.n_rings, 1),
     )
     if truth_elem_data is None:
-        truth_elem = np.full(elems.shape[0], float(background or forward_model_config.background_conductivity))
+        truth_elem = np.full(
+            elems.shape[0],
+            float(background or forward_model_config.background_conductivity),
+        )
     else:
         truth_elem = np.asarray(truth_elem_data, dtype=float).reshape(-1)
     return {
@@ -308,13 +324,17 @@ def build_geometry_payload_from_result(
         "boundary_edges": boundary_entities,
         "electrode_nodes": electrode_nodes,
         "electrode_node_counts": electrode_counts,
-        "n_elec": int(forward_model_config.n_elec * max(forward_model_config.n_rings, 1)),
+        "n_elec": int(
+            forward_model_config.n_elec * max(forward_model_config.n_rings, 1)
+        ),
         "background": float(background or forward_model_config.background_conductivity),
         "truth_elem_data": truth_elem,
         "contact_impedance": (
             float(forward_model_config.contact_impedance)
             if isinstance(forward_model_config.contact_impedance, (int, float))
-            else np.asarray(forward_model_config.contact_impedance or [0.01], dtype=float)
+            else np.asarray(
+                forward_model_config.contact_impedance or [0.01], dtype=float
+            )
         ),
         "mesh_name": mesh_name,
         "mesh_level": "bridge_export",
@@ -341,9 +361,13 @@ class EidorsBridgeRunner:
         root.mkdir(parents=True, exist_ok=True)
 
         hints = detect_script_hints(source)
-        (root / CAPTURE_SCRIPT_NAME).write_text(CAPTURE_SCRIPT_TEMPLATE, encoding="utf-8")
+        (root / CAPTURE_SCRIPT_NAME).write_text(
+            CAPTURE_SCRIPT_TEMPLATE, encoding="utf-8"
+        )
         request_payload = {
-            "eidors_startup": matlab_runtime_path(environment.eidors_startup, environment),
+            "eidors_startup": matlab_runtime_path(
+                environment.eidors_startup, environment
+            ),
             "target_script": matlab_runtime_path(source, environment),
             "output_dir": matlab_runtime_path(root, environment),
             "script_kind": hints["script_kind"],
@@ -359,8 +383,7 @@ class EidorsBridgeRunner:
         escaped_root = runtime_root.replace("'", "''")
         escaped_request = runtime_request.replace("'", "''")
         expression = (
-            f"addpath('{escaped_root}'); "
-            f"run_capture_from_eidors('{escaped_request}');"
+            f"addpath('{escaped_root}'); run_capture_from_eidors('{escaped_request}');"
         )
         result = subprocess.run(
             [matlab_command_for_execution(environment), "-batch", expression],
@@ -370,7 +393,11 @@ class EidorsBridgeRunner:
             timeout=180,
         )
         if result.returncode != 0:
-            raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "MATLAB bridge capture failed.")
+            raise RuntimeError(
+                result.stderr.strip()
+                or result.stdout.strip()
+                or "MATLAB bridge capture failed."
+            )
 
         loaded = load_bridge_package(root)
         geometry_payload = loaded.geometry_payload
@@ -378,8 +405,12 @@ class EidorsBridgeRunner:
         if geometry_payload is None:
             geometry_path = root / GEOMETRY_NAME
             if geometry_path.exists():
-                geometry_payload = loadmat(geometry_path, squeeze_me=True, struct_as_record=False)
-        existing_cfg = loaded.forward_model_config or _config_from_loaded_package(loaded)
+                geometry_payload = loadmat(
+                    geometry_path, squeeze_me=True, struct_as_record=False
+                )
+        existing_cfg = loaded.forward_model_config or _config_from_loaded_package(
+            loaded
+        )
         forward_cfg = existing_cfg.with_overrides(
             stim_pattern=hints.get("stim_pattern") or existing_cfg.stim_pattern,
             meas_pattern=hints.get("meas_pattern") or existing_cfg.meas_pattern,
@@ -388,7 +419,9 @@ class EidorsBridgeRunner:
         notes: list[str] = []
         report_path = root / CAPTURE_REPORT_NAME
         if report_path.exists():
-            notes.append("已生成 capture_report.json，可在 Diagnostics 中查看原始采集结果。")
+            notes.append(
+                "已生成 capture_report.json，可在 Diagnostics 中查看原始采集结果。"
+            )
         manifest = default_manifest(
             source_framework="eidors",
             package_kind="captured_script",
@@ -425,7 +458,9 @@ class EidorsScriptCaptureService:
         self._detector = detector or EidorsEnvironmentDetector()
         self._runner = runner or EidorsBridgeRunner()
 
-    def detect_environments(self) -> tuple[list[EidorsEnvironment], InteropCapabilityReport]:
+    def detect_environments(
+        self,
+    ) -> tuple[list[EidorsEnvironment], InteropCapabilityReport]:
         return self._detector.detect()
 
     def load_profiles(self) -> list[EidorsEnvironment]:
@@ -463,7 +498,9 @@ class EidorsScriptCaptureService:
             return load_bridge_package(source)
         if source.is_file() and source.suffix.lower() == ".m":
             if environment is None:
-                raise RuntimeError("采集 EIDORS 脚本前需要先选择一个 MATLAB/EIDORS 环境。")
+                raise RuntimeError(
+                    "采集 EIDORS 脚本前需要先选择一个 MATLAB/EIDORS 环境。"
+                )
             target_dir = (
                 Path(to_posix_path(output_dir))
                 if output_dir
@@ -471,7 +508,9 @@ class EidorsScriptCaptureService:
             )
             bundle_dir = self._runner.run_capture(environment, source, target_dir)
             return load_bridge_package(bundle_dir)
-        raise RuntimeError("当前仅支持导入 bridge 目录、legacy .mat 文件或 EIDORS .m 脚本。")
+        raise RuntimeError(
+            "当前仅支持导入 bridge 目录、legacy .mat 文件或 EIDORS .m 脚本。"
+        )
 
 
 class InteropBundleImporter:
@@ -480,11 +519,15 @@ class InteropBundleImporter:
     def load_package(self, path: str | Path) -> LoadedBridgePackage:
         return load_bridge_package(path)
 
-    def preview_package(self, path: str | Path) -> tuple[LoadedBridgePackage, EidorsImportPreview]:
+    def preview_package(
+        self, path: str | Path
+    ) -> tuple[LoadedBridgePackage, EidorsImportPreview]:
         loaded = load_bridge_package(path)
         return loaded, _build_preview(loaded)
 
-    def preview_loaded_package(self, loaded: LoadedBridgePackage) -> EidorsImportPreview:
+    def preview_loaded_package(
+        self, loaded: LoadedBridgePackage
+    ) -> EidorsImportPreview:
         return _build_preview(loaded)
 
 
@@ -509,9 +552,13 @@ class InteropBundleExporter:
         effective_measurements = measurements if job.include_measurements else None
         effective_notes = list(notes or [])
         if job.include_geometry and effective_geometry is None:
-            effective_notes.append("本次导出未包含 geometry.mat；当前来源尚未提供可复用的几何载荷。")
+            effective_notes.append(
+                "本次导出未包含 geometry.mat；当前来源尚未提供可复用的几何载荷。"
+            )
         if job.include_measurements and effective_measurements is None:
-            effective_notes.append("本次导出未包含边界电压数据；当前来源没有可导出的测量数组。")
+            effective_notes.append(
+                "本次导出未包含边界电压数据；当前来源没有可导出的测量数组。"
+            )
 
         manifest = default_manifest(
             source_framework="pyeidors",
@@ -530,11 +577,14 @@ class InteropBundleExporter:
             measurements=effective_measurements,
             forward_model_config=forward_model_config,
             reconstruction_preset=reconstruction_preset,
-            include_run_in_eidors_script=job.include_scripts and effective_geometry is not None,
+            include_run_in_eidors_script=job.include_scripts
+            and effective_geometry is not None,
         )
 
         runtime_payload = {
-            "eidors_startup": to_windows_path(environment.eidors_startup) if environment else "",
+            "eidors_startup": to_windows_path(environment.eidors_startup)
+            if environment
+            else "",
             "geometry_mat": to_windows_path((root / GEOMETRY_NAME).resolve()),
             "measurements_csv": to_windows_path((root / "measurements.csv").resolve()),
             "stim_pattern": forward_model_config.stim_pattern,
@@ -550,10 +600,14 @@ class InteropBundleExporter:
 
         manifest_path = root / "manifest.json"
         if manifest_path.exists():
-            (root / BRIDGE_MANIFEST_ALIAS).write_text(manifest_path.read_text(encoding="utf-8"), encoding="utf-8")
+            (root / BRIDGE_MANIFEST_ALIAS).write_text(
+                manifest_path.read_text(encoding="utf-8"), encoding="utf-8"
+            )
         run_script = root / "run_in_eidors.m"
         if run_script.exists():
-            (root / RUN_IMPORT_FROM_PYEIDORS_NAME).write_text(run_script.read_text(encoding="utf-8"), encoding="utf-8")
+            (root / RUN_IMPORT_FROM_PYEIDORS_NAME).write_text(
+                run_script.read_text(encoding="utf-8"), encoding="utf-8"
+            )
         return root
 
 
@@ -573,9 +627,13 @@ class InteropSmokeValidator:
         difference = measurements.get("difference")
 
         if target is None and homogeneous is not None and difference is not None:
-            target = np.asarray(homogeneous, dtype=float).reshape(-1) + np.asarray(difference, dtype=float).reshape(-1)
+            target = np.asarray(homogeneous, dtype=float).reshape(-1) + np.asarray(
+                difference, dtype=float
+            ).reshape(-1)
         if homogeneous is None and target is not None and difference is not None:
-            homogeneous = np.asarray(target, dtype=float).reshape(-1) - np.asarray(difference, dtype=float).reshape(-1)
+            homogeneous = np.asarray(target, dtype=float).reshape(-1) - np.asarray(
+                difference, dtype=float
+            ).reshape(-1)
         if homogeneous is None or target is None:
             raise RuntimeError("冒烟验证需要 homogeneous 与 target 两组边界电压。")
 
@@ -587,8 +645,12 @@ class InteropSmokeValidator:
             "difference_orientation": "target_minus_reference",
         }
 
-        MeasurementDataset.from_metadata(homogeneous.reshape(1, -1), metadata, data_type="real")
-        MeasurementDataset.from_metadata(target.reshape(1, -1), metadata, data_type="real")
+        MeasurementDataset.from_metadata(
+            homogeneous.reshape(1, -1), metadata, data_type="real"
+        )
+        MeasurementDataset.from_metadata(
+            target.reshape(1, -1), metadata, data_type="real"
+        )
 
         result: dict[str, Any] = {
             "status": "compatible",
@@ -600,10 +662,16 @@ class InteropSmokeValidator:
         }
 
         if int(config.mesh_dimension) == 3:
-            result["message"] += " 当前为 3D 配置，自动烟测默认跳过 full inverse，只完成输入兼容性验证。"
+            result["message"] += (
+                " 当前为 3D 配置，自动烟测默认跳过 full inverse，只完成输入兼容性验证。"
+            )
             return result
 
-        preset = reconstruction_preset or loaded.reconstruction_preset or ReconstructionPreset()
+        preset = (
+            reconstruction_preset
+            or loaded.reconstruction_preset
+            or ReconstructionPreset()
+        )
         from pyeidors import EITSystem
         from pyeidors.data import PatternConfig
 
@@ -643,16 +711,24 @@ class InteropSmokeValidator:
             geometry_version=config.geometry_version,
         )
 
-        ref_data = MeasurementDataset.from_metadata(homogeneous.reshape(1, -1), metadata, data_type="real").to_eit_data(0)
-        tgt_data = MeasurementDataset.from_metadata(target.reshape(1, -1), metadata, data_type="real").to_eit_data(0)
+        ref_data = MeasurementDataset.from_metadata(
+            homogeneous.reshape(1, -1), metadata, data_type="real"
+        ).to_eit_data(0)
+        tgt_data = MeasurementDataset.from_metadata(
+            target.reshape(1, -1), metadata, data_type="real"
+        ).to_eit_data(0)
 
         method = str(preset.method or "").strip().lower()
         if method in {"gn-absolute", "eidors_abs_gn"}:
             recon = system.absolute_reconstruct(measurement_data=tgt_data)
         else:
-            recon = system.difference_reconstruct(measurement_data=tgt_data, reference_data=ref_data)
+            recon = system.difference_reconstruct(
+                measurement_data=tgt_data, reference_data=ref_data
+            )
 
-        conductivity = np.asarray(getattr(recon, "conductivity", np.asarray([])), dtype=float).reshape(-1)
+        conductivity = np.asarray(
+            getattr(recon, "conductivity", np.asarray([])), dtype=float
+        ).reshape(-1)
         result.update(
             {
                 "status": "inverse_ok",

@@ -149,8 +149,7 @@ def _limit_step_size_for_sigma_floor(
     delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
     if sigma.shape != delta.shape:
         raise ValueError(
-            "sigma_bg and delta_sigma shape mismatch: "
-            f"{sigma.shape} != {delta.shape}"
+            f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
     if (
         sigma.size == 0
@@ -194,8 +193,7 @@ def _floored_sigma_update(
     delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
     if sigma.shape != delta.shape:
         raise ValueError(
-            "sigma_bg and delta_sigma shape mismatch: "
-            f"{sigma.shape} != {delta.shape}"
+            f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
     if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
         raise RuntimeError(
@@ -1907,15 +1905,17 @@ def build_shared_context(
             payload={**operator_payload_base, "part": "H_FAST"},
             compute_fn=lambda: _timed(
                 "operator_A",
-                lambda: np.asarray(
-                    safe_dot(
-                        jacobian * inv_reg_diag[None, :],
-                        jacobian_t,
-                        "gn_difference.operator.measurement_H",
-                    ),
-                    dtype=float,
-                )
-                + float(lam) * np.eye(jacobian.shape[0], dtype=float),
+                lambda: (
+                    np.asarray(
+                        safe_dot(
+                            jacobian * inv_reg_diag[None, :],
+                            jacobian_t,
+                            "gn_difference.operator.measurement_H",
+                        ),
+                        dtype=float,
+                    )
+                    + float(lam) * np.eye(jacobian.shape[0], dtype=float)
+                ),
             ),
             persist=True,
             cost=6.0,
@@ -1950,15 +1950,17 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "H_STRICT_MEASUREMENT"},
                 compute_fn=lambda: _timed(
                     "operator_A",
-                    lambda: np.asarray(
-                        safe_dot(
-                            jacobian * inv_reg_diag[None, :],
-                            jacobian_t,
-                            "gn_difference.operator.strict_measurement_H",
-                        ),
-                        dtype=float,
-                    )
-                    + float(lam) * np.eye(jacobian.shape[0], dtype=float),
+                    lambda: (
+                        np.asarray(
+                            safe_dot(
+                                jacobian * inv_reg_diag[None, :],
+                                jacobian_t,
+                                "gn_difference.operator.strict_measurement_H",
+                            ),
+                            dtype=float,
+                        )
+                        + float(lam) * np.eye(jacobian.shape[0], dtype=float)
+                    ),
                 ),
                 persist=True,
                 cost=6.0,
@@ -1992,11 +1994,15 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "A"},
                 compute_fn=lambda: _timed(
                     "operator_A",
-                    lambda: np.asarray(
-                        safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
-                        dtype=float,
-                    )
-                    + float(lam) * np.diag(reg_diag),
+                    lambda: (
+                        np.asarray(
+                            safe_dot(
+                                jacobian_t, jacobian, "gn_difference.operator.JtJ"
+                            ),
+                            dtype=float,
+                        )
+                        + float(lam) * np.diag(reg_diag)
+                    ),
                 ),
                 persist=True,
                 cost=10.0,

@@ -17,10 +17,15 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import probe_petsc_cuda_runtime
 
 
-CUDA_AVAILABLE = bool(probe_petsc_cuda_runtime().get("petsc_cuda", False)) and torch.cuda.is_available()
+CUDA_AVAILABLE = (
+    bool(probe_petsc_cuda_runtime().get("petsc_cuda", False))
+    and torch.cuda.is_available()
+)
 
 
-pytestmark = pytest.mark.skipif(not CUDA_AVAILABLE, reason="requires CUDA-enabled PETSc and torch.cuda")
+pytestmark = pytest.mark.skipif(
+    not CUDA_AVAILABLE, reason="requires CUDA-enabled PETSc and torch.cuda"
+)
 
 
 def _pattern(n_elec: int, mesh_dim: int) -> PatternConfig:
@@ -113,11 +118,25 @@ def test_jacobian_cpu_vs_cuda_parity(eit_mesh, mesh_3d, mesh_dim: int):
 
     cpu_sigma = fem.Function(cpu.fwd_model.V_sigma)
     gpu_sigma = fem.Function(gpu.fwd_model.V_sigma)
-    function_set_array(cpu_sigma, np.asarray(cpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=float))
-    function_set_array(gpu_sigma, np.asarray(gpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=float))
+    function_set_array(
+        cpu_sigma,
+        np.asarray(
+            cpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=float
+        ),
+    )
+    function_set_array(
+        gpu_sigma,
+        np.asarray(
+            gpu.create_homogeneous_image(conductivity=1.0).elem_data, dtype=float
+        ),
+    )
 
-    cpu_jac = cpu.reconstructor.jacobian_calculator.calculate(cpu_sigma, method="efficient")
-    gpu_jac = gpu.reconstructor.jacobian_calculator.calculate(gpu_sigma, method="efficient")
+    cpu_jac = cpu.reconstructor.jacobian_calculator.calculate(
+        cpu_sigma, method="efficient"
+    )
+    gpu_jac = gpu.reconstructor.jacobian_calculator.calculate(
+        gpu_sigma, method="efficient"
+    )
     rel_fro = np.linalg.norm(cpu_jac - gpu_jac) / (np.linalg.norm(cpu_jac) + 1e-12)
     assert rel_fro <= 1e-5
 

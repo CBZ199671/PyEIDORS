@@ -21,7 +21,12 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
-from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
+from eit_app.ui.theme import (
+    set_button_role,
+    set_hint_text,
+    set_section_header,
+    set_subtle_value,
+)
 
 
 class DatasetRandomizationPanel(QGroupBox):
@@ -306,7 +311,9 @@ class DatasetRunPanel(QGroupBox):
         self._n_samples_spin = QSpinBox()
         self._n_samples_spin.setRange(1, 1_000_000)
         self._n_samples_spin.setValue(1000)
-        self._n_samples_spin.valueChanged.connect(lambda _value: self.config_changed.emit())
+        self._n_samples_spin.valueChanged.connect(
+            lambda _value: self.config_changed.emit()
+        )
         self._lbl_samples = QLabel("")
         layout.addRow(self._lbl_samples, self._n_samples_spin)
 
@@ -354,7 +361,9 @@ class DatasetRunPanel(QGroupBox):
         layout.addRow(btn_row)
 
     def _browse_dir(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, t("dataset.run.file_dialog_title"))
+        path = QFileDialog.getExistingDirectory(
+            self, t("dataset.run.file_dialog_title")
+        )
         if path:
             self._dir_edit.setText(path)
 

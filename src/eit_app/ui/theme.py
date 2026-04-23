@@ -50,15 +50,15 @@ def _arrow_data_url(direction: str, fill: str) -> str:
 # #1f5d8b accent on hover).  Dark mode brightens both so the arrows
 # stay visible against the dark input fill.
 _ARROW_URLS_LIGHT = {
-    "up_idle":    _arrow_data_url("up",   "#5b6573"),
-    "up_hover":   _arrow_data_url("up",   "#1f5d8b"),
-    "down_idle":  _arrow_data_url("down", "#5b6573"),
+    "up_idle": _arrow_data_url("up", "#5b6573"),
+    "up_hover": _arrow_data_url("up", "#1f5d8b"),
+    "down_idle": _arrow_data_url("down", "#5b6573"),
     "down_hover": _arrow_data_url("down", "#1f5d8b"),
 }
 _ARROW_URLS_DARK = {
-    "up_idle":    _arrow_data_url("up",   "#a7b2c2"),
-    "up_hover":   _arrow_data_url("up",   "#5ca8e0"),
-    "down_idle":  _arrow_data_url("down", "#a7b2c2"),
+    "up_idle": _arrow_data_url("up", "#a7b2c2"),
+    "up_hover": _arrow_data_url("up", "#5ca8e0"),
+    "down_idle": _arrow_data_url("down", "#a7b2c2"),
     "down_hover": _arrow_data_url("down", "#5ca8e0"),
 }
 
@@ -156,10 +156,9 @@ def _build_stylesheet(mode: str) -> str:
     """
     urls = _ARROW_URLS_DARK if mode == "dark" else _ARROW_URLS_LIGHT
     base = (
-        _APP_STYLESHEET
-        .replace("__ARROW_UP_IDLE__",    urls["up_idle"])
-        .replace("__ARROW_UP_HOVER__",   urls["up_hover"])
-        .replace("__ARROW_DOWN_IDLE__",  urls["down_idle"])
+        _APP_STYLESHEET.replace("__ARROW_UP_IDLE__", urls["up_idle"])
+        .replace("__ARROW_UP_HOVER__", urls["up_hover"])
+        .replace("__ARROW_DOWN_IDLE__", urls["down_idle"])
         .replace("__ARROW_DOWN_HOVER__", urls["down_hover"])
     )
     if mode == "dark":
@@ -169,6 +168,7 @@ def _build_stylesheet(mode: str) -> str:
         # to deal with the button backgrounds.
         return base + "\n\n" + _DARK_OVERLAY
     return base
+
 
 # Latin-first base families: Segoe UI on Windows, Noto Sans / DejaVu Sans as
 # Linux fallbacks.  CJK fallbacks are appended at runtime based on what
@@ -270,41 +270,41 @@ def set_embedded_step_panel(widget: QWidget) -> None:
 # unpacking ordered tuples.  Adding a new color requires updating both
 # variants.
 _PLOT_PALETTE_LIGHT = {
-    "bg":       "#f8fbfe",  # main plot canvas
+    "bg": "#f8fbfe",  # main plot canvas
     "panel_bg": "#f4f7fb",  # outer figure / facecolor for matplotlib
-    "axes_bg":  "#fbfdff",  # matplotlib axes (slightly brighter than panel)
-    "text":     "#243447",
-    "grid":     "#d6e1ec",
-    "border":   "#c7d4e2",
+    "axes_bg": "#fbfdff",  # matplotlib axes (slightly brighter than panel)
+    "text": "#243447",
+    "grid": "#d6e1ec",
+    "border": "#c7d4e2",
     # Reconstruction-image widget (pyqtgraph) extras — domain outline,
     # electrode arc, and label color.
-    "domain":     "#8ba0b8",
-    "electrode":  "#355c7d",
-    "label":      "#243447",
+    "domain": "#8ba0b8",
+    "electrode": "#355c7d",
+    "label": "#243447",
     # Color for the matplotlib placeholder/error/loading caption text
-    "caption":    "#5b6573",
+    "caption": "#5b6573",
     "caption_loading": "#1f5d8b",
-    "caption_error":   "#8b2f2f",
+    "caption_error": "#8b2f2f",
     # Inhomogeneity-highlight overlay used by the 3D conductivity
     # widget — amber on light, pumpkin on dark for contrast against
     # the viridis cmap underneath.
-    "highlight":  "#f39c12",
+    "highlight": "#f39c12",
 }
 
 _PLOT_PALETTE_DARK = {
-    "bg":       "#161b22",  # darker than QSS canvas (#1a1f26) for plot contrast
+    "bg": "#161b22",  # darker than QSS canvas (#1a1f26) for plot contrast
     "panel_bg": "#1a1f26",
-    "axes_bg":  "#1e242c",
-    "text":     "#dbe1ea",
-    "grid":     "#2f3742",
-    "border":   "#3e4754",
-    "domain":     "#5d6a7a",
-    "electrode":  "#7cbeee",
-    "label":      "#dbe1ea",
-    "caption":    "#8b97a7",
+    "axes_bg": "#1e242c",
+    "text": "#dbe1ea",
+    "grid": "#2f3742",
+    "border": "#3e4754",
+    "domain": "#5d6a7a",
+    "electrode": "#7cbeee",
+    "label": "#dbe1ea",
+    "caption": "#8b97a7",
     "caption_loading": "#5ca8e0",
-    "caption_error":   "#f09e95",
-    "highlight":  "#ffa94d",
+    "caption_error": "#f09e95",
+    "highlight": "#ffa94d",
 }
 
 
@@ -382,37 +382,37 @@ def empty_placeholder_stylesheet() -> str:
 # subscribe_theme_mode() with a bound method that re-applies the
 # helper's output.
 _CARD_PALETTE_LIGHT = {
-    "info_bg":         "#f5f9fd",   # subtle blue-tinted info card
-    "info_border":     "#dbe4ef",
-    "info_text":       "#5b6573",
-    "info_accent":     "#1f5d8b",   # bold-text accent (e.g. count label)
-    "info_subtle":     "#6a7686",
-    "value_bg":        "#f7f9fc",   # readonly value boxes (Session/Dataset summary fields)
-    "value_border":    "#d8dee9",
-    "value_text":      "#243447",
-    "next_action_bg":  "#edf4fb",   # accent-bordered "next step" hint banner
+    "info_bg": "#f5f9fd",  # subtle blue-tinted info card
+    "info_border": "#dbe4ef",
+    "info_text": "#5b6573",
+    "info_accent": "#1f5d8b",  # bold-text accent (e.g. count label)
+    "info_subtle": "#6a7686",
+    "value_bg": "#f7f9fc",  # readonly value boxes (Session/Dataset summary fields)
+    "value_border": "#d8dee9",
+    "value_text": "#243447",
+    "next_action_bg": "#edf4fb",  # accent-bordered "next step" hint banner
     "next_action_border": "#1f5d8b",
-    "next_action_text":   "#243447",
-    "selection_bg":    "#f5f9fd",   # Database tab "selection status" line
+    "next_action_text": "#243447",
+    "selection_bg": "#f5f9fd",  # Database tab "selection status" line
     "selection_border": "#dbe4ef",
-    "selection_text":  "#5b6573",
+    "selection_text": "#5b6573",
 }
 
 _CARD_PALETTE_DARK = {
-    "info_bg":         "#222831",
-    "info_border":     "#3e4754",
-    "info_text":       "#a7b2c2",
-    "info_accent":     "#9dc9ea",
-    "info_subtle":     "#8b97a7",
-    "value_bg":        "#262d38",
-    "value_border":    "#3e4754",
-    "value_text":      "#dbe1ea",
-    "next_action_bg":  "#1f3148",
+    "info_bg": "#222831",
+    "info_border": "#3e4754",
+    "info_text": "#a7b2c2",
+    "info_accent": "#9dc9ea",
+    "info_subtle": "#8b97a7",
+    "value_bg": "#262d38",
+    "value_border": "#3e4754",
+    "value_text": "#dbe1ea",
+    "next_action_bg": "#1f3148",
     "next_action_border": "#5ca8e0",
-    "next_action_text":   "#dbe1ea",
-    "selection_bg":    "#222831",
+    "next_action_text": "#dbe1ea",
+    "selection_bg": "#222831",
     "selection_border": "#3e4754",
-    "selection_text":  "#a7b2c2",
+    "selection_text": "#a7b2c2",
 }
 
 
@@ -484,11 +484,11 @@ def selection_status_stylesheet() -> str:
 
 
 _TONE_PALETTE_LIGHT = {
-    "idle":   ("#5b6573", "#f7f9fc", "#d8dee9"),
-    "warn":   ("#8a4b08", "#fff4dc", "#f1c27d"),
-    "ready":  ("#0f5f3d", "#e6f6ee", "#7bc69a"),
+    "idle": ("#5b6573", "#f7f9fc", "#d8dee9"),
+    "warn": ("#8a4b08", "#fff4dc", "#f1c27d"),
+    "ready": ("#0f5f3d", "#e6f6ee", "#7bc69a"),
     "active": ("#0b4f80", "#e9f4ff", "#7fb2e5"),
-    "error":  ("#8c1d18", "#fdecec", "#f1a6a1"),
+    "error": ("#8c1d18", "#fdecec", "#f1a6a1"),
 }
 
 # Dark-mode tones: brighter foreground for contrast against dark fills,
@@ -496,11 +496,11 @@ _TONE_PALETTE_LIGHT = {
 # Borders are a muted accent of the same hue so the chip outline stays
 # legible on a #1f2630 surface.
 _TONE_PALETTE_DARK = {
-    "idle":   ("#c7d0db", "#2a313a", "#3e4754"),
-    "warn":   ("#f3c97a", "#3a2f16", "#7a5a22"),
-    "ready":  ("#7bcfa0", "#17321f", "#2a6a42"),
+    "idle": ("#c7d0db", "#2a313a", "#3e4754"),
+    "warn": ("#f3c97a", "#3a2f16", "#7a5a22"),
+    "ready": ("#7bcfa0", "#17321f", "#2a6a42"),
     "active": ("#7cbeee", "#17324c", "#2a5a84"),
-    "error":  ("#f09e95", "#35201d", "#7a3830"),
+    "error": ("#f09e95", "#35201d", "#7a3830"),
 }
 
 
@@ -514,7 +514,9 @@ def tone_palette(tone: str) -> tuple[str, str, str]:
     return palette.get(tone, palette["idle"])
 
 
-def apply_state_chip(label: QLabel, *, tone: str, compact: bool = False, emphasized: bool = False) -> None:
+def apply_state_chip(
+    label: QLabel, *, tone: str, compact: bool = False, emphasized: bool = False
+) -> None:
     """Apply the shared state-chip style used across summary cards and status bar."""
     fg, bg, border = tone_palette(tone)
     padding = "2px 10px" if compact else "4px 8px"

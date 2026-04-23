@@ -36,7 +36,9 @@ class _Sigma:
         self.values = np.asarray(values, dtype=float)
 
 
-def _make_reconstructor(*, max_iterations: int, verbose: bool, n_elements: int) -> tuple[SimpleNamespace, _Progress]:
+def _make_reconstructor(
+    *, max_iterations: int, verbose: bool, n_elements: int
+) -> tuple[SimpleNamespace, _Progress]:
     progress = _Progress()
     recon = SimpleNamespace(
         n_measurements=2,
@@ -76,7 +78,10 @@ def _make_reconstructor(*, max_iterations: int, verbose: bool, n_elements: int) 
         ensure_regularization_ready=lambda: None,
         _ensure_measurement_weights=lambda _sigma: None,
         fwd_model=SimpleNamespace(
-            fwd_solve=lambda _img: (SimpleNamespace(meas=np.array([0.5, 0.4], dtype=float)), None),
+            fwd_solve=lambda _img: (
+                SimpleNamespace(meas=np.array([0.5, 0.4], dtype=float)),
+                None,
+            ),
             linear_backend="petsc",
             _last_cache_lookup={},
             _petsc_backend_info={},
@@ -91,18 +96,30 @@ def _make_reconstructor(*, max_iterations: int, verbose: bool, n_elements: int) 
     return recon, progress
 
 
-def _install_common_runtime_stubs(monkeypatch: pytest.MonkeyPatch, reconstructor: SimpleNamespace) -> None:
-    monkeypatch.setattr(gn_runtime, "_extract_measured_vector", lambda measured: np.asarray(measured, dtype=float))
-    monkeypatch.setattr(gn_runtime, "_configure_measurement_space", lambda *_args, **_kwargs: None)
+def _install_common_runtime_stubs(
+    monkeypatch: pytest.MonkeyPatch, reconstructor: SimpleNamespace
+) -> None:
+    monkeypatch.setattr(
+        gn_runtime,
+        "_extract_measured_vector",
+        lambda measured: np.asarray(measured, dtype=float),
+    )
+    monkeypatch.setattr(
+        gn_runtime, "_configure_measurement_space", lambda *_args, **_kwargs: None
+    )
     monkeypatch.setattr(
         gn_runtime,
         "_to_runtime_tensor",
-        lambda _recon, value: torch.as_tensor(np.asarray(value, dtype=float), dtype=torch.float64),
+        lambda _recon, value: torch.as_tensor(
+            np.asarray(value, dtype=float), dtype=torch.float64
+        ),
     )
     monkeypatch.setattr(
         gn_runtime,
         "_to_runtime_tensor_cached",
-        lambda _recon, _name, value: torch.as_tensor(np.asarray(value, dtype=float), dtype=torch.float64),
+        lambda _recon, _name, value: torch.as_tensor(
+            np.asarray(value, dtype=float), dtype=torch.float64
+        ),
     )
     monkeypatch.setattr(
         gn_runtime,
@@ -122,7 +139,9 @@ def _install_common_runtime_stubs(monkeypatch: pytest.MonkeyPatch, reconstructor
     monkeypatch.setattr(
         gn_runtime,
         "function_set_array",
-        lambda sigma, values: setattr(sigma, "values", np.asarray(values, dtype=float).copy()),
+        lambda sigma, values: setattr(
+            sigma, "values", np.asarray(values, dtype=float).copy()
+        ),
     )
     monkeypatch.setattr(
         gn_runtime,
@@ -197,7 +216,9 @@ def test_run_reconstruction_covers_large_problem_reuse_and_verbose_reuse_info(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ):
-    recon, progress = _make_reconstructor(max_iterations=2, verbose=True, n_elements=6000)
+    recon, progress = _make_reconstructor(
+        max_iterations=2, verbose=True, n_elements=6000
+    )
     _install_common_runtime_stubs(monkeypatch, recon)
 
     monkeypatch.setattr(
@@ -214,11 +235,17 @@ def test_run_reconstruction_covers_large_problem_reuse_and_verbose_reuse_info(
                     "fast_linear_path_reason": "auto:matrix_free_pcg",
                 },
             )
-            or (np.array([0.1, 0.2], dtype=float), float(np.linalg.norm([0.1, 0.2])), 0.5)
+            or (
+                np.array([0.1, 0.2], dtype=float),
+                float(np.linalg.norm([0.1, 0.2])),
+                0.5,
+            )
         ),
     )
     monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_args, **_kwargs: 1.0)
-    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0))
+    monkeypatch.setattr(
+        gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0)
+    )
 
     results = gn_runtime.run_reconstruction(
         recon,
@@ -235,7 +262,9 @@ def test_run_reconstruction_covers_large_problem_reuse_and_verbose_reuse_info(
 def test_run_reconstruction_covers_force_refresh_fast_exception_and_rollback_paths(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    recon, _progress = _make_reconstructor(max_iterations=3, verbose=False, n_elements=100)
+    recon, _progress = _make_reconstructor(
+        max_iterations=3, verbose=False, n_elements=100
+    )
     _install_common_runtime_stubs(monkeypatch, recon)
 
     jacobian_calls = {"count": 0}
@@ -299,11 +328,15 @@ def test_run_reconstruction_covers_force_refresh_fast_exception_and_rollback_pat
 def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)
+    recon, _progress = _make_reconstructor(
+        max_iterations=1, verbose=False, n_elements=2
+    )
     _install_common_runtime_stubs(monkeypatch, recon)
 
     weights = torch.tensor([2.0, 0.5], dtype=torch.float64)
-    recon._ensure_measurement_weights = lambda _sigma: setattr(recon, "_meas_weight_sqrt", weights)
+    recon._ensure_measurement_weights = lambda _sigma: setattr(
+        recon, "_meas_weight_sqrt", weights
+    )
 
     linearization = JacobianLinearization(
         grad_u_all=(np.ones((2, 1), dtype=float),),
@@ -366,7 +399,9 @@ def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
 
     monkeypatch.setattr(gn_runtime, "_solve_linear_system_fast", fake_fast_solver)
     monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_args, **_kwargs: 1.0)
-    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0))
+    monkeypatch.setattr(
+        gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0)
+    )
 
     results = gn_runtime.run_reconstruction(
         recon,
@@ -384,7 +419,9 @@ def test_run_reconstruction_linearized_jacobian_routes_operator_to_fast_solver(
 
 def test_operator_mode_skips_startup_dense_cache(monkeypatch: pytest.MonkeyPatch):
     """T9: operator Jacobian must never consult the dense startup cache lookup."""
-    recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)
+    recon, _progress = _make_reconstructor(
+        max_iterations=1, verbose=False, n_elements=2
+    )
     _install_common_runtime_stubs(monkeypatch, recon)
 
     class _FakeArrayHolder:
@@ -448,7 +485,9 @@ def test_operator_mode_skips_startup_dense_cache(monkeypatch: pytest.MonkeyPatch
         ),
     )
     monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_a, **_kw: 1.0)
-    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_a, **_kw: (False, False, 0))
+    monkeypatch.setattr(
+        gn_runtime, "_maybe_rollback", lambda *_a, **_kw: (False, False, 0)
+    )
 
     results = gn_runtime.run_reconstruction(
         recon,
@@ -463,7 +502,9 @@ def test_operator_mode_skips_startup_dense_cache(monkeypatch: pytest.MonkeyPatch
 
 def test_linearize_path_asserts_sigma_fingerprint(monkeypatch: pytest.MonkeyPatch):
     """Operator path calls JacobianLinearization.assert_compatible(current sigma)."""
-    recon, _progress = _make_reconstructor(max_iterations=1, verbose=False, n_elements=2)
+    recon, _progress = _make_reconstructor(
+        max_iterations=1, verbose=False, n_elements=2
+    )
     _install_common_runtime_stubs(monkeypatch, recon)
 
     # Override _init_sigma_function to return a DOLFINx-Function-shaped stub so
@@ -551,7 +592,9 @@ def test_run_reconstruction_reuses_linearized_jacobian_across_iterations(
     def calculate(_sigma, method=None):
         _ = method
         calls["calculate"] += 1
-        raise AssertionError("dense calculate must not run for linearized Jacobian reuse")
+        raise AssertionError(
+            "dense calculate must not run for linearized Jacobian reuse"
+        )
 
     recon.jacobian_calculator = SimpleNamespace(
         calculate=calculate,
@@ -592,7 +635,9 @@ def test_run_reconstruction_reuses_linearized_jacobian_across_iterations(
 
     monkeypatch.setattr(gn_runtime, "_solve_linear_system_fast", fake_fast_solver)
     monkeypatch.setattr(gn_runtime, "_select_step_size", lambda *_args, **_kwargs: 1.0)
-    monkeypatch.setattr(gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0))
+    monkeypatch.setattr(
+        gn_runtime, "_maybe_rollback", lambda *_args, **_kwargs: (False, False, 0)
+    )
 
     results = gn_runtime.run_reconstruction(
         recon,

@@ -128,7 +128,9 @@ class ForwardModelConfig:
         )
 
     @classmethod
-    def from_mapping(cls, mapping: dict[str, Any] | None = None) -> "ForwardModelConfig":
+    def from_mapping(
+        cls, mapping: dict[str, Any] | None = None
+    ) -> "ForwardModelConfig":
         raw = dict(mapping or {})
         mesh_dimension = int(raw.get("mesh_dimension", raw.get("mea_mode", 2)))
         raw_drive_mode = raw.get(
@@ -149,21 +151,34 @@ class ForwardModelConfig:
         custom_payload = _parse_custom_pattern_payload(raw.get("custom_pattern_json"))
         if not custom_payload:
             custom_payload = _parse_custom_pattern_payload(raw.get("custom_pattern"))
-        custom_stim_matrix = raw.get("custom_stim_matrix", custom_payload.get("stim_matrix"))
-        custom_meas_matrices = raw.get("custom_meas_matrices", custom_payload.get("meas_matrices"))
+        custom_stim_matrix = raw.get(
+            "custom_stim_matrix", custom_payload.get("stim_matrix")
+        )
+        custom_meas_matrices = raw.get(
+            "custom_meas_matrices", custom_payload.get("meas_matrices")
+        )
 
         return cls(
             mesh_dimension=mesh_dimension,
-            mesh_refinement=float(raw.get("mesh_refinement", raw.get("mesh_size", 0.1))),
+            mesh_refinement=float(
+                raw.get("mesh_refinement", raw.get("mesh_size", 0.1))
+            ),
             background_conductivity=float(raw.get("background_conductivity", 1.0)),
             noise_level=float(raw.get("noise_level", 0.0)),
             n_elec=int(raw.get("n_elec", raw.get("n_electrodes", 16))),
             n_rings=int(raw.get("n_rings", 1)),
-            electrode_layout=str(raw.get("electrode_layout", "ring_major")).strip().lower()
+            electrode_layout=str(raw.get("electrode_layout", "ring_major"))
+            .strip()
+            .lower()
             or "ring_major",
             measurement_protocol=str(
-                raw.get("measurement_protocol", raw.get("acquisition_protocol", "eidors_full_3d"))
-            ).strip().lower()
+                raw.get(
+                    "measurement_protocol",
+                    raw.get("acquisition_protocol", "eidors_full_3d"),
+                )
+            )
+            .strip()
+            .lower()
             or "eidors_full_3d",
             stim_pattern=str(raw.get("stim_pattern", "{ad}")),
             meas_pattern=str(raw.get("meas_pattern", "{ad}")),
@@ -278,7 +293,9 @@ class ForwardModelConfig:
             "protocol": self.measurement_protocol,
             "patterns": f"{self.stim_pattern} / {self.meas_pattern}",
             "rotation": "rotate" if self.rotate_meas else "fixed",
-            "drive_related": "include drive electrodes" if self.use_meas_current else "exclude drive electrodes",
+            "drive_related": "include drive electrodes"
+            if self.use_meas_current
+            else "exclude drive electrodes",
             "extra_skip": f"+{int(self.use_meas_current_next)} extra skip",
             "points": f"{int(layout['points_per_frame'])}",
         }

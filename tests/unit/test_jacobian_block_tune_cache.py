@@ -46,12 +46,15 @@ def test_block_tune_cache_hits_and_invalidates_on_candidates(tmp_path, monkeypat
 
     grad_u_all = [np.random.default_rng(0).standard_normal((512, 3))]
     adjoint = [
-        np.random.default_rng(1 + idx).standard_normal((512, 3))
-        for idx in range(4)
+        np.random.default_rng(1 + idx).standard_normal((512, 3)) for idx in range(4)
     ]
 
-    cache_policy = CachePolicy(process_max_bytes=8 * 1024 * 1024, disk_max_bytes=64 * 1024 * 1024)
-    manager_a = CacheManager(scope="both", cache_dir=tmp_path / "cache", policy=cache_policy)
+    cache_policy = CachePolicy(
+        process_max_bytes=8 * 1024 * 1024, disk_max_bytes=64 * 1024 * 1024
+    )
+    manager_a = CacheManager(
+        scope="both", cache_dir=tmp_path / "cache", policy=cache_policy
+    )
     calc_a = _make_calc(manager_a, candidates=(64, 128, 256))
     block_a = calc_a._resolve_block_size(grad_u_all, adjoint, 512)
     info_a = calc_a.block_tuning_info()
@@ -59,7 +62,9 @@ def test_block_tune_cache_hits_and_invalidates_on_candidates(tmp_path, monkeypat
     assert info_a["tune_source"] == "compute"
     assert "assembly_elapsed_only" in info_a
 
-    manager_b = CacheManager(scope="both", cache_dir=tmp_path / "cache", policy=cache_policy)
+    manager_b = CacheManager(
+        scope="both", cache_dir=tmp_path / "cache", policy=cache_policy
+    )
     calc_b = _make_calc(manager_b, candidates=(64, 128, 256))
     block_b = calc_b._resolve_block_size(grad_u_all, adjoint, 512)
     info_b = calc_b.block_tuning_info()

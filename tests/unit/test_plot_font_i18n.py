@@ -57,6 +57,8 @@ def test_chinese_font_config_wrapper_behavior(monkeypatch):
         fallback_used=True,
     )
 
-    monkeypatch.setattr(chinese_font_config, "configure_plot_fonts", lambda language=None: expected)
+    monkeypatch.setattr(
+        chinese_font_config, "configure_plot_fonts", lambda language=None: expected
+    )
     result = chinese_font_config.configure_chinese_font()
     assert result == expected

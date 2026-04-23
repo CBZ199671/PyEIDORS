@@ -6,7 +6,10 @@ import numpy as np
 import pytest
 
 from pyeidors.inverse.reduced import reduced_gn_step as reduced_step_module
-from pyeidors.inverse.reduced.reduced_gn_step import build_reduced_operator, solve_reduced_step
+from pyeidors.inverse.reduced.reduced_gn_step import (
+    build_reduced_operator,
+    solve_reduced_step,
+)
 
 
 def test_build_reduced_operator_validates_input_shapes():
@@ -27,7 +30,9 @@ def test_build_reduced_operator_validates_input_shapes():
         )
 
 
-def test_solve_reduced_step_uses_cg_when_inexact_succeeds(monkeypatch: pytest.MonkeyPatch):
+def test_solve_reduced_step_uses_cg_when_inexact_succeeds(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         reduced_step_module,
         "cg",
@@ -49,7 +54,9 @@ def test_solve_reduced_step_uses_cg_when_inexact_succeeds(monkeypatch: pytest.Mo
     assert float(info["linear_residual_ratio"]) == pytest.approx(0.0)
 
 
-def test_solve_reduced_step_falls_back_to_dense_after_cg_failure(monkeypatch: pytest.MonkeyPatch):
+def test_solve_reduced_step_falls_back_to_dense_after_cg_failure(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(
         reduced_step_module,
         "cg",

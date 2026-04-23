@@ -50,7 +50,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _profile_block(name: str, fn: Callable[[], object]) -> tuple[object, dict[str, float]]:
+def _profile_block(
+    name: str, fn: Callable[[], object]
+) -> tuple[object, dict[str, float]]:
     tracemalloc.start()
     t0 = time.perf_counter()
     result = fn()
@@ -102,13 +104,23 @@ def main() -> None:
     args = parse_args()
     system = _build_system(args)
 
-    baseline_image = system.create_homogeneous_image(conductivity=float(args.background))
+    baseline_image = system.create_homogeneous_image(
+        conductivity=float(args.background)
+    )
     sigma = create_custom_phantom(
         system.fwd_model,
         background_conductivity=float(args.background),
-        anomalies=[{"center": (0.3, 0.2), "radius": 0.18, "conductivity": float(args.background) * 1.8}],
+        anomalies=[
+            {
+                "center": (0.3, 0.2),
+                "radius": 0.18,
+                "conductivity": float(args.background) * 1.8,
+            }
+        ],
     )
-    phantom_image = EITImage(elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model)
+    phantom_image = EITImage(
+        elem_data=function_get_array(sigma).copy(), fwd_model=system.fwd_model
+    )
 
     (_, stage_forward_baseline) = _profile_block(
         "forward_baseline",
@@ -123,7 +135,9 @@ def main() -> None:
     sigma_fn.x.array[:] = baseline_image.elem_data
     (_, stage_jacobian) = _profile_block(
         "jacobian",
-        lambda: system.reconstructor.jacobian_calculator.calculate(sigma_fn, method="efficient"),
+        lambda: system.reconstructor.jacobian_calculator.calculate(
+            sigma_fn, method="efficient"
+        ),
     )
 
     (_, stage_gn) = _profile_block(

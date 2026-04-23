@@ -100,7 +100,9 @@ class FrameRingBuffer:
             return None
         return self._read_slot((wc - 1) % self._capacity)
 
-    def read_at(self, write_count: int) -> tuple[np.ndarray, np.ndarray, float, int] | None:
+    def read_at(
+        self, write_count: int
+    ) -> tuple[np.ndarray, np.ndarray, float, int] | None:
         """Read frame at a specific write_count value.
 
         Returns ``None`` if the slot has been overwritten.

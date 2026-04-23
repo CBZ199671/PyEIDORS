@@ -4,9 +4,7 @@ Keep package import lightweight so helpers such as
 ``pyeidors.electrodes.layout`` do not eagerly import pattern generation.
 """
 
-__all__ = [
-    'StimMeasPatternManager'
-]
+__all__ = ["StimMeasPatternManager"]
 
 
 def __getattr__(name: str):

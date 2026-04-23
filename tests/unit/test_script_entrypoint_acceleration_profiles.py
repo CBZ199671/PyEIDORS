@@ -21,7 +21,9 @@ def _load_script_module(*parts: str):
 
 
 def test_v51_gui_launcher_defaults_to_fast_startup_contract():
-    launcher = Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    launcher = (
+        Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    )
     text = launcher.read_text(encoding="utf-8")
 
     assert 'SKIP_CUDA_PROBE="1"' in text
@@ -30,7 +32,9 @@ def test_v51_gui_launcher_defaults_to_fast_startup_contract():
 
 
 def test_v52_gui_launcher_warns_about_path_shadowed_env():
-    launcher = Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    launcher = (
+        Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    )
     text = launcher.read_text(encoding="utf-8")
 
     assert "warn_path_shadowed_env" in text

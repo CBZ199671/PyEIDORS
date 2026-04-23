@@ -125,13 +125,17 @@ def _decode_process_bytes(raw: bytes) -> str:
     return ""
 
 
-def _run_powershell_capture(script: str, *, timeout: float | None = None) -> tuple[int, str, str]:
+def _run_powershell_capture(
+    script: str, *, timeout: float | None = None
+) -> tuple[int, str, str]:
     binary = _powershell_binary()
     if not binary:
         return 127, "", "PowerShell 不可用。"
     command = [binary, "-NoProfile", "-Command", script]
     try:
-        result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
+        result = subprocess.run(
+            command, capture_output=True, check=False, timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return 124, "", "PowerShell 调用超时。"
     return (
@@ -148,9 +152,13 @@ def _run_powershell_lines(script: str, *, timeout: float | None = None) -> list[
     return [line.strip() for line in stdout.splitlines() if line.strip()]
 
 
-def _run_command_capture(command: list[str], *, timeout: float | None = None) -> tuple[int, str, str]:
+def _run_command_capture(
+    command: list[str], *, timeout: float | None = None
+) -> tuple[int, str, str]:
     try:
-        result = subprocess.run(command, capture_output=True, check=False, timeout=timeout)
+        result = subprocess.run(
+            command, capture_output=True, check=False, timeout=timeout
+        )
     except subprocess.TimeoutExpired:
         return 124, "", "命令执行超时。"
     except Exception as exc:
@@ -214,7 +222,9 @@ def matlab_runtime_path(path: str | Path, environment: EidorsEnvironment) -> str
     raw = str(path).strip()
     if not raw:
         return raw
-    matlab_host_os = environment.matlab_host_os or _guess_host_os_from_path(environment.matlab_command)
+    matlab_host_os = environment.matlab_host_os or _guess_host_os_from_path(
+        environment.matlab_command
+    )
     if matlab_host_os == "windows":
         return to_windows_path(raw)
     return to_posix_path(raw)
@@ -323,7 +333,10 @@ def _toolbox_startups(toolbox_root: Path, *, limit: int = 8) -> list[Path]:
     ):
         candidates.extend(toolbox_root.glob(pattern))
     if len(candidates) < limit:
-        candidates.extend(Path(item) for item in _limited_find_startups(toolbox_root, max_depth=4, limit=limit))
+        candidates.extend(
+            Path(item)
+            for item in _limited_find_startups(toolbox_root, max_depth=4, limit=limit)
+        )
 
     seen: set[str] = set()
     ordered: list[Path] = []
@@ -436,11 +449,15 @@ def _detect_linux_candidates() -> dict[str, Any]:
             direct = root / "startup.m"
             if direct.exists() and "eidors" in str(direct).lower():
                 startups.append(str(direct))
-            startups.extend(_limited_find_startups(root, max_depth=5, limit=_LINUX_STARTUP_LIMIT))
+            startups.extend(
+                _limited_find_startups(root, max_depth=5, limit=_LINUX_STARTUP_LIMIT)
+            )
         startups = _unique_strings(startups)
         startup_strategy = "broadened" if startups else "manual"
 
-    octave_commands = [item for item in (shutil.which("octave"), shutil.which("octave-cli")) if item]
+    octave_commands = [
+        item for item in (shutil.which("octave"), shutil.which("octave-cli")) if item
+    ]
     return {
         "matlab": matlab_items,
         "startups": startups,
@@ -560,7 +577,9 @@ def _detect_windows_candidates_from_wsl() -> dict[str, Any]:
 
     toolbox_startups: list[str] = []
     for matlab in matlab_items:
-        toolbox_root = Path(to_posix_path(str(matlab.get("matlab_root", "")))) / "toolbox"
+        toolbox_root = (
+            Path(to_posix_path(str(matlab.get("matlab_root", "")))) / "toolbox"
+        )
         for candidate in _toolbox_startups(toolbox_root):
             toolbox_startups.append(to_windows_path(candidate))
 
@@ -581,7 +600,9 @@ def _detect_windows_candidates_from_wsl() -> dict[str, Any]:
     return {
         "matlab": matlab_items,
         "startups": startups,
-        "searched_roots": _unique_strings([to_windows_path(item) for item in ordered_roots]),
+        "searched_roots": _unique_strings(
+            [to_windows_path(item) for item in ordered_roots]
+        ),
         "drive_roots": _unique_strings([to_windows_path(item) for item in drives]),
         "startup_strategy": startup_strategy,
     }
@@ -664,7 +685,9 @@ def _detect_windows_candidates() -> dict[str, Any]:
     ):
         add_search_root(raw)
 
-    user_home = next(iter(_run_powershell_lines("[Environment]::GetFolderPath('UserProfile')")), "")
+    user_home = next(
+        iter(_run_powershell_lines("[Environment]::GetFolderPath('UserProfile')")), ""
+    )
     if user_home:
         for relative in (
             "workspace",
@@ -683,10 +706,14 @@ def _detect_windows_candidates() -> dict[str, Any]:
             add_search_root(f"{user_home}\\{relative}")
 
     search_roots = _unique_strings(search_roots)
-    roots_literal = ", ".join("'" + root.replace("'", "''") + "'" for root in search_roots)
+    roots_literal = ", ".join(
+        "'" + root.replace("'", "''") + "'" for root in search_roots
+    )
     startup_literals: list[str] = []
     for matlab in matlab_items:
-        toolbox_root = Path(to_posix_path(str(matlab.get("matlab_root", "")))) / "toolbox"
+        toolbox_root = (
+            Path(to_posix_path(str(matlab.get("matlab_root", "")))) / "toolbox"
+        )
         for candidate in _toolbox_startups(toolbox_root):
             startup_literals.append(to_windows_path(candidate))
     startups = _unique_strings(startup_literals)
@@ -705,7 +732,9 @@ def _detect_windows_candidates() -> dict[str, Any]:
             Select-Object -ExpandProperty FullName
         }}
         """
-        startups = _unique_strings(_run_powershell_lines(startup_scan_script) if search_roots else [])
+        startups = _unique_strings(
+            _run_powershell_lines(startup_scan_script) if search_roots else []
+        )
         startup_strategy = "broadened" if startups else "manual"
 
     return {
@@ -717,7 +746,9 @@ def _detect_windows_candidates() -> dict[str, Any]:
     }
 
 
-def _build_environment_name(matlab_name: str, runtime_kind: str, *, has_matlab: bool, has_startup: bool) -> str:
+def _build_environment_name(
+    matlab_name: str, runtime_kind: str, *, has_matlab: bool, has_startup: bool
+) -> str:
     runtime = _runtime_label(runtime_kind)
     if has_matlab and has_startup:
         return f"{matlab_name} / EIDORS（{runtime}）"
@@ -752,10 +783,19 @@ def _pair_candidates(
         startup = _best_matching_startup(root or command, startup_items)
         if startup:
             used_startups.add(_normalized_path_key(startup))
-        matlab_name = str(matlab.get("name", "")).strip() or Path(to_posix_path(root or command)).name or "MATLAB"
+        matlab_name = (
+            str(matlab.get("name", "")).strip()
+            or Path(to_posix_path(root or command)).name
+            or "MATLAB"
+        )
         environments.append(
             EidorsEnvironment(
-                name=_build_environment_name(matlab_name, runtime_kind, has_matlab=bool(command), has_startup=bool(startup)),
+                name=_build_environment_name(
+                    matlab_name,
+                    runtime_kind,
+                    has_matlab=bool(command),
+                    has_startup=bool(startup),
+                ),
                 matlab_command=command,
                 matlab_root=root,
                 eidors_startup=startup,
@@ -770,7 +810,12 @@ def _pair_candidates(
         for startup in startup_items[:4]:
             environments.append(
                 EidorsEnvironment(
-                    name=_build_environment_name("EIDORS startup", runtime_kind, has_matlab=False, has_startup=True),
+                    name=_build_environment_name(
+                        "EIDORS startup",
+                        runtime_kind,
+                        has_matlab=False,
+                        has_startup=True,
+                    ),
                     eidors_startup=startup,
                     source=source,
                     startup_host_os=host_os,
@@ -785,7 +830,9 @@ def _pair_candidates(
             continue
         environments.append(
             EidorsEnvironment(
-                name=_build_environment_name("EIDORS startup", runtime_kind, has_matlab=False, has_startup=True),
+                name=_build_environment_name(
+                    "EIDORS startup", runtime_kind, has_matlab=False, has_startup=True
+                ),
                 eidors_startup=startup,
                 source=source,
                 startup_host_os=host_os,
@@ -797,7 +844,9 @@ def _pair_candidates(
     return environments
 
 
-def _dedupe_environments(environments: list[EidorsEnvironment]) -> list[EidorsEnvironment]:
+def _dedupe_environments(
+    environments: list[EidorsEnvironment],
+) -> list[EidorsEnvironment]:
     seen: set[tuple[str, str, str]] = set()
     ordered: list[EidorsEnvironment] = []
     for environment in environments:
@@ -814,7 +863,9 @@ def _dedupe_environments(environments: list[EidorsEnvironment]) -> list[EidorsEn
 
 
 def _environment_sort_key(environment: EidorsEnvironment) -> tuple[int, int, str]:
-    completeness = int(bool(environment.matlab_command)) + int(bool(environment.eidors_startup))
+    completeness = int(bool(environment.matlab_command)) + int(
+        bool(environment.eidors_startup)
+    )
     if running_in_wsl():
         runtime_priority = {
             "wsl-bridged": 0,
@@ -862,7 +913,9 @@ class InteropSettingsStore:
         try:
             self._settings.setValue(
                 _PROFILES_KEY,
-                json.dumps([profile.to_mapping() for profile in profiles], ensure_ascii=True),
+                json.dumps(
+                    [profile.to_mapping() for profile in profiles], ensure_ascii=True
+                ),
             )
         finally:
             self._settings.endGroup()
@@ -949,7 +1002,9 @@ class EidorsEnvironmentDetector:
 
         report.can_launch_matlab = any(bool(item.matlab_command) for item in detected)
         report.has_eidors_startup = any(bool(item.eidors_startup) for item in detected)
-        report.can_capture_script = any(bool(item.matlab_command and item.eidors_startup) for item in detected)
+        report.can_capture_script = any(
+            bool(item.matlab_command and item.eidors_startup) for item in detected
+        )
         report.matlab_found_count = sum(1 for item in detected if item.matlab_command)
         report.startup_found_count = sum(1 for item in detected if item.eidors_startup)
 
@@ -959,9 +1014,13 @@ class EidorsEnvironmentDetector:
         }
         startup_strategies.discard("")
         report.toolbox_startup_found = "toolbox" in startup_strategies
-        report.broadened_search_used = any(item in startup_strategies for item in ("broadened", "manual"))
+        report.broadened_search_used = any(
+            item in startup_strategies for item in ("broadened", "manual")
+        )
         report.broadened_startup_found = "broadened" in startup_strategies
-        report.manual_browse_required = report.can_launch_matlab and not report.has_eidors_startup
+        report.manual_browse_required = (
+            report.can_launch_matlab and not report.has_eidors_startup
+        )
 
         if windows_candidates.get("matlab") or windows_candidates.get("startups"):
             report.issues.append(
@@ -973,21 +1032,33 @@ class EidorsEnvironmentDetector:
                 "已扫描 Linux/WSL 侧 MATLAB/EIDORS 常见位置，包括 $MATLABROOT、$EIDORS_HOME、"
                 "~/workspace、~/src、/opt、/usr/local 等目录。"
             )
-        if linux_candidates.get("octave_commands") and not linux_candidates.get("matlab"):
+        if linux_candidates.get("octave_commands") and not linux_candidates.get(
+            "matlab"
+        ):
             report.issues.append(
                 "检测到 Octave，但当前 v1 互通链仍以 MATLAB 为正式运行端；Octave 先作为后续扩展位保留。"
             )
         if "toolbox" in startup_strategies:
-            report.issues.append("已优先从已检测到的 MATLAB 安装目录下检索 toolbox 中的 EIDORS startup.m。")
+            report.issues.append(
+                "已优先从已检测到的 MATLAB 安装目录下检索 toolbox 中的 EIDORS startup.m。"
+            )
         if "broadened" in startup_strategies:
-            report.issues.append("MATLAB 已找到，但 toolbox 内未命中时，已自动扩大到常见工程目录继续搜索 startup.m。")
+            report.issues.append(
+                "MATLAB 已找到，但 toolbox 内未命中时，已自动扩大到常见工程目录继续搜索 startup.m。"
+            )
 
         if not report.can_launch_matlab:
-            report.issues.append("未自动检测到 MATLAB 安装路径，可在 Profiles & Paths 中手动指定。")
+            report.issues.append(
+                "未自动检测到 MATLAB 安装路径，可在 Profiles & Paths 中手动指定。"
+            )
         if not report.has_eidors_startup:
-            report.issues.append("未自动检测到 EIDORS startup.m，请手动点击 Browse 指定；选择用户脚本后系统也会再尝试按脚本位置自动反推。")
+            report.issues.append(
+                "未自动检测到 EIDORS startup.m，请手动点击 Browse 指定；选择用户脚本后系统也会再尝试按脚本位置自动反推。"
+            )
         if detected and not report.can_capture_script:
-            report.issues.append("已检测到部分环境信息，但还缺少 MATLAB 或 startup.m，需手动补全后才能采集脚本。")
+            report.issues.append(
+                "已检测到部分环境信息，但还缺少 MATLAB 或 startup.m，需手动补全后才能采集脚本。"
+            )
         if not detected:
             report.issues.append("当前未检测到任何可用候选环境。")
 
@@ -1013,13 +1084,15 @@ class EidorsEnvironmentDetector:
         command = matlab_command_for_execution(environment)
         startup = matlab_runtime_path(environment.eidors_startup, environment)
         escaped_startup = startup.replace("'", "''")
-        expression = (
-            f"run('{escaped_startup}');"
-            "disp(exist('eidors_default','file'));"
+        expression = f"run('{escaped_startup}');disp(exist('eidors_default','file'));"
+        code, stdout, stderr = _run_command_capture(
+            [command, "-batch", expression], timeout=60
         )
-        code, stdout, stderr = _run_command_capture([command, "-batch", expression], timeout=60)
         if code == 127 and stderr:
             return False, f"EIDORS 启动测试失败: {stderr}"
         if code != 0:
-            return False, stderr.strip() or stdout.strip() or "EIDORS startup 执行失败。"
+            return (
+                False,
+                stderr.strip() or stdout.strip() or "EIDORS startup 执行失败。",
+            )
         return "2" in stdout.split(), stdout.strip() or "EIDORS startup 已运行。"

@@ -128,7 +128,9 @@ def _configure_reconstructor(
     recon.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
 
 
-def _build_dataset(measurement: np.ndarray, metadata: Dict[str, Any]) -> MeasurementDataset:
+def _build_dataset(
+    measurement: np.ndarray, metadata: Dict[str, Any]
+) -> MeasurementDataset:
     measurements = np.asarray(measurement, dtype=float).reshape(1, -1)
     return MeasurementDataset.from_metadata(measurements, metadata)
 
@@ -189,7 +191,8 @@ def run_absolute_reconstruction(
     acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
     jacobian_block_tune: str = DEFAULT_JACOBIAN_BLOCK_TUNE,
     jacobian_block_size: int = DEFAULT_JACOBIAN_BLOCK_SIZE,
-    jacobian_block_candidates: list[int] | tuple[int, ...] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
+    jacobian_block_candidates: list[int]
+    | tuple[int, ...] = DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
 ) -> None:
     """Execute GN absolute reconstruction and save outputs."""
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -201,7 +204,9 @@ def run_absolute_reconstruction(
         mesh_family,
         default=DEFAULT_MESH_FAMILY,
     )
-    geometry_version = str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    geometry_version = (
+        str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    )
 
     print(f"[INFO] CSV data file: {csv_path}")
     print(f"[INFO] YAML metadata file: {metadata_path}")
@@ -211,9 +216,7 @@ def run_absolute_reconstruction(
     )
     measurement_min = float(np.min(measurement))
     measurement_max = float(np.max(measurement))
-    print(
-        f"[INFO] Measurement range: [{measurement_min:.6e}, {measurement_max:.6e}]"
-    )
+    print(f"[INFO] Measurement range: [{measurement_min:.6e}, {measurement_max:.6e}]")
 
     dataset = _build_dataset(measurement, metadata)
     pattern_config, drive_mode_diag = normalize_pattern_config_for_mesh(
@@ -257,7 +260,8 @@ def run_absolute_reconstruction(
     system = EITSystem(
         n_elec=total_electrodes,
         pattern_config=pattern_config,
-        contact_impedance=np.ones(total_electrodes, dtype=float) * float(contact_impedance),
+        contact_impedance=np.ones(total_electrodes, dtype=float)
+        * float(contact_impedance),
         base_conductivity=float(background_sigma),
         regularization_type="noser",
         regularization_alpha=1.0,
@@ -291,12 +295,17 @@ def run_absolute_reconstruction(
         acceleration_profile=str(acceleration_profile),
         jacobian_block_tune=str(jacobian_block_tune),
         jacobian_block_size=int(max(0, jacobian_block_size)),
-        jacobian_block_candidates=tuple(int(v) for v in jacobian_block_candidates if int(v) > 0),
+        jacobian_block_candidates=tuple(
+            int(v) for v in jacobian_block_candidates if int(v) > 0
+        ),
         petsc_device=str(petsc_device),
         device=str(device),
         forward_backend=str(forward_backend),
         mesh_family=str(mesh_family),
-        linear_backend_config={"mat_solve_mode": str(forward_mat_solve), "petsc_device": str(petsc_device)},
+        linear_backend_config={
+            "mat_solve_mode": str(forward_mat_solve),
+            "petsc_device": str(petsc_device),
+        },
     )
     system.setup(mesh=mesh)
     _configure_reconstructor(
@@ -417,7 +426,9 @@ def run_absolute_reconstruction(
     ax_right.set_aspect("equal", adjustable="box")
 
     fig_cmp.tight_layout()
-    fig_cmp.savefig(output_dir / "prediction_vs_measurement.png", dpi=300, bbox_inches="tight")
+    fig_cmp.savefig(
+        output_dir / "prediction_vs_measurement.png", dpi=300, bbox_inches="tight"
+    )
     plt.close(fig_cmp)
 
     write_output_bundle(

@@ -34,14 +34,20 @@ from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.visualization import create_visualizer
 from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
-from scripts.demos._shared import cell_to_node, make_random_anomaly, save_voltage_comparison_figure
+from scripts.demos._shared import (
+    cell_to_node,
+    make_random_anomaly,
+    save_voltage_comparison_figure,
+)
 
 
 def main() -> None:
     rng = np.random.default_rng(20241116)
 
     # 1) Load cached mesh (16 electrodes), avoiding gmsh dependency
-    mesh = load_or_create_mesh(mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16)
+    mesh = load_or_create_mesh(
+        mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16
+    )
 
     # 2) Build system (adjacent drive/measurement, normalized drive=1; contact impedance 1e-6)
     pattern_cfg = PatternConfig(
@@ -66,7 +72,10 @@ def main() -> None:
     )
     system.setup(mesh=mesh)
 
-    n_elem = int(system.fwd_model.V_sigma.dofmap.index_map.size_local * system.fwd_model.V_sigma.dofmap.index_map_bs)
+    n_elem = int(
+        system.fwd_model.V_sigma.dofmap.index_map.size_local
+        * system.fwd_model.V_sigma.dofmap.index_map_bs
+    )
 
     # 3) Construct baseline and random anomaly
     sigma_bg = np.ones(n_elem, dtype=float)
@@ -130,15 +139,25 @@ def main() -> None:
 
     # 8) Visualization: ground truth vs reconstructed conductivity, measurement comparison
     viz = create_visualizer()
-    sigma_true_nodes = cell_to_node(mesh, sigma_true) if len(sigma_true) == mesh.num_cells() else sigma_true
-    sigma_est_nodes = cell_to_node(mesh, sigma_est) if len(sigma_est) == mesh.num_cells() else sigma_est
+    sigma_true_nodes = (
+        cell_to_node(mesh, sigma_true)
+        if len(sigma_true) == mesh.num_cells()
+        else sigma_true
+    )
+    sigma_est_nodes = (
+        cell_to_node(mesh, sigma_est)
+        if len(sigma_est) == mesh.num_cells()
+        else sigma_est
+    )
     fig_cmp = viz.plot_reconstruction_comparison(
         mesh,
         sigma_true_nodes,
         sigma_est_nodes,
-        title="Ground Truth vs Reconstructed Conductivity"
+        title="Ground Truth vs Reconstructed Conductivity",
     )
-    fig_cmp.savefig(out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight")
+    fig_cmp.savefig(
+        out_dir / "conductivity_comparison.png", dpi=300, bbox_inches="tight"
+    )
     plt.close(fig_cmp)
 
     # Boundary voltage comparison: true target vs reconstructed prediction (in measurement space)

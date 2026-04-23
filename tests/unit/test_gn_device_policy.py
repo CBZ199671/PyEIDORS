@@ -61,7 +61,9 @@ def test_resolve_torch_device_auto_uses_cuda_when_petsc_cuda(monkeypatch):
     import pyeidors.inverse.solvers.gauss_newton_device as dev_mod
 
     monkeypatch.setattr(dev_mod, "torch", _TorchStub(cuda_available=True))
-    resolved = resolve_torch_device("auto", verbose=False, petsc_device_effective="cuda")
+    resolved = resolve_torch_device(
+        "auto", verbose=False, petsc_device_effective="cuda"
+    )
 
     assert resolved.requested == "auto"
     assert resolved.effective == "cuda"
@@ -80,13 +82,19 @@ def test_resolve_torch_device_verbose_cuda_and_mps_messages(monkeypatch, capsys)
     import pyeidors.inverse.solvers.gauss_newton_device as dev_mod
 
     monkeypatch.setattr(dev_mod, "torch", _TorchStub(cuda_available=True))
-    cuda_resolved = resolve_torch_device("auto", verbose=True, petsc_device_effective="cuda")
+    cuda_resolved = resolve_torch_device(
+        "auto", verbose=True, petsc_device_effective="cuda"
+    )
     assert cuda_resolved.effective == "cuda"
     assert "Using GPU: Fake CUDA" in capsys.readouterr().out
 
     torch_stub = _TorchStub(cuda_available=False)
-    torch_stub.backends.mps = type("MPSBackend", (), {"is_available": staticmethod(lambda: True)})()
+    torch_stub.backends.mps = type(
+        "MPSBackend", (), {"is_available": staticmethod(lambda: True)}
+    )()
     monkeypatch.setattr(dev_mod, "torch", torch_stub)
-    mps_resolved = resolve_torch_device("mps", verbose=True, petsc_device_effective="cpu")
+    mps_resolved = resolve_torch_device(
+        "mps", verbose=True, petsc_device_effective="cpu"
+    )
     assert mps_resolved.effective == "mps"
     assert "Using Apple MPS device" in capsys.readouterr().out

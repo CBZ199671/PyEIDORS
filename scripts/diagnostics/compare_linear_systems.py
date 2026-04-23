@@ -26,7 +26,9 @@ def load_measured_vector(path: Path, column: int) -> np.ndarray:
     if data.ndim == 1:
         return data
     if not (0 <= column < data.shape[1]):
-        raise IndexError(f"measured column {column} out of range for {path} with {data.shape[1]} columns")
+        raise IndexError(
+            f"measured column {column} out of range for {path} with {data.shape[1]} columns"
+        )
     return data[:, column]
 
 
@@ -39,14 +41,22 @@ def project_prediction(jacobian: np.ndarray, delta: np.ndarray) -> np.ndarray:
         return jacobian @ delta
     if jacobian.shape[0] == delta.size:
         return jacobian.T @ delta
-    raise ValueError(f"Jacobian shape {jacobian.shape} incompatible with delta size {delta.size}")
+    raise ValueError(
+        f"Jacobian shape {jacobian.shape} incompatible with delta size {delta.size}"
+    )
 
 
-def analyze_solution(tag: str, measured: np.ndarray, predicted: np.ndarray) -> Dict[str, float]:
+def analyze_solution(
+    tag: str, measured: np.ndarray, predicted: np.ndarray
+) -> Dict[str, float]:
     error = predicted - measured
-    rmse = float(np.sqrt(np.mean(error ** 2)))
+    rmse = float(np.sqrt(np.mean(error**2)))
     mae = float(np.mean(np.abs(error)))
-    corr = float(np.corrcoef(predicted, measured)[0, 1]) if np.std(measured) > 0 else np.nan
+    corr = (
+        float(np.corrcoef(predicted, measured)[0, 1])
+        if np.std(measured) > 0
+        else np.nan
+    )
     return {"tag": tag, "rmse": rmse, "mae": mae, "corr": corr}
 
 
@@ -71,13 +81,39 @@ def solve_pyeidors_system(npz_path: Path) -> Tuple[np.ndarray, np.ndarray]:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter)
-    parser.add_argument("--measured", type=Path, required=True, help="CSV containing measured difference (column specified below)")
-    parser.add_argument("--measured-column", type=int, default=0, help="Which column of measured CSV to use")
-    parser.add_argument("--matlab-mat", type=Path, help="Path to eidors_linear_system.mat")
-    parser.add_argument("--pyeidors-npz", type=Path, help="Path to linear_system.npz saved via --dump-linear-system")
-    parser.add_argument("--output-dir", type=Path, help="Optional directory to store predicted vectors for inspection")
-    parser.add_argument("--report-components", action="store_true", help="Print norms/differences for J, W, RtR when both systems are provided.")
+    parser = argparse.ArgumentParser(
+        description=__doc__, formatter_class=argparse.ArgumentDefaultsHelpFormatter
+    )
+    parser.add_argument(
+        "--measured",
+        type=Path,
+        required=True,
+        help="CSV containing measured difference (column specified below)",
+    )
+    parser.add_argument(
+        "--measured-column",
+        type=int,
+        default=0,
+        help="Which column of measured CSV to use",
+    )
+    parser.add_argument(
+        "--matlab-mat", type=Path, help="Path to eidors_linear_system.mat"
+    )
+    parser.add_argument(
+        "--pyeidors-npz",
+        type=Path,
+        help="Path to linear_system.npz saved via --dump-linear-system",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        help="Optional directory to store predicted vectors for inspection",
+    )
+    parser.add_argument(
+        "--report-components",
+        action="store_true",
+        help="Print norms/differences for J, W, RtR when both systems are provided.",
+    )
     return parser.parse_args()
 
 
@@ -92,7 +128,9 @@ def main() -> None:
     if args.matlab_mat:
         pred, delta = solve_matlab_system(args.matlab_mat)
         stats = analyze_solution("matlab", measured, pred)
-        print(f"[MATLAB] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}")
+        print(
+            f"[MATLAB] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}"
+        )
         if args.output_dir:
             np.savetxt(args.output_dir / "matlab_predicted.csv", pred, delimiter=",")
             np.savetxt(args.output_dir / "matlab_delta.csv", delta, delimiter=",")
@@ -107,7 +145,9 @@ def main() -> None:
     if args.pyeidors_npz:
         pred, delta = solve_pyeidors_system(args.pyeidors_npz)
         stats = analyze_solution("pyeidors", measured, pred)
-        print(f"[PyEIDORS] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}")
+        print(
+            f"[PyEIDORS] corr={stats['corr']:.6f} rmse={stats['rmse']:.6e} mae={stats['mae']:.6e}"
+        )
         if args.output_dir:
             np.savetxt(args.output_dir / "pyeidors_predicted.csv", pred, delimiter=",")
             np.savetxt(args.output_dir / "pyeidors_delta.csv", delta, delimiter=",")
@@ -119,6 +159,7 @@ def main() -> None:
         }
 
     if args.report_components and matlab_components and pyeidors_components:
+
         def report(name: str, transpose_py: bool = False) -> None:
             mat = matlab_components[name]
             py = pyeidors_components[name]
@@ -128,7 +169,9 @@ def main() -> None:
                 print(f"[Diff] {name}: shape mismatch {mat.shape} vs {py.shape}")
                 return
             diff = np.linalg.norm(mat - py)
-            print(f"[Diff] {name}: ||mat||={np.linalg.norm(mat):.6e} ||py||={np.linalg.norm(py):.6e} ||mat-py||={diff:.6e}")
+            print(
+                f"[Diff] {name}: ||mat||={np.linalg.norm(mat):.6e} ||py||={np.linalg.norm(py):.6e} ||mat-py||={diff:.6e}"
+            )
 
         report("J", transpose_py=True)
         report("W")

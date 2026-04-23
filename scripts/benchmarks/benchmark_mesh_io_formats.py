@@ -154,7 +154,9 @@ def benchmark_mesh_case(
         warmups=warmups,
     )
 
-    msh_assoc = association_for_mesh_data(msh_mesh_data, paths.source_msh, effective_gdim)
+    msh_assoc = association_for_mesh_data(
+        msh_mesh_data, paths.source_msh, effective_gdim
+    )
     hdf5_assoc = dict(hdf5_mesh_data.association_table)
     checks = compare_mesh_data(
         msh_mesh_data,
@@ -189,7 +191,9 @@ def resolve_mesh_case_paths(path: Path) -> MeshCasePaths:
     suffix = input_path.suffix.lower()
     metadata = read_cache_metadata(input_path)
     source_payload = metadata.get("source_msh_file") if metadata else None
-    source_msh = Path(source_payload) if source_payload else input_path.with_suffix(".msh")
+    source_msh = (
+        Path(source_payload) if source_payload else input_path.with_suffix(".msh")
+    )
     if suffix == ".msh":
         source_msh = input_path
         cache_probe = input_path
@@ -254,7 +258,9 @@ def load_hdf5_cache_data(path: Path, *, gdim: int):
     return cache_data
 
 
-def association_for_mesh_data(mesh_data: Any, source_msh: Path, gdim: int) -> dict[str, int]:
+def association_for_mesh_data(
+    mesh_data: Any, source_msh: Path, gdim: int
+) -> dict[str, int]:
     association = validate_mesh_data_tags(mesh_data, gdim=int(gdim))
     if association:
         return {str(key): int(value) for key, value in association.items()}
@@ -302,7 +308,9 @@ def time_repeated(
     return samples, result
 
 
-def build_timing_payload(msh_timings: Sequence[float], hdf5_timings: Sequence[float]) -> dict[str, Any]:
+def build_timing_payload(
+    msh_timings: Sequence[float], hdf5_timings: Sequence[float]
+) -> dict[str, Any]:
     msh_stats = timing_stats(msh_timings)
     hdf5_stats = timing_stats(hdf5_timings)
     msh_median = max(float(msh_stats["median_sec"]), 1.0e-15)
@@ -352,8 +360,10 @@ def compare_mesh_data(
     checks = {
         "vertices_equal": msh_summary["num_vertices"] == hdf5_summary["num_vertices"],
         "cells_equal": msh_summary["num_cells"] == hdf5_summary["num_cells"],
-        "topology_dim_equal": msh_summary["topology_dim"] == hdf5_summary["topology_dim"],
-        "geometry_dim_equal": msh_summary["geometry_dim"] == hdf5_summary["geometry_dim"],
+        "topology_dim_equal": msh_summary["topology_dim"]
+        == hdf5_summary["topology_dim"],
+        "geometry_dim_equal": msh_summary["geometry_dim"]
+        == hdf5_summary["geometry_dim"],
         "facet_tags_equal": bool(facet_equal),
         "cell_tags_equal": bool(cell_equal),
         "association_table_equal": bool(association_equal),
@@ -362,7 +372,9 @@ def compare_mesh_data(
         "facet_tag_entity_pairs_equal": tag_entity_pairs_equal(
             msh_facet_tags, hdf5_facet_tags
         ),
-        "cell_tag_entity_pairs_equal": tag_entity_pairs_equal(msh_cell_tags, hdf5_cell_tags),
+        "cell_tag_entity_pairs_equal": tag_entity_pairs_equal(
+            msh_cell_tags, hdf5_cell_tags
+        ),
     }
     return {
         **checks,
@@ -456,7 +468,9 @@ def pairs_sha256(indices: Iterable[int], values: Iterable[int]) -> str:
         pairs = np.column_stack((index_array, value_array))
     else:
         pairs = np.empty((0, 2), dtype=np.int64)
-    return hashlib.sha256(np.ascontiguousarray(pairs, dtype=np.int64).tobytes()).hexdigest()
+    return hashlib.sha256(
+        np.ascontiguousarray(pairs, dtype=np.int64).tobytes()
+    ).hexdigest()
 
 
 def normalize_association(value: dict[str, int]) -> dict[str, int]:

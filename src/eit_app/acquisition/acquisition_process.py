@@ -56,7 +56,9 @@ class AcquisitionProcess(mp.Process):
     def frame_count(self) -> int:
         return self._frame_count.value
 
-    def send_command(self, cmd: AcquisitionCommand, payload: dict | None = None) -> None:
+    def send_command(
+        self, cmd: AcquisitionCommand, payload: dict | None = None
+    ) -> None:
         self._cmd_queue.put(cmd)
 
     def get_errors(self) -> list[str]:

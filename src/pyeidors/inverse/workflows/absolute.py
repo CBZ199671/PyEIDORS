@@ -58,9 +58,7 @@ def perform_absolute_reconstruction(
 
     measured_vector = measurement_data.meas
     simulated_vector = simulated_data.meas
-    residual_vector, _, _, _ = compute_residuals(
-        measured_vector, simulated_vector
-    )
+    residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
 
     result_metadata: dict[str, Any] = {
         "display_values": conductivity_values,

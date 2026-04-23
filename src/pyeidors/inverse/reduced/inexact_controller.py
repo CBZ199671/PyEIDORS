@@ -52,12 +52,17 @@ class InexactController:
             return float(self._eta)
 
         ratio = 1.0
-        if isinstance(outer_prev, (int, float)) and isinstance(outer_curr, (int, float)):
+        if isinstance(outer_prev, (int, float)) and isinstance(
+            outer_curr, (int, float)
+        ):
             denom = max(abs(float(outer_prev)), 1e-12)
             ratio = abs(float(outer_curr)) / denom
 
         eta_candidate = 0.9 * (ratio**2)
-        if isinstance(linear_residual_ratio, (int, float)) and linear_residual_ratio > 0:
+        if (
+            isinstance(linear_residual_ratio, (int, float))
+            and linear_residual_ratio > 0
+        ):
             eta_candidate = max(float(linear_residual_ratio), eta_candidate)
 
         if step_rejected:

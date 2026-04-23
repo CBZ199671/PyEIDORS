@@ -60,7 +60,9 @@ def _linear_warm_start_subspace(
     s_k: np.ndarray,
     data_vector: np.ndarray,
 ) -> np.ndarray:
-    numerator = safe_dot(U_k.T, data_vector, "solve_sparse_map.linear_warm_start_numerator")
+    numerator = safe_dot(
+        U_k.T, data_vector, "solve_sparse_map.linear_warm_start_numerator"
+    )
     warm_start = np.zeros_like(numerator)
     mask = s_k > 1e-12
     warm_start[mask] = numerator[mask] / s_k[mask]
@@ -218,7 +220,9 @@ def coarse_initialization(
 
     coarse_warm = None
     if initial_guess is not None:
-        coarse_warm = np.array([initial_guess[idx].mean() for idx in groups], dtype=float)
+        coarse_warm = np.array(
+            [initial_guess[idx].mean() for idx in groups], dtype=float
+        )
 
     coarse_estimate = problem.MAP(disp=reconstructor.verbose, x0=coarse_warm)
     coarse_vec = np.asarray(coarse_estimate.to_numpy(), dtype=float)
@@ -250,7 +254,9 @@ def multilevel_correction(
     tol = max(float(reconstructor.config.refinement_gradient_tol), 0.0)
 
     for _ in range(iterations):
-        residual = safe_dot(jacobian, result, "multilevel_correction.residual") - data_vector
+        residual = (
+            safe_dot(jacobian, result, "multilevel_correction.residual") - data_vector
+        )
         grad = (
             inv_noise_var * safe_dot(jacobian.T, residual, "multilevel_correction.grad")
             + lambda_reg * result
@@ -288,7 +294,8 @@ def multilevel_correction(
 
             residual += safe_dot(A_c, delta, "multilevel_correction.residual_update")
             grad = (
-                inv_noise_var * safe_dot(jacobian.T, residual, "multilevel_correction.grad_update")
+                inv_noise_var
+                * safe_dot(jacobian.T, residual, "multilevel_correction.grad_update")
                 + lambda_reg * result
             )
 
@@ -352,9 +359,13 @@ def block_refinement(
                 if J_block.size == 0:
                     continue
 
-                block_hessian = safe_dot(J_block.T, J_block, "block_refinement.block_hessian")
+                block_hessian = safe_dot(
+                    J_block.T, J_block, "block_refinement.block_hessian"
+                )
                 M = inv_noise_var * block_hessian + lambda_reg * np.eye(stop - start)
-                block_residual = safe_dot(J_block.T, residual, "block_refinement.block_residual")
+                block_residual = safe_dot(
+                    J_block.T, residual, "block_refinement.block_residual"
+                )
                 rhs = -inv_noise_var * block_residual - lambda_reg * result[idx]
                 try:
                     delta = np.linalg.solve(M, rhs)

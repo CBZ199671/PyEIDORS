@@ -84,20 +84,30 @@ def test_matlab_runtime_path_matches_environment_host(monkeypatch) -> None:
         matlab_host_os="linux",
         runtime_kind="linux-native",
     )
-    monkeypatch.setattr(environment_module, "to_windows_path", lambda raw: r"C:\converted\startup.m")
-    monkeypatch.setattr(environment_module, "to_posix_path", lambda raw: "/converted/startup.m")
+    monkeypatch.setattr(
+        environment_module, "to_windows_path", lambda raw: r"C:\converted\startup.m"
+    )
+    monkeypatch.setattr(
+        environment_module, "to_posix_path", lambda raw: "/converted/startup.m"
+    )
 
     assert (
-        environment_module.matlab_runtime_path("/home/tom/eidors/startup.m", windows_environment)
+        environment_module.matlab_runtime_path(
+            "/home/tom/eidors/startup.m", windows_environment
+        )
         == r"C:\converted\startup.m"
     )
     assert (
-        environment_module.matlab_runtime_path(r"C:\eidors\startup.m", linux_environment)
+        environment_module.matlab_runtime_path(
+            r"C:\eidors\startup.m", linux_environment
+        )
         == "/converted/startup.m"
     )
 
 
-def test_infer_startup_from_source_path_finds_nearby_eidors_tree(tmp_path: Path) -> None:
+def test_infer_startup_from_source_path_finds_nearby_eidors_tree(
+    tmp_path: Path,
+) -> None:
     project_root = tmp_path / "sample_project"
     scripts_dir = project_root / "scripts"
     eidors_dir = project_root / "eidors"
@@ -113,7 +123,9 @@ def test_infer_startup_from_source_path_finds_nearby_eidors_tree(tmp_path: Path)
     assert detected == str(startup)
 
 
-def test_toolbox_startups_prioritize_eidors_inside_matlab_toolbox(tmp_path: Path) -> None:
+def test_toolbox_startups_prioritize_eidors_inside_matlab_toolbox(
+    tmp_path: Path,
+) -> None:
     toolbox_root = tmp_path / "MATLAB" / "R2025a" / "toolbox"
     startup = toolbox_root / "eidors-v3.11" / "eidors" / "startup.m"
     startup.parent.mkdir(parents=True)
@@ -130,9 +142,13 @@ def test_run_command_capture_decodes_non_utf8_output(monkeypatch) -> None:
         stdout = "启动成功".encode("gbk")
         stderr = b""
 
-    monkeypatch.setattr(environment_module.subprocess, "run", lambda *args, **kwargs: _FakeResult())
+    monkeypatch.setattr(
+        environment_module.subprocess, "run", lambda *args, **kwargs: _FakeResult()
+    )
 
-    code, stdout, stderr = environment_module._run_command_capture(["fake-matlab", "-batch", "disp('ok')"])
+    code, stdout, stderr = environment_module._run_command_capture(
+        ["fake-matlab", "-batch", "disp('ok')"]
+    )
 
     assert code == 0
     assert stdout == "启动成功"

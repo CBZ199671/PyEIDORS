@@ -113,7 +113,9 @@ class WindowsSerialTransport(AbstractTransport):
             except Exception as exc:
                 last_exc = exc
                 self.close()
-                if attempt >= len(_BRIDGE_OPEN_RETRY_DELAYS_SEC) or not self._is_retryable_open_error(exc):
+                if attempt >= len(
+                    _BRIDGE_OPEN_RETRY_DELAYS_SEC
+                ) or not self._is_retryable_open_error(exc):
                     raise
         if last_exc is not None:
             raise last_exc
@@ -210,7 +212,9 @@ class WindowsSerialTransport(AbstractTransport):
             raise RuntimeError(f"Invalid bridge bootstrap response: {line!r}") from exc
 
         try:
-            self._sock = socket.create_connection(("127.0.0.1", listen_port), timeout=5.0)
+            self._sock = socket.create_connection(
+                ("127.0.0.1", listen_port), timeout=5.0
+            )
         except OSError:
             self.close()
             raise

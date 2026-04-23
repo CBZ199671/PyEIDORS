@@ -44,10 +44,12 @@ def _discover_frame_csvs(folder: Path) -> list[Path]:
         if csv_file.name.endswith("_AD.csv"):
             continue
         results.append(csv_file)
+
     # Sort by frame index if names follow the per-frame pattern, else name
     def key(p: Path) -> tuple:
         m = _FRAME_CSV_RE.search(p.name)
         return (0, int(m.group(1))) if m else (1, p.name)
+
     return sorted(results, key=key)
 
 
@@ -102,9 +104,7 @@ class _BatchWorker(QObject):
         try:
             targets = _discover_frame_csvs(req.input_folder)
             if not targets:
-                self.error.emit(
-                    f"No frame CSV files found in {req.input_folder}"
-                )
+                self.error.emit(f"No frame CSV files found in {req.input_folder}")
                 self.finished.emit(0, 0)
                 return
 
@@ -114,28 +114,21 @@ class _BatchWorker(QObject):
 
             if not is_absolute:
                 if req.reference_csv is None:
-                    self.error.emit(
-                        "Difference methods require a reference frame."
-                    )
+                    self.error.emit("Difference methods require a reference frame.")
                     self.finished.emit(0, 0)
                     return
                 ref_path_resolved = req.reference_csv.resolve()
                 try:
                     ref_frame = _load_frame(req.reference_csv)
                 except Exception as exc:
-                    self.error.emit(
-                        f"Failed to load reference frame: {exc}"
-                    )
+                    self.error.emit(f"Failed to load reference frame: {exc}")
                     self.finished.emit(0, 0)
                     return
 
             # Filter targets: skip the reference if it's in the input folder
             effective_targets: list[Path] = []
             for p in targets:
-                if (
-                    ref_path_resolved is not None
-                    and p.resolve() == ref_path_resolved
-                ):
+                if ref_path_resolved is not None and p.resolve() == ref_path_resolved:
                     continue
                 effective_targets.append(p)
 
@@ -259,6 +252,7 @@ def _save_outputs(
     stamp: str,
 ) -> None:
     import matplotlib
+
     matplotlib.use("Agg", force=False)
     from matplotlib import pyplot as plt
     from matplotlib.tri import Triangulation
@@ -297,7 +291,9 @@ def _save_outputs(
             ax.plot(x, measured, color="#4ecdc4", label="Measured")
             if result.simulated is not None:
                 sim = np.asarray(result.simulated, dtype=float).reshape(-1)
-                ax.plot(x, sim, color="#ff6b6b", linestyle="--", label="Reconstructed fit")
+                ax.plot(
+                    x, sim, color="#ff6b6b", linestyle="--", label="Reconstructed fit"
+                )
             ax.set_xlabel("Measurement index")
             ax.set_ylabel("Voltage (V)")
             ax.set_title(f"Voltage fit · {target_path.stem}")

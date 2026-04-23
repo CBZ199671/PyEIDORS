@@ -99,8 +99,8 @@ class EITStatusBar(QStatusBar):
             "acquisition": "idle",
             "recording": "off",
             "mode": 0,
-            "fps": None,           # None -> "status.fps" placeholder
-            "frames": None,        # None -> "status.frames" placeholder
+            "fps": None,  # None -> "status.fps" placeholder
+            "frames": None,  # None -> "status.frames" placeholder
         }
 
         translator().language_changed.connect(self._retranslate)

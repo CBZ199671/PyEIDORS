@@ -20,7 +20,9 @@ class _InterpFunction:
 
     def interpolate(self, expr):
         base = float(expr.grad_value)
-        self.x.array[:] = np.array([base, base + 1.0, base + 2.0, base + 3.0], dtype=float)
+        self.x.array[:] = np.array(
+            [base, base + 1.0, base + 2.0, base + 3.0], dtype=float
+        )
 
 
 class _FakeTensor:
@@ -90,7 +92,10 @@ def _make_calc() -> DirectJacobianCalculator:
     calc.cell_areas = np.array([1.0, 2.0], dtype=float)
     calc.fwd_model = SimpleNamespace(
         n_elec=2,
-        forward_solve=lambda sigma, current_patterns=None: ([np.array([1.0, 2.0], dtype=float)], None),
+        forward_solve=lambda sigma, current_patterns=None: (
+            [np.array([1.0, 2.0], dtype=float)],
+            None,
+        ),
         pattern_manager=SimpleNamespace(
             n_meas_total=3,
             n_stim=2,
@@ -102,19 +107,33 @@ def _make_calc() -> DirectJacobianCalculator:
         ),
         cache_manager=None,
     )
-    calc.Q_DG = SimpleNamespace(element=SimpleNamespace(interpolation_points=np.array([[0.0, 0.0]], dtype=float)))
+    calc.Q_DG = SimpleNamespace(
+        element=SimpleNamespace(
+            interpolation_points=np.array([[0.0, 0.0]], dtype=float)
+        )
+    )
     calc.V = SimpleNamespace(name="V")
     return calc
 
 
-def test_init_and_runtime_device_configuration_cover_validation(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(DirectJacobianCalculator, "_setup_computation", lambda self: setattr(self, "cell_areas", np.ones(2, dtype=float)))
+def test_init_and_runtime_device_configuration_cover_validation(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    monkeypatch.setattr(
+        DirectJacobianCalculator,
+        "_setup_computation",
+        lambda self: setattr(self, "cell_areas", np.ones(2, dtype=float)),
+    )
     monkeypatch.setattr(
         base_module.fem,
         "Function",
-        lambda _space: SimpleNamespace(x=SimpleNamespace(array=np.zeros(3, dtype=float))),
+        lambda _space: SimpleNamespace(
+            x=SimpleNamespace(array=np.zeros(3, dtype=float))
+        ),
     )
-    fake_fwd_model = SimpleNamespace(V_sigma=SimpleNamespace(), pattern_manager=SimpleNamespace(n_meas_total=5))
+    fake_fwd_model = SimpleNamespace(
+        V_sigma=SimpleNamespace(), pattern_manager=SimpleNamespace(n_meas_total=5)
+    )
     with pytest.raises(ValueError, match="Unsupported block_tune_mode"):
         DirectJacobianCalculator(fake_fwd_model, block_tune_mode="bad")
 
@@ -129,21 +148,34 @@ def test_init_and_runtime_device_configuration_cover_validation(monkeypatch: pyt
     assert calc._jacobian_backend_requested == "cuda"
 
 
-def test_block_size_calibration_variants_cover_fixed_small_and_cache_paths(monkeypatch: pytest.MonkeyPatch):
+def test_block_size_calibration_variants_cover_fixed_small_and_cache_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calc = _make_calc()
     calc._calibrate_block_size_once = lambda *_args, **_kwargs: 77
 
     calc.block_size = 40
-    assert calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1], n_elements=30) == 30
+    assert (
+        calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1], n_elements=30)
+        == 30
+    )
     assert calc._block_tune_source == "fixed"
 
     calc.block_size = 0
     calc.block_tune_mode = "off"
-    assert calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1], n_elements=30) == 30
+    assert (
+        calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1], n_elements=30)
+        == 30
+    )
     assert calc._block_tune_source == "disabled"
 
     calc.block_tune_mode = "auto"
-    assert calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1], n_elements=128) == 128
+    assert (
+        calc._calibrate_block_size(
+            grad_u_all=[1], adjoint_gradients=[1], n_elements=128
+        )
+        == 128
+    )
     assert calc._block_tune_source == "small-problem"
 
     class _Lookup:
@@ -157,10 +189,21 @@ def test_block_size_calibration_variants_cover_fixed_small_and_cache_paths(monke
             return 96, _Lookup()
 
     calc.fwd_model.cache_manager = _Cache()
-    monkeypatch.setattr(direct_module, "model_signature_from_forward_model", lambda _fm: "m")
-    monkeypatch.setattr(direct_module, "pattern_signature_from_forward_model", lambda _fm: "p")
-    monkeypatch.setattr(direct_module, "backend_signature_from_forward_model", lambda _fm: "b")
-    assert calc._calibrate_block_size(grad_u_all=[1], adjoint_gradients=[1, 2], n_elements=300) == 96
+    monkeypatch.setattr(
+        direct_module, "model_signature_from_forward_model", lambda _fm: "m"
+    )
+    monkeypatch.setattr(
+        direct_module, "pattern_signature_from_forward_model", lambda _fm: "p"
+    )
+    monkeypatch.setattr(
+        direct_module, "backend_signature_from_forward_model", lambda _fm: "b"
+    )
+    assert (
+        calc._calibrate_block_size(
+            grad_u_all=[1], adjoint_gradients=[1, 2], n_elements=300
+        )
+        == 96
+    )
     assert calc._block_tune_source == "disk"
 
     calc._resolved_block_size = None
@@ -181,8 +224,20 @@ def test_calibrate_block_size_once_edge_cases_and_candidates():
             return np.ones((2, 2), dtype=float)
 
     assert calc._calibrate_block_size_once([], [], 200) == 64
-    assert calc._calibrate_block_size_once([np.array([1.0, 2.0], dtype=float)], [np.array([1.0, 2.0], dtype=float)], 200) == 64
-    assert calc._calibrate_block_size_once([np.ones((10, 2), dtype=float)], _BadAdjoint(), 200) == 64
+    assert (
+        calc._calibrate_block_size_once(
+            [np.array([1.0, 2.0], dtype=float)],
+            [np.array([1.0, 2.0], dtype=float)],
+            200,
+        )
+        == 64
+    )
+    assert (
+        calc._calibrate_block_size_once(
+            [np.ones((10, 2), dtype=float)], _BadAdjoint(), 200
+        )
+        == 64
+    )
 
     calc.block_candidates = ()
     calc.fwd_model.pattern_manager.n_meas_per_stim = [2]
@@ -191,7 +246,9 @@ def test_calibrate_block_size_once_edge_cases_and_candidates():
     assert calc._calibrate_block_size_once(grad_u_all, adjoint_gradients, 400) == 256
 
 
-def test_cuda_threshold_cell_area_cache_and_calculate_cache_paths(monkeypatch: pytest.MonkeyPatch):
+def test_cuda_threshold_cell_area_cache_and_calculate_cache_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calc = _make_calc()
     monkeypatch.setattr(direct_module, "torch", None)
     assert calc._get_cell_areas_cuda() is None
@@ -201,7 +258,9 @@ def test_cuda_threshold_cell_area_cache_and_calculate_cache_paths(monkeypatch: p
     assert calc._wants_cuda_contraction() is True
     assert calc._should_use_cuda_contraction(n_measurements=1, n_elements=10) is False
     assert calc._jacobian_cuda_threshold_hit is False
-    assert calc._should_use_cuda_contraction(n_measurements=1000, n_elements=1024) is True
+    assert (
+        calc._should_use_cuda_contraction(n_measurements=1000, n_elements=1024) is True
+    )
     assert calc._jacobian_cuda_threshold_hit is True
 
     calc.set_runtime_device("cuda", "cuda")
@@ -233,29 +292,55 @@ def test_cuda_threshold_cell_area_cache_and_calculate_cache_paths(monkeypatch: p
             return kwargs["compute_fn"](), _Lookup()
 
     calc.fwd_model.cache_manager = _Cache()
-    monkeypatch.setattr(direct_module, "function_get_array", lambda _sigma: np.array([1.0, 2.0], dtype=float))
-    monkeypatch.setattr(direct_module, "model_signature_from_forward_model", lambda _fm: "m")
-    monkeypatch.setattr(direct_module, "pattern_signature_from_forward_model", lambda _fm: "p")
-    monkeypatch.setattr(direct_module, "backend_signature_from_forward_model", lambda _fm: "b")
+    monkeypatch.setattr(
+        direct_module,
+        "function_get_array",
+        lambda _sigma: np.array([1.0, 2.0], dtype=float),
+    )
+    monkeypatch.setattr(
+        direct_module, "model_signature_from_forward_model", lambda _fm: "m"
+    )
+    monkeypatch.setattr(
+        direct_module, "pattern_signature_from_forward_model", lambda _fm: "p"
+    )
+    monkeypatch.setattr(
+        direct_module, "backend_signature_from_forward_model", lambda _fm: "b"
+    )
     out_cache = calc.calculate(SimpleNamespace(), method="traditional")
     np.testing.assert_allclose(out_cache, np.array([[2.0]], dtype=float))
     assert calc._last_cache_lookup["key"] == "jac-key"
 
 
-def test_compute_gradient_patterns_and_calculation_wrappers(monkeypatch: pytest.MonkeyPatch):
+def test_compute_gradient_patterns_and_calculation_wrappers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calc = _make_calc()
     calc.Q_DG = SimpleNamespace(
-        element=SimpleNamespace(interpolation_points=lambda: np.array([[0.0, 0.0]], dtype=float))
+        element=SimpleNamespace(
+            interpolation_points=lambda: np.array([[0.0, 0.0]], dtype=float)
+        )
     )
     monkeypatch.setattr(direct_module.fem, "Function", _InterpFunction)
-    monkeypatch.setattr(direct_module.fem, "Expression", lambda grad_value, points: SimpleNamespace(grad_value=grad_value, points=points))
-    monkeypatch.setattr(direct_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array)))
+    monkeypatch.setattr(
+        direct_module.fem,
+        "Expression",
+        lambda grad_value, points: SimpleNamespace(
+            grad_value=grad_value, points=points
+        ),
+    )
+    monkeypatch.setattr(
+        direct_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
+    )
 
     grads = calc._compute_field_gradients(
         [np.array([1.0, 2.0], dtype=float), np.array([3.0, 4.0], dtype=float)]
     )
-    np.testing.assert_allclose(grads[0], np.array([[3.0, 4.0], [5.0, 6.0]], dtype=float))
-    np.testing.assert_allclose(grads[1], np.array([[7.0, 8.0], [9.0, 10.0]], dtype=float))
+    np.testing.assert_allclose(
+        grads[0], np.array([[3.0, 4.0], [5.0, 6.0]], dtype=float)
+    )
+    np.testing.assert_allclose(
+        grads[1], np.array([[7.0, 8.0], [9.0, 10.0]], dtype=float)
+    )
 
     patterns = calc._measurement_to_current_patterns()
     np.testing.assert_allclose(
@@ -269,12 +354,23 @@ def test_compute_gradient_patterns_and_calculation_wrappers(monkeypatch: pytest.
         calls["count"] += 1
         if current_patterns is None:
             return [np.array([1.0, 2.0], dtype=float)], None
-        return [np.array([3.0, 4.0], dtype=float), np.array([5.0, 6.0], dtype=float)], None
+        return [
+            np.array([3.0, 4.0], dtype=float),
+            np.array([5.0, 6.0], dtype=float),
+        ], None
 
     calc.fwd_model.forward_solve = _forward_solve
-    calc._compute_field_gradients = lambda fields: ["grad-u"] if calls["count"] == 1 else ["grad-adj"]
-    calc._assemble_jacobian_efficient = lambda grad_u_all, adjoint_fields: ("efficient", grad_u_all, adjoint_fields)
-    calc._assemble_jacobian_traditional = lambda grad_u_all, grad_bu_all: np.array([[7.0, 8.0]], dtype=float)
+    calc._compute_field_gradients = lambda fields: (
+        ["grad-u"] if calls["count"] == 1 else ["grad-adj"]
+    )
+    calc._assemble_jacobian_efficient = lambda grad_u_all, adjoint_fields: (
+        "efficient",
+        grad_u_all,
+        adjoint_fields,
+    )
+    calc._assemble_jacobian_traditional = lambda grad_u_all, grad_bu_all: np.array(
+        [[7.0, 8.0]], dtype=float
+    )
     calc._convert_to_measurement_jacobian = lambda jacobian: jacobian + 1.0
 
     assert calc._calculate_efficient(SimpleNamespace())[0] == "efficient"
@@ -282,7 +378,9 @@ def test_compute_gradient_patterns_and_calculation_wrappers(monkeypatch: pytest.
     np.testing.assert_allclose(traditional, np.array([[8.0, 9.0]], dtype=float))
 
 
-def test_assembly_helpers_cover_cuda_and_traditional_paths(monkeypatch: pytest.MonkeyPatch):
+def test_assembly_helpers_cover_cuda_and_traditional_paths(
+    monkeypatch: pytest.MonkeyPatch,
+):
     calc = _make_calc()
     calc.cell_areas = np.array([1.5, 0.5], dtype=float)
     calc._resolve_block_size = lambda grad_u_all, adjoint_gradients, n_elements: 1

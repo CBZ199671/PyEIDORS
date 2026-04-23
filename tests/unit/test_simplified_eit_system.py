@@ -5,7 +5,10 @@ from __future__ import annotations
 import numpy as np
 from dolfinx import fem
 
-from pyeidors.inverse import perform_absolute_reconstruction, perform_difference_reconstruction
+from pyeidors.inverse import (
+    perform_absolute_reconstruction,
+    perform_difference_reconstruction,
+)
 from pyeidors.inverse.contracts import SolverOutput
 
 

@@ -45,7 +45,9 @@ def collect_electrode_segments(mesh, tags: List[int]) -> Dict[int, List[np.ndarr
     return segments
 
 
-def plot_electrodes(mesh, electrode_tags: List[int], lengths: Dict[int, float], output: Path):
+def plot_electrodes(
+    mesh, electrode_tags: List[int], lengths: Dict[int, float], output: Path
+):
     """Plot electrode segments with labels showing index and length."""
     segments = collect_electrode_segments(mesh, electrode_tags)
     fig, ax = plt.subplots(figsize=(6, 6))
@@ -67,7 +69,7 @@ def plot_electrodes(mesh, electrode_tags: List[int], lengths: Dict[int, float], 
         ax.text(
             centroid[0],
             centroid[1],
-            f"{tag-1}\\n{length:.3f}",
+            f"{tag - 1}\\n{length:.3f}",
             ha="center",
             va="center",
             fontsize=8,
@@ -87,14 +89,34 @@ def plot_electrodes(mesh, electrode_tags: List[int], lengths: Dict[int, float], 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"), help="Mesh directory")
-    parser.add_argument("--mesh-name", type=str, default="mesh_102070", help="Mesh name (without extension)")
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=Path("eit_meshes"), help="Mesh directory"
+    )
+    parser.add_argument(
+        "--mesh-name",
+        type=str,
+        default="mesh_102070",
+        help="Mesh name (without extension)",
+    )
     parser.add_argument("--n-elec", type=int, default=16, help="Number of electrodes")
-    parser.add_argument("--refinement", type=int, default=12, help="Mesh refinement parameter")
-    parser.add_argument("--radius", type=float, default=1.0, help="Mesh radius (for cache key)")
-    parser.add_argument("--electrode-coverage", type=float, default=0.5, help="Electrode coverage ratio (for cache key)")
-    parser.add_argument("--output", type=Path, default=Path("results/electrode_visualization/electrodes.png"),
-                        help="Output PNG path")
+    parser.add_argument(
+        "--refinement", type=int, default=12, help="Mesh refinement parameter"
+    )
+    parser.add_argument(
+        "--radius", type=float, default=1.0, help="Mesh radius (for cache key)"
+    )
+    parser.add_argument(
+        "--electrode-coverage",
+        type=float,
+        default=0.5,
+        help="Electrode coverage ratio (for cache key)",
+    )
+    parser.add_argument(
+        "--output",
+        type=Path,
+        default=Path("results/electrode_visualization/electrodes.png"),
+        help="Output PNG path",
+    )
     args = parser.parse_args()
 
     mesh = load_or_create_mesh(
@@ -134,7 +156,11 @@ def main():
 
     electrode_tags = sorted(set(electrode_tags))
     lengths = {
-        tag: float(mesh.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        tag: float(
+            mesh.comm.allreduce(
+                fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
+            )
+        )
         for tag in electrode_tags
     }
 

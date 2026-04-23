@@ -18,7 +18,12 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
-from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
+from eit_app.ui.theme import (
+    set_button_role,
+    set_hint_text,
+    set_section_header,
+    set_subtle_value,
+)
 
 
 class AcquisitionPanel(QGroupBox):
@@ -184,7 +189,9 @@ class AcquisitionPanel(QGroupBox):
         # session setup work runs in the main window.
         QTimer.singleShot(
             0,
-            lambda checked=checked: self.recording_toggled.emit(checked, self._dir_edit.text()),
+            lambda checked=checked: self.recording_toggled.emit(
+                checked, self._dir_edit.text()
+            ),
         )
 
     def _emit_plan_state(self) -> None:
@@ -211,14 +218,24 @@ class AcquisitionPanel(QGroupBox):
         )
         blockers = [QSignalBlocker(widget) for widget in widgets]
         try:
-            self._sched_check.setChecked(bool(plan.get("timed_enabled", self._sched_check.isChecked())))
-            self._interval_spin.setValue(float(plan.get("interval_sec", self._interval_spin.value())))
-            self._count_spin.setValue(int(plan.get("acquisition_count", self._count_spin.value())))
+            self._sched_check.setChecked(
+                bool(plan.get("timed_enabled", self._sched_check.isChecked()))
+            )
+            self._interval_spin.setValue(
+                float(plan.get("interval_sec", self._interval_spin.value()))
+            )
+            self._count_spin.setValue(
+                int(plan.get("acquisition_count", self._count_spin.value()))
+            )
             self._freq_step_check.setChecked(
                 bool(plan.get("frequency_stepping", self._freq_step_check.isChecked()))
             )
-            self._freq_start_spin.setValue(int(plan.get("start_hz", self._freq_start_spin.value())))
-            self._freq_end_spin.setValue(int(plan.get("end_hz", self._freq_end_spin.value())))
+            self._freq_start_spin.setValue(
+                int(plan.get("start_hz", self._freq_start_spin.value()))
+            )
+            self._freq_end_spin.setValue(
+                int(plan.get("end_hz", self._freq_end_spin.value()))
+            )
         finally:
             del blockers
         self._on_plan_toggled(False)
@@ -298,7 +315,9 @@ class AcquisitionPanel(QGroupBox):
         self._start_btn.setText(t("hw.acquisition.start_button"))
         self._start_btn.setToolTip(t("hw.acquisition.start_button_tooltip"))
         self._single_frame_btn.setText(t("hw.acquisition.single_frame_button"))
-        self._single_frame_btn.setToolTip(t("hw.acquisition.single_frame_button_tooltip"))
+        self._single_frame_btn.setToolTip(
+            t("hw.acquisition.single_frame_button_tooltip")
+        )
         self._stop_btn.setText(t("hw.acquisition.stop_button"))
         self._stop_btn.setToolTip(t("hw.acquisition.stop_button_tooltip"))
 

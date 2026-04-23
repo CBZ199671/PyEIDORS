@@ -118,9 +118,7 @@ class _BackfillWorker(QObject):
 
         return results
 
-    def _ingest_session(
-        self, session_dir: Path, metadata_path: Path | None
-    ) -> None:
+    def _ingest_session(self, session_dir: Path, metadata_path: Path | None) -> None:
         metadata: dict[str, Any] = {}
         if metadata_path and metadata_path.exists():
             metadata = _read_yaml(metadata_path)
@@ -156,9 +154,7 @@ class _BackfillWorker(QObject):
             frame_index = int(match.group(1))
             yaml_file = csv_file.with_suffix(".yaml")
             frame_meta = _read_yaml(yaml_file) if yaml_file.exists() else {}
-            timestamp = float(
-                frame_meta.get("timestamp", csv_file.stat().st_mtime)
-            )
+            timestamp = float(frame_meta.get("timestamp", csv_file.stat().st_mtime))
             self._db.add_frame(
                 session_id=session_id,
                 frame_index=frame_index,
@@ -232,9 +228,7 @@ class DatabaseController(QObject):
 
     # ---- Live recording integration ----
 
-    def register_session(
-        self, session_dir: Path, metadata: dict[str, Any]
-    ) -> int:
+    def register_session(self, session_dir: Path, metadata: dict[str, Any]) -> int:
         try:
             session_id = self._db.add_session(session_dir, metadata)
             row = self._db.get_session(session_id)

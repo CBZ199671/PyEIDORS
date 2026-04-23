@@ -29,7 +29,9 @@ class _DeviceWorker(QObject):
         self._device_config: dict[str, Any] = normalize_device_config("simulator", {})
         self._device = None
 
-    def set_connection_profile(self, transport_type: str, config: dict[str, Any]) -> None:
+    def set_connection_profile(
+        self, transport_type: str, config: dict[str, Any]
+    ) -> None:
         self._transport_type = transport_type
         self._device_config = normalize_device_config(transport_type, config)
         self._apply_profile_to_live_device()
@@ -38,7 +40,9 @@ class _DeviceWorker(QObject):
         return dict(self._device_config)
 
     @Slot(str, dict)
-    def update_connection_profile(self, transport_type: str, config: dict[str, Any]) -> None:
+    def update_connection_profile(
+        self, transport_type: str, config: dict[str, Any]
+    ) -> None:
         self.set_connection_profile(transport_type, config)
 
     @Slot()
@@ -144,7 +148,9 @@ class DeviceController(QObject):
             self._worker.update_connection_profile,
             Qt.ConnectionType.QueuedConnection,
         )
-        self.request_connect.connect(self._worker.do_connect, Qt.ConnectionType.QueuedConnection)
+        self.request_connect.connect(
+            self._worker.do_connect, Qt.ConnectionType.QueuedConnection
+        )
         self.request_disconnect.connect(
             self._worker.do_disconnect,
             Qt.ConnectionType.QueuedConnection,
@@ -172,7 +178,9 @@ class DeviceController(QObject):
         self._thread.start()
         self.request_profile_update.emit(self._transport_type, dict(self._config))
 
-    def set_connection_profile(self, transport_type: str, config: dict[str, Any]) -> None:
+    def set_connection_profile(
+        self, transport_type: str, config: dict[str, Any]
+    ) -> None:
         self._transport_type = transport_type
         self._config = normalize_device_config(transport_type, config)
         self.request_profile_update.emit(self._transport_type, dict(self._config))

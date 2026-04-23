@@ -21,7 +21,9 @@ from pyeidors.visualization.eit_plot_renderers import render_reconstruction_comp
 matplotlib.use("Agg")
 
 
-def test_register_optional_fonts_warns_when_addfont_fails(monkeypatch: pytest.MonkeyPatch):
+def test_register_optional_fonts_warns_when_addfont_fails(
+    monkeypatch: pytest.MonkeyPatch,
+):
     first = Path("/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc")
     font_i18n._WARNED_KEYS.discard(f"font-register-{first}")
     original_exists = Path.exists
@@ -42,7 +44,9 @@ def test_register_optional_fonts_warns_when_addfont_fails(monkeypatch: pytest.Mo
 
 def test_render_reconstruction_comparison_saves_output(eit_system, tmp_path: Path):
     viz = SimpleNamespace(
-        _text=lambda key, **kwargs: key if not kwargs else f"{key}:{kwargs['value']:.4f}",
+        _text=lambda key, **kwargs: (
+            key if not kwargs else f"{key}:{kwargs['value']:.4f}"
+        ),
     )
     sigma = np.ones(eit_system.mesh.num_cells(), dtype=float)
     save_path = tmp_path / "compare.png"
@@ -71,7 +75,9 @@ def test_resolve_reconstruction_output_rejects_invalid_payload_types():
         resolve_reconstruction_output(reconstruction=fake_output, fwd_model=object())
 
 
-def test_sparse_projection_for_zero_width_and_nonfinite_lipschitz(monkeypatch: pytest.MonkeyPatch):
+def test_sparse_projection_for_zero_width_and_nonfinite_lipschitz(
+    monkeypatch: pytest.MonkeyPatch,
+):
     rng = mock.MagicMock()
     rng.standard_normal.return_value = np.zeros(0, dtype=float)
     vec = sparse_projection._init_power_vector(np.empty((2, 0), dtype=float), rng)
@@ -86,7 +92,9 @@ def test_sparse_projection_for_zero_width_and_nonfinite_lipschitz(monkeypatch: p
         return np.array([np.nan, np.nan], dtype=float)
 
     monkeypatch.setattr(sparse_projection, "safe_dot", fake_safe_dot)
-    result = sparse_projection.estimate_lipschitz_constant(np.eye(2, dtype=float), iters=1)
+    result = sparse_projection.estimate_lipschitz_constant(
+        np.eye(2, dtype=float), iters=1
+    )
     assert result == pytest.approx(2e-12)
 
 

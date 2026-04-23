@@ -38,7 +38,9 @@ def build_parser() -> argparse.ArgumentParser:
             "install-to-cache",
         ],
     )
-    parser.add_argument("--cache-scope", choices=["off", "process", "both"], default="both")
+    parser.add_argument(
+        "--cache-scope", choices=["off", "process", "both"], default="both"
+    )
     parser.add_argument(
         "--cache-dir",
         type=Path,
@@ -52,17 +54,28 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--delta", type=float, default=0.0)
     parser.add_argument("--limit", type=int, default=20)
     parser.add_argument("--limit-per-name", type=int, default=1)
-    parser.add_argument("--with-values", action="store_true", help="Include cached values")
-    parser.add_argument("--output", type=Path, default=None, help="Write JSON output to path")
-    parser.add_argument("--input", type=Path, default=None, help="Read snapshot JSON from path")
-    parser.add_argument("--target-layers", choices=["process", "disk", "both"], default="both")
+    parser.add_argument(
+        "--with-values", action="store_true", help="Include cached values"
+    )
+    parser.add_argument(
+        "--output", type=Path, default=None, help="Write JSON output to path"
+    )
+    parser.add_argument(
+        "--input", type=Path, default=None, help="Read snapshot JSON from path"
+    )
+    parser.add_argument(
+        "--target-layers", choices=["process", "disk", "both"], default="both"
+    )
     return parser
 
 
 def _print_or_write(payload: Any, output: Path | None) -> None:
     if output is not None:
         output.parent.mkdir(parents=True, exist_ok=True)
-        output.write_text(json.dumps(payload, indent=2, ensure_ascii=False, default=str), encoding="utf-8")
+        output.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False, default=str),
+            encoding="utf-8",
+        )
         print(json.dumps({"written": str(output)}, ensure_ascii=False))
         return
     print(json.dumps(payload, indent=2, ensure_ascii=False, default=str))
@@ -124,7 +137,9 @@ def main() -> None:
     if args.command == "debug-on":
         if args.name:
             status = {name: manager.set_debug(True, name) for name in args.name}
-            _print_or_write({"status": status, "global": manager.debug_status()}, args.output)
+            _print_or_write(
+                {"status": status, "global": manager.debug_status()}, args.output
+            )
             return
         _print_or_write({"global": manager.set_debug(True)}, args.output)
         return
@@ -132,13 +147,17 @@ def main() -> None:
     if args.command == "debug-off":
         if args.name:
             status = {name: manager.set_debug(False, name) for name in args.name}
-            _print_or_write({"status": status, "global": manager.debug_status()}, args.output)
+            _print_or_write(
+                {"status": status, "global": manager.debug_status()}, args.output
+            )
             return
         _print_or_write({"global": manager.set_debug(False)}, args.output)
         return
 
     if args.command == "boost-priority":
-        _print_or_write({"priority_boost": manager.boost_priority(float(args.delta))}, args.output)
+        _print_or_write(
+            {"priority_boost": manager.boost_priority(float(args.delta))}, args.output
+        )
         return
 
     if args.command == "clear-all":

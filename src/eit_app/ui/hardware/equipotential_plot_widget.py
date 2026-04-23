@@ -79,9 +79,7 @@ class EquipotentialPlotWidget(QWidget):
         self._serif = serif_font_family()
         self._title_font = FontProperties(family=plot_font_families(), size=13)
 
-        self._last_payload: Optional[
-            tuple[np.ndarray, np.ndarray, np.ndarray]
-        ] = None
+        self._last_payload: Optional[tuple[np.ndarray, np.ndarray, np.ndarray]] = None
         self._overlay_mode = "empty"  # "empty" | "loading" | "error" | "data"
         self._overlay_message: str | None = None
 
@@ -199,9 +197,7 @@ class EquipotentialPlotWidget(QWidget):
         if cells.shape[1] == 4:
             cells, _ = extract_boundary_triangles(cells)
             if cells.shape[0] == 0:
-                self._show_status(
-                    t("hw.equipotential.no_surface"), error=True
-                )
+                self._show_status(t("hw.equipotential.no_surface"), error=True)
                 return
 
         if sigma.size == cells.shape[0]:
@@ -317,14 +313,18 @@ class EquipotentialPlotWidget(QWidget):
             # operator a visual anchor between "where in the recon
             # image am I looking" and "where on the warped surface".
             outline = mesh.extract_feature_edges(
-                boundary_edges=True, feature_edges=True,
-                non_manifold_edges=False, manifold_edges=False,
+                boundary_edges=True,
+                feature_edges=True,
+                non_manifold_edges=False,
+                manifold_edges=False,
                 feature_angle=15.0,
             )
             if outline.n_points > 0:
                 plotter.add_mesh(
-                    outline, color=palette.get("border", "#888"),
-                    line_width=1.4, opacity=0.55,
+                    outline,
+                    color=palette.get("border", "#888"),
+                    line_width=1.4,
+                    opacity=0.55,
                 )
 
             # Make the camera + axis labels match the 2D recon's
@@ -335,7 +335,10 @@ class EquipotentialPlotWidget(QWidget):
             # peaks no longer line up with regions of the 2D image.
             self._apply_recon_aligned_camera(plotter, coords, warped)
             plotter.add_axes(
-                xlabel="X", ylabel="Y", zlabel="\u03c3", line_width=2,
+                xlabel="X",
+                ylabel="Y",
+                zlabel="\u03c3",
+                line_width=2,
             )
 
             self._plotter = plotter
@@ -583,9 +586,7 @@ class EquipotentialPlotWidget(QWidget):
                 # The warped mesh is hidden inside the actor; reuse its
                 # bounding box so the camera focal point stays centred.
                 actor = self._mesh_actor
-                warped_bounds = (
-                    actor.GetBounds() if actor is not None else None
-                )
+                warped_bounds = actor.GetBounds() if actor is not None else None
                 self._apply_recon_aligned_camera_from_bounds(
                     self._plotter, coords, warped_bounds
                 )

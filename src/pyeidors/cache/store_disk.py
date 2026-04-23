@@ -86,20 +86,42 @@ class DiskCacheStore:
 
     def _ensure_schema_columns(self, conn: sqlite3.Connection) -> None:
         existing = {
-            row[1]: row for row in conn.execute("PRAGMA table_info(cache_entries)").fetchall()
+            row[1]: row
+            for row in conn.execute("PRAGMA table_info(cache_entries)").fetchall()
         }
         migrations = (
-            ("name", "ALTER TABLE cache_entries ADD COLUMN name TEXT NOT NULL DEFAULT ''"),
+            (
+                "name",
+                "ALTER TABLE cache_entries ADD COLUMN name TEXT NOT NULL DEFAULT ''",
+            ),
             (
                 "namespace",
                 "ALTER TABLE cache_entries ADD COLUMN namespace TEXT NOT NULL DEFAULT 'default'",
             ),
-            ("effort", "ALTER TABLE cache_entries ADD COLUMN effort REAL NOT NULL DEFAULT 1.0"),
-            ("priority", "ALTER TABLE cache_entries ADD COLUMN priority REAL NOT NULL DEFAULT 0.0"),
-            ("use_count", "ALTER TABLE cache_entries ADD COLUMN use_count INTEGER NOT NULL DEFAULT 1"),
-            ("score_eff", "ALTER TABLE cache_entries ADD COLUMN score_eff REAL NOT NULL DEFAULT 0.0"),
-            ("score_size", "ALTER TABLE cache_entries ADD COLUMN score_size REAL NOT NULL DEFAULT 0.0"),
-            ("score", "ALTER TABLE cache_entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0"),
+            (
+                "effort",
+                "ALTER TABLE cache_entries ADD COLUMN effort REAL NOT NULL DEFAULT 1.0",
+            ),
+            (
+                "priority",
+                "ALTER TABLE cache_entries ADD COLUMN priority REAL NOT NULL DEFAULT 0.0",
+            ),
+            (
+                "use_count",
+                "ALTER TABLE cache_entries ADD COLUMN use_count INTEGER NOT NULL DEFAULT 1",
+            ),
+            (
+                "score_eff",
+                "ALTER TABLE cache_entries ADD COLUMN score_eff REAL NOT NULL DEFAULT 0.0",
+            ),
+            (
+                "score_size",
+                "ALTER TABLE cache_entries ADD COLUMN score_size REAL NOT NULL DEFAULT 0.0",
+            ),
+            (
+                "score",
+                "ALTER TABLE cache_entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0",
+            ),
         )
         for column, statement in migrations:
             if column not in existing:
@@ -266,7 +288,9 @@ class DiskCacheStore:
                 conn.commit()
         return True
 
-    def _remove_entry(self, conn: sqlite3.Connection, key: str, file_path: Path) -> None:
+    def _remove_entry(
+        self, conn: sqlite3.Connection, key: str, file_path: Path
+    ) -> None:
         conn.execute("DELETE FROM cache_entries WHERE cache_key = ?", (key,))
         try:
             file_path.unlink(missing_ok=True)
@@ -275,12 +299,16 @@ class DiskCacheStore:
 
     def _evict_if_needed(self, conn: sqlite3.Connection) -> None:
         if self.max_bytes <= 0:
-            rows = conn.execute("SELECT cache_key, file_path FROM cache_entries").fetchall()
+            rows = conn.execute(
+                "SELECT cache_key, file_path FROM cache_entries"
+            ).fetchall()
             for key, file_path in rows:
                 self._remove_entry(conn, key, Path(file_path))
             return
 
-        total_row = conn.execute("SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries").fetchone()
+        total_row = conn.execute(
+            "SELECT COALESCE(SUM(size_bytes), 0) FROM cache_entries"
+        ).fetchone()
         total = int(total_row[0] if total_row else 0)
         if total <= self.max_bytes:
             return
@@ -306,7 +334,9 @@ class DiskCacheStore:
                         (f"{prefix}%",),
                     ).fetchall()
                 else:
-                    rows = conn.execute("SELECT cache_key, file_path FROM cache_entries").fetchall()
+                    rows = conn.execute(
+                        "SELECT cache_key, file_path FROM cache_entries"
+                    ).fetchall()
                 for key, file_path in rows:
                     self._remove_entry(conn, key, Path(file_path))
                 conn.commit()

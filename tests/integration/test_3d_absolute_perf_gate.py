@@ -30,7 +30,14 @@ def test_perf_gate_strict_passes_for_good_report(tmp_path: Path):
     report.write_text(json.dumps(payload), encoding="utf-8")
 
     proc = subprocess.run(
-        [sys.executable, str(_script_path()), "--input", str(report), "--mode", "strict"],
+        [
+            sys.executable,
+            str(_script_path()),
+            "--input",
+            str(report),
+            "--mode",
+            "strict",
+        ],
         capture_output=True,
         text=True,
         check=False,

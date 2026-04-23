@@ -92,7 +92,9 @@ def _aggregate_cache_summary(results: List[CaseResult]) -> Dict[str, Any]:
                         )
                     source = tuning.get("tune_source")
                     if isinstance(source, str):
-                        jacobian_tune_source[source] = jacobian_tune_source.get(source, 0) + 1
+                        jacobian_tune_source[source] = (
+                            jacobian_tune_source.get(source, 0) + 1
+                        )
                     assembly_elapsed = tuning.get("assembly_elapsed_only")
                     if isinstance(assembly_elapsed, (int, float)):
                         jacobian_assembly_elapsed_only_total += float(assembly_elapsed)
@@ -105,10 +107,14 @@ def _aggregate_cache_summary(results: List[CaseResult]) -> Dict[str, Any]:
                     rom_enabled_effective_count += 1
                 rom_rank_val = backend.get("rom_rank_effective")
                 if isinstance(rom_rank_val, int):
-                    rom_rank_effective_max = max(rom_rank_effective_max, int(rom_rank_val))
+                    rom_rank_effective_max = max(
+                        rom_rank_effective_max, int(rom_rank_val)
+                    )
                 lowrank_rank_val = backend.get("lowrank_rank_effective")
                 if isinstance(lowrank_rank_val, int):
-                    lowrank_rank_effective_max = max(lowrank_rank_effective_max, int(lowrank_rank_val))
+                    lowrank_rank_effective_max = max(
+                        lowrank_rank_effective_max, int(lowrank_rank_val)
+                    )
                 eta_hist = backend.get("inexact_eta_history")
                 if isinstance(eta_hist, list):
                     for eta in eta_hist:
@@ -118,12 +124,16 @@ def _aggregate_cache_summary(results: List[CaseResult]) -> Dict[str, Any]:
                 if isinstance(degrade_counts, dict):
                     for key, value in degrade_counts.items():
                         if isinstance(key, str) and isinstance(value, (int, float)):
-                            degrade_stage_counts[key] = degrade_stage_counts.get(key, 0) + int(value)
+                            degrade_stage_counts[key] = degrade_stage_counts.get(
+                                key, 0
+                            ) + int(value)
                 path_counts = backend.get("effective_solver_path_counts")
                 if isinstance(path_counts, dict):
                     for key, value in path_counts.items():
                         if isinstance(key, str) and isinstance(value, (int, float)):
-                            effective_solver_path_counts[key] = effective_solver_path_counts.get(key, 0) + int(value)
+                            effective_solver_path_counts[key] = (
+                                effective_solver_path_counts.get(key, 0) + int(value)
+                            )
         cache_stats = result.metrics.get("cache_stats")
         if isinstance(cache_stats, dict):
             latest_stats = cache_stats

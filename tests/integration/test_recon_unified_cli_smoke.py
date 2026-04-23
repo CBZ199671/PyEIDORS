@@ -42,8 +42,8 @@ def test_unified_cli_dry_run_all_methods(tmp_path: Path):
         "\n".join(
             [
                 "n_elec: 16",
-                "stim_pattern: \"{ad}\"",
-                "meas_pattern: \"{ad}\"",
+                'stim_pattern: "{ad}"',
+                'meas_pattern: "{ad}"',
             ]
         ),
         encoding="utf-8",

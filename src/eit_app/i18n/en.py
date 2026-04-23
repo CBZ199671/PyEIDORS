@@ -16,7 +16,6 @@ TRANSLATIONS: dict[str, str] = {
     # Application chrome
     # ==================================================================
     "app.title": "EIT Workstation",
-
     # ------------------------------------------------------------------
     # Tab labels  (kept as short domain nouns for a tight tab bar)
     # ------------------------------------------------------------------
@@ -24,7 +23,6 @@ TRANSLATIONS: dict[str, str] = {
     "tab.simulation": "Simulation",
     "tab.dataset": "Dataset",
     "tab.database": "Database",
-
     # ------------------------------------------------------------------
     # File menu
     # ------------------------------------------------------------------
@@ -32,7 +30,6 @@ TRANSLATIONS: dict[str, str] = {
     "menu.file.open_recordings": "Open &Recordings Folder",
     "menu.file.open_output": "Open &Output Folder",
     "menu.file.exit": "E&xit",
-
     # ------------------------------------------------------------------
     # Tools menu
     # ------------------------------------------------------------------
@@ -62,7 +59,6 @@ TRANSLATIONS: dict[str, str] = {
     "main.popup.recon_complete.informative": "Output folder:\n{folder}",
     "main.popup.recon_complete.open_folder": "Open Folder",
     "main.popup.recon_complete.close": "Close",
-
     # ==================================================================
     # Loading / busy overlay messages (shared across plots)
     # ==================================================================
@@ -82,7 +78,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_wireframe": "Outline edges",
     "sim.results.viewer3d_reset": "Reset view",
     "sim.results.electrodes_toggle": "Show electrodes",
-
     # ------------------------------------------------------------------
     # Help menu + About dialog (brand surface from claude.ai/design
     # handoff — see docs/design/DESIGN_SYSTEM_README.md).
@@ -95,7 +90,6 @@ TRANSLATIONS: dict[str, str] = {
     "about.body": "Cross-platform PySide6 desktop app covering the full EIT workflow \u2014 hardware acquisition, simulation, dataset generation, and reconstruction. Bilingual zh / en, with PyVista 3D visualisation and PETSc / dolfinx solvers by default.",
     "about.credit": "Brand surface authored via claude.ai/design (handoff WKRMymYpVs58OGTs9jRQ0A). The mark is a flat FEniCSx-style two-colour monogram with an English wordmark for a global audience. Design tokens, colours, typography, and the in-source QSS stay in 1:1 sync.",
     "about.close": "Close",
-
     # ------------------------------------------------------------------
     # Language menu
     # ------------------------------------------------------------------
@@ -103,14 +97,12 @@ TRANSLATIONS: dict[str, str] = {
     "menu.language.zh": "\u4e2d\u6587",
     "menu.language.en": "English",
     "menu.language.tooltip": "Switch between Chinese and English",
-
     # ==================================================================
     # Hardware tab — Step labels on the left QToolBox
     # ==================================================================
     "hw.step.link": "Step 1 \u00b7 Link",
     "hw.step.setup": "Step 2 \u00b7 Setup",
     "hw.step.acquire": "Step 3 \u00b7 Acquire",
-
     # ==================================================================
     # Hardware tab — Step 1 Connection panel
     # ==================================================================
@@ -138,7 +130,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.connection.port_hint.multi_port_bridge": "Detected {count} ports, current selection: {port}. Will use the Windows COM bridge on connect.",
     "hw.connection.port_hint.multi_port": "Detected {count} ports \u2014 verify and pick the one matching your hardware.",
     "hw.connection.relay_hint.dynamic": "4G Relay will connect to {host}:{port}. A reachability check runs before connecting.",
-
     # ==================================================================
     # Hardware tab — Step 2 Control panel
     # ==================================================================
@@ -169,7 +160,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.control.cem_grid.radius": "Radius",
     "hw.control.cem_grid.elec_length": "Elec length",
     "hw.control.cem_grid.contact_z": "Contact z",
-
     # ==================================================================
     # Hardware tab — Step 3 Acquisition panel
     # ==================================================================
@@ -198,7 +188,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.acquisition.stop_button_tooltip": "Stop the current acquisition run",
     "hw.acquisition.frames_acquired_label": "Frames acquired:",
     "hw.acquisition.file_dialog_title": "Select Output Directory",
-
     # ==================================================================
     # Hardware tab — Session summary footer
     # ==================================================================
@@ -245,7 +234,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.summary.banner.link_verified.title": "LINK VERIFIED",
     "hw.summary.banner.link_verified.detail": "The device link is verified and waiting for measurement power or the next setup change.",
     "hw.summary.banner.link_verified.action": "Turn measurement power ON when the hardware is ready, then start acquisition.",
-
     # Short-form indicator chips (LINK / POWER / RECORD / ACQ)
     "hw.summary.chip.link.down": "DOWN",
     "hw.summary.chip.link.check": "CHECK",
@@ -264,13 +252,11 @@ TRANSLATIONS: dict[str, str] = {
     "hw.summary.chip.acq.fin": "FIN",
     "hw.summary.chip.acq.step": "STEP",
     "hw.summary.chip.acq.1fr": "1FR",
-
     # Legacy state keys kept for the first-run / default indicator states.
     "hw.summary.state.down": "Down",
     "hw.summary.state.unknown": "Unknown",
     "hw.summary.state.off": "Off",
     "hw.summary.state.idle": "Idle",
-
     # ==================================================================
     # Hardware tab — Right-side Frame browser
     # ==================================================================
@@ -282,7 +268,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.frame_browser.column.file": "File",
     "hw.frame_browser.set_ref_button": "Set as Reference",
     "hw.frame_browser.clear_button": "Clear List",
-
     # ==================================================================
     # Hardware tab — Live measurement plot
     # ==================================================================
@@ -292,7 +277,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.live_plot.curve.real": "Real",
     "hw.live_plot.curve.imag": "Imag",
     "hw.live_plot.empty_overlay": "No live frames yet.\nStart acquisition to display Real and Imag.",
-
     # ==================================================================
     # Hardware tab — Reconstruction widget
     # ==================================================================
@@ -306,7 +290,6 @@ TRANSLATIONS: dict[str, str] = {
     "hw.equipotential.height_label": "Height scale",
     "hw.equipotential.reset_button": "Reset view",
     "hw.reconstruction.error.expect_2d_triangles": "Fast reconstruction view currently expects 2D triangles",
-
     # ==================================================================
     # Hardware tab — Boundary voltage fit plot
     # ==================================================================
@@ -318,12 +301,10 @@ TRANSLATIONS: dict[str, str] = {
     "hw.boundary.secondary": "Recon Fit",
     "hw.boundary.empty.hardware": "Measured and reconstruction-fit boundary voltages will appear after reconstruction updates.",
     "hw.boundary.empty.simulation": "Ground-truth and reconstruction-fit boundary voltages will appear after forward or inverse updates.",
-
     # ==================================================================
     # Shared plot-legend overlay (used across Hardware and Simulation)
     # ==================================================================
     "plot_legend.drag_tooltip": "Drag to reposition the legend",
-
     # ==================================================================
     # Simulation tab — Step labels and Run Guide footer
     # ==================================================================
@@ -333,13 +314,11 @@ TRANSLATIONS: dict[str, str] = {
     "sim.step.inhom_3d": "Step 2 \u00b7 Inhomogeneity Volumes",
     "sim.step.forward": "Step 3 \u00b7 Forward Problem",
     "sim.step.inverse": "Step 4 \u00b7 Inverse Problem",
-
     "sim.runguide.title": "Run Guide",
     "sim.runguide.step1": "Configure the mesh and electrodes, then maintain the inhomogeneity list.",
     "sim.runguide.step2": "Run Forward to inspect boundary voltages and the ground truth image.",
     "sim.runguide.step3": "Run Inverse to view the reconstructed image and error metrics on the right.",
     "sim.runguide.hint": "The central area is reserved for image and curve comparisons.",
-
     # ==================================================================
     # Simulation tab — Step 1 Mesh & Electrodes
     # ==================================================================
@@ -382,9 +361,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.use_meas_current_check": "Include drive-related electrodes",
     "sim.mesh.extra_neighbors_label": "Extra excluded neighbors:",
     "sim.mesh.custom_pattern_label": "Custom matrices JSON:",
-    "sim.mesh.custom_pattern_placeholder": "{\"stim_matrix\": [[1, -1, 0, 0]], \"meas_matrices\": [[1, 0, -1, 0]]}",
+    "sim.mesh.custom_pattern_placeholder": '{"stim_matrix": [[1, -1, 0, 0]], "meas_matrices": [[1, 0, -1, 0]]}',
     "sim.mesh.point_count_hint": "Expected boundary samples: {count}",
-
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities
     # ==================================================================
@@ -414,7 +392,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.add_ellipsoid": "+ Ellipsoid",
     "sim.inhom.add_box": "+ Box",
     "sim.inhom.remove_button": "Remove",
-
     # ==================================================================
     # Simulation tab — Step 3 Forward Problem
     # ==================================================================
@@ -424,7 +401,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.forward.noise_tooltip": "Relative noise level (0 = noiseless)",
     "sim.forward.solve_button": "Solve Forward Problem",
     "sim.forward.status_solving": "Solving\u2026",
-
     # ==================================================================
     # Simulation tab — Step 4 Inverse Problem
     # ==================================================================
@@ -436,7 +412,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.reconstruct_button": "Reconstruct",
     "sim.inverse.save_button": "Save Results",
     "sim.inverse.status_reconstructing": "Reconstructing\u2026",
-
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================
@@ -444,7 +419,6 @@ TRANSLATIONS: dict[str, str] = {
     "sim.metrics.l2_label": "Relative L2 error:",
     "sim.metrics.correlation_label": "Correlation:",
     "sim.metrics.rmse_label": "RMSE:",
-
     # ==================================================================
     # Simulation tab — Centre results widget
     # ==================================================================
@@ -453,14 +427,12 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.save_dialog_title": "Save Simulation Results",
     "sim.results.save_dialog_filter": "HDF5 package (*.h5 *.hdf5)",
     "sim.results.save_status": "Saved HDF5 package to {path}",
-
     # ==================================================================
     # Dataset Generator tab — Step labels
     # ==================================================================
     "dataset.step.mesh": "Step 1 \u00b7 Mesh & Electrodes",
     "dataset.step.ranges": "Step 2 \u00b7 Randomization Ranges",
     "dataset.step.run": "Step 3 \u00b7 Output & Run",
-
     # ==================================================================
     # Dataset Generator tab — Central workspace blocks
     # ==================================================================
@@ -475,7 +447,6 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.notes.item1": "Mesh settings here are independent from the interactive Simulation tab.",
     "dataset.notes.item2": "Shape toggles define the random family pool; if none are checked, circle is used by default.",
     "dataset.notes.item3": "Noise is applied after the forward solve, so voltage perturbations match the configured batch range.",
-
     # ==================================================================
     # Dataset Generator tab — Step 2 Randomization panel
     # ==================================================================
@@ -495,7 +466,6 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.random.conductivity_label": "\u03c3 range:",
     "dataset.random.background_label": "Background \u03c3:",
     "dataset.random.noise_label": "Noise level:",
-
     # ==================================================================
     # Dataset Generator tab — Step 3 Output & Run panel
     # ==================================================================
@@ -511,7 +481,6 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.run.generate_button": "Generate Dataset",
     "dataset.run.cancel_button": "Cancel",
     "dataset.run.file_dialog_title": "Select Output Directory",
-
     # ==================================================================
     # Dataset Generator tab — Right-side Summary panel
     # ==================================================================
@@ -527,7 +496,6 @@ TRANSLATIONS: dict[str, str] = {
     "dataset.summary.field.mesh": "Mesh:",
     "dataset.summary.field.electrodes": "Electrodes:",
     "dataset.summary.field.status": "Status:",
-
     # ==================================================================
     # Database tab — Left filter panel
     # ==================================================================
@@ -554,7 +522,6 @@ TRANSLATIONS: dict[str, str] = {
     "db.stats.ready": "Ready",
     "db.stats.backfill_progress": "Backfill: {current}/{total}",
     "db.stats.backfill_done": "Backfill complete: {count} sessions imported.",
-
     # ==================================================================
     # Database tab — Central sessions / frames section
     # ==================================================================
@@ -569,7 +536,6 @@ TRANSLATIONS: dict[str, str] = {
     "db.sessions.col.frames": "Frames",
     "db.sessions.open_folder_button": "Open Folder",
     "db.sessions.batch_recon_button": "Batch Reconstruct\u2026",
-
     "db.frames.title": "FRAMES",
     "db.frames.col.index": "Index",
     "db.frames.col.timestamp": "Timestamp",
@@ -583,13 +549,11 @@ TRANSLATIONS: dict[str, str] = {
     "db.frames.set_tgt_button": "Set as Target",
     "db.frames.reconstruct_button": "Reconstruct\u2026",
     "db.frames.clear_button": "Clear",
-
     # ==================================================================
     # Database tab — Right-side preview panel
     # ==================================================================
     "db.preview.title": "FRAME PREVIEW",
     "db.preview.hint": "Click any frame row to preview its waveform here.",
-
     # ==================================================================
     # Main window — transient status-bar flash messages
     # ==================================================================
@@ -601,7 +565,6 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.verifying.relay": "Verifying 4G Relay link: {host}:{port}",
     "main.status.verifying.generic": "Verifying device link.",
     "main.status.link_verified": "Link verification complete. Turn on measurement power and start acquisition when ready.",
-
     # Acquisition + recording
     "main.error.connection_required": "Please verify the device connection first.",
     "main.error.port_release_failed": "Failed to release the control serial port before starting. Retry or reconnect the device.",
@@ -616,18 +579,15 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.frames_cleared": "Recorded frame list cleared.",
     "main.status.record_enabled": "Recording enabled; captures will be saved to {dir}.",
     "main.status.record_path_pending": "Recording is already running; the new save path will take effect on the next acquisition.",
-
     # Reconstruction pre-warm
     "main.status.prewarming": "Pre-warming the realtime reconstruction context\u2026",
     "main.status.prewarm_done": "Realtime reconstruction context pre-warmed; subsequent captures will use the hot-start path.",
     "main.status.prewarm_failed": "Realtime reconstruction pre-warm failed; will retry when needed: {reason}",
-
     # Frame browser / reference / target
     "main.status.reference_updated": "Reference frame updated: #{index}",
     "main.status.reference_selected": "Reference frame selected: #{index}",
     "main.status.target_selected": "Target frame selected: #{index}",
     "main.status.frame_preview": "Showing waveform data for frame #{index}",
-
     # Layout + protocol + power + diagnostics
     "main.status.layout_updated": "Hardware layout updated: {points} boundary voltage points.",
     "main.status.protocol_caps": "Protocol capabilities: {version}",
@@ -638,13 +598,11 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.command_sent": "Command sent: {name}",
     "main.status.impedance_done": "Contact impedance measurement complete.",
     "main.status.impedance_result": "Contact impedance: {values}",
-
     # Plan + frequency sweep
     "main.status.plan_started": "Planned acquisition started: {count} runs.",
     "main.status.plan_sweep_note": "Frequency sweep active: waveforms, boundary voltage, and reconstruction update per step.",
     "main.status.plan_step_start": "Starting run {current}/{total}: {hz} Hz",
     "main.status.plan_complete": "Planned acquisition finished ({count} runs).",
-
     # Interop hub bridge results
     "main.interop.geometry_generate_failed": "Failed to auto-generate simulation geometry.mat: {error}",
     "main.interop.export_note_hw_real": "Recording export defaults to the real part of the boundary voltage so it matches common EIDORS difference workflows.",
@@ -658,7 +616,6 @@ TRANSLATIONS: dict[str, str] = {
     "main.interop.geometry_cached": "Geometry asset cached; subsequent EIDORS exports can reuse it directly.",
     "main.interop.unknown_target": "Unknown import target: {target}",
     "main.interop.smoke_done": "Interop smoke test complete.",
-
     # humanize_error_message branches
     "main.hw_error.no_serial_ports": "No serial ports detected. Check USB, driver, and device power, then click Scan again.",
     "main.hw_error.port_access_denied": "Serial port access denied; another process may be using it. Close the occupying process and retry.",
@@ -669,7 +626,6 @@ TRANSLATIONS: dict[str, str] = {
     "main.hw_error.relay_host_empty": "4G Relay server host is empty. Please fill in a reachable host.",
     "main.hw_error.relay_refused": "4G Relay server refused the connection. Verify host/port and confirm the service is running.",
     "main.hw_error.relay_timeout": "4G Relay connection timed out. Check the network, server address, and target device status.",
-
     # ==================================================================
     # Bottom status bar (persistent chips + FPS / frame counters)
     # ==================================================================
@@ -702,7 +658,6 @@ TRANSLATIONS: dict[str, str] = {
     "status.record.armed": "Record: Armed",
     "status.record.recording": "Record: Writing",
     "status.record.other": "Record: {status}",
-
     # ==================================================================
     # Dialog — Difference Reconstruction
     # ==================================================================
@@ -715,7 +670,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.difference.orient_label": "Orientation:",
     "dlg.difference.part_label": "Use part:",
     "dlg.difference.warn_same_frame": "Reference and target must be different frames.",
-
     # ==================================================================
     # Dialog — Single-session Reconstruct
     # ==================================================================
@@ -739,7 +693,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.reconstruction.save_voltage_check": "Save boundary voltage fit plot (PNG)",
     "dlg.reconstruction.not_selected": "<not selected>",
     "dlg.reconstruction.absolute_no_ref_tip": "Absolute methods do not use a reference frame.",
-
     # ==================================================================
     # Dialog — Batch Reconstruct
     # ==================================================================
@@ -783,24 +736,19 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.batch.finished_ok": "\u2713  Finished \u2014 succeeded: {succeeded}, failed: {failed}",
     "dlg.batch.finished_mixed": "\u26a0  Finished \u2014 succeeded: {succeeded}, failed: {failed}",
     "dlg.batch.finished_fail": "\u2715  Finished \u2014 succeeded: {succeeded}, failed: {failed}",
-
     # Reconstruction dialog — subtitle copy
     "dlg.reconstruction.subtitle": "Pick an algorithm, set regularization, then run. Difference methods need both reference and target; absolute methods only need a target.",
-
     # ==================================================================
     # Dialog — Interop Hub (EIDORS ↔ PyEIDORS migration workbench)
     # ==================================================================
     "dlg.interop.title": "Interop Hub",
     "dlg.interop.intro": "A visual, reviewable, reversible workflow for migrating between EIDORS and PyEIDORS.",
-
     # Tab labels
     "dlg.interop.tabs.import": "Import from EIDORS",
     "dlg.interop.tabs.export": "Export to EIDORS",
     "dlg.interop.tabs.profiles": "Profiles & Paths",
-
     # Shared — path pick button
     "dlg.interop.path_pick_button": "Pick\u2026",
-
     # Manual status panel (top of Import tab)
     "dlg.interop.status.title": "Current manual selections",
     "dlg.interop.status.unspecified": "Not set",
@@ -811,7 +759,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.status.ready_fmt": "Ready ({suffix})",
     "dlg.interop.status.ready": "Ready",
     "dlg.interop.status.failed": "Failed",
-
     # Step 1 — Environment
     "dlg.interop.env.title": "Step 1 \u00b7 Environment",
     "dlg.interop.env.hint": "Click \u201cPick\u2026\u201d to set MATLAB and startup.m manually. The unified file picker shows the Linux / WSL / Windows locations reachable from the current environment. Environment profiles can be managed on the Profiles & Paths tab.",
@@ -825,7 +772,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.env.startup_filter": "MATLAB script (*.m);;All files (*)",
     "dlg.interop.env.manual_entry": "Current manual input",
     "dlg.interop.env.saved_default_name": "Saved EIDORS Environment",
-
     # Step 2 — Source
     "dlg.interop.source.title": "Step 2 \u00b7 Source",
     "dlg.interop.source.label": "Source:",
@@ -835,13 +781,11 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.source.capture_label": "Capture output:",
     "dlg.interop.source.pick_capture_title": "Select bridge capture output directory",
     "dlg.interop.source.hint": "Three kinds of source are supported: user scripts, existing bridge projects, and legacy geometry .mat files.",
-
     # Step 3 — Capture & preview actions
     "dlg.interop.actions.title": "Step 3 \u00b7 Capture & preview",
     "dlg.interop.actions.preview_button": "Generate preview",
     "dlg.interop.actions.reload_button": "Reload last result",
     "dlg.interop.actions.no_preview_yet": "No migration preview yet.",
-
     # Step 4 — Preview & import
     "dlg.interop.preview.title": "Step 4 \u00b7 Preview & import",
     "dlg.interop.preview.waiting": "Waiting for bridge package preview.",
@@ -855,18 +799,15 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.preview.no_warnings": "No high-risk items requiring manual review.",
     "dlg.interop.preview.done": "Preview complete: {dim}  |  {n_elec} electrodes/ring  |  {pts} boundary-voltage points.",
     "dlg.interop.preview.smoke_placeholder": "Inverse-problem smoke test output will appear here.",
-
     # Import target combo
     "dlg.interop.import_target.hardware": "Hardware config template",
     "dlg.interop.import_target.simulation": "Simulation config",
     "dlg.interop.import_target.dataset": "Dataset config",
     "dlg.interop.import_target.measurements": "Boundary voltages only",
     "dlg.interop.import_target.geometry": "Geometry assets only",
-
     "dlg.interop.auto_smoke_check": "Auto-run inverse-problem smoke test after import",
     "dlg.interop.import_button": "Import into PyEIDORS",
     "dlg.interop.smoke_button": "Run smoke validation",
-
     # Export tab
     "dlg.interop.export.title": "Export to EIDORS",
     "dlg.interop.export.source.simulation": "Current simulation config",
@@ -884,7 +825,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.export.log_placeholder": "Export notes, generated paths, and any fallback behavior will be logged here.",
     "dlg.interop.export.success": "[OK] Bridge project generated: {root}",
     "dlg.interop.export.source_tag": "      Source: {source_kind}",
-
     # Profiles & Paths tab
     "dlg.interop.profiles.group_title": "Saved environments",
     "dlg.interop.profiles.name_label": "Name:",
@@ -898,7 +838,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.profiles.unnamed": "Unnamed EIDORS Environment",
     "dlg.interop.profiles.custom_default": "Custom EIDORS Environment",
     "dlg.interop.profiles.manual_name": "Manual Environment",
-
     # Status-bar / message-box text
     "dlg.interop.msg.no_source": "Please select an EIDORS script or bridge package source first.",
     "dlg.interop.msg.missing_before_script": "Before running an EIDORS script, please set: {parts}.",
@@ -916,7 +855,6 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.msg.bundle_no_preview": "No bridge package has been loaded yet.",
     "dlg.interop.msg.profile_saved": "Profile saved: {name}",
     "dlg.interop.msg.profile_removed": "Profile removed: {name}",
-
     # ==================================================================
     # Visual path picker (pick_visual_path)
     # ==================================================================

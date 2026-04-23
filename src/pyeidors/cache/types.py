@@ -21,6 +21,7 @@ def compute_score_size(size_bytes: int) -> float:
     scaled_size = max(size_bytes, 1)
     return float(round(10.0 * np.log10(float(scaled_size) / 1024.0)))
 
+
 CacheDiskLifecycle = Literal["session", "persistent"]
 
 
@@ -33,6 +34,7 @@ def normalize_cache_lifecycle(
     if normalized in {"session", "persistent"}:
         return normalized
     return default
+
 
 CacheScope = Literal["process", "disk", "both", "off"]
 CacheArtifactKind = Literal[

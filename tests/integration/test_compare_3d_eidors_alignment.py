@@ -44,7 +44,9 @@ def test_compare_3d_alignment_exports_all_preset_cases(tmp_path: Path):
     )
     assert run.returncode == 0, run.stderr
 
-    summary = json.loads((output_dir / "alignment_summary.json").read_text(encoding="utf-8"))
+    summary = json.loads(
+        (output_dir / "alignment_summary.json").read_text(encoding="utf-8")
+    )
     case_names = {entry["case"] for entry in summary}
     assert case_names == {
         "difference_eidors_one_step_noser",

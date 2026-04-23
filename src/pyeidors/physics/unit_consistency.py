@@ -105,8 +105,12 @@ def run_unit_consistency_checks(
 
     # 2) Geometry scale sanity
     try:
-        extents_m, max_size_m = _geometry_size_m(fwd_model.mesh, float(cfg.geometry_scale_to_m))
-        finite_and_positive = bool(np.all(np.isfinite(extents_m)) and np.all(extents_m > 0.0))
+        extents_m, max_size_m = _geometry_size_m(
+            fwd_model.mesh, float(cfg.geometry_scale_to_m)
+        )
+        finite_and_positive = bool(
+            np.all(np.isfinite(extents_m)) and np.all(extents_m > 0.0)
+        )
         if not finite_and_positive:
             report.items.append(
                 UnitCheckItem(
@@ -130,7 +134,10 @@ def run_unit_consistency_checks(
                             "Physical domain size deviates from expected value "
                             f"(rel_err={rel:.3e} > {geometry_tolerance:.3e})."
                         ),
-                        details={"max_size_m": max_size_m, "expected_domain_size_m": expected},
+                        details={
+                            "max_size_m": max_size_m,
+                            "expected_domain_size_m": expected,
+                        },
                     )
                 )
             else:
@@ -140,7 +147,10 @@ def run_unit_consistency_checks(
                         level=UnitCheckLevel.INFO,
                         passed=True,
                         message="Geometry scale matches expected physical size.",
-                        details={"max_size_m": max_size_m, "expected_domain_size_m": expected},
+                        details={
+                            "max_size_m": max_size_m,
+                            "expected_domain_size_m": expected,
+                        },
                     )
                 )
         else:
@@ -165,7 +175,11 @@ def run_unit_consistency_checks(
 
     # 3) Electrode length consistency
     lengths = np.asarray(fwd_model.electrode_lengths_m, dtype=float).reshape(-1)
-    lengths_ok = bool(lengths.size == n_elec and np.all(np.isfinite(lengths)) and np.all(lengths > 0.0))
+    lengths_ok = bool(
+        lengths.size == n_elec
+        and np.all(np.isfinite(lengths))
+        and np.all(lengths > 0.0)
+    )
     if lengths_ok:
         report.items.append(
             UnitCheckItem(
@@ -203,7 +217,9 @@ def run_unit_consistency_checks(
                 level=UnitCheckLevel.INFO,
                 passed=True,
                 message="All stimulation patterns conserve net current.",
-                details={"max_abs_row_sum": float(np.max(np.abs(row_sums), initial=0.0))},
+                details={
+                    "max_abs_row_sum": float(np.max(np.abs(row_sums), initial=0.0))
+                },
             )
         )
     else:
@@ -234,7 +250,9 @@ def run_unit_consistency_checks(
         )
         return report
 
-    lengths_full = np.asarray(fwd_model.pattern_manager._electrode_lengths_m, dtype=float)  # noqa: SLF001
+    lengths_full = np.asarray(
+        fwd_model.pattern_manager._electrode_lengths_m, dtype=float
+    )  # noqa: SLF001
     n_elec_single_ring = int(cfg.n_elec)
     max_rel_err = 0.0
     for stim_idx in range(fwd_model.pattern_manager.n_stim):
@@ -242,12 +260,13 @@ def run_unit_consistency_checks(
         elec = stim_idx % n_elec_single_ring
         for inj_i, inj_elec in enumerate(fwd_model.pattern_manager.inj_electrodes):
             idx = (
-                (inj_elec + fwd_model.pattern_manager.stim_direction * elec) % n_elec_single_ring
-                + ring * n_elec_single_ring
-            )
+                inj_elec + fwd_model.pattern_manager.stim_direction * elec
+            ) % n_elec_single_ring + ring * n_elec_single_ring
             current = stim[stim_idx, idx]
             density = current / lengths_full[idx]
-            expected = float(cfg.drive_value) * float(fwd_model.pattern_manager.inj_weights[inj_i])
+            expected = float(cfg.drive_value) * float(
+                fwd_model.pattern_manager.inj_weights[inj_i]
+            )
             rel = abs(density - expected) / max(abs(expected), np.finfo(float).eps)
             max_rel_err = max(max_rel_err, float(rel))
 
@@ -268,7 +287,10 @@ def run_unit_consistency_checks(
                 level=UnitCheckLevel.WARN,
                 passed=True,
                 message="Current density closure near tolerance boundary.",
-                details={"max_rel_err": max_rel_err, "density_rel_tol": density_rel_tol},
+                details={
+                    "max_rel_err": max_rel_err,
+                    "density_rel_tol": density_rel_tol,
+                },
             )
         )
     else:
@@ -278,7 +300,10 @@ def run_unit_consistency_checks(
                 level=UnitCheckLevel.ERROR,
                 passed=False,
                 message="Current density closure failed.",
-                details={"max_rel_err": max_rel_err, "density_rel_tol": density_rel_tol},
+                details={
+                    "max_rel_err": max_rel_err,
+                    "density_rel_tol": density_rel_tol,
+                },
             )
         )
 

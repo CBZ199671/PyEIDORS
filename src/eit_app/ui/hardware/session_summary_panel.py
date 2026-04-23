@@ -4,7 +4,14 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QGridLayout, QGroupBox, QLabel, QSizePolicy, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QGridLayout,
+    QGroupBox,
+    QLabel,
+    QSizePolicy,
+    QVBoxLayout,
+    QWidget,
+)
 
 from eit_app.i18n import t, translator
 from eit_app.ui.theme import (
@@ -129,15 +136,15 @@ class SessionSummaryPanel(QGroupBox):
         for index, (key, _title_key) in enumerate(self._FIELDS):
             title_label = QLabel("")  # retranslated below
             title_label.setStyleSheet(
-                "color: #4d5f75; "
-                "font-weight: 700; "
-                "padding-top: 2px;"
+                "color: #4d5f75; font-weight: 700; padding-top: 2px;"
             )
             value = QLabel("\u2014")
             value.setWordWrap(True)
             value.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
             value.setFont(fixed_font)
-            value.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+            value.setSizePolicy(
+                QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred
+            )
             # Style comes from theme.field_value_stylesheet() so the
             # box surface follows dark mode.
             value.setStyleSheet(field_value_stylesheet())

@@ -1,10 +1,18 @@
 """Dialog for selecting reference and target frames for difference imaging."""
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QFormLayout, QGroupBox, QLabel, QVBoxLayout
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QGroupBox,
+    QLabel,
+    QVBoxLayout,
+)
 
 from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+
 
 class DifferenceDialog(QDialog):
     """Modeless dialog for configuring difference reconstruction.
@@ -57,12 +65,16 @@ class DifferenceDialog(QDialog):
         self._ref_combo = AutoCloseComboBox()
         self._tgt_combo = AutoCloseComboBox()
         for entry in self._frame_entries:
-            label = f"Frame {entry.get('frame_index', '?')} - {entry.get('file_path', '')}"
+            label = (
+                f"Frame {entry.get('frame_index', '?')} - {entry.get('file_path', '')}"
+            )
             self._ref_combo.addItem(label)
             self._tgt_combo.addItem(label)
 
         if self._frame_entries:
-            ref_index = min(max(self._default_ref_index, 0), len(self._frame_entries) - 1)
+            ref_index = min(
+                max(self._default_ref_index, 0), len(self._frame_entries) - 1
+            )
             self._ref_combo.setCurrentIndex(ref_index)
 
         if len(self._frame_entries) > 1:
@@ -89,7 +101,9 @@ class DifferenceDialog(QDialog):
         settings_layout.addRow(self._lbl_mode, self._mode_combo)
 
         self._orient_combo = AutoCloseComboBox()
-        self._orient_combo.addItems(["target_minus_reference", "reference_minus_target"])
+        self._orient_combo.addItems(
+            ["target_minus_reference", "reference_minus_target"]
+        )
         self._lbl_orient = QLabel("")
         settings_layout.addRow(self._lbl_orient, self._orient_combo)
 
@@ -144,20 +158,30 @@ class DifferenceDialog(QDialog):
         """
         # Remember which entry the user had picked (not just the index,
         # since the new list may have a different ordering).
-        prev_ref = self._frame_entries[self._ref_combo.currentIndex()] if (
-            self._frame_entries
-            and 0 <= self._ref_combo.currentIndex() < len(self._frame_entries)
-        ) else None
-        prev_tgt = self._frame_entries[self._tgt_combo.currentIndex()] if (
-            self._frame_entries
-            and 0 <= self._tgt_combo.currentIndex() < len(self._frame_entries)
-        ) else None
+        prev_ref = (
+            self._frame_entries[self._ref_combo.currentIndex()]
+            if (
+                self._frame_entries
+                and 0 <= self._ref_combo.currentIndex() < len(self._frame_entries)
+            )
+            else None
+        )
+        prev_tgt = (
+            self._frame_entries[self._tgt_combo.currentIndex()]
+            if (
+                self._frame_entries
+                and 0 <= self._tgt_combo.currentIndex() < len(self._frame_entries)
+            )
+            else None
+        )
 
         self._frame_entries = list(frame_entries)
         self._ref_combo.clear()
         self._tgt_combo.clear()
         for entry in self._frame_entries:
-            label = f"Frame {entry.get('frame_index', '?')} - {entry.get('file_path', '')}"
+            label = (
+                f"Frame {entry.get('frame_index', '?')} - {entry.get('file_path', '')}"
+            )
             self._ref_combo.addItem(label)
             self._tgt_combo.addItem(label)
 

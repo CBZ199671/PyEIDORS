@@ -77,7 +77,7 @@ def normalize_electrode_level_fractions(
     for frac in seq:
         if not 0.0 < float(frac) < 1.0:
             raise ValueError(
-                "electrode_level_fractions entries must be in (0, 1), " f"got {frac!r}."
+                f"electrode_level_fractions entries must be in (0, 1), got {frac!r}."
             )
     return seq
 

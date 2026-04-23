@@ -20,19 +20,30 @@ GIB = float(1024**3)
 
 
 def _forced_selector(effective: str):
-    def _select(*, mesh_dim: int, n_param: int, n_meas: int, mem_available_bytes: int | None = None):
-        estimated_peak_bytes = gn_difference_runner._estimate_strict_dense_peak_bytes(int(n_param))
+    def _select(
+        *,
+        mesh_dim: int,
+        n_param: int,
+        n_meas: int,
+        mem_available_bytes: int | None = None,
+    ):
+        estimated_peak_bytes = gn_difference_runner._estimate_strict_dense_peak_bytes(
+            int(n_param)
+        )
         return {
             "requested": gn_difference_runner.STRICT_SOLVER_BACKEND_DENSE,
             "effective": str(effective),
-            "strict_memory_guard_triggered": str(effective) == gn_difference_runner.STRICT_SOLVER_BACKEND_MEASUREMENT,
+            "strict_memory_guard_triggered": str(effective)
+            == gn_difference_runner.STRICT_SOLVER_BACKEND_MEASUREMENT,
             "strict_memory_guard_reason": "forced_for_test",
             "strict_dense_estimated_peak_bytes": float(estimated_peak_bytes),
             "strict_dense_estimated_peak_gib": float(estimated_peak_bytes / GIB),
             "strict_memory_guard_limit_bytes": float(12 * 1024**3),
             "strict_memory_guard_limit_gib": 12.0,
             "strict_mem_available_bytes": int(mem_available_bytes or (16 * 1024**3)),
-            "strict_mem_available_gib": float((mem_available_bytes or (16 * 1024**3)) / GIB),
+            "strict_mem_available_gib": float(
+                (mem_available_bytes or (16 * 1024**3)) / GIB
+            ),
             "strict_mem_available_source": "forced",
             "strict_measurement_system_shape": [int(n_meas), int(n_meas)]
             if str(effective) == gn_difference_runner.STRICT_SOLVER_BACKEND_MEASUREMENT
@@ -88,11 +99,15 @@ def test_select_strict_backend_switches_to_measurement_exact_for_default_3d_scal
     assert info["effective"] == "measurement-exact"
     assert info["strict_memory_guard_triggered"] is True
     assert info["strict_memory_guard_reason"] == "dense_estimate_exceeds_guard"
-    assert info["strict_dense_estimated_peak_gib"] > info["strict_memory_guard_limit_gib"]
+    assert (
+        info["strict_dense_estimated_peak_gib"] > info["strict_memory_guard_limit_gib"]
+    )
     assert info["strict_measurement_system_shape"] == [208, 208]
 
 
-def test_measurement_exact_strict_matches_dense_param_on_small_problem(tmp_path: Path, monkeypatch):
+def test_measurement_exact_strict_matches_dense_param_on_small_problem(
+    tmp_path: Path, monkeypatch
+):
     dense_ctx = _build_ctx(tmp_path / "cache-dense")
 
     monkeypatch.setattr(
@@ -164,7 +179,9 @@ def test_measurement_exact_strict_matches_dense_param_on_small_problem(tmp_path:
     assert exact_metrics["strict_solver_backend_effective"] == "measurement-exact"
 
 
-def test_strict_backend_cache_keys_do_not_mix_between_dense_and_measurement_exact(tmp_path: Path, monkeypatch):
+def test_strict_backend_cache_keys_do_not_mix_between_dense_and_measurement_exact(
+    tmp_path: Path, monkeypatch
+):
     cache_dir = tmp_path / "shared-cache"
     dense_ctx = _build_ctx(cache_dir)
 
@@ -182,7 +199,9 @@ def test_strict_backend_cache_keys_do_not_mix_between_dense_and_measurement_exac
 
     measurement_operator_key = measurement_cold["cache_lookups"]["operator_A"]["key"]
     measurement_factor_key = measurement_cold["cache_lookups"]["operator_lu"]["key"]
-    measurement_shape = tuple(np.asarray(measurement_cold["operator_bundle"]["A"]).shape)
+    measurement_shape = tuple(
+        np.asarray(measurement_cold["operator_bundle"]["A"]).shape
+    )
 
     assert measurement_cold["strict_backend_info"]["effective"] == "measurement-exact"
     assert measurement_cold["cache_lookups"]["operator_A"]["hit"] is False
@@ -198,4 +217,7 @@ def test_strict_backend_cache_keys_do_not_mix_between_dense_and_measurement_exac
         "dense": dense_ctx["strict_backend_info"],
         "measurement": measurement_cold["strict_backend_info"],
     }
-    assert json.loads(json.dumps(payload))["measurement"]["effective"] == "measurement-exact"
+    assert (
+        json.loads(json.dumps(payload))["measurement"]["effective"]
+        == "measurement-exact"
+    )

@@ -18,10 +18,14 @@ def test_forward_solve_returns_tuple_of_column_views(eit_system):
     assert all(col.base is not None for col in u_all)
 
     pattern_matrix = np.asarray(model.pattern_manager.stim_matrix, dtype=float)
-    rhs_matrix = np.zeros((model.dofs + model.n_elec + 1, pattern_matrix.shape[0]), dtype=float)
+    rhs_matrix = np.zeros(
+        (model.dofs + model.n_elec + 1, pattern_matrix.shape[0]), dtype=float
+    )
     rhs_matrix[model.dofs : model.dofs + model.n_elec, :] = pattern_matrix.T
     sol_matrix = splu(model.create_full_matrix(sigma).tocsc()).solve(rhs_matrix)
     expected_potential = np.asarray(sol_matrix[: model.dofs, :], dtype=float)
 
     for idx, column in enumerate(u_all):
-        np.testing.assert_allclose(column, expected_potential[:, idx], atol=1e-10, rtol=1e-10)
+        np.testing.assert_allclose(
+            column, expected_potential[:, idx], atol=1e-10, rtol=1e-10
+        )

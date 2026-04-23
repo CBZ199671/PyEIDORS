@@ -163,7 +163,9 @@ def _make_model(**overrides):
     return model
 
 
-def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     model = _make_model()
 
     monkeypatch.setattr(forward_module, "PETSc", None)
@@ -184,7 +186,10 @@ def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(monkeypatch: pytes
     monkeypatch.setattr(
         forward_module,
         "PETSc",
-        SimpleNamespace(Mat=SimpleNamespace(Type=SimpleNamespace()), Vec=SimpleNamespace(Type=SimpleNamespace())),
+        SimpleNamespace(
+            Mat=SimpleNamespace(Type=SimpleNamespace()),
+            Vec=SimpleNamespace(Type=SimpleNamespace()),
+        ),
     )
     assert EITForwardModel._stable_cpu_petsc_types(model) == ("seqaij", "seq")
 
@@ -200,7 +205,10 @@ def test_mpi_backend_info_reports_current_single_rank_boundary():
     assert info["mpi_rank"] == 2
     assert info["mpi_parallel"] is True
     assert info["mpi_size_supported"] is False
-    assert info["mpi_fallback_reason"] == "mpi_size_gt_1_not_supported_phase2_single_rank_only"
+    assert (
+        info["mpi_fallback_reason"]
+        == "mpi_size_gt_1_not_supported_phase2_single_rank_only"
+    )
 
     with pytest.raises(RuntimeError, match="Detected MPI size=4"):
         EITForwardModel._assert_supported_mpi_runtime(model)
@@ -237,7 +245,9 @@ def test_resolve_petsc_backend_info_handles_non_petsc_missing_probe_and_capabili
         EITForwardModel._resolve_petsc_backend_info(cuda_model)
 
 
-def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeypatch: pytest.MonkeyPatch):
+def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(forward_module, "PETSc", object())
 
     cpu_model = _make_model()
@@ -245,7 +255,11 @@ def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeyp
     monkeypatch.setattr(
         perf_caps,
         "probe_petsc_cuda_runtime",
-        lambda: {"petsc_cuda": True, "mat_type_name": "aijcusparse", "vec_type_name": "cuda"},
+        lambda: {
+            "petsc_cuda": True,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+        },
     )
     cpu_info = EITForwardModel._resolve_petsc_backend_info(cpu_model)
     assert cpu_info["petsc_device_effective"] == "cpu"
@@ -261,7 +275,10 @@ def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeyp
         lambda: {"petsc_cuda": False, "errors": {"mat": "missing"}},
     )
     fallback_info = EITForwardModel._resolve_petsc_backend_info(fallback_model)
-    assert fallback_info["gpu_fallback_reason"] == "petsc_cuda_not_required_for_cuda_structured"
+    assert (
+        fallback_info["gpu_fallback_reason"]
+        == "petsc_cuda_not_required_for_cuda_structured"
+    )
 
     cuda_model = _make_model()
     monkeypatch.setattr(
@@ -282,9 +299,13 @@ def test_resolve_petsc_backend_info_cpu_cuda_structured_and_cuda_success(monkeyp
     assert cuda_info["gpu_transfer_risk"] == "mixed_dolfinx_assembly_to_petsc_cuda"
 
 
-def test_requested_petsc_type_helpers_use_explicit_and_namespace_fallbacks(monkeypatch: pytest.MonkeyPatch):
+def test_requested_petsc_type_helpers_use_explicit_and_namespace_fallbacks(
+    monkeypatch: pytest.MonkeyPatch,
+):
     fake_petsc = SimpleNamespace(
-        Mat=SimpleNamespace(Type=SimpleNamespace(AIJCUSPARSE="AIJCUSPARSE", DENSECUDA="DENSECUDA")),
+        Mat=SimpleNamespace(
+            Type=SimpleNamespace(AIJCUSPARSE="AIJCUSPARSE", DENSECUDA="DENSECUDA")
+        ),
         Vec=SimpleNamespace(Type=SimpleNamespace(CUDA="VECCUDA")),
     )
     monkeypatch.setattr(forward_module, "PETSc", fake_petsc)
@@ -313,10 +334,16 @@ def test_requested_petsc_type_helpers_use_explicit_and_namespace_fallbacks(monke
     monkeypatch.setattr(
         forward_module,
         "PETSc",
-        SimpleNamespace(Mat=SimpleNamespace(Type=SimpleNamespace()), Vec=SimpleNamespace(Type=SimpleNamespace())),
+        SimpleNamespace(
+            Mat=SimpleNamespace(Type=SimpleNamespace()),
+            Vec=SimpleNamespace(Type=SimpleNamespace()),
+        ),
     )
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
-    assert EITForwardModel._get_cuda_type(model, "petsc_mat_type", "Mat", "AIJCUSPARSE") is None
+    assert (
+        EITForwardModel._get_cuda_type(model, "petsc_mat_type", "Mat", "AIJCUSPARSE")
+        is None
+    )
 
 
 def test_gpu_gauge_fix_flag_and_csr_to_petsc_helpers_cover_cpu_and_unavailable_paths(
@@ -334,7 +361,9 @@ def test_gpu_gauge_fix_flag_and_csr_to_petsc_helpers_cover_cpu_and_unavailable_p
         EITForwardModel._csr_to_petsc(sparse.identity(2, format="csr"))
 
 
-def test_ensure_mat_and_vec_type_cover_convert_settype_and_passthrough(monkeypatch: pytest.MonkeyPatch):
+def test_ensure_mat_and_vec_type_cover_convert_settype_and_passthrough(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(forward_module, "PETSc", object())
 
     mat = _FakeMat("aij")
@@ -359,7 +388,9 @@ def test_ensure_mat_and_vec_type_cover_convert_settype_and_passthrough(monkeypat
     assert vec.set_type_calls == ["cuda"]
 
 
-def test_assemble_form_helpers_route_gpu_kinds_and_kind_fallback(monkeypatch: pytest.MonkeyPatch):
+def test_assemble_form_helpers_route_gpu_kinds_and_kind_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
     model = _make_model()
     mat_calls = []
     vec_calls = []
@@ -376,24 +407,40 @@ def test_assemble_form_helpers_route_gpu_kinds_and_kind_fallback(monkeypatch: py
             raise TypeError("legacy assemble signature")
         return _FakeVec("assembled")
 
-    monkeypatch.setattr(forward_module.fem_petsc, "assemble_matrix", fake_assemble_matrix)
-    monkeypatch.setattr(forward_module.fem_petsc, "assemble_vector", fake_assemble_vector)
-    monkeypatch.setattr(model, "_ensure_mat_type", lambda mat, mat_type: (mat, mat_type))
-    monkeypatch.setattr(model, "_ensure_vec_type", lambda vec, vec_type: (vec, vec_type))
+    monkeypatch.setattr(
+        forward_module.fem_petsc, "assemble_matrix", fake_assemble_matrix
+    )
+    monkeypatch.setattr(
+        forward_module.fem_petsc, "assemble_vector", fake_assemble_vector
+    )
+    monkeypatch.setattr(
+        model, "_ensure_mat_type", lambda mat, mat_type: (mat, mat_type)
+    )
+    monkeypatch.setattr(
+        model, "_ensure_vec_type", lambda vec, vec_type: (vec, vec_type)
+    )
 
-    gpu_mat, gpu_kind = EITForwardModel._assemble_form_matrix(model, "f", mat_kind="AIJCUSPARSE")
+    gpu_mat, gpu_kind = EITForwardModel._assemble_form_matrix(
+        model, "f", mat_kind="AIJCUSPARSE"
+    )
     assert isinstance(gpu_mat, _FakeMat)
     assert gpu_kind == "AIJCUSPARSE"
 
-    cpu_mat, cpu_kind = EITForwardModel._assemble_form_matrix(model, "f", mat_kind="seqaij")
+    cpu_mat, cpu_kind = EITForwardModel._assemble_form_matrix(
+        model, "f", mat_kind="seqaij"
+    )
     assert isinstance(cpu_mat, _FakeMat)
     assert cpu_kind == "seqaij"
 
-    gpu_vec, gpu_vec_kind = EITForwardModel._assemble_form_vector(model, "g", vec_kind="cuda")
+    gpu_vec, gpu_vec_kind = EITForwardModel._assemble_form_vector(
+        model, "g", vec_kind="cuda"
+    )
     assert isinstance(gpu_vec, _FakeVec)
     assert gpu_vec_kind == "cuda"
 
-    cpu_vec, cpu_vec_kind = EITForwardModel._assemble_form_vector(model, "g", vec_kind="seq")
+    cpu_vec, cpu_vec_kind = EITForwardModel._assemble_form_vector(
+        model, "g", vec_kind="seq"
+    )
     assert isinstance(cpu_vec, _FakeVec)
     assert cpu_vec_kind == "seq"
 
@@ -401,7 +448,9 @@ def test_assemble_form_helpers_route_gpu_kinds_and_kind_fallback(monkeypatch: py
     assert vec_calls == [None, "seq", None]
 
 
-def test_structural_diagonal_and_cuda_gauge_fix_helpers(monkeypatch: pytest.MonkeyPatch):
+def test_structural_diagonal_and_cuda_gauge_fix_helpers(
+    monkeypatch: pytest.MonkeyPatch,
+):
     monkeypatch.setattr(forward_module, "PETSc", _FakePETScDense)
     model = _make_model()
 
@@ -410,12 +459,17 @@ def test_structural_diagonal_and_cuda_gauge_fix_helpers(monkeypatch: pytest.Monk
     assert structural.options == [("new_nonzero_allocation_err", False)]
     assert structural.values == [(0, 0, 0.0), (1, 1, 0.0), (2, 2, 0.0)]
 
-    EITForwardModel._ensure_structural_diagonal(model, _StructuralMat(fail_get_size=True))
+    EITForwardModel._ensure_structural_diagonal(
+        model, _StructuralMat(fail_get_size=True)
+    )
 
     monkeypatch.setattr(forward_module, "PETSc", None)
     mat_passthrough = _FakeMat("aijcusparse")
     EITForwardModel._ensure_structural_diagonal(model, mat_passthrough)
-    assert EITForwardModel._apply_cuda_gauge_fix_matrix(model, mat_passthrough) is mat_passthrough
+    assert (
+        EITForwardModel._apply_cuda_gauge_fix_matrix(model, mat_passthrough)
+        is mat_passthrough
+    )
 
     monkeypatch.setattr(forward_module, "PETSc", _FakePETScDense)
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
@@ -440,14 +494,20 @@ def test_structural_diagonal_and_cuda_gauge_fix_helpers(monkeypatch: pytest.Monk
     out = EITForwardModel._apply_cuda_gauge_fix_matrix(model, original)
     assert out is fixed
     assert original.destroyed is True
-    assert model.get_backend_diagnostics()["gpu_constraint_strategy"] == "electrode-zero"
+    assert (
+        model.get_backend_diagnostics()["gpu_constraint_strategy"] == "electrode-zero"
+    )
     fixed_csr = captured["matrix"].tocsr()
     assert np.array_equal(fixed_csr.getrow(2).indices, np.array([2], dtype=np.int32))
     assert np.array_equal(fixed_csr.getrow(4).indices, np.array([4], dtype=np.int32))
     assert 2 not in fixed_csr.getrow(0).indices
     assert 4 not in fixed_csr.getrow(0).indices
 
-    monkeypatch.setattr(model, "_petsc_to_csr", lambda _mat: (_ for _ in ()).throw(RuntimeError("bad csr")))
+    monkeypatch.setattr(
+        model,
+        "_petsc_to_csr",
+        lambda _mat: (_ for _ in ()).throw(RuntimeError("bad csr")),
+    )
     original2 = _FakeMat("aijcusparse")
     assert EITForwardModel._apply_cuda_gauge_fix_matrix(model, original2) is original2
 
@@ -486,7 +546,9 @@ def test_cuda_rhs_and_solution_recentering_respect_gpu_enablement():
     np.testing.assert_allclose(sol_fixed[4, :], 0.0)
 
 
-def test_make_petsc_dense_solver_bundle_validates_dense_type_and_builds_solver(monkeypatch: pytest.MonkeyPatch):
+def test_make_petsc_dense_solver_bundle_validates_dense_type_and_builds_solver(
+    monkeypatch: pytest.MonkeyPatch,
+):
     model = _make_model()
 
     monkeypatch.setattr(forward_module, "PETSc", None)
@@ -525,5 +587,7 @@ def test_make_petsc_dense_solver_bundle_validates_dense_type_and_builds_solver(m
         "PETSc",
         SimpleNamespace(KSP=lambda: _ReuseFailKSP()),
     )
-    bundle_reuse_fail = EITForwardModel._make_petsc_dense_solver_bundle(model, _FakeMat("aij"))
+    bundle_reuse_fail = EITForwardModel._make_petsc_dense_solver_bundle(
+        model, _FakeMat("aij")
+    )
     assert bundle_reuse_fail["ksp"].did_setup is True

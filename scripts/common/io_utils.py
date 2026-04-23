@@ -127,7 +127,9 @@ def align_measurement_polarity(
     return frame, False
 
 
-def align_frames_polarity(frames: np.ndarray, baseline_vector: np.ndarray) -> tuple[np.ndarray, list[int]]:
+def align_frames_polarity(
+    frames: np.ndarray, baseline_vector: np.ndarray
+) -> tuple[np.ndarray, list[int]]:
     """Batch align polarity for multiple frames.
 
     Args:
@@ -151,10 +153,14 @@ def align_frames_polarity(frames: np.ndarray, baseline_vector: np.ndarray) -> tu
         arr = arr.T  # Input is (n_meas, n_frames), transpose to (n_frames, n_meas)
         transposed = True
     else:
-        raise ValueError(f"frames shape {arr.shape} does not match baseline length {baseline_len}")
+        raise ValueError(
+            f"frames shape {arr.shape} does not match baseline length {baseline_len}"
+        )
     aligned = arr.copy()
     for i in range(aligned.shape[0]):
-        aligned[i], was_flipped = align_measurement_polarity(aligned[i], baseline_vector)
+        aligned[i], was_flipped = align_measurement_polarity(
+            aligned[i], baseline_vector
+        )
         if was_flipped:
             flipped.append(i)
     if transposed:

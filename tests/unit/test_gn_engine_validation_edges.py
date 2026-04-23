@@ -48,7 +48,9 @@ def test_invalid_lowrank_energy_high():
     _run_validation_case("lowrank_energy=1.5", "lowrank_energy")
 
 
-def test_invalid_inexact_and_lowrank_validation_inprocess(eit_system, monkeypatch: pytest.MonkeyPatch):
+def test_invalid_inexact_and_lowrank_validation_inprocess(
+    eit_system, monkeypatch: pytest.MonkeyPatch
+):
     monkeypatch.setattr(
         gn_engine,
         "resolve_torch_device",

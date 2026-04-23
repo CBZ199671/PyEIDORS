@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 
-from pyeidors.inverse.reduced.reduced_gn_step import build_reduced_operator, solve_reduced_step
+from pyeidors.inverse.reduced.reduced_gn_step import (
+    build_reduced_operator,
+    solve_reduced_step,
+)
 
 
 def test_reduced_step_matches_dense_identity_basis():

@@ -43,7 +43,9 @@ except Exception as e:
     print(f"ERROR: {e}")
 """
         result = run_python(code)
-        assert "DOLFINX_PASS" in result.stdout or result.returncode == 0, f"stdout={result.stdout}, stderr={result.stderr}"
+        assert "DOLFINX_PASS" in result.stdout or result.returncode == 0, (
+            f"stdout={result.stdout}, stderr={result.stderr}"
+        )
 
 
 class TestInitTorchUnavailable:
@@ -76,7 +78,9 @@ if not pyeidors._MPS_AVAILABLE:
 print("PASS:" + ",".join(checks))
 """
         result = run_python(code)
-        assert "TORCH" in result.stdout, f"stdout={result.stdout}, stderr={result.stderr}"
+        assert "TORCH" in result.stdout, (
+            f"stdout={result.stdout}, stderr={result.stderr}"
+        )
 
 
 class TestInitCuqiUnavailable:
@@ -104,4 +108,6 @@ else:
     print("CUQI_FAIL")
 """
         result = run_python(code)
-        assert "CUQI_PASS" in result.stdout, f"stdout={result.stdout}, stderr={result.stderr}"
+        assert "CUQI_PASS" in result.stdout, (
+            f"stdout={result.stdout}, stderr={result.stderr}"
+        )

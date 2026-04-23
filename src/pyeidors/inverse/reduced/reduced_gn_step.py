@@ -78,7 +78,9 @@ def solve_reduced_step(
     }
     if inexact_tol is not None and float(inexact_tol) > 0:
         tol = float(inexact_tol)
-        cg_maxiter = int(maxiter) if maxiter is not None else max(40, h_reduced.shape[0] * 3)
+        cg_maxiter = (
+            int(maxiter) if maxiter is not None else max(40, h_reduced.shape[0] * 3)
+        )
         alpha, cg_info = cg(h_reduced, reduced_rhs, rtol=tol, maxiter=cg_maxiter)
         if cg_info == 0:
             info["solver"] = "cg"

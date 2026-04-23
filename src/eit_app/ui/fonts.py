@@ -34,11 +34,11 @@ _CJK_CANDIDATES = [
     "PingFang SC",
 ]
 _WINDOWS_CJK_FILES = [
-    Path("/mnt/c/Windows/Fonts/msyh.ttc"),      # Microsoft YaHei
-    Path("/mnt/c/Windows/Fonts/msyhbd.ttc"),    # YaHei Bold
-    Path("/mnt/c/Windows/Fonts/msyhl.ttc"),     # YaHei Light
-    Path("/mnt/c/Windows/Fonts/simhei.ttf"),    # SimHei
-    Path("/mnt/c/Windows/Fonts/simsun.ttc"),    # SimSun
+    Path("/mnt/c/Windows/Fonts/msyh.ttc"),  # Microsoft YaHei
+    Path("/mnt/c/Windows/Fonts/msyhbd.ttc"),  # YaHei Bold
+    Path("/mnt/c/Windows/Fonts/msyhl.ttc"),  # YaHei Light
+    Path("/mnt/c/Windows/Fonts/simhei.ttf"),  # SimHei
+    Path("/mnt/c/Windows/Fonts/simsun.ttc"),  # SimSun
     Path("/mnt/c/Windows/Fonts/NSimSun.ttf"),
 ]
 

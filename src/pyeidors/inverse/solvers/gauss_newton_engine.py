@@ -52,6 +52,7 @@ from ...perf.policy import (
 try:
     from tqdm import tqdm
 except ImportError:  # pragma: no cover - optional dependency fallback
+
     class _NoOpTqdm:
         def __init__(self, *args, **kwargs):
             pass
@@ -153,7 +154,9 @@ class GaussNewtonReconstructor:
         self.clip_values = clip_values
         self.verbose = verbose
         self.measurement_weight_strategy = measurement_weight_strategy
-        self.use_measurement_weights = use_measurement_weights or measurement_weight_strategy != "none"
+        self.use_measurement_weights = (
+            use_measurement_weights or measurement_weight_strategy != "none"
+        )
         self.weight_floor = weight_floor
         self.negate_jacobian = negate_jacobian
         self.max_step = max_step
@@ -172,13 +175,17 @@ class GaussNewtonReconstructor:
         self.jacobian_background_conductivity = float(jacobian_background_conductivity)
         self.difference_step_size_mode = str(difference_step_size_mode).strip().lower()
         self.difference_step_size_value = (
-            None if difference_step_size_value is None else float(difference_step_size_value)
+            None
+            if difference_step_size_value is None
+            else float(difference_step_size_value)
         )
         self.difference_step_size_bounds = (
             float(difference_step_size_bounds[0]),
             float(difference_step_size_bounds[1]),
         )
-        self.difference_step_size_fmin_options = dict(difference_step_size_fmin_options or {})
+        self.difference_step_size_fmin_options = dict(
+            difference_step_size_fmin_options or {}
+        )
         self.difference_preset = str(difference_preset).strip().lower()
         self.absolute_preset = str(absolute_preset).strip().lower()
         self.active_preset_name = self.difference_preset
@@ -219,9 +226,15 @@ class GaussNewtonReconstructor:
         self.absolute_startup_cache = bool(absolute_startup_cache)
         self.cholmod_max_n = int(max(1, cholmod_max_n))
         self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
-        _validate_option("performance_mode", self.performance_mode, {"safe", "aggressive"})
+        _validate_option(
+            "performance_mode", self.performance_mode, {"safe", "aggressive"}
+        )
         _validate_option("solver_mode", self.solver_mode, {"strict", "fast"})
-        _validate_option("linear_solver", self.linear_solver, {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"})
+        _validate_option(
+            "linear_solver",
+            self.linear_solver,
+            {"auto", "petsc-ksp", "scipy-lsmr", "pyamg-cg", "cholmod"},
+        )
         _validate_option("line_search_mode", self.line_search_mode, {"full", "fast"})
         _validate_option(
             "preconditioner",
@@ -239,11 +252,21 @@ class GaussNewtonReconstructor:
                 "petsc-gamg",
             },
         )
-        _validate_option("fast_linear_path", self.fast_linear_path, {"auto", "woodbury", "pcg", "cholmod-direct", "strict"})
+        _validate_option(
+            "fast_linear_path",
+            self.fast_linear_path,
+            {"auto", "woodbury", "pcg", "cholmod-direct", "strict"},
+        )
         _validate_option("rom_mode", self.rom_mode, {"off", "auto", "on"})
-        _validate_option("rom_snapshot_source", self.rom_snapshot_source, {"cache", "synthetic", "hybrid"})
+        _validate_option(
+            "rom_snapshot_source",
+            self.rom_snapshot_source,
+            {"cache", "synthetic", "hybrid"},
+        )
         _validate_option("inexact_mode", self.inexact_mode, {"off", "auto", "on"})
-        _validate_option("inexact_forcing", self.inexact_forcing, {"fixed", "eisenstat-walker"})
+        _validate_option(
+            "inexact_forcing", self.inexact_forcing, {"fixed", "eisenstat-walker"}
+        )
         _validate_option("lowrank_mode", self.lowrank_mode, {"off", "auto", "on"})
         _validate_option("lowrank_method", self.lowrank_method, {"tsvd", "randomized"})
         if self.inexact_eta_min <= 0.0 or self.inexact_eta_max <= 0.0:
@@ -254,7 +277,9 @@ class GaussNewtonReconstructor:
             raise ValueError("lowrank_energy must be in (0, 1].")
 
         petsc_backend_info = getattr(self.fwd_model, "_petsc_backend_info", {}) or {}
-        petsc_device_effective = str(petsc_backend_info.get("petsc_device_effective", "cpu"))
+        petsc_device_effective = str(
+            petsc_backend_info.get("petsc_device_effective", "cpu")
+        )
         device_resolution = resolve_torch_device(
             device,
             verbose=self.verbose,
@@ -275,7 +300,9 @@ class GaussNewtonReconstructor:
                 effective=self.device_effective,
                 torch_device=self.device,
             )
-        self.regularization = regularization or SmoothnessRegularization(fwd_model, alpha=1.0)
+        self.regularization = regularization or SmoothnessRegularization(
+            fwd_model, alpha=1.0
+        )
 
         self.n_elements = int(fem.Function(fwd_model.V_sigma).x.array.size)
         self.n_measurements = fwd_model.pattern_manager.n_meas_total
@@ -340,7 +367,9 @@ class GaussNewtonReconstructor:
     def ensure_regularization_ready(self) -> None:
         """Build and validate the cached regularization tensor used by GN."""
         expected_shape = (self.n_elements, self.n_elements)
-        needs_dense_tensor = self.solver_mode == "strict" or self.line_search_mode == "full"
+        needs_dense_tensor = (
+            self.solver_mode == "strict" or self.line_search_mode == "full"
+        )
         cache_ready = (
             self.R_matrix is not None
             and self.R_linear_operator is not None
@@ -361,7 +390,9 @@ class GaussNewtonReconstructor:
         if callable(as_linear_operator):
             self.R_linear_operator = as_linear_operator(matrix, shape=expected_shape)
         else:
-            self.R_linear_operator = BaseRegularization.as_linear_operator(matrix, shape=expected_shape)
+            self.R_linear_operator = BaseRegularization.as_linear_operator(
+                matrix, shape=expected_shape
+            )
 
         if isspmatrix(matrix):
             if matrix.nnz == 0:
@@ -393,7 +424,9 @@ class GaussNewtonReconstructor:
             probe = np.ones(self.n_elements, dtype=np.float64)
             check = np.asarray(matrix.matvec(probe), dtype=np.float64)
             if not np.isfinite(check).all():
-                raise FloatingPointError("Regularization LinearOperator produces non-finite values.")
+                raise FloatingPointError(
+                    "Regularization LinearOperator produces non-finite values."
+                )
             self.R_diag = None
             self.R_torch = None
             if self.solver_mode == "strict":
@@ -419,7 +452,9 @@ class GaussNewtonReconstructor:
                 dtype=self._torch_dtype,
             )
             if not torch.isfinite(self.R_torch).all():
-                raise FloatingPointError("Regularization tensor contains non-finite values after transfer.")
+                raise FloatingPointError(
+                    "Regularization tensor contains non-finite values after transfer."
+                )
         else:
             self.R_torch = None
 
@@ -450,7 +485,9 @@ class GaussNewtonReconstructor:
         return scale_baseline_to_measured(baseline_vector, self._measured_vector)
 
     def _difference_with_baseline(self, baseline_vector: np.ndarray) -> np.ndarray:
-        return difference_with_baseline(baseline_vector, self._measured_vector, self.weight_floor)
+        return difference_with_baseline(
+            baseline_vector, self._measured_vector, self.weight_floor
+        )
 
     def _line_search_torch(
         self,
@@ -499,4 +536,6 @@ class GaussNewtonReconstructor:
     def set_jacobian_calculator(self, jacobian_calculator):
         self.jacobian_calculator = jacobian_calculator
         if self.verbose:
-            print(f"Jacobian calculator updated to: {type(jacobian_calculator).__name__}")
+            print(
+                f"Jacobian calculator updated to: {type(jacobian_calculator).__name__}"
+            )

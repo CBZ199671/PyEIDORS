@@ -31,7 +31,9 @@ def test_diff_3d_fast_vs_strict_rmse(tmp_path: Path):
         cache_scope="both",
         cache_dir=str(tmp_path / "cache"),
     )
-    strict_ctx = build_shared_context(**common, solver_mode="strict", linear_solver="auto")
+    strict_ctx = build_shared_context(
+        **common, solver_mode="strict", linear_solver="auto"
+    )
     fast_ctx = build_shared_context(**common, solver_mode="fast", linear_solver="auto")
 
     vh = np.asarray(strict_ctx["base_meas"], dtype=float)

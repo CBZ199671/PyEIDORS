@@ -26,7 +26,9 @@ def test_fixed_mode_keeps_eta_and_tightens_on_reject():
 
 
 def test_eisenstat_walker_updates_with_bounds():
-    ctl = InexactController(mode="eisenstat-walker", eta0=0.2, eta_min=1e-3, eta_max=0.5)
+    ctl = InexactController(
+        mode="eisenstat-walker", eta0=0.2, eta_min=1e-3, eta_max=0.5
+    )
     eta = ctl.update(
         outer_prev=1.0,
         outer_curr=0.4,

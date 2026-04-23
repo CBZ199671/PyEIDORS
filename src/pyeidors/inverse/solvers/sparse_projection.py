@@ -24,7 +24,9 @@ def _build_groups(n_elements: int, size: int) -> list[np.ndarray]:
     return groups
 
 
-def _sum_group_columns(jacobian: np.ndarray, groups: list[np.ndarray]) -> list[np.ndarray]:
+def _sum_group_columns(
+    jacobian: np.ndarray, groups: list[np.ndarray]
+) -> list[np.ndarray]:
     return [jacobian[:, idx].sum(axis=1) for idx in groups]
 
 

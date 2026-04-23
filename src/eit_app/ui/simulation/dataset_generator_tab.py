@@ -88,7 +88,11 @@ class _DatasetWorkspaceWidget(QWidget):
         self._artifacts_box.setTitle(t("dataset.artifacts.title"))
         for label, key in zip(
             self._artifact_labels,
-            ("dataset.artifacts.item1", "dataset.artifacts.item2", "dataset.artifacts.item3"),
+            (
+                "dataset.artifacts.item1",
+                "dataset.artifacts.item2",
+                "dataset.artifacts.item3",
+            ),
         ):
             label.setText(t(key))
         self._notes_box.setTitle(t("dataset.notes.title"))
@@ -107,7 +111,9 @@ class DatasetGeneratorTab(QWidget):
         self._progress = (0, 0)
         self._generating = False
         self._build_ui()
-        self._dataset_panel._dir_edit.setText(str(self._dataset_panel.default_output_dir()))
+        self._dataset_panel._dir_edit.setText(
+            str(self._dataset_panel.default_output_dir())
+        )
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
         self._refresh_summary()
@@ -160,7 +166,9 @@ class DatasetGeneratorTab(QWidget):
         mesh_cfg = self._mesh_panel.get_config()
         dataset_cfg = self._dataset_panel.get_config()
         shapes = ", ".join(shape.title() for shape in dataset_cfg["shapes"])
-        output_dir = dataset_cfg["output_dir"] or str(self._dataset_panel.default_output_dir())
+        output_dir = dataset_cfg["output_dir"] or str(
+            self._dataset_panel.default_output_dir()
+        )
         self._summary_panel.set_summary(
             {
                 "output_dir": output_dir,
@@ -177,9 +185,13 @@ class DatasetGeneratorTab(QWidget):
         )
         self._summary_panel.set_progress(*self._progress)
         if self._generating:
-            self._summary_panel.set_status(t("dataset.summary.state.generating"), tone="active")
+            self._summary_panel.set_status(
+                t("dataset.summary.state.generating"), tone="active"
+            )
         elif self._progress[1] > 0 and self._progress[0] == self._progress[1]:
-            self._summary_panel.set_status(t("dataset.summary.state.complete"), tone="ready")
+            self._summary_panel.set_status(
+                t("dataset.summary.state.complete"), tone="ready"
+            )
         else:
             self._summary_panel.set_status(t("dataset.summary.state.idle"), tone="idle")
 

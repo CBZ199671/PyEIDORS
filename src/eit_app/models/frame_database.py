@@ -92,9 +92,7 @@ class FrameDatabase:
 
     def _run_migrations(self) -> None:
         """Apply pending schema migrations gated by ``PRAGMA user_version``."""
-        current = int(
-            self._conn.execute("PRAGMA user_version").fetchone()[0]
-        )
+        current = int(self._conn.execute("PRAGMA user_version").fetchone()[0])
         if current < 2:
             self._migrate_frequency_range_columns()
         # Every future migration adds another `if current < N:` branch
@@ -226,9 +224,7 @@ class FrameDatabase:
         # Default to local-system time so timestamps line up with the
         # operator's wall clock rather than UTC.
         resolved_started = (
-            started_at
-            or metadata.get("session_start")
-            or datetime.now().isoformat()
+            started_at or metadata.get("session_start") or datetime.now().isoformat()
         )
 
         seed_freq = _to_int(metadata.get("frequency_hz"))
@@ -247,8 +243,7 @@ class FrameDatabase:
             "frequency_hz_max": seed_freq,
             "stim_amp_uA": _to_int(metadata.get("stim_amp_uA")),
             "voltage_amp_level": _to_int(
-                metadata.get("voltage_amp_level")
-                or metadata.get("voltage_amp_level_1")
+                metadata.get("voltage_amp_level") or metadata.get("voltage_amp_level_1")
             ),
             "transport_type": _to_str(metadata.get("transport_type")),
             "mea_mode": _to_int(metadata.get("mea_mode")),
@@ -446,9 +441,7 @@ class FrameDatabase:
 
     def find_frame_by_path(self, csv_path: str) -> dict[str, Any] | None:
         csv_path = str(Path(csv_path).resolve())
-        cur = self._conn.execute(
-            "SELECT * FROM frames WHERE csv_path = ?", (csv_path,)
-        )
+        cur = self._conn.execute("SELECT * FROM frames WHERE csv_path = ?", (csv_path,))
         row = cur.fetchone()
         return dict(row) if row else None
 
@@ -460,9 +453,7 @@ class FrameDatabase:
         return [dict(r) for r in cur.fetchall()]
 
     def get_frame(self, frame_id: int) -> dict[str, Any] | None:
-        cur = self._conn.execute(
-            "SELECT * FROM frames WHERE id = ?", (int(frame_id),)
-        )
+        cur = self._conn.execute("SELECT * FROM frames WHERE id = ?", (int(frame_id),))
         row = cur.fetchone()
         return dict(row) if row else None
 

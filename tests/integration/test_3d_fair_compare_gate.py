@@ -68,7 +68,9 @@ def _full_payload(pass_case: bool) -> dict:
                     },
                     "speedup_vs_A": {
                         "B_cholmod_only": {"absolute_linear_speedup_x": 1.10},
-                        "C_autotune_only": {"absolute_jacobian_assembly_speedup_x": 1.20},
+                        "C_autotune_only": {
+                            "absolute_jacobian_assembly_speedup_x": 1.20
+                        },
                         "D_combined": {"absolute_total_speedup_x": 1.12},
                         "E_fused": {"absolute_total_speedup_x": 1.00},
                     },
@@ -112,7 +114,11 @@ def _quick_payload(pass_case: bool) -> dict:
         return {
             "benchmark_phase": "quick",
             "quick_pass": True,
-            "quick_thresholds": {"total": 0.05, "linear": 0.10, "peak_overhead_limit": 0.10},
+            "quick_thresholds": {
+                "total": 0.05,
+                "linear": 0.10,
+                "peak_overhead_limit": 0.10,
+            },
             "quick_eval": {
                 "total_improvement_ratio": 0.06,
                 "linear_improvement_ratio": 0.02,
@@ -123,7 +129,11 @@ def _quick_payload(pass_case: bool) -> dict:
     return {
         "benchmark_phase": "quick",
         "quick_pass": False,
-        "quick_thresholds": {"total": 0.05, "linear": 0.10, "peak_overhead_limit": 0.10},
+        "quick_thresholds": {
+            "total": 0.05,
+            "linear": 0.10,
+            "peak_overhead_limit": 0.10,
+        },
         "quick_eval": {
             "total_improvement_ratio": 0.01,
             "linear_improvement_ratio": 0.02,
@@ -135,7 +145,14 @@ def _quick_payload(pass_case: bool) -> dict:
 
 def _run_gate(report: Path) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
-        [sys.executable, str(_script_path()), "--input", str(report), "--mode", "strict"],
+        [
+            sys.executable,
+            str(_script_path()),
+            "--input",
+            str(report),
+            "--mode",
+            "strict",
+        ],
         capture_output=True,
         text=True,
         check=False,

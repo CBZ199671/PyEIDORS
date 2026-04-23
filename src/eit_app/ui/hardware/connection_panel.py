@@ -4,9 +4,21 @@ import os
 import re
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QFormLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QPushButton, QSpinBox, QWidget
+from PySide6.QtWidgets import (
+    QFormLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QPushButton,
+    QSpinBox,
+    QWidget,
+)
 
-from eit_app.hardware.serial_port_discovery import SerialPortDescriptor, discover_serial_ports
+from eit_app.hardware.serial_port_discovery import (
+    SerialPortDescriptor,
+    discover_serial_ports,
+)
 from eit_app.i18n import t, translator
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
@@ -64,7 +76,9 @@ class ConnectionPanel(QGroupBox):
         # Serial port
         self._port_combo = AutoCloseComboBox()
         self._port_combo.setEditable(True)
-        self._port_combo.currentIndexChanged.connect(lambda _index: self._update_serial_hint())
+        self._port_combo.currentIndexChanged.connect(
+            lambda _index: self._update_serial_hint()
+        )
         self._refresh_btn = QPushButton("")
         self._refresh_btn.clicked.connect(self._refresh_ports)
         set_button_role(self._refresh_btn, "subtle")
@@ -202,7 +216,9 @@ class ConnectionPanel(QGroupBox):
                 self._refresh_ports()
             if not self.selected_serial_port():
                 self._port_hint.setText(t("hw.connection.port_hint.still_no_ports"))
-                self.validation_failed.emit("Connection failed: No serial port detected.")
+                self.validation_failed.emit(
+                    "Connection failed: No serial port detected."
+                )
                 return
 
         port_value = self.selected_serial_port()
@@ -288,7 +304,11 @@ class ConnectionPanel(QGroupBox):
 
         if source == "windows-com":
             self._port_hint.setText(
-                t("hw.connection.port_hint.multi_port_bridge", count=count, port=selected_name)
+                t(
+                    "hw.connection.port_hint.multi_port_bridge",
+                    count=count,
+                    port=selected_name,
+                )
             )
             return
 

@@ -101,8 +101,12 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='pyeidors'\n", encoding="utf-8"
+    )
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='pyeidors'\n", encoding="utf-8"
+    )
 
     versions = {
         "dolfinx": "0.9.0",
@@ -142,7 +146,9 @@ def test_build_manifest_adds_profile_name_for_nondefault(tmp_path: Path, monkeyp
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("[project]\nname='pyeidors'\n", encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text(
+        "[project]\nname='pyeidors'\n", encoding="utf-8"
+    )
 
     versions = {
         "dolfinx": "0.9.0",
@@ -153,8 +159,14 @@ def test_build_manifest_adds_profile_name_for_nondefault(tmp_path: Path, monkeyp
         "pyeidors": "1.0.0",
     }
 
-    monkeypatch.setattr(exporter, "package_version", lambda module_name, dist_name=None: versions[module_name])
+    monkeypatch.setattr(
+        exporter,
+        "package_version",
+        lambda module_name, dist_name=None: versions[module_name],
+    )
     monkeypatch.setattr(exporter, "runtime_context_kind", lambda: "wsl2")
 
-    manifest = exporter.build_manifest(tmp_path, platform_id="linux-x86_64", profile_name="cuda")
+    manifest = exporter.build_manifest(
+        tmp_path, platform_id="linux-x86_64", profile_name="cuda"
+    )
     assert manifest["profile"]["name"] == "cuda"

@@ -134,7 +134,10 @@ class _SessionTableModel(QAbstractTableModel):
         orientation: Qt.Orientation,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+        ):
             return t(self._COLUMN_KEYS[section])
         return None
 
@@ -208,7 +211,10 @@ class _FrameTableModel(QAbstractTableModel):
         orientation: Qt.Orientation,
         role: int = Qt.ItemDataRole.DisplayRole,
     ) -> Any:
-        if role == Qt.ItemDataRole.DisplayRole and orientation == Qt.Orientation.Horizontal:
+        if (
+            role == Qt.ItemDataRole.DisplayRole
+            and orientation == Qt.Orientation.Horizontal
+        ):
             return t(self._COLUMN_KEYS[section])
         return None
 
@@ -452,26 +458,34 @@ class DatabaseTab(QWidget):
         self._session_model = _SessionTableModel()
         self._session_table = QTableView()
         self._session_table.setModel(self._session_model)
-        self._session_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._session_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._session_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._session_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
         self._session_table.setAlternatingRowColors(True)
         self._session_table.verticalHeader().setVisible(False)
         self._session_table.setShowGrid(False)
-        self._session_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self._session_table.setEditTriggers(
+            QAbstractItemView.EditTrigger.NoEditTriggers
+        )
         self._session_table.horizontalHeader().setHighlightSections(False)
         self._session_table.verticalHeader().setDefaultSectionSize(26)
 
         hdr = self._session_table.horizontalHeader()
         hdr.setStretchLastSection(False)
         # Column-specific sizing
-        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)   # ID
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)            # Name
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)   # Started
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)   # N_elec
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeMode.ResizeToContents)   # Frequency
-        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)   # Stim
-        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)   # Gain
-        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)   # Frames
+        hdr.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)  # ID
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)  # Name
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)  # Started
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeMode.ResizeToContents)  # N_elec
+        hdr.setSectionResizeMode(
+            4, QHeaderView.ResizeMode.ResizeToContents
+        )  # Frequency
+        hdr.setSectionResizeMode(5, QHeaderView.ResizeMode.ResizeToContents)  # Stim
+        hdr.setSectionResizeMode(6, QHeaderView.ResizeMode.ResizeToContents)  # Gain
+        hdr.setSectionResizeMode(7, QHeaderView.ResizeMode.ResizeToContents)  # Frames
 
         sessions_layout.addWidget(self._session_table, 1)
 
@@ -502,8 +516,12 @@ class DatabaseTab(QWidget):
         self._frame_model = _FrameTableModel()
         self._frame_table = QTableView()
         self._frame_table.setModel(self._frame_model)
-        self._frame_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self._frame_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self._frame_table.setSelectionBehavior(
+            QAbstractItemView.SelectionBehavior.SelectRows
+        )
+        self._frame_table.setSelectionMode(
+            QAbstractItemView.SelectionMode.SingleSelection
+        )
         self._frame_table.setAlternatingRowColors(True)
         self._frame_table.verticalHeader().setVisible(False)
         self._frame_table.setShowGrid(False)
@@ -834,11 +852,19 @@ class DatabaseTab(QWidget):
         self._lbl_date_from.setText(t("db.filters.date_from_label"))
         self._lbl_date_to.setText(t("db.filters.date_to_label"))
         self._lbl_n_elec.setText(t("db.filters.n_elec_label"))
-        self._filter_n_elec_min.setPlaceholderText(t("db.filters.n_elec_min_placeholder"))
-        self._filter_n_elec_max.setPlaceholderText(t("db.filters.n_elec_max_placeholder"))
+        self._filter_n_elec_min.setPlaceholderText(
+            t("db.filters.n_elec_min_placeholder")
+        )
+        self._filter_n_elec_max.setPlaceholderText(
+            t("db.filters.n_elec_max_placeholder")
+        )
         self._lbl_stim_amp.setText(t("db.filters.stim_amp_label"))
-        self._filter_stim_min.setPlaceholderText(t("db.filters.stim_amp_min_placeholder"))
-        self._filter_stim_max.setPlaceholderText(t("db.filters.stim_amp_max_placeholder"))
+        self._filter_stim_min.setPlaceholderText(
+            t("db.filters.stim_amp_min_placeholder")
+        )
+        self._filter_stim_max.setPlaceholderText(
+            t("db.filters.stim_amp_max_placeholder")
+        )
         self._apply_btn.setText(t("db.filters.apply_button"))
         self._clear_btn.setText(t("db.filters.clear_button"))
         self._refresh_btn.setText(t("db.filters.refresh_button"))

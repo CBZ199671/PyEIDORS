@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from .core_system_helpers import add_circular_phantom, collect_system_info, create_homogeneous_image
+from .core_system_helpers import (
+    add_circular_phantom,
+    collect_system_info,
+    create_homogeneous_image,
+)
 from .data.structures import EITData, EITImage
 from .inverse import (
     ReconstructionResult,
@@ -48,7 +52,9 @@ class CoreSystemFacadeMixin:
             metadata=metadata,
         )
 
-    def create_homogeneous_image(self, conductivity: Optional[float] = None) -> EITImage:
+    def create_homogeneous_image(
+        self, conductivity: Optional[float] = None
+    ) -> EITImage:
         self._require_initialized()
         return create_homogeneous_image(self, conductivity)
 

@@ -53,7 +53,9 @@ from scripts.diagnostics.gallery_shared import (
 BACKGROUND_CONDUCTIVITY = 1.0
 REAL_PHANTOM_HIGH = 1.6
 REAL_PHANTOM_LOW = 0.65
-DEFAULT_OUTPUT_DIR = PROJECT_ROOT / "results" / "diagnostics" / "reconstruction_gallery_real"
+DEFAULT_OUTPUT_DIR = (
+    PROJECT_ROOT / "results" / "diagnostics" / "reconstruction_gallery_real"
+)
 _MEASUREMENT_REL_TOL = 1e-6
 _IMAGE_REL_TOL = 5e-5
 _IMAGE_RMSE_TOL = {2: 1e-6, 3: 1.25e-6}
@@ -68,12 +70,32 @@ class AnomalySpec:
 
 
 ANOMALIES_2D = (
-    AnomalySpec(label="high", center_norm=(0.35, 0.0), radius_norm=0.18, conductivity=REAL_PHANTOM_HIGH),
-    AnomalySpec(label="low", center_norm=(-0.35, 0.0), radius_norm=0.18, conductivity=REAL_PHANTOM_LOW),
+    AnomalySpec(
+        label="high",
+        center_norm=(0.35, 0.0),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_HIGH,
+    ),
+    AnomalySpec(
+        label="low",
+        center_norm=(-0.35, 0.0),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_LOW,
+    ),
 )
 ANOMALIES_3D = (
-    AnomalySpec(label="high", center_norm=(0.35, 0.0, 0.22), radius_norm=0.18, conductivity=REAL_PHANTOM_HIGH),
-    AnomalySpec(label="low", center_norm=(-0.35, 0.0, -0.22), radius_norm=0.18, conductivity=REAL_PHANTOM_LOW),
+    AnomalySpec(
+        label="high",
+        center_norm=(0.35, 0.0, 0.22),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_HIGH,
+    ),
+    AnomalySpec(
+        label="low",
+        center_norm=(-0.35, 0.0, -0.22),
+        radius_norm=0.18,
+        conductivity=REAL_PHANTOM_LOW,
+    ),
 )
 
 
@@ -115,7 +137,9 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument("--contact-impedance", type=float, default=1e-5)
     parser.add_argument("--max-iterations", type=int, default=2)
     parser.add_argument("--slice-resolution", type=int, default=220)
-    parser.add_argument("--report-title", type=str, default="Real-Valued Reconstruction Gallery")
+    parser.add_argument(
+        "--report-title", type=str, default="Real-Valued Reconstruction Gallery"
+    )
     add_acceleration_profile_argument(
         parser,
         flag="--gpu-acceleration-profile",
@@ -126,7 +150,9 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _cuda_available() -> bool:
-    return bool(torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available())
+    return bool(
+        torch is not None and hasattr(torch, "cuda") and torch.cuda.is_available()
+    )
 
 
 def _ensure_plot_stack() -> None:
@@ -146,7 +172,9 @@ def _ensure_plot_stack() -> None:
     griddata = _griddata  # type: ignore[assignment]
 
 
-def _griddata_fill(points: np.ndarray, values: np.ndarray, query: np.ndarray) -> np.ndarray:
+def _griddata_fill(
+    points: np.ndarray, values: np.ndarray, query: np.ndarray
+) -> np.ndarray:
     _ensure_plot_stack()
     sampled = griddata(points, values, query, method="linear")
     if np.isnan(sampled).any():
@@ -172,13 +200,17 @@ def _sample_2d_field(
             center[1] + y_grid.ravel() * float(radius),
         ]
     )
-    sampled = _griddata_fill(coords[:, :2], np.asarray(values, dtype=np.float64), query).reshape(x_grid.shape)
+    sampled = _griddata_fill(
+        coords[:, :2], np.asarray(values, dtype=np.float64), query
+    ).reshape(x_grid.shape)
     mask = (x_grid**2 + y_grid**2) > 1.0
     sampled[mask] = np.nan
     return x_grid, y_grid, sampled
 
 
-def _sample_2d_profile(*, x_grid: np.ndarray, y_grid: np.ndarray, field: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+def _sample_2d_profile(
+    *, x_grid: np.ndarray, y_grid: np.ndarray, field: np.ndarray
+) -> tuple[np.ndarray, np.ndarray]:
     mid_idx = int(np.argmin(np.abs(y_grid[:, 0])))
     return x_grid[mid_idx, :], field[mid_idx, :]
 
@@ -315,9 +347,18 @@ def _render_2d_overview(
         ax.set_aspect("equal")
 
     profile_ax = fig.add_subplot(gs[1, 2])
-    profile_ax.plot(profile_x, profile_truth, label="Truth", color="#000000", linewidth=2.0)
+    profile_ax.plot(
+        profile_x, profile_truth, label="Truth", color="#000000", linewidth=2.0
+    )
     profile_ax.plot(profile_x, profile_cpu, label="CPU", color="#1f77b4", linewidth=1.8)
-    profile_ax.plot(profile_x, profile_gpu, label="GPU", color="#d55e00", linewidth=1.8, linestyle="--")
+    profile_ax.plot(
+        profile_x,
+        profile_gpu,
+        label="GPU",
+        color="#d55e00",
+        linewidth=1.8,
+        linestyle="--",
+    )
     profile_ax.set_title("Centerline Profile (y = 0)")
     profile_ax.set_xlabel("x / R")
     profile_ax.set_ylabel("Δσ")
@@ -343,10 +384,30 @@ def _render_2d_overview(
         f"CPU CRC(high/low): {cpu_metrics['contrast_recovery_high']:.3f} / {cpu_metrics['contrast_recovery_low']:.3f}",
         f"GPU CRC(high/low): {gpu_metrics['contrast_recovery_high']:.3f} / {gpu_metrics['contrast_recovery_low']:.3f}",
     ]
-    text_ax.text(0.0, 1.0, "\n".join(summary_lines), va="top", ha="left", family="monospace", fontsize=9)
+    text_ax.text(
+        0.0,
+        1.0,
+        "\n".join(summary_lines),
+        va="top",
+        ha="left",
+        family="monospace",
+        fontsize=9,
+    )
 
-    fig.colorbar(image_handles[0], ax=[fig.axes[0], fig.axes[1], fig.axes[2]], fraction=0.026, pad=0.02, label="Δσ")
-    fig.colorbar(image_handles[3], ax=[fig.axes[3], fig.axes[4], fig.axes[5]], fraction=0.026, pad=0.02, label="Δσ diff")
+    fig.colorbar(
+        image_handles[0],
+        ax=[fig.axes[0], fig.axes[1], fig.axes[2]],
+        fraction=0.026,
+        pad=0.02,
+        label="Δσ",
+    )
+    fig.colorbar(
+        image_handles[3],
+        ax=[fig.axes[3], fig.axes[4], fig.axes[5]],
+        fraction=0.026,
+        pad=0.02,
+        label="Δσ diff",
+    )
     fig.suptitle("2D Absolute Reconstruction Overview", fontsize=14, fontweight="bold")
     fig.savefig(output_path, bbox_inches="tight")
     plt.close(fig)
@@ -372,7 +433,9 @@ def _render_3d_overview(
         )
     )
     diff_slices = [gpu - cpu for cpu, gpu in zip(cpu_slices, gpu_slices)]
-    diff_limit = float(max(max(np.nanmax(np.abs(field)) for field in diff_slices), 1e-9))
+    diff_limit = float(
+        max(max(np.nanmax(np.abs(field)) for field in diff_slices), 1e-9)
+    )
     recon_norm = TwoSlopeNorm(vcenter=0.0, vmin=-recon_limit, vmax=recon_limit)
     diff_norm = TwoSlopeNorm(vcenter=0.0, vmin=-diff_limit, vmax=diff_limit)
     recon_handle = None
@@ -387,7 +450,13 @@ def _render_3d_overview(
         ]
         for col, (panel_title, field, cmap, norm) in enumerate(panels):
             ax = axes[row, col]
-            im = ax.imshow(field, origin="lower", extent=(-1.0, 1.0, -1.0, 1.0), cmap=cmap, norm=norm)
+            im = ax.imshow(
+                field,
+                origin="lower",
+                extent=(-1.0, 1.0, -1.0, 1.0),
+                cmap=cmap,
+                norm=norm,
+            )
             if col == 0:
                 ax.set_ylabel(title)
             if row == 0:
@@ -400,9 +469,21 @@ def _render_3d_overview(
                 diff_handle = im
 
     if recon_handle is not None:
-        fig.colorbar(recon_handle, ax=axes[:, :3].ravel().tolist(), fraction=0.028, pad=0.02, label="Δσ")
+        fig.colorbar(
+            recon_handle,
+            ax=axes[:, :3].ravel().tolist(),
+            fraction=0.028,
+            pad=0.02,
+            label="Δσ",
+        )
     if diff_handle is not None:
-        fig.colorbar(diff_handle, ax=axes[:, 3].ravel().tolist(), fraction=0.028, pad=0.02, label="Δσ diff")
+        fig.colorbar(
+            diff_handle,
+            ax=axes[:, 3].ravel().tolist(),
+            fraction=0.028,
+            pad=0.02,
+            label="Δσ diff",
+        )
     fig.suptitle(
         "3D Absolute Reconstruction Overview\n"
         f"Consistency: {'PASS' if consistency['passed'] else 'FAIL'} | "
@@ -424,7 +505,11 @@ def _format_metric(value: Any) -> str:
     if isinstance(value, (int, np.integer)):
         return str(int(value))
     if isinstance(value, (float, np.floating)):
-        return f"{float(value):.3e}" if abs(float(value)) < 1e-2 or abs(float(value)) >= 1e3 else f"{float(value):.4f}"
+        return (
+            f"{float(value):.3e}"
+            if abs(float(value)) < 1e-2 or abs(float(value)) >= 1e3
+            else f"{float(value):.4f}"
+        )
     return str(value)
 
 
@@ -435,7 +520,9 @@ def _markdown_table(rows: list[dict[str, Any]]) -> str:
     header = "| " + " | ".join(columns) + " |"
     sep = "| " + " | ".join(["---"] * len(columns)) + " |"
     body = [
-        "| " + " | ".join(_format_metric(row.get(column, "")) for column in columns) + " |"
+        "| "
+        + " | ".join(_format_metric(row.get(column, "")) for column in columns)
+        + " |"
         for row in rows
     ]
     return "\n".join([header, sep, *body])
@@ -452,16 +539,28 @@ def _fairness_thresholds(*, dim_label: str) -> tuple[float, float, float]:
     return (0.10, 0.05, 0.10)
 
 
-def _fairness_order_row(dim_label: str, order_label: str, run: dict[str, Any], *, report_only: bool) -> dict[str, Any]:
+def _fairness_order_row(
+    dim_label: str, order_label: str, run: dict[str, Any], *, report_only: bool
+) -> dict[str, Any]:
     cpu = run["backend_runs"]["cpu"]
     gpu = run["backend_runs"]["gpu"]
     return {
         "dimension": dim_label,
         "order": order_label,
-        "cold_forward_speedup_x": float(cpu["cold"]["forward_elapsed_sec"] / gpu["cold"]["forward_elapsed_sec"]),
-        "hot_forward_speedup_x": float(cpu["hot"]["forward_elapsed_sec"] / gpu["hot"]["forward_elapsed_sec"]),
-        "cold_inverse_speedup_x": float(cpu["cold"]["inverse_total_elapsed_sec"] / gpu["cold"]["inverse_total_elapsed_sec"]),
-        "hot_inverse_speedup_x": float(cpu["hot"]["inverse_total_elapsed_sec"] / gpu["hot"]["inverse_total_elapsed_sec"]),
+        "cold_forward_speedup_x": float(
+            cpu["cold"]["forward_elapsed_sec"] / gpu["cold"]["forward_elapsed_sec"]
+        ),
+        "hot_forward_speedup_x": float(
+            cpu["hot"]["forward_elapsed_sec"] / gpu["hot"]["forward_elapsed_sec"]
+        ),
+        "cold_inverse_speedup_x": float(
+            cpu["cold"]["inverse_total_elapsed_sec"]
+            / gpu["cold"]["inverse_total_elapsed_sec"]
+        ),
+        "hot_inverse_speedup_x": float(
+            cpu["hot"]["inverse_total_elapsed_sec"]
+            / gpu["hot"]["inverse_total_elapsed_sec"]
+        ),
         "report_only": bool(report_only),
     }
 
@@ -474,11 +573,17 @@ def _fairness_backend_row(
     *,
     report_only: bool,
 ) -> dict[str, Any]:
-    cold_forward_tol, hot_forward_tol, inverse_tol = _fairness_thresholds(dim_label=dim_label)
+    cold_forward_tol, hot_forward_tol, inverse_tol = _fairness_thresholds(
+        dim_label=dim_label
+    )
     first = cpu_first["backend_runs"][backend_label]
     second = gpu_first["backend_runs"][backend_label]
-    cold_forward_drift = _relative_drift(first["cold"]["forward_elapsed_sec"], second["cold"]["forward_elapsed_sec"])
-    hot_forward_drift = _relative_drift(first["hot"]["forward_elapsed_sec"], second["hot"]["forward_elapsed_sec"])
+    cold_forward_drift = _relative_drift(
+        first["cold"]["forward_elapsed_sec"], second["cold"]["forward_elapsed_sec"]
+    )
+    hot_forward_drift = _relative_drift(
+        first["hot"]["forward_elapsed_sec"], second["hot"]["forward_elapsed_sec"]
+    )
     inverse_drift = _relative_drift(
         first["cold"]["inverse_total_elapsed_sec"],
         second["cold"]["inverse_total_elapsed_sec"],
@@ -520,14 +625,26 @@ def _write_report(
             return "n/a"
         return f"{float(value):.2f}x"
 
-    fairness_3d_rows = [row for row in fairness_backend_rows if row["dimension"] == "3D" and not row["report_only"]]
-    fairness_3d_pass = bool(fairness_3d_rows and all(row["passed"] for row in fairness_3d_rows))
-    mesh_family_default, geometry_version_default, generator_revision_default = resolve_3d_mesh_contract(
-        acceleration_profile=config.get("gpu_acceleration_profile", ACCELERATION_PROFILE_GPU3D),
+    fairness_3d_rows = [
+        row
+        for row in fairness_backend_rows
+        if row["dimension"] == "3D" and not row["report_only"]
+    ]
+    fairness_3d_pass = bool(
+        fairness_3d_rows and all(row["passed"] for row in fairness_3d_rows)
+    )
+    mesh_family_default, geometry_version_default, generator_revision_default = (
+        resolve_3d_mesh_contract(
+            acceleration_profile=config.get(
+                "gpu_acceleration_profile", ACCELERATION_PROFILE_GPU3D
+            ),
+        )
     )
     mesh_family = str(config.get("mesh_family_3d", mesh_family_default))
     geometry_version = str(config.get("geometry_version_3d", geometry_version_default))
-    generator_revision = str(config.get("generator_revision_3d", generator_revision_default))
+    generator_revision = str(
+        config.get("generator_revision_3d", generator_revision_default)
+    )
     quick_lines = [
         f"- 2D consistency: {'PASS' if consistency_rows[0]['passed'] else 'FAIL'}",
         f"- 3D consistency: {'PASS' if consistency_rows[1]['passed'] else 'FAIL'}",
@@ -608,7 +725,13 @@ def _case_table_row(dim_label: str, case: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _consistency_table_row(dim_label: str, consistency: dict[str, Any], *, cpu_case: dict[str, Any], gpu_case: dict[str, Any]) -> dict[str, Any]:
+def _consistency_table_row(
+    dim_label: str,
+    consistency: dict[str, Any],
+    *,
+    cpu_case: dict[str, Any],
+    gpu_case: dict[str, Any],
+) -> dict[str, Any]:
     return {
         "dimension": dim_label,
         "baseline_meas_rel_l2": consistency["baseline_measurement_relative_l2"],
@@ -618,8 +741,13 @@ def _consistency_table_row(dim_label: str, consistency: dict[str, Any], *, cpu_c
         "image_rel_l2": consistency["image_relative_l2"],
         "image_rmse": consistency["image_rmse"],
         "image_pearson": consistency["image_pearson"],
-        "forward_speedup_x": float(cpu_case["forward_elapsed_sec"] / gpu_case["forward_elapsed_sec"]),
-        "inverse_speedup_x": float(cpu_case["inverse_total_elapsed_sec"] / gpu_case["inverse_total_elapsed_sec"]),
+        "forward_speedup_x": float(
+            cpu_case["forward_elapsed_sec"] / gpu_case["forward_elapsed_sec"]
+        ),
+        "inverse_speedup_x": float(
+            cpu_case["inverse_total_elapsed_sec"]
+            / gpu_case["inverse_total_elapsed_sec"]
+        ),
         "passed": consistency["passed"],
     }
 
@@ -636,7 +764,12 @@ def _worker_command(
 ) -> list[str]:
     cmd = [
         sys.executable,
-        str((Path(__file__).resolve().parent / "run_real_reconstruction_gallery_worker.py")),
+        str(
+            (
+                Path(__file__).resolve().parent
+                / "run_real_reconstruction_gallery_worker.py"
+            )
+        ),
         "--dim",
         str(dim),
         "--output-dir",
@@ -708,7 +841,9 @@ def _run_worker(
     return json.loads(worker_json.read_text(encoding="utf-8"))
 
 
-def _run_correctness_pair(args: argparse.Namespace, *, dim: int, output_dir: Path) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
+def _run_correctness_pair(
+    args: argparse.Namespace, *, dim: int, output_dir: Path
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any], dict[str, Any]]:
     if int(dim) == 2:
         summary = _run_worker(
             args,
@@ -724,15 +859,24 @@ def _run_correctness_pair(args: argparse.Namespace, *, dim: int, output_dir: Pat
             "cpu": {
                 "coords": np.asarray(bundle["coords"], dtype=np.float64),
                 "truth_values": np.asarray(bundle["truth_values"], dtype=np.float64),
-                "reconstruction": np.asarray(bundle["cpu_reconstruction"], dtype=np.float64),
+                "reconstruction": np.asarray(
+                    bundle["cpu_reconstruction"], dtype=np.float64
+                ),
             },
             "gpu": {
                 "coords": np.asarray(bundle["coords"], dtype=np.float64),
                 "truth_values": np.asarray(bundle["truth_values"], dtype=np.float64),
-                "reconstruction": np.asarray(bundle["gpu_reconstruction"], dtype=np.float64),
+                "reconstruction": np.asarray(
+                    bundle["gpu_reconstruction"], dtype=np.float64
+                ),
             },
         }
-        return summary, {"case": summary["cpu_case"]}, {"case": summary["gpu_case"]}, bundles
+        return (
+            summary,
+            {"case": summary["cpu_case"]},
+            {"case": summary["gpu_case"]},
+            bundles,
+        )
 
     cpu_summary = _run_worker(
         args,
@@ -775,7 +919,9 @@ def _run_correctness_pair(args: argparse.Namespace, *, dim: int, output_dir: Pat
     return combined, cpu_summary, gpu_summary, {"cpu": cpu_bundle, "gpu": gpu_bundle}
 
 
-def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path, order_label: str) -> dict[str, Any]:
+def _run_fairness_order(
+    args: argparse.Namespace, *, dim: int, output_dir: Path, order_label: str
+) -> dict[str, Any]:
     if int(dim) == 2:
         cold = _run_worker(
             args,
@@ -797,21 +943,31 @@ def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path,
         )
         return {
             "dim": int(dim),
-            "backend_order": ["cpu", "gpu"] if order_label == "cpu-first" else ["gpu", "cpu"],
+            "backend_order": ["cpu", "gpu"]
+            if order_label == "cpu-first"
+            else ["gpu", "cpu"],
             "backend_runs": {
                 "cpu": {
                     "label": cold["cpu_case"]["label"],
                     "forward_backend": cold["cpu_case"]["forward_backend"],
                     "petsc_device": cold["cpu_case"]["petsc_device"],
                     "cold": {
-                        "forward_baseline_elapsed_sec": cold["cpu_case"]["forward_baseline_elapsed_sec"],
+                        "forward_baseline_elapsed_sec": cold["cpu_case"][
+                            "forward_baseline_elapsed_sec"
+                        ],
                         "forward_elapsed_sec": cold["cpu_case"]["forward_elapsed_sec"],
-                        "inverse_total_elapsed_sec": cold["cpu_case"]["inverse_total_elapsed_sec"],
+                        "inverse_total_elapsed_sec": cold["cpu_case"][
+                            "inverse_total_elapsed_sec"
+                        ],
                     },
                     "hot": {
-                        "forward_baseline_elapsed_sec": hot["cpu_case"]["forward_baseline_elapsed_sec"],
+                        "forward_baseline_elapsed_sec": hot["cpu_case"][
+                            "forward_baseline_elapsed_sec"
+                        ],
                         "forward_elapsed_sec": hot["cpu_case"]["forward_elapsed_sec"],
-                        "inverse_total_elapsed_sec": hot["cpu_case"]["inverse_total_elapsed_sec"],
+                        "inverse_total_elapsed_sec": hot["cpu_case"][
+                            "inverse_total_elapsed_sec"
+                        ],
                     },
                 },
                 "gpu": {
@@ -819,14 +975,22 @@ def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path,
                     "forward_backend": cold["gpu_case"]["forward_backend"],
                     "petsc_device": cold["gpu_case"]["petsc_device"],
                     "cold": {
-                        "forward_baseline_elapsed_sec": cold["gpu_case"]["forward_baseline_elapsed_sec"],
+                        "forward_baseline_elapsed_sec": cold["gpu_case"][
+                            "forward_baseline_elapsed_sec"
+                        ],
                         "forward_elapsed_sec": cold["gpu_case"]["forward_elapsed_sec"],
-                        "inverse_total_elapsed_sec": cold["gpu_case"]["inverse_total_elapsed_sec"],
+                        "inverse_total_elapsed_sec": cold["gpu_case"][
+                            "inverse_total_elapsed_sec"
+                        ],
                     },
                     "hot": {
-                        "forward_baseline_elapsed_sec": hot["gpu_case"]["forward_baseline_elapsed_sec"],
+                        "forward_baseline_elapsed_sec": hot["gpu_case"][
+                            "forward_baseline_elapsed_sec"
+                        ],
                         "forward_elapsed_sec": hot["gpu_case"]["forward_elapsed_sec"],
-                        "inverse_total_elapsed_sec": hot["gpu_case"]["inverse_total_elapsed_sec"],
+                        "inverse_total_elapsed_sec": hot["gpu_case"][
+                            "inverse_total_elapsed_sec"
+                        ],
                     },
                 },
             },
@@ -857,12 +1021,16 @@ def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path,
             "forward_backend": cold["case"]["forward_backend"],
             "petsc_device": cold["case"]["petsc_device"],
             "cold": {
-                "forward_baseline_elapsed_sec": cold["case"]["forward_baseline_elapsed_sec"],
+                "forward_baseline_elapsed_sec": cold["case"][
+                    "forward_baseline_elapsed_sec"
+                ],
                 "forward_elapsed_sec": cold["case"]["forward_elapsed_sec"],
                 "inverse_total_elapsed_sec": cold["case"]["inverse_total_elapsed_sec"],
             },
             "hot": {
-                "forward_baseline_elapsed_sec": hot["case"]["forward_baseline_elapsed_sec"],
+                "forward_baseline_elapsed_sec": hot["case"][
+                    "forward_baseline_elapsed_sec"
+                ],
                 "forward_elapsed_sec": hot["case"]["forward_elapsed_sec"],
                 "inverse_total_elapsed_sec": hot["case"]["inverse_total_elapsed_sec"],
             },
@@ -878,10 +1046,14 @@ def _run_fairness_order(args: argparse.Namespace, *, dim: int, output_dir: Path,
 def main() -> None:
     args = _parse_args()
     if not _cuda_available():
-        raise RuntimeError("This gallery requires the CUDA runtime (`nix develop .#cuda`).")
+        raise RuntimeError(
+            "This gallery requires the CUDA runtime (`nix develop .#cuda`)."
+        )
 
-    mesh_family_3d, geometry_version_3d, generator_revision_3d = resolve_3d_mesh_contract(
-        acceleration_profile=args.gpu_acceleration_profile,
+    mesh_family_3d, geometry_version_3d, generator_revision_3d = (
+        resolve_3d_mesh_contract(
+            acceleration_profile=args.gpu_acceleration_profile,
+        )
     )
 
     output_dir = args.output_dir.resolve()
@@ -930,19 +1102,22 @@ def main() -> None:
 
     x2, y2, truth2 = _sample_2d_field(
         coords=np.asarray(dim2_bundles["cpu"]["coords"], dtype=np.float64),
-        values=np.asarray(dim2_bundles["cpu"]["truth_values"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+        values=np.asarray(dim2_bundles["cpu"]["truth_values"], dtype=np.float64)
+        - BACKGROUND_CONDUCTIVITY,
         radius=float(dim2["mesh_radius"]),
         resolution=int(args.slice_resolution),
     )
     _, _, cpu2 = _sample_2d_field(
         coords=np.asarray(dim2_bundles["cpu"]["coords"], dtype=np.float64),
-        values=np.asarray(dim2_bundles["cpu"]["reconstruction"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+        values=np.asarray(dim2_bundles["cpu"]["reconstruction"], dtype=np.float64)
+        - BACKGROUND_CONDUCTIVITY,
         radius=float(dim2["mesh_radius"]),
         resolution=int(args.slice_resolution),
     )
     _, _, gpu2 = _sample_2d_field(
         coords=np.asarray(dim2_bundles["gpu"]["coords"], dtype=np.float64),
-        values=np.asarray(dim2_bundles["gpu"]["reconstruction"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+        values=np.asarray(dim2_bundles["gpu"]["reconstruction"], dtype=np.float64)
+        - BACKGROUND_CONDUCTIVITY,
         radius=float(dim2["mesh_radius"]),
         resolution=int(args.slice_resolution),
     )
@@ -964,7 +1139,11 @@ def main() -> None:
 
     coords3 = np.asarray(dim3_bundles["cpu"]["coords"], dtype=np.float64)
     z_half_height = 0.5 * float(np.max(coords3[:, 2]) - np.min(coords3[:, 2]))
-    slice_specs = [("Axial z=+0.22", "axial", 0.22), ("Axial z=-0.22", "axial", -0.22), ("Coronal y=0", "coronal", 0.0)]
+    slice_specs = [
+        ("Axial z=+0.22", "axial", 0.22),
+        ("Axial z=-0.22", "axial", -0.22),
+        ("Coronal y=0", "coronal", 0.0),
+    ]
     truth_slices: list[np.ndarray] = []
     cpu_slices: list[np.ndarray] = []
     gpu_slices: list[np.ndarray] = []
@@ -972,7 +1151,8 @@ def main() -> None:
     for name, plane, value_norm in slice_specs:
         _, _, truth_slice = _sample_3d_slice(
             coords=coords3,
-            values=np.asarray(dim3_bundles["cpu"]["truth_values"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+            values=np.asarray(dim3_bundles["cpu"]["truth_values"], dtype=np.float64)
+            - BACKGROUND_CONDUCTIVITY,
             radius=float(dim3["mesh_radius"]),
             z_half_height=z_half_height,
             plane=plane,
@@ -981,7 +1161,8 @@ def main() -> None:
         )
         _, _, cpu_slice = _sample_3d_slice(
             coords=coords3,
-            values=np.asarray(dim3_bundles["cpu"]["reconstruction"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+            values=np.asarray(dim3_bundles["cpu"]["reconstruction"], dtype=np.float64)
+            - BACKGROUND_CONDUCTIVITY,
             radius=float(dim3["mesh_radius"]),
             z_half_height=z_half_height,
             plane=plane,
@@ -990,7 +1171,8 @@ def main() -> None:
         )
         _, _, gpu_slice = _sample_3d_slice(
             coords=coords3,
-            values=np.asarray(dim3_bundles["gpu"]["reconstruction"], dtype=np.float64) - BACKGROUND_CONDUCTIVITY,
+            values=np.asarray(dim3_bundles["gpu"]["reconstruction"], dtype=np.float64)
+            - BACKGROUND_CONDUCTIVITY,
             radius=float(dim3["mesh_radius"]),
             z_half_height=z_half_height,
             plane=plane,
@@ -1017,14 +1199,34 @@ def main() -> None:
         "3d_cpu": data_dir / "3d_cpu_case.h5",
         "3d_gpu": data_dir / "3d_gpu_case.h5",
     }
-    shutil.copy2((workers_dir / "correctness_2d") / dim2_cpu_summary["case"]["data_path"], copied_case_paths["2d_cpu"])
-    shutil.copy2((workers_dir / "correctness_2d") / dim2_gpu_summary["case"]["data_path"], copied_case_paths["2d_gpu"])
-    shutil.copy2((workers_dir / "correctness_3d") / dim3_cpu_summary["case"]["data_path"], copied_case_paths["3d_cpu"])
-    shutil.copy2((workers_dir / "correctness_3d") / dim3_gpu_summary["case"]["data_path"], copied_case_paths["3d_gpu"])
-    dim2["cpu_case"]["data_path"] = str(copied_case_paths["2d_cpu"].relative_to(output_dir))
-    dim2["gpu_case"]["data_path"] = str(copied_case_paths["2d_gpu"].relative_to(output_dir))
-    dim3["cpu_case"]["data_path"] = str(copied_case_paths["3d_cpu"].relative_to(output_dir))
-    dim3["gpu_case"]["data_path"] = str(copied_case_paths["3d_gpu"].relative_to(output_dir))
+    shutil.copy2(
+        (workers_dir / "correctness_2d") / dim2_cpu_summary["case"]["data_path"],
+        copied_case_paths["2d_cpu"],
+    )
+    shutil.copy2(
+        (workers_dir / "correctness_2d") / dim2_gpu_summary["case"]["data_path"],
+        copied_case_paths["2d_gpu"],
+    )
+    shutil.copy2(
+        (workers_dir / "correctness_3d") / dim3_cpu_summary["case"]["data_path"],
+        copied_case_paths["3d_cpu"],
+    )
+    shutil.copy2(
+        (workers_dir / "correctness_3d") / dim3_gpu_summary["case"]["data_path"],
+        copied_case_paths["3d_gpu"],
+    )
+    dim2["cpu_case"]["data_path"] = str(
+        copied_case_paths["2d_cpu"].relative_to(output_dir)
+    )
+    dim2["gpu_case"]["data_path"] = str(
+        copied_case_paths["2d_gpu"].relative_to(output_dir)
+    )
+    dim3["cpu_case"]["data_path"] = str(
+        copied_case_paths["3d_cpu"].relative_to(output_dir)
+    )
+    dim3["gpu_case"]["data_path"] = str(
+        copied_case_paths["3d_gpu"].relative_to(output_dir)
+    )
 
     figure_2d = figures_dir / "2d_overview.png"
     figure_3d = figures_dir / "3d_overview.png"
@@ -1057,8 +1259,18 @@ def main() -> None:
         _case_table_row("3D", dim3["gpu_case"]),
     ]
     consistency_rows = [
-        _consistency_table_row("2D", dim2["consistency"], cpu_case=dim2["cpu_case"], gpu_case=dim2["gpu_case"]),
-        _consistency_table_row("3D", dim3["consistency"], cpu_case=dim3["cpu_case"], gpu_case=dim3["gpu_case"]),
+        _consistency_table_row(
+            "2D",
+            dim2["consistency"],
+            cpu_case=dim2["cpu_case"],
+            gpu_case=dim2["gpu_case"],
+        ),
+        _consistency_table_row(
+            "3D",
+            dim3["consistency"],
+            cpu_case=dim3["cpu_case"],
+            gpu_case=dim3["gpu_case"],
+        ),
     ]
     fairness_order_rows = [
         _fairness_order_row("2D", "CPU->GPU", fairness_2d_cpu_first, report_only=True),
@@ -1067,13 +1279,23 @@ def main() -> None:
         _fairness_order_row("3D", "GPU->CPU", fairness_3d_gpu_first, report_only=False),
     ]
     fairness_backend_rows = [
-        _fairness_backend_row("2D", "cpu", fairness_2d_cpu_first, fairness_2d_gpu_first, report_only=True),
-        _fairness_backend_row("2D", "gpu", fairness_2d_cpu_first, fairness_2d_gpu_first, report_only=True),
-        _fairness_backend_row("3D", "cpu", fairness_3d_cpu_first, fairness_3d_gpu_first, report_only=False),
-        _fairness_backend_row("3D", "gpu", fairness_3d_cpu_first, fairness_3d_gpu_first, report_only=False),
+        _fairness_backend_row(
+            "2D", "cpu", fairness_2d_cpu_first, fairness_2d_gpu_first, report_only=True
+        ),
+        _fairness_backend_row(
+            "2D", "gpu", fairness_2d_cpu_first, fairness_2d_gpu_first, report_only=True
+        ),
+        _fairness_backend_row(
+            "3D", "cpu", fairness_3d_cpu_first, fairness_3d_gpu_first, report_only=False
+        ),
+        _fairness_backend_row(
+            "3D", "gpu", fairness_3d_cpu_first, fairness_3d_gpu_first, report_only=False
+        ),
     ]
     correctness_pass = bool(all(row["passed"] for row in consistency_rows))
-    fairness_pass = bool(all(row["passed"] for row in fairness_backend_rows if not row["report_only"]))
+    fairness_pass = bool(
+        all(row["passed"] for row in fairness_backend_rows if not row["report_only"])
+    )
     all_passed = bool(correctness_pass and fairness_pass)
 
     payload = {

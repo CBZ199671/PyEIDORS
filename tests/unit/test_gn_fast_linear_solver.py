@@ -514,9 +514,9 @@ def test_fast_solver_pyamg_matches_dense_reference():
     path = str(meta.get("path", ""))
     source = str(meta.get("matrix_free_pc_source", ""))
     if source == "identity":
-        assert meta.get(
-            "matrix_free_pc_reason"
-        ), "pyamg fallback must surface a reason, not silently pick identity."
+        assert meta.get("matrix_free_pc_reason"), (
+            "pyamg fallback must surface a reason, not silently pick identity."
+        )
     else:
         assert path in {"pcg-pyamg-precond", "pcg-diag-precond"}
 
@@ -813,9 +813,9 @@ def test_fast_solver_matrix_free_coarse_pmat_and_custom_pc_smokes():
     recon_custom = _dummy_reconstructor(
         "auto", preconditioner="custom", fast_linear_path="pcg"
     )
-    recon_custom.matrix_free_pc_action = lambda x: np.asarray(
-        x, dtype=float
-    ) / np.array([1.2, 1.8, 2.6])
+    recon_custom.matrix_free_pc_action = lambda x: (
+        np.asarray(x, dtype=float) / np.array([1.2, 1.8, 2.6])
+    )
     delta_custom, _, _ = _solve_linear_system_fast(
         recon_custom,
         J_weighted_np=op,

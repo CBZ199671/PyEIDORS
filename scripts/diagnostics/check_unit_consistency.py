@@ -33,7 +33,9 @@ from scripts.common.acceleration_profiles import add_acceleration_profile_argume
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-source", choices=["cache", "generated"], default="cache")
+    parser.add_argument(
+        "--mesh-source", choices=["cache", "generated"], default="cache"
+    )
     parser.add_argument("--mesh-dir", type=str, default="eit_meshes")
     parser.add_argument("--mesh-name", type=str, default=None)
     parser.add_argument("--n-elec", type=int, default=16)
@@ -71,9 +73,7 @@ def _format_table(rows: list[tuple[str, str, str]]) -> str:
     lines = [sep]
     for idx, row in enumerate(all_rows):
         lines.append(
-            "| "
-            + " | ".join(f"{row[i]:<{widths[i]}}" for i in range(3))
-            + " |"
+            "| " + " | ".join(f"{row[i]:<{widths[i]}}" for i in range(3)) + " |"
         )
         if idx == 0:
             lines.append(sep)
@@ -114,13 +114,19 @@ def main() -> int:
         system = EITSystem(
             n_elec=args.n_elec,
             pattern_config=pattern,
-            contact_impedance=np.full(args.n_elec, float(args.contact_impedance), dtype=float),
+            contact_impedance=np.full(
+                args.n_elec, float(args.contact_impedance), dtype=float
+            ),
             acceleration_profile=str(args.acceleration_profile),
         )
         if args.mesh_source == "cache":
-            system.setup(mesh_source="cache", mesh_dir=args.mesh_dir, mesh_name=args.mesh_name)
+            system.setup(
+                mesh_source="cache", mesh_dir=args.mesh_dir, mesh_name=args.mesh_name
+            )
         else:
-            system.setup(mesh_source="generated", radius=args.radius, mesh_size=args.mesh_size)
+            system.setup(
+                mesh_source="generated", radius=args.radius, mesh_size=args.mesh_size
+            )
 
         report = system.run_unit_precheck(
             expected_domain_size_m=args.expected_domain_size_m,

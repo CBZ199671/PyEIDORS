@@ -11,7 +11,13 @@ from urllib.parse import urlparse
 import numpy as np
 from PySide6.QtCore import QTimer, Slot
 from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QMainWindow, QMessageBox, QTabWidget, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QMessageBox,
+    QTabWidget,
+    QWidget,
+)
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
@@ -157,6 +163,7 @@ def _format_runtime_diagnostics(
 def _is_wsl() -> bool:
     """Detect whether we are running inside a WSL distribution."""
     import os
+
     if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
         return True
     try:
@@ -291,6 +298,7 @@ def _qt_open_url(folder_path: str) -> bool:
     except Exception as exc:
         log.debug("QDesktopServices failed: %s", exc)
     return False
+
 
 _voltage_gain_label = voltage_amp_label
 
@@ -512,15 +520,11 @@ class EITWorkstation(QMainWindow):
 
         self._action_open_recordings = self._menu_file.addAction("")
         self._action_open_recordings.setShortcut(QKeySequence("Ctrl+Shift+R"))
-        self._action_open_recordings.triggered.connect(
-            self._open_recordings_folder
-        )
+        self._action_open_recordings.triggered.connect(self._open_recordings_folder)
 
         self._action_open_output = self._menu_file.addAction("")
         self._action_open_output.setShortcut(QKeySequence("Ctrl+Shift+O"))
-        self._action_open_output.triggered.connect(
-            self._open_default_output_folder
-        )
+        self._action_open_output.triggered.connect(self._open_default_output_folder)
 
         self._menu_file.addSeparator()
         self._action_exit = self._menu_file.addAction("")
@@ -651,17 +655,13 @@ class EITWorkstation(QMainWindow):
         # kick off a solve on stale data.
         self._sim_forward_shortcut = QShortcut(QKeySequence("F5"), self)
         self._sim_forward_shortcut.activated.connect(self._sim_shortcut_run_forward)
-        self._sim_inverse_shortcut_enter = QShortcut(
-            QKeySequence("Ctrl+Return"), self
-        )
+        self._sim_inverse_shortcut_enter = QShortcut(QKeySequence("Ctrl+Return"), self)
         self._sim_inverse_shortcut_enter.activated.connect(
             self._sim_shortcut_run_inverse
         )
         # Alternate binding because some keyboards label the numpad-return
         # as Enter rather than Return, and Qt treats them distinctly.
-        self._sim_inverse_shortcut_numpad = QShortcut(
-            QKeySequence("Ctrl+Enter"), self
-        )
+        self._sim_inverse_shortcut_numpad = QShortcut(QKeySequence("Ctrl+Enter"), self)
         self._sim_inverse_shortcut_numpad.activated.connect(
             self._sim_shortcut_run_inverse
         )
@@ -708,6 +708,7 @@ class EITWorkstation(QMainWindow):
                 target = None
         if not target:
             from eit_app.ui.hardware.acquisition_panel import AcquisitionPanel
+
             target = str(AcquisitionPanel.default_output_dir())
         Path(target).mkdir(parents=True, exist_ok=True)
         self._on_open_session_folder(target)
@@ -760,9 +761,7 @@ class EITWorkstation(QMainWindow):
             files = resources.files("eit_app.assets")
             svg_path = Path(str(files.joinpath("logo.svg")))
         except Exception:  # pragma: no cover — resources lookup edge
-            svg_path = (
-                Path(__file__).resolve().parent.parent / "assets" / "logo.svg"
-            )
+            svg_path = Path(__file__).resolve().parent.parent / "assets" / "logo.svg"
         if not svg_path.exists():
             return
         renderer = QSvgRenderer(str(svg_path))
@@ -848,9 +847,7 @@ class EITWorkstation(QMainWindow):
         subscribe to :meth:`eit_app.i18n.translator.language_changed` in
         their own ``__init__``.
         """
-        log.info(
-            "[i18n] retranslating main window (language=%s)", current_language()
-        )
+        log.info("[i18n] retranslating main window (language=%s)", current_language())
         self.setWindowTitle(t("app.title"))
 
         self._tab_widget.setTabText(0, t("tab.hardware"))
@@ -906,17 +903,25 @@ class EITWorkstation(QMainWindow):
         self._control_panel.frequency_changed.connect(self._on_frequency_changed)
         self._control_panel.stim_amp_changed.connect(self._on_stim_amp_changed)
         self._control_panel.voltage_amp_changed.connect(self._on_voltage_amp_changed)
-        self._control_panel.measurement_layout_changed.connect(self._on_measurement_layout_changed)
+        self._control_panel.measurement_layout_changed.connect(
+            self._on_measurement_layout_changed
+        )
         self._control_panel.power_toggled.connect(self._on_power_toggled)
-        self._control_panel.impedance_requested.connect(self._device_ctrl.measure_impedance)
-        self._control_panel.single_point_requested.connect(self._on_single_point_requested)
+        self._control_panel.impedance_requested.connect(
+            self._device_ctrl.measure_impedance
+        )
+        self._control_panel.single_point_requested.connect(
+            self._on_single_point_requested
+        )
 
         self._acq_panel.start_requested.connect(self._on_start_acquisition)
         self._acq_panel.single_frame_requested.connect(self._on_single_frame_requested)
         self._acq_panel.stop_requested.connect(self._on_stop_acquisition)
         self._acq_panel.recording_toggled.connect(self._on_recording_toggled)
         self._acq_panel.output_dir_changed.connect(self._on_output_dir_changed)
-        self._acq_panel.acquisition_plan_changed.connect(self._on_acquisition_plan_changed)
+        self._acq_panel.acquisition_plan_changed.connect(
+            self._on_acquisition_plan_changed
+        )
 
         self._acq_ctrl.new_frame.connect(self._live_plot.update_frame)
         self._acq_ctrl.new_frame.connect(self._on_new_frame)
@@ -931,17 +936,23 @@ class EITWorkstation(QMainWindow):
         self._recon_ctrl.reconstruction_done.connect(self._on_auto_reconstruction_done)
         self._recon_ctrl.error.connect(self._on_auto_reconstruction_error)
 
-        self._recon_prewarm_ctrl.reconstruction_done.connect(self._on_realtime_recon_prewarm_done)
+        self._recon_prewarm_ctrl.reconstruction_done.connect(
+            self._on_realtime_recon_prewarm_done
+        )
         self._recon_prewarm_ctrl.error.connect(self._on_realtime_recon_prewarm_error)
 
-        self._hw_recon_ctrl.reconstruction_done.connect(self._recon_widget.update_reconstruction)
+        self._hw_recon_ctrl.reconstruction_done.connect(
+            self._recon_widget.update_reconstruction
+        )
         # The equipotential widget shows iso-σ contours over the same
         # reconstruction; route the controller's done-signal there too
         # so it lights up alongside the conductivity image.
         self._hw_recon_ctrl.reconstruction_done.connect(
             self._equipotential_widget.update_reconstruction
         )
-        self._hw_recon_ctrl.reconstruction_done.connect(self._on_hardware_reconstruction_done)
+        self._hw_recon_ctrl.reconstruction_done.connect(
+            self._on_hardware_reconstruction_done
+        )
         self._hw_recon_ctrl.progress.connect(
             lambda msg: self._status_bar.showMessage(msg, 3000)
         )
@@ -968,39 +979,65 @@ class EITWorkstation(QMainWindow):
         self._db_tab.open_containing_folder_requested.connect(
             self._on_open_session_folder
         )
-        self._db_tab.batch_reconstruct_requested.connect(
-            self._on_open_batch_dialog
-        )
+        self._db_tab.batch_reconstruct_requested.connect(self._on_open_batch_dialog)
 
-        self._state.connection_status_changed.connect(self._status_bar.on_connection_changed)
-        self._state.power_status_changed.connect(self._status_bar.on_power_status_changed)
+        self._state.connection_status_changed.connect(
+            self._status_bar.on_connection_changed
+        )
+        self._state.power_status_changed.connect(
+            self._status_bar.on_power_status_changed
+        )
         self._state.power_status_changed.connect(self._control_panel.set_power_state)
-        self._state.acquisition_mode_changed.connect(self._status_bar.on_acquisition_mode_changed)
+        self._state.acquisition_mode_changed.connect(
+            self._status_bar.on_acquisition_mode_changed
+        )
         self._state.frame_count_changed.connect(self._status_bar.on_frame_count_changed)
         self._state.frame_count_changed.connect(self._acq_panel.set_frame_count)
-        self._state.recording_active_changed.connect(self._status_bar.on_recording_changed)
-        self._state.recording_status_changed.connect(self._status_bar.on_recording_status_changed)
-        self._state.connection_status_changed.connect(lambda _value: self._refresh_session_summary())
-        self._state.power_status_changed.connect(lambda _value: self._refresh_session_summary())
-        self._state.acquisition_mode_changed.connect(lambda _value: self._refresh_session_summary())
-        self._state.recording_status_changed.connect(lambda _value: self._refresh_session_summary())
+        self._state.recording_active_changed.connect(
+            self._status_bar.on_recording_changed
+        )
+        self._state.recording_status_changed.connect(
+            self._status_bar.on_recording_status_changed
+        )
+        self._state.connection_status_changed.connect(
+            lambda _value: self._refresh_session_summary()
+        )
+        self._state.power_status_changed.connect(
+            lambda _value: self._refresh_session_summary()
+        )
+        self._state.acquisition_mode_changed.connect(
+            lambda _value: self._refresh_session_summary()
+        )
+        self._state.recording_status_changed.connect(
+            lambda _value: self._refresh_session_summary()
+        )
 
         # Tab switching
         self._tab_widget.currentChanged.connect(self._status_bar.on_tab_changed)
 
         # --- Simulation signals ---
         sim = self._sim_tab
-        sim.mesh_setup_panel.config_changed.connect(self._sync_sim_inhomogeneity_context)
+        sim.mesh_setup_panel.config_changed.connect(
+            self._sync_sim_inhomogeneity_context
+        )
         sim.forward_problem_panel.run_forward_requested.connect(self._on_run_forward)
-        sim.inverse_problem_panel.run_inverse_requested.connect(self._on_run_sim_inverse)
+        sim.inverse_problem_panel.run_inverse_requested.connect(
+            self._on_run_sim_inverse
+        )
         sim.inverse_problem_panel.save_requested.connect(self._on_save_sim_results)
 
         dataset = self._dataset_tab
-        dataset.dataset_generator_panel.generate_requested.connect(self._on_generate_dataset)
-        dataset.dataset_generator_panel.cancel_requested.connect(self._dataset_ctrl.cancel)
+        dataset.dataset_generator_panel.generate_requested.connect(
+            self._on_generate_dataset
+        )
+        dataset.dataset_generator_panel.cancel_requested.connect(
+            self._dataset_ctrl.cancel
+        )
 
         self._fwd_ctrl.forward_done.connect(self._on_forward_done)
-        self._fwd_ctrl.progress.connect(lambda msg: self._status_bar.showMessage(msg, 3000))
+        self._fwd_ctrl.progress.connect(
+            lambda msg: self._status_bar.showMessage(msg, 3000)
+        )
         self._fwd_ctrl.error.connect(self._on_error)
 
         self._dataset_ctrl.progress.connect(self._dataset_tab.set_progress)
@@ -1021,10 +1058,14 @@ class EITWorkstation(QMainWindow):
         self._device_ctrl.set_connection_profile(transport_type, self._device_config)
         self._state.set_connection_status(ConnectionStatus.CONNECTING)
         self._refresh_session_summary()
-        self._status_bar.showMessage(self._connect_attempt_message(transport_type, self._device_config), 5000)
+        self._status_bar.showMessage(
+            self._connect_attempt_message(transport_type, self._device_config), 5000
+        )
         self._device_ctrl.connect_device()
 
-    def _prepare_connection_request(self, transport_type: str, config: dict) -> dict | None:
+    def _prepare_connection_request(
+        self, transport_type: str, config: dict
+    ) -> dict | None:
         if transport_type == "serial":
             port = str(config.get("port", "")).strip()
             if not port:
@@ -1067,7 +1108,10 @@ class EITWorkstation(QMainWindow):
     @staticmethod
     def _connect_attempt_message(transport_type: str, config: dict) -> str:
         if transport_type == "serial":
-            port = str(config.get("port_display", "")).strip() or str(config.get("port", "")).strip()
+            port = (
+                str(config.get("port_display", "")).strip()
+                or str(config.get("port", "")).strip()
+            )
             baud = int(config.get("baudrate", 115200))
             if port.upper().startswith("COM"):
                 return t("main.status.verifying.windows_bridge", port=port, baud=baud)
@@ -1121,7 +1165,10 @@ class EITWorkstation(QMainWindow):
         self._start_acquisition(single_frame=True)
 
     def _start_acquisition(self, *, single_frame: bool) -> None:
-        if self._state.connection_status is not ConnectionStatus.CONNECTED and self._transport_type != "simulator":
+        if (
+            self._state.connection_status is not ConnectionStatus.CONNECTED
+            and self._transport_type != "simulator"
+        ):
             self._on_error(t("main.error.connection_required"))
             return
 
@@ -1164,7 +1211,11 @@ class EITWorkstation(QMainWindow):
             self._state.set_acquisition_mode(AcquisitionMode.SINGLE_SHOT)
             self._acq_ctrl.capture_one()
             self._status_bar.showMessage(t("main.status.single_frame_started"), 4000)
-        elif self._planned_acquisition_count > 0 or self._frequency_stepping_enabled or self._scheduled_enabled:
+        elif (
+            self._planned_acquisition_count > 0
+            or self._frequency_stepping_enabled
+            or self._scheduled_enabled
+        ):
             if self._planned_acquisition_count <= 0:
                 self._on_error(t("main.error.acq_count_zero"))
                 return
@@ -1184,7 +1235,9 @@ class EITWorkstation(QMainWindow):
     @Slot()
     def _on_stop_acquisition(self) -> None:
         self._plan_timer.stop()
-        was_single_frame_mode = self._state.acquisition_mode is AcquisitionMode.SINGLE_SHOT
+        was_single_frame_mode = (
+            self._state.acquisition_mode is AcquisitionMode.SINGLE_SHOT
+        )
         was_plan_mode = self._plan_active or self._state.acquisition_mode in {
             AcquisitionMode.FINITE_RUN,
             AcquisitionMode.STEPPED_RUN,
@@ -1419,7 +1472,8 @@ class EITWorkstation(QMainWindow):
                 ):
                     log.debug(
                         "Simulated size %d != measured %d; skipping recon curve",
-                        simulated_arr.size, measured_diff.size,
+                        simulated_arr.size,
+                        measured_diff.size,
                     )
                     simulated_arr = None
             except Exception:
@@ -1450,7 +1504,8 @@ class EITWorkstation(QMainWindow):
         self._status_bar.showMessage(t("main.status.prewarm_done"), 4000)
         if (
             self._recon_prewarm_requested_signature is not None
-            and self._recon_prewarm_requested_signature != self._recon_prewarm_ready_signature
+            and self._recon_prewarm_requested_signature
+            != self._recon_prewarm_ready_signature
         ):
             QTimer.singleShot(0, self._run_realtime_recon_prewarm)
             return
@@ -1491,9 +1546,11 @@ class EITWorkstation(QMainWindow):
         if file_path:
             try:
                 from pyeidors.data.frame_io import read_frame_csv
+
                 real, imag = read_frame_csv(file_path)
                 self._reference_frame = FrameData(
-                    real=real, imag=imag,
+                    real=real,
+                    imag=imag,
                     timestamp=entry.get("timestamp", 0.0),
                     frame_index=entry.get("frame_index", 0),
                 )
@@ -1608,15 +1665,21 @@ class EITWorkstation(QMainWindow):
         self._scheduled_interval_sec = float(plan.get("interval_sec", 5.0))
         self._planned_acquisition_count = int(plan.get("acquisition_count", 0))
         self._frequency_stepping_enabled = bool(plan.get("frequency_stepping", False))
-        self._planned_start_hz = int(plan.get("start_hz", self._device_config.get("frequency_hz", 1000)))
-        self._planned_end_hz = int(plan.get("end_hz", self._device_config.get("frequency_hz", 1000)))
+        self._planned_start_hz = int(
+            plan.get("start_hz", self._device_config.get("frequency_hz", 1000))
+        )
+        self._planned_end_hz = int(
+            plan.get("end_hz", self._device_config.get("frequency_hz", 1000))
+        )
         self._refresh_session_summary()
 
     @Slot(int)
     def _on_frequency_changed(self, hz: int) -> None:
         self._device_config["frequency_hz"] = hz
         self._sync_state_device_config()
-        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_connection_profile(
+            self._transport_type, self._device_config
+        )
         self._device_ctrl.set_frequency(hz)
         self._refresh_session_summary()
         self._schedule_realtime_recon_prewarm()
@@ -1626,7 +1689,9 @@ class EITWorkstation(QMainWindow):
         self._device_config["stim_amp_level"] = level
         self._device_config["stim_amp_uA"] = STIM_AMP_VALUES_UA.get(level, level)
         self._sync_state_device_config()
-        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_connection_profile(
+            self._transport_type, self._device_config
+        )
         self._device_ctrl.set_stim_amplitude(level)
         self._refresh_session_summary()
         self._schedule_realtime_recon_prewarm()
@@ -1637,7 +1702,9 @@ class EITWorkstation(QMainWindow):
         self._device_config["voltage_amp_level_2"] = level
         self._device_config["contact_impedance_amp_level"] = level
         self._sync_state_device_config()
-        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_connection_profile(
+            self._transport_type, self._device_config
+        )
         self._device_ctrl.set_voltage_amp_levels(level, level)
         self._refresh_session_summary()
         self._schedule_realtime_recon_prewarm()
@@ -1645,12 +1712,18 @@ class EITWorkstation(QMainWindow):
     @Slot(dict)
     def _on_measurement_layout_changed(self, layout: dict) -> None:
         self._device_config.update(layout)
-        self._device_config = normalize_device_config(self._transport_type, self._device_config)
+        self._device_config = normalize_device_config(
+            self._transport_type, self._device_config
+        )
         self._sync_state_device_config()
-        self._device_ctrl.set_connection_profile(self._transport_type, self._device_config)
+        self._device_ctrl.set_connection_profile(
+            self._transport_type, self._device_config
+        )
         self._refresh_expected_measurement_counts()
         self._refresh_session_summary()
-        points = int(self._device_config.get("points_per_frame", self._measurement_point_count()))
+        points = int(
+            self._device_config.get("points_per_frame", self._measurement_point_count())
+        )
         self._status_bar.showMessage(
             t("main.status.layout_updated", points=points),
             3500,
@@ -1687,7 +1760,11 @@ class EITWorkstation(QMainWindow):
             )
             return
 
-        if name == "single_point_test_at" and isinstance(result, tuple) and len(result) == 2:
+        if (
+            name == "single_point_test_at"
+            and isinstance(result, tuple)
+            and len(result) == 2
+        ):
             self._status_bar.showMessage(
                 t("main.status.spt_result", real=result[0], imag=result[1]),
                 5000,
@@ -1695,7 +1772,11 @@ class EITWorkstation(QMainWindow):
             return
 
         if name == "power_control":
-            desired = self._pending_power_commands.pop(0) if self._pending_power_commands else None
+            desired = (
+                self._pending_power_commands.pop(0)
+                if self._pending_power_commands
+                else None
+            )
             if desired is True:
                 self._state.set_power_status(PowerStatus.ON)
                 self._control_panel.set_power_state("on")
@@ -1710,9 +1791,7 @@ class EITWorkstation(QMainWindow):
             return
 
         if name in {"set_frequency", "set_stim_amplitude", "set_voltage_amp_levels"}:
-            self._status_bar.showMessage(
-                t("main.status.command_sent", name=name), 3000
-            )
+            self._status_bar.showMessage(t("main.status.command_sent", name=name), 3000)
 
     @Slot(object)
     def _on_impedance_result(self, result: object) -> None:
@@ -1819,16 +1898,26 @@ class EITWorkstation(QMainWindow):
             "difference_mode": "raw",
             "difference_orientation": "target_minus_reference",
             **self._hardware_reconstruction_drive_metadata(),
-            "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
+            "geometry_scale_to_m": float(
+                self._device_config.get("geometry_scale_to_m", 1.0)
+            ),
             "reconstruction_runtime": "single_step_cached",
             "difference_lambda": 1.0e-2,
             "background_sigma": 1.0,
-            "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
-            "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
-            "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
+            "contact_impedance": float(
+                self._device_config.get("contact_impedance", 0.01)
+            ),
+            "electrode_length_m_override": self._device_config.get(
+                "electrode_length_m_override"
+            ),
+            "electrode_coverage": float(
+                self._device_config.get("electrode_coverage", 0.5)
+            ),
             "radius": float(self._device_config.get("radius", 1.0)),
             "mesh_height": float(self._device_config.get("height", 1.0)),
-            "electrode_height_ratio": float(self._device_config.get("electrode_height_ratio", 0.2)),
+            "electrode_height_ratio": float(
+                self._device_config.get("electrode_height_ratio", 0.2)
+            ),
             "z_center": float(self._device_config.get("z_center", 0.0)),
             "request_source": request_source,
         }
@@ -1874,9 +1963,15 @@ class EITWorkstation(QMainWindow):
             return
         _request, signature = self._build_realtime_recon_prewarm_payload()
         self._recon_prewarm_requested_signature = signature
-        if self._recon_prewarm_ready_signature == signature and not self._recon_prewarm_busy:
+        if (
+            self._recon_prewarm_ready_signature == signature
+            and not self._recon_prewarm_busy
+        ):
             return
-        if self._recon_prewarm_busy and self._recon_prewarm_active_signature == signature:
+        if (
+            self._recon_prewarm_busy
+            and self._recon_prewarm_active_signature == signature
+        ):
             return
         self._recon_prewarm_timer.start(0 if immediate else 350)
 
@@ -1939,19 +2034,27 @@ class EITWorkstation(QMainWindow):
         metadata = {
             "frequency_hz": int(self._device_config.get("frequency_hz", 1000)),
             "stim_amp_uA": int(self._device_config.get("stim_amp_uA", 100)),
-            "voltage_amp_level_1": int(self._device_config.get("voltage_amp_level_1", 0)),
-            "voltage_amp_level_2": int(self._device_config.get("voltage_amp_level_2", 0)),
+            "voltage_amp_level_1": int(
+                self._device_config.get("voltage_amp_level_1", 0)
+            ),
+            "voltage_amp_level_2": int(
+                self._device_config.get("voltage_amp_level_2", 0)
+            ),
             "mea_mode": int(self._device_config.get("mea_mode", 2)),
             "board_id": int(self._device_config.get("board_id", 1)),
             "user_id": int(self._device_config.get("user_id", 1)),
             "transport_type": self._transport_type,
-            "protocol_version": str(self._device_config.get("protocol_version", "legacy-v1")),
+            "protocol_version": str(
+                self._device_config.get("protocol_version", "legacy-v1")
+            ),
         }
         metadata.update(self._measurement_layout_config())
         return metadata
 
     def _ensure_recording_session(self, output_dir: str) -> bool:
-        target_dir = self._normalize_output_dir(output_dir) or self._default_output_dir()
+        target_dir = (
+            self._normalize_output_dir(output_dir) or self._default_output_dir()
+        )
         self._acq_panel.set_output_dir(target_dir)
 
         current_parent = None
@@ -1969,7 +2072,9 @@ class EITWorkstation(QMainWindow):
                 )
                 return True
 
-        started = self._rec_ctrl.start_recording(target_dir, session_metadata=self._frame_metadata())
+        started = self._rec_ctrl.start_recording(
+            target_dir, session_metadata=self._frame_metadata()
+        )
         if not started:
             self._acq_panel.set_recording_active(False)
             return False
@@ -1982,10 +2087,13 @@ class EITWorkstation(QMainWindow):
     def _default_db_path() -> Path:
         """Return a platform-appropriate path for the frame database."""
         import os
+
         if os.name == "nt":
             base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         else:
-            base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
+            base = Path(
+                os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
+            )
         return base / "PyEidors" / "eit_frames.db"
 
     def _trigger_backfill(self) -> None:
@@ -2036,12 +2144,18 @@ class EITWorkstation(QMainWindow):
         self._recon_widget.configure_layout(
             n_elec=int(self._device_config.get("n_elec", 16)),
             radius=float(self._device_config.get("radius", 1.0)),
-            electrode_coverage=float(self._device_config.get("electrode_coverage", 0.5)),
+            electrode_coverage=float(
+                self._device_config.get("electrode_coverage", 0.5)
+            ),
         )
 
     def _refresh_session_summary(self) -> None:
         stim_level = int(self._device_config.get("stim_amp_level", 1))
-        stim_uA = int(self._device_config.get("stim_amp_uA", STIM_AMP_VALUES_UA.get(stim_level, 100)))
+        stim_uA = int(
+            self._device_config.get(
+                "stim_amp_uA", STIM_AMP_VALUES_UA.get(stim_level, 100)
+            )
+        )
         gain_1 = int(self._device_config.get("voltage_amp_level_1", 3))
         gain_2 = int(self._device_config.get("voltage_amp_level_2", 5))
         title, detail, next_action, tone = self._summary_banner_state()
@@ -2087,7 +2201,11 @@ class EITWorkstation(QMainWindow):
     def _format_transport_summary(self) -> str:
         if self._transport_type == "serial":
             port_display = str(self._device_config.get("port_display", "")).strip()
-            port = port_display or str(self._device_config.get("port", "")).strip() or "not set"
+            port = (
+                port_display
+                or str(self._device_config.get("port", "")).strip()
+                or "not set"
+            )
             baud = int(self._device_config.get("baudrate", 115200))
             return f"Serial | {port} @ {baud}"
         if self._transport_type == "relay":
@@ -2103,7 +2221,9 @@ class EITWorkstation(QMainWindow):
         mea_mode = int(self._device_config.get("mea_mode", 2))
         dimension = "3D" if mea_mode == 3 else "2D"
         rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
-        drive = "drive-included" if bool(layout["use_meas_current"]) else "drive-excluded"
+        drive = (
+            "drive-included" if bool(layout["use_meas_current"]) else "drive-excluded"
+        )
         electrode_length = float(layout.get("electrode_length_m_override", 0.0) or 0.0)
         contact_impedance = float(layout.get("contact_impedance", 0.01) or 0.01)
         electrode_coverage = float(layout.get("electrode_coverage", 0.5) or 0.5)
@@ -2128,12 +2248,18 @@ class EITWorkstation(QMainWindow):
 
     def _format_mode_summary(self) -> str:
         mode = self._state.acquisition_mode
-        current_hz = int(self._device_config.get("frequency_hz", self._planned_start_hz))
+        current_hz = int(
+            self._device_config.get("frequency_hz", self._planned_start_hz)
+        )
         if self._plan_active:
-            run_label = "Stepped Run" if self._frequency_stepping_enabled else "Finite Run"
+            run_label = (
+                "Stepped Run" if self._frequency_stepping_enabled else "Finite Run"
+            )
             freq_info = ""
             if self._frequency_stepping_enabled and self._plan_frequencies:
-                freq_info = f" | {self._plan_frequencies[0]}→{self._plan_frequencies[-1]} Hz"
+                freq_info = (
+                    f" | {self._plan_frequencies[0]}→{self._plan_frequencies[-1]} Hz"
+                )
             elif self._plan_frequencies:
                 freq_info = f" | {current_hz} Hz"
             if self._scheduled_enabled:
@@ -2150,7 +2276,11 @@ class EITWorkstation(QMainWindow):
             return "Stepped Run"
         if mode is AcquisitionMode.SINGLE_SHOT:
             return "Single frame"
-        if self._scheduled_enabled or self._planned_acquisition_count > 0 or self._frequency_stepping_enabled:
+        if (
+            self._scheduled_enabled
+            or self._planned_acquisition_count > 0
+            or self._frequency_stepping_enabled
+        ):
             freq_info = ""
             if self._frequency_stepping_enabled:
                 freq_info = f" | {self._planned_start_hz}→{self._planned_end_hz} Hz"
@@ -2461,8 +2591,12 @@ class EITWorkstation(QMainWindow):
 
         from eit_app.models.frame_model import FrameData
 
-        ref_frame = FrameData(real=ref_real, imag=ref_imag, timestamp=0.0, frame_index=0)
-        tgt_frame = FrameData(real=tgt_real, imag=tgt_imag, timestamp=0.0, frame_index=1)
+        ref_frame = FrameData(
+            real=ref_real, imag=ref_imag, timestamp=0.0, frame_index=0
+        )
+        tgt_frame = FrameData(
+            real=tgt_real, imag=tgt_imag, timestamp=0.0, frame_index=1
+        )
 
         rc = self._state.reconstruction_config
         request = ReconstructionRequest(
@@ -2477,13 +2611,23 @@ class EITWorkstation(QMainWindow):
             metadata={
                 **self._measurement_layout_config(),
                 "difference_mode": config.get("mode", "raw"),
-                "difference_orientation": config.get("orientation", "target_minus_reference"),
+                "difference_orientation": config.get(
+                    "orientation", "target_minus_reference"
+                ),
                 **self._hardware_reconstruction_drive_metadata(),
-                "geometry_scale_to_m": float(self._device_config.get("geometry_scale_to_m", 1.0)),
+                "geometry_scale_to_m": float(
+                    self._device_config.get("geometry_scale_to_m", 1.0)
+                ),
                 "radius": float(self._device_config.get("radius", 1.0)),
-                "contact_impedance": float(self._device_config.get("contact_impedance", 0.01)),
-                "electrode_length_m_override": self._device_config.get("electrode_length_m_override"),
-                "electrode_coverage": float(self._device_config.get("electrode_coverage", 0.5)),
+                "contact_impedance": float(
+                    self._device_config.get("contact_impedance", 0.01)
+                ),
+                "electrode_length_m_override": self._device_config.get(
+                    "electrode_length_m_override"
+                ),
+                "electrode_coverage": float(
+                    self._device_config.get("electrode_coverage", 0.5)
+                ),
                 "request_source": "hardware_manual",
             },
         )
@@ -2628,7 +2772,9 @@ class EITWorkstation(QMainWindow):
             prefix = f"{stamp}_{method}_tgt{tgt_idx}"
 
             if config.get("save_recon_image"):
-                self._save_reconstruction_image(result, out / f"{prefix}_conductivity.png")
+                self._save_reconstruction_image(
+                    result, out / f"{prefix}_conductivity.png"
+                )
             if config.get("save_voltage_fit"):
                 self._save_voltage_fit_plot(result, out / f"{prefix}_voltage_fit.png")
 
@@ -2675,6 +2821,7 @@ class EITWorkstation(QMainWindow):
     def _save_reconstruction_image(self, result, path: Path) -> None:
         """Render conductivity as PNG using matplotlib tripcolor."""
         import matplotlib
+
         matplotlib.use("Agg", force=False)
         from matplotlib import pyplot as plt
         from matplotlib.tri import Triangulation
@@ -2703,6 +2850,7 @@ class EITWorkstation(QMainWindow):
     def _save_voltage_fit_plot(self, result, path: Path) -> None:
         """Render measured vs reconstructed boundary voltages as PNG."""
         import matplotlib
+
         matplotlib.use("Agg", force=False)
         from matplotlib import pyplot as plt
 
@@ -2823,7 +2971,9 @@ class EITWorkstation(QMainWindow):
         return ForwardModelConfig.from_mapping(
             {
                 **self._device_config,
-                "mesh_dimension": 3 if int(self._device_config.get("mea_mode", 2)) == 3 else 2,
+                "mesh_dimension": 3
+                if int(self._device_config.get("mea_mode", 2)) == 3
+                else 2,
             }
         )
 
@@ -2957,10 +3107,14 @@ class EITWorkstation(QMainWindow):
         if self._last_fwd_result is None or self._last_fwd_result.error_msg:
             return None
         measurements = {
-            "target": np.asarray(self._last_fwd_result.boundary_voltages, dtype=float).reshape(-1),
+            "target": np.asarray(
+                self._last_fwd_result.boundary_voltages, dtype=float
+            ).reshape(-1),
         }
         if self._last_fwd_result.homogeneous_voltages is not None:
-            homogeneous = np.asarray(self._last_fwd_result.homogeneous_voltages, dtype=float).reshape(-1)
+            homogeneous = np.asarray(
+                self._last_fwd_result.homogeneous_voltages, dtype=float
+            ).reshape(-1)
             measurements["homogeneous"] = homogeneous
             measurements["difference"] = measurements["target"] - homogeneous
         return measurements
@@ -2971,8 +3125,12 @@ class EITWorkstation(QMainWindow):
         try:
             from pyeidors.data.frame_io import read_frame_csv
 
-            ref_real, _ref_imag = read_frame_csv(self._selected_reference_entry["file_path"])
-            tgt_real, _tgt_imag = read_frame_csv(self._selected_target_entry["file_path"])
+            ref_real, _ref_imag = read_frame_csv(
+                self._selected_reference_entry["file_path"]
+            )
+            tgt_real, _tgt_imag = read_frame_csv(
+                self._selected_target_entry["file_path"]
+            )
         except Exception as exc:
             log.warning("Failed to build recording export payload: %s", exc)
             return None
@@ -3040,11 +3198,15 @@ class EITWorkstation(QMainWindow):
         }
         return snapshots
 
-    def _apply_reconstruction_preset(self, preset: "ReconstructionPreset | None") -> None:
+    def _apply_reconstruction_preset(
+        self, preset: "ReconstructionPreset | None"
+    ) -> None:
         if preset is None:
             return
         self._state.reconstruction_config.method = preset.method
-        self._state.reconstruction_config.regularization_alpha = preset.regularization_alpha
+        self._state.reconstruction_config.regularization_alpha = (
+            preset.regularization_alpha
+        )
         self._state.reconstruction_config.max_iterations = preset.max_iterations
         self._sim_tab.inverse_problem_panel.set_config(
             {
@@ -3086,7 +3248,9 @@ class EITWorkstation(QMainWindow):
                     "stim_first_positive": bool(config.stim_first_positive),
                 }
             )
-            self._device_config = normalize_device_config(self._transport_type, self._device_config)
+            self._device_config = normalize_device_config(
+                self._transport_type, self._device_config
+            )
             self._sync_state_device_config()
             self._tab_widget.setCurrentWidget(self._hw_tab)
             return t(
@@ -3152,7 +3316,9 @@ class EITWorkstation(QMainWindow):
                     "use_meas_current_next": int(config.use_meas_current_next),
                 }
             )
-            self._dataset_tab.dataset_generator_panel.set_config({"noise_level": config.noise_level})
+            self._dataset_tab.dataset_generator_panel.set_config(
+                {"noise_level": config.noise_level}
+            )
             self._tab_widget.setCurrentWidget(self._dataset_tab)
             return t(
                 "main.interop.applied_to_dataset",
@@ -3175,7 +3341,9 @@ class EITWorkstation(QMainWindow):
 
     def _run_interop_smoke_validation(self, loaded_bundle) -> str:
         self._ensure_interop_services()
-        preset = loaded_bundle.reconstruction_preset or self._interop_reconstruction_preset()
+        preset = (
+            loaded_bundle.reconstruction_preset or self._interop_reconstruction_preset()
+        )
         result = self._interop_smoke_validator.validate(
             loaded_bundle,
             reconstruction_preset=preset,
@@ -3254,7 +3422,12 @@ class EITWorkstation(QMainWindow):
 
         # Raw messages in Chinese are upstream-formatted; pass them through
         # untranslated so we don't double-localise already-localised content.
-        if "windows 串口" in raw or "未找到串口设备" in raw or "串口 " in raw and "当前无法打开" in raw:
+        if (
+            "windows 串口" in raw
+            or "未找到串口设备" in raw
+            or "串口 " in raw
+            and "当前无法打开" in raw
+        ):
             return raw
 
         if "4g relay 服务器地址为空" in raw or "无法连接到 4g relay 服务器" in raw:
@@ -3293,7 +3466,11 @@ class EITWorkstation(QMainWindow):
     def _apply_error_help(self, msg: str, summary: str) -> None:
         lowered = str(msg).lower()
         if "serial" in self._transport_type:
-            if "connection failed:" in lowered or "serial" in lowered or "com" in lowered:
+            if (
+                "connection failed:" in lowered
+                or "serial" in lowered
+                or "com" in lowered
+            ):
                 self._conn_panel.set_serial_hint(summary)
         if self._transport_type == "relay" and (
             "connection failed:" in lowered or "relay" in lowered
@@ -3339,7 +3516,9 @@ class EITWorkstation(QMainWindow):
         self._last_fwd_result = result
         runtime_diag = {}
         if isinstance(result.forward_model_config, dict):
-            runtime_diag = dict(result.forward_model_config.get("runtime_diagnostics", {}) or {})
+            runtime_diag = dict(
+                result.forward_model_config.get("runtime_diagnostics", {}) or {}
+            )
         self._sim_tab.forward_problem_panel.set_status(
             f"Done: {result.n_elements} elements, {result.n_measurements} measurements"
             f"{_format_runtime_diagnostics(runtime_diag)}"
@@ -3413,7 +3592,9 @@ class EITWorkstation(QMainWindow):
             resolved_method = "gn-difference"
             reconstruction_runtime = "full_gn"
             difference_preset = "eidors_demo3d_tv"
-        elif any(tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")):
+        elif any(
+            tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")
+        ):
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
         elif any(tag in raw_method for tag in ("abs", "absolute")):
@@ -3425,7 +3606,9 @@ class EITWorkstation(QMainWindow):
             reconstruction_runtime = "full_gn"
 
         mesh_size = float(forward_cfg.mesh_refinement)
-        is_3d_difference = int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
+        is_3d_difference = (
+            int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
+        )
         # Match the 3D paper/pre-experiment sphere scripts: EIDORS-style
         # difference reconstructions are solved in normalized measurement
         # space with one-step NOSER lambda_eff = 1e-2.
@@ -3482,13 +3665,14 @@ class EITWorkstation(QMainWindow):
                 )
                 return
 
-            solver_diag = getattr(recon_result, "metadata", {}).get("solver_diagnostics", {})
+            solver_diag = getattr(recon_result, "metadata", {}).get(
+                "solver_diagnostics", {}
+            )
             runtime_diag = {}
             if isinstance(solver_diag, dict):
                 runtime_diag = dict(solver_diag.get("runtime", {}) or {})
             self._sim_tab.inverse_problem_panel.set_status(
-                "Reconstruction complete."
-                f"{_format_runtime_diagnostics(runtime_diag)}"
+                f"Reconstruction complete.{_format_runtime_diagnostics(runtime_diag)}"
             )
             self._sim_tab.inverse_problem_panel.set_save_enabled(True)
             self._sim_tab.results_widget.update_inverse_result(
@@ -3511,7 +3695,9 @@ class EITWorkstation(QMainWindow):
                     plot_dtype = compute_dtype()
                     self._sim_tab.results_widget.voltage_plot.update_simulation_voltages(
                         ground_truth=np.asarray(measured, dtype=plot_dtype).reshape(-1),
-                        reconstructed=np.asarray(simulated, dtype=plot_dtype).reshape(-1),
+                        reconstructed=np.asarray(simulated, dtype=plot_dtype).reshape(
+                            -1
+                        ),
                     )
             except Exception as exc:
                 log.warning(
@@ -3613,7 +3799,9 @@ class EITWorkstation(QMainWindow):
             self._dataset_tab.set_progress(total, total)
         else:
             self._dataset_tab.set_progress(0, 0)
-        self._status_bar.showMessage(f"Dataset generation complete: {total} samples.", 10000)
+        self._status_bar.showMessage(
+            f"Dataset generation complete: {total} samples.", 10000
+        )
 
     def closeEvent(self, event) -> None:
         self._db_tab.prepare_for_shutdown()

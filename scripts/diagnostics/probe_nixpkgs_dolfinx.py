@@ -73,7 +73,9 @@ def run_command(
     cwd: Path,
     allow_proxy_retry: bool,
     env: dict[str, str] | None = None,
-) -> tuple[subprocess.CompletedProcess[str], bool, subprocess.CompletedProcess[str] | None]:
+) -> tuple[
+    subprocess.CompletedProcess[str], bool, subprocess.CompletedProcess[str] | None
+]:
     """Run command and retry once with proxy env if it failed due to network issues."""
     first = subprocess.run(
         cmd,
@@ -166,13 +168,26 @@ def ensure_nixpkgs_clone(
                 f"[probe] proxy rc={result.returncode}\n{result.stderr}\n"
             )
         else:
-            sys.stderr.write(f"[probe] git fetch failed rc={result.returncode}\n{result.stderr}\n")
+            sys.stderr.write(
+                f"[probe] git fetch failed rc={result.returncode}\n{result.stderr}\n"
+            )
         raise SystemExit(2)
 
 
-def ensure_commit_available(clone_dir: Path, branch: str, revision: str, cwd: Path) -> None:
-    present_cmd = ["git", "-C", str(clone_dir), "cat-file", "-e", f"{revision}^{{commit}}"]
-    probe = subprocess.run(present_cmd, cwd=str(cwd), text=True, capture_output=True, check=False)
+def ensure_commit_available(
+    clone_dir: Path, branch: str, revision: str, cwd: Path
+) -> None:
+    present_cmd = [
+        "git",
+        "-C",
+        str(clone_dir),
+        "cat-file",
+        "-e",
+        f"{revision}^{{commit}}",
+    ]
+    probe = subprocess.run(
+        present_cmd, cwd=str(cwd), text=True, capture_output=True, check=False
+    )
     deepen_step = 200
     total_steps = 0
 
@@ -193,7 +208,9 @@ def ensure_commit_available(clone_dir: Path, branch: str, revision: str, cwd: Pa
             "origin",
             branch,
         ]
-        result, used_proxy, first = run_command(deepen_cmd, cwd=cwd, allow_proxy_retry=True)
+        result, used_proxy, first = run_command(
+            deepen_cmd, cwd=cwd, allow_proxy_retry=True
+        )
         if result.returncode != 0:
             if used_proxy and first is not None:
                 raise SystemExit(
@@ -205,7 +222,9 @@ def ensure_commit_available(clone_dir: Path, branch: str, revision: str, cwd: Pa
                 f"[probe] git fetch --deepen failed rc={result.returncode}\n{result.stderr}"
             )
 
-        probe = subprocess.run(present_cmd, cwd=str(cwd), text=True, capture_output=True, check=False)
+        probe = subprocess.run(
+            present_cmd, cwd=str(cwd), text=True, capture_output=True, check=False
+        )
 
 
 def git_lines(cmd: List[str], cwd: Path) -> list[str]:
@@ -246,8 +265,12 @@ def write_summary(results: list[ProbeResult], out_json: Path, out_tsv: Path) -> 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--window", type=int, default=2, help="Number of commits to probe on each side")
-    parser.add_argument("--depth", type=int, default=400, help="Initial shallow clone depth")
+    parser.add_argument(
+        "--window", type=int, default=2, help="Number of commits to probe on each side"
+    )
+    parser.add_argument(
+        "--depth", type=int, default=400, help="Initial shallow clone depth"
+    )
     parser.add_argument(
         "--branch",
         default="nixos-unstable",
@@ -330,7 +353,9 @@ def main() -> int:
 
     explicit_revs: list[str] = []
     if args.revisions:
-        explicit_revs.extend([r.strip() for r in args.revisions.split(",") if r.strip()])
+        explicit_revs.extend(
+            [r.strip() for r in args.revisions.split(",") if r.strip()]
+        )
     if args.revisions_file:
         revisions_file = (repo_root / args.revisions_file).resolve()
         if not revisions_file.exists():
@@ -356,7 +381,14 @@ def main() -> int:
             ensure_commit_available(clone_dir, args.branch, rev, repo_root)
     else:
         rev_list = git_lines(
-            ["git", "-C", str(clone_dir), "rev-list", "--first-parent", f"origin/{args.branch}"],
+            [
+                "git",
+                "-C",
+                str(clone_dir),
+                "rev-list",
+                "--first-parent",
+                f"origin/{args.branch}",
+            ],
             repo_root,
         )
 
@@ -367,7 +399,9 @@ def main() -> int:
                 "[probe] Locked revision not found on first-parent history of branch."
             ) from exc
 
-        candidate_indices = build_candidate_indices(current_idx, len(rev_list), args.window)
+        candidate_indices = build_candidate_indices(
+            current_idx, len(rev_list), args.window
+        )
         candidate_indices = candidate_indices[: args.max_candidates]
         candidate_revs = [rev_list[i] for i in candidate_indices]
 
@@ -487,13 +521,14 @@ def main() -> int:
                 f"# proxy-retry-output\n{lock_proc.stdout}\n{lock_proc.stderr}"
             )
         else:
-            lock_output = f"$ {_cmd_str(lock_cmd)}\n\n{lock_proc.stdout}\n{lock_proc.stderr}"
+            lock_output = (
+                f"$ {_cmd_str(lock_cmd)}\n\n{lock_proc.stdout}\n{lock_proc.stderr}"
+            )
         lock_log.write_text(lock_output)
 
         if lock_proc.returncode != 0:
             raise SystemExit(
-                "[probe] Failed to update flake.lock. "
-                f"See {lock_log} for details."
+                f"[probe] Failed to update flake.lock. See {lock_log} for details."
             )
 
         print(f"[probe] flake.lock updated to passing revision. Log: {lock_log}")

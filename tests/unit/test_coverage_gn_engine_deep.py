@@ -29,11 +29,15 @@ class TestGNEngineValidationWithSystem:
         _skip()
         from pyeidors.data.structures import PatternConfig
         from pyeidors.core_system import EITSystem
+
         system = EITSystem(
             n_elec=16,
             pattern_config=PatternConfig(
-                n_elec=16, stim_pattern="{ad}", meas_pattern="{ad}",
-                drive_mode="normalized", drive_value=1.0,
+                n_elec=16,
+                stim_pattern="{ad}",
+                meas_pattern="{ad}",
+                drive_mode="normalized",
+                drive_value=1.0,
                 geometry_scale_to_m=1.0,
             ),
             regularization_type="noser",
@@ -71,6 +75,7 @@ class TestGNEngineRegularizationMatrix:
         # The regularization is already set up; just verify it's been prepared
         if recon.R_matrix is not None:
             from scipy.sparse import issparse
+
             if issparse(recon.R_matrix):
                 assert recon.R_diag is not None
 

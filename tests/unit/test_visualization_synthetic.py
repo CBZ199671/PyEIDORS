@@ -21,7 +21,10 @@ def test_synthetic_data_generation(eit_system):
         center=(0.1, 0.1),
         radius=0.15,
     )
-    assert synthetic["sigma_true"].x.array.size == eit_system.get_system_info()["n_elements"]
+    assert (
+        synthetic["sigma_true"].x.array.size
+        == eit_system.get_system_info()["n_elements"]
+    )
     assert synthetic["data_clean"].meas.shape == synthetic["data_noisy"].meas.shape
     assert np.isfinite(synthetic["snr_db"])
 
@@ -34,7 +37,9 @@ def test_custom_phantom_and_visualization(eit_system):
     viz = create_visualizer(style="default")
     fig_mesh = viz.plot_mesh(eit_system.mesh, show_electrodes=False)
     fig_cond = viz.plot_conductivity(eit_system.mesh, sigma)
-    fig_cmp = viz.plot_reconstruction_comparison(eit_system.mesh, sigma.x.array, sigma.x.array.copy())
+    fig_cmp = viz.plot_reconstruction_comparison(
+        eit_system.mesh, sigma.x.array, sigma.x.array.copy()
+    )
 
     assert fig_mesh is not None
     assert fig_cond is not None

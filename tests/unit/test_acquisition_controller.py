@@ -20,7 +20,11 @@ def test_acquisition_stop_is_idempotent_and_logs_once(
     statuses: list[str] = []
     logs: list[str] = []
     controller.status_changed.connect(statuses.append)
-    monkeypatch.setattr(ac.log, "info", lambda message, *args: logs.append(message % args if args else message))
+    monkeypatch.setattr(
+        ac.log,
+        "info",
+        lambda message, *args: logs.append(message % args if args else message),
+    )
 
     controller._is_active = True
 

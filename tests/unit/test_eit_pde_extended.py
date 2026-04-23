@@ -97,7 +97,9 @@ def test_gradient_and_jacobian_cache(eit_system):
     jac1 = pde.jacobian_wrt_parameter(wrt)
     jac2 = pde.jacobian_wrt_parameter(wrt.copy())
     assert np.allclose(jac1, jac2)
-    assert pde._jacobian_calculator.calls == 2  # one for gradient + one for cached jacobian
+    assert (
+        pde._jacobian_calculator.calls == 2
+    )  # one for gradient + one for cached jacobian
 
     with pytest.raises(ValueError):
         pde.gradient_wrt_parameter(direction, np.zeros(n_elem + 1))
@@ -124,7 +126,9 @@ def test_create_pde_model_branches(monkeypatch, eit_system):
     class _FakeEITPDE:
         def __init__(self, system):
             _ = system
-            self.geometry_info = eit_pde_module.EITGeometryInfo(n_elements=11, n_measurements=22)
+            self.geometry_info = eit_pde_module.EITGeometryInfo(
+                n_elements=11, n_measurements=22
+            )
 
     class _FakePDEModel:
         def __init__(self, PDE, range_geometry, domain_geometry):

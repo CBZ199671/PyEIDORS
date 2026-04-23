@@ -212,10 +212,14 @@ class C8051Device(AbstractHardwareDevice):
             try:
                 self._clear_transport_input()
                 self._transport.write(build_contact_impedance_mea(amp_level))
-                result = self._read_device_response(timeout=self._command_response_timeout())
+                result = self._read_device_response(
+                    timeout=self._command_response_timeout()
+                )
                 if result.cmd != Command.CONTACT_IMPEDANCE_MEA:
                     raise RuntimeError(f"Unexpected impedance response: {result.cmd}")
-                return parse_contact_impedance_response(result.data, gain_level=amp_level)
+                return parse_contact_impedance_response(
+                    result.data, gain_level=amp_level
+                )
             except Exception as exc:
                 errors.append(f"{attempt}/{retries}: {exc}")
                 if attempt < retries:
@@ -234,9 +238,13 @@ class C8051Device(AbstractHardwareDevice):
             try:
                 self._clear_transport_input()
                 self._transport.write(build_single_point_test(hz))
-                result = self._read_device_response(timeout=self._command_response_timeout())
+                result = self._read_device_response(
+                    timeout=self._command_response_timeout()
+                )
                 if result.cmd != Command.SINGLE_POINT_TEST:
-                    raise RuntimeError(f"Unexpected single-point response: {result.cmd}")
+                    raise RuntimeError(
+                        f"Unexpected single-point response: {result.cmd}"
+                    )
                 return parse_single_point_response(
                     result.data,
                     gain_level=int(self._config.get("voltage_amp_level_1", 7)),
@@ -247,7 +255,9 @@ class C8051Device(AbstractHardwareDevice):
                     time.sleep(0.25)
         raise RuntimeError(f"Single-point test failed: {'; '.join(errors)}")
 
-    def run_sweep(self, start_hz: int, end_hz: int, n_points: int) -> list[dict[str, float]]:
+    def run_sweep(
+        self, start_hz: int, end_hz: int, n_points: int
+    ) -> list[dict[str, float]]:
         if n_points < 2:
             raise ValueError("Sweep requires at least 2 points")
         frequencies = np.linspace(start_hz, end_hz, n_points, dtype=float)
@@ -300,7 +310,9 @@ class C8051Device(AbstractHardwareDevice):
             "supports_streaming": bool(result.data[1] & 0x01),
             "supports_extended_impedance": bool(result.data[1] & 0x02),
             "supports_3d_batch": bool(result.data[1] & 0x04),
-            "acquisition_mode": "streaming" if (result.data[1] & 0x01) else "legacy_one_shot",
+            "acquisition_mode": "streaming"
+            if (result.data[1] & 0x01)
+            else "legacy_one_shot",
         }
         self._config.update(caps)
         self._acquisition_mode = (
@@ -346,7 +358,9 @@ class C8051Device(AbstractHardwareDevice):
                 try:
                     self._clear_transport_input()
                     self._transport.write(packet)
-                    result = self._read_device_response(timeout=self._legacy_frame_timeout())
+                    result = self._read_device_response(
+                        timeout=self._legacy_frame_timeout()
+                    )
                     if result.cmd != Command.START_MEA:
                         raise RuntimeError(f"Unexpected frame command: {result.cmd}")
                     self._start_variant = variant_name
@@ -423,7 +437,7 @@ class C8051Device(AbstractHardwareDevice):
             if len(buf) < head_len + 2:
                 continue
 
-            len_field = int.from_bytes(buf[head_len: head_len + 2], "big")
+            len_field = int.from_bytes(buf[head_len : head_len + 2], "big")
             if len_field < 3:
                 del buf[:1]
                 continue
@@ -463,10 +477,16 @@ class C8051Device(AbstractHardwareDevice):
         }
 
     def _frame_spec(self) -> FrameSpec:
-        total_electrodes = max(int(self._config.get("n_elec", DEFAULT_FRAME_SPEC.n_electrodes)), 1)
+        total_electrodes = max(
+            int(self._config.get("n_elec", DEFAULT_FRAME_SPEC.n_electrodes)), 1
+        )
         total_electrodes *= max(int(self._config.get("n_rings", 1)), 1)
         points_per_frame = max(
-            int(self._config.get("points_per_frame", DEFAULT_FRAME_SPEC.points_per_frame)),
+            int(
+                self._config.get(
+                    "points_per_frame", DEFAULT_FRAME_SPEC.points_per_frame
+                )
+            ),
             1,
         )
         return FrameSpec(

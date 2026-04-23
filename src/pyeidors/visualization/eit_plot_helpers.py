@@ -11,7 +11,12 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
 from mpi4py import MPI
 
-from ..femx import mesh_cell_vertices, mesh_coordinates, mesh_num_cells, mesh_num_vertices
+from ..femx import (
+    mesh_cell_vertices,
+    mesh_coordinates,
+    mesh_num_cells,
+    mesh_num_vertices,
+)
 
 
 def raw_mesh(mesh):
@@ -72,7 +77,10 @@ def plot_electrodes(ax, electrode_vertices):
 
 
 def is_eidors_diff(colormap: str | Any) -> bool:
-    return isinstance(colormap, str) and colormap.lower() in {"eidors_diff", "eidors-diff"}
+    return isinstance(colormap, str) and colormap.lower() in {
+        "eidors_diff",
+        "eidors-diff",
+    }
 
 
 def resolve_colormap(colormap: str | Any) -> Any:
@@ -163,7 +171,7 @@ def format_colorbar(cbar: Any, format_mode: str) -> None:
             return "0"
         ax = abs(x)
         exp = int(np.floor(np.log10(ax)))
-        mantissa = x / (10 ** exp)
+        mantissa = x / (10**exp)
         mantissa_rounded = round(mantissa, 1)
         if abs(mantissa_rounded) >= 10:
             mantissa_rounded /= 10
@@ -177,6 +185,7 @@ def format_colorbar(cbar: Any, format_mode: str) -> None:
     if mode == "scientific":
         formatter = FuncFormatter(_fmt_sci_adaptive)
     elif mode == "matlab_short":
+
         def _fmt_matlab_short(x: float, _: float) -> str:
             if x == 0:
                 return "0.0000"
@@ -242,7 +251,11 @@ def overlay_electrode_labels(ax, mesh, label_outset: float = 0.08):
     ds = ufl.Measure("ds", domain=mesh_obj, subdomain_data=facet_tags)
     one = fem.Constant(mesh_obj, 1.0)
     _lengths = {
-        tag: float(mesh_obj.comm.allreduce(fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM))
+        tag: float(
+            mesh_obj.comm.allreduce(
+                fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
+            )
+        )
         for tag in tags
     }
 

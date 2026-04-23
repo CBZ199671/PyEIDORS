@@ -44,8 +44,12 @@ def _shape_score(metrics: dict[str, object]) -> float:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compare 3D EIDORS-aligned reconstruction settings")
-    parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "eidors_alignment_suite")
+    parser = argparse.ArgumentParser(
+        description="Compare 3D EIDORS-aligned reconstruction settings"
+    )
+    parser.add_argument(
+        "--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR / "eidors_alignment_suite"
+    )
     parser.add_argument("--refinement", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=None)
     parser.add_argument("--radius", type=float, default=0.22)
@@ -55,7 +59,9 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ACCELERATION_PROFILE,
         help_suffix="Forwarded to each 3D reconstruction case.",
     )
-    parser.add_argument("--difference-mode", choices=["raw", "normalized"], default="normalized")
+    parser.add_argument(
+        "--difference-mode", choices=["raw", "normalized"], default="normalized"
+    )
     parser.add_argument(
         "--difference-orientation",
         choices=["target_minus_reference", "reference_minus_target"],

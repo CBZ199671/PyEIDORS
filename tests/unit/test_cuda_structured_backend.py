@@ -36,7 +36,9 @@ def _write_sidecar(path: Path, *, generator_revision: str = "g3d3") -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_resolve_cuda_structured_runtime_accepts_narrow_happy_path(tmp_path, monkeypatch):
+def test_resolve_cuda_structured_runtime_accepts_narrow_happy_path(
+    tmp_path, monkeypatch
+):
     mesh_file = tmp_path / "mesh.msh"
     mesh_file.write_text("$MeshFormat\n2.2 0 8\n", encoding="utf-8")
     _write_sidecar(module.structured_sidecar_path_for_mesh(mesh_file))
@@ -56,7 +58,9 @@ def test_resolve_cuda_structured_runtime_accepts_narrow_happy_path(tmp_path, mon
 
     assert payload["forward_backend_effective"] == "cuda_structured"
     assert payload["structured_sidecar_version"] == module.STRUCTURED_SIDECAR_VERSION
-    assert payload["structured_backend_version"] == module.CUDA_STRUCTURED_BACKEND_VERSION
+    assert (
+        payload["structured_backend_version"] == module.CUDA_STRUCTURED_BACKEND_VERSION
+    )
     assert payload["operator_backend"] == "torch-cuda"
 
 
@@ -130,7 +134,9 @@ def test_resolve_cuda_structured_runtime_accepts_narrow_happy_path(tmp_path, mon
         ),
     ],
 )
-def test_resolve_cuda_structured_runtime_rejects_unsupported_cases(tmp_path, monkeypatch, kwargs, match):
+def test_resolve_cuda_structured_runtime_rejects_unsupported_cases(
+    tmp_path, monkeypatch, kwargs, match
+):
     mesh_file = tmp_path / "mesh.msh"
     mesh_file.write_text("$MeshFormat\n2.2 0 8\n", encoding="utf-8")
     _write_sidecar(module.structured_sidecar_path_for_mesh(mesh_file))
@@ -162,7 +168,9 @@ def test_resolve_cuda_structured_runtime_rejects_missing_sidecar(tmp_path, monke
         )
 
 
-@pytest.mark.skipif(module.torch is None, reason="torch not importable in current runtime")
+@pytest.mark.skipif(
+    module.torch is None, reason="torch not importable in current runtime"
+)
 def test_block_pcg_solves_small_spd_system():
     device = "cuda" if module._torch_cuda_available() else "cpu"
     if device != "cuda":
@@ -171,7 +179,9 @@ def test_block_pcg_solves_small_spd_system():
     matrix = csr_matrix(np.array([[4.0, 1.0], [1.0, 3.0]], dtype=np.float64))
     rhs_np = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
     expected = np.linalg.solve(matrix.toarray(), rhs_np)
-    A = module.CudaStructuredForwardBackend._csr_to_torch(matrix, module.torch.device(device))
+    A = module.CudaStructuredForwardBackend._csr_to_torch(
+        matrix, module.torch.device(device)
+    )
     rhs = module.torch.as_tensor(rhs_np, device=device, dtype=module.torch.float64)
     diag_inv = module.torch.as_tensor(
         (1.0 / matrix.diagonal())[:, None],
@@ -189,10 +199,14 @@ def test_block_pcg_solves_small_spd_system():
     )
 
     assert iterations > 0
-    np.testing.assert_allclose(solved.detach().cpu().numpy(), expected, rtol=1e-10, atol=1e-10)
+    np.testing.assert_allclose(
+        solved.detach().cpu().numpy(), expected, rtol=1e-10, atol=1e-10
+    )
 
 
-def test_resolve_cuda_structured_runtime_additional_validation_paths(tmp_path, monkeypatch):
+def test_resolve_cuda_structured_runtime_additional_validation_paths(
+    tmp_path, monkeypatch
+):
     mesh_file = tmp_path / "mesh.bad"
     mesh_file.write_text("$MeshFormat\n2.2 0 8\n", encoding="utf-8")
     sidecar = module.structured_sidecar_path_for_mesh(mesh_file)
@@ -310,7 +324,9 @@ def test_resolve_cuda_structured_runtime_covers_missing_file_geometry_sidecar_re
 
     if module.torch is not None:
         matrix = csr_matrix(np.eye(2, dtype=np.float64))
-        A = module.CudaStructuredForwardBackend._csr_to_torch(matrix, module.torch.device("cpu"))
+        A = module.CudaStructuredForwardBackend._csr_to_torch(
+            matrix, module.torch.device("cpu")
+        )
         zeros = module.torch.zeros((2, 1), dtype=module.torch.float64)
         diag_inv = module.torch.ones((2, 1), dtype=module.torch.float64)
         solved, iterations = module.CudaStructuredForwardBackend._block_pcg(
@@ -322,11 +338,15 @@ def test_resolve_cuda_structured_runtime_covers_missing_file_geometry_sidecar_re
             max_it=8,
         )
         assert iterations == 0
-        np.testing.assert_allclose(solved.detach().cpu().numpy(), np.zeros((2, 1), dtype=np.float64))
+        np.testing.assert_allclose(
+            solved.detach().cpu().numpy(), np.zeros((2, 1), dtype=np.float64)
+        )
 
 
 def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
-    backend = module.CudaStructuredForwardBackend.__new__(module.CudaStructuredForwardBackend)
+    backend = module.CudaStructuredForwardBackend.__new__(
+        module.CudaStructuredForwardBackend
+    )
     backend.sidecar = {"blocks": []}
     assert backend._estimate_mg_levels() == 1
 
@@ -336,11 +356,21 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
         (),
         {
             "mesh": type("Mesh", (), {"geometry": type("Geom", (), {"dim": 3})()})(),
-            "V": type("VSpace", (), {"tabulate_dof_coordinates": staticmethod(lambda: np.zeros((3, 3), dtype=float))})(),
+            "V": type(
+                "VSpace",
+                (),
+                {
+                    "tabulate_dof_coordinates": staticmethod(
+                        lambda: np.zeros((3, 3), dtype=float)
+                    )
+                },
+            )(),
         },
     )()
     backend.mesh_file = "demo.msh"
-    monkeypatch.setattr(backend, "_load_mesh_points", lambda: np.zeros((2, 3), dtype=float))
+    monkeypatch.setattr(
+        backend, "_load_mesh_points", lambda: np.zeros((2, 3), dtype=float)
+    )
     with pytest.raises(RuntimeError, match="structured_node_to_mesh_node"):
         backend._build_dof_bijection()
 
@@ -353,10 +383,24 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
         (),
         {
             "mesh": type("Mesh", (), {"geometry": type("Geom", (), {"dim": 3})()})(),
-            "V": type("VSpace", (), {"tabulate_dof_coordinates": staticmethod(lambda: np.array([[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=float))})(),
+            "V": type(
+                "VSpace",
+                (),
+                {
+                    "tabulate_dof_coordinates": staticmethod(
+                        lambda: np.array(
+                            [[0.0, 0.0, 0.0], [10.0, 0.0, 0.0]], dtype=float
+                        )
+                    )
+                },
+            )(),
         },
     )()
-    monkeypatch.setattr(backend, "_load_mesh_points", lambda: np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float))
+    monkeypatch.setattr(
+        backend,
+        "_load_mesh_points",
+        lambda: np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]], dtype=float),
+    )
     with pytest.raises(RuntimeError, match="exceeds tolerance"):
         backend._build_dof_bijection()
 
@@ -365,10 +409,24 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
         (),
         {
             "mesh": type("Mesh", (), {"geometry": type("Geom", (), {"dim": 3})()})(),
-            "V": type("VSpace", (), {"tabulate_dof_coordinates": staticmethod(lambda: np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=float))})(),
+            "V": type(
+                "VSpace",
+                (),
+                {
+                    "tabulate_dof_coordinates": staticmethod(
+                        lambda: np.array(
+                            [[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=float
+                        )
+                    )
+                },
+            )(),
         },
     )()
-    monkeypatch.setattr(backend, "_load_mesh_points", lambda: np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=float))
+    monkeypatch.setattr(
+        backend,
+        "_load_mesh_points",
+        lambda: np.array([[0.0, 0.0, 0.0], [0.0, 0.0, 0.0]], dtype=float),
+    )
     with pytest.raises(RuntimeError, match="not bijective"):
         backend._build_dof_bijection()
 
@@ -378,7 +436,9 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
         diag_inv = module.torch.ones((2, 1), dtype=module.torch.float64)
         with pytest.raises(RuntimeError, match="failed to converge"):
             module.CudaStructuredForwardBackend._block_pcg(
-                module.CudaStructuredForwardBackend._csr_to_torch(matrix, module.torch.device("cpu")),
+                module.CudaStructuredForwardBackend._csr_to_torch(
+                    matrix, module.torch.device("cpu")
+                ),
                 rhs,
                 diag_inv=diag_inv,
                 rtol=0.0,
@@ -386,14 +446,18 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
                 max_it=0,
             )
 
-        build_backend = module.CudaStructuredForwardBackend.__new__(module.CudaStructuredForwardBackend)
+        build_backend = module.CudaStructuredForwardBackend.__new__(
+            module.CudaStructuredForwardBackend
+        )
         build_backend.model = type(
             "Model",
             (),
             {
                 "V_sigma": object(),
                 "dofs": 2,
-                "_petsc_to_csr": staticmethod(lambda _mat: csr_matrix(np.diag([0.0, 1.0]))),
+                "_petsc_to_csr": staticmethod(
+                    lambda _mat: csr_matrix(np.diag([0.0, 1.0]))
+                ),
                 "_assemble_conductivity_matrix": staticmethod(lambda _sigma: object()),
             },
         )()
@@ -401,6 +465,14 @@ def test_cuda_structured_helper_methods_cover_remaining_edge_paths(monkeypatch):
         build_backend._coupling_columns = np.zeros((2, 1), dtype=np.float64)
         build_backend.device = module.torch.device("cpu")
         build_backend._sigma_state = None
-        monkeypatch.setattr(module.fem, "Function", lambda _space: type("Sigma", (), {"x": type("X", (), {"array": np.zeros(2, dtype=np.float64)})()})())
+        monkeypatch.setattr(
+            module.fem,
+            "Function",
+            lambda _space: type(
+                "Sigma",
+                (),
+                {"x": type("X", (), {"array": np.zeros(2, dtype=np.float64)})()},
+            )(),
+        )
         with pytest.raises(RuntimeError, match="invalid diagonal"):
             build_backend._build_sigma_state(np.array([1.0, 2.0], dtype=np.float64))

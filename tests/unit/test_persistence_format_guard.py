@@ -10,7 +10,9 @@ SCRIPT_PATH = REPO_ROOT / "scripts" / "ci" / "persistence_format_guard.py"
 
 
 def _load_module():
-    spec = importlib.util.spec_from_file_location("persistence_format_guard", SCRIPT_PATH)
+    spec = importlib.util.spec_from_file_location(
+        "persistence_format_guard", SCRIPT_PATH
+    )
     assert spec is not None
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -28,9 +30,7 @@ def test_guard_blocks_new_production_numpy_writer(tmp_path):
     module = _load_module()
     _write(
         tmp_path / "src" / "pkg" / "new_writer.py",
-        "import numpy as np\n\n"
-        "def save(path):\n"
-        "    np.savez(path, values=[1])\n",
+        "import numpy as np\n\ndef save(path):\n    np.savez(path, values=[1])\n",
     )
 
     findings = module.scan_repo(tmp_path)

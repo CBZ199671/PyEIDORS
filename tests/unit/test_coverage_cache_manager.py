@@ -7,7 +7,12 @@ import time
 import numpy as np
 import pytest
 
-from pyeidors.cache.manager import CacheManager, _get_shared_process_store, _SHARED_PROCESS_STORES, _SHARED_PROCESS_STORES_LOCK
+from pyeidors.cache.manager import (
+    CacheManager,
+    _get_shared_process_store,
+    _SHARED_PROCESS_STORES,
+    _SHARED_PROCESS_STORES_LOCK,
+)
 from pyeidors.cache.types import CachePolicy, normalize_cache_lifecycle
 
 
@@ -26,6 +31,7 @@ class TestSharedProcessStore:
 
     def test_max_bytes_upgraded(self, tmp_path):
         from pathlib import Path
+
         store1 = _get_shared_process_store(
             cache_dir=tmp_path / "test_shared",
             max_bytes=100,
@@ -77,8 +83,11 @@ class TestCacheManagerGetOrCompute:
     """Cover lines 226-238: repopulate process from disk."""
 
     def test_disk_hit_populates_process(self, tmp_path):
-        mgr = CacheManager(scope="both", cache_dir=tmp_path / "cache_both",
-                           policy=CachePolicy(disk_lifecycle="persistent"))
+        mgr = CacheManager(
+            scope="both",
+            cache_dir=tmp_path / "cache_both",
+            policy=CachePolicy(disk_lifecycle="persistent"),
+        )
         data = np.array([1.0, 2.0, 3.0])
 
         # Populate disk
@@ -107,10 +116,14 @@ class TestCacheManagerClearMax:
     """Cover lines 327-332."""
 
     def test_clear_max(self, tmp_path):
-        mgr = CacheManager(scope="both", cache_dir=tmp_path / "cache_cm",
-                           policy=CachePolicy(disk_lifecycle="persistent"))
+        mgr = CacheManager(
+            scope="both",
+            cache_dir=tmp_path / "cache_cm",
+            policy=CachePolicy(disk_lifecycle="persistent"),
+        )
         mgr.get_or_compute(
-            artifact="test", payload={"k": 1},
+            artifact="test",
+            payload={"k": 1},
             compute_fn=lambda: np.zeros(100),
         )
         removed = mgr.clear_max(max_bytes=0)
@@ -123,7 +136,8 @@ class TestCacheManagerEntryValue:
     def test_entry_value_process_layer(self, tmp_path):
         mgr = CacheManager(scope="process", cache_dir=tmp_path / "cache_ev")
         mgr.get_or_compute(
-            artifact="test", payload={"k": 1},
+            artifact="test",
+            payload={"k": 1},
             compute_fn=lambda: "hello",
         )
         entries = mgr.list_entries()
@@ -161,12 +175,16 @@ class TestCacheManagerInstall:
 
     def test_install_skips_invalid_key(self, tmp_path):
         mgr = CacheManager(scope="process", cache_dir=tmp_path / "cache_inst5")
-        result = mgr.install_to_cache([{"val": "v", "key": ""}], target_layers="process")
+        result = mgr.install_to_cache(
+            [{"val": "v", "key": ""}], target_layers="process"
+        )
         assert result == 0
 
     def test_install_skips_no_artifact(self, tmp_path):
         mgr = CacheManager(scope="process", cache_dir=tmp_path / "cache_inst6")
-        result = mgr.install_to_cache([{"val": "v", "key": "k1", "meta": {}}], target_layers="process")
+        result = mgr.install_to_cache(
+            [{"val": "v", "key": "k1", "meta": {}}], target_layers="process"
+        )
         assert result == 0
 
     def test_install_skips_non_dict_meta(self, tmp_path):

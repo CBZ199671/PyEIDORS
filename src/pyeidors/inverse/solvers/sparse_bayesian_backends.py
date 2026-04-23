@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import numpy as np
 
-from .sparse_map_solver import block_refinement, coarse_initialization, multilevel_correction, solve_sparse_map
+from .sparse_map_solver import (
+    block_refinement,
+    coarse_initialization,
+    multilevel_correction,
+    solve_sparse_map,
+)
 from .sparse_optimizers import solve_fista, solve_irls
-from .sparse_projection import compute_projection, estimate_lipschitz_constant, get_coarse_matrix
+from .sparse_projection import (
+    compute_projection,
+    estimate_lipschitz_constant,
+    get_coarse_matrix,
+)
 
 
 class SparseBayesianBackendMixin:
@@ -58,10 +67,14 @@ class SparseBayesianBackendMixin:
     def _compute_projection(self, jacobian: np.ndarray, rank: int):
         return compute_projection(jacobian, rank)
 
-    def _estimate_lipschitz_constant(self, matrix: np.ndarray, iters: int = 12) -> float:
+    def _estimate_lipschitz_constant(
+        self, matrix: np.ndarray, iters: int = 12
+    ) -> float:
         return estimate_lipschitz_constant(matrix, iters=iters)
 
-    def _solve_with_cuqi_map(self, problem, warm_start: np.ndarray | None) -> np.ndarray:
+    def _solve_with_cuqi_map(
+        self, problem, warm_start: np.ndarray | None
+    ) -> np.ndarray:
         if warm_start is not None:
             map_estimate = problem.MAP(disp=self.verbose, x0=warm_start)
         else:

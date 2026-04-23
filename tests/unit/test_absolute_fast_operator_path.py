@@ -13,7 +13,9 @@ from pyeidors.inverse.solvers.gauss_newton_runtime import _solve_linear_system_f
 def _dummy_reconstructor(*, linear_solver: str = "auto", preconditioner: str = "auto"):
     return SimpleNamespace(
         use_prior_term=True,
-        R_matrix=sparse.diags(np.array([1.5, 2.0, 2.5], dtype=float), offsets=0, format="csr"),
+        R_matrix=sparse.diags(
+            np.array([1.5, 2.0, 2.5], dtype=float), offsets=0, format="csr"
+        ),
         R_diag=np.array([1.5, 2.0, 2.5], dtype=float),
         performance_mode="safe",
         linear_solver=linear_solver,

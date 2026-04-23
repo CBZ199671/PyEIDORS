@@ -61,7 +61,9 @@ class MeasurementDataset:
     data_type: str = "real"
 
     def __post_init__(self) -> None:
-        self.measurements = self._as_read_only(np.asarray(self.measurements, dtype=float))
+        self.measurements = self._as_read_only(
+            np.asarray(self.measurements, dtype=float)
+        )
         self.stim_matrix = self._as_read_only(np.asarray(self.stim_matrix, dtype=float))
         self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
         self.metadata = dict(self.metadata)
@@ -98,7 +100,10 @@ class MeasurementDataset:
         # n_frames: actual frame count in CSV (each frame has 2 columns: real + imaginary)
         # Validation: loaded frames cannot exceed n_frames
         expected_frames = metadata.get("n_frames")
-        if expected_frames is not None and measurements_array.shape[0] > expected_frames:
+        if (
+            expected_frames is not None
+            and measurements_array.shape[0] > expected_frames
+        ):
             raise ValueError(
                 "Loaded frame count exceeds declared n_frames in metadata: "
                 f"n_frames={expected_frames}, actual loaded={measurements_array.shape[0]}"
@@ -198,8 +203,7 @@ class MeasurementDataset:
             array = array.reshape(1, -1)
         if array.ndim != 2:
             raise ValueError(
-                "measurements must be a 1D or 2D array, "
-                f"got {array.ndim} dimensions"
+                f"measurements must be a 1D or 2D array, got {array.ndim} dimensions"
             )
         return array
 
@@ -231,7 +235,9 @@ class MeasurementDataset:
             stim_pattern=metadata.get("stim_pattern", "{ad}"),
             meas_pattern=metadata.get("meas_pattern", "{ad}"),
             electrode_layout=str(metadata.get("electrode_layout", "ring_major")),
-            measurement_protocol=str(metadata.get("measurement_protocol", "eidors_full_3d")),
+            measurement_protocol=str(
+                metadata.get("measurement_protocol", "eidors_full_3d")
+            ),
             custom_stim_matrix=metadata.get("custom_stim_matrix"),
             custom_meas_matrices=metadata.get("custom_meas_matrices"),
             drive_mode=str(metadata.get("drive_mode", "line_current_density")),

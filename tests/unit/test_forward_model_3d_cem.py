@@ -136,9 +136,15 @@ def test_forward_model_3d_reuses_static_setup_bundle(tmp_path):
     assert fwd1.V is fwd2.V
     assert fwd1.V_sigma is fwd2.V_sigma
     assert fwd1.pattern_manager is not fwd2.pattern_manager
-    assert np.array_equal(fwd1.pattern_manager.stim_matrix, fwd2.pattern_manager.stim_matrix)
-    assert np.array_equal(fwd1.pattern_manager._meas_projection, fwd2.pattern_manager._meas_projection)
-    assert np.array_equal(fwd1.pattern_manager.meas_selector, fwd2.pattern_manager.meas_selector)
+    assert np.array_equal(
+        fwd1.pattern_manager.stim_matrix, fwd2.pattern_manager.stim_matrix
+    )
+    assert np.array_equal(
+        fwd1.pattern_manager._meas_projection, fwd2.pattern_manager._meas_projection
+    )
+    assert np.array_equal(
+        fwd1.pattern_manager.meas_selector, fwd2.pattern_manager.meas_selector
+    )
     assert fwd1.M is fwd2.M
 
 
@@ -210,6 +216,8 @@ def test_forward_model_3d_petsc_gamg_smoke_records_multi_rhs_diagnostics(tmp_pat
         solve_count = int(diag["forward_ksp_solve_count"])
         assert 1 <= solve_count <= fwd.pattern_manager.n_stim
         if diag.get("forward_ksp_converged") is False:
-            assert diag.get("fallback_reason") or diag.get("forward_mat_solve_fallback_reason")
+            assert diag.get("fallback_reason") or diag.get(
+                "forward_mat_solve_fallback_reason"
+            )
         else:
             assert solve_count == fwd.pattern_manager.n_stim

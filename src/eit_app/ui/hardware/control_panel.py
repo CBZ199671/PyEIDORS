@@ -19,7 +19,12 @@ from eit_app.hardware.types import VOLTAGE_AMP_LABELS
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
-from eit_app.ui.theme import set_button_role, set_hint_text, set_section_header, set_subtle_value
+from eit_app.ui.theme import (
+    set_button_role,
+    set_hint_text,
+    set_section_header,
+    set_subtle_value,
+)
 
 
 # Stimulation amplitude level descriptions — kept as numeric/unit labels
@@ -79,6 +84,7 @@ class ControlPanel(QGroupBox):
         self._grid_labels: dict[str, QLabel] = {}
         self._build_ui()
         from PySide6.QtWidgets import QSizePolicy
+
         for spin in (
             self._n_elec_spin,
             self._n_rings_spin,
@@ -125,7 +131,9 @@ class ControlPanel(QGroupBox):
         power_layout = QVBoxLayout(self._power_section)
         power_layout.setContentsMargins(0, 0, 0, 0)
         power_layout.setSpacing(4)
-        power_layout.addWidget(self._inline_row(self._power_on_btn, self._power_off_btn))
+        power_layout.addWidget(
+            self._inline_row(self._power_on_btn, self._power_off_btn)
+        )
         self._power_hint = QLabel("")
         self._power_hint.setWordWrap(True)
         set_hint_text(self._power_hint)
@@ -139,7 +147,9 @@ class ControlPanel(QGroupBox):
         self._mea_mode_combo = AutoCloseComboBox()
         self._mea_mode_combo.addItems(["2D", "3D"])
         self._mea_mode_combo.setCurrentIndex(0)
-        self._mea_mode_combo.currentIndexChanged.connect(lambda _: self._emit_layout_changed())
+        self._mea_mode_combo.currentIndexChanged.connect(
+            lambda _: self._emit_layout_changed()
+        )
 
         self._n_elec_spin = QSpinBox()
         self._n_elec_spin.setRange(4, 128)
@@ -162,16 +172,22 @@ class ControlPanel(QGroupBox):
 
         self._rotate_meas_check = QCheckBox("")
         self._rotate_meas_check.setChecked(True)
-        self._rotate_meas_check.toggled.connect(lambda _checked: self._emit_layout_changed())
+        self._rotate_meas_check.toggled.connect(
+            lambda _checked: self._emit_layout_changed()
+        )
 
         self._use_meas_current_check = QCheckBox("")
         self._use_meas_current_check.setChecked(False)
-        self._use_meas_current_check.toggled.connect(lambda _checked: self._emit_layout_changed())
+        self._use_meas_current_check.toggled.connect(
+            lambda _checked: self._emit_layout_changed()
+        )
 
         self._exclude_neighbors_spin = QSpinBox()
         self._exclude_neighbors_spin.setRange(0, 8)
         self._exclude_neighbors_spin.setValue(0)
-        self._exclude_neighbors_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+        self._exclude_neighbors_spin.valueChanged.connect(
+            lambda _: self._emit_layout_changed()
+        )
 
         # Hardware geometry uses metres throughout — surface the unit
         # in every spinbox so the operator can't mix mm with m.
@@ -189,7 +205,9 @@ class ControlPanel(QGroupBox):
         self._electrode_length_spin.setSingleStep(0.01)
         self._electrode_length_spin.setValue(0.19635)
         self._electrode_length_spin.setSuffix(" m")
-        self._electrode_length_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+        self._electrode_length_spin.valueChanged.connect(
+            lambda _: self._emit_layout_changed()
+        )
 
         self._contact_impedance_spin = QDoubleSpinBox()
         self._contact_impedance_spin.setRange(0.0, 1000000.0)
@@ -197,7 +215,9 @@ class ControlPanel(QGroupBox):
         self._contact_impedance_spin.setSingleStep(0.001)
         self._contact_impedance_spin.setValue(0.01)
         self._contact_impedance_spin.setSuffix(" \u03a9\u00b7m\u00b2")  # Ω·m²
-        self._contact_impedance_spin.valueChanged.connect(lambda _: self._emit_layout_changed())
+        self._contact_impedance_spin.valueChanged.connect(
+            lambda _: self._emit_layout_changed()
+        )
 
         self._layout_hint = QLabel()
         self._layout_hint.setWordWrap(True)
@@ -449,8 +469,14 @@ class ControlPanel(QGroupBox):
         # hasn't changed.
         dimension = "3D" if mea_mode == 3 else "2D"
         rotate = "rotate" if bool(layout["rotate_meas"]) else "fixed"
-        drive = "include drive electrodes" if bool(layout["use_meas_current"]) else "exclude drive electrodes"
-        electrode_length = _coerce_scalar_float(layout.get("electrode_length_m_override"), 0.0)
+        drive = (
+            "include drive electrodes"
+            if bool(layout["use_meas_current"])
+            else "exclude drive electrodes"
+        )
+        electrode_length = _coerce_scalar_float(
+            layout.get("electrode_length_m_override"), 0.0
+        )
         coverage = _coerce_scalar_float(layout.get("electrode_coverage"), 0.5)
         contact_impedance = _coerce_scalar_float(layout.get("contact_impedance"), 0.01)
         self._layout_hint.setText(
@@ -503,7 +529,9 @@ class ControlPanel(QGroupBox):
 
         # Layout section — grid header labels
         self._grid_labels["layout.mode"].setText(t("hw.control.layout_grid.mode"))
-        self._grid_labels["layout.elec_ring"].setText(t("hw.control.layout_grid.elec_ring"))
+        self._grid_labels["layout.elec_ring"].setText(
+            t("hw.control.layout_grid.elec_ring")
+        )
         self._grid_labels["layout.rings"].setText(t("hw.control.layout_grid.rings"))
         self._grid_labels["layout.stim_pattern"].setText(
             t("hw.control.layout_grid.stim_pattern")
@@ -515,7 +543,9 @@ class ControlPanel(QGroupBox):
             t("hw.control.layout_grid.extra_neighbors")
         )
         self._grid_labels["cem.radius"].setText(t("hw.control.cem_grid.radius"))
-        self._grid_labels["cem.elec_length"].setText(t("hw.control.cem_grid.elec_length"))
+        self._grid_labels["cem.elec_length"].setText(
+            t("hw.control.cem_grid.elec_length")
+        )
         self._grid_labels["cem.contact_z"].setText(t("hw.control.cem_grid.contact_z"))
 
         # Checkboxes
@@ -526,7 +556,9 @@ class ControlPanel(QGroupBox):
         # Append ':' once, matching the existing visual pattern.
         self._field_labels["frequency"].setText(t("hw.control.frequency_label") + ":")
         self._field_labels["stim_amp"].setText(t("hw.control.stim_amp_label") + ":")
-        self._field_labels["voltage_gain"].setText(t("hw.control.voltage_gain_label") + ":")
+        self._field_labels["voltage_gain"].setText(
+            t("hw.control.voltage_gain_label") + ":"
+        )
         self._freq_apply.setText(t("hw.control.freq_apply_button"))
         self._stim_apply.setText(t("hw.control.stim_apply_button"))
         self._vamp_apply.setText(t("hw.control.vamp_apply_button"))

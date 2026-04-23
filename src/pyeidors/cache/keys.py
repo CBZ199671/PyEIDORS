@@ -26,11 +26,16 @@ def _normalize(obj: Any) -> Any:
     if isinstance(obj, (np.floating, np.integer, np.bool_)):
         return obj.item()
     if isinstance(obj, dict):
-        return {str(k): _normalize(v) for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))}
+        return {
+            str(k): _normalize(v)
+            for k, v in sorted(obj.items(), key=lambda kv: str(kv[0]))
+        }
     if isinstance(obj, (list, tuple)):
         return [_normalize(v) for v in obj]
     if isinstance(obj, set):
-        return sorted((_normalize(v) for v in obj), key=lambda x: json.dumps(x, sort_keys=True))
+        return sorted(
+            (_normalize(v) for v in obj), key=lambda x: json.dumps(x, sort_keys=True)
+        )
     if hasattr(obj, "__dataclass_fields__"):
         return _normalize(asdict(obj))
     return obj
@@ -62,7 +67,9 @@ def build_cache_key(parts: CacheKeyParts) -> str:
     """Build SHA-256 key from normalized parts."""
 
     normalized = parts.normalized()
-    encoded = json.dumps(normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")
+    encoded = json.dumps(
+        normalized, sort_keys=True, separators=(",", ":"), ensure_ascii=True
+    ).encode("utf-8")
     return hashlib.sha256(encoded).hexdigest()
 
 

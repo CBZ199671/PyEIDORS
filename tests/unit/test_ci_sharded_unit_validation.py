@@ -99,7 +99,10 @@ def test_bare_dry_run_selection_can_include_hardware():
 
 def test_gui_and_hardware_shards_keep_domains_separate():
     module = _load_module()
-    shards = {shard.name: set(shard.relative_files) for shard in module.build_category_shards()}
+    shards = {
+        shard.name: set(shard.relative_files)
+        for shard in module.build_category_shards()
+    }
 
     assert "tests/unit/test_eit_app_gui_smoke.py" in shards["gui"]
     assert "tests/unit/test_eit_app_interop_hub.py" in shards["gui"]

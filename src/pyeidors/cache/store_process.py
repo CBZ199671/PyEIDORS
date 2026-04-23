@@ -24,7 +24,10 @@ def estimate_object_size_bytes(value: Any) -> int:
     if isinstance(value, (str, int, float, bool, type(None))):
         return 64
     if isinstance(value, dict):
-        return 96 + sum(estimate_object_size_bytes(k) + estimate_object_size_bytes(v) for k, v in value.items())
+        return 96 + sum(
+            estimate_object_size_bytes(k) + estimate_object_size_bytes(v)
+            for k, v in value.items()
+        )
     if isinstance(value, (list, tuple, set)):
         return 96 + sum(estimate_object_size_bytes(v) for v in value)
     try:

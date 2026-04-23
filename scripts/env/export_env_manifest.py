@@ -89,18 +89,23 @@ def current_platform_id() -> str:
     return f"{system}-{machine}"
 
 
-
-
 def resolve_profile_name(profile_name: Optional[str] = None) -> str:
-    candidate = str(profile_name or os.environ.get(PROFILE_ENV_VAR, DEFAULT_PROFILE_NAME)).strip().lower()
+    candidate = (
+        str(profile_name or os.environ.get(PROFILE_ENV_VAR, DEFAULT_PROFILE_NAME))
+        .strip()
+        .lower()
+    )
     return candidate or DEFAULT_PROFILE_NAME
 
 
-def default_manifest_filename(platform_id: str, *, profile_name: Optional[str] = None) -> str:
+def default_manifest_filename(
+    platform_id: str, *, profile_name: Optional[str] = None
+) -> str:
     resolved_profile = resolve_profile_name(profile_name)
     if resolved_profile == DEFAULT_PROFILE_NAME:
         return f"{platform_id}.lock.json"
     return f"{platform_id}-{resolved_profile}.lock.json"
+
 
 def runtime_context_kind() -> Optional[str]:
     if platform.system().lower() != "linux":
@@ -110,7 +115,9 @@ def runtime_context_kind() -> Optional[str]:
         return "wsl2"
 
     try:
-        version_text = Path("/proc/version").read_text(encoding="utf-8", errors="ignore")
+        version_text = Path("/proc/version").read_text(
+            encoding="utf-8", errors="ignore"
+        )
     except OSError:
         return None
 
@@ -174,7 +181,9 @@ def collect_package_versions() -> Dict[str, str]:
     return packages
 
 
-def build_manifest(root: Path, platform_id: Optional[str] = None, profile_name: Optional[str] = None) -> Dict[str, Any]:
+def build_manifest(
+    root: Path, platform_id: Optional[str] = None, profile_name: Optional[str] = None
+) -> Dict[str, Any]:
     flake_lock = root / "flake.lock"
     uv_lock = root / "uv.lock"
     pyproject = root / "pyproject.toml"
@@ -216,7 +225,9 @@ def build_manifest(root: Path, platform_id: Optional[str] = None, profile_name: 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Export PyEIDORS environment manifest")
-    parser.add_argument("--output", type=Path, required=True, help="Output manifest JSON path")
+    parser.add_argument(
+        "--output", type=Path, required=True, help="Output manifest JSON path"
+    )
     parser.add_argument(
         "--platform-id",
         type=str,
@@ -235,9 +246,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     args = parse_args()
     root = repo_root()
-    manifest = build_manifest(root, platform_id=args.platform_id, profile_name=args.profile)
+    manifest = build_manifest(
+        root, platform_id=args.platform_id, profile_name=args.profile
+    )
     args.output.parent.mkdir(parents=True, exist_ok=True)
-    args.output.write_text(json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    args.output.write_text(
+        json.dumps(manifest, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
+    )
     print(f"[env-manifest] wrote {args.output}")
 
 

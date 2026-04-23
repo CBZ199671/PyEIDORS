@@ -89,7 +89,9 @@ class TestDiskCacheStoreEdgeCases:
         assert len(entry) > 0
         # Corrupt the file
         with store._session() as conn:
-            row = conn.execute("SELECT file_path FROM cache_entries WHERE cache_key = ?", ("k1",)).fetchone()
+            row = conn.execute(
+                "SELECT file_path FROM cache_entries WHERE cache_key = ?", ("k1",)
+            ).fetchone()
         Path(row[0]).write_bytes(b"corrupted data")
         assert store.get_value("k1") is None
 

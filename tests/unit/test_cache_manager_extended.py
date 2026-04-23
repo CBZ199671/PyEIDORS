@@ -33,7 +33,9 @@ def test_cache_key_stable_for_semantically_equal_payload():
 
 
 def test_cache_manager_process_hit():
-    manager = CacheManager(scope="process", policy=CachePolicy(process_max_bytes=2 * 1024**2))
+    manager = CacheManager(
+        scope="process", policy=CachePolicy(process_max_bytes=2 * 1024**2)
+    )
     manager.clear(scope="process")
     calls = {"count": 0}
 
@@ -145,7 +147,9 @@ def test_cache_manager_off_scope_and_invalidation_paths(tmp_path: Path):
     assert calls["count"] == 1
     assert disabled.enabled is False
 
-    manager = CacheManager(scope="both", cache_dir=tmp_path / "cache-two", policy=CachePolicy())
+    manager = CacheManager(
+        scope="both", cache_dir=tmp_path / "cache-two", policy=CachePolicy()
+    )
     manager.get_or_compute(
         artifact="single_step_operator",
         payload={"alpha": 1},
@@ -249,7 +253,9 @@ def test_cache_manager_can_opt_into_persistent_disk_cache(tmp_path: Path):
     assert manager.cache_dir == cache_dir
 
 
-def test_cleanup_registered_session_caches_removes_effective_session_dir(tmp_path: Path, monkeypatch):
+def test_cleanup_registered_session_caches_removes_effective_session_dir(
+    tmp_path: Path, monkeypatch
+):
     from pyeidors.cache import cleanup_registered_session_caches
 
     for name in (
@@ -300,7 +306,9 @@ def test_cache_manager_prefers_shell_session_environment(tmp_path: Path, monkeyp
     assert session_dir.exists()
 
 
-def test_cache_manager_uses_shell_session_id_for_custom_root(tmp_path: Path, monkeypatch):
+def test_cache_manager_uses_shell_session_id_for_custom_root(
+    tmp_path: Path, monkeypatch
+):
     cleanup_registered_session_caches()
     default_root = tmp_path / "default-cache"
     custom_root = tmp_path / "custom-cache"
@@ -320,7 +328,11 @@ def test_cache_manager_uses_shell_session_id_for_custom_root(tmp_path: Path, mon
     assert manager.cache_dir == expected_dir
     assert expected_dir.exists()
     assert registry_path.exists()
-    entries = {line.strip() for line in registry_path.read_text(encoding="utf-8").splitlines() if line.strip()}
+    entries = {
+        line.strip()
+        for line in registry_path.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    }
     assert str(default_session_dir) in entries
     assert str(expected_dir) in entries
 

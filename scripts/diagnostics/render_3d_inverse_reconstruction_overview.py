@@ -53,6 +53,7 @@ from common.acceleration_profiles import (
     resolve_3d_mesh_contract,
 )
 from common.hdf5_outputs import DIAGNOSTICS_ARRAYS_SCHEMA, write_output_bundle
+
 DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo"
 
 
@@ -73,7 +74,12 @@ def _configure_times_new_roman() -> None:
     matplotlib.rcParams.update(
         {
             "font.family": "serif",
-            "font.serif": ["Times New Roman", "Times", "Liberation Serif", "DejaVu Serif"],
+            "font.serif": [
+                "Times New Roman",
+                "Times",
+                "Liberation Serif",
+                "DejaVu Serif",
+            ],
             "axes.unicode_minus": False,
             "svg.fonttype": "none",
         }
@@ -91,7 +97,9 @@ def _build_3d_phantom(
     image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
     sigma = np.asarray(image.elem_data, dtype=float).copy()
     coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
-    distances = np.linalg.norm(coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1)
+    distances = np.linalg.norm(
+        coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1
+    )
     sigma[distances <= float(radius)] = float(phantom_conductivity)
     return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
 
@@ -132,17 +140,25 @@ def _build_electrode_markers(
 ) -> np.ndarray:
     theta = np.linspace(0.0, 2.0 * math.pi, n_elec, endpoint=False)
     z_levels = (
-        z_center - 0.5 * height
-        + height * np.asarray(electrode_level_fractions, dtype=float)[
+        z_center
+        - 0.5 * height
+        + height
+        * np.asarray(electrode_level_fractions, dtype=float)[
             np.arange(n_elec, dtype=np.int32) % len(electrode_level_fractions)
         ]
     )
     return np.column_stack(
-        [radius * np.cos(theta), radius * np.sin(theta), np.asarray(z_levels, dtype=float)]
+        [
+            radius * np.cos(theta),
+            radius * np.sin(theta),
+            np.asarray(z_levels, dtype=float),
+        ]
     )
 
 
-def _choose_threshold(values: np.ndarray, *, baseline: float, truth_mode: bool) -> float:
+def _choose_threshold(
+    values: np.ndarray, *, baseline: float, truth_mode: bool
+) -> float:
     vmax = float(np.max(values))
     if truth_mode:
         return baseline + 0.55 * (vmax - baseline)
@@ -209,7 +225,9 @@ def _compute_regular_volume_payload(
     y_centers = np.linspace(-radius, radius, ny)
     z_centers = np.linspace(z_center - 0.5 * height, z_center + 0.5 * height, nz)
     Xc, Yc, Zc = np.meshgrid(x_centers, y_centers, z_centers, indexing="ij")
-    volume = griddata(coords, values, (Xc, Yc, Zc), method="linear", fill_value=float(np.min(values)))
+    volume = griddata(
+        coords, values, (Xc, Yc, Zc), method="linear", fill_value=float(np.min(values))
+    )
     if smooth_sigma > 0.0:
         volume = gaussian_filter(volume, sigma=smooth_sigma)
     radial_mask = (Xc**2 + Yc**2) <= (radius * 0.995) ** 2
@@ -321,7 +339,9 @@ def run_case(
     resolved_difference_preset = str(difference_preset).strip().lower()
     resolved_absolute_preset = str(absolute_preset).strip().lower()
     preset_name = (
-        resolved_difference_preset if resolved_inverse_mode == "difference" else resolved_absolute_preset
+        resolved_difference_preset
+        if resolved_inverse_mode == "difference"
+        else resolved_absolute_preset
     )
     resolved_level_fractions = normalize_electrode_level_fractions(
         electrode_level_fractions,
@@ -436,7 +456,11 @@ def run_case(
     coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()[:, :3]
 
     cond_rmse = float(np.sqrt(np.mean((recon_sigma - truth_sigma) ** 2)))
-    cond_corr = float(np.corrcoef(truth_sigma, recon_sigma)[0, 1]) if truth_sigma.size > 1 else float("nan")
+    cond_corr = (
+        float(np.corrcoef(truth_sigma, recon_sigma)[0, 1])
+        if truth_sigma.size > 1
+        else float("nan")
+    )
     pred_img = EITImage(elem_data=recon_sigma, fwd_model=system.fwd_model)
     pred_data = system.forward_solve(pred_img)
     vh = np.asarray(reference_data.meas, dtype=float).copy()
@@ -476,24 +500,38 @@ def run_case(
     volt_rmse = float(np.sqrt(np.mean((prediction_vector - measurement_vector) ** 2)))
     residual_l2 = float(np.linalg.norm(residual_vector))
     residual_max = float(np.max(np.abs(residual_vector)))
-    truth_threshold = _choose_threshold(truth_sigma, baseline=base_sigma, truth_mode=True)
-    recon_threshold = _choose_threshold(recon_sigma, baseline=base_sigma, truth_mode=False)
+    truth_threshold = _choose_threshold(
+        truth_sigma, baseline=base_sigma, truth_mode=True
+    )
+    recon_threshold = _choose_threshold(
+        recon_sigma, baseline=base_sigma, truth_mode=False
+    )
     truth_shape = _compute_shape_metrics(coords, truth_sigma, threshold=truth_threshold)
     recon_shape = _compute_shape_metrics(coords, recon_sigma, threshold=recon_threshold)
     target_mask = truth_sigma > (base_sigma + 0.5 * (target_sigma - base_sigma))
     background_mask = ~target_mask
-    target_mean = float(np.mean(recon_sigma[target_mask])) if np.any(target_mask) else float("nan")
+    target_mean = (
+        float(np.mean(recon_sigma[target_mask]))
+        if np.any(target_mask)
+        else float("nan")
+    )
     background_mean = (
-        float(np.mean(recon_sigma[background_mask])) if np.any(background_mask) else float("nan")
+        float(np.mean(recon_sigma[background_mask]))
+        if np.any(background_mask)
+        else float("nan")
     )
     peak_conductivity = float(np.max(recon_sigma))
-    contrast_recovery = float((target_mean - background_mean) / (target_sigma - base_sigma))
+    contrast_recovery = float(
+        (target_mean - background_mean) / (target_sigma - base_sigma)
+    )
     fig = None
     png_path = output_dir / "inverse_3d_overview.png"
     svg_path = output_dir / "inverse_3d_overview.svg"
     if render_plot:
         cmap = plt.get_cmap("turbo")
-        norm = mcolors.Normalize(vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma)))
+        norm = mcolors.Normalize(
+            vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma))
+        )
         grid_X, grid_Y, grid_Z, truth_volume = _build_regular_volume(
             coords=coords,
             values=truth_sigma,
@@ -517,7 +555,9 @@ def run_case(
         ax_truth = fig.add_subplot(1, 2, 1, projection="3d")
         ax_recon = fig.add_subplot(1, 2, 2, projection="3d")
 
-        wire_segments = _build_cylinder_wireframe(radius=radius, height=height, z_center=z_center)
+        wire_segments = _build_cylinder_wireframe(
+            radius=radius, height=height, z_center=z_center
+        )
         wire_color = (0.45, 0.45, 0.45, 0.38)
         for ax in (ax_truth, ax_recon):
             for seg in wire_segments:
@@ -572,8 +612,24 @@ def run_case(
         for ax in (ax_truth, ax_recon):
             _style_3d_axes(ax, radius=radius, height=height, z_center=z_center)
 
-        ax_truth.text2D(0.50, 0.97, "Truth", transform=ax_truth.transAxes, ha="center", va="top", fontsize=15)
-        ax_recon.text2D(0.50, 0.97, "Reconstruction", transform=ax_recon.transAxes, ha="center", va="top", fontsize=15)
+        ax_truth.text2D(
+            0.50,
+            0.97,
+            "Truth",
+            transform=ax_truth.transAxes,
+            ha="center",
+            va="top",
+            fontsize=15,
+        )
+        ax_recon.text2D(
+            0.50,
+            0.97,
+            "Reconstruction",
+            transform=ax_recon.transAxes,
+            ha="center",
+            va="top",
+            fontsize=15,
+        )
         fig.suptitle(
             f"{resolved_inverse_mode.capitalize()} / {preset_name}",
             fontsize=14,
@@ -681,7 +737,9 @@ def run_case(
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Render a full 3D inverse reconstruction overview")
+    parser = argparse.ArgumentParser(
+        description="Render a full 3D inverse reconstruction overview"
+    )
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("--refinement", type=int, default=1)
     parser.add_argument("--max-iterations", type=int, default=None)
@@ -692,8 +750,12 @@ def parse_args() -> argparse.Namespace:
         default=DEFAULT_ACCELERATION_PROFILE,
         help_suffix="Only affects this 3D workflow.",
     )
-    parser.add_argument("--inverse-mode", choices=["difference", "absolute"], default="difference")
-    parser.add_argument("--difference-mode", choices=["raw", "normalized"], default="normalized")
+    parser.add_argument(
+        "--inverse-mode", choices=["difference", "absolute"], default="difference"
+    )
+    parser.add_argument(
+        "--difference-mode", choices=["raw", "normalized"], default="normalized"
+    )
     parser.add_argument(
         "--difference-orientation",
         choices=["target_minus_reference", "reference_minus_target"],
@@ -750,7 +812,9 @@ def main() -> None:
         inverse_mode=args.inverse_mode,
         difference_mode=args.difference_mode,
         difference_orientation=args.difference_orientation,
-        electrode_level_fractions=_parse_level_fractions(args.electrode_level_fractions),
+        electrode_level_fractions=_parse_level_fractions(
+            args.electrode_level_fractions
+        ),
         difference_preset=args.difference_preset,
         absolute_preset=args.absolute_preset,
         hyperparameter=args.hyperparameter,
@@ -765,7 +829,9 @@ def main() -> None:
         print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.png'}")
         print(f"Saved figure to: {args.output_dir / 'inverse_3d_overview.svg'}")
     if not args.no_save_data:
-        print(f"Saved metrics to: {args.output_dir / 'inverse_3d_overview_metrics.json'}")
+        print(
+            f"Saved metrics to: {args.output_dir / 'inverse_3d_overview_metrics.json'}"
+        )
         print(f"Saved data to: {args.output_dir / 'inverse_3d_overview_data.h5'}")
 
 

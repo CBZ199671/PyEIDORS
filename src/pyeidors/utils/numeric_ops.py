@@ -23,7 +23,9 @@ def _finite_summary(values: np.ndarray) -> str:
 def _as_finite_array(value: Any, name: str) -> np.ndarray:
     array = np.asarray(value, dtype=float)
     if not np.isfinite(array).all():
-        raise FloatingPointError(f"{name} contains non-finite values: {_finite_summary(array)}")
+        raise FloatingPointError(
+            f"{name} contains non-finite values: {_finite_summary(array)}"
+        )
     return array
 
 

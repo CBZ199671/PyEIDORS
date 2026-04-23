@@ -52,8 +52,12 @@ class TotalVariationRegularization(BaseRegularization):
 
     def _reference_vector(self) -> np.ndarray:
         if np.isscalar(self.reference_conductivity):
-            return np.full(self.n_elements, float(self.reference_conductivity), dtype=np.float64)
-        reference = np.asarray(self.reference_conductivity, dtype=np.float64).reshape(-1)
+            return np.full(
+                self.n_elements, float(self.reference_conductivity), dtype=np.float64
+            )
+        reference = np.asarray(self.reference_conductivity, dtype=np.float64).reshape(
+            -1
+        )
         if reference.shape[0] != self.n_elements:
             raise ValueError(
                 "reference_conductivity must match the number of elements: "
@@ -123,7 +127,7 @@ class NOSERRegularization(BaseRegularization):
     def create_matrix(self):
         if self._baseline_diag is None:
             self._baseline_diag = self._compute_baseline_diag()
-        scaled_diag = self._baseline_diag ** self.exponent
+        scaled_diag = self._baseline_diag**self.exponent
         return diags(self.alpha * scaled_diag, offsets=0, format="csr")
 
 
@@ -156,4 +160,6 @@ def _cell_difference_operator(mesh, n_elements: int) -> csr_matrix:
     if row_idx == 0:
         return csr_matrix((0, n_elements), dtype=np.float64)
 
-    return csr_matrix((data, (rows, cols)), shape=(row_idx, n_elements), dtype=np.float64)
+    return csr_matrix(
+        (data, (rows, cols)), shape=(row_idx, n_elements), dtype=np.float64
+    )

@@ -8,7 +8,9 @@ import sys
 from typing import Mapping
 
 
-def run_python(code: str, *, env: Mapping[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_python(
+    code: str, *, env: Mapping[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     merged_env = _merge_env(env)
     return subprocess.run(
         [sys.executable, "-c", code],

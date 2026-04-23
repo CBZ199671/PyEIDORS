@@ -126,10 +126,7 @@ def _paint_shape(
                 & (np.abs(centers[:, 2] - cz) < rz)
             )
         else:
-            mask = (
-                (np.abs(centers[:, 0] - cx) < rx)
-                & (np.abs(centers[:, 1] - cy) < ry)
-            )
+            mask = (np.abs(centers[:, 0] - cx) < rx) & (np.abs(centers[:, 1] - cy) < ry)
         values[mask] = spec.conductivity
 
     else:
@@ -231,8 +228,12 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     )
 
     return {
-        "solver_mode": _auto(forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"),
-        "line_search_mode": _auto(forward_cfg.line_search_mode, "fast" if mesh_dim == 3 else "full"),
+        "solver_mode": _auto(
+            forward_cfg.solver_mode, "fast" if mesh_dim == 3 else "strict"
+        ),
+        "line_search_mode": _auto(
+            forward_cfg.line_search_mode, "fast" if mesh_dim == 3 else "full"
+        ),
         "linear_solver": _auto(forward_cfg.linear_solver, "auto"),
         "preconditioner": _auto(forward_cfg.preconditioner, "auto"),
         "fast_linear_path": _auto(forward_cfg.fast_linear_path, "auto"),
@@ -240,7 +241,9 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         "forward_solver_preset_requested": str(
             solver_policy["forward_solver_preset_requested"]
         ),
-        "forward_solver_policy_reason": str(solver_policy["forward_solver_policy_reason"]),
+        "forward_solver_policy_reason": str(
+            solver_policy["forward_solver_policy_reason"]
+        ),
         "forward_solver_policy_warning": str(
             solver_policy["forward_solver_policy_warning"]
         ),
@@ -284,7 +287,9 @@ def _forward_runtime_diagnostics(system: Any) -> dict[str, Any]:
         "forward_backend_effective": str(
             backend_diag.get(
                 "forward_backend_effective",
-                getattr(fwd_model, "forward_backend", "") if fwd_model is not None else "",
+                getattr(fwd_model, "forward_backend", "")
+                if fwd_model is not None
+                else "",
             )
         ),
         "solver_preset": str(backend_diag.get("solver_preset", "")),
@@ -414,9 +419,13 @@ class _ForwardSolverWorker(QObject):
             self.progress.emit("Building conductivity distribution...")
             fwd = system.fwd_model
             centers = cell_midpoints(fwd.mesh)
-            sigma = np.full(len(centers), forward_cfg.background_conductivity, dtype=np.float64)
+            sigma = np.full(
+                len(centers), forward_cfg.background_conductivity, dtype=np.float64
+            )
             for spec in req.inhomogeneities:
-                _paint_shape(sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension)
+                _paint_shape(
+                    sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension
+                )
 
             self.progress.emit("Running forward solve...")
             data = system.forward_solve(sigma)
@@ -436,10 +445,8 @@ class _ForwardSolverWorker(QObject):
 
             # Extract mesh geometry
             mesh = system.mesh
-            node_coords = mesh.geometry.x[:, :forward_cfg.mesh_dimension].copy()
-            cells = mesh.topology.connectivity(
-                mesh.topology.dim, 0
-            )
+            node_coords = mesh.geometry.x[:, : forward_cfg.mesh_dimension].copy()
+            cells = mesh.topology.connectivity(mesh.topology.dim, 0)
             n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
             cell_connectivity = np.array(
                 [cells.links(i) for i in range(n_cells)], dtype=np.int32
@@ -466,15 +473,17 @@ class _ForwardSolverWorker(QObject):
         except Exception as exc:
             log.exception("Forward solver failed")
             self.error.emit(str(exc))
-            self.finished.emit(ForwardSolverResult(
-                boundary_voltages=np.array([]),
-                ground_truth_conductivity=np.array([]),
-                node_coords=np.array([]),
-                cell_connectivity=np.array([]),
-                n_elements=0,
-                n_measurements=0,
-                error_msg=str(exc),
-            ))
+            self.finished.emit(
+                ForwardSolverResult(
+                    boundary_voltages=np.array([]),
+                    ground_truth_conductivity=np.array([]),
+                    node_coords=np.array([]),
+                    cell_connectivity=np.array([]),
+                    n_elements=0,
+                    n_measurements=0,
+                    error_msg=str(exc),
+                )
+            )
 
 
 class ForwardSolverController(QObject):

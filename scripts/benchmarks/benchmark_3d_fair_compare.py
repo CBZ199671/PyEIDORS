@@ -64,13 +64,17 @@ def _parse_args() -> argparse.Namespace:
         help="Comma-separated refinement levels for full mode.",
     )
     parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
-    parser.add_argument("--cache-root", type=Path, default=Path(".pyeidors_cache") / "fair_compare")
+    parser.add_argument(
+        "--cache-root", type=Path, default=Path(".pyeidors_cache") / "fair_compare"
+    )
     add_acceleration_profile_argument(
         parser,
         default=DEFAULT_ACCELERATION_PROFILE,
         help_suffix="Forwarded to benchmark_3d_runtime.py for both quick and full phases.",
     )
-    parser.add_argument("--cholmod-max-memory-gib", type=float, default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB)
+    parser.add_argument(
+        "--cholmod-max-memory-gib", type=float, default=DEFAULT_CHOLMOD_MAX_MEMORY_GIB
+    )
     parser.add_argument(
         "--benchmark-quick-threshold-total",
         type=float,
@@ -221,7 +225,9 @@ def _run_runtime_report(
     return json.loads(output_json.read_text(encoding="utf-8"))
 
 
-def _extract_metrics(diff_payload: dict[str, Any] | None, absolute_payload: dict[str, Any] | None) -> dict[str, Any]:
+def _extract_metrics(
+    diff_payload: dict[str, Any] | None, absolute_payload: dict[str, Any] | None
+) -> dict[str, Any]:
     diff_payload = diff_payload or {}
     absolute_payload = absolute_payload or {}
 
@@ -230,17 +236,25 @@ def _extract_metrics(diff_payload: dict[str, Any] | None, absolute_payload: dict
     diff_cold = _sum_numeric(diff_cache.get("cold_build"))
     diff_warm = _sum_numeric(diff_cache.get("warm_build"))
     if diff_cold <= 0:
-        diff_cold = _safe_float(diff_stage.get("diff_context_cold", {}).get("elapsed_sec"), 0.0)
+        diff_cold = _safe_float(
+            diff_stage.get("diff_context_cold", {}).get("elapsed_sec"), 0.0
+        )
     if diff_warm <= 0:
-        diff_warm = _safe_float(diff_stage.get("diff_context_warm", {}).get("elapsed_sec"), 0.0)
+        diff_warm = _safe_float(
+            diff_stage.get("diff_context_warm", {}).get("elapsed_sec"), 0.0
+        )
 
     abs_stage = _stage_map(absolute_payload)
     abs_breakdown = absolute_payload.get("stage_breakdown", {}).get("absolute", {})
     abs_solver = absolute_payload.get("absolute_solver", {})
     mesh_info = absolute_payload.get("mesh_info", {})
 
-    absolute_total = _safe_float(abs_stage.get("absolute_reconstruct", {}).get("elapsed_sec"), 0.0)
-    absolute_peak = _safe_float(abs_stage.get("absolute_reconstruct", {}).get("peak_mib"), 0.0)
+    absolute_total = _safe_float(
+        abs_stage.get("absolute_reconstruct", {}).get("elapsed_sec"), 0.0
+    )
+    absolute_peak = _safe_float(
+        abs_stage.get("absolute_reconstruct", {}).get("peak_mib"), 0.0
+    )
     absolute_linear = _safe_float(abs_breakdown.get("linear_solve"), 0.0)
     absolute_jacobian = _safe_float(abs_breakdown.get("jacobian"), 0.0)
     jacobian_assembly_only = _safe_float(
@@ -259,7 +273,9 @@ def _extract_metrics(diff_payload: dict[str, Any] | None, absolute_payload: dict
     return {
         "diff_context_cold_sec": float(diff_cold),
         "diff_context_warm_sec": float(diff_warm),
-        "diff_warm_cold_ratio": float(diff_cold / max(diff_warm, 1e-12)) if diff_cold > 0 else 0.0,
+        "diff_warm_cold_ratio": float(diff_cold / max(diff_warm, 1e-12))
+        if diff_cold > 0
+        else 0.0,
         "absolute_total_sec": float(absolute_total),
         "absolute_linear_sec": float(absolute_linear),
         "absolute_jacobian_sec": float(absolute_jacobian),
@@ -273,15 +289,21 @@ def _extract_metrics(diff_payload: dict[str, Any] | None, absolute_payload: dict
         "mesh_potential_dofs": int(mesh_info.get("potential_dofs", 0) or 0),
         "mesh_sigma_dofs": int(mesh_info.get("sigma_dofs", 0) or 0),
         "fast_solver_path": fast_solver_path,
-        "fast_linear_path_selected": str(abs_solver.get("fast_linear_path_selected", "") or ""),
-        "fast_linear_path_reason": str(abs_solver.get("fast_linear_path_reason", "") or ""),
+        "fast_linear_path_selected": str(
+            abs_solver.get("fast_linear_path_selected", "") or ""
+        ),
+        "fast_linear_path_reason": str(
+            abs_solver.get("fast_linear_path_reason", "") or ""
+        ),
         "fallback_reason": fallback_reason,
         "cholmod_path_used": "cholmod" in fast_solver_path.lower(),
         "rom_enabled_effective": bool(abs_solver.get("rom_enabled_effective", False)),
         "rom_rank_effective": rom_rank_effective,
         "lowrank_rank_effective": lowrank_rank_effective,
         "degrade_stage_counts": abs_solver.get("degrade_stage_counts", {}),
-        "effective_solver_path_counts": abs_solver.get("effective_solver_path_counts", {}),
+        "effective_solver_path_counts": abs_solver.get(
+            "effective_solver_path_counts", {}
+        ),
     }
 
 
@@ -395,7 +417,9 @@ def _render_markdown(payload: dict[str, Any]) -> str:
     if phase == "quick":
         eval_block = payload.get("quick_eval", {})
         lines.append(f"- Quick pass: {bool(payload.get('quick_pass', False))}")
-        lines.append(f"- Primary profile: {payload.get('primary_profile', PRIMARY_PERF_PROFILE)}")
+        lines.append(
+            f"- Primary profile: {payload.get('primary_profile', PRIMARY_PERF_PROFILE)}"
+        )
         lines.append(
             f"- Quick deltas: total={float(eval_block.get('total_improvement_ratio', 0.0)):.4f}, "
             f"linear={float(eval_block.get('linear_improvement_ratio', 0.0)):.4f}, "
@@ -403,7 +427,10 @@ def _render_markdown(payload: dict[str, Any]) -> str:
         )
     lines.append("")
 
-    experimental_profiles = {str(name) for name in payload.get("experimental_profiles", EXPERIMENTAL_PERF_PROFILES)}
+    experimental_profiles = {
+        str(name)
+        for name in payload.get("experimental_profiles", EXPERIMENTAL_PERF_PROFILES)
+    }
     for ref_key in sorted(payload["results"].keys()):
         block = payload["results"][ref_key]
         lines.append(f"## {ref_key}")
@@ -419,7 +446,13 @@ def _render_markdown(payload: dict[str, Any]) -> str:
                 "| "
                 + " | ".join(
                     [
-                        profile_name + (" (experimental)" if profile_name in experimental_profiles or is_experimental_profile(profile_name) else ""),
+                        profile_name
+                        + (
+                            " (experimental)"
+                            if profile_name in experimental_profiles
+                            or is_experimental_profile(profile_name)
+                            else ""
+                        ),
                         f"{median['diff_context_cold_sec']:.4f}",
                         f"{median['diff_context_warm_sec']:.4f}",
                         f"{median['diff_warm_cold_ratio']:.2f}",
@@ -486,7 +519,12 @@ def _run_profiles(
                 diff_payload = _run_runtime_report(
                     benchmark_script,
                     output_json=diff_json,
-                    cache_dir=cache_root / "cache" / f"ref_{refinement}" / profile_name / "diff" / f"run_{run_index:02d}",
+                    cache_dir=cache_root
+                    / "cache"
+                    / f"ref_{refinement}"
+                    / profile_name
+                    / "diff"
+                    / f"run_{run_index:02d}",
                     mesh_dir=mesh_dir,
                     refinement=refinement,
                     profile_label=f"{profile_name}-diff",
@@ -498,9 +536,13 @@ def _run_profiles(
                     rom_rank_global=int(profile_cfg.get("rom_rank_global", 32)),
                     rom_rank_adaptive=int(profile_cfg.get("rom_rank_adaptive", 16)),
                     rom_refresh_every=int(profile_cfg.get("rom_refresh_every", 2)),
-                    rom_snapshot_source=str(profile_cfg.get("rom_snapshot_source", "hybrid")),
+                    rom_snapshot_source=str(
+                        profile_cfg.get("rom_snapshot_source", "hybrid")
+                    ),
                     inexact_mode=str(profile_cfg.get("inexact_mode", "off")),
-                    inexact_forcing=str(profile_cfg.get("inexact_forcing", "eisenstat-walker")),
+                    inexact_forcing=str(
+                        profile_cfg.get("inexact_forcing", "eisenstat-walker")
+                    ),
                     inexact_eta0=float(profile_cfg.get("inexact_eta0", 0.2)),
                     inexact_eta_min=float(profile_cfg.get("inexact_eta_min", 1e-3)),
                     inexact_eta_max=float(profile_cfg.get("inexact_eta_max", 0.5)),
@@ -510,7 +552,9 @@ def _run_profiles(
                     lowrank_energy=float(profile_cfg.get("lowrank_energy", 0.995)),
                     cholmod_max_n=int(profile_cfg["cholmod_max_n"]),
                     cholmod_max_memory_gib=float(profile_cfg["cholmod_max_memory_gib"]),
-                    absolute_startup_cache=str(profile_cfg.get("absolute_startup_cache", "off")),
+                    absolute_startup_cache=str(
+                        profile_cfg.get("absolute_startup_cache", "off")
+                    ),
                     run_diff="on",
                     run_absolute="off",
                     acceleration_profile=str(args.acceleration_profile),
@@ -547,9 +591,13 @@ def _run_profiles(
                     rom_rank_global=int(profile_cfg.get("rom_rank_global", 32)),
                     rom_rank_adaptive=int(profile_cfg.get("rom_rank_adaptive", 16)),
                     rom_refresh_every=int(profile_cfg.get("rom_refresh_every", 2)),
-                    rom_snapshot_source=str(profile_cfg.get("rom_snapshot_source", "hybrid")),
+                    rom_snapshot_source=str(
+                        profile_cfg.get("rom_snapshot_source", "hybrid")
+                    ),
                     inexact_mode=str(profile_cfg.get("inexact_mode", "off")),
-                    inexact_forcing=str(profile_cfg.get("inexact_forcing", "eisenstat-walker")),
+                    inexact_forcing=str(
+                        profile_cfg.get("inexact_forcing", "eisenstat-walker")
+                    ),
                     inexact_eta0=float(profile_cfg.get("inexact_eta0", 0.2)),
                     inexact_eta_min=float(profile_cfg.get("inexact_eta_min", 1e-3)),
                     inexact_eta_max=float(profile_cfg.get("inexact_eta_max", 0.5)),
@@ -559,7 +607,9 @@ def _run_profiles(
                     lowrank_energy=float(profile_cfg.get("lowrank_energy", 0.995)),
                     cholmod_max_n=int(profile_cfg["cholmod_max_n"]),
                     cholmod_max_memory_gib=float(profile_cfg["cholmod_max_memory_gib"]),
-                    absolute_startup_cache=str(profile_cfg.get("absolute_startup_cache", "off")),
+                    absolute_startup_cache=str(
+                        profile_cfg.get("absolute_startup_cache", "off")
+                    ),
                     run_diff="off",
                     run_absolute="on",
                     acceleration_profile=str(args.acceleration_profile),
@@ -593,7 +643,10 @@ def _run_profiles(
                 [str(run["metrics"]["fast_solver_path"]) for run in run_records]
             )[len(run_records) // 2],
             "fast_linear_path_selected": sorted(
-                [str(run["metrics"]["fast_linear_path_selected"]) for run in run_records]
+                [
+                    str(run["metrics"]["fast_linear_path_selected"])
+                    for run in run_records
+                ]
             )[len(run_records) // 2],
             "fast_linear_path_reason": sorted(
                 [str(run["metrics"]["fast_linear_path_reason"]) for run in run_records]
@@ -605,13 +658,20 @@ def _run_profiles(
                 bool(run["metrics"]["cholmod_path_used"]) for run in run_records
             ),
             "rom_enabled_effective": any(
-                bool(run["metrics"].get("rom_enabled_effective", False)) for run in run_records
+                bool(run["metrics"].get("rom_enabled_effective", False))
+                for run in run_records
             ),
             "rom_rank_effective": int(
-                max(float(run["metrics"].get("rom_rank_effective", 0)) for run in run_records)
+                max(
+                    float(run["metrics"].get("rom_rank_effective", 0))
+                    for run in run_records
+                )
             ),
             "lowrank_rank_effective": int(
-                max(float(run["metrics"].get("lowrank_rank_effective", 0)) for run in run_records)
+                max(
+                    float(run["metrics"].get("lowrank_rank_effective", 0))
+                    for run in run_records
+                )
             ),
             "degrade_stage_counts": {
                 k: sum(
@@ -664,13 +724,15 @@ def main() -> None:
 
         a = ref_profiles[PROFILE_A_BASELINE]["median"]
         d = ref_profiles[PROFILE_D_COMBINED]["median"]
-        total_improvement = (float(a["absolute_total_sec"]) - float(d["absolute_total_sec"])) / max(
-            float(a["absolute_total_sec"]), 1e-12
-        )
-        linear_improvement = (float(a["absolute_linear_sec"]) - float(d["absolute_linear_sec"])) / max(
-            float(a["absolute_linear_sec"]), 1e-12
-        )
-        peak_delta = (float(d["absolute_peak_mib"]) - float(a["absolute_peak_mib"])) / max(
+        total_improvement = (
+            float(a["absolute_total_sec"]) - float(d["absolute_total_sec"])
+        ) / max(float(a["absolute_total_sec"]), 1e-12)
+        linear_improvement = (
+            float(a["absolute_linear_sec"]) - float(d["absolute_linear_sec"])
+        ) / max(float(a["absolute_linear_sec"]), 1e-12)
+        peak_delta = (
+            float(d["absolute_peak_mib"]) - float(a["absolute_peak_mib"])
+        ) / max(
             float(a["absolute_peak_mib"]),
             1e-12,
         )

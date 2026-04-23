@@ -27,8 +27,12 @@ if str(REPO_ROOT) not in sys.path:
 
 from scripts.common.hdf5_outputs import read_output_bundle
 
-DEFAULT_INPUT = REPO_ROOT / "results" / "figures_3d_inverse_demo" / "inverse_3d_overview_data.h5"
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo" / "pyvista_html_test"
+DEFAULT_INPUT = (
+    REPO_ROOT / "results" / "figures_3d_inverse_demo" / "inverse_3d_overview_data.h5"
+)
+DEFAULT_OUTPUT_DIR = (
+    REPO_ROOT / "results" / "figures_3d_inverse_demo" / "pyvista_html_test"
+)
 
 
 def build_volume(
@@ -45,7 +49,9 @@ def build_volume(
     ys = np.linspace(mins[1], maxs[1], ny)
     zs = np.linspace(mins[2], maxs[2], nz)
     X, Y, Z = np.meshgrid(xs, ys, zs, indexing="ij")
-    interp = griddata(coords, values, (X, Y, Z), method="linear", fill_value=float(np.min(values)))
+    interp = griddata(
+        coords, values, (X, Y, Z), method="linear", fill_value=float(np.min(values))
+    )
     interp = gaussian_filter(interp, sigma=smooth_sigma)
 
     spacing = (
@@ -115,8 +121,12 @@ def add_cylinder_outline(plotter: pv.Plotter, bounds: dict[str, float]) -> None:
     )
     radius = 0.5 * max(bounds["xmax"] - bounds["xmin"], bounds["ymax"] - bounds["ymin"])
     height = bounds["zmax"] - bounds["zmin"]
-    cyl = pv.Cylinder(center=center, direction=(0, 0, 1), radius=radius, height=height, resolution=80)
-    plotter.add_mesh(cyl.extract_feature_edges(), color="black", line_width=1.0, opacity=0.18)
+    cyl = pv.Cylinder(
+        center=center, direction=(0, 0, 1), radius=radius, height=height, resolution=80
+    )
+    plotter.add_mesh(
+        cyl.extract_feature_edges(), color="black", line_width=1.0, opacity=0.18
+    )
 
 
 def build_scene_html(package_path: Path, output_dir: Path) -> dict[str, str]:
@@ -134,7 +144,9 @@ def build_scene_html(package_path: Path, output_dir: Path) -> dict[str, str]:
         float(np.percentile(recon, 97.5)),
     )
 
-    plotter = pv.Plotter(shape=(1, 2), notebook=False, off_screen=True, window_size=(1600, 760))
+    plotter = pv.Plotter(
+        shape=(1, 2), notebook=False, off_screen=True, window_size=(1600, 760)
+    )
     plotter.set_background("white")
 
     plotter.subplot(0, 0)
@@ -179,7 +191,11 @@ def build_scene_html(package_path: Path, output_dir: Path) -> dict[str, str]:
 def build_smoke_html(output_dir: Path) -> dict[str, str]:
     plotter = pv.Plotter(notebook=False, off_screen=True, window_size=(900, 700))
     plotter.set_background("white")
-    plotter.add_mesh(pv.Sphere(radius=0.45, theta_resolution=48, phi_resolution=48), color="tomato", smooth_shading=True)
+    plotter.add_mesh(
+        pv.Sphere(radius=0.45, theta_resolution=48, phi_resolution=48),
+        color="tomato",
+        smooth_shading=True,
+    )
     plotter.view_isometric()
     output_dir.mkdir(parents=True, exist_ok=True)
     html_path = output_dir / "smoke_test.html"

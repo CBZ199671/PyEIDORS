@@ -42,11 +42,18 @@ def _build_square_eit_mesh(side_length: float):
     t[right] = 2.0 + (ymax - y[right]) / (ymax - ymin)
     t[bottom] = 3.0 + (xmax - x[bottom]) / (xmax - xmin)
     seg = 4.0 / 16
-    tags = (np.floor(np.clip(t, 0.0, 4.0 - 1e-12) / seg).astype(np.int32) + 2).astype(np.int32)
+    tags = (np.floor(np.clip(t, 0.0, 4.0 - 1e-12) / seg).astype(np.int32) + 2).astype(
+        np.int32
+    )
     order = np.argsort(boundary_facets)
     facet_tags = dmesh.meshtags(mesh, fdim, boundary_facets[order], tags[order])
     association = {f"electrode_{i + 1}": i + 2 for i in range(16)}
-    return build_eit_mesh(mesh, facet_tags=facet_tags, association_table=association, radius=float(side_length))
+    return build_eit_mesh(
+        mesh,
+        facet_tags=facet_tags,
+        association_table=association,
+        radius=float(side_length),
+    )
 
 
 def _solve_voltage(side_length: float, geometry_scale_to_m: float) -> np.ndarray:
@@ -63,7 +70,9 @@ def _solve_voltage(side_length: float, geometry_scale_to_m: float) -> np.ndarray
     )
     z = np.full(16, 1e-5, dtype=float)
     model = EITForwardModel(n_elec=16, pattern_config=config, z=z, mesh=mesh)
-    n_elem = int(model.V_sigma.dofmap.index_map.size_local * model.V_sigma.dofmap.index_map_bs)
+    n_elem = int(
+        model.V_sigma.dofmap.index_map.size_local * model.V_sigma.dofmap.index_map_bs
+    )
     sigma = np.ones(n_elem, dtype=float)
     data, _ = model.fwd_solve(EITImage(elem_data=sigma, fwd_model=model))
     return np.asarray(data.meas, dtype=float)
