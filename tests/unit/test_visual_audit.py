@@ -37,8 +37,6 @@ def test_visual_audit_manifest_covers_t24_history_tasks() -> None:
         "T14",
         "T15",
         "T17",
-        "T18",
-        "T21",
     }
     assert all(experiment.required_visual_keys for experiment in manifest)
 
@@ -57,23 +55,17 @@ def test_visual_audit_marks_missing_required_visuals_as_smoke(tmp_path) -> None:
     assert "point_audit" in t13.missing_required_visuals
 
 
-def test_run_visual_audit_writes_index_and_t21_trusted_row(tmp_path) -> None:
-    for name in [
-        "eit_holdout_voltage_points_16e.png",
-        "eit_holdout_fit_curves_16e.png",
-        "eit_holdout_recon_compare_16e.png",
-        "eit_holdout_fit_diff_16e.png",
-    ]:
-        _write_tiny_png(tmp_path / name)
-    (tmp_path / "eit_holdout_structure_metrics_16e.csv").write_text(
-        "recon_kind,sigma_relative_rmse\nfull_208,0.1\n",
+def test_run_visual_audit_writes_index_without_removed_square_tasks(tmp_path) -> None:
+    _write_tiny_png(tmp_path / "eit_factor_sweep_16e.png")
+    (tmp_path / "eit_factor_sweep_16e.csv").write_text(
+        "sweep,changed_factor,level\nsingle_factor,ridge,0.01\n",
         encoding="utf-8",
     )
 
     run = run_visual_audit(
         output_dir=tmp_path,
         audit_output_dir=tmp_path / "audit",
-        slugs=["t21_holdout_fit"],
+        slugs=["t15_factor_sweep"],
         dpi=70,
     )
 
@@ -85,23 +77,15 @@ def test_run_visual_audit_writes_index_and_t21_trusted_row(tmp_path) -> None:
     assert run.experiment_plot_paths[0].read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
     with run.csv_path.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))
-    assert rows[0]["task_id"] == "T21"
-    assert rows[0]["audit_status"] == "trusted/audited"
-    assert rows[0]["missing_required_visuals"] == ""
+    assert rows[0]["task_id"] == "T15"
+    assert rows[0]["audit_status"] == "untrusted/smoke"
+    assert rows[0]["missing_required_visuals"] == "field_map"
 
 
 def test_eit_visual_audit_index_cli_writes_outputs(tmp_path) -> None:
-    _write_tiny_png(tmp_path / "eit_grid_error_fields_16e.png")
-    (tmp_path / "eit_grid_error_summary_16e.csv").write_text(
-        "fem_grid,sigma_relative_rmse\n4,0.1\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "eit_grid_error_fields_16e.csv").write_text(
-        "fem_grid,cell_index,sigma_true,sigma_recon,sigma_error\n4,0,1,1,0\n",
-        encoding="utf-8",
-    )
-    (tmp_path / "eit_grid_error_fields_16e.md").write_text(
-        "# grid report\n",
+    _write_tiny_png(tmp_path / "eit_voltage_digit_sweep_16e.png")
+    (tmp_path / "eit_voltage_digit_sweep_16e.csv").write_text(
+        "target_voltage_digits,sigma_relative_rmse\n5,0.1\n",
         encoding="utf-8",
     )
 
@@ -115,7 +99,7 @@ def test_eit_visual_audit_index_cli_writes_outputs(tmp_path) -> None:
             "--audit-output-dir",
             str(audit_dir),
             "--experiments",
-            "t18_grid_error_fields",
+            "t14_voltage_digits",
             "--dpi",
             "70",
         ],
@@ -125,7 +109,7 @@ def test_eit_visual_audit_index_cli_writes_outputs(tmp_path) -> None:
         capture_output=True,
     )
 
-    assert "t18_grid_error_fields" in completed.stdout
-    assert "trusted/audited" in completed.stdout
+    assert "t14_voltage_digits" in completed.stdout
+    assert "untrusted/smoke" in completed.stdout
     assert (audit_dir / "eit_visual_audit_index.csv").exists()
-    assert (audit_dir / "eit_visual_audit_t18_grid_error_fields.png").exists()
+    assert (audit_dir / "eit_visual_audit_t14_voltage_digits.png").exists()

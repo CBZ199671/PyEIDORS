@@ -828,10 +828,8 @@ def plot_bucket_dense_summary(
     output_path: Path,
     *,
     coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
-    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
-    coarse_structure_csv: Path | None = Path(
-        "outputs/eit_holdout_structure_metrics_16e.csv"
-    ),
+    coarse_holdout_csv: Path | None = None,
+    coarse_structure_csv: Path | None = None,
     dpi: int = 200,
 ) -> Path:
     """Plot dense-bucket metrics against available coarse-grid references."""
@@ -955,7 +953,7 @@ def format_bucket_dense_report(
     case: BucketDenseExperimentCase,
     *,
     coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
-    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
+    coarse_holdout_csv: Path | None = None,
 ) -> str:
     """Format a Chinese dense-bucket comparison report."""
 
@@ -1011,10 +1009,8 @@ def write_bucket_dense_outputs(
     curve_plot_output: Path,
     holdout_summary_plot_output: Path,
     coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
-    coarse_holdout_csv: Path | None = Path("outputs/eit_holdout_fit_diff_16e.csv"),
-    coarse_structure_csv: Path | None = Path(
-        "outputs/eit_holdout_structure_metrics_16e.csv"
-    ),
+    coarse_holdout_csv: Path | None = None,
+    coarse_structure_csv: Path | None = None,
     dpi: int = 200,
 ) -> dict[str, Path]:
     """Write all T23 dense-bucket CSV, report, and visual outputs."""

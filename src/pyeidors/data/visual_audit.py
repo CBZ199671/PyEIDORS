@@ -229,88 +229,6 @@ def default_visual_audit_manifest() -> tuple[VisualAuditExperiment, ...]:
                 "field audit per changed factor; keep as smoke."
             ),
         ),
-        VisualAuditExperiment(
-            task_id="T18",
-            slug="t18_grid_error_fields",
-            title="T18 grid error fields",
-            claim_scope="Grid-level sigma_true/sigma_recon/error field localization.",
-            artifacts=(
-                VisualAuditArtifact(
-                    "summary_csv",
-                    "eit_grid_error_summary_16e.csv",
-                    "csv",
-                    "grid summary CSV",
-                ),
-                VisualAuditArtifact(
-                    "field_csv",
-                    "eit_grid_error_fields_16e.csv",
-                    "csv",
-                    "grid field CSV",
-                ),
-                VisualAuditArtifact(
-                    "report_md",
-                    "eit_grid_error_fields_16e.md",
-                    "md",
-                    "grid field report",
-                ),
-                VisualAuditArtifact(
-                    "field_map",
-                    "eit_grid_error_fields_16e.png",
-                    "plot",
-                    "truth/recon/error fields",
-                ),
-            ),
-            required_visual_keys=("field_map",),
-            trusted_note=(
-                "Has sigma_true/sigma_recon/sigma_error visual field audit. "
-                "Still square-domain/coarse-grid, not dense-bucket physics."
-            ),
-            smoke_note="Missing grid field map; cannot support field-shape conclusions.",
-        ),
-        VisualAuditExperiment(
-            task_id="T21",
-            slug="t21_holdout_fit",
-            title="T21 holdout fit comparison",
-            claim_scope="256->208->160 point audit, raw 160, fitted 208, structure metrics.",
-            artifacts=(
-                VisualAuditArtifact(
-                    "point_audit",
-                    "eit_holdout_voltage_points_16e.png",
-                    "plot",
-                    "point deletion audit",
-                ),
-                VisualAuditArtifact(
-                    "fit_curves",
-                    "eit_holdout_fit_curves_16e.png",
-                    "plot",
-                    "13-point U curves",
-                ),
-                VisualAuditArtifact(
-                    "recon_compare",
-                    "eit_holdout_recon_compare_16e.png",
-                    "plot",
-                    "truth/recon/error compare",
-                ),
-                VisualAuditArtifact(
-                    "summary_plot",
-                    "eit_holdout_fit_diff_16e.png",
-                    "plot",
-                    "metric summary plot",
-                ),
-                VisualAuditArtifact(
-                    "structure_csv",
-                    "eit_holdout_structure_metrics_16e.csv",
-                    "csv",
-                    "structure metrics CSV",
-                ),
-            ),
-            required_visual_keys=("point_audit", "fit_curves", "recon_compare"),
-            trusted_note=(
-                "Has point deletion, U-curve fit, reconstruction/error, and "
-                "structure-metric audit."
-            ),
-            smoke_note="Missing one or more holdout visual audit panels.",
-        ),
     )
 
 
@@ -439,7 +357,7 @@ def format_visual_audit_markdown(rows: Iterable[VisualAuditRow]) -> str:
             f"- visual-audited：{', '.join(row.task_id for row in trusted) or '-'}。",
             f"- untrusted/smoke：{', '.join(row.task_id for row in smoke) or '-'}。",
             "- T13/T14/T15/T17 的旧结论若缺真值/重建/误差或点位审计图，均只能作为筛查线索。",
-            "- T18/T21 有可视化审计，但 T18 仍是旧方形/粗网格语境；密集圆桶结论应看 T23。",
+            "- 粗方形历史实验已移除；密集圆桶结论应看 T23。",
             "",
             "## 审计图",
             "",

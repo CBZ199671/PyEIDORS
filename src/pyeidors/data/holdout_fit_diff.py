@@ -74,7 +74,7 @@ STRUCTURE_FIELDS = [
 
 @dataclass(frozen=True)
 class HoldoutFitDiffSummary:
-    """One reconstruction-method summary row for T21."""
+    """One reconstruction-method summary row for holdout comparison."""
 
     recon_method: str
     n_inverse_points: int
@@ -204,7 +204,7 @@ class HoldoutFitFrameCurve:
 
 @dataclass(frozen=True)
 class HoldoutFitDiffCase:
-    """Full T21 result bundle."""
+    """Full holdout-comparison result bundle."""
 
     model: EITLinearizedModel
     point_rows: list[HoldoutPointAuditRow]
@@ -689,7 +689,7 @@ def run_holdout_fit_diff(
     rm_form: str = "param",
     noser_exponent: float = 0.5,
 ) -> HoldoutFitDiffCase:
-    """Run full 208, raw 160, and fitted 208 reconstructions for T21."""
+    """Run full 208, raw 160, and fitted 208 holdout reconstructions."""
 
     n_elec = int(model.n_elec or 16)
     point_rows, point_summary = build_holdout_point_audit(
@@ -897,7 +897,7 @@ def populate_point_rows_with_voltages(
 
 
 def format_holdout_fit_report(case: HoldoutFitDiffCase) -> str:
-    """Format a Chinese summary report for the T21 holdout comparison."""
+    """Format a Chinese summary report for holdout comparison."""
 
     rows = sorted(
         case.summaries,
@@ -925,7 +925,7 @@ def format_holdout_fit_report(case: HoldoutFitDiffCase) -> str:
                 harmful.append(row.recon_method)
 
     lines = [
-        "# T21 远端 3 点扣除与拟合补点差分仿真报告",
+        "# 远端 3 点扣除与拟合补点差分仿真报告",
         "",
         "## 方法排序",
         "",
@@ -1126,7 +1126,7 @@ def plot_holdout_recon_compare(
         squeeze=False,
         constrained_layout=True,
     )
-    fig.suptitle("T21 recon compare")
+    fig.suptitle("Holdout recon compare")
     for col_idx, (label, values) in enumerate(fields):
         ax = axes[0, col_idx]
         image = _draw_field(
@@ -1190,7 +1190,7 @@ def plot_holdout_fit_summary(
     labels = [row.recon_method for row in rows]
     x = np.arange(len(rows), dtype=float)
     fig, axes = plt.subplots(2, 1, figsize=(9.5, 6.8), constrained_layout=True)
-    fig.suptitle("T21 holdout reconstruction summary")
+    fig.suptitle("Holdout reconstruction summary")
     axes[0].bar(x, [row.delta_sigma_relative_rmse for row in rows], color="#1f77b4")
     axes[0].axhline(0.0, color="#444444", linewidth=0.8)
     axes[0].set_ylabel("Delta relative RMSE")
@@ -1211,7 +1211,7 @@ def write_holdout_point_audit_plot(
     *,
     dpi: int = 200,
 ) -> Path:
-    """Wrapper that renders the point audit plot from the T21 case."""
+    """Wrapper that renders the point audit plot from a holdout case."""
 
     return plot_holdout_point_audit(
         case.point_rows,

@@ -167,12 +167,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--coarse-holdout-csv",
         type=_parse_optional_path,
-        default=Path("outputs/eit_holdout_fit_diff_16e.csv"),
+        default=None,
+        help="Optional coarse holdout CSV. Defaults to none because square-grid holdout experiments were removed.",
     )
     parser.add_argument(
         "--coarse-structure-csv",
         type=_parse_optional_path,
-        default=Path("outputs/eit_holdout_structure_metrics_16e.csv"),
+        default=None,
+        help="Optional coarse structure CSV. Defaults to none because square-grid holdout experiments were removed.",
     )
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--dpi", type=int, default=200)

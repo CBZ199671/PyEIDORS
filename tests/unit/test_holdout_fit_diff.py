@@ -1,27 +1,17 @@
 from __future__ import annotations
 
-import csv
 from dataclasses import replace
-from pathlib import Path
-import subprocess
-import sys
 
 import numpy as np
 
 from pyeidors.data.eit_digit_metrics import build_surrogate_linearized_model
 from pyeidors.data.holdout_fit_diff import (
-    FIELD_FIELDS,
-    STRUCTURE_FIELDS,
-    SUMMARY_FIELDS,
     format_holdout_fit_report,
     plot_holdout_fit_curves,
     plot_holdout_fit_summary,
     plot_holdout_recon_compare,
     run_holdout_fit_diff,
 )
-
-
-REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 def _surrogate_model():
@@ -84,92 +74,6 @@ def test_holdout_fit_diff_plots_and_report(tmp_path) -> None:
     for path in [curve, recon, summary]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
         assert path.stat().st_size > 1000
-
-
-def test_eit_holdout_fit_diff_cli_writes_expected_outputs(tmp_path) -> None:
-    summary_output = tmp_path / "summary.csv"
-    field_output = tmp_path / "fields.csv"
-    point_output = tmp_path / "points.csv"
-    structure_output = tmp_path / "structure.csv"
-    report_output = tmp_path / "report.md"
-    point_plot = tmp_path / "points.png"
-    curve_plot = tmp_path / "curves.png"
-    recon_plot = tmp_path / "recon.png"
-    summary_plot = tmp_path / "summary.png"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            "scripts/eit_holdout_fit_diff_test.py",
-            "--forward-backend",
-            "surrogate",
-            "--inverse-backend",
-            "least-squares",
-            "--fem-n-elec",
-            "16",
-            "--n-parameters",
-            "6",
-            "--model-seed",
-            "123",
-            "--ridge",
-            "0.0001",
-            "--raw-160-baseline",
-            "--fit-methods",
-            "poly2",
-            "poly3",
-            "spline",
-            "--plot-voltage-points",
-            "--plot-recon-compare",
-            "--structure-metrics",
-            "--output",
-            str(summary_output),
-            "--field-output",
-            str(field_output),
-            "--point-output",
-            str(point_output),
-            "--structure-output",
-            str(structure_output),
-            "--report-output",
-            str(report_output),
-            "--point-plot-output",
-            str(point_plot),
-            "--curve-plot-output",
-            str(curve_plot),
-            "--recon-plot-output",
-            str(recon_plot),
-            "--summary-plot-output",
-            str(summary_plot),
-            "--dpi",
-            "80",
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
-    )
-
-    assert "raw_160=True" in completed.stdout
-    with summary_output.open(newline="", encoding="utf-8") as handle:
-        summary_rows = list(csv.DictReader(handle))
-    with field_output.open(newline="", encoding="utf-8") as handle:
-        field_rows = list(csv.DictReader(handle))
-    with point_output.open(newline="", encoding="utf-8") as handle:
-        point_rows = list(csv.DictReader(handle))
-    with structure_output.open(newline="", encoding="utf-8") as handle:
-        structure_rows = list(csv.DictReader(handle))
-
-    assert list(summary_rows[0].keys()) == SUMMARY_FIELDS
-    assert {row["recon_method"] for row in summary_rows} == {
-        "raw_160",
-        "poly2_208",
-        "poly3_208",
-        "spline_208",
-    }
-    assert list(field_rows[0].keys()) == FIELD_FIELDS
-    assert len(field_rows) == 24
-    assert len(point_rows) == 256
-    assert list(structure_rows[0].keys()) == STRUCTURE_FIELDS
-    for path in [point_plot, curve_plot, recon_plot, summary_plot]:
-        assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
 def test_v36_fit_curves_keep_absolute_voltage_separate_from_diff() -> None:
