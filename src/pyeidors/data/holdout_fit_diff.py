@@ -994,13 +994,23 @@ def _draw_field(
     )
 
 
+def _prediction_marker_offsets(methods: Iterable[str]) -> dict[str, float]:
+    """Return small visual-only x offsets so overlapping prediction markers show."""
+
+    names = sorted(dict.fromkeys(str(method) for method in methods))
+    if len(names) <= 1:
+        return {name: 0.0 for name in names}
+    offsets = np.linspace(-0.18, 0.18, len(names), dtype=float)
+    return {name: float(offsets[idx]) for idx, name in enumerate(names)}
+
+
 def plot_holdout_fit_curves(
     case: HoldoutFitDiffCase,
     output_path: Path,
     *,
     dpi: int = 200,
 ) -> Path:
-    """Plot all 16 per-frame U-shaped differential-voltage curves."""
+    """Plot all 16 per-frame absolute U-shaped voltage curves."""
 
     if not case.frame_curves:
         raise ValueError("case must include fitted frame curves")
@@ -1027,49 +1037,57 @@ def plot_holdout_fit_curves(
     )
     fig.suptitle("Holdout fit curves: absolute 13-point U curves")
     colors = {"poly2": "#9467bd", "poly3": "#8c564b", "spline": "#17becf"}
+    markers = {"poly2": "D", "poly3": "s", "spline": "P"}
     for ax, curve in zip(axes.ravel(), case.frame_curves, strict=False):
-        if np.max(np.abs(curve.voltage_reference_full)) > 0.0:
-            ax.plot(
-                curve.x_all,
-                curve.voltage_reference_full,
-                color="#7f7f7f",
-                linestyle="--",
-                linewidth=0.9,
-                label="reference full",
-            )
         ax.plot(
             curve.x_all,
             curve.voltage_anomaly_full,
             color="#1f77b4",
-            linewidth=1.2,
+            linewidth=1.25,
             label="target full",
+            zorder=2,
         )
+        if np.max(np.abs(curve.voltage_reference_full)) > 0.0:
+            ax.plot(
+                curve.x_all,
+                curve.voltage_reference_full,
+                color="#222222",
+                linestyle=(0, (3.0, 2.0)),
+                linewidth=0.95,
+                alpha=0.78,
+                label="reference full",
+                zorder=3,
+            )
         ax.scatter(
             curve.x_all[curve.train_mask],
             curve.voltage_anomaly_full[curve.train_mask],
             color="#2ca02c",
             s=20,
             label="train 10",
-            zorder=3,
+            zorder=4,
         )
         ax.scatter(
             curve.x_all[curve.holdout_mask],
             curve.voltage_anomaly_full[curve.holdout_mask],
             color="#ff7f0e",
             marker="x",
-            s=28,
+            s=34,
             label="holdout true",
-            zorder=4,
+            zorder=5,
         )
+        marker_offsets = _prediction_marker_offsets(curve.fitted_anomaly_by_method)
         for method, fitted in sorted(curve.fitted_anomaly_by_method.items()):
             ax.scatter(
-                curve.x_all[curve.holdout_mask],
+                curve.x_all[curve.holdout_mask] + marker_offsets[method],
                 fitted[curve.holdout_mask],
                 color=colors.get(method, "#444444"),
-                marker="D",
-                s=18,
+                marker=markers.get(method, "D"),
+                s=30,
                 label=f"{method} pred",
-                alpha=0.85,
+                alpha=0.95,
+                edgecolors="#ffffff",
+                linewidths=0.45,
+                zorder=6,
             )
         ax.set_title(f"stim {curve.stim_index}", fontsize=9)
         ax.grid(True, alpha=0.25)

@@ -6,6 +6,7 @@ import numpy as np
 
 from pyeidors.data.eit_digit_metrics import build_surrogate_linearized_model
 from pyeidors.data.holdout_fit_diff import (
+    _prediction_marker_offsets,
     format_holdout_fit_report,
     plot_holdout_fit_curves,
     plot_holdout_fit_summary,
@@ -118,3 +119,18 @@ def test_v36_fit_curves_keep_absolute_voltage_separate_from_diff() -> None:
     )
     assert not np.allclose(curve.voltage_anomaly_full, curve.diff_full)
     assert "poly2" in curve.fitted_anomaly_by_method
+
+
+def test_v38_fit_curve_prediction_marker_offsets_make_overlaps_visible() -> None:
+    offsets = _prediction_marker_offsets(["poly2", "poly3", "spline"])
+
+    assert set(offsets) == {"poly2", "poly3", "spline"}
+    assert offsets["poly2"] < offsets["poly3"] < offsets["spline"]
+    assert (
+        min(
+            abs(left - right)
+            for idx, left in enumerate(offsets.values())
+            for right in list(offsets.values())[idx + 1 :]
+        )
+        >= 0.15
+    )
