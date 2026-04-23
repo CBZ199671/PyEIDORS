@@ -71,6 +71,16 @@ STRUCTURE_FIELDS = [
     "sigma_effective_digits",
 ]
 
+FIT_CURVE_LEGEND_LABELS = {
+    "target_full": "target full: 13 original pts",
+    "reference_full": "reference full: 13 baseline pts",
+    "fit_input": "fit input: 10 original pts",
+    "withheld_true": "withheld true: 3 original pts",
+    "poly2": "poly2 pred: 3 pts",
+    "poly3": "poly3 pred: 3 pts",
+    "spline": "spline pred: 3 pts",
+}
+
 
 @dataclass(frozen=True)
 class HoldoutFitDiffSummary:
@@ -1044,7 +1054,7 @@ def plot_holdout_fit_curves(
             curve.voltage_anomaly_full,
             color="#1f77b4",
             linewidth=1.25,
-            label="target full",
+            label=FIT_CURVE_LEGEND_LABELS["target_full"],
             zorder=2,
         )
         if np.max(np.abs(curve.voltage_reference_full)) > 0.0:
@@ -1055,7 +1065,7 @@ def plot_holdout_fit_curves(
                 linestyle=(0, (3.0, 2.0)),
                 linewidth=0.95,
                 alpha=0.78,
-                label="reference full",
+                label=FIT_CURVE_LEGEND_LABELS["reference_full"],
                 zorder=3,
             )
         ax.scatter(
@@ -1063,7 +1073,7 @@ def plot_holdout_fit_curves(
             curve.voltage_anomaly_full[curve.train_mask],
             color="#2ca02c",
             s=20,
-            label="train 10",
+            label=FIT_CURVE_LEGEND_LABELS["fit_input"],
             zorder=4,
         )
         ax.scatter(
@@ -1072,7 +1082,7 @@ def plot_holdout_fit_curves(
             color="#ff7f0e",
             marker="x",
             s=34,
-            label="holdout true",
+            label=FIT_CURVE_LEGEND_LABELS["withheld_true"],
             zorder=5,
         )
         marker_offsets = _prediction_marker_offsets(curve.fitted_anomaly_by_method)
@@ -1083,7 +1093,7 @@ def plot_holdout_fit_curves(
                 color=colors.get(method, "#444444"),
                 marker=markers.get(method, "D"),
                 s=30,
-                label=f"{method} pred",
+                label=FIT_CURVE_LEGEND_LABELS.get(method, f"{method} pred: 3 pts"),
                 alpha=0.95,
                 edgecolors="#ffffff",
                 linewidths=0.45,
@@ -1094,7 +1104,7 @@ def plot_holdout_fit_curves(
     for ax in axes.ravel()[n_frames:]:
         ax.axis("off")
     handles, labels = axes[0, 0].get_legend_handles_labels()
-    fig.legend(handles, labels, loc="lower center", ncol=6, fontsize=8)
+    fig.legend(handles, labels, loc="lower center", ncol=3, fontsize=7.5)
     fig.savefig(output, dpi=int(dpi), bbox_inches="tight")
     plt.close(fig)
     return output

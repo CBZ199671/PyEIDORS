@@ -6,6 +6,7 @@ import numpy as np
 
 from pyeidors.data.eit_digit_metrics import build_surrogate_linearized_model
 from pyeidors.data.holdout_fit_diff import (
+    FIT_CURVE_LEGEND_LABELS,
     _prediction_marker_offsets,
     format_holdout_fit_report,
     plot_holdout_fit_curves,
@@ -134,3 +135,13 @@ def test_v38_fit_curve_prediction_marker_offsets_make_overlaps_visible() -> None
         )
         >= 0.15
     )
+
+
+def test_v39_fit_curve_legend_labels_explain_original_fit_points() -> None:
+    labels = set(FIT_CURVE_LEGEND_LABELS.values())
+
+    assert "train 10" not in labels
+    assert "holdout true" not in labels
+    assert FIT_CURVE_LEGEND_LABELS["fit_input"] == "fit input: 10 original pts"
+    assert FIT_CURVE_LEGEND_LABELS["withheld_true"] == "withheld true: 3 original pts"
+    assert "original" in FIT_CURVE_LEGEND_LABELS["target_full"]
