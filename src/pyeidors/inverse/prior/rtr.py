@@ -352,10 +352,20 @@ def _signature_for_payload(
     kind: str,
     metadata: Mapping[str, Any],
 ) -> str:
+    semantic = json.dumps(
+        {
+            "schema": RTR_PRIOR_SCHEMA,
+            "signature_hint": metadata.get("signature_hint"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
     if sparse.issparse(payload):
         mat = payload.tocsr()
         encoded = (
-            str(mat.dtype).encode()
+            semantic
+            + b"|"
+            + str(mat.dtype).encode()
             + b"|"
             + json.dumps(list(mat.shape)).encode()
             + b"|"
@@ -369,7 +379,9 @@ def _signature_for_payload(
     if isinstance(payload, np.ndarray):
         arr = np.ascontiguousarray(payload, dtype=np.float64)
         encoded = (
-            str(arr.dtype).encode()
+            semantic
+            + b"|"
+            + str(arr.dtype).encode()
             + b"|"
             + json.dumps(list(arr.shape)).encode()
             + b"|"
@@ -383,7 +395,6 @@ def _signature_for_payload(
         "shape": list(shape),
         "callable": callable_id,
         "signature_hint": metadata.get("signature_hint"),
-        "name": metadata.get("name"),
     }
     return hashlib.sha256(
         json.dumps(payload_json, sort_keys=True, separators=(",", ":")).encode()

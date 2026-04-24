@@ -44,10 +44,12 @@ def test_rm_signature_is_math_strong_and_device_independent() -> None:
         **{**base, "bad_channel_mask": np.array([False, False, False])}
     )
     changed_reg = rm_signature(**{**base, "regularization_type": "laplace"})
+    changed_graph_ltl = rm_signature(**{**base, "regularization_type": "graph_ltl"})
 
     assert cpu == cuda
     assert cpu != changed_mask
     assert cpu != changed_reg
+    assert changed_reg != changed_graph_ltl
     payload = rm_signature_payload(**base, device="cuda")
     assert "device" not in payload
     assert "backend" not in payload

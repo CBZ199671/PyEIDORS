@@ -2,6 +2,7 @@
 
 from .base_regularization import BaseRegularization
 from .smoothness import (
+    CurvatureRegularization,
     SmoothnessRegularization,
     TikhonovRegularization,
     TotalVariationRegularization,
@@ -9,6 +10,7 @@ from .smoothness import (
 
 __all__ = [
     "BaseRegularization",
+    "CurvatureRegularization",
     "SmoothnessRegularization",
     "TikhonovRegularization",
     "TotalVariationRegularization",

@@ -31,8 +31,11 @@ from .greit import (
 from .prior import (
     RtRPrior,
     as_rtr_prior,
+    graph_curvature_prior,
     graph_difference_operator,
     graph_laplacian,
+    graph_ltl,
+    graph_ltl_prior,
     load_rtr_prior_artifact,
     write_rtr_prior_artifact,
 )
@@ -99,8 +102,11 @@ __all__ = [
     "write_greit_metrics_artifact",
     "RtRPrior",
     "as_rtr_prior",
+    "graph_curvature_prior",
     "graph_difference_operator",
     "graph_laplacian",
+    "graph_ltl",
+    "graph_ltl_prior",
     "load_rtr_prior_artifact",
     "write_rtr_prior_artifact",
     "TemporalTVPipelineResult",

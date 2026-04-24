@@ -24,6 +24,10 @@ class SmoothnessRegularization(BaseRegularization):
         return (self.alpha * (L.T @ L)).tocsr()
 
 
+class CurvatureRegularization(SmoothnessRegularization):
+    """Named ``L.T @ L`` curvature prior on the current parameter mesh."""
+
+
 class TikhonovRegularization(BaseRegularization):
     """Tikhonov regularization."""
 

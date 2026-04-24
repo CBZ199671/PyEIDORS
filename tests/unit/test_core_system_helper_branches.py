@@ -296,6 +296,11 @@ def test_regularization_and_preset_application_helpers(monkeypatch: pytest.Monke
     )
     monkeypatch.setattr(
         core_module,
+        "CurvatureRegularization",
+        lambda *args, **kwargs: ("curvature", args, kwargs),
+    )
+    monkeypatch.setattr(
+        core_module,
         "TotalVariationRegularization",
         lambda *args, **kwargs: ("tv", args, kwargs),
     )
@@ -309,6 +314,14 @@ def test_regularization_and_preset_application_helpers(monkeypatch: pytest.Monke
     assert (
         system._build_regularization(jac, regularization_type="smoothness")[0]
         == "smoothness"
+    )
+    assert (
+        system._build_regularization(jac, regularization_type="curvature")[0]
+        == "curvature"
+    )
+    assert (
+        system._build_regularization(jac, regularization_type="graph_ltl")[0]
+        == "curvature"
     )
     assert system._build_regularization(jac, regularization_type="tv")[0] == "tv"
     with pytest.raises(ValueError, match="Unsupported regularization_type"):

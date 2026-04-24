@@ -39,6 +39,7 @@ from .geometry.simple_mesh_generator import create_simple_eit_mesh
 from .inverse.contracts import SolverOutput
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from .inverse.regularization.smoothness import (
+    CurvatureRegularization,
     NOSERRegularization,
     SmoothnessRegularization,
     TotalVariationRegularization,
@@ -857,6 +858,10 @@ class EITSystem(CoreSystemFacadeMixin):
             return SmoothnessRegularization(
                 self.fwd_model, alpha=self.regularization_alpha
             )
+        if resolved_type in {"curvature", "graph_ltl"}:
+            return CurvatureRegularization(
+                self.fwd_model, alpha=self.regularization_alpha
+            )
         if resolved_type == "tv":
             return TotalVariationRegularization(
                 self.fwd_model,
@@ -866,7 +871,7 @@ class EITSystem(CoreSystemFacadeMixin):
             )
         raise ValueError(
             f"Unsupported regularization_type={resolved_type!r}. "
-            "Expected one of: 'noser', 'tikhonov', 'smoothness', 'tv'."
+            "Expected one of: 'noser', 'tikhonov', 'smoothness', 'curvature', 'graph_ltl', 'tv'."
         )
 
     def _capture_reconstructor_controls(self) -> dict[str, Any]:
@@ -970,6 +975,8 @@ class EITSystem(CoreSystemFacadeMixin):
                 "noser": NOSERRegularization,
                 "tikhonov": TikhonovRegularization,
                 "smoothness": SmoothnessRegularization,
+                "curvature": CurvatureRegularization,
+                "graph_ltl": CurvatureRegularization,
                 "tv": TotalVariationRegularization,
             }[regularization_type],
         ):

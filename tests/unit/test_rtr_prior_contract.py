@@ -67,6 +67,24 @@ def test_rtr_prior_infers_diagonal_shape_and_guards_dense_materialization() -> N
     np.testing.assert_allclose(call_prior.as_RtR(dense=True), np.eye(3))
 
 
+def test_rtr_prior_signature_hint_distinguishes_semantically_named_explicit_priors() -> (
+    None
+):
+    matrix = sparse.diags([1.0, 2.0, 3.0], 0, format="csr")
+    laplace = as_rtr_prior(
+        matrix,
+        name="laplace",
+        metadata={"signature_hint": "laplace"},
+    )
+    graph_ltl = as_rtr_prior(
+        matrix,
+        name="curvature",
+        metadata={"signature_hint": "graph_ltl"},
+    )
+
+    assert laplace.signature_hash != graph_ltl.signature_hash
+
+
 def test_rtr_prior_hdf5_round_trips_explicit_priors(tmp_path) -> None:
     vector = np.array([2.0, -1.0, 0.5], dtype=float)
     sparse_prior = as_rtr_prior(

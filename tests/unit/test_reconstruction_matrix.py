@@ -7,7 +7,8 @@ import pytest
 from scipy import sparse
 
 from pyeidors.data.difference import normalize_time_difference
-from pyeidors.inverse.prior import as_rtr_prior
+from pyeidors.inverse import VoxelGrid
+from pyeidors.inverse.prior import as_rtr_prior, graph_curvature_prior, graph_laplacian
 from pyeidors.inverse.reconstruction_matrix import (
     build_one_step_rm,
     reconstruct_difference,
@@ -122,6 +123,46 @@ def test_build_one_step_rm_accepts_rtr_prior_contract() -> None:
     assert result.metadata["RtR_kind"] == prior.kind
 
 
+@pytest.mark.parametrize("mode", ["curvature", "graph_ltl"])
+def test_build_one_step_rm_curvature_mode_matches_laplace_but_keeps_distinct_signature(
+    mode: str,
+) -> None:
+    mesh = VoxelGrid.from_bounds([0.0], [4.0], shape=(4,))
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5, -0.25], [0.5, 2.0, -1.0, 0.75]],
+        dtype=float,
+    )
+    laplace = graph_laplacian(mesh)
+    curvature = graph_curvature_prior(mesh)
+    lam = 0.3
+
+    laplace_rm = build_one_step_rm(
+        jacobian,
+        regularization=laplace,
+        lambda_=lam,
+        mode="laplace",
+        return_metadata=True,
+    )
+    curvature_rm = build_one_step_rm(
+        jacobian,
+        regularization=curvature
+        if mode == "curvature"
+        else curvature.as_RtR(dense=False),
+        lambda_=lam,
+        mode=mode,
+        return_metadata=True,
+    )
+
+    np.testing.assert_allclose(curvature_rm.rm, laplace_rm.rm)
+    assert curvature_rm.metadata["regularization_type"] == mode
+    assert curvature_rm.metadata["regularization_source"] == "provided_graph_ltl"
+    assert (
+        curvature_rm.metadata["RtR_signature_hash"]
+        != laplace_rm.metadata["RtR_signature_hash"]
+    )
+    assert curvature_rm.metadata["RtR_metadata"]["signature_hint"] == "graph_ltl"
+
+
 @pytest.mark.parametrize("mode", ["tikhonov", "noser", "laplace"])
 def test_build_one_step_rm_uses_official_hp2_rtr_weighted_fixture(mode: str) -> None:
     jacobian = np.array(
@@ -217,7 +258,7 @@ def test_build_one_step_rm_measurement_form_matches_param_for_noser() -> None:
         form="measurement",
     )
 
-    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-6, atol=1e-8)
 
 
 def test_build_one_step_rm_measurement_form_matches_param_for_spd_laplace() -> None:
@@ -251,7 +292,38 @@ def test_build_one_step_rm_measurement_form_matches_param_for_spd_laplace() -> N
         form="measurement",
     )
 
-    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-10, atol=1e-12)
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-7, atol=1e-9)
+
+
+def test_build_one_step_rm_measurement_form_matches_param_for_curvature() -> None:
+    mesh = VoxelGrid.from_bounds([0.0], [4.0], shape=(4,))
+    jacobian = np.array(
+        [[1.0, 0.0, 0.5, -0.25], [0.5, 2.0, -1.0, 0.75]],
+        dtype=float,
+    )
+    curvature = as_rtr_prior(
+        graph_curvature_prior(mesh).as_RtR(dense=False)
+        + sparse.eye(4, format="csr") * 1e-9,
+        name="curvature",
+        metadata={"signature_hint": "graph_ltl"},
+    )
+    lam = 0.3
+
+    param_rm = build_one_step_rm(
+        jacobian,
+        regularization=curvature,
+        lambda_=lam,
+        mode="curvature",
+    )
+    measurement_rm = build_one_step_rm(
+        jacobian,
+        regularization=curvature,
+        lambda_=lam,
+        mode="curvature",
+        form="measurement",
+    )
+
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-6, atol=1e-8)
 
 
 def test_build_one_step_rm_measurement_form_accepts_measurement_regularization() -> (

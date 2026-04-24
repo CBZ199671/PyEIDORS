@@ -1,4 +1,4 @@
-"""Graph-Laplacian priors for coarse inverse meshes."""
+"""Graph priors for coarse inverse meshes."""
 
 from __future__ import annotations
 
@@ -8,6 +8,8 @@ import numpy as np
 from scipy import sparse
 
 from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
+
+from .rtr import RtRPrior, as_rtr_prior
 
 
 def graph_laplacian(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
@@ -53,6 +55,59 @@ def graph_difference_operator(mesh: Any, *, weight: str = "unit") -> sparse.csr_
         volumes = _cell_volumes(mesh, cells, n_cells)
     return _difference_from_edges(
         n_cells, edges, volumes=volumes, weight=resolved_weight
+    )
+
+
+def graph_ltl(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
+    """Build ``L.T @ L`` from :func:`graph_difference_operator`."""
+
+    difference = graph_difference_operator(mesh, weight=weight).tocsr()
+    n_cells = int(difference.shape[1])
+    if difference.shape[0] == 0:
+        return sparse.csr_matrix((n_cells, n_cells), dtype=np.float64)
+    return (difference.T @ difference).tocsr()
+
+
+def graph_ltl_prior(mesh: Any, *, weight: str = "unit") -> RtRPrior:
+    """Build a named ``graph_ltl`` RtR prior from the graph difference operator."""
+
+    difference = graph_difference_operator(mesh, weight=weight).tocsr()
+    n_cells = int(difference.shape[1])
+    matrix = (
+        sparse.csr_matrix((n_cells, n_cells), dtype=np.float64)
+        if difference.shape[0] == 0
+        else (difference.T @ difference).tocsr()
+    )
+    return as_rtr_prior(
+        matrix,
+        name="graph_ltl",
+        metadata={
+            "prior_family": "graph_ltl",
+            "graph_weight": str(weight).strip().lower(),
+            "difference_operator_shape": tuple(int(v) for v in difference.shape),
+            "regularization_source": "graph_difference_operator",
+            "signature_hint": "graph_ltl",
+        },
+    )
+
+
+def graph_curvature_prior(mesh: Any, *, weight: str = "unit") -> RtRPrior:
+    """Build a named ``curvature`` RtR prior with ``L.T @ L`` payload."""
+
+    prior = graph_ltl_prior(mesh, weight=weight)
+    metadata = {
+        key: value
+        for key, value in dict(prior.metadata).items()
+        if key not in {"kind", "name", "nnz", "shape", "signature_hash"}
+    }
+    return as_rtr_prior(
+        prior.as_RtR(dense=False),
+        name="curvature",
+        metadata={
+            **metadata,
+            "alias": "curvature",
+            "signature_hint": "graph_ltl",
+        },
     )
 
 
@@ -203,4 +258,10 @@ def _difference_from_edges(
     )
 
 
-__all__ = ["graph_difference_operator", "graph_laplacian"]
+__all__ = [
+    "graph_curvature_prior",
+    "graph_difference_operator",
+    "graph_laplacian",
+    "graph_ltl",
+    "graph_ltl_prior",
+]

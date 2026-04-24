@@ -45,7 +45,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - `compute_sigma_fingerprint(sigma) -> str`
 - `GaussNewtonReconstructor` + `run_reconstruction(reconstructor, measured_data, jacobian_method="efficient"|"linearized"|"operator"|"matrix-free")`
 - `pyeidors.inverse.block_system`: `ParameterBlock`, `BlockCoupling`, `JointInverseBlockMetadata`, `build_sigma_contact_block_metadata(n_sigma, n_contact, n_measurements)`, `make_block_diagonal_inverse_action`, `scale_contact_impedance_update(current_z, delta_z, max_relative_step, floor)`
-- Data: `PatternConfig`, `EITMesh`, `EITData`, `EITImage`
+- Data: `PatternConfig`, `EITMesh`, `EITData`, `EITImage`; `pyeidors.data.add_noise(snr, v1, v2=None, options=None, seed=None, rng=None)` — EIDORS `add_noise` parity, array or `EITData`
 - Cache: `build_process_forward_setup_key(*, mesh_file, mesh_content_hash, n_elec, z, pattern_config)`, `backend_signature_from_forward_model`, `model_signature_from_forward_model`, `pattern_signature_from_forward_model`, `rom_signature`, semantic `cache_manager.get_or_compute_semantic`
 - Perf: `detect_performance_capabilities`, `select_preconditioner`, `select_fast_linear_path`, `select_fused_strategy`, `probe_mpi_runtime`, `resolve_3d_cuda_forward_solver_policy`, `resolve_3d_cuda_mat_solve_policy`
 - Forward diagnostics: `EITForwardModel.get_backend_diagnostics()` (see §I.diag)
@@ -178,6 +178,8 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V67 | Project binary array persistence default = HDF5 `.h5`: RM/GREIT artifacts, dataset generator outputs, GUI simulation exports, diagnostics bundles, benchmark arrays, MATLAB mesh bridge arrays, reconstruction outputs. `.npz/.npy` creation forbidden outside tests/legacy adapters unless task explicitly marks small fixture. JSON/CSV stay for metadata/tables only | future scan gate; B12 |
 | V68 | Mesh IO benchmark gate: for representative 2D + 3D meshes, HDF5 load median ≤ `.msh` import median or regression explained; equality checks: vertices/cells count, topology dim, geometry dim, facet tags, cell tags, association table. Local 2026-04-22 48e 3D samples: `.msh 0.0747s` vs HDF5 `0.0429s`; `.msh 0.0314s` vs HDF5 `0.0276s` | future `scripts/benchmarks/benchmark_mesh_io_formats.py`; B12 |
 | V69 | GUI 3D PyVista offscreen interaction defaults to high-performance machines: drag/zoom timer targets 60 fps and full-DPR framebuffer (`EIT_APP_3D_DRAG_RENDER_SCALE=1.0` effective); repeated frames at the same size must not force a PyVista/VTK window resize. Users may explicitly lower `EIT_APP_3D_DRAG_FPS` or `EIT_APP_3D_DRAG_RENDER_SCALE`; logical canvas size remains stable per V54 | tests/unit/test_conductivity_3d_widget_runtime.py; B13 |
+| V70 | EIDORS `add_noise` parity: `noise = randn(size(signal)) * ||signal|| / ||randn|| / SNR`; `signal=v1` \| `v1-v2` \| `(v1-v2)/v2` for `options="norm"`; `EITData` input preserves metadata while replacing `.meas`; actual `||signal||/||noise|| == SNR` | src/pyeidors/data/noise.py; tests/unit/test_eidors_noise.py; EIDORS `add_noise.m` |
+| V71 | Bucket all-modes noise gradient exp ! reuse V70 `add_noise`; same 7 recon modes as `仿真各情况全量测试`; deterministic seeds; ∀ SNR row records actual SNR, sigma RMSE, artifact, direct delta vs `full_208`; output isolated folder | future `scripts/eit_bucket_all_modes_noise_sweep.py`; V70 |
 
 ## §T — tasks
 
@@ -294,7 +296,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T58 | x | Raise GUI 3D offscreen drag defaults to 60 fps + full-DPR framebuffer; skip redundant offscreen window resizes; keep env-controlled lower-fps/downsample mode for constrained machines without reintroducing V54 size jitter | V69,B13 |
 | T59 | x | Baseline alignment freeze: official-style framewise GN/NOSER/Laplace checklist + tiny fixtures; verify `Jᵀ W J + hp² RtR` formula, `hp²` scaling, normalized/raw difference parity, artifact metadata names | V26,V27,V28,V38,V40 |
 | T60 | x | General `RtR/R_prior` prior contract: dense/sparse/`LinearOperator`/callable inputs, `apply(v)`, `diag()`, `as_RtR()`, signature hash, metadata, HDF5 persistence; wire through RM builder + GN runtime without forced dense materialization on large 3D | V26,V28,V35,V36,V49 |
-| T61 | . | Curvature prior mode: expose `L = graph_difference_operator(mesh)`, `RtR = L.T @ L` as named `curvature` / `graph_ltl` prior; compare vs Laplace smoothing on same mesh; cache signature distinguishes `laplace` vs `LᵀL` | V28,V35,V36,V49 |
+| T61 | x | Curvature prior mode: expose `L = graph_difference_operator(mesh)`, `RtR = L.T @ L` as named `curvature` / `graph_ltl` prior; compare vs Laplace smoothing on same mesh; cache signature distinguishes `laplace` vs `LᵀL` | V28,V35,V36,V49 |
 | T62 | . | TV-IRLS inverse prior: iterative `RtR(x)=L.T @ diag(1/sqrt((Lx)^2+β)) @ L`; β/floor finite guard, max outer iterations, stale-RM invalidation, monotone objective smoke; keep TV-PDHG postprocess as separate seeded refinement | V28,V35,V49 |
 | T63 | . | Measurement-domain temporal filtering before reconstruction: causal EMA/moving-average + optional bandpass/lock-in hook over `Δv`/raw frames; channel mask + `W` applied deterministically; filter state stored in metadata, no smoothing of timestamps | V33,V34,V35,V37,V40 |
 | T64 | . | Dynamic sequence data contract: frames carry `t`, `dt`, sampling rate, frame id, reference policy, stim/meas signature, bad-channel mask, `W`, frequency/context metadata; HDF5 package round-trips multi-frame arrays + metadata; `MeasurementDataset` remains single-frame-compatible | V33,V34,V35,V37,V65,V67 |
@@ -304,6 +306,8 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T68 | . | Propagation-aware prior research: directed anatomical/vascular graph, velocity-range prior, path-constrained smoothness for nerve / plant conduction; opt-in only, never required for baseline parity | V31,V49 |
 | T69 | . | Dynamic validation benchmark: synthetic travelling wave + plant slow-pulse fixtures; report onset-time error, peak-time error, propagation-speed error, amplitude attenuation, SNR gain, spatial metrics; fail if regularization delays peak beyond tolerance ? | V30,V40,V41,V49 |
 | T70 | . | SBL/BSBL acceptance benchmark: compare SBL/BSBL/SA-SBL vs GN/NOSER/Laplace/TV-IRLS/4D prior on sparse anomaly + frequency-difference + propagating sparse events; promote only if accuracy/latency win recorded | V31,V35,V49,T27 |
+| T71 | x | Add EIDORS-style `add_noise`: SNR-exact Gaussian scaling for `v1`, `v1-v2`, normalized-difference signal; support arrays and `EITData`; export via `pyeidors.data` | V70 |
+| T72 | x | Add bucket all-modes noise gradient experiment: full256/full208/far3-drop-near3-keep/raw160/poly2/poly3/spline across SNR ladder; CSV+plots+Word in `仿真各情况加噪声梯度测试` | V70,V71 |
 
 ## §B — bugs
 

@@ -550,23 +550,34 @@ def _regularization_for_mode(
                 metadata={
                     "regularization_source": "diag_jtj",
                     "noser_exponent": float(noser_exponent),
+                    "signature_hint": "noser",
                 },
             ),
             "diag_jtj",
         )
-    if mode == "laplace":
+    if mode in {"laplace", "curvature", "graph_ltl"}:
         if regularization is None:
+            if mode == "laplace":
+                raise ValueError(
+                    "mode='laplace' requires a graph-Laplacian regularization."
+                )
             raise ValueError(
-                "mode='laplace' requires a graph-Laplacian regularization."
+                f"mode={mode!r} requires a graph_ltl/curvature regularization."
             )
+        family = "laplace" if mode == "laplace" else "graph_ltl"
+        source = "provided_laplace" if mode == "laplace" else "provided_graph_ltl"
         return (
             _as_regularization_prior(
                 regularization,
                 n_parameters=n_parameters,
-                name="laplace",
-                metadata={"regularization_source": "provided_laplace"},
+                name=mode,
+                metadata={
+                    "prior_family": family,
+                    "regularization_source": source,
+                    "signature_hint": family,
+                },
             ),
-            "provided_laplace",
+            source,
         )
     return (
         _as_regularization_prior(
@@ -576,7 +587,8 @@ def _regularization_for_mode(
             metadata={
                 "regularization_source": "identity"
                 if regularization is None
-                else "provided"
+                else "provided",
+                "signature_hint": "tikhonov",
             },
         ),
         "identity" if regularization is None else "provided",
@@ -604,7 +616,7 @@ def build_one_step_rm(
     noser_exponent: float = 0.5,
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
-    """Build a one-step GN/NOSER/Laplace reconstruction matrix.
+    """Build a one-step GN/NOSER/Laplace/curvature reconstruction matrix.
 
     ``form="param"`` uses ``RM = (J.T @ J + lambda_**2 R)^-1 @ J.T``.
     ``form="measurement"`` uses
@@ -624,8 +636,10 @@ def build_one_step_rm(
     if resolved_form not in {"param", "measurement"}:
         raise ValueError("form must be one of: 'param', 'measurement'.")
     resolved_mode = str(mode).strip().lower()
-    if resolved_mode not in {"tikhonov", "noser", "laplace"}:
-        raise ValueError("mode must be one of: 'tikhonov', 'noser', 'laplace'.")
+    if resolved_mode not in {"tikhonov", "noser", "laplace", "curvature", "graph_ltl"}:
+        raise ValueError(
+            "mode must be one of: 'tikhonov', 'noser', 'laplace', 'curvature', 'graph_ltl'."
+        )
     lam = float(lambda_)
     if lam < 0.0 or not np.isfinite(lam):
         raise ValueError("lambda_ must be finite and non-negative.")

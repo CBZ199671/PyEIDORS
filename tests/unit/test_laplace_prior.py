@@ -5,7 +5,13 @@ from __future__ import annotations
 import numpy as np
 
 from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
-from pyeidors.inverse.prior.laplace import graph_laplacian
+from pyeidors.inverse.prior import as_rtr_prior
+from pyeidors.inverse.prior.laplace import (
+    graph_curvature_prior,
+    graph_laplacian,
+    graph_ltl,
+    graph_ltl_prior,
+)
 
 
 def test_graph_laplacian_for_voxel_grid_uses_face_neighbours() -> None:
@@ -64,3 +70,28 @@ def test_graph_laplacian_volume_weight_keeps_row_sum_zero() -> None:
 
     np.testing.assert_allclose(np.asarray(laplace.sum(axis=1)).reshape(-1), 0.0)
     assert laplace.nnz > 0
+
+
+def test_graph_ltl_matches_laplacian_but_keeps_named_prior_identity() -> None:
+    grid = VoxelGrid(
+        origin=np.array([0.0, 0.0]),
+        spacing=np.array([1.0, 1.0]),
+        shape=(2, 2),
+    )
+
+    laplace = graph_laplacian(grid)
+    ltl = graph_ltl(grid)
+    laplace_prior = as_rtr_prior(
+        laplace,
+        name="laplace",
+        metadata={"signature_hint": "laplace"},
+    )
+    graph_prior = graph_ltl_prior(grid)
+    curvature_prior = graph_curvature_prior(grid)
+
+    np.testing.assert_allclose(ltl.toarray(), laplace.toarray())
+    assert graph_prior.signature_hash != laplace_prior.signature_hash
+    assert curvature_prior.signature_hash == graph_prior.signature_hash
+    assert graph_prior.metadata["difference_operator_shape"] == (4, 4)
+    assert curvature_prior.metadata["alias"] == "curvature"
+    assert curvature_prior.metadata["name"] == "curvature"
