@@ -555,17 +555,24 @@ def _regularization_for_mode(
             ),
             "diag_jtj",
         )
-    if mode in {"laplace", "curvature", "graph_ltl"}:
+    if mode in {"laplace", "curvature", "graph_ltl", "tv_irls"}:
         if regularization is None:
             if mode == "laplace":
                 raise ValueError(
                     "mode='laplace' requires a graph-Laplacian regularization."
                 )
             raise ValueError(
-                f"mode={mode!r} requires a graph_ltl/curvature regularization."
+                f"mode={mode!r} requires a graph_ltl/curvature/TV-IRLS regularization."
             )
-        family = "laplace" if mode == "laplace" else "graph_ltl"
-        source = "provided_laplace" if mode == "laplace" else "provided_graph_ltl"
+        if mode == "laplace":
+            family = "laplace"
+            source = "provided_laplace"
+        elif mode == "tv_irls":
+            family = "tv_irls"
+            source = "provided_tv_irls"
+        else:
+            family = "graph_ltl"
+            source = "provided_graph_ltl"
         return (
             _as_regularization_prior(
                 regularization,
@@ -616,7 +623,7 @@ def build_one_step_rm(
     noser_exponent: float = 0.5,
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
-    """Build a one-step GN/NOSER/Laplace/curvature reconstruction matrix.
+    """Build a one-step GN/NOSER/Laplace/curvature/TV-IRLS reconstruction matrix.
 
     ``form="param"`` uses ``RM = (J.T @ J + lambda_**2 R)^-1 @ J.T``.
     ``form="measurement"`` uses
@@ -636,9 +643,16 @@ def build_one_step_rm(
     if resolved_form not in {"param", "measurement"}:
         raise ValueError("form must be one of: 'param', 'measurement'.")
     resolved_mode = str(mode).strip().lower()
-    if resolved_mode not in {"tikhonov", "noser", "laplace", "curvature", "graph_ltl"}:
+    if resolved_mode not in {
+        "tikhonov",
+        "noser",
+        "laplace",
+        "curvature",
+        "graph_ltl",
+        "tv_irls",
+    }:
         raise ValueError(
-            "mode must be one of: 'tikhonov', 'noser', 'laplace', 'curvature', 'graph_ltl'."
+            "mode must be one of: 'tikhonov', 'noser', 'laplace', 'curvature', 'graph_ltl', 'tv_irls'."
         )
     lam = float(lambda_)
     if lam < 0.0 or not np.isfinite(lam):
