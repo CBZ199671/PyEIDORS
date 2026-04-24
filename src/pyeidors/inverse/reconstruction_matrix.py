@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
@@ -21,6 +22,10 @@ from pyeidors.data.channels import (
     zero_bad_channel_weights,
 )
 from pyeidors.data.difference import normalize_time_difference
+from pyeidors.data.temporal_filtering import (
+    MeasurementTemporalFilterResult,
+    filter_measurement_frames,
+)
 from pyeidors.inverse.prior import RtRPrior, as_rtr_prior
 from pyeidors.perf.gpu_kernels import RMMatmulResult, rm_matmul
 from pyeidors.utils.numeric_ops import safe_dot
@@ -389,24 +394,27 @@ def _normalize_time_difference_frames(
     reference: Any,
     *,
     floor: float | None,
+    orientation: str = "target_minus_reference",
 ) -> np.ndarray:
     refs = _reference_frames(
         reference,
         n_frames=targets.shape[0],
         n_measurements=targets.shape[1],
     )
-    safe = refs.copy()
-    eps = (
-        np.finfo(np.float64).eps
-        if floor is None
-        else float(max(floor, np.finfo(np.float64).eps))
+    return np.ascontiguousarray(
+        np.vstack(
+            [
+                normalize_time_difference(
+                    target,
+                    ref,
+                    floor=floor,
+                    orientation=orientation,
+                )
+                for target, ref in zip(targets, refs, strict=True)
+            ]
+        ),
+        dtype=np.float64,
     )
-    small = np.abs(safe) < eps
-    if np.any(small):
-        signs = np.sign(safe[small])
-        signs[signs == 0.0] = 1.0
-        safe[small] = signs * eps
-    return np.asarray((targets - refs) / safe, dtype=np.float64)
 
 
 def _apply_measurement_contract_to_frames(
@@ -814,6 +822,7 @@ def reconstruct_difference_batch(
     normalize: bool = True,
     v_ref=None,
     floor: float | None = None,
+    difference_orientation: str = "target_minus_reference",
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
     device: str = "auto",
@@ -828,6 +837,7 @@ def reconstruct_difference_batch(
             frame_batch,
             v_ref,
             floor=floor,
+            orientation=difference_orientation,
         )
     else:
         measurement_batch = frame_batch
@@ -851,6 +861,132 @@ def reconstruct_difference_batch(
     if return_metadata:
         return _annotate_online_hot_path_metadata(result)
     return result
+
+
+def reconstruct_temporal_difference_batch(
+    rm: Any,
+    frames,
+    *,
+    normalize: bool = True,
+    v_ref=None,
+    floor: float | None = None,
+    difference_orientation: str = "target_minus_reference",
+    temporal: str = "none",
+    moving_window: int = 3,
+    exponential_alpha: float = 0.5,
+    filter_state: Mapping[str, Any] | None = None,
+    timestamps: Any | None = None,
+    sample_rate_hz: float | None = None,
+    filter_hook: Any | None = None,
+    hook_kind: str | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+    device: str = "auto",
+    dtype: str | np.dtype[Any] = "float64",
+    return_metadata: bool = False,
+) -> np.ndarray | RMMatmulResult:
+    """Filter measurement frames causally, then apply a cached RM.
+
+    This hot path remains measurement-space preprocessing followed by one
+    ``RM @ delta_v`` batch. It never rebuilds a Jacobian, KSP, or forward solve.
+    """
+
+    total_start = time.perf_counter()
+    projection_start = total_start
+    frame_batch, was_vector = _as_measurement_frames(frames, name="frames")
+    if normalize and v_ref is not None:
+        measurement_batch = _normalize_time_difference_frames(
+            frame_batch,
+            v_ref,
+            floor=floor,
+            orientation=difference_orientation,
+        )
+        projection_kind = "normalized_time_difference"
+    else:
+        measurement_batch = frame_batch
+        projection_kind = "preprojected_measurement"
+    projection_seconds = time.perf_counter() - projection_start
+
+    filter_start = time.perf_counter()
+    filter_result = filter_measurement_frames(
+        measurement_batch,
+        temporal=temporal,
+        moving_window=moving_window,
+        exponential_alpha=exponential_alpha,
+        initial_state=filter_state,
+        timestamps=timestamps,
+        sample_rate_hz=sample_rate_hz,
+        hook=filter_hook,
+        hook_kind=hook_kind,
+        return_metadata=True,
+    )
+    assert isinstance(filter_result, MeasurementTemporalFilterResult)
+    filtered_batch, _ = _as_measurement_frames(filter_result.values, name="filtered")
+    filter_seconds = time.perf_counter() - filter_start
+
+    contract_start = time.perf_counter()
+    contract = prepare_measurement_contract(
+        n_measurements=filtered_batch.shape[1],
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    measurement_payload = _apply_measurement_contract_to_frames(
+        filtered_batch,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    contract_seconds = time.perf_counter() - contract_start
+
+    payload: np.ndarray
+    if was_vector:
+        payload = measurement_payload.reshape(-1)
+    else:
+        payload = measurement_payload
+    rm_start = time.perf_counter()
+    matmul = rm_matmul(
+        rm,
+        payload,
+        device=device,
+        dtype=dtype,
+        return_metadata=True,
+    )
+    assert isinstance(matmul, RMMatmulResult)
+    rm_seconds = time.perf_counter() - rm_start
+    total_seconds = time.perf_counter() - total_start
+
+    metadata = dict(matmul.metadata)
+    metadata.update(
+        {
+            "schema": "pyeidors-temporal-rm-online-v1",
+            "online_hot_path": "temporal_filter_plus_rm_matmul",
+            "rm_online_hot_path": "rm_matmul",
+            "projection_kind": projection_kind,
+            "normalize": bool(normalize and v_ref is not None),
+            "difference_orientation": str(difference_orientation),
+            "measurement_contract_applied": True,
+            "bad_channel_count": int(contract.bad_channel_count),
+            "measurement_weight_kind": contract.weight_kind,
+            "temporal_filter_metadata": MappingProxyType(dict(filter_result.metadata)),
+            "temporal_filter_state": filter_result.metadata["final_state"],
+            "timestamp_policy": "metadata_only_no_smoothing",
+            "timestamps": filter_result.metadata["timestamps"],
+            "offline_rm_build_seconds": 0.0,
+            "online_projection_seconds": float(projection_seconds),
+            "online_temporal_filter_seconds": float(filter_seconds),
+            "online_measurement_contract_seconds": float(contract_seconds),
+            "online_rm_apply_seconds": float(rm_seconds),
+            "online_total_seconds": float(total_seconds),
+            "forward_solve_count": 0,
+            "adjoint_solve_count": 0,
+            "ksp_solve_count": 0,
+            "jacobian_rebuild_count": 0,
+        }
+    )
+    result = RMMatmulResult(
+        values=np.asarray(matmul.values, dtype=np.float64),
+        metadata=MappingProxyType(metadata),
+    )
+    return result if return_metadata else result.values
 
 
 def _annotate_online_hot_path_metadata(result: RMMatmulResult) -> RMMatmulResult:
@@ -944,6 +1080,7 @@ __all__ = [
     "migrate_rm_artifact_to_hdf5",
     "reconstruct_difference",
     "reconstruct_difference_batch",
+    "reconstruct_temporal_difference_batch",
     "rm_signature",
     "rm_signature_payload",
     "write_forward_rm_benchmark_artifact",
