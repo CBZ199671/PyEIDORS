@@ -10,8 +10,12 @@ import numpy as np
 from pyeidors.data.bucket_dense_experiments import (
     BUCKET_DENSE_FIELD_FIELDS,
     BUCKET_DENSE_SUMMARY_FIELDS,
+    BUCKET_FULL256_COMPARE_FIELD_FIELDS,
+    BUCKET_FULL256_COMPARE_SUMMARY_FIELDS,
     build_circle_bucket_linearized_model,
+    run_bucket_full256_compare_experiment,
     run_bucket_dense_experiments,
+    write_bucket_full256_compare_outputs,
     write_bucket_dense_outputs,
 )
 from pyeidors.data.bucket_domain_audit import build_circle_bucket_domain
@@ -37,6 +41,28 @@ def test_circle_bucket_linearized_model_uses_dense_circle_geometry() -> None:
     assert np.max(np.linalg.norm(model.parameter_points, axis=1)) <= 1.0 + 1e-10
     assert np.max(np.abs(model.voltage_true)) > 0.0
     assert np.max(np.abs(model.voltage_reference)) > 0.0
+
+
+def test_v40_full256_circle_bucket_model_keeps_drive_related_points() -> None:
+    bucket = build_circle_bucket_domain(
+        mesh_h=0.16,
+        n_elec=16,
+        allow_coarse_smoke=True,
+    )
+    model_208 = build_circle_bucket_linearized_model(bucket=bucket)
+    model_256 = build_circle_bucket_linearized_model(
+        bucket=bucket,
+        include_drive_related=True,
+    )
+
+    assert model_208.label == "circle_bucket_dense"
+    assert model_208.n_measurements == 208
+    assert model_208.sensitivity.shape == (208, bucket.n_cells)
+    assert model_256.label == "circle_bucket_dense_full_256"
+    assert model_256.n_measurements == 256
+    assert model_256.sensitivity.shape == (256, bucket.n_cells)
+    assert model_256.voltage_true.shape == (256,)
+    assert np.max(np.abs(model_256.voltage_reference[:16])) > 0.0
 
 
 def test_v36_circle_bucket_reference_voltage_is_rotated_local_u_curve() -> None:
@@ -135,6 +161,56 @@ def test_v37_bucket_dense_experiment_outputs_and_recovers_visible_anomaly(
         assert written[key].read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
+def test_v41_full256_compare_outputs_numeric_and_visual_differences(
+    tmp_path,
+) -> None:
+    case = run_bucket_full256_compare_experiment(
+        mesh_h=0.16,
+        fit_methods=["poly2"],
+        raw_160_baseline=True,
+        allow_coarse_smoke=True,
+    )
+    written = write_bucket_full256_compare_outputs(
+        case,
+        summary_output=tmp_path / "summary.csv",
+        field_output=tmp_path / "fields.csv",
+        report_output=tmp_path / "report.md",
+        recon_plot_output=tmp_path / "recon.png",
+        metrics_plot_output=tmp_path / "metrics.png",
+        point_audit_plot_output=tmp_path / "point_audit.png",
+        dpi=70,
+    )
+
+    assert case.model_full_256.n_measurements == 256
+    assert case.model_full_208.n_measurements == 208
+    assert {row.recon_method for row in case.summaries} == {
+        "full_256",
+        "full_208",
+        "raw_160",
+        "poly2_208",
+    }
+    inverse_points = {row.recon_method: row.n_inverse_points for row in case.summaries}
+    assert inverse_points["full_256"] == 256
+    assert inverse_points["full_208"] == 208
+    assert inverse_points["raw_160"] == 160
+    assert inverse_points["poly2_208"] == 208
+    baseline = next(row for row in case.summaries if row.recon_method == "full_208")
+    assert baseline.delta_sigma_relative_rmse_vs_full_208 == 0.0
+    assert baseline.delta_artifact_energy_vs_full_208 == 0.0
+    assert len(case.field_rows) == 4 * case.bucket.n_cells
+
+    with written["summary"].open(newline="", encoding="utf-8") as handle:
+        summary_rows = list(csv.DictReader(handle))
+    with written["fields"].open(newline="", encoding="utf-8") as handle:
+        field_rows = list(csv.DictReader(handle))
+
+    assert list(summary_rows[0].keys()) == BUCKET_FULL256_COMPARE_SUMMARY_FIELDS
+    assert list(field_rows[0].keys()) == BUCKET_FULL256_COMPARE_FIELD_FIELDS
+    assert "full_256" in written["report"].read_text(encoding="utf-8")
+    for key in ["recon_plot", "metrics_plot", "point_audit_plot"]:
+        assert written[key].read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
 def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> None:
     summary_output = tmp_path / "summary.csv"
     field_output = tmp_path / "fields.csv"
@@ -204,4 +280,62 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> N
     assert list(field_rows[0].keys()) == BUCKET_DENSE_FIELD_FIELDS
     assert {row["inside_bucket"] for row in field_rows} == {"true"}
     for path in [domain_plot, recon_plot, summary_plot, curve_plot, holdout_summary]:
+        assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> None:
+    summary_output = tmp_path / "summary.csv"
+    field_output = tmp_path / "fields.csv"
+    report_output = tmp_path / "report.md"
+    recon_plot = tmp_path / "recon.png"
+    metrics_plot = tmp_path / "metrics.png"
+    point_audit_plot = tmp_path / "point_audit.png"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/eit_bucket_full256_compare.py",
+            "--mesh-h",
+            "0.16",
+            "--allow-coarse-smoke",
+            "--raw-160-baseline",
+            "--fit-methods",
+            "poly2",
+            "--output",
+            str(summary_output),
+            "--field-output",
+            str(field_output),
+            "--report-output",
+            str(report_output),
+            "--recon-plot-output",
+            str(recon_plot),
+            "--metrics-plot-output",
+            str(metrics_plot),
+            "--point-audit-plot-output",
+            str(point_audit_plot),
+            "--dpi",
+            "70",
+        ],
+        check=True,
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    assert "full_256_measurements=256" in completed.stdout
+    assert "full_208_measurements=208" in completed.stdout
+    with summary_output.open(newline="", encoding="utf-8") as handle:
+        summary_rows = list(csv.DictReader(handle))
+    with field_output.open(newline="", encoding="utf-8") as handle:
+        field_rows = list(csv.DictReader(handle))
+
+    assert list(summary_rows[0].keys()) == BUCKET_FULL256_COMPARE_SUMMARY_FIELDS
+    assert {row["recon_method"] for row in summary_rows} == {
+        "full_256",
+        "full_208",
+        "raw_160",
+        "poly2_208",
+    }
+    assert list(field_rows[0].keys()) == BUCKET_FULL256_COMPARE_FIELD_FIELDS
+    assert {row["inside_bucket"] for row in field_rows} == {"true"}
+    for path in [recon_plot, metrics_plot, point_audit_plot]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
