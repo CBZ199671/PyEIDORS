@@ -28,6 +28,7 @@ from ..perf.policy import (
 )
 from ._helpers import (
     add_named_physical_group,
+    association_from_mesh_data,
     assert_unique_physical_group_ownership,
     infer_generator_revision,
     infer_geometry_version,

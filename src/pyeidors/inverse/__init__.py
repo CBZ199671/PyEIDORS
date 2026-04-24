@@ -15,6 +15,12 @@ from .block_system import (
     scale_contact_impedance_update,
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
+from .dynamic import (
+    SPATIOTEMPORAL_GN_SCHEMA,
+    SpatiotemporalGNResult,
+    solve_batch_spatiotemporal_gn,
+    temporal_difference_operator,
+)
 from .greit import (
     GREIT3DDistribution,
     GREIT_METRIC_KEYS,
@@ -95,6 +101,10 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "SPATIOTEMPORAL_GN_SCHEMA",
+    "SpatiotemporalGNResult",
+    "solve_batch_spatiotemporal_gn",
+    "temporal_difference_operator",
     "GREIT3DDistribution",
     "GREIT_METRIC_KEYS",
     "GREITRM",
