@@ -17,8 +17,11 @@ from .block_system import (
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
 from .dynamic import (
     SPATIOTEMPORAL_GN_SCHEMA,
+    SPATIOTEMPORAL_TV_HUBER_SCHEMA,
     SpatiotemporalGNResult,
+    SpatiotemporalTVHuberResult,
     solve_batch_spatiotemporal_gn,
+    solve_spatiotemporal_tv_huber,
     temporal_difference_operator,
 )
 from .greit import (
@@ -102,8 +105,11 @@ __all__ = [
     "VoxelGrid",
     "coarse2fine",
     "SPATIOTEMPORAL_GN_SCHEMA",
+    "SPATIOTEMPORAL_TV_HUBER_SCHEMA",
     "SpatiotemporalGNResult",
+    "SpatiotemporalTVHuberResult",
     "solve_batch_spatiotemporal_gn",
+    "solve_spatiotemporal_tv_huber",
     "temporal_difference_operator",
     "GREIT3DDistribution",
     "GREIT_METRIC_KEYS",
