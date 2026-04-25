@@ -26,6 +26,7 @@ from pyeidors.inverse.reconstruction_matrix import (
 
 SPATIOTEMPORAL_GN_SCHEMA = "pyeidors-spatiotemporal-gn-v1"
 SPATIOTEMPORAL_TV_HUBER_SCHEMA = "pyeidors-spatiotemporal-tv-huber-v1"
+DYNAMIC_KALMAN_SCHEMA = "pyeidors-dynamic-kalman-fixed-lag-v1"
 
 
 @dataclass(frozen=True)
@@ -61,6 +62,28 @@ class SpatiotemporalTVHuberResult:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.values, dtype=dtype)
+
+
+@dataclass(frozen=True)
+class DynamicKalmanResult:
+    """Online Kalman / fixed-lag smoother reconstruction result."""
+
+    filtered: np.ndarray
+    smoothed: np.ndarray
+    predicted: np.ndarray
+    covariance_trace: np.ndarray
+    metadata: MappingProxyType
+
+    @property
+    def values(self) -> np.ndarray:
+        return self.smoothed
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return tuple(int(v) for v in self.smoothed.shape)
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        return np.asarray(self.smoothed, dtype=dtype)
 
 
 def temporal_difference_operator(n_frames: int, *, order: int = 1) -> sparse.csr_matrix:
@@ -472,6 +495,178 @@ def solve_spatiotemporal_tv_huber(
     )
 
 
+def run_dynamic_kalman_filter(
+    observation_model: Any,
+    observations: Any,
+    *,
+    observation_mode: str = "jacobian",
+    transition: Any | None = None,
+    process_noise: Any | None = None,
+    measurement_noise: Any | None = None,
+    initial_state: Any | None = None,
+    initial_covariance: Any | None = None,
+    fixed_lag: int = 0,
+    process_noise_hook: Any | None = None,
+    measurement_noise_hook: Any | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+    timestamps: Any | None = None,
+    sampling_rate_hz: float | None = None,
+    metadata: Mapping[str, Any] | None = None,
+) -> DynamicKalmanResult:
+    """Run linear online Kalman filtering with optional fixed-lag smoothing.
+
+    ``observation_mode="jacobian"`` treats ``observation_model`` as ``J`` and
+    observations as measurement frames ``y_t``. ``"rm_observation"`` treats
+    ``observation_model`` as a reconstruction matrix and first projects
+    measurements into state observations ``z_t = RM @ y_t``; the Kalman
+    observation matrix is then identity. This stays a prototype dynamic layer
+    and does not replace the cached RM hot path.
+    """
+
+    mode = _kalman_observation_mode(observation_mode)
+    obs_batch = _frame_batch(observations, name="observations")
+    n_frames, n_observations_raw = obs_batch.shape
+    projected, observation_matrices, contract_kinds, bad_counts = _kalman_observations(
+        observation_model,
+        obs_batch,
+        mode=mode,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    n_state = int(observation_matrices[0].shape[1])
+    transition_matrix = _transition_matrix(transition, n_state=n_state)
+    initial = _kalman_initial_state(initial_state, n_state=n_state)
+    initial_cov = _kalman_covariance(
+        initial_covariance,
+        n=n_state,
+        name="initial_covariance",
+        default_scale=1.0,
+    )
+    fixed_lag_frames = _nonnegative_int(fixed_lag, name="fixed_lag")
+    times = _optional_timestamps(timestamps, n_frames=n_frames)
+    latency_seconds = _latency_seconds(
+        fixed_lag_frames,
+        timestamps=times,
+        sampling_rate_hz=sampling_rate_hz,
+    )
+
+    predicted_states: list[np.ndarray] = []
+    predicted_covs: list[np.ndarray] = []
+    filtered_states: list[np.ndarray] = []
+    filtered_covs: list[np.ndarray] = []
+    innovation_norms: list[float] = []
+    kalman_gain_norms: list[float] = []
+    process_noise_sources: list[str] = []
+    measurement_noise_sources: list[str] = []
+    x_prev = initial
+    p_prev = initial_cov
+    identity_state = np.eye(n_state, dtype=np.float64)
+    for frame_idx in range(n_frames):
+        q_t, q_source = _resolve_kalman_noise(
+            process_noise,
+            hook=process_noise_hook,
+            n=n_state,
+            frame_idx=frame_idx,
+            state=x_prev,
+            observation=projected[frame_idx],
+            default_scale=1.0e-4,
+            name="process_noise",
+        )
+        x_pred = transition_matrix @ x_prev
+        p_pred = transition_matrix @ p_prev @ transition_matrix.T + q_t
+        h_t = observation_matrices[frame_idx]
+        r_t, r_source = _resolve_measurement_noise(
+            measurement_noise,
+            hook=measurement_noise_hook,
+            n_observations=h_t.shape[0],
+            frame_idx=frame_idx,
+            state=x_pred,
+            observation=projected[frame_idx],
+            default_scale=1.0e-2,
+            mode=mode,
+        )
+        innovation = projected[frame_idx] - h_t @ x_pred
+        innovation_cov = h_t @ p_pred @ h_t.T + r_t
+        kalman_gain = _kalman_gain(p_pred, h_t, innovation_cov)
+        x_filt = x_pred + kalman_gain @ innovation
+        kh = kalman_gain @ h_t
+        p_filt = (identity_state - kh) @ p_pred @ (
+            identity_state - kh
+        ).T + kalman_gain @ r_t @ kalman_gain.T
+        predicted_states.append(np.ascontiguousarray(x_pred, dtype=np.float64))
+        predicted_covs.append(_symmetrize(p_pred))
+        filtered_states.append(np.ascontiguousarray(x_filt, dtype=np.float64))
+        filtered_covs.append(_symmetrize(p_filt))
+        innovation_norms.append(float(np.linalg.norm(innovation)))
+        kalman_gain_norms.append(float(np.linalg.norm(kalman_gain)))
+        process_noise_sources.append(q_source)
+        measurement_noise_sources.append(r_source)
+        x_prev = x_filt
+        p_prev = _symmetrize(p_filt)
+
+    predicted = np.ascontiguousarray(np.vstack(predicted_states), dtype=np.float64)
+    filtered = np.ascontiguousarray(np.vstack(filtered_states), dtype=np.float64)
+    smoothed, smoother_meta = _fixed_lag_smoother(
+        filtered_states,
+        filtered_covs,
+        predicted_covs,
+        transition_matrix=transition_matrix,
+        fixed_lag=fixed_lag_frames,
+    )
+    cov_trace = np.asarray(
+        [float(np.trace(covariance)) for covariance in filtered_covs],
+        dtype=np.float64,
+    )
+    meta = {
+        "schema": DYNAMIC_KALMAN_SCHEMA,
+        "algorithm": "online-kalman-fixed-lag-smoother",
+        "observation_mode": mode,
+        "state_model": "x_t=A_x_prev_plus_q",
+        "n_frames": int(n_frames),
+        "n_state": int(n_state),
+        "n_observations_raw": int(n_observations_raw),
+        "n_observations_effective": int(projected.shape[1]),
+        "transition_shape": tuple(int(v) for v in transition_matrix.shape),
+        "process_noise_hook_used": process_noise_hook is not None,
+        "measurement_noise_hook_used": measurement_noise_hook is not None,
+        "process_noise_sources": tuple(process_noise_sources),
+        "measurement_noise_sources": tuple(measurement_noise_sources),
+        "fixed_lag": int(fixed_lag_frames),
+        "latency_frames": int(fixed_lag_frames),
+        "latency_seconds": float(latency_seconds),
+        "latency_policy": "fixed_lag_frames",
+        "smoother": smoother_meta,
+        "measurement_contract_applied": mode == "jacobian",
+        "measurement_weight_kinds": tuple(contract_kinds),
+        "bad_channel_counts": tuple(int(v) for v in bad_counts),
+        "innovation_norms": tuple(innovation_norms),
+        "kalman_gain_norms": tuple(kalman_gain_norms),
+        "covariance_trace_min": float(np.min(cov_trace)) if cov_trace.size else 0.0,
+        "covariance_trace_max": float(np.max(cov_trace)) if cov_trace.size else 0.0,
+        "online_hot_path": "rm_observation_plus_kalman"
+        if mode == "rm_observation"
+        else "jacobian_observation_kalman",
+        "online_hot_path_replaced": False,
+        "default_enabled": False,
+        "intended_tier": "dynamic_quality_realtime_prototype",
+        "forward_solve_count": 0,
+        "adjoint_solve_count": 0,
+        "ksp_solve_count": 0,
+        "jacobian_rebuild_count": 0,
+        "requires_t69_gate_before_default": True,
+    }
+    if metadata:
+        meta["user_metadata"] = dict(metadata)
+    return DynamicKalmanResult(
+        filtered=filtered,
+        smoothed=smoothed,
+        predicted=predicted,
+        covariance_trace=cov_trace,
+        metadata=MappingProxyType(meta),
+    )
+
+
 @dataclass(frozen=True)
 class _SpatialPrior:
     prior: RtRPrior
@@ -851,6 +1046,378 @@ def _resolve_residuals(
     )
 
 
+def _kalman_observation_mode(value: str) -> str:
+    resolved = str(value).strip().lower().replace("-", "_")
+    aliases = {
+        "j": "jacobian",
+        "measurement": "jacobian",
+        "measurement_jacobian": "jacobian",
+        "rm": "rm_observation",
+        "rm_observation_shortcut": "rm_observation",
+    }
+    resolved = aliases.get(resolved, resolved)
+    if resolved not in {"jacobian", "rm_observation"}:
+        raise ValueError("observation_mode must be 'jacobian' or 'rm_observation'.")
+    return resolved
+
+
+def _kalman_observations(
+    observation_model: Any,
+    observations: np.ndarray,
+    *,
+    mode: str,
+    channel_mask: Any | None,
+    measurement_weights: Any | None,
+) -> tuple[np.ndarray, list[np.ndarray], list[str], list[int]]:
+    n_frames, n_raw = observations.shape
+    if mode == "rm_observation":
+        rm = _rm_matrix(observation_model, n_measurements=n_raw)
+        projected_rows = [
+            reconstruct_difference(
+                rm,
+                observations[idx],
+                normalize=False,
+                channel_mask=_frame_channel_mask(
+                    channel_mask,
+                    frame_idx=idx,
+                    n_frames=n_frames,
+                    n_measurements=n_raw,
+                ),
+                measurement_weights=_frame_measurement_weights(
+                    measurement_weights,
+                    frame_idx=idx,
+                    n_frames=n_frames,
+                    n_measurements=n_raw,
+                ),
+                device="cpu",
+            )
+            for idx in range(n_frames)
+        ]
+        projected = np.ascontiguousarray(np.vstack(projected_rows), dtype=np.float64)
+        h_stack = [np.eye(rm.shape[0], dtype=np.float64) for _ in range(n_frames)]
+        return projected, h_stack, ["state_observation"] * n_frames, [0] * n_frames
+
+    h_raw_stack, _ = _as_jacobian_stack(
+        observation_model,
+        n_frames=n_frames,
+        n_measurements=n_raw,
+    )
+    projected_rows: list[np.ndarray] = []
+    h_stack: list[np.ndarray] = []
+    contract_kinds: list[str] = []
+    bad_counts: list[int] = []
+    for frame_idx, matrix in enumerate(h_raw_stack):
+        mask_t = _frame_channel_mask(
+            channel_mask,
+            frame_idx=frame_idx,
+            n_frames=n_frames,
+            n_measurements=n_raw,
+        )
+        weights_t = _frame_measurement_weights(
+            measurement_weights,
+            frame_idx=frame_idx,
+            n_frames=n_frames,
+            n_measurements=n_raw,
+        )
+        h_t, contract = apply_measurement_contract_to_jacobian(
+            matrix,
+            channel_mask=mask_t,
+            measurement_weights=weights_t,
+        )
+        y_t, _ = apply_measurement_contract_to_vector(
+            observations[frame_idx],
+            channel_mask=mask_t,
+            measurement_weights=weights_t,
+        )
+        h_stack.append(h_t)
+        projected_rows.append(y_t)
+        contract_kinds.append(contract.weight_kind)
+        bad_counts.append(contract.bad_channel_count)
+    return (
+        np.ascontiguousarray(np.vstack(projected_rows), dtype=np.float64),
+        h_stack,
+        contract_kinds,
+        bad_counts,
+    )
+
+
+def _rm_matrix(value: Any, *, n_measurements: int) -> np.ndarray:
+    if sparse.issparse(value):
+        matrix = np.asarray(value.toarray(), dtype=np.float64)
+    else:
+        matrix = np.asarray(value, dtype=np.float64)
+    if matrix.ndim != 2 or 0 in matrix.shape:
+        raise ValueError("RM observation model must be a non-empty 2D matrix.")
+    if matrix.shape[1] != int(n_measurements):
+        raise ValueError(
+            f"RM column count {matrix.shape[1]} does not match observation length {n_measurements}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("RM observation model contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=np.float64)
+
+
+def _transition_matrix(value: Any | None, *, n_state: int) -> np.ndarray:
+    if value is None:
+        matrix = np.eye(n_state, dtype=np.float64)
+    else:
+        matrix = np.asarray(value, dtype=np.float64)
+    if matrix.shape != (n_state, n_state):
+        raise ValueError(
+            f"transition shape {matrix.shape} does not match {(n_state, n_state)}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("transition contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=np.float64)
+
+
+def _kalman_initial_state(value: Any | None, *, n_state: int) -> np.ndarray:
+    if value is None:
+        return np.zeros(n_state, dtype=np.float64)
+    arr = np.asarray(value, dtype=np.float64).reshape(-1)
+    if arr.size != int(n_state):
+        raise ValueError(f"initial_state length {arr.size} does not match {n_state}.")
+    if not np.isfinite(arr).all():
+        raise FloatingPointError("initial_state contains non-finite values.")
+    return np.ascontiguousarray(arr, dtype=np.float64)
+
+
+def _kalman_covariance(
+    value: Any | None,
+    *,
+    n: int,
+    name: str,
+    default_scale: float,
+) -> np.ndarray:
+    if value is None:
+        matrix = float(default_scale) * np.eye(n, dtype=np.float64)
+    else:
+        matrix = _covariance_matrix(value, n=n, name=name)
+    return matrix
+
+
+def _resolve_kalman_noise(
+    value: Any | None,
+    *,
+    hook: Any | None,
+    n: int,
+    frame_idx: int,
+    state: np.ndarray,
+    observation: np.ndarray,
+    default_scale: float,
+    name: str,
+) -> tuple[np.ndarray, str]:
+    if hook is not None:
+        raw = hook(
+            MappingProxyType(
+                {
+                    "frame_index": int(frame_idx),
+                    "state": state.copy(),
+                    "observation": observation.copy(),
+                    "noise_name": name,
+                }
+            )
+        )
+        return _covariance_matrix(raw, n=n, name=name), "hook"
+    if value is None:
+        return default_scale * np.eye(n, dtype=np.float64), "default"
+    return _frame_covariance(value, frame_idx=frame_idx, n=n, name=name), "provided"
+
+
+def _resolve_measurement_noise(
+    value: Any | None,
+    *,
+    hook: Any | None,
+    n_observations: int,
+    frame_idx: int,
+    state: np.ndarray,
+    observation: np.ndarray,
+    default_scale: float,
+    mode: str,
+) -> tuple[np.ndarray, str]:
+    source_name = "measurement_noise"
+    if hook is not None:
+        raw = hook(
+            MappingProxyType(
+                {
+                    "frame_index": int(frame_idx),
+                    "state": state.copy(),
+                    "observation": observation.copy(),
+                    "noise_name": source_name,
+                    "observation_mode": mode,
+                }
+            )
+        )
+        return (
+            _covariance_matrix(raw, n=n_observations, name=source_name),
+            "hook",
+        )
+    if value is None:
+        return default_scale * np.eye(n_observations, dtype=np.float64), "default"
+    return (
+        _frame_covariance(
+            value,
+            frame_idx=frame_idx,
+            n=n_observations,
+            name=source_name,
+        ),
+        "provided",
+    )
+
+
+def _frame_covariance(
+    value: Any,
+    *,
+    frame_idx: int,
+    n: int,
+    name: str,
+) -> np.ndarray:
+    arr = np.asarray(value, dtype=np.float64)
+    if arr.ndim == 3:
+        if arr.shape[1:] != (n, n):
+            raise ValueError(
+                f"{name} per-frame shape {arr.shape} does not match (*,{n},{n})."
+            )
+        return _covariance_matrix(arr[int(frame_idx)], n=n, name=name)
+    if arr.ndim == 2 and arr.shape[0] != arr.shape[1] and arr.shape[1] == n:
+        if int(frame_idx) >= arr.shape[0]:
+            raise ValueError(f"{name} frame index {frame_idx} out of range.")
+        return _covariance_matrix(arr[int(frame_idx)], n=n, name=name)
+    return _covariance_matrix(arr, n=n, name=name)
+
+
+def _covariance_matrix(value: Any, *, n: int, name: str) -> np.ndarray:
+    arr = np.asarray(value, dtype=np.float64)
+    if arr.ndim == 0:
+        matrix = float(arr) * np.eye(n, dtype=np.float64)
+    elif arr.ndim == 1:
+        if arr.size != int(n):
+            raise ValueError(f"{name} diagonal length {arr.size} does not match {n}.")
+        matrix = np.diag(arr)
+    elif arr.ndim == 2:
+        if arr.shape != (n, n):
+            raise ValueError(
+                f"{name} matrix shape {arr.shape} does not match {(n, n)}."
+            )
+        matrix = arr
+    else:
+        raise ValueError(f"{name} must be scalar, diagonal, or covariance matrix.")
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError(f"{name} contains non-finite values.")
+    if not np.allclose(matrix, matrix.T, rtol=1.0e-10, atol=1.0e-12):
+        raise ValueError(f"{name} covariance matrix must be symmetric.")
+    eig_min = float(np.min(np.linalg.eigvalsh(matrix)))
+    if eig_min < -1.0e-10:
+        raise ValueError(f"{name} covariance matrix must be positive semidefinite.")
+    return _symmetrize(matrix)
+
+
+def _kalman_gain(
+    p_pred: np.ndarray,
+    h_t: np.ndarray,
+    innovation_covariance: np.ndarray,
+) -> np.ndarray:
+    rhs = h_t @ p_pred
+    try:
+        gain_t = np.linalg.solve(innovation_covariance, rhs)
+    except np.linalg.LinAlgError:
+        gain_t = np.linalg.pinv(innovation_covariance) @ rhs
+    return np.asarray(gain_t.T, dtype=np.float64)
+
+
+def _fixed_lag_smoother(
+    filtered_states: list[np.ndarray],
+    filtered_covs: list[np.ndarray],
+    predicted_covs: list[np.ndarray],
+    *,
+    transition_matrix: np.ndarray,
+    fixed_lag: int,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    n_frames = len(filtered_states)
+    if fixed_lag <= 0 or n_frames == 0:
+        return np.ascontiguousarray(np.vstack(filtered_states)), {
+            "enabled": False,
+            "fixed_lag": int(fixed_lag),
+        }
+    smoothed = [state.copy() for state in filtered_states]
+    window_count = 0
+    for end in range(n_frames):
+        start = max(0, end - int(fixed_lag))
+        x_window = [state.copy() for state in filtered_states[start : end + 1]]
+        p_window = [cov.copy() for cov in filtered_covs[start : end + 1]]
+        for local in range(len(x_window) - 2, -1, -1):
+            global_next = start + local + 1
+            p_pred_next = predicted_covs[global_next]
+            gain = _smoother_gain(
+                p_window[local],
+                transition_matrix,
+                p_pred_next,
+            )
+            x_window[local] = x_window[local] + gain @ (
+                x_window[local + 1] - transition_matrix @ x_window[local]
+            )
+            p_window[local] = _symmetrize(
+                p_window[local] + gain @ (p_window[local + 1] - p_pred_next) @ gain.T
+            )
+        for offset, state in enumerate(x_window):
+            smoothed[start + offset] = np.ascontiguousarray(state, dtype=np.float64)
+        window_count += 1
+    return np.ascontiguousarray(np.vstack(smoothed), dtype=np.float64), {
+        "enabled": True,
+        "fixed_lag": int(fixed_lag),
+        "window_count": int(window_count),
+        "policy": "online_fixed_lag_rts_windows",
+    }
+
+
+def _smoother_gain(
+    p_filt: np.ndarray,
+    transition_matrix: np.ndarray,
+    p_pred_next: np.ndarray,
+) -> np.ndarray:
+    rhs = transition_matrix @ p_filt
+    try:
+        solved = np.linalg.solve(p_pred_next, rhs)
+    except np.linalg.LinAlgError:
+        solved = np.linalg.pinv(p_pred_next) @ rhs
+    return np.asarray(solved.T, dtype=np.float64)
+
+
+def _optional_timestamps(value: Any | None, *, n_frames: int) -> np.ndarray | None:
+    if value is None:
+        return None
+    arr = np.asarray(value, dtype=np.float64).reshape(-1)
+    if arr.size != int(n_frames):
+        raise ValueError(f"timestamps length {arr.size} does not match {n_frames}.")
+    if not np.isfinite(arr).all():
+        raise FloatingPointError("timestamps contain non-finite values.")
+    return np.ascontiguousarray(arr, dtype=np.float64)
+
+
+def _latency_seconds(
+    fixed_lag: int,
+    *,
+    timestamps: np.ndarray | None,
+    sampling_rate_hz: float | None,
+) -> float:
+    lag = int(fixed_lag)
+    if lag <= 0:
+        return 0.0
+    if timestamps is not None and timestamps.size > 1:
+        dt = float(np.median(np.diff(timestamps)))
+        return float(max(dt, 0.0) * lag)
+    if sampling_rate_hz is not None and float(sampling_rate_hz) > 0.0:
+        return float(lag / float(sampling_rate_hz))
+    return 0.0
+
+
+def _symmetrize(matrix: np.ndarray) -> np.ndarray:
+    out = 0.5 * (
+        np.asarray(matrix, dtype=np.float64) + np.asarray(matrix, dtype=np.float64).T
+    )
+    return np.ascontiguousarray(out, dtype=np.float64)
+
+
 def _as_jacobian_stack(
     jacobian: Any,
     *,
@@ -1112,11 +1679,21 @@ def _positive_int(value: int, *, name: str) -> int:
     return out
 
 
+def _nonnegative_int(value: int, *, name: str) -> int:
+    out = int(value)
+    if out < 0:
+        raise ValueError(f"{name} must be non-negative.")
+    return out
+
+
 __all__ = [
+    "DYNAMIC_KALMAN_SCHEMA",
     "SPATIOTEMPORAL_GN_SCHEMA",
     "SPATIOTEMPORAL_TV_HUBER_SCHEMA",
+    "DynamicKalmanResult",
     "SpatiotemporalGNResult",
     "SpatiotemporalTVHuberResult",
+    "run_dynamic_kalman_filter",
     "solve_batch_spatiotemporal_gn",
     "solve_spatiotemporal_tv_huber",
     "temporal_difference_operator",

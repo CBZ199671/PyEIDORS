@@ -16,10 +16,13 @@ from .block_system import (
 )
 from .dual_mesh import CellMesh, DualMesh, VoxelGrid, coarse2fine
 from .dynamic import (
+    DYNAMIC_KALMAN_SCHEMA,
     SPATIOTEMPORAL_GN_SCHEMA,
     SPATIOTEMPORAL_TV_HUBER_SCHEMA,
+    DynamicKalmanResult,
     SpatiotemporalGNResult,
     SpatiotemporalTVHuberResult,
+    run_dynamic_kalman_filter,
     solve_batch_spatiotemporal_gn,
     solve_spatiotemporal_tv_huber,
     temporal_difference_operator,
@@ -104,10 +107,13 @@ __all__ = [
     "DualMesh",
     "VoxelGrid",
     "coarse2fine",
+    "DYNAMIC_KALMAN_SCHEMA",
     "SPATIOTEMPORAL_GN_SCHEMA",
     "SPATIOTEMPORAL_TV_HUBER_SCHEMA",
+    "DynamicKalmanResult",
     "SpatiotemporalGNResult",
     "SpatiotemporalTVHuberResult",
+    "run_dynamic_kalman_filter",
     "solve_batch_spatiotemporal_gn",
     "solve_spatiotemporal_tv_huber",
     "temporal_difference_operator",
