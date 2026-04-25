@@ -30,6 +30,7 @@ from pyeidors.inverse import (
     graph_laplacian,
     greit_metrics,
     reconstruct_temporal_difference_batch,
+    solve_batch_spatiotemporal_gn,
 )
 
 
@@ -46,6 +47,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--noise-std", type=float, default=2.0e-3)
     parser.add_argument("--seed", type=int, default=20260424)
     parser.add_argument("--temporal-alpha", type=float, default=0.75)
+    parser.add_argument("--lambda-t", type=float, default=0.08)
+    parser.add_argument("--temporal-order", type=int, choices=(1, 2), default=2)
     parser.add_argument("--onset-fraction", type=float, default=0.30)
     parser.add_argument("--peak-delay-tolerance", type=float, default=0.16)
     parser.add_argument(
@@ -57,6 +60,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         "--output-json",
         type=Path,
         default=Path("reports/runtime_benchmarks/dynamic_validation.json"),
+    )
+    parser.add_argument(
+        "--output-md",
+        type=Path,
+        default=None,
+        help="Markdown 4D GN vs rowwise RM report path. Defaults next to --output-json.",
     )
     return parser.parse_args(argv)
 
@@ -71,6 +80,8 @@ def run_benchmark(
     noise_std: float = 2.0e-3,
     seed: int = 20260424,
     temporal_alpha: float = 0.75,
+    lambda_t: float = 0.08,
+    temporal_order: int = 2,
     onset_fraction: float = 0.30,
     peak_delay_tolerance: float = 0.16,
 ) -> dict[str, Any]:
@@ -94,6 +105,8 @@ def run_benchmark(
             lambda_=lambda_,
             ridge=ridge,
             temporal_alpha=temporal_alpha,
+            lambda_t=lambda_t,
+            temporal_order=temporal_order,
             onset_fraction=onset_fraction,
         )
     gate = evaluate_peak_delay_gate(
@@ -112,6 +125,8 @@ def run_benchmark(
             "noise_std": float(noise_std),
             "seed": int(seed),
             "temporal_alpha": float(temporal_alpha),
+            "lambda_t": float(lambda_t),
+            "temporal_order": int(temporal_order),
             "onset_fraction": float(onset_fraction),
             "peak_delay_tolerance": float(peak_delay_tolerance),
         },
@@ -127,6 +142,8 @@ def evaluate_fixture(
     lambda_: float,
     ridge: float,
     temporal_alpha: float,
+    lambda_t: float,
+    temporal_order: int,
     onset_fraction: float,
 ) -> dict[str, Any]:
     mesh = fixture["mesh"]
@@ -215,6 +232,72 @@ def evaluate_fixture(
                 onset_fraction=onset_fraction,
             ),
         }
+
+    batch_start = time.perf_counter()
+    spatiotemporal = solve_batch_spatiotemporal_gn(
+        jacobian,
+        sequence,
+        spatial_prior=prior,
+        lambda_s=lambda_,
+        lambda_t=lambda_t,
+        temporal_order=temporal_order,
+        rowwise_rm_baseline=True,
+        rowwise_rm_mode="laplace",
+    )
+    batch_seconds = time.perf_counter() - batch_start
+    st_values = np.asarray(spatiotemporal.values, dtype=np.float64)
+    rowwise_values = np.asarray(spatiotemporal.rowwise_baseline, dtype=np.float64)
+    st_metadata = dict(spatiotemporal.metadata)
+    method_payloads["spatiotemporal_gn_4d"] = {
+        "mode": "batch_spatiotemporal_gn_4d",
+        "temporal": f"Dt_order_{int(temporal_order)}",
+        "exponential_alpha": None,
+        "cold_metadata": {
+            "offline_rm_build_seconds": float(batch_seconds),
+            "batch_solve_seconds": float(batch_seconds),
+            "normal_operator_shape": [
+                int(v) for v in st_metadata["normal_operator_shape"]
+            ],
+            "normal_operator_nnz": int(st_metadata["normal_operator_nnz"]),
+            "lambda_s": float(st_metadata["lambda_s"]),
+            "lambda_t": float(st_metadata["lambda_t"]),
+            "temporal_order": int(st_metadata["temporal_order"]),
+            "temporal_operator_shape": [
+                int(v) for v in st_metadata["temporal_operator_shape"]
+            ],
+            "spatial_prior_signature_hash": st_metadata["spatial_prior_signature_hash"],
+            "solver": st_metadata["solver"],
+        },
+        "online_metadata": {
+            "online_hot_path": "not_online_batch_spatiotemporal_gn",
+            "online_rm_apply_seconds": 0.0,
+            "forward_solve_count": 0,
+            "adjoint_solve_count": 0,
+            "ksp_solve_count": 0,
+            "jacobian_rebuild_count": 0,
+            "online_hot_path_replaced": bool(st_metadata["online_hot_path_replaced"]),
+        },
+        "rowwise_rm_comparison": st_metadata["rowwise_rm_comparison"],
+        "rowwise_rm_baseline": st_metadata["rowwise_rm_baseline"],
+        "rowwise_rm_fidelity": dynamic_fidelity_metrics(
+            truth,
+            rowwise_values,
+            clean_measurements=clean_measurements,
+            noisy_measurements=noisy_measurements,
+            positions=positions,
+            times=times,
+            onset_fraction=onset_fraction,
+        ),
+        "fidelity": dynamic_fidelity_metrics(
+            truth,
+            st_values,
+            clean_measurements=clean_measurements,
+            noisy_measurements=noisy_measurements,
+            positions=positions,
+            times=times,
+            onset_fraction=onset_fraction,
+        ),
+    }
 
     return {
         "name": fixture["name"],
@@ -523,6 +606,62 @@ def summarize_benchmark(fixtures: dict[str, dict[str, Any]]) -> dict[str, Any]:
             "method": best_speed[1],
             "value": float(best_speed[2]["propagation_speed_abs_error"]),
         },
+        "spatiotemporal_4d_vs_rowwise_rm": summarize_4d_vs_rowwise_rm(fixtures),
+    }
+
+
+def summarize_4d_vs_rowwise_rm(fixtures: dict[str, dict[str, Any]]) -> dict[str, Any]:
+    """Summarize 4D GN fidelity deltas relative to its rowwise RM baseline."""
+
+    rows: list[dict[str, Any]] = []
+    for fixture_name, fixture in fixtures.items():
+        method = fixture["methods"].get("spatiotemporal_gn_4d")
+        if method is None:
+            continue
+        fidelity = method["fidelity"]
+        baseline = method["rowwise_rm_fidelity"]
+        comparison = method["rowwise_rm_comparison"]
+        rows.append(
+            {
+                "fixture": fixture_name,
+                "rmse_4d": float(fidelity["rmse"]),
+                "rmse_rowwise_rm": float(baseline["rmse"]),
+                "rmse_delta_rowwise_minus_4d": float(
+                    baseline["rmse"] - fidelity["rmse"]
+                ),
+                "peak_time_mae_4d": float(fidelity["peak_time_mean_abs_error"]),
+                "peak_time_mae_rowwise_rm": float(baseline["peak_time_mean_abs_error"]),
+                "peak_time_mae_delta_rowwise_minus_4d": float(
+                    baseline["peak_time_mean_abs_error"]
+                    - fidelity["peak_time_mean_abs_error"]
+                ),
+                "speed_error_4d": float(fidelity["propagation_speed_abs_error"]),
+                "speed_error_rowwise_rm": float(
+                    baseline["propagation_speed_abs_error"]
+                ),
+                "speed_error_delta_rowwise_minus_4d": float(
+                    baseline["propagation_speed_abs_error"]
+                    - fidelity["propagation_speed_abs_error"]
+                ),
+                "relative_l2_delta_vs_rowwise_rm": float(
+                    comparison["relative_l2_delta"]
+                ),
+            }
+        )
+    if not rows:
+        return {"enabled": False, "fixtures": []}
+    return {
+        "enabled": True,
+        "fixtures": rows,
+        "mean_rmse_delta_rowwise_minus_4d": float(
+            np.mean([row["rmse_delta_rowwise_minus_4d"] for row in rows])
+        ),
+        "mean_speed_error_delta_rowwise_minus_4d": float(
+            np.mean([row["speed_error_delta_rowwise_minus_4d"] for row in rows])
+        ),
+        "mean_peak_time_mae_delta_rowwise_minus_4d": float(
+            np.mean([row["peak_time_mae_delta_rowwise_minus_4d"] for row in rows])
+        ),
     }
 
 
@@ -608,6 +747,80 @@ def write_payload(path: Path, payload: dict[str, Any]) -> Path:
     return target
 
 
+def write_markdown_report(path: Path, payload: dict[str, Any]) -> Path:
+    """Write a compact human-readable 4D GN vs rowwise RM report."""
+
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(_markdown_report(payload), encoding="utf-8")
+    return target
+
+
+def default_markdown_report_path(output_json: Path) -> Path:
+    """Derive default Markdown report path from the JSON artifact path."""
+
+    source = Path(output_json)
+    return source.with_name(f"{source.stem}_4d_gn_vs_rowwise_rm.md")
+
+
+def _markdown_report(payload: dict[str, Any]) -> str:
+    config = payload["config"]
+    summary = payload["summary"]["spatiotemporal_4d_vs_rowwise_rm"]
+    lines = [
+        "# Dynamic Validation: 4D GN vs Rowwise RM",
+        "",
+        f"- schema: `{payload['schema']}`",
+        f"- created_utc: `{payload['created_utc']}`",
+        f"- n_cells/n_frames/n_measurements: `{config['n_cells']}/{config['n_frames']}/{config['n_measurements']}`",
+        f"- lambda_s/lambda_t: `{config['lambda']}/{config['lambda_t']}`",
+        f"- temporal_order: `{config['temporal_order']}`",
+        f"- noise_std: `{config['noise_std']}`",
+        f"- peak_delay_gate: `passed={payload['gate']['passed']}` max_delay=`{_fmt(payload['gate']['max_peak_time_positive_delay'])}` tolerance=`{_fmt(payload['gate']['peak_delay_tolerance'])}`",
+        "",
+        "## Fixture Summary",
+        "",
+        "| fixture | rmse rowwise RM | rmse 4D GN | delta rowwise-4D | speed err rowwise | speed err 4D | peak MAE rowwise | peak MAE 4D | rel L2 vs rowwise |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|",
+    ]
+    for row in summary.get("fixtures", []):
+        lines.append(
+            "| {fixture} | {rmse_row} | {rmse_4d} | {rmse_delta} | "
+            "{speed_row} | {speed_4d} | {peak_row} | {peak_4d} | {rel_l2} |".format(
+                fixture=row["fixture"],
+                rmse_row=_fmt(row["rmse_rowwise_rm"]),
+                rmse_4d=_fmt(row["rmse_4d"]),
+                rmse_delta=_fmt(row["rmse_delta_rowwise_minus_4d"]),
+                speed_row=_fmt(row["speed_error_rowwise_rm"]),
+                speed_4d=_fmt(row["speed_error_4d"]),
+                peak_row=_fmt(row["peak_time_mae_rowwise_rm"]),
+                peak_4d=_fmt(row["peak_time_mae_4d"]),
+                rel_l2=_fmt(row["relative_l2_delta_vs_rowwise_rm"]),
+            )
+        )
+    lines.extend(
+        [
+            "",
+            "## Mean Deltas",
+            "",
+            f"- mean_rmse_delta_rowwise_minus_4d: `{_fmt(summary.get('mean_rmse_delta_rowwise_minus_4d', 0.0))}`",
+            f"- mean_speed_error_delta_rowwise_minus_4d: `{_fmt(summary.get('mean_speed_error_delta_rowwise_minus_4d', 0.0))}`",
+            f"- mean_peak_time_mae_delta_rowwise_minus_4d: `{_fmt(summary.get('mean_peak_time_mae_delta_rowwise_minus_4d', 0.0))}`",
+            "",
+            "## Method Notes",
+            "",
+            "- `rowwise RM`: independent framewise Laplace RM solve with the same spatial prior and measurement contract.",
+            "- `4D GN`: one windowed block normal solve with spatial `Rs` and temporal `Dt.T @ Dt` prior.",
+            "- Positive delta means 4D GN improved that error metric relative to rowwise RM.",
+            "",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _fmt(value: Any) -> str:
+    return f"{float(value):.6g}"
+
+
 def _validate_fixture_inputs(
     n_cells: int,
     n_frames: int,
@@ -679,11 +892,18 @@ def main(argv: Sequence[str] | None = None) -> int:
         noise_std=args.noise_std,
         seed=args.seed,
         temporal_alpha=args.temporal_alpha,
+        lambda_t=args.lambda_t,
+        temporal_order=args.temporal_order,
         onset_fraction=args.onset_fraction,
         peak_delay_tolerance=args.peak_delay_tolerance,
     )
     output = write_payload(args.output_json, payload)
+    report = write_markdown_report(
+        args.output_md or default_markdown_report_path(args.output_json),
+        payload,
+    )
     print(f"[OK] dynamic validation benchmark saved: {output}")
+    print(f"[OK] 4D GN vs rowwise RM report saved: {report}")
     if payload["gate"]["passed"] or args.no_fail_on_delay:
         return 0
     print(

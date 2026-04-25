@@ -45,25 +45,39 @@ def test_dynamic_validation_benchmark_reports_required_dynamic_metrics(
         ridge=1.0e-8,
         noise_std=1.0e-4,
         temporal_alpha=0.80,
+        lambda_t=0.12,
+        temporal_order=2,
         peak_delay_tolerance=0.30,
         seed=321,
     )
     output = module.write_payload(tmp_path / "dynamic_validation.json", payload)
+    report = module.write_markdown_report(
+        tmp_path / "dynamic_validation_4d_gn_vs_rowwise_rm.md",
+        payload,
+    )
     saved = json.loads(output.read_text(encoding="utf-8"))
+    report_text = report.read_text(encoding="utf-8")
 
     assert saved["schema"] == module.SCHEMA
     assert set(saved["fixtures"]) == {"travelling_wave", "plant_slow_pulse"}
     assert saved["gate"]["passed"] is True
     assert saved["summary"]["fixture_count"] == 2
-    assert saved["summary"]["method_count"] == 4
+    assert saved["summary"]["method_count"] == 6
+    assert saved["summary"]["spatiotemporal_4d_vs_rowwise_rm"]["enabled"] is True
+    assert "4D GN vs Rowwise RM" in report_text
+    assert "travelling_wave" in report_text
 
     for fixture in saved["fixtures"].values():
         assert (
             fixture["sequence"]["schema"] == "pyeidors-dynamic-measurement-sequence-v1"
         )
         assert fixture["truth_shape"] == [10, 12]
-        assert set(fixture["methods"]) == {"rm_raw", "measurement_ema"}
-        for method in fixture["methods"].values():
+        assert set(fixture["methods"]) == {
+            "rm_raw",
+            "measurement_ema",
+            "spatiotemporal_gn_4d",
+        }
+        for method_name, method in fixture["methods"].items():
             fidelity = method["fidelity"]
             for key in (
                 "onset_time_mean_abs_error",
@@ -81,6 +95,12 @@ def test_dynamic_validation_benchmark_reports_required_dynamic_metrics(
             assert online["adjoint_solve_count"] == 0
             assert online["ksp_solve_count"] == 0
             assert online["jacobian_rebuild_count"] == 0
+            if method_name == "spatiotemporal_gn_4d":
+                assert method["rowwise_rm_comparison"]["enabled"] is True
+                assert method["rowwise_rm_baseline"]["enabled"] is True
+                assert method["cold_metadata"]["lambda_t"] == 0.12
+                assert method["cold_metadata"]["temporal_order"] == 2
+                assert "rowwise_rm_fidelity" in method
 
 
 def test_peak_delay_gate_reports_violations() -> None:
