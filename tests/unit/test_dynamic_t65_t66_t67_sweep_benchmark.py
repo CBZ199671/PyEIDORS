@@ -141,4 +141,73 @@ def test_eidors_metric_review_rechecks_dynamic_sweep_payload(
     for winner in scenario["official_metric_winners"].values():
         assert winner["method_family"] in {"T65", "T66", "T67"}
         assert np.isfinite(winner["value"])
+    assert scenario["propagation_aware_A_gate"]["enabled"] is False
     assert "Per-Metric Winners" in report.read_text(encoding="utf-8")
+
+
+def test_dynamic_sweep_can_include_propagation_aware_kalman_transition(
+    tmp_path: Path,
+) -> None:
+    module = _load_module()
+    review_module = _load_review_module()
+
+    transition = module.propagation_transition_matrix(
+        np.linspace(0.0, 1.0, 6),
+        velocity=0.6,
+        dt=0.2,
+    )
+    assert transition.shape == (6, 6)
+    assert np.count_nonzero(transition) > 0
+    assert np.max(np.sum(transition, axis=1)) <= 1.0
+
+    payload = module.run_sweep(
+        n_cells=8,
+        n_frames=7,
+        n_measurements=5,
+        lambda_s=0.05,
+        lambda_t_values=(0.04,),
+        huber_delta_values=(0.03,),
+        temporal_order=2,
+        noise_std=1.0e-4,
+        seed=20260426,
+        max_outer_iterations=3,
+        peak_delay_limit=0.50,
+        kalman_lag_values=(0,),
+        kalman_process_noise_values=(0.02,),
+        kalman_measurement_noise_values=(0.04,),
+        kalman_transition_modes=("identity", "propagation"),
+        kalman_velocity_values=(0.68,),
+    )
+
+    rows = payload["t67_kalman_rows"]
+    assert len(rows) == 2
+    assert {row["transition_kind"] for row in rows} == {"identity", "propagation"}
+    propagation_row = next(
+        row for row in rows if row["transition_kind"] == "propagation"
+    )
+    assert propagation_row["transition_velocity"] == 0.68
+    assert propagation_row["transition_shift_per_frame"] > 0.0
+    assert propagation_row["metadata"]["transition"]["kind"] == "propagation"
+    review = payload["summary"]["propagation_aware_A_review"]
+    assert review["enabled"] is True
+    assert review["propagation_row_count"] == 1
+    assert review["identity_row_count"] == 1
+
+    source = module.write_payload(tmp_path / "dynamic_transition.json", payload)
+    reviewed = review_module.review_reports([source])
+    gate = reviewed["scenarios"][0]["propagation_aware_A_gate"]
+    gate_report = review_module.write_markdown(
+        tmp_path / "eidors_transition_review.md",
+        reviewed,
+    )
+
+    assert gate["enabled"] is True
+    assert gate["threshold"] == 4
+    assert set(gate["official_metric_winners"]) == set(
+        review_module.OFFICIAL_METRIC_ORDER
+    )
+    assert sum(gate["transition_winner_counts"].values()) == len(
+        review_module.OFFICIAL_METRIC_ORDER
+    )
+    assert isinstance(gate["passed"], bool)
+    assert "Propagation-A Gate" in gate_report.read_text(encoding="utf-8")

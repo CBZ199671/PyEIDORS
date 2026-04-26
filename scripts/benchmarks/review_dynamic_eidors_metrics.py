@@ -66,6 +66,11 @@ def review_reports(paths: Sequence[Path]) -> dict[str, Any]:
         for metric, winner in scenario["official_metric_winners"].items():
             method_counter[winner["method_family"]] += 1
             metric_counter[metric] += 1
+    propagation_gate_counter = Counter(
+        "passed" if scenario["propagation_aware_A_gate"]["passed"] else "failed"
+        for scenario in scenario_reviews
+        if scenario["propagation_aware_A_gate"]["enabled"]
+    )
     return {
         "schema": SCHEMA,
         "created_utc": datetime.now(timezone.utc).isoformat(),
@@ -76,6 +81,7 @@ def review_reports(paths: Sequence[Path]) -> dict[str, Any]:
             "legacy_best_method_counts": dict(legacy_counter),
             "official_metric_winner_counts": dict(method_counter),
             "official_metric_counts": dict(metric_counter),
+            "propagation_aware_A_gate_counts": dict(propagation_gate_counter),
             "review_statement": _review_statement(scenario_reviews),
         },
     }
@@ -125,6 +131,7 @@ def _review_one_report(*, path: Path, payload: Mapping[str, Any]) -> dict[str, A
         "official_winner_counts": dict(official_counts),
         "old_conclusion_supported_by_official_majority": official_counts[legacy_family]
         >= 4,
+        "propagation_aware_A_gate": _propagation_aware_A_gate(rows),
     }
 
 
@@ -153,6 +160,8 @@ def _candidate_rows(payload: Mapping[str, Any]) -> list[dict[str, Any]]:
                 "t67_kalman_fixed_lag",
                 item,
                 params={
+                    "transition_kind": item.get("transition_kind", "identity"),
+                    "transition_velocity": item.get("transition_velocity"),
                     "fixed_lag": item["fixed_lag"],
                     "process_noise": item["process_noise"],
                     "measurement_noise": item["measurement_noise"],
@@ -218,6 +227,61 @@ def _best_by_metric(rows: Sequence[Mapping[str, Any]], metric: str) -> dict[str,
     }
 
 
+def _propagation_aware_A_gate(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    t67_rows = [row for row in rows if str(row["method"]).startswith("t67")]
+    propagation_rows = [
+        row for row in t67_rows if row["params"].get("transition_kind") == "propagation"
+    ]
+    identity_rows = [
+        row for row in t67_rows if row["params"].get("transition_kind") == "identity"
+    ]
+    threshold = len(OFFICIAL_METRIC_ORDER) // 2 + 1
+    if not propagation_rows or not identity_rows:
+        return {
+            "enabled": False,
+            "passed": False,
+            "threshold": int(threshold),
+            "metric_count": int(len(OFFICIAL_METRIC_ORDER)),
+            "reason": "requires both identity and propagation T67 rows",
+            "identity_row_count": int(len(identity_rows)),
+            "propagation_row_count": int(len(propagation_rows)),
+        }
+    contenders = identity_rows + propagation_rows
+    winners = {
+        metric: _best_by_metric(contenders, metric) for metric in OFFICIAL_METRIC_ORDER
+    }
+    transition_counts = Counter(
+        str(winner["params"].get("transition_kind", "identity"))
+        for winner in winners.values()
+    )
+    deltas = {}
+    for metric in OFFICIAL_METRIC_ORDER:
+        best_identity = _best_by_metric(identity_rows, metric)
+        best_propagation = _best_by_metric(propagation_rows, metric)
+        deltas[metric] = {
+            "identity_minus_propagation": float(best_identity["value"])
+            - float(best_propagation["value"]),
+            "best_identity": best_identity,
+            "best_propagation": best_propagation,
+        }
+    passed = transition_counts["propagation"] >= threshold
+    return {
+        "enabled": True,
+        "passed": bool(passed),
+        "threshold": int(threshold),
+        "metric_count": int(len(OFFICIAL_METRIC_ORDER)),
+        "admission_policy": "pass iff propagation wins >=4/7 lower-is-better EIDORS-aligned metrics among T67 identity/propagation rows",
+        "identity_row_count": int(len(identity_rows)),
+        "propagation_row_count": int(len(propagation_rows)),
+        "transition_winner_counts": dict(transition_counts),
+        "official_metric_winners": winners,
+        "metric_deltas_identity_minus_propagation": deltas,
+        "review_statement": "propagation-aware A admitted for this scenario"
+        if passed
+        else "propagation-aware A kept experimental for this scenario",
+    }
+
+
 def _method_family(method: str) -> str:
     if method.startswith("t65"):
         return "T65"
@@ -250,12 +314,12 @@ def _markdown(payload: Mapping[str, Any]) -> str:
         "",
         "## Scenario Summary",
         "",
-        "| source | noise | seed | legacy best | official winner counts | official majority supports legacy |",
-        "|---|---:|---:|---|---|:---:|",
+        "| source | noise | seed | legacy best | official winner counts | official majority supports legacy | propagation-A gate |",
+        "|---|---:|---:|---|---|:---:|---|",
     ]
     for scenario in payload["scenarios"]:
         lines.append(
-            "| {source} | {noise} | {seed} | {legacy} | {counts} | {supported} |".format(
+            "| {source} | {noise} | {seed} | {legacy} | {counts} | {supported} | {propagation_gate} |".format(
                 source=Path(scenario["source"]).name,
                 noise=_fmt(scenario["config"]["noise_std"]),
                 seed=scenario["config"]["seed"],
@@ -267,6 +331,9 @@ def _markdown(payload: Mapping[str, Any]) -> str:
                 supported="yes"
                 if scenario["old_conclusion_supported_by_official_majority"]
                 else "no",
+                propagation_gate=_propagation_gate_cell(
+                    scenario["propagation_aware_A_gate"]
+                ),
             )
         )
     lines.extend(
@@ -303,11 +370,74 @@ def _markdown(payload: Mapping[str, Any]) -> str:
             "",
         ]
     )
+    propagation_scenarios = [
+        scenario
+        for scenario in payload["scenarios"]
+        if scenario["propagation_aware_A_gate"]["enabled"]
+    ]
+    if propagation_scenarios:
+        lines.extend(
+            [
+                "## Propagation-A Gate",
+                "",
+                "| source | winner counts | pass | AR err | PE | RES | SD | RNG | NF | solution error |",
+                "|---|---|:---:|---|---|---|---|---|---|---|",
+            ]
+        )
+        for scenario in propagation_scenarios:
+            gate = scenario["propagation_aware_A_gate"]
+            winners = gate["official_metric_winners"]
+            lines.append(
+                "| {source} | {counts} | {passed} | {ar} | {pe} | {res} | {sd} | {rng} | {nf} | {se} |".format(
+                    source=Path(scenario["source"]).name,
+                    counts=", ".join(
+                        f"{key}:{value}"
+                        for key, value in sorted(
+                            gate["transition_winner_counts"].items()
+                        )
+                    ),
+                    passed="yes" if gate["passed"] else "no",
+                    ar=_winner_cell(winners["AR_error"]),
+                    pe=_winner_cell(winners["PE"]),
+                    res=_winner_cell(winners["RES"]),
+                    sd=_winner_cell(winners["SD"]),
+                    rng=_winner_cell(winners["RNG"]),
+                    nf=_winner_cell(winners["NF"]),
+                    se=_winner_cell(winners["solution_error"]),
+                )
+            )
+        lines.extend(
+            [
+                "",
+                "- Propagation-A gate compares only T67 identity vs T67 propagation rows; promotion requires a 4/7 majority across the EIDORS-aligned metrics above.",
+                "",
+            ]
+        )
     return "\n".join(lines)
 
 
 def _winner_cell(winner: Mapping[str, Any]) -> str:
-    return f"{winner['method_family']} {_fmt(winner['value'])}"
+    label = str(winner["method_family"])
+    params = winner.get("params", {})
+    if label == "T67" and isinstance(params, Mapping):
+        transition = params.get("transition_kind")
+        if transition:
+            label = f"{label}/{transition}"
+            velocity = params.get("transition_velocity")
+            if velocity is not None:
+                label = f"{label}@v={_fmt(velocity)}"
+    return f"{label} {_fmt(winner['value'])}"
+
+
+def _propagation_gate_cell(gate: Mapping[str, Any]) -> str:
+    if not gate["enabled"]:
+        return "n/a"
+    counts = ", ".join(
+        f"{key}:{value}"
+        for key, value in sorted(gate["transition_winner_counts"].items())
+    )
+    status = "pass" if gate["passed"] else "hold"
+    return f"{status} ({counts})"
 
 
 def _fmt(value: Any) -> str:

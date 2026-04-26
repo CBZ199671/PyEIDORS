@@ -59,6 +59,16 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--kalman-measurement-noise", default="0.01,0.02,0.04,0.08")
     parser.add_argument("--kalman-initial-covariance", type=float, default=1.0)
     parser.add_argument(
+        "--kalman-transition",
+        default="identity",
+        help="Comma-separated transition models: identity, propagation.",
+    )
+    parser.add_argument(
+        "--kalman-velocity",
+        default="0.50,0.68,0.85",
+        help="Comma-separated propagation velocities in fixture position units per time unit.",
+    )
+    parser.add_argument(
         "--output-json",
         type=Path,
         default=Path(
@@ -95,6 +105,8 @@ def run_sweep(
     kalman_process_noise_values: Sequence[float] = (0.005, 0.01, 0.02, 0.04, 0.08),
     kalman_measurement_noise_values: Sequence[float] = (0.01, 0.02, 0.04, 0.08),
     kalman_initial_covariance: float = 1.0,
+    kalman_transition_modes: Sequence[str] = ("identity",),
+    kalman_velocity_values: Sequence[float] = (0.50, 0.68, 0.85),
 ) -> dict[str, Any]:
     """Run deterministic T65/T66/T67 hyperparameter sweep."""
 
@@ -108,6 +120,11 @@ def run_sweep(
     kalman_r_grid = _positive_grid(
         kalman_measurement_noise_values,
         name="kalman_measurement_noise_values",
+    )
+    kalman_transition_grid = _transition_mode_grid(kalman_transition_modes)
+    kalman_velocity_grid = _positive_grid(
+        kalman_velocity_values,
+        name="kalman_velocity_values",
     )
     fixture = build_travelling_wave_fixture(
         n_cells=n_cells,
@@ -205,47 +222,56 @@ def run_sweep(
     )
     rm_seconds = time.perf_counter() - rm_start
     t67_rows: list[dict[str, Any]] = []
-    for lag in kalman_lag_grid:
-        for process_noise in kalman_q_grid:
-            for measurement_noise in kalman_r_grid:
-                kalman_start = time.perf_counter()
-                kalman = run_dynamic_kalman_filter(
-                    rm.rm,
-                    fixture["measurements"],
-                    observation_mode="rm_observation",
-                    process_noise=process_noise,
-                    measurement_noise=measurement_noise,
-                    initial_covariance=kalman_initial_covariance,
-                    fixed_lag=lag,
-                    timestamps=fixture["times"],
-                )
-                kalman_seconds = time.perf_counter() - kalman_start
-                kalman_metrics = dynamic_fidelity_metrics(
-                    truth,
-                    kalman.values,
-                    clean_measurements=fixture["clean_measurements"],
-                    noisy_measurements=fixture["measurements"],
-                    jacobian=fixture["jacobian"],
-                    positions=fixture["positions"],
-                    times=fixture["times"],
-                    onset_fraction=onset_fraction,
-                )
-                t67_rows.append(
-                    _t67_row_payload(
-                        fixed_lag=lag,
+    transitions = build_kalman_transition_payloads(
+        kalman_transition_grid,
+        positions=fixture["positions"],
+        times=fixture["times"],
+        velocity_values=kalman_velocity_grid,
+    )
+    for transition_payload in transitions:
+        for lag in kalman_lag_grid:
+            for process_noise in kalman_q_grid:
+                for measurement_noise in kalman_r_grid:
+                    kalman_start = time.perf_counter()
+                    kalman = run_dynamic_kalman_filter(
+                        rm.rm,
+                        fixture["measurements"],
+                        observation_mode="rm_observation",
+                        transition=transition_payload["matrix"],
                         process_noise=process_noise,
                         measurement_noise=measurement_noise,
                         initial_covariance=kalman_initial_covariance,
-                        kalman_metrics=kalman_metrics,
-                        solve_seconds=kalman_seconds,
-                        rm_build_seconds=rm_seconds,
-                        metadata=dict(kalman.metadata),
-                        best_t65=best_t65,
-                        best_t66=best_t66,
-                        peak_delay_limit=peak_delay_limit,
-                        rmse_ratio_limit=rmse_ratio_limit,
+                        fixed_lag=lag,
+                        timestamps=fixture["times"],
                     )
-                )
+                    kalman_seconds = time.perf_counter() - kalman_start
+                    kalman_metrics = dynamic_fidelity_metrics(
+                        truth,
+                        kalman.values,
+                        clean_measurements=fixture["clean_measurements"],
+                        noisy_measurements=fixture["measurements"],
+                        jacobian=fixture["jacobian"],
+                        positions=fixture["positions"],
+                        times=fixture["times"],
+                        onset_fraction=onset_fraction,
+                    )
+                    t67_rows.append(
+                        _t67_row_payload(
+                            transition_payload=transition_payload,
+                            fixed_lag=lag,
+                            process_noise=process_noise,
+                            measurement_noise=measurement_noise,
+                            initial_covariance=kalman_initial_covariance,
+                            kalman_metrics=kalman_metrics,
+                            solve_seconds=kalman_seconds,
+                            rm_build_seconds=rm_seconds,
+                            metadata=dict(kalman.metadata),
+                            best_t65=best_t65,
+                            best_t66=best_t66,
+                            peak_delay_limit=peak_delay_limit,
+                            rmse_ratio_limit=rmse_ratio_limit,
+                        )
+                    )
 
     summary = summarize_sweep(
         t66_rows,
@@ -256,6 +282,8 @@ def run_sweep(
         kalman_lag_grid=kalman_lag_grid,
         kalman_q_grid=kalman_q_grid,
         kalman_r_grid=kalman_r_grid,
+        kalman_transition_grid=kalman_transition_grid,
+        kalman_velocity_grid=kalman_velocity_grid,
         peak_delay_limit=peak_delay_limit,
         rmse_ratio_limit=rmse_ratio_limit,
     )
@@ -283,6 +311,8 @@ def run_sweep(
             "kalman_process_noise_values": [float(v) for v in kalman_q_grid],
             "kalman_measurement_noise_values": [float(v) for v in kalman_r_grid],
             "kalman_initial_covariance": float(kalman_initial_covariance),
+            "kalman_transition_modes": list(kalman_transition_grid),
+            "kalman_velocity_values": [float(v) for v in kalman_velocity_grid],
         },
         "t65_l2_by_lambda_t": {str(key): value for key, value in t65_by_lambda.items()},
         "t66_rows": t66_rows,
@@ -302,6 +332,8 @@ def summarize_sweep(
     kalman_lag_grid: Sequence[int],
     kalman_q_grid: Sequence[float],
     kalman_r_grid: Sequence[float],
+    kalman_transition_grid: Sequence[str],
+    kalman_velocity_grid: Sequence[float],
     peak_delay_limit: float,
     rmse_ratio_limit: float,
 ) -> dict[str, Any]:
@@ -321,6 +353,8 @@ def summarize_sweep(
         kalman_lag_grid=kalman_lag_grid,
         kalman_q_grid=kalman_q_grid,
         kalman_r_grid=kalman_r_grid,
+        kalman_transition_grid=kalman_transition_grid,
+        kalman_velocity_grid=kalman_velocity_grid,
         peak_delay_limit=peak_delay_limit,
         rmse_ratio_limit=rmse_ratio_limit,
     )
@@ -363,7 +397,12 @@ def summarize_sweep(
         "recommended_kalman_measurement_noise_range": t67_summary[
             "recommended_measurement_noise_range"
         ],
+        "recommended_kalman_transition_modes": t67_summary[
+            "recommended_transition_modes"
+        ],
+        "recommended_kalman_velocity_range": t67_summary["recommended_velocity_range"],
         "recommended_kalman_region_rows": t67_summary["recommended_region_rows"],
+        "propagation_aware_A_review": _propagation_aware_review(t67_rows),
         "comparison": {
             "best_t67_vs_best_t65": _reference_delta(
                 best_t67,
@@ -384,6 +423,8 @@ def summarize_sweep(
             "kalman_lag": [int(v) for v in kalman_lag_grid],
             "kalman_process_noise": [float(v) for v in kalman_q_grid],
             "kalman_measurement_noise": [float(v) for v in kalman_r_grid],
+            "kalman_transition": list(kalman_transition_grid),
+            "kalman_velocity": [float(v) for v in kalman_velocity_grid],
         },
     }
 
@@ -403,6 +444,115 @@ def write_markdown_report(path: Path, payload: Mapping[str, Any]) -> Path:
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(_markdown_report(payload), encoding="utf-8")
     return target
+
+
+def build_kalman_transition_payloads(
+    modes: Sequence[str],
+    *,
+    positions: Sequence[float],
+    times: Sequence[float],
+    velocity_values: Sequence[float],
+) -> tuple[dict[str, Any], ...]:
+    """Build opt-in Kalman transition matrices for the travelling-wave fixture."""
+
+    resolved_modes = _transition_mode_grid(modes)
+    positions_arr = np.asarray(positions, dtype=np.float64).reshape(-1)
+    times_arr = np.asarray(times, dtype=np.float64).reshape(-1)
+    if positions_arr.size <= 1:
+        raise ValueError("positions must contain at least two cells.")
+    if times_arr.size <= 1:
+        raise ValueError("times must contain at least two frames.")
+    dt = float(np.median(np.diff(times_arr)))
+    if not np.isfinite(dt) or dt <= 0.0:
+        raise ValueError("times must be strictly increasing enough to infer dt.")
+    payloads: list[dict[str, Any]] = []
+    n_state = int(positions_arr.size)
+    for mode in resolved_modes:
+        if mode == "identity":
+            payloads.append(
+                {
+                    "kind": "identity",
+                    "matrix": None,
+                    "velocity": None,
+                    "shift_per_frame": 0.0,
+                    "metadata": {
+                        "kind": "identity",
+                        "matrix_shape": [n_state, n_state],
+                        "boundary": "none",
+                    },
+                }
+            )
+            continue
+        for velocity in velocity_values:
+            matrix = propagation_transition_matrix(
+                positions_arr,
+                velocity=float(velocity),
+                dt=dt,
+            )
+            row_sums = np.sum(matrix, axis=1)
+            payloads.append(
+                {
+                    "kind": "propagation",
+                    "matrix": matrix,
+                    "velocity": float(velocity),
+                    "shift_per_frame": float(velocity) * dt,
+                    "metadata": {
+                        "kind": "propagation",
+                        "velocity": float(velocity),
+                        "dt": dt,
+                        "shift_per_frame": float(velocity) * dt,
+                        "boundary": "zero_open",
+                        "matrix_shape": [int(v) for v in matrix.shape],
+                        "matrix_nnz": int(np.count_nonzero(matrix)),
+                        "row_sum_min": float(np.min(row_sums)),
+                        "row_sum_max": float(np.max(row_sums)),
+                    },
+                }
+            )
+    return tuple(payloads)
+
+
+def propagation_transition_matrix(
+    positions: Sequence[float],
+    *,
+    velocity: float,
+    dt: float,
+) -> np.ndarray:
+    """Construct a 1D open-boundary advection matrix for ``x_t = A x_{t-1}``."""
+
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1)
+    if pos.size <= 1:
+        raise ValueError("positions must contain at least two cells.")
+    if np.any(np.diff(pos) <= 0.0):
+        raise ValueError("positions must be strictly increasing.")
+    vel = float(velocity)
+    step = float(dt)
+    if not np.isfinite(vel) or vel <= 0.0:
+        raise ValueError("velocity must be finite and positive.")
+    if not np.isfinite(step) or step <= 0.0:
+        raise ValueError("dt must be finite and positive.")
+    shift = vel * step
+    matrix = np.zeros((pos.size, pos.size), dtype=np.float64)
+    for row, target_pos in enumerate(pos):
+        source_pos = target_pos - shift
+        if source_pos < pos[0] or source_pos > pos[-1]:
+            continue
+        right = int(np.searchsorted(pos, source_pos, side="left"))
+        if right == 0:
+            matrix[row, 0] = 1.0
+            continue
+        if right < pos.size and np.isclose(source_pos, pos[right]):
+            matrix[row, right] = 1.0
+            continue
+        if right >= pos.size:
+            matrix[row, -1] = 1.0
+            continue
+        left = right - 1
+        span = float(pos[right] - pos[left])
+        frac = float((source_pos - pos[left]) / span)
+        matrix[row, left] = 1.0 - frac
+        matrix[row, right] = frac
+    return np.ascontiguousarray(matrix, dtype=np.float64)
 
 
 def _t65_row_payload(
@@ -505,6 +655,7 @@ def _t66_row_payload(
 
 def _t67_row_payload(
     *,
+    transition_payload: Mapping[str, Any],
     fixed_lag: int,
     process_noise: float,
     measurement_noise: float,
@@ -537,12 +688,17 @@ def _t67_row_payload(
         and float(kalman_metrics["propagation_speed_abs_error"]) <= reference_speed
     )
     latency_seconds = float(metadata["latency_seconds"])
+    transition_meta = dict(transition_payload["metadata"])
     return {
+        "transition_kind": str(transition_payload["kind"]),
+        "transition_velocity": transition_payload["velocity"],
+        "transition_shift_per_frame": float(transition_payload["shift_per_frame"]),
         "fixed_lag": int(fixed_lag),
         "process_noise": float(process_noise),
         "measurement_noise": float(measurement_noise),
         "initial_covariance": float(initial_covariance),
         "method": "t67_kalman_fixed_lag",
+        "method_variant": f"t67_kalman_{transition_payload['kind']}_transition",
         "baseline": "t65_best_l2_and_t66_best_tv_huber",
         "solve_seconds": float(solve_seconds),
         "rm_build_seconds": float(rm_build_seconds),
@@ -578,6 +734,7 @@ def _t67_row_payload(
         "passes_fast_conduction_gate": bool(passes),
         "metrics": dict(kalman_metrics),
         "metadata": {
+            "transition": transition_meta,
             "schema": metadata["schema"],
             "observation_mode": metadata["observation_mode"],
             "online_hot_path": metadata["online_hot_path"],
@@ -649,6 +806,8 @@ def _summarize_t67_rows(
     kalman_lag_grid: Sequence[int],
     kalman_q_grid: Sequence[float],
     kalman_r_grid: Sequence[float],
+    kalman_transition_grid: Sequence[str],
+    kalman_velocity_grid: Sequence[float],
     peak_delay_limit: float,
     rmse_ratio_limit: float,
 ) -> dict[str, Any]:
@@ -685,11 +844,23 @@ def _summarize_t67_rows(
         "recommended_measurement_noise_range": _range(
             [float(row["measurement_noise"]) for row in stable]
         ),
+        "recommended_transition_modes": sorted(
+            {str(row["transition_kind"]) for row in stable}
+        ),
+        "recommended_velocity_range": _optional_range(
+            [
+                float(row["transition_velocity"])
+                for row in stable
+                if row["transition_velocity"] is not None
+            ]
+        ),
         "recommended_region_rows": [_compact_t67_row(row) for row in stable],
         "grid": {
             "kalman_lag": [int(v) for v in kalman_lag_grid],
             "kalman_process_noise": [float(v) for v in kalman_q_grid],
             "kalman_measurement_noise": [float(v) for v in kalman_r_grid],
+            "kalman_transition": list(kalman_transition_grid),
+            "kalman_velocity": [float(v) for v in kalman_velocity_grid],
         },
     }
 
@@ -698,6 +869,51 @@ def _best_t66_row(rows: Sequence[Mapping[str, Any]]) -> Mapping[str, Any]:
     candidates = [row for row in rows if bool(row["passes_fast_conduction_gate"])]
     pool = candidates or list(rows)
     return min(pool, key=lambda row: float(row["fast_conduction_score"]))
+
+
+def _propagation_aware_review(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    propagation = [row for row in rows if row.get("transition_kind") == "propagation"]
+    identity = [row for row in rows if row.get("transition_kind") == "identity"]
+    if not propagation:
+        return {
+            "enabled": False,
+            "best_propagation": None,
+            "best_identity": _compact_t67_row(
+                min(rows, key=lambda row: float(row["fast_conduction_score"]))
+            )
+            if rows
+            else None,
+        }
+    best_prop = min(propagation, key=lambda row: float(row["fast_conduction_score"]))
+    best_identity = (
+        min(identity, key=lambda row: float(row["fast_conduction_score"]))
+        if identity
+        else None
+    )
+    review: dict[str, Any] = {
+        "enabled": True,
+        "propagation_row_count": int(len(propagation)),
+        "identity_row_count": int(len(identity)),
+        "best_propagation": _compact_t67_row(best_prop),
+        "best_identity": _compact_t67_row(best_identity) if best_identity else None,
+        "gate_passing_propagation_count": int(
+            sum(bool(row["passes_fast_conduction_gate"]) for row in propagation)
+        ),
+    }
+    if best_identity is not None:
+        review["best_propagation_vs_identity"] = {
+            "score_delta_identity_minus_propagation": float(
+                best_identity["fast_conduction_score"]
+            )
+            - float(best_prop["fast_conduction_score"]),
+            "speed_delta_identity_minus_propagation": float(
+                best_identity["speed_error_t67"]
+            )
+            - float(best_prop["speed_error_t67"]),
+            "rmse_delta_identity_minus_propagation": float(best_identity["rmse_t67"])
+            - float(best_prop["rmse_t67"]),
+        }
+    return review
 
 
 def _fast_conduction_score(metrics: Mapping[str, Any], *, rmse_ratio: float) -> float:
@@ -746,6 +962,10 @@ def _compact_t66_row(row: Mapping[str, Any]) -> dict[str, Any]:
 def _compact_t67_row(row: Mapping[str, Any]) -> dict[str, Any]:
     keys = (
         "method",
+        "method_variant",
+        "transition_kind",
+        "transition_velocity",
+        "transition_shift_per_frame",
         "fixed_lag",
         "process_noise",
         "measurement_noise",
@@ -794,6 +1014,8 @@ def _overall_candidate(method: str, row: Mapping[str, Any]) -> dict[str, Any]:
                 "fixed_lag": row["fixed_lag"],
                 "process_noise": row["process_noise"],
                 "measurement_noise": row["measurement_noise"],
+                "transition_kind": row.get("transition_kind"),
+                "transition_velocity": row.get("transition_velocity"),
             }
         )
     return out
@@ -860,6 +1082,8 @@ def _markdown_report(payload: Mapping[str, Any]) -> str:
         f"- T67 fixed_lag range: `{_int_range_text(summary['recommended_kalman_fixed_lag_range'])}`",
         f"- T67 process_noise Q range: `{_range_text(summary['recommended_kalman_process_noise_range'])}`",
         f"- T67 measurement_noise R range: `{_range_text(summary['recommended_kalman_measurement_noise_range'])}`",
+        f"- T67 transition modes: `{', '.join(summary['recommended_kalman_transition_modes'])}`",
+        f"- T67 propagation velocity range: `{_optional_range_text(summary['recommended_kalman_velocity_range'])}`",
         f"- T67 gate-passing rows: `{summary['t67_candidate_count']}/{summary['t67_row_count']}`; if zero, the range is the best-scored fallback region.",
         f"- best overall score: `{summary['best_overall_by_fast_conduction_score']['method']}`",
         "",
@@ -873,8 +1097,8 @@ def _markdown_report(payload: Mapping[str, Any]) -> str:
         "",
         "## Top T67 Kalman Lag/Q/R Rows",
         "",
-        "| lag | Q | R | latency | score | speed err | peak MAE | onset MAE | RMSE ratio vs T65 | speed delta vs T66 | pass |",
-        "|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
+        "| A | lag | Q | R | latency | score | speed err | peak MAE | onset MAE | RMSE ratio vs T65 | speed delta vs T66 | pass |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|:---:|",
     ]
     for row in sorted(
         payload["t67_kalman_rows"],
@@ -884,7 +1108,8 @@ def _markdown_report(payload: Mapping[str, Any]) -> str:
         ),
     )[:12]:
         lines.append(
-            "| {lag} | {q} | {r} | {latency} | {score} | {speed} | {peak} | {onset} | {rmse_ratio} | {speed_delta} | {passed} |".format(
+            "| {transition} | {lag} | {q} | {r} | {latency} | {score} | {speed} | {peak} | {onset} | {rmse_ratio} | {speed_delta} | {passed} |".format(
+                transition=_transition_label(row),
                 lag=int(row["fixed_lag"]),
                 q=_fmt(row["process_noise"]),
                 r=_fmt(row["measurement_noise"]),
@@ -965,7 +1190,8 @@ def _best_t66_markdown_row(row: Mapping[str, Any]) -> str:
 
 
 def _best_t67_markdown_row(row: Mapping[str, Any]) -> str:
-    return "| T67 Kalman | lag={lag}, Q={q}, R={r} | {score} | {speed} | {peak} | {onset} | {rmse} |".format(
+    return "| T67 Kalman | A={transition}, lag={lag}, Q={q}, R={r} | {score} | {speed} | {peak} | {onset} | {rmse} |".format(
+        transition=_transition_label(row),
         lag=int(row["fixed_lag"]),
         q=_fmt(row["process_noise"]),
         r=_fmt(row["measurement_noise"]),
@@ -977,6 +1203,14 @@ def _best_t67_markdown_row(row: Mapping[str, Any]) -> str:
     )
 
 
+def _transition_label(row: Mapping[str, Any]) -> str:
+    kind = str(row.get("transition_kind", "identity"))
+    velocity = row.get("transition_velocity")
+    if velocity is None:
+        return kind
+    return f"{kind}@v={_fmt(velocity)}"
+
+
 def _parse_grid(text: str) -> tuple[float, ...]:
     values = [float(item.strip()) for item in str(text).split(",") if item.strip()]
     return tuple(values)
@@ -985,6 +1219,10 @@ def _parse_grid(text: str) -> tuple[float, ...]:
 def _parse_int_grid(text: str) -> tuple[int, ...]:
     values = [int(item.strip()) for item in str(text).split(",") if item.strip()]
     return tuple(values)
+
+
+def _parse_text_grid(text: str) -> tuple[str, ...]:
+    return tuple(item.strip() for item in str(text).split(",") if item.strip())
 
 
 def _positive_grid(values: Sequence[float], *, name: str) -> tuple[float, ...]:
@@ -1005,9 +1243,34 @@ def _nonnegative_int_grid(values: Sequence[int], *, name: str) -> tuple[int, ...
     return out
 
 
+def _transition_mode_grid(
+    values: Sequence[str], *, name: str = "kalman_transition"
+) -> tuple[str, ...]:
+    out = tuple(str(value).strip().lower() for value in values)
+    if not out:
+        raise ValueError(f"{name} must not be empty.")
+    allowed = {"identity", "propagation"}
+    bad = [value for value in out if value not in allowed]
+    if bad:
+        raise ValueError(f"{name} entries must be one of {sorted(allowed)}; got {bad}.")
+    seen: set[str] = set()
+    unique: list[str] = []
+    for value in out:
+        if value not in seen:
+            unique.append(value)
+            seen.add(value)
+    return tuple(unique)
+
+
 def _range(values: Sequence[float]) -> dict[str, float]:
     arr = np.asarray(values, dtype=np.float64)
     return {"min": float(np.min(arr)), "max": float(np.max(arr))}
+
+
+def _optional_range(values: Sequence[float]) -> dict[str, float] | None:
+    if not values:
+        return None
+    return _range(values)
 
 
 def _int_range(values: Sequence[int]) -> dict[str, int]:
@@ -1017,6 +1280,10 @@ def _int_range(values: Sequence[int]) -> dict[str, int]:
 
 def _range_text(value: Mapping[str, Any]) -> str:
     return f"{_fmt(value['min'])}..{_fmt(value['max'])}"
+
+
+def _optional_range_text(value: Mapping[str, Any] | None) -> str:
+    return "none" if value is None else _range_text(value)
 
 
 def _int_range_text(value: Mapping[str, Any]) -> str:
@@ -1060,6 +1327,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         kalman_process_noise_values=_parse_grid(args.kalman_process_noise),
         kalman_measurement_noise_values=_parse_grid(args.kalman_measurement_noise),
         kalman_initial_covariance=args.kalman_initial_covariance,
+        kalman_transition_modes=_parse_text_grid(args.kalman_transition),
+        kalman_velocity_values=_parse_grid(args.kalman_velocity),
     )
     json_path = write_payload(args.output_json, payload)
     md_path = write_markdown_report(args.output_md, payload)
@@ -1071,6 +1340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"{_int_range_text(summary['recommended_kalman_fixed_lag_range'])}, "
         f"Q={_range_text(summary['recommended_kalman_process_noise_range'])}, "
         f"R={_range_text(summary['recommended_kalman_measurement_noise_range'])} "
+        f"A={','.join(summary['recommended_kalman_transition_modes'])} "
         f"(gate candidates={summary['t67_candidate_count']}/{summary['t67_row_count']})"
     )
     return 0
