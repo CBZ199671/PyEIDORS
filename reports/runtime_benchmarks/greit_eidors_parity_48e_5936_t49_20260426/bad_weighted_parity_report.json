@@ -1,0 +1,240 @@
+{
+  "all_passed": true,
+  "comparisons": [
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "Y",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        5936,
+        144
+      ],
+      "shape_pyeidors": [
+        5936,
+        144
+      ],
+      "source": "vh/vi"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "D",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        144,
+        144
+      ],
+      "shape_pyeidors": [
+        144,
+        144
+      ],
+      "source": "D"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "PJt",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        144,
+        5936
+      ],
+      "shape_pyeidors": [
+        144,
+        5936
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "M",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        5936,
+        5936
+      ],
+      "shape_pyeidors": [
+        5936,
+        5936
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "noiselev",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        1
+      ],
+      "shape_pyeidors": [
+        1
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "RM",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        144,
+        5936
+      ],
+      "shape_pyeidors": [
+        144,
+        5936
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "RM@dv",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        144
+      ],
+      "shape_pyeidors": [
+        144
+      ],
+      "source": "target_index=0"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "metrics",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": {
+        "AR": [],
+        "PE": [],
+        "RES": [],
+        "RNG": [],
+        "SD": []
+      },
+      "shape_pyeidors": {
+        "AR": [],
+        "PE": [],
+        "RES": [],
+        "RNG": [],
+        "SD": []
+      },
+      "source": "greit_metrics target_index=0"
+    }
+  ],
+  "component_order": [
+    "Y",
+    "D",
+    "PJt",
+    "M",
+    "noiselev",
+    "RM",
+    "RM@dv",
+    "metrics"
+  ],
+  "eidors_shapes": {
+    "D": [
+      144,
+      144
+    ],
+    "M": [
+      5936,
+      5936
+    ],
+    "PJt": [
+      144,
+      5936
+    ],
+    "RM": [
+      144,
+      5936
+    ],
+    "Y": [
+      5936,
+      144
+    ],
+    "noiselev": [
+      1
+    ],
+    "vh": [
+      5936
+    ],
+    "vi": [
+      5936,
+      144
+    ],
+    "weight": [
+      1
+    ],
+    "xyzr": [
+      4,
+      144
+    ]
+  },
+  "fixture_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_eidors_greit_fixture.h5",
+  "metric_keys": [
+    "AR",
+    "PE",
+    "RES",
+    "SD",
+    "RNG"
+  ],
+  "normalize": true,
+  "pyeidors_artifact_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_greit_eidors_rm.h5",
+  "pyeidors_source": "artifact",
+  "schema": "pyeidors-greit-eidors-parity-report-v1",
+  "target_index": 0,
+  "tolerance_source": "cli-or-default",
+  "tolerances": {
+    "D": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "M": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "PJt": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "RM": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "RM@dv": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "Y": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "metrics": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "noiselev": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    }
+  }
+}

@@ -1,0 +1,1253 @@
+{
+  "artifacts": {
+    "cases": {
+      "bad_weighted": {
+        "fixture": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_eidors_greit_fixture.h5",
+        "greit_artifact": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_greit_eidors_rm.h5",
+        "metrics": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_greit_metrics.json",
+        "parity_report": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_parity_report.json"
+      }
+    },
+    "markdown_report": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/README.md",
+    "summary_json": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/summary.json"
+  },
+  "cases": {
+    "bad_weighted": {
+      "artifact_load": {
+        "metadata": {
+          "algorithm": "greit-3d",
+          "artifact_format": "hdf5",
+          "artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
+          "bad_channel_count": 192,
+          "batch_forward_solve_count": 5,
+          "cache_signature_hash": "86b3a93c465c0634d5e532dc852903eb04767c4fe2b89f6729cf4e4153207b1b",
+          "cache_signature_payload": {
+            "desired_solution_fn": "GREIT_desired_img_sigmoid",
+            "desired_solution_params": {
+              "builder": "GREIT_desired_img",
+              "coordinate_mode": "rec_model_physical",
+              "d_shape": [
+                144,
+                144
+              ],
+              "desired_solution_fn": "GREIT_desired_img_sigmoid",
+              "eidors_component_parity": true,
+              "n_rec_parameters": 144,
+              "n_targets": 144,
+              "radius_max": 0.035,
+              "radius_min": 0.035,
+              "target_values_requires_explicit_opt_in": true,
+              "target_values_used": false,
+              "xyz_shape": [
+                3,
+                144
+              ],
+              "xyz_source": "GREITFiniteTargetResponses.xyzr"
+            },
+            "finite_target_inputs": {
+              "bad_channel_count": 192,
+              "batch_size": 32,
+              "cache_hit": false,
+              "cache_key": "t49-bad_weighted",
+              "difference_normalization": "ratio",
+              "eidors_parity": true,
+              "measurement_weight_kind": "diagonal",
+              "n_forward_parameters": 144,
+              "n_measurements": 5936,
+              "n_targets": 144,
+              "response_orientation": "measurements_by_targets",
+              "target_contrast_mode": "additive_conductivity_delta",
+              "target_offset": null,
+              "target_plane": null,
+              "target_radius_source": "target_radius",
+              "target_source": "GREIT3D_distribution",
+              "training_mode": "forward"
+            },
+            "fwd_model_signature": "t49-bad_weighted-48e-5936-surrogate",
+            "image_snr": null,
+            "keep_model_components": true,
+            "noise_covar": 1.0,
+            "normalize": true,
+            "scalar_weight": 0.02,
+            "schema": "pyeidors-greit-cache-signature-v1",
+            "target_distribution_grid": {
+              "axis_source": "imgsz,imgsz,imgsz",
+              "builder": "GREIT3D_distribution",
+              "candidate_shape": [
+                6,
+                6,
+                4
+              ],
+              "downsample_factors": [
+                1,
+                1,
+                1
+              ],
+              "downsample_phases": [
+                0,
+                0,
+                0
+              ],
+              "eidors_component_parity": true,
+              "n_candidate_voxels": 144,
+              "n_targets": 144,
+              "parameter_order": "eidors_ndgrid_x_fastest",
+              "x_pts": [
+                -0.15,
+                -0.09,
+                -0.03,
+                0.03,
+                0.09,
+                0.15
+              ],
+              "xvec": [
+                -0.18,
+                -0.12,
+                -0.06,
+                0.0,
+                0.06,
+                0.12,
+                0.18
+              ],
+              "y_pts": [
+                -0.15,
+                -0.09,
+                -0.03,
+                0.03,
+                0.09,
+                0.15
+              ],
+              "yvec": [
+                -0.18,
+                -0.12,
+                -0.06,
+                0.0,
+                0.06,
+                0.12,
+                0.18
+              ],
+              "z_pts": [
+                -0.06,
+                -0.02,
+                0.019999999999999997,
+                0.06
+              ],
+              "zvec": [
+                -0.08,
+                -0.04,
+                0.0,
+                0.039999999999999994,
+                0.08
+              ]
+            },
+            "target_noise_figure": null,
+            "training_mode": "forward"
+          },
+          "cache_signature_schema": "pyeidors-greit-cache-signature-v1",
+          "calc_greit_rm_parity_core": true,
+          "case_id": "bad_weighted",
+          "checksum_algorithm": "sha256",
+          "component_storage": "eidors_components",
+          "compression": "gzip",
+          "desired_image_seconds": 0.0009590460103936493,
+          "desired_metadata": {
+            "builder": "GREIT_desired_img",
+            "coordinate_mode": "rec_model_physical",
+            "d_shape": [
+              144,
+              144
+            ],
+            "desired_solution_fn": "GREIT_desired_img_sigmoid",
+            "eidors_component_parity": true,
+            "n_rec_parameters": 144,
+            "n_targets": 144,
+            "radius_max": 0.035,
+            "radius_min": 0.035,
+            "target_values_requires_explicit_opt_in": true,
+            "target_values_used": false,
+            "xyz_shape": [
+              3,
+              144
+            ],
+            "xyz_source": "GREITFiniteTargetResponses.xyzr"
+          },
+          "desired_solution_fn": "GREIT_desired_img_sigmoid",
+          "difference_normalization": "ratio",
+          "distribution_seconds": 0.0005380500224418938,
+          "eidors_parity": true,
+          "finite_target_response_seconds": 9.923666523012798,
+          "fixture_source": "generated_synthetic_eidors_surrogate",
+          "forward_solve_count": 1,
+          "keep_model_components": true,
+          "large_cache": true,
+          "legacy_artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
+          "measurement_weight_kind": "diagonal",
+          "n_elec": 48,
+          "n_measurements": 5936,
+          "n_rings": 3,
+          "noiselev": 1.076767041995306e-05,
+          "official_eidors_fixture": false,
+          "online_hot_path": "rm_matmul",
+          "response_metadata": {
+            "bad_channel_count": 192,
+            "batch_size": 32,
+            "cache_hit": false,
+            "cache_key": "t49-bad_weighted",
+            "difference_normalization": "ratio",
+            "eidors_parity": true,
+            "measurement_weight_kind": "diagonal",
+            "n_forward_parameters": 144,
+            "n_measurements": 5936,
+            "n_targets": 144,
+            "response_orientation": "measurements_by_targets",
+            "target_contrast_mode": "additive_conductivity_delta",
+            "target_offset": null,
+            "target_plane": null,
+            "target_radius_source": "target_radius",
+            "target_source": "GREIT3D_distribution",
+            "training_mode": "forward"
+          },
+          "rm_build_equivalence": "Equivalent to solve(M.T, PJt.T).T for scalar Sn=lambda*I; unit tests compare against calc_greit_rm on dense small fixtures.",
+          "rm_build_method": "woodbury_scalar_noise_equivalent",
+          "rm_component_build_seconds": 0.26752268499694765,
+          "target_contrast": 0.08,
+          "target_distribution_metadata": {
+            "axis_source": "imgsz,imgsz,imgsz",
+            "builder": "GREIT3D_distribution",
+            "candidate_shape": [
+              6,
+              6,
+              4
+            ],
+            "downsample_factors": [
+              1,
+              1,
+              1
+            ],
+            "downsample_phases": [
+              0,
+              0,
+              0
+            ],
+            "eidors_component_parity": true,
+            "n_candidate_voxels": 144,
+            "n_targets": 144,
+            "parameter_order": "eidors_ndgrid_x_fastest",
+            "x_pts": [
+              -0.15,
+              -0.09,
+              -0.03,
+              0.03,
+              0.09,
+              0.15
+            ],
+            "xvec": [
+              -0.18,
+              -0.12,
+              -0.06,
+              0.0,
+              0.06,
+              0.12,
+              0.18
+            ],
+            "y_pts": [
+              -0.15,
+              -0.09,
+              -0.03,
+              0.03,
+              0.09,
+              0.15
+            ],
+            "yvec": [
+              -0.18,
+              -0.12,
+              -0.06,
+              0.0,
+              0.06,
+              0.12,
+              0.18
+            ],
+            "z_pts": [
+              -0.06,
+              -0.02,
+              0.019999999999999997,
+              0.06
+            ],
+            "zvec": [
+              -0.08,
+              -0.04,
+              0.0,
+              0.039999999999999994,
+              0.08
+            ]
+          },
+          "target_radius": 0.035,
+          "training_mode": "forward",
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ],
+          "weight": 0.02
+        },
+        "seconds": 2.2658156090183184
+      },
+      "case_id": "bad_weighted",
+      "cold_build": {
+        "artifact_write_seconds": 12.087612981995335,
+        "case_total_seconds": 28.676632055983646,
+        "desired_image_seconds": 0.0009590460103936493,
+        "distribution_seconds": 0.0005380500224418938,
+        "finite_target_response_seconds": 9.923666523012798,
+        "metrics_seconds": 0.000894299999345094,
+        "parity_compare_seconds": 2.9182354279910214,
+        "rm_build_equivalence": "Equivalent to solve(M.T, PJt.T).T for scalar Sn=lambda*I; unit tests compare against calc_greit_rm on dense small fixtures.",
+        "rm_build_method": "woodbury_scalar_noise_equivalent",
+        "rm_component_build_seconds": 0.26752268499694765
+      },
+      "component_shapes": {
+        "D": [
+          144,
+          144
+        ],
+        "M": [
+          5936,
+          5936
+        ],
+        "PJt": [
+          144,
+          5936
+        ],
+        "RM": [
+          144,
+          5936
+        ],
+        "Sn": [
+          5936,
+          5936
+        ],
+        "Y": [
+          5936,
+          144
+        ],
+        "noiselev": [
+          1
+        ],
+        "normalize": [
+          1
+        ],
+        "rec_model": [
+          144,
+          3
+        ],
+        "vh": [
+          5936
+        ],
+        "vi": [
+          5936,
+          144
+        ],
+        "weight": [
+          1
+        ],
+        "xyzr": [
+          4,
+          144
+        ]
+      },
+      "fixture_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_eidors_greit_fixture.h5",
+      "fixture_source": "generated_synthetic_eidors_surrogate",
+      "greit_artifact_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_greit_eidors_rm.h5",
+      "hdf5": {
+        "arrays": {
+          "D": {
+            "chunks": [
+              144,
+              144
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              144,
+              144
+            ]
+          },
+          "M": {
+            "chunks": [
+              371,
+              742
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936,
+              5936
+            ]
+          },
+          "PJt": {
+            "chunks": [
+              144,
+              2968
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              144,
+              5936
+            ]
+          },
+          "RM": {
+            "chunks": [
+              144,
+              2968
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              144,
+              5936
+            ]
+          },
+          "Sn": {
+            "chunks": [
+              371,
+              742
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936,
+              5936
+            ]
+          },
+          "Y": {
+            "chunks": [
+              2968,
+              144
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936,
+              144
+            ]
+          },
+          "channel_mask": {
+            "chunks": [
+              5936
+            ],
+            "compression": "gzip",
+            "dtype": "bool",
+            "sha256_recorded": true,
+            "shape": [
+              5936
+            ]
+          },
+          "fwd_model_signature": {
+            "chunks": [
+              35
+            ],
+            "compression": "gzip",
+            "dtype": "uint8",
+            "sha256_recorded": true,
+            "shape": [
+              35
+            ]
+          },
+          "measurement_weights": {
+            "chunks": [
+              5936
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936
+            ]
+          },
+          "noiselev": {
+            "chunks": [
+              1
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              1
+            ]
+          },
+          "rec_model": {
+            "chunks": [
+              144,
+              3
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              144,
+              3
+            ]
+          },
+          "training_responses": {
+            "chunks": [
+              144,
+              2968
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              144,
+              5936
+            ]
+          },
+          "training_targets": {
+            "chunks": null,
+            "compression": null,
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              0
+            ]
+          },
+          "vh": {
+            "chunks": [
+              5936
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936
+            ]
+          },
+          "vi": {
+            "chunks": [
+              2968,
+              144
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              5936,
+              144
+            ]
+          },
+          "voxel_shape": {
+            "chunks": [
+              3
+            ],
+            "compression": "gzip",
+            "dtype": "int64",
+            "sha256_recorded": true,
+            "shape": [
+              3
+            ]
+          },
+          "weight": {
+            "chunks": [
+              1
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              1
+            ]
+          },
+          "xyzr": {
+            "chunks": [
+              4,
+              144
+            ],
+            "compression": "gzip",
+            "dtype": "float64",
+            "sha256_recorded": true,
+            "shape": [
+              4,
+              144
+            ]
+          }
+        },
+        "metadata": {
+          "algorithm": "greit-3d",
+          "artifact_format": "hdf5",
+          "artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
+          "bad_channel_count": 192,
+          "batch_forward_solve_count": 5,
+          "cache_signature_hash": "86b3a93c465c0634d5e532dc852903eb04767c4fe2b89f6729cf4e4153207b1b",
+          "cache_signature_payload": {
+            "desired_solution_fn": "GREIT_desired_img_sigmoid",
+            "desired_solution_params": {
+              "builder": "GREIT_desired_img",
+              "coordinate_mode": "rec_model_physical",
+              "d_shape": [
+                144,
+                144
+              ],
+              "desired_solution_fn": "GREIT_desired_img_sigmoid",
+              "eidors_component_parity": true,
+              "n_rec_parameters": 144,
+              "n_targets": 144,
+              "radius_max": 0.035,
+              "radius_min": 0.035,
+              "target_values_requires_explicit_opt_in": true,
+              "target_values_used": false,
+              "xyz_shape": [
+                3,
+                144
+              ],
+              "xyz_source": "GREITFiniteTargetResponses.xyzr"
+            },
+            "finite_target_inputs": {
+              "bad_channel_count": 192,
+              "batch_size": 32,
+              "cache_hit": false,
+              "cache_key": "t49-bad_weighted",
+              "difference_normalization": "ratio",
+              "eidors_parity": true,
+              "measurement_weight_kind": "diagonal",
+              "n_forward_parameters": 144,
+              "n_measurements": 5936,
+              "n_targets": 144,
+              "response_orientation": "measurements_by_targets",
+              "target_contrast_mode": "additive_conductivity_delta",
+              "target_offset": null,
+              "target_plane": null,
+              "target_radius_source": "target_radius",
+              "target_source": "GREIT3D_distribution",
+              "training_mode": "forward"
+            },
+            "fwd_model_signature": "t49-bad_weighted-48e-5936-surrogate",
+            "image_snr": null,
+            "keep_model_components": true,
+            "noise_covar": 1.0,
+            "normalize": true,
+            "scalar_weight": 0.02,
+            "schema": "pyeidors-greit-cache-signature-v1",
+            "target_distribution_grid": {
+              "axis_source": "imgsz,imgsz,imgsz",
+              "builder": "GREIT3D_distribution",
+              "candidate_shape": [
+                6,
+                6,
+                4
+              ],
+              "downsample_factors": [
+                1,
+                1,
+                1
+              ],
+              "downsample_phases": [
+                0,
+                0,
+                0
+              ],
+              "eidors_component_parity": true,
+              "n_candidate_voxels": 144,
+              "n_targets": 144,
+              "parameter_order": "eidors_ndgrid_x_fastest",
+              "x_pts": [
+                -0.15,
+                -0.09,
+                -0.03,
+                0.03,
+                0.09,
+                0.15
+              ],
+              "xvec": [
+                -0.18,
+                -0.12,
+                -0.06,
+                0.0,
+                0.06,
+                0.12,
+                0.18
+              ],
+              "y_pts": [
+                -0.15,
+                -0.09,
+                -0.03,
+                0.03,
+                0.09,
+                0.15
+              ],
+              "yvec": [
+                -0.18,
+                -0.12,
+                -0.06,
+                0.0,
+                0.06,
+                0.12,
+                0.18
+              ],
+              "z_pts": [
+                -0.06,
+                -0.02,
+                0.019999999999999997,
+                0.06
+              ],
+              "zvec": [
+                -0.08,
+                -0.04,
+                0.0,
+                0.039999999999999994,
+                0.08
+              ]
+            },
+            "target_noise_figure": null,
+            "training_mode": "forward"
+          },
+          "cache_signature_schema": "pyeidors-greit-cache-signature-v1",
+          "calc_greit_rm_parity_core": true,
+          "case_id": "bad_weighted",
+          "checksum_algorithm": "sha256",
+          "component_storage": "eidors_components",
+          "compression": "gzip",
+          "desired_image_seconds": 0.0009590460103936493,
+          "desired_metadata": {
+            "builder": "GREIT_desired_img",
+            "coordinate_mode": "rec_model_physical",
+            "d_shape": [
+              144,
+              144
+            ],
+            "desired_solution_fn": "GREIT_desired_img_sigmoid",
+            "eidors_component_parity": true,
+            "n_rec_parameters": 144,
+            "n_targets": 144,
+            "radius_max": 0.035,
+            "radius_min": 0.035,
+            "target_values_requires_explicit_opt_in": true,
+            "target_values_used": false,
+            "xyz_shape": [
+              3,
+              144
+            ],
+            "xyz_source": "GREITFiniteTargetResponses.xyzr"
+          },
+          "desired_solution_fn": "GREIT_desired_img_sigmoid",
+          "difference_normalization": "ratio",
+          "distribution_seconds": 0.0005380500224418938,
+          "eidors_parity": true,
+          "finite_target_response_seconds": 9.923666523012798,
+          "fixture_source": "generated_synthetic_eidors_surrogate",
+          "forward_solve_count": 1,
+          "keep_model_components": true,
+          "large_cache": true,
+          "legacy_artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
+          "measurement_weight_kind": "diagonal",
+          "n_elec": 48,
+          "n_measurements": 5936,
+          "n_rings": 3,
+          "noiselev": 1.076767041995306e-05,
+          "official_eidors_fixture": false,
+          "online_hot_path": "rm_matmul",
+          "response_metadata": {
+            "bad_channel_count": 192,
+            "batch_size": 32,
+            "cache_hit": false,
+            "cache_key": "t49-bad_weighted",
+            "difference_normalization": "ratio",
+            "eidors_parity": true,
+            "measurement_weight_kind": "diagonal",
+            "n_forward_parameters": 144,
+            "n_measurements": 5936,
+            "n_targets": 144,
+            "response_orientation": "measurements_by_targets",
+            "target_contrast_mode": "additive_conductivity_delta",
+            "target_offset": null,
+            "target_plane": null,
+            "target_radius_source": "target_radius",
+            "target_source": "GREIT3D_distribution",
+            "training_mode": "forward"
+          },
+          "rm_build_equivalence": "Equivalent to solve(M.T, PJt.T).T for scalar Sn=lambda*I; unit tests compare against calc_greit_rm on dense small fixtures.",
+          "rm_build_method": "woodbury_scalar_noise_equivalent",
+          "rm_component_build_seconds": 0.26752268499694765,
+          "target_contrast": 0.08,
+          "target_distribution_metadata": {
+            "axis_source": "imgsz,imgsz,imgsz",
+            "builder": "GREIT3D_distribution",
+            "candidate_shape": [
+              6,
+              6,
+              4
+            ],
+            "downsample_factors": [
+              1,
+              1,
+              1
+            ],
+            "downsample_phases": [
+              0,
+              0,
+              0
+            ],
+            "eidors_component_parity": true,
+            "n_candidate_voxels": 144,
+            "n_targets": 144,
+            "parameter_order": "eidors_ndgrid_x_fastest",
+            "x_pts": [
+              -0.15,
+              -0.09,
+              -0.03,
+              0.03,
+              0.09,
+              0.15
+            ],
+            "xvec": [
+              -0.18,
+              -0.12,
+              -0.06,
+              0.0,
+              0.06,
+              0.12,
+              0.18
+            ],
+            "y_pts": [
+              -0.15,
+              -0.09,
+              -0.03,
+              0.03,
+              0.09,
+              0.15
+            ],
+            "yvec": [
+              -0.18,
+              -0.12,
+              -0.06,
+              0.0,
+              0.06,
+              0.12,
+              0.18
+            ],
+            "z_pts": [
+              -0.06,
+              -0.02,
+              0.019999999999999997,
+              0.06
+            ],
+            "zvec": [
+              -0.08,
+              -0.04,
+              0.0,
+              0.039999999999999994,
+              0.08
+            ]
+          },
+          "target_radius": 0.035,
+          "training_mode": "forward",
+          "voxel_shape": [
+            6,
+            6,
+            4
+          ],
+          "weight": 0.02
+        },
+        "schema": "pyeidors-greit-eidors-hdf5-v1"
+      },
+      "measurement_contract": {
+        "bad_channel_count": 192,
+        "measurement_weight_kind": "diagonal"
+      },
+      "metric_keys": [
+        "AR",
+        "PE",
+        "RES",
+        "SD",
+        "RNG"
+      ],
+      "metrics": {
+        "AR": 0.946584808171487,
+        "PE": 0.16025356321290934,
+        "RES": 0.3262389700974053,
+        "RNG": 1.6171353064918932,
+        "SD": 1.0
+      },
+      "metrics_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_greit_metrics.json",
+      "official_eidors_fixture": false,
+      "offline_counts": {
+        "batch_forward_solve_count": 5,
+        "forward_solve_count": 1,
+        "jacobian_rebuild_count": 0,
+        "ksp_solve_count": 0
+      },
+      "online_apply": {
+        "auto": {
+          "apply_1_frame_seconds": 0.12094166700262576,
+          "apply_batch_n_frames": 512,
+          "apply_batch_seconds": 0.12649670700193383,
+          "metadata_1_frame": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "torch",
+            "batched": true,
+            "delta_v_shape": [
+              1,
+              5936
+            ],
+            "device_effective": "cuda",
+            "device_requested": "auto",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "delta_v_to_device+output_to_host",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 1,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              1,
+              144
+            ],
+            "rm_cache_key": "t49:auto:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "device",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": true,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "metadata_batch": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "torch",
+            "batched": true,
+            "delta_v_shape": [
+              512,
+              5936
+            ],
+            "device_effective": "cuda",
+            "device_requested": "auto",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "delta_v_to_device+output_to_host",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 512,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              512,
+              144
+            ],
+            "rm_cache_key": "t49:auto:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "device",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": true,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "output_norm_1_frame": 0.5103173148367609,
+          "output_norm_batch": 11.862972110367135,
+          "prepare_seconds": 0.017302708991337568
+        },
+        "cpu": {
+          "apply_1_frame_seconds": 0.003115644009085372,
+          "apply_batch_n_frames": 512,
+          "apply_batch_seconds": 0.05137122198357247,
+          "metadata_1_frame": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "numpy",
+            "batched": true,
+            "delta_v_shape": [
+              1,
+              5936
+            ],
+            "device_effective": "cpu",
+            "device_requested": "cpu",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "none",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 1,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              1,
+              144
+            ],
+            "rm_cache_key": "t49:cpu:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "cpu",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": false,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "metadata_batch": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "numpy",
+            "batched": true,
+            "delta_v_shape": [
+              512,
+              5936
+            ],
+            "device_effective": "cpu",
+            "device_requested": "cpu",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "none",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 512,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              512,
+              144
+            ],
+            "rm_cache_key": "t49:cpu:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "cpu",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": false,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "output_norm_1_frame": 0.5103173148367602,
+          "output_norm_batch": 11.862972110367135,
+          "prepare_seconds": 0.0008079970139078796
+        },
+        "cuda": {
+          "apply_1_frame_seconds": 0.0048294150037691,
+          "apply_batch_n_frames": 512,
+          "apply_batch_seconds": 0.1335750040016137,
+          "metadata_1_frame": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "torch",
+            "batched": true,
+            "delta_v_shape": [
+              1,
+              5936
+            ],
+            "device_effective": "cuda",
+            "device_requested": "cuda",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "delta_v_to_device+output_to_host",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 1,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              1,
+              144
+            ],
+            "rm_cache_key": "t49:cuda:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "device",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": true,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "metadata_batch": {
+            "adjoint_solve_count": 0,
+            "algorithm": "greit-3d",
+            "backend": "torch",
+            "batched": true,
+            "delta_v_shape": [
+              512,
+              5936
+            ],
+            "device_effective": "cuda",
+            "device_requested": "cuda",
+            "fallback_reason": null,
+            "forward_solve_count": 0,
+            "host_device_transfer": "delta_v_to_device+output_to_host",
+            "jacobian_rebuild_count": 0,
+            "ksp_solve_count": 0,
+            "n_frames": 512,
+            "online_hot_path": "rm_matmul",
+            "output_shape": [
+              512,
+              144
+            ],
+            "rm_cache_key": "t49:cuda:float64",
+            "rm_dtype": "float64",
+            "rm_matrix_resident": "device",
+            "rm_persistent": true,
+            "rm_prepare_mode": "reused_handle",
+            "rm_shape": [
+              144,
+              5936
+            ],
+            "rm_tensor_reused": true,
+            "voxel_shape": [
+              6,
+              6,
+              4
+            ]
+          },
+          "output_norm_1_frame": 0.5103173148367609,
+          "output_norm_batch": 11.862972110367135,
+          "prepare_seconds": 0.0031195030023809522
+        }
+      },
+      "parity_report": {
+        "all_passed": true,
+        "comparison_names": [
+          "Y",
+          "D",
+          "PJt",
+          "M",
+          "noiselev",
+          "RM",
+          "RM@dv",
+          "metrics"
+        ],
+        "pyeidors_source": "artifact",
+        "schema": "pyeidors-greit-eidors-parity-report-v1",
+        "tolerances": {
+          "D": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "M": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "PJt": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "RM": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "RM@dv": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "Y": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "metrics": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          },
+          "noiselev": {
+            "abs": 1e-08,
+            "rel": 1e-08
+          }
+        }
+      },
+      "parity_report_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_20260426/bad_weighted_parity_report.json"
+    }
+  },
+  "config": {
+    "common_config_reference": {
+      "config_id": "48e",
+      "description": "48-electrode three-ring 3D cylinder, 5936-measurement runtime gate",
+      "electrode_layout": "cylindrical-rings",
+      "height": 0.16,
+      "mesh_dimension": 3,
+      "n_elec_per_ring": 16,
+      "n_measurements": 5936,
+      "n_parameters": 144,
+      "n_rings": 3,
+      "radius": 0.18,
+      "total_electrodes": 48,
+      "voxel_shape": [
+        6,
+        6,
+        4
+      ]
+    },
+    "devices": [
+      "cpu",
+      "auto",
+      "cuda"
+    ],
+    "dtype": "float64",
+    "n_elec": 48,
+    "n_frames": 512,
+    "n_measurements": 5936,
+    "n_parameters": 144,
+    "n_rings": 3,
+    "seed": 20260426,
+    "target_contrast": 0.08,
+    "target_radius": 0.035,
+    "voxel_shape": [
+      6,
+      6,
+      4
+    ],
+    "weight": 0.02
+  },
+  "gate": {
+    "official_eidors_fixture": false,
+    "official_equivalence_claim_allowed": false,
+    "parity_components_passed": true,
+    "surrogate_note": "No external MATLAB/EIDORS 48e fixture was supplied; this run uses a deterministic EIDORS-compatible surrogate to exercise the full PyEIDORS benchmark path."
+  },
+  "git_commit": "d374424",
+  "invariants": {
+    "V55_target_distribution": true,
+    "V56_finite_target_training": true,
+    "V57_difference_normalization": true,
+    "V58_desired_image": true,
+    "V59_calc_greit_rm_equivalence": true,
+    "V60_scalar_weight_recorded": true,
+    "V61_hdf5_components": true,
+    "V62_cache_signature": true,
+    "V63_parity_report": true,
+    "V64_online_hot_path": true,
+    "V65_hdf5_cache": true
+  },
+  "schema": "pyeidors-greit-eidors-parity-48e-v1-benchmark",
+  "scope": "48e/5936 EIDORS-parity GREIT RM benchmark",
+  "timestamp_utc": "2026-04-26T14:36:07.854295+00:00"
+}

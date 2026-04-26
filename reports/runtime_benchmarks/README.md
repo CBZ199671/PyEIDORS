@@ -9,6 +9,7 @@
 | 主题 | 当前结论 | 关键报告 |
 |---|---|---|
 | 48e/5936 dual-model RM | 在线 hot path 已成立，512 帧 CUDA apply 为毫秒级批处理 | `dual_model_rm_48e_5936_t36_20260422/README.md` |
+| 48e/5936 GREIT parity gate | PyEIDORS EIDORS-component path、HDF5 artifact、CPU/CUDA hot path 已通过 surrogate gate；外部 MATLAB/EIDORS fixture 未提供，官方等价声明仍不放行 | `greit_eidors_parity_48e_5936_t49_20260426/README.md` |
 | 4D GN vs rowwise RM | 4D GN 改善连续测量时间保真，plant slow pulse speed error 改善明显 | `dynamic_validation_4d_gn_vs_rowwise_rm_20260425.md` |
 | T66 high-noise dynamic | TV/Huber 是当前高噪声快传导整体保真首选 | `dynamic_t65_t66_t67_high_noise_sweep_20260426.md` |
 | propagation-aware A | 在 T67 Kalman 内部多 seed 稳定通过 EIDORS-aligned gate | `dynamic_eidors_metric_review_propagation_A_multiseed_high_noise_20260426.md` |
@@ -38,6 +39,31 @@
 
 - 冷路径可以贵，在线路径必须是 `RM @ delta_v`。
 - 这个报告是 v1 realtime RM 主线的主要证据。
+
+### 48e/5936 GREIT parity gate
+
+入口：
+
+- `greit_eidors_parity_48e_5936_t49_20260426/README.md`
+- `greit_eidors_parity_48e_5936_t49_20260426/summary.json`
+
+关键数字：
+
+- case: `bad_weighted`, 5936 measurements, 144 voxels, 512 frames
+- bad channels: `192`, measurement W: `diagonal`
+- finite-target response build: `9.923667s`
+- GREIT RM component build: `0.267523s`
+- HDF5 artifact write: `12.087613s`
+- HDF5 artifact load: `2.265816s`
+- 512 帧 online apply:
+  - CPU `0.051371s`
+  - CUDA `0.133575s`
+- parity components: `Y/D/PJt/M/noiselev/RM/RM@dv/metrics` all passed
+
+使用结论：
+
+- V55..V65 的 PyEIDORS 组件路径、HDF5 schema、在线 `RM @ dv` gate 已经能系统化跑通。
+- 本次未提供外部 MATLAB/EIDORS 48e fixture，报告中的 `official_equivalence_claim_allowed=false` 是故意保守；正式对外称“官方等价”仍需接入真实官方 fixture 后复跑。
 
 ### 4D GN vs rowwise RM
 
