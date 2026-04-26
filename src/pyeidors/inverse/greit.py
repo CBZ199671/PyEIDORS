@@ -97,6 +97,21 @@ class GREITRMComponents:
 
 
 @dataclass(frozen=True)
+class GREITWeightSearchResult:
+    """Scalar GREIT weight search result over ``log10(weight)``."""
+
+    weight: float
+    log10_weight: float
+    target_metric: float
+    achieved_metric: float
+    objective_value: float
+    initial_bracket: tuple[float, float]
+    bracket: tuple[float, float]
+    evaluations: int
+    metadata: MappingProxyType
+
+
+@dataclass(frozen=True)
 class GREIT3DDistribution:
     """EIDORS ``GREIT3D_distribution`` target-center volume."""
 
@@ -803,10 +818,174 @@ def calc_greit_rm(
     )
 
 
+def search_greit_weight_for_metric(
+    metric_fn,
+    *,
+    target_metric: float,
+    bracket: tuple[float, float] = (-2.0, 2.0),
+    tolerance: float = 1.0e-3,
+    maxiter: int = 64,
+    max_expand: int = 3,
+) -> GREITWeightSearchResult:
+    """Choose scalar GREIT weight by bounded search over ``log10(weight)``.
+
+    ``metric_fn`` is intentionally a tiny injectable objective seam: it
+    receives ``log10(weight)`` and returns the achieved NF/image-SNR scalar.
+    It does not know about ``calc_greit_rm`` or GREIT matrices.
+    """
+
+    target = float(target_metric)
+    if not np.isfinite(target):
+        raise ValueError("target_metric must be finite.")
+    if tolerance <= 0.0 or not np.isfinite(tolerance):
+        raise ValueError("tolerance must be finite and positive.")
+    if maxiter < 3:
+        raise ValueError("maxiter must be at least 3.")
+    lo, hi = _validate_log10_bracket(bracket)
+    initial_bracket = (lo, hi)
+    records: list[tuple[float, float, float]] = []
+
+    def objective(log10_weight: float) -> float:
+        metric = float(metric_fn(float(log10_weight)))
+        if not np.isfinite(metric):
+            raise FloatingPointError("GREIT weight metric returned non-finite value.")
+        value = float((metric - target) ** 2)
+        records.append((float(log10_weight), metric, value))
+        return value
+
+    expansions = 0
+    result = None
+    success = False
+    message = ""
+    for attempt in range(max_expand + 1):
+        result = _bounded_minimize(
+            objective,
+            lo=lo,
+            hi=hi,
+            tolerance=tolerance,
+            maxiter=maxiter,
+        )
+        success = bool(result["success"])
+        message = str(result["message"])
+        best_x = float(result["x"])
+        if attempt >= max_expand or _inside_bracket(best_x, lo=lo, hi=hi):
+            break
+        width = hi - lo
+        if best_x <= lo + 0.1 * width:
+            hi = lo
+            lo = lo - width
+        else:
+            lo = hi
+            hi = hi + width
+        expansions += 1
+
+    if result is None:  # pragma: no cover - defensive
+        raise RuntimeError("GREIT weight search did not run.")
+    log10_weight = float(result["x"])
+    achieved = float(metric_fn(log10_weight))
+    objective_value = float((achieved - target) ** 2)
+    records.append((log10_weight, achieved, objective_value))
+    metadata = MappingProxyType(
+        {
+            "algorithm": "bounded_log10_weight_search",
+            "search_variable": "log10_weight",
+            "initial_bracket": initial_bracket,
+            "bracket": (float(lo), float(hi)),
+            "bracket_expansions": expansions,
+            "target_metric": target,
+            "achieved_metric": achieved,
+            "objective_value": objective_value,
+            "tolerance": float(tolerance),
+            "maxiter": int(maxiter),
+            "evaluations": len(records),
+            "success": success,
+            "message": message,
+            "best_log10_weight": log10_weight,
+            "best_weight": float(10.0**log10_weight),
+        }
+    )
+    return GREITWeightSearchResult(
+        weight=float(10.0**log10_weight),
+        log10_weight=log10_weight,
+        target_metric=target,
+        achieved_metric=achieved,
+        objective_value=objective_value,
+        initial_bracket=initial_bracket,
+        bracket=(float(lo), float(hi)),
+        evaluations=len(records),
+        metadata=metadata,
+    )
+
+
+def optimize_greit_weight_for_metric(
+    y: Any,
+    d: Any,
+    *,
+    target_metric: float,
+    metric: str = "noise_figure",
+    noise_covar: Any = 1.0,
+    measurement_noise: Any | None = None,
+    bracket: tuple[float, float] = (-2.0, 2.0),
+    tolerance: float = 1.0e-3,
+    maxiter: int = 64,
+) -> GREITWeightSearchResult:
+    """Optimize scalar GREIT weight against simulated NF/image-SNR metric."""
+
+    metric_name = _normalize_weight_metric(metric)
+    y_matrix = _validate_training_response_matrix(y)
+    d_matrix = _validate_desired_component_matrix(d, n_targets=y_matrix.shape[1])
+    noise = _measurement_noise_matrix(measurement_noise, y=y_matrix)
+
+    def metric_fn(log10_weight: float) -> float:
+        components = calc_greit_rm(
+            y_matrix,
+            d_matrix,
+            weight=10.0 ** float(log10_weight),
+            noise_covar=noise_covar,
+        )
+        return _greit_noise_metric(
+            y_matrix,
+            d_matrix,
+            components.rm,
+            noise=noise,
+            metric=metric_name,
+        )
+
+    result = search_greit_weight_for_metric(
+        metric_fn,
+        target_metric=target_metric,
+        bracket=bracket,
+        tolerance=tolerance,
+        maxiter=maxiter,
+    )
+    metadata = dict(result.metadata)
+    metadata.update(
+        {
+            "algorithm": "greit_weight_metric_search",
+            "metric": metric_name,
+            "noise_source": "provided"
+            if measurement_noise is not None
+            else "deterministic_unit_std",
+            "uses_calc_greit_rm_as_black_box": True,
+        }
+    )
+    return GREITWeightSearchResult(
+        weight=result.weight,
+        log10_weight=result.log10_weight,
+        target_metric=result.target_metric,
+        achieved_metric=result.achieved_metric,
+        objective_value=result.objective_value,
+        initial_bracket=result.initial_bracket,
+        bracket=result.bracket,
+        evaluations=result.evaluations,
+        metadata=MappingProxyType(metadata),
+    )
+
+
 def build_3d_greit_rm(
     fwd_model: Any = None,
     targets: Any | None = None,
-    noise_figure: float = 0.5,
+    noise_figure: float | None = 0.5,
     regularisation: Any | None = None,
     *,
     jacobian: Any | None = None,
@@ -817,6 +996,12 @@ def build_3d_greit_rm(
     target_kind: str = "sphere",
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
+    target_noise_figure: float | None = None,
+    image_snr: float | None = None,
+    weight_search_bracket: tuple[float, float] = (-2.0, 2.0),
+    weight_search_tolerance: float = 1.0e-3,
+    weight_search_maxiter: int = 64,
+    weight_search_noise: Any | None = None,
     artifact_path: str | Path | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> GREITRM:
@@ -849,10 +1034,6 @@ def build_3d_greit_rm(
             "targets parameter dimension "
             f"{target_values.shape[1]} does not match J columns {weighted_j.shape[1]}."
         )
-    nf = float(noise_figure)
-    if nf < 0.0 or not np.isfinite(nf):
-        raise ValueError("noise_figure must be finite and non-negative.")
-
     responses = np.asarray(target_values @ weighted_j.T, dtype=np.float64)
     response_cols = responses.T
     target_cols = target_values.T
@@ -864,6 +1045,43 @@ def build_3d_greit_rm(
             regularisation,
             n_measurements=weighted_j.shape[0],
         )
+    search_result: GREITWeightSearchResult | None = None
+    metric_targets = [target is not None for target in (target_noise_figure, image_snr)]
+    if sum(metric_targets) > 1:
+        raise ValueError("Only one of target_noise_figure or image_snr may be set.")
+    if target_noise_figure is not None or image_snr is not None:
+        if noise_figure is not None:
+            raise ValueError(
+                "Set noise_figure=None when optimizing scalar GREIT weight."
+            )
+        metric_name = "noise_figure" if target_noise_figure is not None else "image_snr"
+        target_metric = (
+            float(target_noise_figure)
+            if target_noise_figure is not None
+            else float(image_snr)
+        )
+        search_result = optimize_greit_weight_for_metric(
+            response_cols,
+            target_cols,
+            target_metric=target_metric,
+            metric=metric_name,
+            noise_covar=noise_covar,
+            measurement_noise=weight_search_noise,
+            bracket=weight_search_bracket,
+            tolerance=weight_search_tolerance,
+            maxiter=weight_search_maxiter,
+        )
+        nf = search_result.weight
+        weight_source = "metric_search"
+    else:
+        if noise_figure is None:
+            raise ValueError(
+                "noise_figure=None requires target_noise_figure or image_snr."
+            )
+        nf = float(noise_figure)
+        if nf < 0.0 or not np.isfinite(nf):
+            raise ValueError("noise_figure must be finite and non-negative.")
+        weight_source = "explicit"
     components = calc_greit_rm(
         response_cols,
         target_cols,
@@ -882,6 +1100,7 @@ def build_3d_greit_rm(
         "n_parameters": int(weighted_j.shape[1]),
         "noise_figure": nf,
         "weight": components.weight,
+        "weight_source": weight_source,
         "noiselev": components.noiselev,
         "regularisation_source": rn_source,
         "bad_channel_count": int(measurement_contract.bad_channel_count),
@@ -903,6 +1122,15 @@ def build_3d_greit_rm(
         "training_mode": "linearized",
         "voxel_shape": voxel_shape,
     }
+    if search_result is not None:
+        meta.update(
+            {
+                "weight_search": dict(search_result.metadata),
+                "target_noise_figure": target_noise_figure,
+                "target_image_snr": image_snr,
+                "achieved_metric": search_result.achieved_metric,
+            }
+        )
     if metadata:
         meta.update(metadata)
 
@@ -1950,6 +2178,134 @@ def _measurement_regularisation(
     return np.ascontiguousarray(matrix, dtype=np.float64), "provided"
 
 
+def _validate_log10_bracket(bracket: tuple[float, float]) -> tuple[float, float]:
+    if len(bracket) != 2:
+        raise ValueError("bracket must contain exactly two log10 bounds.")
+    lo = float(bracket[0])
+    hi = float(bracket[1])
+    if not np.isfinite([lo, hi]).all() or lo >= hi:
+        raise ValueError("bracket bounds must be finite and increasing.")
+    return lo, hi
+
+
+def _bounded_minimize(
+    objective,
+    *,
+    lo: float,
+    hi: float,
+    tolerance: float,
+    maxiter: int,
+) -> dict[str, Any]:
+    phi = (1.0 + np.sqrt(5.0)) / 2.0
+    inv_phi = 1.0 / phi
+    x1 = hi - inv_phi * (hi - lo)
+    x2 = lo + inv_phi * (hi - lo)
+    f1 = float(objective(x1))
+    f2 = float(objective(x2))
+    iterations = 0
+    for iterations in range(1, int(maxiter) + 1):
+        if abs(hi - lo) <= tolerance:
+            break
+        if f1 > f2:
+            lo = x1
+            x1 = x2
+            f1 = f2
+            x2 = lo + inv_phi * (hi - lo)
+            f2 = float(objective(x2))
+        else:
+            hi = x2
+            x2 = x1
+            f2 = f1
+            x1 = hi - inv_phi * (hi - lo)
+            f1 = float(objective(x1))
+    if f1 <= f2:
+        x = x1
+        fun = f1
+    else:
+        x = x2
+        fun = f2
+    return {
+        "x": float(x),
+        "fun": float(fun),
+        "success": bool(np.isfinite(fun)),
+        "message": "bounded golden-section search completed",
+        "nit": int(iterations),
+    }
+
+
+def _inside_bracket(value: float, *, lo: float, hi: float) -> bool:
+    width = hi - lo
+    if width <= 0.0:
+        return True
+    margin = max(0.1 * width, 1.0e-12)
+    return (lo + margin) < value < (hi - margin)
+
+
+def _normalize_weight_metric(metric: str) -> str:
+    token = str(metric).strip().lower().replace("-", "_")
+    aliases = {
+        "nf": "noise_figure",
+        "noisefigure": "noise_figure",
+        "noise_figure": "noise_figure",
+        "image_snr": "image_snr",
+        "imagesnr": "image_snr",
+        "snr": "image_snr",
+    }
+    if token not in aliases:
+        raise ValueError("metric must be 'noise_figure' or 'image_snr'.")
+    return aliases[token]
+
+
+def _measurement_noise_matrix(values: Any | None, *, y: np.ndarray) -> np.ndarray:
+    if values is not None:
+        noise = np.asarray(values, dtype=np.float64)
+        if noise.shape != y.shape:
+            raise ValueError(
+                f"measurement_noise must have shape {y.shape}, got {noise.shape}."
+            )
+    else:
+        idx = np.arange(y.size, dtype=np.float64).reshape(y.shape)
+        noise = np.sin(idx + 1.0) + 0.5 * np.cos(2.0 * idx + 0.25)
+        noise = noise - float(np.mean(noise))
+        std = float(np.std(noise))
+        if std <= np.finfo(np.float64).eps:
+            noise = np.ones_like(y, dtype=np.float64)
+            noise.flat[::2] *= -1.0
+            noise = noise - float(np.mean(noise))
+            std = float(np.std(noise))
+        scale = max(float(np.mean(np.abs(y))), 1.0e-12) * 1.0e-2
+        noise = noise / max(std, 1.0e-12) * scale
+    if not np.isfinite(noise).all():
+        raise FloatingPointError("measurement_noise contains non-finite values.")
+    if float(np.std(noise)) <= 1.0e-15:
+        raise ValueError("measurement_noise must have non-zero standard deviation.")
+    return np.ascontiguousarray(noise, dtype=np.float64)
+
+
+def _greit_noise_metric(
+    y: np.ndarray,
+    d: np.ndarray,
+    rm: np.ndarray,
+    *,
+    noise: np.ndarray,
+    metric: str,
+) -> float:
+    clean_recon = rm @ y
+    noisy_recon = rm @ (y + noise)
+    recon_noise = noisy_recon - clean_recon
+    input_signal = float(np.mean(np.abs(y)))
+    input_noise = float(np.std(noise))
+    output_signal = float(np.mean(np.abs(clean_recon)))
+    if output_signal <= 1.0e-15:
+        output_signal = float(np.mean(np.abs(d)))
+    output_noise = float(np.std(recon_noise))
+    input_snr = input_signal / max(input_noise, 1.0e-15)
+    image_snr = output_signal / max(output_noise, 1.0e-15)
+    if metric == "image_snr":
+        return float(image_snr)
+    return float(input_snr / max(image_snr, 1.0e-15))
+
+
 def _validate_training_response_matrix(values: Any) -> np.ndarray:
     raw = np.asarray(values)
     dtype = np.complex128 if np.iscomplexobj(raw) else np.float64
@@ -2229,6 +2585,7 @@ __all__ = [
     "GREITRM",
     "GREITRMComponents",
     "GREITTrainingTargets",
+    "GREITWeightSearchResult",
     "build_3d_greit_rm",
     "build_greit_desired_images",
     "build_greit_finite_target_responses",
@@ -2239,5 +2596,7 @@ __all__ = [
     "greit_desired_image_sigmoid",
     "load_greit_rm",
     "migrate_greit_rm_to_hdf5",
+    "optimize_greit_weight_for_metric",
+    "search_greit_weight_for_metric",
     "write_greit_metrics_artifact",
 ]

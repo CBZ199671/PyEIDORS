@@ -35,6 +35,7 @@ from .greit import (
     GREITRM,
     GREITRMComponents,
     GREITTrainingTargets,
+    GREITWeightSearchResult,
     build_3d_greit_rm,
     build_greit_desired_images,
     build_greit_finite_target_responses,
@@ -45,6 +46,8 @@ from .greit import (
     greit_desired_image_sigmoid,
     load_greit_rm,
     migrate_greit_rm_to_hdf5,
+    optimize_greit_weight_for_metric,
+    search_greit_weight_for_metric,
     write_greit_metrics_artifact,
 )
 from .prior import (
@@ -131,6 +134,7 @@ __all__ = [
     "GREITRM",
     "GREITRMComponents",
     "GREITTrainingTargets",
+    "GREITWeightSearchResult",
     "build_3d_greit_rm",
     "build_greit_desired_images",
     "build_greit_finite_target_responses",
@@ -141,6 +145,8 @@ __all__ = [
     "greit_desired_image_sigmoid",
     "load_greit_rm",
     "migrate_greit_rm_to_hdf5",
+    "optimize_greit_weight_for_metric",
+    "search_greit_weight_for_metric",
     "write_greit_metrics_artifact",
     "RtRPrior",
     "TVIRLSResult",
