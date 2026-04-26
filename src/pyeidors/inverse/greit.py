@@ -241,7 +241,7 @@ class GREITRM:
     def save(self, path: str | Path) -> Path:
         """Persist the RM and offline training artifact to HDF5."""
 
-        from pyeidors.io.hdf5_artifacts import write_hdf5_artifact
+        from pyeidors.io.hdf5_artifacts import write_large_cache_hdf5_artifact
 
         target = _greit_hdf5_path(path)
         metadata = dict(self.metadata)
@@ -250,7 +250,7 @@ class GREITRM:
         metadata["artifact_schema"] = schema
         metadata["artifact_format"] = "hdf5"
         metadata.setdefault("component_storage", "eidors_components")
-        write_hdf5_artifact(
+        write_large_cache_hdf5_artifact(
             target,
             _greit_artifact_arrays(self, schema=schema, metadata=metadata),
             metadata,

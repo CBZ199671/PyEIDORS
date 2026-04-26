@@ -430,6 +430,8 @@ def test_eidors_greit_hdf5_artifact_stores_model_components_and_signature(
     artifact = read_hdf5_artifact(artifact_path)
     assert artifact.schema == GREIT_EIDORS_HDF5_SCHEMA
     assert artifact.metadata["artifact_schema"] == GREIT_EIDORS_HDF5_SCHEMA
+    assert artifact.metadata["large_cache"] is True
+    assert artifact.metadata["checksum_algorithm"] == "sha256"
     assert artifact.metadata["cache_signature_schema"] == GREIT_CACHE_SIGNATURE_SCHEMA
     assert artifact.metadata["cache_signature_hash"] == greit.cache_signature
     assert artifact.metadata["cache_signature_payload"]["schema"] == (
@@ -460,6 +462,9 @@ def test_eidors_greit_hdf5_artifact_stores_model_components_and_signature(
     np.testing.assert_allclose(artifact.arrays["Y"], responses.contracted_y)
     assert artifact.arrays["noiselev"].shape == (1,)
     assert artifact.arrays["weight"].shape == (1,)
+    lazy_artifact = read_hdf5_artifact(artifact_path, lazy=True)
+    assert lazy_artifact.arrays["RM"].compression == "gzip"
+    assert lazy_artifact.arrays["RM"].chunks is not None
 
     loaded = load_greit_rm(artifact_path)
     np.testing.assert_allclose(loaded.rm, greit.rm)

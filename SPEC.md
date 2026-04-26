@@ -286,7 +286,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T47 | . | Add MATLAB EIDORS parity diagnostics + tests: compare PyEIDORS vs official EIDORS `Y/D/PJt/M/RM/recon/metrics`; record tolerances and drift report | V63 |
 | T48 | . | Add common-config offline warmup CLI/GUI path: precompute/load 16/32/48e 3D GREIT `.h5` artifacts; online load+matmul only; no routine cold build for known hardware | V64,V65 |
 | T49 | . | Run final 48e/5936 EIDORS-parity 3D GREIT benchmark: cold build, HDF5 artifact load, 1-frame/512-frame online apply, metrics, bad-channel/W cases, GPU/CPU stability | V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65 |
-| T50 | . | Implement large-cache HDF5 IO layer: chunked/compressed datasets for `RM/Y/D/PJt/M/vh/vi/xyzr`, JSON metadata attrs, checksum, lazy dataset reads, legacy `.npz` read-only import/migration path | V61,V62,V65 |
+| T50 | x | Implement large-cache HDF5 IO layer: chunked/compressed datasets for `RM/Y/D/PJt/M/vh/vi/xyzr`, JSON metadata attrs, checksum, lazy dataset reads, legacy `.npz` read-only import/migration path | V61,V62,V65 |
 | T51 | x | Repo persistence inventory + blocklist: classify all `.npz/.npy/.msh/.xdmf/.h5/.mat` writers/readers; mark legacy/test-only exemptions; add CI scan forbidding new production `.npz/.npy` writes | V65,V67,B12 |
 | T52 | x | Mesh HDF5-first hardening: support `.xdmf/.h5` cache load without source `.msh`; store source hash/provenance optional; generator writes XDMF/HDF5 from in-memory mesh even when `save_msh=false`; round-trip facet/cell tags + physical groups | V66,V68 |
 | T53 | x | Convert RM/GREIT/one-step artifacts from `.npz` to HDF5 `.h5`; keep `.npz` loader read-only + migration helper; update GUI cached-RM loader | V36,V37,V61,V64,V65,V67 |

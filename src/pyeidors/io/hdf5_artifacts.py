@@ -1,4 +1,4 @@
-"""Small HDF5 artifact helpers for numeric cache/save payloads."""
+"""HDF5 artifact helpers for numeric cache/save payloads."""
 
 from __future__ import annotations
 
@@ -17,12 +17,83 @@ DEFAULT_SCHEMA = "pyeidors-hdf5-artifact-v1"
 
 @dataclass(frozen=True)
 class HDF5Artifact:
-    """Eagerly loaded HDF5 artifact payload."""
+    """Loaded HDF5 artifact payload."""
 
     path: Path
     schema: str
-    arrays: Mapping[str, np.ndarray]
+    arrays: Mapping[str, Any]
     metadata: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class HDF5DatasetInfo:
+    """Metadata for one dataset inside an HDF5 artifact."""
+
+    path: Path
+    name: str
+    shape: tuple[int, ...]
+    dtype: str
+    compression: str | None
+    chunks: tuple[int, ...] | None
+    sha256: str | None
+
+
+class HDF5LazyDataset:
+    """Lazy dataset reader that opens the file only on access."""
+
+    def __init__(self, info: HDF5DatasetInfo, *, verify_checksum: bool = True) -> None:
+        self.info = info
+        self._verify_checksum = bool(verify_checksum)
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        return self.info.shape
+
+    @property
+    def dtype(self) -> np.dtype[Any]:
+        return np.dtype(self.info.dtype)
+
+    @property
+    def ndim(self) -> int:
+        return len(self.info.shape)
+
+    @property
+    def size(self) -> int:
+        return int(np.prod(self.info.shape)) if self.info.shape else 1
+
+    @property
+    def compression(self) -> str | None:
+        return self.info.compression
+
+    @property
+    def chunks(self) -> tuple[int, ...] | None:
+        return self.info.chunks
+
+    @property
+    def sha256(self) -> str | None:
+        return self.info.sha256
+
+    def read(self, *, verify_checksum: bool | None = None) -> np.ndarray:
+        """Read full dataset and optionally verify its checksum."""
+
+        should_verify = (
+            self._verify_checksum if verify_checksum is None else bool(verify_checksum)
+        )
+        with h5py.File(self.info.path, "r") as handle:
+            data = np.asarray(handle["arrays"][self.info.name])
+        if should_verify:
+            _verify_array_checksum(data, self.info.sha256, self.info.name)
+        return data
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        data = self.read()
+        if dtype is not None:
+            return np.asarray(data, dtype=dtype)
+        return data
+
+    def __getitem__(self, key: Any) -> np.ndarray:
+        with h5py.File(self.info.path, "r") as handle:
+            return np.asarray(handle["arrays"][self.info.name][key])
 
 
 def write_hdf5_artifact(
@@ -39,9 +110,12 @@ def write_hdf5_artifact(
     target = _hdf5_path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
     meta = _json_ready(dict(metadata or {}))
+    meta.setdefault("artifact_format", "hdf5")
+    meta.setdefault("checksum_algorithm", "sha256")
     with h5py.File(target, "w") as handle:
         handle.attrs["schema"] = str(schema)
         handle.attrs["metadata_json"] = json.dumps(meta, sort_keys=True)
+        handle.attrs["checksum_algorithm"] = "sha256"
         arrays_group = handle.create_group("arrays")
         names: list[str] = []
         for name, value in sorted(arrays.items(), key=lambda item: str(item[0])):
@@ -63,35 +137,113 @@ def write_hdf5_artifact(
             dset.attrs["dtype"] = str(arr.dtype)
             dset.attrs["shape_json"] = json.dumps([int(v) for v in arr.shape])
             dset.attrs["sha256"] = _array_digest(arr)
+            dset.attrs["compression"] = (
+                "" if dset.compression is None else str(dset.compression)
+            )
+            dset.attrs["chunks_json"] = json.dumps(
+                [] if dset.chunks is None else [int(v) for v in dset.chunks]
+            )
             names.append(str(name))
         handle.attrs["array_names_json"] = json.dumps(names, sort_keys=True)
     return target
 
 
-def read_hdf5_artifact(path: str | Path, *, lazy: bool = False) -> HDF5Artifact:
-    """Read an HDF5 artifact.
+def write_large_cache_hdf5_artifact(
+    path: str | Path,
+    arrays: Mapping[str, Any],
+    metadata: Mapping[str, Any] | None = None,
+    *,
+    schema: str = DEFAULT_SCHEMA,
+    compression: str | None = "gzip",
+) -> Path:
+    """Write a large array cache with deterministic chunk/compression metadata."""
 
-    ``lazy`` is accepted for API stability; current callers need eager arrays so
-    the file can be closed immediately.
-    """
+    meta = {
+        "large_cache": True,
+        "artifact_format": "hdf5",
+        "checksum_algorithm": "sha256",
+        "compression": compression or "none",
+    }
+    if metadata:
+        meta.update(dict(metadata))
+    return write_hdf5_artifact(
+        path,
+        arrays,
+        meta,
+        schema=schema,
+        compression=compression,
+        chunks=large_cache_chunks_for_arrays(arrays),
+    )
 
-    _ = lazy
+
+def read_hdf5_artifact(
+    path: str | Path,
+    *,
+    lazy: bool = False,
+    verify_checksums: bool = True,
+) -> HDF5Artifact:
+    """Read an HDF5 artifact eagerly or as lazy dataset handles."""
+
     source = Path(path)
     with h5py.File(source, "r") as handle:
         schema = str(handle.attrs.get("schema", DEFAULT_SCHEMA))
         raw_meta = str(handle.attrs.get("metadata_json", "{}"))
         metadata = json.loads(raw_meta)
         group = handle.get("arrays")
-        arrays = {
-            str(name): np.asarray(dataset)
-            for name, dataset in (group.items() if group is not None else ())
-        }
+        arrays: dict[str, Any] = {}
+        if group is not None:
+            for name, dataset in group.items():
+                key = str(name)
+                if lazy:
+                    arrays[key] = HDF5LazyDataset(
+                        _dataset_info(source, key, dataset),
+                        verify_checksum=verify_checksums,
+                    )
+                else:
+                    data = np.asarray(dataset)
+                    if verify_checksums:
+                        _verify_array_checksum(data, _dataset_sha256(dataset), key)
+                    arrays[key] = data
     return HDF5Artifact(
         path=source,
         schema=schema,
         arrays=arrays,
         metadata=metadata,
     )
+
+
+def large_cache_chunks_for_arrays(
+    arrays: Mapping[str, Any],
+    *,
+    target_chunk_bytes: int = 4 * 1024 * 1024,
+) -> dict[str, tuple[int, ...] | bool | None]:
+    """Return deterministic chunk settings for large numeric cache datasets."""
+
+    return {
+        str(name): _auto_chunk_shape(
+            np.asarray(value),
+            target_chunk_bytes=target_chunk_bytes,
+        )
+        for name, value in arrays.items()
+        if value is not None
+    }
+
+
+def verify_hdf5_artifact_checksums(path: str | Path) -> dict[str, str]:
+    """Verify all recorded dataset checksums and return digest map."""
+
+    verified: dict[str, str] = {}
+    with h5py.File(Path(path), "r") as handle:
+        group = handle.get("arrays")
+        if group is None:
+            return verified
+        for name, dataset in group.items():
+            key = str(name)
+            digest = _dataset_sha256(dataset)
+            _verify_array_checksum(np.asarray(dataset), digest, key)
+            if digest:
+                verified[key] = digest
+    return verified
 
 
 def migrate_npz_to_hdf5(
@@ -110,10 +262,12 @@ def migrate_npz_to_hdf5(
     meta = {
         "migrated_from": str(source),
         "legacy_format": source.suffix.lower().lstrip("."),
+        "legacy_source_read_only": True,
+        "artifact_format": "hdf5",
     }
     if metadata:
         meta.update(dict(metadata))
-    return write_hdf5_artifact(target, arrays, meta, schema=schema)
+    return write_large_cache_hdf5_artifact(target, arrays, meta, schema=schema)
 
 
 def _hdf5_path(path: str | Path) -> Path:
@@ -123,6 +277,42 @@ def _hdf5_path(path: str | Path) -> Path:
     if target.suffix.lower() not in {".h5", ".hdf5"}:
         raise ValueError(f"HDF5 artifact path must end with .h5 or .hdf5: {target}")
     return target
+
+
+def _dataset_info(path: Path, name: str, dataset: h5py.Dataset) -> HDF5DatasetInfo:
+    return HDF5DatasetInfo(
+        path=path,
+        name=name,
+        shape=tuple(int(v) for v in dataset.shape),
+        dtype=str(dataset.dtype),
+        compression=dataset.compression,
+        chunks=None
+        if dataset.chunks is None
+        else tuple(int(v) for v in dataset.chunks),
+        sha256=_dataset_sha256(dataset),
+    )
+
+
+def _dataset_sha256(dataset: h5py.Dataset) -> str | None:
+    digest = dataset.attrs.get("sha256")
+    if digest is None:
+        return None
+    return digest.decode("utf-8") if isinstance(digest, bytes) else str(digest)
+
+
+def _verify_array_checksum(
+    values: Any,
+    expected_sha256: str | None,
+    name: str,
+) -> None:
+    if not expected_sha256:
+        return
+    actual = _array_digest(values)
+    if actual != expected_sha256:
+        raise ValueError(
+            f"HDF5 dataset checksum mismatch for {name!r}: "
+            f"{actual} != {expected_sha256}"
+        )
 
 
 def _dataset_kwargs(
@@ -147,6 +337,26 @@ def _dataset_kwargs(
     return kwargs
 
 
+def _auto_chunk_shape(
+    arr: np.ndarray,
+    *,
+    target_chunk_bytes: int,
+) -> tuple[int, ...] | bool | None:
+    if arr.ndim == 0 or arr.size == 0:
+        return None
+    if arr.dtype.kind in {"O", "S", "U"}:
+        return True
+    itemsize = max(int(arr.dtype.itemsize), 1)
+    chunks = [max(1, int(v)) for v in arr.shape]
+    max_elements = max(1, int(target_chunk_bytes) // itemsize)
+    while int(np.prod(chunks)) > max_elements:
+        axis = int(np.argmax(chunks))
+        if chunks[axis] <= 1:
+            break
+        chunks[axis] = max(1, chunks[axis] // 2)
+    return tuple(chunks)
+
+
 def _dataset_data(arr: np.ndarray) -> tuple[Any, Any | None]:
     if arr.dtype.kind in {"U", "O"}:
         return arr.astype(str).astype(object), h5py.string_dtype(encoding="utf-8")
@@ -155,8 +365,8 @@ def _dataset_data(arr: np.ndarray) -> tuple[Any, Any | None]:
 
 def _array_digest(value: Any) -> str:
     arr = np.ascontiguousarray(np.asarray(value))
-    if arr.dtype.kind in {"U", "O"}:
-        arr = np.ascontiguousarray(arr.astype(str))
+    if arr.dtype.kind in {"S", "U", "O"}:
+        arr = _canonical_string_array(arr)
     encoded = (
         str(arr.dtype).encode()
         + b"|"
@@ -165,6 +375,16 @@ def _array_digest(value: Any) -> str:
         + arr.tobytes()
     )
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _canonical_string_array(arr: np.ndarray) -> np.ndarray:
+    def normalize(item: Any) -> str:
+        if isinstance(item, bytes):
+            return item.decode("utf-8")
+        return str(item)
+
+    flat = [normalize(item) for item in arr.reshape(-1)]
+    return np.asarray(flat, dtype=np.str_).reshape(arr.shape)
 
 
 def _json_ready(value: Any) -> Any:
@@ -184,7 +404,12 @@ def _json_ready(value: Any) -> Any:
 __all__ = [
     "DEFAULT_SCHEMA",
     "HDF5Artifact",
+    "HDF5DatasetInfo",
+    "HDF5LazyDataset",
+    "large_cache_chunks_for_arrays",
     "migrate_npz_to_hdf5",
     "read_hdf5_artifact",
+    "verify_hdf5_artifact_checksums",
     "write_hdf5_artifact",
+    "write_large_cache_hdf5_artifact",
 ]
