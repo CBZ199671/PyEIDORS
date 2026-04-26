@@ -95,7 +95,32 @@ def test_official_fixture_gate_reruns_t49_with_fixture(tmp_path: Path) -> None:
     t49_summary = json.loads(
         Path(payload["t49_summary_path"]).read_text(encoding="utf-8")
     )
+    assert t49_summary["scope"] == (
+        "48e official EIDORS fixture GREIT RM benchmark "
+        "(actual n_measurements=4; 5936 measurement protocol separate)"
+    )
     assert t49_summary["config"]["n_measurements"] == 4
+    assert "common_config_reference" not in t49_summary["config"]
+    assert t49_summary["config"]["official_fixture_measurement_contract"] == {
+        "claim_boundary": (
+            "48e official fixture passed; 5936 measurement protocol remains "
+            "a separate official gate."
+        ),
+        "n_measurements": 4,
+        "protocol": "EIDORS adjacent/no_meas_current",
+    }
+    assert (
+        t49_summary["config"]["surrogate_runtime_config_reference"]["n_measurements"]
+        == 5936
+    )
+    t49_report_text = Path(payload["t49_report_path"]).read_text(encoding="utf-8")
+    assert "48e Official EIDORS Fixture GREIT Runtime Gate" in t49_report_text
+    assert (
+        "- scope: `48e official EIDORS fixture GREIT RM benchmark "
+        "(actual n_measurements=4; 5936 measurement protocol separate)`"
+        in t49_report_text
+    )
+    assert "48e/5936 EIDORS-Parity GREIT Runtime Gate" not in t49_report_text
     case = t49_summary["cases"]["reduced_48e_5936"]
     assert case["official_eidors_fixture"] is True
     artifact = read_hdf5_artifact(case["greit_artifact_path"])

@@ -769,7 +769,7 @@
     }
   },
   "config": {
-    "common_config_reference": {
+    "surrogate_runtime_config_reference": {
       "config_id": "48e",
       "description": "48-electrode three-ring 3D cylinder, 5936-measurement runtime gate",
       "electrode_layout": "cylindrical-rings",
@@ -786,6 +786,11 @@
         6,
         4
       ]
+    },
+    "official_fixture_measurement_contract": {
+      "claim_boundary": "48e official fixture passed; 5936 measurement protocol remains a separate official gate.",
+      "n_measurements": 2160,
+      "protocol": "EIDORS adjacent/no_meas_current"
     },
     "devices": [
       "cpu",
@@ -829,6 +834,6 @@
     "V65_hdf5_cache": true
   },
   "schema": "pyeidors-greit-eidors-parity-48e-v1-benchmark",
-  "scope": "48e/5936 EIDORS-parity GREIT RM benchmark",
+  "scope": "48e official EIDORS fixture GREIT RM benchmark (actual n_measurements=2160; 5936 measurement protocol separate)",
   "timestamp_utc": "2026-04-26T15:48:30.410775+00:00"
 }

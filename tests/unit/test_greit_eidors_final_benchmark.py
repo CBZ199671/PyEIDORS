@@ -68,8 +68,11 @@ def test_t49_benchmark_writes_parity_report_and_hot_path_summary(
     )
 
     assert payload["schema"] == module.REPORT_SCHEMA
+    assert payload["scope"] == "48e/5936 EIDORS-parity GREIT RM benchmark"
     assert payload["config"]["n_measurements"] == 16
     assert payload["config"]["n_frames"] == 4
+    assert "common_config_reference" in payload["config"]
+    assert "surrogate_runtime_config_reference" not in payload["config"]
     assert payload["gate"]["parity_components_passed"] is True
     assert payload["gate"]["official_equivalence_claim_allowed"] is False
     assert payload["invariants"]["V55_target_distribution"] is True
@@ -106,9 +109,9 @@ def test_t49_benchmark_writes_parity_report_and_hot_path_summary(
     assert json.loads(summary_path.read_text(encoding="utf-8"))["schema"] == (
         module.REPORT_SCHEMA
     )
-    assert "48e/5936 EIDORS-Parity GREIT Runtime Gate" in report_path.read_text(
-        encoding="utf-8"
-    )
+    report_text = report_path.read_text(encoding="utf-8")
+    assert "48e/5936 EIDORS-Parity GREIT Runtime Gate" in report_text
+    assert "- scope: `48e/5936 EIDORS-parity GREIT RM benchmark`" in report_text
 
     artifact = read_hdf5_artifact(
         tmp_path / "bench" / "bad_weighted_greit_eidors_rm.h5"

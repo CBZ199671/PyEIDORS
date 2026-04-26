@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark the 48e/5936 EIDORS-parity 3D GREIT RM gate."""
+"""Benchmark the 48e/5936 surrogate and 48e official-fixture GREIT gates."""
 
 from __future__ import annotations
 
@@ -263,26 +263,50 @@ def run_benchmark(
         bool(item["parity_report"]["all_passed"]) for item in case_payloads.values()
     )
     official_fixture = bool(fixture is not None)
+    reported_n_measurements = (
+        _actual_measurement_count_from_cases(
+            case_payloads,
+            fallback=n_measurements,
+        )
+        if official_fixture
+        else int(n_measurements)
+    )
+    config_payload: dict[str, Any] = {
+        "n_elec": int(n_elec),
+        "n_rings": int(n_rings),
+        "n_measurements": int(reported_n_measurements),
+        "n_frames": int(n_frames),
+        "voxel_shape": [int(v) for v in voxel_shape],
+        "n_parameters": int(np.prod(voxel_shape)),
+        "target_radius": float(target_radius),
+        "target_contrast": float(target_contrast),
+        "weight": float(weight),
+        "seed": int(seed),
+        "devices": [str(device) for device in devices],
+        "dtype": str(dtype),
+    }
+    if official_fixture:
+        config_payload["official_fixture_measurement_contract"] = {
+            "n_measurements": int(reported_n_measurements),
+            "protocol": "EIDORS adjacent/no_meas_current",
+            "claim_boundary": (
+                "48e official fixture passed; 5936 measurement protocol remains "
+                "a separate official gate."
+            ),
+        }
+        config_payload["surrogate_runtime_config_reference"] = config.metadata()
+    else:
+        config_payload["common_config_reference"] = config.metadata()
+
     payload = {
         "schema": REPORT_SCHEMA,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
         "git_commit": _git_commit(),
-        "scope": "48e/5936 EIDORS-parity GREIT RM benchmark",
-        "config": {
-            "n_elec": int(n_elec),
-            "n_rings": int(n_rings),
-            "n_measurements": int(n_measurements),
-            "n_frames": int(n_frames),
-            "voxel_shape": [int(v) for v in voxel_shape],
-            "n_parameters": int(np.prod(voxel_shape)),
-            "target_radius": float(target_radius),
-            "target_contrast": float(target_contrast),
-            "weight": float(weight),
-            "seed": int(seed),
-            "devices": [str(device) for device in devices],
-            "dtype": str(dtype),
-            "common_config_reference": config.metadata(),
-        },
+        "scope": _benchmark_scope(
+            official_fixture=official_fixture,
+            n_measurements=reported_n_measurements,
+        ),
+        "config": config_payload,
         "gate": {
             "parity_components_passed": gate_passed,
             "official_eidors_fixture": official_fixture,
@@ -844,6 +868,31 @@ def _component_shapes(arrays: Mapping[str, np.ndarray]) -> dict[str, list[int]]:
     }
 
 
+def _actual_measurement_count_from_cases(
+    cases: Mapping[str, Any],
+    *,
+    fallback: int,
+) -> int:
+    for case in cases.values():
+        vh_shape = case.get("component_shapes", {}).get("vh")
+        if vh_shape:
+            count = 1
+            for value in vh_shape:
+                count *= int(value)
+            return int(count)
+    return int(fallback)
+
+
+def _benchmark_scope(*, official_fixture: bool, n_measurements: int) -> str:
+    if official_fixture:
+        return (
+            "48e official EIDORS fixture GREIT RM benchmark "
+            f"(actual n_measurements={int(n_measurements)}; "
+            "5936 measurement protocol separate)"
+        )
+    return "48e/5936 EIDORS-parity GREIT RM benchmark"
+
+
 def _all_online_hot_paths_are_rm(cases: Mapping[str, Any]) -> bool:
     for case in cases.values():
         for entry in case.get("online_apply", {}).values():
@@ -873,9 +922,10 @@ def _format_seconds(value: Any) -> str:
 
 def _write_markdown_report(path: Path, payload: Mapping[str, Any]) -> Path:
     lines = [
-        "# 48e/5936 EIDORS-Parity GREIT Runtime Gate",
+        f"# {_markdown_report_title(payload)}",
         "",
         f"- schema: `{payload['schema']}`",
+        f"- scope: `{payload['scope']}`",
         f"- generated: {payload['timestamp_utc']}",
         f"- git: `{payload['git_commit']}`",
         f"- official EIDORS fixture: `{payload['gate']['official_eidors_fixture']}`",
@@ -961,6 +1011,12 @@ def _write_markdown_report(path: Path, payload: Mapping[str, Any]) -> Path:
     lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
     return path
+
+
+def _markdown_report_title(payload: Mapping[str, Any]) -> str:
+    if payload["gate"].get("official_eidors_fixture"):
+        return "48e Official EIDORS Fixture GREIT Runtime Gate"
+    return "48e/5936 EIDORS-Parity GREIT Runtime Gate"
 
 
 def _timed(fn):

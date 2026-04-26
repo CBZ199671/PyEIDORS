@@ -1,6 +1,7 @@
-# 48e/5936 EIDORS-Parity GREIT Runtime Gate
+# 48e Official EIDORS Fixture GREIT Runtime Gate
 
 - schema: `pyeidors-greit-eidors-parity-48e-v1-benchmark`
+- scope: `48e official EIDORS fixture GREIT RM benchmark (actual n_measurements=2160; 5936 measurement protocol separate)`
 - generated: 2026-04-26T15:48:30.410775+00:00
 - git: `934b0c6`
 - official EIDORS fixture: `True`
