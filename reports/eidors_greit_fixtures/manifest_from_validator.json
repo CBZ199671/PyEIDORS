@@ -1,0 +1,65 @@
+{
+  "fixture_count": 1,
+  "fixtures": [
+    {
+      "exports": [
+        "vh",
+        "vi",
+        "xyzr",
+        "D",
+        "Y",
+        "PJt",
+        "M",
+        "noiselev",
+        "RM",
+        "weight"
+      ],
+      "path": "reports/eidors_greit_fixtures/reduced_48e_5936_eidors_greit_fixture.mat",
+      "schema": "pyeidors-eidors-greit-fixture-v1",
+      "shapes": {
+        "D": [
+          48,
+          8
+        ],
+        "M": [
+          2160,
+          2160
+        ],
+        "PJt": [
+          2160,
+          48
+        ],
+        "RM": [
+          2160,
+          48
+        ],
+        "Y": [
+          8,
+          2160
+        ],
+        "noiselev": [
+          1,
+          1
+        ],
+        "vh": [
+          1,
+          2160
+        ],
+        "vi": [
+          8,
+          2160
+        ],
+        "weight": [
+          1,
+          1
+        ],
+        "xyzr": [
+          8,
+          4
+        ]
+      }
+    }
+  ],
+  "schema": "pyeidors-eidors-greit-fixture-manifest-v1",
+  "source_map": "/home/tom/workspace/PyEidors_wsl2/scripts/diagnostics/eidors_greit_source_map.json"
+}

@@ -1,0 +1,240 @@
+{
+  "all_passed": true,
+  "comparisons": [
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "Y",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        2160,
+        8
+      ],
+      "shape_pyeidors": [
+        2160,
+        8
+      ],
+      "source": "vh/vi"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "D",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        48,
+        8
+      ],
+      "shape_pyeidors": [
+        48,
+        8
+      ],
+      "source": "D"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 0.0,
+      "name": "PJt",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 0.0,
+      "shape_eidors": [
+        48,
+        2160
+      ],
+      "shape_pyeidors": [
+        48,
+        2160
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 2.7755575615628914e-17,
+      "name": "M",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 3.513318946293339e-18,
+      "shape_eidors": [
+        2160,
+        2160
+      ],
+      "shape_pyeidors": [
+        2160,
+        2160
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 6.505213034913027e-19,
+      "name": "noiselev",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 6.505213034913027e-19,
+      "shape_eidors": [
+        1
+      ],
+      "shape_pyeidors": [
+        1
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 1.8877196697751663e-11,
+      "name": "RM",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 1.8877196697751663e-11,
+      "shape_eidors": [
+        48,
+        2160
+      ],
+      "shape_pyeidors": [
+        48,
+        2160
+      ],
+      "source": "calc_GREIT_RM"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 2.168404344971009e-18,
+      "name": "RM@dv",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 2.168404344971009e-18,
+      "shape_eidors": [
+        48
+      ],
+      "shape_pyeidors": [
+        48
+      ],
+      "source": "target_index=0"
+    },
+    {
+      "abs_tolerance": 1e-08,
+      "max_abs_error": 2.5240693767072513e-15,
+      "name": "metrics",
+      "passed": true,
+      "rel_tolerance": 1e-08,
+      "relative_error": 2.5240693767072513e-15,
+      "shape_eidors": {
+        "AR": [],
+        "PE": [],
+        "RES": [],
+        "RNG": [],
+        "SD": []
+      },
+      "shape_pyeidors": {
+        "AR": [],
+        "PE": [],
+        "RES": [],
+        "RNG": [],
+        "SD": []
+      },
+      "source": "greit_metrics target_index=0"
+    }
+  ],
+  "component_order": [
+    "Y",
+    "D",
+    "PJt",
+    "M",
+    "noiselev",
+    "RM",
+    "RM@dv",
+    "metrics"
+  ],
+  "eidors_shapes": {
+    "D": [
+      48,
+      8
+    ],
+    "M": [
+      2160,
+      2160
+    ],
+    "PJt": [
+      48,
+      2160
+    ],
+    "RM": [
+      48,
+      2160
+    ],
+    "Y": [
+      2160,
+      8
+    ],
+    "noiselev": [
+      1
+    ],
+    "vh": [
+      2160
+    ],
+    "vi": [
+      2160,
+      8
+    ],
+    "weight": [
+      1
+    ],
+    "xyzr": [
+      4,
+      8
+    ]
+  },
+  "fixture_path": "reports/eidors_greit_fixtures/reduced_48e_5936_eidors_greit_fixture.mat",
+  "metric_keys": [
+    "AR",
+    "PE",
+    "RES",
+    "SD",
+    "RNG"
+  ],
+  "normalize": true,
+  "pyeidors_artifact_path": null,
+  "pyeidors_source": "computed_from_fixture_components",
+  "schema": "pyeidors-greit-eidors-parity-report-v1",
+  "target_index": 0,
+  "tolerance_source": "cli-or-default",
+  "tolerances": {
+    "D": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "M": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "PJt": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "RM": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "RM@dv": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "Y": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "metrics": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    },
+    "noiselev": {
+      "abs": 1e-08,
+      "rel": 1e-08
+    }
+  }
+}

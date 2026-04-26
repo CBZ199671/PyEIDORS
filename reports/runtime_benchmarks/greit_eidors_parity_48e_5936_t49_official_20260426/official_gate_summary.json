@@ -1,0 +1,101 @@
+{
+  "benchmark_gate": {
+    "official_eidors_fixture": true,
+    "official_equivalence_claim_allowed": true,
+    "parity_components_passed": true,
+    "surrogate_note": null
+  },
+  "benchmark_invariants": {
+    "V55_target_distribution": true,
+    "V56_finite_target_training": true,
+    "V57_difference_normalization": true,
+    "V58_desired_image": true,
+    "V59_calc_greit_rm_equivalence": true,
+    "V60_scalar_weight_recorded": true,
+    "V61_hdf5_components": true,
+    "V62_cache_signature": true,
+    "V63_parity_report": true,
+    "V64_online_hot_path": true,
+    "V65_hdf5_cache": true
+  },
+  "computed_from_fixture_comparison_names": [
+    "Y",
+    "D",
+    "PJt",
+    "M",
+    "noiselev",
+    "RM",
+    "RM@dv",
+    "metrics"
+  ],
+  "computed_from_fixture_parity_passed": true,
+  "computed_from_fixture_parity_report_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/computed_from_fixture_parity_report.json",
+  "fixture_path": "reports/eidors_greit_fixtures/reduced_48e_5936_eidors_greit_fixture.mat",
+  "fixture_validation": {
+    "exports": [
+      "vh",
+      "vi",
+      "xyzr",
+      "D",
+      "Y",
+      "PJt",
+      "M",
+      "noiselev",
+      "RM",
+      "weight"
+    ],
+    "path": "reports/eidors_greit_fixtures/reduced_48e_5936_eidors_greit_fixture.mat",
+    "schema": "pyeidors-eidors-greit-fixture-v1",
+    "shapes": {
+      "D": [
+        48,
+        8
+      ],
+      "M": [
+        2160,
+        2160
+      ],
+      "PJt": [
+        2160,
+        48
+      ],
+      "RM": [
+        2160,
+        48
+      ],
+      "Y": [
+        8,
+        2160
+      ],
+      "noiselev": [
+        1,
+        1
+      ],
+      "vh": [
+        1,
+        2160
+      ],
+      "vi": [
+        8,
+        2160
+      ],
+      "weight": [
+        1,
+        1
+      ],
+      "xyzr": [
+        8,
+        4
+      ]
+    }
+  },
+  "official_eidors_fixture": true,
+  "official_equivalence_claim_allowed": true,
+  "official_fixture_available": true,
+  "schema": "pyeidors-greit-eidors-official-fixture-gate-v1",
+  "status": "passed",
+  "t49_report_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/t49_official_benchmark/README.md",
+  "t49_rerun_status": "completed",
+  "t49_summary_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/t49_official_benchmark/summary.json",
+  "timestamp_utc": "2026-04-26T15:48:30.419692+00:00"
+}

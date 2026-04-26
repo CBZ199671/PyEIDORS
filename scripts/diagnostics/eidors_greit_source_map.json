@@ -17,8 +17,9 @@
   "parity_status": {
     "current_pyeidors_greit": "eidors-component-path-t40-t50-complete; linearized-rm-v0-explicit-non-parity-mode",
     "eidors_complete_claim_allowed": false,
-    "official_equivalence_claim_allowed": false,
-    "claim_boundary": "PyEIDORS component path and T49 surrogate gate pass, but external MATLAB/EIDORS 48e fixture gate is still required before any official-equivalent claim.",
+    "official_equivalence_claim_allowed": true,
+    "official_equivalence_scope": "48e MATLAB/EIDORS reduced fixture only; actual EIDORS adjacent/no_meas_current n_measurements=2160; 5936 measurement protocol remains a separate official fixture gate.",
+    "claim_boundary": "PyEIDORS component path and 48e MATLAB/EIDORS official fixture gate pass. Claim allowed: 48e official fixture parity. Claim forbidden: 48e/5936 protocol official-equivalent or perfect stable 3D GREIT until separate 5936 protocol fixture gate passes.",
     "completed_tasks": [
       "T40",
       "T41",
@@ -32,10 +33,15 @@
       "T49",
       "T50"
     ],
-    "remaining_claim_gates": [
+    "completed_claim_gates": [
       "external MATLAB/EIDORS 48e fixture captured",
       "T49 rerun with official_eidors_fixture=true",
-      "official_equivalence_claim_allowed=true in benchmark summary"
+      "official_equivalence_claim_allowed=true in benchmark summary",
+      "computed-from-fixture Y/D/PJt/M/noiselev/RM/RM@dv/metrics pass at abs/rel 1e-8"
+    ],
+    "remaining_claim_gates": [
+      "separate 5936 measurement protocol MATLAB/EIDORS fixture captured",
+      "5936 protocol official_equivalence_claim_allowed=true in benchmark summary"
     ],
     "unlock_requires_tasks": [
       "T40",
@@ -200,6 +206,10 @@
       "case_id": "reduced_48e_5936",
       "role": "Reduced 48-electrode, three-ring cylinder aligned with PyEIDORS 48e/5936 production geometry family.",
       "electrode_count": 48,
+      "official_fixture_status": "passed",
+      "official_fixture_scope": "48e adjacent/no_meas_current EIDORS fixture; n_measurements=2160; not the 5936 protocol gate.",
+      "official_fixture_report": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/official_gate_summary.json",
+      "computed_from_fixture_report": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/computed_from_fixture_parity_report.json",
       "target_mesh": "reduced Netgen 3D cylinder; PyEIDORS matching mesh lives under eit_meshes/mesh3d_48e_*",
       "target_distribution": {
         "xvec": [
@@ -227,7 +237,7 @@
           0
         ]
       },
-      "expected_tolerance_status": "unknown_until_first_official_fixture"
+      "expected_tolerance_status": "passed_abs_rel_1e-8_for_48e_fixture; 5936_protocol_unknown"
     }
   ]
 }

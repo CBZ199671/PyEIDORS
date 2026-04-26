@@ -138,6 +138,8 @@ cases = repmat(empty_case(), 1, 2);
 cases(1).case_id = 'tiny_3d_cylinder';
 cases(1).n_elec = 8;
 cases(1).n_rings = 1;
+cases(1).pattern_n_elec = 8;
+cases(1).pattern_n_rings = 1;
 cases(1).cyl_shape = [1.0, 1.0, 0.35];
 cases(1).elec_pos = [8, 0.5];
 cases(1).elec_shape = [0.12];
@@ -153,8 +155,11 @@ cases(1).vopt = struct( ...
 cases(2).case_id = 'reduced_48e_5936';
 cases(2).n_elec = 48;
 cases(2).n_rings = 3;
+cases(2).pattern_n_elec = 48;
+cases(2).pattern_n_rings = 1;
 cases(2).cyl_shape = [0.16, 0.18, 0.055];
-cases(2).elec_pos = three_ring_electrode_positions(16, [0.15, 0.50, 0.85]);
+cases(2).elec_pos = three_ring_electrode_positions( ...
+    16, scaled_ring_z_levels(cases(2).cyl_shape(1), [0.15, 0.50, 0.85]));
 cases(2).elec_shape = [0.012, 0, 0.006];
 cases(2).background = 1.0;
 cases(2).radius = 0.035;
@@ -173,6 +178,8 @@ case_def = struct();
 case_def.case_id = '';
 case_def.n_elec = 0;
 case_def.n_rings = 0;
+case_def.pattern_n_elec = 0;
+case_def.pattern_n_rings = 0;
 case_def.cyl_shape = [];
 case_def.elec_pos = [];
 case_def.elec_shape = [];
@@ -181,6 +188,11 @@ case_def.radius = 0.0;
 case_def.weight = 0.0;
 case_def.normalize = 1;
 case_def.vopt = struct();
+end
+
+
+function z_levels = scaled_ring_z_levels(height, fractions)
+z_levels = double(height) .* double(fractions);
 end
 
 
@@ -203,7 +215,8 @@ assert_required_eidors_functions();
     case_def.cyl_shape, case_def.elec_pos, case_def.elec_shape);
 fmdl.name = ['PyEIDORS parity ' case_def.case_id];
 fmdl.stimulation = mk_stim_patterns( ...
-    case_def.n_elec, case_def.n_rings, '{ad}', '{ad}', {'no_meas_current'}, 1);
+    case_def.pattern_n_elec, case_def.pattern_n_rings, ...
+    '{ad}', '{ad}', {'no_meas_current'}, 1);
 fmdl = mdl_normalize(fmdl, case_def.normalize);
 
 homogeneous = mk_image(fmdl, case_def.background);
@@ -243,6 +256,8 @@ payload.noiselev = noiselev;
 payload.RM = RM;
 payload.weight = official_weight;
 payload.requested_weight = case_def.weight;
+payload.normalize = case_def.normalize;
+payload.rec_model = interp_mesh(imdl.rec_model);
 payload.official_RM = official_imdl.solve_use_matrix.RM;
 payload.official_PJt = official_imdl.solve_use_matrix.PJt;
 payload.official_M = official_imdl.solve_use_matrix.M;
@@ -285,14 +300,14 @@ end
 
 function [D, Y] = capture_desired_and_response_matrices(vh, vi, xyz, radius, opt)
 if isfield(opt, 'normalize') && opt.normalize
-    Y = calc_difference_data(vi, vh, 'ratio');
+    Y = bsxfun(@rdivide, vi, vh) - 1;
 else
-    Y = calc_difference_data(vi, vh);
+    Y = bsxfun(@minus, vi, vh);
 end
 if isfield(opt, 'desired_solution_fn')
     fn = opt.desired_solution_fn;
 else
-    fn = eidors_default('get', 'calc_GREIT_RM_desired_img');
+    fn = eidors_default('get', 'GREIT_desired_img');
 end
 D = feval(fn, xyz, radius, opt);
 end

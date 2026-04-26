@@ -131,7 +131,7 @@ J.T @ W @ J + hp^2 * RtR
 |---|---|
 | 48e/5936 在线 RM hot path 成立 | `reports/runtime_benchmarks/dual_model_rm_48e_5936_t36_20260422/README.md` |
 | 512 帧在线 apply 已是毫秒级批处理 | Laplace CUDA 512 帧 `0.036958s`，GREIT CUDA 512 帧 `0.033325s` |
-| 3D GREIT EIDORS-component path 已完成但官方等价声明未放行 | T49 48e/5936 surrogate gate 中 `Y/D/PJt/M/noiselev/RM/RM@dv/metrics` 全过；`official_equivalence_claim_allowed=false` 因外部 MATLAB/EIDORS 48e fixture 未接入 |
+| 3D GREIT 48e official fixture parity 已通过 | MATLAB/EIDORS 48e fixture gate `official_equivalence_claim_allowed=true`；computed-from-fixture `Y/D/PJt/M/noiselev/RM/RM@dv/metrics` abs/rel `1e-8` 全过；该 fixture 实际 `n_measurements=2160` |
 | 4D GN 比 rowwise RM 更懂连续过程 | `dynamic_validation_4d_gn_vs_rowwise_rm_20260425.md`，plant speed error 从 `0.0570454` 降到 `0.0441677` |
 | 高噪声快传导整体保真首选 T66 | `dynamic_t65_t66_t67_high_noise_sweep_20260426.md`，best overall 为 T66 TV/Huber |
 | propagation-aware A 是 Kalman 有效增强 | `dynamic_eidors_metric_review_propagation_A_multiseed_high_noise_20260426.md`，5 seed 全部通过，计票 `5/7` 或 `6/7` |
@@ -139,7 +139,7 @@ J.T @ W @ J + hp^2 * RtR
 
 ## 不能过度宣称的点
 
-- 当前 3D GREIT 的 EIDORS-component 路线 T40-T50 已完成，但 T49 仍是 surrogate gate；接入真实 MATLAB/EIDORS 48e fixture 前，不应称作官方完整等价。
+- 当前 3D GREIT 的 EIDORS-component 路线 T40-T50 已完成，真实 MATLAB/EIDORS 48e fixture 已通过；但该 fixture 不是 5936 测量协议，不能称作“48e/5936 official-equivalent”。
 - linearized GREIT RM v0 仍保留为显式 non-parity 快速/基线模式，不能和 EIDORS-component 路线混称。
 - propagation-aware A 已通过 benchmark gate，但只是 T67 Kalman benchmark 原型，不是默认重建器。
 - SBL/BSBL 仍是 research，未通过 T70 benchmark 前不应作为默认推荐。
@@ -150,5 +150,5 @@ J.T @ W @ J + hp^2 * RtR
 1. 把 benchmark 证据持续归档到 `reports/runtime_benchmarks/README.md`。
 2. 对 dynamic 方法继续做多噪声、多 seed、不同速度范围复核。
 3. 推进 T68 propagation-aware prior，但保持 opt-in。
-4. 推进 T42 到 T50，完成 official GREIT parity 后再开放“EIDORS 等价”表述。
+4. 单独定义并捕获 5936 测量协议的 MATLAB/EIDORS fixture，再决定是否开放“48e/5936 official-equivalent”表述。
 5. 对 SBL/BSBL 做 T70 接受 benchmark，只有赢了才晋升。

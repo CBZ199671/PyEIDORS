@@ -1,0 +1,23 @@
+{
+  "metadata": {
+    "case": "reduced_48e_5936",
+    "schema": "pyeidors-greit-eidors-parity-48e-v1-benchmark"
+  },
+  "metric_keys": [
+    "AR",
+    "PE",
+    "RES",
+    "SD",
+    "RNG"
+  ],
+  "records": [
+    {
+      "AR": 0.002367868507483429,
+      "PE": 1.736945890683578e-08,
+      "RES": 0.020833333333333332,
+      "RNG": 1.0729799417796542e-08,
+      "SD": 0.0
+    }
+  ],
+  "schema": "pyeidors-greit-metrics-v1"
+}

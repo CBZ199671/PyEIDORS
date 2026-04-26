@@ -253,13 +253,14 @@
 
 缺点：
 
-- 当前是 linearized v0。
-- 还缺 finite target `vh/vi`、desired image、NF search、official MATLAB parity。
+- `linearized v0` 仍只是快速/基线模式，不能和 EIDORS parity path 混称。
+- 48e official fixture 已过，但实际测量数是 2160；5936 协议仍需单独 official fixture。
 
 建议：
 
 - 可用作 v1 enhancement。
-- 对外不要说“官方 EIDORS 完整等价”。
+- 对外可说“48e official fixture parity passed”。
+- 对外不要说“48e/5936 official-equivalent”，直到 5936 protocol fixture 单独通过。
 
 ## 评价选择
 
@@ -324,5 +325,5 @@
 | Laplace/NOSER RM | baseline / v1 | 公式与测试稳定，hot path 成立 |
 | T66 TV/Huber | dynamic-quality | 高噪声快传导表现强 |
 | propagation-aware A | opt-in benchmark candidate | multi-seed gate 通过，但未改默认 |
-| GREIT v0 | v1 enhancement | 在线快，但 official parity 未完成 |
+| GREIT EIDORS parity path | v1 enhancement | 48e official fixture 已过；5936 protocol official gate 仍单独 |
 | SBL/BSBL | research | 缺 T70 接受 benchmark |

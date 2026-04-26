@@ -1,0 +1,61 @@
+{
+  "schema": "pyeidors-eidors-greit-fixture-manifest-v1",
+  "generated_by": "capture_eidors_greit_fixture",
+  "source_map": {
+    "schema": "pyeidors-eidors-greit-source-map-v1",
+    "required_exports": [
+      "vh",
+      "vi",
+      "xyzr",
+      "D",
+      "Y",
+      "PJt",
+      "M",
+      "noiselev",
+      "RM",
+      "weight"
+    ],
+    "official_functions": [
+      "GREIT3D_distribution",
+      "mk_GREIT_model",
+      "mk_GREIT_model/stim_targets",
+      "simulate_movement",
+      "calc_GREIT_RM",
+      "calc_GREIT_RM/calc_PJt",
+      "ng_mk_cyl_models"
+    ],
+    "urls": {
+      "GREIT3D_distribution": "https://eidors3d.sourceforge.net/doc/eidors/models/GREIT3D_distribution.html",
+      "mk_GREIT_model": "https://eidors3d.sourceforge.net/doc/eidors/models/mk_GREIT_model.html",
+      "simulate_movement": "https://eidors3d.sourceforge.net/doc/eidors/models/simulate_movement.html",
+      "calc_GREIT_RM": "https://eidors3d.sourceforge.net/doc/eidors/solvers/inverse/calc_GREIT_RM.html",
+      "ng_mk_cyl_models": "https://eidors3d.sourceforge.net/doc/eidors/meshing/netgen/ng_mk_cyl_models.html"
+    }
+  },
+  "fixtures": [
+    {
+      "case_id": "reduced_48e_5936",
+      "path": "\\\\wsl.localhost\\Ubuntu-22.04\\home\\tom\\workspace\\PyEidors_wsl2\\reports\\eidors_greit_fixtures\\reduced_48e_5936_eidors_greit_fixture.mat",
+      "required_exports": [
+        "vh",
+        "vi",
+        "xyzr",
+        "D",
+        "Y",
+        "PJt",
+        "M",
+        "noiselev",
+        "RM",
+        "weight"
+      ],
+      "weight": 0.02,
+      "n_targets": 8,
+      "n_measurements": 2160,
+      "rm_shape": [
+        48,
+        2160
+      ],
+      "tolerance_status": "unknown_until_first_official_fixture"
+    }
+  ]
+}

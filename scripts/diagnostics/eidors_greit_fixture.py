@@ -91,9 +91,9 @@ def validate_fixture_hdf5(path: str | Path) -> dict[str, Any]:
         if schema and schema != FIXTURE_SCHEMA:
             raise ValueError(f"unexpected fixture schema {schema!r}")
         shapes = {
-            name: tuple(int(v) for v in handle[name].shape)
+            name: _hdf5_export_shape(handle[name])
             for name in REQUIRED_EXPORTS
-            if name in handle and hasattr(handle[name], "shape")
+            if name in handle
         }
     return {
         "schema": FIXTURE_SCHEMA,
@@ -132,6 +132,9 @@ def _read_hdf5_string(handle: Any, key: str) -> str:
         value = handle.attrs[key]
         if isinstance(value, bytes):
             return value.decode("utf-8")
+        decoded = _decode_hdf5_string_value(value)
+        if decoded:
+            return decoded
         return str(value)
     if key not in handle:
         return ""
@@ -140,9 +143,48 @@ def _read_hdf5_string(handle: Any, key: str) -> str:
         value = dataset[()]
     except Exception:
         return ""
+    decoded = _decode_hdf5_string_value(value)
+    if decoded:
+        return decoded
     if isinstance(value, bytes):
         return value.decode("utf-8")
     return str(value)
+
+
+def _hdf5_export_shape(value: Any) -> tuple[int, ...]:
+    if hasattr(value, "shape"):
+        return tuple(int(v) for v in value.shape)
+    if "MATLAB_sparse" in value.attrs and "jc" in value:
+        return (int(value.attrs["MATLAB_sparse"]), int(value["jc"].shape[0]) - 1)
+    return ()
+
+
+def _decode_hdf5_string_value(value: Any) -> str:
+    """Decode Python, h5py, or MATLAB v7.3 char-array string payloads."""
+
+    if isinstance(value, str):
+        return value
+    if isinstance(value, bytes):
+        return value.decode("utf-8")
+    try:
+        import numpy as np
+    except Exception:
+        return ""
+
+    if isinstance(value, np.bytes_):
+        return bytes(value).decode("utf-8")
+    if isinstance(value, np.str_):
+        return str(value)
+    if not isinstance(value, np.ndarray):
+        return ""
+    if value.dtype.kind in {"S", "U"}:
+        return "".join(str(item) for item in value.reshape(-1)).strip()
+    if value.dtype.kind not in {"i", "u"}:
+        return ""
+    codes = [int(item) for item in value.reshape(-1)]
+    if not codes or any(code < 0 or code > 0x10FFFF for code in codes):
+        return ""
+    return "".join(chr(code) for code in codes if code).strip()
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:

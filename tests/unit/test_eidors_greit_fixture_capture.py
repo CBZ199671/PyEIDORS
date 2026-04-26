@@ -43,10 +43,17 @@ def test_eidors_greit_source_map_covers_official_pipeline() -> None:
         "linearized-rm-v0-explicit-non-parity-mode"
     )
     assert payload["parity_status"]["eidors_complete_claim_allowed"] is False
-    assert payload["parity_status"]["official_equivalence_claim_allowed"] is False
+    assert payload["parity_status"]["official_equivalence_claim_allowed"] is True
+    assert (
+        "n_measurements=2160" in payload["parity_status"]["official_equivalence_scope"]
+    )
     assert "T49" in payload["parity_status"]["completed_tasks"]
     assert (
         "external MATLAB/EIDORS 48e fixture captured"
+        in (payload["parity_status"]["completed_claim_gates"])
+    )
+    assert (
+        "separate 5936 measurement protocol MATLAB/EIDORS fixture captured"
         in (payload["parity_status"]["remaining_claim_gates"])
     )
 
@@ -59,11 +66,15 @@ def test_matlab_capture_script_exports_required_component_fields() -> None:
         "mk_GREIT_model",
         "simulate_movement",
         "calc_GREIT_RM",
-        "calc_difference_data",
+        "bsxfun(@rdivide, vi, vh) - 1",
         "eidors_default",
+        "GREIT_desired_img",
         "-v7.3",
         "tiny_3d_cylinder",
         "reduced_48e_5936",
+        "scaled_ring_z_levels(cases(2).cyl_shape(1), [0.15, 0.50, 0.85])",
+        "cases(2).pattern_n_elec = 48",
+        "cases(2).pattern_n_rings = 1",
     ):
         assert token in text
     for field in (
@@ -77,6 +88,8 @@ def test_matlab_capture_script_exports_required_component_fields() -> None:
         "payload.noiselev",
         "payload.RM",
         "payload.weight",
+        "payload.rec_model",
+        "payload.normalize",
     ):
         assert field in text
 

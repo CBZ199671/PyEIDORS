@@ -43,6 +43,7 @@ from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 from scripts.diagnostics.compare_greit_eidors_parity import (
     compare_greit_eidors_parity,
+    load_greit_eidors_fixture_arrays,
 )
 from scripts.diagnostics.eidors_greit_fixture import FIXTURE_SCHEMA, REQUIRED_EXPORTS
 
@@ -436,6 +437,7 @@ def _generate_case(
         "target_radius": float(target_radius),
         "target_contrast": float(target_contrast),
         "weight": float(weight),
+        "fwd_model_signature": f"t49-{case_id}-48e-5936-surrogate",
     }
     return ComponentCase(
         case_id=case_id,
@@ -464,6 +466,7 @@ def _case_from_fixture(
     for name in REQUIRED_EXPORTS:
         if name not in arrays:
             raise ValueError(f"fixture missing required export: {name}")
+    arrays["vh"] = np.asarray(arrays["vh"], dtype=np.float64).reshape(-1)
     arrays.setdefault("Sn", np.eye(np.asarray(arrays["vh"]).reshape(-1).size))
     arrays.setdefault("rec_model", _rec_centers_from_voxel_shape(voxel_shape))
     arrays.setdefault("normalize", np.asarray([1], dtype=np.int64))
@@ -480,6 +483,9 @@ def _case_from_fixture(
         "bad_channel_count": 0,
         "voxel_shape": tuple(int(v) for v in voxel_shape),
         "weight": float(np.asarray(arrays.get("weight", [weight])).reshape(-1)[0]),
+        "fwd_model_signature": (
+            f"t49-{case_id}-official-eidors-fixture:{fixture_path.name}"
+        ),
     }
     return ComponentCase(
         case_id=case_id,
@@ -528,7 +534,7 @@ def _write_case_artifact(case: ComponentCase) -> GREITRM:
         "target_noise_figure": None,
         "image_snr": None,
         "training_mode": "forward",
-        "fwd_model_signature": f"t49-{case.case_id}-48e-5936-surrogate",
+        "fwd_model_signature": case.metadata.get("fwd_model_signature"),
         "keep_model_components": True,
     }
     metadata["cache_signature_hash"] = _component_signature_hash(arrays, metadata)
@@ -548,7 +554,7 @@ def _write_case_artifact(case: ComponentCase) -> GREITRM:
         vi=np.asarray(arrays["vi"], dtype=np.float64),
         xyzr=np.asarray(arrays["xyzr"], dtype=np.float64),
         rec_model=np.asarray(arrays["rec_model"], dtype=np.float64),
-        fwd_model_signature=f"t49-{case.case_id}-48e-5936-surrogate",
+        fwd_model_signature=str(case.metadata.get("fwd_model_signature")),
         cache_signature=str(metadata["cache_signature_hash"]),
     )
     saved = greit.save(case.artifact_path)
@@ -720,10 +726,11 @@ def _metrics_for_case(
     target_mask = np.abs(target) >= max(threshold, np.finfo(np.float64).eps)
     if not np.any(target_mask):
         target_mask[int(np.argmax(np.abs(target)))] = True
+    centers = _matching_rec_model_centers(case.arrays.get("rec_model"), target.size)
     metrics = greit_metrics(
         recon,
         target_mask,
-        centers=np.asarray(case.arrays["rec_model"], dtype=np.float64),
+        centers=centers,
     )
     if set(metrics) != set(GREIT_METRIC_KEYS):
         raise RuntimeError("GREIT metric key set is incomplete.")
@@ -735,6 +742,17 @@ def _first_successful_online_entry(online: Mapping[str, Any]) -> Mapping[str, An
         if isinstance(entry, Mapping) and "values_1_frame" in entry:
             return entry
     raise RuntimeError("No successful online apply entry is available for metrics.")
+
+
+def _matching_rec_model_centers(values: Any, n_cells: int) -> np.ndarray | None:
+    if values is None:
+        return None
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim == 2 and array.shape[0] == n_cells:
+        return np.ascontiguousarray(array, dtype=np.float64)
+    if array.ndim == 2 and array.shape[1] == n_cells:
+        return np.ascontiguousarray(array.T, dtype=np.float64)
+    return None
 
 
 def _write_fixture(
@@ -752,12 +770,15 @@ def _write_fixture(
 
 
 def _load_fixture_arrays(path: Path) -> dict[str, np.ndarray]:
-    arrays: dict[str, np.ndarray] = {}
-    with h5py.File(path, "r") as handle:
-        for name, value in handle.items():
-            if isinstance(value, h5py.Dataset):
-                arrays[str(name)] = np.asarray(value)
-    return arrays
+    return {
+        str(name): np.asarray(value)
+        for name, value in load_greit_eidors_fixture_arrays(path).items()
+        if _is_array_like(value)
+    }
+
+
+def _is_array_like(value: Any) -> bool:
+    return isinstance(value, (np.ndarray, list, tuple, int, float, np.number))
 
 
 def _difference_data_from_vh_vi(vh: np.ndarray, vi: np.ndarray) -> np.ndarray:

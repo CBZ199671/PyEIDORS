@@ -75,7 +75,7 @@ def compare_greit_eidors_parity(
 ) -> dict[str, Any]:
     """Build a GREIT parity drift report for one captured EIDORS fixture."""
 
-    fixture = _load_fixture_arrays(fixture_path)
+    fixture = load_greit_eidors_fixture_arrays(fixture_path)
     _require_fixture_fields(fixture, fixture_path)
     official = _official_components(fixture)
     py = (
@@ -185,12 +185,19 @@ def write_parity_report(path: str | Path, payload: Mapping[str, Any]) -> Path:
     return target
 
 
-def _load_fixture_arrays(path: str | Path) -> dict[str, Any]:
+def load_greit_eidors_fixture_arrays(path: str | Path) -> dict[str, Any]:
+    """Load a MATLAB/EIDORS GREIT fixture with MATLAB v7.3 orientation fixes."""
+
     source = Path(path)
     try:
-        return _load_hdf5_fixture(source)
+        fixture = _load_hdf5_fixture(source)
     except OSError:
-        return _load_matlab_v7_fixture(source)
+        fixture = _load_matlab_v7_fixture(source)
+    return _normalize_fixture_orientation(fixture)
+
+
+def _load_fixture_arrays(path: str | Path) -> dict[str, Any]:
+    return load_greit_eidors_fixture_arrays(path)
 
 
 def _load_hdf5_fixture(path: Path) -> dict[str, Any]:
@@ -199,6 +206,10 @@ def _load_hdf5_fixture(path: Path) -> dict[str, Any]:
         for key in handle.keys():
             if isinstance(handle[key], h5py.Dataset):
                 arrays[str(key)] = _dataset_value(handle[key])
+            elif isinstance(handle[key], h5py.Group):
+                value = _group_value(handle[key])
+                if value is not None:
+                    arrays[str(key)] = value
         for key, value in handle.attrs.items():
             arrays.setdefault(str(key), _attr_value(value))
     return arrays
@@ -215,11 +226,96 @@ def _load_matlab_v7_fixture(path: Path) -> dict[str, Any]:
     }
 
 
+def _normalize_fixture_orientation(fixture: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalize likely MATLAB v7.3 matrix orientation after h5py loading."""
+
+    arrays = dict(fixture)
+    if "vh" not in arrays:
+        return arrays
+    n_meas = int(np.asarray(arrays["vh"]).reshape(-1).size)
+    for name in ("vi", "Y"):
+        if name in arrays:
+            arrays[name] = _matrix_with_expected_rows(arrays[name], n_meas)
+
+    y = np.asarray(arrays.get("Y", []), dtype=np.float64)
+    n_targets = int(y.shape[1]) if y.ndim == 2 else None
+    if n_targets is not None:
+        for name in ("D",):
+            if name in arrays:
+                arrays[name] = _matrix_with_expected_columns(arrays[name], n_targets)
+        if "xyzr" in arrays:
+            arrays["xyzr"] = _xyzr_with_expected_rows(arrays["xyzr"])
+
+    for name in ("PJt", "RM"):
+        if name in arrays:
+            arrays[name] = _matrix_with_expected_columns(arrays[name], n_meas)
+    for name in ("rec_model", "rec_centers", "centers"):
+        if name in arrays:
+            arrays[name] = _centers_with_expected_columns(arrays[name])
+    return arrays
+
+
+def _matrix_with_expected_rows(values: Any, expected_rows: int) -> Any:
+    array = np.asarray(values)
+    if (
+        array.ndim == 2
+        and array.shape[0] != expected_rows
+        and array.shape[1] == expected_rows
+    ):
+        return np.ascontiguousarray(array.T)
+    return values
+
+
+def _matrix_with_expected_columns(values: Any, expected_columns: int) -> Any:
+    array = np.asarray(values)
+    if (
+        array.ndim == 2
+        and array.shape[1] != expected_columns
+        and array.shape[0] == expected_columns
+    ):
+        return np.ascontiguousarray(array.T)
+    return values
+
+
+def _xyzr_with_expected_rows(values: Any) -> Any:
+    array = np.asarray(values)
+    if array.ndim == 2 and array.shape[0] not in {3, 4} and array.shape[1] in {3, 4}:
+        return np.ascontiguousarray(array.T)
+    return values
+
+
+def _centers_with_expected_columns(values: Any) -> Any:
+    array = np.asarray(values)
+    if array.ndim == 2 and array.shape[1] != 3 and array.shape[0] == 3:
+        return np.ascontiguousarray(array.T)
+    return values
+
+
 def _dataset_value(dataset: h5py.Dataset) -> Any:
     value = dataset[()]
     if isinstance(value, bytes):
         return value.decode("utf-8")
     return np.asarray(value)
+
+
+def _group_value(group: h5py.Group) -> Any | None:
+    if "MATLAB_sparse" in group.attrs:
+        return _matlab_sparse_group_value(group)
+    return None
+
+
+def _matlab_sparse_group_value(group: h5py.Group) -> np.ndarray:
+    rows = int(group.attrs["MATLAB_sparse"])
+    data = np.asarray(group["data"], dtype=np.float64).reshape(-1)
+    ir = np.asarray(group["ir"], dtype=np.int64).reshape(-1)
+    jc = np.asarray(group["jc"], dtype=np.int64).reshape(-1)
+    cols = max(int(jc.size) - 1, 0)
+    dense = np.zeros((rows, cols), dtype=np.float64)
+    for col in range(cols):
+        start = int(jc[col])
+        stop = int(jc[col + 1])
+        dense[ir[start:stop], col] = data[start:stop]
+    return np.ascontiguousarray(dense, dtype=np.float64)
 
 
 def _attr_value(value: Any) -> Any:
