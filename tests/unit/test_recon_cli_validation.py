@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
-import sys
+import importlib.util
+import io
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _script_path() -> Path:
@@ -15,9 +17,36 @@ def _script_path() -> Path:
     )
 
 
-def _run_cli(args: list[str]) -> subprocess.CompletedProcess[str]:
-    cmd = [sys.executable, str(_script_path()), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, check=False)
+def _load_script():
+    spec = importlib.util.spec_from_file_location(
+        "run_reconstruction_unified_cli", _script_path()
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError("Unable to load unified reconstruction CLI")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_SCRIPT = _load_script()
+
+
+def _run_cli(args: list[str]):
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with redirect_stdout(stdout), redirect_stderr(stderr):
+        try:
+            returncode = _SCRIPT.run(args)
+        except SystemExit as exc:
+            returncode = int(exc.code or 0)
+        except Exception as exc:
+            print(f"[ERROR] {exc}", file=stderr)
+            returncode = 1
+    return SimpleNamespace(
+        returncode=returncode,
+        stdout=stdout.getvalue(),
+        stderr=stderr.getvalue(),
+    )
 
 
 def test_help_is_available_without_full_runtime_stack():

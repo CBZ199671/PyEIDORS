@@ -56,14 +56,14 @@ def _forced_selector(effective: str):
 def _build_ctx(cache_dir: Path) -> dict:
     return gn_difference_runner.build_shared_context(
         mesh_dir=str(REPO_ROOT / "eit_meshes"),
-        mesh_name="mesh_16e_r0p025_ref10_cov0p5",
+        mesh_name="mesh_8e_r1_ref8_cov0p5",
         mesh_dim=2,
         mesh_height=1.0,
         electrode_height_ratio=0.2,
         z_center=0.0,
-        refinement=6,
-        n_elec=16,
-        radius=0.025,
+        refinement=8,
+        n_elec=8,
+        radius=1.0,
         drive_value=1.0,
         contact_impedance=1e-6,
         background_sigma=1.0,

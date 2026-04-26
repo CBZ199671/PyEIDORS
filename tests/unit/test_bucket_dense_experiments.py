@@ -1,9 +1,8 @@
 from __future__ import annotations
 
 import csv
+import importlib.util
 from pathlib import Path
-import subprocess
-import sys
 
 import numpy as np
 
@@ -23,6 +22,32 @@ from pyeidors.data.eit_digit_metrics import reconstruct_linearized_sigma
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def _load_script(module_name: str, relative_path: str):
+    spec = importlib.util.spec_from_file_location(
+        module_name,
+        REPO_ROOT / relative_path,
+    )
+    if spec is None or spec.loader is None:
+        raise AssertionError(f"failed to load {relative_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+_DENSE_SCRIPT = _load_script(
+    "eit_bucket_dense_experiments_cli",
+    "scripts/eit_bucket_dense_experiments.py",
+)
+_FULL256_SCRIPT = _load_script(
+    "eit_bucket_full256_compare_cli",
+    "scripts/eit_bucket_full256_compare.py",
+)
+_NOISE_SWEEP_SCRIPT = _load_script(
+    "eit_bucket_all_modes_noise_sweep_cli",
+    "scripts/eit_bucket_all_modes_noise_sweep.py",
+)
 
 
 def test_circle_bucket_linearized_model_uses_dense_circle_geometry() -> None:
@@ -215,7 +240,10 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
         assert written[key].read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> None:
+def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(
+    tmp_path,
+    capsys,
+) -> None:
     summary_output = tmp_path / "summary.csv"
     field_output = tmp_path / "fields.csv"
     report_output = tmp_path / "report.md"
@@ -224,10 +252,8 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> N
     summary_plot = tmp_path / "summary.png"
     curve_plot = tmp_path / "curves.png"
     holdout_summary = tmp_path / "holdout_summary.png"
-    completed = subprocess.run(
+    exit_code = _DENSE_SCRIPT.main(
         [
-            sys.executable,
-            "scripts/eit_bucket_dense_experiments.py",
             "--mesh-h",
             "0.16",
             "--allow-coarse-smoke",
@@ -260,15 +286,13 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> N
             "none",
             "--dpi",
             "70",
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
+        ]
     )
+    captured = capsys.readouterr()
 
-    assert "domain=circle_bucket" in completed.stdout
-    assert "n_measurements=208" in completed.stdout
+    assert exit_code == 0
+    assert "domain=circle_bucket" in captured.out
+    assert "n_measurements=208" in captured.out
     with summary_output.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with field_output.open(newline="", encoding="utf-8") as handle:
@@ -287,7 +311,9 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(tmp_path) -> N
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
-def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> None:
+def test_eit_bucket_full256_compare_cli_writes_expected_outputs(
+    tmp_path, capsys
+) -> None:
     summary_output = tmp_path / "summary.csv"
     field_output = tmp_path / "fields.csv"
     report_output = tmp_path / "report.md"
@@ -295,10 +321,8 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
     recon_delta_plot = tmp_path / "recon_delta.png"
     metrics_plot = tmp_path / "metrics.png"
     point_audit_plot = tmp_path / "point_audit.png"
-    completed = subprocess.run(
+    exit_code = _FULL256_SCRIPT.main(
         [
-            sys.executable,
-            "scripts/eit_bucket_full256_compare.py",
             "--mesh-h",
             "0.16",
             "--allow-coarse-smoke",
@@ -321,15 +345,13 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
             str(point_audit_plot),
             "--dpi",
             "70",
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
+        ]
     )
+    captured = capsys.readouterr()
 
-    assert "full_256_measurements=256" in completed.stdout
-    assert "full_208_measurements=208" in completed.stdout
+    assert exit_code == 0
+    assert "full_256_measurements=256" in captured.out
+    assert "full_208_measurements=208" in captured.out
     with summary_output.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with field_output.open(newline="", encoding="utf-8") as handle:
@@ -351,12 +373,11 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
 
 def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
     tmp_path,
+    capsys,
 ) -> None:
     output_dir = tmp_path / "noise_sweep"
-    completed = subprocess.run(
+    exit_code = _NOISE_SWEEP_SCRIPT.main(
         [
-            sys.executable,
-            "scripts/eit_bucket_all_modes_noise_sweep.py",
             "--mesh-h",
             "0.16",
             "--allow-coarse-smoke",
@@ -369,12 +390,9 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
             str(output_dir),
             "--dpi",
             "70",
-        ],
-        check=True,
-        cwd=REPO_ROOT,
-        text=True,
-        capture_output=True,
+        ]
     )
+    captured = capsys.readouterr()
 
     summary = output_dir / "eit_bucket_all_modes_noise_sweep_summary_16e.csv"
     fields = output_dir / "eit_bucket_all_modes_noise_sweep_fields_16e.csv"
@@ -383,8 +401,9 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
     recon = output_dir / "eit_bucket_all_modes_noise_sweep_recon_grid_16e.png"
     errors = output_dir / "eit_bucket_all_modes_noise_sweep_error_grid_16e.png"
 
-    assert "SNR=inf" in completed.stdout
-    assert "SNR=10" in completed.stdout
+    assert exit_code == 0
+    assert "SNR=inf" in captured.out
+    assert "SNR=10" in captured.out
     with summary.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with fields.open(newline="", encoding="utf-8") as handle:

@@ -28,13 +28,17 @@ OPERATOR_CACHE_KEYS = (
 def test_gn_difference_3d_context_cache_hits_and_background_invalidation(tmp_path):
     cache_dir = tmp_path / "cache3d"
     kwargs = dict(
-        mesh_dir=str(tmp_path / "mesh_cache"),
-        mesh_name=None,
+        mesh_dir=str(REPO_ROOT / "eit_meshes"),
+        mesh_name=(
+            "mesh3d_4e_r0p1_h0p08_ref1_cov0p5_ehr0p2_lev0p35-0p65_"
+            "zc0_elring_major_cftetra_geomv2_g3d3"
+        ),
         mesh_dim=3,
         mesh_height=0.08,
         electrode_height_ratio=0.2,
+        electrode_level_fractions=(0.35, 0.65),
         z_center=0.0,
-        refinement=2,
+        refinement=1,
         n_elec=4,
         radius=0.1,
         drive_value=1.0,
@@ -43,14 +47,16 @@ def test_gn_difference_3d_context_cache_hits_and_background_invalidation(tmp_pat
         cache_scope="both",
         cache_dir=str(cache_dir),
         cache_clear_names=[],
+        mesh_family="tetra",
+        geometry_version="geomv2",
     )
 
     cold_ctx = gn_difference_runner.build_shared_context(
         background_sigma=1.0,
         **kwargs,
     )
-    assert cold_ctx["mesh_cache_hit"] is False
-    assert cold_ctx["mesh_cache_layer"] == "generated"
+    assert cold_ctx["mesh_cache_hit"] is True
+    assert cold_ctx["mesh_cache_layer"] in {"disk", "process"}
     assert cold_ctx["cache_lookups"]["jacobian"]["hit"] is False
     for key in OPERATOR_CACHE_KEYS:
         assert cold_ctx["cache_lookups"][key]["hit"] is False

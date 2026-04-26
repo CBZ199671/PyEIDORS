@@ -4,6 +4,7 @@ import gc
 import os
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -34,6 +35,11 @@ def _get_app() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+class _NoopSignal:
+    def connect(self, _slot) -> None:
+        return None
 
 
 def _wait_until(predicate, *, timeout: float = 5.0, step: float = 0.02) -> bool:
@@ -141,6 +147,12 @@ def _cleanup_top_level_widgets_after_test():
                 obj.wait(500)
         except Exception:
             pass
+    try:
+        from eit_app.ui.theme import _mode_listeners
+
+        _mode_listeners.clear()
+    except Exception:
+        pass
     app.processEvents()
 
 
@@ -879,60 +891,72 @@ def test_inline_card_stylesheets_follow_dark_mode_palette() -> None:
         card_palette,
         set_theme_mode,
     )
+    from eit_app.ui.database.database_tab import DatabaseTab
+    from eit_app.ui.hardware.session_summary_panel import SessionSummaryPanel
+    from eit_app.ui.simulation.dataset_summary_panel import DatasetSummaryPanel
 
     app = _get_app()
-    set_theme_mode(app, "light", persist=False)
+    set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
     light_value_bg = card_palette()["value_bg"]
 
-    window = EITWorkstation()
-    _show_window(window)
+    session_summary = SessionSummaryPanel()
+    dataset_summary = DatasetSummaryPanel()
+    database_tab = DatabaseTab(
+        SimpleNamespace(
+            query_sessions=lambda **_filters: [],
+            is_shutting_down=False,
+            session_added=_NoopSignal(),
+            frame_added=_NoopSignal(),
+            backfill_progress=_NoopSignal(),
+            backfill_done=_NoopSignal(),
+        )
+    )
     try:
         # Initial state: every card stylesheet contains the LIGHT bg color.
-        sample_session_value = next(iter(window._summary_panel._values.values()))
-        sample_dataset_value = next(
-            iter(window._dataset_tab._summary_panel._values.values())
-        )
+        sample_session_value = next(iter(session_summary._values.values()))
+        sample_dataset_value = next(iter(dataset_summary._values.values()))
         assert light_value_bg in sample_session_value.styleSheet()
         assert light_value_bg in sample_dataset_value.styleSheet()
         assert light_value_bg.lower() != "#262d38"
 
         # Flip to dark and verify all 5 paths swap.
-        set_theme_mode(app, "dark", persist=False)
+        set_theme_mode(app, "dark", persist=False, apply_stylesheet=False)
         _get_app().processEvents()
         dark_palette = card_palette()
         dark_value_bg = dark_palette["value_bg"]
 
         # SessionSummaryPanel: field value boxes + next-action banner
-        for value in window._summary_panel._values.values():
+        for value in session_summary._values.values():
             assert dark_value_bg in value.styleSheet(), (
                 "SessionSummaryPanel field value should follow dark mode"
             )
         assert (
-            dark_palette["next_action_bg"]
-            in window._summary_panel._next_action.styleSheet()
+            dark_palette["next_action_bg"] in session_summary._next_action.styleSheet()
         )
 
         # DatasetSummaryPanel: field value boxes
-        for value in window._dataset_tab._summary_panel._values.values():
+        for value in dataset_summary._values.values():
             assert dark_value_bg in value.styleSheet()
 
         # Database tab: stats card + selection status
-        assert dark_palette["info_bg"] in window._db_tab._stats_card.styleSheet()
-        assert dark_palette["info_accent"] in window._db_tab._count_label.styleSheet()
+        assert dark_palette["info_bg"] in database_tab._stats_card.styleSheet()
+        assert dark_palette["info_accent"] in database_tab._count_label.styleSheet()
         assert (
-            dark_palette["selection_bg"]
-            in window._db_tab._selection_status.styleSheet()
+            dark_palette["selection_bg"] in database_tab._selection_status.styleSheet()
         )
 
         # Light mode reverts the same paths.
-        set_theme_mode(app, "light", persist=False)
+        set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
         _get_app().processEvents()
-        for value in window._summary_panel._values.values():
+        for value in session_summary._values.values():
             assert light_value_bg in value.styleSheet()
-        assert "#edf4fb" in window._summary_panel._next_action.styleSheet()
+        assert "#edf4fb" in session_summary._next_action.styleSheet()
     finally:
-        set_theme_mode(app, "light", persist=False)
-        _close_window(window)
+        set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
+        for widget in (session_summary, dataset_summary, database_tab):
+            widget.close()
+            widget.deleteLater()
+        app.processEvents()
 
 
 @pytest.mark.gui
@@ -950,34 +974,38 @@ def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
         plot_palette,
         set_theme_mode,
     )
+    from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
+    from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
+    from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 
     app = _get_app()
-    set_theme_mode(app, "light", persist=False)
+    set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
     light_palette = plot_palette()
 
-    window = EITWorkstation()
-    _show_window(window)
+    live_plot = LivePlotWidget()
+    voltage_plot = BoundaryVoltagePlotWidget()
+    recon_widget = ReconstructionWidget()
+    gt = ConductivityImageWidget()
     try:
         # Initial widgets pulled the light palette.
-        assert window._live_plot._plot_bg == light_palette["bg"]
-        assert window._voltage_plot._plot_bg == light_palette["bg"]
-        assert window._recon_widget._plot_bg == light_palette["panel_bg"]
+        assert live_plot._plot_bg == light_palette["bg"]
+        assert voltage_plot._plot_bg == light_palette["bg"]
+        assert recon_widget._plot_bg == light_palette["panel_bg"]
 
         # The simulation results widget now wraps the matplotlib pane
         # in a dispatcher slot (_ConductivityViewSlot) that flips
         # between 2D matplotlib and 3D PyVista for 3D meshes — reach
         # through ._mpl to get back to the matplotlib Figure.
-        gt = window._sim_tab._results_widget._ground_truth_widget._mpl
         light_facecolor = gt._figure.patch.get_facecolor()
 
         # Flip to dark.
-        set_theme_mode(app, "dark", persist=False)
+        set_theme_mode(app, "dark", persist=False, apply_stylesheet=False)
         _get_app().processEvents()
         dark_palette = plot_palette()
 
-        assert window._live_plot._plot_bg == dark_palette["bg"]
-        assert window._voltage_plot._plot_bg == dark_palette["bg"]
-        assert window._recon_widget._plot_bg == dark_palette["panel_bg"]
+        assert live_plot._plot_bg == dark_palette["bg"]
+        assert voltage_plot._plot_bg == dark_palette["bg"]
+        assert recon_widget._plot_bg == dark_palette["panel_bg"]
         # Matplotlib facecolor is a 4-tuple (r,g,b,a) of floats — not
         # the hex string we set — so compare via "is the value darker"
         # (sum of channels lower).
@@ -987,17 +1015,20 @@ def test_plot_widgets_repaint_canvas_when_dark_mode_toggles() -> None:
         )
 
         # Toggle back to light: every widget reverts.
-        set_theme_mode(app, "light", persist=False)
+        set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
         _get_app().processEvents()
-        assert window._live_plot._plot_bg == light_palette["bg"]
-        assert window._voltage_plot._plot_bg == light_palette["bg"]
-        assert window._recon_widget._plot_bg == light_palette["panel_bg"]
+        assert live_plot._plot_bg == light_palette["bg"]
+        assert voltage_plot._plot_bg == light_palette["bg"]
+        assert recon_widget._plot_bg == light_palette["panel_bg"]
         # Facecolor returns to roughly the original light value.
         again = gt._figure.patch.get_facecolor()
         assert sum(again[:3]) > sum(dark_facecolor[:3])
     finally:
-        set_theme_mode(app, "light", persist=False)
-        _close_window(window)
+        set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
+        for widget in (live_plot, voltage_plot, recon_widget, gt):
+            widget.close()
+            widget.deleteLater()
+        app.processEvents()
 
 
 @pytest.mark.gui
@@ -1010,24 +1041,23 @@ def test_dark_mode_toggle_swaps_stylesheet_and_tone_palette() -> None:
        overlay into the light stylesheet
     """
     from eit_app.ui.theme import (
-        apply_app_theme,
+        _build_stylesheet,
         current_theme_mode,
         set_theme_mode,
         tone_palette,
     )
 
     app = _get_app()
-    apply_app_theme(app)
     # Start from known-good light state regardless of any persisted
     # preference on the dev machine.
-    set_theme_mode(app, "light", persist=False)
+    set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
     assert current_theme_mode() == "light"
-    light_css = app.styleSheet()
+    light_css = _build_stylesheet("light")
     light_tones = tone_palette("idle")
 
-    set_theme_mode(app, "dark", persist=False)
+    set_theme_mode(app, "dark", persist=False, apply_stylesheet=False)
     assert current_theme_mode() == "dark"
-    dark_css = app.styleSheet()
+    dark_css = _build_stylesheet("dark")
     dark_tones = tone_palette("idle")
 
     # The dark stylesheet is a strict superset of the light one (base
@@ -1041,9 +1071,36 @@ def test_dark_mode_toggle_swaps_stylesheet_and_tone_palette() -> None:
     assert dark_tones[0] == "#c7d0db"
 
     # Toggle back: stylesheet returns to the base exactly.
-    set_theme_mode(app, "light", persist=False)
-    assert app.styleSheet() == light_css
+    set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
+    assert _build_stylesheet("light") == light_css
     assert tone_palette("idle") == light_tones
+
+
+@pytest.mark.gui
+def test_theme_mode_subscribers_are_weakly_retained() -> None:
+    from eit_app.ui.theme import _mode_listeners, set_theme_mode, subscribe_theme_mode
+
+    app = _get_app()
+    before = len(_mode_listeners)
+
+    class ListenerProbe:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def on_theme_mode_changed(self, mode: str) -> None:
+            self.calls.append(mode)
+
+    probe = ListenerProbe()
+    subscribe_theme_mode(probe.on_theme_mode_changed)
+    assert len(_mode_listeners) == before + 1
+
+    set_theme_mode(app, "dark", persist=False, apply_stylesheet=False)
+    assert probe.calls[-1] == "dark"
+
+    del probe
+    gc.collect()
+    set_theme_mode(app, "light", persist=False, apply_stylesheet=False)
+    assert len(_mode_listeners) <= before
 
 
 @pytest.mark.gui

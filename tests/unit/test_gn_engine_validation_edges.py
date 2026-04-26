@@ -3,49 +3,55 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from unittest import mock
 
 import pytest
 
 import pyeidors.inverse.solvers.gauss_newton_engine as gn_engine
-from tests.utils import run_python
 
 
-def _run_validation_case(argument_expr: str, expected_substring: str) -> None:
-    code = f"""
-from unittest import mock
-fm = mock.MagicMock()
-fm.n_elec = 4
-fm.mesh.topology.dim = 2
-try:
-    from pyeidors.inverse.solvers.gauss_newton_engine import GaussNewtonReconstructor
-    GaussNewtonReconstructor(fwd_model=fm, {argument_expr})
-except ValueError as e:
-    print("PASS" if {expected_substring!r} in str(e) else f"WRONG: {{e}}")
-except Exception as e:
-    print("PASS" if {expected_substring!r} in str(e) else f"OTHER: {{e}}")
-"""
-    result = run_python(code)
-    assert "PASS" in result.stdout or result.returncode == 0, result.stderr
+@pytest.mark.parametrize(
+    ("kwargs", "expected_substring"),
+    [
+        ({"inexact_eta_min": 0.0}, "inexact eta bounds"),
+        ({"inexact_eta_min": 0.9, "inexact_eta_max": 0.1}, "inexact_eta_min"),
+        ({"lowrank_energy": 1.5}, "lowrank_energy"),
+    ],
+)
+def test_invalid_edge_parameters_raise_inprocess(kwargs, expected_substring):
+    fm = mock.MagicMock()
+    fm.n_elec = 4
+    fm.mesh.topology.dim = 2
+
+    with pytest.raises(Exception) as exc_info:
+        gn_engine.GaussNewtonReconstructor(fwd_model=fm, **kwargs)
+
+    assert expected_substring in str(exc_info.value)
 
 
-def test_invalid_cholmod_max_n():
-    _run_validation_case("cholmod_max_n=0", "cholmod_max_n")
+def test_cholmod_guard_bounds_are_clamped_inprocess(
+    eit_system, monkeypatch: pytest.MonkeyPatch
+):
+    monkeypatch.setattr(
+        gn_engine,
+        "resolve_torch_device",
+        lambda *args, **kwargs: SimpleNamespace(
+            requested="cpu",
+            effective="cpu",
+            fallback_reason=None,
+            torch_device="cpu",
+        ),
+    )
 
+    recon = gn_engine.GaussNewtonReconstructor(
+        fwd_model=eit_system.fwd_model,
+        cholmod_max_n=0,
+        cholmod_max_memory_gib=0.0,
+        verbose=False,
+    )
 
-def test_invalid_cholmod_max_memory_gib():
-    _run_validation_case("cholmod_max_memory_gib=0.0", "cholmod_max_memory_gib")
-
-
-def test_invalid_inexact_eta_bounds_negative():
-    _run_validation_case("inexact_eta_min=0.0", "inexact eta bounds")
-
-
-def test_invalid_inexact_eta_order():
-    _run_validation_case("inexact_eta_min=0.9, inexact_eta_max=0.1", "inexact_eta_min")
-
-
-def test_invalid_lowrank_energy_high():
-    _run_validation_case("lowrank_energy=1.5", "lowrank_energy")
+    assert recon.cholmod_max_n == 1
+    assert recon.cholmod_max_memory_gib == 0.25
 
 
 def test_invalid_inexact_and_lowrank_validation_inprocess(

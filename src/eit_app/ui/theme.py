@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import weakref
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QFont, QFontDatabase
@@ -87,11 +88,29 @@ _DEFAULT_MODE = "light"
 
 # Callers subscribe via theme_mode_changed to update non-stylesheet
 # surfaces (e.g. matplotlib plot backgrounds, pyqtgraph axes).  We use
-# a module-level list of callables instead of a Qt signal because
-# theme.py has no QObject to host the signal on and we want to avoid
-# creating one just for this.
-_mode_listeners: list = []
+# weak listener refs so closed widgets do not stay alive just because
+# they once subscribed to theme changes.
+_mode_listeners: list[_ThemeModeListener] = []
 _current_mode: str = _DEFAULT_MODE
+
+
+class _ThemeModeListener:
+    def __init__(self, listener) -> None:
+        owner = getattr(listener, "__self__", None)
+        func = getattr(listener, "__func__", None)
+        if owner is not None and func is not None:
+            self.key = (id(owner), id(func))
+            self._ref = weakref.WeakMethod(listener)
+            return
+
+        self.key = (id(listener), None)
+        try:
+            self._ref = weakref.ref(listener)
+        except TypeError:
+            self._ref = lambda: listener
+
+    def resolve(self):
+        return self._ref()
 
 
 def current_theme_mode() -> str:
@@ -99,24 +118,39 @@ def current_theme_mode() -> str:
     return _current_mode
 
 
-def set_theme_mode(app: QApplication, mode: str, *, persist: bool = True) -> None:
+def set_theme_mode(
+    app: QApplication,
+    mode: str,
+    *,
+    persist: bool = True,
+    apply_stylesheet: bool = True,
+) -> None:
     """Switch between 'light' and 'dark' and re-apply the stylesheet.
 
     Persistence via QSettings is on by default so the next launch
     restores the user's preference.  Pass ``persist=False`` for
-    tests or preview flows that should not mutate the store.
+    tests or preview flows that should not mutate the store.  Pass
+    ``apply_stylesheet=False`` when a narrow test only needs to exercise
+    palette subscribers without forcing a full QApplication repolish.
     """
     global _current_mode
     mode = mode if mode in ("light", "dark") else _DEFAULT_MODE
     _current_mode = mode
     if persist:
         QSettings("PyEIDORS", "EITWorkstation").setValue(_MODE_SETTINGS_KEY, mode)
-    app.setStyleSheet(_build_stylesheet(mode))
-    for listener in list(_mode_listeners):
+    if apply_stylesheet:
+        app.setStyleSheet(_build_stylesheet(mode))
+    live_listeners: list[_ThemeModeListener] = []
+    for listener_ref in list(_mode_listeners):
+        listener = listener_ref.resolve()
+        if listener is None:
+            continue
         try:
             listener(mode)
         except Exception:  # pragma: no cover — best effort
-            pass
+            continue
+        live_listeners.append(listener_ref)
+    _mode_listeners[:] = live_listeners
 
 
 def init_theme_mode_from_settings() -> str:
@@ -141,8 +175,12 @@ def subscribe_theme_mode(listener) -> None:
     Useful for plot widgets that need to update their own non-QSS
     background colors when the app flips to dark.
     """
-    if listener not in _mode_listeners:
-        _mode_listeners.append(listener)
+    listener_ref = _ThemeModeListener(listener)
+    _mode_listeners[:] = [
+        existing for existing in _mode_listeners if existing.resolve() is not None
+    ]
+    if all(existing.key != listener_ref.key for existing in _mode_listeners):
+        _mode_listeners.append(listener_ref)
 
 
 def _build_stylesheet(mode: str) -> str:
