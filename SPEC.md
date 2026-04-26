@@ -277,7 +277,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T39 | x | Stabilize GUI 3D PyVista offscreen drag display: low-res drag frame is scaled to the same QLabel physical target before DPR assignment, so visual canvas size is invariant | V54,B10 |
 | T40 | x | Build EIDORS GREIT source map + golden fixture capture: MATLAB script exports `vh`, `vi`, `xyzr`, `D`, `Y`, `PJt`, `M`, `noiselev`, `RM`, `weight`; include tiny 3D cylinder + 48e/5936 reduced case | V50,V55,V63,B11 |
 | T41 | x | Implement `GREIT3D_distribution` parity builder: `imgsz/xvec/yvec/zvec`, `downsample`, point-in-volume, target centers, volume/inside mask, deterministic order | V55 |
-| T42 | . | Implement finite-target training response engine: homogeneous `vh`, per-target `vi`, target radius/size/plane/offset, contrast, batching/cache; keep linearized shortcut explicit non-parity mode | V56,V57 |
+| T42 | x | Implement finite-target training response engine: homogeneous `vh`, per-target `vi`, target radius/size/plane/offset, contrast, batching/cache; keep linearized shortcut explicit non-parity mode | V56,V57 |
 | T43 | . | Implement desired image stack: default EIDORS-like `GREIT_desired_img` for 3D rec model + custom `desired_solution_fn`; output `D` independent from raw target `T` | V58 |
 | T44 | . | Rework `calc_GREIT_RM` parity core: `PJt`, `noiselev` scaling, `Sn`, `M`, transpose solve, diagnostics, singular fallback; unit compare against exported EIDORS components | V57,V58,V59 |
 | T45 | . | Implement NF/image-SNR scalar-weight optimizer: target simulation, bounded log10 search, achieved metric/tolerance metadata, failure diagnostics | V60 |

@@ -12,7 +12,11 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
-from pyeidors.data.channels import apply_measurement_contract_to_jacobian
+from pyeidors.data.channels import (
+    apply_measurement_contract_to_jacobian,
+    apply_measurement_contract_to_vector,
+)
+from pyeidors.data.structures import EITImage
 from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
 from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 from pyeidors.perf.gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul
@@ -36,6 +40,27 @@ class GREITTrainingTargets:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.values, dtype=dtype)
+
+
+@dataclass(frozen=True)
+class GREITFiniteTargetResponses:
+    """Finite-target GREIT forward responses for EIDORS parity mode."""
+
+    vh: np.ndarray
+    vi: np.ndarray
+    y: np.ndarray
+    contracted_y: np.ndarray
+    xyzr: np.ndarray
+    conductivities: np.ndarray
+    metadata: MappingProxyType
+
+    @property
+    def n_targets(self) -> int:
+        return int(self.vi.shape[1])
+
+    @property
+    def n_measurements(self) -> int:
+        return int(self.vh.size)
 
 
 @dataclass(frozen=True)
@@ -378,6 +403,136 @@ def build_greit3d_distribution(
         zvec=np.ascontiguousarray(z_edges, dtype=np.float64),
         metadata=metadata,
     )
+
+
+def build_greit_finite_target_responses(
+    fwd_model: Any,
+    *,
+    distribution: GREIT3DDistribution | None = None,
+    targets: GREITTrainingTargets | None = None,
+    centers: Any | None = None,
+    target_radius: float | None = None,
+    target_size: float | None = None,
+    target_plane: Any | None = None,
+    target_offset: Any | None = None,
+    target_contrast: Any = 1.0,
+    background_conductivity: Any = 1.0,
+    normalize: bool = True,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+    batch_size: int | None = None,
+    response_cache: dict[str, GREITFiniteTargetResponses] | None = None,
+    cache_key: str | None = None,
+) -> GREITFiniteTargetResponses:
+    """Simulate finite-target ``vh``/``vi`` training responses.
+
+    This is the EIDORS-parity training path for T42: homogeneous data ``vh``
+    are solved once, each finite target produces one inhomogeneous column in
+    ``vi``, and ``Y`` follows EIDORS ``calc_difference_data`` orientation
+    ``(n_measurements, n_targets)``.
+    """
+
+    if (
+        response_cache is not None
+        and cache_key is not None
+        and cache_key in response_cache
+    ):
+        cached = response_cache[cache_key]
+        meta = dict(cached.metadata)
+        meta["cache_hit"] = True
+        return replace(cached, metadata=MappingProxyType(meta))
+
+    fwd_centers = _forward_cell_centers(fwd_model)
+    background = _resolve_background_conductivity(
+        background_conductivity,
+        n_cells=fwd_centers.shape[0],
+    )
+    target_centers, target_radii, target_source = _resolve_finite_target_geometry(
+        distribution=distribution,
+        targets=targets,
+        centers=centers,
+        target_radius=target_radius,
+        target_size=target_size,
+    )
+    target_centers, plane_metadata = _apply_target_plane_offset(
+        target_centers,
+        target_plane=target_plane,
+        target_offset=target_offset,
+    )
+    target_contrasts = _as_target_contrasts(
+        target_contrast,
+        n_targets=target_centers.shape[0],
+    )
+    resolved_batch_size = _resolve_batch_size(
+        batch_size, n_targets=target_centers.shape[0]
+    )
+
+    conductivities = _build_finite_target_conductivities(
+        fwd_centers,
+        background=background,
+        target_centers=target_centers,
+        target_radii=target_radii,
+        target_contrasts=target_contrasts,
+    )
+    vh = _solve_measurement_vector(fwd_model, background)
+    vi = _solve_measurement_batch(
+        fwd_model,
+        conductivities,
+        batch_size=resolved_batch_size,
+    )
+    if vi.shape[0] != vh.size:
+        raise ValueError(
+            f"vi measurement rows {vi.shape[0]} do not match vh length {vh.size}."
+        )
+    y = _calc_greit_difference_data(vh, vi, normalize=normalize)
+    contracted_y, measurement_contract = _contract_training_responses(
+        y,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    xyzr = np.vstack(
+        [
+            target_centers.T,
+            target_radii.reshape(1, -1),
+        ]
+    )
+
+    metadata = MappingProxyType(
+        {
+            "training_mode": "forward",
+            "eidors_parity": True,
+            "response_orientation": "measurements_by_targets",
+            "difference_normalization": "ratio" if normalize else "raw",
+            "target_source": target_source,
+            "target_radius_source": "target_radius"
+            if target_radius is not None
+            else "target_size"
+            if target_size is not None
+            else "targets_or_default",
+            "target_contrast_mode": "additive_conductivity_delta",
+            "n_measurements": int(vh.size),
+            "n_targets": int(target_centers.shape[0]),
+            "n_forward_parameters": int(fwd_centers.shape[0]),
+            "batch_size": resolved_batch_size,
+            "cache_key": cache_key,
+            "cache_hit": False,
+            "bad_channel_count": int(measurement_contract.bad_channel_count),
+            "measurement_weight_kind": measurement_contract.weight_kind,
+            **plane_metadata,
+        }
+    )
+    responses = GREITFiniteTargetResponses(
+        vh=vh,
+        vi=vi,
+        y=y,
+        contracted_y=contracted_y,
+        xyzr=np.ascontiguousarray(xyzr, dtype=np.float64),
+        conductivities=conductivities,
+        metadata=metadata,
+    )
+    if response_cache is not None and cache_key is not None:
+        response_cache[cache_key] = responses
+    return responses
 
 
 def build_3d_greit_rm(
@@ -918,6 +1073,327 @@ def _distribution_inside_mask(
     return np.ascontiguousarray(mask, dtype=bool)
 
 
+def _resolve_finite_target_geometry(
+    *,
+    distribution: GREIT3DDistribution | None,
+    targets: GREITTrainingTargets | None,
+    centers: Any | None,
+    target_radius: float | None,
+    target_size: float | None,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    if centers is not None:
+        target_centers = _as_centers(centers)
+        source = "centers"
+    elif distribution is not None:
+        target_centers = np.asarray(distribution.centers, dtype=np.float64)
+        source = "GREIT3D_distribution"
+    elif targets is not None and targets.centers.size:
+        target_centers = _as_centers(targets.centers)
+        source = "GREITTrainingTargets.centers"
+    else:
+        raise ValueError(
+            "finite-target GREIT responses require centers, distribution, "
+            "or GREITTrainingTargets with 3D centers."
+        )
+    if target_centers.shape[1] != 3:
+        raise ValueError("finite-target GREIT centers must be 3D.")
+
+    n_targets = int(target_centers.shape[0])
+    if target_radius is not None and target_size is not None:
+        raise ValueError("Use either target_radius or target_size, not both.")
+    radius_source = target_radius if target_radius is not None else target_size
+    if radius_source is None and targets is not None and targets.radii.size:
+        radii = np.asarray(targets.radii, dtype=np.float64).reshape(-1)
+        if radii.size != n_targets:
+            raise ValueError(
+                f"targets radii length {radii.size} does not match {n_targets}."
+            )
+    elif radius_source is None:
+        radii = np.full(n_targets, _default_radius(target_centers), dtype=np.float64)
+    else:
+        radii = np.asarray(radius_source, dtype=np.float64).reshape(-1)
+        if radii.size == 1:
+            radii = np.full(n_targets, float(radii[0]), dtype=np.float64)
+        elif radii.size != n_targets:
+            raise ValueError(
+                f"target radius length {radii.size} does not match {n_targets}."
+            )
+    if not np.isfinite(radii).all():
+        raise FloatingPointError("target radii contain non-finite values.")
+    if np.any(radii <= 0.0):
+        raise ValueError("target radii must be positive.")
+    return (
+        np.ascontiguousarray(target_centers, dtype=np.float64),
+        np.ascontiguousarray(radii, dtype=np.float64),
+        source,
+    )
+
+
+def _apply_target_plane_offset(
+    centers: np.ndarray,
+    *,
+    target_plane: Any | None,
+    target_offset: Any | None,
+) -> tuple[np.ndarray, dict[str, Any]]:
+    shifted = np.asarray(centers, dtype=np.float64).copy()
+    metadata: dict[str, Any] = {
+        "target_plane": None,
+        "target_offset": None,
+    }
+    if target_plane is None and target_offset is None:
+        return shifted, metadata
+
+    if target_plane is None:
+        offset = _as_3d_offset(target_offset)
+        shifted += offset.reshape(1, 3)
+        metadata["target_offset"] = tuple(float(v) for v in offset)
+        return np.ascontiguousarray(shifted, dtype=np.float64), metadata
+
+    axis = _target_plane_axis(target_plane)
+    metadata["target_plane"] = ("x", "y", "z")[axis]
+    if target_offset is None:
+        return np.ascontiguousarray(shifted, dtype=np.float64), metadata
+
+    offset_values = np.asarray(target_offset, dtype=np.float64).reshape(-1)
+    if offset_values.size == 1:
+        if not np.isfinite(offset_values[0]):
+            raise FloatingPointError("target_offset contains non-finite values.")
+        shifted[:, axis] = float(offset_values[0])
+        metadata["target_offset"] = float(offset_values[0])
+        return np.ascontiguousarray(shifted, dtype=np.float64), metadata
+
+    offset = _as_3d_offset(offset_values)
+    shifted += offset.reshape(1, 3)
+    metadata["target_offset"] = tuple(float(v) for v in offset)
+    return np.ascontiguousarray(shifted, dtype=np.float64), metadata
+
+
+def _target_plane_axis(value: Any) -> int:
+    if isinstance(value, str):
+        token = value.strip().lower()
+        aliases = {
+            "x": 0,
+            "yz": 0,
+            "xplane": 0,
+            "y": 1,
+            "xz": 1,
+            "yplane": 1,
+            "z": 2,
+            "xy": 2,
+            "zplane": 2,
+        }
+        if token in aliases:
+            return aliases[token]
+    axis = int(value)
+    if axis not in {0, 1, 2}:
+        raise ValueError("target_plane must resolve to axis 0, 1, or 2.")
+    return axis
+
+
+def _as_3d_offset(value: Any) -> np.ndarray:
+    offset = np.asarray(value, dtype=np.float64).reshape(-1)
+    if offset.size == 1:
+        offset = np.full(3, float(offset[0]), dtype=np.float64)
+    if offset.size != 3:
+        raise ValueError("target_offset must be scalar or length-3.")
+    if not np.isfinite(offset).all():
+        raise FloatingPointError("target_offset contains non-finite values.")
+    return np.ascontiguousarray(offset, dtype=np.float64)
+
+
+def _resolve_background_conductivity(values: Any, *, n_cells: int) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    if array.size == 1:
+        array = np.full(n_cells, float(array[0]), dtype=np.float64)
+    if array.size != n_cells:
+        raise ValueError(
+            f"background_conductivity length {array.size} does not match {n_cells}."
+        )
+    if not np.isfinite(array).all():
+        raise FloatingPointError("background_conductivity contains non-finite values.")
+    if np.any(array <= 0.0):
+        raise ValueError("background_conductivity entries must be positive.")
+    return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _as_target_contrasts(values: Any, *, n_targets: int) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64).reshape(-1)
+    if array.size == 1:
+        array = np.full(n_targets, float(array[0]), dtype=np.float64)
+    if array.size != n_targets:
+        raise ValueError(
+            f"target_contrast length {array.size} does not match {n_targets}."
+        )
+    if not np.isfinite(array).all():
+        raise FloatingPointError("target_contrast contains non-finite values.")
+    return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _resolve_batch_size(value: int | None, *, n_targets: int) -> int:
+    if value is None:
+        return max(1, int(n_targets))
+    batch_size = int(value)
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive.")
+    return batch_size
+
+
+def _build_finite_target_conductivities(
+    fwd_centers: np.ndarray,
+    *,
+    background: np.ndarray,
+    target_centers: np.ndarray,
+    target_radii: np.ndarray,
+    target_contrasts: np.ndarray,
+) -> np.ndarray:
+    conductivities = []
+    for center, radius, contrast in zip(
+        target_centers,
+        target_radii,
+        target_contrasts,
+        strict=True,
+    ):
+        distance = np.linalg.norm(fwd_centers - center.reshape(1, 3), axis=1)
+        mask = distance <= float(radius)
+        if not np.any(mask):
+            mask[int(np.argmin(distance))] = True
+        sigma = background.copy()
+        sigma[mask] = sigma[mask] + float(contrast)
+        if np.any(sigma <= 0.0):
+            raise ValueError("finite-target conductivity must stay positive.")
+        conductivities.append(sigma)
+    return np.ascontiguousarray(conductivities, dtype=np.float64)
+
+
+def _solve_measurement_vector(fwd_model: Any, conductivity: np.ndarray) -> np.ndarray:
+    data = _call_fwd_solve(fwd_model, conductivity)
+    vector = _measurement_vector_from_result(data)
+    if vector.size == 0:
+        raise ValueError("forward solve returned an empty measurement vector.")
+    return vector
+
+
+def _solve_measurement_batch(
+    fwd_model: Any,
+    conductivities: np.ndarray,
+    *,
+    batch_size: int,
+) -> np.ndarray:
+    batch_solver = getattr(fwd_model, "fwd_solve_batch", None)
+    columns = []
+    if callable(batch_solver):
+        for start in range(0, conductivities.shape[0], batch_size):
+            chunk = conductivities[start : start + batch_size]
+            images = [_eit_image(fwd_model, sigma) for sigma in chunk]
+            results = batch_solver(images)
+            for result in results:
+                columns.append(_measurement_vector_from_result(result))
+    else:
+        for sigma in conductivities:
+            columns.append(_solve_measurement_vector(fwd_model, sigma))
+    if not columns:
+        raise ValueError("finite-target response batch produced no columns.")
+    first_size = columns[0].size
+    if any(column.size != first_size for column in columns):
+        raise ValueError("finite-target response columns have inconsistent lengths.")
+    return np.ascontiguousarray(np.column_stack(columns), dtype=np.float64)
+
+
+def _call_fwd_solve(fwd_model: Any, conductivity: np.ndarray) -> Any:
+    solver = getattr(fwd_model, "fwd_solve", None)
+    if not callable(solver):
+        raise TypeError(
+            "fwd_model must provide fwd_solve(EITImage) for T42 parity mode."
+        )
+    return solver(_eit_image(fwd_model, conductivity))
+
+
+def _eit_image(fwd_model: Any, conductivity: np.ndarray) -> EITImage:
+    return EITImage(
+        elem_data=np.ascontiguousarray(conductivity, dtype=np.float64),
+        fwd_model=fwd_model,
+    )
+
+
+def _measurement_vector_from_result(result: Any) -> np.ndarray:
+    data = result[0] if isinstance(result, tuple) else result
+    values = getattr(data, "meas", data)
+    vector = np.asarray(values, dtype=np.float64).reshape(-1)
+    if not np.isfinite(vector).all():
+        raise FloatingPointError(
+            "forward solve measurement contains non-finite values."
+        )
+    return np.ascontiguousarray(vector, dtype=np.float64)
+
+
+def _calc_greit_difference_data(
+    vh: np.ndarray,
+    vi: np.ndarray,
+    *,
+    normalize: bool,
+) -> np.ndarray:
+    if normalize:
+        if np.any(np.abs(vh) <= np.finfo(np.float64).eps):
+            raise ValueError("normalize=True requires non-zero homogeneous vh entries.")
+        y = vi / vh.reshape(-1, 1) - 1.0
+    else:
+        y = vi - vh.reshape(-1, 1)
+    if not np.isfinite(y).all():
+        raise FloatingPointError(
+            "GREIT training response Y contains non-finite values."
+        )
+    return np.ascontiguousarray(y, dtype=np.float64)
+
+
+def _contract_training_responses(
+    y: np.ndarray,
+    *,
+    channel_mask: Any | None,
+    measurement_weights: Any | None,
+):
+    columns = []
+    contract = None
+    for column in y.T:
+        weighted, contract = apply_measurement_contract_to_vector(
+            column,
+            channel_mask=channel_mask,
+            measurement_weights=measurement_weights,
+        )
+        columns.append(weighted)
+    assert contract is not None
+    return np.ascontiguousarray(np.column_stack(columns), dtype=np.float64), contract
+
+
+def _forward_cell_centers(fwd_model: Any) -> np.ndarray:
+    centers = None
+    if isinstance(fwd_model, dict):
+        centers = fwd_model.get("cell_centers")
+        if centers is None:
+            centers = fwd_model.get("centers")
+    if centers is None:
+        for name in ("cell_centers", "centers"):
+            attr = getattr(fwd_model, name, None)
+            if attr is not None:
+                centers = attr() if callable(attr) else attr
+                break
+    if centers is None:
+        space = getattr(fwd_model, "V_sigma", None)
+        tabulate = getattr(space, "tabulate_dof_coordinates", None)
+        if callable(tabulate):
+            centers = tabulate()
+    if centers is None:
+        raise TypeError(
+            "fwd_model must expose fine target centers via cell_centers, centers, "
+            "or V_sigma.tabulate_dof_coordinates()."
+        )
+    array = np.asarray(centers, dtype=np.float64)
+    if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] < 3:
+        raise ValueError("forward target centers must have shape (n_cells, >=3).")
+    if not np.isfinite(array).all():
+        raise FloatingPointError("forward target centers contain non-finite values.")
+    return np.ascontiguousarray(array[:, :3], dtype=np.float64)
+
+
 def _model_nodes(fwd_model: Any | None) -> np.ndarray | None:
     if fwd_model is None:
         return None
@@ -1252,10 +1728,12 @@ def _as_metric_records(metrics: Any) -> list[dict[str, Any]]:
 
 __all__ = [
     "GREIT3DDistribution",
+    "GREITFiniteTargetResponses",
     "GREIT_METRIC_KEYS",
     "GREITRM",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
+    "build_greit_finite_target_responses",
     "build_greit3d_distribution",
     "generate_spherical_targets",
     "greit_metrics",

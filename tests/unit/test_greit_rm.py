@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import csv
 import json
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -11,10 +12,12 @@ import pytest
 from pyeidors.data.channels import bad_channel_mask
 from pyeidors.inverse import (
     GREIT3DDistribution,
+    GREITFiniteTargetResponses,
     GREIT_METRIC_KEYS,
     GREITRM,
     VoxelGrid,
     build_3d_greit_rm,
+    build_greit_finite_target_responses,
     build_greit3d_distribution,
     generate_spherical_targets,
     greit_metrics,
@@ -22,6 +25,31 @@ from pyeidors.inverse import (
     migrate_greit_rm_to_hdf5,
     write_greit_metrics_artifact,
 )
+
+
+class _FiniteTargetForwardModel:
+    def __init__(self, centers: np.ndarray, measurement_matrix: np.ndarray) -> None:
+        self.centers = np.asarray(centers, dtype=float)
+        self.measurement_matrix = np.asarray(measurement_matrix, dtype=float)
+        self.solve_calls = 0
+
+    def cell_centers(self) -> np.ndarray:
+        return self.centers
+
+    def fwd_solve(self, image):
+        self.solve_calls += 1
+        meas = self.measurement_matrix @ np.asarray(image.elem_data, dtype=float)
+        return SimpleNamespace(meas=meas), None
+
+
+class _BatchFiniteTargetForwardModel(_FiniteTargetForwardModel):
+    def __init__(self, centers: np.ndarray, measurement_matrix: np.ndarray) -> None:
+        super().__init__(centers, measurement_matrix)
+        self.batch_calls = 0
+
+    def fwd_solve_batch(self, images):
+        self.batch_calls += 1
+        return [self.fwd_solve(image)[0] for image in images]
 
 
 def test_greit3d_distribution_explicit_planes_use_eidors_x_fastest_order() -> None:
@@ -101,6 +129,145 @@ def test_generate_spherical_targets_for_3d_voxel_grid() -> None:
     assert blobs.metadata["voxel_shape"] == (2, 2, 2)
 
 
+def test_build_greit_finite_target_responses_ratio_mode_and_contract() -> None:
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.5],
+            [1.0, 0.0, 0.5],
+            [0.0, 1.0, 0.5],
+            [1.0, 1.0, 0.5],
+        ],
+        dtype=float,
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 2.0, 0.5, 0.25],
+            [0.5, 1.0, 1.5, 2.0],
+            [2.0, 0.0, 1.0, 0.5],
+        ],
+        dtype=float,
+    )
+    model = _FiniteTargetForwardModel(centers, measurement_matrix)
+    channel_mask = bad_channel_mask(3, bad_channels=[1])
+
+    responses = build_greit_finite_target_responses(
+        model,
+        centers=[[0.0, 0.0, 0.0], [1.0, 1.0, 0.0]],
+        target_radius=0.2,
+        target_plane="z",
+        target_offset=0.5,
+        target_contrast=[0.5, 1.0],
+        normalize=True,
+        channel_mask=channel_mask,
+        measurement_weights=np.array([4.0, 9.0, 16.0]),
+    )
+
+    assert isinstance(responses, GREITFiniteTargetResponses)
+    expected_conductivities = np.array(
+        [
+            [1.5, 1.0, 1.0, 1.0],
+            [1.0, 1.0, 1.0, 2.0],
+        ],
+        dtype=float,
+    )
+    expected_vh = measurement_matrix @ np.ones(4, dtype=float)
+    expected_vi = np.column_stack(
+        [measurement_matrix @ row for row in expected_conductivities]
+    )
+    expected_y = expected_vi / expected_vh.reshape(-1, 1) - 1.0
+    expected_contracted = expected_y.copy()
+    expected_contracted[0, :] *= 2.0
+    expected_contracted[1, :] = 0.0
+    expected_contracted[2, :] *= 4.0
+
+    np.testing.assert_allclose(responses.vh, expected_vh)
+    np.testing.assert_allclose(responses.vi, expected_vi)
+    np.testing.assert_allclose(responses.y, expected_y)
+    np.testing.assert_allclose(responses.contracted_y, expected_contracted)
+    np.testing.assert_allclose(responses.conductivities, expected_conductivities)
+    np.testing.assert_allclose(
+        responses.xyzr,
+        np.array(
+            [
+                [0.0, 1.0],
+                [0.0, 1.0],
+                [0.5, 0.5],
+                [0.2, 0.2],
+            ],
+            dtype=float,
+        ),
+    )
+    assert responses.n_measurements == 3
+    assert responses.n_targets == 2
+    assert responses.metadata["training_mode"] == "forward"
+    assert responses.metadata["eidors_parity"] is True
+    assert responses.metadata["difference_normalization"] == "ratio"
+    assert responses.metadata["target_plane"] == "z"
+    assert responses.metadata["target_offset"] == 0.5
+    assert responses.metadata["bad_channel_count"] == 1
+    assert responses.metadata["measurement_weight_kind"] == "diagonal"
+    assert model.solve_calls == 3
+
+
+def test_build_greit_finite_target_responses_raw_batch_and_cache() -> None:
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=float,
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 0.0, 2.0],
+            [0.0, 1.5, 0.5],
+        ],
+        dtype=float,
+    )
+    model = _BatchFiniteTargetForwardModel(centers, measurement_matrix)
+    cache: dict[str, GREITFiniteTargetResponses] = {}
+
+    responses = build_greit_finite_target_responses(
+        model,
+        centers=[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        target_size=0.25,
+        target_offset=[0.0, 0.0, 0.0],
+        target_contrast=0.25,
+        normalize=False,
+        batch_size=1,
+        response_cache=cache,
+        cache_key="unit-forward-responses",
+    )
+    cached = build_greit_finite_target_responses(
+        model,
+        centers=[[99.0, 99.0, 99.0]],
+        target_size=1.0,
+        normalize=True,
+        response_cache=cache,
+        cache_key="unit-forward-responses",
+    )
+
+    expected_vh = measurement_matrix @ np.ones(3, dtype=float)
+    expected_vi = np.column_stack(
+        [
+            measurement_matrix @ np.array([1.25, 1.0, 1.0]),
+            measurement_matrix @ np.array([1.0, 1.0, 1.25]),
+        ]
+    )
+    np.testing.assert_allclose(responses.vh, expected_vh)
+    np.testing.assert_allclose(responses.vi, expected_vi)
+    np.testing.assert_allclose(responses.y, expected_vi - expected_vh.reshape(-1, 1))
+    np.testing.assert_allclose(responses.contracted_y, responses.y)
+    assert responses.metadata["difference_normalization"] == "raw"
+    assert responses.metadata["batch_size"] == 1
+    assert responses.metadata["cache_key"] == "unit-forward-responses"
+    assert responses.metadata["cache_hit"] is False
+    assert model.batch_calls == 2
+    assert cached.metadata["cache_hit"] is True
+    np.testing.assert_allclose(cached.y, responses.y)
+
+
 def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     tmp_path,
 ) -> None:
@@ -138,6 +305,8 @@ def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     assert greit.metadata["online_hot_path"] == "rm_matmul"
     assert greit.metadata["artifact_schema"] == "pyeidors-greit-rm-hdf5-v1"
     assert greit.metadata["artifact_format"] == "hdf5"
+    assert greit.metadata["eidors_parity"] is False
+    assert greit.metadata["training_mode"] == "linearized"
     assert greit.metadata["bad_channel_count"] == 1
 
     target = np.asarray(greit.training_targets[3], dtype=float)
