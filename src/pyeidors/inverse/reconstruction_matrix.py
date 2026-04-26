@@ -292,10 +292,13 @@ def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
 
     artifact = read_hdf5_artifact(path)
     arrays = dict(artifact.arrays)
-    if "rm" not in arrays:
+    rm_array = arrays.get("rm")
+    if rm_array is None:
+        rm_array = arrays.get("RM")
+    if rm_array is None:
         raise ValueError(f"RM artifact is missing 'rm': {path}")
     return RMArtifact(
-        rm=_as_rm_matrix(arrays["rm"]),
+        rm=_as_rm_matrix(rm_array),
         metadata=MappingProxyType(dict(artifact.metadata)),
         voxel_shape=_positive_int_shape(arrays.get("voxel_shape")),
         node_coords=_optional_artifact_array(arrays, "node_coords", dtype=np.float64),

@@ -448,6 +448,74 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
 
 
+def test_single_step_cached_request_resolves_greit_common_config_hot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import precompute_greit_common_config
+
+    warmup = precompute_greit_common_config("16e", artifact_dir=tmp_path)
+    reference = np.linspace(1.0, 2.0, warmup.config.n_measurements, dtype=float)
+    target = reference + np.linspace(
+        0.01,
+        0.02,
+        warmup.config.n_measurements,
+        dtype=float,
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros_like(reference),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros_like(target),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "greit_common_config": "16e",
+            "greit_common_config_dir": str(tmp_path),
+            "device": "cpu",
+            "n_elec": 16,
+            "n_rings": 1,
+            "radius": 0.18,
+            "height": 0.16,
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("common-config RM hot path must not build context.")
+
+    def _unexpected_runner():
+        raise AssertionError("common-config RM hot path must not import GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_dv = target - reference
+    expected_sigma = warmup.greit.rm @ expected_dv
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    assert result.metadata["rm_artifact_path"] == str(warmup.artifact_path)
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["adjoint_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["runtime"]["ksp_solve_count"] == 0
+    assert diagnostics["rm_metadata"]["common_config_id"] == "16e"
+
+
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

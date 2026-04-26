@@ -43,6 +43,9 @@ _RM_ARTIFACT_META_KEYS = (
     "rm_artifact_path",
     "dual_model_rm_path",
     "greit_rm_path",
+    "greit_common_config_artifact_path",
+    "greit_common_config_path",
+    "common_greit_rm_path",
     "reconstruction_matrix_path",
 )
 
@@ -78,6 +81,14 @@ def resolve_3d_cuda_forward_solver_policy(*args, **kwargs) -> dict[str, Any]:
 def resolve_3d_cuda_mat_solve_policy(*args, **kwargs) -> dict[str, Any]:
     from pyeidors.perf.forward_solver_policy import (
         resolve_3d_cuda_mat_solve_policy as _resolve,
+    )
+
+    return _resolve(*args, **kwargs)
+
+
+def resolve_greit_common_config_artifact_path_from_meta(*args, **kwargs):
+    from pyeidors.inverse.greit_warmup import (
+        resolve_greit_common_config_artifact_path_from_meta as _resolve,
     )
 
     return _resolve(*args, **kwargs)
@@ -619,6 +630,9 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
             if repo_relative.exists():
                 return repo_relative
         raise FileNotFoundError(f"RM artifact path does not exist: {text}")
+    common_path = resolve_greit_common_config_artifact_path_from_meta(meta)
+    if common_path is not None:
+        return common_path
     return None
 
 
