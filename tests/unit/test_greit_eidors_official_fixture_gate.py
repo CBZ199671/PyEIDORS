@@ -78,6 +78,10 @@ def test_official_fixture_gate_reruns_t49_with_fixture(tmp_path: Path) -> None:
     assert payload["official_fixture_available"] is True
     assert payload["official_eidors_fixture"] is True
     assert payload["official_equivalence_claim_allowed"] is True
+    assert payload["scope"] == (
+        "48e official EIDORS fixture GREIT RM benchmark "
+        "(actual n_measurements=4; 5936 measurement protocol separate)"
+    )
     assert payload["benchmark_gate"]["official_eidors_fixture"] is True
     assert payload["benchmark_gate"]["official_equivalence_claim_allowed"] is True
     assert payload["computed_from_fixture_parity_passed"] is True
@@ -95,10 +99,7 @@ def test_official_fixture_gate_reruns_t49_with_fixture(tmp_path: Path) -> None:
     t49_summary = json.loads(
         Path(payload["t49_summary_path"]).read_text(encoding="utf-8")
     )
-    assert t49_summary["scope"] == (
-        "48e official EIDORS fixture GREIT RM benchmark "
-        "(actual n_measurements=4; 5936 measurement protocol separate)"
-    )
+    assert t49_summary["scope"] == payload["scope"]
     assert t49_summary["config"]["n_measurements"] == 4
     assert "common_config_reference" not in t49_summary["config"]
     assert t49_summary["config"]["official_fixture_measurement_contract"] == {
@@ -121,6 +122,12 @@ def test_official_fixture_gate_reruns_t49_with_fixture(tmp_path: Path) -> None:
         in t49_report_text
     )
     assert "48e/5936 EIDORS-Parity GREIT Runtime Gate" not in t49_report_text
+    gate_summary = json.loads(
+        (tmp_path / "gate" / "official_gate_summary.json").read_text(encoding="utf-8")
+    )
+    assert gate_summary["scope"] == payload["scope"]
+    gate_report_text = (tmp_path / "gate" / "README.md").read_text(encoding="utf-8")
+    assert f"- scope: `{payload['scope']}`" in gate_report_text
     case = t49_summary["cases"]["reduced_48e_5936"]
     assert case["official_eidors_fixture"] is True
     artifact = read_hdf5_artifact(case["greit_artifact_path"])

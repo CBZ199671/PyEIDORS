@@ -104,6 +104,7 @@ def run_official_fixture_gate(
     payload = {
         "schema": GATE_SCHEMA,
         "timestamp_utc": datetime.now(timezone.utc).isoformat(),
+        "scope": str(benchmark["scope"]),
         "status": "passed" if allowed else "failed",
         "official_fixture_available": True,
         "official_eidors_fixture": True,
@@ -218,6 +219,11 @@ def _write_markdown(path: Path, payload: Mapping[str, Any]) -> None:
         "",
         f"- schema: `{payload['schema']}`",
         f"- status: `{payload['status']}`",
+        *(
+            [f"- scope: `{payload['scope']}`"]
+            if payload.get("scope") is not None
+            else []
+        ),
         f"- official fixture: `{payload['official_eidors_fixture']}`",
         f"- official-equivalence claim allowed: `{payload['official_equivalence_claim_allowed']}`",
         f"- fixture: `{payload['fixture_path']}`",

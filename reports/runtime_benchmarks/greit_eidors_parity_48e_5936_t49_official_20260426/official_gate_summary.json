@@ -93,6 +93,7 @@
   "official_equivalence_claim_allowed": true,
   "official_fixture_available": true,
   "schema": "pyeidors-greit-eidors-official-fixture-gate-v1",
+  "scope": "48e official EIDORS fixture GREIT RM benchmark (actual n_measurements=2160; 5936 measurement protocol separate)",
   "status": "passed",
   "t49_report_path": "reports/runtime_benchmarks/greit_eidors_parity_48e_5936_t49_official_20260426/t49_official_benchmark/README.md",
   "t49_rerun_status": "completed",

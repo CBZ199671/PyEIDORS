@@ -2,6 +2,7 @@
 
 - schema: `pyeidors-greit-eidors-official-fixture-gate-v1`
 - status: `passed`
+- scope: `48e official EIDORS fixture GREIT RM benchmark (actual n_measurements=2160; 5936 measurement protocol separate)`
 - official fixture: `True`
 - official-equivalence claim allowed: `True`
 - fixture: `reports/eidors_greit_fixtures/reduced_48e_5936_eidors_greit_fixture.mat`
