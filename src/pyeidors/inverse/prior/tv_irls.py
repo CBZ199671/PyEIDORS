@@ -349,13 +349,14 @@ def tv_irls_objective(
     *,
     lambda_: float,
     beta: float,
+    beta_floor: float = 1.0e-12,
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
 ) -> float:
     """Weighted data misfit plus smoothed TV penalty for one frame."""
 
     lam = _nonnegative_finite(lambda_, name="lambda_")
-    effective_beta = _effective_beta(beta, beta)
+    effective_beta = _effective_beta(beta, beta_floor)
     difference = _difference_operator(mesh_or_difference, graph_weight="unit")
     state_vec = _state_vector(state, n_parameters=int(difference.shape[1]))
     jac, _ = apply_measurement_contract_to_jacobian(

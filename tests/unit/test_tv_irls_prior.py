@@ -128,3 +128,49 @@ def test_solve_tv_irls_frame_has_monotone_objective_and_stale_rm_tokens() -> Non
         lambda_=0.15,
         beta=1.0e-4,
     ) == pytest.approx(objectives[-1])
+
+
+def test_tv_irls_objective_applies_beta_floor() -> None:
+    """``tv_irls_objective`` must clamp ``beta`` to ``beta_floor`` (V74)."""
+
+    mesh = VoxelGrid.from_bounds([0.0], [4.0], shape=(4,))
+    jacobian = np.eye(4, dtype=float)
+    measurement = np.array([0.1, 0.4, 0.4, 0.1], dtype=float)
+    state = np.array([0.0, 1.0, 1.0, 0.0], dtype=float)
+
+    floored_default = tv_irls_objective(
+        jacobian, measurement, state, mesh, lambda_=0.1, beta=1.0e-12
+    )
+    clamped = tv_irls_objective(
+        jacobian, measurement, state, mesh, lambda_=0.1, beta=1.0e-20
+    )
+    assert clamped == floored_default
+
+    explicit_floor = tv_irls_objective(
+        jacobian,
+        measurement,
+        state,
+        mesh,
+        lambda_=0.1,
+        beta=1.0e-4,
+        beta_floor=1.0e-12,
+    )
+    same_call = tv_irls_objective(
+        jacobian, measurement, state, mesh, lambda_=0.1, beta=1.0e-4
+    )
+    assert explicit_floor == same_call
+
+    raised_floor = tv_irls_objective(
+        jacobian,
+        measurement,
+        state,
+        mesh,
+        lambda_=0.1,
+        beta=1.0e-4,
+        beta_floor=1.0e-2,
+    )
+    raised_via_beta = tv_irls_objective(
+        jacobian, measurement, state, mesh, lambda_=0.1, beta=1.0e-2
+    )
+    assert raised_floor == raised_via_beta
+    assert raised_floor != pytest.approx(same_call, rel=1.0e-3)
