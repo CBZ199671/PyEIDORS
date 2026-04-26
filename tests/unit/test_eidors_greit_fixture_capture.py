@@ -38,8 +38,17 @@ def test_eidors_greit_source_map_covers_official_pipeline() -> None:
     assert set(module.REQUIRED_OFFICIAL_FUNCTIONS).issubset(official_ids)
     case_ids = {case["case_id"] for case in payload["fixture_cases"]}
     assert set(module.REQUIRED_CASE_IDS).issubset(case_ids)
-    assert payload["parity_status"]["current_pyeidors_greit"] == "linearized-rm-v0"
+    assert payload["parity_status"]["current_pyeidors_greit"] == (
+        "eidors-component-path-t40-t50-complete; "
+        "linearized-rm-v0-explicit-non-parity-mode"
+    )
     assert payload["parity_status"]["eidors_complete_claim_allowed"] is False
+    assert payload["parity_status"]["official_equivalence_claim_allowed"] is False
+    assert "T49" in payload["parity_status"]["completed_tasks"]
+    assert (
+        "external MATLAB/EIDORS 48e fixture captured"
+        in (payload["parity_status"]["remaining_claim_gates"])
+    )
 
 
 def test_matlab_capture_script_exports_required_component_fields() -> None:

@@ -15,8 +15,28 @@
     "weight"
   ],
   "parity_status": {
-    "current_pyeidors_greit": "linearized-rm-v0",
+    "current_pyeidors_greit": "eidors-component-path-t40-t50-complete; linearized-rm-v0-explicit-non-parity-mode",
     "eidors_complete_claim_allowed": false,
+    "official_equivalence_claim_allowed": false,
+    "claim_boundary": "PyEIDORS component path and T49 surrogate gate pass, but external MATLAB/EIDORS 48e fixture gate is still required before any official-equivalent claim.",
+    "completed_tasks": [
+      "T40",
+      "T41",
+      "T42",
+      "T43",
+      "T44",
+      "T45",
+      "T46",
+      "T47",
+      "T48",
+      "T49",
+      "T50"
+    ],
+    "remaining_claim_gates": [
+      "external MATLAB/EIDORS 48e fixture captured",
+      "T49 rerun with official_eidors_fixture=true",
+      "official_equivalence_claim_allowed=true in benchmark summary"
+    ],
     "unlock_requires_tasks": [
       "T40",
       "T41",
