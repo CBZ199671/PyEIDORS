@@ -104,6 +104,8 @@ def test_metric_optimizer_uses_calc_greit_rm_as_black_box() -> None:
     assert result.metadata["algorithm"] == "greit_weight_metric_search"
     assert result.metadata["metric"] == "noise_figure"
     assert result.metadata["uses_calc_greit_rm_as_black_box"] is True
+    assert result.metadata["pjt_cache_source"] == "computed_once"
+    assert result.metadata["pjt_cache_reused_across_weight_search"] is True
     assert result.metadata["noise_source"] == "provided"
 
 
@@ -147,6 +149,13 @@ def test_build_3d_greit_rm_can_choose_weight_from_metric_search() -> None:
     assert greit.metadata["target_image_snr"] == pytest.approx(target_metric)
     assert greit.metadata["weight_search"]["metric"] == "image_snr"
     assert greit.metadata["weight_search"]["objective_value"] <= 1.0e-6
+    assert greit.metadata["weight_search"]["pjt_cache_source"] == "provided"
+    assert (
+        greit.metadata["weight_search"]["pjt_cache_reused_across_weight_search"] is True
+    )
+    assert greit.metadata["pjt_cache_source"] == "provided_cache"
+    assert greit.metadata["pjt_cache_reused_across_weight_search"] is True
+    assert greit.metadata["cache_signature_hash"]
     assert greit.metadata["weight"] > 0.0
 
 

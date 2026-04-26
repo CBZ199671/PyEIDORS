@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -22,6 +23,9 @@ from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 from pyeidors.perf.gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul
 
 GREIT_METRIC_KEYS = ("AR", "PE", "RES", "SD", "RNG")
+GREIT_RM_HDF5_SCHEMA = "pyeidors-greit-rm-hdf5-v1"
+GREIT_EIDORS_HDF5_SCHEMA = "pyeidors-greit-eidors-hdf5-v1"
+GREIT_CACHE_SIGNATURE_SCHEMA = "pyeidors-greit-cache-signature-v1"
 
 
 @dataclass(frozen=True)
@@ -151,6 +155,17 @@ class GREITRM:
     measurement_weights: np.ndarray | None = None
     training_targets: np.ndarray | None = None
     training_responses: np.ndarray | None = None
+    pjt: np.ndarray | None = None
+    m: np.ndarray | None = None
+    sn: np.ndarray | None = None
+    y: np.ndarray | None = None
+    d: np.ndarray | None = None
+    vh: np.ndarray | None = None
+    vi: np.ndarray | None = None
+    xyzr: np.ndarray | None = None
+    rec_model: np.ndarray | None = None
+    fwd_model_signature: str | None = None
+    cache_signature: str | None = None
     rm_handle: RMMatmulHandle | None = None
 
     @property
@@ -231,20 +246,15 @@ class GREITRM:
         target = _greit_hdf5_path(path)
         metadata = dict(self.metadata)
         metadata.setdefault("legacy_artifact_schema", metadata.get("artifact_schema"))
-        metadata["artifact_schema"] = "pyeidors-greit-rm-hdf5-v1"
+        schema = _greit_artifact_schema(metadata)
+        metadata["artifact_schema"] = schema
         metadata["artifact_format"] = "hdf5"
+        metadata.setdefault("component_storage", "eidors_components")
         write_hdf5_artifact(
             target,
-            {
-                "rm": np.asarray(self.rm, dtype=np.float64),
-                "voxel_shape": np.asarray(self.voxel_shape or (), dtype=np.int64),
-                "channel_mask": _optional_array(self.channel_mask, dtype=bool),
-                "measurement_weights": _optional_array(self.measurement_weights),
-                "training_targets": _optional_array(self.training_targets),
-                "training_responses": _optional_array(self.training_responses),
-            },
+            _greit_artifact_arrays(self, schema=schema, metadata=metadata),
             metadata,
-            schema="pyeidors-greit-rm-hdf5-v1",
+            schema=schema,
         )
         return target
 
@@ -266,17 +276,31 @@ class GREITRM:
 
         artifact = read_hdf5_artifact(path)
         arrays = dict(artifact.arrays)
-        if "rm" not in arrays:
+        rm_array = _array_from_aliases(arrays, "rm", "RM")
+        if rm_array is None:
             raise ValueError(f"GREIT artifact is missing 'rm': {path}")
         voxel_raw = np.asarray(arrays.get("voxel_shape", ()), dtype=np.int64)
+        metadata = dict(artifact.metadata)
         return cls(
-            rm=np.asarray(arrays["rm"], dtype=np.float64),
-            metadata=MappingProxyType(dict(artifact.metadata)),
+            rm=np.asarray(rm_array, dtype=np.float64),
+            metadata=MappingProxyType(metadata),
             voxel_shape=tuple(int(v) for v in voxel_raw) if voxel_raw.size else None,
             channel_mask=_empty_to_none_array(arrays.get("channel_mask"), dtype=bool),
             measurement_weights=_empty_to_none_array(arrays.get("measurement_weights")),
             training_targets=_empty_to_none_array(arrays.get("training_targets")),
             training_responses=_empty_to_none_array(arrays.get("training_responses")),
+            pjt=_empty_to_none_array(_array_from_aliases(arrays, "pjt", "PJt")),
+            m=_empty_to_none_array(_array_from_aliases(arrays, "m", "M")),
+            sn=_empty_to_none_array(_array_from_aliases(arrays, "sn", "Sn")),
+            y=_empty_to_none_array(_array_from_aliases(arrays, "y", "Y")),
+            d=_empty_to_none_array(_array_from_aliases(arrays, "d", "D")),
+            vh=_empty_to_none_array(arrays.get("vh")),
+            vi=_empty_to_none_array(arrays.get("vi")),
+            xyzr=_empty_to_none_array(arrays.get("xyzr")),
+            rec_model=_empty_to_none_array(arrays.get("rec_model")),
+            fwd_model_signature=_utf8_bytes_to_string(arrays.get("fwd_model_signature"))
+            or metadata.get("fwd_model_signature"),
+            cache_signature=metadata.get("cache_signature_hash"),
         )
 
     @classmethod
@@ -741,6 +765,7 @@ def calc_greit_rm(
     *,
     weight: Any = 0.5,
     noise_covar: Any = 1.0,
+    pjt_cache: Any | None = None,
 ) -> GREITRMComponents:
     """Replicate EIDORS ``calc_GREIT_RM`` matrix algebra.
 
@@ -760,7 +785,17 @@ def calc_greit_rm(
     )
 
     component_dtype = np.result_type(y_matrix, d_matrix, sn)
-    pjt = np.ascontiguousarray(d_matrix @ y_matrix.T, dtype=component_dtype)
+    if pjt_cache is None:
+        pjt = np.ascontiguousarray(d_matrix @ y_matrix.T, dtype=component_dtype)
+        pjt_source = "computed"
+    else:
+        pjt = _validate_pjt_cache(
+            pjt_cache,
+            n_rec_parameters=d_matrix.shape[0],
+            n_measurements=y_matrix.shape[0],
+            dtype=component_dtype,
+        )
+        pjt_source = "provided_cache"
     noiselev = float(scalar_weight * np.mean(np.abs(y_matrix)))
     m = np.ascontiguousarray(
         y_matrix @ y_matrix.T + (noiselev * noiselev) * sn,
@@ -790,6 +825,7 @@ def calc_greit_rm(
             "algorithm": "calc_GREIT_RM",
             "eidors_component_parity": not singular_fallback,
             "pjt_shape": tuple(int(v) for v in pjt.shape),
+            "pjt_source": pjt_source,
             "y_shape": tuple(int(v) for v in y_matrix.shape),
             "d_shape": tuple(int(v) for v in d_matrix.shape),
             "sn_shape": tuple(int(v) for v in sn.shape),
@@ -925,6 +961,7 @@ def optimize_greit_weight_for_metric(
     metric: str = "noise_figure",
     noise_covar: Any = 1.0,
     measurement_noise: Any | None = None,
+    pjt_cache: Any | None = None,
     bracket: tuple[float, float] = (-2.0, 2.0),
     tolerance: float = 1.0e-3,
     maxiter: int = 64,
@@ -935,6 +972,19 @@ def optimize_greit_weight_for_metric(
     y_matrix = _validate_training_response_matrix(y)
     d_matrix = _validate_desired_component_matrix(d, n_targets=y_matrix.shape[1])
     noise = _measurement_noise_matrix(measurement_noise, y=y_matrix)
+    pjt = (
+        np.ascontiguousarray(
+            d_matrix @ y_matrix.T,
+            dtype=np.result_type(y_matrix, d_matrix),
+        )
+        if pjt_cache is None
+        else _validate_pjt_cache(
+            pjt_cache,
+            n_rec_parameters=d_matrix.shape[0],
+            n_measurements=y_matrix.shape[0],
+            dtype=np.result_type(y_matrix, d_matrix),
+        )
+    )
 
     def metric_fn(log10_weight: float) -> float:
         components = calc_greit_rm(
@@ -942,6 +992,7 @@ def optimize_greit_weight_for_metric(
             d_matrix,
             weight=10.0 ** float(log10_weight),
             noise_covar=noise_covar,
+            pjt_cache=pjt,
         )
         return _greit_noise_metric(
             y_matrix,
@@ -967,6 +1018,9 @@ def optimize_greit_weight_for_metric(
             if measurement_noise is not None
             else "deterministic_unit_std",
             "uses_calc_greit_rm_as_black_box": True,
+            "pjt_cache_source": "computed_once" if pjt_cache is None else "provided",
+            "pjt_cache_reused_across_weight_search": True,
+            "pjt_shape": tuple(int(v) for v in pjt.shape),
         }
     )
     return GREITWeightSearchResult(
@@ -980,6 +1034,60 @@ def optimize_greit_weight_for_metric(
         evaluations=result.evaluations,
         metadata=MappingProxyType(metadata),
     )
+
+
+def greit_cache_signature_payload(
+    *,
+    target_distribution_grid: Any,
+    desired_solution_fn: str,
+    normalize: bool,
+    noise_covar: Any,
+    training_mode: str,
+    fwd_model_signature: str,
+    keep_model_components: bool,
+    target_distribution_downsample: Any | None = None,
+    finite_target_inputs: Any | None = None,
+    desired_solution_params: Any | None = None,
+    scalar_weight: Any | None = None,
+    target_noise_figure: float | None = None,
+    image_snr: float | None = None,
+    model_components: Any | None = None,
+) -> dict[str, Any]:
+    """Return canonical GREIT RM cache-signature payload for V55..V61 inputs."""
+
+    mode = str(training_mode).strip().lower()
+    if not mode:
+        raise ValueError("training_mode is required for GREIT cache signature.")
+    fwd_signature = str(fwd_model_signature or "").strip()
+    if not fwd_signature:
+        raise ValueError("fwd_model_signature is required for GREIT cache signature.")
+    return {
+        "schema": GREIT_CACHE_SIGNATURE_SCHEMA,
+        "target_distribution_grid": _canonical_signature_value(
+            target_distribution_grid
+        ),
+        "target_distribution_downsample": _canonical_signature_value(
+            target_distribution_downsample
+        ),
+        "finite_target_inputs": _canonical_signature_value(finite_target_inputs),
+        "desired_solution_fn": str(desired_solution_fn),
+        "desired_solution_params": _canonical_signature_value(desired_solution_params),
+        "normalize": bool(normalize),
+        "noise_covar": _canonical_signature_value(noise_covar),
+        "scalar_weight": _canonical_signature_value(scalar_weight),
+        "target_noise_figure": _canonical_signature_value(target_noise_figure),
+        "image_snr": _canonical_signature_value(image_snr),
+        "training_mode": mode,
+        "fwd_model_signature": fwd_signature,
+        "keep_model_components": bool(keep_model_components),
+        "model_components": _canonical_signature_value(model_components),
+    }
+
+
+def greit_cache_signature(**kwargs) -> str:
+    """Hash the canonical GREIT RM cache-signature payload."""
+
+    return _signature_hash(greit_cache_signature_payload(**kwargs))
 
 
 def build_3d_greit_rm(
@@ -1004,6 +1112,7 @@ def build_3d_greit_rm(
     weight_search_noise: Any | None = None,
     artifact_path: str | Path | None = None,
     metadata: dict[str, Any] | None = None,
+    keep_model_components: bool = False,
 ) -> GREITRM:
     """Build an offline 3D GREIT RM from synthetic targets.
 
@@ -1037,6 +1146,10 @@ def build_3d_greit_rm(
     responses = np.asarray(target_values @ weighted_j.T, dtype=np.float64)
     response_cols = responses.T
     target_cols = target_values.T
+    pjt_cache = np.ascontiguousarray(
+        target_cols @ response_cols.T,
+        dtype=np.result_type(response_cols, target_cols),
+    )
     if regularisation is None:
         noise_covar: Any = 1.0
         rn_source = "identity"
@@ -1067,6 +1180,7 @@ def build_3d_greit_rm(
             metric=metric_name,
             noise_covar=noise_covar,
             measurement_noise=weight_search_noise,
+            pjt_cache=pjt_cache,
             bracket=weight_search_bracket,
             tolerance=weight_search_tolerance,
             maxiter=weight_search_maxiter,
@@ -1087,11 +1201,45 @@ def build_3d_greit_rm(
         target_cols,
         weight=nf,
         noise_covar=noise_covar,
+        pjt_cache=pjt_cache,
     )
 
     voxel_shape = _voxel_shape(inverse_mesh) or _metadata_voxel_shape(
         target_bundle.metadata
     )
+    fwd_signature = _greit_forward_model_signature(fwd_model, raw_j)
+    cache_payload = greit_cache_signature_payload(
+        target_distribution_grid=target_bundle.metadata,
+        target_distribution_downsample=target_bundle.metadata.get("downsample_factors"),
+        finite_target_inputs={
+            "mode": "linearized",
+            "target_radius": target_radius,
+            "target_amplitude": target_amplitude,
+            "target_kind": target_kind,
+            "target_values": target_values,
+        },
+        desired_solution_fn="target_values_explicit_opt_in",
+        desired_solution_params={
+            "D": target_cols,
+            "legacy_linearized_d_approx_t": True,
+        },
+        normalize=True,
+        noise_covar=noise_covar,
+        scalar_weight=nf,
+        target_noise_figure=target_noise_figure,
+        image_snr=image_snr,
+        training_mode="linearized",
+        fwd_model_signature=fwd_signature,
+        keep_model_components=keep_model_components,
+        model_components={
+            "Y": response_cols,
+            "D": target_cols,
+            "PJt": pjt_cache,
+        }
+        if keep_model_components
+        else None,
+    )
+    cache_hash = _signature_hash(cache_payload)
     meta = {
         "algorithm": "greit-3d",
         "target_kind": target_bundle.metadata["kind"],
@@ -1108,6 +1256,8 @@ def build_3d_greit_rm(
         "system_shape": tuple(int(v) for v in components.m.shape),
         "rm_shape": tuple(int(v) for v in components.rm.shape),
         "pjt_shape": tuple(int(v) for v in components.pjt.shape),
+        "pjt_cache_source": components.metadata["pjt_source"],
+        "pjt_cache_reused_across_weight_search": search_result is not None,
         "sn_shape": tuple(int(v) for v in components.sn.shape),
         "matrix_rank": components.metadata["matrix_rank"],
         "matrix_condition": components.metadata["matrix_condition"],
@@ -1120,6 +1270,11 @@ def build_3d_greit_rm(
         "eidors_parity": False,
         "calc_greit_rm_parity_core": True,
         "training_mode": "linearized",
+        "keep_model_components": bool(keep_model_components),
+        "fwd_model_signature": fwd_signature,
+        "cache_signature_schema": GREIT_CACHE_SIGNATURE_SCHEMA,
+        "cache_signature_payload": cache_payload,
+        "cache_signature_hash": cache_hash,
         "voxel_shape": voxel_shape,
     }
     if search_result is not None:
@@ -1142,20 +1297,160 @@ def build_3d_greit_rm(
         measurement_weights=_stored_measurement_weights(measurement_weights),
         training_targets=target_values,
         training_responses=responses,
+        pjt=components.pjt if keep_model_components else None,
+        m=components.m if keep_model_components else None,
+        sn=components.sn if keep_model_components else None,
+        y=components.y if keep_model_components else None,
+        d=components.d if keep_model_components else None,
+        rec_model=_rec_model_array(inverse_mesh) if keep_model_components else None,
+        fwd_model_signature=fwd_signature,
+        cache_signature=cache_hash,
     )
     if artifact_path is not None:
         saved = result.save(artifact_path)
         meta = dict(result.metadata)
         meta["artifact_path"] = str(saved)
-        result = GREITRM(
-            rm=result.rm,
-            metadata=MappingProxyType(meta),
-            voxel_shape=result.voxel_shape,
-            channel_mask=result.channel_mask,
-            measurement_weights=result.measurement_weights,
-            training_targets=result.training_targets,
-            training_responses=result.training_responses,
-        )
+        result = replace(result, metadata=MappingProxyType(meta))
+    return result
+
+
+def build_greit_rm_from_eidors_components(
+    responses: GREITFiniteTargetResponses,
+    desired_images: GREITDesiredImages,
+    *,
+    weight: Any = 0.5,
+    noise_covar: Any = 1.0,
+    artifact_path: str | Path | None = None,
+    keep_model_components: bool = True,
+    fwd_model_signature: str,
+    rec_model: Any | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> GREITRM:
+    """Build GREIT RM from EIDORS-oriented ``vh/vi/Y/D`` components."""
+
+    if not isinstance(responses, GREITFiniteTargetResponses):
+        raise TypeError("responses must be GREITFiniteTargetResponses.")
+    if not isinstance(desired_images, GREITDesiredImages):
+        raise TypeError("desired_images must be GREITDesiredImages.")
+    response_meta = dict(responses.metadata)
+    desired_meta = dict(desired_images.metadata)
+    y_matrix = _validate_training_response_matrix(responses.contracted_y)
+    d_matrix = _validate_desired_component_matrix(
+        desired_images.values,
+        n_targets=y_matrix.shape[1],
+    )
+    pjt_cache = np.ascontiguousarray(
+        d_matrix @ y_matrix.T,
+        dtype=np.result_type(y_matrix, d_matrix),
+    )
+    components = calc_greit_rm(
+        y_matrix,
+        d_matrix,
+        weight=weight,
+        noise_covar=noise_covar,
+        pjt_cache=pjt_cache,
+    )
+    rec_model_array = (
+        _rec_model_array(rec_model)
+        if rec_model is not None
+        else np.asarray(desired_images.rec_centers, dtype=np.float64)
+    )
+    normalize = response_meta.get("difference_normalization") == "ratio"
+    cache_payload = greit_cache_signature_payload(
+        target_distribution_grid={
+            "rec_centers": desired_images.rec_centers,
+            "xyz": desired_images.xyz,
+            "radii": desired_images.radii,
+        },
+        target_distribution_downsample=response_meta.get("downsample_factors"),
+        finite_target_inputs={
+            "metadata": response_meta,
+            "xyzr": responses.xyzr,
+            "conductivities": responses.conductivities,
+        },
+        desired_solution_fn=str(
+            desired_meta.get("desired_solution_fn", "unknown_desired_solution_fn")
+        ),
+        desired_solution_params={"metadata": desired_meta},
+        normalize=normalize,
+        noise_covar=noise_covar,
+        scalar_weight=components.weight,
+        training_mode=str(response_meta.get("training_mode", "forward")),
+        fwd_model_signature=fwd_model_signature,
+        keep_model_components=keep_model_components,
+        model_components={
+            "Y": y_matrix,
+            "D": d_matrix,
+            "PJt": pjt_cache,
+            "M": components.m,
+            "vh": responses.vh,
+            "vi": responses.vi,
+            "xyzr": responses.xyzr,
+        }
+        if keep_model_components
+        else None,
+    )
+    cache_hash = _signature_hash(cache_payload)
+    meta = {
+        "algorithm": "greit-3d",
+        "artifact_schema": GREIT_EIDORS_HDF5_SCHEMA,
+        "artifact_format": "hdf5",
+        "eidors_parity": bool(
+            response_meta.get("eidors_parity")
+            and desired_meta.get("eidors_component_parity")
+        ),
+        "calc_greit_rm_parity_core": True,
+        "training_mode": str(response_meta.get("training_mode", "forward")),
+        "difference_normalization": response_meta.get("difference_normalization"),
+        "desired_solution_fn": desired_meta.get("desired_solution_fn"),
+        "keep_model_components": bool(keep_model_components),
+        "component_storage": "eidors_components",
+        "n_measurements": int(y_matrix.shape[0]),
+        "n_parameters": int(d_matrix.shape[0]),
+        "synthetic_target_count": int(y_matrix.shape[1]),
+        "weight": components.weight,
+        "noise_figure": components.weight,
+        "noiselev": components.noiselev,
+        "system_shape": tuple(int(v) for v in components.m.shape),
+        "rm_shape": tuple(int(v) for v in components.rm.shape),
+        "pjt_shape": tuple(int(v) for v in components.pjt.shape),
+        "sn_shape": tuple(int(v) for v in components.sn.shape),
+        "matrix_rank": components.metadata["matrix_rank"],
+        "matrix_condition": components.metadata["matrix_condition"],
+        "solver": components.metadata["solver"],
+        "singular_fallback": components.metadata["singular_fallback"],
+        "transpose_semantics": components.metadata["transpose_semantics"],
+        "pjt_cache_source": components.metadata["pjt_source"],
+        "pjt_cache_reused_across_weight_search": False,
+        "online_hot_path": "rm_matmul",
+        "fwd_model_signature": str(fwd_model_signature),
+        "cache_signature_schema": GREIT_CACHE_SIGNATURE_SCHEMA,
+        "cache_signature_payload": cache_payload,
+        "cache_signature_hash": cache_hash,
+    }
+    if metadata:
+        meta.update(metadata)
+    result = GREITRM(
+        rm=components.rm,
+        metadata=MappingProxyType(meta),
+        training_responses=y_matrix.T,
+        pjt=components.pjt if keep_model_components else None,
+        m=components.m if keep_model_components else None,
+        sn=components.sn if keep_model_components else None,
+        y=components.y if keep_model_components else None,
+        d=components.d if keep_model_components else None,
+        vh=responses.vh if keep_model_components else None,
+        vi=responses.vi if keep_model_components else None,
+        xyzr=responses.xyzr if keep_model_components else None,
+        rec_model=rec_model_array if keep_model_components else None,
+        fwd_model_signature=str(fwd_model_signature),
+        cache_signature=cache_hash,
+    )
+    if artifact_path is not None:
+        saved = result.save(artifact_path)
+        meta = dict(result.metadata)
+        meta["artifact_path"] = str(saved)
+        result = replace(result, metadata=MappingProxyType(meta))
     return result
 
 
@@ -2377,6 +2672,209 @@ def _stored_measurement_weights(values: Any | None) -> np.ndarray | None:
     return np.asarray(values, dtype=np.float64).copy()
 
 
+def _validate_pjt_cache(
+    values: Any,
+    *,
+    n_rec_parameters: int,
+    n_measurements: int,
+    dtype: Any,
+) -> np.ndarray:
+    matrix = np.asarray(values, dtype=dtype)
+    expected = (int(n_rec_parameters), int(n_measurements))
+    if matrix.shape != expected:
+        raise ValueError(f"PJt cache must have shape {expected}, got {matrix.shape}.")
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("PJt cache contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=dtype)
+
+
+def _greit_artifact_schema(metadata: dict[str, Any]) -> str:
+    schema = str(metadata.get("artifact_schema") or "")
+    if schema in {GREIT_RM_HDF5_SCHEMA, GREIT_EIDORS_HDF5_SCHEMA}:
+        return schema
+    if bool(metadata.get("eidors_parity")) or bool(
+        metadata.get("keep_model_components")
+    ):
+        return GREIT_EIDORS_HDF5_SCHEMA
+    return GREIT_RM_HDF5_SCHEMA
+
+
+def _greit_artifact_arrays(
+    greit: GREITRM,
+    *,
+    schema: str,
+    metadata: dict[str, Any],
+) -> dict[str, Any]:
+    eidors_schema = schema == GREIT_EIDORS_HDF5_SCHEMA
+    rm_name = "RM" if eidors_schema else "rm"
+    pjt_name = "PJt" if eidors_schema else "pjt"
+    m_name = "M" if eidors_schema else "m"
+    sn_name = "Sn" if eidors_schema else "sn"
+    y_name = "Y" if eidors_schema else "y"
+    d_name = "D" if eidors_schema else "d"
+    return {
+        rm_name: np.asarray(greit.rm, dtype=np.float64),
+        "voxel_shape": np.asarray(greit.voxel_shape or (), dtype=np.int64),
+        "channel_mask": _optional_array(greit.channel_mask, dtype=bool),
+        "measurement_weights": _optional_array(greit.measurement_weights),
+        "training_targets": _optional_array(greit.training_targets),
+        "training_responses": _optional_array(greit.training_responses),
+        pjt_name: _optional_raw_array(greit.pjt),
+        m_name: _optional_raw_array(greit.m),
+        sn_name: _optional_raw_array(greit.sn),
+        y_name: _optional_raw_array(greit.y),
+        d_name: _optional_raw_array(greit.d),
+        "noiselev": _optional_scalar_array(metadata.get("noiselev")),
+        "weight": _optional_scalar_array(metadata.get("weight")),
+        "vh": _optional_raw_array(greit.vh),
+        "vi": _optional_raw_array(greit.vi),
+        "xyzr": _optional_raw_array(greit.xyzr),
+        "rec_model": _optional_raw_array(greit.rec_model),
+        "fwd_model_signature": _optional_utf8_bytes(
+            greit.fwd_model_signature or metadata.get("fwd_model_signature")
+        ),
+    }
+
+
+def _array_from_aliases(
+    arrays: dict[str, np.ndarray], *names: str
+) -> np.ndarray | None:
+    for name in names:
+        if name in arrays:
+            return arrays[name]
+    return None
+
+
+def _optional_raw_array(values: Any | None) -> np.ndarray:
+    if values is None:
+        return np.asarray([], dtype=np.float64)
+    return np.asarray(values)
+
+
+def _optional_scalar_array(value: Any | None) -> np.ndarray:
+    if value is None:
+        return np.asarray([], dtype=np.float64)
+    scalar = float(np.asarray(value, dtype=np.float64).reshape(-1)[0])
+    return np.asarray([scalar], dtype=np.float64)
+
+
+def _optional_utf8_bytes(value: Any | None) -> np.ndarray:
+    text = "" if value is None else str(value)
+    if text == "":
+        return np.asarray([], dtype=np.uint8)
+    return np.frombuffer(text.encode("utf-8"), dtype=np.uint8)
+
+
+def _utf8_bytes_to_string(values: Any | None) -> str | None:
+    if values is None:
+        return None
+    array = np.asarray(values)
+    if array.size == 0:
+        return None
+    if array.dtype.kind in {"S", "U", "O"}:
+        raw = array.reshape(-1)[0]
+        return raw.decode("utf-8") if isinstance(raw, bytes) else str(raw)
+    return bytes(np.asarray(array, dtype=np.uint8).reshape(-1).tolist()).decode("utf-8")
+
+
+def _rec_model_array(model: Any | None) -> np.ndarray | None:
+    if model is None:
+        return None
+    try:
+        return np.asarray(_cell_centers(model), dtype=np.float64)
+    except (TypeError, ValueError, FloatingPointError):
+        array = np.asarray(model, dtype=np.float64)
+        if array.size == 0:
+            return None
+        if not np.isfinite(array).all():
+            raise FloatingPointError("rec_model contains non-finite values.")
+        return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _greit_forward_model_signature(fwd_model: Any | None, jacobian: Any) -> str:
+    for name in (
+        "fwd_model_signature",
+        "model_signature",
+        "signature",
+        "_semantic_model_signature",
+    ):
+        value = getattr(fwd_model, name, None)
+        if callable(value):
+            value = value()
+        if value:
+            return str(value)
+    if isinstance(fwd_model, dict):
+        for key in ("fwd_model_signature", "model_signature", "signature"):
+            if fwd_model.get(key):
+                return str(fwd_model[key])
+    return "jacobian:" + _array_digest(jacobian)
+
+
+def _canonical_signature_value(value: Any) -> Any:
+    if isinstance(value, MappingProxyType):
+        return _canonical_signature_value(dict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _canonical_signature_value(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_canonical_signature_value(item) for item in value]
+    if sparse.issparse(value):
+        coo = value.tocoo()
+        return {
+            "kind": "sparse",
+            "shape": [int(v) for v in value.shape],
+            "row": _array_digest(coo.row),
+            "col": _array_digest(coo.col),
+            "data": _array_digest(coo.data),
+        }
+    if isinstance(value, np.ndarray):
+        return _array_signature(value)
+    if isinstance(value, np.generic):
+        return value.item()
+    if value is None or isinstance(value, (str, bool, int, float)):
+        return value
+    if hasattr(value, "metadata"):
+        return _canonical_signature_value(getattr(value, "metadata"))
+    return repr(value)
+
+
+def _array_signature(value: Any) -> dict[str, Any]:
+    array = np.ascontiguousarray(np.asarray(value))
+    return {
+        "kind": "ndarray",
+        "dtype": str(array.dtype),
+        "shape": [int(v) for v in array.shape],
+        "sha256": _array_digest(array),
+    }
+
+
+def _array_digest(value: Any) -> str:
+    array = np.ascontiguousarray(np.asarray(value))
+    if array.dtype.kind in {"U", "O"}:
+        array = np.ascontiguousarray(array.astype(str))
+    encoded = (
+        str(array.dtype).encode("utf-8")
+        + b"|"
+        + json.dumps([int(v) for v in array.shape], sort_keys=True).encode("utf-8")
+        + b"|"
+        + array.tobytes()
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _signature_hash(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(
+        _json_ready(payload),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 def _optional_array(values: Any | None, *, dtype=np.float64) -> np.ndarray:
     if values is None:
         return np.asarray([], dtype=dtype)
@@ -2579,9 +3077,12 @@ def _as_metric_records(metrics: Any) -> list[dict[str, Any]]:
 
 __all__ = [
     "GREIT3DDistribution",
+    "GREIT_CACHE_SIGNATURE_SCHEMA",
     "GREITDesiredImages",
+    "GREIT_EIDORS_HDF5_SCHEMA",
     "GREITFiniteTargetResponses",
     "GREIT_METRIC_KEYS",
+    "GREIT_RM_HDF5_SCHEMA",
     "GREITRM",
     "GREITRMComponents",
     "GREITTrainingTargets",
@@ -2589,9 +3090,12 @@ __all__ = [
     "build_3d_greit_rm",
     "build_greit_desired_images",
     "build_greit_finite_target_responses",
+    "build_greit_rm_from_eidors_components",
     "build_greit3d_distribution",
     "calc_greit_rm",
     "generate_spherical_targets",
+    "greit_cache_signature",
+    "greit_cache_signature_payload",
     "greit_metrics",
     "greit_desired_image_sigmoid",
     "load_greit_rm",

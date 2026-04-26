@@ -10,9 +10,12 @@ import numpy as np
 import pytest
 
 from pyeidors.data.channels import bad_channel_mask
+from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 from pyeidors.inverse import (
     GREIT3DDistribution,
+    GREIT_CACHE_SIGNATURE_SCHEMA,
     GREITDesiredImages,
+    GREIT_EIDORS_HDF5_SCHEMA,
     GREITFiniteTargetResponses,
     GREIT_METRIC_KEYS,
     GREITRM,
@@ -20,6 +23,7 @@ from pyeidors.inverse import (
     build_3d_greit_rm,
     build_greit_desired_images,
     build_greit_finite_target_responses,
+    build_greit_rm_from_eidors_components,
     build_greit3d_distribution,
     generate_spherical_targets,
     greit_metrics,
@@ -383,6 +387,92 @@ def test_build_greit_desired_images_target_values_requires_explicit_opt_in() -> 
     assert desired.metadata["desired_solution_fn"] == "target_values_explicit_opt_in"
     assert desired.metadata["eidors_component_parity"] is False
     assert desired.metadata["target_values_used"] is True
+
+
+def test_eidors_greit_hdf5_artifact_stores_model_components_and_signature(
+    tmp_path,
+) -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 2.0, 1.0],
+        shape=(2, 2, 1),
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 0.5, 0.25, 0.0],
+            [0.0, 1.0, -0.5, 0.75],
+            [0.25, -0.25, 1.0, 0.5],
+        ],
+        dtype=float,
+    )
+    model = _FiniteTargetForwardModel(grid.cell_centers(), measurement_matrix)
+    responses = build_greit_finite_target_responses(
+        model,
+        centers=grid.cell_centers()[:2],
+        target_radius=0.4,
+        target_contrast=0.35,
+        normalize=True,
+    )
+    desired = build_greit_desired_images(grid, responses=responses)
+    artifact_path = tmp_path / "eidors_greit_components.h5"
+
+    greit = build_greit_rm_from_eidors_components(
+        responses,
+        desired,
+        weight=0.25,
+        noise_covar=1.5,
+        artifact_path=artifact_path,
+        fwd_model_signature="unit-fwd-signature",
+        keep_model_components=True,
+    )
+
+    expected_pjt = desired.values @ responses.contracted_y.T
+    artifact = read_hdf5_artifact(artifact_path)
+    assert artifact.schema == GREIT_EIDORS_HDF5_SCHEMA
+    assert artifact.metadata["artifact_schema"] == GREIT_EIDORS_HDF5_SCHEMA
+    assert artifact.metadata["cache_signature_schema"] == GREIT_CACHE_SIGNATURE_SCHEMA
+    assert artifact.metadata["cache_signature_hash"] == greit.cache_signature
+    assert artifact.metadata["cache_signature_payload"]["schema"] == (
+        GREIT_CACHE_SIGNATURE_SCHEMA
+    )
+    assert artifact.metadata["cache_signature_payload"]["training_mode"] == "forward"
+    assert artifact.metadata["cache_signature_payload"]["fwd_model_signature"] == (
+        "unit-fwd-signature"
+    )
+    for name in (
+        "RM",
+        "PJt",
+        "M",
+        "Sn",
+        "noiselev",
+        "weight",
+        "vh",
+        "vi",
+        "xyzr",
+        "D",
+        "Y",
+        "rec_model",
+        "fwd_model_signature",
+    ):
+        assert name in artifact.arrays
+    np.testing.assert_allclose(artifact.arrays["PJt"], expected_pjt)
+    np.testing.assert_allclose(artifact.arrays["D"], desired.values)
+    np.testing.assert_allclose(artifact.arrays["Y"], responses.contracted_y)
+    assert artifact.arrays["noiselev"].shape == (1,)
+    assert artifact.arrays["weight"].shape == (1,)
+
+    loaded = load_greit_rm(artifact_path)
+    np.testing.assert_allclose(loaded.rm, greit.rm)
+    np.testing.assert_allclose(loaded.pjt, expected_pjt)
+    np.testing.assert_allclose(loaded.m, greit.m)
+    np.testing.assert_allclose(loaded.y, responses.contracted_y)
+    np.testing.assert_allclose(loaded.d, desired.values)
+    np.testing.assert_allclose(loaded.vh, responses.vh)
+    np.testing.assert_allclose(loaded.vi, responses.vi)
+    np.testing.assert_allclose(loaded.xyzr, responses.xyzr)
+    np.testing.assert_allclose(loaded.rec_model, grid.cell_centers())
+    assert loaded.fwd_model_signature == "unit-fwd-signature"
+    assert loaded.cache_signature == greit.cache_signature
 
 
 def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
