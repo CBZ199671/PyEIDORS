@@ -187,6 +187,7 @@ def run_voltage_digit_sweep(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
     digit_method: DigitMethod = "truncate",
 ) -> tuple[list[VoltageDigitSweepSummary], list[VoltageDigitFieldRow]]:
     """Control voltage significant digits and measure conductivity error."""
@@ -209,6 +210,7 @@ def run_voltage_digit_sweep(
             inverse_backend=inverse_backend,
             rm_mode=rm_mode,
             rm_form=rm_form,
+            noser_exponent=noser_exponent,
         )
         if sigma_recon.shape != sigma_true.shape:
             raise RuntimeError("reconstructed sigma shape must match sigma_true")
@@ -247,6 +249,7 @@ def run_voltage_digit_sweep_from_backend(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
     digit_method: DigitMethod = "truncate",
 ) -> tuple[
     EITLinearizedModel,
@@ -283,6 +286,7 @@ def run_voltage_digit_sweep_from_backend(
         inverse_backend=inverse_backend,
         rm_mode=rm_mode,
         rm_form=rm_form,
+        noser_exponent=noser_exponent,
         digit_method=digit_method,
     )
     return model, summaries, field_rows

@@ -185,6 +185,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PyEIDORS RM construction form.",
     )
     parser.add_argument(
+        "--noser-exponent",
+        type=float,
+        default=0.5,
+        help="NOSER regularization exponent passed to PyEIDORS RM helpers.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("outputs/eit_voltage_digit_sweep_16e.csv"),
@@ -226,6 +232,7 @@ def main(argv: list[str] | None = None) -> int:
         inverse_backend=args.inverse_backend,
         rm_mode=args.rm_mode,
         rm_form=args.rm_form,
+        noser_exponent=args.noser_exponent,
         digit_method=args.digit_method,
     )
 
@@ -251,7 +258,8 @@ def main(argv: list[str] | None = None) -> int:
         f"meas_pattern={model.meas_pattern or '{ad}'}, "
         f"n_measurements={model.n_measurements}, "
         f"n_parameters={model.sigma_true.size}, "
-        f"rm_mode={args.rm_mode}, rm_form={args.rm_form}"
+        f"rm_mode={args.rm_mode}, rm_form={args.rm_form}, "
+        f"noser_exponent={_format_float(args.noser_exponent)}"
     )
     print(_format_table(summaries))
     print(f"Wrote {args.output}")

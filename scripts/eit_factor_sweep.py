@@ -40,6 +40,7 @@ def _format_table(rows: list[FactorSweepRow], *, limit: int = 12) -> str:
         "target_voltage_digits",
         "enob",
         "noise_relative",
+        "noser_exponent",
         "sigma_relative_rmse",
         "sigma_effective_digits",
     ]
@@ -53,6 +54,7 @@ def _format_table(rows: list[FactorSweepRow], *, limit: int = 12) -> str:
             str(row.target_voltage_digits),
             str(row.enob),
             _format_float(row.noise_relative),
+            _format_float(row.noser_exponent),
             _format_float(row.sigma_relative_rmse),
             _format_float(row.sigma_effective_digits),
         ]
@@ -143,6 +145,16 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         choices=["tikhonov", "noser"],
         default=None,
         help="Optional T17 RM regularization modes for a single-factor sweep.",
+    )
+    parser.add_argument(
+        "--noser-exponent-levels",
+        nargs="+",
+        type=float,
+        default=None,
+        help=(
+            "Optional T17 NOSER exponent levels. These rows are evaluated with "
+            "rm_mode=noser because the exponent has no effect on Tikhonov."
+        ),
     )
     parser.add_argument(
         "--anomaly-rule-levels",
@@ -241,6 +253,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PyEIDORS RM construction form.",
     )
     parser.add_argument(
+        "--noser-exponent",
+        type=float,
+        default=0.5,
+        help="NOSER regularization exponent passed to PyEIDORS RM helpers.",
+    )
+    parser.add_argument(
         "--n-measurements",
         type=int,
         default=16,
@@ -300,6 +318,7 @@ def main(argv: list[str] | None = None) -> int:
         enob_levels=args.enob_levels,
         full_scale_levels=args.full_scale_levels,
         rm_mode_levels=args.rm_mode_levels,
+        noser_exponent_levels=args.noser_exponent_levels,
         anomaly_rule_levels=args.anomaly_rule_levels,
         forward_backend=args.forward_backend,
         n_elec=args.fem_n_elec,
@@ -316,6 +335,7 @@ def main(argv: list[str] | None = None) -> int:
         inverse_backend=args.inverse_backend,
         rm_mode=args.rm_mode,
         rm_form=args.rm_form,
+        noser_exponent=args.noser_exponent,
         n_measurements=args.n_measurements,
         n_parameters=args.n_parameters,
         model_seed=args.model_seed,
@@ -327,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
         adc_bit=args.adc_bit,
         title=args.report_title,
         rm_mode=args.rm_mode,
+        noser_exponent=args.noser_exponent,
         baseline_anomaly_rule=args.baseline_anomaly_rule,
     )
     _write_text(args.report_output, report)
@@ -352,6 +373,8 @@ def main(argv: list[str] | None = None) -> int:
         f"full_scale={_format_float(args.full_scale)}, "
         f"adc_bit={args.adc_bit}, "
         f"rm_mode={args.rm_mode}, "
+        f"rm_form={args.rm_form}, "
+        f"noser_exponent={_format_float(args.noser_exponent)}, "
         "stim_pattern={ad}, meas_pattern={ad}"
     )
     print(_format_table(rows))

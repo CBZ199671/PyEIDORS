@@ -39,6 +39,7 @@ class FactorSweepRow:
     target_voltage_digits: int
     enob: str
     noise_relative: float
+    noser_exponent: float
     n_measurements: int
     voltage_rmse: float
     achieved_voltage_effective_digits: float
@@ -59,6 +60,7 @@ class FactorSweepRow:
             "target_voltage_digits": self.target_voltage_digits,
             "enob": self.enob,
             "noise_relative": self.noise_relative,
+            "noser_exponent": self.noser_exponent,
             "n_measurements": self.n_measurements,
             "voltage_rmse": self.voltage_rmse,
             "achieved_voltage_effective_digits": self.achieved_voltage_effective_digits,
@@ -80,6 +82,7 @@ CSV_FIELDS = [
     "target_voltage_digits",
     "enob",
     "noise_relative",
+    "noser_exponent",
     "n_measurements",
     "voltage_rmse",
     "achieved_voltage_effective_digits",
@@ -124,6 +127,13 @@ def _non_negative_float_levels(values: Iterable[float], *, name: str) -> list[fl
     levels = _finite_float_levels(values, name=name)
     if any(value < 0.0 for value in levels):
         raise ValueError(f"{name} must all be non-negative")
+    return levels
+
+
+def _positive_float_levels(values: Iterable[float], *, name: str) -> list[float]:
+    levels = _finite_float_levels(values, name=name)
+    if any(value <= 0.0 for value in levels):
+        raise ValueError(f"{name} must all be positive")
     return levels
 
 
@@ -256,6 +266,7 @@ def _evaluate_case(
     inverse_backend: str,
     rm_mode: str,
     rm_form: str,
+    noser_exponent: float,
 ) -> FactorSweepRow:
     enob_label, enob_value = normalize_enob_level(enob_level)
     sigma_true = _as_float_vector(model.sigma_true, name="model.sigma_true")
@@ -276,6 +287,7 @@ def _evaluate_case(
         inverse_backend=inverse_backend,
         rm_mode=rm_mode,
         rm_form=rm_form,
+        noser_exponent=noser_exponent,
     )
     error = sigma_recon - sigma_true
     abs_error = np.abs(error)
@@ -289,6 +301,7 @@ def _evaluate_case(
         target_voltage_digits=int(target_voltage_digits),
         enob=enob_label,
         noise_relative=float(noise_relative),
+        noser_exponent=float(noser_exponent),
         n_measurements=int(model.n_measurements),
         voltage_rmse=rmse(voltage_true, voltage_measured),
         achieved_voltage_effective_digits=effective_digits_from_rmse(
@@ -312,6 +325,7 @@ def run_factor_sweep(
     enob_levels: Iterable[str | float | int],
     full_scale_levels: Iterable[float] | None = None,
     rm_mode_levels: Iterable[str] | None = None,
+    noser_exponent_levels: Iterable[float] | None = None,
     anomaly_rule_levels: Iterable[str] | None = None,
     forward_backend: str = "pyeidors-fem",
     n_elec: int = 16,
@@ -328,6 +342,7 @@ def run_factor_sweep(
     inverse_backend: str = "pyeidors-rm",
     rm_mode: str = "tikhonov",
     rm_form: str = "param",
+    noser_exponent: float = 0.5,
     n_measurements: int = 16,
     n_parameters: int = 8,
     model_seed: int = 20260422,
@@ -355,6 +370,14 @@ def run_factor_sweep(
         raise ValueError("full_scale_levels must all be positive")
     rm_modes = (
         [] if rm_mode_levels is None else [str(value) for value in rm_mode_levels]
+    )
+    noser_exponents = (
+        []
+        if noser_exponent_levels is None
+        else _positive_float_levels(
+            noser_exponent_levels,
+            name="noser_exponent_levels",
+        )
     )
     anomaly_rules = (
         []
@@ -404,6 +427,7 @@ def run_factor_sweep(
         noise_relative: float,
         full_scale_range: float,
         rm_mode: str,
+        noser_exponent: float,
         anomaly_rule: str,
     ) -> None:
         rows.append(
@@ -424,6 +448,7 @@ def run_factor_sweep(
                 inverse_backend=inverse_backend,
                 rm_mode=rm_mode,
                 rm_form=rm_form,
+                noser_exponent=float(noser_exponent),
             )
         )
 
@@ -438,6 +463,7 @@ def run_factor_sweep(
         noise_relative=baseline_noise_relative,
         full_scale_range=full_scale,
         rm_mode=rm_mode,
+        noser_exponent=noser_exponent,
         anomaly_rule=baseline_anomaly_rule,
     )
 
@@ -453,6 +479,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -468,6 +495,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -483,6 +511,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -498,6 +527,7 @@ def run_factor_sweep(
             noise_relative=noise,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -514,6 +544,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -529,6 +560,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -544,6 +576,23 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=mode,
+            noser_exponent=noser_exponent,
+            anomaly_rule=baseline_anomaly_rule,
+        )
+
+    for exponent in noser_exponents:
+        append_case(
+            sweep="single_factor",
+            changed_factor="noser_exponent",
+            level=_format_level(exponent),
+            fem_grid=baseline_fem_grid,
+            ridge=baseline_ridge,
+            target_voltage_digits=baseline_target_digits,
+            enob_level=baseline_enob,
+            noise_relative=baseline_noise_relative,
+            full_scale_range=full_scale,
+            rm_mode="noser",
+            noser_exponent=exponent,
             anomaly_rule=baseline_anomaly_rule,
         )
 
@@ -559,6 +608,7 @@ def run_factor_sweep(
             noise_relative=baseline_noise_relative,
             full_scale_range=full_scale,
             rm_mode=rm_mode,
+            noser_exponent=noser_exponent,
             anomaly_rule=rule,
         )
 
@@ -575,6 +625,7 @@ def run_factor_sweep(
                 noise_relative=baseline_noise_relative,
                 full_scale_range=full_scale,
                 rm_mode=rm_mode,
+                noser_exponent=noser_exponent,
                 anomaly_rule=baseline_anomaly_rule,
             )
 
@@ -602,6 +653,7 @@ def format_factor_sweep_report(
     adc_bit: int,
     title: str = "T15 多因素控制变量实验报告",
     rm_mode: str | None = None,
+    noser_exponent: float | None = None,
     baseline_anomaly_rule: str | None = None,
 ) -> str:
     """Format the T15 CSV rows into a compact Markdown ranking report."""
@@ -636,8 +688,18 @@ def format_factor_sweep_report(
     ]
     if rm_mode is not None:
         lines.append(f"| rm_mode | {rm_mode} |")
+    if noser_exponent is not None:
+        lines.append(f"| noser_exponent | {float(noser_exponent):.12g} |")
     if baseline_anomaly_rule is not None:
         lines.append(f"| anomaly_rule | {baseline_anomaly_rule} |")
+    if any(row.changed_factor == "noser_exponent" for row in row_list):
+        lines.extend(
+            [
+                "",
+                "注：`noser_exponent` 行固定使用 `rm_mode=noser`，因为该指数对 "
+                "`tikhonov` 无数学作用。",
+            ]
+        )
     lines.extend(
         [
             "",

@@ -120,6 +120,8 @@ def test_eit_voltage_digit_sweep_cli_writes_expected_outputs(tmp_path) -> None:
             "10",
             "--n-parameters",
             "5",
+            "--noser-exponent",
+            "0.5",
             "--output",
             str(summary_output),
             "--field-output",
@@ -136,6 +138,7 @@ def test_eit_voltage_digit_sweep_cli_writes_expected_outputs(tmp_path) -> None:
     )
 
     assert "model=surrogate+least-squares" in completed.stdout
+    assert "noser_exponent=0.5" in completed.stdout
     assert "target_voltage_digits" in completed.stdout
 
     with summary_output.open(newline="", encoding="utf-8") as handle:

@@ -61,6 +61,38 @@ def test_pyeidors_rm_inverse_round_trips_without_adc_error() -> None:
     np.testing.assert_allclose(reconstructed, sigma, rtol=1e-10, atol=1e-10)
 
 
+def test_pyeidors_rm_inverse_passes_noser_exponent() -> None:
+    from pyeidors.inverse.reconstruction_matrix import build_one_step_rm
+
+    sigma = np.array([1.2, 0.85], dtype=float)
+    sensitivity = np.array([[1.0, 0.2], [0.5, 2.0], [0.1, 0.3]], dtype=float)
+    voltages = sensitivity @ sigma
+
+    reconstructed = inverse_pyeidors_rm(
+        voltages,
+        sensitivity,
+        lambda_=0.2,
+        mode="noser",
+        noser_exponent=0.5,
+    )
+    expected_rm = build_one_step_rm(
+        sensitivity,
+        lambda_=0.2,
+        mode="noser",
+        noser_exponent=0.5,
+    )
+    default_reconstructed = inverse_pyeidors_rm(
+        voltages,
+        sensitivity,
+        lambda_=0.2,
+        mode="noser",
+        noser_exponent=1.0,
+    )
+
+    np.testing.assert_allclose(reconstructed, expected_rm @ voltages)
+    assert not np.allclose(reconstructed, default_reconstructed)
+
+
 def test_eit_digit_sweep_reports_hypothesis_delta() -> None:
     rows = summarize_eit_digit_sweep(
         bits=[12, 16],
@@ -144,6 +176,8 @@ def test_eit_end_to_end_cli_writes_expected_csv(tmp_path) -> None:
             "surrogate",
             "--inverse-backend",
             "pyeidors-rm",
+            "--noser-exponent",
+            "0.5",
             "--output",
             str(output),
         ],
@@ -155,6 +189,7 @@ def test_eit_end_to_end_cli_writes_expected_csv(tmp_path) -> None:
 
     assert "model=surrogate+pyeidors-rm" in completed.stdout
     assert "rm_mode=tikhonov" in completed.stdout
+    assert "noser_exponent=0.5" in completed.stdout
     assert "hypothesis_delta_digits" in completed.stdout
     with output.open(newline="", encoding="utf-8") as handle:
         rows = list(csv.DictReader(handle))

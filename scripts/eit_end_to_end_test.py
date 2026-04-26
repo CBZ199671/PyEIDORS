@@ -191,6 +191,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PyEIDORS RM construction form.",
     )
     parser.add_argument(
+        "--noser-exponent",
+        type=float,
+        default=0.5,
+        help="NOSER regularization exponent passed to PyEIDORS RM helpers.",
+    )
+    parser.add_argument(
         "--output",
         type=Path,
         default=Path("outputs/eit_digits.csv"),
@@ -220,6 +226,7 @@ def main(argv: list[str] | None = None) -> int:
         inverse_backend=args.inverse_backend,
         rm_mode=args.rm_mode,
         rm_form=args.rm_form,
+        noser_exponent=args.noser_exponent,
         n_measurements=args.n_measurements,
         n_parameters=args.n_parameters,
         model_seed=args.model_seed,
@@ -241,7 +248,8 @@ def main(argv: list[str] | None = None) -> int:
         f"fem_n_elec={args.fem_n_elec}, fem_grid={args.fem_grid}, "
         f"stim_pattern={{ad}}, meas_pattern={{ad}}, "
         f"fem_n_measurements={_format_float(fem_measurements)}, "
-        f"rm_mode={args.rm_mode}, rm_form={args.rm_form}"
+        f"rm_mode={args.rm_mode}, rm_form={args.rm_form}, "
+        f"noser_exponent={_format_float(args.noser_exponent)}"
     )
     print(_format_table(rows))
     print(f"Wrote {args.output}")

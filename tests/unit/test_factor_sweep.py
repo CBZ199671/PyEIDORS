@@ -113,6 +113,7 @@ def test_factor_sweep_t17_extended_factors_are_optional() -> None:
         enob_levels=["nominal", "5"],
         full_scale_levels=[5.0, 10.0],
         rm_mode_levels=["tikhonov", "noser"],
+        noser_exponent_levels=[0.5, 1.0],
         anomaly_rule_levels=["default", "center_high"],
         forward_backend="surrogate",
         inverse_backend="pyeidors-rm",
@@ -123,12 +124,13 @@ def test_factor_sweep_t17_extended_factors_are_optional() -> None:
         baseline_enob="5",
         full_scale_range=10.0,
         adc_bit=8,
+        noser_exponent=0.5,
         n_measurements=10,
         n_parameters=5,
         model_seed=123,
     )
 
-    assert len(rows) == 21
+    assert len(rows) == 23
     assert {row.changed_factor for row in rows} == {
         "baseline",
         "fem_grid",
@@ -138,12 +140,18 @@ def test_factor_sweep_t17_extended_factors_are_optional() -> None:
         "enob",
         "full_scale",
         "rm_mode",
+        "noser_exponent",
         "anomaly_rule",
         "grid_x_ridge",
     }
     assert [row.changed_factor for row in rows].count("full_scale") == 2
     assert [row.changed_factor for row in rows].count("rm_mode") == 2
+    assert [row.changed_factor for row in rows].count("noser_exponent") == 2
     assert [row.changed_factor for row in rows].count("anomaly_rule") == 2
+    assert {row.level for row in rows if row.changed_factor == "noser_exponent"} == {
+        "0.5",
+        "1",
+    }
     assert all(np.isfinite(row.sigma_relative_rmse) for row in rows)
 
 
@@ -192,6 +200,7 @@ def test_factor_sweep_report_and_plot_outputs(tmp_path) -> None:
         full_scale_range=10.0,
         adc_bit=8,
         rm_mode="tikhonov",
+        noser_exponent=0.5,
         baseline_anomaly_rule="default",
     )
     plot_path = plot_factor_sweep(rows, tmp_path / "factor.png", dpi=80)
@@ -199,6 +208,7 @@ def test_factor_sweep_report_and_plot_outputs(tmp_path) -> None:
     assert "主效应排序" in report
     assert "grid × ridge" in report
     assert "delta_sigma_relative_rmse" in report
+    assert "| noser_exponent | 0.5 |" in report
     assert plot_path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
     assert plot_path.stat().st_size > 1000
 
@@ -236,6 +246,11 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
             "10",
             "--n-parameters",
             "5",
+            "--noser-exponent",
+            "0.5",
+            "--noser-exponent-levels",
+            "0.5",
+            "1.0",
             "--model-seed",
             "123",
             "--output",
@@ -254,10 +269,12 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
     )
 
     assert "model=surrogate+least-squares" in completed.stdout
+    assert "noser_exponent=0.5" in completed.stdout
     with csv_output.open(newline="", encoding="utf-8") as handle:
         csv_rows = list(csv.DictReader(handle))
 
-    assert len(csv_rows) == 15
+    assert len(csv_rows) == 17
+    assert [row["changed_factor"] for row in csv_rows].count("noser_exponent") == 2
     assert list(csv_rows[0].keys()) == CSV_FIELDS
     assert report_output.read_text(encoding="utf-8").startswith(
         "# T15 多因素控制变量实验报告"
