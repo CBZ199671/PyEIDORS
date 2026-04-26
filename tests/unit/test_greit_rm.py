@@ -12,11 +12,13 @@ import pytest
 from pyeidors.data.channels import bad_channel_mask
 from pyeidors.inverse import (
     GREIT3DDistribution,
+    GREITDesiredImages,
     GREITFiniteTargetResponses,
     GREIT_METRIC_KEYS,
     GREITRM,
     VoxelGrid,
     build_3d_greit_rm,
+    build_greit_desired_images,
     build_greit_finite_target_responses,
     build_greit3d_distribution,
     generate_spherical_targets,
@@ -266,6 +268,121 @@ def test_build_greit_finite_target_responses_raw_batch_and_cache() -> None:
     assert model.batch_calls == 2
     assert cached.metadata["cache_hit"] is True
     np.testing.assert_allclose(cached.y, responses.y)
+
+
+def test_build_greit_desired_images_default_sigmoid_is_independent_from_targets() -> (
+    None
+):
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [3.0, 3.0, 3.0],
+        shape=(3, 3, 3),
+    )
+    center = np.array([[1.5, 1.5, 1.5]], dtype=float)
+    raw_targets = generate_spherical_targets(
+        grid,
+        centers=center,
+        radius=0.51,
+        kind="sphere",
+    )
+
+    desired = build_greit_desired_images(
+        grid,
+        xyz=center,
+        radius=0.8,
+        target_values=raw_targets,
+    )
+
+    assert isinstance(desired, GREITDesiredImages)
+    assert desired.shape == (grid.num_cells(), 1)
+    assert desired.metadata["builder"] == "GREIT_desired_img"
+    assert desired.metadata["desired_solution_fn"] == "GREIT_desired_img_sigmoid"
+    assert desired.metadata["eidors_component_parity"] is True
+    assert desired.metadata["target_values_used"] is False
+    assert desired.metadata["target_values_requires_explicit_opt_in"] is True
+    assert desired.metadata["d_shape"] == (grid.num_cells(), 1)
+
+    raw_d = raw_targets.values.T
+    assert not np.allclose(desired.values, raw_d)
+    distances = np.linalg.norm(grid.cell_centers() - center, axis=1)
+    center_idx = int(np.argmin(distances))
+    neighbor_idx = int(np.argsort(distances)[1])
+    far_idx = int(np.argmax(distances))
+    assert desired.values[center_idx, 0] > 0.99
+    assert 0.0 < desired.values[neighbor_idx, 0] < desired.values[center_idx, 0]
+    assert desired.values[far_idx, 0] == pytest.approx(0.0)
+
+
+def test_build_greit_desired_images_uses_custom_solution_fn_signature() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 2.0, 2.0],
+        shape=(2, 2, 2),
+    )
+    xyz = np.array(
+        [
+            [0.5, 1.5],
+            [0.5, 1.5],
+            [0.5, 1.5],
+        ],
+        dtype=float,
+    )
+
+    def custom_desired(xyz_arg, radius_arg, options):
+        assert xyz_arg.shape == (3, 2)
+        np.testing.assert_allclose(radius_arg, [0.25, 0.5])
+        assert options["n_rec_parameters"] == grid.num_cells()
+        centers = np.asarray(options["rec_centers"], dtype=float)
+        return centers[:, [0]] + xyz_arg[[0], :]
+
+    desired = build_greit_desired_images(
+        grid,
+        xyz=xyz,
+        radius=[0.25, 0.5],
+        desired_solution_fn=custom_desired,
+    )
+
+    expected = grid.cell_centers()[:, [0]] + xyz[[0], :]
+    np.testing.assert_allclose(desired.values, expected)
+    assert desired.shape == (grid.num_cells(), 2)
+    assert desired.metadata["desired_solution_fn"] == "custom_desired"
+    assert desired.metadata["eidors_component_parity"] is False
+    assert desired.metadata["target_values_used"] is False
+
+
+def test_build_greit_desired_images_target_values_requires_explicit_opt_in() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 2.0, 2.0],
+        shape=(2, 2, 2),
+    )
+    targets = generate_spherical_targets(
+        grid,
+        centers=[[0.5, 0.5, 0.5], [1.5, 1.5, 1.5]],
+        radius=0.2,
+        kind="sphere",
+    )
+
+    with pytest.raises(ValueError, match="explicit target_values"):
+        build_greit_desired_images(
+            grid,
+            xyz=targets.centers,
+            radius=targets.radii,
+            desired_solution_fn="target_values",
+        )
+
+    desired = build_greit_desired_images(
+        grid,
+        xyz=targets.centers,
+        radius=targets.radii,
+        desired_solution_fn="target_values",
+        target_values=targets,
+    )
+
+    np.testing.assert_allclose(desired.values, targets.values.T)
+    assert desired.metadata["desired_solution_fn"] == "target_values_explicit_opt_in"
+    assert desired.metadata["eidors_component_parity"] is False
+    assert desired.metadata["target_values_used"] is True
 
 
 def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(

@@ -64,6 +64,24 @@ class GREITFiniteTargetResponses:
 
 
 @dataclass(frozen=True)
+class GREITDesiredImages:
+    """Desired image stack ``D`` for EIDORS-parity GREIT RM construction."""
+
+    values: np.ndarray
+    xyz: np.ndarray
+    radii: np.ndarray
+    rec_centers: np.ndarray
+    metadata: MappingProxyType
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.values.shape
+
+    def __array__(self, dtype=None) -> np.ndarray:
+        return np.asarray(self.values, dtype=dtype)
+
+
+@dataclass(frozen=True)
 class GREIT3DDistribution:
     """EIDORS ``GREIT3D_distribution`` target-center volume."""
 
@@ -533,6 +551,158 @@ def build_greit_finite_target_responses(
     if response_cache is not None and cache_key is not None:
         response_cache[cache_key] = responses
     return responses
+
+
+def build_greit_desired_images(
+    rec_model: Any,
+    *,
+    xyz: Any | None = None,
+    radius: Any | None = None,
+    responses: GREITFiniteTargetResponses | None = None,
+    distribution: GREIT3DDistribution | None = None,
+    desired_solution_fn: Any | None = None,
+    desired_options: dict[str, Any] | None = None,
+    target_values: Any | None = None,
+) -> GREITDesiredImages:
+    """Build the GREIT desired image matrix ``D``.
+
+    ``D`` is independent from raw synthetic target matrix ``T`` by default.
+    Passing ``desired_solution_fn="target_values"`` is the explicit opt-in
+    escape hatch for legacy ``D≈T`` experiments.
+    """
+
+    rec_centers = _desired_rec_centers(rec_model)
+    xyz_matrix, radii, xyz_source = _resolve_desired_xyz_radius(
+        xyz=xyz,
+        radius=radius,
+        responses=responses,
+        distribution=distribution,
+    )
+    options = dict(desired_options or {})
+    options.setdefault("rec_model", rec_model)
+    options.setdefault("rec_centers", rec_centers)
+    options.setdefault("n_rec_parameters", int(rec_centers.shape[0]))
+    options.setdefault("dimension", int(rec_centers.shape[1]))
+
+    if desired_solution_fn is None:
+        raw_values = greit_desired_image_sigmoid(xyz_matrix, radii, options)
+        fn_label = "GREIT_desired_img_sigmoid"
+        parity_default = True
+        target_values_used = False
+    elif isinstance(desired_solution_fn, str):
+        token = desired_solution_fn.strip().lower()
+        if token in {
+            "greit_desired_img",
+            "greit_desired_img_sigmoid",
+            "sigmoid",
+            "default",
+        }:
+            raw_values = greit_desired_image_sigmoid(xyz_matrix, radii, options)
+            fn_label = "GREIT_desired_img_sigmoid"
+            parity_default = True
+            target_values_used = False
+        elif token in {"target_values", "target", "raw_target", "t"}:
+            raw_values = _desired_from_target_values(
+                target_values,
+                n_rec_parameters=rec_centers.shape[0],
+                n_targets=xyz_matrix.shape[1],
+            )
+            fn_label = "target_values_explicit_opt_in"
+            parity_default = False
+            target_values_used = True
+        else:
+            raise ValueError(
+                "desired_solution_fn string must be one of: "
+                "'sigmoid' or 'target_values'."
+            )
+    elif callable(desired_solution_fn):
+        raw_values = desired_solution_fn(xyz_matrix, radii, MappingProxyType(options))
+        fn_label = getattr(desired_solution_fn, "__name__", "custom_callable")
+        parity_default = False
+        target_values_used = False
+    else:
+        raise TypeError("desired_solution_fn must be None, a string, or callable.")
+
+    values = _validate_desired_matrix(
+        raw_values,
+        n_rec_parameters=rec_centers.shape[0],
+        n_targets=xyz_matrix.shape[1],
+    )
+    metadata = MappingProxyType(
+        {
+            "builder": "GREIT_desired_img",
+            "desired_solution_fn": fn_label,
+            "eidors_component_parity": parity_default,
+            "target_values_used": target_values_used,
+            "target_values_requires_explicit_opt_in": True,
+            "xyz_source": xyz_source,
+            "d_shape": tuple(int(v) for v in values.shape),
+            "xyz_shape": tuple(int(v) for v in xyz_matrix.shape),
+            "n_rec_parameters": int(rec_centers.shape[0]),
+            "n_targets": int(xyz_matrix.shape[1]),
+            "radius_min": float(np.min(radii)),
+            "radius_max": float(np.max(radii)),
+            "coordinate_mode": "rec_model_physical",
+        }
+    )
+    return GREITDesiredImages(
+        values=values,
+        xyz=xyz_matrix,
+        radii=radii,
+        rec_centers=rec_centers,
+        metadata=metadata,
+    )
+
+
+def greit_desired_image_sigmoid(
+    xyz: Any,
+    radius: Any,
+    options: Any,
+) -> np.ndarray:
+    """Default EIDORS-like sigmoid desired image function.
+
+    The public signature mirrors EIDORS' ``desired_solution_fn(xyz, radius,
+    options)`` hook.  The implementation samples a smooth radial sigmoid at
+    reconstruction-cell centers, producing ``D`` with shape
+    ``n_rec_parameters × n_targets``.
+    """
+
+    opts = dict(options or {})
+    if "desired_img_radius" in opts and opts["desired_img_radius"] is not None:
+        radius = opts["desired_img_radius"]
+    rec_centers = _desired_rec_centers(
+        opts.get("rec_centers")
+        if opts.get("rec_centers") is not None
+        else opts.get("rec_model")
+    )
+    xyz_matrix, embedded_radii = _as_eidors_xyz(xyz)
+    radii = _desired_radii(
+        radius if radius is not None else embedded_radii,
+        n_targets=xyz_matrix.shape[1],
+        xyz=xyz_matrix,
+    )
+    steepness = _desired_steepness(
+        opts.get("desired_img_steepness", opts.get("sigmoid_steepness", 10.0)),
+        n_targets=xyz_matrix.shape[1],
+    )
+    threshold = float(opts.get("desired_img_threshold", 1e-4))
+    if threshold < 0.0 or threshold >= 0.5 or not np.isfinite(threshold):
+        raise ValueError("desired_img_threshold must be finite in [0, 0.5).")
+
+    distances = np.linalg.norm(
+        rec_centers[:, None, :3] - xyz_matrix.T[None, :, :],
+        axis=2,
+    )
+    scaled = steepness.reshape(1, -1) * (distances / radii.reshape(1, -1) - 1.0)
+    desired = 1.0 / (1.0 + np.exp(np.clip(scaled, -700.0, 700.0)))
+    if threshold > 0.0:
+        desired[desired < threshold] = 0.0
+        desired[desired > 1.0 - threshold] = 1.0
+    if bool(opts.get("normalize_peak", False)):
+        peaks = np.max(desired, axis=0)
+        good = peaks > np.finfo(np.float64).eps
+        desired[:, good] = desired[:, good] / peaks[good].reshape(1, -1)
+    return np.ascontiguousarray(desired, dtype=np.float64)
 
 
 def build_3d_greit_rm(
@@ -1394,6 +1564,162 @@ def _forward_cell_centers(fwd_model: Any) -> np.ndarray:
     return np.ascontiguousarray(array[:, :3], dtype=np.float64)
 
 
+def _desired_rec_centers(rec_model: Any) -> np.ndarray:
+    if rec_model is None:
+        raise ValueError("rec_model or rec_centers is required for desired images.")
+    if isinstance(rec_model, (list, tuple, np.ndarray)):
+        centers = np.asarray(rec_model, dtype=np.float64)
+    else:
+        centers = _cell_centers(rec_model)
+    if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] < 3:
+        raise ValueError("GREIT desired images require 3D rec-model centers.")
+    if not np.isfinite(centers).all():
+        raise FloatingPointError("rec-model centers contain non-finite values.")
+    return np.ascontiguousarray(centers[:, :3], dtype=np.float64)
+
+
+def _resolve_desired_xyz_radius(
+    *,
+    xyz: Any | None,
+    radius: Any | None,
+    responses: GREITFiniteTargetResponses | None,
+    distribution: GREIT3DDistribution | None,
+) -> tuple[np.ndarray, np.ndarray, str]:
+    embedded_radii = None
+    if xyz is not None:
+        xyz_matrix, embedded_radii = _as_eidors_xyz(xyz)
+        source = "xyz"
+    elif responses is not None:
+        xyz_matrix, embedded_radii = _as_eidors_xyz(responses.xyzr)
+        source = "GREITFiniteTargetResponses.xyzr"
+    elif distribution is not None:
+        xyz_matrix = np.asarray(distribution.centers, dtype=np.float64).T
+        source = "GREIT3D_distribution"
+    else:
+        raise ValueError(
+            "desired images require xyz, finite-target responses, or distribution."
+        )
+    radii = _desired_radii(
+        radius if radius is not None else embedded_radii,
+        n_targets=xyz_matrix.shape[1],
+        xyz=xyz_matrix,
+    )
+    return xyz_matrix, radii, source
+
+
+def _as_eidors_xyz(values: Any) -> tuple[np.ndarray, np.ndarray | None]:
+    array = np.asarray(values, dtype=np.float64)
+    embedded_radii = None
+    if array.ndim == 1:
+        if array.size not in {3, 4}:
+            raise ValueError("xyz vector must have 3 or 4 entries.")
+        xyz = array[:3].reshape(3, 1)
+        if array.size == 4:
+            embedded_radii = array[3:].reshape(1)
+    elif array.ndim == 2:
+        if array.shape[0] == 3:
+            xyz = array
+        elif array.shape[0] == 4:
+            xyz = array[:3, :]
+            embedded_radii = array[3, :]
+        elif array.shape[1] == 3:
+            xyz = array.T
+        elif array.shape[1] == 4:
+            xyz = array[:, :3].T
+            embedded_radii = array[:, 3]
+        else:
+            raise ValueError("xyz must have shape 3xN, 4xN, Nx3, or Nx4.")
+    else:
+        raise ValueError("xyz must be a vector or 2D matrix.")
+    if xyz.size == 0 or xyz.shape[0] != 3 or xyz.shape[1] == 0:
+        raise ValueError("xyz must contain at least one 3D target center.")
+    if not np.isfinite(xyz).all():
+        raise FloatingPointError("xyz contains non-finite values.")
+    if embedded_radii is not None:
+        embedded_radii = np.asarray(embedded_radii, dtype=np.float64).reshape(-1)
+        if not np.isfinite(embedded_radii).all():
+            raise FloatingPointError("embedded xyz radii contain non-finite values.")
+    return np.ascontiguousarray(xyz, dtype=np.float64), embedded_radii
+
+
+def _desired_radii(
+    values: Any | None,
+    *,
+    n_targets: int,
+    xyz: np.ndarray,
+) -> np.ndarray:
+    if values is None:
+        radii = np.full(n_targets, _default_radius(xyz.T), dtype=np.float64)
+    else:
+        radii = np.asarray(values, dtype=np.float64).reshape(-1)
+        if radii.size == 1:
+            radii = np.full(n_targets, float(radii[0]), dtype=np.float64)
+        elif radii.size != n_targets:
+            raise ValueError(f"radius length {radii.size} does not match {n_targets}.")
+    if not np.isfinite(radii).all():
+        raise FloatingPointError("desired image radius contains non-finite values.")
+    if np.any(radii <= 0.0):
+        raise ValueError("desired image radii must be positive.")
+    return np.ascontiguousarray(radii, dtype=np.float64)
+
+
+def _desired_steepness(values: Any, *, n_targets: int) -> np.ndarray:
+    steepness = np.asarray(values, dtype=np.float64).reshape(-1)
+    if steepness.size == 1:
+        steepness = np.full(n_targets, float(steepness[0]), dtype=np.float64)
+    elif steepness.size != n_targets:
+        raise ValueError(
+            f"desired image steepness length {steepness.size} does not match {n_targets}."
+        )
+    if not np.isfinite(steepness).all():
+        raise FloatingPointError("desired image steepness contains non-finite values.")
+    if np.any(steepness <= 0.0):
+        raise ValueError("desired image steepness must be positive.")
+    return np.ascontiguousarray(steepness, dtype=np.float64)
+
+
+def _desired_from_target_values(
+    target_values: Any,
+    *,
+    n_rec_parameters: int,
+    n_targets: int,
+) -> np.ndarray:
+    if target_values is None:
+        raise ValueError(
+            "target_values desired mode requires explicit target_values input."
+        )
+    values = (
+        np.asarray(target_values.values, dtype=np.float64)
+        if isinstance(target_values, GREITTrainingTargets)
+        else np.asarray(target_values, dtype=np.float64)
+    )
+    if values.shape == (n_targets, n_rec_parameters):
+        return np.ascontiguousarray(values.T, dtype=np.float64)
+    if values.shape == (n_rec_parameters, n_targets):
+        return np.ascontiguousarray(values, dtype=np.float64)
+    raise ValueError(
+        "target_values must have shape "
+        f"{(n_targets, n_rec_parameters)} or {(n_rec_parameters, n_targets)}."
+    )
+
+
+def _validate_desired_matrix(
+    values: Any,
+    *,
+    n_rec_parameters: int,
+    n_targets: int,
+) -> np.ndarray:
+    matrix = np.asarray(values, dtype=np.float64)
+    if matrix.shape != (n_rec_parameters, n_targets):
+        raise ValueError(
+            "desired image matrix D must have shape "
+            f"{(n_rec_parameters, n_targets)}, got {matrix.shape}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("desired image matrix D contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=np.float64)
+
+
 def _model_nodes(fwd_model: Any | None) -> np.ndarray | None:
     if fwd_model is None:
         return None
@@ -1728,15 +2054,18 @@ def _as_metric_records(metrics: Any) -> list[dict[str, Any]]:
 
 __all__ = [
     "GREIT3DDistribution",
+    "GREITDesiredImages",
     "GREITFiniteTargetResponses",
     "GREIT_METRIC_KEYS",
     "GREITRM",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
+    "build_greit_desired_images",
     "build_greit_finite_target_responses",
     "build_greit3d_distribution",
     "generate_spherical_targets",
     "greit_metrics",
+    "greit_desired_image_sigmoid",
     "load_greit_rm",
     "migrate_greit_rm_to_hdf5",
     "write_greit_metrics_artifact",
