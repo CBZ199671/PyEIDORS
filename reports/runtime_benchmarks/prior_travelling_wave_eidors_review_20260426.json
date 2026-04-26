@@ -1,0 +1,2140 @@
+{
+  "config": {
+    "lambda": 0.08,
+    "n_cells": 32,
+    "n_frames": 24,
+    "n_measurements": 20,
+    "noise_std": 0.0,
+    "ridge": 1e-09,
+    "seed": 20260424,
+    "tv_irls_beta": 0.0001,
+    "tv_irls_iterations": 4,
+    "tv_irls_tolerance": 1e-05
+  },
+  "created_utc": "2026-04-26T06:20:50.623722+00:00",
+  "fixture": {
+    "center_end": 0.8190189600128999,
+    "center_start": 0.18098103998710033,
+    "measurement_shape": [
+      24,
+      20
+    ],
+    "mesh": {
+      "bounds": [
+        0.015625,
+        0.984375
+      ],
+      "shape": [
+        32
+      ],
+      "type": "VoxelGrid"
+    },
+    "name": "travelling_gaussian_1d",
+    "truth_shape": [
+      24,
+      32
+    ]
+  },
+  "methods": {
+    "curvature": {
+      "RtR_metadata": {
+        "kind": "sparse",
+        "name": "curvature",
+        "nnz": 94,
+        "prior_family": "graph_ltl",
+        "regularization_source": "provided_graph_ltl",
+        "schema": "pyeidors-rtr-prior-v1",
+        "shape": [
+          32,
+          32
+        ],
+        "signature_hash": "52d7b6f1dacc002483267894bab14ef34dcaecc3ac768bed3da61ea848db39b9",
+        "signature_hint": "graph_ltl"
+      },
+      "RtR_signature_hash": "52d7b6f1dacc002483267894bab14ef34dcaecc3ac768bed3da61ea848db39b9",
+      "fidelity": {
+        "amplitude_ratio": 0.8922627496358567,
+        "center_max_abs_error": 0.01046690904430958,
+        "center_rmse": 0.005706992408895166,
+        "eidors_greit_figures_of_merit": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "eidors_noise_figure": 186050790650226.3,
+        "eidors_noise_figure_db": 285.39263039919626,
+        "eidors_solution_error": 0.0027087779429009846,
+        "eidors_solution_residual_norm": 0.049715395151414675,
+        "mean_frame_correlation": 0.9871391481154337,
+        "peak_time_mean_abs_error": 0.004658385093167705,
+        "relative_l2_error": 0.1406423937985622,
+        "rmse": 0.04613007047000315,
+        "spatial_metrics": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "speed_abs_error": 0.015984540083333942,
+        "speed_estimate": 0.623387815906723,
+        "speed_true": 0.6393723559900569
+      },
+      "matrix_delta_fro_vs_laplace": 0.0,
+      "mode": "curvature",
+      "online_metadata": {
+        "adjoint_solve_count": 0,
+        "backend": "numpy",
+        "batched": true,
+        "delta_v_shape": [
+          24,
+          20
+        ],
+        "device_effective": "cpu",
+        "device_requested": "cpu",
+        "fallback_reason": null,
+        "forward_solve_count": 0,
+        "host_device_transfer": "none",
+        "jacobian_rebuild_count": 0,
+        "ksp_solve_count": 0,
+        "n_frames": 24,
+        "online_hot_path": "rm_matmul",
+        "output_shape": [
+          24,
+          32
+        ],
+        "rm_cache_key": null,
+        "rm_dtype": "float64",
+        "rm_matrix_resident": "cpu",
+        "rm_persistent": true,
+        "rm_prepare_mode": "per_call",
+        "rm_shape": [
+          32,
+          20
+        ],
+        "rm_tensor_reused": false
+      },
+      "reconstruction_delta_l2_vs_laplace": 0.0,
+      "reconstruction_delta_max_abs_vs_laplace": 0.0,
+      "regularization_source": "provided_graph_ltl",
+      "rm_shape": [
+        32,
+        20
+      ]
+    },
+    "graph_ltl": {
+      "RtR_metadata": {
+        "kind": "sparse",
+        "name": "graph_ltl",
+        "nnz": 94,
+        "prior_family": "graph_ltl",
+        "regularization_source": "provided_graph_ltl",
+        "schema": "pyeidors-rtr-prior-v1",
+        "shape": [
+          32,
+          32
+        ],
+        "signature_hash": "52d7b6f1dacc002483267894bab14ef34dcaecc3ac768bed3da61ea848db39b9",
+        "signature_hint": "graph_ltl"
+      },
+      "RtR_signature_hash": "52d7b6f1dacc002483267894bab14ef34dcaecc3ac768bed3da61ea848db39b9",
+      "fidelity": {
+        "amplitude_ratio": 0.8922627496358567,
+        "center_max_abs_error": 0.01046690904430958,
+        "center_rmse": 0.005706992408895166,
+        "eidors_greit_figures_of_merit": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "eidors_noise_figure": 186050790650226.3,
+        "eidors_noise_figure_db": 285.39263039919626,
+        "eidors_solution_error": 0.0027087779429009846,
+        "eidors_solution_residual_norm": 0.049715395151414675,
+        "mean_frame_correlation": 0.9871391481154337,
+        "peak_time_mean_abs_error": 0.004658385093167705,
+        "relative_l2_error": 0.1406423937985622,
+        "rmse": 0.04613007047000315,
+        "spatial_metrics": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "speed_abs_error": 0.015984540083333942,
+        "speed_estimate": 0.623387815906723,
+        "speed_true": 0.6393723559900569
+      },
+      "matrix_delta_fro_vs_laplace": 0.0,
+      "mode": "graph_ltl",
+      "online_metadata": {
+        "adjoint_solve_count": 0,
+        "backend": "numpy",
+        "batched": true,
+        "delta_v_shape": [
+          24,
+          20
+        ],
+        "device_effective": "cpu",
+        "device_requested": "cpu",
+        "fallback_reason": null,
+        "forward_solve_count": 0,
+        "host_device_transfer": "none",
+        "jacobian_rebuild_count": 0,
+        "ksp_solve_count": 0,
+        "n_frames": 24,
+        "online_hot_path": "rm_matmul",
+        "output_shape": [
+          24,
+          32
+        ],
+        "rm_cache_key": null,
+        "rm_dtype": "float64",
+        "rm_matrix_resident": "cpu",
+        "rm_persistent": true,
+        "rm_prepare_mode": "per_call",
+        "rm_shape": [
+          32,
+          20
+        ],
+        "rm_tensor_reused": false
+      },
+      "reconstruction_delta_l2_vs_laplace": 0.0,
+      "reconstruction_delta_max_abs_vs_laplace": 0.0,
+      "regularization_source": "provided_graph_ltl",
+      "rm_shape": [
+        32,
+        20
+      ]
+    },
+    "laplace": {
+      "RtR_metadata": {
+        "kind": "sparse",
+        "name": "laplace",
+        "nnz": 94,
+        "prior_family": "laplace",
+        "regularization_source": "provided_laplace",
+        "schema": "pyeidors-rtr-prior-v1",
+        "shape": [
+          32,
+          32
+        ],
+        "signature_hash": "5638d4057e738c7c805bdb7e73ad058833f97973a09c2b52aab4638f72c940b4",
+        "signature_hint": "laplace"
+      },
+      "RtR_signature_hash": "5638d4057e738c7c805bdb7e73ad058833f97973a09c2b52aab4638f72c940b4",
+      "fidelity": {
+        "amplitude_ratio": 0.8922627496358567,
+        "center_max_abs_error": 0.01046690904430958,
+        "center_rmse": 0.005706992408895166,
+        "eidors_greit_figures_of_merit": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "eidors_noise_figure": 186050790650226.3,
+        "eidors_noise_figure_db": 285.39263039919626,
+        "eidors_solution_error": 0.0027087779429009846,
+        "eidors_solution_residual_norm": 0.049715395151414675,
+        "mean_frame_correlation": 0.9871391481154337,
+        "peak_time_mean_abs_error": 0.004658385093167705,
+        "relative_l2_error": 0.1406423937985622,
+        "rmse": 0.04613007047000315,
+        "spatial_metrics": {
+          "AR": 0.9997587002075153,
+          "PE": 0.004994860589115473,
+          "RES": 0.2734375,
+          "RNG": 0.04549797126011229,
+          "SD": 0.0
+        },
+        "speed_abs_error": 0.015984540083333942,
+        "speed_estimate": 0.623387815906723,
+        "speed_true": 0.6393723559900569
+      },
+      "matrix_delta_fro_vs_laplace": 0.0,
+      "mode": "laplace",
+      "online_metadata": {
+        "adjoint_solve_count": 0,
+        "backend": "numpy",
+        "batched": true,
+        "delta_v_shape": [
+          24,
+          20
+        ],
+        "device_effective": "cpu",
+        "device_requested": "cpu",
+        "fallback_reason": null,
+        "forward_solve_count": 0,
+        "host_device_transfer": "none",
+        "jacobian_rebuild_count": 0,
+        "ksp_solve_count": 0,
+        "n_frames": 24,
+        "online_hot_path": "rm_matmul",
+        "output_shape": [
+          24,
+          32
+        ],
+        "rm_cache_key": null,
+        "rm_dtype": "float64",
+        "rm_matrix_resident": "cpu",
+        "rm_persistent": true,
+        "rm_prepare_mode": "per_call",
+        "rm_shape": [
+          32,
+          20
+        ],
+        "rm_tensor_reused": false
+      },
+      "reconstruction_delta_l2_vs_laplace": 0.0,
+      "reconstruction_delta_max_abs_vs_laplace": 0.0,
+      "regularization_source": "provided_laplace",
+      "rm_shape": [
+        32,
+        20
+      ]
+    },
+    "tv_irls": {
+      "RtR_metadata": {
+        "beta": 0.0001,
+        "beta_floor": 1e-12,
+        "difference_operator_shape": [
+          31,
+          32
+        ],
+        "effective_beta": 0.0001,
+        "graph_weight": "unit",
+        "irls_iteration": 3,
+        "kind": "sparse",
+        "name": "tv_irls",
+        "nnz": 94,
+        "prior_family": "tv_irls",
+        "regularization_source": "tv_irls_graph_difference_operator",
+        "schema": "pyeidors-rtr-prior-v1",
+        "shape": [
+          32,
+          32
+        ],
+        "signature_hash": "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362",
+        "signature_hint": "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04",
+        "stale_rm_token": "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04",
+        "state_signature": "a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297",
+        "weight_max": 99.99471191119575,
+        "weight_mean": 71.61205921751325,
+        "weight_min": 4.176475499142196
+      },
+      "RtR_signature_hash": "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362",
+      "fidelity": {
+        "amplitude_ratio": 0.7989984939130609,
+        "center_max_abs_error": 0.003167247660989192,
+        "center_rmse": 0.0015701162717956204,
+        "eidors_greit_figures_of_merit": {
+          "AR": 0.999890113991749,
+          "PE": 0.0013320806535920791,
+          "RES": 0.2669270833333333,
+          "RNG": 0.014057869809018094,
+          "SD": 0.0
+        },
+        "eidors_noise_figure": 265635373759513.62,
+        "eidors_noise_figure_db": 288.4857181613308,
+        "eidors_solution_error": 0.00545312553136548,
+        "eidors_solution_residual_norm": 0.1000836156808638,
+        "mean_frame_correlation": 0.9729543058417814,
+        "peak_time_mean_abs_error": 0.031055900621118016,
+        "relative_l2_error": 0.2008031601979072,
+        "rmse": 0.06586253035337264,
+        "spatial_metrics": {
+          "AR": 0.999890113991749,
+          "PE": 0.0013320806535920791,
+          "RES": 0.2669270833333333,
+          "RNG": 0.014057869809018094,
+          "SD": 0.0
+        },
+        "speed_abs_error": 0.0043947795340812945,
+        "speed_estimate": 0.6349775764559756,
+        "speed_true": 0.6393723559900569
+      },
+      "matrix_delta_fro_vs_laplace": null,
+      "mode": "tv_irls",
+      "online_metadata": {
+        "adjoint_solve_count": 0,
+        "forward_solve_count": 0,
+        "jacobian_rebuild_count": 0,
+        "ksp_solve_count": 0,
+        "online_hot_path": "iterative_rm_rebuild"
+      },
+      "reconstruction_delta_l2_vs_laplace": 1.0541250440149876,
+      "reconstruction_delta_max_abs_vs_laplace": 0.1015110544390424,
+      "regularization_source": "iterative_tv_irls",
+      "rm_shape": [
+        32,
+        20
+      ],
+      "tv_irls_metadata": {
+        "final_RtR_signature_hashes": [
+          "5f1605356136dc80ed2db5c8ceb7233ace94ca74b94b92ec74e39fe29ffa3098",
+          "6a47b0be2c98d31d42a1f5e204aacdb406e1a5681f82ce014e2ade7aaa038d93",
+          "9929ef3d3d10c0fb6f81c8d2c61fc22374b126d3277f53001ef9766f3c169588",
+          "e834e1c1b75726a030585c4012eafb6a9b100a8e1c5d5bea3e0e652ceb0518e7",
+          "22b13643bad846731c1d62a2aa9c97c0f2edd7c7cca8e1c50b020279e63eeee4",
+          "9f9fbfccc40f07a0ea66655923d401bcb4ad86cccb1aa89405f398fdbb10db76",
+          "234b7ea797a3091ad3da49ba20460e090fc712c5e8e3cb6b95b75d6d55dee00b",
+          "a87f72c1d454340585807683e68acbe6dc1ad0bb65322fd5198b9b72d1410c02",
+          "605e50ee8c43a299de52c812c705d2134ed15213b783d4bea8516028d069ec99",
+          "03de6e7bec2c44d5565042d6bfd082f9c297d5baaf7097ae51a2cabee4983862",
+          "4e60d677415550631e9486a0fdb7f7bcbc940fb69e8b82c8db5273bced609640",
+          "29b09e206a72aa3b76fecebfc6dcb2f34c71d998b7bea69a14e1ccce9c34c0a4",
+          "f95228740b77752e67019d64f582298d65c821dc573b8dffcf72fb38f4d43352",
+          "82e248c82b4683e0897054008f9b0cbbf60271e537be386c47a7b2f616a1a120",
+          "f23b9219a2d71c6bfe45913fd3cf789deb802fc485b3794062022d2eeff02dc4",
+          "f7292727f197de8715044bcce01b81be1013c029d9c39273d464d2b9fd6d4e5d",
+          "67d2c68f0573026a4d17604374df1aecc529fd543212bc7b9af32af8b276c4f3",
+          "dbac21e2e82343607e43375d112eeed229a044fa17f2847a12d16eef6023269f",
+          "8360b3efa45203d533f54fdb79440153553ccbc1723c3045d67649019ad6688a",
+          "77afd0365e871fe5d7ed74d5f89553b91107fc7d68e2ec3d2ab4ec15e1574165",
+          "98f26921089f2f08477cfbcd66b5da245a797e2ed8da5305b92cfdaebc802128",
+          "26bfd1b53741b77d9e3551a2149e9350c79ce58dfa71b0951b6e26478c9bd467",
+          "742f664a51ab7ff09a4ed3c785dfa320c307e82c3d1bcfae2021c330eac8c8d1",
+          "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362"
+        ],
+        "frame_iterations": [
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4,
+          4
+        ],
+        "frame_metadata": [
+          {
+            "RtR_signature_hash_history": [
+              "6718973d1cca0f18f817fac1ac5f89dfed853f215ac84de765998e22cb523bb5",
+              "1e282fcc861d3299a6e287030c4c95a5764c4ac06ec4c85748a7d67d09710531",
+              "e2fb1664b9b6ae37c71c195cebae356486ad890bf12494f0c36257e4cb93c1b0",
+              "5f1605356136dc80ed2db5c8ceb7233ace94ca74b94b92ec74e39fe29ffa3098"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "5f1605356136dc80ed2db5c8ceb7233ace94ca74b94b92ec74e39fe29ffa3098",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "5f1605356136dc80ed2db5c8ceb7233ace94ca74b94b92ec74e39fe29ffa3098",
+              "signature_hint": "tv_irls:b91e0c3e69a6911afa20b2f8f0e29aea4faa0fbb3d26107ce611b7d5db9c09aa:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:b91e0c3e69a6911afa20b2f8f0e29aea4faa0fbb3d26107ce611b7d5db9c09aa:beta=1.0000000000000000e-04",
+              "state_signature": "b91e0c3e69a6911afa20b2f8f0e29aea4faa0fbb3d26107ce611b7d5db9c09aa",
+              "weight_max": 99.9549735317154,
+              "weight_mean": 72.52783006061716,
+              "weight_min": 3.9719044013631133
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.011079143226198452,
+              0.010042721182704347,
+              0.009793720108673607,
+              0.00964808661632515,
+              0.009558921592889253
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:ddb0c7fed328e2202b7261225adeb4a23db3c4be70265b4dcc4b0b4dd3b9abe2:beta=1.0000000000000000e-04",
+              "tv_irls:b2982c20ffcd4628289b36163dca5255a775b89708b614702dbf411bbf4708fc:beta=1.0000000000000000e-04",
+              "tv_irls:db8ac7fba85665a35d3ab544046627e2d783ab80710c420b56c3cf46affc0fa2:beta=1.0000000000000000e-04",
+              "tv_irls:b91e0c3e69a6911afa20b2f8f0e29aea4faa0fbb3d26107ce611b7d5db9c09aa:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "ed71888b32f2a975a71d2c4cf015f491c66ae81ac709a49139c918d4750355b9",
+              "d5f1a28c0c8e85e60f6e79fafda946c74ced37ca4ee26a0c1c38d3dd9a5dd370",
+              "ce0a7de7aa44174381bb01fac9e805f8ea2cf9d33374631512a3c7e38f6e23ff",
+              "6a47b0be2c98d31d42a1f5e204aacdb406e1a5681f82ce014e2ade7aaa038d93"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "6a47b0be2c98d31d42a1f5e204aacdb406e1a5681f82ce014e2ade7aaa038d93",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "6a47b0be2c98d31d42a1f5e204aacdb406e1a5681f82ce014e2ade7aaa038d93",
+              "signature_hint": "tv_irls:066b2cde74afded3d5e6f6fd736148a3c137440d642ba086dfe91aa9b1273aad:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:066b2cde74afded3d5e6f6fd736148a3c137440d642ba086dfe91aa9b1273aad:beta=1.0000000000000000e-04",
+              "state_signature": "066b2cde74afded3d5e6f6fd736148a3c137440d642ba086dfe91aa9b1273aad",
+              "weight_max": 99.98719135872433,
+              "weight_mean": 69.7948668087267,
+              "weight_min": 3.686511338708557
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.011264989978452811,
+              0.010429409722198805,
+              0.010177358185132187,
+              0.010027794280188889,
+              0.009931534003609778
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:9956a19998a70c6c733c4781730c02d19b22f0ea95a34e426e878985eb9139b6:beta=1.0000000000000000e-04",
+              "tv_irls:355f66b3c7128f51f1f1c8c861bcc344d1509695e6ac1d66f0072faf5d23cc9c:beta=1.0000000000000000e-04",
+              "tv_irls:8b6cb1df924ecb72f6ab33a4e2c9de32dbcdd3a511e8c861d25f4fc5e44ccdc7:beta=1.0000000000000000e-04",
+              "tv_irls:066b2cde74afded3d5e6f6fd736148a3c137440d642ba086dfe91aa9b1273aad:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "380e069c5fbf79696faac3babd273f3f727ecf2f44f947c0efdcd7d52396d795",
+              "d2d1bd256c40b9a51f098899d1bec67c0af02c372dc70bedf2648dd538cf0235",
+              "cfa3fd1700abde86f7cf20cb271cd37a037e0678ff90fe6f2917f7f83bddb0f4",
+              "9929ef3d3d10c0fb6f81c8d2c61fc22374b126d3277f53001ef9766f3c169588"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "9929ef3d3d10c0fb6f81c8d2c61fc22374b126d3277f53001ef9766f3c169588",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "9929ef3d3d10c0fb6f81c8d2c61fc22374b126d3277f53001ef9766f3c169588",
+              "signature_hint": "tv_irls:13e624c3fb2bbe998fffe1cc653ab269a7955a02de43558e1817f40d14d0191f:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:13e624c3fb2bbe998fffe1cc653ab269a7955a02de43558e1817f40d14d0191f:beta=1.0000000000000000e-04",
+              "state_signature": "13e624c3fb2bbe998fffe1cc653ab269a7955a02de43558e1817f40d14d0191f",
+              "weight_max": 99.99977114633616,
+              "weight_mean": 68.02194288573803,
+              "weight_min": 4.16102154691994
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.01151129784739446,
+              0.010602347450367186,
+              0.010331384929607048,
+              0.01017816831538436,
+              0.010081392415214517
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:ab34e2fa37b76bba7ea5fc9447abd0912cddb00962ec056bf83a8cf0b5973353:beta=1.0000000000000000e-04",
+              "tv_irls:c24ba0f5e3d8b8496ca6ccc180885141cf348b53a05b99181350d2d59170c7fa:beta=1.0000000000000000e-04",
+              "tv_irls:cb8c15884741631a42b9bd99c4540134abf258420fd6467a9e4d072e78d395b9:beta=1.0000000000000000e-04",
+              "tv_irls:13e624c3fb2bbe998fffe1cc653ab269a7955a02de43558e1817f40d14d0191f:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "f88167b09629542275d97d8b828f1d72133f079122d230fe2c18b1d442c0c135",
+              "9c7a34a4134c6cef3a0cd83a8aab9b31a2e44548dd8025719197ee41657b99b3",
+              "2988645289138ebaea4f83f17cd108697c74f8c1e2eae1f3e9e3b18376aed849",
+              "e834e1c1b75726a030585c4012eafb6a9b100a8e1c5d5bea3e0e652ceb0518e7"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "e834e1c1b75726a030585c4012eafb6a9b100a8e1c5d5bea3e0e652ceb0518e7",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "e834e1c1b75726a030585c4012eafb6a9b100a8e1c5d5bea3e0e652ceb0518e7",
+              "signature_hint": "tv_irls:782222a2b19cceb87d898eb30accb7cf9945665d5987e7a1ff90941ee348ac38:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:782222a2b19cceb87d898eb30accb7cf9945665d5987e7a1ff90941ee348ac38:beta=1.0000000000000000e-04",
+              "state_signature": "782222a2b19cceb87d898eb30accb7cf9945665d5987e7a1ff90941ee348ac38",
+              "weight_max": 99.99815950514233,
+              "weight_mean": 67.31355752217516,
+              "weight_min": 4.025295754368057
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.011984220620002737,
+              0.01089613278314575,
+              0.01062177969746187,
+              0.010468881956408518,
+              0.010369195130369194
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:36b597ac4920938cd20a2fab6b83842d4a7e90838dcf709c7473c896c162dd5e:beta=1.0000000000000000e-04",
+              "tv_irls:cc4607e200a419d8ed94691ef210f64353ce4a7d4fe0d97c7abddfe29ccb73e6:beta=1.0000000000000000e-04",
+              "tv_irls:9a039752301187eece58d3a4454d1510b2821ceb4b3c9b7618e969401e7bfbba:beta=1.0000000000000000e-04",
+              "tv_irls:782222a2b19cceb87d898eb30accb7cf9945665d5987e7a1ff90941ee348ac38:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "53226775f259f82d895cdb02532d7fc3518fc9c0cffe67b932b38a2c9a00f1d2",
+              "99c0d5431c6227d9b67d610597c6ff3165d6867daa2f026d6950b171763b432d",
+              "e86e70559e03535f6bceb5fd9b6ca9f4bc14ae6a929fd73557e6f83dd816eea5",
+              "22b13643bad846731c1d62a2aa9c97c0f2edd7c7cca8e1c50b020279e63eeee4"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "22b13643bad846731c1d62a2aa9c97c0f2edd7c7cca8e1c50b020279e63eeee4",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "22b13643bad846731c1d62a2aa9c97c0f2edd7c7cca8e1c50b020279e63eeee4",
+              "signature_hint": "tv_irls:4a69354e27494d6c00ede8bf81f86cc42c588d2df9c1ec5461345020da32afbb:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:4a69354e27494d6c00ede8bf81f86cc42c588d2df9c1ec5461345020da32afbb:beta=1.0000000000000000e-04",
+              "state_signature": "4a69354e27494d6c00ede8bf81f86cc42c588d2df9c1ec5461345020da32afbb",
+              "weight_max": 99.98753994221241,
+              "weight_mean": 68.3248116468775,
+              "weight_min": 3.743164702668328
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.012658419642993406,
+              0.011290000944182976,
+              0.011017282915456447,
+              0.010868974583338839,
+              0.01076729672714107
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:e0584cc99aad69c2250b33269279bc3f3dddcc4566dce90de76fe35dccc14398:beta=1.0000000000000000e-04",
+              "tv_irls:855cd4aafcbbecc187d90d3786d6e7601a741321b7e704ee319888abfe7d4b0f:beta=1.0000000000000000e-04",
+              "tv_irls:c6b8422d0485dedc6f5ddced370b4e2d6409536e8e8cd93d72c0b549ff88c618:beta=1.0000000000000000e-04",
+              "tv_irls:4a69354e27494d6c00ede8bf81f86cc42c588d2df9c1ec5461345020da32afbb:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "742130c1fc95a79c45cf16cb78a88a2cf79bf68324f06a2ff0f2806eec8f72b1",
+              "b183a8c4045fb755f8b1eaaff630b5269560525f4f0391c047872f6f2c647324",
+              "4a6f41b95ab4e84d18bfbe585412473d6d890a118cc2d99b3eabd911ccb2c25f",
+              "9f9fbfccc40f07a0ea66655923d401bcb4ad86cccb1aa89405f398fdbb10db76"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "9f9fbfccc40f07a0ea66655923d401bcb4ad86cccb1aa89405f398fdbb10db76",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "9f9fbfccc40f07a0ea66655923d401bcb4ad86cccb1aa89405f398fdbb10db76",
+              "signature_hint": "tv_irls:cc4151d77b45824800b7626522500a499686d1914253936e5ef6921f50f3028f:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:cc4151d77b45824800b7626522500a499686d1914253936e5ef6921f50f3028f:beta=1.0000000000000000e-04",
+              "state_signature": "cc4151d77b45824800b7626522500a499686d1914253936e5ef6921f50f3028f",
+              "weight_max": 99.99498193670463,
+              "weight_mean": 69.01636105603562,
+              "weight_min": 3.6689737196228207
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013293809646269592,
+              0.011653663348110703,
+              0.011369788959816232,
+              0.011212014068186088,
+              0.011112689221492743
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:9c279bfb01605721fa80e44fb5ea4c468f5401ff6a7f8985c9894221ba660b02:beta=1.0000000000000000e-04",
+              "tv_irls:c9937ce5b23fcc0fe292fabead31f49464be060b9347af35c71adfcf902be5ee:beta=1.0000000000000000e-04",
+              "tv_irls:ee7a310accad530e8376111477e26071de5f5e7025740f93de79fa6a7e28ae36:beta=1.0000000000000000e-04",
+              "tv_irls:cc4151d77b45824800b7626522500a499686d1914253936e5ef6921f50f3028f:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "333b0f4a7916a4f2dc6b95bd7bb13456851efe17a05d27af07498853aa21b238",
+              "df2d74d443e5d99a6b210c30d74e71ba9a92af274fa2346a26feca5c8d74dd86",
+              "05b56ac2a2b34533ee3719aa286966b726b837a83f8d4597ff9d86c93cd50bbb",
+              "234b7ea797a3091ad3da49ba20460e090fc712c5e8e3cb6b95b75d6d55dee00b"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "234b7ea797a3091ad3da49ba20460e090fc712c5e8e3cb6b95b75d6d55dee00b",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "234b7ea797a3091ad3da49ba20460e090fc712c5e8e3cb6b95b75d6d55dee00b",
+              "signature_hint": "tv_irls:375d54fcdea5fec36aa94483c0b9925a84e69b84f8a747922c1309ca20ea2c1c:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:375d54fcdea5fec36aa94483c0b9925a84e69b84f8a747922c1309ca20ea2c1c:beta=1.0000000000000000e-04",
+              "state_signature": "375d54fcdea5fec36aa94483c0b9925a84e69b84f8a747922c1309ca20ea2c1c",
+              "weight_max": 99.9973362053133,
+              "weight_mean": 68.44585970230838,
+              "weight_min": 3.6680719432990014
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013388066656611703,
+              0.01196315570354665,
+              0.011613562041863567,
+              0.011440177703832259,
+              0.011341202077568844
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:bd6544f757aef713fd89f1c7b57eda2061b83c8f5ec74b1b6457a76b8b50ce0d:beta=1.0000000000000000e-04",
+              "tv_irls:b46f7dad7231ec2278768dee3f264724b169ed93d09e2d4c45328e7879cda31c:beta=1.0000000000000000e-04",
+              "tv_irls:7b08ca0adb168e20391c91f336538d0c2960a7cdc5122a1da6574d253474d7ed:beta=1.0000000000000000e-04",
+              "tv_irls:375d54fcdea5fec36aa94483c0b9925a84e69b84f8a747922c1309ca20ea2c1c:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "dfcbf84d45f0d10044e6f468d4058b5464896d43e1ac4514f50d6f4d91a49c8a",
+              "3a8a33ba31196bca8f0328bdc509d6cb7ac30c9d57606ba26b19bb006d7038ef",
+              "c652bd59c54105e0a2b2cf05f411d0eb8864164117ce457723ba64b6b22beca9",
+              "a87f72c1d454340585807683e68acbe6dc1ad0bb65322fd5198b9b72d1410c02"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "a87f72c1d454340585807683e68acbe6dc1ad0bb65322fd5198b9b72d1410c02",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "a87f72c1d454340585807683e68acbe6dc1ad0bb65322fd5198b9b72d1410c02",
+              "signature_hint": "tv_irls:5fb36b8be9c3eb65efa35c145efab144613ea2dd69d4bb13b8a4fd10f4107c1e:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:5fb36b8be9c3eb65efa35c145efab144613ea2dd69d4bb13b8a4fd10f4107c1e:beta=1.0000000000000000e-04",
+              "state_signature": "5fb36b8be9c3eb65efa35c145efab144613ea2dd69d4bb13b8a4fd10f4107c1e",
+              "weight_max": 99.78988434683725,
+              "weight_mean": 66.7020961256591,
+              "weight_min": 3.6289368442669825
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013400608760154782,
+              0.012144535869767863,
+              0.01177040684161065,
+              0.011583941372955011,
+              0.01147356817132314
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:5914dd0140015f4e3757b8d14594bfab0b809de9c19183851cd163defff6947f:beta=1.0000000000000000e-04",
+              "tv_irls:d8a2f3602d0ab6fe0de95fbc9f89465bc37a72435d47554ac1af1431ff28cc22:beta=1.0000000000000000e-04",
+              "tv_irls:4089bfe939803f366fb949dc7a786ac4bebe41a3160f199c8f11df25fe77f830:beta=1.0000000000000000e-04",
+              "tv_irls:5fb36b8be9c3eb65efa35c145efab144613ea2dd69d4bb13b8a4fd10f4107c1e:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "fcf29e95f859d659f1cfcf06d19cca6a682ff88d364c5be30d9288556f4ebe39",
+              "6bad0f17c3431257b861dcc9afabe1493c56e5044639534663964db4fc7ef6ff",
+              "ce4f8c64de6fd25a16b7a92c6e71b0b1807e8ae19ad16416f211ceb62302ef03",
+              "605e50ee8c43a299de52c812c705d2134ed15213b783d4bea8516028d069ec99"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "605e50ee8c43a299de52c812c705d2134ed15213b783d4bea8516028d069ec99",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "605e50ee8c43a299de52c812c705d2134ed15213b783d4bea8516028d069ec99",
+              "signature_hint": "tv_irls:c0af3037ad76ee6b81f350187db2b12c65f40f87afae2f9a05e43a97e1b6d302:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:c0af3037ad76ee6b81f350187db2b12c65f40f87afae2f9a05e43a97e1b6d302:beta=1.0000000000000000e-04",
+              "state_signature": "c0af3037ad76ee6b81f350187db2b12c65f40f87afae2f9a05e43a97e1b6d302",
+              "weight_max": 99.96243572492652,
+              "weight_mean": 66.01650651520735,
+              "weight_min": 3.7593710665006803
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013319369079237706,
+              0.012133986307952625,
+              0.011766752266035583,
+              0.011580976450411107,
+              0.011468938060819472
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:84f11fcdd83e420f842851de5e6301f4607b7eb0533317949057c1cf2aeb7a83:beta=1.0000000000000000e-04",
+              "tv_irls:5b91edacc7d0eb059ac9d61eaec025032139e1f815cb2e1608c088cfcd1df95d:beta=1.0000000000000000e-04",
+              "tv_irls:83d165e33ce2172f0e9310f7f5356255d09b003d2c06ba14d44178cf30305227:beta=1.0000000000000000e-04",
+              "tv_irls:c0af3037ad76ee6b81f350187db2b12c65f40f87afae2f9a05e43a97e1b6d302:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "fcb5159a4620479c662ea71761b406ceef6560c339e335fef865437c74593742",
+              "3bf2044024dd82bd8e1b38f080d23e54f383adec7c24652056faa453ef13254a",
+              "81fbde085051244c72d1f9989bd97af5575fccb0a4223280fb8ed0afaf36d2ff",
+              "03de6e7bec2c44d5565042d6bfd082f9c297d5baaf7097ae51a2cabee4983862"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "03de6e7bec2c44d5565042d6bfd082f9c297d5baaf7097ae51a2cabee4983862",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "03de6e7bec2c44d5565042d6bfd082f9c297d5baaf7097ae51a2cabee4983862",
+              "signature_hint": "tv_irls:f61c4b3dfdeda27293b1c2ec3b8fc70459c24af62e642808b08221fb911da448:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:f61c4b3dfdeda27293b1c2ec3b8fc70459c24af62e642808b08221fb911da448:beta=1.0000000000000000e-04",
+              "state_signature": "f61c4b3dfdeda27293b1c2ec3b8fc70459c24af62e642808b08221fb911da448",
+              "weight_max": 99.89743780858664,
+              "weight_mean": 67.08032116166768,
+              "weight_min": 3.595228436134273
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013629310787564346,
+              0.012273781774740342,
+              0.011913755448257292,
+              0.011728181592247802,
+              0.01162034165057649
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:541d0d8737f37d6127e11bb16caf27e6ed764d543a410be136ccc76258e1b731:beta=1.0000000000000000e-04",
+              "tv_irls:bda5053481ee5753b4cc6a7ca699c589b33816a2588c9568c654dec60ae5d058:beta=1.0000000000000000e-04",
+              "tv_irls:10cd722b4c92a492cd3737681928892c4669be7d4136da6be1573f6a205d38b5:beta=1.0000000000000000e-04",
+              "tv_irls:f61c4b3dfdeda27293b1c2ec3b8fc70459c24af62e642808b08221fb911da448:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "229555604fe17274869a1856e1c39025dffbbdcce785b375f8ce4560c687b0e7",
+              "330f01ce1e3dbd8a8781ddfbcfc0a7d0c2cd90864d29d2fdea9a886712066f9e",
+              "3862b256b96aa61057a382f72b0aaf8148e6e8a8a2794e70a3514a211341aea8",
+              "4e60d677415550631e9486a0fdb7f7bcbc940fb69e8b82c8db5273bced609640"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "4e60d677415550631e9486a0fdb7f7bcbc940fb69e8b82c8db5273bced609640",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "4e60d677415550631e9486a0fdb7f7bcbc940fb69e8b82c8db5273bced609640",
+              "signature_hint": "tv_irls:1f133b93c2a24f192441dd752653557ea97cd733f63db8b4926777fd2c95ba5d:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:1f133b93c2a24f192441dd752653557ea97cd733f63db8b4926777fd2c95ba5d:beta=1.0000000000000000e-04",
+              "state_signature": "1f133b93c2a24f192441dd752653557ea97cd733f63db8b4926777fd2c95ba5d",
+              "weight_max": 99.98302681391323,
+              "weight_mean": 68.55621405492268,
+              "weight_min": 3.351749226039183
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.014152280370660533,
+              0.012391688641155519,
+              0.012056947390320167,
+              0.011882135944740295,
+              0.011769133749520001
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:9f61fc2aa05fa977e9656217d945fc2e612c2c52eabc1a51bc68cf5284c25da0:beta=1.0000000000000000e-04",
+              "tv_irls:9a5f57f137c2a8faaf9c14ac5a8c58a9f1fb0f5b6c5b756707fb5ad8e78100c7:beta=1.0000000000000000e-04",
+              "tv_irls:7d0fd09f8d82ae8cf9c766e3a1b03fd6e75aa83281ce0b8828c405ccd45f846a:beta=1.0000000000000000e-04",
+              "tv_irls:1f133b93c2a24f192441dd752653557ea97cd733f63db8b4926777fd2c95ba5d:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "97b20391e01be94c545fbf9044bfe4d1ee614c1ebc19ff0e62cc11b054b2641f",
+              "fc6db91559440a664b2092fbabe155c8b8430baebb58ed7a399c9e3db476e8c2",
+              "1109471d0e2099b63878e23641fdf6dfb13a389c4514fab2db6362b9b35ec4a2",
+              "29b09e206a72aa3b76fecebfc6dcb2f34c71d998b7bea69a14e1ccce9c34c0a4"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "29b09e206a72aa3b76fecebfc6dcb2f34c71d998b7bea69a14e1ccce9c34c0a4",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "29b09e206a72aa3b76fecebfc6dcb2f34c71d998b7bea69a14e1ccce9c34c0a4",
+              "signature_hint": "tv_irls:976879d1ce9ab3ec0bf546520bb55157cb92fb8376cef0ae97c3491790f1e73f:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:976879d1ce9ab3ec0bf546520bb55157cb92fb8376cef0ae97c3491790f1e73f:beta=1.0000000000000000e-04",
+              "state_signature": "976879d1ce9ab3ec0bf546520bb55157cb92fb8376cef0ae97c3491790f1e73f",
+              "weight_max": 99.92901519278251,
+              "weight_mean": 68.29937578840563,
+              "weight_min": 3.3432470666215734
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.014233964418779051,
+              0.012396318005471144,
+              0.01207700702641691,
+              0.01190669405514493,
+              0.011789020020788604
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:1b80c87a722524ab2373424370a8921edf377d370e925a7e9df253d9487ced45:beta=1.0000000000000000e-04",
+              "tv_irls:8a71a95d655e239900e8e139569cbba62f5688f4edf98481929d2bf95506a8fb:beta=1.0000000000000000e-04",
+              "tv_irls:41a76a69ff82841ec5b794037dcc3759a6d5b5a7288a9a1b840a73ca06cfc110:beta=1.0000000000000000e-04",
+              "tv_irls:976879d1ce9ab3ec0bf546520bb55157cb92fb8376cef0ae97c3491790f1e73f:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "89c02afa3dfe20b098140ea569b5c6a0319b7ca0aec07f7c725c3966ee65f415",
+              "ddd335c2ead21a2b1c84f515edd45699a008dead0a33ca25440694500199e97e",
+              "fb56fa33d6d84f9781161e9292f57b902606f77dbefcc31d185b40d8caf8fc82",
+              "f95228740b77752e67019d64f582298d65c821dc573b8dffcf72fb38f4d43352"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "f95228740b77752e67019d64f582298d65c821dc573b8dffcf72fb38f4d43352",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "f95228740b77752e67019d64f582298d65c821dc573b8dffcf72fb38f4d43352",
+              "signature_hint": "tv_irls:8614b01f66347d0b2079f704ae81dc55cf5c2c17c9c63a22d4a3db2468866bf9:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:8614b01f66347d0b2079f704ae81dc55cf5c2c17c9c63a22d4a3db2468866bf9:beta=1.0000000000000000e-04",
+              "state_signature": "8614b01f66347d0b2079f704ae81dc55cf5c2c17c9c63a22d4a3db2468866bf9",
+              "weight_max": 99.99999742312124,
+              "weight_mean": 66.5157182156012,
+              "weight_min": 3.4173816058736053
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013874187316054885,
+              0.012295992061615763,
+              0.011958339611705386,
+              0.011779480914500443,
+              0.011666225645453323
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:e28228591f664e9a72c2e844517ceb08d77839b082a172b2913d6b6dc7816157:beta=1.0000000000000000e-04",
+              "tv_irls:8293b721b909e0096d99947a44dcee75241bbc8edeb0a70c9507953d52fc0b4a:beta=1.0000000000000000e-04",
+              "tv_irls:ccc63b7f5c94d45215951fd02bf7e94c3feb7f27d4d6f4f5f42d0d16fcdc5b14:beta=1.0000000000000000e-04",
+              "tv_irls:8614b01f66347d0b2079f704ae81dc55cf5c2c17c9c63a22d4a3db2468866bf9:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "aec71402eedee830781965ec1c18f9556be45eeb4dc12ddeff23f727449ad523",
+              "16a211d75db2c512700180fb525d7c8467e9523f3290b61c0e8733adb6a17f1d",
+              "5c06e2a8bc0f702833a652a046e06c90f6d371dbe813d8ffe6b392bceba6193c",
+              "82e248c82b4683e0897054008f9b0cbbf60271e537be386c47a7b2f616a1a120"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "82e248c82b4683e0897054008f9b0cbbf60271e537be386c47a7b2f616a1a120",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "82e248c82b4683e0897054008f9b0cbbf60271e537be386c47a7b2f616a1a120",
+              "signature_hint": "tv_irls:38ceae0aa8e3f0f2bfb3981a29e3a536247212d72b906fb64f4924b729599a56:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:38ceae0aa8e3f0f2bfb3981a29e3a536247212d72b906fb64f4924b729599a56:beta=1.0000000000000000e-04",
+              "state_signature": "38ceae0aa8e3f0f2bfb3981a29e3a536247212d72b906fb64f4924b729599a56",
+              "weight_max": 99.99682066016955,
+              "weight_mean": 64.84803693819894,
+              "weight_min": 3.768662578196487
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013521104623341444,
+              0.012150515734361916,
+              0.01180959458589537,
+              0.011625287086658756,
+              0.011511120680562358
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:09bda4af3c9ac223310f5cfd01fd8b9a21c171f7de86fb0a0e76acd1c3b66a82:beta=1.0000000000000000e-04",
+              "tv_irls:9595ca620894297b67250ec295c1598b0432c39da536024cdb11d29163965f0c:beta=1.0000000000000000e-04",
+              "tv_irls:2f2a499f337b6306f174301d07f669b9b580f6a7894f341ca6102131037fcad5:beta=1.0000000000000000e-04",
+              "tv_irls:38ceae0aa8e3f0f2bfb3981a29e3a536247212d72b906fb64f4924b729599a56:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "ca7e6c72024a83173f239141506cab9dec050eed46dc8c5d54e1b2db923ac8fb",
+              "96263bc3e7ef2cc476f85e44064fdf83c221b067171e67114648eb3e7d982df3",
+              "afcc60c23a2ed9ed376e8ff394766b68918f08c347c8e3d6c8452e8a7df71311",
+              "f23b9219a2d71c6bfe45913fd3cf789deb802fc485b3794062022d2eeff02dc4"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "f23b9219a2d71c6bfe45913fd3cf789deb802fc485b3794062022d2eeff02dc4",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "f23b9219a2d71c6bfe45913fd3cf789deb802fc485b3794062022d2eeff02dc4",
+              "signature_hint": "tv_irls:9fc5a00b7c50634b74d7fde21b7efc1ac8a879cfe4513f1ad852b19f48a66e02:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:9fc5a00b7c50634b74d7fde21b7efc1ac8a879cfe4513f1ad852b19f48a66e02:beta=1.0000000000000000e-04",
+              "state_signature": "9fc5a00b7c50634b74d7fde21b7efc1ac8a879cfe4513f1ad852b19f48a66e02",
+              "weight_max": 99.99041952728251,
+              "weight_mean": 65.16117659371193,
+              "weight_min": 3.4943447600056174
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013390695069931857,
+              0.012154397925215785,
+              0.011819357846498142,
+              0.011639037490087855,
+              0.011520786263542158
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:4abf6ea54aaba6467e73cc7dadf663852f37e752df60e29bd9141edea1d6e685:beta=1.0000000000000000e-04",
+              "tv_irls:6ed1d3cbb5ac2cf82a4b477a575fd488eb4e9b5c77335ac464d809ebc24ac8f8:beta=1.0000000000000000e-04",
+              "tv_irls:aa4dba7cb7f571dbc4016b0b1c5dc4de6532b087df9ad93179914ad9f3af11d0:beta=1.0000000000000000e-04",
+              "tv_irls:9fc5a00b7c50634b74d7fde21b7efc1ac8a879cfe4513f1ad852b19f48a66e02:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "5c1561c5732f7c5cb5191342613473742fa1059cc64290ea7359da251146424e",
+              "57d591b7e2af23288f9ca969775c06c581b757e80751e5880da64c0b10ac857e",
+              "551d7444f63628ca64c2ce00c63b6c152ada15942051c2bc9d7625a47d070033",
+              "f7292727f197de8715044bcce01b81be1013c029d9c39273d464d2b9fd6d4e5d"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "f7292727f197de8715044bcce01b81be1013c029d9c39273d464d2b9fd6d4e5d",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "f7292727f197de8715044bcce01b81be1013c029d9c39273d464d2b9fd6d4e5d",
+              "signature_hint": "tv_irls:5a2139059ad121fb6af541b7bd346e2f56ee3a079008c28281be77da4d0e7bb1:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:5a2139059ad121fb6af541b7bd346e2f56ee3a079008c28281be77da4d0e7bb1:beta=1.0000000000000000e-04",
+              "state_signature": "5a2139059ad121fb6af541b7bd346e2f56ee3a079008c28281be77da4d0e7bb1",
+              "weight_max": 99.99228574723756,
+              "weight_mean": 67.23401176511756,
+              "weight_min": 3.4397110980394703
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013607267686602295,
+              0.012272540294034587,
+              0.01193662229594714,
+              0.011753298583882847,
+              0.01163852320635137
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:e1eb8236bf4ef46a7f3db06688959f2600a2053719a01a413c4096fd55cddf8b:beta=1.0000000000000000e-04",
+              "tv_irls:9547a7a1ce333edbe392db29ed66d6769c923d338f318ad8d1631deee7ab5c79:beta=1.0000000000000000e-04",
+              "tv_irls:04f320469099e3eb650affba7b83a736e22fef2d8b33dee07e80365e573b3527:beta=1.0000000000000000e-04",
+              "tv_irls:5a2139059ad121fb6af541b7bd346e2f56ee3a079008c28281be77da4d0e7bb1:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "3e257ac7589cb32994eb24291a8bbba299c814b4935356323ceee18eb37ea1cd",
+              "9d4d0c24bedcb16de450c5b24636d4eb78c30ab1dfb663883c2484cc7cfea4b7",
+              "4b094d037230f7c376a56724b89a60827c38fd5a2d6307e2bb53dd93954ebe44",
+              "67d2c68f0573026a4d17604374df1aecc529fd543212bc7b9af32af8b276c4f3"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "67d2c68f0573026a4d17604374df1aecc529fd543212bc7b9af32af8b276c4f3",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "67d2c68f0573026a4d17604374df1aecc529fd543212bc7b9af32af8b276c4f3",
+              "signature_hint": "tv_irls:1609c7ca7f5be2074275a1024b250a5dcccecbee70f61557a742d627a5348590:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:1609c7ca7f5be2074275a1024b250a5dcccecbee70f61557a742d627a5348590:beta=1.0000000000000000e-04",
+              "state_signature": "1609c7ca7f5be2074275a1024b250a5dcccecbee70f61557a742d627a5348590",
+              "weight_max": 99.99353866211749,
+              "weight_mean": 68.7033756405929,
+              "weight_min": 3.5956094618683356
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013826085054935476,
+              0.012311868404050593,
+              0.011965805194294644,
+              0.011781056182940135,
+              0.011675816254870422
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:4d90afd950ab5a928128f9d2ba438f1a0b30d2de305ac82d2e7b341784eaae12:beta=1.0000000000000000e-04",
+              "tv_irls:001bd2ed3f6618c0e61fc616f3c3f0fc16191a98b667e3b22a9c966cb5be59fd:beta=1.0000000000000000e-04",
+              "tv_irls:3574a7e00af8b18e3f68968afc13afeb6bb6a653608e5f12fca659018263dbbd:beta=1.0000000000000000e-04",
+              "tv_irls:1609c7ca7f5be2074275a1024b250a5dcccecbee70f61557a742d627a5348590:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "a80af508b3e2341b68a725bb5eaa4775bafa402bcdf5f5b04fac046509b87cbc",
+              "72255aad9d688185991581ac3b1b322ea0aeb1fb27d96df6b993bdb1aec759ca",
+              "8c01b506b51a7fc12b0ee6aa19a8109b9938cf6d3d6a9ea8987b15a50bd255c3",
+              "dbac21e2e82343607e43375d112eeed229a044fa17f2847a12d16eef6023269f"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "dbac21e2e82343607e43375d112eeed229a044fa17f2847a12d16eef6023269f",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "dbac21e2e82343607e43375d112eeed229a044fa17f2847a12d16eef6023269f",
+              "signature_hint": "tv_irls:48a5594ca7e944e8cfcbb837ea479abf0f6252412df32307b2c6ea0ee4457ac7:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:48a5594ca7e944e8cfcbb837ea479abf0f6252412df32307b2c6ea0ee4457ac7:beta=1.0000000000000000e-04",
+              "state_signature": "48a5594ca7e944e8cfcbb837ea479abf0f6252412df32307b2c6ea0ee4457ac7",
+              "weight_max": 99.99852885016763,
+              "weight_mean": 67.66091289030668,
+              "weight_min": 3.6418796190737828
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.013566252977027482,
+              0.011954690358979638,
+              0.011634732528737361,
+              0.011462540369017175,
+              0.011355968788258628
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:0e2dcd14ae5e12bb3b2f8497edc95e0f7d8254545d242eeabfa38af1ae300fa3:beta=1.0000000000000000e-04",
+              "tv_irls:030d83e5d476ee8c916db48e26754f8894ca8dc97740f12c83da1ce0e49e80d3:beta=1.0000000000000000e-04",
+              "tv_irls:686056374d5db6a9ceec12133f533e60944085151a4e47de98ea297d3f1a0fce:beta=1.0000000000000000e-04",
+              "tv_irls:48a5594ca7e944e8cfcbb837ea479abf0f6252412df32307b2c6ea0ee4457ac7:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "6061ca92ade1e93959962699a4f2a516c06f3e4afd830e7b12ca2b38ec09efb3",
+              "0cedefb7950897058d18daecdeb6695161ef9035a0c765e9f7b37e3eb7c49fe7",
+              "301db1607475213baa47aacc0962066eddfbc1c245bad089b76e3922043f0de5",
+              "8360b3efa45203d533f54fdb79440153553ccbc1723c3045d67649019ad6688a"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "8360b3efa45203d533f54fdb79440153553ccbc1723c3045d67649019ad6688a",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "8360b3efa45203d533f54fdb79440153553ccbc1723c3045d67649019ad6688a",
+              "signature_hint": "tv_irls:1c6da8b8f57386118c0a68bc704e7309ed6e7427695e2ca9d0df234d32437e79:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:1c6da8b8f57386118c0a68bc704e7309ed6e7427695e2ca9d0df234d32437e79:beta=1.0000000000000000e-04",
+              "state_signature": "1c6da8b8f57386118c0a68bc704e7309ed6e7427695e2ca9d0df234d32437e79",
+              "weight_max": 99.96921658859708,
+              "weight_mean": 65.95537029256278,
+              "weight_min": 3.717624200180477
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.012820188580774241,
+              0.011457291477991937,
+              0.011168444230183644,
+              0.011013278103426683,
+              0.010909582789987354
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:1d223b3555ec1508326407bebf220a11301a23eab5ff528ba3f56494eceab424:beta=1.0000000000000000e-04",
+              "tv_irls:81fd04a9afa2981451a12270c4c497bf7999980cddecaa60e97d66f902c909b0:beta=1.0000000000000000e-04",
+              "tv_irls:5de9cf1c9d3fb5fbda6db1654626348748356231378c1fef61eed4ec86efba5c:beta=1.0000000000000000e-04",
+              "tv_irls:1c6da8b8f57386118c0a68bc704e7309ed6e7427695e2ca9d0df234d32437e79:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "f903af0d2f0b2c24ee1811470506e8c2ee7d949e98b94347305914ce829797da",
+              "2bba25ba386b9c749a6d681d97d93b37047a6edd14efb9a8791399a594dd7a41",
+              "a074bbf193f5f3e2fa6cdb4b0ebd532b18f072031c8dfe332abbeef30a2e496c",
+              "77afd0365e871fe5d7ed74d5f89553b91107fc7d68e2ec3d2ab4ec15e1574165"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "77afd0365e871fe5d7ed74d5f89553b91107fc7d68e2ec3d2ab4ec15e1574165",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "77afd0365e871fe5d7ed74d5f89553b91107fc7d68e2ec3d2ab4ec15e1574165",
+              "signature_hint": "tv_irls:d97f4937b160a731aacac47a7d3e1939f7d406fd4396688e41c3e92558219287:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:d97f4937b160a731aacac47a7d3e1939f7d406fd4396688e41c3e92558219287:beta=1.0000000000000000e-04",
+              "state_signature": "d97f4937b160a731aacac47a7d3e1939f7d406fd4396688e41c3e92558219287",
+              "weight_max": 99.72903774866545,
+              "weight_mean": 66.00378379802991,
+              "weight_min": 4.170500926992057
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.012008890788121713,
+              0.0110072393574711,
+              0.010740952577799218,
+              0.010593736195752325,
+              0.010499089353406571
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:54a9d34858e17c793b1b0b09fd05c7ac8df7537109ea8f557277be32d90f9350:beta=1.0000000000000000e-04",
+              "tv_irls:f579e5bad4ee389a016988e1e6a1ce2adb1f5d086c7574aed04f5c3e088826f7:beta=1.0000000000000000e-04",
+              "tv_irls:c62789b1c59b840531ba4777b0ef8a29dabcd84357e794f46b0fc8e3fdbd3a05:beta=1.0000000000000000e-04",
+              "tv_irls:d97f4937b160a731aacac47a7d3e1939f7d406fd4396688e41c3e92558219287:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "55d146e126526e6f2c685492919b3765da96ce2ed9cf94f08883742834f7f6ff",
+              "604575a48e22698ec7dda847412c6a0348b8140176bcf84e4449b559521443e2",
+              "316abe9cb5aa6e1c1b2009753fb4f04bd89d40b86e8a14d9c990df536e1b2534",
+              "98f26921089f2f08477cfbcd66b5da245a797e2ed8da5305b92cfdaebc802128"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "98f26921089f2f08477cfbcd66b5da245a797e2ed8da5305b92cfdaebc802128",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "98f26921089f2f08477cfbcd66b5da245a797e2ed8da5305b92cfdaebc802128",
+              "signature_hint": "tv_irls:87a071b4b72fcf3a6bbf349eff5c82565e69feffb27fb7ac43dc769d1eebace7:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:87a071b4b72fcf3a6bbf349eff5c82565e69feffb27fb7ac43dc769d1eebace7:beta=1.0000000000000000e-04",
+              "state_signature": "87a071b4b72fcf3a6bbf349eff5c82565e69feffb27fb7ac43dc769d1eebace7",
+              "weight_max": 99.98634123241584,
+              "weight_mean": 67.46894511185832,
+              "weight_min": 4.17846629686175
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.011641597197859002,
+              0.010801597870825566,
+              0.010547677780926011,
+              0.010404083946346647,
+              0.010313592755454608
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:d250ebeb0d22db2af7e9f991bf1632e5f35a067e7e0de9ca70179dca7bff25ac:beta=1.0000000000000000e-04",
+              "tv_irls:1737660ea854bce40c1c9c466595502eb179245792c6a0f63e12a24283621d0e:beta=1.0000000000000000e-04",
+              "tv_irls:d5c7cfb2813138bd46ac0ecc386d2d6f4089089b8a77185be5372e5a523a2e48:beta=1.0000000000000000e-04",
+              "tv_irls:87a071b4b72fcf3a6bbf349eff5c82565e69feffb27fb7ac43dc769d1eebace7:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "0d234908635c5b0d69fd2e34c6bff7a6706adbcfe9e2eaa5a5401e8cdc88fa69",
+              "71cd06fb5969fab9896cf1ce37565357336bea7d0d3ef98af7a537c4993502a3",
+              "b39c913c8ec837338a07f2f721e73d2c610909df0210f979118fe889f5dee66c",
+              "26bfd1b53741b77d9e3551a2149e9350c79ce58dfa71b0951b6e26478c9bd467"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "26bfd1b53741b77d9e3551a2149e9350c79ce58dfa71b0951b6e26478c9bd467",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "26bfd1b53741b77d9e3551a2149e9350c79ce58dfa71b0951b6e26478c9bd467",
+              "signature_hint": "tv_irls:3d6be7ed484f93996dddb15d04edeaaca0f1bba12c55d006df5e01227c2550b4:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:3d6be7ed484f93996dddb15d04edeaaca0f1bba12c55d006df5e01227c2550b4:beta=1.0000000000000000e-04",
+              "state_signature": "3d6be7ed484f93996dddb15d04edeaaca0f1bba12c55d006df5e01227c2550b4",
+              "weight_max": 99.99970635038946,
+              "weight_mean": 69.33853755509776,
+              "weight_min": 3.7984469469260516
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.01177367169097779,
+              0.010725550295215807,
+              0.010476100930494274,
+              0.010333873215214421,
+              0.010237423648446294
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:5a9f45370685473f075b51b058ff3cbdd76c77d6e5910ead5a2da6127d5f363c:beta=1.0000000000000000e-04",
+              "tv_irls:3f96439d470f24c97528c049ff921f8c3638d444c0fb325cad466eacef4f0f1e:beta=1.0000000000000000e-04",
+              "tv_irls:613a58bce1f38a319a9cacc90103ba9cb919ee4bba7f77dfc7d5f42c03d64679:beta=1.0000000000000000e-04",
+              "tv_irls:3d6be7ed484f93996dddb15d04edeaaca0f1bba12c55d006df5e01227c2550b4:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "57627f97121a9fb3a7c5ba79fe07cbeed2f646d56c7b10198901b8441fef7deb",
+              "b997344e2eaaf5b8ca9117a298f051e37a8013e0ab40ab99ee597df392216a7c",
+              "e0ebbf639dbdd8e27878b96a17827359403c9546b1171ea57263a12f684d615a",
+              "742f664a51ab7ff09a4ed3c785dfa320c307e82c3d1bcfae2021c330eac8c8d1"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "742f664a51ab7ff09a4ed3c785dfa320c307e82c3d1bcfae2021c330eac8c8d1",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "742f664a51ab7ff09a4ed3c785dfa320c307e82c3d1bcfae2021c330eac8c8d1",
+              "signature_hint": "tv_irls:4c2219ce5f28776af1a71ca34cd90dfd4dae5b1d5bce5255032b74add5ad0621:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:4c2219ce5f28776af1a71ca34cd90dfd4dae5b1d5bce5255032b74add5ad0621:beta=1.0000000000000000e-04",
+              "state_signature": "4c2219ce5f28776af1a71ca34cd90dfd4dae5b1d5bce5255032b74add5ad0621",
+              "weight_max": 99.981277431786,
+              "weight_mean": 71.1526488246082,
+              "weight_min": 4.031560327782522
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.01166023524009893,
+              0.010508290090432979,
+              0.010233188440360308,
+              0.01008460127325675,
+              0.00999007253785843
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:442b3a36d0414bbed2df6de2aaab7ac605e498b16173fe496afd8df60ad1b21c:beta=1.0000000000000000e-04",
+              "tv_irls:7aaa315014055905bb97859a1ca38d3cded410c62bf8e30f22eda469fccd4bc5:beta=1.0000000000000000e-04",
+              "tv_irls:7ce18440cf3d964b36f9e59d433abf61e80953b22864bed5e391d7b521afea77:beta=1.0000000000000000e-04",
+              "tv_irls:4c2219ce5f28776af1a71ca34cd90dfd4dae5b1d5bce5255032b74add5ad0621:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          },
+          {
+            "RtR_signature_hash_history": [
+              "85f34674ef5a7e49cfdfdc15abab921ce176c34814cef08727f6d95e177649d4",
+              "d8b7c29e1476eb3fee13ee24923d3c35cc6125dfc0d1275a1e149ebb2528fe17",
+              "289e21216bff4f15fe0af9885a671f0b9d30efbb8bb6a3ee139637e880ea0372",
+              "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362"
+            ],
+            "beta": 0.0001,
+            "beta_floor": 1e-12,
+            "effective_beta": 0.0001,
+            "final_RtR_signature_hash": "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362",
+            "final_prior_metadata": {
+              "beta": 0.0001,
+              "beta_floor": 1e-12,
+              "difference_operator_shape": [
+                31,
+                32
+              ],
+              "effective_beta": 0.0001,
+              "graph_weight": "unit",
+              "irls_iteration": 3,
+              "kind": "sparse",
+              "name": "tv_irls",
+              "nnz": 94,
+              "prior_family": "tv_irls",
+              "regularization_source": "tv_irls_graph_difference_operator",
+              "schema": "pyeidors-rtr-prior-v1",
+              "shape": [
+                32,
+                32
+              ],
+              "signature_hash": "6c75232c56eb7d9b6e96386083c8c6518b0e1cff6a634a8c866b731610668362",
+              "signature_hint": "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04",
+              "stale_rm_token": "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04",
+              "state_signature": "a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297",
+              "weight_max": 99.99471191119575,
+              "weight_mean": 71.61205921751325,
+              "weight_min": 4.176475499142196
+            },
+            "graph_weight": "unit",
+            "initial_source": "provided",
+            "iterations": 4,
+            "lambda": 0.08,
+            "max_outer_iterations": 4,
+            "method": "tv-irls",
+            "monotone": true,
+            "objective_history": [
+              0.010949296972893,
+              0.009846000957355147,
+              0.009556400472608993,
+              0.009401928210626742,
+              0.009319071256484106
+            ],
+            "objective_monotone": true,
+            "regularization_type": "tv_irls",
+            "stale_rm_token_history": [
+              "tv_irls:61066cb163c54fa3b155b4f3a9022456940d4f7c92d76851ce47b5986e14fc8d:beta=1.0000000000000000e-04",
+              "tv_irls:e4c154282c0a55c1ecb86b396026ac5e3d3cde375a57a14f1e9dd082990e5695:beta=1.0000000000000000e-04",
+              "tv_irls:2028c9370e3198a791fa95a2f4764409b4fb3b6294747a4fedbe248d791f8342:beta=1.0000000000000000e-04",
+              "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04"
+            ],
+            "stopped_reason": "max_outer_iterations",
+            "tv_pdhg_postprocess_separate": true
+          }
+        ],
+        "method": "tv-irls-batch",
+        "n_frames": 24,
+        "objective_monotone_all": true,
+        "stale_rm_token_history": [
+          [
+            "tv_irls:ddb0c7fed328e2202b7261225adeb4a23db3c4be70265b4dcc4b0b4dd3b9abe2:beta=1.0000000000000000e-04",
+            "tv_irls:b2982c20ffcd4628289b36163dca5255a775b89708b614702dbf411bbf4708fc:beta=1.0000000000000000e-04",
+            "tv_irls:db8ac7fba85665a35d3ab544046627e2d783ab80710c420b56c3cf46affc0fa2:beta=1.0000000000000000e-04",
+            "tv_irls:b91e0c3e69a6911afa20b2f8f0e29aea4faa0fbb3d26107ce611b7d5db9c09aa:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:9956a19998a70c6c733c4781730c02d19b22f0ea95a34e426e878985eb9139b6:beta=1.0000000000000000e-04",
+            "tv_irls:355f66b3c7128f51f1f1c8c861bcc344d1509695e6ac1d66f0072faf5d23cc9c:beta=1.0000000000000000e-04",
+            "tv_irls:8b6cb1df924ecb72f6ab33a4e2c9de32dbcdd3a511e8c861d25f4fc5e44ccdc7:beta=1.0000000000000000e-04",
+            "tv_irls:066b2cde74afded3d5e6f6fd736148a3c137440d642ba086dfe91aa9b1273aad:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:ab34e2fa37b76bba7ea5fc9447abd0912cddb00962ec056bf83a8cf0b5973353:beta=1.0000000000000000e-04",
+            "tv_irls:c24ba0f5e3d8b8496ca6ccc180885141cf348b53a05b99181350d2d59170c7fa:beta=1.0000000000000000e-04",
+            "tv_irls:cb8c15884741631a42b9bd99c4540134abf258420fd6467a9e4d072e78d395b9:beta=1.0000000000000000e-04",
+            "tv_irls:13e624c3fb2bbe998fffe1cc653ab269a7955a02de43558e1817f40d14d0191f:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:36b597ac4920938cd20a2fab6b83842d4a7e90838dcf709c7473c896c162dd5e:beta=1.0000000000000000e-04",
+            "tv_irls:cc4607e200a419d8ed94691ef210f64353ce4a7d4fe0d97c7abddfe29ccb73e6:beta=1.0000000000000000e-04",
+            "tv_irls:9a039752301187eece58d3a4454d1510b2821ceb4b3c9b7618e969401e7bfbba:beta=1.0000000000000000e-04",
+            "tv_irls:782222a2b19cceb87d898eb30accb7cf9945665d5987e7a1ff90941ee348ac38:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:e0584cc99aad69c2250b33269279bc3f3dddcc4566dce90de76fe35dccc14398:beta=1.0000000000000000e-04",
+            "tv_irls:855cd4aafcbbecc187d90d3786d6e7601a741321b7e704ee319888abfe7d4b0f:beta=1.0000000000000000e-04",
+            "tv_irls:c6b8422d0485dedc6f5ddced370b4e2d6409536e8e8cd93d72c0b549ff88c618:beta=1.0000000000000000e-04",
+            "tv_irls:4a69354e27494d6c00ede8bf81f86cc42c588d2df9c1ec5461345020da32afbb:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:9c279bfb01605721fa80e44fb5ea4c468f5401ff6a7f8985c9894221ba660b02:beta=1.0000000000000000e-04",
+            "tv_irls:c9937ce5b23fcc0fe292fabead31f49464be060b9347af35c71adfcf902be5ee:beta=1.0000000000000000e-04",
+            "tv_irls:ee7a310accad530e8376111477e26071de5f5e7025740f93de79fa6a7e28ae36:beta=1.0000000000000000e-04",
+            "tv_irls:cc4151d77b45824800b7626522500a499686d1914253936e5ef6921f50f3028f:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:bd6544f757aef713fd89f1c7b57eda2061b83c8f5ec74b1b6457a76b8b50ce0d:beta=1.0000000000000000e-04",
+            "tv_irls:b46f7dad7231ec2278768dee3f264724b169ed93d09e2d4c45328e7879cda31c:beta=1.0000000000000000e-04",
+            "tv_irls:7b08ca0adb168e20391c91f336538d0c2960a7cdc5122a1da6574d253474d7ed:beta=1.0000000000000000e-04",
+            "tv_irls:375d54fcdea5fec36aa94483c0b9925a84e69b84f8a747922c1309ca20ea2c1c:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:5914dd0140015f4e3757b8d14594bfab0b809de9c19183851cd163defff6947f:beta=1.0000000000000000e-04",
+            "tv_irls:d8a2f3602d0ab6fe0de95fbc9f89465bc37a72435d47554ac1af1431ff28cc22:beta=1.0000000000000000e-04",
+            "tv_irls:4089bfe939803f366fb949dc7a786ac4bebe41a3160f199c8f11df25fe77f830:beta=1.0000000000000000e-04",
+            "tv_irls:5fb36b8be9c3eb65efa35c145efab144613ea2dd69d4bb13b8a4fd10f4107c1e:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:84f11fcdd83e420f842851de5e6301f4607b7eb0533317949057c1cf2aeb7a83:beta=1.0000000000000000e-04",
+            "tv_irls:5b91edacc7d0eb059ac9d61eaec025032139e1f815cb2e1608c088cfcd1df95d:beta=1.0000000000000000e-04",
+            "tv_irls:83d165e33ce2172f0e9310f7f5356255d09b003d2c06ba14d44178cf30305227:beta=1.0000000000000000e-04",
+            "tv_irls:c0af3037ad76ee6b81f350187db2b12c65f40f87afae2f9a05e43a97e1b6d302:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:541d0d8737f37d6127e11bb16caf27e6ed764d543a410be136ccc76258e1b731:beta=1.0000000000000000e-04",
+            "tv_irls:bda5053481ee5753b4cc6a7ca699c589b33816a2588c9568c654dec60ae5d058:beta=1.0000000000000000e-04",
+            "tv_irls:10cd722b4c92a492cd3737681928892c4669be7d4136da6be1573f6a205d38b5:beta=1.0000000000000000e-04",
+            "tv_irls:f61c4b3dfdeda27293b1c2ec3b8fc70459c24af62e642808b08221fb911da448:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:9f61fc2aa05fa977e9656217d945fc2e612c2c52eabc1a51bc68cf5284c25da0:beta=1.0000000000000000e-04",
+            "tv_irls:9a5f57f137c2a8faaf9c14ac5a8c58a9f1fb0f5b6c5b756707fb5ad8e78100c7:beta=1.0000000000000000e-04",
+            "tv_irls:7d0fd09f8d82ae8cf9c766e3a1b03fd6e75aa83281ce0b8828c405ccd45f846a:beta=1.0000000000000000e-04",
+            "tv_irls:1f133b93c2a24f192441dd752653557ea97cd733f63db8b4926777fd2c95ba5d:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:1b80c87a722524ab2373424370a8921edf377d370e925a7e9df253d9487ced45:beta=1.0000000000000000e-04",
+            "tv_irls:8a71a95d655e239900e8e139569cbba62f5688f4edf98481929d2bf95506a8fb:beta=1.0000000000000000e-04",
+            "tv_irls:41a76a69ff82841ec5b794037dcc3759a6d5b5a7288a9a1b840a73ca06cfc110:beta=1.0000000000000000e-04",
+            "tv_irls:976879d1ce9ab3ec0bf546520bb55157cb92fb8376cef0ae97c3491790f1e73f:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:e28228591f664e9a72c2e844517ceb08d77839b082a172b2913d6b6dc7816157:beta=1.0000000000000000e-04",
+            "tv_irls:8293b721b909e0096d99947a44dcee75241bbc8edeb0a70c9507953d52fc0b4a:beta=1.0000000000000000e-04",
+            "tv_irls:ccc63b7f5c94d45215951fd02bf7e94c3feb7f27d4d6f4f5f42d0d16fcdc5b14:beta=1.0000000000000000e-04",
+            "tv_irls:8614b01f66347d0b2079f704ae81dc55cf5c2c17c9c63a22d4a3db2468866bf9:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:09bda4af3c9ac223310f5cfd01fd8b9a21c171f7de86fb0a0e76acd1c3b66a82:beta=1.0000000000000000e-04",
+            "tv_irls:9595ca620894297b67250ec295c1598b0432c39da536024cdb11d29163965f0c:beta=1.0000000000000000e-04",
+            "tv_irls:2f2a499f337b6306f174301d07f669b9b580f6a7894f341ca6102131037fcad5:beta=1.0000000000000000e-04",
+            "tv_irls:38ceae0aa8e3f0f2bfb3981a29e3a536247212d72b906fb64f4924b729599a56:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:4abf6ea54aaba6467e73cc7dadf663852f37e752df60e29bd9141edea1d6e685:beta=1.0000000000000000e-04",
+            "tv_irls:6ed1d3cbb5ac2cf82a4b477a575fd488eb4e9b5c77335ac464d809ebc24ac8f8:beta=1.0000000000000000e-04",
+            "tv_irls:aa4dba7cb7f571dbc4016b0b1c5dc4de6532b087df9ad93179914ad9f3af11d0:beta=1.0000000000000000e-04",
+            "tv_irls:9fc5a00b7c50634b74d7fde21b7efc1ac8a879cfe4513f1ad852b19f48a66e02:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:e1eb8236bf4ef46a7f3db06688959f2600a2053719a01a413c4096fd55cddf8b:beta=1.0000000000000000e-04",
+            "tv_irls:9547a7a1ce333edbe392db29ed66d6769c923d338f318ad8d1631deee7ab5c79:beta=1.0000000000000000e-04",
+            "tv_irls:04f320469099e3eb650affba7b83a736e22fef2d8b33dee07e80365e573b3527:beta=1.0000000000000000e-04",
+            "tv_irls:5a2139059ad121fb6af541b7bd346e2f56ee3a079008c28281be77da4d0e7bb1:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:4d90afd950ab5a928128f9d2ba438f1a0b30d2de305ac82d2e7b341784eaae12:beta=1.0000000000000000e-04",
+            "tv_irls:001bd2ed3f6618c0e61fc616f3c3f0fc16191a98b667e3b22a9c966cb5be59fd:beta=1.0000000000000000e-04",
+            "tv_irls:3574a7e00af8b18e3f68968afc13afeb6bb6a653608e5f12fca659018263dbbd:beta=1.0000000000000000e-04",
+            "tv_irls:1609c7ca7f5be2074275a1024b250a5dcccecbee70f61557a742d627a5348590:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:0e2dcd14ae5e12bb3b2f8497edc95e0f7d8254545d242eeabfa38af1ae300fa3:beta=1.0000000000000000e-04",
+            "tv_irls:030d83e5d476ee8c916db48e26754f8894ca8dc97740f12c83da1ce0e49e80d3:beta=1.0000000000000000e-04",
+            "tv_irls:686056374d5db6a9ceec12133f533e60944085151a4e47de98ea297d3f1a0fce:beta=1.0000000000000000e-04",
+            "tv_irls:48a5594ca7e944e8cfcbb837ea479abf0f6252412df32307b2c6ea0ee4457ac7:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:1d223b3555ec1508326407bebf220a11301a23eab5ff528ba3f56494eceab424:beta=1.0000000000000000e-04",
+            "tv_irls:81fd04a9afa2981451a12270c4c497bf7999980cddecaa60e97d66f902c909b0:beta=1.0000000000000000e-04",
+            "tv_irls:5de9cf1c9d3fb5fbda6db1654626348748356231378c1fef61eed4ec86efba5c:beta=1.0000000000000000e-04",
+            "tv_irls:1c6da8b8f57386118c0a68bc704e7309ed6e7427695e2ca9d0df234d32437e79:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:54a9d34858e17c793b1b0b09fd05c7ac8df7537109ea8f557277be32d90f9350:beta=1.0000000000000000e-04",
+            "tv_irls:f579e5bad4ee389a016988e1e6a1ce2adb1f5d086c7574aed04f5c3e088826f7:beta=1.0000000000000000e-04",
+            "tv_irls:c62789b1c59b840531ba4777b0ef8a29dabcd84357e794f46b0fc8e3fdbd3a05:beta=1.0000000000000000e-04",
+            "tv_irls:d97f4937b160a731aacac47a7d3e1939f7d406fd4396688e41c3e92558219287:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:d250ebeb0d22db2af7e9f991bf1632e5f35a067e7e0de9ca70179dca7bff25ac:beta=1.0000000000000000e-04",
+            "tv_irls:1737660ea854bce40c1c9c466595502eb179245792c6a0f63e12a24283621d0e:beta=1.0000000000000000e-04",
+            "tv_irls:d5c7cfb2813138bd46ac0ecc386d2d6f4089089b8a77185be5372e5a523a2e48:beta=1.0000000000000000e-04",
+            "tv_irls:87a071b4b72fcf3a6bbf349eff5c82565e69feffb27fb7ac43dc769d1eebace7:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:5a9f45370685473f075b51b058ff3cbdd76c77d6e5910ead5a2da6127d5f363c:beta=1.0000000000000000e-04",
+            "tv_irls:3f96439d470f24c97528c049ff921f8c3638d444c0fb325cad466eacef4f0f1e:beta=1.0000000000000000e-04",
+            "tv_irls:613a58bce1f38a319a9cacc90103ba9cb919ee4bba7f77dfc7d5f42c03d64679:beta=1.0000000000000000e-04",
+            "tv_irls:3d6be7ed484f93996dddb15d04edeaaca0f1bba12c55d006df5e01227c2550b4:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:442b3a36d0414bbed2df6de2aaab7ac605e498b16173fe496afd8df60ad1b21c:beta=1.0000000000000000e-04",
+            "tv_irls:7aaa315014055905bb97859a1ca38d3cded410c62bf8e30f22eda469fccd4bc5:beta=1.0000000000000000e-04",
+            "tv_irls:7ce18440cf3d964b36f9e59d433abf61e80953b22864bed5e391d7b521afea77:beta=1.0000000000000000e-04",
+            "tv_irls:4c2219ce5f28776af1a71ca34cd90dfd4dae5b1d5bce5255032b74add5ad0621:beta=1.0000000000000000e-04"
+          ],
+          [
+            "tv_irls:61066cb163c54fa3b155b4f3a9022456940d4f7c92d76851ce47b5986e14fc8d:beta=1.0000000000000000e-04",
+            "tv_irls:e4c154282c0a55c1ecb86b396026ac5e3d3cde375a57a14f1e9dd082990e5695:beta=1.0000000000000000e-04",
+            "tv_irls:2028c9370e3198a791fa95a2f4764409b4fb3b6294747a4fedbe248d791f8342:beta=1.0000000000000000e-04",
+            "tv_irls:a65ff77df2c48a33123d1b8437f920d5047a38562f158a1fbb5eb382c2322297:beta=1.0000000000000000e-04"
+          ]
+        ],
+        "tv_pdhg_postprocess_separate": true
+      }
+    }
+  },
+  "schema": "pyeidors-prior-travelling-wave-benchmark-v1",
+  "summary": {
+    "best_center_rmse_method": "tv_irls",
+    "best_rmse_method": "laplace",
+    "matches_laplace_reconstruction": {
+      "curvature": true,
+      "graph_ltl": true,
+      "laplace": true,
+      "tv_irls": false
+    },
+    "max_reconstruction_delta_vs_laplace": 0.1015110544390424,
+    "signatures_distinct_from_laplace": {
+      "curvature": true,
+      "graph_ltl": true,
+      "tv_irls": true
+    }
+  }
+}

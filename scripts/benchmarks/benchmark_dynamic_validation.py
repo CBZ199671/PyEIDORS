@@ -227,6 +227,7 @@ def evaluate_fixture(
                 values,
                 clean_measurements=clean_measurements,
                 noisy_measurements=noisy_measurements,
+                jacobian=jacobian,
                 positions=positions,
                 times=times,
                 onset_fraction=onset_fraction,
@@ -284,6 +285,7 @@ def evaluate_fixture(
             rowwise_values,
             clean_measurements=clean_measurements,
             noisy_measurements=noisy_measurements,
+            jacobian=jacobian,
             positions=positions,
             times=times,
             onset_fraction=onset_fraction,
@@ -293,6 +295,7 @@ def evaluate_fixture(
             st_values,
             clean_measurements=clean_measurements,
             noisy_measurements=noisy_measurements,
+            jacobian=jacobian,
             positions=positions,
             times=times,
             onset_fraction=onset_fraction,
@@ -452,6 +455,7 @@ def dynamic_fidelity_metrics(
     *,
     clean_measurements: np.ndarray,
     noisy_measurements: np.ndarray,
+    jacobian: np.ndarray | None = None,
     positions: np.ndarray,
     times: np.ndarray,
     onset_fraction: float,
@@ -491,6 +495,30 @@ def dynamic_fidelity_metrics(
         recon_arr,
         positions=positions_arr,
     )
+    noise_figure = eidors_noise_figure(
+        clean_measurements,
+        noisy_measurements,
+        truth_arr,
+        recon_arr,
+    )
+    solution_error = (
+        eidors_solution_error(
+            noisy_measurements,
+            recon_arr,
+            jacobian=jacobian,
+        )
+        if jacobian is not None
+        else None
+    )
+    clean_solution_error = (
+        eidors_solution_error(
+            clean_measurements,
+            recon_arr,
+            jacobian=jacobian,
+        )
+        if jacobian is not None
+        else None
+    )
     metrics: dict[str, Any] = {
         "rmse": float(np.sqrt(np.mean(error * error))),
         "relative_l2_error": float(
@@ -517,7 +545,17 @@ def dynamic_fidelity_metrics(
         "reconstruction_snr_db": float(reconstruction_snr),
         "snr_gain_db": float(reconstruction_snr - measurement_snr),
         "spatial_metrics": spatial,
+        "eidors_greit_figures_of_merit": dict(spatial),
+        "eidors_noise_figure": noise_figure["noise_figure"],
+        "eidors_noise_figure_db": noise_figure["noise_figure_db"],
+        "eidors_input_snr": noise_figure["input_snr"],
+        "eidors_output_snr": noise_figure["output_snr"],
     }
+    if solution_error is not None:
+        metrics["eidors_solution_error"] = solution_error["solution_error"]
+        metrics["eidors_solution_residual_norm"] = solution_error["residual_norm"]
+    if clean_solution_error is not None:
+        metrics["eidors_clean_solution_error"] = clean_solution_error["solution_error"]
     _assert_finite_metrics(metrics)
     return metrics
 
@@ -725,6 +763,78 @@ def snr_db(reference: np.ndarray, observed: np.ndarray) -> float:
     if noise <= 1.0e-15:
         return 300.0
     return float(20.0 * np.log10(max(signal, 1.0e-15) / noise))
+
+
+def eidors_noise_figure(
+    clean_measurements: np.ndarray,
+    noisy_measurements: np.ndarray,
+    truth: np.ndarray,
+    reconstruction: np.ndarray,
+) -> dict[str, float]:
+    """Compute EIDORS-style noise figure ``SNR(input) / SNR(output)``.
+
+    EIDORS ``calc_noise_figure`` estimates input SNR from the voltage data and
+    output SNR from reconstructed image perturbations. This deterministic
+    benchmark has one noisy realization, so the noise terms are measured from
+    the known clean synthetic fixture.
+    """
+
+    clean_y = np.asarray(clean_measurements, dtype=np.float64)
+    noisy_y = np.asarray(noisy_measurements, dtype=np.float64)
+    truth_x = np.asarray(truth, dtype=np.float64)
+    recon_x = np.asarray(reconstruction, dtype=np.float64)
+    if clean_y.shape != noisy_y.shape:
+        raise ValueError("clean and noisy measurements must have matching shapes.")
+    if truth_x.shape != recon_x.shape:
+        raise ValueError("truth and reconstruction must have matching shapes.")
+
+    signal_y = float(np.mean(np.abs(clean_y)))
+    noise_y = float(np.std(noisy_y - clean_y))
+    signal_x = float(np.mean(np.abs(truth_x)))
+    noise_x = float(np.std(recon_x - truth_x))
+    input_snr = signal_y / max(noise_y, 1.0e-15)
+    output_snr = signal_x / max(noise_x, 1.0e-15)
+    nf = input_snr / max(output_snr, 1.0e-15)
+    return {
+        "noise_figure": float(nf),
+        "noise_figure_db": float(20.0 * np.log10(max(nf, 1.0e-15))),
+        "input_snr": float(input_snr),
+        "output_snr": float(output_snr),
+        "input_signal": signal_y,
+        "input_noise": noise_y,
+        "output_signal": signal_x,
+        "output_noise": noise_x,
+    }
+
+
+def eidors_solution_error(
+    measurements: np.ndarray,
+    reconstruction: np.ndarray,
+    *,
+    jacobian: np.ndarray,
+) -> dict[str, float]:
+    """Compute EIDORS ``calc_solution_error`` style data residual."""
+
+    data = np.asarray(measurements, dtype=np.float64)
+    recon = np.asarray(reconstruction, dtype=np.float64)
+    jac = np.asarray(jacobian, dtype=np.float64)
+    if data.ndim != 2 or recon.ndim != 2 or jac.ndim != 2:
+        raise ValueError("measurements, reconstruction, and jacobian must be 2D.")
+    if data.shape[0] != recon.shape[0]:
+        raise ValueError("measurement and reconstruction frame counts must match.")
+    if jac.shape != (data.shape[1], recon.shape[1]):
+        raise ValueError(
+            f"jacobian shape {jac.shape} does not match {(data.shape[1], recon.shape[1])}."
+        )
+    predicted = np.asarray(recon @ jac.T, dtype=np.float64)
+    residual = data - predicted
+    residual_norm = float(np.linalg.norm(residual))
+    data_norm = float(np.linalg.norm(data))
+    return {
+        "solution_error": float(residual_norm / max(data_norm, 1.0e-15)),
+        "residual_norm": residual_norm,
+        "data_norm": data_norm,
+    }
 
 
 def smoothstep(value: np.ndarray) -> np.ndarray:

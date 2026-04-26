@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 import numpy as np
+import pytest
 
 from pyeidors.inverse import GREIT_METRIC_KEYS
 
@@ -85,9 +86,15 @@ def test_dynamic_validation_benchmark_reports_required_dynamic_metrics(
                 "propagation_speed_abs_error",
                 "amplitude_attenuation",
                 "snr_gain_db",
+                "eidors_noise_figure",
+                "eidors_solution_error",
+                "eidors_clean_solution_error",
             ):
                 assert np.isfinite(float(fidelity[key]))
             assert set(fidelity["spatial_metrics"]) == set(GREIT_METRIC_KEYS)
+            assert set(fidelity["eidors_greit_figures_of_merit"]) == set(
+                GREIT_METRIC_KEYS
+            )
             assert method["cold_metadata"]["offline_rm_build_seconds"] >= 0.0
             online = method["online_metadata"]
             assert online["online_rm_apply_seconds"] >= 0.0
@@ -144,3 +151,28 @@ def test_dynamic_validation_fixture_input_validation() -> None:
             assert message in str(exc)
         else:  # pragma: no cover - assertion clarity
             raise AssertionError(f"expected ValueError containing {message!r}")
+
+
+def test_eidors_noise_figure_and_solution_error_formulas() -> None:
+    module = _load_module()
+    clean = np.array([[1.0, 2.0], [2.0, 4.0]], dtype=np.float64)
+    noisy = clean + np.array([[0.1, -0.1], [0.2, -0.2]], dtype=np.float64)
+    truth = np.array([[1.0, 0.0], [0.0, 1.0]], dtype=np.float64)
+    recon = truth + np.array([[0.1, -0.1], [-0.2, 0.2]], dtype=np.float64)
+
+    nf = module.eidors_noise_figure(clean, noisy, truth, recon)
+
+    input_snr = np.mean(np.abs(clean)) / np.std(noisy - clean)
+    output_snr = np.mean(np.abs(truth)) / np.std(recon - truth)
+    assert nf["input_snr"] == pytest.approx(input_snr)
+    assert nf["output_snr"] == pytest.approx(output_snr)
+    assert nf["noise_figure"] == pytest.approx(input_snr / output_snr)
+
+    jacobian = np.eye(2, dtype=np.float64)
+    solution_error = module.eidors_solution_error(
+        noisy,
+        recon,
+        jacobian=jacobian,
+    )
+    expected = np.linalg.norm(noisy - recon) / np.linalg.norm(noisy)
+    assert solution_error["solution_error"] == pytest.approx(expected)

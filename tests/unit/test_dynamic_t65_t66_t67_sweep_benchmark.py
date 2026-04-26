@@ -16,6 +16,12 @@ SCRIPT_PATH = (
     / "benchmarks"
     / "benchmark_dynamic_tv_huber_sweep.py"
 )
+REVIEW_SCRIPT_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "benchmarks"
+    / "review_dynamic_eidors_metrics.py"
+)
 
 
 def _load_module():
@@ -24,6 +30,18 @@ def _load_module():
     )
     if spec is None or spec.loader is None:  # pragma: no cover - defensive
         raise AssertionError(f"failed to load script: {SCRIPT_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+def _load_review_module():
+    spec = importlib.util.spec_from_file_location(
+        "review_dynamic_eidors_metrics_t67", REVIEW_SCRIPT_PATH
+    )
+    if spec is None or spec.loader is None:  # pragma: no cover - defensive
+        raise AssertionError(f"failed to load script: {REVIEW_SCRIPT_PATH}")
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
@@ -88,3 +106,39 @@ def test_dynamic_sweep_reports_t67_kalman_lag_qr_comparison(
         assert metadata["forward_solve_count"] == 0
         assert metadata["adjoint_solve_count"] == 0
         assert metadata["ksp_solve_count"] == 0
+
+
+def test_eidors_metric_review_rechecks_dynamic_sweep_payload(
+    tmp_path: Path,
+) -> None:
+    sweep = _load_module()
+    review = _load_review_module()
+    payload = sweep.run_sweep(
+        n_cells=8,
+        n_frames=7,
+        n_measurements=5,
+        lambda_s=0.05,
+        lambda_t_values=(0.04,),
+        huber_delta_values=(0.03,),
+        temporal_order=2,
+        noise_std=1.0e-4,
+        seed=20260426,
+        max_outer_iterations=3,
+        peak_delay_limit=0.50,
+        kalman_lag_values=(0,),
+        kalman_process_noise_values=(0.02,),
+        kalman_measurement_noise_values=(0.04,),
+    )
+    source = sweep.write_payload(tmp_path / "dynamic_t65_t66_t67.json", payload)
+
+    reviewed = review.review_reports([source])
+    report = review.write_markdown(tmp_path / "eidors_review.md", reviewed)
+
+    assert reviewed["schema"] == review.SCHEMA
+    assert reviewed["scenario_count"] == 1
+    scenario = reviewed["scenarios"][0]
+    assert set(scenario["official_metric_winners"]) == set(review.OFFICIAL_METRIC_ORDER)
+    for winner in scenario["official_metric_winners"].values():
+        assert winner["method_family"] in {"T65", "T66", "T67"}
+        assert np.isfinite(winner["value"])
+    assert "Per-Metric Winners" in report.read_text(encoding="utf-8")

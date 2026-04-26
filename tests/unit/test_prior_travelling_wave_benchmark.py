@@ -71,7 +71,19 @@ def test_prior_travelling_wave_benchmark_reports_fidelity_and_signature_delta(
     assert tv_irls["tv_irls_metadata"]["objective_monotone_all"] is True
     for method in saved["methods"].values():
         fidelity = method["fidelity"]
-        assert np.isfinite(list(fidelity.values())).all()
+        for value in fidelity.values():
+            if isinstance(value, dict):
+                assert np.isfinite(list(value.values())).all()
+            else:
+                assert np.isfinite(float(value))
+        assert set(fidelity["spatial_metrics"]) == {"AR", "PE", "RES", "SD", "RNG"}
+        assert set(fidelity["eidors_greit_figures_of_merit"]) == {
+            "AR",
+            "PE",
+            "RES",
+            "SD",
+            "RNG",
+        }
         assert fidelity["rmse"] >= 0.0
         assert fidelity["center_rmse"] >= 0.0
         assert method["online_metadata"]["forward_solve_count"] == 0

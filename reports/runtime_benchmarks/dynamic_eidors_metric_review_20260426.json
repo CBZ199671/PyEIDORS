@@ -1,0 +1,742 @@
+{
+  "created_utc": "2026-04-26T06:16:43.374927+00:00",
+  "input_reports": [
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_default_20260426.json",
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260426_20260426.json",
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260427_20260426.json",
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260428_20260426.json",
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260429_20260426.json",
+    "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260430_20260426.json"
+  ],
+  "scenario_count": 6,
+  "scenarios": [
+    {
+      "candidate_count": 122,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.002,
+        "seed": 20260425
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.03455716014009805,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.0,
+        "rmse": 0.02475954296631306,
+        "speed_error": 0.0058188060645516515
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.13797775767480952,
+          "method": "t65_spatiotemporal_l2",
+          "method_family": "T65",
+          "metric": "AR_error",
+          "params": {
+            "lambda_t": 0.35
+          },
+          "rmse": 0.05401007896856008,
+          "speed_error": 0.02795375467795247,
+          "value": 4.147006391508334e-06
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.044914087476799654,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.12
+          },
+          "rmse": 0.02462538152378745,
+          "speed_error": 0.004261540219376858,
+          "value": 52.79211984995691
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.06705895012957555,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.08
+          },
+          "rmse": 0.02906023398102484,
+          "speed_error": 0.004075695210239205,
+          "value": 0.0011030991198949297
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.11304134240760084,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.047955847262127475,
+          "speed_error": 0.005165958112963387,
+          "value": 0.2255859375
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.06705895012957555,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RNG",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.08
+          },
+          "rmse": 0.02906023398102484,
+          "speed_error": 0.004075695210239205,
+          "value": 0.0033028750339370422
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.11190920383319185,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "SD",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.04799410729802232,
+          "speed_error": 0.005233893723913807,
+          "value": 0.0
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.11304134240760084,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.047955847262127475,
+          "speed_error": 0.005165958112963387,
+          "value": 0.001718668462724834
+        }
+      },
+      "official_winner_counts": {
+        "T65": 1,
+        "T66": 6
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_default_20260426.json"
+    },
+    {
+      "candidate_count": 222,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.01,
+        "seed": 20260426
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.1375910408804579,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.0069124423963133645,
+        "rmse": 0.04164995762243844,
+        "speed_error": 0.040974273195583
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.19219614562448056,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "AR_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.12
+          },
+          "rmse": 0.047020411434104833,
+          "speed_error": 0.05990234614622625,
+          "value": 0.00017730174506791485
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.13996370850172013,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.0386140729710335,
+          "speed_error": 0.04374115357211883,
+          "value": 15.451215790015413
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.1375910408804579,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.35
+          },
+          "rmse": 0.04164995762243844,
+          "speed_error": 0.040974273195583,
+          "value": 0.009827490756736465
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.3403447994684451,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.07248893330139361,
+          "speed_error": 0.07934928843071709,
+          "value": 0.2265625
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.82081612852811,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "RNG",
+          "params": {
+            "fixed_lag": 4,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.15713296175727431,
+          "speed_error": 0.16823627384350137,
+          "value": 0.007878111924814392
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.8015055221289026,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "SD",
+          "params": {
+            "fixed_lag": 3,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.15902841078644267,
+          "speed_error": 0.16578721314055833,
+          "value": 0.019202628968253966
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.43646557397073704,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.0891776995200139,
+          "speed_error": 0.10560415217672037,
+          "value": 0.008179496445118064
+        }
+      },
+      "official_winner_counts": {
+        "T66": 5,
+        "T67": 2
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260426_20260426.json"
+    },
+    {
+      "candidate_count": 222,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.01,
+        "seed": 20260427
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.10065115125903734,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.008064516129032256,
+        "rmse": 0.04065755013246669,
+        "speed_error": 0.029530491462318675
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.1688215794800587,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "AR_error",
+          "params": {
+            "fixed_lag": 2,
+            "measurement_noise": 0.01,
+            "process_noise": 0.01
+          },
+          "rmse": 0.05183721003597863,
+          "speed_error": 0.03600624130962671,
+          "value": 4.642975674018501e-05
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.10304234612430078,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.03770470833981556,
+          "speed_error": 0.03023495958774658,
+          "value": 15.847650193550333
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.10065115125903734,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.35
+          },
+          "rmse": 0.04065755013246669,
+          "speed_error": 0.029530491462318675,
+          "value": 0.00730705653332061
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.211999876366778,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.06616207660831212,
+          "speed_error": 0.04221814658107592,
+          "value": 0.21875
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.8225130796961959,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "RNG",
+          "params": {
+            "fixed_lag": 4,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.15724696741048674,
+          "speed_error": 0.1655537373492344,
+          "value": 0.006766863015084832
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.19052371736615525,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "SD",
+          "params": {
+            "fixed_lag": 2,
+            "measurement_noise": 0.01,
+            "process_noise": 0.005
+          },
+          "rmse": 0.05771483173751417,
+          "speed_error": 0.03619015364223821,
+          "value": 0.006944444444444444
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.29598778227724826,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.08501060029258047,
+          "speed_error": 0.056004489510491196,
+          "value": 0.008466115071139627
+        }
+      },
+      "official_winner_counts": {
+        "T66": 4,
+        "T67": 3
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260427_20260426.json"
+    },
+    {
+      "candidate_count": 222,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.01,
+        "seed": 20260428
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.09587558730538445,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.008064516129032256,
+        "rmse": 0.040613896088822425,
+        "speed_error": 0.023079324896966957
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.09728078149058861,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "AR_error",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.03759914732177558,
+          "speed_error": 0.020233744426403022,
+          "value": 0.0015686648874387865
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.09728078149058861,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.03759914732177558,
+          "speed_error": 0.020233744426403022,
+          "value": 16.253526147753746
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.09728078149058861,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.03759914732177558,
+          "speed_error": 0.020233744426403022,
+          "value": 0.004882633410511793
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.19778370383517233,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.06373785985974194,
+          "speed_error": 0.03335739735875187,
+          "value": 0.220703125
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.8363393700060413,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "RNG",
+          "params": {
+            "fixed_lag": 4,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.1572787207942468,
+          "speed_error": 0.17022545569648095,
+          "value": 0.011227435201308988
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.2484739858124323,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "SD",
+          "params": {
+            "fixed_lag": 1,
+            "measurement_noise": 0.02,
+            "process_noise": 0.005
+          },
+          "rmse": 0.07650962489893147,
+          "speed_error": 0.03485322899656529,
+          "value": 0.003472222222222222
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.27097253958247325,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.07825990122296582,
+          "speed_error": 0.05140952086235495,
+          "value": 0.008255977068562702
+        }
+      },
+      "official_winner_counts": {
+        "T66": 5,
+        "T67": 2
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260428_20260426.json"
+    },
+    {
+      "candidate_count": 222,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.01,
+        "seed": 20260429
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.10266992970555906,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.0046082949308755795,
+        "rmse": 0.037673069946966814,
+        "speed_error": 0.02789221059560998
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.17359254730229542,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "AR_error",
+          "params": {
+            "fixed_lag": 2,
+            "measurement_noise": 0.02,
+            "process_noise": 0.02
+          },
+          "rmse": 0.05094943872214094,
+          "speed_error": 0.037258002404798485,
+          "value": 2.5154009959393875e-06
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.10266992970555906,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.037673069946966814,
+          "speed_error": 0.02789221059560998,
+          "value": 15.567754715063716
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.10266992970555906,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.037673069946966814,
+          "speed_error": 0.02789221059560998,
+          "value": 0.0073700953581054916
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.24956300754864397,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.06857950193507258,
+          "speed_error": 0.04312689364484079,
+          "value": 0.212890625
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.8628553602165817,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "RNG",
+          "params": {
+            "fixed_lag": 4,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.157464649390647,
+          "speed_error": 0.17443728074479692,
+          "value": 0.011112076697545034
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.12992155929177304,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "SD",
+          "params": {
+            "huber_delta": 0.05,
+            "lambda_t": 0.08
+          },
+          "rmse": 0.04038418280266596,
+          "speed_error": 0.029144711428636838,
+          "value": 0.008370535714285714
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.24956300754864397,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.06857950193507258,
+          "speed_error": 0.04312689364484079,
+          "value": 0.008615666964250316
+        }
+      },
+      "official_winner_counts": {
+        "T66": 5,
+        "T67": 2
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260429_20260426.json"
+    },
+    {
+      "candidate_count": 222,
+      "config": {
+        "domain": "neural_fast_conduction",
+        "fixture": "travelling_wave",
+        "noise_std": 0.01,
+        "seed": 20260430
+      },
+      "legacy_best": {
+        "fast_conduction_score": 0.09016760005620693,
+        "method": "t66_spatiotemporal_tv_huber",
+        "peak_time_mae": 0.005760368663594473,
+        "rmse": 0.038636378161017816,
+        "speed_error": 0.023577875803231674
+      },
+      "legacy_best_method": "T66",
+      "official_metric_winners": {
+        "AR_error": {
+          "legacy_fast_conduction_score": 0.3505224910962236,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "AR_error",
+          "params": {
+            "fixed_lag": 1,
+            "measurement_noise": 0.08,
+            "process_noise": 0.01
+          },
+          "rmse": 0.09820856772158802,
+          "speed_error": 0.05074577092990462,
+          "value": 3.888286817055331e-05
+        },
+        "NF": {
+          "legacy_fast_conduction_score": 0.09016760005620693,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "NF",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.038636378161017816,
+          "speed_error": 0.023577875803231674,
+          "value": 16.0061080075093
+        },
+        "PE": {
+          "legacy_fast_conduction_score": 0.09016760005620693,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "PE",
+          "params": {
+            "huber_delta": 0.02,
+            "lambda_t": 0.2
+          },
+          "rmse": 0.038636378161017816,
+          "speed_error": 0.023577875803231674,
+          "value": 0.006042192580763083
+        },
+        "RES": {
+          "legacy_fast_conduction_score": 0.2435493960248062,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "RES",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.04
+          },
+          "rmse": 0.0671585460041468,
+          "speed_error": 0.054495114083407126,
+          "value": 0.2216796875
+        },
+        "RNG": {
+          "legacy_fast_conduction_score": 0.8369945191980757,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "RNG",
+          "params": {
+            "fixed_lag": 4,
+            "measurement_noise": 0.32,
+            "process_noise": 0.005
+          },
+          "rmse": 0.15767354440130218,
+          "speed_error": 0.16665234152692032,
+          "value": 0.006078791378013508
+        },
+        "SD": {
+          "legacy_fast_conduction_score": 0.18953451270419025,
+          "method": "t67_kalman_fixed_lag",
+          "method_family": "T67",
+          "metric": "SD",
+          "params": {
+            "fixed_lag": 1,
+            "measurement_noise": 0.32,
+            "process_noise": 0.16
+          },
+          "rmse": 0.05929369709454552,
+          "speed_error": 0.03463206843006761,
+          "value": 0.003472222222222222
+        },
+        "solution_error": {
+          "legacy_fast_conduction_score": 0.3097126348782407,
+          "method": "t66_spatiotemporal_tv_huber",
+          "method_family": "T66",
+          "metric": "solution_error",
+          "params": {
+            "huber_delta": 0.01,
+            "lambda_t": 0.02
+          },
+          "rmse": 0.0828572047700917,
+          "speed_error": 0.06878019411337666,
+          "value": 0.008831052012329041
+        }
+      },
+      "official_winner_counts": {
+        "T66": 4,
+        "T67": 3
+      },
+      "old_conclusion_supported_by_official_majority": true,
+      "source": "reports/runtime_benchmarks/dynamic_t65_t66_t67_eidors_review_high_noise_seed_20260430_20260426.json"
+    }
+  ],
+  "schema": "pyeidors-dynamic-eidors-metric-review-v1",
+  "summary": {
+    "legacy_best_method_counts": {
+      "T66": 6
+    },
+    "official_metric_counts": {
+      "AR_error": 6,
+      "NF": 6,
+      "PE": 6,
+      "RES": 6,
+      "RNG": 6,
+      "SD": 6,
+      "solution_error": 6
+    },
+    "official_metric_winner_counts": {
+      "T65": 1,
+      "T66": 29,
+      "T67": 12
+    },
+    "review_statement": "Previous dynamic-score conclusions are broadly supported by the EIDORS-aligned metric majority, but individual metric trade-offs remain visible."
+  }
+}

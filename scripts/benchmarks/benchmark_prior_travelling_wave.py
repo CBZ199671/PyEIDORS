@@ -29,6 +29,11 @@ from pyeidors.inverse import (
     reconstruct_difference_batch,
     solve_tv_irls_batch,
 )
+from scripts.benchmarks.benchmark_dynamic_validation import (
+    eidors_noise_figure,
+    eidors_solution_error,
+    spatial_metric_summary,
+)
 
 
 SCHEMA = "pyeidors-prior-travelling-wave-benchmark-v1"
@@ -80,6 +85,7 @@ def run_benchmark(
     jacobian = fixture["jacobian"]
     truth = fixture["truth"]
     measurements = fixture["measurements"]
+    clean_measurements = fixture["clean_measurements"]
     positions = fixture["positions"]
     times = fixture["times"]
 
@@ -119,6 +125,9 @@ def run_benchmark(
             "fidelity": fidelity_metrics(
                 truth,
                 values,
+                clean_measurements=clean_measurements,
+                noisy_measurements=measurements,
+                jacobian=jacobian,
                 positions=positions,
                 times=times,
             ),
@@ -155,6 +164,9 @@ def run_benchmark(
         "fidelity": fidelity_metrics(
             truth,
             tv_values,
+            clean_measurements=clean_measurements,
+            noisy_measurements=measurements,
+            jacobian=jacobian,
             positions=positions,
             times=times,
         ),
@@ -237,7 +249,8 @@ def build_travelling_wave_fixture(
         positions,
         n_measurements=int(n_measurements),
     )
-    measurements = np.asarray(truth @ jacobian.T, dtype=np.float64)
+    clean_measurements = np.asarray(truth @ jacobian.T, dtype=np.float64)
+    measurements = clean_measurements.copy()
     if noise_std > 0.0:
         rng = np.random.default_rng(int(seed))
         measurements = measurements + rng.normal(
@@ -250,6 +263,10 @@ def build_travelling_wave_fixture(
         "times": times,
         "truth": np.ascontiguousarray(truth, dtype=np.float64),
         "jacobian": jacobian,
+        "clean_measurements": np.ascontiguousarray(
+            clean_measurements,
+            dtype=np.float64,
+        ),
         "measurements": np.ascontiguousarray(measurements, dtype=np.float64),
     }
 
@@ -312,6 +329,9 @@ def fidelity_metrics(
     truth: np.ndarray,
     reconstruction: np.ndarray,
     *,
+    clean_measurements: np.ndarray,
+    noisy_measurements: np.ndarray,
+    jacobian: np.ndarray,
     positions: np.ndarray,
     times: np.ndarray,
 ) -> dict[str, float]:
@@ -330,6 +350,22 @@ def fidelity_metrics(
     peak_time_recon = peak_time_trace(recon_arr, times)
     peak_mask = np.max(truth_arr, axis=0) >= 0.20 * float(np.max(truth_arr))
     peak_delta = np.abs(peak_time_recon[peak_mask] - peak_time_truth[peak_mask])
+    spatial = spatial_metric_summary(
+        truth_arr,
+        recon_arr,
+        positions=np.asarray(positions, dtype=np.float64),
+    )
+    noise_figure = eidors_noise_figure(
+        clean_measurements,
+        noisy_measurements,
+        truth_arr,
+        recon_arr,
+    )
+    solution_error = eidors_solution_error(
+        noisy_measurements,
+        recon_arr,
+        jacobian=jacobian,
+    )
     return {
         "rmse": float(np.sqrt(np.mean(error * error))),
         "relative_l2_error": float(
@@ -347,6 +383,12 @@ def fidelity_metrics(
         "peak_time_mean_abs_error": float(
             np.mean(peak_delta) if peak_delta.size else 0.0
         ),
+        "spatial_metrics": spatial,
+        "eidors_greit_figures_of_merit": dict(spatial),
+        "eidors_noise_figure": noise_figure["noise_figure"],
+        "eidors_noise_figure_db": noise_figure["noise_figure_db"],
+        "eidors_solution_error": solution_error["solution_error"],
+        "eidors_solution_residual_norm": solution_error["residual_norm"],
     }
 
 
