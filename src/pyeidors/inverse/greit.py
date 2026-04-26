@@ -82,6 +82,21 @@ class GREITDesiredImages:
 
 
 @dataclass(frozen=True)
+class GREITRMComponents:
+    """EIDORS ``calc_GREIT_RM`` component bundle."""
+
+    rm: np.ndarray
+    pjt: np.ndarray
+    m: np.ndarray
+    sn: np.ndarray
+    noiselev: float
+    weight: float
+    y: np.ndarray
+    d: np.ndarray
+    metadata: MappingProxyType
+
+
+@dataclass(frozen=True)
 class GREIT3DDistribution:
     """EIDORS ``GREIT3D_distribution`` target-center volume."""
 
@@ -705,6 +720,89 @@ def greit_desired_image_sigmoid(
     return np.ascontiguousarray(desired, dtype=np.float64)
 
 
+def calc_greit_rm(
+    y: Any,
+    d: Any,
+    *,
+    weight: Any = 0.5,
+    noise_covar: Any = 1.0,
+) -> GREITRMComponents:
+    """Replicate EIDORS ``calc_GREIT_RM`` matrix algebra.
+
+    Inputs follow EIDORS component orientation: ``Y`` is
+    ``n_measurements x n_targets`` and ``D`` is
+    ``n_rec_parameters x n_targets``.  The scalar ``weight`` is converted to
+    effective ``noiselev`` via ``weight * mean(abs(Y))`` before forming
+    ``M``.
+    """
+
+    y_matrix = _validate_training_response_matrix(y)
+    d_matrix = _validate_desired_component_matrix(d, n_targets=y_matrix.shape[1])
+    scalar_weight = _as_scalar_weight(weight)
+    sn, sn_source = _noise_covar_matrix(
+        noise_covar,
+        n_measurements=y_matrix.shape[0],
+    )
+
+    component_dtype = np.result_type(y_matrix, d_matrix, sn)
+    pjt = np.ascontiguousarray(d_matrix @ y_matrix.T, dtype=component_dtype)
+    noiselev = float(scalar_weight * np.mean(np.abs(y_matrix)))
+    m = np.ascontiguousarray(
+        y_matrix @ y_matrix.T + (noiselev * noiselev) * sn,
+        dtype=component_dtype,
+    )
+
+    rhs_t = pjt.T
+    try:
+        rm = np.linalg.solve(m.T, rhs_t).T
+        solver = "solve"
+        singular_fallback = False
+    except np.linalg.LinAlgError:
+        rm = (np.linalg.pinv(m.T) @ rhs_t).T
+        solver = "pinv"
+        singular_fallback = True
+    rm = np.ascontiguousarray(rm, dtype=component_dtype)
+    if not np.isfinite(rm).all():
+        raise FloatingPointError("GREIT RM contains non-finite values.")
+
+    try:
+        condition = float(np.linalg.cond(m))
+    except np.linalg.LinAlgError:
+        condition = float("inf")
+    rank = int(np.linalg.matrix_rank(m))
+    metadata = MappingProxyType(
+        {
+            "algorithm": "calc_GREIT_RM",
+            "eidors_component_parity": not singular_fallback,
+            "pjt_shape": tuple(int(v) for v in pjt.shape),
+            "y_shape": tuple(int(v) for v in y_matrix.shape),
+            "d_shape": tuple(int(v) for v in d_matrix.shape),
+            "sn_shape": tuple(int(v) for v in sn.shape),
+            "m_shape": tuple(int(v) for v in m.shape),
+            "rm_shape": tuple(int(v) for v in rm.shape),
+            "weight": scalar_weight,
+            "noiselev": noiselev,
+            "noise_covar_source": sn_source,
+            "solver": solver,
+            "singular_fallback": singular_fallback,
+            "matrix_rank": rank,
+            "matrix_condition": condition,
+            "transpose_semantics": "matlab_nonconjugate_dot_transpose",
+        }
+    )
+    return GREITRMComponents(
+        rm=rm,
+        pjt=pjt,
+        m=m,
+        sn=sn,
+        noiselev=noiselev,
+        weight=scalar_weight,
+        y=y_matrix,
+        d=d_matrix,
+        metadata=metadata,
+    )
+
+
 def build_3d_greit_rm(
     fwd_model: Any = None,
     targets: Any | None = None,
@@ -724,11 +822,11 @@ def build_3d_greit_rm(
 ) -> GREITRM:
     """Build an offline 3D GREIT RM from synthetic targets.
 
-    The first v1 implementation accepts a linearized forward response
+    The current production path still accepts a linearized forward response
     ``J`` with shape ``(n_measurements, n_inverse_parameters)``. Synthetic
-    targets ``T`` are projected to measurement responses ``Y = T @ J.T`` and
-    the GREIT RM is built as ``T.T @ Y @ (Y.T @ Y + nf^2 Rn)^-1`` in
-    measurement space.
+    targets ``T`` are projected to measurement responses, then the shared
+    ``calc_greit_rm`` parity core builds ``RM`` from EIDORS-oriented
+    component matrices ``Y`` and ``D``.
     """
 
     raw_j = _resolve_jacobian(fwd_model, jacobian)
@@ -758,21 +856,20 @@ def build_3d_greit_rm(
     responses = np.asarray(target_values @ weighted_j.T, dtype=np.float64)
     response_cols = responses.T
     target_cols = target_values.T
-    rn, rn_source = _measurement_regularisation(
-        regularisation,
-        n_measurements=weighted_j.shape[0],
+    if regularisation is None:
+        noise_covar: Any = 1.0
+        rn_source = "identity"
+    else:
+        noise_covar, rn_source = _measurement_regularisation(
+            regularisation,
+            n_measurements=weighted_j.shape[0],
+        )
+    components = calc_greit_rm(
+        response_cols,
+        target_cols,
+        weight=nf,
+        noise_covar=noise_covar,
     )
-    lhs = response_cols @ response_cols.T + (nf * nf) * rn
-    rhs_t = (target_cols @ response_cols.T).T
-    try:
-        rm = np.linalg.solve(lhs.T, rhs_t).T
-        solver = "solve"
-    except np.linalg.LinAlgError:
-        rm = target_cols @ response_cols.T @ np.linalg.pinv(lhs)
-        solver = "pinv"
-    rm = np.asarray(rm, dtype=np.float64)
-    if not np.isfinite(rm).all():
-        raise FloatingPointError("GREIT RM contains non-finite values.")
 
     voxel_shape = _voxel_shape(inverse_mesh) or _metadata_voxel_shape(
         target_bundle.metadata
@@ -784,16 +881,25 @@ def build_3d_greit_rm(
         "n_measurements": int(weighted_j.shape[0]),
         "n_parameters": int(weighted_j.shape[1]),
         "noise_figure": nf,
+        "weight": components.weight,
+        "noiselev": components.noiselev,
         "regularisation_source": rn_source,
         "bad_channel_count": int(measurement_contract.bad_channel_count),
         "measurement_weight_kind": measurement_contract.weight_kind,
-        "system_shape": tuple(int(v) for v in lhs.shape),
-        "rm_shape": tuple(int(v) for v in rm.shape),
-        "solver": solver,
+        "system_shape": tuple(int(v) for v in components.m.shape),
+        "rm_shape": tuple(int(v) for v in components.rm.shape),
+        "pjt_shape": tuple(int(v) for v in components.pjt.shape),
+        "sn_shape": tuple(int(v) for v in components.sn.shape),
+        "matrix_rank": components.metadata["matrix_rank"],
+        "matrix_condition": components.metadata["matrix_condition"],
+        "solver": components.metadata["solver"],
+        "singular_fallback": components.metadata["singular_fallback"],
+        "transpose_semantics": components.metadata["transpose_semantics"],
         "online_hot_path": "rm_matmul",
         "artifact_schema": "pyeidors-greit-rm-hdf5-v1",
         "artifact_format": "hdf5",
         "eidors_parity": False,
+        "calc_greit_rm_parity_core": True,
         "training_mode": "linearized",
         "voxel_shape": voxel_shape,
     }
@@ -801,7 +907,7 @@ def build_3d_greit_rm(
         meta.update(metadata)
 
     result = GREITRM(
-        rm=rm,
+        rm=components.rm,
         metadata=MappingProxyType(meta),
         voxel_shape=voxel_shape,
         channel_mask=measurement_contract.channel_mask,
@@ -1844,6 +1950,69 @@ def _measurement_regularisation(
     return np.ascontiguousarray(matrix, dtype=np.float64), "provided"
 
 
+def _validate_training_response_matrix(values: Any) -> np.ndarray:
+    raw = np.asarray(values)
+    dtype = np.complex128 if np.iscomplexobj(raw) else np.float64
+    matrix = np.asarray(values, dtype=dtype)
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] == 0:
+        raise ValueError("GREIT response matrix Y must be non-empty 2D.")
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("GREIT response matrix Y contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=dtype)
+
+
+def _validate_desired_component_matrix(values: Any, *, n_targets: int) -> np.ndarray:
+    raw = np.asarray(values)
+    dtype = np.complex128 if np.iscomplexobj(raw) else np.float64
+    matrix = np.asarray(values, dtype=dtype)
+    if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] != n_targets:
+        raise ValueError(
+            "desired image matrix D must have shape "
+            f"(n_rec_parameters, {n_targets}), got {matrix.shape}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("desired image matrix D contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=dtype)
+
+
+def _as_scalar_weight(value: Any) -> float:
+    weight = np.asarray(value, dtype=np.float64)
+    if weight.size != 1:
+        raise NotImplementedError(
+            "calc_greit_rm currently supports scalar weight only; "
+            "matrix/NF weight search belongs to T45."
+        )
+    scalar = float(weight.reshape(-1)[0])
+    if scalar < 0.0 or not np.isfinite(scalar):
+        raise ValueError("weight must be finite and non-negative.")
+    return scalar
+
+
+def _noise_covar_matrix(values: Any, *, n_measurements: int) -> tuple[np.ndarray, str]:
+    if sparse.issparse(values):
+        matrix = np.asarray(values.toarray(), dtype=np.float64)
+        source = "matrix"
+    else:
+        array = np.asarray(values, dtype=np.float64)
+        if array.size == 1:
+            scalar = float(array.reshape(-1)[0])
+            if scalar < 0.0 or not np.isfinite(scalar):
+                raise ValueError("noise_covar scalar must be finite and non-negative.")
+            matrix = scalar * np.eye(n_measurements, dtype=np.float64)
+            source = "scalar"
+        else:
+            matrix = np.asarray(array, dtype=np.float64)
+            source = "matrix"
+    if matrix.shape != (n_measurements, n_measurements):
+        raise ValueError(
+            "noise_covar must be scalar or have shape "
+            f"{(n_measurements, n_measurements)}, got {matrix.shape}."
+        )
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError("noise_covar contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=np.float64), source
+
+
 def _stored_measurement_weights(values: Any | None) -> np.ndarray | None:
     if values is None:
         return None
@@ -2058,11 +2227,13 @@ __all__ = [
     "GREITFiniteTargetResponses",
     "GREIT_METRIC_KEYS",
     "GREITRM",
+    "GREITRMComponents",
     "GREITTrainingTargets",
     "build_3d_greit_rm",
     "build_greit_desired_images",
     "build_greit_finite_target_responses",
     "build_greit3d_distribution",
+    "calc_greit_rm",
     "generate_spherical_targets",
     "greit_metrics",
     "greit_desired_image_sigmoid",
