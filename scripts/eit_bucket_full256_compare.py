@@ -34,6 +34,7 @@ def _format_table(case: BucketFull256CompareCase) -> str:
         "delta_rmse_vs_208",
         "artifact_energy",
         "delta_artifact_vs_208",
+        "direct_l2_vs_208",
     ]
     rendered = [
         [
@@ -43,6 +44,7 @@ def _format_table(case: BucketFull256CompareCase) -> str:
             _format_float(row.delta_sigma_relative_rmse_vs_full_208),
             _format_float(row.artifact_energy),
             _format_float(row.delta_artifact_energy_vs_full_208),
+            _format_float(row.delta_field_l2_vs_full_208),
         ]
         for row in case.summaries
     ]
@@ -132,6 +134,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("outputs/eit_bucket_full256_compare_metrics_16e.png"),
     )
     parser.add_argument(
+        "--recon-delta-plot-output",
+        type=Path,
+        default=None,
+        help=(
+            "Optional 3-row reconstruction plot with sigma, error vs truth, "
+            "and direct delta vs full_208."
+        ),
+    )
+    parser.add_argument(
         "--point-audit-plot-output",
         type=Path,
         default=Path("outputs/eit_bucket_full256_point_audit_16e.png"),
@@ -164,6 +175,7 @@ def main(argv: list[str] | None = None) -> int:
         recon_plot_output=args.recon_plot_output,
         metrics_plot_output=args.metrics_plot_output,
         point_audit_plot_output=args.point_audit_plot_output,
+        recon_delta_plot_output=args.recon_delta_plot_output,
         dpi=args.dpi,
     )
     print(

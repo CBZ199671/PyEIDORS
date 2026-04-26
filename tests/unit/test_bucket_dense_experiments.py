@@ -178,6 +178,7 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
         recon_plot_output=tmp_path / "recon.png",
         metrics_plot_output=tmp_path / "metrics.png",
         point_audit_plot_output=tmp_path / "point_audit.png",
+        recon_delta_plot_output=tmp_path / "recon_delta.png",
         dpi=70,
     )
 
@@ -186,18 +187,21 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
     assert {row.recon_method for row in case.summaries} == {
         "full_256",
         "full_208",
+        "far3_drop_near3_keep_208",
         "raw_160",
         "poly2_208",
     }
     inverse_points = {row.recon_method: row.n_inverse_points for row in case.summaries}
     assert inverse_points["full_256"] == 256
     assert inverse_points["full_208"] == 208
+    assert inverse_points["far3_drop_near3_keep_208"] == 208
     assert inverse_points["raw_160"] == 160
     assert inverse_points["poly2_208"] == 208
     baseline = next(row for row in case.summaries if row.recon_method == "full_208")
     assert baseline.delta_sigma_relative_rmse_vs_full_208 == 0.0
     assert baseline.delta_artifact_energy_vs_full_208 == 0.0
-    assert len(case.field_rows) == 4 * case.bucket.n_cells
+    assert baseline.delta_field_l2_vs_full_208 == 0.0
+    assert len(case.field_rows) == 5 * case.bucket.n_cells
 
     with written["summary"].open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
@@ -207,7 +211,7 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
     assert list(summary_rows[0].keys()) == BUCKET_FULL256_COMPARE_SUMMARY_FIELDS
     assert list(field_rows[0].keys()) == BUCKET_FULL256_COMPARE_FIELD_FIELDS
     assert "full_256" in written["report"].read_text(encoding="utf-8")
-    for key in ["recon_plot", "metrics_plot", "point_audit_plot"]:
+    for key in ["recon_plot", "metrics_plot", "point_audit_plot", "recon_delta_plot"]:
         assert written[key].read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
 
@@ -288,6 +292,7 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
     field_output = tmp_path / "fields.csv"
     report_output = tmp_path / "report.md"
     recon_plot = tmp_path / "recon.png"
+    recon_delta_plot = tmp_path / "recon_delta.png"
     metrics_plot = tmp_path / "metrics.png"
     point_audit_plot = tmp_path / "point_audit.png"
     completed = subprocess.run(
@@ -308,6 +313,8 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
             str(report_output),
             "--recon-plot-output",
             str(recon_plot),
+            "--recon-delta-plot-output",
+            str(recon_delta_plot),
             "--metrics-plot-output",
             str(metrics_plot),
             "--point-audit-plot-output",
@@ -332,10 +339,67 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(tmp_path) -> Non
     assert {row["recon_method"] for row in summary_rows} == {
         "full_256",
         "full_208",
+        "far3_drop_near3_keep_208",
         "raw_160",
         "poly2_208",
     }
     assert list(field_rows[0].keys()) == BUCKET_FULL256_COMPARE_FIELD_FIELDS
     assert {row["inside_bucket"] for row in field_rows} == {"true"}
-    for path in [recon_plot, metrics_plot, point_audit_plot]:
+    for path in [recon_plot, recon_delta_plot, metrics_plot, point_audit_plot]:
+        assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
+    tmp_path,
+) -> None:
+    output_dir = tmp_path / "noise_sweep"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/eit_bucket_all_modes_noise_sweep.py",
+            "--mesh-h",
+            "0.16",
+            "--allow-coarse-smoke",
+            "--fit-methods",
+            "poly2",
+            "--snr-levels",
+            "inf",
+            "10",
+            "--output-dir",
+            str(output_dir),
+            "--dpi",
+            "70",
+        ],
+        check=True,
+        cwd=REPO_ROOT,
+        text=True,
+        capture_output=True,
+    )
+
+    summary = output_dir / "eit_bucket_all_modes_noise_sweep_summary_16e.csv"
+    fields = output_dir / "eit_bucket_all_modes_noise_sweep_fields_16e.csv"
+    report = output_dir / "eit_bucket_all_modes_noise_sweep_summary_16e.md"
+    metrics = output_dir / "eit_bucket_all_modes_noise_sweep_metrics_16e.png"
+    recon = output_dir / "eit_bucket_all_modes_noise_sweep_recon_grid_16e.png"
+    errors = output_dir / "eit_bucket_all_modes_noise_sweep_error_grid_16e.png"
+
+    assert "SNR=inf" in completed.stdout
+    assert "SNR=10" in completed.stdout
+    with summary.open(newline="", encoding="utf-8") as handle:
+        summary_rows = list(csv.DictReader(handle))
+    with fields.open(newline="", encoding="utf-8") as handle:
+        field_rows = list(csv.DictReader(handle))
+
+    assert summary_rows[0]["actual_snr"]
+    assert {row["noise_snr_requested"] for row in summary_rows} == {"inf", "10"}
+    assert {row["recon_method"] for row in summary_rows} == {
+        "full_256",
+        "full_208",
+        "far3_drop_near3_keep_208",
+        "raw_160",
+        "poly2_208",
+    }
+    assert field_rows[0]["noise_seed"]
+    assert "add_noise" in report.read_text(encoding="utf-8")
+    for path in [metrics, recon, errors]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")

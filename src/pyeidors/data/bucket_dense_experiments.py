@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import csv
 import math
 from pathlib import Path
@@ -78,6 +78,9 @@ BUCKET_FULL256_COMPARE_SUMMARY_FIELDS = [
     "recon_method",
     "delta_sigma_relative_rmse_vs_full_208",
     "delta_artifact_energy_vs_full_208",
+    "delta_field_rmse_vs_full_208",
+    "delta_field_l2_vs_full_208",
+    "delta_field_max_abs_vs_full_208",
     "sigma_rmse",
     "sigma_relative_rmse",
     "sigma_mae",
@@ -194,6 +197,9 @@ class BucketFull256CompareSummaryRow:
     recon_method: str
     delta_sigma_relative_rmse_vs_full_208: float
     delta_artifact_energy_vs_full_208: float
+    delta_field_rmse_vs_full_208: float
+    delta_field_l2_vs_full_208: float
+    delta_field_max_abs_vs_full_208: float
     sigma_rmse: float
     sigma_relative_rmse: float
     sigma_mae: float
@@ -223,6 +229,9 @@ class BucketFull256CompareSummaryRow:
             "delta_artifact_energy_vs_full_208": (
                 self.delta_artifact_energy_vs_full_208
             ),
+            "delta_field_rmse_vs_full_208": self.delta_field_rmse_vs_full_208,
+            "delta_field_l2_vs_full_208": self.delta_field_l2_vs_full_208,
+            "delta_field_max_abs_vs_full_208": (self.delta_field_max_abs_vs_full_208),
             "sigma_rmse": self.sigma_rmse,
             "sigma_relative_rmse": self.sigma_relative_rmse,
             "sigma_mae": self.sigma_mae,
@@ -500,6 +509,36 @@ def build_circle_bucket_linearized_model(
     )
 
 
+def _measurement_submodel(
+    model: EITLinearizedModel,
+    indices: np.ndarray,
+    *,
+    label: str,
+) -> EITLinearizedModel:
+    idx = np.asarray(indices, dtype=np.int64)
+    if idx.ndim != 1 or idx.size == 0:
+        raise ValueError("indices must be a non-empty 1D vector")
+    return replace(
+        model,
+        voltage_true=np.asarray(model.voltage_true, dtype=float)[idx],
+        voltage_reference=np.asarray(model.voltage_reference, dtype=float)[idx],
+        sensitivity=np.asarray(model.sensitivity, dtype=float)[idx, :],
+        label=label,
+        n_measurements=int(idx.size),
+    )
+
+
+def _far3_drop_near3_keep_indices(n_elec: int) -> np.ndarray:
+    point_rows, point_summary = build_holdout_point_audit(n_elec=int(n_elec))
+    indices = [
+        row.global_index_256 for row in point_rows if row.point_status != "holdout_far3"
+    ]
+    expected = point_summary.full_candidate_count - point_summary.holdout_far3_count
+    if len(indices) != expected:
+        raise RuntimeError("far3-drop/near3-keep point count mismatch")
+    return np.asarray(indices, dtype=np.int64)
+
+
 def _weighted_structure(
     *,
     values: np.ndarray,
@@ -633,9 +672,15 @@ def _full256_summary_from_metrics(
     recon_method: str,
     n_measurements: int,
     n_inverse_points: int,
+    sigma_recon: np.ndarray,
+    sigma_baseline: np.ndarray,
     metrics: _StructureMetrics,
     baseline_metrics: _StructureMetrics,
 ) -> BucketFull256CompareSummaryRow:
+    delta_field = np.asarray(sigma_recon, dtype=float) - np.asarray(
+        sigma_baseline,
+        dtype=float,
+    )
     return BucketFull256CompareSummaryRow(
         experiment="full256_compare",
         domain=bucket.domain,
@@ -653,6 +698,9 @@ def _full256_summary_from_metrics(
         delta_artifact_energy_vs_full_208=(
             metrics.artifact_energy - baseline_metrics.artifact_energy
         ),
+        delta_field_rmse_vs_full_208=float(np.sqrt(np.mean(delta_field**2))),
+        delta_field_l2_vs_full_208=float(np.linalg.norm(delta_field)),
+        delta_field_max_abs_vs_full_208=float(np.max(np.abs(delta_field))),
         sigma_rmse=metrics.sigma_rmse,
         sigma_relative_rmse=metrics.sigma_relative_rmse,
         sigma_mae=metrics.sigma_mae,
@@ -919,10 +967,23 @@ def run_bucket_full256_compare_experiment(
         ridge=ridge,
         inverse_backend=inverse_backend,
     )
+    far3_drop_near3_keep_indices = _far3_drop_near3_keep_indices(n_elec)
+    model_far3_drop_near3_keep_208 = _measurement_submodel(
+        model_full_256,
+        far3_drop_near3_keep_indices,
+        label="circle_bucket_dense_far3_drop_near3_keep_208",
+    )
+    sigma_far3_drop_near3_keep_208 = reconstruct_linearized_sigma(
+        model=model_far3_drop_near3_keep_208,
+        voltages=model_far3_drop_near3_keep_208.voltage_true,
+        ridge=ridge,
+        inverse_backend=inverse_backend,
+    )
 
     sigma_recon_by_method: dict[str, np.ndarray] = {
         "full_256": sigma_full_256,
         "full_208": holdout_case.sigma_recon_full,
+        "far3_drop_near3_keep_208": sigma_far3_drop_near3_keep_208,
     }
     sigma_recon_by_method.update(holdout_case.sigma_recon_by_method)
 
@@ -934,6 +995,7 @@ def run_bucket_full256_compare_experiment(
     inverse_points = {
         "full_256": int(model_full_256.n_measurements),
         "full_208": int(model_full_208.n_measurements),
+        "far3_drop_near3_keep_208": int(model_far3_drop_near3_keep_208.n_measurements),
     }
     inverse_points.update(
         {row.recon_method: int(row.n_inverse_points) for row in holdout_case.summaries}
@@ -941,6 +1003,7 @@ def run_bucket_full256_compare_experiment(
     available_measurements = {
         "full_256": int(model_full_256.n_measurements),
         "full_208": int(model_full_208.n_measurements),
+        "far3_drop_near3_keep_208": int(model_full_256.n_measurements),
     }
     available_measurements.update(
         {
@@ -956,6 +1019,8 @@ def run_bucket_full256_compare_experiment(
             recon_method=method,
             n_measurements=available_measurements[method],
             n_inverse_points=inverse_points[method],
+            sigma_recon=sigma_recon_by_method[method],
+            sigma_baseline=sigma_recon_by_method["full_208"],
             metrics=metrics,
             baseline_metrics=baseline_metrics,
         )
@@ -1304,6 +1369,97 @@ def plot_bucket_full256_compare_recon(
     return output
 
 
+def plot_bucket_full256_compare_recon_with_full208_delta(
+    case: BucketFull256CompareCase,
+    output_path: Path,
+    *,
+    baseline_method: str = "full_208",
+    dpi: int = 200,
+) -> Path:
+    """Plot recon, truth error, and direct field deltas against full_208."""
+
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    from .digit_plot import configure_times_new_roman
+
+    configure_times_new_roman()
+    output = Path(output_path).with_suffix(".png")
+    output.parent.mkdir(parents=True, exist_ok=True)
+
+    if baseline_method not in case.sigma_recon_by_method:
+        raise ValueError(f"baseline_method not found: {baseline_method}")
+
+    fields: list[tuple[str, np.ndarray]] = [("truth", case.bucket.sigma_true)]
+    fields.extend(case.sigma_recon_by_method.items())
+    baseline = np.asarray(case.sigma_recon_by_method[baseline_method], dtype=float)
+    sigma_values = np.concatenate([values for _, values in fields])
+    sigma_min = float(np.min(sigma_values))
+    sigma_max = float(np.max(sigma_values))
+    truth_errors = [np.asarray(values) - case.bucket.sigma_true for _, values in fields]
+    error_lim = max(
+        float(max(np.max(np.abs(error)) for error in truth_errors[1:])),
+        1e-12,
+    )
+    full208_deltas = [np.asarray(values) - baseline for _, values in fields]
+    delta_lim = max(
+        float(max(np.max(np.abs(delta)) for delta in full208_deltas)),
+        1e-12,
+    )
+
+    n_cols = len(fields)
+    fig, axes = plt.subplots(
+        3,
+        n_cols,
+        figsize=(2.45 * n_cols, 8.3),
+        squeeze=False,
+        constrained_layout=True,
+    )
+    fig.suptitle(
+        "Full acquisition-mode recon compare: truth error and delta vs full_208",
+        fontsize=14,
+    )
+    for col_idx, (label, values) in enumerate(fields):
+        image = _tripcolor_field(
+            axes[0, col_idx],
+            case,
+            np.asarray(values, dtype=float),
+            vmin=sigma_min,
+            vmax=sigma_max,
+            cmap="viridis",
+        )
+        axes[0, col_idx].set_title(label, fontsize=8)
+        fig.colorbar(image, ax=axes[0, col_idx], fraction=0.046, pad=0.02)
+
+        err_image = _tripcolor_field(
+            axes[1, col_idx],
+            case,
+            np.asarray(values, dtype=float) - case.bucket.sigma_true,
+            vmin=-error_lim,
+            vmax=error_lim,
+            cmap="coolwarm",
+        )
+        axes[1, col_idx].set_title("error vs truth", fontsize=8)
+        fig.colorbar(err_image, ax=axes[1, col_idx], fraction=0.046, pad=0.02)
+
+        delta_image = _tripcolor_field(
+            axes[2, col_idx],
+            case,
+            np.asarray(values, dtype=float) - baseline,
+            vmin=-delta_lim,
+            vmax=delta_lim,
+            cmap="coolwarm",
+        )
+        axes[2, col_idx].set_title(f"delta vs {baseline_method}", fontsize=8)
+        fig.colorbar(delta_image, ax=axes[2, col_idx], fraction=0.046, pad=0.02)
+
+    fig.savefig(output, dpi=int(dpi), bbox_inches="tight")
+    plt.close(fig)
+    return output
+
+
 def plot_bucket_full256_compare_metrics(
     case: BucketFull256CompareCase,
     output_path: Path,
@@ -1326,13 +1482,23 @@ def plot_bucket_full256_compare_metrics(
     rows = case.summaries
     labels = [row.recon_method for row in rows]
     x = np.arange(len(rows), dtype=float)
-    fig, axes = plt.subplots(2, 2, figsize=(12.4, 7.0), constrained_layout=True)
+    fig, axes = plt.subplots(2, 3, figsize=(15.4, 7.0), constrained_layout=True)
     fig.suptitle("Full 256 numeric comparison", fontsize=14)
     panels = [
         (
             "Sigma relative RMSE",
             [row.sigma_relative_rmse for row in rows],
             "#1f77b4",
+        ),
+        (
+            "Direct field L2 vs full_208",
+            [row.delta_field_l2_vs_full_208 for row in rows],
+            "#d62728",
+        ),
+        (
+            "Direct field RMSE vs full_208",
+            [row.delta_field_rmse_vs_full_208 for row in rows],
+            "#8c564b",
         ),
         (
             "Sigma effective digits",
@@ -1370,6 +1536,8 @@ def format_bucket_full256_compare_report(case: BucketFull256CompareCase) -> str:
         f"n_cells/n_dofs `{case.bucket.n_cells}`，n_elec `{case.bucket.n_elec}`。",
         f"- 点数：full_256 `{case.model_full_256.n_measurements}`；"
         f"原生 full_208 `{case.model_full_208.n_measurements}`；"
+        "far3_drop_near3_keep_208 为从 256 候选点中仅删除远端 3 点/帧、"
+        "保留激励相关近端 3 点/帧；"
         "raw_160 每帧再删 far3 后用 160 点；拟合 208 用 160 点训练补回 48 点。",
         f"- full_256 相对 full_208：delta_sigma_relative_rmse "
         f"`{full256.delta_sigma_relative_rmse_vs_full_208:.12g}`，"
@@ -1386,8 +1554,8 @@ def format_bucket_full256_compare_report(case: BucketFull256CompareCase) -> str:
         "",
         "## 数值表",
         "",
-        "| recon_method | n_inverse_points | sigma_relative_rmse | delta_rmse_vs_full_208 | artifact_energy | delta_artifact_vs_full_208 |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| recon_method | n_inverse_points | sigma_relative_rmse | delta_rmse_vs_full_208 | artifact_energy | delta_artifact_vs_full_208 | direct_field_l2_vs_full_208 |",
+        "|---|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         lines.append(
@@ -1395,7 +1563,8 @@ def format_bucket_full256_compare_report(case: BucketFull256CompareCase) -> str:
             f"{row.sigma_relative_rmse:.12g} | "
             f"{row.delta_sigma_relative_rmse_vs_full_208:.12g} | "
             f"{row.artifact_energy:.12g} | "
-            f"{row.delta_artifact_energy_vs_full_208:.12g} |"
+            f"{row.delta_artifact_energy_vs_full_208:.12g} | "
+            f"{row.delta_field_l2_vs_full_208:.12g} |"
         )
     return "\n".join(lines) + "\n"
 
@@ -1536,6 +1705,7 @@ def write_bucket_full256_compare_outputs(
     recon_plot_output: Path,
     metrics_plot_output: Path,
     point_audit_plot_output: Path,
+    recon_delta_plot_output: Path | None = None,
     dpi: int = 200,
 ) -> dict[str, Path]:
     """Write all full-256 comparison CSV, report, and visual outputs."""
@@ -1565,7 +1735,7 @@ def write_bucket_full256_compare_outputs(
         format_bucket_full256_compare_report(case),
         encoding="utf-8",
     )
-    return {
+    written = {
         "summary": summary_output,
         "fields": field_output,
         "report": report_output,
@@ -1586,6 +1756,15 @@ def write_bucket_full256_compare_outputs(
             dpi=dpi,
         ),
     }
+    if recon_delta_plot_output is not None:
+        written["recon_delta_plot"] = (
+            plot_bucket_full256_compare_recon_with_full208_delta(
+                case,
+                recon_delta_plot_output,
+                dpi=dpi,
+            )
+        )
+    return written
 
 
 __all__ = [
@@ -1605,6 +1784,7 @@ __all__ = [
     "plot_bucket_dense_summary",
     "plot_bucket_full256_compare_metrics",
     "plot_bucket_full256_compare_recon",
+    "plot_bucket_full256_compare_recon_with_full208_delta",
     "run_bucket_dense_experiments",
     "run_bucket_full256_compare_experiment",
     "write_bucket_dense_outputs",
