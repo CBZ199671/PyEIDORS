@@ -24,6 +24,7 @@ from .difference import (
     project_measurement_jacobian,
     project_measurement_vector,
 )
+from .noise import EIDORS_NOISE_NORM_OPTION, add_noise
 from .channels import (
     MeasurementContract,
     apply_measurement_contract_to_jacobian,
@@ -106,6 +107,8 @@ __all__ = [
     "normalize_time_difference",
     "project_measurement_jacobian",
     "project_measurement_vector",
+    "EIDORS_NOISE_NORM_OPTION",
+    "add_noise",
     "MeasurementContract",
     "apply_measurement_contract_to_jacobian",
     "apply_measurement_contract_to_vector",
