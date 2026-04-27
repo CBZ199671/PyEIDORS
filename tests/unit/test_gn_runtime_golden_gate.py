@@ -150,6 +150,11 @@ def _fake_signature(_fwd_model) -> str:
     return "stub-signature"
 
 
+EXPECTED_STARTUP_CACHE_PAYLOAD_SHA256 = (
+    "b73d9dfd0d440872a6920a0c46c102afc74025e33232c959677ef3ed34d916f5"
+)
+
+
 def test_startup_cache_payload_sha256_locked_for_synthetic_reconstructor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -217,13 +222,7 @@ def test_startup_cache_payload_sha256_locked_for_synthetic_reconstructor(
         payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
     ).encode("utf-8")
     digest = hashlib.sha256(canonical).hexdigest()
-    assert len(digest) == 64
-
-    payload2 = _startup_cache_payload(reconstructor, sigma_array, "efficient")
-    canonical2 = json.dumps(
-        payload2, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
-    assert hashlib.sha256(canonical2).hexdigest() == digest
+    assert digest == EXPECTED_STARTUP_CACHE_PAYLOAD_SHA256
 
 
 def test_iteration_log_to_payload_passes_through_known_input_values() -> None:
