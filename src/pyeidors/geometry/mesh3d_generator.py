@@ -21,7 +21,6 @@ from ..electrodes.layout import (
     ELECTRODE_LAYOUT_ZIGZAG,
     normalize_electrode_layout,
 )
-from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import (
     DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_3D_GEOMETRY_VERSION,
@@ -33,10 +32,8 @@ from ..perf.policy import (
 from ._helpers import (
     add_named_physical_group,
     assert_unique_physical_group_ownership,
-    validate_mesh_data_tags,
-    write_association_table,
+    finalize_3d_cylinder_mesh,
 )
-from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
 
@@ -501,35 +498,11 @@ class _LegacyTetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        electrode_names = [
-            f"electrode_{idx}" for idx in range(1, int(self.electrodes.n_elec) + 1)
-        ]
-        facet_names = [*electrode_names, "gaps"]
-        association_table = validate_mesh_data_tags(
+        return finalize_3d_cylinder_mesh(
             mesh_data,
-            gdim=3,
-            required_names=["domain", *facet_names],
-            required_facet_names=facet_names,
-        )
-        write_association_table(assoc_path, association_table)
-        write_dolfinx_mesh_cache(
-            mesh_data,
-            source_msh_file=msh_path,
-            association_table=association_table,
-            gdim=3,
-            mesh_family="tetra",
-            geometry_version="legacy",
-            generator_revision=LEGACY_3D_GENERATOR_REVISION,
-        )
-
-        return build_eit_mesh(
-            mesh_data.mesh,
-            facet_tags=mesh_data.facet_tags,
-            cell_tags=mesh_data.cell_tags,
-            association_table=association_table,
-            physical_groups=mesh_data.physical_groups,
-            radius=estimate_radius(mesh_data.mesh),
-            mesh_file=str(msh_path),
+            msh_path=msh_path,
+            assoc_path=assoc_path,
+            total_electrodes=int(self.electrodes.n_elec),
             mesh_family="tetra",
             geometry_version="legacy",
             generator_revision=LEGACY_3D_GENERATOR_REVISION,
@@ -828,33 +801,11 @@ class _GeomV2TetraCylinder3DMeshGenerator:
             else:
                 gmsh.clear()
 
-        electrode_names = [f"electrode_{idx}" for idx in range(1, total_electrodes + 1)]
-        facet_names = [*electrode_names, "gaps"]
-        association_table = validate_mesh_data_tags(
+        return finalize_3d_cylinder_mesh(
             mesh_data,
-            gdim=3,
-            required_names=["domain", *facet_names],
-            required_facet_names=facet_names,
-        )
-        write_association_table(assoc_path, association_table)
-        write_dolfinx_mesh_cache(
-            mesh_data,
-            source_msh_file=msh_path,
-            association_table=association_table,
-            gdim=3,
-            mesh_family="tetra",
-            geometry_version="geomv2",
-            generator_revision=self.generator_revision,
-        )
-
-        return build_eit_mesh(
-            mesh_data.mesh,
-            facet_tags=mesh_data.facet_tags,
-            cell_tags=mesh_data.cell_tags,
-            association_table=association_table,
-            physical_groups=mesh_data.physical_groups,
-            radius=estimate_radius(mesh_data.mesh),
-            mesh_file=str(msh_path),
+            msh_path=msh_path,
+            assoc_path=assoc_path,
+            total_electrodes=total_electrodes,
             mesh_family="tetra",
             geometry_version="geomv2",
             generator_revision=self.generator_revision,
@@ -1300,39 +1251,15 @@ class _GeomV2HexCylinder3DMeshGenerator:
         )
 
         mesh_data = gmshio.read_from_msh(str(msh_path), MPI.COMM_WORLD, rank=0, gdim=3)
-        electrode_names = [f"electrode_{idx}" for idx in range(1, total_electrodes + 1)]
-        facet_names = [*electrode_names, "gaps"]
-        association_table = validate_mesh_data_tags(
+        return finalize_3d_cylinder_mesh(
             mesh_data,
-            gdim=3,
-            required_names=["domain", *facet_names],
-            required_facet_names=facet_names,
-        )
-        write_association_table(assoc_path, association_table)
-        write_dolfinx_mesh_cache(
-            mesh_data,
-            source_msh_file=msh_path,
-            association_table=association_table,
-            gdim=3,
+            msh_path=msh_path,
+            assoc_path=assoc_path,
+            total_electrodes=total_electrodes,
             mesh_family="hex",
             geometry_version="geomv2",
             generator_revision=self.generator_revision,
             structured_sidecar_file=sidecar_path,
-            structured_sidecar_version=STRUCTURED_SIDECAR_VERSION,
-        )
-
-        return build_eit_mesh(
-            mesh_data.mesh,
-            facet_tags=mesh_data.facet_tags,
-            cell_tags=mesh_data.cell_tags,
-            association_table=association_table,
-            physical_groups=mesh_data.physical_groups,
-            radius=estimate_radius(mesh_data.mesh),
-            mesh_file=str(msh_path),
-            mesh_family="hex",
-            geometry_version="geomv2",
-            generator_revision=self.generator_revision,
-            structured_sidecar_file=str(sidecar_path),
             structured_sidecar_version=STRUCTURED_SIDECAR_VERSION,
         )
 

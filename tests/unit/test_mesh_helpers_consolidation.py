@@ -185,3 +185,48 @@ def test_optimized_mesh_converter_init_wires_estimate_radius() -> None:
         radius_provider=estimate_radius,
     )
     assert converter._radius_provider is estimate_radius
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: finalize_3d_cylinder_mesh tail consolidation across 3 generators.
+# ---------------------------------------------------------------------------
+
+
+def test_finalize_3d_cylinder_mesh_signature_exposes_required_kwargs() -> None:
+    """``finalize_3d_cylinder_mesh`` must accept the kwargs all 3 generators feed it."""
+    sig = inspect.signature(helpers.finalize_3d_cylinder_mesh)
+    params = sig.parameters
+    required = {
+        "mesh_data": inspect.Parameter.POSITIONAL_OR_KEYWORD,
+        "msh_path": inspect.Parameter.KEYWORD_ONLY,
+        "assoc_path": inspect.Parameter.KEYWORD_ONLY,
+        "total_electrodes": inspect.Parameter.KEYWORD_ONLY,
+        "mesh_family": inspect.Parameter.KEYWORD_ONLY,
+        "geometry_version": inspect.Parameter.KEYWORD_ONLY,
+        "generator_revision": inspect.Parameter.KEYWORD_ONLY,
+        "structured_sidecar_file": inspect.Parameter.KEYWORD_ONLY,
+        "structured_sidecar_version": inspect.Parameter.KEYWORD_ONLY,
+    }
+    for name, kind in required.items():
+        assert name in params, f"finalize_3d_cylinder_mesh missing kwarg {name!r}"
+        assert params[name].kind == kind, f"{name!r} has wrong parameter kind"
+
+    # Sidecar kwargs default to None (tetra path); hex path overrides.
+    assert params["structured_sidecar_file"].default is None
+    assert params["structured_sidecar_version"].default is None
+
+
+def test_three_cylinder_generators_route_through_finalize_helper() -> None:
+    """Each cylinder generator's ``generate`` body must call ``finalize_3d_cylinder_mesh``."""
+    from pyeidors.geometry import mesh3d_generator as mesh3d
+
+    for generator_cls in (
+        mesh3d._LegacyTetraCylinder3DMeshGenerator,
+        mesh3d._GeomV2TetraCylinder3DMeshGenerator,
+        mesh3d._GeomV2HexCylinder3DMeshGenerator,
+    ):
+        source = inspect.getsource(generator_cls.generate)
+        assert "finalize_3d_cylinder_mesh(" in source, (
+            f"{generator_cls.__name__}.generate must delegate its post-mesh tail "
+            "to pyeidors.geometry._helpers.finalize_3d_cylinder_mesh"
+        )

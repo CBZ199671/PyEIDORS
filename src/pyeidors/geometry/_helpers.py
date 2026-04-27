@@ -5,10 +5,11 @@ from __future__ import annotations
 import re
 from configparser import ConfigParser
 from pathlib import Path
-from typing import Any, Dict, Sequence
+from typing import Any, Dict, Optional, Sequence
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
+from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
 
 
@@ -234,3 +235,85 @@ def infer_generator_revision(mesh_name: str) -> str:
     if match is not None:
         return str(match.group(1))
     return LEGACY_3D_GENERATOR_REVISION
+
+
+def finalize_3d_cylinder_mesh(
+    mesh_data,
+    *,
+    msh_path: Path,
+    assoc_path: Path,
+    total_electrodes: int,
+    mesh_family: str,
+    geometry_version: str,
+    generator_revision: str,
+    structured_sidecar_file: Optional[Path] = None,
+    structured_sidecar_version: Optional[str] = None,
+) -> EITMesh:
+    """Run the post-mesh-creation tail shared by all 3D cylinder generators.
+
+    The legacy tetra, geomv2 tetra and geomv2 hex cylinder generators
+    historically duplicated the same ~30-line tail: build the
+    ``electrode_*`` + ``gaps`` facet name list, validate physical
+    groups via :func:`validate_mesh_data_tags`, persist the association
+    table, write the DOLFINx mesh cache (XDMF + HDF5 + optional
+    structured sidecar), then return an :class:`EITMesh` via
+    :func:`pyeidors.femx.build_eit_mesh`. T78 phase 2 consolidates that
+    tail here so the three generators only differ in their geometry
+    construction (``_create_geometry`` / ``_set_physical_groups`` /
+    ``_structured_geometry`` etc.) and in the
+    ``mesh_family`` / ``geometry_version`` / ``generator_revision``
+    triple.
+
+    The optional ``structured_sidecar_file`` / ``structured_sidecar_version``
+    pair is only populated by the geomv2 hex variant; the helper
+    forwards both ``None`` for the tetra paths so the existing
+    :func:`write_dolfinx_mesh_cache` and :func:`build_eit_mesh`
+    signatures see the same defaults they always have.
+    """
+    # Local import keeps the module-level dependency tree clean — only
+    # callers that finalize a mesh pull these heavyweight modules in.
+    from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
+
+    electrode_names = [
+        f"electrode_{idx}" for idx in range(1, int(total_electrodes) + 1)
+    ]
+    facet_names = [*electrode_names, "gaps"]
+    association_table = validate_mesh_data_tags(
+        mesh_data,
+        gdim=3,
+        required_names=["domain", *facet_names],
+        required_facet_names=facet_names,
+    )
+    write_association_table(assoc_path, association_table)
+
+    cache_kwargs: Dict[str, Any] = {
+        "source_msh_file": msh_path,
+        "association_table": association_table,
+        "gdim": 3,
+        "mesh_family": mesh_family,
+        "geometry_version": geometry_version,
+        "generator_revision": generator_revision,
+    }
+    if structured_sidecar_file is not None:
+        cache_kwargs["structured_sidecar_file"] = structured_sidecar_file
+    if structured_sidecar_version is not None:
+        cache_kwargs["structured_sidecar_version"] = structured_sidecar_version
+    write_dolfinx_mesh_cache(mesh_data, **cache_kwargs)
+
+    build_kwargs: Dict[str, Any] = {
+        "facet_tags": mesh_data.facet_tags,
+        "cell_tags": mesh_data.cell_tags,
+        "association_table": association_table,
+        "physical_groups": mesh_data.physical_groups,
+        "radius": estimate_radius(mesh_data.mesh),
+        "mesh_file": str(msh_path),
+        "mesh_family": mesh_family,
+        "geometry_version": geometry_version,
+        "generator_revision": generator_revision,
+    }
+    if structured_sidecar_file is not None:
+        build_kwargs["structured_sidecar_file"] = str(structured_sidecar_file)
+    if structured_sidecar_version is not None:
+        build_kwargs["structured_sidecar_version"] = structured_sidecar_version
+
+    return build_eit_mesh(mesh_data.mesh, **build_kwargs)

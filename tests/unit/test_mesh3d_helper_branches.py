@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import pyeidors.geometry._helpers as helpers_module
 import pyeidors.geometry.mesh3d_generator as mesh3d_module
 
 
@@ -275,8 +276,10 @@ def test_sidecar_and_output_path_helpers_cover_validation_and_io(
         with pytest.raises(ValueError, match=match):
             mesh3d_module.validate_structured_sidecar_payload(case)
 
+    # T78 phase 2: ``write_association_table`` lives in ``geometry/_helpers.py``;
+    # ``mesh3d_generator`` no longer keeps a private re-export.
     assoc_path = tmp_path / "assoc.ini"
-    mesh3d_module.write_association_table(assoc_path, {"domain": 1, "electrode_1": 2})
+    helpers_module.write_association_table(assoc_path, {"domain": 1, "electrode_1": 2})
     assert "electrode_1 = 2" in assoc_path.read_text(encoding="utf-8")
 
     sidecar_path = mesh3d_module.structured_sidecar_path_for_mesh(tmp_path / "demo.msh")
@@ -472,9 +475,12 @@ def test_legacy_and_geomv2_tetra_generator_helpers_and_dispatch(
     monkeypatch.setattr(
         mesh3d_module.gmshio, "model_to_mesh", lambda *_args, **_kwargs: fake_mesh_data
     )
-    monkeypatch.setattr(mesh3d_module, "estimate_radius", lambda _mesh: 1.0)
+    # T78 phase 2: ``estimate_radius`` and ``build_eit_mesh`` are now invoked
+    # from inside ``finalize_3d_cylinder_mesh`` in ``geometry/_helpers.py``;
+    # patching the canonical helper module redirects all three generators.
+    monkeypatch.setattr(helpers_module, "estimate_radius", lambda _mesh: 1.0)
     monkeypatch.setattr(
-        mesh3d_module,
+        helpers_module,
         "build_eit_mesh",
         lambda *_args, **kwargs: SimpleNamespace(
             mesh_family=kwargs["mesh_family"],
@@ -626,9 +632,12 @@ def test_mesh3d_generator_remaining_edge_paths(
     monkeypatch.setattr(
         mesh3d_module.gmshio, "model_to_mesh", lambda *_args, **_kwargs: fake_mesh_data
     )
-    monkeypatch.setattr(mesh3d_module, "estimate_radius", lambda _mesh: 1.0)
+    # T78 phase 2: ``estimate_radius`` and ``build_eit_mesh`` are now invoked
+    # from inside ``finalize_3d_cylinder_mesh`` in ``geometry/_helpers.py``;
+    # patching the canonical helper module redirects all three generators.
+    monkeypatch.setattr(helpers_module, "estimate_radius", lambda _mesh: 1.0)
     monkeypatch.setattr(
-        mesh3d_module,
+        helpers_module,
         "build_eit_mesh",
         lambda *_args, **kwargs: SimpleNamespace(
             mesh_family=kwargs["mesh_family"],
