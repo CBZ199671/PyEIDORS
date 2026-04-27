@@ -1,0 +1,2 @@
+recon_method,cell_index,sigma_true,sigma_recon_full,sigma_recon_candidate,sigma_error_full,sigma_error_candidate,delta_sigma_error
+raw_160,4,1.0,0.98,0.97,-0.02,-0.03,-0.01

@@ -1,0 +1,2 @@
+recon_method,n_inverse_points,frame_count,points_per_frame,holdout_per_frame,train_points_per_frame,holdout_voltage_rmse,diff_voltage_rmse,full_sigma_rmse,recon_sigma_rmse,delta_sigma_rmse,full_sigma_relative_rmse,recon_sigma_relative_rmse,delta_sigma_relative_rmse,full_sigma_effective_digits,recon_sigma_effective_digits,delta_sigma_effective_digits
+raw_160,160,16,13,3,10,0.001,0.002,0.003,0.004,0.005,0.006,0.007,0.008,5.1,5.2,5.3

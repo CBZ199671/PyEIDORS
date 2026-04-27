@@ -1,9 +1,10 @@
 # T81 phase 1 — `src/pyeidors/data/` sweep & audit module index
 
-Status: **phase 2a started**. Phase 1 was index-only; phase 2a now adds
-small shared sweep/report primitives while keeping T81 open. Larger row-schema
-base-class consolidation is still deferred — see the rationale at the end of
-this document.
+Status: **phase 2b landed**. Phase 1 was index-only; phase 2a added
+small shared sweep/report primitives; phase 2b adds byte-stable CSV golden
+fixtures for those migrated serialization edges while keeping T81 open. Larger
+row-schema base-class consolidation is still deferred — see the rationale at
+the end of this document.
 
 This audit is the entrance gate the SPEC row for T81 mandates: index
 each module's dataclass schema, map overlapping fields across modules,
@@ -134,16 +135,31 @@ contract and representative migrated row order/coercion.
 T81 remains `~`: the heavier `ReconMetricRow` / `_StructureMetrics` base
 consolidation still needs the gates below before T81 can close.
 
+## 4.1. Phase 2b boundary
+
+Phase 2b adds the first CSV byte-stability gate without migrating more source
+code. The new fixtures under `tests/fixtures/sweep_csv_columns/` cover the
+already-migrated phase 2a rows from `voltage_digit_sweep`, `factor_sweep`,
+`bucket_dense_experiments`, and `holdout_fit_diff`. The corresponding unit test
+renders each row through its public `as_csv_row()` method plus `csv.DictWriter`
+and asserts exact bytes, including column order, empty optional cells, and
+lowercase boolean cells.
+
+This is deliberately not the heavier `ReconMetricRow` / `_StructureMetrics`
+schema-base move. If those rows are consolidated later, this fixture set should
+be extended before the migration rather than relaxed afterward.
+
 ## 5. Phase 2 completion conditions (gate)
 
 Before heavier row-base consolidation lands, the following must be in
 place (otherwise paper reproducibility breaks; SPEC §T.T81 boundary):
 
-1. **CSV byte-stable fixture per consolidated row**: a tiny golden
-   CSV stored in `tests/fixtures/sweep_csv_columns/`, regenerated
-   from each row class via `as_csv_row` + DictWriter, asserted
-   bytewise against the historical CSV produced by the un-merged
-   class. This locks column order + boolean / numeric coercion.
+1. **CSV byte-stable fixture per consolidated row**: phase 2b has
+   landed tiny golden CSV files for the phase 2a migrated rows in
+   `tests/fixtures/sweep_csv_columns/`. If `ReconMetricRow` /
+   `_StructureMetrics` migration proceeds later, add the next row
+   fixtures before moving those schemas. This locks column order +
+   boolean / numeric coercion.
 2. **HDF5 sheet-name fixture**: an HDF5 archive with the historical
    group / dataset names is committed; the consolidated row writer
    must produce an archive that matches under

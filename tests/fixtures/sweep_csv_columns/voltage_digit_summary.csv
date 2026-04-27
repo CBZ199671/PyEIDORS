@@ -1,0 +1,2 @@
+target_voltage_digits,achieved_voltage_effective_digits,voltage_rmse,sigma_rmse,sigma_relative_rmse,sigma_mae,sigma_max_abs_error,sigma_effective_digits
+5,4.75,0.001,0.002,0.003,0.004,0.005,6.5

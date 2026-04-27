@@ -1,0 +1,2 @@
+experiment,domain,mesh_h,n_cells,n_dofs,n_elec,n_measurements,ridge,recon_method,target_voltage_digits,holdout_voltage_rmse,diff_voltage_rmse,sigma_rmse,sigma_relative_rmse,sigma_mae,sigma_max_abs_error,sigma_effective_digits,centroid_error,eccentricity,artifact_area,artifact_energy,artifact_peak
+voltage_digit_sweep,circle,0.16,12,34,16,208,0.01,digits_5,,,,0.1,0.2,0.3,0.4,5.0,0.6,0.7,0.8,0.9,1.0

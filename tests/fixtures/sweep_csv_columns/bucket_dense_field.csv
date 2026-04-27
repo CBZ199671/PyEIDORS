@@ -1,0 +1,2 @@
+experiment,recon_method,cell_index,cell_x,cell_y,sigma_true,sigma_recon,sigma_error,inside_bucket
+holdout_far3,raw_160,3,0.1,-0.2,1.0,0.9,-0.1,true

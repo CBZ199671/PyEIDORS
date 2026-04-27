@@ -1,0 +1,2 @@
+experiment,domain,mesh_h,n_cells,n_dofs,n_elec,n_measurements,n_inverse_points,ridge,recon_method,delta_sigma_relative_rmse_vs_full_208,delta_artifact_energy_vs_full_208,delta_field_rmse_vs_full_208,delta_field_l2_vs_full_208,delta_field_max_abs_vs_full_208,sigma_rmse,sigma_relative_rmse,sigma_mae,sigma_max_abs_error,sigma_effective_digits,centroid_error,eccentricity,artifact_area,artifact_energy,artifact_peak
+full256_compare,circle,0.16,12,34,16,256,208,0.01,full_256,0.001,0.002,0.003,0.004,0.005,0.1,0.2,0.3,0.4,5.0,0.6,0.7,0.8,0.9,1.0
