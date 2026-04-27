@@ -1,11 +1,11 @@
 # T81 phase 1 — `src/pyeidors/data/` sweep & audit module index
 
-Status: **phase 2c landed**. Phase 1 was index-only; phase 2a added
+Status: **phase 2d landed**. Phase 1 was index-only; phase 2a added
 small shared sweep/report primitives; phase 2b added byte-stable CSV golden
 fixtures; phase 2c adds a tiny HDF5 sheet-name fixture gate for those migrated
-serialization edges while keeping T81 open. Larger row-schema base-class
-consolidation is still deferred — see the rationale at the end of this
-document.
+serialization edges; phase 2d starts the heavier schema-base consolidation
+while keeping T81 open. Remaining row-schema work is still deliberately scoped
+— see the rationale at the end of this document.
 
 This audit is the entrance gate the SPEC row for T81 mandates: index
 each module's dataclass schema, map overlapping fields across modules,
@@ -165,6 +165,31 @@ generates the same HDF5 layout from the helper and compares group / dataset
 paths plus table metadata against the fixture. Future `ReconMetricRow` /
 `_StructureMetrics` consolidation should extend this fixture before moving
 additional tables.
+
+## 4.3. Phase 2d boundary
+
+Phase 2d lands the first heavier schema-base consolidation without changing
+dataclass field order. `pyeidors.data._sweep_core` now owns zero-field mixins
+`SweepRow`, `ReconMetricRow`, and `StructureMetricRow`, plus the reusable
+`StructureMetrics` value object. The zero-field design is intentional:
+dataclass field inheritance would move base fields ahead of child fields and
+therefore break historical CSV columns.
+
+Migrated row classes:
+
+- `VoltageDigitSweepSummary` → `ReconMetricRow`; `VoltageDigitFieldRow` →
+  `SweepRow`.
+- `BucketDenseSummaryRow` / `BucketFull256CompareSummaryRow` →
+  `StructureMetricRow`; `BucketDenseFieldRow` → `SweepRow`.
+- local `bucket_dense_experiments._StructureMetrics` duplicate removed via
+  alias to shared `StructureMetrics`.
+- `HoldoutFitDiffSummary` → `ReconMetricRow` with explicit
+  `recon_*` metric field view; `HoldoutFitDiffFieldRow` → `SweepRow`;
+  `HoldoutStructureMetricRow` → `StructureMetricRow`.
+
+`tests/unit/test_sweep_schema_base_consolidation.py` locks subclassing,
+dataclass field order, shared metric views, and the `_StructureMetrics` alias.
+CSV and HDF5 golden gates remain the byte-level guard for output stability.
 
 ## 5. Phase 2 completion conditions (gate)
 

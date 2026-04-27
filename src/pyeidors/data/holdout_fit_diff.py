@@ -16,7 +16,7 @@ from .holdout_point_audit import (
     build_holdout_point_audit,
     plot_holdout_point_audit,
 )
-from ._sweep_core import dataclass_csv_row
+from ._sweep_core import ReconMetricRow, StructureMetricRow, SweepRow
 
 
 FitMethod = Literal["poly2", "poly3", "spline"]
@@ -84,8 +84,14 @@ FIT_CURVE_LEGEND_LABELS = {
 
 
 @dataclass(frozen=True)
-class HoldoutFitDiffSummary:
+class HoldoutFitDiffSummary(ReconMetricRow):
     """One reconstruction-method summary row for holdout comparison."""
+
+    recon_metric_fields = (
+        "recon_sigma_rmse",
+        "recon_sigma_relative_rmse",
+        "recon_sigma_effective_digits",
+    )
 
     recon_method: str
     n_inverse_points: int
@@ -105,12 +111,9 @@ class HoldoutFitDiffSummary:
     recon_sigma_effective_digits: float
     delta_sigma_effective_digits: float
 
-    def as_csv_row(self) -> dict[str, float | int | str]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
-class HoldoutFitDiffFieldRow:
+class HoldoutFitDiffFieldRow(SweepRow):
     """Per-cell full-vs-candidate reconstruction error row."""
 
     recon_method: str
@@ -122,12 +125,9 @@ class HoldoutFitDiffFieldRow:
     sigma_error_candidate: float
     delta_sigma_error: float
 
-    def as_csv_row(self) -> dict[str, float | int | str]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
-class HoldoutStructureMetricRow:
+class HoldoutStructureMetricRow(StructureMetricRow):
     """Structure metrics for truth/full/candidate conductivity fields."""
 
     recon_kind: str
@@ -147,9 +147,6 @@ class HoldoutStructureMetricRow:
     sigma_mae: float
     sigma_max_abs_error: float
     sigma_effective_digits: float
-
-    def as_csv_row(self) -> dict[str, float | str]:
-        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)

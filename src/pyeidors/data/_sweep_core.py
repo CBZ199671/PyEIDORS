@@ -8,11 +8,38 @@ paper-specific sweep dataclasses.
 from __future__ import annotations
 
 import csv
+from dataclasses import dataclass
 from dataclasses import fields, is_dataclass
 from pathlib import Path
-from typing import Iterable, Mapping, Protocol, Sequence
+from typing import ClassVar, Iterable, Mapping, Protocol, Sequence
 
 CSVCell = str | int | float
+RECON_METRIC_FIELDS = (
+    "sigma_rmse",
+    "sigma_relative_rmse",
+    "sigma_mae",
+    "sigma_max_abs_error",
+    "sigma_effective_digits",
+)
+STRUCTURE_METRIC_FIELDS = (
+    "centroid_error",
+    "equivalent_area",
+    "eccentricity",
+    "major_axis",
+    "minor_axis",
+    "artifact_area",
+    "artifact_energy",
+    "artifact_peak",
+    *RECON_METRIC_FIELDS,
+)
+STRUCTURE_SUMMARY_METRIC_FIELDS = (
+    "centroid_error",
+    "eccentricity",
+    "artifact_area",
+    "artifact_energy",
+    "artifact_peak",
+    *RECON_METRIC_FIELDS,
+)
 SWEEP_TABLES_HDF5_SCHEMA = "pyeidors-sweep-tables-hdf5-v1"
 
 
@@ -21,6 +48,58 @@ class SupportsCSVRow(Protocol):
 
     def as_csv_row(self) -> Mapping[str, object]:
         """Return one string-keyed CSV row."""
+
+
+class SweepRow:
+    """Mixin for dataclass-backed report rows with stable CSV serialization."""
+
+    csv_fieldnames: ClassVar[Sequence[str] | None] = None
+
+    def as_csv_row(self) -> dict[str, CSVCell]:
+        """Return CSV-ready cells using the row's dataclass field order."""
+
+        return dataclass_csv_row(self, fieldnames=self.csv_fieldnames)
+
+
+class ReconMetricRow(SweepRow):
+    """Mixin for rows that expose reconstruction-quality metric columns."""
+
+    recon_metric_fields: ClassVar[Sequence[str]] = RECON_METRIC_FIELDS
+
+    def recon_metric_values(self) -> dict[str, float]:
+        """Return reconstruction metric values keyed by their CSV field names."""
+
+        return _numeric_field_values(self, self.recon_metric_fields)
+
+
+class StructureMetricRow(ReconMetricRow):
+    """Mixin for rows that expose spatial structure/artifact metric columns."""
+
+    structure_metric_fields: ClassVar[Sequence[str]] = STRUCTURE_METRIC_FIELDS
+
+    def structure_metric_values(self) -> dict[str, float]:
+        """Return structure metric values keyed by their CSV field names."""
+
+        return _numeric_field_values(self, self.structure_metric_fields)
+
+
+@dataclass(frozen=True)
+class StructureMetrics(StructureMetricRow):
+    """Reusable structure/artifact metrics shared by sweep implementations."""
+
+    centroid_error: float
+    equivalent_area: float
+    eccentricity: float
+    major_axis: float
+    minor_axis: float
+    artifact_area: float
+    artifact_energy: float
+    artifact_peak: float
+    sigma_rmse: float
+    sigma_relative_rmse: float
+    sigma_mae: float
+    sigma_max_abs_error: float
+    sigma_effective_digits: float
 
 
 def csv_cell(value: object) -> CSVCell:
@@ -61,6 +140,10 @@ def dataclass_csv_row(
         else tuple(field.name for field in fields(row))
     )
     return {name: csv_cell(getattr(row, name)) for name in names}
+
+
+def _numeric_field_values(row: object, fieldnames: Sequence[str]) -> dict[str, float]:
+    return {str(name): float(getattr(row, str(name))) for name in fieldnames}
 
 
 def write_csv_rows(
@@ -179,8 +262,15 @@ def _hdf5_table_name(name: object) -> str:
 
 __all__ = [
     "CSVCell",
+    "RECON_METRIC_FIELDS",
+    "STRUCTURE_METRIC_FIELDS",
+    "STRUCTURE_SUMMARY_METRIC_FIELDS",
     "SWEEP_TABLES_HDF5_SCHEMA",
+    "ReconMetricRow",
+    "StructureMetricRow",
+    "StructureMetrics",
     "SupportsCSVRow",
+    "SweepRow",
     "csv_cell",
     "dataclass_csv_row",
     "format_aligned_table",

@@ -25,7 +25,13 @@ from .holdout_fit_diff import (
     run_holdout_fit_diff,
 )
 from .holdout_point_audit import build_holdout_point_audit, plot_holdout_point_audit
-from ._sweep_core import dataclass_csv_row, write_csv_rows
+from ._sweep_core import (
+    StructureMetricRow,
+    STRUCTURE_SUMMARY_METRIC_FIELDS,
+    StructureMetrics as _StructureMetrics,
+    SweepRow,
+    write_csv_rows,
+)
 from .voltage_digit_sweep import keep_significant_digits
 
 
@@ -98,8 +104,10 @@ BUCKET_FULL256_COMPARE_FIELD_FIELDS = BUCKET_DENSE_FIELD_FIELDS
 
 
 @dataclass(frozen=True)
-class BucketDenseSummaryRow:
+class BucketDenseSummaryRow(StructureMetricRow):
     """One dense-bucket summary row for voltage or holdout experiments."""
+
+    structure_metric_fields = STRUCTURE_SUMMARY_METRIC_FIELDS
 
     experiment: str
     domain: str
@@ -124,12 +132,9 @@ class BucketDenseSummaryRow:
     artifact_energy: float
     artifact_peak: float
 
-    def as_csv_row(self) -> dict[str, float | int | str]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
-class BucketDenseFieldRow:
+class BucketDenseFieldRow(SweepRow):
     """One per-cell dense-bucket reconstructed conductivity row."""
 
     experiment: str
@@ -142,13 +147,12 @@ class BucketDenseFieldRow:
     sigma_error: float
     inside_bucket: bool
 
-    def as_csv_row(self) -> dict[str, float | int | str]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
-class BucketFull256CompareSummaryRow:
+class BucketFull256CompareSummaryRow(StructureMetricRow):
     """One full-256-vs-filtered reconstruction comparison row."""
+
+    structure_metric_fields = STRUCTURE_SUMMARY_METRIC_FIELDS
 
     experiment: str
     domain: str
@@ -176,9 +180,6 @@ class BucketFull256CompareSummaryRow:
     artifact_energy: float
     artifact_peak: float
 
-    def as_csv_row(self) -> dict[str, float | int | str]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
 class BucketDenseExperimentCase:
@@ -203,23 +204,6 @@ class BucketFull256CompareCase:
     summaries: list[BucketFull256CompareSummaryRow]
     field_rows: list[BucketDenseFieldRow]
     sigma_recon_by_method: dict[str, np.ndarray]
-
-
-@dataclass(frozen=True)
-class _StructureMetrics:
-    centroid_error: float
-    equivalent_area: float
-    eccentricity: float
-    major_axis: float
-    minor_axis: float
-    artifact_area: float
-    artifact_energy: float
-    artifact_peak: float
-    sigma_rmse: float
-    sigma_relative_rmse: float
-    sigma_mae: float
-    sigma_max_abs_error: float
-    sigma_effective_digits: float
 
 
 def _relative_rmse(reference: np.ndarray, observed: np.ndarray) -> float:

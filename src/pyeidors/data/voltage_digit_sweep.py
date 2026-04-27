@@ -17,14 +17,14 @@ from .eit_digit_metrics import (
     build_surrogate_linearized_model,
     reconstruct_linearized_sigma,
 )
-from ._sweep_core import dataclass_csv_row
+from ._sweep_core import ReconMetricRow, SweepRow
 
 
 DigitMethod = Literal["truncate", "round"]
 
 
 @dataclass(frozen=True)
-class VoltageDigitSweepSummary:
+class VoltageDigitSweepSummary(ReconMetricRow):
     """Summary metrics for one target voltage significant-digit setting."""
 
     target_voltage_digits: int
@@ -36,12 +36,9 @@ class VoltageDigitSweepSummary:
     sigma_max_abs_error: float
     sigma_effective_digits: float
 
-    def as_csv_row(self) -> dict[str, float | int]:
-        return dataclass_csv_row(self)
-
 
 @dataclass(frozen=True)
-class VoltageDigitFieldRow:
+class VoltageDigitFieldRow(SweepRow):
     """Per-cell conductivity reconstruction error for one digit setting."""
 
     target_voltage_digits: int
@@ -50,9 +47,6 @@ class VoltageDigitFieldRow:
     sigma_recon: float
     sigma_error: float
     abs_sigma_error: float
-
-    def as_csv_row(self) -> dict[str, float | int]:
-        return dataclass_csv_row(self)
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:
