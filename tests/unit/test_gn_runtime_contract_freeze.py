@@ -336,6 +336,7 @@ def test_companion_modules_still_importable() -> None:
         "pyeidors.inverse.solvers.gauss_newton_engine",
         "pyeidors.inverse.solvers.gauss_newton_runtime",
         "pyeidors.inverse.solvers.gauss_newton_line_search",
+        "pyeidors.inverse.solvers.gauss_newton_regularization",
         "pyeidors.inverse.solvers.gauss_newton_step_size",
         "pyeidors.inverse.solvers.gauss_newton_weights",
         "pyeidors.inverse.solvers.gauss_newton_device",

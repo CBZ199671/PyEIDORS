@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 import torch
 from dolfinx import fem
-from scipy.sparse import isspmatrix
 from scipy.sparse.linalg import LinearOperator
 
 from ...data.difference import (
@@ -18,8 +17,6 @@ from ...data.difference import (
 )
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
-from ..prior import RtRPrior
-from ..regularization.base_regularization import BaseRegularization
 from ..regularization.smoothness import SmoothnessRegularization
 from .gauss_newton_device import resolve_torch_device
 from .gauss_newton_line_search import (
@@ -29,6 +26,7 @@ from .gauss_newton_line_search import (
 )
 from .gauss_newton_runtime import ensure_measurement_weights, run_reconstruction
 from .gauss_newton_weights import difference_with_baseline, scale_baseline_to_measured
+from . import gauss_newton_regularization as _regularization_helpers
 from ...perf.policy import (
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     DEFAULT_CHOLMOD_MAX_N,
@@ -80,11 +78,7 @@ def _validate_option(name: str, value: str, allowed: set[str]) -> None:
         raise ValueError(f"Unsupported {name}={value!r}. Expected one of: {options}.")
 
 
-def _is_rtr_prior_contract(value: Any) -> bool:
-    return isinstance(value, RtRPrior) or all(
-        callable(getattr(value, attr, None))
-        for attr in ("apply", "diag", "as_RtR", "as_linear_operator")
-    )
+_is_rtr_prior_contract = _regularization_helpers._is_rtr_prior_contract
 
 
 class GaussNewtonReconstructor:
@@ -372,141 +366,8 @@ class GaussNewtonReconstructor:
         return tqdm(total=total, disable=not self.verbose)
 
     def ensure_regularization_ready(self) -> None:
-        """Build and validate the cached regularization tensor used by GN."""
-        expected_shape = (self.n_elements, self.n_elements)
-        needs_dense_tensor = (
-            self.solver_mode == "strict" or self.line_search_mode == "full"
-        )
-        cache_ready = (
-            self.R_matrix is not None
-            and self.R_linear_operator is not None
-            and (not needs_dense_tensor or self.R_torch is not None)
-        )
-        if cache_ready:
-            return
-
-        matrix = self.regularization.get_regularization_matrix()
-        matrix_shape = tuple(getattr(matrix, "shape", ()))
-        if matrix_shape != expected_shape:
-            raise RuntimeError(
-                "Regularization matrix shape mismatch: "
-                f"expected {expected_shape}, got {matrix_shape}."
-            )
-
-        if _is_rtr_prior_contract(matrix):
-            self.R_matrix = matrix
-            self.R_linear_operator = matrix.as_linear_operator()
-            probe = np.ones(self.n_elements, dtype=np.float64)
-            check = np.asarray(matrix.apply(probe), dtype=np.float64)
-            if not np.isfinite(check).all():
-                raise FloatingPointError(
-                    "Regularization RtRPrior produces non-finite values."
-                )
-            diag = matrix.diag()
-            self.R_diag = (
-                None if diag is None else np.asarray(diag, dtype=np.float64).reshape(-1)
-            )
-            if self.R_diag is not None and not np.isfinite(self.R_diag).all():
-                raise FloatingPointError("Regularization RtRPrior diag is non-finite.")
-            if needs_dense_tensor and self.solver_mode == "strict":
-                dense_like = matrix.as_RtR(dense=True)
-                if isspmatrix(dense_like):
-                    dense = dense_like.toarray()
-                elif isinstance(dense_like, LinearOperator):
-                    raise RuntimeError(
-                        "solver_mode='strict' requires explicit dense/sparse regularization matrix, "
-                        "matrix-free RtRPrior is not supported."
-                    )
-                else:
-                    dense = np.asarray(dense_like, dtype=np.float64)
-                if not np.isfinite(dense).all():
-                    raise FloatingPointError(
-                        "Regularization RtRPrior dense view contains non-finite values."
-                    )
-                self.R_torch = torch.from_numpy(dense).to(
-                    self.device,
-                    dtype=self._torch_dtype,
-                )
-                if not torch.isfinite(self.R_torch).all():
-                    raise FloatingPointError(
-                        "Regularization tensor contains non-finite values after transfer."
-                    )
-            else:
-                self.R_torch = None
-            return
-
-        self.R_matrix = matrix
-        as_linear_operator = getattr(self.regularization, "as_linear_operator", None)
-        if callable(as_linear_operator):
-            self.R_linear_operator = as_linear_operator(matrix, shape=expected_shape)
-        else:
-            self.R_linear_operator = BaseRegularization.as_linear_operator(
-                matrix, shape=expected_shape
-            )
-
-        if isspmatrix(matrix):
-            if matrix.nnz == 0:
-                raise FloatingPointError("Regularization sparse matrix is empty.")
-            if not np.isfinite(matrix.data).all():
-                finite = matrix.data[np.isfinite(matrix.data)]
-                min_val = float(finite.min()) if finite.size else float("nan")
-                max_val = float(finite.max()) if finite.size else float("nan")
-                raise FloatingPointError(
-                    "Regularization sparse matrix contains non-finite values: "
-                    f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
-                )
-            if matrix.format == "csr":
-                diag = matrix.diagonal()
-            else:
-                diag = matrix.tocsr().diagonal()
-            self.R_diag = np.asarray(diag, dtype=np.float64)
-            if needs_dense_tensor:
-                dense = matrix.toarray()
-                self.R_torch = torch.from_numpy(np.asarray(dense, dtype=np.float64)).to(
-                    self.device,
-                    dtype=self._torch_dtype,
-                )
-            else:
-                self.R_torch = None
-            return
-
-        if isinstance(matrix, LinearOperator):
-            probe = np.ones(self.n_elements, dtype=np.float64)
-            check = np.asarray(matrix.matvec(probe), dtype=np.float64)
-            if not np.isfinite(check).all():
-                raise FloatingPointError(
-                    "Regularization LinearOperator produces non-finite values."
-                )
-            self.R_diag = None
-            self.R_torch = None
-            if self.solver_mode == "strict":
-                raise RuntimeError(
-                    "solver_mode='strict' requires explicit dense/sparse regularization matrix, "
-                    "LinearOperator is not supported."
-                )
-            return
-
-        dense = np.asarray(matrix, dtype=np.float64)
-        if not np.isfinite(dense).all():
-            finite = dense[np.isfinite(dense)]
-            min_val = float(finite.min()) if finite.size else float("nan")
-            max_val = float(finite.max()) if finite.size else float("nan")
-            raise FloatingPointError(
-                "Regularization matrix contains non-finite values: "
-                f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
-            )
-        self.R_diag = np.asarray(np.diag(dense), dtype=np.float64)
-        if needs_dense_tensor:
-            self.R_torch = torch.from_numpy(dense).to(
-                self.device,
-                dtype=self._torch_dtype,
-            )
-            if not torch.isfinite(self.R_torch).all():
-                raise FloatingPointError(
-                    "Regularization tensor contains non-finite values after transfer."
-                )
-        else:
-            self.R_torch = None
+        _regularization_helpers.torch = torch
+        _regularization_helpers.ensure_regularization_ready(self)
 
     def reconstruct(
         self,
