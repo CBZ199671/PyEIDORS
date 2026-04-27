@@ -292,36 +292,114 @@ def test_run_reconstruction_public_signature_is_locked() -> None:
 
 
 # ---------------------------------------------------------------------------
-# PETSc matrix-free context classes must remain importable from runtime.
+# T77 runtime compatibility surface must remain importable from runtime.
 # ---------------------------------------------------------------------------
 
 
-def test_petsc_matrix_free_context_classes_exposed() -> None:
-    """Sub-module split MUST keep these symbols re-exported from ``gauss_newton_runtime``.
-
-    Down-stream tests + benchmark scripts reach in via
-    ``gn_runtime._PETScMatrixFreeHessianContext`` etc.; if T77 phase 2
-    moves the bodies to a sub-module, the runtime must still re-export
-    them as module-level attributes for backward compatibility.
-    """
-    for symbol in (
+T77_RUNTIME_COMPAT_SURFACE = {
+    "linear_system_wrappers": (
+        "_solve_matrix_free_hessian_via_petsc",
+        "_as_jacobian_action_bundle",
+        "_solve_linear_system_fast",
+    ),
+    "linear_system_reexports": (
+        "_JacobianActionBundle",
+        "_PETSc",
         "_PETScMatrixFreeHessianContext",
         "_PETScMatrixFreePCContext",
-        "_solve_matrix_free_hessian_via_petsc",
+        "_apply_regularization_np",
+        "_as_sparse_regularization_matrix",
         "_build_matrix_free_custom_pc_operator",
         "_build_matrix_free_pmat_inverse_operator",
         "_build_matrix_free_explicit_pc_operator",
-        "_as_jacobian_action_bundle",
-        "_solve_linear_system_fast",
+        "_coerce_preconditioner_diag",
+        "_diag_preconditioner",
+        "_finite_summary",
+        "_is_jv_jtr_action",
+        "_jv_jtr_action_shape",
+        "_jv_jtr_action_representation",
+        "_matrix_free_pc_floor",
+        "_matrix_free_pmat_candidates",
+        "_operator_diag_preconditioner",
+        "_petsc_vec_to_numpy",
+        "_regularization_looks_like_noser",
+        "_require_finite",
+        "_require_scalar_finite",
+        "_sanitize_preconditioner_diag",
+        "InexactController",
+        "SnapshotBank",
+        "backend_signature_from_forward_model",
+        "build_lowrank_subspace",
+        "build_reduced_operator",
+        "cg",
+        "cho_factor",
+        "cho_solve",
+        "cholmod_cholesky",
+        "compute_pod_basis",
+        "detect_performance_capabilities",
+        "lsmr",
+        "merge_orthonormal_bases",
+        "model_signature_from_forward_model",
+        "pattern_signature_from_forward_model",
+        "pyamg",
+        "rom_signature",
+        "safe_dot",
+        "select_fast_linear_path",
+        "select_fused_strategy",
+        "select_preconditioner",
+        "select_snapshot_matrix",
+        "solve_reduced_step",
+    ),
+    "startup_cache_wrappers": (
+        "_startup_cache_payload",
+        "_startup_cache_lookup",
+    ),
+    "step_size_wrappers": (
         "_difference_step_size_objective",
         "_apply_difference_step_size",
         "_select_step_size",
+    ),
+    "runtime_owned_helpers": (
+        "_to_runtime_tensor",
+        "_to_runtime_tensor_cached",
+        "ensure_measurement_weights",
+        "_is_operator_jacobian_method",
+        "_is_matrix_free_jacobian",
+        "_scale_jacobian_action",
+        "_calculate_iteration_jacobian",
+        "_init_sigma_function",
+        "_prepare_prior",
+        "_best_homog_bounds",
+        "_estimate_best_homogeneous_conductivity",
+        "_compute_residuals",
+        "_compute_objective",
+        "_build_linear_system",
+        "_solve_linear_system_torch_cg",
+        "_solve_linear_system",
+        "_maybe_rollback",
         "run_reconstruction",
-    ):
-        assert hasattr(gn_runtime, symbol), (
-            f"gauss_newton_runtime must expose {symbol!r}; sub-module split "
-            "in T77 phase 2 has to preserve the import path."
-        )
+    ),
+}
+
+
+def test_t77_runtime_compat_surface_exposed() -> None:
+    """T77 final audit: private runtime entrypoints are deliberately retained.
+
+    Down-stream tests + benchmark scripts reach in via
+    ``gn_runtime._solve_linear_system_fast`` / ``gn_runtime._select_step_size``
+    / patchable globals such as ``gn_runtime.pyamg``. These names are not
+    dead wrappers: if their bodies live in companion modules, runtime still
+    owns the compatibility import path until a deliberate API-breaking cleanup.
+    """
+    missing = {
+        group: [symbol for symbol in symbols if not hasattr(gn_runtime, symbol)]
+        for group, symbols in T77_RUNTIME_COMPAT_SURFACE.items()
+    }
+    missing = {group: symbols for group, symbols in missing.items() if symbols}
+    assert not missing, (
+        "T77 contract: runtime compatibility surface drifted. Missing symbols: "
+        f"{missing!r}"
+    )
 
 
 # ---------------------------------------------------------------------------
