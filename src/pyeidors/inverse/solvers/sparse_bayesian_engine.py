@@ -1,23 +1,46 @@
-"""Sparse Bayesian EIT reconstructor powered by CUQIpy."""
+"""Sparse Bayesian EIT reconstructor powered by CUQIpy.
+
+T76 Path C consolidation: the historical ``SparseBayesianBackendMixin``
+(formerly in ``sparse_bayesian_backends.py``) and the legacy alias
+module ``sparse_bayesian.py`` were folded into this engine module so
+the sparse solver tier collapses from 7 files to 5. The cuqi adapters
+(:meth:`_linear_model` / :meth:`_sparse_prior` / :meth:`_gaussian_likelihood`
+/ :meth:`_bayesian_problem` / :meth:`_solve_with_cuqi_map`) and the
+thin wrappers around the FISTA / IRLS / projection / coarse-matrix /
+multilevel-correction / block-refinement helpers all live directly on
+:class:`SparseBayesianReconstructor` now. Tests + script callers that
+monkey-patch the wrapper methods continue to work unchanged.
+"""
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import hashlib
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
-from ...data.structures import EITData, EITImage
 from ...cache.object_signature import (
     backend_signature_from_forward_model,
     model_signature_from_forward_model,
     pattern_signature_from_forward_model,
 )
+from ...data.structures import EITData, EITImage
 from ...utils.cuqi_imports import suppress_known_cuqi_import_warnings
-from .sparse_bayesian_backends import SparseBayesianBackendMixin
 from .eit_pde import EITPDE, create_pde_model
-from .sparse_projection import build_coarse_hierarchy
+from .sparse_map_solver import (
+    block_refinement,
+    coarse_initialization,
+    multilevel_correction,
+    solve_sparse_map,
+)
+from .sparse_optimizers import solve_fista, solve_irls
+from .sparse_projection import (
+    build_coarse_hierarchy,
+    compute_projection,
+    estimate_lipschitz_constant,
+    get_coarse_matrix,
+)
 from .sparse_runtime import run_sparse_reconstruction
 
 try:  # pragma: no cover - optional dependency guard
@@ -61,7 +84,7 @@ class SparseBayesianConfig:
     coarse_relaxation: float = 1.0
 
 
-class SparseBayesianReconstructor(SparseBayesianBackendMixin):
+class SparseBayesianReconstructor:
     """Sparse Bayesian reconstructor using CUQIpy."""
 
     def __init__(
@@ -231,3 +254,167 @@ class SparseBayesianReconstructor(SparseBayesianBackendMixin):
             cost=8.0,
         )
         return hierarchy
+
+    # ------------------------------------------------------------------
+    # Backend-mixin methods (folded in by T76 Path C). The thin wrapper
+    # layer historically lived in ``sparse_bayesian_backends.py``; tests
+    # and ``sparse_map_solver`` consumers monkey-patch / reach through
+    # these hooks, so they remain instance methods even though the
+    # forwarding bodies are one-liners.
+    # ------------------------------------------------------------------
+
+    def _solve_sparse_map(
+        self,
+        jacobian: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+    ) -> np.ndarray:
+        return solve_sparse_map(self, jacobian, data_vector, noise_sigma, prior_scale)
+
+    def _coarse_initialization(
+        self,
+        jacobian: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+        groups: list[np.ndarray],
+        group_size: int,
+        initial_guess: np.ndarray | None,
+    ) -> np.ndarray:
+        return coarse_initialization(
+            self,
+            jacobian,
+            data_vector,
+            noise_sigma,
+            prior_scale,
+            groups,
+            group_size,
+            initial_guess,
+        )
+
+    def _get_coarse_matrix(
+        self,
+        jacobian: np.ndarray,
+        groups: list[np.ndarray],
+        group_size: int,
+    ) -> np.ndarray:
+        return get_coarse_matrix(
+            jacobian=jacobian,
+            groups=groups,
+            group_size=group_size,
+            cache=self._cached_coarse_matrices,
+        )
+
+    def _compute_projection(self, jacobian: np.ndarray, rank: int):
+        return compute_projection(jacobian, rank)
+
+    def _estimate_lipschitz_constant(
+        self, matrix: np.ndarray, iters: int = 12
+    ) -> float:
+        return estimate_lipschitz_constant(matrix, iters=iters)
+
+    def _solve_with_cuqi_map(
+        self, problem, warm_start: np.ndarray | None
+    ) -> np.ndarray:
+        if warm_start is not None:
+            map_estimate = problem.MAP(disp=self.verbose, x0=warm_start)
+        else:
+            map_estimate = problem.MAP(disp=self.verbose)
+        return np.asarray(map_estimate.to_numpy(), dtype=float)
+
+    def _solve_fista(
+        self,
+        linear_matrix: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+        warm_start: np.ndarray | None,
+    ) -> np.ndarray:
+        return solve_fista(
+            linear_matrix=linear_matrix,
+            data_vector=data_vector,
+            noise_sigma=noise_sigma,
+            prior_scale=prior_scale,
+            warm_start=warm_start,
+            config=self.config,
+        )
+
+    def _solve_irls(
+        self,
+        linear_matrix: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+        warm_start: np.ndarray | None,
+    ) -> np.ndarray:
+        return solve_irls(
+            linear_matrix=linear_matrix,
+            data_vector=data_vector,
+            noise_sigma=noise_sigma,
+            prior_scale=prior_scale,
+            warm_start=warm_start,
+            config=self.config,
+        )
+
+    def _multilevel_correction(
+        self,
+        jacobian: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+        solution: np.ndarray,
+        hierarchy: list[tuple[int, list[np.ndarray]]],
+    ) -> np.ndarray:
+        return multilevel_correction(
+            self,
+            jacobian,
+            data_vector,
+            noise_sigma,
+            prior_scale,
+            solution,
+            hierarchy,
+        )
+
+    def _block_refinement(
+        self,
+        jacobian: np.ndarray,
+        data_vector: np.ndarray,
+        noise_sigma: float,
+        prior_scale: float,
+        solution: np.ndarray,
+    ) -> np.ndarray:
+        return block_refinement(
+            self,
+            jacobian,
+            data_vector,
+            noise_sigma,
+            prior_scale,
+            solution,
+        )
+
+    def _linear_model(self, matrix: np.ndarray):
+        if LinearModel is None:
+            raise ImportError("CUQIpy is required for SparseBayesianReconstructor")
+        return LinearModel(matrix)
+
+    def _sparse_prior(self, target_dim: int, prior_scale: float):
+        if SmoothedLaplace is None:
+            raise ImportError("CUQIpy is required for SparseBayesianReconstructor")
+        return SmoothedLaplace(
+            location=np.zeros(target_dim, dtype=float),
+            scale=prior_scale,
+            beta=self.config.smoothing_beta,
+        )
+
+    @staticmethod
+    def _gaussian_likelihood(latent, noise_sigma: float):
+        if Gaussian is None:
+            raise ImportError("CUQIpy is required for SparseBayesianReconstructor")
+        return Gaussian(latent, noise_sigma)
+
+    @staticmethod
+    def _bayesian_problem(y, x):
+        if BayesianProblem is None:
+            raise ImportError("CUQIpy is required for SparseBayesianReconstructor")
+        return BayesianProblem(y, x)

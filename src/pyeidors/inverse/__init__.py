@@ -2,7 +2,10 @@
 
 from .solvers.gauss_newton import GaussNewtonReconstructor
 from .solvers.matrix_free_gn import MatrixFreeGNStepResult, solve_matrix_free_gn_step
-from .solvers.sparse_bayesian import SparseBayesianReconstructor, SparseBayesianConfig
+from .solvers.sparse_bayesian_engine import (
+    SparseBayesianConfig,
+    SparseBayesianReconstructor,
+)
 from .contracts import SolverOutput
 from .block_system import (
     BlockCoupling,

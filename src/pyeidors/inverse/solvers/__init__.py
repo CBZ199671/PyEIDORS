@@ -2,7 +2,7 @@
 
 from .gauss_newton import GaussNewtonReconstructor
 from .matrix_free_gn import MatrixFreeGNStepResult, solve_matrix_free_gn_step
-from .sparse_bayesian import SparseBayesianReconstructor, SparseBayesianConfig
+from .sparse_bayesian_engine import SparseBayesianConfig, SparseBayesianReconstructor
 
 __all__ = [
     "GaussNewtonReconstructor",

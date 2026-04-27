@@ -13,6 +13,7 @@ from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
+from ..perf.policy import LEGACY_3D_GENERATOR_REVISION  # noqa: F401  re-exported for in-tree callers
 from ._helpers import (
     infer_generator_revision,
     infer_geometry_version,

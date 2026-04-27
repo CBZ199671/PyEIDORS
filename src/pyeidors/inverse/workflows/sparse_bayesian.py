@@ -8,7 +8,10 @@ from ...core_system_helpers import difference_measurement
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITData, EITImage
 from ..contracts import SolverOutput
-from ..solvers.sparse_bayesian import SparseBayesianConfig, SparseBayesianReconstructor
+from ..solvers.sparse_bayesian_engine import (
+    SparseBayesianConfig,
+    SparseBayesianReconstructor,
+)
 from .base import ReconstructionResult, compute_residuals, resolve_reconstruction_output
 
 try:  # pragma: no cover - optional import guard for type checking
