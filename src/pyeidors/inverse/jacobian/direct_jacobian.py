@@ -24,8 +24,12 @@ from ..solvers.gauss_newton_device import (
     normalize_runtime_device_label,
 )
 from ._core import (
+    assemble_jacobian_efficient_numpy,
+    assemble_jacobian_traditional,
     build_jacobian_geometry,
+    calibrate_block_size_once,
     compute_field_gradients,
+    convert_electrode_to_measurement_jacobian,
     measurement_to_current_patterns,
 )
 from .base_jacobian import BaseJacobianCalculator
@@ -54,6 +58,12 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     ``tests/unit/test_jacobian_direct_adjoint_parity.py``. Do **not**
     swap calculators inside an existing GN/RM pipeline without
     compensating the sign at the consumer site.
+
+    The geometry setup, field-gradient interpolation, adjoint solve
+    and the pure-numpy / traditional / electrode-to-measurement assembly
+    helpers all live in :mod:`pyeidors.inverse.jacobian._core`. This
+    class owns the cache-manager integration, the runtime-device state
+    and the CUDA assembly orchestration; everything else delegates.
     """
 
     sign_convention = "+dV/dsigma_pyeidors_runtime"
@@ -171,48 +181,13 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         adjoint_gradients,
         n_elements: int,
     ) -> int:
-        if not grad_u_all or not adjoint_gradients:
-            return int(min(n_elements, self.block_candidates[-1]))
-
-        sample_grad_u = np.asarray(grad_u_all[0], dtype=float)
-        if sample_grad_u.ndim != 2 or sample_grad_u.shape[0] == 0:
-            return int(min(n_elements, self.block_candidates[-1]))
-
-        local_meas = int(self.fwd_model.pattern_manager.n_meas_per_stim[0])
-        sample_adjoint = np.asarray(adjoint_gradients[:local_meas], dtype=float)
-        if sample_adjoint.ndim != 3 or sample_adjoint.shape[1] == 0:
-            return int(min(n_elements, self.block_candidates[-1]))
-
-        n_sample_elem = int(min(sample_grad_u.shape[0], 2048))
-        sample_grad_u = sample_grad_u[:n_sample_elem, :]
-        sample_adjoint = sample_adjoint[:, :n_sample_elem, :]
-
-        candidates = sorted(
-            {
-                max(16, min(int(candidate), n_sample_elem))
-                for candidate in self.block_candidates
-            }
+        return calibrate_block_size_once(
+            grad_u_all=grad_u_all,
+            adjoint_gradients=adjoint_gradients,
+            n_elements=int(n_elements),
+            candidates=self.block_candidates,
+            sample_meas_count=int(self.fwd_model.pattern_manager.n_meas_per_stim[0]),
         )
-        if not candidates:
-            return int(min(n_elements, 256))
-
-        best_size = candidates[0]
-        best_elapsed = float("inf")
-        for candidate in candidates:
-            t0 = perf_counter()
-            for start in range(0, n_sample_elem, candidate):
-                end = min(start + candidate, n_sample_elem)
-                _ = np.einsum(
-                    "eg,meg->me",
-                    sample_grad_u[start:end, :],
-                    sample_adjoint[:, start:end, :],
-                    optimize=True,
-                )
-            elapsed = perf_counter() - t0
-            if elapsed < best_elapsed:
-                best_elapsed = elapsed
-                best_size = candidate
-        return int(max(1, min(best_size, n_elements)))
 
     def _resolve_block_size(
         self, grad_u_all, adjoint_gradients, n_elements: int
@@ -424,8 +399,6 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         n_elements = len(self.cell_areas)
         block_size = self._resolve_block_size(grad_u_all, adjoint_gradients, n_elements)
 
-        jacobian = np.zeros((n_measurements, n_elements), dtype=float)
-        assembly_t0 = perf_counter()
         use_cuda_blocks = self._should_use_cuda_contraction(
             n_measurements=n_measurements,
             n_elements=n_elements,
@@ -433,8 +406,33 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self._jacobian_backend_effective = "cuda" if use_cuda_blocks else "cpu"
         self._jacobian_block_backend = "torch-cuda" if use_cuda_blocks else "numpy"
         self._jacobian_transfer_estimate = 0.0
-        cell_areas_cuda = self._get_cell_areas_cuda() if use_cuda_blocks else None
 
+        if not use_cuda_blocks:
+            jacobian, elapsed = assemble_jacobian_efficient_numpy(
+                grad_u_all=grad_u_all,
+                adjoint_gradients=adjoint_gradients,
+                cell_areas=self.cell_areas,
+                n_meas_per_stim=self.fwd_model.pattern_manager.n_meas_per_stim,
+                block_size=block_size,
+            )
+            self._last_assembly_elapsed_only = elapsed
+            return jacobian
+
+        return self._assemble_jacobian_efficient_cuda(
+            grad_u_all=grad_u_all,
+            adjoint_gradients=adjoint_gradients,
+            block_size=block_size,
+        )
+
+    def _assemble_jacobian_efficient_cuda(
+        self, *, grad_u_all, adjoint_gradients, block_size: int
+    ) -> np.ndarray:
+        n_measurements = len(adjoint_gradients)
+        n_elements = len(self.cell_areas)
+        jacobian = np.zeros((n_measurements, n_elements), dtype=float)
+        cell_areas_cuda = self._get_cell_areas_cuda()
+
+        assembly_t0 = perf_counter()
         meas_idx = 0
         for stim_idx, grad_u in enumerate(grad_u_all):
             n_meas_this_stim = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
@@ -445,36 +443,25 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             grad_u_arr = np.asarray(grad_u, dtype=float)
             for start in range(0, n_elements, block_size):
                 end = min(start + block_size, n_elements)
-                if use_cuda_blocks:
-                    grad_u_t = torch.from_numpy(
-                        np.ascontiguousarray(grad_u_arr[start:end, :], dtype=np.float64)
-                    ).to(self._runtime_cuda_device, dtype=torch.float64)
-                    adjoint_block_t = torch.from_numpy(
-                        np.ascontiguousarray(
-                            adjoint_block[:, start:end, :], dtype=np.float64
-                        )
-                    ).to(self._runtime_cuda_device, dtype=torch.float64)
-                    sensitivity_t = torch.einsum(
-                        "eg,meg->me", grad_u_t, adjoint_block_t
+                grad_u_t = torch.from_numpy(
+                    np.ascontiguousarray(grad_u_arr[start:end, :], dtype=np.float64)
+                ).to(self._runtime_cuda_device, dtype=torch.float64)
+                adjoint_block_t = torch.from_numpy(
+                    np.ascontiguousarray(
+                        adjoint_block[:, start:end, :], dtype=np.float64
                     )
-                    out_t = sensitivity_t * cell_areas_cuda[start:end].unsqueeze(0)
-                    jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
-                        out_t.cpu().numpy()
-                    )
-                    bytes_h2d = (
-                        grad_u_t.numel() + adjoint_block_t.numel() + out_t.numel()
-                    ) * 8
-                    self._jacobian_transfer_estimate += float(bytes_h2d)
-                else:
-                    sensitivity_block = np.einsum(
-                        "eg,meg->me",
-                        grad_u_arr[start:end, :],
-                        adjoint_block[:, start:end, :],
-                        optimize=True,
-                    )
-                    jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
-                        sensitivity_block * self.cell_areas[None, start:end]
-                    )
+                ).to(self._runtime_cuda_device, dtype=torch.float64)
+                sensitivity_t = torch.einsum(
+                    "eg,meg->me", grad_u_t, adjoint_block_t
+                )
+                out_t = sensitivity_t * cell_areas_cuda[start:end].unsqueeze(0)
+                jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
+                    out_t.cpu().numpy()
+                )
+                bytes_h2d = (
+                    grad_u_t.numel() + adjoint_block_t.numel() + out_t.numel()
+                ) * 8
+                self._jacobian_transfer_estimate += float(bytes_h2d)
 
             meas_idx += n_meas_this_stim
 
@@ -482,31 +469,16 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         return jacobian
 
     def _assemble_jacobian_traditional(self, grad_u_all, grad_bu_all):
-        assembly_t0 = perf_counter()
-        jacobian_blocks = []
-
-        for grad_u in grad_u_all:
-            derivatives = []
-            for grad_bu in grad_bu_all:
-                sensitivity = np.sum(grad_bu * grad_u, axis=1) * self.cell_areas
-                derivatives.append(sensitivity)
-
-            jacobian_blocks.append(np.array(derivatives))
-
-        self._last_assembly_elapsed_only = float(perf_counter() - assembly_t0)
-        return np.vstack(jacobian_blocks)
+        jacobian, elapsed = assemble_jacobian_traditional(
+            grad_u_all, grad_bu_all, self.cell_areas
+        )
+        self._last_assembly_elapsed_only = elapsed
+        return jacobian
 
     def _convert_to_measurement_jacobian(self, electrode_jacobian):
-        measurement_jacobian_blocks = []
-
-        for stim_idx in range(self.fwd_model.pattern_manager.n_stim):
-            elec_start = stim_idx * self.fwd_model.n_elec
-            elec_end = (stim_idx + 1) * self.fwd_model.n_elec
-            electrode_jac_for_stim = electrode_jacobian[elec_start:elec_end, :]
-
-            meas_matrix = self.fwd_model.pattern_manager.meas_matrices[stim_idx]
-            meas_jacobian_for_stim = meas_matrix @ electrode_jac_for_stim
-
-            measurement_jacobian_blocks.append(meas_jacobian_for_stim)
-
-        return np.vstack(measurement_jacobian_blocks)
+        return convert_electrode_to_measurement_jacobian(
+            electrode_jacobian,
+            n_stim=self.fwd_model.pattern_manager.n_stim,
+            n_elec=self.fwd_model.n_elec,
+            meas_matrices=self.fwd_model.pattern_manager.meas_matrices,
+        )
