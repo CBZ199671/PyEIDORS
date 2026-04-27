@@ -160,11 +160,47 @@ def build_disk_artifact_manifest(
     )
 
 
+def ensure_disk_artifact_metadata(
+    metadata: Mapping[str, Any],
+    artifact_kind: str,
+    key_payload: Mapping[str, Any],
+    *,
+    files: Mapping[str, str | Path | None] | None = None,
+    manifest_metadata: Mapping[str, Any] | None = None,
+    namespace: str = "pyeidors",
+    schema_version: int = DISK_ARTIFACT_MANIFEST_VERSION,
+    include_file_sha256: bool = False,
+) -> dict[str, Any]:
+    """Return metadata with ``artifact_key`` / ``artifact_manifest`` populated.
+
+    Existing values are preserved so newer artifacts round-trip byte-for-byte in
+    memory. Legacy artifacts that predate T82 phase 1 get an in-memory manifest
+    from the same semantic payload without mutating the file on disk.
+    """
+
+    out = dict(metadata)
+    if out.get("artifact_key") and isinstance(out.get("artifact_manifest"), Mapping):
+        return out
+    manifest = build_disk_artifact_manifest(
+        artifact_kind,
+        key_payload,
+        files=files,
+        metadata=manifest_metadata,
+        namespace=namespace,
+        schema_version=schema_version,
+        include_file_sha256=include_file_sha256,
+    )
+    out.setdefault("artifact_key", manifest.artifact_key)
+    out.setdefault("artifact_manifest", manifest.to_metadata())
+    return out
+
+
 __all__ = [
     "DISK_ARTIFACT_MANIFEST_VERSION",
     "DiskArtifactManifest",
     "build_disk_artifact_key",
     "build_disk_artifact_manifest",
+    "ensure_disk_artifact_metadata",
     "file_fingerprint",
     "file_sha256",
     "stable_json_digest",

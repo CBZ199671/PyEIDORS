@@ -21,7 +21,11 @@ import numpy as np
 from dolfinx.io import XDMFFile
 from mpi4py import MPI
 
-from ..cache.disk_artifacts import build_disk_artifact_manifest, file_sha256
+from ..cache.disk_artifacts import (
+    build_disk_artifact_manifest,
+    ensure_disk_artifact_metadata,
+    file_sha256,
+)
 from ..cache.keys import hash_array
 from ._helpers import (
     association_from_mesh_data,
@@ -129,6 +133,84 @@ def _mesh_content_signature(mesh: Any) -> dict[str, Any] | None:
         "geometry_hash": hash_array(geometry),
         "topology_hash": hash_array(topology),
     }
+
+
+def _physical_groups_for_manifest(
+    physical_groups: dict[str, Any],
+) -> dict[str, dict[str, int | None]]:
+    payload: dict[str, dict[str, int | None]] = {}
+    for name, group in physical_groups.items():
+        tag = getattr(group, "tag", None)
+        dim = getattr(group, "dim", None)
+        if tag is None:
+            continue
+        payload[str(name)] = {
+            "tag": int(tag),
+            "dim": None if dim is None else int(dim),
+        }
+    return payload
+
+
+def _dolfinx_manifest_key_payload(
+    metadata: dict[str, Any],
+    *,
+    mesh_content_signature: dict[str, Any] | None,
+    association_table: dict[str, int],
+    physical_groups: dict[str, Any],
+) -> dict[str, Any]:
+    physical_payload = metadata.get("physical_groups")
+    if not isinstance(physical_payload, dict):
+        physical_payload = _physical_groups_for_manifest(physical_groups)
+    return {
+        "format": metadata.get("format", "dolfinx-xdmf-hdf5"),
+        "gdim": int(metadata.get("gdim", 0)),
+        "mesh_content_signature": (
+            metadata.get("mesh_content_signature") or mesh_content_signature
+        ),
+        "source_msh_signature": metadata.get("source_msh_signature"),
+        "association_table": {
+            str(name): int(tag) for name, tag in association_table.items()
+        },
+        "physical_groups": physical_payload,
+        "mesh_family": metadata.get("mesh_family"),
+        "geometry_version": metadata.get("geometry_version"),
+        "generator_revision": metadata.get("generator_revision"),
+        "structured_sidecar_signature": metadata.get("structured_sidecar_signature"),
+        "structured_sidecar_version": metadata.get("structured_sidecar_version"),
+    }
+
+
+def _ensure_dolfinx_cache_artifact_metadata(
+    metadata: dict[str, Any],
+    *,
+    mesh: Any,
+    xdmf_file: Path,
+    metadata_file: Path,
+    association_table: dict[str, int],
+    physical_groups: dict[str, Any],
+) -> dict[str, Any]:
+    mesh_content_signature = _mesh_content_signature(mesh)
+    if metadata.get("mesh_content_signature") is None and mesh_content_signature:
+        metadata = dict(metadata)
+        metadata["mesh_content_signature"] = mesh_content_signature
+    return ensure_disk_artifact_metadata(
+        metadata,
+        "dolfinx-mesh-cache",
+        _dolfinx_manifest_key_payload(
+            metadata,
+            mesh_content_signature=mesh_content_signature,
+            association_table=association_table,
+            physical_groups=physical_groups,
+        ),
+        files={
+            "xdmf": xdmf_file,
+            "hdf5": Path(metadata.get("hdf5_file") or xdmf_file.with_suffix(".h5")),
+            "metadata": metadata_file,
+            "adios2": metadata.get("adios2_file"),
+            "adios4dolfinx": metadata.get("adios4dolfinx_file"),
+        },
+        manifest_metadata={"cache_format": metadata.get("format", "dolfinx-xdmf-hdf5")},
+    )
 
 
 def _json_safe(value: Any) -> Any:
@@ -298,6 +380,14 @@ def load_dolfinx_mesh_cache(
         str(source_path)
         if source_path.suffix == ".msh" and source_path.exists()
         else None
+    )
+    metadata = _ensure_dolfinx_cache_artifact_metadata(
+        metadata,
+        mesh=mesh,
+        xdmf_file=xdmf_file,
+        metadata_file=metadata_file,
+        association_table=association_table,
+        physical_groups=physical_groups,
     )
     return DolfinxMeshCacheData(
         mesh=mesh,

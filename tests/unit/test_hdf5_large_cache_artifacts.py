@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import h5py
 import numpy as np
 import pytest
@@ -103,6 +105,32 @@ def test_large_cache_hdf5_artifact_key_ignores_output_path(tmp_path) -> None:
     )
     meta_c = read_hdf5_artifact(path_c, lazy=True).metadata
     assert meta_c["artifact_key"] != meta_a["artifact_key"]
+
+
+def test_legacy_hdf5_without_manifest_gets_in_memory_artifact_key(tmp_path) -> None:
+    arrays = _greit_component_arrays()
+    path = write_large_cache_hdf5_artifact(
+        tmp_path / "legacy_without_manifest.h5",
+        arrays,
+        {"package_role": "greit-eidors-components"},
+        schema="unit-greit-large-cache-v1",
+    )
+    expected_key = read_hdf5_artifact(path, lazy=True).metadata["artifact_key"]
+
+    with h5py.File(path, "a") as handle:
+        metadata = json.loads(str(handle.attrs["metadata_json"]))
+        metadata.pop("artifact_key", None)
+        metadata.pop("artifact_manifest", None)
+        handle.attrs["metadata_json"] = json.dumps(metadata, sort_keys=True)
+
+    artifact = read_hdf5_artifact(path, lazy=True)
+
+    assert artifact.metadata["artifact_key"] == expected_key
+    assert artifact.metadata["artifact_manifest"]["artifact_kind"] == "hdf5-artifact"
+    with h5py.File(path, "r") as handle:
+        persisted = json.loads(str(handle.attrs["metadata_json"]))
+    assert "artifact_key" not in persisted
+    assert "artifact_manifest" not in persisted
 
 
 def test_hdf5_artifact_checksum_mismatch_fails_eager_and_lazy_reads(tmp_path) -> None:

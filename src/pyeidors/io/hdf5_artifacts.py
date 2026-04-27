@@ -14,6 +14,7 @@ import numpy as np
 from pyeidors.cache.disk_artifacts import (
     DiskArtifactManifest,
     build_disk_artifact_manifest,
+    ensure_disk_artifact_metadata,
 )
 
 
@@ -218,6 +219,12 @@ def read_hdf5_artifact(
                     if verify_checksums:
                         _verify_array_checksum(data, _dataset_sha256(dataset), key)
                     arrays[key] = data
+        metadata = _ensure_hdf5_artifact_manifest(
+            source,
+            schema=schema,
+            metadata=metadata,
+            group=group,
+        )
     return HDF5Artifact(
         path=source,
         schema=schema,
@@ -421,6 +428,54 @@ def _hdf5_disk_artifact_manifest(
         },
         files={"artifact": target},
         metadata={"artifact_format": "hdf5"},
+    )
+
+
+def _hdf5_manifest_array_payload_from_group(group: Any) -> dict[str, dict[str, Any]]:
+    if group is None:
+        return {}
+    payload: dict[str, dict[str, Any]] = {}
+    for name, dataset in sorted(group.items(), key=lambda item: str(item[0])):
+        key = str(name)
+        shape_raw = dataset.attrs.get("shape_json")
+        if shape_raw is not None:
+            shape = json.loads(
+                shape_raw.decode("utf-8") if isinstance(shape_raw, bytes) else shape_raw
+            )
+        else:
+            shape = [int(dim) for dim in dataset.shape]
+        dtype_raw = dataset.attrs.get("dtype")
+        dtype = dtype_raw.decode("utf-8") if isinstance(dtype_raw, bytes) else dtype_raw
+        payload[key] = {
+            "shape": [int(dim) for dim in shape],
+            "dtype": str(dtype or dataset.dtype),
+            "sha256": _dataset_sha256(dataset) or _array_digest(np.asarray(dataset)),
+        }
+    return payload
+
+
+def _ensure_hdf5_artifact_manifest(
+    source: Path,
+    *,
+    schema: str,
+    metadata: Mapping[str, Any],
+    group: Any,
+) -> dict[str, Any]:
+    metadata_payload = {
+        str(key): val
+        for key, val in dict(metadata).items()
+        if str(key) not in _MANIFEST_METADATA_KEYS
+    }
+    return ensure_disk_artifact_metadata(
+        metadata,
+        "hdf5-artifact",
+        {
+            "schema": str(schema),
+            "arrays": _hdf5_manifest_array_payload_from_group(group),
+            "metadata": metadata_payload,
+        },
+        files={"artifact": source},
+        manifest_metadata={"artifact_format": "hdf5"},
     )
 
 

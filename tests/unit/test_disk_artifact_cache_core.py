@@ -72,3 +72,17 @@ def test_file_fingerprint_and_sha256_are_optional_for_manifest_files(
     assert missing is not None
     assert missing["exists"] is False
     assert "sha256" not in missing
+
+
+def test_file_fingerprint_supports_adios2_directory_artifacts(tmp_path: Path) -> None:
+    adios_dir = tmp_path / "mesh_adios4dolfinx.bp"
+    adios_dir.mkdir()
+    (adios_dir / "md.idx").write_text("index", encoding="utf-8")
+
+    fingerprint = file_fingerprint(adios_dir, include_sha256=True)
+
+    assert fingerprint is not None
+    assert fingerprint["exists"] is True
+    assert fingerprint["is_dir"] is True
+    assert fingerprint["path"].endswith(".bp")
+    assert "sha256" not in fingerprint

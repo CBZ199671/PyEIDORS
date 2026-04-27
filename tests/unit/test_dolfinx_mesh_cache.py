@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -146,3 +147,34 @@ def test_xdmf_cache_loads_after_source_msh_is_removed(tmp_path: Path, monkeypatc
     assert loaded.generator_revision == "test-rev"
     assert loaded.structured_sidecar_file == str(sidecar)
     assert loaded.structured_sidecar_version == "test-sidecar-v1"
+
+
+def test_legacy_xdmf_metadata_without_manifest_gets_in_memory_artifact_key(
+    tmp_path: Path,
+) -> None:
+    source_msh = tmp_path / "legacy_manifest.msh"
+    source_msh.write_text("placeholder source", encoding="utf-8")
+    mesh_data = _unit_square_mesh_data()
+    association = {"domain": 1, "electrode_1": 2}
+
+    assert write_dolfinx_mesh_cache(
+        mesh_data,
+        source_msh_file=source_msh,
+        association_table=association,
+        gdim=2,
+    )
+    metadata_file = dolfinx_cache_metadata_path_for_mesh(source_msh)
+    original = json.loads(metadata_file.read_text(encoding="utf-8"))
+    expected_key = original["artifact_key"]
+    original.pop("artifact_key", None)
+    original.pop("artifact_manifest", None)
+    metadata_file.write_text(json.dumps(original, sort_keys=True), encoding="utf-8")
+
+    loaded = load_dolfinx_mesh_cache(xdmf_cache_path_for_mesh(source_msh), gdim=2)
+
+    assert loaded is not None
+    assert loaded.metadata["artifact_key"] == expected_key
+    assert loaded.metadata["artifact_manifest"]["artifact_kind"] == "dolfinx-mesh-cache"
+    persisted = json.loads(metadata_file.read_text(encoding="utf-8"))
+    assert "artifact_key" not in persisted
+    assert "artifact_manifest" not in persisted
