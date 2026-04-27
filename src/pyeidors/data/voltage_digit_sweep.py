@@ -17,6 +17,7 @@ from .eit_digit_metrics import (
     build_surrogate_linearized_model,
     reconstruct_linearized_sigma,
 )
+from ._sweep_core import dataclass_csv_row
 
 
 DigitMethod = Literal["truncate", "round"]
@@ -36,16 +37,7 @@ class VoltageDigitSweepSummary:
     sigma_effective_digits: float
 
     def as_csv_row(self) -> dict[str, float | int]:
-        return {
-            "target_voltage_digits": self.target_voltage_digits,
-            "achieved_voltage_effective_digits": self.achieved_voltage_effective_digits,
-            "voltage_rmse": self.voltage_rmse,
-            "sigma_rmse": self.sigma_rmse,
-            "sigma_relative_rmse": self.sigma_relative_rmse,
-            "sigma_mae": self.sigma_mae,
-            "sigma_max_abs_error": self.sigma_max_abs_error,
-            "sigma_effective_digits": self.sigma_effective_digits,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -60,14 +52,7 @@ class VoltageDigitFieldRow:
     abs_sigma_error: float
 
     def as_csv_row(self) -> dict[str, float | int]:
-        return {
-            "target_voltage_digits": self.target_voltage_digits,
-            "cell_index": self.cell_index,
-            "sigma_true": self.sigma_true,
-            "sigma_recon": self.sigma_recon,
-            "sigma_error": self.sigma_error,
-            "abs_sigma_error": self.abs_sigma_error,
-        }
+        return dataclass_csv_row(self)
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:

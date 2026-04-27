@@ -23,6 +23,7 @@ from .eit_digit_metrics import (
     reconstruct_linearized_sigma,
     sigma_true_from_anomaly_rule,
 )
+from ._sweep_core import dataclass_csv_row
 from .voltage_digit_sweep import keep_significant_digits
 
 
@@ -50,26 +51,7 @@ class FactorSweepRow:
     sigma_effective_digits: float
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        return {
-            "sweep": self.sweep,
-            "changed_factor": self.changed_factor,
-            "level": self.level,
-            "n_elec": self.n_elec,
-            "fem_grid": self.fem_grid,
-            "ridge": self.ridge,
-            "target_voltage_digits": self.target_voltage_digits,
-            "enob": self.enob,
-            "noise_relative": self.noise_relative,
-            "noser_exponent": self.noser_exponent,
-            "n_measurements": self.n_measurements,
-            "voltage_rmse": self.voltage_rmse,
-            "achieved_voltage_effective_digits": self.achieved_voltage_effective_digits,
-            "sigma_rmse": self.sigma_rmse,
-            "sigma_relative_rmse": self.sigma_relative_rmse,
-            "sigma_mae": self.sigma_mae,
-            "sigma_max_abs_error": self.sigma_max_abs_error,
-            "sigma_effective_digits": self.sigma_effective_digits,
-        }
+        return dataclass_csv_row(self)
 
 
 CSV_FIELDS = [

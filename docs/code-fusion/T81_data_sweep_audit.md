@@ -1,7 +1,9 @@
 # T81 phase 1 — `src/pyeidors/data/` sweep & audit module index
 
-Status: **phase 1 (index-only)**. Phase 2 (actual code consolidation) is
-intentionally deferred — see the rationale at the end of this document.
+Status: **phase 2a started**. Phase 1 was index-only; phase 2a now adds
+small shared sweep/report primitives while keeping T81 open. Larger row-schema
+base-class consolidation is still deferred — see the rationale at the end of
+this document.
 
 This audit is the entrance gate the SPEC row for T81 mandates: index
 each module's dataclass schema, map overlapping fields across modules,
@@ -112,9 +114,29 @@ two largest files (≥ 1 200 LOC each) get *partial* row-schema
 consolidation, not a wholesale rewrite, because the bulk of their
 content is orchestration / experiment-specific glue.
 
-## 4. Phase 2 entry conditions (gate)
+## 4. Phase 2a boundary
 
-Before any source change in phase 2 lands, the following must be in
+Phase 2a intentionally stays below the risky `ReconMetricRow` base-class move.
+It only introduces `pyeidors.data._sweep_core` helpers for:
+
+- dataclass field-order CSV rows,
+- stable `None` / boolean CSV cell coercion,
+- repeated CSV writer boilerplate,
+- terminal aligned summary tables used by sweep CLIs.
+
+Migrated callers are limited to low-risk serialization edges:
+`voltage_digit_sweep`, `factor_sweep`, `bucket_dense_experiments`,
+`holdout_fit_diff`, and the voltage/factor sweep CLI writers/tables. Numerical
+paths, report text content, row dataclass fields, and historical CSV headers are
+unchanged. `tests/unit/test_sweep_core_primitives.py` locks the shared primitive
+contract and representative migrated row order/coercion.
+
+T81 remains `~`: the heavier `ReconMetricRow` / `_StructureMetrics` base
+consolidation still needs the gates below before T81 can close.
+
+## 5. Phase 2 completion conditions (gate)
+
+Before heavier row-base consolidation lands, the following must be in
 place (otherwise paper reproducibility breaks; SPEC §T.T81 boundary):
 
 1. **CSV byte-stable fixture per consolidated row**: a tiny golden
@@ -142,7 +164,7 @@ place (otherwise paper reproducibility breaks; SPEC §T.T81 boundary):
 When all six gates pass, T81 status flips from `~` to `x` and the
 phase 2 commit can land.
 
-## 5. Phase 1 commit boundary
+## 6. Phase 1 commit boundary
 
 Phase 1 (this commit) introduces:
 

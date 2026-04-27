@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 import sys
 
 import numpy as np
 
+from pyeidors.data._sweep_core import format_aligned_table, write_csv_rows
 from pyeidors.data.factor_sweep import (
     CSV_FIELDS,
     FactorSweepRow,
@@ -30,7 +30,6 @@ def _format_float(value: float | None) -> str:
 
 
 def _format_table(rows: list[FactorSweepRow], *, limit: int = 12) -> str:
-    display_rows = rows[: int(limit)]
     fields = [
         "sweep",
         "changed_factor",
@@ -58,32 +57,13 @@ def _format_table(rows: list[FactorSweepRow], *, limit: int = 12) -> str:
             _format_float(row.sigma_relative_rmse),
             _format_float(row.sigma_effective_digits),
         ]
-        for row in display_rows
+        for row in rows
     ]
-    widths = [
-        max(len(fields[idx]), *(len(row[idx]) for row in rendered))
-        for idx in range(len(fields))
-    ]
-    lines = [
-        " | ".join(header.ljust(widths[idx]) for idx, header in enumerate(fields)),
-        "-+-".join("-" * width for width in widths),
-    ]
-    lines.extend(
-        " | ".join(value.rjust(widths[idx]) for idx, value in enumerate(row))
-        for row in rendered
-    )
-    if len(rows) > len(display_rows):
-        lines.append(f"... {len(rows) - len(display_rows)} more rows")
-    return "\n".join(lines)
+    return format_aligned_table(fields, rendered, limit=limit)
 
 
 def _write_csv(path: Path, rows: list[FactorSweepRow]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=CSV_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row.as_csv_row())
+    write_csv_rows(path, rows, CSV_FIELDS)
 
 
 def _write_text(path: Path, text: str) -> None:

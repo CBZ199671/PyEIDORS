@@ -4,12 +4,12 @@
 from __future__ import annotations
 
 import argparse
-import csv
 from pathlib import Path
 import sys
 
 import numpy as np
 
+from pyeidors.data._sweep_core import format_aligned_table, write_csv_rows
 from pyeidors.data.voltage_digit_sweep import (
     VoltageDigitFieldRow,
     VoltageDigitSweepSummary,
@@ -63,39 +63,15 @@ def _format_table(rows: list[VoltageDigitSweepSummary]) -> str:
         ]
         for row in rows
     ]
-    widths = [
-        max(len(SUMMARY_FIELDS[idx]), *(len(row[idx]) for row in rendered_rows))
-        for idx in range(len(SUMMARY_FIELDS))
-    ]
-    lines = [
-        " | ".join(
-            header.ljust(widths[idx]) for idx, header in enumerate(SUMMARY_FIELDS)
-        ),
-        "-+-".join("-" * width for width in widths),
-    ]
-    lines.extend(
-        " | ".join(value.rjust(widths[idx]) for idx, value in enumerate(row))
-        for row in rendered_rows
-    )
-    return "\n".join(lines)
+    return format_aligned_table(SUMMARY_FIELDS, rendered_rows)
 
 
 def _write_summary_csv(path: Path, rows: list[VoltageDigitSweepSummary]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=SUMMARY_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row.as_csv_row())
+    write_csv_rows(path, rows, SUMMARY_FIELDS)
 
 
 def _write_field_csv(path: Path, rows: list[VoltageDigitFieldRow]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELD_FIELDS)
-        writer.writeheader()
-        for row in rows:
-            writer.writerow(row.as_csv_row())
+    write_csv_rows(path, rows, FIELD_FIELDS)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

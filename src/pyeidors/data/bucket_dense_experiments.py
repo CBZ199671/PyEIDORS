@@ -25,6 +25,7 @@ from .holdout_fit_diff import (
     run_holdout_fit_diff,
 )
 from .holdout_point_audit import build_holdout_point_audit, plot_holdout_point_audit
+from ._sweep_core import dataclass_csv_row, write_csv_rows
 from .voltage_digit_sweep import keep_significant_digits
 
 
@@ -124,33 +125,7 @@ class BucketDenseSummaryRow:
     artifact_peak: float
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        def optional(value: float | int | None) -> float | int | str:
-            return "" if value is None else value
-
-        return {
-            "experiment": self.experiment,
-            "domain": self.domain,
-            "mesh_h": self.mesh_h,
-            "n_cells": self.n_cells,
-            "n_dofs": self.n_dofs,
-            "n_elec": self.n_elec,
-            "n_measurements": self.n_measurements,
-            "ridge": self.ridge,
-            "recon_method": self.recon_method,
-            "target_voltage_digits": optional(self.target_voltage_digits),
-            "holdout_voltage_rmse": optional(self.holdout_voltage_rmse),
-            "diff_voltage_rmse": optional(self.diff_voltage_rmse),
-            "sigma_rmse": self.sigma_rmse,
-            "sigma_relative_rmse": self.sigma_relative_rmse,
-            "sigma_mae": self.sigma_mae,
-            "sigma_max_abs_error": self.sigma_max_abs_error,
-            "sigma_effective_digits": self.sigma_effective_digits,
-            "centroid_error": self.centroid_error,
-            "eccentricity": self.eccentricity,
-            "artifact_area": self.artifact_area,
-            "artifact_energy": self.artifact_energy,
-            "artifact_peak": self.artifact_peak,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -168,17 +143,7 @@ class BucketDenseFieldRow:
     inside_bucket: bool
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        return {
-            "experiment": self.experiment,
-            "recon_method": self.recon_method,
-            "cell_index": self.cell_index,
-            "cell_x": self.cell_x,
-            "cell_y": self.cell_y,
-            "sigma_true": self.sigma_true,
-            "sigma_recon": self.sigma_recon,
-            "sigma_error": self.sigma_error,
-            "inside_bucket": str(bool(self.inside_bucket)).lower(),
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -212,37 +177,7 @@ class BucketFull256CompareSummaryRow:
     artifact_peak: float
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        return {
-            "experiment": self.experiment,
-            "domain": self.domain,
-            "mesh_h": self.mesh_h,
-            "n_cells": self.n_cells,
-            "n_dofs": self.n_dofs,
-            "n_elec": self.n_elec,
-            "n_measurements": self.n_measurements,
-            "n_inverse_points": self.n_inverse_points,
-            "ridge": self.ridge,
-            "recon_method": self.recon_method,
-            "delta_sigma_relative_rmse_vs_full_208": (
-                self.delta_sigma_relative_rmse_vs_full_208
-            ),
-            "delta_artifact_energy_vs_full_208": (
-                self.delta_artifact_energy_vs_full_208
-            ),
-            "delta_field_rmse_vs_full_208": self.delta_field_rmse_vs_full_208,
-            "delta_field_l2_vs_full_208": self.delta_field_l2_vs_full_208,
-            "delta_field_max_abs_vs_full_208": (self.delta_field_max_abs_vs_full_208),
-            "sigma_rmse": self.sigma_rmse,
-            "sigma_relative_rmse": self.sigma_relative_rmse,
-            "sigma_mae": self.sigma_mae,
-            "sigma_max_abs_error": self.sigma_max_abs_error,
-            "sigma_effective_digits": self.sigma_effective_digits,
-            "centroid_error": self.centroid_error,
-            "eccentricity": self.eccentricity,
-            "artifact_area": self.artifact_area,
-            "artifact_energy": self.artifact_energy,
-            "artifact_peak": self.artifact_peak,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -1637,19 +1572,8 @@ def write_bucket_dense_outputs(
 ) -> dict[str, Path]:
     """Write all T23 dense-bucket CSV, report, and visual outputs."""
 
-    summary_output.parent.mkdir(parents=True, exist_ok=True)
-    with summary_output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=BUCKET_DENSE_SUMMARY_FIELDS)
-        writer.writeheader()
-        for row in case.summaries:
-            writer.writerow(row.as_csv_row())
-
-    field_output.parent.mkdir(parents=True, exist_ok=True)
-    with field_output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(handle, fieldnames=BUCKET_DENSE_FIELD_FIELDS)
-        writer.writeheader()
-        for row in case.field_rows:
-            writer.writerow(row.as_csv_row())
+    write_csv_rows(summary_output, case.summaries, BUCKET_DENSE_SUMMARY_FIELDS)
+    write_csv_rows(field_output, case.field_rows, BUCKET_DENSE_FIELD_FIELDS)
 
     report_output.parent.mkdir(parents=True, exist_ok=True)
     report_output.write_text(
@@ -1710,25 +1634,12 @@ def write_bucket_full256_compare_outputs(
 ) -> dict[str, Path]:
     """Write all full-256 comparison CSV, report, and visual outputs."""
 
-    summary_output.parent.mkdir(parents=True, exist_ok=True)
-    with summary_output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=BUCKET_FULL256_COMPARE_SUMMARY_FIELDS,
-        )
-        writer.writeheader()
-        for row in case.summaries:
-            writer.writerow(row.as_csv_row())
-
-    field_output.parent.mkdir(parents=True, exist_ok=True)
-    with field_output.open("w", newline="", encoding="utf-8") as handle:
-        writer = csv.DictWriter(
-            handle,
-            fieldnames=BUCKET_FULL256_COMPARE_FIELD_FIELDS,
-        )
-        writer.writeheader()
-        for row in case.field_rows:
-            writer.writerow(row.as_csv_row())
+    write_csv_rows(
+        summary_output,
+        case.summaries,
+        BUCKET_FULL256_COMPARE_SUMMARY_FIELDS,
+    )
+    write_csv_rows(field_output, case.field_rows, BUCKET_FULL256_COMPARE_FIELD_FIELDS)
 
     report_output.parent.mkdir(parents=True, exist_ok=True)
     report_output.write_text(

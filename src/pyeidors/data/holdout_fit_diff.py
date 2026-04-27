@@ -16,6 +16,7 @@ from .holdout_point_audit import (
     build_holdout_point_audit,
     plot_holdout_point_audit,
 )
+from ._sweep_core import dataclass_csv_row
 
 
 FitMethod = Literal["poly2", "poly3", "spline"]
@@ -105,25 +106,7 @@ class HoldoutFitDiffSummary:
     delta_sigma_effective_digits: float
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        return {
-            "recon_method": self.recon_method,
-            "n_inverse_points": self.n_inverse_points,
-            "frame_count": self.frame_count,
-            "points_per_frame": self.points_per_frame,
-            "holdout_per_frame": self.holdout_per_frame,
-            "train_points_per_frame": self.train_points_per_frame,
-            "holdout_voltage_rmse": self.holdout_voltage_rmse,
-            "diff_voltage_rmse": self.diff_voltage_rmse,
-            "full_sigma_rmse": self.full_sigma_rmse,
-            "recon_sigma_rmse": self.recon_sigma_rmse,
-            "delta_sigma_rmse": self.delta_sigma_rmse,
-            "full_sigma_relative_rmse": self.full_sigma_relative_rmse,
-            "recon_sigma_relative_rmse": self.recon_sigma_relative_rmse,
-            "delta_sigma_relative_rmse": self.delta_sigma_relative_rmse,
-            "full_sigma_effective_digits": self.full_sigma_effective_digits,
-            "recon_sigma_effective_digits": self.recon_sigma_effective_digits,
-            "delta_sigma_effective_digits": self.delta_sigma_effective_digits,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -140,16 +123,7 @@ class HoldoutFitDiffFieldRow:
     delta_sigma_error: float
 
     def as_csv_row(self) -> dict[str, float | int | str]:
-        return {
-            "recon_method": self.recon_method,
-            "cell_index": self.cell_index,
-            "sigma_true": self.sigma_true,
-            "sigma_recon_full": self.sigma_recon_full,
-            "sigma_recon_candidate": self.sigma_recon_candidate,
-            "sigma_error_full": self.sigma_error_full,
-            "sigma_error_candidate": self.sigma_error_candidate,
-            "delta_sigma_error": self.delta_sigma_error,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
@@ -175,25 +149,7 @@ class HoldoutStructureMetricRow:
     sigma_effective_digits: float
 
     def as_csv_row(self) -> dict[str, float | str]:
-        return {
-            "recon_kind": self.recon_kind,
-            "threshold_rule": self.threshold_rule,
-            "centroid_x": self.centroid_x,
-            "centroid_y": self.centroid_y,
-            "centroid_error": self.centroid_error,
-            "equivalent_area": self.equivalent_area,
-            "eccentricity": self.eccentricity,
-            "major_axis": self.major_axis,
-            "minor_axis": self.minor_axis,
-            "artifact_area": self.artifact_area,
-            "artifact_energy": self.artifact_energy,
-            "artifact_peak": self.artifact_peak,
-            "sigma_rmse": self.sigma_rmse,
-            "sigma_relative_rmse": self.sigma_relative_rmse,
-            "sigma_mae": self.sigma_mae,
-            "sigma_max_abs_error": self.sigma_max_abs_error,
-            "sigma_effective_digits": self.sigma_effective_digits,
-        }
+        return dataclass_csv_row(self)
 
 
 @dataclass(frozen=True)
