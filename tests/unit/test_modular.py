@@ -6,7 +6,7 @@ import numpy as np
 from dolfinx import fem
 from scipy.sparse import isspmatrix
 
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.inverse.regularization.smoothness import (
     NOSERRegularization,
@@ -24,7 +24,7 @@ def _baseline_sigma(system):
 def test_direct_and_adjoint_jacobian_shapes(eit_system):
     sigma = _baseline_sigma(eit_system)
     direct = DirectJacobianCalculator(eit_system.fwd_model)
-    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
+    adjoint = EidorsJacobianAdapter(eit_system.fwd_model, use_torch=False)
 
     j_direct = direct.calculate(sigma)
     j_adjoint = adjoint.calculate(sigma)

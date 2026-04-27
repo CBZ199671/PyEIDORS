@@ -39,7 +39,7 @@ from pyeidors.data.holdout_point_audit import build_holdout_point_audit
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 
 
 SUMMARY_FIELDS = [
@@ -555,7 +555,7 @@ def main(argv: list[str] | None = None) -> int:
     if flipped:
         print(f"[INFO] Polarity correction: flipped frame indices {flipped}")
 
-    jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
+    jac_calc = EidorsJacobianAdapter(fwd_model, use_torch=False)
     jacobian = jac_calc.calculate_from_image(img_bg)
     if jacobian.shape[0] != 208:
         raise RuntimeError(f"expected 208 Jacobian rows, got {jacobian.shape}")

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import torch
 from dolfinx import fem
@@ -20,8 +22,8 @@ from .linearized import (
 )
 
 
-class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
-    """Adjoint Jacobian calculator with EIDORS canonical sign convention.
+class EidorsJacobianAdapter(BaseJacobianCalculator):
+    """EIDORS-canonical adjoint Jacobian adapter (Path C, T75 Stage 5).
 
     Sign convention: EIDORS canonical physical ``J = -∂V/∂σ``
     (``sign=-1.0``). Mirrors the trailing ``J = -J;`` step of
@@ -31,20 +33,27 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
 
     The sibling :class:`pyeidors.inverse.jacobian.direct_jacobian.DirectJacobianCalculator`
     uses the opposite PyEIDORS runtime convention ``J = +∂V/∂σ``; that
-    convention is what the production GN runtime (`gauss_newton_runtime.py:952`,
-    `rhs = -jtr`) is paired with. The two calculators MUST satisfy
-    ``Direct.calculate(σ) == -EidorsStyleAdjointJacobian.calculate(σ)``;
+    convention is what the production GN runtime
+    (``gauss_newton_runtime.py:952``, ``rhs = -jtr``) is paired with.
+    The two calculators MUST satisfy
+    ``Direct.calculate(σ) == -EidorsJacobianAdapter.calculate(σ)``;
     the contract is frozen by V73 and exercised by
     ``tests/unit/test_jacobian_direct_adjoint_parity.py``. Do **not**
     swap calculators inside an existing GN/RM pipeline without
     compensating the sign at the consumer site.
 
-    Unique features beyond DirectJacobianCalculator: ``use_torch`` /
-    ``device`` / ``torch_dtype`` / ``torch_batch_all`` GPU controls and
-    :meth:`linearize_lazy` for the matrix-free
-    :class:`LazyAdjointJacobianLinearization` path. The eventual Path C
-    refactor will move these into a shared core; until then this class
-    coexists with the direct calculator by design.
+    After T75 Stages 1–4 the NumPy assembly path delegates to the same
+    :func:`pyeidors.inverse.jacobian._core.assemble_jacobian_efficient_numpy`
+    kernel that backs ``DirectJacobianCalculator``; this class only adds
+    the EIDORS sign flip plus the GPU / torch / lazy-adjoint surface
+    that ``DirectJacobianCalculator`` does not expose
+    (``use_torch`` / ``device`` / ``torch_dtype`` / ``torch_batch_all``,
+    :meth:`linearize_lazy`, :meth:`linearize_lazy_from_image`).
+
+    The historical name ``EidorsStyleAdjointJacobian`` remains available
+    as a deprecated alias for one release cycle; it emits a
+    :class:`DeprecationWarning` on construction and will be removed in
+    the next cycle (T75 Stage 5 → final cleanup).
     """
 
     sign_convention = "-dV/dsigma_eidors_canonical"
@@ -180,14 +189,15 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
     ) -> np.ndarray:
         """Assemble EIDORS-canonical ``J = -∂V/∂σ`` via shared core + sign flip.
 
-        Stage 3 of T75 routes Adjoint's NumPy path through the same
+        Stage 3 of T75 routes the NumPy path through the same
         :func:`pyeidors.inverse.jacobian._core.assemble_jacobian_efficient_numpy`
         kernel that backs ``DirectJacobianCalculator``. The only difference
         between the two calculators on this path is the trailing sign
-        convention (V73): Adjoint negates the shared result so it returns
-        ``-Direct``. The Torch GPU path (``_assemble_torch`` / ``_assemble_torch_all``)
-        remains inline because it is unique to this calculator and exercised
-        through the explicit ``use_torch`` flag.
+        convention (V73): the adapter negates the shared result so it
+        returns ``-Direct``. The Torch GPU path
+        (``_assemble_torch`` / ``_assemble_torch_all``) remains inline
+        because it is unique to this calculator and exercised through the
+        explicit ``use_torch`` flag.
         """
         jacobian, _ = assemble_jacobian_efficient_numpy(
             grad_u_all=grad_u_all,
@@ -255,3 +265,24 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         )
         sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * self.cell_areas_t
         return sensitivity.cpu().numpy()
+
+
+class EidorsStyleAdjointJacobian(EidorsJacobianAdapter):
+    """Deprecated alias for :class:`EidorsJacobianAdapter` (T75 Stage 5).
+
+    Construction emits a :class:`DeprecationWarning`. The class will be
+    removed in the next release cycle once external callers migrate.
+    All behavior is inherited unchanged so existing pipelines continue
+    to compute the same EIDORS-canonical ``J = -∂V/∂σ`` and the V73
+    sign-parity contract still holds.
+    """
+
+    def __init__(self, *args, **kwargs):
+        warnings.warn(
+            "EidorsStyleAdjointJacobian is deprecated; "
+            "use pyeidors.inverse.jacobian.EidorsJacobianAdapter instead. "
+            "The alias will be removed in the next release cycle (T75 Stage 5).",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        super().__init__(*args, **kwargs)

@@ -33,7 +33,7 @@ from pyeidors.data.structures import EITImage, PatternConfig  # noqa: E402
 from pyeidors.data.synthetic_data import create_custom_phantom  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
 from pyeidors.inverse.jacobian.adjoint_jacobian import (
-    EidorsStyleAdjointJacobian,
+    EidorsJacobianAdapter,
 )  # noqa: E402
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization  # noqa: E402
 from pyeidors.inverse.solvers.gauss_newton import (
@@ -299,7 +299,7 @@ class PyEidorsCase:
         if args.task == "absolute_gn":
             use_torch = args.device == "gpu"
             use_legacy_dense = args.gn_path == "legacy_dense"
-            jacobian_calculator = EidorsStyleAdjointJacobian(
+            jacobian_calculator = EidorsJacobianAdapter(
                 self.system.fwd_model,
                 use_torch=use_torch,
                 device="cuda:0" if use_torch else None,
@@ -366,7 +366,7 @@ class PyEidorsCase:
         return voltage_metrics(self.target_meas.meas, sim.meas)
 
     def jacobian(self) -> Dict[str, float]:
-        calc = EidorsStyleAdjointJacobian(
+        calc = EidorsJacobianAdapter(
             self.system.fwd_model, use_torch=self.args.device == "gpu"
         )
         matrix = calc.calculate_from_image(self.truth_image)

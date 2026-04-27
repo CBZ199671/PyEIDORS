@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Benchmark comparison: DirectJacobian vs EidorsStyleAdjointJacobian (CPU/torch).
+"""Benchmark comparison: DirectJacobian vs EidorsJacobianAdapter (CPU/torch).
 
 Output:
 - Computation time
@@ -24,7 +24,7 @@ from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 
 
 def benchmark():
@@ -59,19 +59,19 @@ def benchmark():
     J_direct = direct_calc.calculate_from_image(img, method="efficient")
     t_direct = time.perf_counter() - t0
 
-    # EidorsStyle adjoint CPU
-    adj_cpu = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
+    # EidorsJacobianAdapter CPU
+    adj_cpu = EidorsJacobianAdapter(fwd_model, use_torch=False)
     t0 = time.perf_counter()
     J_adj_cpu = adj_cpu.calculate_from_image(img)
     t_adj_cpu = time.perf_counter() - t0
 
-    # EidorsStyle adjoint torch (uses GPU if available)
-    adj_torch = EidorsStyleAdjointJacobian(fwd_model, use_torch=True)
+    # EidorsJacobianAdapter torch (uses GPU if available)
+    adj_torch = EidorsJacobianAdapter(fwd_model, use_torch=True)
     t0 = time.perf_counter()
     J_adj_torch = adj_torch.calculate_from_image(img)
     t_adj_torch = time.perf_counter() - t0
 
-    # Align signs: DirectJacobian has positive sign by default, EIDORS style has negative sign
+    # Align signs: DirectJacobian has positive sign by default, EIDORS adapter has negative sign
     J_direct_aligned = -J_direct
 
     def rel_err(A, B):

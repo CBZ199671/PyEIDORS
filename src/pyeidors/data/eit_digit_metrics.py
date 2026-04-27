@@ -360,7 +360,7 @@ def build_pyeidors_fem_linearized_model(
 
     from pyeidors.data.structures import PatternConfig
     from pyeidors.forward.eit_forward_model import EITForwardModel
-    from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+    from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 
     mesh = _create_pyeidors_square_mesh(n_elec=int(n_elec), grid=int(grid))
     pattern = PatternConfig(
@@ -407,7 +407,7 @@ def build_pyeidors_fem_linearized_model(
             f"expected {int(expected_measurements)}, got {actual_measurements}"
         )
     sensitivity = np.asarray(
-        EidorsStyleAdjointJacobian(fwd_model).calculate(sigma_ref_fun),
+        EidorsJacobianAdapter(fwd_model).calculate(sigma_ref_fun),
         dtype=float,
     )
     if sensitivity.shape != (voltage_reference.size, sigma_reference.size):

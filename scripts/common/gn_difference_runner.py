@@ -42,7 +42,7 @@ from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.jacobian.linearized import (
     JacobianLinearization,
     LazyAdjointJacobianLinearization,
@@ -1450,7 +1450,7 @@ def build_shared_context(
     unique_counts = sorted(set(pattern_manager.n_meas_per_stim))
     n_meas_per_stim = unique_counts[0] if len(unique_counts) == 1 else None
 
-    jac_calc = EidorsStyleAdjointJacobian(
+    jac_calc = EidorsJacobianAdapter(
         fwd_model,
         use_torch=str(runtime_selection.effective) == "cuda",
         device=str(runtime_selection.torch_device),

@@ -1,12 +1,12 @@
 """T73 (V73): Direct vs Adjoint Jacobian sign-convention contract.
 
 Frozen contract for the two coexisting calculators:
-- ``DirectJacobianCalculator``   uses the PyEIDORS runtime sign convention
+- ``DirectJacobianCalculator`` uses the PyEIDORS runtime sign convention
   ``J = +∂V/∂σ``. Combined with ``rhs = -jtr`` in
   ``gauss_newton_runtime.py`` this yields physical δσ matching EIDORS.
-- ``EidorsStyleAdjointJacobian`` uses the EIDORS canonical physical
-  convention ``J = -∂V/∂σ`` (matches ``calc_jacobian_adjoint.m``'s final
-  ``J = -J;`` step).
+- ``EidorsJacobianAdapter`` (formerly ``EidorsStyleAdjointJacobian``)
+  uses the EIDORS canonical physical convention ``J = -∂V/∂σ`` (matches
+  ``calc_jacobian_adjoint.m``'s final ``J = -J;`` step).
 
 For any σ the two MUST satisfy ``Direct.calculate(σ) == -Adjoint.calculate(σ)``.
 The absolute-value parity is asserted as an auxiliary sanity check.
@@ -22,7 +22,7 @@ from __future__ import annotations
 import numpy as np
 from dolfinx import fem
 
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 
 
@@ -37,7 +37,7 @@ def test_direct_calculate_equals_negative_adjoint_calculate(eit_system) -> None:
 
     sigma = _baseline_sigma(eit_system)
     direct = DirectJacobianCalculator(eit_system.fwd_model)
-    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
+    adjoint = EidorsJacobianAdapter(eit_system.fwd_model, use_torch=False)
 
     j_direct = direct.calculate(sigma)
     j_adjoint = adjoint.calculate(sigma)
@@ -53,7 +53,7 @@ def test_direct_and_adjoint_calculate_have_equal_magnitude(eit_system) -> None:
 
     sigma = _baseline_sigma(eit_system)
     direct = DirectJacobianCalculator(eit_system.fwd_model)
-    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
+    adjoint = EidorsJacobianAdapter(eit_system.fwd_model, use_torch=False)
 
     j_direct = direct.calculate(sigma)
     j_adjoint = adjoint.calculate(sigma)
@@ -69,7 +69,7 @@ def test_direct_and_adjoint_linearize_to_dense_signed_parity(eit_system) -> None
 
     sigma = _baseline_sigma(eit_system)
     direct = DirectJacobianCalculator(eit_system.fwd_model)
-    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
+    adjoint = EidorsJacobianAdapter(eit_system.fwd_model, use_torch=False)
 
     direct_dense = direct.linearize(sigma).to_dense()
     adjoint_dense = adjoint.linearize(sigma).to_dense()
@@ -85,7 +85,7 @@ def test_calculator_sign_convention_metadata(eit_system) -> None:
 
     sigma = _baseline_sigma(eit_system)
     direct = DirectJacobianCalculator(eit_system.fwd_model)
-    adjoint = EidorsStyleAdjointJacobian(eit_system.fwd_model, use_torch=False)
+    adjoint = EidorsJacobianAdapter(eit_system.fwd_model, use_torch=False)
 
     assert direct.sign_convention == "+dV/dsigma_pyeidors_runtime"
     assert adjoint.sign_convention == "-dV/dsigma_eidors_canonical"

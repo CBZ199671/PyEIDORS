@@ -49,12 +49,13 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     matches the EIDORS reconstruction direction (``δσ > 0`` when the
     inhomogeneous conductivity exceeds the background).
 
-    The sibling :class:`pyeidors.inverse.jacobian.adjoint_jacobian.EidorsStyleAdjointJacobian`
-    instead returns the EIDORS-canonical signed Jacobian
-    ``J = -∂V/∂σ``. The two calculators differ only in overall sign
+    The sibling :class:`pyeidors.inverse.jacobian.adjoint_jacobian.EidorsJacobianAdapter`
+    (deprecated alias ``EidorsStyleAdjointJacobian``) instead returns
+    the EIDORS-canonical signed Jacobian ``J = -∂V/∂σ``. The two
+    calculators differ only in overall sign
     (``DirectJacobianCalculator(...).calculate(σ)
-    == -EidorsStyleAdjointJacobian(...).calculate(σ)``); the
-    contract is frozen by V73 and exercised by
+    == -EidorsJacobianAdapter(...).calculate(σ)``); the contract is
+    frozen by V73 and exercised by
     ``tests/unit/test_jacobian_direct_adjoint_parity.py``. Do **not**
     swap calculators inside an existing GN/RM pipeline without
     compensating the sign at the consumer site.

@@ -17,7 +17,7 @@ from pyeidors.geometry.mesh3d_generator import (
     create_cylinder_3d_eit_mesh,
 )
 from pyeidors.inverse.regularization.smoothness import TikhonovRegularization
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.solvers.gauss_newton import GaussNewtonReconstructor
 
 
@@ -142,7 +142,7 @@ def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_r
     )
     sigma = fem.Function(fwd.V_sigma)
     sigma.x.array[:] = 1.0
-    jac_calc = EidorsStyleAdjointJacobian(fwd)
+    jac_calc = EidorsJacobianAdapter(fwd)
 
     lazy = jac_calc.linearize_lazy(
         sigma,

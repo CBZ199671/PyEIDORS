@@ -11,7 +11,7 @@ import torch
 import pyeidors.inverse.jacobian._core as core_module
 import pyeidors.inverse.jacobian.adjoint_jacobian as adjoint_module
 import pyeidors.inverse.jacobian.base_jacobian as base_module
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 
 
 class _FakeCellVec:
@@ -38,17 +38,17 @@ class _InterpFunction:
 def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    assert EidorsStyleAdjointJacobian._resolve_torch_dtype(None) == torch.float64
+    assert EidorsJacobianAdapter._resolve_torch_dtype(None) == torch.float64
     assert (
-        EidorsStyleAdjointJacobian._resolve_torch_dtype(torch.float32) == torch.float32
+        EidorsJacobianAdapter._resolve_torch_dtype(torch.float32) == torch.float32
     )
-    assert EidorsStyleAdjointJacobian._resolve_torch_dtype("fp32") == torch.float32
-    assert EidorsStyleAdjointJacobian._resolve_torch_dtype("double") == torch.float64
+    assert EidorsJacobianAdapter._resolve_torch_dtype("fp32") == torch.float32
+    assert EidorsJacobianAdapter._resolve_torch_dtype("double") == torch.float64
     with pytest.raises(ValueError, match="Unsupported torch dtype"):
-        EidorsStyleAdjointJacobian._resolve_torch_dtype("int8")
+        EidorsJacobianAdapter._resolve_torch_dtype("int8")
 
     monkeypatch.setattr(
-        EidorsStyleAdjointJacobian,
+        EidorsJacobianAdapter,
         "_setup",
         lambda self: setattr(self, "_setup_called", True),
     )
@@ -65,17 +65,17 @@ def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     if getattr(torch.backends, "mps", None) is not None:
         monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-        jac_mps = EidorsStyleAdjointJacobian(
+        jac_mps = EidorsJacobianAdapter(
             fake_fwd_model, use_torch=False, device=None
         )
         assert jac_mps.torch_device.type == "mps"
 
     if getattr(torch.backends, "mps", None) is not None:
         monkeypatch.setattr(torch.backends.mps, "is_available", lambda: False)
-    jac_cpu = EidorsStyleAdjointJacobian(fake_fwd_model, use_torch=False, device=None)
+    jac_cpu = EidorsJacobianAdapter(fake_fwd_model, use_torch=False, device=None)
     assert jac_cpu.torch_device.type == "cpu"
 
-    jac_explicit = EidorsStyleAdjointJacobian(
+    jac_explicit = EidorsJacobianAdapter(
         fake_fwd_model, use_torch=False, device="cpu"
     )
     assert jac_explicit.torch_device.type == "cpu"
@@ -84,7 +84,7 @@ def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
 def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolation_points(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    jac = EidorsStyleAdjointJacobian.__new__(EidorsStyleAdjointJacobian)
+    jac = EidorsJacobianAdapter.__new__(EidorsJacobianAdapter)
     jac.fwd_model = SimpleNamespace(
         mesh=SimpleNamespace(geometry=SimpleNamespace(dim=2)),
         V=SimpleNamespace(name="V"),
@@ -109,7 +109,7 @@ def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolatio
         "assemble_vector",
         lambda _form: _FakeCellVec([2.0, 3.0]),
     )
-    EidorsStyleAdjointJacobian._setup(jac)
+    EidorsJacobianAdapter._setup(jac)
     np.testing.assert_allclose(jac.cell_areas, np.array([2.0, 3.0], dtype=float))
     np.testing.assert_allclose(
         jac.cell_areas_t.cpu().numpy(), np.array([2.0, 3.0], dtype=np.float32)
@@ -133,7 +133,7 @@ def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolatio
         core_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
     )
 
-    grads = EidorsStyleAdjointJacobian._compute_field_gradients(
+    grads = EidorsJacobianAdapter._compute_field_gradients(
         jac,
         [np.array([1.0, 2.0], dtype=float), np.array([3.0, 4.0], dtype=float)],
     )
@@ -148,7 +148,7 @@ def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolatio
 def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
     monkeypatch: pytest.MonkeyPatch,
 ):
-    jac = EidorsStyleAdjointJacobian.__new__(EidorsStyleAdjointJacobian)
+    jac = EidorsJacobianAdapter.__new__(EidorsJacobianAdapter)
     jac.fwd_model = SimpleNamespace(
         n_elec=2,
         pattern_manager=SimpleNamespace(
@@ -167,7 +167,7 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
     jac.torch_dtype = torch.float32
     jac.torch_batch_all = False
 
-    patterns = EidorsStyleAdjointJacobian._measurement_to_current_patterns(jac)
+    patterns = EidorsJacobianAdapter._measurement_to_current_patterns(jac)
     np.testing.assert_allclose(
         patterns,
         np.array([[1.0, 0.0, 1.0], [0.0, 1.0, -1.0]], dtype=float),
@@ -182,7 +182,7 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
         np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
         np.array([[1.5, 0.5], [0.5, 1.5]], dtype=float),
     ]
-    assembled_np = EidorsStyleAdjointJacobian._assemble_numpy(
+    assembled_np = EidorsJacobianAdapter._assemble_numpy(
         jac, grad_u_all, grad_adj_all
     )
     expected = np.array(
@@ -195,7 +195,7 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
     )
     np.testing.assert_allclose(assembled_np, expected)
 
-    assembled_torch = EidorsStyleAdjointJacobian._assemble_torch(
+    assembled_torch = EidorsJacobianAdapter._assemble_torch(
         jac, grad_u_all, grad_adj_all
     )
     np.testing.assert_allclose(assembled_torch, expected, atol=1e-6, rtol=1e-6)
@@ -205,12 +205,12 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
         jac, "_assemble_torch_all", lambda gu, ga: np.array([[42.0]], dtype=float)
     )
     np.testing.assert_allclose(
-        EidorsStyleAdjointJacobian._assemble_torch(jac, grad_u_all, grad_adj_all),
+        EidorsJacobianAdapter._assemble_torch(jac, grad_u_all, grad_adj_all),
         np.array([[42.0]]),
     )
 
     jac.torch_batch_all = False
-    assembled_all = EidorsStyleAdjointJacobian._assemble_torch_all(
+    assembled_all = EidorsJacobianAdapter._assemble_torch_all(
         jac, grad_u_all, grad_adj_all
     )
     np.testing.assert_allclose(assembled_all, expected, atol=1e-6, rtol=1e-6)
@@ -238,7 +238,7 @@ def test_linearize_returns_matrix_free_operator_matching_dense_assembly():
             np.array([5.0], dtype=float),
         ], None
 
-    jac = EidorsStyleAdjointJacobian.__new__(EidorsStyleAdjointJacobian)
+    jac = EidorsJacobianAdapter.__new__(EidorsJacobianAdapter)
     jac.fwd_model = SimpleNamespace(
         forward_solve=fake_forward_solve,
         pattern_manager=SimpleNamespace(
@@ -254,9 +254,9 @@ def test_linearize_returns_matrix_free_operator_matching_dense_assembly():
     )
     sigma = SimpleNamespace(x=SimpleNamespace(array=np.array([1.0, 1.0], dtype=float)))
 
-    linearization = EidorsStyleAdjointJacobian.linearize(jac, sigma)
+    linearization = EidorsJacobianAdapter.linearize(jac, sigma)
 
-    expected = EidorsStyleAdjointJacobian._assemble_numpy(jac, grad_u_all, grad_adj_all)
+    expected = EidorsJacobianAdapter._assemble_numpy(jac, grad_u_all, grad_adj_all)
     np.testing.assert_allclose(linearization.to_dense(), expected)
     np.testing.assert_allclose(
         linearization.matvec(np.array([0.25, 0.5])), expected @ np.array([0.25, 0.5])
@@ -279,7 +279,7 @@ def test_calculate_dispatches_torch_path(monkeypatch: pytest.MonkeyPatch):
             return [np.array([1.0, 2.0], dtype=float)], None
         return [np.array([3.0, 4.0], dtype=float)], None
 
-    jac = EidorsStyleAdjointJacobian.__new__(EidorsStyleAdjointJacobian)
+    jac = EidorsJacobianAdapter.__new__(EidorsJacobianAdapter)
     jac.fwd_model = SimpleNamespace(forward_solve=fake_forward_solve)
     jac.use_torch = True
     jac._compute_field_gradients = lambda _fields: (
@@ -289,5 +289,5 @@ def test_calculate_dispatches_torch_path(monkeypatch: pytest.MonkeyPatch):
         [[1.0], [-1.0]], dtype=float
     )
     jac._assemble_torch = lambda gu, ga: np.array([[7.0]], dtype=float)
-    out = EidorsStyleAdjointJacobian.calculate(jac, sigma=SimpleNamespace())
+    out = EidorsJacobianAdapter.calculate(jac, sigma=SimpleNamespace())
     np.testing.assert_allclose(out, np.array([[7.0]], dtype=float))

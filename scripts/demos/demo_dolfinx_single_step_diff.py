@@ -34,7 +34,7 @@ from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.femx import function_get_array, function_set_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
-from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
 from pyeidors.visualization import create_visualizer
 from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
@@ -90,11 +90,11 @@ def main() -> None:
     dv = data_true.meas - data_bg.meas  # unnormalized difference
 
     # 4) Single-step difference: J, prior, one linear solve
-    jac_calc = EidorsStyleAdjointJacobian(fwd_model, use_torch=False)
+    jac_calc = EidorsJacobianAdapter(fwd_model, use_torch=False)
     sigma_fun_bg = fem.Function(fwd_model.V_sigma)
     function_set_array(sigma_fun_bg, sigma_bg)
     J = jac_calc.calculate(sigma_fun_bg, method="efficient")  # shape: n_meas x n_elem
-    # EIDORS sign convention is built into EidorsStyleAdjointJacobian, no extra negation needed.
+    # EIDORS sign convention is built into EidorsJacobianAdapter, no extra negation needed.
 
     # W = I (unweighted), prior uses NOSER, exponent=0.5 (EIDORS default)
     reg = NOSERRegularization(

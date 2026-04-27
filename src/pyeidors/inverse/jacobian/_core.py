@@ -4,8 +4,8 @@ Path C progressive fusion (T75):
 
 * Stage 1 extracted the FEM geometry handles, field-gradient interpolation
   and measurement-to-current pattern construction that
-  ``DirectJacobianCalculator`` and ``EidorsStyleAdjointJacobian``
-  historically duplicated.
+  ``DirectJacobianCalculator`` and ``EidorsJacobianAdapter`` (formerly
+  ``EidorsStyleAdjointJacobian``) historically duplicated.
 * Stage 2 adds the shared adjoint-fields solve and the pure-numpy
   assembly / electrode-to-measurement mapping / block-size calibration
   helpers consumed by the direct calculator. ``DirectJacobianCalculator``
