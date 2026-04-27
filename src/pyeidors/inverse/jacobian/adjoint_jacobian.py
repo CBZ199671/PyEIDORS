@@ -7,6 +7,7 @@ import torch
 from dolfinx import fem
 
 from ._core import (
+    assemble_jacobian_efficient_numpy,
     build_jacobian_geometry,
     compute_field_gradients,
     measurement_to_current_patterns,
@@ -177,19 +178,25 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
     def _assemble_numpy(
         self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]
     ) -> np.ndarray:
-        n_meas = self.fwd_model.pattern_manager.n_meas_total
-        n_elem = len(self.cell_areas)
-        J = np.zeros((n_meas, n_elem), dtype=float)
+        """Assemble EIDORS-canonical ``J = -∂V/∂σ`` via shared core + sign flip.
 
-        meas_idx = 0
-        for stim_idx, grad_u in enumerate(grad_u_all):
-            n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
-            for k in range(n_meas_this):
-                adj_grad = grad_adj_all[meas_idx + k]
-                sensitivity = -np.sum(grad_u * adj_grad, axis=1) * self.cell_areas
-                J[meas_idx + k, :] = sensitivity
-            meas_idx += n_meas_this
-        return J
+        Stage 3 of T75 routes Adjoint's NumPy path through the same
+        :func:`pyeidors.inverse.jacobian._core.assemble_jacobian_efficient_numpy`
+        kernel that backs ``DirectJacobianCalculator``. The only difference
+        between the two calculators on this path is the trailing sign
+        convention (V73): Adjoint negates the shared result so it returns
+        ``-Direct``. The Torch GPU path (``_assemble_torch`` / ``_assemble_torch_all``)
+        remains inline because it is unique to this calculator and exercised
+        through the explicit ``use_torch`` flag.
+        """
+        jacobian, _ = assemble_jacobian_efficient_numpy(
+            grad_u_all=grad_u_all,
+            adjoint_gradients=grad_adj_all,
+            cell_areas=self.cell_areas,
+            n_meas_per_stim=self.fwd_model.pattern_manager.n_meas_per_stim,
+            block_size=int(len(self.cell_areas) or 1),
+        )
+        return -jacobian
 
     def _assemble_torch(
         self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]
