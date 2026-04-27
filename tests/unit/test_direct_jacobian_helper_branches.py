@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import pyeidors.inverse.jacobian._core as core_module
 import pyeidors.inverse.jacobian.base_jacobian as base_module
 import pyeidors.inverse.jacobian.direct_jacobian as direct_module
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
@@ -320,16 +321,19 @@ def test_compute_gradient_patterns_and_calculation_wrappers(
             interpolation_points=lambda: np.array([[0.0, 0.0]], dtype=float)
         )
     )
-    monkeypatch.setattr(direct_module.fem, "Function", _InterpFunction)
+    calc._geometry = SimpleNamespace(
+        V=calc.V, Q_DG=calc.Q_DG, gdim=calc.gdim
+    )
+    monkeypatch.setattr(core_module.fem, "Function", _InterpFunction)
     monkeypatch.setattr(
-        direct_module.fem,
+        core_module.fem,
         "Expression",
         lambda grad_value, points: SimpleNamespace(
             grad_value=grad_value, points=points
         ),
     )
     monkeypatch.setattr(
-        direct_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
+        core_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
     )
 
     grads = calc._compute_field_gradients(

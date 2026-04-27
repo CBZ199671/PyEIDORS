@@ -4,10 +4,13 @@ from __future__ import annotations
 
 import numpy as np
 import torch
-import ufl
 from dolfinx import fem
-import dolfinx.fem.petsc as fem_petsc
 
+from ._core import (
+    build_jacobian_geometry,
+    compute_field_gradients,
+    measurement_to_current_patterns,
+)
 from .base_jacobian import BaseJacobianCalculator
 from .linearized import (
     JacobianLinearization,
@@ -81,18 +84,14 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         raise ValueError(f"Unsupported torch dtype: {dtype}")
 
     def _setup(self):
-        self.mesh = self.fwd_model.mesh
-        self.V = self.fwd_model.V
-        self.V_sigma = self.fwd_model.V_sigma
-        self.gdim = self.mesh.geometry.dim
-
-        self.Q_DG = fem.functionspace(self.mesh, ("DG", 0, (self.gdim,)))
-        self.DG0 = fem.functionspace(self.mesh, ("DG", 0))
-
-        v = ufl.TestFunction(self.DG0)
-        cell_vec = fem_petsc.assemble_vector(fem.form(v * ufl.dx))
-        cell_vec.assemble()
-        self.cell_areas = np.asarray(cell_vec.array, dtype=float)
+        self._geometry = build_jacobian_geometry(self.fwd_model)
+        self.mesh = self._geometry.mesh
+        self.V = self._geometry.V
+        self.V_sigma = self._geometry.V_sigma
+        self.gdim = self._geometry.gdim
+        self.Q_DG = self._geometry.Q_DG
+        self.DG0 = self._geometry.DG0
+        self.cell_areas = self._geometry.cell_areas
 
         if self.use_torch:
             self.cell_areas_t = torch.from_numpy(self.cell_areas).to(
@@ -170,35 +169,10 @@ class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
         return self.linearize_lazy(sigma, **kwargs)
 
     def _compute_field_gradients(self, field_solutions):
-        gradients = []
-        interpolation_points = self.Q_DG.element.interpolation_points
-        if callable(interpolation_points):
-            interpolation_points = interpolation_points()
-
-        for field in field_solutions:
-            u_fun = fem.Function(self.V)
-            u_fun.x.array[:] = field
-
-            grad_expr = fem.Expression(ufl.grad(u_fun), interpolation_points)
-            grad_u = fem.Function(self.Q_DG)
-            grad_u.interpolate(grad_expr)
-            grad_u_vec = grad_u.x.array.reshape(-1, self.gdim)
-            gradients.append(grad_u_vec)
-
-        return gradients
+        return compute_field_gradients(field_solutions, self._geometry)
 
     def _measurement_to_current_patterns(self) -> np.ndarray:
-        n_meas = self.fwd_model.pattern_manager.n_meas_total
-        n_elec = self.fwd_model.n_elec
-        current_patterns = np.zeros((n_elec, n_meas), dtype=float)
-
-        meas_idx = 0
-        for stim_idx in range(self.fwd_model.pattern_manager.n_stim):
-            meas_matrix = self.fwd_model.pattern_manager.meas_matrices[stim_idx]
-            n_meas_this = meas_matrix.shape[0]
-            current_patterns[:, meas_idx : meas_idx + n_meas_this] = meas_matrix.T
-            meas_idx += n_meas_this
-        return current_patterns
+        return measurement_to_current_patterns(self.fwd_model)
 
     def _assemble_numpy(
         self, grad_u_all: list[np.ndarray], grad_adj_all: list[np.ndarray]

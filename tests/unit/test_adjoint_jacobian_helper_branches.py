@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 import torch
 
+import pyeidors.inverse.jacobian._core as core_module
 import pyeidors.inverse.jacobian.adjoint_jacobian as adjoint_module
 import pyeidors.inverse.jacobian.base_jacobian as base_module
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsStyleAdjointJacobian
@@ -94,17 +95,17 @@ def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolatio
     jac.torch_dtype = torch.float32
 
     monkeypatch.setattr(
-        adjoint_module.fem,
+        core_module.fem,
         "functionspace",
         lambda _mesh, _desc: SimpleNamespace(
             element=SimpleNamespace(interpolation_points=lambda: np.array([[0.0, 0.0]]))
         ),
     )
-    monkeypatch.setattr(adjoint_module.ufl, "TestFunction", lambda _space: 1.0)
-    monkeypatch.setattr(adjoint_module.ufl, "dx", 1.0)
-    monkeypatch.setattr(adjoint_module.fem, "form", lambda expr: expr)
+    monkeypatch.setattr(core_module.ufl, "TestFunction", lambda _space: 1.0)
+    monkeypatch.setattr(core_module.ufl, "dx", 1.0)
+    monkeypatch.setattr(core_module.fem, "form", lambda expr: expr)
     monkeypatch.setattr(
-        adjoint_module.fem_petsc,
+        core_module.fem_petsc,
         "assemble_vector",
         lambda _form: _FakeCellVec([2.0, 3.0]),
     )
@@ -119,16 +120,17 @@ def test_setup_and_compute_field_gradients_cover_torch_and_callable_interpolatio
         element=SimpleNamespace(interpolation_points=lambda: np.array([[0.0, 0.0]]))
     )
     jac.gdim = 2
-    monkeypatch.setattr(adjoint_module.fem, "Function", _InterpFunction)
+    jac._geometry = SimpleNamespace(V=jac.V, Q_DG=jac.Q_DG, gdim=jac.gdim)
+    monkeypatch.setattr(core_module.fem, "Function", _InterpFunction)
     monkeypatch.setattr(
-        adjoint_module.fem,
+        core_module.fem,
         "Expression",
         lambda grad_value, points: SimpleNamespace(
             grad_value=grad_value, points=points
         ),
     )
     monkeypatch.setattr(
-        adjoint_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
+        core_module.ufl, "grad", lambda u_fun: float(np.sum(u_fun.x.array))
     )
 
     grads = EidorsStyleAdjointJacobian._compute_field_gradients(

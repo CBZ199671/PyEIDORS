@@ -6,9 +6,7 @@ import hashlib
 from time import perf_counter
 
 import numpy as np
-import ufl
 from dolfinx import fem
-import dolfinx.fem.petsc as fem_petsc
 
 try:
     import torch
@@ -24,6 +22,11 @@ from ...femx import function_get_array
 from ..solvers.gauss_newton_device import (
     normalize_runtime_device,
     normalize_runtime_device_label,
+)
+from ._core import (
+    build_jacobian_geometry,
+    compute_field_gradients,
+    measurement_to_current_patterns,
 )
 from .base_jacobian import BaseJacobianCalculator
 from .linearized import JacobianLinearization, compute_sigma_fingerprint
@@ -94,18 +97,14 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self._setup_computation()
 
     def _setup_computation(self):
-        self.mesh = self.fwd_model.mesh
-        self.V = self.fwd_model.V
-        self.V_sigma = self.fwd_model.V_sigma
-        self.gdim = self.mesh.geometry.dim
-
-        self.Q_DG = fem.functionspace(self.mesh, ("DG", 0, (self.gdim,)))
-        self.DG0 = fem.functionspace(self.mesh, ("DG", 0))
-
-        v = ufl.TestFunction(self.DG0)
-        areas_vec = fem_petsc.assemble_vector(fem.form(v * ufl.dx))
-        areas_vec.assemble()
-        self.cell_areas = np.asarray(areas_vec.array, dtype=float)
+        self._geometry = build_jacobian_geometry(self.fwd_model)
+        self.mesh = self._geometry.mesh
+        self.V = self._geometry.V
+        self.V_sigma = self._geometry.V_sigma
+        self.gdim = self._geometry.gdim
+        self.Q_DG = self._geometry.Q_DG
+        self.DG0 = self._geometry.DG0
+        self.cell_areas = self._geometry.cell_areas
 
     def _calibrate_block_size(
         self,
@@ -410,21 +409,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         return self._convert_to_measurement_jacobian(jacobian)
 
     def _compute_field_gradients(self, field_solutions):
-        gradients = []
-        interpolation_points = self.Q_DG.element.interpolation_points
-        if callable(interpolation_points):
-            interpolation_points = interpolation_points()
-        for field in field_solutions:
-            u_fun = fem.Function(self.V)
-            u_fun.x.array[:] = field
-
-            grad_expr = fem.Expression(ufl.grad(u_fun), interpolation_points)
-            grad_u = fem.Function(self.Q_DG)
-            grad_u.interpolate(grad_expr)
-            grad_u_vec = grad_u.x.array.reshape(-1, self.gdim)
-            gradients.append(grad_u_vec)
-
-        return gradients
+        return compute_field_gradients(field_solutions, self._geometry)
 
     def _compute_adjoint_fields_efficient(self, sigma: fem.Function):
         adjoint_patterns = self._measurement_to_current_patterns()
@@ -432,20 +417,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         return self._compute_field_gradients(adjoint_fields)
 
     def _measurement_to_current_patterns(self):
-        n_meas = self.fwd_model.pattern_manager.n_meas_total
-        n_elec = self.fwd_model.n_elec
-
-        current_patterns = np.zeros((n_elec, n_meas), dtype=float)
-
-        meas_idx = 0
-        for stim_idx in range(self.fwd_model.pattern_manager.n_stim):
-            meas_matrix = self.fwd_model.pattern_manager.meas_matrices[stim_idx]
-            n_meas_this_stim = meas_matrix.shape[0]
-
-            current_patterns[:, meas_idx : meas_idx + n_meas_this_stim] = meas_matrix.T
-            meas_idx += n_meas_this_stim
-
-        return current_patterns
+        return measurement_to_current_patterns(self.fwd_model)
 
     def _assemble_jacobian_efficient(self, grad_u_all, adjoint_gradients):
         n_measurements = len(adjoint_gradients)
