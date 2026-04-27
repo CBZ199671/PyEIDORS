@@ -17,7 +17,33 @@ from .linearized import (
 
 
 class EidorsStyleAdjointJacobian(BaseJacobianCalculator):
-    """Adjoint Jacobian calculator with EIDORS sign convention."""
+    """Adjoint Jacobian calculator with EIDORS canonical sign convention.
+
+    Sign convention: EIDORS canonical physical ``J = -∂V/∂σ``
+    (``sign=-1.0``). Mirrors the trailing ``J = -J;`` step of
+    ``calc_jacobian_adjoint.m`` so that downstream EIDORS-style consumers
+    (e.g. ``J' * W * (vi - vh)`` directly used as RHS without an extra
+    negation) yield correct-sign reconstructions.
+
+    The sibling :class:`pyeidors.inverse.jacobian.direct_jacobian.DirectJacobianCalculator`
+    uses the opposite PyEIDORS runtime convention ``J = +∂V/∂σ``; that
+    convention is what the production GN runtime (`gauss_newton_runtime.py:952`,
+    `rhs = -jtr`) is paired with. The two calculators MUST satisfy
+    ``Direct.calculate(σ) == -EidorsStyleAdjointJacobian.calculate(σ)``;
+    the contract is frozen by V73 and exercised by
+    ``tests/unit/test_jacobian_direct_adjoint_parity.py``. Do **not**
+    swap calculators inside an existing GN/RM pipeline without
+    compensating the sign at the consumer site.
+
+    Unique features beyond DirectJacobianCalculator: ``use_torch`` /
+    ``device`` / ``torch_dtype`` / ``torch_batch_all`` GPU controls and
+    :meth:`linearize_lazy` for the matrix-free
+    :class:`LazyAdjointJacobianLinearization` path. The eventual Path C
+    refactor will move these into a shared core; until then this class
+    coexists with the direct calculator by design.
+    """
+
+    sign_convention = "-dV/dsigma_eidors_canonical"
 
     def __init__(
         self,

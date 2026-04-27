@@ -30,7 +30,30 @@ from .linearized import JacobianLinearization, compute_sigma_fingerprint
 
 
 class DirectJacobianCalculator(BaseJacobianCalculator):
-    """Direct method Jacobian calculator."""
+    """Direct (forward + adjoint solves) Jacobian calculator.
+
+    Sign convention: PyEIDORS runtime ``J = +∂V/∂σ`` (``sign=+1.0``).
+
+    The dense Jacobian returned by :meth:`calculate` and the operator
+    returned by :meth:`linearize` both encode this positive-sign
+    convention. Combined with ``rhs = -jtr`` in
+    :func:`pyeidors.inverse.solvers.gauss_newton_runtime` (line 952)
+    the end-to-end Gauss-Newton step produces a physical δσ that
+    matches the EIDORS reconstruction direction (``δσ > 0`` when the
+    inhomogeneous conductivity exceeds the background).
+
+    The sibling :class:`pyeidors.inverse.jacobian.adjoint_jacobian.EidorsStyleAdjointJacobian`
+    instead returns the EIDORS-canonical signed Jacobian
+    ``J = -∂V/∂σ``. The two calculators differ only in overall sign
+    (``DirectJacobianCalculator(...).calculate(σ)
+    == -EidorsStyleAdjointJacobian(...).calculate(σ)``); the
+    contract is frozen by V73 and exercised by
+    ``tests/unit/test_jacobian_direct_adjoint_parity.py``. Do **not**
+    swap calculators inside an existing GN/RM pipeline without
+    compensating the sign at the consumer site.
+    """
+
+    sign_convention = "+dV/dsigma_pyeidors_runtime"
 
     def __init__(
         self,
