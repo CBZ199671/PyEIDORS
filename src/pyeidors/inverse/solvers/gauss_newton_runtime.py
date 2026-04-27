@@ -33,6 +33,7 @@ from .gauss_newton_weights import build_weight_reference
 
 from . import gauss_newton_linear_system as _linear_system
 from . import gauss_newton_startup_cache as _startup_cache
+from . import gauss_newton_step_size as _step_size
 
 # T77 phase 2 keeps these legacy runtime-level names patchable/importable.
 _JacobianActionBundle = _linear_system._JacobianActionBundle
@@ -130,6 +131,16 @@ _STARTUP_CACHE_DEFAULT_PATCHES = {
     name: getattr(_startup_cache, name) for name in _STARTUP_CACHE_PATCHABLE_NAMES
 }
 _STARTUP_CACHE_LAST_SYNCED: dict[str, object] = {}
+_STEP_SIZE_PATCHABLE_NAMES = (
+    "EITImage",
+    "_project_simulated_measurements",
+    "_require_scalar_finite",
+    "minimize_scalar",
+)
+_STEP_SIZE_DEFAULT_PATCHES = {
+    name: getattr(_step_size, name) for name in _STEP_SIZE_PATCHABLE_NAMES
+}
+_STEP_SIZE_LAST_SYNCED: dict[str, object] = {}
 
 
 def _sync_linear_system_runtime_overrides() -> None:
@@ -152,6 +163,20 @@ def _sync_startup_cache_runtime_overrides() -> None:
                 _STARTUP_CACHE_LAST_SYNCED.pop(name, None)
 
 
+def _sync_step_size_runtime_overrides() -> None:
+    for name in _STEP_SIZE_PATCHABLE_NAMES:
+        if name in globals():
+            runtime_value = globals()[name]
+            default_value = _STEP_SIZE_DEFAULT_PATCHES[name]
+            if runtime_value is not default_value:
+                setattr(_step_size, name, runtime_value)
+                _STEP_SIZE_LAST_SYNCED[name] = runtime_value
+                continue
+            if getattr(_step_size, name) is _STEP_SIZE_LAST_SYNCED.get(name):
+                setattr(_step_size, name, default_value)
+                _STEP_SIZE_LAST_SYNCED.pop(name, None)
+
+
 def _startup_cache_payload(
     reconstructor, sigma_array: np.ndarray, jacobian_method: str
 ) -> dict[str, object]:
@@ -171,6 +196,38 @@ def _startup_cache_lookup(
         reconstructor,
         sigma_current,
         jacobian_method,
+    )
+
+
+def _difference_step_size_objective(
+    reconstructor,
+    *,
+    prior_sigma: np.ndarray,
+    delta_sigma: np.ndarray,
+    measured_vector: np.ndarray,
+    alpha: float,
+) -> float:
+    _sync_step_size_runtime_overrides()
+    return _step_size._difference_step_size_objective(
+        reconstructor,
+        prior_sigma=prior_sigma,
+        delta_sigma=delta_sigma,
+        measured_vector=measured_vector,
+        alpha=alpha,
+    )
+
+
+def _apply_difference_step_size(
+    reconstructor,
+    *,
+    sigma_final: np.ndarray,
+    measured_vector: np.ndarray,
+) -> tuple[np.ndarray, dict[str, object]]:
+    _sync_step_size_runtime_overrides()
+    return _step_size._apply_difference_step_size(
+        reconstructor,
+        sigma_final=sigma_final,
+        measured_vector=measured_vector,
     )
 
 
@@ -226,6 +283,29 @@ def _solve_linear_system_fast(
         lambda_eff=lambda_eff,
         iteration=iteration,
         measurement_weight_np=measurement_weight_np,
+    )
+
+
+def _select_step_size(
+    reconstructor,
+    iteration: int,
+    sigma_current: fem.Function,
+    delta_sigma_torch: torch.Tensor,
+    meas_torch: torch.Tensor,
+    residual_norm_weighted: float,
+    prior_torch: torch.Tensor,
+    lambda_eff: float,
+) -> float:
+    _sync_step_size_runtime_overrides()
+    return _step_size._select_step_size(
+        reconstructor,
+        iteration,
+        sigma_current,
+        delta_sigma_torch,
+        meas_torch,
+        residual_norm_weighted,
+        prior_torch,
+        lambda_eff,
     )
 
 
@@ -507,129 +587,6 @@ def _estimate_best_homogeneous_conductivity(
     return info
 
 
-def _difference_step_size_objective(
-    reconstructor,
-    *,
-    prior_sigma: np.ndarray,
-    delta_sigma: np.ndarray,
-    measured_vector: np.ndarray,
-    alpha: float,
-) -> float:
-    sigma = np.asarray(prior_sigma + float(alpha) * delta_sigma, dtype=np.float64)
-    clip_values = getattr(reconstructor, "clip_values", None)
-    if clip_values is not None:
-        sigma = np.clip(sigma, clip_values[0], clip_values[1])
-    image = EITImage(elem_data=sigma, fwd_model=reconstructor.fwd_model)
-    simulated, _ = reconstructor.fwd_model.fwd_solve(image)
-    simulated_vector = _project_simulated_measurements(reconstructor, simulated.meas)
-    residual = np.asarray(simulated_vector, dtype=np.float64) - measured_vector
-    return float(np.dot(residual, residual))
-
-
-def _apply_difference_step_size(
-    reconstructor,
-    *,
-    sigma_final: np.ndarray,
-    measured_vector: np.ndarray,
-) -> tuple[np.ndarray, dict[str, object]]:
-    mode = (
-        str(getattr(reconstructor, "difference_step_size_mode", "off")).strip().lower()
-    )
-    info: dict[str, object] = {
-        "mode": mode,
-        "applied": False,
-        "value": 1.0,
-        "objective": None,
-    }
-    if getattr(reconstructor, "_measurement_space_type", "real") != "difference":
-        info["reason"] = "real_measurement_space"
-        return np.asarray(sigma_final, dtype=np.float64), info
-    if mode == "off":
-        info["reason"] = "disabled"
-        return np.asarray(sigma_final, dtype=np.float64), info
-    if str(getattr(reconstructor, "active_preset_name", "")).strip().lower() not in {
-        "eidors_one_step_noser",
-        "eidors_demo3d_tv",
-    }:
-        info["reason"] = "preset_not_one_step"
-        return np.asarray(sigma_final, dtype=np.float64), info
-
-    prior_raw = getattr(reconstructor, "_prior_data", None)
-    if prior_raw is None:
-        info["reason"] = "missing_prior"
-        return np.asarray(sigma_final, dtype=np.float64), info
-    prior_sigma = np.asarray(prior_raw, dtype=np.float64).reshape(-1)
-    if prior_sigma.shape[0] != sigma_final.shape[0]:
-        info["reason"] = "missing_prior"
-        return np.asarray(sigma_final, dtype=np.float64), info
-
-    delta_sigma = np.asarray(sigma_final - prior_sigma, dtype=np.float64)
-    if np.linalg.norm(delta_sigma) <= 1e-18:
-        info["reason"] = "zero_delta"
-        return np.asarray(sigma_final, dtype=np.float64), info
-
-    if mode == "fixed":
-        alpha = float(
-            1.0
-            if reconstructor.difference_step_size_value is None
-            else reconstructor.difference_step_size_value
-        )
-        objective = _difference_step_size_objective(
-            reconstructor,
-            prior_sigma=prior_sigma,
-            delta_sigma=delta_sigma,
-            measured_vector=measured_vector,
-            alpha=alpha,
-        )
-        info["applied"] = True
-        info["value"] = alpha
-        info["objective"] = objective
-        return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
-
-    bounds = tuple(
-        float(v)
-        for v in getattr(reconstructor, "difference_step_size_bounds", (0.0, 4.0))
-    )
-    options = {"xatol": 1e-3, "maxiter": 32}
-    options.update(
-        dict(getattr(reconstructor, "difference_step_size_fmin_options", {}) or {})
-    )
-    info["bounds"] = [float(bounds[0]), float(bounds[1])]
-    calls = {"count": 0}
-
-    def _objective(alpha: float) -> float:
-        calls["count"] += 1
-        return _difference_step_size_objective(
-            reconstructor,
-            prior_sigma=prior_sigma,
-            delta_sigma=delta_sigma,
-            measured_vector=measured_vector,
-            alpha=float(alpha),
-        )
-
-    try:
-        result = minimize_scalar(
-            _objective,
-            bounds=bounds,
-            method="bounded",
-            options=options,
-        )
-        alpha = float(result.x)
-        objective = float(result.fun)
-        info["success"] = bool(result.success)
-        info["message"] = str(result.message)
-    except Exception as exc:
-        info["reason"] = f"optimization_failed:{type(exc).__name__}"
-        info["eval_count"] = int(calls["count"])
-        return np.asarray(sigma_final, dtype=np.float64), info
-
-    info["eval_count"] = int(calls["count"])
-    info["applied"] = True
-    info["value"] = alpha
-    info["objective"] = objective
-    return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
-
-
 def _compute_residuals(
     reconstructor,
     simulated_meas: np.ndarray,
@@ -799,54 +756,6 @@ def _solve_linear_system(
     delta_norm = torch.norm(delta_sigma_torch).item()
     _require_scalar_finite("delta_norm", delta_norm, iteration)
     return delta_sigma_torch, delta_norm
-
-
-def _select_step_size(
-    reconstructor,
-    iteration: int,
-    sigma_current: fem.Function,
-    delta_sigma_torch: torch.Tensor,
-    meas_torch: torch.Tensor,
-    residual_norm_weighted: float,
-    prior_torch: torch.Tensor,
-    lambda_eff: float,
-) -> float:
-    if (
-        getattr(reconstructor, "_measurement_space_type", "real") == "difference"
-        and str(getattr(reconstructor, "active_preset_name", "")).strip().lower()
-        in {"eidors_one_step_noser", "eidors_demo3d_tv"}
-        and int(getattr(reconstructor, "max_iterations", 1)) <= 1
-    ):
-        return 1.0
-
-    if reconstructor.solver_mode == "fast" and reconstructor.line_search_mode == "fast":
-        quick_step = min(float(reconstructor.max_step), 1.0)
-        if reconstructor.min_step is not None:
-            quick_step = max(float(reconstructor.min_step), quick_step)
-        _require_scalar_finite("optimal_step_size", quick_step, iteration)
-        return quick_step
-
-    if reconstructor.step_schedule is not None and iteration < len(
-        reconstructor.step_schedule
-    ):
-        optimal_step_size = float(reconstructor.step_schedule[iteration])
-    else:
-        optimal_step_size = reconstructor._line_search_torch(
-            sigma_current,
-            delta_sigma_torch,
-            meas_torch,
-            residual_norm_weighted,
-            reconstructor._meas_weight_sqrt,
-            prior_torch=prior_torch,
-            lambda_eff=lambda_eff,
-        )
-        if (
-            reconstructor.min_step is not None
-            and optimal_step_size < reconstructor.min_step
-        ):
-            optimal_step_size = reconstructor.min_step
-    _require_scalar_finite("optimal_step_size", optimal_step_size, iteration)
-    return optimal_step_size
 
 
 def _maybe_rollback(

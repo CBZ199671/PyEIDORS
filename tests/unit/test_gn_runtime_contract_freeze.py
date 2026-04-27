@@ -313,6 +313,9 @@ def test_petsc_matrix_free_context_classes_exposed() -> None:
         "_build_matrix_free_explicit_pc_operator",
         "_as_jacobian_action_bundle",
         "_solve_linear_system_fast",
+        "_difference_step_size_objective",
+        "_apply_difference_step_size",
+        "_select_step_size",
         "run_reconstruction",
     ):
         assert hasattr(gn_runtime, symbol), (
@@ -333,6 +336,7 @@ def test_companion_modules_still_importable() -> None:
         "pyeidors.inverse.solvers.gauss_newton_engine",
         "pyeidors.inverse.solvers.gauss_newton_runtime",
         "pyeidors.inverse.solvers.gauss_newton_line_search",
+        "pyeidors.inverse.solvers.gauss_newton_step_size",
         "pyeidors.inverse.solvers.gauss_newton_weights",
         "pyeidors.inverse.solvers.gauss_newton_device",
         "pyeidors.inverse.solvers.matrix_free_gn",
