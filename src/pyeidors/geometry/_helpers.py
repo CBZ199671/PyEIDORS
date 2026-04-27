@@ -5,10 +5,60 @@ from __future__ import annotations
 import re
 from configparser import ConfigParser
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Sequence
 
 from ..data.structures import EITMesh
+from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
+
+
+def format_float_compact(value: float) -> str:
+    """Format ``value`` for cache filename use: 6dp, trim trailing 0/dot, ``.``→``p``."""
+    return f"{float(value):.6f}".rstrip("0").rstrip(".").replace(".", "p")
+
+
+def build_mesh_cache_name(
+    n_elec: int,
+    radius: float,
+    refinement: int,
+    electrode_coverage: float,
+) -> str:
+    """Cache-stable 2D mesh name keyed on ``(n_elec, radius, refinement, coverage)``."""
+    radius_str = format_float_compact(radius)
+    coverage_str = format_float_compact(electrode_coverage)
+    return f"mesh_{int(n_elec)}e_r{radius_str}_ref{int(refinement)}_cov{coverage_str}"
+
+
+def build_mesh_cache_name_3d(
+    n_elec: int,
+    radius: float,
+    height: float,
+    refinement: int,
+    electrode_coverage: float,
+    electrode_height_ratio: float,
+    electrode_level_fractions: Sequence[float],
+    z_center: float,
+    mesh_family: str,
+    geometry_version: str,
+    generator_revision: str,
+    electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
+) -> str:
+    """Cache-stable 3D cylinder mesh name keyed on full geometry signature."""
+    levels_str = "-".join(
+        format_float_compact(float(value)) for value in electrode_level_fractions
+    )
+    layout_str = normalize_electrode_layout(electrode_layout)
+    return (
+        "mesh3d_"
+        f"{int(n_elec)}e_r{format_float_compact(radius)}_h{format_float_compact(height)}_"
+        f"ref{int(refinement)}_cov{format_float_compact(electrode_coverage)}_"
+        f"ehr{format_float_compact(electrode_height_ratio)}_"
+        f"lev{levels_str}_"
+        f"zc{format_float_compact(z_center)}_"
+        f"el{layout_str}_"
+        f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
+        f"{str(generator_revision).strip().lower()}"
+    )
 
 
 def _physical_group_tag(group: Any) -> int:

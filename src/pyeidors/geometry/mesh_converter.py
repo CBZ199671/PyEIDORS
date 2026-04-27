@@ -1,10 +1,19 @@
-"""Mesh converter for Gmsh -> DOLFINx mesh import."""
+"""Mesh converter for Gmsh -> DOLFINx mesh import.
+
+T78 Path C consolidates the canonical ``MeshConverter`` body so the
+:class:`OptimizedMeshConverter` variant in
+:mod:`pyeidors.geometry.optimized_mesh_generator` can be a thin
+subclass that only adds a ``radius_provider`` (``estimate_radius``).
+The shared body covers Gmsh ``.msh`` parsing, physical group
+validation, association-table persistence and DOLFINx mesh cache
+writes — exactly the steps both historical converters duplicated.
+"""
 
 from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Callable, Dict, Optional, Tuple
 
 from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
@@ -16,17 +25,35 @@ from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
 
+RadiusProvider = Callable[[object], float]
+
 
 class MeshConverter:
-    """Convert ``.msh`` file to DOLFINx mesh with facet tags."""
+    """Convert ``.msh`` file to DOLFINx mesh with facet tags.
 
-    def __init__(self, mesh_file: str, output_dir: str, gdim: int = 2):
+    ``radius_provider`` is optional callable invoked on the parsed
+    DOLFINx mesh to derive an :attr:`EITMesh.radius` value (used by
+    e.g. :class:`OptimizedMeshConverter` to reuse
+    :func:`pyeidors.femx.estimate_radius`). When ``None``, the produced
+    :class:`EITMesh` carries ``radius=None`` — the legacy plain-converter
+    behavior.
+    """
+
+    def __init__(
+        self,
+        mesh_file: str,
+        output_dir: str,
+        gdim: int = 2,
+        *,
+        radius_provider: Optional[RadiusProvider] = None,
+    ):
         self.mesh_file = Path(mesh_file)
         self.output_dir = Path(output_dir)
         self.prefix = self.mesh_file.stem
         self.gdim = int(gdim)
         if self.gdim not in {2, 3}:
             raise ValueError(f"gdim must be 2 or 3, got {gdim!r}")
+        self._radius_provider = radius_provider
 
     def convert(self) -> Tuple[EITMesh, object, Dict[str, int]]:
         mesh_data = gmshio.read_from_msh(
@@ -45,12 +72,18 @@ class MeshConverter:
             gdim=self.gdim,
         )
 
+        radius = (
+            self._radius_provider(mesh_data.mesh)
+            if self._radius_provider is not None
+            else None
+        )
         mesh = build_eit_mesh(
             mesh_data.mesh,
             facet_tags=mesh_data.facet_tags,
             cell_tags=mesh_data.cell_tags,
             association_table=association_table,
             physical_groups=mesh_data.physical_groups,
+            radius=radius,
             mesh_file=str(self.mesh_file),
         )
         return mesh, mesh_data.facet_tags, association_table

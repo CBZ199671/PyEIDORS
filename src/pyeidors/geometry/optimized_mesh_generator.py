@@ -28,14 +28,18 @@ from ..perf.policy import (
 )
 from ._helpers import (
     add_named_physical_group,
-    association_from_mesh_data,
+    association_from_mesh_data,  # noqa: F401  re-exported for in-tree callers
     assert_unique_physical_group_ownership,
+    build_mesh_cache_name,
+    build_mesh_cache_name_3d,
+    format_float_compact,
     infer_generator_revision,
     infer_geometry_version,
     infer_mesh_family_from_mesh,
     validate_mesh_data_tags,
     write_association_table,
 )
+from .mesh_converter import MeshConverter
 from .dolfinx_mesh_cache import (
     dolfinx_cache_metadata_path_for_mesh,
     load_dolfinx_mesh_cache,
@@ -311,40 +315,24 @@ class OptimizedMeshGenerator:
         self.mesh_data["electrode_vertices"] = electrode_vertices
 
 
-class OptimizedMeshConverter:
-    """Read a ``.msh`` file into DOLFINx mesh and tags."""
+class OptimizedMeshConverter(MeshConverter):
+    """``MeshConverter`` variant that records ``radius=estimate_radius(...)``.
+
+    Behavior identical to the canonical :class:`MeshConverter` apart from
+    populating :attr:`EITMesh.radius` via :func:`pyeidors.femx.estimate_radius`.
+    Kept as an explicit subclass so existing callers (tests, scripts,
+    benchmarks) referencing this name keep working without alias warnings.
+    T78 Path C consolidates the two converter implementations onto the
+    canonical ``MeshConverter`` body via the ``radius_provider`` hook.
+    """
 
     def __init__(self, mesh_file: str, output_dir: str, gdim: int = 2):
-        self.mesh_file = Path(mesh_file)
-        self.output_dir = Path(output_dir)
-        self.prefix = self.mesh_file.stem
-        self.gdim = int(gdim)
-
-    def convert(self) -> tuple[EITMesh, object, Dict[str, int]]:
-        mesh_data = gmshio.read_from_msh(
-            str(self.mesh_file), MPI.COMM_WORLD, rank=0, gdim=self.gdim
+        super().__init__(
+            mesh_file,
+            output_dir,
+            gdim=gdim,
+            radius_provider=estimate_radius,
         )
-        association_table = validate_mesh_data_tags(mesh_data, gdim=self.gdim)
-
-        association_file = self.output_dir / f"{self.prefix}_association_table.ini"
-        write_association_table(association_file, association_table)
-        write_dolfinx_mesh_cache(
-            mesh_data,
-            source_msh_file=self.mesh_file,
-            association_table=association_table,
-            gdim=self.gdim,
-        )
-
-        mesh = build_eit_mesh(
-            mesh_data.mesh,
-            facet_tags=mesh_data.facet_tags,
-            cell_tags=mesh_data.cell_tags,
-            association_table=association_table,
-            physical_groups=mesh_data.physical_groups,
-            radius=estimate_radius(mesh_data.mesh),
-            mesh_file=str(self.mesh_file),
-        )
-        return mesh, mesh_data.facet_tags, association_table
 
 
 # Convenience functions
@@ -378,47 +366,14 @@ def create_eit_mesh(
     )
 
 
-def _format_float(value: float) -> str:
-    return f"{value:.6f}".rstrip("0").rstrip(".").replace(".", "p")
+# T78 Path C: cache-name helpers consolidated into ``geometry/_helpers.py``.
+# These module-level aliases preserve the historical private symbols for
+# any in-tree ``import`` users while the canonical bodies live in
+# :mod:`pyeidors.geometry._helpers`.
 
-
-def _build_cache_name(
-    n_elec: int, radius: float, refinement: int, electrode_coverage: float
-) -> str:
-    radius_str = _format_float(radius)
-    coverage_str = _format_float(electrode_coverage)
-    return f"mesh_{n_elec}e_r{radius_str}_ref{refinement}_cov{coverage_str}"
-
-
-def _build_cache_name_3d(
-    n_elec: int,
-    radius: float,
-    height: float,
-    refinement: int,
-    electrode_coverage: float,
-    electrode_height_ratio: float,
-    electrode_level_fractions: tuple[float, ...],
-    z_center: float,
-    mesh_family: str,
-    geometry_version: str,
-    generator_revision: str,
-    electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
-) -> str:
-    levels_str = "-".join(
-        _format_float(float(value)) for value in electrode_level_fractions
-    )
-    layout_str = normalize_electrode_layout(electrode_layout)
-    return (
-        "mesh3d_"
-        f"{n_elec}e_r{_format_float(radius)}_h{_format_float(height)}_"
-        f"ref{refinement}_cov{_format_float(electrode_coverage)}_"
-        f"ehr{_format_float(electrode_height_ratio)}_"
-        f"lev{levels_str}_"
-        f"zc{_format_float(z_center)}_"
-        f"el{layout_str}_"
-        f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
-        f"{str(generator_revision).strip().lower()}"
-    )
+_format_float = format_float_compact
+_build_cache_name = build_mesh_cache_name
+_build_cache_name_3d = build_mesh_cache_name_3d
 
 
 def _facet_tags_cover_electrodes(
