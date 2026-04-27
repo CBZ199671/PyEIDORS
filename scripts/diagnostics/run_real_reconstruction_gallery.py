@@ -43,7 +43,6 @@ from scripts.common.hdf5_outputs import (
 from scripts.diagnostics.gallery_shared import (
     consistency_metrics as _shared_consistency_metrics,
     jsonable as _jsonable,
-    safe_pearson as _safe_pearson,
 )
 
 
