@@ -15,6 +15,28 @@ from pyeidors.io.hdf5_artifacts import (
 )
 
 
+def _mesh_provenance_payload() -> dict[str, object]:
+    return {
+        "format": "dolfinx-xdmf-hdf5",
+        "gdim": 2,
+        "mesh_content_signature": {
+            "tdim": 2,
+            "geometry_hash": "geom",
+            "topology_hash": "topo",
+        },
+        "association_table": {"domain": 1, "electrode_1": 2},
+        "physical_groups": {
+            "domain": {"tag": 1, "dim": 2},
+            "electrode_1": {"tag": 2, "dim": 1},
+        },
+        "mesh_family": "tet",
+        "geometry_version": "unit",
+        "generator_revision": "unit-rev",
+        "structured_sidecar_signature": None,
+        "structured_sidecar_version": None,
+    }
+
+
 def _greit_component_arrays() -> dict[str, np.ndarray]:
     y = np.arange(24, dtype=np.float64).reshape(6, 4) / 10.0
     d = np.arange(40, dtype=np.float64).reshape(10, 4) / 20.0
@@ -105,6 +127,25 @@ def test_large_cache_hdf5_artifact_key_ignores_output_path(tmp_path) -> None:
     )
     meta_c = read_hdf5_artifact(path_c, lazy=True).metadata
     assert meta_c["artifact_key"] != meta_a["artifact_key"]
+
+
+def test_large_cache_hdf5_records_optional_mesh_provenance_subkey(tmp_path) -> None:
+    mesh_provenance = _mesh_provenance_payload()
+    path = write_large_cache_hdf5_artifact(
+        tmp_path / "greit_with_mesh_subkey.h5",
+        _greit_component_arrays(),
+        {"package_role": "greit-eidors-components"},
+        schema="unit-greit-large-cache-v1",
+        subkey_payloads={"mesh_provenance": mesh_provenance},
+    )
+
+    metadata = read_hdf5_artifact(path, lazy=True).metadata
+
+    assert metadata["artifact_manifest"]["subkeys"]["mesh_provenance"]
+    assert (
+        metadata["artifact_manifest"]["key_payload"]["metadata"]["package_role"]
+        == "greit-eidors-components"
+    )
 
 
 def test_legacy_hdf5_without_manifest_gets_in_memory_artifact_key(tmp_path) -> None:

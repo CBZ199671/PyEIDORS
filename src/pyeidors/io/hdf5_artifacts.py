@@ -111,6 +111,7 @@ def write_hdf5_artifact(
     schema: str = DEFAULT_SCHEMA,
     compression: str | None = "gzip",
     chunks: bool | tuple[int, ...] | Mapping[str, Any] | None = True,
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Path:
     """Write numeric arrays and JSON metadata into one HDF5 artifact."""
 
@@ -124,6 +125,7 @@ def write_hdf5_artifact(
         arrays,
         metadata=meta,
         schema=schema,
+        subkey_payloads=subkey_payloads,
     )
     meta.setdefault("artifact_key", manifest.artifact_key)
     meta.setdefault("artifact_manifest", manifest.to_metadata())
@@ -170,6 +172,7 @@ def write_large_cache_hdf5_artifact(
     *,
     schema: str = DEFAULT_SCHEMA,
     compression: str | None = "gzip",
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> Path:
     """Write a large array cache with deterministic chunk/compression metadata."""
 
@@ -188,6 +191,7 @@ def write_large_cache_hdf5_artifact(
         schema=schema,
         compression=compression,
         chunks=large_cache_chunks_for_arrays(arrays),
+        subkey_payloads=subkey_payloads,
     )
 
 
@@ -404,6 +408,7 @@ def _hdf5_disk_artifact_manifest(
     *,
     metadata: Mapping[str, Any],
     schema: str,
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> DiskArtifactManifest:
     array_payload = {
         str(name): {
@@ -428,6 +433,7 @@ def _hdf5_disk_artifact_manifest(
         },
         files={"artifact": target},
         metadata={"artifact_format": "hdf5"},
+        subkey_payloads=subkey_payloads,
     )
 
 

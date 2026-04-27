@@ -7,6 +7,8 @@ from pathlib import Path
 from pyeidors.cache.disk_artifacts import (
     build_disk_artifact_key,
     build_disk_artifact_manifest,
+    build_disk_artifact_subkey,
+    build_disk_artifact_subkeys,
     file_fingerprint,
     file_sha256,
     stable_json_digest,
@@ -54,6 +56,32 @@ def test_disk_artifact_key_excludes_output_file_locations(tmp_path: Path) -> Non
     meta_b = manifest_b.to_metadata()
     assert meta_a["files"]["xdmf"]["path"] != meta_b["files"]["xdmf"]["path"]
     assert meta_a["artifact_key"] == meta_b["artifact_key"]
+
+
+def test_disk_artifact_subkeys_are_artifact_kind_independent() -> None:
+    payload = {
+        "gdim": 3,
+        "mesh_content_signature": {"geometry_hash": "g", "topology_hash": "t"},
+        "association_table": {"domain": 1, "electrode_1": 2},
+    }
+    mesh_manifest = build_disk_artifact_manifest(
+        "dolfinx-mesh-cache",
+        {"format": "dolfinx-xdmf-hdf5", **payload},
+        subkey_payloads={"mesh_provenance": payload},
+    )
+    hdf5_manifest = build_disk_artifact_manifest(
+        "hdf5-artifact",
+        {"schema": "unit-cache-v1", "arrays": {"RM": {"shape": [2, 2]}}},
+        subkey_payloads={"mesh_provenance": payload},
+    )
+
+    expected = build_disk_artifact_subkey("mesh_provenance", payload)
+    assert mesh_manifest.artifact_key != hdf5_manifest.artifact_key
+    assert mesh_manifest.to_metadata()["subkeys"]["mesh_provenance"] == expected
+    assert hdf5_manifest.to_metadata()["subkeys"]["mesh_provenance"] == expected
+    assert build_disk_artifact_subkeys({"mesh_provenance": payload}) == {
+        "mesh_provenance": expected
+    }
 
 
 def test_file_fingerprint_and_sha256_are_optional_for_manifest_files(

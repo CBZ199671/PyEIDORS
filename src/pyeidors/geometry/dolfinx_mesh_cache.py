@@ -193,15 +193,16 @@ def _ensure_dolfinx_cache_artifact_metadata(
     if metadata.get("mesh_content_signature") is None and mesh_content_signature:
         metadata = dict(metadata)
         metadata["mesh_content_signature"] = mesh_content_signature
+    key_payload = _dolfinx_manifest_key_payload(
+        metadata,
+        mesh_content_signature=mesh_content_signature,
+        association_table=association_table,
+        physical_groups=physical_groups,
+    )
     return ensure_disk_artifact_metadata(
         metadata,
         "dolfinx-mesh-cache",
-        _dolfinx_manifest_key_payload(
-            metadata,
-            mesh_content_signature=mesh_content_signature,
-            association_table=association_table,
-            physical_groups=physical_groups,
-        ),
+        key_payload,
         files={
             "xdmf": xdmf_file,
             "hdf5": Path(metadata.get("hdf5_file") or xdmf_file.with_suffix(".h5")),
@@ -210,6 +211,7 @@ def _ensure_dolfinx_cache_artifact_metadata(
             "adios4dolfinx": metadata.get("adios4dolfinx_file"),
         },
         manifest_metadata={"cache_format": metadata.get("format", "dolfinx-xdmf-hdf5")},
+        subkey_payloads={"mesh_provenance": key_payload},
     )
 
 
@@ -536,21 +538,22 @@ def write_dolfinx_mesh_cache(
             "structured_sidecar_version": structured_sidecar_version,
             "structured_sidecar_signature": structured_sidecar_signature,
         }
+        key_payload = {
+            "format": metadata["format"],
+            "gdim": int(gdim),
+            "mesh_content_signature": mesh_content_signature,
+            "source_msh_signature": source_signature,
+            "association_table": association,
+            "physical_groups": physical_groups,
+            "mesh_family": mesh_family,
+            "geometry_version": geometry_version,
+            "generator_revision": generator_revision,
+            "structured_sidecar_signature": structured_sidecar_signature,
+            "structured_sidecar_version": structured_sidecar_version,
+        }
         manifest = build_disk_artifact_manifest(
             "dolfinx-mesh-cache",
-            {
-                "format": metadata["format"],
-                "gdim": int(gdim),
-                "mesh_content_signature": mesh_content_signature,
-                "source_msh_signature": source_signature,
-                "association_table": association,
-                "physical_groups": physical_groups,
-                "mesh_family": mesh_family,
-                "geometry_version": geometry_version,
-                "generator_revision": generator_revision,
-                "structured_sidecar_signature": structured_sidecar_signature,
-                "structured_sidecar_version": structured_sidecar_version,
-            },
+            key_payload,
             files={
                 "xdmf": xdmf_file,
                 "hdf5": xdmf_file.with_suffix(".h5"),
@@ -559,6 +562,7 @@ def write_dolfinx_mesh_cache(
                 "adios4dolfinx": adios4dolfinx_file,
             },
             metadata={"cache_format": metadata["format"]},
+            subkey_payloads={"mesh_provenance": key_payload},
         )
         metadata["artifact_key"] = manifest.artifact_key
         metadata["artifact_manifest"] = manifest.to_metadata()

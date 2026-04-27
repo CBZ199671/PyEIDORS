@@ -16,6 +16,10 @@ from pyeidors.geometry.dolfinx_mesh_cache import (
     write_dolfinx_mesh_cache,
     xdmf_cache_path_for_mesh,
 )
+from pyeidors.io.hdf5_artifacts import (
+    read_hdf5_artifact,
+    write_large_cache_hdf5_artifact,
+)
 import pyeidors.geometry.mesh_loader as mesh_loader_module
 
 
@@ -124,6 +128,7 @@ def test_xdmf_cache_loads_after_source_msh_is_removed(tmp_path: Path, monkeypatc
     assert manifest["key_payload"]["source_msh_signature"]["sha256"]
     assert manifest["files"]["xdmf"]["path"].endswith(".xdmf")
     assert manifest["files"]["hdf5"]["path"].endswith(".h5")
+    assert manifest["subkeys"]["mesh_provenance"]
 
     direct_from_h5 = load_dolfinx_mesh_cache(xdmf_file.with_suffix(".h5"), gdim=2)
     assert direct_from_h5 is not None
@@ -178,3 +183,46 @@ def test_legacy_xdmf_metadata_without_manifest_gets_in_memory_artifact_key(
     persisted = json.loads(metadata_file.read_text(encoding="utf-8"))
     assert "artifact_key" not in persisted
     assert "artifact_manifest" not in persisted
+
+
+def test_cross_layer_mesh_provenance_subkey_matches_hdf5_artifact(
+    tmp_path: Path,
+) -> None:
+    source_msh = tmp_path / "cross_layer.msh"
+    source_msh.write_text("placeholder source", encoding="utf-8")
+    mesh_data = _unit_square_mesh_data()
+    association = {"domain": 1, "electrode_1": 2}
+
+    assert write_dolfinx_mesh_cache(
+        mesh_data,
+        source_msh_file=source_msh,
+        association_table=association,
+        gdim=2,
+        mesh_family="tet",
+        geometry_version="unit",
+        generator_revision="phase3",
+    )
+    mesh_cache = load_dolfinx_mesh_cache(xdmf_cache_path_for_mesh(source_msh), gdim=2)
+    assert mesh_cache is not None
+    mesh_manifest = mesh_cache.metadata["artifact_manifest"]
+    mesh_provenance = mesh_manifest["key_payload"]
+
+    hdf5_path = write_large_cache_hdf5_artifact(
+        tmp_path / "rm_package.h5",
+        {"RM": np.eye(2, dtype=np.float64)},
+        {"package_role": "unit-rm", "mesh_name": "cross_layer"},
+        schema="unit-rm-cache-v1",
+        subkey_payloads={"mesh_provenance": mesh_provenance},
+    )
+    hdf5_manifest = read_hdf5_artifact(hdf5_path, lazy=True).metadata[
+        "artifact_manifest"
+    ]
+
+    assert mesh_manifest["artifact_kind"] == "dolfinx-mesh-cache"
+    assert hdf5_manifest["artifact_kind"] == "hdf5-artifact"
+    assert mesh_manifest["artifact_key"] != hdf5_manifest["artifact_key"]
+    assert (
+        mesh_manifest["subkeys"]["mesh_provenance"]
+        == hdf5_manifest["subkeys"]["mesh_provenance"]
+    )
+    assert "rm_package.h5" in hdf5_manifest["files"]["artifact"]["path"]

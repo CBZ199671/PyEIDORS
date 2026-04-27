@@ -26,6 +26,7 @@ class DiskArtifactManifest:
 
     artifact_kind: str
     artifact_key: str
+    subkeys: Mapping[str, str]
     namespace: str
     schema_version: int
     key_payload: Mapping[str, Any]
@@ -36,6 +37,7 @@ class DiskArtifactManifest:
         return {
             "artifact_kind": self.artifact_kind,
             "artifact_key": self.artifact_key,
+            "subkeys": _normalize(self.subkeys),
             "namespace": self.namespace,
             "schema_version": int(self.schema_version),
             "manifest_version": DISK_ARTIFACT_MANIFEST_VERSION,
@@ -127,12 +129,51 @@ def build_disk_artifact_key(
     )
 
 
+def build_disk_artifact_subkey(
+    subkey_name: str,
+    payload: Mapping[str, Any],
+    *,
+    namespace: str = "pyeidors",
+    schema_version: int = DISK_ARTIFACT_MANIFEST_VERSION,
+) -> str:
+    """Build a stable digest for provenance shared across artifact kinds."""
+
+    return stable_json_digest(
+        {
+            "namespace": str(namespace),
+            "schema_version": int(schema_version),
+            "subkey_name": str(subkey_name),
+            "payload": dict(payload),
+        }
+    )
+
+
+def build_disk_artifact_subkeys(
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None,
+    *,
+    namespace: str = "pyeidors",
+    schema_version: int = DISK_ARTIFACT_MANIFEST_VERSION,
+) -> dict[str, str]:
+    """Build named subkeys from shared semantic payloads."""
+
+    return {
+        str(name): build_disk_artifact_subkey(
+            str(name),
+            payload,
+            namespace=namespace,
+            schema_version=schema_version,
+        )
+        for name, payload in sorted((subkey_payloads or {}).items())
+    }
+
+
 def build_disk_artifact_manifest(
     artifact_kind: str,
     key_payload: Mapping[str, Any],
     *,
     files: Mapping[str, str | Path | None] | None = None,
     metadata: Mapping[str, Any] | None = None,
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None = None,
     namespace: str = "pyeidors",
     schema_version: int = DISK_ARTIFACT_MANIFEST_VERSION,
     include_file_sha256: bool = False,
@@ -152,6 +193,11 @@ def build_disk_artifact_manifest(
     return DiskArtifactManifest(
         artifact_kind=str(artifact_kind),
         artifact_key=key,
+        subkeys=build_disk_artifact_subkeys(
+            subkey_payloads,
+            namespace=namespace,
+            schema_version=schema_version,
+        ),
         namespace=str(namespace),
         schema_version=int(schema_version),
         key_payload=_normalize(dict(key_payload)),
@@ -167,6 +213,7 @@ def ensure_disk_artifact_metadata(
     *,
     files: Mapping[str, str | Path | None] | None = None,
     manifest_metadata: Mapping[str, Any] | None = None,
+    subkey_payloads: Mapping[str, Mapping[str, Any]] | None = None,
     namespace: str = "pyeidors",
     schema_version: int = DISK_ARTIFACT_MANIFEST_VERSION,
     include_file_sha256: bool = False,
@@ -186,6 +233,7 @@ def ensure_disk_artifact_metadata(
         key_payload,
         files=files,
         metadata=manifest_metadata,
+        subkey_payloads=subkey_payloads,
         namespace=namespace,
         schema_version=schema_version,
         include_file_sha256=include_file_sha256,
@@ -200,6 +248,8 @@ __all__ = [
     "DiskArtifactManifest",
     "build_disk_artifact_key",
     "build_disk_artifact_manifest",
+    "build_disk_artifact_subkey",
+    "build_disk_artifact_subkeys",
     "ensure_disk_artifact_metadata",
     "file_fingerprint",
     "file_sha256",
