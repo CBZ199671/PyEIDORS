@@ -451,9 +451,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
                         adjoint_block[:, start:end, :], dtype=np.float64
                     )
                 ).to(self._runtime_cuda_device, dtype=torch.float64)
-                sensitivity_t = torch.einsum(
-                    "eg,meg->me", grad_u_t, adjoint_block_t
-                )
+                sensitivity_t = torch.einsum("eg,meg->me", grad_u_t, adjoint_block_t)
                 out_t = sensitivity_t * cell_areas_cuda[start:end].unsqueeze(0)
                 jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
                     out_t.cpu().numpy()

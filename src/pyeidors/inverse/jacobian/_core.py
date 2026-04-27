@@ -103,9 +103,7 @@ def measurement_to_current_patterns(fwd_model) -> np.ndarray:
     for stim_idx in range(fwd_model.pattern_manager.n_stim):
         meas_matrix = fwd_model.pattern_manager.meas_matrices[stim_idx]
         n_meas_this_stim = meas_matrix.shape[0]
-        current_patterns[
-            :, meas_idx : meas_idx + n_meas_this_stim
-        ] = meas_matrix.T
+        current_patterns[:, meas_idx : meas_idx + n_meas_this_stim] = meas_matrix.T
         meas_idx += n_meas_this_stim
 
     return current_patterns
@@ -239,10 +237,7 @@ def calibrate_block_size_once(
     sample_adjoint = sample_adjoint[:, :n_sample_elem, :]
 
     bounded = sorted(
-        {
-            max(16, min(int(candidate), n_sample_elem))
-            for candidate in candidate_tuple
-        }
+        {max(16, min(int(candidate), n_sample_elem)) for candidate in candidate_tuple}
     )
     if not bounded:
         return int(min(int(n_elements), 256))

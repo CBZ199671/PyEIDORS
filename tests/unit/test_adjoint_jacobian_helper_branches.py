@@ -9,7 +9,6 @@ import pytest
 import torch
 
 import pyeidors.inverse.jacobian._core as core_module
-import pyeidors.inverse.jacobian.adjoint_jacobian as adjoint_module
 import pyeidors.inverse.jacobian.base_jacobian as base_module
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 
@@ -39,9 +38,7 @@ def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
     monkeypatch: pytest.MonkeyPatch,
 ):
     assert EidorsJacobianAdapter._resolve_torch_dtype(None) == torch.float64
-    assert (
-        EidorsJacobianAdapter._resolve_torch_dtype(torch.float32) == torch.float32
-    )
+    assert EidorsJacobianAdapter._resolve_torch_dtype(torch.float32) == torch.float32
     assert EidorsJacobianAdapter._resolve_torch_dtype("fp32") == torch.float32
     assert EidorsJacobianAdapter._resolve_torch_dtype("double") == torch.float64
     with pytest.raises(ValueError, match="Unsupported torch dtype"):
@@ -65,9 +62,7 @@ def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     if getattr(torch.backends, "mps", None) is not None:
         monkeypatch.setattr(torch.backends.mps, "is_available", lambda: True)
-        jac_mps = EidorsJacobianAdapter(
-            fake_fwd_model, use_torch=False, device=None
-        )
+        jac_mps = EidorsJacobianAdapter(fake_fwd_model, use_torch=False, device=None)
         assert jac_mps.torch_device.type == "mps"
 
     if getattr(torch.backends, "mps", None) is not None:
@@ -75,9 +70,7 @@ def test_resolve_torch_dtype_and_init_cover_aliases_and_auto_device_paths(
     jac_cpu = EidorsJacobianAdapter(fake_fwd_model, use_torch=False, device=None)
     assert jac_cpu.torch_device.type == "cpu"
 
-    jac_explicit = EidorsJacobianAdapter(
-        fake_fwd_model, use_torch=False, device="cpu"
-    )
+    jac_explicit = EidorsJacobianAdapter(fake_fwd_model, use_torch=False, device="cpu")
     assert jac_explicit.torch_device.type == "cpu"
 
 
@@ -182,9 +175,7 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
         np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
         np.array([[1.5, 0.5], [0.5, 1.5]], dtype=float),
     ]
-    assembled_np = EidorsJacobianAdapter._assemble_numpy(
-        jac, grad_u_all, grad_adj_all
-    )
+    assembled_np = EidorsJacobianAdapter._assemble_numpy(jac, grad_u_all, grad_adj_all)
     expected = np.array(
         [
             [-5.0, -6.0],

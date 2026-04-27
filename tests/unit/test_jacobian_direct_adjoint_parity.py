@@ -43,7 +43,10 @@ def test_direct_calculate_equals_negative_adjoint_calculate(eit_system) -> None:
     j_adjoint = adjoint.calculate(sigma)
 
     np.testing.assert_allclose(
-        j_direct, -j_adjoint, rtol=1.0e-8, atol=1.0e-12,
+        j_direct,
+        -j_adjoint,
+        rtol=1.0e-8,
+        atol=1.0e-12,
         err_msg="Direct(σ) must equal -Adjoint(σ) per V73 sign convention.",
     )
 
@@ -59,7 +62,10 @@ def test_direct_and_adjoint_calculate_have_equal_magnitude(eit_system) -> None:
     j_adjoint = adjoint.calculate(sigma)
 
     np.testing.assert_allclose(
-        np.abs(j_direct), np.abs(j_adjoint), rtol=1.0e-8, atol=1.0e-12,
+        np.abs(j_direct),
+        np.abs(j_adjoint),
+        rtol=1.0e-8,
+        atol=1.0e-12,
         err_msg="Magnitudes must match; only the sign convention differs.",
     )
 
@@ -75,7 +81,10 @@ def test_direct_and_adjoint_linearize_to_dense_signed_parity(eit_system) -> None
     adjoint_dense = adjoint.linearize(sigma).to_dense()
 
     np.testing.assert_allclose(
-        direct_dense, -adjoint_dense, rtol=1.0e-8, atol=1.0e-12,
+        direct_dense,
+        -adjoint_dense,
+        rtol=1.0e-8,
+        atol=1.0e-12,
         err_msg="linearize().to_dense() must respect the V73 signed parity.",
     )
 

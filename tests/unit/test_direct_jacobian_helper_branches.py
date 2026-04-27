@@ -321,9 +321,7 @@ def test_compute_gradient_patterns_and_calculation_wrappers(
             interpolation_points=lambda: np.array([[0.0, 0.0]], dtype=float)
         )
     )
-    calc._geometry = SimpleNamespace(
-        V=calc.V, Q_DG=calc.Q_DG, gdim=calc.gdim
-    )
+    calc._geometry = SimpleNamespace(V=calc.V, Q_DG=calc.Q_DG, gdim=calc.gdim)
     monkeypatch.setattr(core_module.fem, "Function", _InterpFunction)
     monkeypatch.setattr(
         core_module.fem,
