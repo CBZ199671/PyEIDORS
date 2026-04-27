@@ -13,14 +13,15 @@ no test for.
 What this test freezes (phase 1):
 
 * V73 sign pairing — ``rhs = -jtr`` literal still appears in the
-  matrix-free fast-PCG path. Combined with ``DirectJacobianCalculator``
+  runtime contract source. Combined with ``DirectJacobianCalculator``
   ``sign=+1.0`` this is what produces the EIDORS-direction δσ.
 * V11 ``matrix_free_pc_source`` enum literals — the strings
   ``dense-sensitivity`` / ``explicit`` / ``matrix_free_hessian_diag``
   / ``hessian_diag`` / ``noser`` / ``prior`` / ``auto_linearization_diag``
   / ``pmat`` / ``coarse-pmat`` / ``custom-pcshell`` / ``identity``
   appear as string literals so the diagnostic surface is bytewise
-  stable.
+  stable. T77 phase 2 may host these literals in extracted companions
+  while keeping the runtime import path stable.
 * V12 ``matrix_free_ksp_backend_fallback_reason`` literals —
   ``petsc_backend_unavailable`` etc.
 * V10 ``matrix_free_pc`` fallback reason
@@ -52,18 +53,28 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 RUNTIME_SOURCE = (
     REPO_ROOT / "src" / "pyeidors" / "inverse" / "solvers" / "gauss_newton_runtime.py"
 ).read_text(encoding="utf-8")
+LINEAR_SYSTEM_SOURCE = (
+    REPO_ROOT
+    / "src"
+    / "pyeidors"
+    / "inverse"
+    / "solvers"
+    / "gauss_newton_linear_system.py"
+).read_text(encoding="utf-8")
+RUNTIME_CONTRACT_SOURCE = f"{RUNTIME_SOURCE}\n{LINEAR_SYSTEM_SOURCE}"
 
 
 # ---------------------------------------------------------------------------
-# V73 — ``rhs = -jtr`` sign pairing literal MUST stay in the runtime.
+# V73 — ``rhs = -jtr`` sign pairing literal MUST stay in runtime contract source.
 # ---------------------------------------------------------------------------
 
 
-def test_v73_rhs_minus_jtr_literal_present_in_runtime() -> None:
+def test_v73_rhs_minus_jtr_literal_present_in_runtime_contract_source() -> None:
     """V73: matrix-free fast-PCG builds ``rhs = -jtr`` to honor Direct sign."""
-    assert "rhs = -jtr" in RUNTIME_SOURCE, (
-        "V73 contract: gauss_newton_runtime must build the matrix-free fast-PCG "
-        "right-hand side as ``rhs = -jtr`` so DirectJacobianCalculator "
+    assert "rhs = -jtr" in RUNTIME_CONTRACT_SOURCE, (
+        "V73 contract: gauss_newton_runtime or its linear-system companion must "
+        "build the matrix-free fast-PCG right-hand side as ``rhs = -jtr`` so "
+        "DirectJacobianCalculator "
         "(sign=+1.0) yields physical δσ in the EIDORS direction."
     )
 
@@ -91,10 +102,12 @@ V11_PC_SOURCE_LITERALS = (
 def test_v11_matrix_free_pc_source_enum_literals_present() -> None:
     """V11: every documented PC source string still appears in the runtime."""
     missing = [
-        literal for literal in V11_PC_SOURCE_LITERALS if literal not in RUNTIME_SOURCE
+        literal
+        for literal in V11_PC_SOURCE_LITERALS
+        if literal not in RUNTIME_CONTRACT_SOURCE
     ]
     assert not missing, (
-        f"V11 contract: matrix_free_pc_source literals missing from runtime: {missing!r}. "
+        f"V11 contract: matrix_free_pc_source literals missing from runtime contract source: {missing!r}. "
         "These are diagnostic strings consumed by cache artifacts + GUI panels; "
         "renaming requires a SPEC.md V11 update + downstream consumer migration."
     )
@@ -107,10 +120,10 @@ def test_v11_matrix_free_pc_source_enum_literals_present() -> None:
 
 def test_v12_petsc_backend_unavailable_fallback_reason_literal_present() -> None:
     """V12: ``petsc_backend_unavailable`` is the canonical fallback reason."""
-    assert '"petsc_backend_unavailable"' in RUNTIME_SOURCE, (
+    assert '"petsc_backend_unavailable"' in RUNTIME_CONTRACT_SOURCE, (
         "V12 contract: ``petsc_backend_unavailable`` fallback-reason literal "
-        "must appear in the runtime when petsc4py is missing and the matrix-free "
-        "ksp backend falls back to scipy."
+        "must appear in the runtime contract source when petsc4py is missing "
+        "and the matrix-free ksp backend falls back to scipy."
     )
 
 
@@ -121,10 +134,10 @@ def test_v12_petsc_backend_unavailable_fallback_reason_literal_present() -> None
 
 def test_v10_petsc_gamg_unsupported_fallback_reason_literal_present() -> None:
     """V10: matrix-free path falls back when petsc-gamg has no Pmat with a documented reason."""
-    assert "petsc_gamg_not_supported_in_matrix_free" in RUNTIME_SOURCE, (
+    assert "petsc_gamg_not_supported_in_matrix_free" in RUNTIME_CONTRACT_SOURCE, (
         "V10 contract: ``petsc_gamg_not_supported_in_matrix_free`` fallback "
-        "reason must appear in the runtime so callers can detect the auto "
-        "fallback to ``diag``."
+        "reason must appear in the runtime contract source so callers can "
+        "detect the auto fallback to ``diag``."
     )
 
 
