@@ -4,9 +4,9 @@ Frozen contract for the two coexisting calculators:
 - ``DirectJacobianCalculator`` uses the PyEIDORS runtime sign convention
   ``J = +∂V/∂σ``. Combined with ``rhs = -jtr`` in
   ``gauss_newton_runtime.py`` this yields physical δσ matching EIDORS.
-- ``EidorsJacobianAdapter`` (formerly ``EidorsStyleAdjointJacobian``)
-  uses the EIDORS canonical physical convention ``J = -∂V/∂σ`` (matches
-  ``calc_jacobian_adjoint.m``'s final ``J = -J;`` step).
+- ``EidorsJacobianAdapter`` uses the EIDORS canonical physical
+  convention ``J = -∂V/∂σ`` (matches ``calc_jacobian_adjoint.m``'s
+  final ``J = -J;`` step).
 
 For any σ the two MUST satisfy ``Direct.calculate(σ) == -Adjoint.calculate(σ)``.
 The absolute-value parity is asserted as an auxiliary sanity check.

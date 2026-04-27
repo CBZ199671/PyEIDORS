@@ -50,9 +50,8 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     inhomogeneous conductivity exceeds the background).
 
     The sibling :class:`pyeidors.inverse.jacobian.adjoint_jacobian.EidorsJacobianAdapter`
-    (deprecated alias ``EidorsStyleAdjointJacobian``) instead returns
-    the EIDORS-canonical signed Jacobian ``J = -∂V/∂σ``. The two
-    calculators differ only in overall sign
+    instead returns the EIDORS-canonical signed Jacobian
+    ``J = -∂V/∂σ``. The two calculators differ only in overall sign
     (``DirectJacobianCalculator(...).calculate(σ)
     == -EidorsJacobianAdapter(...).calculate(σ)``); the contract is
     frozen by V73 and exercised by

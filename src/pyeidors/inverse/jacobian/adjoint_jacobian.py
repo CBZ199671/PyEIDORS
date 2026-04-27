@@ -1,8 +1,6 @@
-"""EIDORS-style adjoint Jacobian calculator with optional Torch accumulation."""
+"""EIDORS-canonical adjoint Jacobian adapter with optional Torch accumulation."""
 
 from __future__ import annotations
-
-import warnings
 
 import numpy as np
 import torch
@@ -23,7 +21,7 @@ from .linearized import (
 
 
 class EidorsJacobianAdapter(BaseJacobianCalculator):
-    """EIDORS-canonical adjoint Jacobian adapter (Path C, T75 Stage 5).
+    """EIDORS-canonical adjoint Jacobian adapter (Path C, T75).
 
     Sign convention: EIDORS canonical physical ``J = -∂V/∂σ``
     (``sign=-1.0``). Mirrors the trailing ``J = -J;`` step of
@@ -42,18 +40,13 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
     swap calculators inside an existing GN/RM pipeline without
     compensating the sign at the consumer site.
 
-    After T75 Stages 1–4 the NumPy assembly path delegates to the same
+    The NumPy assembly path delegates to the same
     :func:`pyeidors.inverse.jacobian._core.assemble_jacobian_efficient_numpy`
     kernel that backs ``DirectJacobianCalculator``; this class only adds
     the EIDORS sign flip plus the GPU / torch / lazy-adjoint surface
     that ``DirectJacobianCalculator`` does not expose
     (``use_torch`` / ``device`` / ``torch_dtype`` / ``torch_batch_all``,
     :meth:`linearize_lazy`, :meth:`linearize_lazy_from_image`).
-
-    The historical name ``EidorsStyleAdjointJacobian`` remains available
-    as a deprecated alias for one release cycle; it emits a
-    :class:`DeprecationWarning` on construction and will be removed in
-    the next cycle (T75 Stage 5 → final cleanup).
     """
 
     sign_convention = "-dV/dsigma_eidors_canonical"
@@ -265,24 +258,3 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
         )
         sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * self.cell_areas_t
         return sensitivity.cpu().numpy()
-
-
-class EidorsStyleAdjointJacobian(EidorsJacobianAdapter):
-    """Deprecated alias for :class:`EidorsJacobianAdapter` (T75 Stage 5).
-
-    Construction emits a :class:`DeprecationWarning`. The class will be
-    removed in the next release cycle once external callers migrate.
-    All behavior is inherited unchanged so existing pipelines continue
-    to compute the same EIDORS-canonical ``J = -∂V/∂σ`` and the V73
-    sign-parity contract still holds.
-    """
-
-    def __init__(self, *args, **kwargs):
-        warnings.warn(
-            "EidorsStyleAdjointJacobian is deprecated; "
-            "use pyeidors.inverse.jacobian.EidorsJacobianAdapter instead. "
-            "The alias will be removed in the next release cycle (T75 Stage 5).",
-            DeprecationWarning,
-            stacklevel=2,
-        )
-        super().__init__(*args, **kwargs)
