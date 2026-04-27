@@ -36,6 +36,12 @@ dependency signatures, deterministic invalidation, and rank-aware eviction.
 - `rom_reduced_operator_absolute`
 - `rom_reduced_rm_diff`
 
+Persistent disk-artifact manifest status is tracked separately in
+`docs/code-fusion/T82_disk_artifact_manifest_schema_audit.md`. That audit
+separates integrated manifest kinds (`hdf5-artifact`, `dolfinx-mesh-cache`)
+from future-scope candidates such as ADIOS2-side artifacts and a possible
+`MeshCacheLayer` protocol.
+
 ## Key design
 
 Keys are SHA-256 hashes generated from:
