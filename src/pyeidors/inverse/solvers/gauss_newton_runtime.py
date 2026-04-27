@@ -142,12 +142,7 @@ def _solve_matrix_free_hessian_via_petsc(
     return result, iterations, converged, fallback
 
 
-from ...data.difference import (
-    normalize_difference_mode,
-    normalize_difference_orientation,
-    project_measurement_jacobian,
-    project_measurement_vector,
-)
+from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
 from ...perf.capabilities import (
@@ -174,6 +169,13 @@ from ..matrix_free.dual_mesh import DualMeshJacobianOperator
 from .gauss_newton_iteration_log import (  # noqa: F401  re-exported for V73 contract
     _IterationLog,
     _record_iteration_log,
+)
+from .gauss_newton_measurement_space import (  # noqa: F401  re-exported for V73 contract
+    _configure_measurement_space,
+    _extract_measured_vector,
+    _measurement_space_kwargs,
+    _project_measurement_jacobian,
+    _project_simulated_measurements,
 )
 from .gauss_newton_startup_cache import (  # noqa: F401  re-exported for V73 contract
     _startup_cache_lookup,
@@ -2073,88 +2075,6 @@ def _solve_linear_system_fast(
         extra=passthrough_extra,
     )
     return delta_np, delta_norm, jtr_norm
-
-
-def _extract_measured_vector(measured_data) -> np.ndarray:
-    if hasattr(measured_data, "meas"):
-        return np.asarray(measured_data.meas, dtype=np.float64).reshape(-1)
-    return np.asarray(measured_data, dtype=np.float64).reshape(-1)
-
-
-def _configure_measurement_space(reconstructor, measured_data) -> None:
-    measurement_type = str(getattr(measured_data, "type", "real")).strip().lower()
-    reference_meas_raw = getattr(measured_data, "reference_meas", None)
-    target_meas_raw = getattr(measured_data, "target_meas", None)
-    reference_meas = (
-        np.asarray(reference_meas_raw, dtype=np.float64).reshape(-1)
-        if reference_meas_raw is not None
-        else None
-    )
-    target_meas = (
-        np.asarray(target_meas_raw, dtype=np.float64).reshape(-1)
-        if target_meas_raw is not None
-        else None
-    )
-
-    if measurement_type == "difference" and reference_meas is not None:
-        reconstructor._measurement_space_type = "difference"
-        reconstructor._difference_reference_meas = reference_meas.copy()
-        reconstructor._difference_target_meas = (
-            target_meas.copy() if target_meas is not None else None
-        )
-        reconstructor._difference_mode_effective = normalize_difference_mode(
-            getattr(measured_data, "difference_mode", reconstructor.difference_mode),
-            default=reconstructor.difference_mode,
-        )
-        reconstructor._difference_orientation_effective = (
-            normalize_difference_orientation(
-                getattr(
-                    measured_data,
-                    "difference_orientation",
-                    reconstructor.difference_orientation,
-                ),
-                default=reconstructor.difference_orientation,
-            )
-        )
-        return
-
-    reconstructor._measurement_space_type = "real"
-    reconstructor._difference_reference_meas = None
-    reconstructor._difference_target_meas = None
-    reconstructor._difference_mode_effective = reconstructor.difference_mode
-    reconstructor._difference_orientation_effective = (
-        reconstructor.difference_orientation
-    )
-
-
-def _measurement_space_kwargs(reconstructor) -> dict[str, object]:
-    """Common keyword arguments for measurement projection functions."""
-    return {
-        "measurement_type": getattr(reconstructor, "_measurement_space_type", "real"),
-        "reference_meas": getattr(reconstructor, "_difference_reference_meas", None),
-        "difference_mode": getattr(
-            reconstructor, "_difference_mode_effective", reconstructor.difference_mode
-        ),
-        "difference_orientation": getattr(
-            reconstructor,
-            "_difference_orientation_effective",
-            reconstructor.difference_orientation,
-        ),
-    }
-
-
-def _project_simulated_measurements(
-    reconstructor, simulated_meas: np.ndarray
-) -> np.ndarray:
-    return project_measurement_vector(
-        simulated_meas, **_measurement_space_kwargs(reconstructor)
-    )
-
-
-def _project_measurement_jacobian(reconstructor, jacobian: np.ndarray) -> np.ndarray:
-    return project_measurement_jacobian(
-        jacobian, **_measurement_space_kwargs(reconstructor)
-    )
 
 
 def _is_operator_jacobian_method(jacobian_method: str) -> bool:
