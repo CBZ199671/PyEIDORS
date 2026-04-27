@@ -1,4 +1,17 @@
-"""Matrix-free Jacobian actions for EIT sensitivity linearizations."""
+"""Matrix-free Jacobian actions for EIT sensitivity linearizations.
+
+Path C (T80) consolidates the public matrix-free operator surface that
+the eager :class:`JacobianLinearization` and the lazy
+:class:`LazyAdjointJacobianLinearization` historically duplicated. Both
+classes now inherit from :class:`_LinearizationBase` which owns the
+shape properties, the permissive fingerprint check (V9), the
+``LinearOperator`` adapters, the ``J^T W J v + alpha R v`` normal-matvec
+helper and the PETSc Python matrix wrapper. Each subclass keeps its own
+storage layout (eager: stored adjoint gradients; lazy: ``fwd_model`` +
+on-demand adjoint solve) and overrides the abstract
+``matvec`` / ``rmatvec`` / ``hessian_diag`` / ``_validate_shapes`` hooks.
+The V73 sign defaults (eager ``+1.0``, lazy ``-1.0``) are unchanged.
+"""
 
 from __future__ import annotations
 
@@ -26,8 +39,164 @@ def compute_sigma_fingerprint(sigma_values) -> str:
     return hashlib.sha256(array.tobytes()).hexdigest()
 
 
+class _LinearizationBase:
+    """Shared public surface for EIT Jacobian matrix-free linearizations.
+
+    Concrete subclasses own their storage layout (eager stores
+    ``adjoint_gradients``; lazy stores ``fwd_model`` and computes
+    adjoints on demand) and override ``matvec`` / ``rmatvec`` /
+    ``hessian_diag`` / ``_validate_shapes``. This base class holds the
+    shape derivations, the V9 fingerprint check, the
+    ``LinearOperator`` / PETSc Python matrix adapters and the
+    ``J^T W J v + alpha R v`` normal-matvec helper so the eager and
+    lazy classes never re-implement them out of step.
+
+    Subclasses MUST set the following attributes during ``__post_init__``:
+    ``cell_areas`` (``ndarray``), ``n_meas_per_stim`` (``tuple[int, ...]``),
+    ``sign`` (``float``), ``sigma_fingerprint`` (``str``).
+    """
+
+    cell_areas: np.ndarray
+    n_meas_per_stim: tuple[int, ...]
+    sign: float
+    sigma_fingerprint: str
+
+    @property
+    def n_parameters(self) -> int:
+        return int(self.cell_areas.size)
+
+    @property
+    def n_measurements(self) -> int:
+        return int(sum(self.n_meas_per_stim))
+
+    @property
+    def shape(self) -> tuple[int, int]:
+        return self.n_measurements, self.n_parameters
+
+    def assert_compatible(self, sigma_fingerprint: str | None) -> None:
+        """Raise if the stored gradients predate a new conductivity value.
+
+        The check is permissive (V9): it only fires when both the stored
+        and provided fingerprints are non-empty and differ. An empty
+        stored fingerprint (legacy construction) or an empty
+        ``sigma_fingerprint`` argument skips the guard. The error
+        message names the concrete subclass so callers can tell the
+        eager and lazy paths apart in stack traces.
+        """
+        stored = str(self.sigma_fingerprint or "")
+        provided = str(sigma_fingerprint or "")
+        if not stored or not provided:
+            return
+        if stored != provided:
+            raise ValueError(
+                f"{type(self).__name__} sigma fingerprint mismatch: "
+                f"stored={stored[:12]}..., provided={provided[:12]}..."
+            )
+
+    # ------------------------------------------------------------------
+    # Abstract operations: subclasses MUST override.
+    # ------------------------------------------------------------------
+
+    def _validate_shapes(self) -> None:
+        raise NotImplementedError
+
+    def matvec(self, vector: np.ndarray) -> np.ndarray:  # pragma: no cover
+        raise NotImplementedError
+
+    def rmatvec(self, residual: np.ndarray) -> np.ndarray:  # pragma: no cover
+        raise NotImplementedError
+
+    def hessian_diag(self, **kwargs) -> np.ndarray:  # pragma: no cover
+        raise NotImplementedError
+
+    # ------------------------------------------------------------------
+    # Shared helpers built on top of ``matvec`` / ``rmatvec``.
+    # ------------------------------------------------------------------
+
+    def as_linear_operator(self) -> LinearOperator:
+        """Return a SciPy ``LinearOperator`` wrapping ``J``."""
+        return LinearOperator(
+            self.shape,
+            matvec=self.matvec,
+            rmatvec=self.rmatvec,
+            dtype=np.float64,
+        )
+
+    def normal_matvec(
+        self,
+        vector: np.ndarray,
+        *,
+        measurement_weights: np.ndarray | None = None,
+        alpha: float = 0.0,
+        regularization: RegularizationAction | None = None,
+    ) -> np.ndarray:
+        """Apply ``J^T W J v + alpha R v`` without dense ``J`` or ``H``."""
+        projected = self.matvec(vector)
+        if measurement_weights is not None:
+            weights = np.asarray(measurement_weights, dtype=np.float64).reshape(-1)
+            if weights.size != self.n_measurements:
+                raise ValueError(
+                    f"Expected {self.n_measurements} weights, got {weights.size}."
+                )
+            projected = weights * projected
+        out = self.rmatvec(projected)
+        if regularization is not None and float(alpha) != 0.0:
+            out = out + float(alpha) * self._apply_regularization(
+                regularization, vector
+            )
+        return np.asarray(out, dtype=np.float64)
+
+    def as_normal_operator(
+        self,
+        *,
+        measurement_weights: np.ndarray | None = None,
+        alpha: float = 0.0,
+        regularization: RegularizationAction | None = None,
+    ) -> LinearOperator:
+        """Return ``J^T W J + alpha R`` as a SciPy ``LinearOperator``."""
+        return LinearOperator(
+            (self.n_parameters, self.n_parameters),
+            matvec=lambda v: self.normal_matvec(
+                v,
+                measurement_weights=measurement_weights,
+                alpha=alpha,
+                regularization=regularization,
+            ),
+            dtype=np.float64,
+        )
+
+    @staticmethod
+    def _apply_regularization(
+        regularization: RegularizationAction,
+        vector: np.ndarray,
+    ) -> np.ndarray:
+        vec = np.asarray(vector, dtype=np.float64)
+        if isinstance(regularization, LinearOperator):
+            return np.asarray(regularization.matvec(vec), dtype=np.float64)
+        if callable(regularization):
+            return np.asarray(regularization(vec), dtype=np.float64)
+        if isspmatrix(regularization):
+            return np.asarray(regularization.dot(vec), dtype=np.float64)
+        matrix = np.asarray(regularization, dtype=np.float64)
+        return np.asarray(matrix @ vec, dtype=np.float64)
+
+    def as_petsc_mat(self, *, comm=None):
+        """Return a PETSc Python matrix for ``J`` when petsc4py is available."""
+        try:
+            from petsc4py import PETSc
+        except ImportError as exc:  # pragma: no cover - optional runtime
+            raise RuntimeError(
+                "petsc4py is required to create a PETSc matrix."
+            ) from exc
+
+        context = _PETScJacobianContext(self)
+        mat = PETSc.Mat().createPython(self.shape, context=context, comm=comm)
+        mat.setUp()
+        return mat
+
+
 @dataclass
-class JacobianLinearization:
+class JacobianLinearization(_LinearizationBase):
     """Apply EIT Jacobian actions without materializing the dense Jacobian.
 
     The object stores forward and adjoint field gradients for one linearization
@@ -60,36 +229,6 @@ class JacobianLinearization:
         self.sign = float(self.sign)
         self.sigma_fingerprint = str(self.sigma_fingerprint or "")
         self._validate_shapes()
-
-    def assert_compatible(self, sigma_fingerprint: str | None) -> None:
-        """Raise if the stored gradients predate a new conductivity value.
-
-        The check is permissive: it only fires when both the stored and
-        provided fingerprints are non-empty and differ. An empty stored
-        fingerprint (legacy construction) or an empty ``sigma_fingerprint``
-        argument skips the guard.
-        """
-        stored = str(self.sigma_fingerprint or "")
-        provided = str(sigma_fingerprint or "")
-        if not stored or not provided:
-            return
-        if stored != provided:
-            raise ValueError(
-                "JacobianLinearization sigma fingerprint mismatch: "
-                f"stored={stored[:12]}..., provided={provided[:12]}..."
-            )
-
-    @property
-    def n_parameters(self) -> int:
-        return int(self.cell_areas.size)
-
-    @property
-    def n_measurements(self) -> int:
-        return int(sum(self.n_meas_per_stim))
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self.n_measurements, self.n_parameters
 
     def _validate_shapes(self) -> None:
         if len(self.grad_u_all) != len(self.n_meas_per_stim):
@@ -165,15 +304,6 @@ class JacobianLinearization:
             )
             meas_idx += n_meas
         return out
-
-    def as_linear_operator(self) -> LinearOperator:
-        """Return a SciPy ``LinearOperator`` wrapping ``J``."""
-        return LinearOperator(
-            self.shape,
-            matvec=self.matvec,
-            rmatvec=self.rmatvec,
-            dtype=np.float64,
-        )
 
     def to_dense(self, *, block_size: int | None = None) -> np.ndarray:
         """Materialize the dense Jacobian for compatibility or debugging."""
@@ -255,81 +385,9 @@ class JacobianLinearization:
             diag = np.maximum(diag, float(floor))
         return np.asarray(diag, dtype=np.float64)
 
-    def normal_matvec(
-        self,
-        vector: np.ndarray,
-        *,
-        measurement_weights: np.ndarray | None = None,
-        alpha: float = 0.0,
-        regularization: RegularizationAction | None = None,
-    ) -> np.ndarray:
-        """Apply ``J^T W J v + alpha R v`` without dense ``J`` or ``H``."""
-        projected = self.matvec(vector)
-        if measurement_weights is not None:
-            weights = np.asarray(measurement_weights, dtype=np.float64).reshape(-1)
-            if weights.size != self.n_measurements:
-                raise ValueError(
-                    f"Expected {self.n_measurements} weights, got {weights.size}."
-                )
-            projected = weights * projected
-        out = self.rmatvec(projected)
-        if regularization is not None and float(alpha) != 0.0:
-            out = out + float(alpha) * self._apply_regularization(
-                regularization, vector
-            )
-        return np.asarray(out, dtype=np.float64)
-
-    def as_normal_operator(
-        self,
-        *,
-        measurement_weights: np.ndarray | None = None,
-        alpha: float = 0.0,
-        regularization: RegularizationAction | None = None,
-    ) -> LinearOperator:
-        """Return ``J^T W J + alpha R`` as a SciPy ``LinearOperator``."""
-        return LinearOperator(
-            (self.n_parameters, self.n_parameters),
-            matvec=lambda v: self.normal_matvec(
-                v,
-                measurement_weights=measurement_weights,
-                alpha=alpha,
-                regularization=regularization,
-            ),
-            dtype=np.float64,
-        )
-
-    @staticmethod
-    def _apply_regularization(
-        regularization: RegularizationAction,
-        vector: np.ndarray,
-    ) -> np.ndarray:
-        vec = np.asarray(vector, dtype=np.float64)
-        if isinstance(regularization, LinearOperator):
-            return np.asarray(regularization.matvec(vec), dtype=np.float64)
-        if callable(regularization):
-            return np.asarray(regularization(vec), dtype=np.float64)
-        if isspmatrix(regularization):
-            return np.asarray(regularization.dot(vec), dtype=np.float64)
-        matrix = np.asarray(regularization, dtype=np.float64)
-        return np.asarray(matrix @ vec, dtype=np.float64)
-
-    def as_petsc_mat(self, *, comm=None):
-        """Return a PETSc Python matrix for ``J`` when petsc4py is available."""
-        try:
-            from petsc4py import PETSc
-        except ImportError as exc:  # pragma: no cover - optional runtime
-            raise RuntimeError(
-                "petsc4py is required to create a PETSc matrix."
-            ) from exc
-
-        context = _PETScJacobianContext(self)
-        mat = PETSc.Mat().createPython(self.shape, context=context, comm=comm)
-        mat.setUp()
-        return mat
-
 
 @dataclass
-class LazyAdjointJacobianLinearization:
+class LazyAdjointJacobianLinearization(_LinearizationBase):
     """Lazy EIT Jacobian action without per-measurement adjoint storage."""
 
     fwd_model: Any
@@ -366,18 +424,6 @@ class LazyAdjointJacobianLinearization:
         self.last_diag_info: dict[str, Any] = {}
         self._validate_shapes()
 
-    @property
-    def n_parameters(self) -> int:
-        return int(self.cell_areas.size)
-
-    @property
-    def n_measurements(self) -> int:
-        return int(sum(self.n_meas_per_stim))
-
-    @property
-    def shape(self) -> tuple[int, int]:
-        return self.n_measurements, self.n_parameters
-
     def _validate_shapes(self) -> None:
         if len(self.u_all) != len(self.n_meas_per_stim):
             raise ValueError("u_all length must match n_meas_per_stim.")
@@ -390,15 +436,6 @@ class LazyAdjointJacobianLinearization:
                 raise ValueError(
                     "Each forward gradient must have shape (n_elem, gdim)."
                 )
-
-    def assert_compatible(self, sigma_fingerprint: str | None) -> None:
-        stored = str(self.sigma_fingerprint or "")
-        provided = str(sigma_fingerprint or "")
-        if stored and provided and stored != provided:
-            raise ValueError(
-                "LazyAdjointJacobianLinearization sigma fingerprint mismatch: "
-                f"stored={stored[:12]}..., provided={provided[:12]}..."
-            )
 
     def _make_sigma(self):
         from dolfinx import fem
@@ -523,14 +560,6 @@ class LazyAdjointJacobianLinearization:
             "mode": "lazy_adjoint_combined",
         }
         return np.asarray(out, dtype=np.float64)
-
-    def as_linear_operator(self) -> LinearOperator:
-        return LinearOperator(
-            self.shape,
-            matvec=self.matvec,
-            rmatvec=self.rmatvec,
-            dtype=np.float64,
-        )
 
     def hessian_diag(
         self,
