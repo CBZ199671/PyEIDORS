@@ -1,32 +1,36 @@
-"""Process-local cache for loaded EIT mesh objects."""
+"""Process-local cache for loaded EIT mesh objects.
+
+T79 Path C: storage + key-hashing primitives now live in
+:mod:`pyeidors.cache.process_lru`. This module is a thin wrapper that
+pins the value type to :class:`EITMesh` and preserves the historical
+public function names (``build_process_mesh_cache_key`` /
+``get_process_cached_mesh`` / ``put_process_cached_mesh`` /
+``clear_process_mesh_cache``) so existing callers (``MeshLoader``,
+``optimized_mesh_generator.load_or_create_mesh`` etc.) do not need to
+update.
+
+The cache-key payload formula is bytewise identical to the
+pre-consolidation implementation: same field set, same sort order,
+same JSON separators (see :func:`pyeidors.cache.process_lru.hash_json_payload`).
+"""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import threading
-from collections import OrderedDict
 from pathlib import Path
 from typing import Sequence
 
+from ..cache.process_lru import ProcessLRUCache, hash_json_payload, path_signature
 from ..data.structures import EITMesh
 
 _PROCESS_MESH_CACHE_MAX_ITEMS = 8
-_PROCESS_MESH_CACHE: OrderedDict[str, EITMesh] = OrderedDict()
-_PROCESS_MESH_CACHE_LOCK = threading.Lock()
+_PROCESS_MESH_CACHE: ProcessLRUCache[EITMesh] = ProcessLRUCache(
+    max_items=_PROCESS_MESH_CACHE_MAX_ITEMS
+)
 
 
 def _path_signature(path: str | Path) -> str:
-    """Return a cheap process-cache signature for large mesh artifacts."""
-    mesh_path = Path(path)
-    try:
-        stat = mesh_path.stat()
-        return (
-            f"{mesh_path.resolve()}::{stat.st_size}::"
-            f"{stat.st_mtime_ns}::{int(mesh_path.is_dir())}"
-        )
-    except OSError:
-        return str(mesh_path)
+    """Backward-compat alias for :func:`pyeidors.cache.process_lru.path_signature`."""
+    return path_signature(path)
 
 
 def build_process_mesh_cache_key(
@@ -42,7 +46,7 @@ def build_process_mesh_cache_key(
     mesh_path = Path(mesh_file)
     payload: dict[str, object] = {
         "mesh_file": str(mesh_path.resolve()),
-        "mesh_sig": _path_signature(mesh_path),
+        "mesh_sig": path_signature(mesh_path),
         "gdim": int(gdim),
         "mesh_name": str(mesh_name or mesh_path.stem),
     }
@@ -50,41 +54,28 @@ def build_process_mesh_cache_key(
         payload["n_elec"] = int(n_elec)
     if association_file is not None:
         payload["association_file"] = str(Path(association_file).resolve())
-        payload["association_sig"] = _path_signature(association_file)
+        payload["association_sig"] = path_signature(association_file)
     if sidecar_file is not None:
         payload["sidecar_file"] = str(Path(sidecar_file).resolve())
-        payload["sidecar_sig"] = _path_signature(sidecar_file)
+        payload["sidecar_sig"] = path_signature(sidecar_file)
     if extra_files:
         payload["extra_files"] = [
             {
                 "file": str(Path(extra_file).resolve()),
-                "sig": _path_signature(extra_file),
+                "sig": path_signature(extra_file),
             }
             for extra_file in sorted(extra_files, key=lambda item: str(item))
         ]
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return hash_json_payload(payload)
 
 
 def get_process_cached_mesh(key: str) -> EITMesh | None:
-    with _PROCESS_MESH_CACHE_LOCK:
-        mesh = _PROCESS_MESH_CACHE.get(key)
-        if mesh is None:
-            return None
-        _PROCESS_MESH_CACHE.move_to_end(key)
-        return mesh
+    return _PROCESS_MESH_CACHE.get(key)
 
 
 def put_process_cached_mesh(key: str, mesh: EITMesh) -> None:
-    with _PROCESS_MESH_CACHE_LOCK:
-        _PROCESS_MESH_CACHE.pop(key, None)
-        _PROCESS_MESH_CACHE[key] = mesh
-        while len(_PROCESS_MESH_CACHE) > _PROCESS_MESH_CACHE_MAX_ITEMS:
-            _PROCESS_MESH_CACHE.popitem(last=False)
+    _PROCESS_MESH_CACHE.put(key, mesh)
 
 
 def clear_process_mesh_cache() -> None:
-    with _PROCESS_MESH_CACHE_LOCK:
-        _PROCESS_MESH_CACHE.clear()
+    _PROCESS_MESH_CACHE.clear()

@@ -1,18 +1,24 @@
-"""Process-local cache for forward-model static setup bundles."""
+"""Process-local cache for forward-model static setup bundles.
+
+T79 Path C: the OrderedDict LRU + threading.Lock + JSON-hash key
+machinery moved to :mod:`pyeidors.cache.process_lru`; this module
+pins the value type to :class:`ForwardStaticSetupBundle` and keeps the
+historical public function names so ``EITForwardModel`` callers stay
+intact. The cache-key payload formula (V16 / V17) is preserved
+bytewise — same field set, same sort order, same JSON separators
+through :func:`pyeidors.cache.process_lru.hash_json_payload`.
+"""
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from dataclasses import asdict, dataclass
-import hashlib
-import json
-import threading
 from typing import Any
 
 import numpy as np
 from scipy.sparse import csr_matrix
 
 from ..cache.keys import _normalize, hash_array
+from ..cache.process_lru import ProcessLRUCache, hash_json_payload
 from ..data.structures import PatternConfig
 
 
@@ -35,8 +41,9 @@ class ForwardStaticSetupBundle:
 
 
 _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS = 8
-_PROCESS_FORWARD_SETUP_CACHE: OrderedDict[str, ForwardStaticSetupBundle] = OrderedDict()
-_PROCESS_FORWARD_SETUP_CACHE_LOCK = threading.Lock()
+_PROCESS_FORWARD_SETUP_CACHE: ProcessLRUCache[ForwardStaticSetupBundle] = (
+    ProcessLRUCache(max_items=_PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS)
+)
 
 
 def _pattern_signature(config: PatternConfig) -> dict[str, Any]:
@@ -73,41 +80,22 @@ def build_process_forward_setup_key(
         "z_hash": hash_array(np.asarray(z, dtype=np.float64).reshape(-1)),
         "pattern_config": _pattern_signature(pattern_config),
     }
-    encoded = json.dumps(
-        payload, sort_keys=True, separators=(",", ":"), ensure_ascii=True
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
+    return hash_json_payload(payload)
 
 
 def get_process_forward_setup_bundle(key: str) -> ForwardStaticSetupBundle | None:
-    with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
-        bundle = _PROCESS_FORWARD_SETUP_CACHE.get(key)
-        if bundle is None:
-            return None
-        _PROCESS_FORWARD_SETUP_CACHE.move_to_end(key)
-        return bundle
+    return _PROCESS_FORWARD_SETUP_CACHE.get(key)
 
 
 def put_process_forward_setup_bundle(
     key: str, bundle: ForwardStaticSetupBundle
 ) -> None:
-    with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
-        _PROCESS_FORWARD_SETUP_CACHE.pop(key, None)
-        _PROCESS_FORWARD_SETUP_CACHE[key] = bundle
-        while (
-            len(_PROCESS_FORWARD_SETUP_CACHE) > _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS
-        ):
-            _PROCESS_FORWARD_SETUP_CACHE.popitem(last=False)
+    _PROCESS_FORWARD_SETUP_CACHE.put(key, bundle)
 
 
 def clear_process_forward_setup_cache() -> None:
-    with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
-        _PROCESS_FORWARD_SETUP_CACHE.clear()
+    _PROCESS_FORWARD_SETUP_CACHE.clear()
 
 
 def process_forward_setup_cache_stats() -> dict[str, int]:
-    with _PROCESS_FORWARD_SETUP_CACHE_LOCK:
-        return {
-            "items": len(_PROCESS_FORWARD_SETUP_CACHE),
-            "max_items": _PROCESS_FORWARD_SETUP_CACHE_MAX_ITEMS,
-        }
+    return _PROCESS_FORWARD_SETUP_CACHE.stats()
