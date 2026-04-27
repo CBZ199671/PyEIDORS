@@ -1,10 +1,11 @@
 # T81 phase 1 — `src/pyeidors/data/` sweep & audit module index
 
-Status: **phase 2b landed**. Phase 1 was index-only; phase 2a added
-small shared sweep/report primitives; phase 2b adds byte-stable CSV golden
-fixtures for those migrated serialization edges while keeping T81 open. Larger
-row-schema base-class consolidation is still deferred — see the rationale at
-the end of this document.
+Status: **phase 2c landed**. Phase 1 was index-only; phase 2a added
+small shared sweep/report primitives; phase 2b added byte-stable CSV golden
+fixtures; phase 2c adds a tiny HDF5 sheet-name fixture gate for those migrated
+serialization edges while keeping T81 open. Larger row-schema base-class
+consolidation is still deferred — see the rationale at the end of this
+document.
 
 This audit is the entrance gate the SPEC row for T81 mandates: index
 each module's dataclass schema, map overlapping fields across modules,
@@ -149,6 +150,22 @@ This is deliberately not the heavier `ReconMetricRow` / `_StructureMetrics`
 schema-base move. If those rows are consolidated later, this fixture set should
 be extended before the migration rather than relaxed afterward.
 
+## 4.2. Phase 2c boundary
+
+Phase 2c adds the HDF5 sheet-name gate before the heavier row-schema move. The
+new `write_hdf5_row_tables` helper writes CSV-compatible sweep rows as HDF5
+artifact datasets under the shared `arrays/` group and stores stable
+`table_names` / `table_columns` metadata. No existing sweep caller is migrated
+in this phase.
+
+The committed fixture
+`tests/fixtures/sweep_hdf5_tables/phase2a_table_names.h5` records the current
+phase 2a migrated table names. `tests/unit/test_sweep_hdf5_sheet_golden_fixture.py`
+generates the same HDF5 layout from the helper and compares group / dataset
+paths plus table metadata against the fixture. Future `ReconMetricRow` /
+`_StructureMetrics` consolidation should extend this fixture before moving
+additional tables.
+
 ## 5. Phase 2 completion conditions (gate)
 
 Before heavier row-base consolidation lands, the following must be in
@@ -161,9 +178,11 @@ place (otherwise paper reproducibility breaks; SPEC §T.T81 boundary):
    fixtures before moving those schemas. This locks column order +
    boolean / numeric coercion.
 2. **HDF5 sheet-name fixture**: an HDF5 archive with the historical
-   group / dataset names is committed; the consolidated row writer
-   must produce an archive that matches under
-   `tests/unit/io/test_hdf5_artifacts.py`-style equality checks.
+   group / dataset names is committed. Phase 2c has landed
+   `tests/fixtures/sweep_hdf5_tables/phase2a_table_names.h5` for the
+   phase 2a migrated tables; future consolidated row writers must
+   match or deliberately extend this layout under the HDF5 fixture
+   gate.
 3. **`__dataclass_fields__` order test**: each consolidated row has
    `tuple(rec_cls.__dataclass_fields__) == EXPECTED_ORDER` so a
    future contributor cannot reorder columns.

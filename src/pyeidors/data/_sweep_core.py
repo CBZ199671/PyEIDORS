@@ -12,8 +12,8 @@ from dataclasses import fields, is_dataclass
 from pathlib import Path
 from typing import Iterable, Mapping, Protocol, Sequence
 
-
 CSVCell = str | int | float
+SWEEP_TABLES_HDF5_SCHEMA = "pyeidors-sweep-tables-hdf5-v1"
 
 
 class SupportsCSVRow(Protocol):
@@ -80,6 +80,58 @@ def write_csv_rows(
     return output
 
 
+def write_hdf5_row_tables(
+    path: str | Path,
+    tables: Mapping[str, tuple[Sequence[str], Iterable[SupportsCSVRow]]],
+    metadata: Mapping[str, object] | None = None,
+    *,
+    schema: str = SWEEP_TABLES_HDF5_SCHEMA,
+) -> Path:
+    """Write CSV-compatible sweep row tables to a HDF5 artifact.
+
+    Table names become dataset names under the shared ``arrays`` group. Column
+    names live in metadata so tests can lock sheet/dataset names separately from
+    row-schema refactors.
+    """
+
+    import numpy as np
+
+    from pyeidors.io.hdf5_artifacts import write_hdf5_artifact
+
+    arrays: dict[str, object] = {}
+    columns: dict[str, list[str]] = {}
+    for table_name, (fieldnames, rows) in sorted(
+        tables.items(), key=lambda item: str(item[0])
+    ):
+        name = _hdf5_table_name(table_name)
+        field_list = [str(field) for field in fieldnames]
+        columns[name] = field_list
+        rendered_rows = [
+            [str(csv_cell(row.as_csv_row().get(field, ""))) for field in field_list]
+            for row in rows
+        ]
+        arrays[name] = (
+            np.asarray(rendered_rows, dtype=np.str_)
+            if rendered_rows
+            else np.empty((0, len(field_list)), dtype=np.str_)
+        )
+    meta: dict[str, object] = {
+        "package_role": "sweep_report_tables",
+        "table_columns": columns,
+        "table_names": sorted(columns),
+    }
+    if metadata:
+        meta.update(dict(metadata))
+    return write_hdf5_artifact(
+        path,
+        arrays,
+        meta,
+        schema=schema,
+        compression=None,
+        chunks=None,
+    )
+
+
 def format_aligned_table(
     headers: Sequence[str],
     rows: Iterable[Sequence[object]],
@@ -118,11 +170,20 @@ def format_aligned_table(
     return "\n".join(lines)
 
 
+def _hdf5_table_name(name: object) -> str:
+    text = str(name)
+    if not text or "/" in text:
+        raise ValueError(f"HDF5 table name must be non-empty and slash-free: {text!r}")
+    return text
+
+
 __all__ = [
     "CSVCell",
+    "SWEEP_TABLES_HDF5_SCHEMA",
     "SupportsCSVRow",
     "csv_cell",
     "dataclass_csv_row",
     "format_aligned_table",
     "write_csv_rows",
+    "write_hdf5_row_tables",
 ]
