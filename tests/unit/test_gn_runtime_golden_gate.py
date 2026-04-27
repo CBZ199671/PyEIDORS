@@ -4,8 +4,8 @@ The string-only contract gate in
 :mod:`tests.unit.test_gn_runtime_contract_freeze` only stops a sub-
 module split commit from renaming things. This file adds the
 behavioural complement: fixed inputs → fixed outputs (delta vector,
-diagnostic ``matrix_free_pc_source``, fallback reason, startup cache
-SHA256, iteration log payload). A future ``linear_system.py`` /
+diagnostic ``matrix_free_pc_source``, fallback reason, linear iteration
+count, startup cache SHA256, iteration log payload). A future ``linear_system.py`` /
 ``step_size.py`` extract that silently changes algorithm tolerances
 or skips a fallback branch will fail these assertions even if every
 string literal in the contract gate is preserved.
@@ -92,6 +92,7 @@ def test_solve_linear_system_fast_auto_config_returns_locked_delta_and_meta() ->
     meta = getattr(reconstructor, "_last_fast_linear_meta", None)
     assert isinstance(meta, dict)
     assert meta.get("matrix_free_pc_source") == "dense-sensitivity", meta
+    assert meta.get("linear_iterations") == EXPECTED_WOODBURY_LINEAR_ITERATIONS, meta
 
 
 def test_solve_linear_system_fast_petsc_backend_fallback_reason_literal_pinned(
@@ -141,6 +142,7 @@ def test_solve_linear_system_fast_petsc_backend_fallback_reason_literal_pinned(
         meta.get("matrix_free_ksp_backend_fallback_reason")
         == "petsc_backend_unavailable"
     ), meta
+    assert meta.get("linear_iterations") == EXPECTED_FAST_PCG_LINEAR_ITERATIONS, meta
 
     expected_delta = _expected_dense_solution(J, residual, de, lam)
     np.testing.assert_allclose(delta, expected_delta, rtol=1e-5, atol=1e-7)
@@ -150,6 +152,8 @@ def _fake_signature(_fwd_model) -> str:
     return "stub-signature"
 
 
+EXPECTED_WOODBURY_LINEAR_ITERATIONS = 0
+EXPECTED_FAST_PCG_LINEAR_ITERATIONS = 3
 EXPECTED_STARTUP_CACHE_PAYLOAD_SHA256 = (
     "b73d9dfd0d440872a6920a0c46c102afc74025e33232c959677ef3ed34d916f5"
 )
