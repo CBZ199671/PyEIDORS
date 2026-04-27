@@ -115,6 +115,14 @@ def test_xdmf_cache_loads_after_source_msh_is_removed(tmp_path: Path, monkeypatc
     assert direct.facet_tags is not None
     assert direct.cell_tags is not None
     assert direct.metadata["structured_sidecar_file"] == str(sidecar)
+    assert len(direct.metadata["artifact_key"]) == 64
+    manifest = direct.metadata["artifact_manifest"]
+    assert manifest["artifact_key"] == direct.metadata["artifact_key"]
+    assert manifest["artifact_kind"] == "dolfinx-mesh-cache"
+    assert manifest["key_payload"]["mesh_content_signature"]["geometry_hash"]
+    assert manifest["key_payload"]["source_msh_signature"]["sha256"]
+    assert manifest["files"]["xdmf"]["path"].endswith(".xdmf")
+    assert manifest["files"]["hdf5"]["path"].endswith(".h5")
 
     direct_from_h5 = load_dolfinx_mesh_cache(xdmf_file.with_suffix(".h5"), gdim=2)
     assert direct_from_h5 is not None

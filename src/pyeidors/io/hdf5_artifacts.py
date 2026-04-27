@@ -11,8 +11,14 @@ from typing import Any, Mapping
 import h5py
 import numpy as np
 
+from pyeidors.cache.disk_artifacts import (
+    DiskArtifactManifest,
+    build_disk_artifact_manifest,
+)
+
 
 DEFAULT_SCHEMA = "pyeidors-hdf5-artifact-v1"
+_MANIFEST_METADATA_KEYS = {"artifact_key", "artifact_manifest"}
 
 
 @dataclass(frozen=True)
@@ -112,6 +118,14 @@ def write_hdf5_artifact(
     meta = _json_ready(dict(metadata or {}))
     meta.setdefault("artifact_format", "hdf5")
     meta.setdefault("checksum_algorithm", "sha256")
+    manifest = _hdf5_disk_artifact_manifest(
+        target,
+        arrays,
+        metadata=meta,
+        schema=schema,
+    )
+    meta.setdefault("artifact_key", manifest.artifact_key)
+    meta.setdefault("artifact_manifest", manifest.to_metadata())
     with h5py.File(target, "w") as handle:
         handle.attrs["schema"] = str(schema)
         handle.attrs["metadata_json"] = json.dumps(meta, sort_keys=True)
@@ -375,6 +389,39 @@ def _array_digest(value: Any) -> str:
         + arr.tobytes()
     )
     return hashlib.sha256(encoded).hexdigest()
+
+
+def _hdf5_disk_artifact_manifest(
+    target: Path,
+    arrays: Mapping[str, Any],
+    *,
+    metadata: Mapping[str, Any],
+    schema: str,
+) -> DiskArtifactManifest:
+    array_payload = {
+        str(name): {
+            "shape": [int(dim) for dim in np.asarray(value).shape],
+            "dtype": str(np.asarray(value).dtype),
+            "sha256": _array_digest(value),
+        }
+        for name, value in sorted(arrays.items(), key=lambda item: str(item[0]))
+        if value is not None
+    }
+    metadata_payload = {
+        str(key): val
+        for key, val in dict(metadata).items()
+        if str(key) not in _MANIFEST_METADATA_KEYS
+    }
+    return build_disk_artifact_manifest(
+        "hdf5-artifact",
+        {
+            "schema": str(schema),
+            "arrays": array_payload,
+            "metadata": metadata_payload,
+        },
+        files={"artifact": target},
+        metadata={"artifact_format": "hdf5"},
+    )
 
 
 def _canonical_string_array(arr: np.ndarray) -> np.ndarray:

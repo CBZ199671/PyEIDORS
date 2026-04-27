@@ -9,7 +9,6 @@ reload source.
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 import json
 import logging
 import os
@@ -22,6 +21,8 @@ import numpy as np
 from dolfinx.io import XDMFFile
 from mpi4py import MPI
 
+from ..cache.disk_artifacts import build_disk_artifact_manifest, file_sha256
+from ..cache.keys import hash_array
 from ._helpers import (
     association_from_mesh_data,
     physical_group_dimensions_from_mesh_data,
@@ -94,17 +95,6 @@ def _cache_paths_for_mesh(mesh_file: str | Path) -> tuple[Path, Path, Path]:
     return xdmf_file, xdmf_file.with_suffix(".h5"), metadata_file
 
 
-def _sha256_file(path: Path) -> str | None:
-    try:
-        digest = hashlib.sha256()
-        with path.open("rb") as handle:
-            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-                digest.update(chunk)
-        return digest.hexdigest()
-    except OSError:
-        return None
-
-
 def _source_signature(
     path: str | Path | None, *, include_hash: bool = False
 ) -> dict[str, Any] | None:
@@ -121,8 +111,24 @@ def _source_signature(
         "mtime_ns": int(stat.st_mtime_ns),
     }
     if include_hash:
-        signature["sha256"] = _sha256_file(mesh_path)
+        signature["sha256"] = file_sha256(mesh_path)
     return signature
+
+
+def _mesh_content_signature(mesh: Any) -> dict[str, Any] | None:
+    try:
+        geometry = np.asarray(mesh.geometry.x)
+        tdim = int(mesh.topology.dim)
+        mesh.topology.create_connectivity(tdim, 0)
+        connectivity = mesh.topology.connectivity(tdim, 0)
+        topology = np.asarray(connectivity.array)
+    except Exception:
+        return None
+    return {
+        "tdim": tdim,
+        "geometry_hash": hash_array(geometry),
+        "topology_hash": hash_array(topology),
+    }
 
 
 def _json_safe(value: Any) -> Any:
@@ -201,7 +207,7 @@ def dolfinx_cache_is_fresh(mesh_file: str | Path) -> bool:
         if same_size and same_mtime:
             return True
         if same_size and recorded_source.get("sha256"):
-            return recorded_source["sha256"] == _sha256_file(source_msh)
+            return recorded_source["sha256"] == file_sha256(source_msh)
         return False
 
     if current_source is not None:
@@ -404,15 +410,23 @@ def write_dolfinx_mesh_cache(
                 engine=adios4dolfinx_engine,
             )
 
+        physical_groups = _physical_group_metadata(mesh_data, association)
+        source_signature = _source_signature(source_msh, include_hash=True)
+        structured_sidecar_signature = _source_signature(
+            structured_sidecar_file,
+            include_hash=True,
+        )
+        mesh_content_signature = _mesh_content_signature(mesh)
         metadata = {
             "version": DOLFINX_MESH_CACHE_VERSION,
             "format": "dolfinx-xdmf-hdf5",
             "gdim": int(gdim),
+            "mesh_content_signature": mesh_content_signature,
             "mesh_name": MESH_NAME,
             "facet_tags_name": FACET_TAGS_NAME,
             "cell_tags_name": CELL_TAGS_NAME,
             "source_msh_file": None if source_msh is None else str(source_msh),
-            "source_msh_signature": _source_signature(source_msh, include_hash=True),
+            "source_msh_signature": source_signature,
             "xdmf_file": str(xdmf_file),
             "hdf5_file": str(xdmf_file.with_suffix(".h5")),
             "adios2_file": str(adios2_file) if adios2_written else None,
@@ -420,7 +434,7 @@ def write_dolfinx_mesh_cache(
             "adios4dolfinx_file": adios4dolfinx_file,
             "adios4dolfinx_engine": adios4dolfinx_engine,
             "association_table": association,
-            "physical_groups": _physical_group_metadata(mesh_data, association),
+            "physical_groups": physical_groups,
             "mesh_family": mesh_family,
             "geometry_version": geometry_version,
             "generator_revision": generator_revision,
@@ -430,7 +444,34 @@ def write_dolfinx_mesh_cache(
                 else str(structured_sidecar_file)
             ),
             "structured_sidecar_version": structured_sidecar_version,
+            "structured_sidecar_signature": structured_sidecar_signature,
         }
+        manifest = build_disk_artifact_manifest(
+            "dolfinx-mesh-cache",
+            {
+                "format": metadata["format"],
+                "gdim": int(gdim),
+                "mesh_content_signature": mesh_content_signature,
+                "source_msh_signature": source_signature,
+                "association_table": association,
+                "physical_groups": physical_groups,
+                "mesh_family": mesh_family,
+                "geometry_version": geometry_version,
+                "generator_revision": generator_revision,
+                "structured_sidecar_signature": structured_sidecar_signature,
+                "structured_sidecar_version": structured_sidecar_version,
+            },
+            files={
+                "xdmf": xdmf_file,
+                "hdf5": xdmf_file.with_suffix(".h5"),
+                "metadata": metadata_file,
+                "adios2": adios2_file if adios2_written else None,
+                "adios4dolfinx": adios4dolfinx_file,
+            },
+            metadata={"cache_format": metadata["format"]},
+        )
+        metadata["artifact_key"] = manifest.artifact_key
+        metadata["artifact_manifest"] = manifest.to_metadata()
         if extra_metadata:
             metadata.update(_json_safe(extra_metadata))
 

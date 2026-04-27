@@ -3,6 +3,15 @@
 from .keys import CacheKeyParts, build_cache_key, hash_array, hash_path
 from .lifecycle import cleanup_registered_session_caches, cleanup_stale_session_caches
 from .manager import CacheManager
+from .disk_artifacts import (
+    DISK_ARTIFACT_MANIFEST_VERSION,
+    DiskArtifactManifest,
+    build_disk_artifact_key,
+    build_disk_artifact_manifest,
+    file_fingerprint,
+    file_sha256,
+    stable_json_digest,
+)
 from .object_signature import (
     backend_signature_from_forward_model,
     model_signature_from_forward_model,
@@ -30,7 +39,13 @@ __all__ = [
     "CacheManager",
     "CachePolicy",
     "CacheScope",
+    "DISK_ARTIFACT_MANIFEST_VERSION",
+    "DiskArtifactManifest",
     "build_cache_key",
+    "build_disk_artifact_key",
+    "build_disk_artifact_manifest",
+    "file_fingerprint",
+    "file_sha256",
     "hash_array",
     "hash_path",
     "model_signature_from_forward_model",
@@ -38,4 +53,5 @@ __all__ = [
     "pattern_signature_from_forward_model",
     "signature_of_cache_obj",
     "stable_signature_hash",
+    "stable_json_digest",
 ]

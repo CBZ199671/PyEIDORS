@@ -55,6 +55,10 @@ def test_large_cache_hdf5_writes_chunked_compressed_checksummed_greit_components
     lazy_artifact = read_hdf5_artifact(path, lazy=True)
     assert lazy_artifact.metadata["large_cache"] is True
     assert lazy_artifact.metadata["checksum_algorithm"] == "sha256"
+    assert len(lazy_artifact.metadata["artifact_key"]) == 64
+    assert (
+        lazy_artifact.metadata["artifact_manifest"]["artifact_kind"] == "hdf5-artifact"
+    )
     rm = lazy_artifact.arrays["RM"]
     assert isinstance(rm, HDF5LazyDataset)
     assert rm.shape == arrays["RM"].shape
@@ -62,6 +66,43 @@ def test_large_cache_hdf5_writes_chunked_compressed_checksummed_greit_components
     assert rm.chunks is not None
     np.testing.assert_allclose(rm[0, :3], arrays["RM"][0, :3])
     np.testing.assert_allclose(np.asarray(lazy_artifact.arrays["PJt"]), arrays["PJt"])
+
+
+def test_large_cache_hdf5_artifact_key_ignores_output_path(tmp_path) -> None:
+    arrays = _greit_component_arrays()
+    metadata = {"package_role": "greit-eidors-components"}
+    path_a = write_large_cache_hdf5_artifact(
+        tmp_path / "a" / "greit_cache.h5",
+        arrays,
+        metadata,
+        schema="unit-greit-large-cache-v1",
+    )
+    path_b = write_large_cache_hdf5_artifact(
+        tmp_path / "b" / "greit_cache.h5",
+        arrays,
+        metadata,
+        schema="unit-greit-large-cache-v1",
+    )
+
+    meta_a = read_hdf5_artifact(path_a, lazy=True).metadata
+    meta_b = read_hdf5_artifact(path_b, lazy=True).metadata
+
+    assert meta_a["artifact_key"] == meta_b["artifact_key"]
+    assert (
+        meta_a["artifact_manifest"]["files"]["artifact"]["path"]
+        != meta_b["artifact_manifest"]["files"]["artifact"]["path"]
+    )
+
+    changed = dict(arrays)
+    changed["RM"] = arrays["RM"] + 1.0
+    path_c = write_large_cache_hdf5_artifact(
+        tmp_path / "c" / "greit_cache.h5",
+        changed,
+        metadata,
+        schema="unit-greit-large-cache-v1",
+    )
+    meta_c = read_hdf5_artifact(path_c, lazy=True).metadata
+    assert meta_c["artifact_key"] != meta_a["artifact_key"]
 
 
 def test_hdf5_artifact_checksum_mismatch_fails_eager_and_lazy_reads(tmp_path) -> None:
