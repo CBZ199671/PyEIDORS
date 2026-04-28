@@ -100,6 +100,49 @@ def build_difference_vector(
     return np.asarray(diff, dtype=np.float64)
 
 
+def build_difference_frames(
+    targets: np.ndarray,
+    references: np.ndarray,
+    *,
+    mode: str = DEFAULT_DIFFERENCE_MODE,
+    orientation: str = DEFAULT_DIFFERENCE_ORIENTATION,
+    floor: float | None = None,
+) -> np.ndarray:
+    """Vectorized 2D batch of :func:`build_difference_vector`.
+
+    Both ``targets`` and ``references`` must already be ``(n_frames, n_meas)``
+    float64 arrays. Returns a contiguous float64 ``(n_frames, n_meas)`` array.
+    """
+    target_batch = np.asarray(targets, dtype=np.float64)
+    reference_batch = np.asarray(references, dtype=np.float64)
+    if target_batch.ndim != 2 or reference_batch.ndim != 2:
+        raise ValueError("targets and references must be 2D frame batches.")
+    if target_batch.shape != reference_batch.shape:
+        raise ValueError(
+            "targets and references must have identical 2D shapes: "
+            f"{target_batch.shape!r} vs {reference_batch.shape!r}."
+        )
+    resolved_mode = normalize_difference_mode(mode)
+    resolved_orientation = normalize_difference_orientation(orientation)
+    diff = target_batch - reference_batch
+    if resolved_mode == "normalized":
+        eps = (
+            np.finfo(np.float64).eps
+            if floor is None
+            else float(max(floor, np.finfo(np.float64).eps))
+        )
+        safe = reference_batch.copy()
+        small = np.abs(safe) < eps
+        if np.any(small):
+            signs = np.sign(safe[small])
+            signs[signs == 0] = 1.0
+            safe[small] = signs * eps
+        diff = diff / safe
+    if resolved_orientation == "reference_minus_target":
+        diff = -diff
+    return np.ascontiguousarray(diff, dtype=np.float64)
+
+
 def normalize_time_difference(
     v_t,
     v_ref,

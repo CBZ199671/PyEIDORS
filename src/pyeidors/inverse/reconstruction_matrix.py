@@ -21,7 +21,10 @@ from pyeidors.data.channels import (
     prepare_measurement_contract,
     zero_bad_channel_weights,
 )
-from pyeidors.data.difference import normalize_time_difference
+from pyeidors.data.difference import (
+    build_difference_frames,
+    normalize_time_difference,
+)
 from pyeidors.data.temporal_filtering import (
     MeasurementTemporalFilterResult,
     filter_measurement_frames,
@@ -404,19 +407,12 @@ def _normalize_time_difference_frames(
         n_frames=targets.shape[0],
         n_measurements=targets.shape[1],
     )
-    return np.ascontiguousarray(
-        np.vstack(
-            [
-                normalize_time_difference(
-                    target,
-                    ref,
-                    floor=floor,
-                    orientation=orientation,
-                )
-                for target, ref in zip(targets, refs, strict=True)
-            ]
-        ),
-        dtype=np.float64,
+    return build_difference_frames(
+        targets,
+        refs,
+        mode="normalized",
+        orientation=orientation,
+        floor=floor,
     )
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 from pyeidors.data.difference import (
+    build_difference_frames,
     build_difference_vector,
     normalize_time_difference,
     project_measurement_jacobian,
@@ -56,6 +57,42 @@ def test_normalize_time_difference_matches_existing_normalized_contract():
         ),
         -expected,
     )
+
+
+def test_build_difference_frames_matches_rowwise_vector_contract():
+    references = np.array(
+        [[2.0, -4.0, 0.0], [1.0, 0.25, -0.5]],
+        dtype=float,
+    )
+    targets = np.array(
+        [[3.0, -2.0, 1.0], [1.5, 0.5, -1.5]],
+        dtype=float,
+    )
+    floor = 0.5
+
+    expected = np.vstack(
+        [
+            build_difference_vector(
+                target,
+                reference,
+                mode="normalized",
+                orientation="reference_minus_target",
+                floor=floor,
+            )
+            for target, reference in zip(targets, references, strict=True)
+        ]
+    )
+
+    actual = build_difference_frames(
+        targets,
+        references,
+        mode="normalized",
+        orientation="reference_minus_target",
+        floor=floor,
+    )
+
+    assert actual.flags.c_contiguous
+    np.testing.assert_allclose(actual, expected)
 
 
 def test_project_measurement_vector_and_jacobian_in_difference_space():

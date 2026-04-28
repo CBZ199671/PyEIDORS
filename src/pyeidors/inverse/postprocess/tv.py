@@ -83,20 +83,25 @@ def refine_tv_pdhg(
     x = y.copy()
     x_bar = x.copy()
     dual = np.zeros(D.shape[0], dtype=np.float64)
+    previous = np.empty_like(x)
+    x_new = np.empty_like(x)
+    not_roi = ~roi
+    x_new[not_roi] = y[not_roi]
     residual_history: list[float] = []
     tv_history: list[float] = [total_variation_norm(x, D)]
     stopped_reason = "max_iterations"
 
     for iteration in range(1, max_it + 1):
-        dual = dual + sigma * np.asarray(D @ x_bar, dtype=np.float64).reshape(-1)
-        dual = _project_linf_ball(dual, radius=weight)
+        Dxbar = np.asarray(D @ x_bar, dtype=np.float64).reshape(-1)
+        dual += sigma * Dxbar
+        if weight == 0.0:
+            dual.fill(0.0)
+        else:
+            np.clip(dual, -float(weight), float(weight), out=dual)
 
-        previous = x.copy()
+        np.copyto(previous, x)
         descent = np.asarray(D.T @ dual, dtype=np.float64).reshape(-1)
-        candidate = x - tau * descent
-        x_new = previous.copy()
-        x_new[roi] = (candidate[roi] + tau * y[roi]) / (1.0 + tau)
-        x_new[~roi] = y[~roi]
+        x_new[roi] = (x[roi] - tau * descent[roi] + tau * y[roi]) / (1.0 + tau)
 
         roi_residual = float(
             np.linalg.norm(x_new[roi] - previous[roi])
@@ -105,8 +110,13 @@ def refine_tv_pdhg(
         residual_history.append(roi_residual)
         tv_history.append(total_variation_norm(x_new, D))
 
-        x_bar = x_new + theta * (x_new - previous)
-        x = x_new
+        if theta == 0.0:
+            np.copyto(x_bar, x_new)
+        else:
+            np.subtract(x_new, previous, out=x_bar)
+            x_bar *= theta
+            x_bar += x_new
+        np.copyto(x, x_new)
         if roi_residual <= tol:
             stopped_reason = "roi_residual_tolerance"
             break
@@ -172,12 +182,6 @@ def _pdhg_steps(operator: sparse.csr_matrix) -> tuple[float, float]:
         norm_estimate = 1.0
     step = 0.99 / norm_estimate
     return step, step
-
-
-def _project_linf_ball(values: np.ndarray, *, radius: float) -> np.ndarray:
-    if radius == 0.0:
-        return np.zeros_like(values, dtype=np.float64)
-    return np.clip(values, -float(radius), float(radius))
 
 
 def _metadata(
