@@ -7,6 +7,7 @@ from dolfinx import fem
 from scipy.sparse import csr_matrix, diags
 
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
+from ..prior._graph_core import dolfinx_cell_difference_operator
 from .base_regularization import BaseRegularization
 
 
@@ -137,33 +138,4 @@ class NOSERRegularization(BaseRegularization):
 
 def _cell_difference_operator(mesh, n_elements: int) -> csr_matrix:
     """Build the cell-adjacency difference operator used by smoothness/TV priors."""
-    tdim = mesh.topology.dim
-    fdim = tdim - 1
-
-    mesh.topology.create_connectivity(fdim, tdim)
-    facet_to_cell = mesh.topology.connectivity(fdim, tdim)
-    facet_map = mesh.topology.index_map(fdim)
-    if facet_to_cell is None or facet_map is None:
-        return csr_matrix((0, n_elements), dtype=np.float64)
-
-    rows: list[int] = []
-    cols: list[int] = []
-    data: list[float] = []
-    row_idx = 0
-
-    for facet in range(int(facet_map.size_local)):
-        adjacent_cells = facet_to_cell.links(facet)
-        if len(adjacent_cells) != 2:
-            continue
-        cell1, cell2 = int(adjacent_cells[0]), int(adjacent_cells[1])
-        rows.extend([row_idx, row_idx])
-        cols.extend([cell1, cell2])
-        data.extend([1.0, -1.0])
-        row_idx += 1
-
-    if row_idx == 0:
-        return csr_matrix((0, n_elements), dtype=np.float64)
-
-    return csr_matrix(
-        (data, (rows, cols)), shape=(row_idx, n_elements), dtype=np.float64
-    )
+    return dolfinx_cell_difference_operator(mesh, n_elements)
