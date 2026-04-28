@@ -33,11 +33,16 @@ def moving_average_frames(frames: Any, *, window: int = 3) -> np.ndarray:
 
     batch, _ = _as_frame_batch(frames)
     width = _positive_int(window, "window")
-    out = np.empty_like(batch, dtype=np.float64)
-    for idx in range(batch.shape[0]):
-        start = max(0, idx + 1 - width)
-        out[idx] = np.mean(batch[start : idx + 1], axis=0)
-    return out
+    n_frames = batch.shape[0]
+    if n_frames == 0:
+        return np.empty_like(batch, dtype=np.float64)
+    csum = np.empty((n_frames + 1, batch.shape[1]), dtype=np.float64)
+    csum[0] = 0.0
+    np.cumsum(batch, axis=0, dtype=np.float64, out=csum[1:])
+    indices = np.arange(n_frames)
+    starts = np.maximum(0, indices + 1 - width)
+    denom = (indices + 1 - starts).astype(np.float64).reshape(-1, 1)
+    return (csum[indices + 1] - csum[starts]) / denom
 
 
 def exponential_smooth_frames(

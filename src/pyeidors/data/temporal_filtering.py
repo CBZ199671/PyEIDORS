@@ -171,15 +171,23 @@ def _moving_average(
         initial_state,
         n_measurements=batch.shape[1],
     )
-    history = [row.copy() for row in prior_tail]
+    n_prior = prior_tail.shape[0]
+    n_frames = batch.shape[0]
+    combined = np.concatenate([prior_tail, batch], axis=0) if n_prior else batch
+    n_combined = combined.shape[0]
     out = np.empty_like(batch, dtype=np.float64)
-    for idx, frame in enumerate(batch):
-        history.append(frame.copy())
-        out[idx] = np.mean(np.vstack(history[-width:]), axis=0)
+    if n_frames > 0:
+        csum = np.empty((n_combined + 1, batch.shape[1]), dtype=np.float64)
+        csum[0] = 0.0
+        np.cumsum(combined, axis=0, dtype=np.float64, out=csum[1:])
+        indices = np.arange(n_prior, n_combined)
+        starts = np.maximum(0, indices + 1 - width)
+        denom = (indices + 1 - starts).astype(np.float64).reshape(-1, 1)
+        out = (csum[indices + 1] - csum[starts]) / denom
     tail_count = max(width - 1, 0)
-    if tail_count == 0 or not history:
+    if tail_count == 0 or n_combined == 0:
         return out, np.empty((0, batch.shape[1]), dtype=np.float64)
-    return out, np.ascontiguousarray(np.vstack(history[-tail_count:]), dtype=np.float64)
+    return out, np.ascontiguousarray(combined[-tail_count:], dtype=np.float64)
 
 
 def _exponential_smooth(

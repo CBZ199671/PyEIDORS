@@ -229,6 +229,15 @@ class JacobianLinearization(_LinearizationBase):
         self.sign = float(self.sign)
         self.sigma_fingerprint = str(self.sigma_fingerprint or "")
         self._validate_shapes()
+        blocks: list[np.ndarray] = []
+        meas_idx = 0
+        for n_meas in self.n_meas_per_stim:
+            stack = np.stack(
+                self.adjoint_gradients[meas_idx : meas_idx + n_meas], axis=0
+            )
+            blocks.append(np.ascontiguousarray(stack, dtype=np.float64))
+            meas_idx += n_meas
+        self._adjoint_blocks: tuple[np.ndarray, ...] = tuple(blocks)
 
     def _validate_shapes(self) -> None:
         if len(self.grad_u_all) != len(self.n_meas_per_stim):
@@ -259,10 +268,7 @@ class JacobianLinearization(_LinearizationBase):
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
-            adjoint_block = np.asarray(
-                self.adjoint_gradients[meas_idx : meas_idx + n_meas],
-                dtype=np.float64,
-            )
+            adjoint_block = self._adjoint_blocks[stim_idx]
             out[meas_idx : meas_idx + n_meas] = self.sign * np.einsum(
                 "eg,meg,e->m",
                 grad_u,
@@ -285,10 +291,7 @@ class JacobianLinearization(_LinearizationBase):
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
-            adjoint_block = np.asarray(
-                self.adjoint_gradients[meas_idx : meas_idx + n_meas],
-                dtype=np.float64,
-            )
+            adjoint_block = self._adjoint_blocks[stim_idx]
             weighted_adjoint = np.einsum(
                 "m,meg->eg",
                 res[meas_idx : meas_idx + n_meas],
@@ -314,10 +317,7 @@ class JacobianLinearization(_LinearizationBase):
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas_this = self.n_meas_per_stim[stim_idx]
-            adjoint_block = np.asarray(
-                self.adjoint_gradients[meas_idx : meas_idx + n_meas_this],
-                dtype=np.float64,
-            )
+            adjoint_block = self._adjoint_blocks[stim_idx]
             for start in range(0, n_param, block):
                 end = min(start + block, n_param)
                 dense[meas_idx : meas_idx + n_meas_this, start:end] = (
@@ -359,10 +359,7 @@ class JacobianLinearization(_LinearizationBase):
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
-            adjoint_block = np.asarray(
-                self.adjoint_gradients[meas_idx : meas_idx + n_meas],
-                dtype=np.float64,
-            )
+            adjoint_block = self._adjoint_blocks[stim_idx]
             # Per (measurement m, element e) sensitivity before cell_area scaling.
             contrib = np.einsum("eg,meg->me", grad_u, adjoint_block, optimize=True)
             contrib_sq = contrib * contrib
