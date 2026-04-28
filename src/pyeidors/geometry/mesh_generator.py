@@ -15,13 +15,24 @@ import numpy as np
 from mpi4py import MPI
 
 from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
-from ..femx import build_eit_mesh
 from ._helpers import (
     add_named_physical_group,
     assert_unique_physical_group_ownership,
     validate_mesh_data_tags,
 )
 from .dolfinx_mesh_cache import write_dolfinx_mesh_cache, xdmf_cache_path_for_mesh
+
+build_eit_mesh = None
+
+
+def _ensure_femx() -> None:
+    """Defer pyeidors.femx (and transitive dolfinx.io.gmsh) until cache miss."""
+    global build_eit_mesh
+    if build_eit_mesh is not None:
+        return
+    from ..femx import build_eit_mesh as _build
+
+    build_eit_mesh = _build
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +139,8 @@ class MeshGenerator:
             association_table=association_table,
             gdim=2,
         )
+
+        _ensure_femx()
 
         electrode_vertices = [
             np.asarray(v, dtype=float)

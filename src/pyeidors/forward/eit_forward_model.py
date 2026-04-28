@@ -66,6 +66,7 @@ class LinearBackendConfig:
     forward_pc_refresh_iter_threshold: int = 0
     forward_pc_refresh_lag: int = 0
     forward_mat_solve_min_patterns: int = 0
+    forward_template_reuse: bool = False
 
     @classmethod
     def from_dict(cls, payload: dict | None) -> "LinearBackendConfig":
@@ -113,6 +114,9 @@ class LinearBackendConfig:
             forward_pc_refresh_lag=int(payload.get("forward_pc_refresh_lag", 0) or 0),
             forward_mat_solve_min_patterns=int(
                 payload.get("forward_mat_solve_min_patterns", 0) or 0
+            ),
+            forward_template_reuse=bool(
+                payload.get("forward_template_reuse", False)
             ),
         )
 
@@ -274,6 +278,8 @@ class EITForwardModel:
         self.cache_manager = cache_manager
         self._last_cache_lookup: dict[str, str | bool] = {}
         self._forward_ksp_session: ForwardKSPSession | None = None
+        self._full_matrix_template = None
+        self._full_matrix_template_fingerprint: str | None = None
 
         self.facet_tags = mesh.facet_tags
         self.association_table = mesh.association_table
@@ -1360,15 +1366,7 @@ class EITForwardModel:
             conductivity_augmented = self._expand_conductivity_csr_to_full(
                 conductivity_mat, mat_type=None
             )
-            full_matrix = self._get_electrode_matrix_petsc(mat_type=None).copy()
-            full_matrix.axpy(
-                1.0,
-                conductivity_augmented,
-                structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
-            )
-            self._ensure_structural_diagonal(full_matrix)
-            full_matrix.assemblyBegin()
-            full_matrix.assemblyEnd()
+            full_matrix = self._build_full_matrix_via_axpy(conductivity_augmented)
             conductivity_augmented.destroy()
         full_matrix = self._ensure_mat_type(full_matrix, mat_kind)
         if hasattr(full_matrix, "assemble"):
@@ -1381,6 +1379,79 @@ class EITForwardModel:
             ),
         )
         return full_matrix
+
+    def _build_full_matrix_via_axpy(self, conductivity_augmented):
+        """Combine cached electrode matrix M with conductivity term K(σ).
+
+        Default (``forward_template_reuse=False``): copy M, AXPY K with
+        ``DIFFERENT_NONZERO_PATTERN`` — original behavior, every iteration
+        re-symbolic-allocates K's structure on top of M.
+
+        Opt-in (``forward_template_reuse=True``): once a stable
+        ``M ∪ K ∪ structural-diagonal`` template is bootstrapped, every
+        subsequent call duplicates it (preallocated structure, zero values),
+        AXPYs M and K with ``SAME_NONZERO_PATTERN`` so PETSc skips the
+        symbolic phase. Template is invalidated whenever the structural
+        fingerprint changes (mesh / electrode topology / backend config).
+        """
+        electrode_matrix = self._get_electrode_matrix_petsc(mat_type=None)
+        reuse_enabled = bool(
+            getattr(self.backend_config, "forward_template_reuse", False)
+        )
+        template = self._full_matrix_template if reuse_enabled else None
+        if template is not None and reuse_enabled:
+            current_fp = self._compute_forward_ksp_structural_fingerprint()
+            if self._full_matrix_template_fingerprint != current_fp:
+                self._dispose_full_matrix_template()
+                template = None
+        if template is None:
+            full_matrix = electrode_matrix.copy()
+            full_matrix.axpy(
+                1.0,
+                conductivity_augmented,
+                structure=PETSc.Mat.Structure.DIFFERENT_NONZERO_PATTERN,
+            )
+            self._ensure_structural_diagonal(full_matrix)
+            full_matrix.assemblyBegin()
+            full_matrix.assemblyEnd()
+            if reuse_enabled:
+                self._full_matrix_template = full_matrix.duplicate(copy=False)
+                self._full_matrix_template.zeroEntries()
+                self._ensure_structural_diagonal(self._full_matrix_template)
+                self._full_matrix_template.assemblyBegin()
+                self._full_matrix_template.assemblyEnd()
+                self._full_matrix_template_fingerprint = (
+                    self._compute_forward_ksp_structural_fingerprint()
+                )
+            return full_matrix
+        full_matrix = template.duplicate(copy=True)
+        full_matrix.zeroEntries()
+        full_matrix.axpy(
+            1.0,
+            electrode_matrix,
+            structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
+        )
+        full_matrix.axpy(
+            1.0,
+            conductivity_augmented,
+            structure=PETSc.Mat.Structure.SUBSET_NONZERO_PATTERN,
+        )
+        self._ensure_structural_diagonal(full_matrix)
+        full_matrix.assemblyBegin()
+        full_matrix.assemblyEnd()
+        return full_matrix
+
+    def _dispose_full_matrix_template(self) -> None:
+        template = getattr(self, "_full_matrix_template", None)
+        if template is not None:
+            destroy = getattr(template, "destroy", None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception:
+                    pass
+        self._full_matrix_template = None
+        self._full_matrix_template_fingerprint = None
 
     def create_full_matrix(self, sigma: fem.Function):
         """Build complete system matrix including conductivity term."""
@@ -1875,6 +1946,7 @@ class EITForwardModel:
         return session.current_solve_A is session.current_A
 
     def _dispose_forward_ksp_session(self, session: "ForwardKSPSession | None") -> None:
+        self._dispose_full_matrix_template()
         if session is None:
             return
         ksp = getattr(session, "ksp", None)

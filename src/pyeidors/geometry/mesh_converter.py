@@ -19,9 +19,20 @@ from typing import Callable, Dict, Optional, Tuple
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
-from ..femx import build_eit_mesh
 from ._helpers import validate_mesh_data_tags, write_association_table
 from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
+
+build_eit_mesh = None
+
+
+def _ensure_femx() -> None:
+    """Defer pyeidors.femx (and transitive dolfinx.io.gmsh) until cache miss."""
+    global build_eit_mesh
+    if build_eit_mesh is not None:
+        return
+    from ..femx import build_eit_mesh as _build
+
+    build_eit_mesh = _build
 
 logger = logging.getLogger(__name__)
 
@@ -98,6 +109,8 @@ class MeshConverter:
             association_table=association_table,
             gdim=self.gdim,
         )
+
+        _ensure_femx()
 
         radius = (
             self._radius_provider(mesh_data.mesh)

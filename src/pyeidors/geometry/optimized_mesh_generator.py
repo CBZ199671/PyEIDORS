@@ -13,13 +13,10 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 import numpy as np
-import ufl
-from dolfinx import fem
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
-from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import (
     DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_3D_GEOMETRY_VERSION,
@@ -62,6 +59,30 @@ from .process_mesh_cache import (
 )
 
 logger = logging.getLogger(__name__)
+
+build_eit_mesh = None
+estimate_radius = None
+fem = None
+ufl = None
+
+
+def _ensure_femx() -> None:
+    """Defer pyeidors.femx + dolfinx.fem + ufl (transitive dolfinx.io.gmsh)."""
+    global build_eit_mesh, estimate_radius, fem, ufl
+    if all(x is not None for x in (build_eit_mesh, estimate_radius, fem, ufl)):
+        return
+    from ..femx import build_eit_mesh as _build, estimate_radius as _estimate
+    from dolfinx import fem as _fem
+    import ufl as _ufl
+
+    if build_eit_mesh is None:
+        build_eit_mesh = _build
+    if estimate_radius is None:
+        estimate_radius = _estimate
+    if fem is None:
+        fem = _fem
+    if ufl is None:
+        ufl = _ufl
 
 GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
 gmsh = None  # populated lazily by _ensure_gmsh on first generation/parse path
@@ -203,6 +224,8 @@ class OptimizedMeshGenerator:
             association_table=association_table,
             gdim=2,
         )
+
+        _ensure_femx()
 
         electrode_vertices = [
             np.asarray(v, dtype=float)
@@ -346,6 +369,7 @@ class OptimizedMeshConverter(MeshConverter):
     """
 
     def __init__(self, mesh_file: str, output_dir: str, gdim: int = 2):
+        _ensure_femx()
         super().__init__(
             mesh_file,
             output_dir,
@@ -444,6 +468,7 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
         return False
     if facet_coverage is None:
         try:
+            _ensure_femx()
             ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
             one = fem.Constant(mesh.mesh, 1.0)
             measures = []
@@ -514,6 +539,7 @@ def _load_cached_mesh(
 
     cache_data = load_dolfinx_mesh_cache(msh_file, gdim=int(gdim))
     if cache_data is not None:
+        _ensure_femx()
         metadata = cache_data.metadata
         sidecar_file = metadata.get("structured_sidecar_file")
         mesh_file = cache_data.source_msh_file or cache_data.xdmf_file
@@ -606,6 +632,7 @@ def _load_cached_mesh(
         structured_sidecar_file=structured_sidecar_file,
         structured_sidecar_version=structured_sidecar_version,
     )
+    _ensure_femx()
     mesh = build_eit_mesh(
         mesh_data.mesh,
         facet_tags=mesh_data.facet_tags,

@@ -9,8 +9,23 @@ from typing import Any, Dict, Optional, Sequence
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
-from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
+
+build_eit_mesh = None
+estimate_radius = None
+
+
+def _ensure_femx() -> None:
+    """Defer pyeidors.femx (and transitive dolfinx.io.gmsh) until cache miss."""
+    global build_eit_mesh, estimate_radius
+    if build_eit_mesh is not None and estimate_radius is not None:
+        return
+    from ..femx import build_eit_mesh as _build, estimate_radius as _estimate
+
+    if build_eit_mesh is None:
+        build_eit_mesh = _build
+    if estimate_radius is None:
+        estimate_radius = _estimate
 
 
 def format_float_compact(value: float) -> str:
@@ -272,6 +287,7 @@ def finalize_3d_cylinder_mesh(
     """
     # Local import keeps the module-level dependency tree clean — only
     # callers that finalize a mesh pull these heavyweight modules in.
+    _ensure_femx()
     from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
     electrode_names = [

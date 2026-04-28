@@ -37,27 +37,49 @@ os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 
 def _populate_lazy_mesh_gmsh_imports() -> None:
-    """T91: tests monkeypatch ``module.gmshio`` attributes; ensure the lazy
-    import is resolved before any test file is collected so the symbol is the
-    real module by then. Production code paths still hit the lazy path because
-    the cold-start gate runs in a fresh subprocess.
+    """T91/T92: tests monkeypatch ``module.gmshio`` /
+    ``module.build_eit_mesh`` / ``module.estimate_radius`` /
+    ``module.fem`` / ``module.ufl`` attributes. Ensure the lazy imports are
+    resolved + back-bound on the geometry modules before any test file is
+    collected so monkeypatch.setattr targets exist. Production code paths
+    still hit the lazy path because the cold-start gate runs in a fresh
+    subprocess.
     """
+    geometry_modules: list = []
     for module_name in (
         "pyeidors.geometry.optimized_mesh_generator",
         "pyeidors.geometry.mesh3d_generator",
         "pyeidors.geometry.mesh_generator",
         "pyeidors.geometry.mesh_converter",
+        "pyeidors.geometry._helpers",
     ):
         try:
-            module = __import__(module_name, fromlist=["_ensure_gmsh"])
+            module = __import__(module_name, fromlist=["__name__"])
         except Exception:  # pragma: no cover - import guard
             continue
+        geometry_modules.append(module)
         ensure = getattr(module, "_ensure_gmsh", None)
         if callable(ensure):
             try:
                 ensure()
             except Exception:  # pragma: no cover - lean env without gmsh
                 pass
+
+    try:
+        import ufl as _ufl
+        from dolfinx import fem as _fem
+        from pyeidors.femx import build_eit_mesh as _build, estimate_radius as _estimate
+    except Exception:  # pragma: no cover - lean env without dolfinx
+        return
+    for module in geometry_modules:
+        if not hasattr(module, "build_eit_mesh"):
+            module.build_eit_mesh = _build  # type: ignore[attr-defined]
+        if not hasattr(module, "estimate_radius"):
+            module.estimate_radius = _estimate  # type: ignore[attr-defined]
+        if not hasattr(module, "fem"):
+            module.fem = _fem  # type: ignore[attr-defined]
+        if not hasattr(module, "ufl"):
+            module.ufl = _ufl  # type: ignore[attr-defined]
 
 
 _populate_lazy_mesh_gmsh_imports()
