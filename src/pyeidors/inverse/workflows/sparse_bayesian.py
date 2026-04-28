@@ -7,7 +7,6 @@ from typing import Any
 from ...core_system_helpers import difference_measurement
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITData, EITImage
-from ..contracts import SolverOutput
 from ..solvers.sparse_bayesian_engine import (
     SparseBayesianConfig,
     SparseBayesianReconstructor,
@@ -17,8 +16,11 @@ from .base import (
     ReconstructionResult,
     compute_residuals,
     merge_workflow_metadata,
+    require_initialized,
+    require_solver_output,
     resolve_difference_vectors,
     resolve_reconstruction_output,
+    resolve_simulated_or_forward,
 )
 
 try:  # pragma: no cover - optional import guard for type checking
@@ -52,8 +54,10 @@ def perform_sparse_absolute_reconstruction(
 ) -> ReconstructionResult:
     """Execute sparse Bayesian absolute imaging."""
 
-    if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem must be initialised before reconstruction.")
+    require_initialized(
+        eit_system,
+        message="EITSystem must be initialised before reconstruction.",
+    )
 
     baseline_image = baseline_image or eit_system.create_homogeneous_image()
     solver = _ensure_reconstructor(eit_system, reconstructor, config)
@@ -65,20 +69,20 @@ def perform_sparse_absolute_reconstruction(
         prior_scale=prior_scale,
         metadata=metadata,
     )
-    if not isinstance(solver_output, SolverOutput):
-        raise TypeError(
-            "SparseBayesianReconstructor must return SolverOutput. "
-            f"Received {type(solver_output).__name__}."
-        )
+    solver_output = require_solver_output(
+        solver_output,
+        owner="SparseBayesianReconstructor",
+    )
 
     conductivity_image, conductivity_values, residual_history, sigma_history = (
         resolve_reconstruction_output(solver_output, eit_system.fwd_model)
     )
 
-    simulated_vector = solver_output.simulated_measurement
-    if simulated_vector is None:
-        simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
-        simulated_vector = simulated_data.meas
+    simulated_vector = resolve_simulated_or_forward(
+        solver_output=solver_output,
+        fwd_model=eit_system.fwd_model,
+        conductivity_image=conductivity_image,
+    )
 
     measured_vector = measurement_data.meas
     result_metadata = merge_workflow_metadata(
@@ -119,8 +123,10 @@ def perform_sparse_difference_reconstruction(
 ) -> ReconstructionResult:
     """Execute sparse Bayesian difference imaging."""
 
-    if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem must be initialised before reconstruction.")
+    require_initialized(
+        eit_system,
+        message="EITSystem must be initialised before reconstruction.",
+    )
 
     baseline_image = baseline_image or eit_system.create_homogeneous_image()
     solver = _ensure_reconstructor(eit_system, reconstructor, config)
@@ -133,20 +139,20 @@ def perform_sparse_difference_reconstruction(
         prior_scale=prior_scale,
         metadata=metadata,
     )
-    if not isinstance(solver_output, SolverOutput):
-        raise TypeError(
-            "SparseBayesianReconstructor must return SolverOutput. "
-            f"Received {type(solver_output).__name__}."
-        )
+    solver_output = require_solver_output(
+        solver_output,
+        owner="SparseBayesianReconstructor",
+    )
 
     conductivity_image, conductivity_values, residual_history, sigma_history = (
         resolve_reconstruction_output(solver_output, eit_system.fwd_model)
     )
 
-    simulated_vector = solver_output.simulated_measurement
-    if simulated_vector is None:
-        simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
-        simulated_vector = simulated_data.meas
+    simulated_vector = resolve_simulated_or_forward(
+        solver_output=solver_output,
+        fwd_model=eit_system.fwd_model,
+        conductivity_image=conductivity_image,
+    )
 
     measured_vector, predicted_vector, _ = resolve_difference_vectors(
         measurement_data=measurement_data,

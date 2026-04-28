@@ -13,6 +13,7 @@ from .base import (
     resolve_reconstruction_output,
     compute_residuals,
     merge_workflow_metadata,
+    require_initialized,
     resolve_difference_vectors,
 )
 
@@ -37,8 +38,10 @@ def perform_difference_reconstruction(
         metadata: Additional info (frame index, etc.).
     """
 
-    if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem not initialized, please call setup() first.")
+    require_initialized(
+        eit_system,
+        message="EITSystem not initialized, please call setup() first.",
+    )
 
     initial_guess = initial_image.elem_data if initial_image is not None else None
 

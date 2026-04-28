@@ -5,11 +5,16 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
+from pyeidors.inverse.contracts import SolverOutput
 from pyeidors.inverse.workflows.base import (
     build_reconstruction_result,
     merge_workflow_metadata,
+    require_initialized,
+    require_solver_output,
     resolve_difference_vectors,
+    resolve_simulated_or_forward,
 )
 
 
@@ -49,6 +54,67 @@ def test_build_reconstruction_result_uses_injected_residual_fn() -> None:
     assert result.metadata == {"case": "injected"}
     assert result.residual_history == [0.3]
     assert result.sigma_change_history == [0.1]
+
+
+def test_require_initialized_preserves_caller_error_wording() -> None:
+    require_initialized(
+        SimpleNamespace(_is_initialized=True),
+        message="already initialized",
+    )
+
+    with pytest.raises(RuntimeError, match="must be initialised"):
+        require_initialized(
+            SimpleNamespace(_is_initialized=False),
+            message="EITSystem must be initialised before reconstruction.",
+        )
+
+
+def test_require_solver_output_preserves_owner_type_message() -> None:
+    output = SolverOutput(conductivity=np.array([1.0], dtype=float))
+
+    assert require_solver_output(output, owner="SparseBayesianReconstructor") is output
+    with pytest.raises(TypeError, match="SparseBayesianReconstructor"):
+        require_solver_output("bad", owner="SparseBayesianReconstructor")
+
+
+def test_resolve_simulated_or_forward_prefers_solver_output_without_fallback() -> None:
+    output = SolverOutput(
+        conductivity=np.array([1.0], dtype=float),
+        simulated_measurement=np.array([0.2, 0.4], dtype=float),
+    )
+    fwd_model = SimpleNamespace(
+        fwd_solve=lambda _image: (_ for _ in ()).throw(
+            AssertionError("provided simulated_measurement must skip fwd_solve")
+        )
+    )
+
+    resolved = resolve_simulated_or_forward(
+        solver_output=output,
+        fwd_model=fwd_model,
+        conductivity_image=SimpleNamespace(elem_data=np.array([1.0])),
+    )
+
+    np.testing.assert_allclose(resolved, np.array([0.2, 0.4], dtype=float))
+
+
+def test_resolve_simulated_or_forward_runs_forward_fallback_when_missing() -> None:
+    calls: list[object] = []
+
+    def _fwd_solve(image):
+        calls.append(image)
+        return SimpleNamespace(meas=np.array([0.7, 0.8], dtype=float)), {"ok": True}
+
+    conductivity_image = SimpleNamespace(elem_data=np.array([1.0]))
+    output = SolverOutput(conductivity=np.array([1.0], dtype=float))
+
+    resolved = resolve_simulated_or_forward(
+        solver_output=output,
+        fwd_model=SimpleNamespace(fwd_solve=_fwd_solve),
+        conductivity_image=conductivity_image,
+    )
+
+    assert calls == [conductivity_image]
+    np.testing.assert_allclose(resolved, np.array([0.7, 0.8], dtype=float))
 
 
 def test_resolve_difference_vectors_keeps_preprojected_simulated_vector() -> None:

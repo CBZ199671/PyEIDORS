@@ -92,6 +92,38 @@ def resolve_reconstruction_output(
     )
 
 
+def require_initialized(eit_system: Any, *, message: str) -> None:
+    """Raise a workflow initialization error using caller-owned wording."""
+
+    if not getattr(eit_system, "_is_initialized", False):
+        raise RuntimeError(message)
+
+
+def require_solver_output(value: Any, *, owner: str) -> SolverOutput:
+    """Validate and return a ``SolverOutput`` from a workflow reconstructor."""
+
+    if not isinstance(value, SolverOutput):
+        raise TypeError(
+            f"{owner} must return SolverOutput. Received {type(value).__name__}."
+        )
+    return value
+
+
+def resolve_simulated_or_forward(
+    *,
+    solver_output: SolverOutput,
+    fwd_model: Any,
+    conductivity_image: EITImage,
+) -> np.ndarray:
+    """Use solver-provided simulated data or run a forward fallback."""
+
+    simulated_vector = solver_output.simulated_measurement
+    if simulated_vector is not None:
+        return simulated_vector
+    simulated_data, _ = fwd_model.fwd_solve(conductivity_image)
+    return simulated_data.meas
+
+
 def compute_residuals(
     measured_vector: np.ndarray,
     simulated_vector: np.ndarray,

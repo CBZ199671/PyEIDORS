@@ -11,6 +11,7 @@ from .base import (
     resolve_reconstruction_output,
     compute_residuals,
     merge_workflow_metadata,
+    require_initialized,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -35,8 +36,10 @@ def perform_absolute_reconstruction(
         metadata: Additional info (frame index, frequency, etc.), stored as-is in result.
     """
 
-    if not eit_system._is_initialized:  # pylint: disable=protected-access
-        raise RuntimeError("EITSystem not initialized, please call setup() first.")
+    require_initialized(
+        eit_system,
+        message="EITSystem not initialized, please call setup() first.",
+    )
 
     if baseline_image is None:
         baseline_image = eit_system.create_homogeneous_image()

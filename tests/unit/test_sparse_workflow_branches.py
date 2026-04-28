@@ -56,6 +56,52 @@ def test_sparse_absolute_type_guard():
         )
 
 
+def test_sparse_absolute_uses_solver_simulated_without_forward_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    output = SolverOutput(
+        conductivity=np.array([1.1, 1.2], dtype=float),
+        simulated_measurement=np.array([0.6, 0.7], dtype=float),
+        likelihood_noise_std=1e-3,
+        prior_scale=2e-2,
+        metadata={},
+        iterations=1,
+        converged=True,
+        final_residual=0.1,
+        final_relative_change=0.01,
+    )
+    fwd_model = SimpleNamespace(
+        fwd_solve=lambda _img: (_ for _ in ()).throw(
+            AssertionError("solver_output.simulated_measurement must skip fwd_solve")
+        )
+    )
+    eit_system = SimpleNamespace(
+        _is_initialized=True,
+        fwd_model=fwd_model,
+        create_homogeneous_image=lambda: SimpleNamespace(
+            elem_data=np.array([1.0, 1.5], dtype=float)
+        ),
+    )
+    monkeypatch.setattr(
+        sparse_workflow_module,
+        "resolve_reconstruction_output",
+        lambda solver_output, _fwd_model: (
+            SimpleNamespace(elem_data=np.array([1.1, 1.2], dtype=float)),
+            np.array([1.1, 1.2], dtype=float),
+            [0.5],
+            [0.1],
+        ),
+    )
+
+    result = sparse_workflow_module.perform_sparse_absolute_reconstruction(
+        eit_system=eit_system,
+        measurement_data=SimpleNamespace(meas=np.array([0.5, 0.6], dtype=float)),
+        reconstructor=_FactoryReconstructor(output=output),
+    )
+
+    np.testing.assert_allclose(result.simulated, np.array([0.6, 0.7], dtype=float))
+
+
 def test_sparse_difference_requires_initialized_system():
     with pytest.raises(RuntimeError, match="must be initialised"):
         sparse_workflow_module.perform_sparse_difference_reconstruction(
