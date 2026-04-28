@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import json
 from pathlib import Path
 import subprocess
 import sys
@@ -17,6 +18,7 @@ from pyeidors.data.factor_sweep import (
     run_factor_sweep,
 )
 from pyeidors.data.eit_digit_metrics import sigma_true_from_anomaly_rule
+from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -217,6 +219,8 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
     csv_output = tmp_path / "factor.csv"
     report_output = tmp_path / "factor.md"
     plot_output = tmp_path / "factor.png"
+    hdf5_output = tmp_path / "factor_tables.h5"
+    json_output = tmp_path / "factor_tables.json"
     completed = subprocess.run(
         [
             sys.executable,
@@ -259,6 +263,10 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
             str(report_output),
             "--plot-output",
             str(plot_output),
+            "--hdf5-output",
+            str(hdf5_output),
+            "--json-output",
+            str(json_output),
             "--dpi",
             "80",
         ],
@@ -270,6 +278,8 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
 
     assert "model=surrogate+least-squares" in completed.stdout
     assert "noser_exponent=0.5" in completed.stdout
+    assert "Wrote hdf5:" in completed.stdout
+    assert "Wrote json:" in completed.stdout
     with csv_output.open(newline="", encoding="utf-8") as handle:
         csv_rows = list(csv.DictReader(handle))
 
@@ -280,3 +290,8 @@ def test_eit_factor_sweep_cli_writes_expected_outputs(tmp_path) -> None:
         "# T15 多因素控制变量实验报告"
     )
     assert plot_output.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+    artifact = read_hdf5_artifact(hdf5_output, lazy=True, verify_checksums=False)
+    payload = json.loads(json_output.read_text(encoding="utf-8"))
+    assert artifact.metadata["table_names"] == ["factor_sweep_row"]
+    assert payload["metadata"]["table_names"] == ["factor_sweep_row"]
+    assert len(payload["tables"]["factor_sweep_row"]["rows"]) == len(csv_rows)

@@ -17,7 +17,7 @@ from .eit_digit_metrics import (
     build_surrogate_linearized_model,
     reconstruct_linearized_sigma,
 )
-from ._sweep_core import ReconMetricRow, SweepRow
+from ._sweep_core import ReconMetricRow, SweepRow, run_sweep
 
 
 DigitMethod = Literal["truncate", "round"]
@@ -173,10 +173,10 @@ def run_voltage_digit_sweep(
 
     sigma_true = _as_float_vector(model.sigma_true, name="model.sigma_true")
     voltage_true = _as_float_vector(model.voltage_true, name="model.voltage_true")
-    summaries: list[VoltageDigitSweepSummary] = []
-    field_rows: list[VoltageDigitFieldRow] = []
 
-    for digit_count in _validate_target_digits(target_digits):
+    def compute_case(
+        digit_count: int,
+    ) -> tuple[VoltageDigitSweepSummary, list[VoltageDigitFieldRow]]:
         voltage_digit = keep_significant_digits(
             voltage_true,
             digit_count,
@@ -194,23 +194,24 @@ def run_voltage_digit_sweep(
         if sigma_recon.shape != sigma_true.shape:
             raise RuntimeError("reconstructed sigma shape must match sigma_true")
 
-        summaries.append(
+        return (
             _summarize_sigma_error(
                 target_digits=digit_count,
                 sigma_true=sigma_true,
                 sigma_recon=sigma_recon,
                 voltage_true=voltage_true,
                 voltage_digit=voltage_digit,
-            )
-        )
-        field_rows.extend(
+            ),
             _field_rows(
                 target_digits=digit_count,
                 sigma_true=sigma_true,
                 sigma_recon=sigma_recon,
-            )
+            ),
         )
 
+    results = run_sweep(_validate_target_digits(target_digits), compute_case)
+    summaries = [summary for summary, _ in results]
+    field_rows = [row for _, rows in results for row in rows]
     return summaries, field_rows
 
 

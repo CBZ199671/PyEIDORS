@@ -9,7 +9,11 @@ import sys
 
 import numpy as np
 
-from pyeidors.data._sweep_core import format_aligned_table, write_csv_rows
+from pyeidors.data._sweep_core import (
+    format_aligned_table,
+    write_csv_rows,
+    write_sweep_table_artifacts,
+)
 from pyeidors.data.factor_sweep import (
     CSV_FIELDS,
     FactorSweepRow,
@@ -275,6 +279,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PNG plot output path.",
     )
     parser.add_argument(
+        "--hdf5-output",
+        type=Path,
+        default=None,
+        help="Optional shared HDF5 report-table artifact output path.",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional shared JSON report-table artifact output path.",
+    )
+    parser.add_argument(
         "--dpi",
         type=int,
         default=200,
@@ -321,6 +337,28 @@ def main(argv: list[str] | None = None) -> int:
         model_seed=args.model_seed,
     )
     _write_csv(args.output, rows)
+    table_artifacts = write_sweep_table_artifacts(
+        tables={"factor_sweep_row": (CSV_FIELDS, rows)},
+        hdf5_output=args.hdf5_output,
+        json_output=args.json_output,
+        metadata={
+            "report_kind": "factor_sweep",
+            "forward_backend": args.forward_backend,
+            "inverse_backend": args.inverse_backend,
+            "fem_n_elec": args.fem_n_elec,
+            "baseline_fem_grid": args.baseline_fem_grid,
+            "baseline_ridge": args.baseline_ridge,
+            "baseline_target_digits": args.baseline_target_digits,
+            "baseline_enob": args.baseline_enob,
+            "baseline_anomaly_rule": args.baseline_anomaly_rule,
+            "baseline_noise_relative": args.baseline_noise_relative,
+            "full_scale": args.full_scale,
+            "adc_bit": args.adc_bit,
+            "rm_mode": args.rm_mode,
+            "rm_form": args.rm_form,
+            "noser_exponent": args.noser_exponent,
+        },
+    )
     report = format_factor_sweep_report(
         rows,
         full_scale_range=args.full_scale,
@@ -359,6 +397,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(_format_table(rows))
     print(f"Wrote {args.output}")
+    for label, path in table_artifacts.items():
+        print(f"Wrote {label}: {path}")
     print(f"Wrote {args.report_output}")
     print(f"Wrote {plot_path}")
     return 0

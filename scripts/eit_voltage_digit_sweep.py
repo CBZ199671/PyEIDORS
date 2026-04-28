@@ -9,7 +9,11 @@ import sys
 
 import numpy as np
 
-from pyeidors.data._sweep_core import format_aligned_table, write_csv_rows
+from pyeidors.data._sweep_core import (
+    format_aligned_table,
+    write_csv_rows,
+    write_sweep_table_artifacts,
+)
 from pyeidors.data.voltage_digit_sweep import (
     VoltageDigitFieldRow,
     VoltageDigitSweepSummary,
@@ -185,6 +189,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="PNG plot output path.",
     )
     parser.add_argument(
+        "--hdf5-output",
+        type=Path,
+        default=None,
+        help="Optional shared HDF5 report-table artifact output path.",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional shared JSON report-table artifact output path.",
+    )
+    parser.add_argument(
         "--dpi",
         type=int,
         default=200,
@@ -214,6 +230,28 @@ def main(argv: list[str] | None = None) -> int:
 
     _write_summary_csv(args.output, summaries)
     _write_field_csv(args.field_output, field_rows)
+    table_artifacts = write_sweep_table_artifacts(
+        tables={
+            "voltage_digit_summary": (SUMMARY_FIELDS, summaries),
+            "voltage_digit_field": (FIELD_FIELDS, field_rows),
+        },
+        hdf5_output=args.hdf5_output,
+        json_output=args.json_output,
+        metadata={
+            "report_kind": "voltage_digit_sweep",
+            "forward_backend": args.forward_backend,
+            "inverse_backend": args.inverse_backend,
+            "digit_method": args.digit_method,
+            "ridge": args.ridge,
+            "fem_n_elec": args.fem_n_elec,
+            "fem_grid": args.fem_grid,
+            "n_measurements": model.n_measurements,
+            "n_parameters": model.sigma_true.size,
+            "rm_mode": args.rm_mode,
+            "rm_form": args.rm_form,
+            "noser_exponent": args.noser_exponent,
+        },
+    )
     plot_path = plot_voltage_digit_sweep(
         summaries,
         args.plot_output,
@@ -240,6 +278,8 @@ def main(argv: list[str] | None = None) -> int:
     print(_format_table(summaries))
     print(f"Wrote {args.output}")
     print(f"Wrote {args.field_output}")
+    for label, path in table_artifacts.items():
+        print(f"Wrote {label}: {path}")
     print(f"Wrote {plot_path}")
     return 0
 

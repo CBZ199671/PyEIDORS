@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 from pyeidors.data._sweep_core import (
+    SWEEP_TABLES_HDF5_SCHEMA,
+    SWEEP_TABLES_JSON_SCHEMA,
     dataclass_csv_row,
     format_aligned_table,
+    run_sweep,
     write_csv_rows,
+    write_json_row_tables,
+    write_sweep_table_artifacts,
 )
 from pyeidors.data.bucket_dense_experiments import (
     BUCKET_DENSE_FIELD_FIELDS,
@@ -20,6 +26,7 @@ from pyeidors.data.voltage_digit_sweep import (
     VoltageDigitFieldRow,
     VoltageDigitSweepSummary,
 )
+from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 
 @dataclass(frozen=True)
@@ -165,3 +172,58 @@ def test_write_csv_rows_and_aligned_table_are_stable(tmp_path) -> None:
         format_aligned_table(["a", "bb"], [["1", "xx"], ["100", "y"]], limit=1)
         == "a | bb\n--+---\n1 | xx\n... 1 more rows"
     )
+
+
+def test_run_sweep_collects_rows_and_calls_optional_dump() -> None:
+    dumped: list[list[_TinyRow]] = []
+
+    rows = run_sweep(
+        [1, 2],
+        lambda value: _TinyRow(f"case-{value}", float(value), value == 1),
+        dump_target=dumped.append,
+    )
+
+    assert [row.as_csv_row()["name"] for row in rows] == ["case-1", "case-2"]
+    assert dumped == [rows]
+
+
+def test_json_row_tables_preserve_schema_and_csv_cells(tmp_path) -> None:
+    path = write_json_row_tables(
+        tmp_path / "tiny_tables.json",
+        {"tiny": (["name", "maybe", "enabled"], [_TinyRow("left", None, True)])},
+        metadata={"suite": "unit"},
+    )
+
+    payload = json.loads(path.read_text(encoding="utf-8"))
+
+    assert payload["schema"] == SWEEP_TABLES_JSON_SCHEMA
+    assert payload["metadata"]["package_role"] == "sweep_report_tables"
+    assert payload["metadata"]["suite"] == "unit"
+    assert payload["metadata"]["table_names"] == ["tiny"]
+    assert payload["tables"]["tiny"]["columns"] == ["name", "maybe", "enabled"]
+    assert payload["tables"]["tiny"]["rows"] == [["left", "", "true"]]
+
+
+def test_write_sweep_table_artifacts_shares_json_and_hdf5_materialization(
+    tmp_path,
+) -> None:
+    rows = [_TinyRow("left", None, True), _TinyRow("right", 2.5, False)]
+
+    written = write_sweep_table_artifacts(
+        tables={"tiny": (["name", "maybe", "enabled"], rows)},
+        hdf5_output=tmp_path / "tiny_tables.h5",
+        json_output=tmp_path / "tiny_tables.json",
+        metadata={"suite": "unit"},
+    )
+
+    assert set(written) == {"hdf5", "json"}
+    artifact = read_hdf5_artifact(written["hdf5"])
+    payload = json.loads(written["json"].read_text(encoding="utf-8"))
+
+    assert artifact.schema == SWEEP_TABLES_HDF5_SCHEMA
+    assert artifact.metadata["table_names"] == ["tiny"]
+    assert payload["metadata"]["table_names"] == ["tiny"]
+    assert payload["tables"]["tiny"]["rows"] == [
+        ["left", "", "true"],
+        ["right", 2.5, "false"],
+    ]

@@ -27,6 +27,7 @@ from pyeidors.data.eit_digit_metrics import (
 )
 from pyeidors.data.holdout_fit_diff import run_holdout_fit_diff
 from pyeidors.data.holdout_point_audit import build_holdout_point_audit
+from pyeidors.data._sweep_core import write_sweep_table_artifacts
 
 
 NOISE_SUMMARY_FIELDS = [
@@ -563,6 +564,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--allow-coarse-smoke", action="store_true")
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument(
+        "--hdf5-output",
+        type=Path,
+        default=None,
+        help="Optional shared HDF5 report-table artifact output path.",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional shared JSON report-table artifact output path.",
+    )
     parser.add_argument("--dpi", type=int, default=200)
     return parser.parse_args(argv)
 
@@ -633,6 +646,28 @@ def main(argv: list[str] | None = None) -> int:
         writer = csv.DictWriter(handle, fieldnames=NOISE_FIELD_FIELDS)
         writer.writeheader()
         writer.writerows(all_field_rows)
+    table_artifacts = write_sweep_table_artifacts(
+        tables={
+            "bucket_all_modes_noise_summary": (
+                NOISE_SUMMARY_FIELDS,
+                all_summary_rows,
+            ),
+            "bucket_all_modes_noise_field": (NOISE_FIELD_FIELDS, all_field_rows),
+        },
+        hdf5_output=args.hdf5_output,
+        json_output=args.json_output,
+        metadata={
+            "report_kind": "bucket_all_modes_noise_sweep",
+            "domain": bucket.domain,
+            "mesh_h": bucket.mesh_h,
+            "n_cells": bucket.n_cells,
+            "n_dofs": bucket.n_dofs,
+            "n_elec": bucket.n_elec,
+            "ridge": float(args.ridge),
+            "inverse_backend": str(args.inverse_backend),
+            "fit_methods": fit_methods,
+        },
+    )
 
     report = output_dir / "eit_bucket_all_modes_noise_sweep_summary_16e.md"
     report.write_text(format_noise_report(all_summary_rows), encoding="utf-8")
@@ -662,6 +697,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(f"Wrote summary: {summary_csv}")
     print(f"Wrote fields: {fields_csv}")
+    for label, path in table_artifacts.items():
+        print(f"Wrote {label}: {path}")
     print(f"Wrote report: {report}")
     return 0
 

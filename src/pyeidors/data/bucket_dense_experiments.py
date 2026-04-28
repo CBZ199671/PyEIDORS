@@ -31,6 +31,7 @@ from ._sweep_core import (
     StructureMetrics as _StructureMetrics,
     SweepRow,
     write_csv_rows,
+    write_sweep_table_artifacts,
 )
 from .voltage_digit_sweep import keep_significant_digits
 
@@ -1552,12 +1553,35 @@ def write_bucket_dense_outputs(
     coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
     coarse_holdout_csv: Path | None = None,
     coarse_structure_csv: Path | None = None,
+    hdf5_output: Path | None = None,
+    json_output: Path | None = None,
     dpi: int = 200,
 ) -> dict[str, Path]:
     """Write all T23 dense-bucket CSV, report, and visual outputs."""
 
     write_csv_rows(summary_output, case.summaries, BUCKET_DENSE_SUMMARY_FIELDS)
     write_csv_rows(field_output, case.field_rows, BUCKET_DENSE_FIELD_FIELDS)
+    table_artifacts = write_sweep_table_artifacts(
+        tables={
+            "bucket_dense_summary": (
+                BUCKET_DENSE_SUMMARY_FIELDS,
+                case.summaries,
+            ),
+            "bucket_dense_field": (BUCKET_DENSE_FIELD_FIELDS, case.field_rows),
+        },
+        hdf5_output=hdf5_output,
+        json_output=json_output,
+        metadata={
+            "report_kind": "bucket_dense_experiments",
+            "domain": case.bucket.domain,
+            "mesh_h": case.bucket.mesh_h,
+            "n_cells": case.bucket.n_cells,
+            "n_dofs": case.bucket.n_dofs,
+            "n_elec": case.bucket.n_elec,
+            "n_measurements": case.bucket.n_measurements,
+            "ridge": case.summaries[0].ridge if case.summaries else "",
+        },
+    )
 
     report_output.parent.mkdir(parents=True, exist_ok=True)
     report_output.write_text(
@@ -1572,6 +1596,7 @@ def write_bucket_dense_outputs(
         "summary": summary_output,
         "fields": field_output,
         "report": report_output,
+        **table_artifacts,
         "domain_plot": plot_bucket_domain_audit(
             case.bucket,
             domain_plot_output,
@@ -1614,6 +1639,8 @@ def write_bucket_full256_compare_outputs(
     metrics_plot_output: Path,
     point_audit_plot_output: Path,
     recon_delta_plot_output: Path | None = None,
+    hdf5_output: Path | None = None,
+    json_output: Path | None = None,
     dpi: int = 200,
 ) -> dict[str, Path]:
     """Write all full-256 comparison CSV, report, and visual outputs."""
@@ -1624,6 +1651,31 @@ def write_bucket_full256_compare_outputs(
         BUCKET_FULL256_COMPARE_SUMMARY_FIELDS,
     )
     write_csv_rows(field_output, case.field_rows, BUCKET_FULL256_COMPARE_FIELD_FIELDS)
+    table_artifacts = write_sweep_table_artifacts(
+        tables={
+            "bucket_full256_summary": (
+                BUCKET_FULL256_COMPARE_SUMMARY_FIELDS,
+                case.summaries,
+            ),
+            "bucket_dense_field": (
+                BUCKET_FULL256_COMPARE_FIELD_FIELDS,
+                case.field_rows,
+            ),
+        },
+        hdf5_output=hdf5_output,
+        json_output=json_output,
+        metadata={
+            "report_kind": "bucket_full256_compare",
+            "domain": case.bucket.domain,
+            "mesh_h": case.bucket.mesh_h,
+            "n_cells": case.bucket.n_cells,
+            "n_dofs": case.bucket.n_dofs,
+            "n_elec": case.bucket.n_elec,
+            "full_256_measurements": case.model_full_256.n_measurements,
+            "full_208_measurements": case.model_full_208.n_measurements,
+            "ridge": case.summaries[0].ridge if case.summaries else "",
+        },
+    )
 
     report_output.parent.mkdir(parents=True, exist_ok=True)
     report_output.write_text(
@@ -1634,6 +1686,7 @@ def write_bucket_full256_compare_outputs(
         "summary": summary_output,
         "fields": field_output,
         "report": report_output,
+        **table_artifacts,
         "recon_plot": plot_bucket_full256_compare_recon(
             case,
             recon_plot_output,

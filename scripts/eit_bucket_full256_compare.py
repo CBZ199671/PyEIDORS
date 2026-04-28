@@ -147,6 +147,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=Path,
         default=Path("outputs/eit_bucket_full256_point_audit_16e.png"),
     )
+    parser.add_argument(
+        "--hdf5-output",
+        type=Path,
+        default=None,
+        help="Optional shared HDF5 report-table artifact output path.",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional shared JSON report-table artifact output path.",
+    )
     parser.add_argument("--plot", action="store_true")
     parser.add_argument("--dpi", type=int, default=200)
     return parser.parse_args(argv)
@@ -176,6 +188,8 @@ def main(argv: list[str] | None = None) -> int:
         metrics_plot_output=args.metrics_plot_output,
         point_audit_plot_output=args.point_audit_plot_output,
         recon_delta_plot_output=args.recon_delta_plot_output,
+        hdf5_output=args.hdf5_output,
+        json_output=args.json_output,
         dpi=args.dpi,
     )
     print(

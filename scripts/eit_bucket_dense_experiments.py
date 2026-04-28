@@ -160,6 +160,18 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("outputs/eit_bucket_dense_holdout_summary_16e.png"),
     )
     parser.add_argument(
+        "--hdf5-output",
+        type=Path,
+        default=None,
+        help="Optional shared HDF5 report-table artifact output path.",
+    )
+    parser.add_argument(
+        "--json-output",
+        type=Path,
+        default=None,
+        help="Optional shared JSON report-table artifact output path.",
+    )
+    parser.add_argument(
         "--coarse-voltage-csv",
         type=_parse_optional_path,
         default=Path("outputs/eit_voltage_digit_sweep_16e.csv"),
@@ -211,6 +223,8 @@ def main(argv: list[str] | None = None) -> int:
         coarse_voltage_csv=args.coarse_voltage_csv,
         coarse_holdout_csv=args.coarse_holdout_csv,
         coarse_structure_csv=args.coarse_structure_csv,
+        hdf5_output=args.hdf5_output,
+        json_output=args.json_output,
         dpi=args.dpi,
     )
     print(

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import importlib.util
+import json
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,7 @@ from pyeidors.data.bucket_dense_experiments import (
 )
 from pyeidors.data.bucket_domain_audit import build_circle_bucket_domain
 from pyeidors.data.eit_digit_metrics import reconstruct_linearized_sigma
+from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -146,6 +148,8 @@ def test_v37_bucket_dense_experiment_outputs_and_recovers_visible_anomaly(
         coarse_voltage_csv=None,
         coarse_holdout_csv=None,
         coarse_structure_csv=None,
+        hdf5_output=tmp_path / "tables.h5",
+        json_output=tmp_path / "tables.json",
         dpi=70,
     )
     reference = case.model.sigma_reference
@@ -171,6 +175,17 @@ def test_v37_bucket_dense_experiment_outputs_and_recovers_visible_anomaly(
 
     assert list(summary_rows[0].keys()) == BUCKET_DENSE_SUMMARY_FIELDS
     assert list(field_rows[0].keys()) == BUCKET_DENSE_FIELD_FIELDS
+    artifact = read_hdf5_artifact(written["hdf5"], lazy=True, verify_checksums=False)
+    payload = json.loads(written["json"].read_text(encoding="utf-8"))
+    assert artifact.metadata["table_names"] == [
+        "bucket_dense_field",
+        "bucket_dense_summary",
+    ]
+    assert payload["metadata"]["table_names"] == [
+        "bucket_dense_field",
+        "bucket_dense_summary",
+    ]
+    assert len(payload["tables"]["bucket_dense_summary"]["rows"]) == len(summary_rows)
     assert (
         written["report"]
         .read_text(encoding="utf-8")
@@ -204,6 +219,8 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
         metrics_plot_output=tmp_path / "metrics.png",
         point_audit_plot_output=tmp_path / "point_audit.png",
         recon_delta_plot_output=tmp_path / "recon_delta.png",
+        hdf5_output=tmp_path / "tables.h5",
+        json_output=tmp_path / "tables.json",
         dpi=70,
     )
 
@@ -227,6 +244,19 @@ def test_v41_full256_compare_outputs_numeric_and_visual_differences(
     assert baseline.delta_artifact_energy_vs_full_208 == 0.0
     assert baseline.delta_field_l2_vs_full_208 == 0.0
     assert len(case.field_rows) == 5 * case.bucket.n_cells
+    artifact = read_hdf5_artifact(written["hdf5"], lazy=True, verify_checksums=False)
+    payload = json.loads(written["json"].read_text(encoding="utf-8"))
+    assert artifact.metadata["table_names"] == [
+        "bucket_dense_field",
+        "bucket_full256_summary",
+    ]
+    assert payload["metadata"]["table_names"] == [
+        "bucket_dense_field",
+        "bucket_full256_summary",
+    ]
+    assert len(payload["tables"]["bucket_full256_summary"]["rows"]) == len(
+        case.summaries
+    )
 
     with written["summary"].open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
@@ -252,6 +282,8 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(
     summary_plot = tmp_path / "summary.png"
     curve_plot = tmp_path / "curves.png"
     holdout_summary = tmp_path / "holdout_summary.png"
+    hdf5_output = tmp_path / "tables.h5"
+    json_output = tmp_path / "tables.json"
     exit_code = _DENSE_SCRIPT.main(
         [
             "--mesh-h",
@@ -278,6 +310,10 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(
             str(curve_plot),
             "--holdout-summary-plot-output",
             str(holdout_summary),
+            "--hdf5-output",
+            str(hdf5_output),
+            "--json-output",
+            str(json_output),
             "--coarse-voltage-csv",
             "none",
             "--coarse-holdout-csv",
@@ -293,6 +329,8 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(
     assert exit_code == 0
     assert "domain=circle_bucket" in captured.out
     assert "n_measurements=208" in captured.out
+    assert "Wrote hdf5:" in captured.out
+    assert "Wrote json:" in captured.out
     with summary_output.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with field_output.open(newline="", encoding="utf-8") as handle:
@@ -307,6 +345,12 @@ def test_eit_bucket_dense_experiments_cli_writes_expected_outputs(
     }
     assert list(field_rows[0].keys()) == BUCKET_DENSE_FIELD_FIELDS
     assert {row["inside_bucket"] for row in field_rows} == {"true"}
+    assert json.loads(json_output.read_text(encoding="utf-8"))["metadata"][
+        "table_names"
+    ] == ["bucket_dense_field", "bucket_dense_summary"]
+    assert read_hdf5_artifact(hdf5_output, lazy=True, verify_checksums=False).metadata[
+        "table_names"
+    ] == ["bucket_dense_field", "bucket_dense_summary"]
     for path in [domain_plot, recon_plot, summary_plot, curve_plot, holdout_summary]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
@@ -321,6 +365,8 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(
     recon_delta_plot = tmp_path / "recon_delta.png"
     metrics_plot = tmp_path / "metrics.png"
     point_audit_plot = tmp_path / "point_audit.png"
+    hdf5_output = tmp_path / "tables.h5"
+    json_output = tmp_path / "tables.json"
     exit_code = _FULL256_SCRIPT.main(
         [
             "--mesh-h",
@@ -343,6 +389,10 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(
             str(metrics_plot),
             "--point-audit-plot-output",
             str(point_audit_plot),
+            "--hdf5-output",
+            str(hdf5_output),
+            "--json-output",
+            str(json_output),
             "--dpi",
             "70",
         ]
@@ -352,6 +402,8 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(
     assert exit_code == 0
     assert "full_256_measurements=256" in captured.out
     assert "full_208_measurements=208" in captured.out
+    assert "Wrote hdf5:" in captured.out
+    assert "Wrote json:" in captured.out
     with summary_output.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with field_output.open(newline="", encoding="utf-8") as handle:
@@ -367,6 +419,12 @@ def test_eit_bucket_full256_compare_cli_writes_expected_outputs(
     }
     assert list(field_rows[0].keys()) == BUCKET_FULL256_COMPARE_FIELD_FIELDS
     assert {row["inside_bucket"] for row in field_rows} == {"true"}
+    assert json.loads(json_output.read_text(encoding="utf-8"))["metadata"][
+        "table_names"
+    ] == ["bucket_dense_field", "bucket_full256_summary"]
+    assert read_hdf5_artifact(hdf5_output, lazy=True, verify_checksums=False).metadata[
+        "table_names"
+    ] == ["bucket_dense_field", "bucket_full256_summary"]
     for path in [recon_plot, recon_delta_plot, metrics_plot, point_audit_plot]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
 
@@ -376,6 +434,8 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
     capsys,
 ) -> None:
     output_dir = tmp_path / "noise_sweep"
+    hdf5_output = tmp_path / "noise_tables.h5"
+    json_output = tmp_path / "noise_tables.json"
     exit_code = _NOISE_SWEEP_SCRIPT.main(
         [
             "--mesh-h",
@@ -388,6 +448,10 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
             "10",
             "--output-dir",
             str(output_dir),
+            "--hdf5-output",
+            str(hdf5_output),
+            "--json-output",
+            str(json_output),
             "--dpi",
             "70",
         ]
@@ -404,6 +468,8 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
     assert exit_code == 0
     assert "SNR=inf" in captured.out
     assert "SNR=10" in captured.out
+    assert "Wrote hdf5:" in captured.out
+    assert "Wrote json:" in captured.out
     with summary.open(newline="", encoding="utf-8") as handle:
         summary_rows = list(csv.DictReader(handle))
     with fields.open(newline="", encoding="utf-8") as handle:
@@ -419,6 +485,15 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
         "poly2_208",
     }
     assert field_rows[0]["noise_seed"]
+    assert json.loads(json_output.read_text(encoding="utf-8"))["metadata"][
+        "table_names"
+    ] == ["bucket_all_modes_noise_field", "bucket_all_modes_noise_summary"]
+    assert read_hdf5_artifact(hdf5_output, lazy=True, verify_checksums=False).metadata[
+        "table_names"
+    ] == [
+        "bucket_all_modes_noise_field",
+        "bucket_all_modes_noise_summary",
+    ]
     assert "add_noise" in report.read_text(encoding="utf-8")
     for path in [metrics, recon, errors]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
