@@ -8,6 +8,12 @@ from typing import Any
 
 import numpy as np
 
+from pyeidors.data._temporal_core import (
+    as_frame_batch as _as_frame_batch,
+    positive_int as _positive_int,
+    unit_interval as _unit_interval,
+)
+
 from .tv import TVRefinementResult, refine_tv_pdhg
 
 
@@ -141,37 +147,6 @@ def postprocess_rm_frames(
     )
     result = TemporalTVPipelineResult(values=values_out, metadata=metadata)
     return result if return_metadata else result.values
-
-
-def _as_frame_batch(values: Any) -> tuple[np.ndarray, bool]:
-    array = np.asarray(values, dtype=np.float64)
-    if array.ndim == 1:
-        batch = array.reshape(1, -1)
-        was_vector = True
-    elif array.ndim == 2:
-        batch = array
-        was_vector = False
-    else:
-        raise ValueError("frames must be a 1D vector or 2D frame batch.")
-    if 0 in batch.shape:
-        raise ValueError("frames must be non-empty.")
-    if not np.isfinite(batch).all():
-        raise FloatingPointError("frames contain non-finite values.")
-    return np.ascontiguousarray(batch, dtype=np.float64), was_vector
-
-
-def _positive_int(value: int, name: str) -> int:
-    resolved = int(value)
-    if resolved <= 0:
-        raise ValueError(f"{name} must be positive.")
-    return resolved
-
-
-def _unit_interval(value: float, name: str) -> float:
-    resolved = float(value)
-    if not np.isfinite(resolved) or resolved < 0.0 or resolved > 1.0:
-        raise ValueError(f"{name} must be finite and in [0, 1].")
-    return resolved
 
 
 __all__ = [

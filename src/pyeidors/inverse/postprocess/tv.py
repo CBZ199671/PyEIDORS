@@ -9,6 +9,7 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
+from pyeidors.data._temporal_core import positive_int as _positive_int
 from pyeidors.inverse.prior import graph_difference_operator
 
 
@@ -156,13 +157,6 @@ def _as_roi_mask(values: Any | None, *, n: int) -> np.ndarray:
     if not np.any(mask):
         raise ValueError("roi_mask must select at least one parameter.")
     return np.ascontiguousarray(mask, dtype=bool)
-
-
-def _positive_int(value: int, name: str) -> int:
-    resolved = int(value)
-    if resolved <= 0:
-        raise ValueError(f"{name} must be positive.")
-    return resolved
 
 
 def _nonnegative_float(value: float, name: str) -> float:

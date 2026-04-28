@@ -9,6 +9,12 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from ._temporal_core import (
+    as_frame_batch as _as_frame_batch,
+    positive_int as _positive_int,
+    unit_interval as _unit_interval,
+)
+
 
 TemporalMeasurementHook = Callable[[np.ndarray, Mapping[str, Any]], Any]
 
@@ -223,23 +229,6 @@ def _apply_hook(
     return np.ascontiguousarray(out, dtype=np.float64), hook_metadata
 
 
-def _as_frame_batch(values: Any) -> tuple[np.ndarray, bool]:
-    array = np.asarray(values, dtype=np.float64)
-    if array.ndim == 1:
-        batch = array.reshape(1, -1)
-        was_vector = True
-    elif array.ndim == 2:
-        batch = array
-        was_vector = False
-    else:
-        raise ValueError("frames must be a 1D vector or 2D frame batch.")
-    if 0 in batch.shape:
-        raise ValueError("frames must be non-empty.")
-    if not np.isfinite(batch).all():
-        raise FloatingPointError("frames contain non-finite values.")
-    return np.ascontiguousarray(batch, dtype=np.float64), was_vector
-
-
 def _normalize_temporal_mode(value: str | None) -> str:
     resolved = str(value or "none").strip().lower()
     aliases = {
@@ -366,20 +355,6 @@ def _tuple_rows(values: np.ndarray) -> tuple[tuple[float, ...], ...]:
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
     return tuple(_tuple_vector(row) for row in arr)
-
-
-def _positive_int(value: int, name: str) -> int:
-    resolved = int(value)
-    if resolved <= 0:
-        raise ValueError(f"{name} must be positive.")
-    return resolved
-
-
-def _unit_interval(value: float, name: str) -> float:
-    resolved = float(value)
-    if not np.isfinite(resolved) or resolved < 0.0 or resolved > 1.0:
-        raise ValueError(f"{name} must be finite and in [0, 1].")
-    return resolved
 
 
 def _optional_positive_float(value: float | None, *, name: str) -> float | None:
