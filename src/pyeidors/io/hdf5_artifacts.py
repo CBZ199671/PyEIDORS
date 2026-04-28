@@ -16,6 +16,7 @@ from pyeidors.cache.disk_artifacts import (
     build_disk_artifact_manifest,
     ensure_disk_artifact_metadata,
 )
+from pyeidors.io._json import json_ready as _json_ready
 
 
 DEFAULT_SCHEMA = "pyeidors-hdf5-artifact-v1"
@@ -493,20 +494,6 @@ def _canonical_string_array(arr: np.ndarray) -> np.ndarray:
 
     flat = [normalize(item) for item in arr.reshape(-1)]
     return np.asarray(flat, dtype=np.str_).reshape(arr.shape)
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return _json_ready(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 __all__ = [

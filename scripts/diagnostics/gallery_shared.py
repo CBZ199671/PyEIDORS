@@ -8,25 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from pyeidors.io._json import json_ready as jsonable
 from scripts.common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bundle
-
-
-def jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(k): jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [jsonable(v) for v in value]
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, (np.floating,)):
-        return float(value)
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.bool_,)):
-        return bool(value)
-    return value
 
 
 def relative_l2(left: np.ndarray, right: np.ndarray) -> float:

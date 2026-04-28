@@ -9,9 +9,17 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+SRC_PATH = PROJECT_ROOT / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
+from pyeidors.io._json import json_ready as _json_ready  # noqa: E402
 
 
 SCHEMA = "pyeidors-dynamic-eidors-metric-review-v1"
@@ -442,18 +450,6 @@ def _propagation_gate_cell(gate: Mapping[str, Any]) -> str:
 
 def _fmt(value: Any) -> str:
     return f"{float(value):.6g}"
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return _json_ready(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:

@@ -4,10 +4,17 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import sys
 from typing import Any, Mapping
 
 import h5py
 import numpy as np
+
+SRC_PATH = Path(__file__).resolve().parents[2] / "src"
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
+
+from pyeidors.io._json import json_ready as _json_ready  # noqa: E402
 
 
 MATLAB_MESH_HDF5_SCHEMA = "pyeidors-matlab-mesh-hdf5-v1"
@@ -91,20 +98,6 @@ def _dataset_kwargs(arr: np.ndarray) -> dict[str, Any]:
     if arr.ndim == 0 or arr.size == 0:
         return {}
     return {"compression": "gzip", "shuffle": True, "chunks": True}
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return _json_ready(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 __all__ = [

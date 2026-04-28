@@ -51,6 +51,7 @@ from pyeidors.inverse import (
     write_rm_artifact as write_hdf5_rm_artifact,
 )
 from pyeidors.perf.gpu_kernels import prepare_rm_matmul
+from pyeidors.io._json import json_ready as _jsonable
 
 
 def _parse_args() -> argparse.Namespace:
@@ -256,18 +257,6 @@ def _timed(fn):
     out = fn()
     _sync_cuda()
     return out, float(time.perf_counter() - started)
-
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {str(key): _jsonable(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

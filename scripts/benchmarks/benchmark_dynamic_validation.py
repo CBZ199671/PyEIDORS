@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-from collections.abc import Mapping
 from datetime import datetime, timezone
 import json
 from pathlib import Path
@@ -32,6 +31,7 @@ from pyeidors.inverse import (
     reconstruct_temporal_difference_batch,
     solve_batch_spatiotemporal_gn,
 )
+from pyeidors.io._json import json_ready as _json_ready
 
 
 SCHEMA = "pyeidors-dynamic-validation-benchmark-v1"
@@ -977,18 +977,6 @@ def _assert_finite_metrics(metrics: dict[str, Any]) -> None:
             continue
         if not np.isfinite(float(value)):
             raise FloatingPointError(f"dynamic metric {key!r} is non-finite.")
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return _json_ready(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:

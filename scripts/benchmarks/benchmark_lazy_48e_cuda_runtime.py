@@ -14,22 +14,14 @@ import numpy as np
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SCRIPTS_PATH = REPO_ROOT / "scripts"
+SRC_PATH = REPO_ROOT / "src"
 if str(SCRIPTS_PATH) not in sys.path:
     sys.path.insert(0, str(SCRIPTS_PATH))
+if str(SRC_PATH) not in sys.path:
+    sys.path.insert(0, str(SRC_PATH))
 
 from common import gn_difference_runner as runner  # noqa: E402
-
-
-def _jsonable(value):
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
+from pyeidors.io._json import json_ready as _jsonable  # noqa: E402
 
 
 def _build_context(label: str, kwargs: dict) -> tuple[dict, dict]:

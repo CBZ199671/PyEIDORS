@@ -29,6 +29,7 @@ from pyeidors.inverse import (  # noqa: E402
     solve_batch_spatiotemporal_gn,
     solve_spatiotemporal_tv_huber,
 )
+from pyeidors.io._json import json_ready as _json_ready  # noqa: E402
 from scripts.benchmarks.benchmark_dynamic_validation import (  # noqa: E402
     build_travelling_wave_fixture,
     dynamic_fidelity_metrics,
@@ -1292,18 +1293,6 @@ def _int_range_text(value: Mapping[str, Any]) -> str:
 
 def _fmt(value: Any) -> str:
     return f"{float(value):.6g}"
-
-
-def _json_ready(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _json_ready(val) for key, val in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_json_ready(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return _json_ready(value.tolist())
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
 
 
 def main(argv: Sequence[str] | None = None) -> int:
