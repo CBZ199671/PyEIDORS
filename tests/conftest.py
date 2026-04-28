@@ -36,6 +36,33 @@ os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
 os.environ.setdefault("OMP_NUM_THREADS", "1")
 
 
+def _populate_lazy_mesh_gmsh_imports() -> None:
+    """T91: tests monkeypatch ``module.gmshio`` attributes; ensure the lazy
+    import is resolved before any test file is collected so the symbol is the
+    real module by then. Production code paths still hit the lazy path because
+    the cold-start gate runs in a fresh subprocess.
+    """
+    for module_name in (
+        "pyeidors.geometry.optimized_mesh_generator",
+        "pyeidors.geometry.mesh3d_generator",
+        "pyeidors.geometry.mesh_generator",
+        "pyeidors.geometry.mesh_converter",
+    ):
+        try:
+            module = __import__(module_name, fromlist=["_ensure_gmsh"])
+        except Exception:  # pragma: no cover - import guard
+            continue
+        ensure = getattr(module, "_ensure_gmsh", None)
+        if callable(ensure):
+            try:
+                ensure()
+            except Exception:  # pragma: no cover - lean env without gmsh
+                pass
+
+
+_populate_lazy_mesh_gmsh_imports()
+
+
 def _cleanup_qt_runtime() -> None:
     try:
         from PySide6.QtCore import QCoreApplication, QThread

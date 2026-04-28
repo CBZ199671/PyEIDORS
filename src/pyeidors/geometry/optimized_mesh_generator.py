@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util as _import_util
 import logging
 import tempfile
 import time
@@ -14,7 +15,6 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import ufl
 from dolfinx import fem
-from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
@@ -63,13 +63,26 @@ from .process_mesh_cache import (
 
 logger = logging.getLogger(__name__)
 
-try:
-    import gmsh
+GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
+gmsh = None  # populated lazily by _ensure_gmsh on first generation/parse path
+gmshio = None
+_GMSH_LOADED = False
 
-    GMSH_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    gmsh = None  # type: ignore[assignment]
-    GMSH_AVAILABLE = False
+
+def _ensure_gmsh() -> bool:
+    """Import gmsh + dolfinx.io.gmsh on demand. Return False iff unavailable."""
+    global gmsh, gmshio, _GMSH_LOADED
+    if _GMSH_LOADED:
+        return GMSH_AVAILABLE
+    _GMSH_LOADED = True
+    if not GMSH_AVAILABLE:
+        return False
+    import gmsh as _gmsh_mod
+    from dolfinx.io import gmsh as _gmshio_mod
+
+    gmsh = _gmsh_mod
+    gmshio = _gmshio_mod
+    return True
 
 
 @dataclass
@@ -131,7 +144,7 @@ class OptimizedMeshGenerator:
     def generate(
         self, output_dir: Optional[Path] = None, mesh_name: Optional[str] = None
     ) -> EITMesh:
-        if not GMSH_AVAILABLE:
+        if not _ensure_gmsh():
             raise ImportError("gmsh Python bindings are required to generate meshes.")
 
         if output_dir is None:
@@ -527,6 +540,9 @@ def _load_cached_mesh(
         return mesh
 
     if not msh_file.exists():
+        return None
+
+    if not _ensure_gmsh():
         return None
 
     try:

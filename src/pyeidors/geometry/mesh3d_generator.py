@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util as _import_util
 import json
 import logging
 import tempfile
@@ -12,7 +13,6 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
@@ -37,21 +37,45 @@ from ._helpers import (
 
 logger = logging.getLogger(__name__)
 
-try:  # pragma: no cover - optional in isolated unit stubs
-    import gmsh
+GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
+gmsh = None
+gmshio = None
+_GMSH_LOADED = False
 
-    GMSH_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    gmsh = None  # type: ignore[assignment]
-    GMSH_AVAILABLE = False
 
-try:  # pragma: no cover - optional in some unit stubs
-    import meshio
+def _ensure_gmsh() -> bool:
+    """Import gmsh + dolfinx.io.gmsh on demand. Return False iff unavailable."""
+    global gmsh, gmshio, _GMSH_LOADED
+    if _GMSH_LOADED:
+        return GMSH_AVAILABLE
+    _GMSH_LOADED = True
+    if not GMSH_AVAILABLE:
+        return False
+    import gmsh as _gmsh_mod
+    from dolfinx.io import gmsh as _gmshio_mod
 
-    MESHIO_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    meshio = None  # type: ignore[assignment]
-    MESHIO_AVAILABLE = False
+    gmsh = _gmsh_mod
+    gmshio = _gmshio_mod
+    return True
+
+
+MESHIO_AVAILABLE: bool = _import_util.find_spec("meshio") is not None
+meshio = None
+_MESHIO_LOADED = False
+
+
+def _ensure_meshio() -> bool:
+    """Import meshio on demand. Return False iff unavailable."""
+    global meshio, _MESHIO_LOADED
+    if _MESHIO_LOADED:
+        return MESHIO_AVAILABLE
+    _MESHIO_LOADED = True
+    if not MESHIO_AVAILABLE:
+        return False
+    import meshio as _meshio_mod
+
+    meshio = _meshio_mod
+    return True
 
 
 STRUCTURED_SIDECAR_VERSION = "cuda-structured-v1"
@@ -466,7 +490,7 @@ class _LegacyTetraCylinder3DMeshGenerator:
         output_dir: Optional[Path] = None,
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
-        if not GMSH_AVAILABLE:
+        if not _ensure_gmsh():
             raise ImportError(
                 "gmsh Python bindings are required to generate 3D meshes."
             )
@@ -692,7 +716,7 @@ class _GeomV2TetraCylinder3DMeshGenerator:
         output_dir: Optional[Path] = None,
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
-        if not GMSH_AVAILABLE:
+        if not _ensure_gmsh():
             raise ImportError(
                 "gmsh Python bindings are required to generate 3D meshes."
             )
@@ -1194,9 +1218,13 @@ class _GeomV2HexCylinder3DMeshGenerator:
         output_dir: Optional[Path] = None,
         mesh_name: Optional[str] = None,
     ) -> EITMesh:
-        if not MESHIO_AVAILABLE:
+        if not _ensure_meshio():
             raise ImportError(
                 "meshio is required to generate tensor-product hex meshes."
+            )
+        if not _ensure_gmsh():
+            raise ImportError(
+                "gmsh Python bindings are required to load tensor-product hex meshes."
             )
 
         _, _, msh_path, assoc_path = _prepare_output_paths(

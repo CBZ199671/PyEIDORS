@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util as _import_util
 import logging
 import tempfile
 import time
@@ -10,9 +11,7 @@ from math import cos, pi, sin
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
-import gmsh
 import numpy as np
-from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
@@ -26,6 +25,27 @@ from .dolfinx_mesh_cache import write_dolfinx_mesh_cache, xdmf_cache_path_for_me
 
 logger = logging.getLogger(__name__)
 
+GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
+gmsh = None
+gmshio = None
+_GMSH_LOADED = False
+
+
+def _ensure_gmsh() -> bool:
+    """Import gmsh + dolfinx.io.gmsh on demand. Return False iff unavailable."""
+    global gmsh, gmshio, _GMSH_LOADED
+    if _GMSH_LOADED:
+        return GMSH_AVAILABLE
+    _GMSH_LOADED = True
+    if not GMSH_AVAILABLE:
+        return False
+    import gmsh as _gmsh_mod
+    from dolfinx.io import gmsh as _gmshio_mod
+
+    gmsh = _gmsh_mod
+    gmshio = _gmshio_mod
+    return True
+
 
 class MeshGenerator:
     """Generate EIT meshes with electrode physical groups."""
@@ -37,6 +57,8 @@ class MeshGenerator:
 
     @contextmanager
     def gmsh_context(self, model_name: str = "EIT_Mesh"):
+        if not _ensure_gmsh():
+            raise ImportError("gmsh Python bindings are required to generate meshes.")
         gmsh.initialize()
         gmsh.model.add(model_name)
         try:

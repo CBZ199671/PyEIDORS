@@ -11,11 +11,11 @@ writes — exactly the steps both historical converters duplicated.
 
 from __future__ import annotations
 
+import importlib.util as _import_util
 import logging
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
-from dolfinx.io import gmsh as gmshio
 from mpi4py import MPI
 
 from ..data.structures import EITMesh
@@ -24,6 +24,24 @@ from ._helpers import validate_mesh_data_tags, write_association_table
 from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
 
 logger = logging.getLogger(__name__)
+
+GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
+gmshio = None
+_GMSHIO_LOADED = False
+
+
+def _ensure_gmsh() -> bool:
+    """Import dolfinx.io.gmsh on demand. Return False iff unavailable."""
+    global gmshio, _GMSHIO_LOADED
+    if _GMSHIO_LOADED:
+        return GMSH_AVAILABLE
+    _GMSHIO_LOADED = True
+    if not GMSH_AVAILABLE:
+        return False
+    from dolfinx.io import gmsh as _gmshio_mod
+
+    gmshio = _gmshio_mod
+    return True
 
 RadiusProvider = Callable[[object], float]
 
@@ -56,6 +74,8 @@ class MeshConverter:
         self._radius_provider = radius_provider
 
     def convert(self) -> Tuple[EITMesh, object, Dict[str, int]]:
+        if not _ensure_gmsh():
+            raise ImportError("gmsh Python bindings are required to convert meshes.")
         mesh_data = gmshio.read_from_msh(
             str(self.mesh_file),
             MPI.COMM_WORLD,
