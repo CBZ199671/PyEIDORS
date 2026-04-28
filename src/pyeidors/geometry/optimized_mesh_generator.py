@@ -72,16 +72,22 @@ _GMSH_LOADED = False
 def _ensure_gmsh() -> bool:
     """Import gmsh + dolfinx.io.gmsh on demand. Return False iff unavailable."""
     global gmsh, gmshio, _GMSH_LOADED
-    if _GMSH_LOADED:
-        return GMSH_AVAILABLE
-    _GMSH_LOADED = True
     if not GMSH_AVAILABLE:
         return False
-    import gmsh as _gmsh_mod
-    from dolfinx.io import gmsh as _gmshio_mod
+    if _GMSH_LOADED:
+        return gmsh is not None and gmshio is not None
+    if gmsh is not None and gmshio is not None:
+        _GMSH_LOADED = True
+        return True
+    try:
+        import gmsh as _gmsh_mod
+        from dolfinx.io import gmsh as _gmshio_mod
+    except (ImportError, OSError):
+        return False
 
     gmsh = _gmsh_mod
     gmshio = _gmshio_mod
+    _GMSH_LOADED = True
     return True
 
 

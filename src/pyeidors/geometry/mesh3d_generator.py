@@ -46,16 +46,22 @@ _GMSH_LOADED = False
 def _ensure_gmsh() -> bool:
     """Import gmsh + dolfinx.io.gmsh on demand. Return False iff unavailable."""
     global gmsh, gmshio, _GMSH_LOADED
-    if _GMSH_LOADED:
-        return GMSH_AVAILABLE
-    _GMSH_LOADED = True
     if not GMSH_AVAILABLE:
         return False
-    import gmsh as _gmsh_mod
-    from dolfinx.io import gmsh as _gmshio_mod
+    if _GMSH_LOADED:
+        return gmsh is not None and gmshio is not None
+    if gmsh is not None and gmshio is not None:
+        _GMSH_LOADED = True
+        return True
+    try:
+        import gmsh as _gmsh_mod
+        from dolfinx.io import gmsh as _gmshio_mod
+    except (ImportError, OSError):
+        return False
 
     gmsh = _gmsh_mod
     gmshio = _gmshio_mod
+    _GMSH_LOADED = True
     return True
 
 
@@ -67,14 +73,20 @@ _MESHIO_LOADED = False
 def _ensure_meshio() -> bool:
     """Import meshio on demand. Return False iff unavailable."""
     global meshio, _MESHIO_LOADED
-    if _MESHIO_LOADED:
-        return MESHIO_AVAILABLE
-    _MESHIO_LOADED = True
     if not MESHIO_AVAILABLE:
         return False
-    import meshio as _meshio_mod
+    if _MESHIO_LOADED:
+        return meshio is not None
+    if meshio is not None:
+        _MESHIO_LOADED = True
+        return True
+    try:
+        import meshio as _meshio_mod
+    except (ImportError, OSError):
+        return False
 
     meshio = _meshio_mod
+    _MESHIO_LOADED = True
     return True
 
 
