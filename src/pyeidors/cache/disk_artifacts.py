@@ -13,11 +13,82 @@ from dataclasses import dataclass
 import hashlib
 import json
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Literal, Mapping
 
 from .keys import _normalize
 
 DISK_ARTIFACT_MANIFEST_VERSION = 1
+DiskArtifactKindStatus = Literal["integrated", "future-scope", "read-only"]
+
+
+@dataclass(frozen=True)
+class DiskArtifactKindPolicy:
+    """Governance status for one persistent disk-artifact kind."""
+
+    status: DiskArtifactKindStatus
+    gate: str
+    note: str
+
+
+DISK_ARTIFACT_KIND_POLICIES: Mapping[str, DiskArtifactKindPolicy] = {
+    "hdf5-artifact": DiskArtifactKindPolicy(
+        status="integrated",
+        gate="T82 phases 1..4",
+        note="Shared numeric HDF5 packages via pyeidors.io.hdf5_artifacts.",
+    ),
+    "dolfinx-mesh-cache": DiskArtifactKindPolicy(
+        status="integrated",
+        gate="T82 phases 1..4",
+        note="DOLFINx XDMF/HDF5 mesh cache with optional ADIOS side files.",
+    ),
+    "adios4dolfinx-checkpoint": DiskArtifactKindPolicy(
+        status="future-scope",
+        gate="Add only if ADIOS4DOLFINx becomes an independent reload source.",
+        note="Today it remains a side file recorded inside dolfinx-mesh-cache.",
+    ),
+    "adios2-vtx-side-artifact": DiskArtifactKindPolicy(
+        status="future-scope",
+        gate="Add only if VTX/BP gains a supported reader.",
+        note="Today it remains optional write-side output.",
+    ),
+    "cache-manager-disk-object": DiskArtifactKindPolicy(
+        status="future-scope",
+        gate="Add only for durable cache-manager export/import workflows.",
+        note=".pyeidors_cache/v2 keeps its own runtime index.",
+    ),
+    "legacy-npz-artifact": DiskArtifactKindPolicy(
+        status="read-only",
+        gate="V65/V67: legacy compatibility loaders only; new writers forbidden.",
+        note="Migrate large numeric artifacts to HDF5 instead of registering writers.",
+    ),
+    "mesh-cache-layer": DiskArtifactKindPolicy(
+        status="future-scope",
+        gate="Add only if multiple formats share a real storage backend.",
+        note="Do not introduce a leaky protocol over format-divergent code.",
+    ),
+}
+
+INTEGRATED_DISK_ARTIFACT_KINDS = tuple(
+    sorted(
+        kind
+        for kind, policy in DISK_ARTIFACT_KIND_POLICIES.items()
+        if policy.status == "integrated"
+    )
+)
+FUTURE_DISK_ARTIFACT_KINDS = tuple(
+    sorted(
+        kind
+        for kind, policy in DISK_ARTIFACT_KIND_POLICIES.items()
+        if policy.status == "future-scope"
+    )
+)
+READ_ONLY_DISK_ARTIFACT_KINDS = tuple(
+    sorted(
+        kind
+        for kind, policy in DISK_ARTIFACT_KIND_POLICIES.items()
+        if policy.status == "read-only"
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -104,6 +175,31 @@ def file_fingerprint(
     return payload
 
 
+def disk_artifact_kind_policy(
+    artifact_kind: str,
+) -> DiskArtifactKindPolicy | None:
+    """Return registered governance policy for one artifact kind."""
+
+    return DISK_ARTIFACT_KIND_POLICIES.get(str(artifact_kind))
+
+
+def assert_integrated_disk_artifact_kind(artifact_kind: str) -> None:
+    """Fail unless an artifact kind is explicitly integrated for writing."""
+
+    kind = str(artifact_kind)
+    policy = disk_artifact_kind_policy(kind)
+    if policy is None:
+        raise ValueError(
+            f"Unregistered disk artifact kind {kind!r}. Add a T82 governance "
+            "policy before writing manifests for a new persistent format."
+        )
+    if policy.status != "integrated":
+        raise ValueError(
+            f"Disk artifact kind {kind!r} is {policy.status}, not integrated. "
+            f"Gate before integration: {policy.gate}"
+        )
+
+
 def build_disk_artifact_key(
     artifact_kind: str,
     key_payload: Mapping[str, Any],
@@ -119,6 +215,7 @@ def build_disk_artifact_key(
     mathematical identity.
     """
 
+    assert_integrated_disk_artifact_kind(artifact_kind)
     return stable_json_digest(
         {
             "artifact_kind": str(artifact_kind),
@@ -245,11 +342,18 @@ def ensure_disk_artifact_metadata(
 
 __all__ = [
     "DISK_ARTIFACT_MANIFEST_VERSION",
+    "DISK_ARTIFACT_KIND_POLICIES",
     "DiskArtifactManifest",
+    "DiskArtifactKindPolicy",
+    "FUTURE_DISK_ARTIFACT_KINDS",
+    "INTEGRATED_DISK_ARTIFACT_KINDS",
+    "READ_ONLY_DISK_ARTIFACT_KINDS",
+    "assert_integrated_disk_artifact_kind",
     "build_disk_artifact_key",
     "build_disk_artifact_manifest",
     "build_disk_artifact_subkey",
     "build_disk_artifact_subkeys",
+    "disk_artifact_kind_policy",
     "ensure_disk_artifact_metadata",
     "file_fingerprint",
     "file_sha256",

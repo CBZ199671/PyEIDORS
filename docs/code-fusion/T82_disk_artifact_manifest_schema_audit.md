@@ -2,10 +2,11 @@
 
 Date: 2026-04-27
 
-Scope: T82 phase 4. This is a small architecture audit for the persistent
-disk-artifact manifest layer introduced by T82 phases 1..3. It records which
-artifact kinds are already wired into the shared schema, which paths only
-reference the schema indirectly, and which candidates remain future scope.
+Scope: T82 phase 4/5. This is a small architecture and governance audit for
+the persistent disk-artifact manifest layer introduced by T82 phases 1..3. It
+records which artifact kinds are already wired into the shared schema, which
+paths only reference the schema indirectly, and which candidates remain future
+scope under an explicit registry gate.
 
 ## Canonical Schema
 
@@ -48,21 +49,28 @@ These paths inherit `hdf5-artifact` because they call the shared HDF5 writer:
 | `adios4dolfinx-checkpoint` | future scope | Add only if ADIOS4DOLFINx becomes an independent reload source. Today it is optional and is listed as a file inside the `dolfinx-mesh-cache` manifest. |
 | `adios2-vtx-side-artifact` | future scope | Add only if the VTX/BP side artifact gains a supported reader. Today it remains optional write-side output. |
 | `cache-manager-disk-object` | future scope | The `.pyeidors_cache/v2` sqlite/object store keeps its own runtime index. Bridge to `artifact_manifest` only if a durable export/import workflow needs it. |
-| legacy `.npz` artifacts | future scope/read-only | Remain read-only compatibility inputs. New large 3D artifacts must use HDF5 per V65/V67. |
+| `legacy-npz-artifact` | read-only | Remain read-only compatibility inputs. New large 3D artifacts must use HDF5 per V65/V67. |
 | `MeshCacheLayer` protocol | future scope | Do not introduce until XDMF/HDF5, optional ADIOS2, and HDF5 numeric packages show a real shared storage backend, not only a shared manifest. |
 
-## Phase 4 Decision
+## Phase 5 Governance
 
-T82 is not complete yet. Phases 1..3 established:
+T82 governance is complete. Phases 1..3 established:
 
 - shared manifest key builder,
 - writer-side manifest embedding for HDF5 and DOLFINx mesh cache,
 - reader-side in-memory backfill for legacy HDF5 and legacy mesh metadata,
 - cross-layer `mesh_provenance` subkey.
 
-Remaining work is governance and optional integration, not a blocker for current
-HDF5/DOLFINx usage. Keep T82 status `~` until either:
+Phase 4 recorded the schema audit. Phase 5 adds
+`DISK_ARTIFACT_KIND_POLICIES` in `pyeidors.cache.disk_artifacts`:
 
-1. this audit is accepted as the completion boundary and future candidates move
-   to a new task, or
-2. the future-scope candidates above are implemented and gated.
+- `integrated`: `hdf5-artifact`, `dolfinx-mesh-cache`
+- `future-scope`: `adios4dolfinx-checkpoint`, `adios2-vtx-side-artifact`,
+  `cache-manager-disk-object`, `mesh-cache-layer`
+- `read-only`: `legacy-npz-artifact`
+
+`build_disk_artifact_key` / `build_disk_artifact_manifest` accept only
+`integrated` kinds. Future-scope or read-only candidates fail fast until a new
+task changes the governance policy and adds dedicated gates. T82 can close here:
+optional integrations above are not current HDF5/DOLFINx blockers and must land
+as separate future tasks.

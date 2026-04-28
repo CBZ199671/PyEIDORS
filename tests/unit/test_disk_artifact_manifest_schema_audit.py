@@ -4,6 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pyeidors.cache.disk_artifacts import (
+    FUTURE_DISK_ARTIFACT_KINDS,
+    INTEGRATED_DISK_ARTIFACT_KINDS,
+    READ_ONLY_DISK_ARTIFACT_KINDS,
+)
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AUDIT_DOC = (
     REPO_ROOT / "docs" / "code-fusion" / "T82_disk_artifact_manifest_schema_audit.md"
@@ -34,21 +40,20 @@ def test_t82_manifest_schema_audit_records_canonical_fields() -> None:
 
 def test_t82_manifest_schema_audit_separates_integrated_and_future_scope() -> None:
     text = AUDIT_DOC.read_text(encoding="utf-8")
-    for integrated in ("`hdf5-artifact`", "`dolfinx-mesh-cache`"):
-        assert integrated in text, (
-            f"T82 audit doc must list integrated artifact kind {integrated}"
+    for integrated in INTEGRATED_DISK_ARTIFACT_KINDS:
+        assert f"`{integrated}`" in text, (
+            f"T82 audit doc must list integrated artifact kind {integrated!r}"
         )
-    for future in (
-        "`adios4dolfinx-checkpoint`",
-        "`adios2-vtx-side-artifact`",
-        "`cache-manager-disk-object`",
-        "legacy `.npz` artifacts",
-        "`MeshCacheLayer` protocol",
-    ):
-        assert future in text, f"T82 audit doc must mark future scope {future}"
+    for future in FUTURE_DISK_ARTIFACT_KINDS:
+        assert f"`{future}`" in text, f"T82 audit doc must mark future scope {future!r}"
+    for read_only in READ_ONLY_DISK_ARTIFACT_KINDS:
+        assert f"`{read_only}`" in text, (
+            f"T82 audit doc must mark read-only scope {read_only!r}"
+        )
 
 
-def test_t82_manifest_schema_audit_keeps_t82_open_boundary() -> None:
+def test_t82_manifest_schema_audit_records_governance_close_boundary() -> None:
     text = AUDIT_DOC.read_text(encoding="utf-8")
-    assert "T82 is not complete yet" in text
-    assert "Keep T82 status `~`" in text
+    assert "T82 governance is complete" in text
+    assert "T82 can close here" in text
+    assert "as separate future tasks" in text

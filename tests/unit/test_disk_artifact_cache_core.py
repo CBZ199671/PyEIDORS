@@ -4,11 +4,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from pyeidors.cache.disk_artifacts import (
+    FUTURE_DISK_ARTIFACT_KINDS,
+    INTEGRATED_DISK_ARTIFACT_KINDS,
+    READ_ONLY_DISK_ARTIFACT_KINDS,
+    assert_integrated_disk_artifact_kind,
     build_disk_artifact_key,
     build_disk_artifact_manifest,
     build_disk_artifact_subkey,
     build_disk_artifact_subkeys,
+    disk_artifact_kind_policy,
     file_fingerprint,
     file_sha256,
     stable_json_digest,
@@ -19,6 +26,41 @@ def test_stable_json_digest_is_order_independent() -> None:
     left = {"mesh": {"gdim": 3, "n_elec": 48}, "arrays": ["RM", "Y"]}
     right = {"arrays": ["RM", "Y"], "mesh": {"n_elec": 48, "gdim": 3}}
     assert stable_json_digest(left) == stable_json_digest(right)
+
+
+def test_disk_artifact_kind_governance_freezes_current_boundary() -> None:
+    assert INTEGRATED_DISK_ARTIFACT_KINDS == (
+        "dolfinx-mesh-cache",
+        "hdf5-artifact",
+    )
+    assert FUTURE_DISK_ARTIFACT_KINDS == (
+        "adios2-vtx-side-artifact",
+        "adios4dolfinx-checkpoint",
+        "cache-manager-disk-object",
+        "mesh-cache-layer",
+    )
+    assert READ_ONLY_DISK_ARTIFACT_KINDS == ("legacy-npz-artifact",)
+
+    hdf5_policy = disk_artifact_kind_policy("hdf5-artifact")
+    legacy_policy = disk_artifact_kind_policy("legacy-npz-artifact")
+    assert hdf5_policy is not None
+    assert legacy_policy is not None
+    assert hdf5_policy.status == "integrated"
+    assert legacy_policy.status == "read-only"
+
+
+def test_disk_artifact_kind_governance_rejects_future_and_unknown_writers() -> None:
+    assert_integrated_disk_artifact_kind("hdf5-artifact")
+
+    with pytest.raises(ValueError, match="future-scope"):
+        build_disk_artifact_manifest(
+            "adios4dolfinx-checkpoint",
+            {"format": "bp"},
+        )
+    with pytest.raises(ValueError, match="read-only"):
+        build_disk_artifact_key("legacy-npz-artifact", {"format": "npz"})
+    with pytest.raises(ValueError, match="Unregistered disk artifact kind"):
+        build_disk_artifact_key("new-format-without-governance", {})
 
 
 def test_disk_artifact_key_excludes_output_file_locations(tmp_path: Path) -> None:
