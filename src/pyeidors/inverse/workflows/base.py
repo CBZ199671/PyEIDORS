@@ -8,6 +8,8 @@ from typing import Any
 
 import numpy as np
 
+from ...core_system_helpers import difference_measurement
+from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array
 from ..contracts import SolverOutput
@@ -106,6 +108,8 @@ def compute_residuals(
 ResidualComputer = Callable[
     [np.ndarray, np.ndarray], tuple[np.ndarray, float, float, float]
 ]
+DifferenceMeasurementBuilder = Callable[..., Any]
+DifferenceProjector = Callable[..., np.ndarray]
 
 
 def merge_workflow_metadata(*parts: Mapping[str, Any] | None) -> dict[str, Any]:
@@ -144,3 +148,43 @@ def build_reconstruction_result(
         sigma_change_history=sigma_change_history,
         metadata=dict(metadata or {}),
     )
+
+
+def resolve_difference_vectors(
+    *,
+    measurement_data: Any,
+    reference_data: Any,
+    difference_mode: str,
+    difference_orientation: str,
+    simulated_vector: np.ndarray,
+    simulated_measurement_space: str,
+    difference_fn: DifferenceMeasurementBuilder = difference_measurement,
+    project_fn: DifferenceProjector = project_measurement_vector,
+) -> tuple[np.ndarray, np.ndarray, Any]:
+    """Resolve measured/simulated vectors for difference workflow output.
+
+    ``simulated_measurement_space`` is intentionally explicit: GN runtime emits
+    difference-space simulated measurements, while sparse workflows emit raw
+    forward measurements that must still be projected.
+    """
+
+    diff_data = difference_fn(
+        measurement_data,
+        reference_data,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
+    measured_vector = diff_data.meas
+    resolved_space = str(simulated_measurement_space).strip().lower()
+    if resolved_space == "difference":
+        return measured_vector, simulated_vector, diff_data
+    if resolved_space == "raw":
+        projected_vector = project_fn(
+            simulated_vector,
+            measurement_type="difference",
+            reference_meas=diff_data.reference_meas,
+            difference_mode=diff_data.difference_mode,
+            difference_orientation=diff_data.difference_orientation,
+        )
+        return measured_vector, projected_vector, diff_data
+    raise ValueError("simulated_measurement_space must be 'difference' or 'raw'.")

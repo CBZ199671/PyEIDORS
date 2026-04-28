@@ -17,6 +17,7 @@ from .base import (
     ReconstructionResult,
     compute_residuals,
     merge_workflow_metadata,
+    resolve_difference_vectors,
     resolve_reconstruction_output,
 )
 
@@ -147,19 +148,15 @@ def perform_sparse_difference_reconstruction(
         simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
         simulated_vector = simulated_data.meas
 
-    diff_data = difference_measurement(
-        measurement_data,
-        reference_data,
-        mode=eit_system.difference_mode,
-        orientation=eit_system.difference_orientation,
-    )
-    measured_vector = diff_data.meas
-    predicted_vector = project_measurement_vector(
-        simulated_vector,
-        measurement_type="difference",
-        reference_meas=diff_data.reference_meas,
-        difference_mode=diff_data.difference_mode,
-        difference_orientation=diff_data.difference_orientation,
+    measured_vector, predicted_vector, _ = resolve_difference_vectors(
+        measurement_data=measurement_data,
+        reference_data=reference_data,
+        difference_mode=eit_system.difference_mode,
+        difference_orientation=eit_system.difference_orientation,
+        simulated_vector=simulated_vector,
+        simulated_measurement_space="raw",
+        difference_fn=difference_measurement,
+        project_fn=project_measurement_vector,
     )
     result_metadata = merge_workflow_metadata(
         {

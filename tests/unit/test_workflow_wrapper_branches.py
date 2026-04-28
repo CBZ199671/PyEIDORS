@@ -108,6 +108,13 @@ def test_difference_workflow_init_guard_and_metadata_merge(
         "compute_residuals",
         lambda measured, simulated: (measured - simulated, 0.0, 0.0, 0.0),
     )
+    monkeypatch.setattr(
+        difference_workflow,
+        "project_measurement_vector",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("preprojected GN simulated_measurement must not project")
+        ),
+    )
 
     measured = SimpleNamespace(meas=np.array([1.4, 1.5], dtype=float))
     reference = SimpleNamespace(meas=np.array([1.0, 1.0], dtype=float))

@@ -13,6 +13,7 @@ from .base import (
     resolve_reconstruction_output,
     compute_residuals,
     merge_workflow_metadata,
+    resolve_difference_vectors,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -52,23 +53,21 @@ def perform_difference_reconstruction(
     )
 
     simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
-    diff_data = difference_measurement(
-        measurement_data,
-        reference_data,
-        mode=eit_system.difference_mode,
-        orientation=eit_system.difference_orientation,
-    )
-    measured_vector = diff_data.meas
-    simulated_vector = (
-        reconstruction.simulated_measurement
-        if reconstruction.simulated_measurement is not None
-        else project_measurement_vector(
-            simulated_data.meas,
-            measurement_type="difference",
-            reference_meas=diff_data.reference_meas,
-            difference_mode=diff_data.difference_mode,
-            difference_orientation=diff_data.difference_orientation,
-        )
+    if reconstruction.simulated_measurement is not None:
+        simulated_source = reconstruction.simulated_measurement
+        simulated_space = "difference"
+    else:
+        simulated_source = simulated_data.meas
+        simulated_space = "raw"
+    measured_vector, simulated_vector, _ = resolve_difference_vectors(
+        measurement_data=measurement_data,
+        reference_data=reference_data,
+        difference_mode=eit_system.difference_mode,
+        difference_orientation=eit_system.difference_orientation,
+        simulated_vector=simulated_source,
+        simulated_measurement_space=simulated_space,
+        difference_fn=difference_measurement,
+        project_fn=project_measurement_vector,
     )
     result_metadata = merge_workflow_metadata(
         {
