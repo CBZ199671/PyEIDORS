@@ -32,7 +32,7 @@ hits the per-file totals are:
 | `inverse/jacobian/linearized.py` | 1 | 1 | B (V9 guard) |
 | `inverse/jacobian/direct_jacobian.py` | 1 | 1 | B (jacobian cache key) |
 | `inverse/solvers/sparse_bayesian_engine.py` | 1 | 1 | B (SVD reuse cache) |
-| `inverse/solvers/gauss_newton_linear_system.py` | 10 | 7 (967,970,973,987,1495,1562,1677,1680) | B + C |
+| `inverse/solvers/gauss_newton_linear_system.py` | 10 | 8 (967,970,973,987,1495,1562,1677,1680) | B + C |
 | `inverse/solvers/gauss_newton_startup_cache.py` | 1 | 1 | B (startup cache) |
 | `inverse/reduced/snapshot_bank.py` | 3 | 3 (42, 105, 108) | B (in-memory dedup) |
 | `inverse/prior/rtr.py` | 3 | 0 | C schema-locked |
