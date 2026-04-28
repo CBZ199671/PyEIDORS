@@ -64,8 +64,7 @@ def test_per_file_sha256_inventory_matches_audit_baseline() -> None:
 
 def test_no_undocumented_files_added_sha256_calls() -> None:
     documented = {
-        str((SRC_PYEIDORS / rel).resolve())
-        for rel in EXPECTED_SHA256_PER_FILE
+        str((SRC_PYEIDORS / rel).resolve()) for rel in EXPECTED_SHA256_PER_FILE
     }
     pattern = re.compile(r"hashlib\.sha256\(")
     undocumented: list[str] = []

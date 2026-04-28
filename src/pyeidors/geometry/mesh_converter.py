@@ -43,6 +43,7 @@ def _ensure_gmsh() -> bool:
     gmshio = _gmshio_mod
     return True
 
+
 RadiusProvider = Callable[[object], float]
 
 

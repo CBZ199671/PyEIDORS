@@ -26,7 +26,9 @@ def test_json_default_raises_typeerror_for_unknown_objects() -> None:
     class Opaque:
         pass
 
-    with pytest.raises(TypeError, match="Object of type Opaque is not JSON serializable"):
+    with pytest.raises(
+        TypeError, match="Object of type Opaque is not JSON serializable"
+    ):
         bridge_package._json_default(Opaque())
 
 
