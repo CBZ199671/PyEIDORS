@@ -12,7 +12,13 @@ from ..solvers.sparse_bayesian_engine import (
     SparseBayesianConfig,
     SparseBayesianReconstructor,
 )
-from .base import ReconstructionResult, compute_residuals, resolve_reconstruction_output
+from .base import (
+    build_reconstruction_result,
+    ReconstructionResult,
+    compute_residuals,
+    merge_workflow_metadata,
+    resolve_reconstruction_output,
+)
 
 try:  # pragma: no cover - optional import guard for type checking
     from ...core_system import EITSystem
@@ -74,30 +80,28 @@ def perform_sparse_absolute_reconstruction(
         simulated_vector = simulated_data.meas
 
     measured_vector = measurement_data.meas
-    residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
+    result_metadata = merge_workflow_metadata(
+        {
+            "baseline_used": baseline_image.elem_data.copy(),
+            "display_values": conductivity_values,
+            "solver": "sparse_bayesian",
+            "likelihood_noise_std": solver_output.likelihood_noise_std,
+            "prior_scale": solver_output.prior_scale,
+        },
+        metadata,
+        solver_output.metadata,
+    )
 
-    result_metadata: dict[str, Any] = {
-        "baseline_used": baseline_image.elem_data.copy(),
-        "display_values": conductivity_values,
-        "solver": "sparse_bayesian",
-        "likelihood_noise_std": solver_output.likelihood_noise_std,
-        "prior_scale": solver_output.prior_scale,
-    }
-    if metadata:
-        result_metadata.update(metadata)
-    if solver_output.metadata:
-        result_metadata.update(solver_output.metadata)
-
-    return ReconstructionResult(
+    return build_reconstruction_result(
         mode="absolute",
-        conductivity=conductivity_values,
+        conductivity_values=conductivity_values,
         conductivity_image=conductivity_image,
-        measured=measured_vector,
-        simulated=simulated_vector,
-        residual=residual_vector,
+        measured_vector=measured_vector,
+        simulated_vector=simulated_vector,
         residual_history=residual_history,
         sigma_change_history=sigma_history,
         metadata=result_metadata,
+        residual_fn=compute_residuals,
     )
 
 
@@ -157,28 +161,26 @@ def perform_sparse_difference_reconstruction(
         difference_mode=diff_data.difference_mode,
         difference_orientation=diff_data.difference_orientation,
     )
-    residual_vector, _, _, _ = compute_residuals(measured_vector, predicted_vector)
+    result_metadata = merge_workflow_metadata(
+        {
+            "reference_measured": reference_data.meas.copy(),
+            "display_values": conductivity_values,
+            "solver": "sparse_bayesian",
+            "likelihood_noise_std": solver_output.likelihood_noise_std,
+            "prior_scale": solver_output.prior_scale,
+        },
+        metadata,
+        solver_output.metadata,
+    )
 
-    result_metadata: dict[str, Any] = {
-        "reference_measured": reference_data.meas.copy(),
-        "display_values": conductivity_values,
-        "solver": "sparse_bayesian",
-        "likelihood_noise_std": solver_output.likelihood_noise_std,
-        "prior_scale": solver_output.prior_scale,
-    }
-    if metadata:
-        result_metadata.update(metadata)
-    if solver_output.metadata:
-        result_metadata.update(solver_output.metadata)
-
-    return ReconstructionResult(
+    return build_reconstruction_result(
         mode="difference",
-        conductivity=conductivity_values,
+        conductivity_values=conductivity_values,
         conductivity_image=conductivity_image,
-        measured=measured_vector,
-        simulated=predicted_vector,
-        residual=residual_vector,
+        measured_vector=measured_vector,
+        simulated_vector=predicted_vector,
         residual_history=residual_history,
         sigma_change_history=sigma_history,
         metadata=result_metadata,
+        residual_fn=compute_residuals,
     )

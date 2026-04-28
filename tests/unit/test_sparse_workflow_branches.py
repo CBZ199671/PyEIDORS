@@ -74,7 +74,7 @@ def test_sparse_absolute_uses_factory_fallback_and_metadata(
         simulated_measurement=None,
         likelihood_noise_std=1e-3,
         prior_scale=2e-2,
-        metadata={"solver_meta": "absolute"},
+        metadata={"solver_meta": "absolute", "shared": "solver"},
         iterations=2,
         converged=True,
         final_residual=0.1,
@@ -112,7 +112,7 @@ def test_sparse_absolute_uses_factory_fallback_and_metadata(
         measurement_data=measurement_data,
         reconstructor=None,
         config=config,
-        metadata={"user_meta": "kept"},
+        metadata={"user_meta": "kept", "shared": "user"},
     )
 
     assert created["eit_system"] is eit_system
@@ -122,6 +122,8 @@ def test_sparse_absolute_uses_factory_fallback_and_metadata(
     assert result.metadata["user_meta"] == "kept"
     assert result.metadata["solver_meta"] == "absolute"
     assert result.metadata["solver"] == "sparse_bayesian"
+    assert result.metadata["shared"] == "solver"
+    np.testing.assert_allclose(result.residual, np.array([0.7, 0.6], dtype=float))
 
 
 def test_sparse_difference_type_guard_and_projection_fallback(
@@ -144,7 +146,7 @@ def test_sparse_difference_type_guard_and_projection_fallback(
         simulated_measurement=None,
         likelihood_noise_std=2e-3,
         prior_scale=3e-2,
-        metadata={"solver_meta": "difference"},
+        metadata={"solver_meta": "difference", "shared": "solver"},
         iterations=1,
         converged=True,
         final_residual=0.05,
@@ -187,7 +189,7 @@ def test_sparse_difference_type_guard_and_projection_fallback(
         reference_data=reference_data,
         baseline_image=None,
         reconstructor=_FactoryReconstructor(output=output),
-        metadata={"user_meta": "diff"},
+        metadata={"user_meta": "diff", "shared": "user"},
     )
 
     np.testing.assert_allclose(result.measured, np.array([0.4, 0.7], dtype=float))
@@ -197,3 +199,5 @@ def test_sparse_difference_type_guard_and_projection_fallback(
     )
     assert result.metadata["solver_meta"] == "difference"
     assert result.metadata["user_meta"] == "diff"
+    assert result.metadata["shared"] == "solver"
+    np.testing.assert_allclose(result.residual, np.array([1.2, 1.4], dtype=float))

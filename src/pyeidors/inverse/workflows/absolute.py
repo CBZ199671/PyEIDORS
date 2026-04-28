@@ -6,9 +6,11 @@ from typing import Any, TYPE_CHECKING
 
 from ...data.structures import EITData, EITImage
 from .base import (
+    build_reconstruction_result,
     ReconstructionResult,
     resolve_reconstruction_output,
     compute_residuals,
+    merge_workflow_metadata,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -58,24 +60,23 @@ def perform_absolute_reconstruction(
 
     measured_vector = measurement_data.meas
     simulated_vector = simulated_data.meas
-    residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
+    result_metadata = merge_workflow_metadata(
+        {
+            "display_values": conductivity_values,
+            "baseline_used": baseline_elem,
+            "solver_diagnostics": reconstruction.diagnostics,
+        },
+        metadata,
+    )
 
-    result_metadata: dict[str, Any] = {
-        "display_values": conductivity_values,
-        "baseline_used": baseline_elem,
-        "solver_diagnostics": reconstruction.diagnostics,
-    }
-    if metadata:
-        result_metadata.update(metadata)
-
-    return ReconstructionResult(
+    return build_reconstruction_result(
         mode="absolute",
-        conductivity=conductivity_values,
+        conductivity_values=conductivity_values,
         conductivity_image=conductivity_image,
-        measured=measured_vector,
-        simulated=simulated_vector,
-        residual=residual_vector,
+        measured_vector=measured_vector,
+        simulated_vector=simulated_vector,
         residual_history=residual_history,
         sigma_change_history=sigma_history,
         metadata=result_metadata,
+        residual_fn=compute_residuals,
     )

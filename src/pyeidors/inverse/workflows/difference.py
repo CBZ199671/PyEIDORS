@@ -8,9 +8,11 @@ from ...core_system_helpers import difference_measurement
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITData, EITImage
 from .base import (
+    build_reconstruction_result,
     ReconstructionResult,
     resolve_reconstruction_output,
     compute_residuals,
+    merge_workflow_metadata,
 )
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -68,24 +70,23 @@ def perform_difference_reconstruction(
             difference_orientation=diff_data.difference_orientation,
         )
     )
-    residual_vector, _, _, _ = compute_residuals(measured_vector, simulated_vector)
+    result_metadata = merge_workflow_metadata(
+        {
+            "reference_measured": reference_data.meas,
+            "display_values": conductivity_values,
+            "solver_diagnostics": reconstruction.diagnostics,
+        },
+        metadata,
+    )
 
-    result_metadata: dict[str, Any] = {
-        "reference_measured": reference_data.meas,
-        "display_values": conductivity_values,
-        "solver_diagnostics": reconstruction.diagnostics,
-    }
-    if metadata:
-        result_metadata.update(metadata)
-
-    return ReconstructionResult(
+    return build_reconstruction_result(
         mode="difference",
-        conductivity=conductivity_values,
+        conductivity_values=conductivity_values,
         conductivity_image=conductivity_image,
-        measured=measured_vector,
-        simulated=simulated_vector,
-        residual=residual_vector,
+        measured_vector=measured_vector,
+        simulated_vector=simulated_vector,
         residual_history=residual_history,
         sigma_change_history=sigma_history,
         metadata=result_metadata,
+        residual_fn=compute_residuals,
     )

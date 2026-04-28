@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -101,3 +101,46 @@ def compute_residuals(
     rel_error = float(l2_error / (np.linalg.norm(measured_vector) + 1e-12))
     mse = float(np.mean(residual_vector**2))
     return residual_vector, l2_error, rel_error, mse
+
+
+ResidualComputer = Callable[
+    [np.ndarray, np.ndarray], tuple[np.ndarray, float, float, float]
+]
+
+
+def merge_workflow_metadata(*parts: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Merge workflow metadata maps with later maps taking precedence."""
+
+    merged: dict[str, Any] = {}
+    for part in parts:
+        if part:
+            merged.update(part)
+    return merged
+
+
+def build_reconstruction_result(
+    *,
+    mode: str,
+    conductivity_values: np.ndarray,
+    conductivity_image: EITImage,
+    measured_vector: np.ndarray,
+    simulated_vector: np.ndarray,
+    residual_history: Sequence[float] | None,
+    sigma_change_history: Sequence[float] | None,
+    metadata: Mapping[str, Any] | None = None,
+    residual_fn: ResidualComputer = compute_residuals,
+) -> ReconstructionResult:
+    """Build a workflow result from already-resolved vectors and metadata."""
+
+    residual_vector, _, _, _ = residual_fn(measured_vector, simulated_vector)
+    return ReconstructionResult(
+        mode=mode,
+        conductivity=conductivity_values,
+        conductivity_image=conductivity_image,
+        measured=measured_vector,
+        simulated=simulated_vector,
+        residual=residual_vector,
+        residual_history=residual_history,
+        sigma_change_history=sigma_change_history,
+        metadata=dict(metadata or {}),
+    )

@@ -70,6 +70,7 @@ def test_absolute_workflow_init_guard_and_metadata_merge(
     np.testing.assert_allclose(
         result.metadata["baseline_used"], np.array([1.0, 1.1], dtype=float)
     )
+    np.testing.assert_allclose(result.residual, np.array([0.3, 0.3], dtype=float))
 
 
 def test_difference_workflow_init_guard_and_metadata_merge(
@@ -119,3 +120,4 @@ def test_difference_workflow_init_guard_and_metadata_merge(
     assert result.mode == "difference"
     assert result.metadata["case"] == "difference"
     np.testing.assert_allclose(result.metadata["reference_measured"], reference.meas)
+    np.testing.assert_allclose(result.residual, np.array([0.2, 0.2], dtype=float))
