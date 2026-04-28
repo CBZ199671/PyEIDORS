@@ -105,12 +105,12 @@ respectively).
 | `visual_audit.py` | **leave-alone**: artifact-level audit; rows are figure-pointer style, not metric-row style. | Different schema family. |
 | `dynamic_sequence.py` | **leave-alone**: `DynamicMeasurementSequence` is a measurement container, not a sweep row. V64 dynamic-data contract pinned. | Different abstraction layer. |
 | `temporal_filtering.py` | **leave-alone**: `MeasurementTemporalFilterResult` is filter metadata. | Different abstraction layer. |
-| `holdout_point_audit.py` | **soft-merge candidate**: `HoldoutPointAuditRow` / `HoldoutPointAuditSummary` partially overlap holdout_fit_diff fields. Defer until the holdout summary base lands first. | Smaller surface; do after `holdout_fit_diff`. |
+| `holdout_point_audit.py` | **soft-merged (phase 2f)**: `HoldoutPointAuditRow` now reuses zero-field `SweepRow` CSV serialization; `HoldoutPointAuditSummary` stays bespoke because it is count/geometry metadata, not a metric row. | Removes hand-written blank-cell row builder without changing point-selection logic. |
 
-In one line: of the 10 modules, **3** carry rows that would benefit
+In one line: of the 10 modules, **4** now carry rows that benefit
 from a shared `ReconMetricRow` + `_StructureMetrics` base
 (`bucket_dense_experiments`, `holdout_fit_diff`,
-`voltage_digit_sweep`), one is a follow-up candidate
+`voltage_digit_sweep`) or zero-field `SweepRow`
 (`holdout_point_audit`), and the remaining 6 should stay as-is. The
 two largest files (≥ 1 200 LOC each) get *partial* row-schema
 consolidation, not a wholesale rewrite, because the bulk of their

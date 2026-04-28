@@ -5,10 +5,12 @@ import numpy as np
 from pyeidors.data.structures import PatternConfig
 from pyeidors.electrodes.patterns import StimMeasPatternManager
 from pyeidors.data.holdout_point_audit import (
+    POINT_AUDIT_FIELDS,
     build_holdout_point_audit,
     drive_removed_frame_indices,
     far3_frame_indices,
 )
+from pyeidors.data._sweep_core import SweepRow
 
 
 def test_holdout_point_audit_counts_16e_adjacent_256_to_208_to_160() -> None:
@@ -23,6 +25,16 @@ def test_holdout_point_audit_counts_16e_adjacent_256_to_208_to_160() -> None:
     assert summary.points_per_full_frame == 16
     assert summary.points_per_kept_frame == 13
     assert summary.points_per_train_frame == 10
+
+
+def test_holdout_point_audit_row_uses_shared_sweep_csv_contract() -> None:
+    rows, _ = build_holdout_point_audit(n_elec=16, holdout="far3")
+    first = rows[0]
+
+    assert isinstance(first, SweepRow)
+    assert list(first.as_csv_row()) == POINT_AUDIT_FIELDS
+    assert first.as_csv_row()["frame_index_13"] == ""
+    assert first.as_csv_row()["fit_residual"] == ""
 
 
 def test_holdout_point_audit_first_frame_removed_pairs_are_expected() -> None:

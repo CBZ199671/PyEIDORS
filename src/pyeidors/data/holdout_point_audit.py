@@ -4,7 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 from typing import Iterable
+
+from ._sweep_core import SweepRow
 
 
 POINT_AUDIT_FIELDS = [
@@ -30,8 +33,10 @@ POINT_AUDIT_FIELDS = [
 
 
 @dataclass(frozen=True)
-class HoldoutPointAuditRow:
+class HoldoutPointAuditRow(SweepRow):
     """One candidate adjacent voltage measurement point in a stimulation frame."""
+
+    csv_fieldnames: ClassVar[tuple[str, ...]] = tuple(POINT_AUDIT_FIELDS)
 
     stim_index: int
     stim_e1: int
@@ -51,33 +56,6 @@ class HoldoutPointAuditRow:
     fit_voltage_anomaly: float | None = None
     fit_voltage_diff: float | None = None
     fit_residual: float | None = None
-
-    def as_csv_row(self) -> dict[str, int | float | str]:
-        """Return CSV-ready row; unknown voltage values stay blank."""
-
-        def optional(value: int | float | None) -> int | float | str:
-            return "" if value is None else value
-
-        return {
-            "stim_index": self.stim_index,
-            "stim_e1": self.stim_e1,
-            "stim_e2": self.stim_e2,
-            "meas_index_full": self.meas_index_full,
-            "meas_e1": self.meas_e1,
-            "meas_e2": self.meas_e2,
-            "global_index_256": self.global_index_256,
-            "frame_index_16": self.frame_index_16,
-            "frame_index_13": optional(self.frame_index_13),
-            "frame_index_10": optional(self.frame_index_10),
-            "point_status": self.point_status,
-            "voltage_reference": optional(self.voltage_reference),
-            "voltage_anomaly": optional(self.voltage_anomaly),
-            "voltage_diff": optional(self.voltage_diff),
-            "fit_voltage_reference": optional(self.fit_voltage_reference),
-            "fit_voltage_anomaly": optional(self.fit_voltage_anomaly),
-            "fit_voltage_diff": optional(self.fit_voltage_diff),
-            "fit_residual": optional(self.fit_residual),
-        }
 
 
 @dataclass(frozen=True)
