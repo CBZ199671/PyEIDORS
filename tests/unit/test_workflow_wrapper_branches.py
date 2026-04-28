@@ -128,3 +128,62 @@ def test_difference_workflow_init_guard_and_metadata_merge(
     assert result.metadata["case"] == "difference"
     np.testing.assert_allclose(result.metadata["reference_measured"], reference.meas)
     np.testing.assert_allclose(result.residual, np.array([0.2, 0.2], dtype=float))
+
+
+def test_difference_workflow_keeps_eager_forward_solve_with_solver_simulated(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conductivity_image = SimpleNamespace(elem_data=np.array([1.2, 1.3], dtype=float))
+    fwd_calls: list[object] = []
+
+    def _fwd_solve(image):
+        fwd_calls.append(image)
+        return SimpleNamespace(meas=np.array([9.0, 9.1], dtype=float)), {"ok": True}
+
+    reconstruction = SimpleNamespace(
+        diagnostics={"solver": "stub"},
+        simulated_measurement=np.array([0.2, 0.3], dtype=float),
+    )
+    eit_system = SimpleNamespace(
+        _is_initialized=True,
+        fwd_model=SimpleNamespace(fwd_solve=_fwd_solve),
+        difference_mode="normalized",
+        difference_orientation="target_minus_reference",
+        inverse_solve=lambda **_kwargs: reconstruction,
+    )
+    monkeypatch.setattr(
+        difference_workflow,
+        "resolve_reconstruction_output",
+        lambda _reconstruction, _fwd_model: (
+            conductivity_image,
+            np.array([1.2, 1.3], dtype=float),
+            [0.3],
+            [0.1],
+        ),
+    )
+    monkeypatch.setattr(
+        difference_workflow,
+        "difference_measurement",
+        lambda _meas, ref, **kwargs: SimpleNamespace(
+            meas=np.array([0.4, 0.5], dtype=float),
+            reference_meas=ref.meas.copy(),
+            difference_mode=kwargs["mode"],
+            difference_orientation=kwargs["orientation"],
+        ),
+    )
+    monkeypatch.setattr(
+        difference_workflow,
+        "project_measurement_vector",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("preprojected GN simulated_measurement must not project")
+        ),
+    )
+
+    result = difference_workflow.perform_difference_reconstruction(
+        eit_system,
+        measurement_data=SimpleNamespace(meas=np.array([1.4, 1.5], dtype=float)),
+        reference_data=SimpleNamespace(meas=np.array([1.0, 1.0], dtype=float)),
+    )
+
+    assert fwd_calls == [conductivity_image]
+    np.testing.assert_allclose(result.simulated, np.array([0.2, 0.3], dtype=float))

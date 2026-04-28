@@ -10,6 +10,7 @@ from .base import (
     ReconstructionResult,
     resolve_reconstruction_output,
     compute_residuals,
+    forward_measurement_vector,
     merge_workflow_metadata,
     require_initialized,
 )
@@ -59,10 +60,11 @@ def perform_absolute_reconstruction(
         resolve_reconstruction_output(reconstruction, eit_system.fwd_model)
     )
 
-    simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
-
     measured_vector = measurement_data.meas
-    simulated_vector = simulated_data.meas
+    simulated_vector = forward_measurement_vector(
+        fwd_model=eit_system.fwd_model,
+        conductivity_image=conductivity_image,
+    )
     result_metadata = merge_workflow_metadata(
         {
             "display_values": conductivity_values,

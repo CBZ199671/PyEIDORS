@@ -109,6 +109,17 @@ def require_solver_output(value: Any, *, owner: str) -> SolverOutput:
     return value
 
 
+def forward_measurement_vector(
+    *,
+    fwd_model: Any,
+    conductivity_image: EITImage,
+) -> np.ndarray:
+    """Run a forward solve and return its measurement vector."""
+
+    simulated_data, _ = fwd_model.fwd_solve(conductivity_image)
+    return simulated_data.meas
+
+
 def resolve_simulated_or_forward(
     *,
     solver_output: SolverOutput,
@@ -120,8 +131,10 @@ def resolve_simulated_or_forward(
     simulated_vector = solver_output.simulated_measurement
     if simulated_vector is not None:
         return simulated_vector
-    simulated_data, _ = fwd_model.fwd_solve(conductivity_image)
-    return simulated_data.meas
+    return forward_measurement_vector(
+        fwd_model=fwd_model,
+        conductivity_image=conductivity_image,
+    )
 
 
 def compute_residuals(

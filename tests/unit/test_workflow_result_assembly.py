@@ -10,6 +10,7 @@ import pytest
 from pyeidors.inverse.contracts import SolverOutput
 from pyeidors.inverse.workflows.base import (
     build_reconstruction_result,
+    forward_measurement_vector,
     merge_workflow_metadata,
     require_initialized,
     require_solver_output,
@@ -95,6 +96,24 @@ def test_resolve_simulated_or_forward_prefers_solver_output_without_fallback() -
     )
 
     np.testing.assert_allclose(resolved, np.array([0.2, 0.4], dtype=float))
+
+
+def test_forward_measurement_vector_returns_forward_meas() -> None:
+    calls: list[object] = []
+
+    def _fwd_solve(image):
+        calls.append(image)
+        return SimpleNamespace(meas=np.array([0.15, 0.35], dtype=float)), {"ok": True}
+
+    conductivity_image = SimpleNamespace(elem_data=np.array([1.0]))
+
+    resolved = forward_measurement_vector(
+        fwd_model=SimpleNamespace(fwd_solve=_fwd_solve),
+        conductivity_image=conductivity_image,
+    )
+
+    assert calls == [conductivity_image]
+    np.testing.assert_allclose(resolved, np.array([0.15, 0.35], dtype=float))
 
 
 def test_resolve_simulated_or_forward_runs_forward_fallback_when_missing() -> None:

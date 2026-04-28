@@ -12,6 +12,7 @@ from .base import (
     ReconstructionResult,
     resolve_reconstruction_output,
     compute_residuals,
+    forward_measurement_vector,
     merge_workflow_metadata,
     require_initialized,
     resolve_difference_vectors,
@@ -55,12 +56,15 @@ def perform_difference_reconstruction(
         resolve_reconstruction_output(reconstruction, eit_system.fwd_model)
     )
 
-    simulated_data, _ = eit_system.fwd_model.fwd_solve(conductivity_image)
+    forward_simulated_vector = forward_measurement_vector(
+        fwd_model=eit_system.fwd_model,
+        conductivity_image=conductivity_image,
+    )
     if reconstruction.simulated_measurement is not None:
         simulated_source = reconstruction.simulated_measurement
         simulated_space = "difference"
     else:
-        simulated_source = simulated_data.meas
+        simulated_source = forward_simulated_vector
         simulated_space = "raw"
     measured_vector, simulated_vector, _ = resolve_difference_vectors(
         measurement_data=measurement_data,
