@@ -18,6 +18,7 @@ from pyeidors.interop import (
     load_forward_csv,
     save_exchange_mat,
 )
+from pyeidors.io._json import json_ready
 
 from .matlab_templates import CAPTURE_SCRIPT_TEMPLATE, RUN_IN_EIDORS_TEMPLATE
 from .models import (
@@ -50,11 +51,12 @@ class LoadedBridgePackage:
 
 
 def _json_default(value: Any) -> Any:
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    raise TypeError(f"Object of type {type(value).__name__} is not JSON serializable")
+    converted = json_ready(value)
+    if converted is value:
+        raise TypeError(
+            f"Object of type {type(value).__name__} is not JSON serializable"
+        )
+    return converted
 
 
 def utc_now_iso() -> str:
