@@ -21,6 +21,7 @@ from eit_app.ui.theme import set_button_role, set_hint_text
 SIMULATION_INVERSE_METHODS = [
     "noser_rm",
     "laplace_rm",
+    "curvature_rm",
     "greit3d_rm",
     "debug_fine_mesh_noser",
     "debug_full_gn",
@@ -34,6 +35,7 @@ _METHOD_TOOLTIP_KEYS = {
     "debug_fine_mesh_noser": "sim.inverse.method.debug_fine_mesh_noser.tooltip",
     "noser_rm": "sim.inverse.method.noser_rm.tooltip",
     "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
+    "curvature_rm": "sim.inverse.method.curvature_rm.tooltip",
     "greit3d_rm": "sim.inverse.method.greit3d_rm.tooltip",
     "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
 }

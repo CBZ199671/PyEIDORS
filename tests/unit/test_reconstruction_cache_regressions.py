@@ -296,6 +296,77 @@ def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
     assert cpu_signature == cuda_signature
 
 
+def test_smooth_rm_signature_tracks_graph_prior_semantics_not_storage_axes() -> None:
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "rm_auto_build": True,
+        "mesh_size": 0.25,
+        "rm_inverse_mesh_size": 0.25,
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference",
+        "n_elec": 16,
+        "radius": 1.0,
+        "rm_graph_weight": "unit",
+    }
+    laplace_cpu = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "simulation_inverse_route": "laplace_rm",
+            "rm_regularization": "laplace",
+            "device": "cpu",
+            "petsc_device": "cpu",
+        },
+    )
+    laplace_cuda = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "simulation_inverse_route": "laplace_rm",
+            "rm_regularization": "laplace",
+            "device": "cuda",
+            "petsc_device": "cuda",
+        },
+    )
+    curvature = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "simulation_inverse_route": "curvature_rm",
+            "rm_regularization": "curvature",
+            "device": "cpu",
+            "petsc_device": "cpu",
+        },
+    )
+
+    laplace_cpu_runtime = rc._prepare_single_step_cached_runtime(laplace_cpu)
+    laplace_cuda_runtime = rc._prepare_single_step_cached_runtime(laplace_cuda)
+    curvature_runtime = rc._prepare_single_step_cached_runtime(curvature)
+    laplace_cpu_signature, laplace_payload = rc._planned_one_step_rm_signature(
+        laplace_cpu,
+        laplace_cpu_runtime,
+    )
+    laplace_cuda_signature, _ = rc._planned_one_step_rm_signature(
+        laplace_cuda,
+        laplace_cuda_runtime,
+    )
+    curvature_signature, curvature_payload = rc._planned_one_step_rm_signature(
+        curvature,
+        curvature_runtime,
+    )
+
+    assert laplace_cpu_runtime.cache_key != laplace_cuda_runtime.cache_key
+    assert laplace_cpu_signature == laplace_cuda_signature
+    assert laplace_cpu_signature != curvature_signature
+    assert laplace_payload["regularization_type"] == "laplace"
+    assert laplace_payload["hyperparameters"]["prior_operator"] == "graph_laplacian"
+    assert curvature_payload["regularization_type"] == "curvature"
+    assert curvature_payload["hyperparameters"]["prior_operator"] == "graph_ltl"
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -669,6 +740,128 @@ def test_single_step_cached_noser_rm_route_auto_builds_hdf5_hot_path(
 
     warm = rc._run_single_step_cached_request(request)
     np.testing.assert_allclose(warm.conductivity, expected_sigma)
+    assert context_calls["count"] == 1
+    assert (
+        warm.metadata["solver_diagnostics"]["cache_lookups"]["rm_artifact"]["layer"]
+        == "process"
+    )
+
+
+@pytest.mark.parametrize(
+    ("route", "mode", "prior_builder", "expected_source"),
+    [
+        ("laplace_rm", "laplace", "graph_laplacian", "provided_laplace"),
+        ("curvature_rm", "curvature", "graph_ltl_prior", "provided_graph_ltl"),
+    ],
+)
+def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    route: str,
+    mode: str,
+    prior_builder: str,
+    expected_source: str,
+) -> None:
+    from pyeidors.inverse import CellMesh
+    from pyeidors.inverse.prior import graph_laplacian, graph_ltl_prior
+    from pyeidors.inverse.reconstruction_matrix import build_one_step_rm
+
+    reference = np.ones(4, dtype=float)
+    target = reference + np.array([0.0, 1.0, 1.0, 0.0], dtype=float)
+    jacobian = np.eye(4, dtype=float)
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [2.0, 0.0], [3.0, 0.0], [4.0, 0.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1], [1, 2], [2, 3], [3, 4]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(4, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    context_calls = {"count": 0}
+
+    def _fake_context(*_args, **_kwargs):
+        context_calls["count"] += 1
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _fake_context)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=lambda **_kwargs: fake_ctx),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": route,
+            "rm_regularization": mode,
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.25,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    inverse_mesh = CellMesh(node_coords, cells, name=f"{route}-expected")
+    regularization = (
+        graph_laplacian(inverse_mesh)
+        if prior_builder == "graph_laplacian"
+        else graph_ltl_prior(inverse_mesh)
+    )
+    expected_rm = build_one_step_rm(
+        jacobian,
+        regularization=regularization,
+        lambda_=0.5,
+        mode=mode,
+        form="measurement",
+    )
+    expected_delta = expected_rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, 1.0 + expected_delta)
+    assert result.error_msg is None
+    assert context_calls["count"] == 1
+    assert Path(result.metadata["rm_artifact_path"]).suffix == ".h5"
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    delta = result.conductivity - 1.0
+    assert delta[1:3].mean() > delta[[0, 3]].mean()
+    assert abs(delta[1] - delta[2]) <= 1.0e-12
+    assert abs(delta[0] - delta[3]) <= 1.0e-12
+
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["rm_metadata"]["rm_build_route"] == route
+    assert diagnostics["rm_metadata"]["regularization_type"] == mode
+    assert diagnostics["rm_metadata"]["regularization_source"] == expected_source
+    assert diagnostics["rm_metadata"]["RtR_signature_hash"]
+    assert diagnostics["rm_metadata"]["form"] == "measurement"
+
+    warm = rc._run_single_step_cached_request(request)
+    np.testing.assert_allclose(warm.conductivity, result.conductivity)
     assert context_calls["count"] == 1
     assert (
         warm.metadata["solver_diagnostics"]["cache_lookups"]["rm_artifact"]["layer"]

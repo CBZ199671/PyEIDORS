@@ -2633,7 +2633,8 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
     ("method", "pending_task", "regularization", "auto_build", "display_mode"),
     [
         ("noser_rm", "", "noser", True, "absolute_sigma"),
-        ("laplace_rm", "T101", "laplace", False, ""),
+        ("laplace_rm", "", "laplace", True, "absolute_sigma"),
+        ("curvature_rm", "", "curvature", True, "absolute_sigma"),
         ("greit3d_rm", "T102", "greit", False, ""),
     ],
 )
@@ -2687,7 +2688,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
     assert request.metadata["rm_regularization"] == regularization
     assert request.metadata["difference_preset"] == method
     assert request.metadata["rm_output_display_mode"] == display_mode
-    if method == "noser_rm":
+    if method in {"noser_rm", "laplace_rm", "curvature_rm"}:
         assert request.metadata["rm_form"] == "measurement"
         assert request.metadata["rm_inverse_mesh_size"] >= request.metadata["mesh_size"]
         assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"

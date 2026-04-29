@@ -425,8 +425,12 @@ TRANSLATIONS: dict[str, str] = {
         "artifact, then reconstruct with the RM @ dv hot path."
     ),
     "sim.inverse.method.laplace_rm.tooltip": (
-        "Laplace RM hot path: use a precomputed smooth-prior RM artifact; "
-        "artifact build is T101."
+        "Laplace RM smooth route: cold-build or reuse an HDF5 graph-Laplacian "
+        "artifact, then reconstruct with the RM @ dv hot path."
+    ),
+    "sim.inverse.method.curvature_rm.tooltip": (
+        "Curvature RM smooth route: cold-build or reuse an HDF5 graph-LtL "
+        "artifact, then reconstruct with the RM @ dv hot path."
     ),
     "sim.inverse.method.greit3d_rm.tooltip": (
         "3D GREIT RM/common-config hot path; requires a GREIT artifact from T102."

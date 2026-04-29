@@ -3626,8 +3626,16 @@ class EITWorkstation(QMainWindow):
             difference_preset = "laplace_rm"
             route_kind = "rm"
             rm_regularization = "laplace"
-            rm_route_pending_task = "T101"
             rm_route_requires_artifact = True
+            rm_auto_build = True
+        elif route == "curvature_rm":
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "curvature_rm"
+            route_kind = "rm"
+            rm_regularization = "curvature"
+            rm_route_requires_artifact = True
+            rm_auto_build = True
         elif route == "greit3d_rm":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
@@ -3644,7 +3652,7 @@ class EITWorkstation(QMainWindow):
 
         mesh_size = float(forward_cfg.mesh_refinement)
         rm_inverse_mesh_size = None
-        if route == "noser_rm":
+        if route in {"noser_rm", "laplace_rm", "curvature_rm"}:
             rm_inverse_mesh_size = max(mesh_size, float(forward_cfg.radius) / 4.0)
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
@@ -3675,8 +3683,12 @@ class EITWorkstation(QMainWindow):
             "rm_auto_build": rm_auto_build,
             "rm_route_pending_task": rm_route_pending_task,
             "rm_regularization": rm_regularization,
-            "rm_form": "measurement" if route == "noser_rm" else "",
-            "rm_output_display_mode": "absolute_sigma" if route == "noser_rm" else "",
+            "rm_form": "measurement"
+            if route in {"noser_rm", "laplace_rm", "curvature_rm"}
+            else "",
+            "rm_output_display_mode": "absolute_sigma"
+            if route in {"noser_rm", "laplace_rm", "curvature_rm"}
+            else "",
             "rm_artifact_dir": ".pyeidors_cache/gui_rm",
             "reconstruction_runtime": reconstruction_runtime,
             "jacobian_representation": "auto",

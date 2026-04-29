@@ -60,9 +60,15 @@ _RM_ARTIFACT_META_KEYS = (
 _PRODUCTION_RM_ROUTE_TASKS = {
     "noser_rm": "T100",
     "laplace_rm": "T101",
+    "curvature_rm": "T101",
     "greit3d_rm": "T102",
 }
-_AUTO_BUILD_RM_ROUTES = {"noser_rm"}
+_ONE_STEP_RM_ROUTE_REGULARIZATION = {
+    "noser_rm": "noser",
+    "laplace_rm": "laplace",
+    "curvature_rm": "curvature",
+}
+_AUTO_BUILD_RM_ROUTES = frozenset(_ONE_STEP_RM_ROUTE_REGULARIZATION)
 
 
 def build_difference_vector(*args, **kwargs):
@@ -707,12 +713,28 @@ def _meta_value_present(value: Any) -> bool:
     return value is not None and not (isinstance(value, str) and not value.strip())
 
 
+def _simulation_inverse_route(meta: dict[str, Any]) -> str:
+    return str(meta.get("simulation_inverse_route", "")).strip().lower()
+
+
+def _one_step_rm_regularization(meta: dict[str, Any]) -> str:
+    route = _simulation_inverse_route(meta)
+    regularization = _ONE_STEP_RM_ROUTE_REGULARIZATION.get(route)
+    if regularization:
+        return regularization
+    return str(meta.get("rm_regularization", "")).strip().lower()
+
+
 def _is_noser_rm_route(meta: dict[str, Any]) -> bool:
-    return str(meta.get("simulation_inverse_route", "")).strip().lower() == "noser_rm"
+    return _simulation_inverse_route(meta) == "noser_rm"
+
+
+def _is_auto_built_one_step_rm_route(meta: dict[str, Any]) -> bool:
+    return _simulation_inverse_route(meta) in _AUTO_BUILD_RM_ROUTES
 
 
 def _should_auto_build_rm_artifact(meta: dict[str, Any]) -> bool:
-    route = str(meta.get("simulation_inverse_route", "")).strip().lower()
+    route = _simulation_inverse_route(meta)
     return route in _AUTO_BUILD_RM_ROUTES and _flag_enabled(
         meta.get("rm_auto_build", False)
     )
@@ -763,7 +785,7 @@ def _array_pair_hash(*arrays: Any) -> str:
     return digest.hexdigest()
 
 
-def _planned_noser_rm_signature(
+def _planned_one_step_rm_signature(
     req: ReconstructionRequest,
     runtime: _SingleStepCachedRuntimeConfig,
 ) -> tuple[str, dict[str, Any]]:
@@ -774,6 +796,8 @@ def _planned_noser_rm_signature(
     channel_mask = _channel_mask_from_meta(meta, n_measurements=n_meas)
     weights = _measurement_weights_from_meta(meta, n_measurements=n_meas)
     hp = math.sqrt(max(float(runtime.lam), 0.0))
+    regularization_type = _one_step_rm_regularization(meta) or "noser"
+    graph_weight = str(meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
     forward_mesh_payload = {
         "mesh_dimension": runtime.mesh_dim,
         "forward_mesh_size": meta.get("mesh_size", req.mesh_refinement),
@@ -845,31 +869,49 @@ def _planned_noser_rm_signature(
         difference_mode=str(meta.get("difference_mode", "raw")),
         bad_channel_mask=channel_mask,
         noise_covariance=weights,
-        regularization_type="noser",
+        regularization_type=regularization_type,
         hyperparameters={
             "hp": hp,
             "hp_squared": hp * hp,
             "lambda_eff": float(runtime.lam),
             "form": "measurement",
-            "noser_exponent": 0.5,
+            "noser_exponent": 0.5 if regularization_type == "noser" else None,
+            "prior_operator": {
+                "laplace": "graph_laplacian",
+                "curvature": "graph_ltl",
+                "graph_ltl": "graph_ltl",
+            }.get(regularization_type),
+            "graph_weight": graph_weight
+            if regularization_type in {"laplace", "curvature", "graph_ltl"}
+            else None,
         },
     )
     return _stable_json_digest(payload), payload
 
 
-def _planned_noser_rm_artifact_path(
+def _planned_noser_rm_signature(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+) -> tuple[str, dict[str, Any]]:
+    """Backward-compatible alias for tests and diagnostics."""
+
+    return _planned_one_step_rm_signature(req, runtime)
+
+
+def _planned_one_step_rm_artifact_path(
     req: ReconstructionRequest,
     runtime: _SingleStepCachedRuntimeConfig,
 ) -> tuple[Path, str, dict[str, Any]]:
-    signature, payload = _planned_noser_rm_signature(req, runtime)
+    signature, payload = _planned_one_step_rm_signature(req, runtime)
     artifact_dir = _repo_relative_or_absolute_path(
         runtime.meta.get("rm_artifact_dir"),
         default=".pyeidors_cache/gui_rm",
     )
-    return artifact_dir / f"noser_rm_{signature[:24]}.h5", signature, payload
+    route = _simulation_inverse_route(runtime.meta) or "one_step_rm"
+    return artifact_dir / f"{route}_{signature[:24]}.h5", signature, payload
 
 
-def _ensure_auto_built_noser_rm_artifact(
+def _ensure_auto_built_one_step_rm_artifact(
     req: ReconstructionRequest,
     runtime: _SingleStepCachedRuntimeConfig,
     *,
@@ -877,9 +919,11 @@ def _ensure_auto_built_noser_rm_artifact(
 ) -> Path | None:
     if not _should_auto_build_rm_artifact(runtime.meta):
         return None
-    if not _is_noser_rm_route(runtime.meta):
+    if not _is_auto_built_one_step_rm_route(runtime.meta):
         return None
-    artifact_path, signature, signature_payload = _planned_noser_rm_artifact_path(
+    route = _simulation_inverse_route(runtime.meta)
+    regularization_type = _one_step_rm_regularization(runtime.meta) or "noser"
+    artifact_path, signature, signature_payload = _planned_one_step_rm_artifact_path(
         req,
         runtime,
     )
@@ -890,11 +934,11 @@ def _ensure_auto_built_noser_rm_artifact(
         runtime.meta["dual_model_rm_path"] = str(artifact_path)
         runtime.meta["rm_artifact_auto_built"] = False
         runtime.meta["rm_artifact_cache_status"] = "disk_hit"
-        emit("Using cached NOSER RM artifact...")
+        emit(f"Using cached {regularization_type.upper()} RM artifact...")
         return artifact_path
 
     diff_runner = _load_gn_difference_runner_module()
-    emit("Building NOSER RM artifact...")
+    emit(f"Building {regularization_type.upper()} RM artifact...")
     ctx = _ensure_single_step_cached_context(
         runtime,
         emit=emit,
@@ -903,12 +947,32 @@ def _ensure_auto_built_noser_rm_artifact(
     jacobian = np.asarray(ctx["J"], dtype=np.float64)
     if jacobian.ndim != 2 or 0 in jacobian.shape:
         raise ValueError(
-            f"NOSER RM build requires a non-empty dense J, got {jacobian.shape}."
+            f"{route} RM build requires a non-empty dense J, got {jacobian.shape}."
         )
     n_meas = int(jacobian.shape[0])
     channel_mask = _channel_mask_from_meta(runtime.meta, n_measurements=n_meas)
     weights = _measurement_weights_from_meta(runtime.meta, n_measurements=n_meas)
     hp = math.sqrt(max(float(runtime.lam), 0.0))
+
+    node_coords = np.asarray(ctx["display_node_coords"], dtype=np.float64)
+    cell_connectivity = np.asarray(ctx["display_cell_connectivity"], dtype=np.int32)
+    regularization = None
+    graph_weight = (
+        str(runtime.meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
+    )
+    if regularization_type in {"laplace", "curvature", "graph_ltl"}:
+        from pyeidors.inverse import CellMesh
+        from pyeidors.inverse.prior import graph_laplacian, graph_ltl_prior
+
+        inverse_mesh = CellMesh(
+            coordinates=node_coords,
+            cells=cell_connectivity,
+            name=f"{route}-inverse-mesh",
+        )
+        if regularization_type == "laplace":
+            regularization = graph_laplacian(inverse_mesh, weight=graph_weight)
+        else:
+            regularization = graph_ltl_prior(inverse_mesh, weight=graph_weight)
 
     from pyeidors.inverse.reconstruction_matrix import (
         build_one_step_rm,
@@ -917,19 +981,18 @@ def _ensure_auto_built_noser_rm_artifact(
 
     rm = build_one_step_rm(
         jacobian,
+        regularization=regularization,
         lambda_=hp,
-        mode="noser",
+        mode=regularization_type,
         form="measurement",
         channel_mask=channel_mask,
         measurement_weights=weights,
         return_metadata=True,
     )
-    node_coords = np.asarray(ctx["display_node_coords"], dtype=np.float64)
-    cell_connectivity = np.asarray(ctx["display_cell_connectivity"], dtype=np.int32)
     mesh_hash = _array_pair_hash(node_coords, cell_connectivity)
     metadata = {
-        "algorithm": "one-step-noser",
-        "rm_build_route": "noser_rm",
+        "algorithm": f"one-step-{regularization_type}",
+        "rm_build_route": route,
         "rm_signature": signature,
         "rm_signature_payload": signature_payload,
         "forward_mesh_hash": mesh_hash,
@@ -950,6 +1013,9 @@ def _ensure_auto_built_noser_rm_artifact(
         "mesh_dimension": int(runtime.mesh_dim),
         "effective_refinement": int(runtime.refinement),
         "inverse_mesh_size": runtime.meta.get("rm_inverse_mesh_size"),
+        "rm_graph_weight": graph_weight
+        if regularization_type in {"laplace", "curvature", "graph_ltl"}
+        else "",
         "online_hot_path": "rm_matmul",
         **dict(rm.metadata),
     }
@@ -1493,7 +1559,7 @@ def _prepare_single_step_cached_runtime(
     meta["jacobian_representation"] = jac_repr
     radius = float(meta.get("radius", 1.0))
     mesh_size_for_runtime = meta.get("mesh_size")
-    if _is_noser_rm_route(meta):
+    if _is_auto_built_one_step_rm_route(meta):
         try:
             requested_mesh_size = float(meta.get("mesh_size", req.mesh_refinement))
         except (TypeError, ValueError):
@@ -2150,7 +2216,7 @@ def _run_single_step_cached_request(
     if rm_result is not None:
         return rm_result
     if _should_auto_build_rm_artifact(runtime.meta):
-        _ensure_auto_built_noser_rm_artifact(req, runtime, emit=emit)
+        _ensure_auto_built_one_step_rm_artifact(req, runtime, emit=emit)
         rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
         if rm_result is not None:
             return rm_result
