@@ -300,7 +300,7 @@ def test_single_step_cached_uses_measurement_space_when_operator_shape_matches(
     )
 
     assert calls == {"measurement": 1, "parameter": 0}
-    assert np.allclose(result.conductivity, delta_sigma)
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + delta_sigma)
     assert np.allclose(result.measured, expected_dv)
     assert np.allclose(result.simulated, pred_diff)
     assert result.metadata["single_step_operator_space"] == "measurement"
@@ -393,7 +393,7 @@ def test_single_step_cached_limits_alpha_before_forward_validation(
     assert 0.0 < result.metadata["step_size_alpha"] < 0.4
     assert result.metadata["step_size_alpha_requested"] == pytest.approx(1.0)
     assert result.metadata["step_size_alpha_limited"] is True
-    np.testing.assert_allclose(result.conductivity, captured_sigma[-1] - sigma_bg)
+    np.testing.assert_allclose(result.conductivity, captured_sigma[-1])
 
 
 def test_single_step_cached_uses_linearized_operator_solver(
@@ -482,7 +482,7 @@ def test_single_step_cached_uses_linearized_operator_solver(
     )
 
     assert calls == {"linearized": 1, "measurement": 0, "parameter": 0}
-    assert np.allclose(result.conductivity, delta_sigma)
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + delta_sigma)
     assert result.metadata["single_step_operator_space"] == "linearized"
 
 
@@ -498,6 +498,50 @@ def test_mesh_setup_panel_exposes_tetra_and_hex_3d_families():
 
         panel.set_config({"mesh_dimension": 2, "mesh_family": "hex"})
         assert panel.get_config()["mesh_family"] == "tetra"
+    finally:
+        panel.close()
+
+
+def test_mesh_setup_panel_exposes_2d_length_and_3d_area_geometry():
+    _get_app()
+    panel = MeshSetupPanel()
+    try:
+        panel.set_config(
+            {
+                "mesh_dimension": 2,
+                "radius": 1.0,
+                "n_electrodes": 16,
+                "electrode_length_m_override": 0.125,
+            }
+        )
+        cfg_2d = panel.get_config()
+        assert cfg_2d["electrode_length_m_override"] == pytest.approx(0.125)
+        assert cfg_2d["electrode_coverage"] == pytest.approx(
+            0.125 / (2.0 * np.pi / 16.0)
+        )
+        assert cfg_2d["electrode_area_m2_override"] is None
+        assert panel._electrode_length_spin.isEnabled()
+        assert not panel._electrode_area_spin.isEnabled()
+
+        panel.set_config(
+            {
+                "mesh_dimension": 3,
+                "radius": 0.18,
+                "height": 0.16,
+                "n_electrodes": 8,
+                "n_rings": 2,
+                "electrode_area_m2_override": 0.003,
+            }
+        )
+        cfg_3d = panel.get_config()
+        expected_length = 2.0 * np.pi * 0.18 * 0.5 / 8.0
+        assert cfg_3d["electrode_length_m_override"] == pytest.approx(expected_length)
+        assert cfg_3d["electrode_area_m2_override"] == pytest.approx(0.003)
+        assert cfg_3d["electrode_height_ratio"] == pytest.approx(
+            0.003 / (expected_length * 0.16)
+        )
+        assert not panel._electrode_length_spin.isEnabled()
+        assert panel._electrode_area_spin.isEnabled()
     finally:
         panel.close()
 
@@ -534,6 +578,20 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert hex_cfg["mesh_family"] == "hex"
     assert hex_cfg["forward_backend"] == "cuda_structured"
     assert hex_cfg["petsc_device"] == "cuda"
+
+
+def test_v83_gpu_forward_runtime_keeps_2d_auto_petsc_on_cpu(monkeypatch):
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+
+    runtime = _resolve_forward_runtime(
+        ForwardModelConfig(mesh_dimension=2, petsc_device="auto")
+    )
+
+    assert runtime["acceleration_profile"] == "default"
+    assert runtime["forward_backend"] == "dolfinx"
+    assert runtime["petsc_device"] == "cpu"
+    assert runtime["device"] == "auto"
+    assert runtime["forward_mat_solve"] == "off"
 
 
 def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
@@ -590,6 +648,18 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     hex_cfg = _resolve_reconstruction_runtime({"mesh_family": "hex"}, mesh_dim=3)
     assert hex_cfg["mesh_family"] == "hex"
     assert hex_cfg["forward_backend"] == "cuda_structured"
+
+
+def test_v83_gpu_reconstruction_runtime_keeps_2d_auto_petsc_on_cpu(monkeypatch):
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+
+    runtime = _resolve_reconstruction_runtime({"petsc_device": "auto"}, mesh_dim=2)
+
+    assert runtime["acceleration_profile"] == "default"
+    assert runtime["forward_backend"] == "dolfinx"
+    assert runtime["petsc_device"] == "cpu"
+    assert runtime["device"] == "auto"
+    assert runtime["forward_mat_solve"] == "off"
 
 
 def test_single_step_solver_diagnostics_exposes_runtime_summary():

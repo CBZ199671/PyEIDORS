@@ -342,6 +342,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.height_tooltip": "3D \u5706\u67f1\u4f53\u7684\u9ad8\u5ea6\uff08m\uff09\uff1b\u7535\u6781\u73af\u4f1a\u81ea\u52a8\u5747\u5300\u5206\u5e03\u5728\u8be5\u9ad8\u5ea6\u533a\u95f4\u5185 (15%-85%)\u3002",  # 3D 圆柱体的高度（m）；电极环会自动均匀分布在该高度区间内 (15%-85%)。
     "sim.mesh.electrodes_label": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",  # 每环电极数：
     "sim.mesh.rings_label": "\u73af\u6570/\u5c42\u6570\uff1a",  # 环数/层数：
+    "sim.mesh.electrode_length_label": "2D 电极长度：",
+    "sim.mesh.electrode_length_tooltip": "二维边界电极弧长，单位为米；会同步换算为网格电极覆盖率。",
+    "sim.mesh.electrode_area_label": "3D 电极面积：",
+    "sim.mesh.electrode_area_tooltip": "三维圆柱侧壁单个电极贴片面积，单位为平方米；会同步换算为电极高度比例。",
     "sim.mesh.electrode_layout_label": "3D 电极编号：",
     "sim.mesh.electrode_layout.ring_major": "Ring-major（EIDORS 标准）",
     "sim.mesh.electrode_layout.zigzag": "Zigzag（旧版兼容）",
@@ -415,6 +419,11 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.reconstruct_button": "\u91cd\u6784",  # 重构
     "sim.inverse.save_button": "\u4fdd\u5b58\u7ed3\u679c",  # 保存结果
     "sim.inverse.status_reconstructing": "\u91cd\u6784\u4e2d\u2026",  # 重构中…
+    "sim.inverse.method.debug_fine_mesh_noser.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u5728\u5f53\u524d\u7ec6\u7f51\u683c\u4e0a\u51b7\u6784\u5efa dense NOSER \u4e0a\u4e0b\u6587\uff0c\u6bd4 v1 RM \u70ed\u8def\u5f84\u66f4\u6162\u4e14\u66f4\u6613\u788e\u7247\u5316\u3002",  # 调试基线：在当前细网格上冷构建 dense NOSER 上下文，比 v1 RM 热路径更慢且更易碎片化。
+    "sim.inverse.method.noser_rm.tooltip": "NOSER RM \u70ed\u8def\u5f84\uff1a\u4f7f\u7528\u9884\u8ba1\u7b97\u7684\u7c97\u9006\u6a21\u578b RM artifact\uff1bartifact \u6784\u5efa\u5c5e\u4e8e T100\u3002",  # NOSER RM 热路径：使用预计算的粗逆模型 RM artifact；artifact 构建属于 T100。
+    "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u70ed\u8def\u5f84\uff1a\u4f7f\u7528\u9884\u8ba1\u7b97\u7684\u5e73\u6ed1\u5148\u9a8c RM artifact\uff1bartifact \u6784\u5efa\u5c5e\u4e8e T101\u3002",  # Laplace RM 热路径：使用预计算的平滑先验 RM artifact；artifact 构建属于 T101。
+    "sim.inverse.method.greit3d_rm.tooltip": "3D GREIT RM/common-config \u70ed\u8def\u5f84\uff1b\u9700\u8981 T102 \u751f\u6210\u7684 GREIT artifact\u3002",  # 3D GREIT RM/common-config 热路径；需要 T102 生成的 GREIT artifact。
+    "sim.inverse.method.debug_full_gn.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5bf9\u7167\uff0c\u4e0d\u662f\u5b9e\u65f6 RM \u8def\u7531\u3002",  # 调试基线：迭代 full GN 冷路径，适合对照，不是实时 RM 路由。
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================

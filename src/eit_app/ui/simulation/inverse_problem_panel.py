@@ -18,11 +18,34 @@ from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role, set_hint_text
 
 
-_METHODS = [
-    "eidors_one_step_noser",
-    "eidors_abs_gn",
-    "eidors_demo3d_tv",
+SIMULATION_INVERSE_METHODS = [
+    # Keep the currently-implemented dense path first until the RM artifact
+    # builders in T100/T101/T102 are wired into the GUI.
+    "debug_fine_mesh_noser",
+    "noser_rm",
+    "laplace_rm",
+    "greit3d_rm",
+    "debug_full_gn",
 ]
+_LEGACY_METHOD_ALIASES = {
+    "eidors_one_step_noser": "debug_fine_mesh_noser",
+    "eidors_abs_gn": "debug_full_gn",
+    "eidors_demo3d_tv": "debug_full_gn",
+}
+_METHOD_TOOLTIP_KEYS = {
+    "debug_fine_mesh_noser": "sim.inverse.method.debug_fine_mesh_noser.tooltip",
+    "noser_rm": "sim.inverse.method.noser_rm.tooltip",
+    "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
+    "greit3d_rm": "sim.inverse.method.greit3d_rm.tooltip",
+    "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
+}
+
+
+def normalize_simulation_inverse_method(method: str) -> str:
+    """Return the SPEC route label for a GUI simulation inverse method."""
+
+    key = str(method or "").strip().lower()
+    return _LEGACY_METHOD_ALIASES.get(key, key)
 
 
 class InverseProblemPanel(QGroupBox):
@@ -51,7 +74,10 @@ class InverseProblemPanel(QGroupBox):
 
         self._method_combo = AutoCloseComboBox()
         # Method identifiers are invariant algorithm codes; no translation.
-        self._method_combo.addItems(_METHODS)
+        self._method_combo.addItems(SIMULATION_INVERSE_METHODS)
+        self._method_combo.currentIndexChanged.connect(
+            lambda _index: self._update_method_tooltip()
+        )
         self._lbl_method = QLabel("")
         layout.addRow(self._lbl_method, self._method_combo)
 
@@ -102,7 +128,9 @@ class InverseProblemPanel(QGroupBox):
 
     def get_config(self) -> dict:
         return {
-            "method": self._method_combo.currentText(),
+            "method": normalize_simulation_inverse_method(
+                self._method_combo.currentText()
+            ),
             "regularization_alpha": self._alpha_spin.value(),
             "max_iterations": self._iter_spin.value(),
         }
@@ -115,7 +143,9 @@ class InverseProblemPanel(QGroupBox):
         )
         blockers = [widget.blockSignals(True) for widget in widgets]
         try:
-            method = str(config.get("method", self._method_combo.currentText()))
+            method = normalize_simulation_inverse_method(
+                str(config.get("method", self._method_combo.currentText()))
+            )
             index = self._method_combo.findText(method)
             if index >= 0:
                 self._method_combo.setCurrentIndex(index)
@@ -124,6 +154,7 @@ class InverseProblemPanel(QGroupBox):
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
+        self._update_method_tooltip()
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
@@ -152,3 +183,10 @@ class InverseProblemPanel(QGroupBox):
         self._lbl_iter.setText(t("sim.inverse.iterations_label"))
         self._recon_btn.setText(t("sim.inverse.reconstruct_button"))
         self._save_btn.setText(t("sim.inverse.save_button"))
+        self._update_method_tooltip()
+
+    def _update_method_tooltip(self) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        tooltip = t(_METHOD_TOOLTIP_KEYS.get(method, "sim.inverse.method_label"))
+        self._method_combo.setToolTip(tooltip)
+        self._lbl_method.setToolTip(tooltip)

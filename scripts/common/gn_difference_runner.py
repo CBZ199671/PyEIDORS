@@ -87,6 +87,12 @@ CACHE_NAME_OPERATOR_A = "gn_diff_operator_system"
 CACHE_NAME_OPERATOR_LU = "gn_diff_operator_lu"
 CACHE_NAME_OPERATOR_PRECOND = "gn_diff_operator_precond"
 CACHE_NAME_OPERATOR_REDUCED_RM = "gn_diff_operator_reduced_rm"
+SINGLE_STEP_SIGNATURE_SCHEMA_VERSION = "single_step_signature_schema_v1"
+SINGLE_STEP_JACOBIAN_CALCULATOR = "EidorsJacobianAdapter"
+SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v2"
+SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v1"
+SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
+SINGLE_STEP_ALGORITHM_VERSION = "eidors_noser_single_step_v3"
 
 
 def _mesh_compatible_drive_mode(drive_mode: str | None, *, mesh_dim: int) -> str:
@@ -96,6 +102,13 @@ def _mesh_compatible_drive_mode(drive_mode: str | None, *, mesh_dim: int) -> str
     if int(mesh_dim) == 3 and resolved == "line_current_density":
         return "total_current"
     return resolved or ("normalized" if int(mesh_dim) == 2 else "total_current")
+
+
+def _mesh_compatible_petsc_device(petsc_device: str | None, *, mesh_dim: int) -> str:
+    resolved = str(petsc_device or "auto").strip().lower()
+    if int(mesh_dim) != 3 and resolved == "auto":
+        return "cpu"
+    return resolved
 
 
 CACHE_NAME_BASE_MEAS = "gn_diff_base_meas"
@@ -279,6 +292,46 @@ def _difference_jacobian_weights(
     ):
         weights = -weights
     return np.asarray(weights, dtype=np.float64)
+
+
+def _runtime_jacobian_from_eidors_adapter(jacobian: np.ndarray) -> np.ndarray:
+    """Return the EIDORS adapter Jacobian in the runner's difference sign."""
+    return np.asarray(jacobian, dtype=np.float64)
+
+
+def _runtime_projection_weights_from_eidors_adapter(
+    reference_meas: np.ndarray,
+    *,
+    difference_mode: str,
+    difference_orientation: str,
+) -> np.ndarray:
+    """Weights for an EIDORS adapter linearization in runtime difference space."""
+    return _difference_jacobian_weights(
+        reference_meas,
+        difference_mode=difference_mode,
+        difference_orientation=difference_orientation,
+    )
+
+
+def _single_step_semantic_payload(
+    *,
+    signature_schema_version: str,
+    jacobian_calculator: str,
+    jacobian_math_convention: str,
+    projection_math_convention: str,
+    operator_math_convention: str | None = None,
+    algorithm_version: str,
+) -> dict[str, str]:
+    payload = {
+        "single_step_signature_schema_version": str(signature_schema_version),
+        "single_step_jacobian_calculator": str(jacobian_calculator),
+        "single_step_jacobian_math_convention": str(jacobian_math_convention),
+        "single_step_projection_math_convention": str(projection_math_convention),
+        "single_step_algorithm_version": str(algorithm_version),
+    }
+    if operator_math_convention is not None:
+        payload["single_step_operator_math_convention"] = str(operator_math_convention)
+    return payload
 
 
 def _build_noser_diag_from_linearization(
@@ -1228,6 +1281,14 @@ def build_shared_context(
     forward_backend: str = DEFAULT_FORWARD_BACKEND,
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
+    single_step_signature_schema_version: str = SINGLE_STEP_SIGNATURE_SCHEMA_VERSION,
+    single_step_jacobian_calculator: str = SINGLE_STEP_JACOBIAN_CALCULATOR,
+    single_step_jacobian_math_convention: str = SINGLE_STEP_JACOBIAN_MATH_CONVENTION,
+    single_step_projection_math_convention: str = (
+        SINGLE_STEP_PROJECTION_MATH_CONVENTION
+    ),
+    single_step_operator_math_convention: str = SINGLE_STEP_OPERATOR_MATH_CONVENTION,
+    single_step_algorithm_version: str = SINGLE_STEP_ALGORITHM_VERSION,
 ) -> dict:
     context_start = time.perf_counter()
     build_seconds: dict[str, float] = {}
@@ -1243,6 +1304,7 @@ def build_shared_context(
     forward_solver_preset = str(forward_solver_preset).strip().lower()
     forward_mat_solve = str(forward_mat_solve).strip().lower()
     petsc_device = str(petsc_device).strip().lower()
+    petsc_device = _mesh_compatible_petsc_device(petsc_device, mesh_dim=int(mesh_dim))
     device = str(device).strip().lower()
     jacobian_representation = _normalize_jacobian_representation(
         jacobian_representation,
@@ -1268,6 +1330,39 @@ def build_shared_context(
     )
     geometry_version = (
         str(geometry_version).strip().lower() or DEFAULT_3D_GEOMETRY_VERSION
+    )
+    single_step_algorithm_version = str(
+        single_step_algorithm_version or SINGLE_STEP_ALGORITHM_VERSION
+    )
+    single_step_signature_schema_version = str(
+        single_step_signature_schema_version or SINGLE_STEP_SIGNATURE_SCHEMA_VERSION
+    )
+    single_step_jacobian_calculator = str(
+        single_step_jacobian_calculator or SINGLE_STEP_JACOBIAN_CALCULATOR
+    )
+    single_step_jacobian_math_convention = str(
+        single_step_jacobian_math_convention or SINGLE_STEP_JACOBIAN_MATH_CONVENTION
+    )
+    single_step_projection_math_convention = str(
+        single_step_projection_math_convention or SINGLE_STEP_PROJECTION_MATH_CONVENTION
+    )
+    single_step_operator_math_convention = str(
+        single_step_operator_math_convention or SINGLE_STEP_OPERATOR_MATH_CONVENTION
+    )
+    jacobian_semantic_payload = _single_step_semantic_payload(
+        signature_schema_version=single_step_signature_schema_version,
+        jacobian_calculator=single_step_jacobian_calculator,
+        jacobian_math_convention=single_step_jacobian_math_convention,
+        projection_math_convention=single_step_projection_math_convention,
+        algorithm_version=single_step_algorithm_version,
+    )
+    operator_semantic_payload = _single_step_semantic_payload(
+        signature_schema_version=single_step_signature_schema_version,
+        jacobian_calculator=single_step_jacobian_calculator,
+        jacobian_math_convention=single_step_jacobian_math_convention,
+        projection_math_convention=single_step_projection_math_convention,
+        operator_math_convention=single_step_operator_math_convention,
+        algorithm_version=single_step_algorithm_version,
     )
     if solver_mode not in {"strict", "fast"}:
         raise ValueError(f"solver_mode must be 'strict' or 'fast', got {solver_mode!r}")
@@ -1463,6 +1558,7 @@ def build_shared_context(
     jacobian_payload = {
         "solver": "gn_difference",
         "method": "adjoint",
+        **jacobian_semantic_payload,
         "jacobian_representation": jacobian_representation,
         "mesh_dim": int(mesh_dim),
         "mesh_height": float(mesh_height),
@@ -1501,7 +1597,7 @@ def build_shared_context(
             raise RuntimeError("Cached linearized Jacobian payload has the wrong type.")
         build_seconds.setdefault("jacobian", 0.0)
 
-        projection_weights = _difference_jacobian_weights(
+        projection_weights = _runtime_projection_weights_from_eidors_adapter(
             base_meas,
             difference_mode=difference_mode,
             difference_orientation=difference_orientation,
@@ -1536,6 +1632,7 @@ def build_shared_context(
         )
         operator_payload_base = {
             "solver": "gn_difference",
+            **operator_semantic_payload,
             "solver_mode": solver_mode,
             "linear_solver": linear_solver,
             "preconditioner": preconditioner,
@@ -1689,6 +1786,8 @@ def build_shared_context(
             "fwd_model": fwd_model,
             "cache_manager": cache_manager,
             "cache_scope": cache_scope,
+            "single_step_semantic_signature": dict(operator_semantic_payload),
+            **operator_semantic_payload,
             "mesh_dim": int(mesh_dim),
             "mesh_height": float(mesh_height),
             "electrode_height_ratio": float(electrode_height_ratio),
@@ -1799,7 +1898,9 @@ def build_shared_context(
         payload=jacobian_payload,
         compute_fn=lambda: _timed(
             "jacobian",
-            lambda: jac_calc.calculate_from_image(img_bg),
+            lambda: _runtime_jacobian_from_eidors_adapter(
+                jac_calc.calculate_from_image(img_bg)
+            ),
         ),
         persist=True,
         cost=12.0,
@@ -1839,6 +1940,7 @@ def build_shared_context(
 
     operator_payload_base = {
         "solver": "gn_difference",
+        **operator_semantic_payload,
         "solver_mode": solver_mode,
         "linear_solver": linear_solver,
         "preconditioner": preconditioner,
@@ -2221,6 +2323,8 @@ def build_shared_context(
         "fwd_model": fwd_model,
         "cache_manager": cache_manager,
         "cache_scope": cache_scope,
+        "single_step_semantic_signature": dict(operator_semantic_payload),
+        **operator_semantic_payload,
         "mesh_dim": int(mesh_dim),
         "mesh_height": float(mesh_height),
         "electrode_height_ratio": float(electrode_height_ratio),

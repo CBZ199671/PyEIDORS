@@ -755,6 +755,38 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     app.processEvents()
 
 
+@pytest.mark.gui
+def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
+    from eit_app.ui.simulation.inverse_problem_panel import (
+        SIMULATION_INVERSE_METHODS,
+        InverseProblemPanel,
+    )
+
+    app = _get_app()
+    inv = InverseProblemPanel()
+    inv.show()
+    app.processEvents()
+
+    methods = [inv._method_combo.itemText(i) for i in range(inv._method_combo.count())]
+    assert methods == SIMULATION_INVERSE_METHODS
+    assert "eidors_one_step_noser" not in methods
+    assert "eidors_abs_gn" not in methods
+    assert "eidors_demo3d_tv" not in methods
+    assert inv.get_config()["method"] == "debug_fine_mesh_noser"
+    assert inv._method_combo.toolTip()
+
+    inv.set_config({"method": "eidors_one_step_noser"})
+    assert inv.get_config()["method"] == "debug_fine_mesh_noser"
+
+    inv.set_config({"method": "noser_rm"})
+    assert inv.get_config()["method"] == "noser_rm"
+    assert "RM" in inv._method_combo.toolTip()
+
+    inv.close()
+    inv.deleteLater()
+    app.processEvents()
+
+
 def test_theme_arrow_svg_is_hidpi_friendly_and_parses_via_qsvg() -> None:
     """All 8 spinbox/date-edit arrow URLs must be DPR-aware.
 
@@ -2440,6 +2472,15 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     assert cfg.radius == pytest.approx(0.18)
     assert cfg.height == pytest.approx(0.16)
     assert cfg.drive_mode == "total_current"
+    assert cfg.electrode_length_m_override == pytest.approx(
+        2.0 * np.pi * 0.18 * 0.5 / 8.0
+    )
+    assert cfg.electrode_coverage == pytest.approx(0.5)
+    assert cfg.electrode_area_m2_override == pytest.approx(
+        cfg.electrode_length_m_override * 0.16 * 0.2,
+        rel=1.0e-5,
+    )
+    assert cfg.electrode_height_ratio == pytest.approx(0.2, rel=1.0e-5)
     assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
 
     _close_window(window)
@@ -2510,7 +2551,7 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     window._sim_tab.mesh_setup_panel._refine_spin.setValue(0.1)
     window._sim_tab.inverse_problem_panel.set_config(
         {
-            "method": "eidors_one_step_noser",
+            "method": "debug_fine_mesh_noser",
             "regularization_alpha": 1.0,
             "max_iterations": 10,
         }
@@ -2533,9 +2574,160 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     assert request.mesh_refinement == pytest.approx(0.1)
     assert request.metadata["mesh_size"] == pytest.approx(0.1)
     assert request.metadata["reconstruction_runtime"] == "single_step_cached"
+    assert request.metadata["simulation_inverse_route"] == "debug_fine_mesh_noser"
+    assert request.metadata["simulation_inverse_debug_route"] is True
+    assert request.metadata["rm_route_requires_artifact"] is False
     assert request.metadata["difference_mode"] == "normalized"
     assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
     assert rc._prepare_single_step_cached_runtime(request).refinement == 2
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_2d_single_step_uses_canonical_noser_lambda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "debug_fine_mesh_noser",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["difference_mode"] == "raw"
+    assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
+    assert request.metadata["simulation_inverse_route"] == "debug_fine_mesh_noser"
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize(
+    ("method", "pending_task", "regularization"),
+    [
+        ("noser_rm", "T100", "noser"),
+        ("laplace_rm", "T101", "laplace"),
+        ("greit3d_rm", "T102", "greit"),
+    ],
+)
+def test_simulation_rm_routes_record_artifact_requirement(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+    pending_task: str,
+    regularization: str,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": method,
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "gn-difference"
+    assert request.metadata["reconstruction_runtime"] == "single_step_cached"
+    assert request.metadata["simulation_inverse_route"] == method
+    assert request.metadata["simulation_inverse_route_kind"] == "rm"
+    assert request.metadata["simulation_inverse_debug_route"] is False
+    assert request.metadata["rm_route_requires_artifact"] is True
+    assert request.metadata["rm_route_pending_task"] == pending_task
+    assert request.metadata["rm_regularization"] == regularization
+    assert request.metadata["difference_preset"] == method
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "debug_full_gn",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "gn-difference"
+    assert request.metadata["reconstruction_runtime"] == "full_gn"
+    assert request.metadata["simulation_inverse_route"] == "debug_full_gn"
+    assert request.metadata["simulation_inverse_debug_route"] is True
+    assert "difference_lambda" not in request.metadata
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -2583,7 +2775,7 @@ def test_simulation_inverse_uses_config_stored_with_forward_result(
     )
     window._sim_tab.inverse_problem_panel.set_config(
         {
-            "method": "eidors_one_step_noser",
+            "method": "debug_fine_mesh_noser",
             "regularization_alpha": 1.0,
             "max_iterations": 10,
         }

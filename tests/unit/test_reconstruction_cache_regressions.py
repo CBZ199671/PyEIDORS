@@ -13,6 +13,7 @@ from eit_app.controllers import reconstruction_controller as rc
 from eit_app.models.frame_model import FrameData
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
+from eit_app.ui.simulation.metrics_panel import MetricsPanel
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -40,6 +41,35 @@ def test_reconstruction_widget_can_replace_colorbar_repeatedly() -> None:
     widget.update_reconstruction(result)
     widget.clear()
     widget.clear()
+
+
+def test_metrics_panel_compares_values_by_geometry_not_cell_order() -> None:
+    _get_app()
+    panel = MetricsPanel()
+    node_coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    truth_cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=int)
+    recon_cells = np.array([[1, 3, 2], [0, 1, 2]], dtype=int)
+
+    panel.update_metrics(
+        np.array([1.0, 2.0], dtype=float),
+        np.array([2.0, 1.0], dtype=float),
+        ground_truth_node_coords=node_coords,
+        ground_truth_cell_connectivity=truth_cells,
+        reconstructed_node_coords=node_coords,
+        reconstructed_cell_connectivity=recon_cells,
+    )
+
+    assert panel._l2_label.text() == "0.0000"
+    assert panel._corr_label.text() == "1.0000"
+    assert panel._rmse_label.text() == "0.000000"
 
 
 def test_mesh_loader_default_mesh_skips_incompatible_3d_candidates(
@@ -174,6 +204,56 @@ def test_single_step_cached_runtime_prefers_explicit_difference_lambda() -> None
     assert runtime.lam == pytest.approx(0.02)
 
 
+def test_single_step_cached_runtime_keys_semantics_with_version_fallback() -> None:
+    default_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={"reconstruction_runtime": "single_step_cached"},
+    )
+    semantic_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "single_step_projection_math_convention": "test-projection-v2",
+        },
+    )
+    version_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "single_step_algorithm_version": "test-local-version",
+        },
+    )
+
+    default_runtime = rc._prepare_single_step_cached_runtime(default_request)
+    semantic_runtime = rc._prepare_single_step_cached_runtime(semantic_request)
+    version_runtime = rc._prepare_single_step_cached_runtime(version_request)
+    semantic_signature = default_runtime.cache_key[0]
+
+    assert isinstance(semantic_signature, tuple)
+    assert default_runtime.meta["single_step_jacobian_calculator"] in semantic_signature
+    assert (
+        default_runtime.meta["single_step_jacobian_math_convention"]
+        in semantic_signature
+    )
+    assert (
+        default_runtime.meta["single_step_projection_math_convention"]
+        in semantic_signature
+    )
+    assert (
+        default_runtime.meta["single_step_operator_math_convention"]
+        in semantic_signature
+    )
+    assert (
+        default_runtime.meta["single_step_algorithm_version"]
+        in default_runtime.cache_key
+    )
+    assert default_runtime.cache_key != semantic_runtime.cache_key
+    assert default_runtime.cache_key != version_runtime.cache_key
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -207,7 +287,7 @@ def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     assert result is sentinel
 
 
-def test_single_step_cached_request_returns_delta_conductivity_for_display(
+def test_single_step_cached_request_returns_absolute_sigma_for_display(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import scripts.common.gn_difference_runner as diff_runner
@@ -268,7 +348,8 @@ def test_single_step_cached_request_returns_delta_conductivity_for_display(
 
     result = rc._run_single_step_cached_request(request)
 
-    assert np.allclose(result.conductivity, delta_sigma)
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + delta_sigma)
+    assert result.metadata["conductivity_display_mode"] == "absolute_sigma"
     assert np.allclose(
         result.measured,
         request.target_frame.real - request.reference_frame.real,
@@ -448,6 +529,57 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
 
 
+def test_single_step_cached_rm_route_requires_artifact_before_dense_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array([2.0, 4.0, -8.0], dtype=float)
+    target = np.array([3.0, 8.0, -4.0], dtype=float)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_route_pending_task": "T100",
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("RM route without artifact must not build dense context.")
+
+    def _unexpected_runner():
+        raise AssertionError("RM route without artifact must not import GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    assert result.error_msg is not None
+    assert "noser_rm requires a precomputed RM/GREIT artifact" in result.error_msg
+    assert result.conductivity.size == 0
+    assert result.metadata["rm_artifact_missing"] is True
+    assert result.metadata["rm_route_pending_task"] == "T100"
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm_missing_artifact"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+
+
 def test_single_step_cached_request_resolves_greit_common_config_hot_path(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -598,9 +730,25 @@ def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and
     assert result_100.metadata["drive_mode"] == "total_current"
     assert result_100.metadata["drive_value"] == pytest.approx(100e-6)
     assert result_200.metadata["drive_value"] == pytest.approx(200e-6)
+    assert (
+        build_kwargs[0]["single_step_algorithm_version"]
+        == result_100.metadata["single_step_algorithm_version"]
+    )
+    assert (
+        build_kwargs[0]["single_step_jacobian_math_convention"]
+        == result_100.metadata["single_step_jacobian_math_convention"]
+    )
+    assert (
+        build_kwargs[0]["single_step_projection_math_convention"]
+        == result_100.metadata["single_step_projection_math_convention"]
+    )
+    assert (
+        build_kwargs[0]["single_step_operator_math_convention"]
+        == result_100.metadata["single_step_operator_math_convention"]
+    )
 
 
-def test_single_step_cached_request_scales_display_by_calibrated_alpha(
+def test_single_step_cached_request_scales_absolute_display_by_calibrated_alpha(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     import scripts.common.gn_difference_runner as diff_runner
@@ -654,11 +802,9 @@ def test_single_step_cached_request_scales_display_by_calibrated_alpha(
 
     result = rc._run_single_step_cached_request(request)
 
-    expected_display = delta_sigma * 0.25
-    assert np.allclose(result.conductivity, expected_display)
-    assert np.allclose(
-        captured_sigmas[-1], np.ones_like(delta_sigma) + expected_display
-    )
+    expected_update = delta_sigma * 0.25
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + expected_update)
+    assert np.allclose(captured_sigmas[-1], np.ones_like(delta_sigma) + expected_update)
     assert result.metadata["step_size_alpha"] == pytest.approx(0.25)
 
 

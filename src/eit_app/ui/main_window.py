@@ -69,6 +69,9 @@ from eit_app.models.simulation_state import (
 )
 from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
+from eit_app.ui.simulation.inverse_problem_panel import (
+    normalize_simulation_inverse_method,
+)
 from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
@@ -2994,6 +2997,10 @@ class EITWorkstation(QMainWindow):
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
+            electrode_length_m_override=mesh_cfg.get("electrode_length_m_override"),
+            electrode_coverage=float(mesh_cfg.get("electrode_coverage", 0.5)),
+            electrode_area_m2_override=mesh_cfg.get("electrode_area_m2_override"),
+            electrode_height_ratio=float(mesh_cfg.get("electrode_height_ratio", 0.2)),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=self._sim_tab.forward_problem_panel.noise_level,
             measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
@@ -3055,6 +3062,10 @@ class EITWorkstation(QMainWindow):
             n_elec=mesh_cfg["n_electrodes"],
             n_rings=int(mesh_cfg.get("n_rings", 1)),
             electrode_layout=mesh_cfg.get("electrode_layout", "ring_major"),
+            electrode_length_m_override=mesh_cfg.get("electrode_length_m_override"),
+            electrode_coverage=float(mesh_cfg.get("electrode_coverage", 0.5)),
+            electrode_area_m2_override=mesh_cfg.get("electrode_area_m2_override"),
+            electrode_height_ratio=float(mesh_cfg.get("electrode_height_ratio", 0.2)),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=panel_cfg["noise_level"],
             measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
@@ -3272,6 +3283,10 @@ class EITWorkstation(QMainWindow):
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
                     "electrode_layout": config.electrode_layout,
+                    "electrode_length_m_override": config.electrode_length_m_override,
+                    "electrode_coverage": config.electrode_coverage,
+                    "electrode_area_m2_override": config.electrode_area_m2_override,
+                    "electrode_height_ratio": config.electrode_height_ratio,
                     "background_conductivity": config.background_conductivity,
                     "measurement_protocol": config.measurement_protocol,
                     "custom_pattern_json": config.custom_pattern_json,
@@ -3305,6 +3320,10 @@ class EITWorkstation(QMainWindow):
                     "n_electrodes": config.n_elec,
                     "n_rings": int(config.n_rings),
                     "electrode_layout": config.electrode_layout,
+                    "electrode_length_m_override": config.electrode_length_m_override,
+                    "electrode_coverage": config.electrode_coverage,
+                    "electrode_area_m2_override": config.electrode_area_m2_override,
+                    "electrode_height_ratio": config.electrode_height_ratio,
                     "background_conductivity": config.background_conductivity,
                     "measurement_protocol": config.measurement_protocol,
                     "custom_pattern_json": config.custom_pattern_json,
@@ -3576,45 +3595,64 @@ class EITWorkstation(QMainWindow):
 
         forward_cfg = self._forward_model_config_for_result(result)
 
-        # Map the user's algorithm selection into the runtime path we
-        # actually need.  The panel exposes raw eidors-style method keys
-        # ("eidors_one_step_noser" / "eidors_abs_gn") for UX continuity,
-        # but the reconstruction dispatcher keys off
-        # (method + use_part + reconstruction_runtime) — without this
-        # mapping a "single-step" selection falls through to the slow
-        # iterative GN path, which is why forward→inverse took 40 seconds
-        # and the reconstruction barely converged.
-        raw_method = str(inv_cfg.get("method", "")).strip().lower()
+        # Map explicit SPEC route labels into reconstruction runtime paths.
+        # Legacy eidors-style strings are accepted only as saved-config
+        # aliases, then normalized so they cannot silently select a stale path.
+        route = normalize_simulation_inverse_method(str(inv_cfg.get("method", "")))
         difference_preset = "eidors_one_step_noser"
         absolute_preset = "eidors_abs_gn"
-        if "demo3d_tv" in raw_method:
-            resolved_method = "gn-difference"
-            reconstruction_runtime = "full_gn"
-            difference_preset = "eidors_demo3d_tv"
-        elif any(
-            tag in raw_method for tag in ("one_step", "noser", "step", "gn-difference")
-        ):
+        route_kind = "debug"
+        rm_route_pending_task = ""
+        rm_regularization = ""
+        rm_route_requires_artifact = False
+        if route == "debug_fine_mesh_noser":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
-        elif any(tag in raw_method for tag in ("abs", "absolute")):
-            resolved_method = "gn-absolute"
+        elif route == "debug_full_gn":
+            resolved_method = "gn-difference"
             reconstruction_runtime = "full_gn"
+        elif route == "noser_rm":
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "noser_rm"
+            route_kind = "rm"
+            rm_regularization = "noser"
+            rm_route_pending_task = "T100"
+            rm_route_requires_artifact = True
+        elif route == "laplace_rm":
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "laplace_rm"
+            route_kind = "rm"
+            rm_regularization = "laplace"
+            rm_route_pending_task = "T101"
+            rm_route_requires_artifact = True
+        elif route == "greit3d_rm":
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "greit3d_rm"
+            route_kind = "rm"
+            rm_regularization = "greit"
+            rm_route_pending_task = "T102"
+            rm_route_requires_artifact = True
         else:
-            # Unknown → safest fallback: iterative GN, no single-step cache.
-            resolved_method = raw_method or "gn-difference"
+            # Unknown route → safest fallback: iterative GN, no RM/cache claim.
+            resolved_method = route or "gn-difference"
             reconstruction_runtime = "full_gn"
+            route_kind = "debug"
 
         mesh_size = float(forward_cfg.mesh_refinement)
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
         )
-        # Match the 3D paper/pre-experiment sphere scripts: EIDORS-style
-        # difference reconstructions are solved in normalized measurement
-        # space with one-step NOSER lambda_eff = 1e-2.
+        # Match the EIDORS-style one-step NOSER path: the GUI fast path uses
+        # the canonical lambda_eff = 1e-2, while iterative/full-GN routes keep
+        # the panel alpha.
         difference_mode = "normalized" if is_3d_difference else "raw"
         difference_lambda = (
             1.0e-2
-            if is_3d_difference and reconstruction_runtime == "single_step_cached"
+            if resolved_method == "gn-difference"
+            and reconstruction_runtime == "single_step_cached"
             else None
         )
         metadata = {
@@ -3626,6 +3664,12 @@ class EITWorkstation(QMainWindow):
             "difference_preset": difference_preset,
             "absolute_preset": absolute_preset,
             "request_source": "simulation",
+            "simulation_inverse_route": route,
+            "simulation_inverse_route_kind": route_kind,
+            "simulation_inverse_debug_route": route_kind == "debug",
+            "rm_route_requires_artifact": rm_route_requires_artifact,
+            "rm_route_pending_task": rm_route_pending_task,
+            "rm_regularization": rm_regularization,
             "reconstruction_runtime": reconstruction_runtime,
             "jacobian_representation": "auto",
             "linearized_solver_strategy": "auto",
@@ -3705,6 +3749,10 @@ class EITWorkstation(QMainWindow):
             self._sim_tab.metrics_panel.update_metrics(
                 self._last_fwd_result.ground_truth_conductivity,
                 recon_result.conductivity,
+                ground_truth_node_coords=self._last_fwd_result.node_coords,
+                ground_truth_cell_connectivity=self._last_fwd_result.cell_connectivity,
+                reconstructed_node_coords=recon_result.node_coords,
+                reconstructed_cell_connectivity=recon_result.cell_connectivity,
             )
 
         # Disconnect previous one-shot connections and reconnect

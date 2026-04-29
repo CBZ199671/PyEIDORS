@@ -24,6 +24,19 @@ OPERATOR_CACHE_KEYS = (
 )
 
 
+def test_v83_2d_auto_petsc_device_uses_cpu_without_blocking_explicit_cuda():
+    assert (
+        gn_difference_runner._mesh_compatible_petsc_device("auto", mesh_dim=2) == "cpu"
+    )
+    assert gn_difference_runner._mesh_compatible_petsc_device(None, mesh_dim=2) == "cpu"
+    assert (
+        gn_difference_runner._mesh_compatible_petsc_device("auto", mesh_dim=3) == "auto"
+    )
+    assert (
+        gn_difference_runner._mesh_compatible_petsc_device("cuda", mesh_dim=2) == "cuda"
+    )
+
+
 def _small_linearization() -> JacobianLinearization:
     return JacobianLinearization(
         grad_u_all=(
@@ -93,6 +106,42 @@ def _small_linearized_bundle(
         dense_j.T @ rhs,
     )
     return bundle, rhs, expected
+
+
+def test_eidors_adapter_jacobian_keeps_runtime_projection_sign():
+    raw_eidors = np.array([[2.0, -4.0], [6.0, 8.0]], dtype=float)
+    reference = np.array([2.0, 4.0], dtype=float)
+
+    runtime_jacobian = gn_difference_runner._runtime_jacobian_from_eidors_adapter(
+        raw_eidors
+    )
+    weights = gn_difference_runner._runtime_projection_weights_from_eidors_adapter(
+        reference,
+        difference_mode="normalized",
+        difference_orientation="target_minus_reference",
+    )
+
+    np.testing.assert_allclose(runtime_jacobian, raw_eidors)
+    np.testing.assert_allclose(
+        weights[:, None] * raw_eidors, raw_eidors / reference[:, None]
+    )
+
+
+def test_single_step_semantic_payload_prefers_math_axes_over_version_only():
+    payload = gn_difference_runner._single_step_semantic_payload(
+        signature_schema_version=gn_difference_runner.SINGLE_STEP_SIGNATURE_SCHEMA_VERSION,
+        jacobian_calculator=gn_difference_runner.SINGLE_STEP_JACOBIAN_CALCULATOR,
+        jacobian_math_convention=gn_difference_runner.SINGLE_STEP_JACOBIAN_MATH_CONVENTION,
+        projection_math_convention=gn_difference_runner.SINGLE_STEP_PROJECTION_MATH_CONVENTION,
+        operator_math_convention=gn_difference_runner.SINGLE_STEP_OPERATOR_MATH_CONVENTION,
+        algorithm_version=gn_difference_runner.SINGLE_STEP_ALGORITHM_VERSION,
+    )
+
+    assert payload["single_step_jacobian_calculator"] == "EidorsJacobianAdapter"
+    assert payload["single_step_jacobian_math_convention"]
+    assert payload["single_step_projection_math_convention"]
+    assert payload["single_step_operator_math_convention"]
+    assert payload["single_step_algorithm_version"]
 
 
 def _build_ctx(cache_dir: Path, background_sigma: float) -> dict:

@@ -338,6 +338,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.height_tooltip": "Height of the 3D cylinder in metres; electrode rings are auto-distributed within this height (15%-85%).",
     "sim.mesh.electrodes_label": "Electrodes / ring:",
     "sim.mesh.rings_label": "Rings / layers:",
+    "sim.mesh.electrode_length_label": "2D electrode length:",
+    "sim.mesh.electrode_length_tooltip": "Boundary arc length for each 2D electrode, in metres; this is converted into mesh electrode coverage.",
+    "sim.mesh.electrode_area_label": "3D electrode area:",
+    "sim.mesh.electrode_area_tooltip": "Side-wall patch area for each 3D electrode, in square metres; this is converted into electrode height ratio.",
     "sim.mesh.electrode_layout_label": "3D numbering:",
     "sim.mesh.electrode_layout.ring_major": "Ring-major (EIDORS)",
     "sim.mesh.electrode_layout.zigzag": "Zigzag (legacy)",
@@ -412,6 +416,25 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.reconstruct_button": "Reconstruct",
     "sim.inverse.save_button": "Save Results",
     "sim.inverse.status_reconstructing": "Reconstructing\u2026",
+    "sim.inverse.method.debug_fine_mesh_noser.tooltip": (
+        "Debug baseline: cold-builds the fine-mesh dense NOSER context and is "
+        "slower/noisier than the v1 RM hot path."
+    ),
+    "sim.inverse.method.noser_rm.tooltip": (
+        "NOSER RM hot path: use a precomputed coarse inverse-model RM artifact; "
+        "artifact build is T100."
+    ),
+    "sim.inverse.method.laplace_rm.tooltip": (
+        "Laplace RM hot path: use a precomputed smooth-prior RM artifact; "
+        "artifact build is T101."
+    ),
+    "sim.inverse.method.greit3d_rm.tooltip": (
+        "3D GREIT RM/common-config hot path; requires a GREIT artifact from T102."
+    ),
+    "sim.inverse.method.debug_full_gn.tooltip": (
+        "Debug baseline: iterative full GN cold path; useful for comparison, not "
+        "the realtime RM route."
+    ),
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================

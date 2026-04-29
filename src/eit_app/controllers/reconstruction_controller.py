@@ -36,6 +36,12 @@ _FAST_CONTEXT_CACHE_LOCK = threading.Lock()
 _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
+_SINGLE_STEP_SIGNATURE_SCHEMA_VERSION = "single_step_signature_schema_v1"
+_SINGLE_STEP_JACOBIAN_CALCULATOR = "EidorsJacobianAdapter"
+_SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v2"
+_SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v1"
+_SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
+_SINGLE_STEP_CACHED_ALGORITHM_VERSION = "eidors_noser_single_step_v3"
 _RM_ARTIFACT_CACHE_LOCK = threading.Lock()
 _RM_ARTIFACT_CACHE_MAX_ITEMS = 4
 _RM_ARTIFACT_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
@@ -48,6 +54,11 @@ _RM_ARTIFACT_META_KEYS = (
     "common_greit_rm_path",
     "reconstruction_matrix_path",
 )
+_PRODUCTION_RM_ROUTE_TASKS = {
+    "noser_rm": "T100",
+    "laplace_rm": "T101",
+    "greit3d_rm": "T102",
+}
 
 
 def build_difference_vector(*args, **kwargs):
@@ -135,6 +146,16 @@ def _contact_impedance_vector_from_meta(
             f"expected {total} or a divisor of it, got {arr.size}."
         )
     return arr.astype(float, copy=False)
+
+
+def _single_step_semantic_signature(meta: dict[str, Any]) -> tuple[str, ...]:
+    return (
+        str(meta.get("single_step_signature_schema_version", "")),
+        str(meta.get("single_step_jacobian_calculator", "")),
+        str(meta.get("single_step_jacobian_math_convention", "")),
+        str(meta.get("single_step_projection_math_convention", "")),
+        str(meta.get("single_step_operator_math_convention", "")),
+    )
 
 
 _DEFAULT_SINGLE_STEP_SIGMA_FLOOR = 1.0e-6
@@ -269,7 +290,7 @@ def _resolve_reconstruction_runtime(
     elif not wants_structured_gpu and forward_backend == "cuda_structured":
         forward_backend = "dolfinx"
 
-    petsc_device = _auto("petsc_device", "cuda" if wants_3d_cuda else "auto")
+    petsc_device = _auto("petsc_device", "cuda" if wants_3d_cuda else "cpu")
     capability: dict[str, Any] = {}
     if int(mesh_dim) == 3 and petsc_device == "cuda":
         try:
@@ -634,6 +655,67 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
     if common_path is not None:
         return common_path
     return None
+
+
+def _single_step_rm_route_requires_artifact(meta: dict[str, Any]) -> bool:
+    route = str(meta.get("simulation_inverse_route", "")).strip().lower()
+    return bool(meta.get("rm_route_requires_artifact", False)) or (
+        route in _PRODUCTION_RM_ROUTE_TASKS
+    )
+
+
+def _missing_rm_artifact_result(
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    emit: Callable[[str], None],
+) -> ReconstructionResult:
+    meta = runtime.meta
+    route = str(meta.get("simulation_inverse_route", "")).strip().lower() or "rm"
+    task = str(
+        meta.get("rm_route_pending_task")
+        or _PRODUCTION_RM_ROUTE_TASKS.get(route, "T100/T101/T102")
+    )
+    message = (
+        f"{route} requires a precomputed RM/GREIT artifact before reconstruction. "
+        f"Build or attach the artifact in {task}, or use debug_fine_mesh_noser for "
+        "the current fine-mesh dense baseline."
+    )
+    emit(message)
+    result_meta = dict(meta)
+    result_meta.update(
+        {
+            "n_elec": int(meta.get("n_elec", 0) or 0),
+            "reconstruction_runtime": "single_step_cached",
+            "single_step_operator_space": "rm",
+            "online_hot_path": "rm_matmul",
+            "rm_artifact_missing": True,
+            "rm_artifact_required": True,
+            "rm_route_pending_task": task,
+            "difference_lambda": runtime.lam,
+            "effective_refinement": runtime.refinement,
+            "solver_diagnostics": {
+                "path": "single_step_cached_rm_missing_artifact",
+                "strict_solver_backend_effective": "rm",
+                "runtime": {
+                    "online_hot_path": "rm_matmul",
+                    "single_step_operator_space": "rm",
+                    "forward_solve_count": 0,
+                    "adjoint_solve_count": 0,
+                    "jacobian_rebuild_count": 0,
+                    "ksp_solve_count": 0,
+                    "rm_artifact_missing": True,
+                },
+            },
+        }
+    )
+    verts_per_cell = 4 if runtime.mesh_dim == 3 else 3
+    return ReconstructionResult(
+        conductivity=np.asarray([], dtype=np.float64),
+        node_coords=np.empty((0, runtime.mesh_dim), dtype=np.float64),
+        cell_connectivity=np.empty((0, verts_per_cell), dtype=np.int32),
+        error_msg=message,
+        metadata=result_meta,
+    )
 
 
 def _parse_int_shape(value: Any) -> tuple[int, ...]:
@@ -1004,6 +1086,7 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("radius", 1.0)
     meta.setdefault("geometry_scale_to_m", 1.0)
     meta.setdefault("electrode_length_m_override", None)
+    meta.setdefault("electrode_area_m2_override", None)
     meta.setdefault("electrode_coverage", 0.5)
     meta.setdefault("mesh_dir", "eit_meshes")
     meta.setdefault("difference_mode", "raw")
@@ -1030,6 +1113,27 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
     meta.setdefault("acceleration_profile", "default")
+    meta.setdefault(
+        "single_step_signature_schema_version",
+        _SINGLE_STEP_SIGNATURE_SCHEMA_VERSION,
+    )
+    meta.setdefault("single_step_jacobian_calculator", _SINGLE_STEP_JACOBIAN_CALCULATOR)
+    meta.setdefault(
+        "single_step_jacobian_math_convention",
+        _SINGLE_STEP_JACOBIAN_MATH_CONVENTION,
+    )
+    meta.setdefault(
+        "single_step_projection_math_convention",
+        _SINGLE_STEP_PROJECTION_MATH_CONVENTION,
+    )
+    meta.setdefault(
+        "single_step_operator_math_convention",
+        _SINGLE_STEP_OPERATOR_MATH_CONVENTION,
+    )
+    meta.setdefault(
+        "single_step_algorithm_version",
+        _SINGLE_STEP_CACHED_ALGORITHM_VERSION,
+    )
     mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
     meta["mesh_dimension"] = mesh_dim
     meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=mesh_dim)
@@ -1090,6 +1194,8 @@ def _prepare_single_step_cached_runtime(
     electrode_height_ratio = float(meta.get("electrode_height_ratio", 0.2))
     z_center = float(meta.get("z_center", 0.0))
     cache_key = (
+        _single_step_semantic_signature(meta),
+        str(meta.get("single_step_algorithm_version")),
         int(meta["n_elec"]),
         int(meta.get("n_rings", 1)),
         mesh_dim,
@@ -1105,6 +1211,7 @@ def _prepare_single_step_cached_runtime(
         float(meta.get("geometry_scale_to_m", 1.0)),
         float(meta.get("electrode_coverage", 0.5)),
         repr(meta.get("electrode_length_m_override")),
+        repr(meta.get("electrode_area_m2_override")),
         str(meta.get("difference_mode", "raw")),
         str(meta.get("difference_orientation", "target_minus_reference")),
         str(meta.get("stim_pattern", "{ad}")),
@@ -1368,6 +1475,24 @@ def _ensure_single_step_cached_context(
                 forward_backend=str(meta.get("forward_backend", "dolfinx")),
                 mesh_family=str(meta.get("mesh_family", "tetra")),
                 geometry_version=str(meta.get("geometry_version", "geomv2")),
+                single_step_signature_schema_version=str(
+                    meta.get("single_step_signature_schema_version")
+                ),
+                single_step_jacobian_calculator=str(
+                    meta.get("single_step_jacobian_calculator")
+                ),
+                single_step_jacobian_math_convention=str(
+                    meta.get("single_step_jacobian_math_convention")
+                ),
+                single_step_projection_math_convention=str(
+                    meta.get("single_step_projection_math_convention")
+                ),
+                single_step_operator_math_convention=str(
+                    meta.get("single_step_operator_math_convention")
+                ),
+                single_step_algorithm_version=str(
+                    meta.get("single_step_algorithm_version")
+                ),
             )
         )
         _put_cached_fast_context(runtime.cache_key, ctx)
@@ -1427,6 +1552,7 @@ def _run_full_gn_request(
     meta.setdefault("radius", 1.0)
     meta.setdefault("electrode_coverage", 0.5)
     meta.setdefault("electrode_length_m_override", None)
+    meta.setdefault("electrode_area_m2_override", None)
     meta.setdefault("contact_impedance", 0.01)
     meta.setdefault("difference_mode", "raw")
     meta.setdefault("difference_orientation", "target_minus_reference")
@@ -1506,6 +1632,7 @@ def _run_full_gn_request(
         repr(meta.get("electrode_level_fractions", (0.25, 0.75))),
         float(meta.get("electrode_coverage", 0.5)),
         repr(meta.get("electrode_length_m_override")),
+        repr(meta.get("electrode_area_m2_override")),
         _contact_impedance_scalar(meta.get("contact_impedance", 0.01)),
         float(req.regularization_alpha),
         repr(meta.get("hyperparameter")),
@@ -1687,6 +1814,8 @@ def _run_single_step_cached_request(
     rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
     if rm_result is not None:
         return rm_result
+    if _single_step_rm_route_requires_artifact(runtime.meta):
+        return _missing_rm_artifact_result(runtime, emit=emit)
 
     diff_runner = _load_gn_difference_runner_module()
     STRICT_SOLVER_BACKEND_MEASUREMENT = diff_runner.STRICT_SOLVER_BACKEND_MEASUREMENT
@@ -1801,7 +1930,7 @@ def _run_single_step_cached_request(
             alpha = 1.0
 
     alpha_requested = float(alpha)
-    alpha, display_delta, sigma_est, sigma_floor_applied = (
+    alpha, _display_delta, sigma_est, sigma_floor_applied = (
         _constrain_single_step_sigma_update(
             ctx["sigma_bg"],
             delta_sigma,
@@ -1825,6 +1954,7 @@ def _run_single_step_cached_request(
             "reconstruction_runtime": "single_step_cached",
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
+            "conductivity_display_mode": "absolute_sigma",
             "step_size_alpha": alpha,
             "step_size_alpha_requested": alpha_requested,
             "step_size_alpha_limited": bool(alpha < alpha_requested),
@@ -1840,7 +1970,7 @@ def _run_single_step_cached_request(
 
     emit("Reconstruction complete")
     return ReconstructionResult(
-        conductivity=display_delta,
+        conductivity=sigma_est,
         node_coords=ctx["display_node_coords"],
         cell_connectivity=ctx["display_cell_connectivity"],
         measured=dv,
