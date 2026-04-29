@@ -33,6 +33,7 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - Nix + uv dev path, WSL2 supported; GUI launcher `scripts/gui/run_eit_app.sh`
 - PySide6 GUI under `src/eit_app/`
 - MIT license
+- Frozen queue guard: T2/T3/T7/T10/T33 ⊥ build until explicit env unfreeze + passing CUDA/MPI/PCAMGX probes; T11/T27/T28/T68/T70 ⊥ build until explicit research unfreeze + baseline-gain/new-API evidence
 
 ## §I — interfaces
 
@@ -221,11 +222,12 @@ dynamic-quality  (after dynamic foundation metrics stable):
 phase-2  (after v1 stable, higher-fidelity reconstruction):
     T22, T23, T25, T24, T21, T30
 
-research  (post-phase-2, opt-in enhancement):
-    T27, T70, T68, T28, T1, T11, T33
+research  (FROZEN: post-v1 + user unfreeze + baseline-gain/new-API evidence):
+    T27, T70, T68, T28, T11, T33  (T1 done)
 
 infra / deferred  (hardware / design-heavy, unblock separately):
-    T2, T3, T4, T6, T7, T10, T37
+    local-actionable: T4, T6
+    FROZEN env/precondition: T2, T3, T7, T10, T33
 
 code-fusion (Path C, T75 reference pattern; tackle low-risk → high-risk):
     T80  →  T78  →  T76  →  T79  →  T81  →  T77  →  T83  →  T84  →  T85  →  T86  →  T87  →  T89
@@ -255,16 +257,16 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | id | status | desc | cites |
 |----|--------|------|-------|
 | T1 | x | Full PETSc `PCFIELDSPLIT` inverse solver for `sigma + z_contact` joint estimation (additive → multiplicative → Schur) | V20 |
-| T2 | . | Enable MPI size > 1: distributed Mat/Vec + `mpiexec -n 2` smoke; lift fail-fast guard | V18 |
-| T3 | . | Flip `matrix_free_ksp_backend` default to `auto` once 3D benchmark parity vs scipy holds | V12 |
-| T4 | . | Real 3D benchmark artifact proving G1 persistent-KSP setup-time saved (iter histogram + cumulative setup seconds) | V13,V14 |
+| T2 | . | FROZEN env(MPI): enable MPI size > 1 only after explicit unfreeze + distributed Mat/Vec design + `mpiexec -n 2` smoke plan; until then keep fail-fast guard | V18 |
+| T3 | . | FROZEN precondition: flip `matrix_free_ksp_backend` default to `auto` only after real 3D PETSc-vs-SciPy parity artifact; no default change before evidence | V12 |
+| T4 | x | Real 3D benchmark artifact proving G1 persistent-KSP setup-time saved (iter histogram + cumulative setup seconds): `scripts/benchmarks/benchmark_forward_ksp_session_reuse.py` drives N forward solves with σ updates under `forward_pc_refresh_policy ∈ {auto,never,always,lag}` and emits HDF5 + JSON + Markdown bundle (per-call iter array, setup_seconds, session_reused, refresh_reason histogram, cumulative_setup_seconds, p50/p95 iter, V13/V14/V52/V67 cites, `env_path`); 3D 16e ref5 hypre artifact `reports/runtime_benchmarks/forward_ksp_session_reuse_t4_20260429_3d/` records `auto.n_reused=9/10`, `never.n_reused=0/10`, G1 cum-setup saved 0.0228s (warm/cold ratio 0.9383). Gate: `tests/unit/test_benchmark_forward_ksp_session_reuse.py` smokes 2D `spd_hypre` regimes `auto,never` in-process, asserting V13 (`auto.n_reused>=1`), V14 (`never.n_reused==0`), schema, env_path, HDF5 dataset names, summary.md V cites | V13,V14 |
 | T5 | x | Wire `JacobianLinearization.assert_compatible(sigma_fp)` at runtime reuse path; stored fingerprint currently inert | V9,V15 |
 | T6 | . | Persistent across-iteration Jacobian cache keyed on `sigma_fingerprint` + mesh content hash | V9,V17 |
-| T7 | . | CUDA 3D inverse benchmark gated by `probe_petsc_cuda --require cuda` | V19 |
+| T7 | . | FROZEN env(CUDA): 3D inverse benchmark only after explicit unfreeze + `probe_petsc_cuda --require cuda` passes in target shell | V19 |
 | T8 | x | Guard canonical solver/PC matrix doc against preset-default drift (R11 hard gate) | V4,V5,V6 |
 | T9 | x | Explicit startup cache skip for operator Jacobian (avoid `np.asarray(JacobianLinearization, dtype=float)` path) | V15 |
-| T10 | . | PETSc AmgX / Hypre CUDA path wiring + capability probe entries in benchmark artifact | V19 |
-| T11 | . | Research: PETSc/petsc4py structural reuse hints. `KSPSetOperators(ksp, Amat, Pmat)` has no `SAME_NONZERO_PATTERN` parameter in current API; `petsc4py.KSP.setOperators(A=None, P=None)` likewise. Current main line stays `setOperators(A_new)` + `KSPSetReusePreconditioner(True)` | V13 |
+| T10 | . | FROZEN env(CUDA/PCAMGX): PETSc AmgX/Hypre CUDA path wiring only after explicit unfreeze + capability probe evidence; B5 current shell has no PCAMGX | V19,B5 |
+| T11 | . | FROZEN research/closed-form: PETSc/petsc4py structural reuse hints. `KSPSetOperators(ksp, Amat, Pmat)` has no `SAME_NONZERO_PATTERN` parameter in current API; `petsc4py.KSP.setOperators(A=None, P=None)` likewise. Reopen only if new API evidence appears; current main line stays `setOperators(A_new)` + `KSPSetReusePreconditioner(True)` | V13 |
 | T12 | x | `forward_pc_session_reused` / `forward_pc_refresh_*` diagnostics covered by `tests/unit/test_forward_ksp_session_reuse.py:189` | V13,V14 |
 | T13 | x | Add dense-reference parity smoke for `pyamg` matrix-free PC mode (currently only code path + fallback covered; no PC-output parity assertion) | V10 |
 | T14 | x | Guard `_decide_pc_reuse_for_session` against cross-sigma reuse when `ksp_type==preonly` and `pc_type ∈ {lu, cholesky, qr}` | V24,B1 |
@@ -280,13 +282,13 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T24 | x | TV PDHG / PDIPM refinement on ROI after one-step init; seeded by RM output, stops on ROI-restricted residual norm | V26,V28 |
 | T25 | x | Electrode-movement metadata path landed: `build_sigma_contact_block_metadata(..., n_movement=...)` adds `e` block + `H_σe`/`H_ze`/`H_ee`; `build_electrode_movement_jacobian` finite-diff helper + `prior_movement` diagonal prior. Scope = metadata/preconditioner contract, not production Schur solve | V20,V32 |
 | T26 | x | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
-| T27 | . | SBL / BSBL / SA-SBL coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1; no default use until T70 benchmark wins | V31 |
-| T28 | . | CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement | V29 |
+| T27 | . | FROZEN research: SBL / BSBL / SA-SBL coarse-basis enhancement (RBF, sparse-inclusion, low-rank anatomical basis); no implementation/default use until explicit unfreeze + T70-style benchmark case exists | V31 |
+| T28 | . | FROZEN research: CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement; needs explicit unfreeze + baseline-gain evidence | V29 |
 | T29 | x | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
 | T30 | x | Forward CUDA AMG policy/report surface: presets + capability fields for Hypre/AmgX, `forward_solver_benchmark` reports `petsc_hypre_available` / `petsc_amgx_available` / `petsc_amgx_cuda_candidate`, high-level runtime downgrades unavailable AmgX and blacklisted Hypre CUDA to `spd_gamg`. Scope ⊥ actual `.#cuda-amgx` PETSc PCAMGX build; that remains T33/T10 | V6,V13,V43,V44,T10,T33 |
 | T31 | x | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
 | T32 | x | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
-| T33 | . | Research: `cuda-amgx` Nix profile. Rebuild PETSc with PCAMGX (CUDA + 32-bit `PetscInt` + AmgX external package), then rebuild same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`; benchmark against current safe route `spd_gamg + petsc_device=cuda`. Do not treat FEniCSx version upgrade as AmgX enablement | V19,V42,V43,B5 |
+| T33 | . | FROZEN env/research(B5): `cuda-amgx` Nix profile only after explicit unfreeze + PCAMGX source/package path; rebuild PETSc with PCAMGX (CUDA + 32-bit `PetscInt` + AmgX external), then same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`; benchmark vs safe `spd_gamg + petsc_device=cuda`. FEniCSx upgrade alone ⊥ AmgX enablement | V19,V42,V43,B5 |
 | T34 | x | Switch GUI/default 3D difference route to cached dual-model RM reconstruction when RM artifact exists; cold path may build/load RM, hot path must bypass `DirectJacobianCalculator` | V37,V46,V48 |
 | T35 | x | Optimize RM hot path for 48e/5936: persistent RM on device, batched frames, no per-call tensor rebuild, minimal CPU↔GPU copy, float64/float32 policy recorded | V29,V37,V50 |
 | T36 | x | Real 48e/5936 dual-model report: compare one-step NOSER/Laplace RM and 3D GREIT RM, split fine-CEM/J build, RM build, artifact load, 1-frame apply, 512-frame apply, GPU/CPU paths | V40,V46,V47,V50 |
@@ -321,9 +323,9 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T65 | x | Batch spatiotemporal GN / 4D prior: windowed solve over `X[t,param]` with spatial prior `Rs`, temporal `Dt` first/second difference, block normal operator, λ_s/λ_t metadata, rowwise RM baseline comparison | V25,V31,V35,V49 |
 | T66 | x | Spatiotemporal TV / Huber prior: separable spatial graph + temporal difference penalties; preserves abrupt wavefront/onset better than L2 time smoothing; ROI support; compare against T65 on travelling-wave fixture | V28,V31,V35,V49 |
 | T67 | x | Online Kalman + fixed-lag smoother prototype: state model `x_t=A x_{t-1}+q`, measurement `y_t=Jx_t+n` or RM-observation shortcut; latency/lag metadata, `Q/R` estimation hooks, no default until T69 metrics pass | V35,V37,V49 |
-| T68 | . | Propagation-aware prior research: directed anatomical/vascular graph, velocity-range prior, path-constrained smoothness for nerve / plant conduction; opt-in only, never required for baseline parity | V31,V49 |
+| T68 | . | FROZEN research: propagation-aware prior (directed anatomical/vascular graph, velocity-range prior, path-constrained smoothness for nerve / plant conduction); opt-in only, needs explicit unfreeze + baseline-gain evidence | V31,V49 |
 | T69 | x | Dynamic validation benchmark: synthetic travelling wave + plant slow-pulse fixtures; report onset-time error, peak-time error, propagation-speed error, amplitude attenuation, SNR gain, spatial metrics; fail if regularization delays peak beyond tolerance ? | V30,V40,V41,V49 |
-| T70 | . | SBL/BSBL acceptance benchmark: compare SBL/BSBL/SA-SBL vs GN/NOSER/Laplace/TV-IRLS/4D prior on sparse anomaly + frequency-difference + propagating sparse events; promote only if accuracy/latency win recorded | V31,V35,V49,T27 |
+| T70 | . | FROZEN research: SBL/BSBL acceptance benchmark only after explicit unfreeze + T27 candidate exists; compare vs GN/NOSER/Laplace/TV-IRLS/4D prior; promote only if accuracy/latency win recorded | V31,V35,V49,T27 |
 | T71 | x | Add EIDORS-style `add_noise`: SNR-exact Gaussian scaling for `v1`, `v1-v2`, normalized-difference signal; support arrays and `EITData`; export via `pyeidors.data` | V70 |
 | T72 | x | Add bucket all-modes noise gradient experiment: full256/full208/far3-drop-near3-keep/raw160/poly2/poly3/spline across SNR ladder; CSV+plots+Word in `仿真各情况加噪声梯度测试` | V70,V71 |
 | T73 | x | Jacobian sign/convention contract freeze (Path A): 加 characterization tests (`Direct == -Adjoint` signed parity + `abs(Direct) == abs(Adjoint)` 辅助 + `linearize().to_dense()` 同) + class docstring 明确两 sign 约定 (Direct=+∂V/∂σ runtime, Adjoint=-∂V/∂σ EIDORS canonical) + `sign_convention` metadata 属性. **不删** Adjoint，**不动** GN/RM/cache. 融合 → Path C 未来任务 (抽 shared core, Direct 主面，Adjoint 退为 sign adapter, 最后视情况删) | V73,B15 |

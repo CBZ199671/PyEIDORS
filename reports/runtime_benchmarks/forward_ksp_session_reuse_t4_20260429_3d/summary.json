@@ -1,0 +1,84 @@
+{
+  "atol": 1e-10,
+  "base_conductivity": 1.0,
+  "contact_impedance": 1e-05,
+  "env_path": "/nix/store/xs8scz9w9jp4hpqycx3n3bah5y07ymgj-coreutils-9.8/bin/env",
+  "g1_cumulative_setup_saved_seconds": 0.022765816131141037,
+  "g1_warm_cold_setup_ratio": 0.9383161150564328,
+  "generated_at": "2026-04-29T08:52:54Z",
+  "ksp_type": "auto",
+  "max_it": 500,
+  "meas_pattern": "{ad}",
+  "mesh_dim": 3,
+  "n_elec": 16,
+  "n_iter": 10,
+  "pc_type": "auto",
+  "per_regime": {
+    "auto": {
+      "cumulative_setup_seconds": 0.34630652994383126,
+      "final_total_setups": 1,
+      "first_call_setup_seconds": 0.038395792013034225,
+      "iter_max_mean": 1.0,
+      "iter_max_p50": 1.0,
+      "iter_max_p95": 1.0,
+      "iter_total_sum": 160,
+      "n_calls": 10,
+      "n_refresh": 1,
+      "n_reused": 9,
+      "n_rhs_per_call": 16,
+      "refresh_reasons": {
+        "initial_setup": 1,
+        "reused": 9
+      },
+      "regime": "auto",
+      "regime_observed": "auto",
+      "solve_seconds_total": 0.04651960311457515,
+      "subsequent_setup_seconds_mean": 0.034212304214533,
+      "subsequent_setup_seconds_total": 0.30791073793079704,
+      "wall_seconds_total": 0.3989181130309589
+    },
+    "never": {
+      "cumulative_setup_seconds": 0.3690723460749723,
+      "final_total_setups": 1,
+      "first_call_setup_seconds": 0.03765233000740409,
+      "iter_max_mean": 1.0,
+      "iter_max_p50": 1.0,
+      "iter_max_p95": 1.0,
+      "iter_total_sum": 160,
+      "n_calls": 10,
+      "n_refresh": 10,
+      "n_reused": 0,
+      "n_rhs_per_call": 16,
+      "refresh_reasons": {
+        "initial_setup": 10
+      },
+      "regime": "never",
+      "regime_observed": "never",
+      "solve_seconds_total": 0.02648714609676972,
+      "subsequent_setup_seconds_mean": 0.0368244462297298,
+      "subsequent_setup_seconds_total": 0.3314200160675682,
+      "wall_seconds_total": 0.40133893192978576
+    }
+  },
+  "petsc_device": "cpu",
+  "refresh_iter_threshold": 0,
+  "refresh_lag": 0,
+  "regimes": [
+    "auto",
+    "never"
+  ],
+  "rtol": 1e-08,
+  "schema_version": 1,
+  "seed": 0,
+  "sigma_floor": 0.001,
+  "sigma_noise_scale": 0.03,
+  "solver_preset": "3d_hypre",
+  "stim_pattern": "{ad}",
+  "task": "T4",
+  "v_cites": [
+    "V13",
+    "V14",
+    "V52",
+    "V67"
+  ]
+}
