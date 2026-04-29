@@ -219,9 +219,7 @@ def _run_regime(
         )
         pc_session_solves[k] = int(diag.get("forward_pc_session_solves") or 0)
         raw_reason = diag.get("forward_pc_refresh_reason")
-        refresh_reasons.append(
-            str(raw_reason) if raw_reason else "reused"
-        )
+        refresh_reasons.append(str(raw_reason) if raw_reason else "reused")
         measurement_norm[k] = float(np.linalg.norm(np.asarray(data.meas)))
         refresh_policy_observed = str(diag.get("forward_pc_refresh_policy") or regime)
 
@@ -269,7 +267,11 @@ def _run_regime(
         f"regime_{regime}_pc_session_solves": pc_session_solves,
         f"regime_{regime}_measurement_norm": measurement_norm,
     }
-    return {"summary": summary, "arrays": arrays, "refresh_reasons_list": refresh_reasons}
+    return {
+        "summary": summary,
+        "arrays": arrays,
+        "refresh_reasons_list": refresh_reasons,
+    }
 
 
 def _format_md(per_regime: dict[str, dict[str, Any]], info: dict[str, Any]) -> str:
@@ -374,9 +376,7 @@ def _normalize_regimes(spec: str) -> list[str]:
         raise ValueError("--regimes must specify at least one regime")
     invalid = [r for r in regimes if r not in ALLOWED_REGIMES]
     if invalid:
-        raise ValueError(
-            f"unknown regimes {invalid!r}; allowed: {ALLOWED_REGIMES}"
-        )
+        raise ValueError(f"unknown regimes {invalid!r}; allowed: {ALLOWED_REGIMES}")
     seen: set[str] = set()
     deduped: list[str] = []
     for r in regimes:

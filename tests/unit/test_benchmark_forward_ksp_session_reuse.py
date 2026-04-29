@@ -126,8 +126,7 @@ def test_t4_bench_auto_reuses_session_never_does_not(tmp_path: Path) -> None:
     # G1 evidence: warm setup must not regress vs cold baseline.
     # Allow tiny noise budget on tiny meshes where both are sub-ms.
     assert (
-        auto["cumulative_setup_seconds"]
-        <= never["cumulative_setup_seconds"] + 5e-3
+        auto["cumulative_setup_seconds"] <= never["cumulative_setup_seconds"] + 5e-3
     ), (
         "auto cumulative setup exceeds never beyond noise budget; "
         f"auto={auto['cumulative_setup_seconds']}, "
