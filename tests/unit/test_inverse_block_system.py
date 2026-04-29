@@ -5,12 +5,16 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import pyeidors.inverse.block_system as block_system
 from pyeidors.inverse.block_system import (
+    assemble_sigma_contact_normal_system,
     build_electrode_movement_jacobian,
     build_sigma_contact_block_metadata,
+    configure_petsc_fieldsplit_solver,
     make_block_diagonal_inverse_action,
     prior_movement,
     scale_contact_impedance_update,
+    solve_sigma_contact_fieldsplit,
 )
 
 
@@ -146,6 +150,200 @@ def test_block_diagonal_inverse_action_validates_subblock_outputs():
     )
     with pytest.raises(ValueError, match="contact inverse action returned length"):
         bad_contact(np.ones(5, dtype=float))
+
+
+def test_sigma_contact_normal_system_and_scipy_solve_match_dense_reference():
+    j_sigma = np.array(
+        [
+            [1.0, 0.0],
+            [0.0, 2.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    j_contact = np.array([[1.0], [0.5], [0.0], [1.0]], dtype=float)
+    residual = np.array([1.0, -0.5, 0.25, 2.0], dtype=float)
+    measurement_weights = np.array([1.0, 2.0, 0.5, 1.5], dtype=float)
+
+    system = assemble_sigma_contact_normal_system(
+        j_sigma,
+        j_contact,
+        residual,
+        sigma_regularization=np.array([0.3, 0.4], dtype=float),
+        contact_regularization=0.2,
+        measurement_weights=measurement_weights,
+        fieldsplit_type="multiplicative",
+    )
+
+    assert system.shape == (3, 3)
+    assert system.metadata.block("sigma").slice == slice(0, 2)
+    assert system.metadata.block("z_contact").slice == slice(2, 3)
+    assert system.diagnostics["measurement_weights"] == "diagonal"
+    expected = np.linalg.solve(system.matrix.toarray(), system.rhs)
+
+    result = solve_sigma_contact_fieldsplit(
+        j_sigma,
+        j_contact,
+        residual,
+        sigma_regularization=np.array([0.3, 0.4], dtype=float),
+        contact_regularization=0.2,
+        measurement_weights=measurement_weights,
+        fieldsplit_type="multiplicative",
+        backend="scipy",
+    )
+
+    assert result.backend == "scipy"
+    assert result.converged
+    assert result.fieldsplit_type == "multiplicative"
+    assert result.residual_norm < 1e-10
+    np.testing.assert_allclose(result.solution, expected, rtol=1e-12, atol=1e-12)
+    np.testing.assert_allclose(result.sigma_delta, expected[:2])
+    np.testing.assert_allclose(result.contact_delta, expected[2:])
+
+
+class _FakePC:
+    def __init__(self) -> None:
+        self.type = None
+        self.fieldsplit_type = None
+        self.schur_fact_type = None
+        self.field_splits = None
+
+    def setType(self, pc_type):
+        self.type = pc_type
+
+    def setFieldSplitType(self, fieldsplit_type):
+        self.fieldsplit_type = fieldsplit_type
+
+    def setFieldSplitSchurFactType(self, fact_type):
+        self.schur_fact_type = fact_type
+
+    def setFieldSplitIS(self, *field_splits):
+        self.field_splits = field_splits
+
+
+class _FakeKSP:
+    comm = "comm-self"
+
+    def __init__(self) -> None:
+        self.type = None
+        self.pc = _FakePC()
+        self.tolerances = {}
+
+    def setType(self, ksp_type):
+        self.type = ksp_type
+
+    def getPC(self):
+        return self.pc
+
+    def setTolerances(self, **kwargs):
+        self.tolerances.update(kwargs)
+
+
+class _FakePETSc:
+    COMM_SELF = "comm-self"
+
+    class PC:
+        class CompositeType:
+            ADDITIVE = "additive-enum"
+            MULTIPLICATIVE = "multiplicative-enum"
+            SCHUR = "schur-enum"
+
+        class SchurFactType:
+            FULL = "full-enum"
+
+    class IS:
+        def createStride(self, size, *, first, step, comm):
+            return ("stride", int(size), int(first), int(step), comm)
+
+
+@pytest.mark.parametrize(
+    ("fieldsplit_type", "expected_enum"),
+    [
+        ("additive", "additive-enum"),
+        ("multiplicative", "multiplicative-enum"),
+        ("schur", "schur-enum"),
+    ],
+)
+def test_configure_petsc_fieldsplit_solver_uses_block_slices(
+    fieldsplit_type,
+    expected_enum,
+):
+    metadata = build_sigma_contact_block_metadata(
+        n_sigma=3,
+        n_contact=2,
+        n_measurements=5,
+        fieldsplit_type=fieldsplit_type,
+    )
+    ksp = _FakeKSP()
+
+    plan = configure_petsc_fieldsplit_solver(
+        ksp,
+        metadata,
+        petsc_module=_FakePETSc,
+        rtol=1e-7,
+        maxiter=25,
+    )
+
+    assert ksp.type == "gmres"
+    assert ksp.pc.type == "fieldsplit"
+    assert ksp.pc.fieldsplit_type == expected_enum
+    assert ksp.pc.field_splits == (
+        ("sigma", ("stride", 3, 0, 1, "comm-self")),
+        ("z_contact", ("stride", 2, 3, 1, "comm-self")),
+    )
+    assert ksp.tolerances == {"rtol": 1e-7, "max_it": 25}
+    assert plan["pc_fieldsplit_type"] == fieldsplit_type
+    if fieldsplit_type == "schur":
+        assert ksp.pc.schur_fact_type == "full-enum"
+    else:
+        assert ksp.pc.schur_fact_type is None
+
+
+def test_sigma_contact_fieldsplit_petsc_request_falls_back_when_unavailable(
+    monkeypatch,
+):
+    monkeypatch.setattr(block_system, "_PETSc", None)
+
+    result = solve_sigma_contact_fieldsplit(
+        np.eye(2, dtype=float),
+        np.ones((2, 1), dtype=float),
+        np.array([1.0, 2.0], dtype=float),
+        sigma_regularization=0.1,
+        contact_regularization=0.2,
+        backend="petsc",
+    )
+
+    assert result.backend == "scipy"
+    assert result.diagnostics["backend_requested"] == "petsc"
+    assert result.diagnostics["petsc_fallback_reason"] == "petsc_backend_unavailable"
+
+
+def test_sigma_contact_joint_solver_validates_shapes_and_weights():
+    with pytest.raises(ValueError, match="same measurement row count"):
+        assemble_sigma_contact_normal_system(
+            np.ones((2, 2), dtype=float),
+            np.ones((3, 1), dtype=float),
+            np.ones(2, dtype=float),
+        )
+
+    with pytest.raises(
+        ValueError, match="measurement_weights matrix must be symmetric"
+    ):
+        assemble_sigma_contact_normal_system(
+            np.eye(2, dtype=float),
+            np.ones((2, 1), dtype=float),
+            np.ones(2, dtype=float),
+            measurement_weights=np.array([[1.0, 2.0], [0.0, 1.0]], dtype=float),
+        )
+
+    with pytest.raises(ValueError, match="backend must be one of"):
+        solve_sigma_contact_fieldsplit(
+            np.eye(2, dtype=float),
+            np.ones((2, 1), dtype=float),
+            np.ones(2, dtype=float),
+            backend="bad",
+        )
 
 
 def test_sigma_contact_metadata_rejects_invalid_sizes_and_modes():

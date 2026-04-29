@@ -34,9 +34,12 @@ def test_claimed_subpackage_exports_are_declared() -> None:
     assert {"EITForwardModel", "LinearBackendConfig"}.issubset(forward.__all__)
     assert {
         "GaussNewtonReconstructor",
+        "assemble_sigma_contact_normal_system",
         "build_sigma_contact_block_metadata",
         "build_electrode_movement_jacobian",
+        "configure_petsc_fieldsplit_solver",
         "prior_movement",
+        "solve_sigma_contact_fieldsplit",
     }.issubset(inverse.__all__)
     assert {
         "DirectJacobianCalculator",
