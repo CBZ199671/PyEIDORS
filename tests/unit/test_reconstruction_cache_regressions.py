@@ -254,6 +254,48 @@ def test_single_step_cached_runtime_keys_semantics_with_version_fallback() -> No
     assert default_runtime.cache_key != version_runtime.cache_key
 
 
+def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "simulation_inverse_route": "noser_rm",
+        "rm_auto_build": True,
+        "mesh_size": 0.25,
+        "rm_inverse_mesh_size": 0.25,
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference",
+        "n_elec": 16,
+        "radius": 1.0,
+    }
+    cpu_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "device": "cpu",
+            "petsc_device": "cpu",
+            "forward_backend": "dolfinx",
+        },
+    )
+    cuda_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "device": "cuda",
+            "petsc_device": "cuda",
+            "forward_backend": "cuda_structured",
+        },
+    )
+
+    cpu_runtime = rc._prepare_single_step_cached_runtime(cpu_request)
+    cuda_runtime = rc._prepare_single_step_cached_runtime(cuda_request)
+    assert cpu_runtime.cache_key != cuda_runtime.cache_key
+
+    cpu_signature, _ = rc._planned_noser_rm_signature(cpu_request, cpu_runtime)
+    cuda_signature, _ = rc._planned_noser_rm_signature(cuda_request, cuda_runtime)
+    assert cpu_signature == cuda_signature
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -529,7 +571,112 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
 
 
-def test_single_step_cached_rm_route_requires_artifact_before_dense_fallback(
+def test_single_step_cached_noser_rm_route_auto_builds_hdf5_hot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import build_one_step_rm
+
+    reference = np.array([2.0, 4.0, 8.0], dtype=float)
+    target = np.array([3.0, 5.0, 10.0], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(2, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    context_calls = {"count": 0}
+
+    def _fake_context(*_args, **_kwargs):
+        context_calls["count"] += 1
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _fake_context)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=lambda **_kwargs: fake_ctx),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.04,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_dv = target - reference
+    expected_rm = build_one_step_rm(
+        jacobian,
+        lambda_=0.2,
+        mode="noser",
+        form="measurement",
+    )
+    expected_sigma = 1.0 + expected_rm @ expected_dv
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    assert result.error_msg is None
+    assert context_calls["count"] == 1
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    assert result.metadata["rm_output_display_mode"] == "absolute_sigma"
+    artifact_path = Path(result.metadata["rm_artifact_path"])
+    assert artifact_path.suffix == ".h5"
+    assert artifact_path.exists()
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["rm_metadata"]["rm_build_route"] == "noser_rm"
+    assert diagnostics["rm_metadata"]["rm_signature"]
+    assert diagnostics["rm_metadata"]["form"] == "measurement"
+
+    warm = rc._run_single_step_cached_request(request)
+    np.testing.assert_allclose(warm.conductivity, expected_sigma)
+    assert context_calls["count"] == 1
+    assert (
+        warm.metadata["solver_diagnostics"]["cache_lookups"]["rm_artifact"]["layer"]
+        == "process"
+    )
+
+
+def test_single_step_cached_non_noser_rm_route_requires_artifact_before_dense_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     reference = np.array([2.0, 4.0, -8.0], dtype=float)
@@ -550,9 +697,9 @@ def test_single_step_cached_rm_route_requires_artifact_before_dense_fallback(
         mesh_dimension=2,
         metadata={
             "reconstruction_runtime": "single_step_cached",
-            "simulation_inverse_route": "noser_rm",
+            "simulation_inverse_route": "laplace_rm",
             "rm_route_requires_artifact": True,
-            "rm_route_pending_task": "T100",
+            "rm_route_pending_task": "T101",
             "difference_mode": "raw",
             "difference_orientation": "target_minus_reference",
         },
@@ -570,10 +717,10 @@ def test_single_step_cached_rm_route_requires_artifact_before_dense_fallback(
     result = rc._run_single_step_cached_request(request)
 
     assert result.error_msg is not None
-    assert "noser_rm requires a precomputed RM/GREIT artifact" in result.error_msg
+    assert "laplace_rm requires a precomputed RM/GREIT artifact" in result.error_msg
     assert result.conductivity.size == 0
     assert result.metadata["rm_artifact_missing"] is True
-    assert result.metadata["rm_route_pending_task"] == "T100"
+    assert result.metadata["rm_route_pending_task"] == "T101"
     diagnostics = result.metadata["solver_diagnostics"]
     assert diagnostics["path"] == "single_step_cached_rm_missing_artifact"
     assert diagnostics["runtime"]["forward_solve_count"] == 0

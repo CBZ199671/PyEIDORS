@@ -19,12 +19,10 @@ from eit_app.ui.theme import set_button_role, set_hint_text
 
 
 SIMULATION_INVERSE_METHODS = [
-    # Keep the currently-implemented dense path first until the RM artifact
-    # builders in T100/T101/T102 are wired into the GUI.
-    "debug_fine_mesh_noser",
     "noser_rm",
     "laplace_rm",
     "greit3d_rm",
+    "debug_fine_mesh_noser",
     "debug_full_gn",
 ]
 _LEGACY_METHOD_ALIASES = {

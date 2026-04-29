@@ -8,9 +8,12 @@ from __future__ import annotations
 
 import contextlib
 import glob
+import hashlib
 import importlib
 import io
+import json
 import logging
+import math
 from functools import lru_cache
 import os
 import threading
@@ -59,6 +62,7 @@ _PRODUCTION_RM_ROUTE_TASKS = {
     "laplace_rm": "T101",
     "greit3d_rm": "T102",
 }
+_AUTO_BUILD_RM_ROUTES = {"noser_rm"}
 
 
 def build_difference_vector(*args, **kwargs):
@@ -657,6 +661,314 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
     return None
 
 
+def _json_signature_value(value: Any) -> Any:
+    if isinstance(value, np.generic):
+        return value.item()
+    if isinstance(value, np.ndarray):
+        return _json_signature_value(value.tolist())
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, dict):
+        return {
+            str(key): _json_signature_value(val)
+            for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        return [_json_signature_value(item) for item in value]
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return value
+    return repr(value)
+
+
+def _stable_json_digest(value: Any) -> str:
+    payload = json.dumps(
+        _json_signature_value(value),
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _repo_relative_or_absolute_path(path: Any, *, default: str) -> Path:
+    raw = str(path or default).strip() or default
+    candidate = Path(raw).expanduser()
+    if candidate.is_absolute():
+        return candidate
+    return Path(__file__).resolve().parents[3] / candidate
+
+
+def _flag_enabled(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _meta_value_present(value: Any) -> bool:
+    return value is not None and not (isinstance(value, str) and not value.strip())
+
+
+def _is_noser_rm_route(meta: dict[str, Any]) -> bool:
+    return str(meta.get("simulation_inverse_route", "")).strip().lower() == "noser_rm"
+
+
+def _should_auto_build_rm_artifact(meta: dict[str, Any]) -> bool:
+    route = str(meta.get("simulation_inverse_route", "")).strip().lower()
+    return route in _AUTO_BUILD_RM_ROUTES and _flag_enabled(
+        meta.get("rm_auto_build", False)
+    )
+
+
+def _channel_mask_from_meta(
+    meta: dict[str, Any],
+    *,
+    n_measurements: int,
+) -> np.ndarray | None:
+    from pyeidors.data.channels import normalize_bad_channel_mask
+
+    for key in ("channel_mask", "bad_channel_mask"):
+        if key in meta and _meta_value_present(meta[key]):
+            return normalize_bad_channel_mask(
+                meta[key],
+                n_measurements=n_measurements,
+            )
+    for key in ("bad_channels", "bad_channel_indices"):
+        if key in meta and _meta_value_present(meta[key]):
+            return normalize_bad_channel_mask(
+                meta[key],
+                n_measurements=n_measurements,
+            )
+    return None
+
+
+def _measurement_weights_from_meta(
+    meta: dict[str, Any],
+    *,
+    n_measurements: int,
+) -> np.ndarray | None:
+    _ = n_measurements
+    for key in ("measurement_weights", "noise_precision", "W"):
+        if key in meta and _meta_value_present(meta[key]):
+            weights = np.asarray(meta[key], dtype=np.float64)
+            return np.ascontiguousarray(weights, dtype=np.float64)
+    return None
+
+
+def _array_pair_hash(*arrays: Any) -> str:
+    digest = hashlib.sha256()
+    for array in arrays:
+        arr = np.ascontiguousarray(np.asarray(array))
+        digest.update(str(arr.dtype).encode("utf-8"))
+        digest.update(str(arr.shape).encode("utf-8"))
+        digest.update(arr.tobytes())
+    return digest.hexdigest()
+
+
+def _planned_noser_rm_signature(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+) -> tuple[str, dict[str, Any]]:
+    from pyeidors.inverse.reconstruction_matrix import rm_signature_payload
+
+    meta = runtime.meta
+    n_meas = max(_request_measurement_count(req), 1)
+    channel_mask = _channel_mask_from_meta(meta, n_measurements=n_meas)
+    weights = _measurement_weights_from_meta(meta, n_measurements=n_meas)
+    hp = math.sqrt(max(float(runtime.lam), 0.0))
+    forward_mesh_payload = {
+        "mesh_dimension": runtime.mesh_dim,
+        "forward_mesh_size": meta.get("mesh_size", req.mesh_refinement),
+        "mesh_family": meta.get("mesh_family"),
+        "geometry_version": meta.get("geometry_version"),
+        "radius": meta.get("radius"),
+        "height": meta.get("height", meta.get("mesh_height")),
+        "electrode_coverage": meta.get("electrode_coverage"),
+        "electrode_length_m_override": meta.get("electrode_length_m_override"),
+        "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
+        "electrode_height_ratio": meta.get("electrode_height_ratio"),
+    }
+    inverse_mesh_payload = {
+        "mesh_dimension": runtime.mesh_dim,
+        "inverse_mesh_size": meta.get("rm_inverse_mesh_size"),
+        "effective_refinement": runtime.refinement,
+        "mesh_family": meta.get("mesh_family"),
+        "geometry_version": meta.get("geometry_version"),
+        "radius": meta.get("radius"),
+        "height": meta.get("height", meta.get("mesh_height")),
+        "electrode_coverage": meta.get("electrode_coverage"),
+        "electrode_length_m_override": meta.get("electrode_length_m_override"),
+        "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
+        "electrode_height_ratio": meta.get("electrode_height_ratio"),
+    }
+    inverse_mesh_hash = _stable_json_digest(inverse_mesh_payload)
+    payload = rm_signature_payload(
+        forward_mesh_hash=_stable_json_digest(forward_mesh_payload),
+        inverse_mesh_hash=inverse_mesh_hash,
+        coarse2fine_hash=_stable_json_digest(
+            {
+                "projection": "identity-current-inverse-mesh",
+                "inverse_mesh_hash": inverse_mesh_hash,
+            }
+        ),
+        electrode_geometry={
+            "n_elec": int(meta.get("n_elec", 16)),
+            "n_rings": int(meta.get("n_rings", 1)),
+            "electrode_layout": str(meta.get("electrode_layout", "ring_major")),
+            "electrode_coverage": float(meta.get("electrode_coverage", 0.5)),
+            "electrode_length_m_override": meta.get("electrode_length_m_override"),
+            "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
+            "electrode_height_ratio": float(
+                meta.get("electrode_height_ratio", runtime.electrode_height_ratio)
+            ),
+        },
+        stim_meas_protocol={
+            "measurement_protocol": str(
+                meta.get("measurement_protocol", "eidors_full_3d")
+            ),
+            "stim_pattern": str(meta.get("stim_pattern", "{ad}")),
+            "meas_pattern": str(meta.get("meas_pattern", "{ad}")),
+            "rotate_meas": bool(meta.get("rotate_meas", True)),
+            "use_meas_current": bool(meta.get("use_meas_current", False)),
+            "use_meas_current_next": int(meta.get("use_meas_current_next", 0)),
+            "stim_direction": str(meta.get("stim_direction", "ccw")),
+            "meas_direction": str(meta.get("meas_direction", "ccw")),
+            "stim_first_positive": bool(meta.get("stim_first_positive", False)),
+            "drive_mode": str(meta.get("drive_mode", "")),
+            "drive_value": float(meta.get("drive_value", 1.0e-5)),
+            "use_part": str(req.use_part),
+            "custom_stim_matrix": meta.get("custom_stim_matrix"),
+            "custom_meas_matrices": meta.get("custom_meas_matrices"),
+        },
+        background={
+            "sigma0": float(runtime.background_sigma),
+            "z0": float(runtime.contact_impedance),
+        },
+        difference_mode=str(meta.get("difference_mode", "raw")),
+        bad_channel_mask=channel_mask,
+        noise_covariance=weights,
+        regularization_type="noser",
+        hyperparameters={
+            "hp": hp,
+            "hp_squared": hp * hp,
+            "lambda_eff": float(runtime.lam),
+            "form": "measurement",
+            "noser_exponent": 0.5,
+        },
+    )
+    return _stable_json_digest(payload), payload
+
+
+def _planned_noser_rm_artifact_path(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+) -> tuple[Path, str, dict[str, Any]]:
+    signature, payload = _planned_noser_rm_signature(req, runtime)
+    artifact_dir = _repo_relative_or_absolute_path(
+        runtime.meta.get("rm_artifact_dir"),
+        default=".pyeidors_cache/gui_rm",
+    )
+    return artifact_dir / f"noser_rm_{signature[:24]}.h5", signature, payload
+
+
+def _ensure_auto_built_noser_rm_artifact(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    emit: Callable[[str], None],
+) -> Path | None:
+    if not _should_auto_build_rm_artifact(runtime.meta):
+        return None
+    if not _is_noser_rm_route(runtime.meta):
+        return None
+    artifact_path, signature, signature_payload = _planned_noser_rm_artifact_path(
+        req,
+        runtime,
+    )
+    runtime.meta["rm_signature"] = signature
+    runtime.meta["rm_signature_payload"] = signature_payload
+    if artifact_path.exists():
+        runtime.meta["rm_artifact_path"] = str(artifact_path)
+        runtime.meta["dual_model_rm_path"] = str(artifact_path)
+        runtime.meta["rm_artifact_auto_built"] = False
+        runtime.meta["rm_artifact_cache_status"] = "disk_hit"
+        emit("Using cached NOSER RM artifact...")
+        return artifact_path
+
+    diff_runner = _load_gn_difference_runner_module()
+    emit("Building NOSER RM artifact...")
+    ctx = _ensure_single_step_cached_context(
+        runtime,
+        emit=emit,
+        build_shared_context=diff_runner.build_shared_context,
+    )
+    jacobian = np.asarray(ctx["J"], dtype=np.float64)
+    if jacobian.ndim != 2 or 0 in jacobian.shape:
+        raise ValueError(
+            f"NOSER RM build requires a non-empty dense J, got {jacobian.shape}."
+        )
+    n_meas = int(jacobian.shape[0])
+    channel_mask = _channel_mask_from_meta(runtime.meta, n_measurements=n_meas)
+    weights = _measurement_weights_from_meta(runtime.meta, n_measurements=n_meas)
+    hp = math.sqrt(max(float(runtime.lam), 0.0))
+
+    from pyeidors.inverse.reconstruction_matrix import (
+        build_one_step_rm,
+        write_rm_artifact,
+    )
+
+    rm = build_one_step_rm(
+        jacobian,
+        lambda_=hp,
+        mode="noser",
+        form="measurement",
+        channel_mask=channel_mask,
+        measurement_weights=weights,
+        return_metadata=True,
+    )
+    node_coords = np.asarray(ctx["display_node_coords"], dtype=np.float64)
+    cell_connectivity = np.asarray(ctx["display_cell_connectivity"], dtype=np.int32)
+    mesh_hash = _array_pair_hash(node_coords, cell_connectivity)
+    metadata = {
+        "algorithm": "one-step-noser",
+        "rm_build_route": "noser_rm",
+        "rm_signature": signature,
+        "rm_signature_payload": signature_payload,
+        "forward_mesh_hash": mesh_hash,
+        "inverse_mesh_hash": mesh_hash,
+        "coarse2fine_hash": signature_payload["coarse2fine_hash"],
+        "difference_mode": str(runtime.meta.get("difference_mode", "raw")),
+        "difference_orientation": str(
+            runtime.meta.get("difference_orientation", "target_minus_reference")
+        ),
+        "rm_output_display_mode": str(
+            runtime.meta.get("rm_output_display_mode", "absolute_sigma")
+        ),
+        "lambda_eff": float(runtime.lam),
+        "hp": hp,
+        "hp_squared": hp * hp,
+        "n_elec": int(runtime.meta.get("n_elec", 16)),
+        "n_rings": int(runtime.meta.get("n_rings", 1)),
+        "mesh_dimension": int(runtime.mesh_dim),
+        "effective_refinement": int(runtime.refinement),
+        "inverse_mesh_size": runtime.meta.get("rm_inverse_mesh_size"),
+        "online_hot_path": "rm_matmul",
+        **dict(rm.metadata),
+    }
+    write_rm_artifact(
+        artifact_path,
+        rm.rm,
+        metadata=metadata,
+        node_coords=node_coords,
+        cell_connectivity=cell_connectivity,
+        channel_mask=channel_mask,
+        measurement_weights=weights,
+    )
+    runtime.meta["rm_artifact_path"] = str(artifact_path)
+    runtime.meta["dual_model_rm_path"] = str(artifact_path)
+    runtime.meta["rm_artifact_auto_built"] = True
+    runtime.meta["rm_artifact_cache_status"] = "built"
+    return artifact_path
+
+
 def _single_step_rm_route_requires_artifact(meta: dict[str, Any]) -> bool:
     route = str(meta.get("simulation_inverse_route", "")).strip().lower()
     return bool(meta.get("rm_route_requires_artifact", False)) or (
@@ -806,6 +1118,8 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         "voxel_shape": tuple(int(v) for v in voxel_shape),
         "node_coords": node_coords,
         "cell_connectivity": cell_connectivity,
+        "channel_mask": artifact.channel_mask,
+        "measurement_weights": artifact.measurement_weights,
     }
 
 
@@ -979,11 +1293,18 @@ def _try_run_cached_rm_request(
         artifact.get("rm_handle", artifact["rm"]),
         dv,
         normalize=False,
+        channel_mask=artifact.get("channel_mask"),
+        measurement_weights=artifact.get("measurement_weights"),
         device=device,
         dtype=dtype,
         return_metadata=True,
     )
-    conductivity = np.asarray(rm_result.values, dtype=np.float64).reshape(-1)
+    delta_conductivity = np.asarray(rm_result.values, dtype=np.float64).reshape(-1)
+    output_display_mode = str(runtime.meta.get("rm_output_display_mode", "")).lower()
+    if output_display_mode == "absolute_sigma":
+        conductivity = delta_conductivity + float(runtime.background_sigma)
+    else:
+        conductivity = delta_conductivity
     result_meta = dict(runtime.meta)
     result_meta.update(
         {
@@ -996,6 +1317,7 @@ def _try_run_cached_rm_request(
             "rm_voxel_shape": tuple(int(v) for v in artifact.get("voxel_shape", ())),
             "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
             "rm_artifact_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
+            "rm_output_display_mode": output_display_mode or "delta_sigma",
             "difference_lambda": runtime.lam,
             "effective_refinement": runtime.refinement,
             "solver_diagnostics": {
@@ -1170,10 +1492,22 @@ def _prepare_single_step_cached_runtime(
         meta["jacobian_representation_reason"] = f"explicit_{jac_repr}"
     meta["jacobian_representation"] = jac_repr
     radius = float(meta.get("radius", 1.0))
+    mesh_size_for_runtime = meta.get("mesh_size")
+    if _is_noser_rm_route(meta):
+        try:
+            requested_mesh_size = float(meta.get("mesh_size", req.mesh_refinement))
+        except (TypeError, ValueError):
+            requested_mesh_size = float(req.mesh_refinement)
+        inverse_mesh_size = meta.get("rm_inverse_mesh_size")
+        if inverse_mesh_size in (None, ""):
+            inverse_mesh_size = max(float(requested_mesh_size), radius / 4.0)
+            meta["rm_inverse_mesh_size"] = inverse_mesh_size
+        mesh_size_for_runtime = inverse_mesh_size
+    meta["effective_inverse_mesh_size"] = mesh_size_for_runtime
     refinement = _compute_effective_refinement(
         radius,
         req.mesh_refinement,
-        mesh_size=meta.get("mesh_size"),
+        mesh_size=mesh_size_for_runtime,
     )
     raw_lam = meta.get("difference_lambda")
     try:
@@ -1229,6 +1563,7 @@ def _prepare_single_step_cached_runtime(
         str(meta.get("drive_mode", "total_current")),
         float(meta.get("drive_value", 1.0e-5)),
         str(meta.get("mesh_dir", "eit_meshes")),
+        repr(meta.get("rm_inverse_mesh_size")),
         str(req.use_part),
         str(meta.get("solver_mode", "auto")),
         str(meta.get("linear_solver", "auto")),
@@ -1814,6 +2149,11 @@ def _run_single_step_cached_request(
     rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
     if rm_result is not None:
         return rm_result
+    if _should_auto_build_rm_artifact(runtime.meta):
+        _ensure_auto_built_noser_rm_artifact(req, runtime, emit=emit)
+        rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
+        if rm_result is not None:
+            return rm_result
     if _single_step_rm_route_requires_artifact(runtime.meta):
         return _missing_rm_artifact_result(runtime, emit=emit)
 

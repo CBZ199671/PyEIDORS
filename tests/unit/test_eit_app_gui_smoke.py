@@ -772,7 +772,7 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     assert "eidors_one_step_noser" not in methods
     assert "eidors_abs_gn" not in methods
     assert "eidors_demo3d_tv" not in methods
-    assert inv.get_config()["method"] == "debug_fine_mesh_noser"
+    assert inv.get_config()["method"] == "noser_rm"
     assert inv._method_combo.toolTip()
 
     inv.set_config({"method": "eidors_one_step_noser"})
@@ -2630,11 +2630,11 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
 
 @pytest.mark.gui
 @pytest.mark.parametrize(
-    ("method", "pending_task", "regularization"),
+    ("method", "pending_task", "regularization", "auto_build", "display_mode"),
     [
-        ("noser_rm", "T100", "noser"),
-        ("laplace_rm", "T101", "laplace"),
-        ("greit3d_rm", "T102", "greit"),
+        ("noser_rm", "", "noser", True, "absolute_sigma"),
+        ("laplace_rm", "T101", "laplace", False, ""),
+        ("greit3d_rm", "T102", "greit", False, ""),
     ],
 )
 def test_simulation_rm_routes_record_artifact_requirement(
@@ -2642,6 +2642,8 @@ def test_simulation_rm_routes_record_artifact_requirement(
     method: str,
     pending_task: str,
     regularization: str,
+    auto_build: bool,
+    display_mode: str,
 ) -> None:
     window = EITWorkstation()
     _show_window(window)
@@ -2680,9 +2682,15 @@ def test_simulation_rm_routes_record_artifact_requirement(
     assert request.metadata["simulation_inverse_route_kind"] == "rm"
     assert request.metadata["simulation_inverse_debug_route"] is False
     assert request.metadata["rm_route_requires_artifact"] is True
+    assert request.metadata["rm_auto_build"] is auto_build
     assert request.metadata["rm_route_pending_task"] == pending_task
     assert request.metadata["rm_regularization"] == regularization
     assert request.metadata["difference_preset"] == method
+    assert request.metadata["rm_output_display_mode"] == display_mode
+    if method == "noser_rm":
+        assert request.metadata["rm_form"] == "measurement"
+        assert request.metadata["rm_inverse_mesh_size"] >= request.metadata["mesh_size"]
+        assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"
 
     window._sim_state.inverse_running = False
     _close_window(window)

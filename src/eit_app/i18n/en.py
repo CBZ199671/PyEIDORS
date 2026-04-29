@@ -421,8 +421,8 @@ TRANSLATIONS: dict[str, str] = {
         "slower/noisier than the v1 RM hot path."
     ),
     "sim.inverse.method.noser_rm.tooltip": (
-        "NOSER RM hot path: use a precomputed coarse inverse-model RM artifact; "
-        "artifact build is T100."
+        "NOSER RM default: cold-build or reuse an HDF5 coarse inverse-model "
+        "artifact, then reconstruct with the RM @ dv hot path."
     ),
     "sim.inverse.method.laplace_rm.tooltip": (
         "Laplace RM hot path: use a precomputed smooth-prior RM artifact; "

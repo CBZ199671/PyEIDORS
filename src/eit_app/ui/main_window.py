@@ -3605,6 +3605,7 @@ class EITWorkstation(QMainWindow):
         rm_route_pending_task = ""
         rm_regularization = ""
         rm_route_requires_artifact = False
+        rm_auto_build = False
         if route == "debug_fine_mesh_noser":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
@@ -3617,8 +3618,8 @@ class EITWorkstation(QMainWindow):
             difference_preset = "noser_rm"
             route_kind = "rm"
             rm_regularization = "noser"
-            rm_route_pending_task = "T100"
             rm_route_requires_artifact = True
+            rm_auto_build = True
         elif route == "laplace_rm":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
@@ -3642,6 +3643,9 @@ class EITWorkstation(QMainWindow):
             route_kind = "debug"
 
         mesh_size = float(forward_cfg.mesh_refinement)
+        rm_inverse_mesh_size = None
+        if route == "noser_rm":
+            rm_inverse_mesh_size = max(mesh_size, float(forward_cfg.radius) / 4.0)
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
         )
@@ -3668,8 +3672,12 @@ class EITWorkstation(QMainWindow):
             "simulation_inverse_route_kind": route_kind,
             "simulation_inverse_debug_route": route_kind == "debug",
             "rm_route_requires_artifact": rm_route_requires_artifact,
+            "rm_auto_build": rm_auto_build,
             "rm_route_pending_task": rm_route_pending_task,
             "rm_regularization": rm_regularization,
+            "rm_form": "measurement" if route == "noser_rm" else "",
+            "rm_output_display_mode": "absolute_sigma" if route == "noser_rm" else "",
+            "rm_artifact_dir": ".pyeidors_cache/gui_rm",
             "reconstruction_runtime": reconstruction_runtime,
             "jacobian_representation": "auto",
             "linearized_solver_strategy": "auto",
@@ -3678,6 +3686,8 @@ class EITWorkstation(QMainWindow):
         }
         if difference_lambda is not None:
             metadata["difference_lambda"] = difference_lambda
+        if rm_inverse_mesh_size is not None:
+            metadata["rm_inverse_mesh_size"] = rm_inverse_mesh_size
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
