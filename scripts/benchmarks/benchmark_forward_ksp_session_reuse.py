@@ -24,6 +24,7 @@ Example
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import shutil
 import sys
@@ -56,7 +57,7 @@ except Exception:
 ALLOWED_REGIMES = ("auto", "never", "always", "lag")
 DEFAULT_REGIMES = "auto,never"
 SCHEMA_VERSION = 1
-V_CITES = ("V13", "V14", "V52", "V67")
+V_CITES = ("V13", "V14", "V52", "V67", "V80")
 
 
 def _make_tagged_unit_square(*, n_elec: int = 4, refinement: int = 4):
@@ -167,38 +168,152 @@ def _percentile(values: np.ndarray, q: float) -> float:
     return float(np.percentile(values, q))
 
 
+def _array_sha256(array: np.ndarray) -> str:
+    arr = np.ascontiguousarray(np.asarray(array))
+    digest = hashlib.sha256()
+    digest.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    digest.update(str(arr.dtype).encode("utf-8"))
+    digest.update(arr.tobytes())
+    return digest.hexdigest()
+
+
+def _sigma_sequence_hash(sigma_sequence: np.ndarray) -> str:
+    return _array_sha256(np.ascontiguousarray(sigma_sequence, dtype=np.float64))
+
+
+def _generate_sigma_sequence(
+    *,
+    n_iter: int,
+    n_dof: int,
+    base_conductivity: float,
+    sigma_noise_scale: float,
+    sigma_floor: float,
+    rng_seed: int,
+) -> np.ndarray:
+    rng = np.random.default_rng(rng_seed)
+    base_sigma = np.full(n_dof, float(base_conductivity), dtype=np.float64)
+    perturbation = rng.standard_normal((n_iter, n_dof))
+    sequence = base_sigma[np.newaxis, :] * (
+        1.0 + float(sigma_noise_scale) * perturbation
+    )
+    sequence = np.maximum(sequence, float(sigma_floor))
+    return np.ascontiguousarray(sequence, dtype=np.float64)
+
+
+def _mesh_artifact_provenance(
+    eit_mesh,
+    args: argparse.Namespace,
+) -> dict[str, Any]:
+    mesh = eit_mesh.mesh
+    topology = mesh.topology
+    tdim = int(topology.dim)
+    fdim = max(0, tdim - 1)
+    num_facets = 0
+    try:
+        topology.create_connectivity(fdim, 0)
+        facet_map = topology.index_map(fdim)
+        num_facets = int(facet_map.size_local if facet_map is not None else 0)
+    except Exception:
+        num_facets = 0
+    try:
+        coords_hash = _array_sha256(eit_mesh.coordinates())
+    except Exception:
+        coords_hash = ""
+    try:
+        cells_hash = _array_sha256(eit_mesh.cells())
+    except Exception:
+        cells_hash = ""
+    content_hash_payload = json.dumps(
+        {
+            "coords_sha256": coords_hash,
+            "cells_sha256": cells_hash,
+            "num_vertices": int(eit_mesh.num_vertices()),
+            "num_cells": int(eit_mesh.num_cells()),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return {
+        "requested_dim": int(args.mesh_dim),
+        "topology_dim": tdim,
+        "geometry_dim": int(mesh.geometry.dim),
+        "n_elec": int(args.n_elec),
+        "mesh_refinement": int(args.mesh_refinement),
+        "mesh_radius": float(args.mesh_radius),
+        "mesh_height": float(args.mesh_height),
+        "mesh_cache_dir": str(args.mesh_cache_dir or ""),
+        "mesh_name": str(args.mesh_name or ""),
+        "mesh_file": str(getattr(eit_mesh, "mesh_file", "") or ""),
+        "mesh_family": str(getattr(eit_mesh, "mesh_family", "") or ""),
+        "geometry_version": str(getattr(eit_mesh, "geometry_version", "") or ""),
+        "generator_revision": str(getattr(eit_mesh, "generator_revision", "") or ""),
+        "num_vertices": int(eit_mesh.num_vertices()),
+        "num_cells": int(eit_mesh.num_cells()),
+        "num_facets": num_facets,
+        "coordinates_sha256": coords_hash,
+        "cells_sha256": cells_hash,
+        "mesh_content_hash": hashlib.sha256(content_hash_payload).hexdigest(),
+    }
+
+
+def _safe_env_path() -> str:
+    usr_env = Path("/usr/bin/env")
+    if usr_env.is_file():
+        return str(usr_env)
+    return shutil.which("env") or ""
+
+
 def _run_regime(
     eit_mesh,
     args: argparse.Namespace,
     *,
     regime: str,
     rng_seed: int,
+    sigma_sequence: np.ndarray | None = None,
 ) -> dict[str, Any]:
     fwd = _build_forward_model(eit_mesh, args, regime=regime)
     n_dof = fem.Function(fwd.V_sigma).x.array.size
-    rng = np.random.default_rng(rng_seed)
-    base_sigma = np.full(n_dof, float(args.base_conductivity), dtype=np.float64)
+    n_iter = int(args.n_iter)
+    if sigma_sequence is None:
+        sigma_sequence = _generate_sigma_sequence(
+            n_iter=n_iter,
+            n_dof=n_dof,
+            base_conductivity=float(args.base_conductivity),
+            sigma_noise_scale=float(args.sigma_noise_scale),
+            sigma_floor=float(args.sigma_floor),
+            rng_seed=int(rng_seed),
+        )
+    else:
+        sigma_sequence = np.ascontiguousarray(sigma_sequence, dtype=np.float64)
+        expected_shape = (n_iter, n_dof)
+        if sigma_sequence.shape != expected_shape:
+            raise ValueError(
+                f"sigma_sequence shape {sigma_sequence.shape} does not match "
+                f"{expected_shape} for regime {regime!r}."
+            )
+        if not np.isfinite(sigma_sequence).all():
+            raise FloatingPointError("sigma_sequence contains non-finite values.")
+        if np.any(sigma_sequence < float(args.sigma_floor)):
+            raise ValueError("sigma_sequence violates sigma_floor.")
+    sigma_hash = _sigma_sequence_hash(sigma_sequence)
 
-    iter_max = np.zeros(int(args.n_iter), dtype=np.int64)
-    iter_total = np.zeros(int(args.n_iter), dtype=np.int64)
-    iter_mean = np.zeros(int(args.n_iter), dtype=np.float64)
-    setup_seconds = np.zeros(int(args.n_iter), dtype=np.float64)
-    solve_seconds = np.zeros(int(args.n_iter), dtype=np.float64)
-    wall_seconds = np.zeros(int(args.n_iter), dtype=np.float64)
-    session_reused = np.zeros(int(args.n_iter), dtype=bool)
-    refresh_triggered = np.zeros(int(args.n_iter), dtype=bool)
-    pc_session_total_setups = np.zeros(int(args.n_iter), dtype=np.int64)
-    pc_session_solves = np.zeros(int(args.n_iter), dtype=np.int64)
+    iter_max = np.zeros(n_iter, dtype=np.int64)
+    iter_total = np.zeros(n_iter, dtype=np.int64)
+    iter_mean = np.zeros(n_iter, dtype=np.float64)
+    setup_seconds = np.zeros(n_iter, dtype=np.float64)
+    solve_seconds = np.zeros(n_iter, dtype=np.float64)
+    wall_seconds = np.zeros(n_iter, dtype=np.float64)
+    session_reused = np.zeros(n_iter, dtype=bool)
+    refresh_triggered = np.zeros(n_iter, dtype=bool)
+    pc_session_total_setups = np.zeros(n_iter, dtype=np.int64)
+    pc_session_solves = np.zeros(n_iter, dtype=np.int64)
     refresh_reasons: list[str] = []
-    measurement_norm = np.zeros(int(args.n_iter), dtype=np.float64)
+    measurement_norm = np.zeros(n_iter, dtype=np.float64)
     refresh_policy_observed = ""
     n_rhs = 0
 
-    for k in range(int(args.n_iter)):
-        sigma_k = base_sigma * (
-            1.0 + float(args.sigma_noise_scale) * rng.standard_normal(n_dof)
-        )
-        sigma_k = np.maximum(sigma_k, float(args.sigma_floor))
+    for k in range(n_iter):
+        sigma_k = sigma_sequence[k]
         wall_t0 = time.perf_counter()
         data, _U = fwd.fwd_solve(EITImage(elem_data=sigma_k, fwd_model=fwd))
         wall_seconds[k] = float(time.perf_counter() - wall_t0)
@@ -233,9 +348,11 @@ def _run_regime(
     summary = {
         "regime": str(regime),
         "regime_observed": refresh_policy_observed,
-        "n_calls": int(args.n_iter),
+        "n_calls": n_iter,
         "n_reused": int(session_reused.sum()),
         "n_refresh": int(refresh_triggered.sum()),
+        "sigma_sequence_hash": sigma_hash,
+        "sigma_sequence_shape": [int(v) for v in sigma_sequence.shape],
         "cumulative_setup_seconds": cumulative_setup,
         "first_call_setup_seconds": first_setup,
         "subsequent_setup_seconds_total": float(subsequent.sum()),
@@ -271,6 +388,7 @@ def _run_regime(
         "summary": summary,
         "arrays": arrays,
         "refresh_reasons_list": refresh_reasons,
+        "sigma_sequence": sigma_sequence,
     }
 
 
@@ -317,7 +435,7 @@ def _format_md(per_regime: dict[str, dict[str, Any]], info: dict[str, Any]) -> s
         lines.extend(
             [
                 "",
-                f"**G1 cumulative setup saved (never − auto)**: `{saved:.6f}s`  ",
+                f"**G1 cumulative setup saved (never − auto)**: `{saved:.6f}s`",
                 f"**warm/cold setup ratio (auto / never)**: `{ratio:.4f}`",
             ]
         )
@@ -388,6 +506,7 @@ def _normalize_regimes(spec: str) -> list[str]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    command_argv = list(sys.argv[1:] if argv is None else argv)
     args = _parse_args(argv)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -397,25 +516,40 @@ def main(argv: list[str] | None = None) -> int:
 
     per_regime: dict[str, dict[str, Any]] = {}
     arrays: dict[str, np.ndarray] = {}
+    sigma_sequence: np.ndarray | None = None
+    sigma_hash = ""
+    sigma_shape: list[int] = []
     for k_regime, regime in enumerate(regimes):
         clear_process_forward_setup_cache()
         result = _run_regime(
             eit_mesh,
             args,
             regime=regime,
-            rng_seed=int(args.seed) + 13 * k_regime,
+            rng_seed=int(args.seed),
+            sigma_sequence=sigma_sequence,
         )
+        if sigma_sequence is None:
+            sigma_sequence = np.ascontiguousarray(result["sigma_sequence"])
+            sigma_hash = str(result["summary"]["sigma_sequence_hash"])
+            sigma_shape = [int(v) for v in sigma_sequence.shape]
+        elif str(result["summary"]["sigma_sequence_hash"]) != sigma_hash:
+            raise RuntimeError("regimes did not share an identical sigma sequence.")
         per_regime[regime] = result
         arrays.update(result["arrays"])
 
+    mesh_provenance = _mesh_artifact_provenance(eit_mesh, args)
     info: dict[str, Any] = {
         "task": "T4",
         "schema_version": SCHEMA_VERSION,
         "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
-        "env_path": shutil.which("env") or "",
+        "env_path": _safe_env_path(),
+        "command_argv": command_argv,
+        "mesh": mesh_provenance,
         "mesh_dim": int(args.mesh_dim),
         "n_elec": int(args.n_elec),
         "n_iter": int(args.n_iter),
+        "sigma_sequence_hash": sigma_hash,
+        "sigma_sequence_shape": sigma_shape,
         "sigma_noise_scale": float(args.sigma_noise_scale),
         "sigma_floor": float(args.sigma_floor),
         "base_conductivity": float(args.base_conductivity),

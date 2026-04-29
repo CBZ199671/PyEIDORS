@@ -90,8 +90,18 @@ def test_t4_bench_writes_artifact_with_v_cites_and_env_path(tmp_path: Path) -> N
     assert summary["schema_version"] == 1
     assert summary["mesh_dim"] == 2
     assert summary["regimes"] == ["auto", "never"]
-    assert sorted(summary["v_cites"]) == ["V13", "V14", "V52", "V67"]
+    assert sorted(summary["v_cites"]) == ["V13", "V14", "V52", "V67", "V80"]
     assert isinstance(summary["env_path"], str) and len(summary["env_path"]) > 0
+    assert not summary["env_path"].endswith("/.local/bin/env")
+    assert "--mesh-refinement" in summary["command_argv"]
+    assert len(summary["sigma_sequence_hash"]) == 64
+    assert summary["sigma_sequence_shape"][0] == 3
+    mesh = summary["mesh"]
+    assert mesh["requested_dim"] == 2
+    assert mesh["mesh_refinement"] == 3
+    assert mesh["num_cells"] > 0
+    assert mesh["num_vertices"] > 0
+    assert len(mesh["mesh_content_hash"]) == 64
     assert "per_regime" in summary
     for regime in ("auto", "never"):
         assert regime in summary["per_regime"]
@@ -104,8 +114,12 @@ def test_t4_bench_writes_artifact_with_v_cites_and_env_path(tmp_path: Path) -> N
             "first_call_setup_seconds",
             "iter_max_mean",
             "refresh_reasons",
+            "sigma_sequence_hash",
+            "sigma_sequence_shape",
         ):
             assert key in per, f"summary regime {regime!r} missing {key!r}"
+        assert per["sigma_sequence_hash"] == summary["sigma_sequence_hash"]
+        assert per["sigma_sequence_shape"] == summary["sigma_sequence_shape"]
 
 
 def test_t4_bench_auto_reuses_session_never_does_not(tmp_path: Path) -> None:
@@ -115,6 +129,7 @@ def test_t4_bench_auto_reuses_session_never_does_not(tmp_path: Path) -> None:
     auto = summary["per_regime"]["auto"]
     never = summary["per_regime"]["never"]
 
+    assert auto["sigma_sequence_hash"] == never["sigma_sequence_hash"]
     # V13: auto regime must reuse the PETSc KSP session at least once
     # after the initial setup. n_iter=4 → at least 1 reuse expected.
     assert auto["n_reused"] >= 1, "auto regime failed to reuse KSP session (V13)"
@@ -145,7 +160,13 @@ def test_t4_bench_hdf5_arrays_and_metadata_ready(tmp_path: Path) -> None:
         meta = json.loads(handle.attrs["metadata_json"])
         assert meta["task"] == "T4"
         assert meta["schema_version"] == 1
-        assert sorted(meta["v_cites"]) == ["V13", "V14", "V52", "V67"]
+        assert sorted(meta["v_cites"]) == ["V13", "V14", "V52", "V67", "V80"]
+        assert (
+            meta["per_regime"]["auto"]["sigma_sequence_hash"]
+            == meta["per_regime"]["never"]["sigma_sequence_hash"]
+        )
+        assert meta["mesh"]["mesh_refinement"] == 3
+        assert len(meta["mesh"]["mesh_content_hash"]) == 64
         arrays_group = handle["arrays"]
         for regime in ("auto", "never"):
             for field in (
@@ -175,7 +196,7 @@ def test_t4_bench_markdown_summary_mentions_v_cites(tmp_path: Path) -> None:
     _ = _run_smoke(out_dir, n_iter=3)
     md = (out_dir / "summary.md").read_text(encoding="utf-8")
     assert "T4" in md
-    for cite in ("V13", "V14", "V52", "V67"):
+    for cite in ("V13", "V14", "V52", "V67", "V80"):
         assert cite in md, f"summary.md missing V cite {cite!r}"
     # Renders the per-regime table header.
     assert "regime" in md and "cum_setup_s" in md
