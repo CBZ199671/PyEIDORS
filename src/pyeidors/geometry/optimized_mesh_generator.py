@@ -84,6 +84,7 @@ def _ensure_femx() -> None:
     if ufl is None:
         ufl = _ufl
 
+
 GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None
 gmsh = None  # populated lazily by _ensure_gmsh on first generation/parse path
 gmshio = None

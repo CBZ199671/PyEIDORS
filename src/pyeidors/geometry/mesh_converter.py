@@ -34,6 +34,7 @@ def _ensure_femx() -> None:
 
     build_eit_mesh = _build
 
+
 logger = logging.getLogger(__name__)
 
 GMSH_AVAILABLE: bool = _import_util.find_spec("gmsh") is not None

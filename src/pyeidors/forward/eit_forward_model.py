@@ -115,9 +115,7 @@ class LinearBackendConfig:
             forward_mat_solve_min_patterns=int(
                 payload.get("forward_mat_solve_min_patterns", 0) or 0
             ),
-            forward_template_reuse=bool(
-                payload.get("forward_template_reuse", False)
-            ),
+            forward_template_reuse=bool(payload.get("forward_template_reuse", False)),
         )
 
 
@@ -1390,9 +1388,11 @@ class EITForwardModel:
         Opt-in (``forward_template_reuse=True``): once a stable
         ``M ∪ K ∪ structural-diagonal`` template is bootstrapped, every
         subsequent call duplicates it (preallocated structure, zero values),
-        AXPYs M and K with ``SAME_NONZERO_PATTERN`` so PETSc skips the
-        symbolic phase. Template is invalidated whenever the structural
-        fingerprint changes (mesh / electrode topology / backend config).
+        AXPYs M and K with ``SUBSET_NONZERO_PATTERN`` (M and K each have
+        nonzero structures that are subsets of the union template) so PETSc
+        skips the symbolic phase. Template is invalidated whenever the
+        structural fingerprint changes (mesh / electrode topology / backend
+        config).
         """
         electrode_matrix = self._get_electrode_matrix_petsc(mat_type=None)
         reuse_enabled = bool(
