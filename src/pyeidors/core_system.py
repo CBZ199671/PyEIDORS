@@ -78,6 +78,7 @@ from .perf.policy import (
     DEFAULT_ROM_SNAPSHOT_SOURCE,
     FORWARD_BACKEND_CUDA_STRUCTURED,
     MESH_FAMILY_HEX,
+    PETSC_DEVICE_CPU,
     PETSC_DEVICE_CUDA,
     normalize_forward_backend,
     normalize_acceleration_profile,
@@ -430,6 +431,7 @@ class EITSystem(CoreSystemFacadeMixin):
         dimension: Optional[int] = None,
         gdim: Optional[int] = None,
         height: Optional[float] = None,
+        electrode_coverage: Optional[float] = None,
         electrode_height_ratio: Optional[float] = None,
         electrode_level_fractions: Optional[tuple[float, ...] | list[float]] = None,
         z_center: Optional[float] = None,
@@ -458,6 +460,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 mesh_size=mesh_size,
                 dimension=resolved_dim,
                 height=height,
+                electrode_coverage=electrode_coverage,
                 electrode_height_ratio=electrode_height_ratio,
                 electrode_level_fractions=electrode_level_fractions,
                 z_center=z_center,
@@ -509,6 +512,7 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_size: Optional[float] = None,
         dimension: int = 2,
         height: Optional[float] = None,
+        electrode_coverage: Optional[float] = None,
         electrode_height_ratio: Optional[float] = None,
         electrode_level_fractions: Optional[tuple[float, ...] | list[float]] = None,
         z_center: Optional[float] = None,
@@ -524,10 +528,16 @@ class EITSystem(CoreSystemFacadeMixin):
             self.mesh_config.mesh_size if mesh_size is None else float(mesh_size)
         )
         if int(dimension) == 2:
+            resolved_coverage = (
+                self.mesh_config.electrode_coverage
+                if electrode_coverage is None
+                else float(electrode_coverage)
+            )
             generated = create_simple_eit_mesh(
                 n_elec=self.n_elec,
                 radius=resolved_radius,
                 mesh_size=resolved_mesh_size,
+                electrode_coverage=resolved_coverage,
             )
         else:
             resolved_height = (
@@ -537,6 +547,11 @@ class EITSystem(CoreSystemFacadeMixin):
                 self.mesh_config.electrode_height_ratio
                 if electrode_height_ratio is None
                 else float(electrode_height_ratio)
+            )
+            resolved_coverage = (
+                self.mesh_config.electrode_coverage
+                if electrode_coverage is None
+                else float(electrode_coverage)
             )
             resolved_level_fractions = (
                 self.mesh_config.electrode_level_fractions
@@ -566,6 +581,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 radius=resolved_radius,
                 height=resolved_height,
                 refinement=resolved_refinement,
+                electrode_coverage=resolved_coverage,
                 electrode_height_ratio=resolved_ratio,
                 electrode_level_fractions=resolved_level_fractions,
                 z_center=resolved_z,
@@ -672,6 +688,8 @@ class EITSystem(CoreSystemFacadeMixin):
             resolved_forward_backend = FORWARD_BACKEND_CUDA_STRUCTURED
 
         resolved_petsc_device = requested_petsc_device
+        if mesh_dim != 3 and resolved_petsc_device == DEFAULT_PETSC_DEVICE:
+            resolved_petsc_device = PETSC_DEVICE_CPU
         if (
             (easy_gpu_profile and mesh_dim == 3)
             or resolved_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED

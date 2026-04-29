@@ -6,10 +6,7 @@ from PySide6.QtWidgets import QGroupBox, QLabel, QVBoxLayout, QWidget
 
 from eit_app.i18n import t, translator
 from eit_app.measurement_layout import measurement_layout_from_config
-from eit_app.models.forward_model_config import (
-    INTERACTIVE_3D_DEFAULT_HEIGHT,
-    INTERACTIVE_3D_DEFAULT_RADIUS,
-)
+from eit_app.models.forward_model_config import INTERACTIVE_3D_DEFAULT_HEIGHT
 from eit_app.ui.simulation.forward_problem_panel import ForwardProblemPanel
 from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
 from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
@@ -133,8 +130,10 @@ class SimulationTab(QWidget):
         mesh_dim = int(mesh_cfg.get("mesh_dimension", 2))
         self._inhom_editor.set_domain_context(
             mesh_dimension=mesh_dim,
-            radius=INTERACTIVE_3D_DEFAULT_RADIUS if mesh_dim == 3 else 1.0,
-            height=INTERACTIVE_3D_DEFAULT_HEIGHT if mesh_dim == 3 else 1.0,
+            radius=float(mesh_cfg.get("radius", 1.0)),
+            height=float(mesh_cfg.get("height", INTERACTIVE_3D_DEFAULT_HEIGHT))
+            if mesh_dim == 3
+            else 1.0,
             z_center=0.0,
         )
         self._refresh_step_labels()

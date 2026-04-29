@@ -124,6 +124,7 @@ class _DatasetGeneratorWorker(QObject):
                 mesh_size=forward_cfg.mesh_refinement,
                 radius=forward_cfg.radius,
                 height=forward_cfg.height,
+                electrode_coverage=forward_cfg.electrode_coverage,
                 electrode_height_ratio=forward_cfg.electrode_height_ratio,
                 electrode_level_fractions=forward_cfg.electrode_level_fractions,
                 z_center=forward_cfg.z_center,

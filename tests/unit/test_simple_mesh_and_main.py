@@ -31,11 +31,16 @@ def test_simple_mesh_generator_uses_create_eit_mesh(monkeypatch):
     assert captured["electrode_coverage"] > 0
 
     out2 = simple_mesh_module.create_simple_eit_mesh(
-        n_elec=8, radius=1.2, mesh_size=0.15, output_dir="."
+        n_elec=8,
+        radius=1.2,
+        mesh_size=0.15,
+        electrode_coverage=0.25,
+        output_dir=".",
     )
     assert out2.ok is True
     assert captured["n_elec"] == 8
     assert captured["radius"] == 1.2
+    assert captured["electrode_coverage"] == 0.25
 
 
 def test_main_entrypoint_prints(capsys):

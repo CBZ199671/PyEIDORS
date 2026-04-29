@@ -28,6 +28,9 @@ DEFAULT_MEASUREMENT_LAYOUT: dict[str, Any] = {
     "geometry_scale_to_m": 1.0,
     "electrode_coverage": 0.5,
     "electrode_length_m_override": None,
+    "electrode_area_m2_override": None,
+    "electrode_height_ratio": 0.2,
+    "height": 1.0,
     "contact_impedance": 0.01,
 }
 
@@ -243,6 +246,23 @@ def measurement_layout_from_config(
         explicit_length=explicit_length,
         explicit_coverage=explicit_coverage,
     )
+    height = max(_coerce_scalar_float(source.get("height"), 1.0), 1e-9)
+    electrode_height_ratio = min(
+        max(_coerce_scalar_float(source.get("electrode_height_ratio"), 0.2), 1e-6),
+        1.0,
+    )
+    explicit_area = "electrode_area_m2_override" in raw and raw[
+        "electrode_area_m2_override"
+    ] not in (None, "")
+    electrode_area_m2_override = (
+        max(_coerce_scalar_float(source.get("electrode_area_m2_override"), 0.0), 0.0)
+        if explicit_area
+        else (
+            electrode_length_m_override * height * electrode_height_ratio
+            if mesh_dimension == 3
+            else None
+        )
+    )
     layout = {
         "n_elec": max(n_elec, 1),
         "n_rings": max(n_rings, 1),
@@ -265,6 +285,9 @@ def measurement_layout_from_config(
         "geometry_scale_to_m": geometry_scale_to_m,
         "electrode_length_m_override": electrode_length_m_override,
         "electrode_coverage": electrode_coverage,
+        "electrode_area_m2_override": electrode_area_m2_override,
+        "electrode_height_ratio": electrode_height_ratio,
+        "height": height,
         "contact_impedance": max(
             _coerce_scalar_float(source.get("contact_impedance"), 0.01), 0.0
         ),

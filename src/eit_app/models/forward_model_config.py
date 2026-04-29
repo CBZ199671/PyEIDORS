@@ -93,6 +93,8 @@ class ForwardModelConfig:
     drive_value: float = 1.0
     geometry_scale_to_m: float = 1.0
     electrode_length_m_override: float | list[float] | None = None
+    electrode_coverage: float = 0.5
+    electrode_area_m2_override: float | None = None
     contact_impedance: float | list[float] | None = None
     custom_pattern_json: str = ""
     custom_stim_matrix: Any | None = None
@@ -157,6 +159,7 @@ class ForwardModelConfig:
         custom_meas_matrices = raw.get(
             "custom_meas_matrices", custom_payload.get("meas_matrices")
         )
+        layout = measurement_layout_from_config(raw)
 
         return cls(
             mesh_dimension=mesh_dimension,
@@ -195,6 +198,12 @@ class ForwardModelConfig:
                 _to_float_list(elec_override)
                 if not isinstance(elec_override, (int, float))
                 else float(elec_override)
+            ),
+            electrode_coverage=float(layout.get("electrode_coverage", 0.5)),
+            electrode_area_m2_override=(
+                None
+                if layout.get("electrode_area_m2_override") in (None, "")
+                else float(layout.get("electrode_area_m2_override"))
             ),
             contact_impedance=(
                 _to_float_list(contact_impedance)
@@ -247,6 +256,8 @@ class ForwardModelConfig:
             "drive_value": float(self.drive_value),
             "geometry_scale_to_m": float(self.geometry_scale_to_m),
             "electrode_length_m_override": self.electrode_length_m_override,
+            "electrode_coverage": float(self.electrode_coverage),
+            "electrode_area_m2_override": self.electrode_area_m2_override,
             "contact_impedance": self.contact_impedance,
             "custom_pattern_json": self.custom_pattern_json,
             "custom_stim_matrix": self.custom_stim_matrix,

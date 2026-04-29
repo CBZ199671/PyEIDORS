@@ -75,6 +75,7 @@ def test_setup_dispatches_generated(monkeypatch):
         mesh_size: float | None,
         dimension: int = 2,
         height: float | None = None,
+        electrode_coverage: float | None = None,
         electrode_height_ratio: float | None = None,
         electrode_level_fractions: tuple[float, ...] | list[float] | None = None,
         z_center: float | None = None,
@@ -86,6 +87,7 @@ def test_setup_dispatches_generated(monkeypatch):
         calls["mesh_size"] = mesh_size
         calls["dimension"] = dimension
         calls["height"] = height
+        calls["electrode_coverage"] = electrode_coverage
         calls["electrode_height_ratio"] = electrode_height_ratio
         calls["electrode_level_fractions"] = electrode_level_fractions
         calls["z_center"] = z_center
@@ -107,6 +109,7 @@ def test_setup_dispatches_generated(monkeypatch):
     assert calls["dimension"] == 2
     assert calls["mesh_family"] == "hex"
     assert calls["geometry_version"] == "geomv2"
+    assert calls["electrode_coverage"] is None
 
 
 def test_setup_with_mesh_type_guard():
@@ -183,6 +186,7 @@ def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
     system = _new_system()
     system.mesh_config.radius = 1.23
     system.mesh_config.mesh_size = 0.07
+    system.mesh_config.electrode_coverage = 0.4
 
     generated_calls = []
     monkeypatch.setattr(
@@ -198,9 +202,14 @@ def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
 
     assert generated_calls[0]["radius"] == 1.23
     assert generated_calls[0]["mesh_size"] == 0.07
+    assert generated_calls[0]["electrode_coverage"] == 0.4
     assert generated_calls[1]["mesh"] == "generated-mesh"
     assert generated_calls[2]["radius"] == 2.0
     assert generated_calls[2]["mesh_size"] == 0.05
+    assert generated_calls[2]["electrode_coverage"] == 0.4
+
+    system.setup_generated_mesh(electrode_coverage=0.6)
+    assert generated_calls[4]["electrode_coverage"] == 0.6
 
 
 def test_system_stores_public_device_policy():
@@ -304,6 +313,31 @@ def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
     assert policy["device_effective"] == "cuda"
     assert policy["solver_mode_effective"] == "fast"
     assert policy["line_search_mode_effective"] == "fast"
+
+
+def test_v83_runtime_policy_keeps_2d_auto_petsc_on_cpu_for_gpu_profile():
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        acceleration_profile="gpu3d",
+        petsc_device="auto",
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=2),
+        mesh_family="simple",
+        geometry_version="geomv2",
+        generator_revision="g2d1",
+        mesh_file="mesh.xdmf",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["acceleration_profile_effective"] == "default"
+    assert policy["forward_backend_effective"] == "dolfinx"
+    assert policy["petsc_device_requested"] == "auto"
+    assert policy["petsc_device_effective"] == "cpu"
+    assert policy["device_effective"] == "auto"
 
 
 def test_runtime_policy_gpu3d_fused_enables_fused_defaults():

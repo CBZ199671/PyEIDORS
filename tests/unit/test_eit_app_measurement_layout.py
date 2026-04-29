@@ -8,6 +8,7 @@ from eit_app.measurement_layout import (
     estimate_measurement_point_count,
     measurement_layout_from_config,
 )
+from eit_app.models.forward_model_config import ForwardModelConfig
 
 
 def test_measurement_layout_defaults_to_current_16_electrode_hardware() -> None:
@@ -140,6 +141,21 @@ def test_explicit_electrode_length_overrides_stale_cached_coverage() -> None:
     assert layout["electrode_coverage"] == pytest.approx(expected_coverage)
 
 
+def test_forward_model_config_derives_coverage_from_explicit_2d_length() -> None:
+    cfg = ForwardModelConfig.from_mapping(
+        {
+            "mesh_dimension": 2,
+            "n_elec": 16,
+            "radius": 1.0,
+            "electrode_length_m_override": 0.020001,
+            "electrode_coverage": 0.5,
+        }
+    )
+
+    expected_coverage = 0.020001 / (2.0 * math.pi / 16.0)
+    assert cfg.electrode_coverage == pytest.approx(expected_coverage)
+
+
 def test_radius_change_recomputes_coverage_when_length_is_fixed() -> None:
     layout = measurement_layout_from_config(
         {
@@ -153,3 +169,23 @@ def test_radius_change_recomputes_coverage_when_length_is_fixed() -> None:
 
     expected_pitch = 2.0 * math.pi * 1.5 / 16.0
     assert layout["electrode_coverage"] == pytest.approx(0.020001 / expected_pitch)
+
+
+def test_3d_layout_reports_electrode_area_from_length_and_height_ratio() -> None:
+    layout = measurement_layout_from_config(
+        {
+            "mesh_dimension": 3,
+            "n_elec": 8,
+            "n_rings": 2,
+            "radius": 0.18,
+            "height": 0.16,
+            "electrode_coverage": 0.5,
+            "electrode_height_ratio": 0.25,
+        }
+    )
+
+    expected_length = 2.0 * math.pi * 0.18 * 0.5 / 8.0
+    assert layout["electrode_length_m_override"] == pytest.approx(expected_length)
+    assert layout["electrode_area_m2_override"] == pytest.approx(
+        expected_length * 0.16 * 0.25
+    )

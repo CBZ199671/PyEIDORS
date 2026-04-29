@@ -81,6 +81,7 @@ class MeshConfig:
     dimension: int = 2
     radius: float = 1.0
     height: float = 1.0
+    electrode_coverage: float = 0.5
     electrode_height_ratio: float = 0.2
     electrode_level_fractions: tuple[float, ...] = (0.25, 0.75)
     z_center: float = 0.0

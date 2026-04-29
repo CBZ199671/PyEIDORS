@@ -56,12 +56,14 @@ def create_simple_eit_mesh(
     n_elec: int = 16,
     radius: float = 1.0,
     mesh_size: float = 0.1,
+    electrode_coverage: float = 0.5,
     output_dir: Optional[str] = None,
 ):
+    segment = 2 * pi / max(1, n_elec)
     generator = SimpleEITMeshGenerator(
         n_elec=n_elec,
         radius=radius,
         mesh_size=mesh_size,
-        electrode_width=2 * pi / n_elec / 8,
+        electrode_width=segment * min(max(float(electrode_coverage), 1e-6), 1.0),
     )
     return generator.generate_circular_mesh(output_dir=output_dir)

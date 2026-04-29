@@ -1,5 +1,7 @@
 """Mesh and electrode configuration panel for simulation."""
 
+import math
+
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -24,6 +26,10 @@ from eit_app.models.forward_model_config import (
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_hint_text, set_section_header
+
+
+DEFAULT_ELECTRODE_COVERAGE = 0.5
+DEFAULT_3D_ELECTRODE_HEIGHT_RATIO = 0.2
 
 
 class MeshSetupPanel(QGroupBox):
@@ -133,6 +139,41 @@ class MeshSetupPanel(QGroupBox):
         self._n_rings_spin.valueChanged.connect(lambda _: self._on_any_change())
         self._lbl_rings = QLabel("")
         mesh_form.addRow(self._lbl_rings, self._n_rings_spin)
+
+        self._electrode_length_spin = QDoubleSpinBox()
+        self._electrode_length_spin.setRange(1.0e-6, 10.0)
+        self._electrode_length_spin.setDecimals(6)
+        self._electrode_length_spin.setSingleStep(0.001)
+        self._electrode_length_spin.setValue(
+            2.0 * math.pi * DEFAULT_ELECTRODE_COVERAGE / 16.0
+        )
+        self._electrode_length_spin.setSuffix(" m")
+        self._electrode_length_spin.valueChanged.connect(
+            lambda _: self._on_any_change()
+        )
+        self._lbl_electrode_length = QLabel("")
+        mesh_form.addRow(self._lbl_electrode_length, self._electrode_length_spin)
+
+        self._electrode_area_spin = QDoubleSpinBox()
+        self._electrode_area_spin.setRange(1.0e-8, 10.0)
+        self._electrode_area_spin.setDecimals(8)
+        self._electrode_area_spin.setSingleStep(0.0001)
+        default_3d_length = (
+            2.0
+            * math.pi
+            * INTERACTIVE_3D_DEFAULT_RADIUS
+            * DEFAULT_ELECTRODE_COVERAGE
+            / INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING
+        )
+        self._electrode_area_spin.setValue(
+            default_3d_length
+            * INTERACTIVE_3D_DEFAULT_HEIGHT
+            * DEFAULT_3D_ELECTRODE_HEIGHT_RATIO
+        )
+        self._electrode_area_spin.setSuffix(" m^2")
+        self._electrode_area_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._lbl_electrode_area = QLabel("")
+        mesh_form.addRow(self._lbl_electrode_area, self._electrode_area_spin)
 
         self._electrode_layout_combo = AutoCloseComboBox()
         self._electrode_layout_combo.addItem("", "ring_major")
@@ -247,28 +288,112 @@ class MeshSetupPanel(QGroupBox):
     # Config interface
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _first_float(value: object, default: float) -> float:
+        if value in (None, ""):
+            return float(default)
+        if isinstance(value, (list, tuple)):
+            if not value:
+                return float(default)
+            return MeshSetupPanel._first_float(value[0], default)
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return float(default)
+
+    @staticmethod
+    def _electrodes_per_circumference(
+        *,
+        mesh_dimension: int,
+        n_electrodes: int,
+        n_rings: int,
+        electrode_layout: str,
+    ) -> int:
+        per_ring = max(int(n_electrodes), 1)
+        if (
+            int(mesh_dimension) == 3
+            and int(n_rings) > 1
+            and str(electrode_layout).strip().lower() == "zigzag"
+        ):
+            return per_ring * max(int(n_rings), 1)
+        return per_ring
+
+    @classmethod
+    def _electrode_pitch_m(
+        cls,
+        *,
+        radius: float,
+        mesh_dimension: int,
+        n_electrodes: int,
+        n_rings: int,
+        electrode_layout: str,
+    ) -> float:
+        circumference_count = cls._electrodes_per_circumference(
+            mesh_dimension=mesh_dimension,
+            n_electrodes=n_electrodes,
+            n_rings=n_rings,
+            electrode_layout=electrode_layout,
+        )
+        return 2.0 * math.pi * max(float(radius), 1.0e-9) / max(circumference_count, 1)
+
     def get_config(self) -> dict:
         stim_pattern = self._stim_pattern_edit.text().strip() or "{ad}"
         meas_pattern = self._meas_pattern_edit.text().strip() or stim_pattern
         is_3d = self._dim_combo.currentIndex() == 1
+        mesh_dimension = 3 if is_3d else 2
+        radius = float(self._radius_spin.value())
+        height = float(self._height_spin.value()) if is_3d else 0.0
+        n_electrodes = int(self._n_elec_spin.value())
+        n_rings = int(self._n_rings_spin.value())
+        electrode_layout = str(
+            self._electrode_layout_combo.currentData() or "ring_major"
+        )
+        pitch_m = self._electrode_pitch_m(
+            radius=radius,
+            mesh_dimension=mesh_dimension,
+            n_electrodes=n_electrodes,
+            n_rings=n_rings,
+            electrode_layout=electrode_layout,
+        )
+        if is_3d:
+            electrode_coverage = DEFAULT_ELECTRODE_COVERAGE
+            electrode_length_m = pitch_m * electrode_coverage
+            electrode_area_m2 = max(float(self._electrode_area_spin.value()), 1.0e-12)
+            electrode_height_ratio = min(
+                max(
+                    electrode_area_m2 / max(electrode_length_m * height, 1.0e-12),
+                    1.0e-6,
+                ),
+                1.0,
+            )
+        else:
+            electrode_length_m = max(float(self._electrode_length_spin.value()), 1.0e-9)
+            electrode_coverage = min(
+                max(electrode_length_m / max(pitch_m, 1.0e-12), 1.0e-6),
+                1.0,
+            )
+            electrode_area_m2 = None
+            electrode_height_ratio = DEFAULT_3D_ELECTRODE_HEIGHT_RATIO
         return {
-            "mesh_dimension": 2 if not is_3d else 3,
+            "mesh_dimension": mesh_dimension,
             "mesh_refinement": self._refine_spin.value(),
             "mesh_family": (
                 str(self._mesh_family_combo.currentData() or "hex")
                 if is_3d
                 else "tetra"
             ),
-            "radius": float(self._radius_spin.value()),
+            "radius": radius,
             # Height is meaningful only for the 3D cylinder; for 2D
             # the field is greyed out and we report 0 so downstream
             # consumers don't accidentally treat it as a real Z extent.
-            "height": float(self._height_spin.value()) if is_3d else 0.0,
-            "n_electrodes": self._n_elec_spin.value(),
-            "n_rings": self._n_rings_spin.value(),
-            "electrode_layout": str(
-                self._electrode_layout_combo.currentData() or "ring_major"
-            ),
+            "height": height,
+            "n_electrodes": n_electrodes,
+            "n_rings": n_rings,
+            "electrode_layout": electrode_layout,
+            "electrode_length_m_override": electrode_length_m,
+            "electrode_coverage": electrode_coverage,
+            "electrode_area_m2_override": electrode_area_m2,
+            "electrode_height_ratio": electrode_height_ratio,
             "background_conductivity": self._bg_cond_spin.value(),
             "measurement_protocol": str(
                 self._measurement_protocol_combo.currentData() or "eidors_full_3d"
@@ -290,6 +415,8 @@ class MeshSetupPanel(QGroupBox):
             self._refine_spin,
             self._n_elec_spin,
             self._n_rings_spin,
+            self._electrode_length_spin,
+            self._electrode_area_spin,
             self._electrode_layout_combo,
             self._bg_cond_spin,
             self._measurement_protocol_combo,
@@ -329,6 +456,36 @@ class MeshSetupPanel(QGroupBox):
                 self._electrode_layout_combo,
                 str(config.get("electrode_layout", "ring_major")),
             )
+            layout = measurement_layout_from_config(
+                {
+                    **config,
+                    "mesh_dimension": mesh_dimension,
+                    "radius": float(self._radius_spin.value()),
+                    "height": float(self._height_spin.value()),
+                    "n_elec": int(self._n_elec_spin.value()),
+                    "n_rings": int(self._n_rings_spin.value()),
+                    "electrode_layout": str(
+                        self._electrode_layout_combo.currentData() or "ring_major"
+                    ),
+                }
+            )
+            default_length = float(layout.get("electrode_length_m_override", 0.0))
+            electrode_length = self._first_float(
+                config.get("electrode_length_m_override"), default_length
+            )
+            self._electrode_length_spin.setValue(max(electrode_length, 1.0e-6))
+            default_area = (
+                default_length
+                * max(float(self._height_spin.value()), 1.0e-9)
+                * self._first_float(
+                    config.get("electrode_height_ratio"),
+                    DEFAULT_3D_ELECTRODE_HEIGHT_RATIO,
+                )
+            )
+            electrode_area = self._first_float(
+                config.get("electrode_area_m2_override"), default_area
+            )
+            self._electrode_area_spin.setValue(max(electrode_area, 1.0e-8))
             self._bg_cond_spin.setValue(
                 float(config.get("background_conductivity", 1.0))
             )
@@ -440,6 +597,11 @@ class MeshSetupPanel(QGroupBox):
         if hasattr(self, "_lbl_height"):
             self._lbl_height.setEnabled(enabled)
             self._height_spin.setEnabled(enabled)
+        if hasattr(self, "_lbl_electrode_length"):
+            self._lbl_electrode_length.setEnabled(not enabled)
+            self._electrode_length_spin.setEnabled(not enabled)
+            self._lbl_electrode_area.setEnabled(enabled)
+            self._electrode_area_spin.setEnabled(enabled)
         if not hasattr(self, "_lbl_electrode_layout"):
             return
         self._lbl_electrode_layout.setEnabled(enabled)
@@ -507,6 +669,10 @@ class MeshSetupPanel(QGroupBox):
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))
         self._lbl_rings.setText(t("sim.mesh.rings_label"))
+        self._lbl_electrode_length.setText(t("sim.mesh.electrode_length_label"))
+        self._electrode_length_spin.setToolTip(t("sim.mesh.electrode_length_tooltip"))
+        self._lbl_electrode_area.setText(t("sim.mesh.electrode_area_label"))
+        self._electrode_area_spin.setToolTip(t("sim.mesh.electrode_area_tooltip"))
         self._lbl_electrode_layout.setText(t("sim.mesh.electrode_layout_label"))
         self._electrode_layout_combo.setItemText(
             0, t("sim.mesh.electrode_layout.ring_major")
