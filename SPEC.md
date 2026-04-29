@@ -36,15 +36,16 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 
 ## §I — interfaces
 
-### Python API (top-level `pyeidors`)
+### Python API (public package surfaces)
 
-- `EITForwardModel(n_elec, pattern_config, z, mesh, linear_backend="petsc", backend_config, forward_backend="dolfinx", cache_manager, performance_mode="aggressive")` — CEM forward solve, multi-RHS
-- `LinearBackendConfig` fields: `solver_preset`, `ksp_type`, `pc_type`, `rtol`, `atol`, `max_it`, `reuse_preconditioner`, `monitor`, `mat_solve_mode`, `use_mat_solve`, `petsc_device`, `pc_factor_mat_solver_type`, `pc_hypre_type`, `pc_gamg_type`, `petsc_options`, `forward_pc_refresh_policy`, `forward_pc_refresh_iter_threshold`, `forward_pc_refresh_lag`, `forward_mat_solve_min_patterns`
-- `DirectJacobianCalculator` — `calculate(sigma, method="efficient"|"traditional")`, `linearize(sigma, method="efficient")`, `block_tuning_info()`
-- `JacobianLinearization` — `matvec`, `rmatvec`, `normal_matvec`, `as_linear_operator`, `to_dense`, `hessian_diag(measurement_weights, alpha, regularization_diag, floor)`, `as_petsc_mat`, `assert_compatible(sigma_fingerprint)`; fields `grad_u_all`, `adjoint_gradients`, `cell_areas`, `n_meas_per_stim`, `sign`, `sigma_fingerprint`
-- `compute_sigma_fingerprint(sigma) -> str`
-- `GaussNewtonReconstructor` + `run_reconstruction(reconstructor, measured_data, jacobian_method="efficient"|"linearized"|"operator"|"matrix-free")`
-- `pyeidors.inverse.block_system`: `ParameterBlock`, `BlockCoupling`, `JointInverseBlockMetadata`, `build_sigma_contact_block_metadata(n_sigma, n_contact, n_measurements)`, `make_block_diagonal_inverse_action`, `scale_contact_impedance_update(current_z, delta_z, max_relative_step, floor)`
+- Top-level `pyeidors`: façade exports `EITSystem`, `check_environment`, `__version__` only; broader solver/forward re-export is not current contract
+- `pyeidors.forward`: `EITForwardModel(n_elec, pattern_config, z, mesh, linear_backend="petsc", backend_config, forward_backend="dolfinx", cache_manager, performance_mode="aggressive")` — CEM forward solve, multi-RHS
+- `pyeidors.forward.LinearBackendConfig` fields: `solver_preset`, `ksp_type`, `pc_type`, `rtol`, `atol`, `max_it`, `reuse_preconditioner`, `monitor`, `mat_solve_mode`, `use_mat_solve`, `petsc_device`, `pc_factor_mat_solver_type`, `pc_hypre_type`, `pc_gamg_type`, `petsc_options`, `forward_pc_refresh_policy`, `forward_pc_refresh_iter_threshold`, `forward_pc_refresh_lag`, `forward_mat_solve_min_patterns`
+- `pyeidors.inverse.jacobian.DirectJacobianCalculator` — `calculate(sigma, method="efficient"|"traditional")`, `linearize(sigma, method="efficient")`, `block_tuning_info()`
+- `pyeidors.inverse.jacobian.JacobianLinearization` — `matvec`, `rmatvec`, `normal_matvec`, `as_linear_operator`, `to_dense`, `hessian_diag(measurement_weights, alpha, regularization_diag, floor)`, `as_petsc_mat`, `assert_compatible(sigma_fingerprint)`; fields `grad_u_all`, `adjoint_gradients`, `cell_areas`, `n_meas_per_stim`, `sign`, `sigma_fingerprint`
+- `pyeidors.inverse.jacobian.compute_sigma_fingerprint(sigma) -> str`
+- `pyeidors.inverse.GaussNewtonReconstructor` + `pyeidors.inverse.solvers.gauss_newton_runtime.run_reconstruction(reconstructor, measured_data, jacobian_method="efficient"|"linearized"|"operator"|"matrix-free")`
+- `pyeidors.inverse.block_system`: `ParameterBlock`, `BlockCoupling`, `JointInverseBlockMetadata`, `build_sigma_contact_block_metadata(n_sigma, n_contact, n_measurements, n_movement=None)`, `build_electrode_movement_jacobian`, `prior_movement`, `make_block_diagonal_inverse_action`, `scale_contact_impedance_update(current_z, delta_z, max_relative_step, floor)`
 - Data: `PatternConfig`, `EITMesh`, `EITData`, `EITImage`; `pyeidors.data.add_noise(snr, v1, v2=None, options=None, seed=None, rng=None)` — EIDORS `add_noise` parity, array or `EITData`
 - Cache: `build_process_forward_setup_key(*, mesh_file, mesh_content_hash, n_elec, z, pattern_config)`, `backend_signature_from_forward_model`, `model_signature_from_forward_model`, `pattern_signature_from_forward_model`, `rom_signature`, semantic `cache_manager.get_or_compute_semantic`
 - Perf: `detect_performance_capabilities`, `select_preconditioner`, `select_fast_linear_path`, `select_fused_strategy`, `probe_mpi_runtime`, `resolve_3d_cuda_forward_solver_policy`, `resolve_3d_cuda_mat_solve_policy`
@@ -58,7 +59,9 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - `scripts/benchmarks/benchmark_difference_runtime.py`
 - `scripts/diagnostics/probe_petsc_cuda.py` — PETSc CUDA + MPI probe, `--pretty`, `--require cuda`
 - `scripts/ci/run_sharded_unit_tests.py` — `--shard <name>` | `--all`, `--timeout`, `--report-dir`, per-shard JSON summary
-- `scripts/gui/run_eit_app.sh` / `.ps1` / `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd`
+- `scripts/gui/run_eit_app.sh` / `.ps1`; repository-root `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd` — current GUI launchers/wrappers
+- `scripts/benchmarks/benchmark_mesh_io_formats.py --mesh <path.msh|path.xdmf|path.h5> --repeats N --output-json <path>`
+- `scripts/cache/migrate_artifacts_to_hdf5.py --root <path> --dry-run|--apply [--manifest <path>]` — migrate legacy `.npz/.npy` numeric artifacts to `.h5`, emit JSON manifest, leave source files untouched
 
 ### §I.diag — diagnostics surface
 
@@ -66,9 +69,9 @@ Python-first EIT framework. FEniCSx (DOLFINx) CEM forward + PyTorch-accel invers
 - Inverse `_last_fast_linear_meta` keys: `path`, `resolved_preconditioner`, `fallback_reason`, `fast_linear_path_selected`, `fast_linear_path_reason`, `jacobian_representation`, `jacobian_shape`, `dense_jacobian_materialized`, `linear_iterations`, `matrix_free_pc_source`, `matrix_free_pc_mode`, `matrix_free_pc_floor`, `matrix_free_pc_min`, `matrix_free_pc_max`, `matrix_free_pc_reason`, `matrix_free_pmat_available`, `matrix_free_pmat_kind`, `matrix_free_pmat_attr`, `matrix_free_ksp_backend_requested`, `matrix_free_ksp_backend_effective`, `matrix_free_ksp_backend_fallback_reason`
 - Benchmark artifact `forward_solver_benchmark` JSON: mesh/RHS/solver/PC/Mat/Vec/timing/iterations/device/fallback/finite-output/CUDA-errors/MPI fields
 
-### §I.future — planned v1 surfaces (not yet implemented)
+### §I.future — planned / scope-limited surfaces
 
-Provisional module paths; see §T.T15..T32 for per-feature scope. All marked `?` until the corresponding `x` lands in §T.
+Provisional module paths; see §T for per-feature scope. Done rows still may be scope-limited; unlanded rows must stay pending.
 
 **Existing hooks v1 MUST build on (not replace):**
 - `src/pyeidors/data/difference.py:66` `build_difference_vector` / `project_measurement_jacobian` — existing normalized/raw difference math. V39 gates parity of the new `normalize_time_difference` against this.
@@ -87,13 +90,13 @@ Provisional module paths; see §T.T15..T32 for per-feature scope. All marked `?`
   - planned EIDORS parity: `build_eidors_3d_greit_model(config) -> GREITRM`; config covers `imgsz/xvec/yvec/zvec`, `distr`, `Nsim`, `target_size`, `target_plane`, `target_offset`, `noise_figure|weight`, `noise_covar`, `desired_solution_fn`, `training_mode="forward"|"linearized"`, `keep_model_components`
   - planned EIDORS parity artifact: HDF5 `.h5` stores `RM`, `PJt`, `M`, `noiselev`, `weight_chosen`, `vh`, `vi`, `xyzr`, `D`, `Y`, `rec_model`, cache signature; `.npz` is legacy/small-test only
 - `pyeidors.inverse.matrix_free.dual_mesh`: `DualMeshJacobianOperator(fwd_model, coarse2fine)` exposing `Jv`, `JTr`, `normal_matvec`
-- `pyeidors.inverse.block_system` (extended): `build_sigma_contact_movement_block_metadata(n_sigma, n_contact, n_electrodes_dofs)`; adds `H_sigma_e`, `H_z_e`, `H_e_e` couplings + `prior_movement` hook
+- `pyeidors.inverse.block_system` (extended): movement support currently via `build_sigma_contact_block_metadata(..., n_movement=...)`, `build_electrode_movement_jacobian`, `prior_movement`; no separate `build_sigma_contact_movement_block_metadata` function unless T93/T98 decides to add alias
 - `pyeidors.data.difference.normalize_time_difference(v_t, v_ref, floor=...) -> dv_norm`
 - `pyeidors.data.channels.bad_channel_mask`: apply mask to `J`, `residual`, `W`
 - `pyeidors.perf.gpu_kernels.rm_matmul`: batched `RM @ ΔV` on GPU (torch / cupy)
-- Nix experimental profile `.#cuda-amgx`: PETSc configured with CUDA + PCAMGX (`--download-amgx=<src>` or `--with-amgx-dir=<path>`, `--with-64-bit-indices=0`), then rebuilds `petsc4py`, SLEPc, DOLFINx, `fenics-dolfinx` against same PETSc; FEniCSx version upgrade alone is neither required nor sufficient
+- Nix experimental profile `.#cuda-amgx` pending T33: PETSc configured with CUDA + PCAMGX (`--download-amgx=<src>` or `--with-amgx-dir=<path>`, `--with-64-bit-indices=0`), then rebuilds `petsc4py`, SLEPc, DOLFINx, `fenics-dolfinx` against same PETSc; FEniCSx version upgrade alone is neither required nor sufficient
 
-CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
+CLI additions still pending unless named above:
 
 - `--algorithm one-step-gn|noser|laplace|greit-3d|matrix-free-gn-cg|tv-pdhg`
 - `--dual-mesh on|off`, `--coarse-mesh <path>`
@@ -101,8 +104,6 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 - `--normalize-difference on|off`
 - `--greit-targets <path>`, `--greit-metrics-out <path>`
 - `--bad-channel-mask <csv|json>`
-- `scripts/benchmarks/benchmark_mesh_io_formats.py --mesh <path.msh|path.xdmf> --repeats N --output-json <path>` — compare `.msh` import vs XDMF/HDF5 load, verify cells/vertices/facet-tags/cell-tags equal
-- `scripts/cache/migrate_artifacts_to_hdf5.py --root <path> --dry-run|--apply` — migrate legacy `.npz/.npy` numeric artifacts to `.h5`, leave source read-only backup, emit manifest
 - `pyeidors.io.hdf5_artifacts`: `write_hdf5_artifact(path, arrays, metadata, chunks, compression)`, `read_hdf5_artifact(path, lazy=True)`, `migrate_npz_to_hdf5(src, dst)`
 
 ## §V — invariants
@@ -140,7 +141,7 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V29 | 3D GREIT RM precomputed offline from synthetic targets; online reconstruction is `x = RM @ dv_norm` single matmul (no KSP solve per frame) | src/pyeidors/inverse/greit.py:207-329; tests/unit/test_greit_rm.py:49-158; tests/unit/test_fenicsx_eit_3d_v1_milestone.py:137-150 |
 | V30 | GREIT metrics `{AR, PE, RES, SD, RNG}` computed per reconstruction against a target mask; documented per EIDORS GREIT evaluation protocol | src/pyeidors/inverse/greit.py:20,330-407; tests/unit/test_greit_rm.py:159-193; tests/unit/test_fenicsx_eit_3d_v1_milestone.py:151-159 |
 | V31 | Matrix-free Jv/JTr on dual mesh: `Jv(δσ_coarse) = fine_forward(c2f @ δσ_coarse)`, `JTr(r) = c2f.T @ fine_adjoint_grad(r)`; parity against dense reference on small mesh inside tol | src/pyeidors/inverse/matrix_free/dual_mesh.py; tests/unit/test_dual_mesh_matrix_free.py |
-| V32 | Joint parameter block `[σ, z_contact, e]` where `e` is electrode pose / motion nuisance; fieldsplit additive→multiplicative→Schur upgrade path extends V20 with `e` block; `prior_movement` regularizes `e` block | extends V20 — future `pyeidors.inverse.block_system` (σ+z exists; +e pending) ? |
+| V32 | Joint parameter block `[σ, z_contact, e]` where `e` is electrode pose / motion nuisance; fieldsplit additive→multiplicative→Schur upgrade path extends V20 with `e` block; `prior_movement` regularizes `e` block. Current implementation is metadata + finite-difference movement Jacobian + diagonal movement prior, not production Schur solve | src/pyeidors/inverse/block_system.py; tests/unit/test_inverse_block_system.py; T25 |
 | V33 | Normalized time difference: `dv_norm = (v_t - v_ref) / v_ref`; `v_ref` zero-guard (floor or mask); sign orientation consistent with existing `difference_orientation` contract | src/pyeidors/data/difference.py:75-124; tests/unit/test_difference_semantics.py:33-58 |
 | V34 | Bad-channel mask `chan_mask` zeroes corresponding rows of `J`, residual entries, and measurement weights `W`; mask survives through offline RM build so precomputed `RM` respects the exact mask used at acquisition | src/pyeidors/data/channels.py:30-215; tests/unit/test_channels.py; tests/unit/test_reconstruction_matrix.py:173-242 |
 | V35 | Noise covariance `W` symmetric in Hv contract: `Hv = Jᵀ W J v + α R v`; identical `W` used during offline RM build and online residual weighting; diagonal `W = diag(1/σ²_m)` is the default, full cov ring-fenced for future work | src/pyeidors/data/channels.py:153-215; src/pyeidors/inverse/reconstruction_matrix.py:323-421,482-540; tests/unit/test_reconstruction_matrix.py:173-242; tests/unit/test_rm_v1_artifacts.py:62-87 |
@@ -185,6 +186,9 @@ CLI additions (under `scripts/run_reconstruction_unified.py` or new scripts):
 | V74 | `prior/tv_irls.py` 所有 `_effective_beta(beta, ...)` 调用第二参 ! `beta_floor`. Outer loop (`_effective_beta(beta, beta_floor)` lines 51, 119) 与 `tv_irls_objective` 必须用同一 floor，否则 β≪beta_floor 时 objective 与梯度路径分歧 | tests/unit/test_tv_irls_prior.py 扩展 β<beta_floor 路径; src/pyeidors/inverse/prior/tv_irls.py:358,440; B16 |
 | V75 | 共享核 ! 对偶/多实现：同职责 ≥2 calculator/solver/generator 共 `_core` 模块或 base class. ⊥ dup field-gradient/cell-area/RHS pattern/cache key/normalize/iteration-loop/dataclass-row builder. 新 sibling impl 必 (a) 入既存 `_core`, (b) 子类化 base 仅覆 hook, 或 (c) 加 §B 解 dup. T75 Jacobian Path C (`pyeidors.inverse.jacobian._core`) = reference pattern：抽 → 薄 façade → sign-flip adapter → rename + 短暂过渡别名 → 有意删旧 API. 候选群标记于 §T.T76..T89 | T75; src/pyeidors/inverse/jacobian/_core.py; T76..T89 |
 | V76 | Semantic cache signatures ! content-safe. `model_signature_from_forward_model` / `pattern_signature_from_forward_model` / `backend_signature_from_forward_model` 必随 math-affecting content change而变；⊥ 裸 `id(obj)` memoization 覆盖 mutable `stim_matrix` / `meas_matrices` / `backend_config` / `_petsc_backend_info` 原地修改. 允许 memoize iff key 含 content hash / immutable generation token / explicit version bump; tests 必含 in-place mutation gate | tests/unit/test_cache_semantic_signature.py; src/pyeidors/cache/object_signature.py; T88,T90 |
+| V77 | Public API docs ! distinguish top-level `pyeidors` façade from subpackage exports. Any claimed import surface must have import test and matching `__all__` / `__getattr__`; if top-level expands, docs + tests + lazy import guard update together | src/pyeidors/__init__.py; src/pyeidors/forward/__init__.py; src/pyeidors/inverse/__init__.py; T93 |
+| V78 | External data/cache docs ! match HDF5 default: new binary array/cache/save artifacts use `.h5` / `.hdf5`; `.npz/.npy` are legacy read-only adapters or test fixtures only. Docs must not recommend `.npz` as default after V65/V67 close | docs/MEASUREMENT_DATA_SPEC.md; scripts/ci/persistence_format_guard.py; T96 |
+| V79 | §I CLI inventory ! match actual files or explicitly mark pending. GUI `.cmd` wrappers and cache migration CLI cannot be listed as implemented until files + smoke/contract tests exist; planned flags in §I.future must either land or be demoted to pending tasks | scripts/gui; scripts/cache; scripts/run_reconstruction_unified.py; T94,T95,T98 |
 
 ## §T — tasks
 
@@ -228,6 +232,9 @@ code-fusion (Path C, T75 reference pattern; tackle low-risk → high-risk):
 
 hot-path-efficiency (bit-exact first; bench before risky PETSc/cache-key changes):
     T88  →  T89  →  T90  →  T91  →  T92
+
+spec-doc-sync (drift found by /check 2026-04-29):
+    T93  →  T94  →  T95  →  T96  →  T97  →  T98
 ```
 
 T32 is the v1 closure milestone and ties in the GREIT metrics, so it
@@ -271,12 +278,12 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T22 | x | Matrix-free `Jv` / `JTr` extended over dual mesh (coarse inverse parameter → fine forward) with dense parity test on small mesh | V25,V31 |
 | T23 | x | IRGNM / LM wrapper around matrix-free Hv for absolute-ish 3D reconstruction, reusing the existing `_solve_pcg` PETSc or SciPy backend | V12,V31,V35 |
 | T24 | x | TV PDHG / PDIPM refinement on ROI after one-step init; seeded by RM output, stops on ROI-restricted residual norm | V26,V28 |
-| T25 | x | Electrode-movement Jacobian + `prior_movement`; extends block metadata with `e` block and `H_σe`, `H_ze`, `H_ee` couplings | V20,V32 |
+| T25 | x | Electrode-movement metadata path landed: `build_sigma_contact_block_metadata(..., n_movement=...)` adds `e` block + `H_σe`/`H_ze`/`H_ee`; `build_electrode_movement_jacobian` finite-diff helper + `prior_movement` diagonal prior. Scope = metadata/preconditioner contract, not production Schur solve | V20,V32 |
 | T26 | x | Bad-channel mask + noise covariance `W` wired into Jacobian rows, residual vector, measurement-weight contract, and RM builder so offline / online weights match | V34,V35 |
 | T27 | . | SBL / BSBL / SA-SBL coarse-basis research enhancement (RBF, sparse-inclusion, low-rank anatomical basis) — tier 3, post-v1; no default use until T70 benchmark wins | V31 |
 | T28 | . | CNN / U-Net postprocess plug-in interface (coarse 3D image in → enhanced image out), no physics replacement | V29 |
 | T29 | x | GPU `RM @ ΔV` online kernel: batched multi-frame matmul on GPU, reuses normalized-difference path | V29,V35 |
-| T30 | x | Hypre `BoomerAMG` / NVIDIA AmgX CUDA path wiring for forward CG (extends T10), with capability-probe entries in `forward_solver_benchmark` artifact | V6,V13,T10 |
+| T30 | x | Forward CUDA AMG policy/report surface: presets + capability fields for Hypre/AmgX, `forward_solver_benchmark` reports `petsc_hypre_available` / `petsc_amgx_available` / `petsc_amgx_cuda_candidate`, high-level runtime downgrades unavailable AmgX and blacklisted Hypre CUDA to `spd_gamg`. Scope ⊥ actual `.#cuda-amgx` PETSc PCAMGX build; that remains T33/T10 | V6,V13,V43,V44,T10,T33 |
 | T31 | x | Dual-mesh integration smoke: fine CEM + coarse recon + EIDORS-style parity metric on synthetic sphere target | V25,V29,V30 |
 | T32 | x | Milestone **FEniCSx-EIT-3D-v1**: ties V25–V35 + GPU online matmul; 10-point checklist (fine CEM, coarse voxel, c2f, reusable KSP/PC, adjoint J on coarse, one-step GN/NOSER/Laplace RM, normalized Δv, GPU RM@Δv, GREIT metrics, bad-channel / W weighting) | V25,V26,V27,V28,V29,V30,V31,V33,V34,V35 |
 | T33 | . | Research: `cuda-amgx` Nix profile. Rebuild PETSc with PCAMGX (CUDA + 32-bit `PetscInt` + AmgX external package), then rebuild same-chain `petsc4py`/SLEPc/DOLFINx/`fenics-dolfinx`; benchmark against current safe route `spd_gamg + petsc_device=cuda`. Do not treat FEniCSx version upgrade as AmgX enablement | V19,V42,V43,B5 |
@@ -295,7 +302,7 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T46 | x | Add EIDORS-parity GREIT HDF5 artifact/cache schema: store model components in `.h5`, cache `PJt` across weight search, signature includes V55..V61 inputs | V61,V62,V65 |
 | T47 | x | Add MATLAB EIDORS parity diagnostics + tests: compare PyEIDORS vs official EIDORS `Y/D/PJt/M/RM/recon/metrics`; record tolerances and drift report | V63 |
 | T48 | x | Add common-config offline warmup CLI/GUI path: precompute/load 16/32/48e 3D GREIT `.h5` artifacts; online load+matmul only; no routine cold build for known hardware | V64,V65 |
-| T49 | x | Run final 48e/5936 EIDORS-parity 3D GREIT benchmark: cold build, HDF5 artifact load, 1-frame/512-frame online apply, metrics, bad-channel/W cases, GPU/CPU stability | V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65 |
+| T49 | x | T49 runtime gate landed as surrogate 48e/5936 benchmark + MATLAB/EIDORS 48e official fixture gate. Cold build/HDF5 load/1-frame/512-frame online apply/metrics/bad-channel/W/GPU-CPU stability recorded; official-equivalence claim scope = 48e fixture actual `n_measurements=2160`. 5936 protocol official fixture remains pending T97; ⊥ claim `48e/5936 official-equivalent` | V50,V55,V56,V57,V58,V59,V60,V61,V62,V63,V64,V65 |
 | T50 | x | Implement large-cache HDF5 IO layer: chunked/compressed datasets for `RM/Y/D/PJt/M/vh/vi/xyzr`, JSON metadata attrs, checksum, lazy dataset reads, legacy `.npz` read-only import/migration path | V61,V62,V65 |
 | T51 | x | Repo persistence inventory + blocklist: classify all `.npz/.npy/.msh/.xdmf/.h5/.mat` writers/readers; mark legacy/test-only exemptions; add CI scan forbidding new production `.npz/.npy` writes | V65,V67,B12 |
 | T52 | x | Mesh HDF5-first hardening: support `.xdmf/.h5` cache load without source `.msh`; store source hash/provenance optional; generator writes XDMF/HDF5 from in-memory mesh even when `save_msh=false`; round-trip facet/cell tags + physical groups | V66,V68 |
@@ -339,6 +346,12 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | T90 | x | Hash helper audit before schema-touching changes: inventory `hashlib.sha256(arr.tobytes())` sites; classify into cache-key/schema/golden/report-only. Do **not** mechanical-replace with `cache.keys.hash_array` unless output hash contract intentionally changes + schema/version bump/golden update. Include V76 check for any semantic cache memoization. Deliver audit report + candidate split. | V36,V62,V65,V67,V76,T79,T82 |
 | T91 | x | Mesh cache cold-start preflight / lazy heavy import. Goal: `load_or_create_mesh` returns disk/process cached mesh with minimal avoidable work; explore moving cache-name/preflight before expensive generation path and lazying optional `gmsh`/DOLFINx imports only if cache miss. Gate: cached 2D/3D mesh load tests + import/cold-start benchmark; preserve V66/V68 cache naming, sidecar validation, CEM completeness checks. | V62,V66,V68,V72,T78,T79,T82 |
 | T92 | x | PETSc matrix template reuse / `SUBSET_NONZERO_PATTERN` experiment. Single task + benchmark gate only: prove conductivity block sparsity pattern stable across sigma for target CEM routes; reuse template/preallocation with `Mat.axpy(..., SUBSET_NONZERO_PATTERN)` (M and K are subsets of the union template, not equal to it; `SAME_NONZERO_PATTERN` was tried first but routes values incorrectly when source pattern is a strict subset of dest) only where safe. Gate: numeric parity, PETSc diagnostics, CUDA/CPU forward benchmark, fallback to current `DIFFERENT_NONZERO_PATTERN` when gauge/CEM pattern uncertain. | V1,V13,V14,V23,V45,V47,V72 |
+| T93 | x | Public API sync: keep top-level `pyeidors` façade limited to `EITSystem`/`check_environment`/`__version__`; add import/`__all__` gate for top-level vs subpackage exports; fix `pyeidors.inverse.jacobian.compute_sigma_fingerprint` re-export | V77,B17 |
+| T94 | x | GUI launcher inventory sync: repository-root `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd` wrappers verified against `scripts/gui/run_eit_app.ps1`; §I lists actual `.sh`/`.ps1`/root `.cmd` surfaces only | V79 |
+| T95 | x | Add `scripts/cache/migrate_artifacts_to_hdf5.py --root <path> --dry-run|--apply [--manifest <path>]`; wraps `migrate_npz_to_hdf5`, supports legacy `.npz/.npy`, emits JSON manifest, leaves source files untouched | V65,V67,V78,V79 |
+| T96 | x | Update `docs/MEASUREMENT_DATA_SPEC.md` to recommend HDF5 `.h5/.hdf5` package/default; `.npz/.npy` described only as legacy/test/read/migration adapters; add doc guard | V65,V67,V78 |
+| T97 | . | Capture + gate separate MATLAB/EIDORS 5936 measurement-protocol official fixture; only after pass may UI/docs/papers say `48e/5936 official-equivalent`. Until then T49 wording stays 48e official fixture + 5936 surrogate | V50,V63 |
+| T98 | x | Unified reconstruction CLI surface synced: planned v1 flags (`--algorithm`, `--dual-mesh`, `--coarse-mesh`, `--rm-cache`, `--normalize-difference`, `--greit-targets`, `--greit-metrics-out`, `--bad-channel-mask`) remain explicitly pending in §I.future and are not accepted by current runner; parser guard locks actual `--method` + acceleration/cache surface | V77,V79 |
 
 ## §B — bugs
 
@@ -360,3 +373,4 @@ Dynamic foundation gate: T63..T65 + T69 must be `x` before neural / plant contin
 | B14 | 2026-04-26 | Full `tests/unit -q --no-cov` exceeded the 10min local gate: GN validation and reconstruction CLI validation spawned one Python process per case; GN diff cache tests used oversized/cold mesh fixtures; GUI theme tests repolished the whole QApplication for local palette/listener assertions | V72 |
 | B15 | 2026-04-27 | `DirectJacobianCalculator` (历史 `direct_jacobian.py:367` sign=+1.0, `:481` 无 minus) 与 `AdjointJacobianCalculator` (历史 `adjoint_jacobian.py:104` sign=-1.0, `:189` 显式 `-np.sum`) 返回 J 整体反号. `linearized.py:127,159` matvec/rmatvec 应用 `self.sign` → 反号传递. GN runtime `gauss_newton_runtime.py:952` `rhs=-jtr` 仅与 Direct 自洽；切到 Adjoint (`set_jacobian_calculator`) 后 δσ 静默反号. Production 默认 Direct 故 V21/V38 通过；无 cross-method parity 测试覆盖此切换. 修：T73 加 V73 sign-parity contract test, T75 Path C 抽 `_core`, Adapter sign 由 `_assemble_numpy` 后置 `-jacobian` 收敛, sign 不再分散在两 calculator 内（旧文件行号已重排, 详 commits `cfa2976` / `0f849cf` / `bb27df0` / `3f8d6d6` / `2945bcf`） | V73,T73,T75 |
 | B16 | 2026-04-27 | `prior/tv_irls.py:358` `tv_irls_objective` 中 `_effective_beta(beta, beta)` 第二参写错（应 `beta_floor`）. 函数签名 (`:440`) 取 `max(beta, beta_floor)`；其他调用 (`:51`, `:119`) 都正确传 `beta_floor`. β<beta_floor 时 objective 评估丢失下限保护，与外层 IRLS 路径用的 `RtR` 不一致 → objective 与梯度分歧、单调下降假设破坏 | V74,T74 |
+| B17 | 2026-04-29 | §I 声明 `pyeidors.inverse.jacobian.compute_sigma_fingerprint`, 但 `jacobian/__init__.py` 未 re-export / `__all__` 未列出；T93 import-surface gate 首次覆盖即失败 | V77,T93 |

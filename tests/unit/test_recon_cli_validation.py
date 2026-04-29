@@ -55,6 +55,45 @@ def test_help_is_available_without_full_runtime_stack():
     assert "Unified PyEIDORS reconstruction CLI" in out.stdout
 
 
+def test_unified_cli_inventory_keeps_planned_flags_pending(tmp_path: Path):
+    help_out = _run_cli(["--help"])
+    assert help_out.returncode == 0
+    assert "{gn-absolute,gn-difference,sparse-bayes}" in help_out.stdout
+    assert "--preconditioner" in help_out.stdout
+
+    planned_flags = (
+        "--algorithm",
+        "--dual-mesh",
+        "--coarse-mesh",
+        "--rm-cache",
+        "--normalize-difference",
+        "--greit-targets",
+        "--greit-metrics-out",
+        "--bad-channel-mask",
+    )
+    for flag in planned_flags:
+        assert flag not in help_out.stdout
+
+    csv_path = tmp_path / "sample.csv"
+    csv_path.write_text("1,2,3,4\n", encoding="utf-8")
+    for flag in planned_flags:
+        out = _run_cli(
+            [
+                "--method",
+                "gn-difference",
+                "--csv",
+                str(csv_path),
+                "--output-root",
+                str(tmp_path / "out"),
+                flag,
+                "placeholder",
+                "--dry-run",
+            ]
+        )
+        assert out.returncode != 0
+        assert f"unrecognized arguments: {flag}" in out.stderr
+
+
 def test_requires_input_source(tmp_path: Path):
     out = _run_cli(
         [

@@ -13,8 +13,9 @@ A complete measurement dataset consists of two parts: **measurement matrix** and
 
 Supported storage formats:
 
-- **Recommended**: A single `.npz` file containing the `measurements` array and `metadata` dictionary serialized as a JSON string;
-- Or: `measurements.csv` + `metadata.yaml` in the same directory.
+- **Recommended**: A single HDF5 package (`.h5` / `.hdf5`) containing the `measurements` array and JSON-compatible metadata. PyEIDORS HDF5 packages use the shared artifact layout from `pyeidors.io.hdf5_artifacts`: numeric arrays under `/arrays` and metadata in the package metadata JSON.
+- Also supported for small, human-inspectable inputs: `measurements.csv` + `metadata.yaml` or `metadata.json` in the same directory.
+- Legacy compatibility only: existing `.npz` / `.npy` inputs may be read or migrated, but new production measurement, cache, reconstruction, GUI export, and benchmark artifacts should use HDF5 packages.
 
 Regardless of format, `metadata` must be complete and consistent with the measurement matrix.
 
@@ -61,11 +62,18 @@ import numpy as np
 import yaml
 
 from pyeidors.data.measurement_dataset import MeasurementDataset
+from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
-# Load data
 data_dir = Path("data/measurements")
-measurements = np.loadtxt(data_dir / "2025-06-29-20-00-52.csv", delimiter=",")
-metadata = yaml.safe_load((data_dir / "2025-06-29-20-00-52.yaml").read_text())
+
+# Recommended: load an HDF5 package.
+artifact = read_hdf5_artifact(data_dir / "2025-06-29-20-00-52.h5")
+measurements = artifact.arrays["measurements"]
+metadata = dict(artifact.metadata)
+
+# Alternative for small interchange files:
+# measurements = np.loadtxt(data_dir / "2025-06-29-20-00-52.csv", delimiter=",")
+# metadata = yaml.safe_load((data_dir / "2025-06-29-20-00-52.yaml").read_text())
 
 # Build dataset
 dataset = MeasurementDataset.from_metadata(
@@ -105,7 +113,8 @@ YYYY-MM-DD-HH-MM-SS_<run_id>_<drive_mode>_<drive_value>_<frequency>
 Example: `2025-06-29-20-00-52_1_lineCurrentDensity_5e-5Apm_1000Hz`
 
 - Matching `.csv` and `.yaml/.json` files should appear in pairs;
-- For `.npz` format, use this naming scheme as the filename prefix.
+- For the recommended HDF5 format, use this naming scheme as the `.h5` filename prefix.
+- Existing `.npz/.npy` files are legacy compatibility inputs; migrate them to `.h5` before publishing new datasets.
 
 ## 7. Responsibility Division
 

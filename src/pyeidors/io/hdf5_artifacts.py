@@ -279,15 +279,21 @@ def migrate_npz_to_hdf5(
     metadata: Mapping[str, Any] | None = None,
     schema: str = DEFAULT_SCHEMA,
 ) -> Path:
-    """Copy a legacy NumPy archive into HDF5 without modifying the source."""
+    """Copy a legacy NumPy artifact into HDF5 without modifying the source."""
 
     source = Path(src)
     target = Path(dst) if dst is not None else source.with_suffix(".h5")
-    with np.load(source, allow_pickle=False) as payload:
-        arrays = {str(name): np.asarray(payload[name]) for name in payload.files}
+    suffix = source.suffix.lower()
+    if suffix == ".npz":
+        with np.load(source, allow_pickle=False) as payload:
+            arrays = {str(name): np.asarray(payload[name]) for name in payload.files}
+    elif suffix == ".npy":
+        arrays = {"array": np.asarray(np.load(source, allow_pickle=False))}
+    else:
+        raise ValueError(f"legacy NumPy artifact must be .npz or .npy: {source}")
     meta = {
         "migrated_from": str(source),
-        "legacy_format": source.suffix.lower().lstrip("."),
+        "legacy_format": suffix.lstrip("."),
         "legacy_source_read_only": True,
         "artifact_format": "hdf5",
     }
