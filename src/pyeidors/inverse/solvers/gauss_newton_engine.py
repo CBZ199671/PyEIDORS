@@ -139,6 +139,7 @@ class GaussNewtonReconstructor:
         lowrank_method: str = DEFAULT_LOWRANK_METHOD,
         lowrank_energy: float = DEFAULT_LOWRANK_ENERGY,
         absolute_startup_cache: bool = True,
+        persistent_jacobian_cache: bool = False,
         cholmod_max_n: int = DEFAULT_CHOLMOD_MAX_N,
         cholmod_max_memory_gib: float = DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
     ):
@@ -225,6 +226,7 @@ class GaussNewtonReconstructor:
         self.lowrank_method = str(lowrank_method).strip().lower()
         self.lowrank_energy = float(lowrank_energy)
         self.absolute_startup_cache = bool(absolute_startup_cache)
+        self.persistent_jacobian_cache = bool(persistent_jacobian_cache)
         self.cholmod_max_n = int(max(1, cholmod_max_n))
         self.cholmod_max_memory_gib = float(max(0.25, cholmod_max_memory_gib))
         _validate_option(

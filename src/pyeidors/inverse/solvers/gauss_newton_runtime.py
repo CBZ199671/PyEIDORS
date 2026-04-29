@@ -17,6 +17,11 @@ from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
 from ..contracts import SolverOutput
 from ..jacobian.linearized import JacobianLinearization, compute_sigma_fingerprint
+from ..jacobian.process_jacobian_cache import (
+    build_process_jacobian_key,
+    get_process_cached_jacobian,
+    put_process_cached_jacobian,
+)
 from ..matrix_free.dual_mesh import DualMeshJacobianOperator
 from .gauss_newton_iteration_log import (  # noqa: F401  re-exported for V73 contract
     _IterationLog,
@@ -431,6 +436,66 @@ def _scale_jacobian_action(jacobian, scale: float):
     return scale * np.asarray(jacobian, dtype=np.float64)
 
 
+def _persistent_jacobian_cache_key(
+    reconstructor,
+    sigma_current,
+    jacobian_method: str,
+) -> str | None:
+    """Build a process-cache key for the current Jacobian, or ``None``.
+
+    Returns ``None`` when the persistent cache is disabled, when the
+    sigma fingerprint cannot be computed, when the mesh has no stable
+    identifier (V17), or when the forward model is missing required
+    signatures.
+    """
+    if not bool(getattr(reconstructor, "persistent_jacobian_cache", False)):
+        return None
+    fwd_model = getattr(reconstructor, "fwd_model", None)
+    if fwd_model is None:
+        return None
+    try:
+        sigma_fp = compute_sigma_fingerprint(sigma_current)
+    except Exception:
+        return None
+    if not sigma_fp:
+        return None
+    mesh = getattr(fwd_model, "mesh", None) or getattr(fwd_model, "eit_mesh", None)
+    mesh_file = str(getattr(mesh, "mesh_file", "") or "")
+    mesh_content_hash = ""
+    try:
+        from ...forward.eit_forward_model import _hash_mesh_content
+
+        dolfinx_mesh = getattr(mesh, "mesh", mesh)
+        mesh_content_hash = _hash_mesh_content(dolfinx_mesh) or ""
+    except Exception:
+        mesh_content_hash = ""
+    if not mesh_file and not mesh_content_hash:
+        return None
+    try:
+        return build_process_jacobian_key(
+            sigma_fingerprint=sigma_fp,
+            mesh_file=mesh_file or None,
+            mesh_content_hash=mesh_content_hash or None,
+            jacobian_method=str(jacobian_method),
+            model_signature=model_signature_from_forward_model(fwd_model),
+            pattern_signature=pattern_signature_from_forward_model(fwd_model),
+            backend_signature=backend_signature_from_forward_model(fwd_model),
+            extra={
+                "measurement_space": str(
+                    getattr(reconstructor, "_measurement_space_type", "real")
+                ),
+                "difference_mode": str(
+                    getattr(reconstructor, "_difference_mode_effective", "")
+                ),
+                "difference_orientation": str(
+                    getattr(reconstructor, "_difference_orientation_effective", "")
+                ),
+            },
+        )
+    except ValueError:
+        return None
+
+
 def _calculate_iteration_jacobian(
     reconstructor,
     sigma_current,
@@ -457,14 +522,41 @@ def _calculate_iteration_jacobian(
                 current_fp = ""
             jacobian.assert_compatible(current_fp)
     else:
-        jacobian = reconstructor.jacobian_calculator.calculate(
-            sigma_current,
-            method=jacobian_method,
+        cache_key = _persistent_jacobian_cache_key(
+            reconstructor, sigma_current, jacobian_method
         )
-        jacobian = _project_measurement_jacobian(
-            reconstructor,
-            jacobian,
+        cached = (
+            get_process_cached_jacobian(cache_key) if cache_key is not None else None
         )
+        if cached is not None:
+            jacobian = np.array(cached, copy=True)
+            reconstructor._last_persistent_jacobian_lookup = {
+                "hit": True,
+                "stored": False,
+                "key": cache_key,
+                "artifact": "persistent_jacobian",
+            }
+        else:
+            jacobian = reconstructor.jacobian_calculator.calculate(
+                sigma_current,
+                method=jacobian_method,
+            )
+            jacobian = _project_measurement_jacobian(
+                reconstructor,
+                jacobian,
+            )
+            stored = False
+            if cache_key is not None and not _is_matrix_free_jacobian(jacobian):
+                put_process_cached_jacobian(
+                    cache_key, np.asarray(jacobian, dtype=np.float64)
+                )
+                stored = True
+            reconstructor._last_persistent_jacobian_lookup = {
+                "hit": False,
+                "stored": stored,
+                "key": cache_key,
+                "artifact": "persistent_jacobian",
+            }
 
     if reconstructor.negate_jacobian:
         jacobian = _scale_jacobian_action(jacobian, -1.0)
@@ -1421,6 +1513,9 @@ def run_reconstruction(
         ),
         "jacobian_cache_lookup": getattr(
             reconstructor.jacobian_calculator, "_last_cache_lookup", {}
+        ),
+        "persistent_jacobian_cache_lookup": getattr(
+            reconstructor, "_last_persistent_jacobian_lookup", {}
         ),
         "petsc_device_requested": petsc_backend_info.get(
             "petsc_device_requested", "auto"
