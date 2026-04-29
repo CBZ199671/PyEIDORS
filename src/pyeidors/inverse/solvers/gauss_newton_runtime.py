@@ -477,6 +477,9 @@ def _persistent_jacobian_cache_key(
             mesh_file=mesh_file or None,
             mesh_content_hash=mesh_content_hash or None,
             jacobian_method=str(jacobian_method),
+            calculator_signature=_jacobian_calculator_cache_signature(
+                getattr(reconstructor, "jacobian_calculator", None)
+            ),
             model_signature=model_signature_from_forward_model(fwd_model),
             pattern_signature=pattern_signature_from_forward_model(fwd_model),
             backend_signature=backend_signature_from_forward_model(fwd_model),
@@ -494,6 +497,42 @@ def _persistent_jacobian_cache_key(
         )
     except ValueError:
         return None
+
+
+def _persistent_jacobian_lookup_state(
+    *,
+    hit: bool = False,
+    stored: bool = False,
+    key: str | None = None,
+    reason: str | None = None,
+) -> dict[str, object]:
+    lookup: dict[str, object] = {
+        "hit": bool(hit),
+        "stored": bool(stored),
+        "key": key,
+        "artifact": "persistent_jacobian",
+    }
+    if reason:
+        lookup["reason"] = str(reason)
+    return lookup
+
+
+def _jacobian_calculator_cache_signature(jacobian_calculator) -> dict[str, object]:
+    cls = type(jacobian_calculator)
+    signature: dict[str, object] = {
+        "module": cls.__module__,
+        "qualname": cls.__qualname__,
+        "sign_convention": str(getattr(jacobian_calculator, "sign_convention", "")),
+    }
+    for attr in (
+        "use_torch",
+        "torch_batch_all",
+        "torch_dtype",
+        "block_tune_mode",
+    ):
+        if hasattr(jacobian_calculator, attr):
+            signature[attr] = str(getattr(jacobian_calculator, attr))
+    return signature
 
 
 def _calculate_iteration_jacobian(
@@ -530,12 +569,9 @@ def _calculate_iteration_jacobian(
         )
         if cached is not None:
             jacobian = np.array(cached, copy=True)
-            reconstructor._last_persistent_jacobian_lookup = {
-                "hit": True,
-                "stored": False,
-                "key": cache_key,
-                "artifact": "persistent_jacobian",
-            }
+            reconstructor._last_persistent_jacobian_lookup = (
+                _persistent_jacobian_lookup_state(hit=True, key=cache_key)
+            )
         else:
             jacobian = reconstructor.jacobian_calculator.calculate(
                 sigma_current,
@@ -551,12 +587,9 @@ def _calculate_iteration_jacobian(
                     cache_key, np.asarray(jacobian, dtype=np.float64)
                 )
                 stored = True
-            reconstructor._last_persistent_jacobian_lookup = {
-                "hit": False,
-                "stored": stored,
-                "key": cache_key,
-                "artifact": "persistent_jacobian",
-            }
+            reconstructor._last_persistent_jacobian_lookup = (
+                _persistent_jacobian_lookup_state(stored=stored, key=cache_key)
+            )
 
     if reconstructor.negate_jacobian:
         jacobian = _scale_jacobian_action(jacobian, -1.0)
@@ -972,6 +1005,9 @@ def run_reconstruction(
     relative_change = float("inf")
     reconstructor._runtime_tensor_cache = {}
     reconstructor._force_jacobian_refresh = False
+    reconstructor._last_persistent_jacobian_lookup = _persistent_jacobian_lookup_state(
+        reason="not_attempted"
+    )
     use_operator_jacobian = _is_operator_jacobian_method(jacobian_method)
     if use_operator_jacobian and reconstructor.solver_mode != "fast":
         raise RuntimeError("Operator Jacobian methods require solver_mode='fast'.")
@@ -1005,6 +1041,9 @@ def run_reconstruction(
             "artifact": "absolute_startup_jacobian",
             "reason": "operator_jacobian",
         }
+        reconstructor._last_persistent_jacobian_lookup = (
+            _persistent_jacobian_lookup_state(reason="operator_jacobian")
+        )
     else:
         startup_jacobian_np, startup_cache_lookup = _startup_cache_lookup(
             reconstructor,

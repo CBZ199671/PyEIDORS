@@ -91,9 +91,7 @@ def test_distinct_keys_for_different_axes():
     key_sigma = build_process_jacobian_key(
         **{**base_kwargs, "sigma_fingerprint": "def"}
     )
-    key_mesh_file = build_process_jacobian_key(
-        **{**base_kwargs, "mesh_file": "m2.msh"}
-    )
+    key_mesh_file = build_process_jacobian_key(**{**base_kwargs, "mesh_file": "m2.msh"})
     key_mesh_hash = build_process_jacobian_key(
         sigma_fingerprint="abc",
         mesh_file=None,
@@ -107,8 +105,18 @@ def test_distinct_keys_for_different_axes():
     key_backend = build_process_jacobian_key(
         **{**base_kwargs, "backend_signature": {"backend": "scipy"}}
     )
+    key_calculator = build_process_jacobian_key(
+        **{
+            **base_kwargs,
+            "calculator_signature": {
+                "qualname": "EidorsJacobianAdapter",
+                "sign_convention": "-dV/dsigma_eidors_canonical",
+            },
+        }
+    )
     keys = {key_base, key_sigma, key_mesh_file, key_mesh_hash, key_method, key_backend}
-    assert len(keys) == 6
+    keys.add(key_calculator)
+    assert len(keys) == 7
 
 
 def test_get_returns_none_for_missing_key():

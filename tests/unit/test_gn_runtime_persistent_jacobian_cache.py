@@ -11,6 +11,7 @@ This module covers:
 
 - second reconstruct hits the cache → ``calculate`` count drops to 0
 - mesh content hash differs → cache miss → fresh ``calculate`` call
+- calculator identity differs → cache miss → fresh ``calculate`` call
 - toggle off → no cache entry recorded, no behavioural change
 - ``_last_persistent_jacobian_lookup`` / runtime diagnostic surface
 """
@@ -28,6 +29,7 @@ from pyeidors.inverse.jacobian import (
     clear_process_jacobian_cache,
     process_jacobian_cache_stats,
 )
+from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.regularization.smoothness import TikhonovRegularization
 from pyeidors.inverse.solvers.gauss_newton import GaussNewtonReconstructor
 
@@ -107,9 +109,9 @@ def test_persistent_cache_skips_recompute_on_repeat_run():
         measured, initial_conductivity=base.copy(), jacobian_method="efficient"
     )
     assert counter["calls"] >= 1
-    lookup_first = (
-        out_first.diagnostics["backend_info"]["persistent_jacobian_cache_lookup"]
-    )
+    lookup_first = out_first.diagnostics["backend_info"][
+        "persistent_jacobian_cache_lookup"
+    ]
     assert lookup_first.get("hit") is False
     assert lookup_first.get("stored") is True
     assert lookup_first.get("key")
@@ -119,11 +121,45 @@ def test_persistent_cache_skips_recompute_on_repeat_run():
     out_second = reconstructor.reconstruct(
         measured, initial_conductivity=base.copy(), jacobian_method="efficient"
     )
-    lookup_second = (
-        out_second.diagnostics["backend_info"]["persistent_jacobian_cache_lookup"]
-    )
+    lookup_second = out_second.diagnostics["backend_info"][
+        "persistent_jacobian_cache_lookup"
+    ]
     assert lookup_second.get("hit") is True
     assert counter["calls"] == calls_after_first
+
+
+def test_persistent_cache_key_tracks_calculator_identity_after_swap():
+    fwd = _build_fwd()
+    base = np.ones(fem.Function(fwd.V_sigma).x.array.size, dtype=np.float64)
+    measured, _ = fwd.fwd_solve(EITImage(elem_data=base, fwd_model=fwd))
+
+    reconstructor = _build_reconstructor(fwd, persistent=True)
+    direct_counter = _wrap_calculate_count(reconstructor)
+    out_direct = reconstructor.reconstruct(
+        measured, initial_conductivity=base.copy(), jacobian_method="efficient"
+    )
+    direct_lookup = out_direct.diagnostics["backend_info"][
+        "persistent_jacobian_cache_lookup"
+    ]
+    assert direct_counter["calls"] >= 1
+    assert direct_lookup.get("stored") is True
+    direct_key = direct_lookup.get("key")
+    assert direct_key
+
+    reconstructor.set_jacobian_calculator(EidorsJacobianAdapter(fwd, use_torch=False))
+    adapter_counter = _wrap_calculate_count(reconstructor)
+    out_adapter = reconstructor.reconstruct(
+        measured, initial_conductivity=base.copy(), jacobian_method="efficient"
+    )
+    adapter_lookup = out_adapter.diagnostics["backend_info"][
+        "persistent_jacobian_cache_lookup"
+    ]
+
+    assert adapter_counter["calls"] >= 1
+    assert adapter_lookup.get("hit") is False
+    assert adapter_lookup.get("stored") is True
+    assert adapter_lookup.get("key") != direct_key
+    assert process_jacobian_cache_stats()["items"] == 2
 
 
 def test_persistent_cache_off_default_no_cache_entry_or_lookup():
@@ -255,9 +291,35 @@ def test_persistent_cache_skipped_for_operator_jacobian_method():
     )
     # Operator path never enters the cache code path → no entries stored.
     assert process_jacobian_cache_stats()["items"] == 0
-    lookup = out.diagnostics["backend_info"].get(
-        "persistent_jacobian_cache_lookup", {}
-    )
-    # Operator path should leave the lookup dict empty / untouched.
+    lookup = out.diagnostics["backend_info"].get("persistent_jacobian_cache_lookup", {})
+    assert lookup.get("reason") == "operator_jacobian"
     assert lookup.get("stored", False) is False
     assert lookup.get("hit", False) is False
+
+
+def test_persistent_cache_lookup_reset_when_operator_follows_dense_run():
+    fwd = _build_fwd()
+    base = np.ones(fem.Function(fwd.V_sigma).x.array.size, dtype=np.float64)
+    measured, _ = fwd.fwd_solve(EITImage(elem_data=base, fwd_model=fwd))
+    reconstructor = _build_reconstructor(fwd, persistent=True)
+
+    dense = reconstructor.reconstruct(
+        measured,
+        initial_conductivity=base.copy(),
+        jacobian_method="efficient",
+    )
+    dense_lookup = dense.diagnostics["backend_info"]["persistent_jacobian_cache_lookup"]
+    assert dense_lookup.get("key")
+    assert dense_lookup.get("stored") is True
+
+    operator = reconstructor.reconstruct(
+        measured,
+        initial_conductivity=base.copy(),
+        jacobian_method="linearized",
+    )
+    lookup = operator.diagnostics["backend_info"]["persistent_jacobian_cache_lookup"]
+    assert lookup.get("reason") == "operator_jacobian"
+    assert lookup.get("key") is None
+    assert lookup.get("stored") is False
+    assert lookup.get("hit") is False
+    assert process_jacobian_cache_stats()["items"] == 1

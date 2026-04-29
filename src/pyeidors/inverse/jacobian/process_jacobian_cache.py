@@ -9,7 +9,7 @@ the Jacobian had to be rebuilt from scratch.
 This module pins a thread-safe :class:`pyeidors.cache.process_lru.ProcessLRUCache`
 to the dense measurement Jacobian (``np.ndarray``) keyed by
 ``sigma_fingerprint`` + mesh identifier (file path or content hash) +
-forward-model signatures + Jacobian method. The cache is purely
+forward-model signatures + Jacobian method + calculator signature. The cache is purely
 in-memory (process-local LRU). Disk persistence is out of scope here —
 that would be a T82-style HDF5 artifact registered through
 ``pyeidors.cache.disk_artifacts``.
@@ -54,6 +54,7 @@ def build_process_jacobian_key(
     mesh_file: str | None = None,
     mesh_content_hash: str | None = None,
     jacobian_method: str = "default",
+    calculator_signature: Mapping[str, Any] | str | None = None,
     model_signature: Mapping[str, Any] | str | None = None,
     pattern_signature: Mapping[str, Any] | str | None = None,
     backend_signature: Mapping[str, Any] | str | None = None,
@@ -68,8 +69,8 @@ def build_process_jacobian_key(
 
     The forward-model signature helpers return SHA256 hex strings; the
     builder accepts either a string or a mapping for each of
-    ``model_signature`` / ``pattern_signature`` / ``backend_signature``
-    so callers can pass the existing hex digests directly.
+    ``calculator_signature`` / ``model_signature`` / ``pattern_signature`` /
+    ``backend_signature`` so callers can pass the existing hex digests directly.
     """
     sigma_token = str(sigma_fingerprint or "")
     if not sigma_token:
@@ -97,6 +98,7 @@ def build_process_jacobian_key(
         "mesh_file": file_token,
         "mesh_content_hash": content_token,
         "jacobian_method": str(jacobian_method or "default"),
+        "calculator_signature": _signature_token(calculator_signature),
         "model_signature": _signature_token(model_signature),
         "pattern_signature": _signature_token(pattern_signature),
         "backend_signature": _signature_token(backend_signature),
