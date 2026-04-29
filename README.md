@@ -49,9 +49,12 @@ commands. This launcher preserves the nix runtime paths, adds both repository
 root and `src/`, and performs a preflight check before opening the window:
 
 ```bash
-bash scripts/gui/run_eit_app.sh --cpu
-bash scripts/gui/run_eit_app.sh --gpu
+./eit-gui --cpu
+./eit-gui --gpu
 ```
+
+The longer `bash scripts/gui/run_eit_app.sh --gpu` form is still supported for
+automation and debugging.
 
 On the Windows host side, use:
 

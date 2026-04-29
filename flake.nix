@@ -261,7 +261,11 @@ PY
                 if [ -x scripts/env/sync_locked_env.sh ]; then
                   echo "[nix+uv] Checking locked Python environment profile (torch+cuqi+dev+eit-app)..."
                   if ! scripts/env/sync_locked_env.sh --check; then
-                    echo "[nix+uv] Drift detected. Attempting automatic repair..."
+                    if [ "''${PYEIDORS_GUI_LAUNCH:-0}" = "1" ]; then
+                      echo "[nix+uv] Refreshing locked Python environment profile..."
+                    else
+                      echo "[nix+uv] Drift detected. Attempting automatic repair..."
+                    fi
                     if ! scripts/env/sync_locked_env.sh --repair; then
                       echo "[nix+uv] ERROR: environment repair failed."
                       echo "[nix+uv] Manual repair command: scripts/env/sync_locked_env.sh --repair"

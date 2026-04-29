@@ -63,3 +63,14 @@ def test_repository_root_cmd_wrappers_delegate_to_supported_gui_launcher() -> No
         assert f"-Profile {profile}" in text
         assert "%*" in text
         assert "exit /b %EXIT_CODE%" in text
+
+
+def test_repository_root_posix_wrapper_delegates_to_supported_gui_launcher() -> None:
+    path = REPO_ROOT / "eit-gui"
+    text = path.read_text(encoding="utf-8")
+
+    assert path.exists()
+    assert "scripts/gui/run_eit_app.sh" in text
+    assert "PROFILE_ARG=(--gpu)" in text
+    assert "PROFILE_ARG=(--cpu)" in text
+    assert 'exec bash "$ROOT_DIR/scripts/gui/run_eit_app.sh"' in text

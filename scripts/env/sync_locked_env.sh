@@ -283,9 +283,15 @@ run_check() {
   lock_freshness_check
   build_sync_cmd
 
-  if run_with_log "${SYNC_CMD[@]}" --check; then
+  sync_check_log="$(mktemp -t pyeidors-env-sync-check.XXXXXX)"
+  if "${SYNC_CMD[@]}" --check >"$sync_check_log" 2>&1; then
+    rm -f "$sync_check_log"
     echo "[env-sync] uv environment is synchronized"
   else
+    if ! env_flag_enabled "${PYEIDORS_ENV_SYNC_QUIET_DRIFT:-0}"; then
+      cat "$sync_check_log" >&2
+    fi
+    rm -f "$sync_check_log"
     echo "[env-sync] environment drift detected" >&2
     echo "[env-sync] Repair command: scripts/env/sync_locked_env.sh --repair" >&2
     return 1
@@ -306,11 +312,20 @@ run_repair() {
   lock_freshness_check
   build_sync_cmd
 
-  echo "[env-sync] repairing environment with locked profile..."
-  "${SYNC_CMD[@]}"
+  if env_flag_enabled "${PYEIDORS_ENV_SYNC_QUIET_REPAIR:-0}"; then
+    echo "[env-sync] refreshing locked environment profile..."
+    run_with_log "${SYNC_CMD[@]}"
+  else
+    echo "[env-sync] repairing environment with locked profile..."
+    "${SYNC_CMD[@]}"
+  fi
   run_import_checks
   write_sync_cache_stamp
-  echo "[env-sync] repair completed"
+  if env_flag_enabled "${PYEIDORS_ENV_SYNC_QUIET_REPAIR:-0}"; then
+    echo "[env-sync] locked environment profile refreshed"
+  else
+    echo "[env-sync] repair completed"
+  fi
 }
 
 mode="${1:---check}"

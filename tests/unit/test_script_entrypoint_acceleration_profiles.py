@@ -31,15 +31,16 @@ def test_v51_gui_launcher_defaults_to_fast_startup_contract():
     assert "PYEIDORS_ENV_SYNC_CACHE" in text
 
 
-def test_v52_gui_launcher_warns_about_path_shadowed_env():
+def test_v52_gui_launcher_prefers_system_env_for_path_shadow():
     launcher = (
         Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
     )
     text = launcher.read_text(encoding="utf-8")
 
-    assert "warn_path_shadowed_env" in text
+    assert "prefer_system_env_first" in text
     assert '"/usr/bin/env"' in text
-    assert "bogus real 0.00" in text
+    assert 'export PATH="/usr/bin:/bin:$PATH"' in text
+    assert "PYEIDORS_LAUNCH_VERBOSE" in text
 
 
 def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):

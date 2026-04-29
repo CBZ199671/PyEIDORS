@@ -59,15 +59,18 @@ nix_daemon_proxy_unreachable() {
   return 0
 }
 
-warn_path_shadowed_env() {
+prefer_system_env_first() {
   local env_path
   env_path="$(command -v env 2>/dev/null || true)"
   if [[ -n "$env_path" && "$env_path" != "/usr/bin/env" ]]; then
-    echo "[run_eit_app] WARNING: PATH resolves env to $env_path; use /usr/bin/env for launch timing to avoid bogus real 0.00 measurements" >&2
+    export PATH="/usr/bin:/bin:$PATH"
+    if [[ "${PYEIDORS_LAUNCH_VERBOSE:-0}" == "1" ]]; then
+      echo "[run_eit_app] PATH resolves env to $env_path; preferring /usr/bin for this launch" >&2
+    fi
   fi
 }
 
-warn_path_shadowed_env
+prefer_system_env_first
 
 if nix_daemon_proxy_unreachable; then
   # The daemon-level proxy is outside this script's environment.  When it
@@ -75,7 +78,9 @@ if nix_daemon_proxy_unreachable; then
   # download warnings before falling back to local store/build behaviour.
   # Disable substituter lookup for this launch only; do not mutate Nix config.
   NIX_OPTS+=(--option substituters "")
-  echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable; skipping substituter lookup for this launch" >&2
+  if [[ "${PYEIDORS_LAUNCH_VERBOSE:-0}" == "1" ]]; then
+    echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable; skipping substituter lookup for this launch" >&2
+  fi
 fi
 
 while (($# > 0)); do
@@ -125,6 +130,10 @@ INNER_SCRIPT="$REPO_ROOT/scripts/gui/run_eit_app_inner.sh"
 # `printf '%q'` safely quotes each value against spaces / special chars.
 export PYEIDORS_ENV_SYNC_CACHE="$ENV_SYNC_CACHE"
 export PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS="${PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS:-43200}"
+export PYEIDORS_GUI_LAUNCH=1
+export PYEIDORS_ENV_SYNC_QUIET_DRIFT="${PYEIDORS_ENV_SYNC_QUIET_DRIFT:-1}"
+export PYEIDORS_ENV_SYNC_QUIET_REPAIR="${PYEIDORS_ENV_SYNC_QUIET_REPAIR:-1}"
+export UV_NO_PROGRESS="${UV_NO_PROGRESS:-1}"
 
 BASH_PAYLOAD=$(cat <<EOF
 set -euo pipefail
