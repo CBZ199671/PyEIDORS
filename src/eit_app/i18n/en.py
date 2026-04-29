@@ -433,7 +433,9 @@ TRANSLATIONS: dict[str, str] = {
         "artifact, then reconstruct with the RM @ dv hot path."
     ),
     "sim.inverse.method.greit3d_rm.tooltip": (
-        "3D GREIT RM/common-config hot path; requires a GREIT artifact from T102."
+        "3D GREIT common-config route: resolves or warms an HDF5 artifact and "
+        "uses RM @ dv. Scope: 48e official fixture passed; 5936 official "
+        "protocol remains pending T97."
     ),
     "sim.inverse.method.debug_full_gn.tooltip": (
         "Debug baseline: iterative full GN cold path; useful for comparison, not "

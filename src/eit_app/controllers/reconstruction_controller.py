@@ -115,6 +115,12 @@ def resolve_greit_common_config_artifact_path_from_meta(*args, **kwargs):
     return _resolve(*args, **kwargs)
 
 
+def precompute_greit_common_config(*args, **kwargs):
+    from pyeidors.inverse.greit_warmup import precompute_greit_common_config as _warmup
+
+    return _warmup(*args, **kwargs)
+
+
 def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:
     return max(int(meta.get("n_elec", 16)), 1) * max(int(meta.get("n_rings", 1)), 1)
 
@@ -645,6 +651,46 @@ def _resolve_drive_value(
     return float(default)
 
 
+def _first_present_meta_value(meta: dict[str, Any], *keys: str) -> Any | None:
+    for key in keys:
+        value = meta.get(key)
+        if value is not None and str(value).strip():
+            return value
+    return None
+
+
+def _warm_greit_common_config_artifact_from_meta(meta: dict[str, Any]) -> Path | None:
+    if not _flag_enabled(meta.get("greit_common_config_auto_warm", False)):
+        return None
+    config_id = _first_present_meta_value(
+        meta,
+        "greit_common_config",
+        "greit_common_config_id",
+        "common_greit_config",
+        "common_config",
+    )
+    if config_id is None:
+        return None
+    artifact_dir = _first_present_meta_value(
+        meta,
+        "greit_common_config_dir",
+        "greit_common_artifact_dir",
+        "common_greit_artifact_dir",
+    )
+    warmup = precompute_greit_common_config(
+        config_id,
+        artifact_dir=artifact_dir,
+        overwrite=False,
+        prepare_online=False,
+    )
+    meta["greit_common_config"] = warmup.config.config_id
+    meta["greit_common_config_artifact_path"] = str(warmup.artifact_path)
+    meta["greit_common_config_dir"] = str(warmup.artifact_path.parent)
+    meta["rm_artifact_auto_built"] = bool(warmup.built)
+    meta["rm_artifact_cache_status"] = "built" if warmup.built else "disk_hit"
+    return warmup.artifact_path
+
+
 def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
     for key in _RM_ARTIFACT_META_KEYS:
         raw = meta.get(key)
@@ -661,7 +707,12 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
             if repo_relative.exists():
                 return repo_relative
         raise FileNotFoundError(f"RM artifact path does not exist: {text}")
-    common_path = resolve_greit_common_config_artifact_path_from_meta(meta)
+    try:
+        common_path = resolve_greit_common_config_artifact_path_from_meta(meta)
+    except FileNotFoundError:
+        common_path = _warm_greit_common_config_artifact_from_meta(meta)
+        if common_path is None:
+            raise
     if common_path is not None:
         return common_path
     return None

@@ -988,6 +988,96 @@ def test_single_step_cached_request_resolves_greit_common_config_hot_path(
     assert diagnostics["rm_metadata"]["common_config_id"] == "16e"
 
 
+def test_single_step_cached_greit_common_config_auto_warms_hdf5_then_hot_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import greit_common_config, load_greit_common_config
+
+    cfg = greit_common_config("16e")
+    reference = np.linspace(1.0, 2.0, cfg.n_measurements, dtype=float)
+    target = reference + np.linspace(0.01, 0.02, cfg.n_measurements, dtype=float)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros_like(reference),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros_like(target),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "greit3d_rm",
+            "rm_route_requires_artifact": True,
+            "greit_common_config": "16e",
+            "greit_common_config_dir": str(tmp_path),
+            "greit_common_config_auto_warm": True,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+            "n_elec": 16,
+            "n_rings": 1,
+            "radius": 0.18,
+            "height": 0.16,
+            "greit_official_fixture_scope": "48e official fixture passed",
+            "greit_5936_protocol_scope": "5936 official pending T97",
+            "greit_official_equivalence_claim_allowed": False,
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("GREIT common-config route must not build context.")
+
+    def _unexpected_runner():
+        raise AssertionError("GREIT common-config route must not import GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    loaded = load_greit_common_config("16e", artifact_dir=tmp_path)
+    expected_sigma = loaded.greit.rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    artifact_path = Path(result.metadata["rm_artifact_path"])
+    assert artifact_path == loaded.artifact_path
+    assert artifact_path.suffix == ".h5"
+    assert artifact_path.exists()
+    assert result.metadata["greit_common_config_artifact_path"] == str(artifact_path)
+    assert result.metadata["greit_common_config_dir"] == str(tmp_path)
+    assert result.metadata["rm_artifact_auto_built"] is True
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    assert result.metadata["greit_official_fixture_scope"] == (
+        "48e official fixture passed"
+    )
+    assert result.metadata["greit_5936_protocol_scope"] == ("5936 official pending T97")
+    assert result.metadata["greit_official_equivalence_claim_allowed"] is False
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["path"] == "single_step_cached_rm"
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["adjoint_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["runtime"]["ksp_solve_count"] == 0
+    assert diagnostics["rm_metadata"]["common_config_id"] == "16e"
+    assert diagnostics["rm_metadata"]["artifact_format"] == "hdf5"
+    assert diagnostics["rm_metadata"]["online_hot_path"] == "rm_matmul"
+    assert diagnostics["rm_metadata"]["eidors_parity"] is False
+    assert diagnostics["rm_metadata"]["official_fixture_scope"] == (
+        "48e official fixture passed"
+    )
+    assert diagnostics["rm_metadata"]["protocol_5936_official_status"] == (
+        "pending_T97"
+    )
+    assert diagnostics["rm_metadata"]["official_equivalence_claim_allowed"] is False
+
+
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

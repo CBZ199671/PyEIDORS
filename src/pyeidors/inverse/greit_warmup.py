@@ -422,6 +422,12 @@ def _common_metadata(
             "electrode_layout": cfg.electrode_layout,
             "description": cfg.description,
             "gui_cold_build_allowed": False,
+            "official_fixture_scope": "48e official fixture passed",
+            "protocol_5936_official_status": "pending_T97",
+            "official_equivalence_claim_allowed": False,
+            "official_equivalence_scope": (
+                "48e official fixture only; 5936 protocol official fixture pending T97"
+            ),
         }
     )
     meta.setdefault("artifact_schema", GREIT_RM_HDF5_SCHEMA)

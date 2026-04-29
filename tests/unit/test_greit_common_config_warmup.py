@@ -51,6 +51,9 @@ def test_common_config_precompute_writes_hdf5_and_reuses_existing(
     assert artifact.metadata["artifact_format"] == "hdf5"
     assert artifact.metadata["online_hot_path"] == "rm_matmul"
     assert artifact.metadata["fixture_only"] is True
+    assert artifact.metadata["official_fixture_scope"] == "48e official fixture passed"
+    assert artifact.metadata["protocol_5936_official_status"] == "pending_T97"
+    assert artifact.metadata["official_equivalence_claim_allowed"] is False
 
     warm = precompute_greit_common_config("16e", artifact_dir=tmp_path)
     assert warm.built is False

@@ -2635,7 +2635,7 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
         ("noser_rm", "", "noser", True, "absolute_sigma"),
         ("laplace_rm", "", "laplace", True, "absolute_sigma"),
         ("curvature_rm", "", "curvature", True, "absolute_sigma"),
-        ("greit3d_rm", "T102", "greit", False, ""),
+        ("greit3d_rm", "", "greit", True, ""),
     ],
 )
 def test_simulation_rm_routes_record_artifact_requirement(
@@ -2692,6 +2692,87 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["rm_form"] == "measurement"
         assert request.metadata["rm_inverse_mesh_size"] >= request.metadata["mesh_size"]
         assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"
+    if method == "greit3d_rm":
+        assert request.metadata["rm_form"] == "measurement"
+        assert request.metadata["greit_common_config"] == "16e"
+        assert (
+            request.metadata["greit_common_config_dir"]
+            == ".pyeidors_cache/greit_common_configs"
+        )
+        assert request.metadata["greit_common_config_auto_warm"] is True
+        assert (
+            request.metadata["greit_official_fixture_scope"]
+            == "48e official fixture passed"
+        )
+        assert request.metadata["greit_5936_protocol_scope"] == (
+            "5936 official pending T97"
+        )
+        assert request.metadata["greit_official_equivalence_claim_allowed"] is False
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 5936
+    forward_config = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.1,
+        "n_elec": 16,
+        "n_rings": 3,
+        "electrode_layout": "ring_major",
+        "measurement_protocol": "eidors_full_3d",
+        "radius": 0.18,
+        "height": 0.16,
+        "drive_mode": "total_current",
+    }
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+        forward_model_config=forward_config,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "greit3d_rm",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["greit_common_config"] == "48e"
+    assert request.metadata["greit_common_config_auto_warm"] is True
+    assert request.metadata["greit_official_fixture_scope"] == (
+        "48e official fixture passed"
+    )
+    assert request.metadata["greit_5936_protocol_scope"] == (
+        "5936 official pending T97"
+    )
+    assert request.metadata["greit_official_equivalence_claim_allowed"] is False
+    assert (
+        "5936 protocol official fixture pending T97"
+        in request.metadata["greit_official_equivalence_scope"]
+    )
 
     window._sim_state.inverse_running = False
     _close_window(window)

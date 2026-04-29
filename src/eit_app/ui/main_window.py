@@ -87,6 +87,15 @@ if TYPE_CHECKING:
 
 _AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE = "AmgX 不可用时使用 spd_gamg CUDA"
 _RUNTIME_DIAGNOSTICS_ENV = "EIT_APP_SHOW_RUNTIME_DIAGNOSTICS"
+_GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
+_GREIT_COMMON_CONFIG_SCOPE = {
+    "greit_official_fixture_scope": "48e official fixture passed",
+    "greit_5936_protocol_scope": "5936 official pending T97",
+    "greit_official_equivalence_claim_allowed": False,
+    "greit_official_equivalence_scope": (
+        "48e official fixture only; 5936 protocol official fixture pending T97"
+    ),
+}
 
 
 def _runtime_diagnostics_enabled() -> bool:
@@ -161,6 +170,15 @@ def _format_runtime_diagnostics(
         parts.append(f"pc={lazy_pc}")
     parts.append(f"cache={cache_label}")
     return " | " + ", ".join(parts) if parts else ""
+
+
+def _greit_common_config_id_for_forward_config(
+    forward_cfg: ForwardModelConfig,
+) -> str:
+    total_electrodes = int(forward_cfg.total_electrodes())
+    if total_electrodes in {16, 32, 48}:
+        return f"{total_electrodes}e"
+    return ""
 
 
 def _is_wsl() -> bool:
@@ -3606,6 +3624,9 @@ class EITWorkstation(QMainWindow):
         rm_regularization = ""
         rm_route_requires_artifact = False
         rm_auto_build = False
+        greit_common_config_id = ""
+        greit_common_config_auto_warm = False
+        greit_scope_metadata: dict[str, object] = {}
         if route == "debug_fine_mesh_noser":
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
@@ -3642,8 +3663,13 @@ class EITWorkstation(QMainWindow):
             difference_preset = "greit3d_rm"
             route_kind = "rm"
             rm_regularization = "greit"
-            rm_route_pending_task = "T102"
             rm_route_requires_artifact = True
+            rm_auto_build = True
+            greit_common_config_id = _greit_common_config_id_for_forward_config(
+                forward_cfg
+            )
+            greit_common_config_auto_warm = bool(greit_common_config_id)
+            greit_scope_metadata = dict(_GREIT_COMMON_CONFIG_SCOPE)
         else:
             # Unknown route → safest fallback: iterative GN, no RM/cache claim.
             resolved_method = route or "gn-difference"
@@ -3695,7 +3721,13 @@ class EITWorkstation(QMainWindow):
             "linearized_solver_strategy": "auto",
             "linearized_maxiter": 0,
             "lazy_preconditioner_mode": "auto",
+            **greit_scope_metadata,
         }
+        if greit_common_config_id:
+            metadata["greit_common_config"] = greit_common_config_id
+            metadata["greit_common_config_dir"] = _GREIT_COMMON_CONFIG_DIR
+            metadata["greit_common_config_auto_warm"] = greit_common_config_auto_warm
+            metadata["rm_form"] = "measurement"
         if difference_lambda is not None:
             metadata["difference_lambda"] = difference_lambda
         if rm_inverse_mesh_size is not None:
