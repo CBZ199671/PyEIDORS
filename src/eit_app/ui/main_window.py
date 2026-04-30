@@ -3778,6 +3778,8 @@ class EITWorkstation(QMainWindow):
             metadata["greit_common_config_dir"] = _GREIT_COMMON_CONFIG_DIR
             metadata["greit_common_config_auto_warm"] = greit_common_config_auto_warm
             metadata["rm_form"] = "measurement"
+        if route_kind == "rm":
+            metadata["online_hot_path"] = "rm_matmul"
         if difference_lambda is not None:
             metadata["difference_lambda"] = difference_lambda
         if rm_inverse_mesh_size is not None:

@@ -119,6 +119,17 @@ def _as_wsl_unc(path: Path) -> str:
     return "\\\\wsl.localhost\\Ubuntu-22.04" + posix_path.replace("/", "\\")
 
 
+def _sample_pixmap_unique_rgb_count(pixmap, *, samples_per_axis: int = 8) -> int:
+    image = pixmap.toImage()
+    if image.isNull():
+        return 0
+    width = image.width()
+    height = image.height()
+    xs = np.linspace(0, width - 1, min(samples_per_axis, width), dtype=int)
+    ys = np.linspace(0, height - 1, min(samples_per_axis, height), dtype=int)
+    return len({int(image.pixel(int(x), int(y))) & 0x00FFFFFF for x in xs for y in ys})
+
+
 @pytest.fixture(autouse=True)
 def _cleanup_top_level_widgets_after_test():
     _get_app()
@@ -2615,6 +2626,7 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     assert request.metadata["simulation_inverse_route"] == "debug_fine_mesh_noser"
     assert request.metadata["simulation_inverse_debug_route"] is True
     assert request.metadata["rm_route_requires_artifact"] is False
+    assert request.metadata.get("online_hot_path") != "rm_matmul"
     assert request.metadata["difference_mode"] == "normalized"
     assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
     assert request.regularization_alpha == pytest.approx(1.0e-2)
@@ -2672,6 +2684,7 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
     assert request.metadata["difference_mode"] == "raw"
     assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
     assert request.metadata["simulation_inverse_route"] == "debug_fine_mesh_noser"
+    assert request.metadata.get("online_hot_path") != "rm_matmul"
     assert request.regularization_alpha == pytest.approx(1.0e-2)
     assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
     assert request.metadata["hyperparameter_ui_locked"] is True
@@ -2738,6 +2751,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
     assert request.metadata["simulation_inverse_debug_route"] is False
     assert request.metadata["rm_route_requires_artifact"] is True
     assert request.metadata["rm_auto_build"] is auto_build
+    assert request.metadata["online_hot_path"] == "rm_matmul"
     assert request.metadata["rm_route_pending_task"] == pending_task
     assert request.metadata["rm_regularization"] == regularization
     assert request.metadata["difference_preset"] == method
@@ -2779,6 +2793,135 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["difference_lambda_semantics"] == (
             "unused_for_greit_rm_artifact"
         )
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import write_rm_artifact
+
+    window = EITWorkstation()
+    window.resize(1200, 800)
+    _show_window(window)
+    window._tab_widget.setCurrentWidget(window._sim_tab)
+    _get_app().processEvents()
+
+    node_coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [1.0, 1.0],
+            [0.0, 1.0],
+            [0.5, 0.5],
+        ],
+        dtype=np.float64,
+    )
+    cells = np.array(
+        [
+            [0, 1, 4],
+            [1, 2, 4],
+            [2, 3, 4],
+            [3, 0, 4],
+        ],
+        dtype=np.int32,
+    )
+    reference = np.full(4, 2.0, dtype=np.float64)
+    target = reference + np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float64)
+    expected_sigma = np.array([1.0, 1.2, 1.2, 1.0], dtype=np.float64)
+    rm = np.diag([0.0, 0.2, 0.2, 0.0]).astype(np.float64)
+    artifact_path = write_rm_artifact(
+        tmp_path / "gui_default_noser_rm.h5",
+        rm,
+        metadata={"algorithm": "one-step-noser", "rm_build_route": "noser_rm"},
+        node_coords=node_coords,
+        cell_connectivity=cells,
+    )
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=target,
+        homogeneous_voltages=reference,
+        ground_truth_conductivity=expected_sigma,
+        node_coords=node_coords,
+        cell_connectivity=cells,
+        n_elements=len(cells),
+        n_measurements=len(target),
+        forward_model_config={
+            "mesh_dimension": 2,
+            "mesh_refinement": 0.1,
+            "mesh_family": "tri",
+            "n_elec": 4,
+            "radius": 1.0,
+            "height": 0.0,
+            "background_conductivity": 1.0,
+            "stim_pattern": "{ad}",
+            "meas_pattern": "{ad}",
+        },
+    )
+    window._sim_tab.results_widget.update_forward_result(window._last_fwd_result)
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["simulation_inverse_route"] == "noser_rm"
+    assert request.metadata["simulation_inverse_route_kind"] == "rm"
+    assert request.metadata["simulation_inverse_debug_route"] is False
+    assert request.metadata["rm_route_requires_artifact"] is True
+    assert request.metadata["online_hot_path"] == "rm_matmul"
+    assert "rm_artifact_path" not in request.metadata
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("Default NOSER GUI route must use RM hot path.")
+
+    def _unexpected_runner():
+        raise AssertionError("Default NOSER GUI route must not import dense GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+    request.metadata["rm_artifact_path"] = str(artifact_path)
+    request.metadata["rm_auto_build"] = False
+    request.metadata["device"] = "cpu"
+    result = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    assert result.metadata["rm_artifact_path"] == str(artifact_path)
+    assert result.metadata["single_step_operator_space"] == "rm"
+    assert result.metadata["online_hot_path"] == "rm_matmul"
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["runtime"]["forward_solve_count"] == 0
+    assert diagnostics["runtime"]["adjoint_solve_count"] == 0
+    assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
+    assert diagnostics["runtime"]["ksp_solve_count"] == 0
+
+    delta = result.conductivity - 1.0
+    assert delta[1:3].mean() > 0.15
+    assert abs(delta[1] - delta[2]) <= 1.0e-12
+    assert abs(delta[0] - delta[3]) <= 1.0e-12
+
+    window._sim_recon_handler(result)
+    _get_app().processEvents()
+
+    recon_slot = window._sim_tab.results_widget._reconstruction_widget
+    recon_widget = recon_slot._mpl
+    assert recon_slot._stack.currentWidget() is recon_widget
+    assert recon_widget._last_image is not None
+    last_sigma, last_coords, last_cells, _title = recon_widget._last_image
+    np.testing.assert_allclose(last_sigma, expected_sigma)
+    np.testing.assert_allclose(last_coords, node_coords)
+    np.testing.assert_array_equal(last_cells, cells)
+    assert _sample_pixmap_unique_rgb_count(recon_slot.grab()) > 1
+    assert window._sim_tab.metrics_panel._l2_label.text() == "0.0000"
+    assert float(window._sim_tab.metrics_panel._corr_label.text()) >= 0.999
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -2893,6 +3036,7 @@ def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
     assert request.metadata["simulation_inverse_route"] == "debug_full_gn"
     assert request.metadata["simulation_inverse_debug_route"] is True
     assert "difference_lambda" not in request.metadata
+    assert request.metadata.get("online_hot_path") != "rm_matmul"
     assert request.regularization_alpha == pytest.approx(1.0)
     assert request.metadata["hyperparameter_ui_name"] == "alpha"
     assert request.metadata["hyperparameter_ui_locked"] is False
