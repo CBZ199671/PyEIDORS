@@ -2536,6 +2536,53 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
 
 
 @pytest.mark.gui
+def test_simulation_forward_config_clamps_dense_3d_ring_area_before_mesh_build() -> (
+    None
+):
+    from pyeidors.geometry.mesh3d_generator import Cylinder3DMeshConfig
+
+    window = EITWorkstation()
+    _show_window(window)
+
+    mesh_panel = window._sim_tab.mesh_setup_panel
+    mesh_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "radius": 0.18,
+            "height": 0.16,
+            "n_electrodes": 8,
+            "n_rings": 8,
+            "electrode_layout": "ring_major",
+            "electrode_area_m2_override": 0.003,
+        }
+    )
+    _get_app().processEvents()
+
+    cfg = window._current_sim_forward_model_config()
+
+    assert cfg.mesh_dimension == 3
+    assert cfg.n_rings == 8
+    assert cfg.electrode_height_ratio < min(
+        right - left
+        for left, right in zip(
+            cfg.electrode_level_fractions[:-1],
+            cfg.electrode_level_fractions[1:],
+        )
+    )
+    assert cfg.electrode_area_m2_override == pytest.approx(
+        cfg.electrode_length_m_override * cfg.height * cfg.electrode_height_ratio
+    )
+    Cylinder3DMeshConfig(
+        radius=cfg.radius,
+        height=cfg.height,
+        electrode_height_ratio=cfg.electrode_height_ratio,
+        electrode_level_fractions=cfg.electrode_level_fractions,
+    )
+
+    _close_window(window)
+
+
+@pytest.mark.gui
 def test_interop_imported_3d_geometry_is_not_replaced_by_interactive_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -13,6 +13,7 @@ INTERACTIVE_3D_DEFAULT_ELECTRODES_PER_RING = 8
 INTERACTIVE_3D_DEFAULT_RINGS = 2
 INTERACTIVE_3D_DEFAULT_RADIUS = 0.18
 INTERACTIVE_3D_DEFAULT_HEIGHT = 0.16
+ELECTRODE_HEIGHT_RATIO_WINDOW_MARGIN = 0.95
 
 
 def drive_mode_for_mesh_dimension(drive_mode: Any, mesh_dimension: int) -> str:
@@ -34,6 +35,26 @@ def electrode_level_fractions_for_rings(n_rings: int) -> tuple[float, ...]:
     lo, hi = 0.15, 0.85
     step = (hi - lo) / float(rings - 1)
     return tuple(lo + step * idx for idx in range(rings))
+
+
+def max_non_overlapping_electrode_height_ratio(
+    electrode_level_fractions: tuple[float, ...] | list[float],
+) -> float:
+    """Largest GUI-safe 3D electrode height ratio for the level spacing."""
+
+    levels = sorted(float(value) for value in electrode_level_fractions)
+    if len(levels) < 2:
+        return ELECTRODE_HEIGHT_RATIO_WINDOW_MARGIN
+    min_gap = min(right - left for left, right in zip(levels[:-1], levels[1:]))
+    return max(min(float(min_gap) * ELECTRODE_HEIGHT_RATIO_WINDOW_MARGIN, 1.0), 1e-6)
+
+
+def max_electrode_height_ratio_for_rings(n_rings: int) -> float:
+    """Largest GUI-safe 3D electrode height ratio for a ring count."""
+
+    return max_non_overlapping_electrode_height_ratio(
+        electrode_level_fractions_for_rings(n_rings)
+    )
 
 
 def _to_float_list(values: Any) -> list[float] | None:

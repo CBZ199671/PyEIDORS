@@ -23,6 +23,7 @@ from eit_app.models.forward_model_config import (
     INTERACTIVE_3D_DEFAULT_HEIGHT,
     INTERACTIVE_3D_DEFAULT_RADIUS,
     INTERACTIVE_3D_DEFAULT_RINGS,
+    max_electrode_height_ratio_for_rings,
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_hint_text, set_section_header
@@ -336,6 +337,29 @@ class MeshSetupPanel(QGroupBox):
         )
         return 2.0 * math.pi * max(float(radius), 1.0e-9) / max(circumference_count, 1)
 
+    @classmethod
+    def _max_3d_electrode_area_m2(
+        cls,
+        *,
+        radius: float,
+        height: float,
+        n_electrodes: int,
+        n_rings: int,
+        electrode_layout: str,
+    ) -> float:
+        pitch_m = cls._electrode_pitch_m(
+            radius=radius,
+            mesh_dimension=3,
+            n_electrodes=n_electrodes,
+            n_rings=n_rings,
+            electrode_layout=electrode_layout,
+        )
+        electrode_length_m = pitch_m * DEFAULT_ELECTRODE_COVERAGE
+        max_ratio = max_electrode_height_ratio_for_rings(n_rings)
+        return max(
+            electrode_length_m * max(float(height), 1.0e-12) * max_ratio, 1.0e-12
+        )
+
     def get_config(self) -> dict:
         stim_pattern = self._stim_pattern_edit.text().strip() or "{ad}"
         meas_pattern = self._meas_pattern_edit.text().strip() or stim_pattern
@@ -358,7 +382,17 @@ class MeshSetupPanel(QGroupBox):
         if is_3d:
             electrode_coverage = DEFAULT_ELECTRODE_COVERAGE
             electrode_length_m = pitch_m * electrode_coverage
-            electrode_area_m2 = max(float(self._electrode_area_spin.value()), 1.0e-12)
+            max_area_m2 = self._max_3d_electrode_area_m2(
+                radius=radius,
+                height=height,
+                n_electrodes=n_electrodes,
+                n_rings=n_rings,
+                electrode_layout=electrode_layout,
+            )
+            electrode_area_m2 = min(
+                max(float(self._electrode_area_spin.value()), 1.0e-12),
+                max_area_m2,
+            )
             electrode_height_ratio = min(
                 max(
                     electrode_area_m2 / max(electrode_length_m * height, 1.0e-12),
@@ -581,12 +615,35 @@ class MeshSetupPanel(QGroupBox):
 
     def _on_any_change(self) -> None:
         self._refresh_protocol_enabled()
+        self._clamp_3d_electrode_area_spin()
         # Recompute and cache the expected measurement point count so the
         # user can see whether their pattern matches their hardware board.
         layout = measurement_layout_from_config(self.get_config())
         self._point_count_cache = int(layout.get("points_per_frame", 0))
         self._refresh_point_count_label()
         self.config_changed.emit()
+
+    def _clamp_3d_electrode_area_spin(self) -> None:
+        if self._dim_combo.currentIndex() != 1:
+            return
+        max_area = self._max_3d_electrode_area_m2(
+            radius=float(self._radius_spin.value()),
+            height=float(self._height_spin.value()),
+            n_electrodes=int(self._n_elec_spin.value()),
+            n_rings=int(self._n_rings_spin.value()),
+            electrode_layout=str(
+                self._electrode_layout_combo.currentData() or "ring_major"
+            ),
+        )
+        if float(self._electrode_area_spin.value()) <= max_area + 1.0e-12:
+            return
+        blocked = self._electrode_area_spin.blockSignals(True)
+        try:
+            self._electrode_area_spin.setValue(
+                max(max_area, self._electrode_area_spin.minimum())
+            )
+        finally:
+            self._electrode_area_spin.blockSignals(blocked)
 
     def _refresh_mesh_family_enabled(self) -> None:
         enabled = self._dim_combo.currentIndex() == 1

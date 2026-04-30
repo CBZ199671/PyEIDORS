@@ -19,7 +19,11 @@ from eit_app.controllers.reconstruction_controller import (  # noqa: E402
     _resolve_reconstruction_runtime,
 )
 from eit_app.models.frame_model import FrameData  # noqa: E402
-from eit_app.models.forward_model_config import ForwardModelConfig  # noqa: E402
+from eit_app.models.forward_model_config import (  # noqa: E402
+    ForwardModelConfig,
+    electrode_level_fractions_for_rings,
+    max_electrode_height_ratio_for_rings,
+)
 from eit_app.models.simulation_state import InhomogeneitySpec  # noqa: E402
 from pyeidors.electrodes.layout import (  # noqa: E402
     effective_pattern_layout_for_3d_mesh,
@@ -35,6 +39,7 @@ from eit_app.ui.simulation.simulation_results_widget import (  # noqa: E402
     _ConductivityViewSlot,
 )
 from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel  # noqa: E402
+from pyeidors.geometry.mesh3d_generator import Cylinder3DMeshConfig  # noqa: E402
 
 
 def _get_app() -> QApplication:
@@ -542,6 +547,45 @@ def test_mesh_setup_panel_exposes_2d_length_and_3d_area_geometry():
         )
         assert not panel._electrode_length_spin.isEnabled()
         assert panel._electrode_area_spin.isEnabled()
+    finally:
+        panel.close()
+
+
+def test_mesh_setup_panel_clamps_3d_area_to_non_overlapping_ring_windows():
+    _get_app()
+    panel = MeshSetupPanel()
+    try:
+        panel.set_config(
+            {
+                "mesh_dimension": 3,
+                "radius": 0.18,
+                "height": 0.16,
+                "n_electrodes": 8,
+                "n_rings": 8,
+                "electrode_layout": "ring_major",
+                "electrode_area_m2_override": 0.003,
+            }
+        )
+
+        cfg = panel.get_config()
+
+        levels = electrode_level_fractions_for_rings(8)
+        max_ratio = max_electrode_height_ratio_for_rings(8)
+        expected_length = 2.0 * np.pi * 0.18 * 0.5 / 8.0
+        assert cfg["electrode_height_ratio"] <= max_ratio
+        assert cfg["electrode_height_ratio"] == pytest.approx(max_ratio, rel=1.0e-5)
+        assert cfg["electrode_area_m2_override"] == pytest.approx(
+            expected_length * 0.16 * cfg["electrode_height_ratio"]
+        )
+        assert panel._electrode_area_spin.value() == pytest.approx(
+            cfg["electrode_area_m2_override"]
+        )
+        Cylinder3DMeshConfig(
+            radius=cfg["radius"],
+            height=cfg["height"],
+            electrode_height_ratio=cfg["electrode_height_ratio"],
+            electrode_level_fractions=levels,
+        )
     finally:
         panel.close()
 
