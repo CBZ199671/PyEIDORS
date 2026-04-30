@@ -163,6 +163,84 @@ def _make_model(**overrides):
     return model
 
 
+def test_apply_ksp_options_database_scopes_and_cleans_project_options(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _FakeOptions(dict):
+        def __init__(self):
+            super().__init__()
+            self.deleted: list[str] = []
+
+        def delValue(self, key):
+            self.deleted.append(str(key))
+            self.pop(str(key), None)
+
+    class _OptionsKSP:
+        def __init__(self, options, *, fail: bool = False):
+            self.options = options
+            self.fail = bool(fail)
+            self.prefix = ""
+            self.snapshot: dict[str, str] = {}
+
+        def setOptionsPrefix(self, prefix):
+            self.prefix = str(prefix)
+
+        def setFromOptions(self):
+            self.snapshot = dict(self.options)
+            if self.fail:
+                raise RuntimeError("setFromOptions failed")
+
+    model = _make_model()
+    model.backend_config = SimpleNamespace(
+        pc_type="gamg",
+        pc_hypre_type="boomeramg",
+        pc_gamg_type="agg",
+        pc_factor_mat_solver_type="mumps",
+        petsc_options={"ksp_error_if_not_converged": True},
+    )
+    options = _FakeOptions()
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(Options=lambda: options),
+    )
+    ksp = _OptionsKSP(options)
+
+    EITForwardModel._apply_ksp_options_database(model, ksp)
+
+    assert ksp.snapshot == {
+        f"{ksp.prefix}ksp_error_if_not_converged": "true",
+        f"{ksp.prefix}pc_gamg_type": "agg",
+    }
+    assert f"{ksp.prefix}pc_hypre_type" not in ksp.snapshot
+    assert f"{ksp.prefix}pc_factor_mat_solver_type" not in ksp.snapshot
+    assert dict(options) == {}
+    assert sorted(options.deleted) == sorted(ksp.snapshot)
+
+    model.backend_config = SimpleNamespace(
+        pc_type="hypre",
+        pc_hypre_type="boomeramg",
+        pc_gamg_type="agg",
+        pc_factor_mat_solver_type=None,
+        petsc_options={},
+    )
+    failing_options = _FakeOptions()
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(Options=lambda: failing_options),
+    )
+    failing_ksp = _OptionsKSP(failing_options, fail=True)
+
+    with pytest.raises(RuntimeError, match="setFromOptions failed"):
+        EITForwardModel._apply_ksp_options_database(model, failing_ksp)
+
+    assert failing_ksp.snapshot == {f"{failing_ksp.prefix}pc_hypre_type": "boomeramg"}
+    assert f"{failing_ksp.prefix}pc_gamg_type" not in failing_ksp.snapshot
+    assert dict(failing_options) == {}
+    assert failing_options.deleted == [f"{failing_ksp.prefix}pc_hypre_type"]
+
+
 def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ):

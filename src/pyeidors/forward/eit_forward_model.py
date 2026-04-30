@@ -1024,11 +1024,12 @@ class EITForwardModel:
         hypre_type = getattr(self.backend_config, "pc_hypre_type", None)
         gamg_type = getattr(self.backend_config, "pc_gamg_type", None)
         factor_type = getattr(self.backend_config, "pc_factor_mat_solver_type", None)
-        if hypre_type is not None:
+        pc_type = str(getattr(self.backend_config, "pc_type", "") or "").strip().lower()
+        if hypre_type is not None and pc_type == "hypre":
             options.setdefault("pc_hypre_type", str(hypre_type))
-        if gamg_type is not None:
+        if gamg_type is not None and pc_type == "gamg":
             options.setdefault("pc_gamg_type", str(gamg_type))
-        if factor_type is not None:
+        if factor_type is not None and pc_type in {"lu", "cholesky", "qr"}:
             options.setdefault("pc_factor_mat_solver_type", str(factor_type))
         if not options:
             return
@@ -1039,12 +1040,25 @@ class EITForwardModel:
         except Exception:
             prefix = ""
         opts = PETSc.Options()
+        written_keys: list[str] = []
         for key, value in options.items():
             option_key = str(key).strip().lstrip("-")
             if not option_key:
                 continue
-            opts[prefix + option_key] = self._petsc_option_value(value)
-        ksp_obj.setFromOptions()
+            full_key = prefix + option_key
+            opts[full_key] = self._petsc_option_value(value)
+            written_keys.append(full_key)
+        try:
+            ksp_obj.setFromOptions()
+        finally:
+            for full_key in written_keys:
+                try:
+                    if hasattr(opts, "delValue"):
+                        opts.delValue(full_key)
+                    else:
+                        del opts[full_key]
+                except Exception:
+                    pass
 
     @staticmethod
     def _is_gpu_petsc_kind(kind) -> bool:
