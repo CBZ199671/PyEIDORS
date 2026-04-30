@@ -415,6 +415,11 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.hint": "\u4ece\u8fb9\u754c\u7535\u538b\u91cd\u6784\u7535\u5bfc\u7387\u5206\u5e03\u3002",  # 从边界电压重构电导率分布。
     "sim.inverse.method_label": "\u65b9\u6cd5\uff1a",  # 方法：
     "sim.inverse.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",  # 正则化 α：
+    "sim.inverse.alpha_tooltip": "\u4ec5\u8fed\u4ee3 full-GN \u8c03\u8bd5\u8def\u7531\u4f7f\u7528\u8be5\u503c\u3002",  # 仅迭代 full-GN 调试路由使用该值。
+    "sim.inverse.lambda_eff_locked_label": "\u03bb_eff\uff08\u9501\u5b9a\uff09\uff1a",  # λ_eff（锁定）：
+    "sim.inverse.lambda_eff_locked_tooltip": "\u5355\u6b65/RM \u8def\u7531\u56fa\u5b9a \u03bb_eff=1e-2\uff1b\u516c\u5f0f\u4f7f\u7528 hp^2 RtR\uff0chp=0.1\u3002",  # 单步/RM 路由固定 λ_eff=1e-2；公式使用 hp^2 RtR，hp=0.1。
+    "sim.inverse.artifact_weight_label": "Artifact weight\uff1a",  # Artifact weight：
+    "sim.inverse.artifact_weight_tooltip": "GREIT \u6743\u91cd\u5b58\u5728 HDF5 artifact \u4e2d\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\u3002",  # GREIT 权重存在 HDF5 artifact 中；该值不作为 α 使用。
     "sim.inverse.iterations_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：
     "sim.inverse.reconstruct_button": "\u91cd\u6784",  # 重构
     "sim.inverse.save_button": "\u4fdd\u5b58\u7ed3\u679c",  # 保存结果

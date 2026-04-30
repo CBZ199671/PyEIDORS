@@ -87,6 +87,14 @@ if TYPE_CHECKING:
 
 _AMGX_UNAVAILABLE_SPD_GAMG_CUDA_NOTE = "AmgX 不可用时使用 spd_gamg CUDA"
 _RUNTIME_DIAGNOSTICS_ENV = "EIT_APP_SHOW_RUNTIME_DIAGNOSTICS"
+_CANONICAL_SINGLE_STEP_LAMBDA_EFF = 1.0e-2
+_CANONICAL_SINGLE_STEP_HP = float(np.sqrt(_CANONICAL_SINGLE_STEP_LAMBDA_EFF))
+_ONE_STEP_LAMBDA_EFF_ROUTES = {
+    "noser_rm",
+    "laplace_rm",
+    "curvature_rm",
+    "debug_fine_mesh_noser",
+}
 _GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
 _GREIT_COMMON_CONFIG_SCOPE = {
     "greit_official_fixture_scope": "48e official fixture passed",
@@ -3683,16 +3691,57 @@ class EITWorkstation(QMainWindow):
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
         )
-        # Match the EIDORS-style one-step NOSER path: the GUI fast path uses
-        # the canonical lambda_eff = 1e-2, while iterative/full-GN routes keep
-        # the panel alpha.
+        alpha_input = float(inv_cfg["regularization_alpha"])
+        # Match the EIDORS-style one-step paths: the GUI shows and records the
+        # locked canonical lambda_eff instead of pretending user alpha applies.
         difference_mode = "normalized" if is_3d_difference else "raw"
-        difference_lambda = (
-            1.0e-2
-            if resolved_method == "gn-difference"
+        locked_lambda_eff = (
+            route in _ONE_STEP_LAMBDA_EFF_ROUTES
+            and resolved_method == "gn-difference"
             and reconstruction_runtime == "single_step_cached"
-            else None
         )
+        greit_artifact_hyperparameter = route == "greit3d_rm"
+        difference_lambda = (
+            _CANONICAL_SINGLE_STEP_LAMBDA_EFF if locked_lambda_eff else None
+        )
+        if locked_lambda_eff:
+            hyperparameter_meta = {
+                "hyperparameter_ui_name": "lambda_eff",
+                "hyperparameter_ui_value": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+                "hyperparameter_ui_locked": True,
+                "hyperparameter_effective_source": "canonical_single_step",
+                "hyperparameter_formula": "JtWJ_plus_hp2_RtR",
+                "hyperparameter_diagnostic": "locked_lambda_eff_1e-2_hp_0p1",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": False,
+                "lambda_eff": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+                "hp": _CANONICAL_SINGLE_STEP_HP,
+                "hp_squared": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+                "difference_lambda_semantics": "lambda_eff_equals_hp_squared",
+            }
+        elif greit_artifact_hyperparameter:
+            hyperparameter_meta = {
+                "hyperparameter_ui_name": "greit_artifact_weight",
+                "hyperparameter_ui_value": None,
+                "hyperparameter_ui_locked": True,
+                "hyperparameter_effective_source": "hdf5_artifact",
+                "hyperparameter_formula": "calc_GREIT_RM_artifact",
+                "hyperparameter_diagnostic": "greit_weight_loaded_from_hdf5_artifact",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": False,
+                "difference_lambda_semantics": "unused_for_greit_rm_artifact",
+            }
+        else:
+            hyperparameter_meta = {
+                "hyperparameter_ui_name": "alpha",
+                "hyperparameter_ui_value": alpha_input,
+                "hyperparameter_ui_locked": False,
+                "hyperparameter_effective_source": "user_input",
+                "hyperparameter_formula": "iterative_gn_alpha",
+                "hyperparameter_diagnostic": "",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": True,
+            }
         metadata = {
             **forward_cfg.to_mapping(),
             **measurement_layout_from_config(forward_cfg.to_mapping()),
@@ -3721,6 +3770,7 @@ class EITWorkstation(QMainWindow):
             "linearized_solver_strategy": "auto",
             "linearized_maxiter": 0,
             "lazy_preconditioner_mode": "auto",
+            **hyperparameter_meta,
             **greit_scope_metadata,
         }
         if greit_common_config_id:
@@ -3737,7 +3787,7 @@ class EITWorkstation(QMainWindow):
             target_frame=tgt_frame,
             use_part="real",
             method=resolved_method,
-            regularization_alpha=inv_cfg["regularization_alpha"],
+            regularization_alpha=alpha_input,
             max_iterations=inv_cfg["max_iterations"],
             mesh_dimension=forward_cfg.mesh_dimension,
             mesh_refinement=mesh_size,

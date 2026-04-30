@@ -734,7 +734,8 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     app.processEvents()
     assert inv._busy_bar.isHidden()
     assert inv._method_combo.isEnabled()
-    assert inv._alpha_spin.isEnabled()
+    assert not inv._alpha_spin.isEnabled()
+    assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
     assert inv._iter_spin.isEnabled()
 
     inv.set_running(True)
@@ -750,6 +751,7 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     assert inv._busy_bar.isHidden()
     assert inv._recon_btn.isEnabled()
     assert inv._method_combo.isEnabled()
+    assert not inv._alpha_spin.isEnabled()
     inv.close()
     inv.deleteLater()
     app.processEvents()
@@ -781,6 +783,42 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     inv.set_config({"method": "noser_rm"})
     assert inv.get_config()["method"] == "noser_rm"
     assert "RM" in inv._method_combo.toolTip()
+
+    inv.close()
+    inv.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.gui
+def test_simulation_inverse_panel_hyperparameter_semantics_follow_route() -> None:
+    from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
+
+    app = _get_app()
+    inv = InverseProblemPanel()
+    inv.show()
+    app.processEvents()
+
+    assert inv.get_config()["method"] == "noser_rm"
+    assert "λ_eff" in inv._lbl_alpha.text()
+    assert not inv._alpha_spin.isEnabled()
+    assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
+    assert inv.get_config()["regularization_alpha"] == pytest.approx(1.0e-2)
+    assert "hp=0.1" in inv._alpha_spin.toolTip()
+
+    inv.set_config({"method": "debug_full_gn", "regularization_alpha": 2.5})
+    app.processEvents()
+    assert inv._alpha_spin.isEnabled()
+    assert "α" in inv._lbl_alpha.text()
+    assert inv._alpha_spin.value() == pytest.approx(2.5)
+    assert inv.get_config()["regularization_alpha"] == pytest.approx(2.5)
+
+    inv.set_config({"method": "greit3d_rm", "regularization_alpha": 3.5})
+    app.processEvents()
+    assert not inv._alpha_spin.isEnabled()
+    assert "Artifact" in inv._lbl_alpha.text()
+    assert "HDF5" in inv._alpha_spin.toolTip()
+    assert "α" in inv._alpha_spin.toolTip()
+    assert inv.get_config()["regularization_alpha"] == pytest.approx(3.5)
 
     inv.close()
     inv.deleteLater()
@@ -2579,6 +2617,17 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
     assert request.metadata["rm_route_requires_artifact"] is False
     assert request.metadata["difference_mode"] == "normalized"
     assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
+    assert request.regularization_alpha == pytest.approx(1.0e-2)
+    assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
+    assert request.metadata["hyperparameter_ui_locked"] is True
+    assert request.metadata["hyperparameter_ui_value"] == pytest.approx(1.0e-2)
+    assert request.metadata["regularization_alpha_applied"] is False
+    assert request.metadata["lambda_eff"] == pytest.approx(1.0e-2)
+    assert request.metadata["hp"] == pytest.approx(0.1)
+    assert request.metadata["hp_squared"] == pytest.approx(1.0e-2)
+    assert request.metadata["difference_lambda_semantics"] == (
+        "lambda_eff_equals_hp_squared"
+    )
     assert rc._prepare_single_step_cached_runtime(request).refinement == 2
 
     window._sim_state.inverse_running = False
@@ -2623,6 +2672,11 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
     assert request.metadata["difference_mode"] == "raw"
     assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
     assert request.metadata["simulation_inverse_route"] == "debug_fine_mesh_noser"
+    assert request.regularization_alpha == pytest.approx(1.0e-2)
+    assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
+    assert request.metadata["hyperparameter_ui_locked"] is True
+    assert request.metadata["regularization_alpha_applied"] is False
+    assert request.metadata["hp"] == pytest.approx(0.1)
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -2692,6 +2746,14 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["rm_form"] == "measurement"
         assert request.metadata["rm_inverse_mesh_size"] >= request.metadata["mesh_size"]
         assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"
+        assert request.regularization_alpha == pytest.approx(1.0e-2)
+        assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
+        assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
+        assert request.metadata["hyperparameter_ui_locked"] is True
+        assert request.metadata["regularization_alpha_applied"] is False
+        assert request.metadata["lambda_eff"] == pytest.approx(1.0e-2)
+        assert request.metadata["hp"] == pytest.approx(0.1)
+        assert request.metadata["hp_squared"] == pytest.approx(1.0e-2)
     if method == "greit3d_rm":
         assert request.metadata["rm_form"] == "measurement"
         assert request.metadata["greit_common_config"] == "16e"
@@ -2708,6 +2770,15 @@ def test_simulation_rm_routes_record_artifact_requirement(
             "5936 official pending T97"
         )
         assert request.metadata["greit_official_equivalence_claim_allowed"] is False
+        assert "difference_lambda" not in request.metadata
+        assert request.regularization_alpha == pytest.approx(1.0)
+        assert request.metadata["hyperparameter_ui_name"] == "greit_artifact_weight"
+        assert request.metadata["hyperparameter_ui_locked"] is True
+        assert request.metadata["hyperparameter_effective_source"] == "hdf5_artifact"
+        assert request.metadata["regularization_alpha_applied"] is False
+        assert request.metadata["difference_lambda_semantics"] == (
+            "unused_for_greit_rm_artifact"
+        )
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -2773,6 +2844,10 @@ def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
         "5936 protocol official fixture pending T97"
         in request.metadata["greit_official_equivalence_scope"]
     )
+    assert "difference_lambda" not in request.metadata
+    assert request.metadata["hyperparameter_ui_name"] == "greit_artifact_weight"
+    assert request.metadata["hyperparameter_ui_locked"] is True
+    assert request.metadata["regularization_alpha_applied"] is False
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -2818,6 +2893,11 @@ def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
     assert request.metadata["simulation_inverse_route"] == "debug_full_gn"
     assert request.metadata["simulation_inverse_debug_route"] is True
     assert "difference_lambda" not in request.metadata
+    assert request.regularization_alpha == pytest.approx(1.0)
+    assert request.metadata["hyperparameter_ui_name"] == "alpha"
+    assert request.metadata["hyperparameter_ui_locked"] is False
+    assert request.metadata["hyperparameter_ui_value"] == pytest.approx(1.0)
+    assert request.metadata["regularization_alpha_applied"] is True
 
     window._sim_state.inverse_running = False
     _close_window(window)

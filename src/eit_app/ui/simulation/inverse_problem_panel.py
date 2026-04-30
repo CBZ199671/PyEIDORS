@@ -39,6 +39,14 @@ _METHOD_TOOLTIP_KEYS = {
     "greit3d_rm": "sim.inverse.method.greit3d_rm.tooltip",
     "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
 }
+CANONICAL_SINGLE_STEP_LAMBDA_EFF = 1.0e-2
+_LOCKED_LAMBDA_EFF_METHODS = {
+    "noser_rm",
+    "laplace_rm",
+    "curvature_rm",
+    "debug_fine_mesh_noser",
+}
+_ARTIFACT_HYPERPARAM_METHODS = {"greit3d_rm"}
 
 
 def normalize_simulation_inverse_method(method: str) -> str:
@@ -57,6 +65,7 @@ class InverseProblemPanel(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
+        self._editable_alpha_value = 1.0
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -76,7 +85,7 @@ class InverseProblemPanel(QGroupBox):
         # Method identifiers are invariant algorithm codes; no translation.
         self._method_combo.addItems(SIMULATION_INVERSE_METHODS)
         self._method_combo.currentIndexChanged.connect(
-            lambda _index: self._update_method_tooltip()
+            lambda _index: self._update_method_state()
         )
         self._lbl_method = QLabel("")
         layout.addRow(self._lbl_method, self._method_combo)
@@ -86,6 +95,7 @@ class InverseProblemPanel(QGroupBox):
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
+        self._alpha_spin.valueChanged.connect(self._remember_editable_alpha)
         self._lbl_alpha = QLabel("")
         layout.addRow(self._lbl_alpha, self._alpha_spin)
 
@@ -149,12 +159,15 @@ class InverseProblemPanel(QGroupBox):
             index = self._method_combo.findText(method)
             if index >= 0:
                 self._method_combo.setCurrentIndex(index)
-            self._alpha_spin.setValue(float(config.get("regularization_alpha", 1.0)))
+            alpha = float(config.get("regularization_alpha", 1.0))
+            if method not in _LOCKED_LAMBDA_EFF_METHODS:
+                self._editable_alpha_value = alpha
+            self._alpha_spin.setValue(alpha)
             self._iter_spin.setValue(int(config.get("max_iterations", 10)))
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
-        self._update_method_tooltip()
+        self._update_method_state()
 
     def set_status(self, text: str) -> None:
         self._status_label.setText(text)
@@ -164,8 +177,11 @@ class InverseProblemPanel(QGroupBox):
         # Lock adjacent inputs during busy so changing α / method / iters
         # mid-flight doesn't desync the next run's request.
         self._method_combo.setEnabled(not running)
-        self._alpha_spin.setEnabled(not running)
         self._iter_spin.setEnabled(not running)
+        if running:
+            self._alpha_spin.setEnabled(False)
+        else:
+            self._update_hyperparameter_control()
         self._busy_bar.setVisible(running)
         if running:
             self._status_label.setText(t("sim.inverse.status_reconstructing"))
@@ -179,14 +195,46 @@ class InverseProblemPanel(QGroupBox):
         self.setTitle(t("sim.inverse.title"))
         self._hint.setText(t("sim.inverse.hint"))
         self._lbl_method.setText(t("sim.inverse.method_label"))
-        self._lbl_alpha.setText(t("sim.inverse.alpha_label"))
         self._lbl_iter.setText(t("sim.inverse.iterations_label"))
         self._recon_btn.setText(t("sim.inverse.reconstruct_button"))
         self._save_btn.setText(t("sim.inverse.save_button"))
+        self._update_method_state()
+
+    def _remember_editable_alpha(self, value: float) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        if method not in _LOCKED_LAMBDA_EFF_METHODS | _ARTIFACT_HYPERPARAM_METHODS:
+            self._editable_alpha_value = float(value)
+
+    def _update_method_state(self) -> None:
         self._update_method_tooltip()
+        self._update_hyperparameter_control()
 
     def _update_method_tooltip(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
         tooltip = t(_METHOD_TOOLTIP_KEYS.get(method, "sim.inverse.method_label"))
         self._method_combo.setToolTip(tooltip)
         self._lbl_method.setToolTip(tooltip)
+
+    def _update_hyperparameter_control(self) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        blocked = self._alpha_spin.blockSignals(True)
+        try:
+            if method in _LOCKED_LAMBDA_EFF_METHODS:
+                self._lbl_alpha.setText(t("sim.inverse.lambda_eff_locked_label"))
+                tooltip = t("sim.inverse.lambda_eff_locked_tooltip")
+                self._alpha_spin.setValue(CANONICAL_SINGLE_STEP_LAMBDA_EFF)
+                self._alpha_spin.setEnabled(False)
+            elif method in _ARTIFACT_HYPERPARAM_METHODS:
+                self._lbl_alpha.setText(t("sim.inverse.artifact_weight_label"))
+                tooltip = t("sim.inverse.artifact_weight_tooltip")
+                self._alpha_spin.setValue(self._editable_alpha_value)
+                self._alpha_spin.setEnabled(False)
+            else:
+                self._lbl_alpha.setText(t("sim.inverse.alpha_label"))
+                tooltip = t("sim.inverse.alpha_tooltip")
+                self._alpha_spin.setValue(self._editable_alpha_value)
+                self._alpha_spin.setEnabled(True)
+        finally:
+            self._alpha_spin.blockSignals(blocked)
+        self._lbl_alpha.setToolTip(tooltip)
+        self._alpha_spin.setToolTip(tooltip)

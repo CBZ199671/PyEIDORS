@@ -412,6 +412,17 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.hint": "Reconstruct the conductivity distribution from boundary voltages.",
     "sim.inverse.method_label": "Method:",
     "sim.inverse.alpha_label": "Regularization \u03b1:",
+    "sim.inverse.alpha_tooltip": "Applied only by the iterative full-GN debug route.",
+    "sim.inverse.lambda_eff_locked_label": "\u03bb_eff (locked):",
+    "sim.inverse.lambda_eff_locked_tooltip": (
+        "Fixed at \u03bb_eff=1e-2 for single-step/RM routes; the one-step "
+        "formula uses hp^2 RtR with hp=0.1."
+    ),
+    "sim.inverse.artifact_weight_label": "Artifact weight:",
+    "sim.inverse.artifact_weight_tooltip": (
+        "GREIT weighting is stored in the HDF5 artifact; this value is not "
+        "used as \u03b1."
+    ),
     "sim.inverse.iterations_label": "Max iterations:",
     "sim.inverse.reconstruct_button": "Reconstruct",
     "sim.inverse.save_button": "Save Results",
