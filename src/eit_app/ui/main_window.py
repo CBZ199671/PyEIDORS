@@ -182,10 +182,23 @@ def _format_runtime_diagnostics(
 
 def _greit_common_config_id_for_forward_config(
     forward_cfg: ForwardModelConfig,
+    *,
+    n_measurements: int | None = None,
 ) -> str:
     total_electrodes = int(forward_cfg.total_electrodes())
     if total_electrodes in {16, 32, 48}:
-        return f"{total_electrodes}e"
+        config_id = f"{total_electrodes}e"
+        try:
+            from pyeidors.inverse.greit_warmup import greit_common_config
+
+            expected_n_measurements = int(greit_common_config(config_id).n_measurements)
+        except Exception:
+            return config_id if not n_measurements else ""
+        observed_n_measurements = int(n_measurements or 0)
+        if observed_n_measurements <= 0:
+            observed_n_measurements = int(forward_cfg.point_count())
+        if observed_n_measurements == expected_n_measurements:
+            return config_id
     return ""
 
 
@@ -3672,12 +3685,19 @@ class EITWorkstation(QMainWindow):
             route_kind = "rm"
             rm_regularization = "greit"
             rm_route_requires_artifact = True
-            rm_auto_build = True
             greit_common_config_id = _greit_common_config_id_for_forward_config(
-                forward_cfg
+                forward_cfg,
+                n_measurements=n_meas,
             )
+            rm_auto_build = bool(greit_common_config_id)
             greit_common_config_auto_warm = bool(greit_common_config_id)
             greit_scope_metadata = dict(_GREIT_COMMON_CONFIG_SCOPE)
+            if not greit_common_config_id:
+                greit_scope_metadata["greit_common_config_unavailable_reason"] = (
+                    "No GREIT common-config artifact matches the current "
+                    f"{forward_cfg.total_electrodes()}-electrode / "
+                    f"{n_meas}-measurement protocol."
+                )
         else:
             # Unknown route → safest fallback: iterative GN, no RM/cache claim.
             resolved_method = route or "gn-difference"

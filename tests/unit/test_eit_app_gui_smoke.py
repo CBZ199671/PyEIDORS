@@ -3044,6 +3044,65 @@ def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
 
 
 @pytest.mark.gui
+def test_simulation_greit3d_route_rejects_48e_common_config_for_2160_adad(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 2160
+    forward_config = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.1,
+        "n_elec": 16,
+        "n_rings": 3,
+        "electrode_layout": "ring_major",
+        "measurement_protocol": "eidors_full_3d",
+        "radius": 0.18,
+        "height": 0.16,
+        "drive_mode": "total_current",
+    }
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+        forward_model_config=forward_config,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "greit3d_rm",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["simulation_inverse_route"] == "greit3d_rm"
+    assert "greit_common_config" not in request.metadata
+    assert request.metadata["rm_auto_build"] is False
+    assert (
+        "2160-measurement protocol"
+        in request.metadata["greit_common_config_unavailable_reason"]
+    )
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
 def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

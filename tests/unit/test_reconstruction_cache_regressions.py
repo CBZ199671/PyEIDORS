@@ -296,6 +296,72 @@ def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
     assert cpu_signature == cuda_signature
 
 
+def test_one_step_rm_signature_tracks_effective_measurement_count() -> None:
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "simulation_inverse_route": "laplace_rm",
+        "rm_auto_build": True,
+        "mesh_size": 0.25,
+        "rm_inverse_mesh_size": 0.25,
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference",
+        "n_elec": 16,
+        "n_rings": 3,
+        "radius": 0.18,
+        "height": 0.16,
+        "rm_regularization": "laplace",
+    }
+    ref_2160 = FrameData(
+        real=np.ones(2160, dtype=float),
+        imag=np.zeros(2160, dtype=float),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    tgt_2160 = FrameData(
+        real=np.ones(2160, dtype=float) * 1.01,
+        imag=np.zeros(2160, dtype=float),
+        timestamp=0.0,
+        frame_index=1,
+    )
+    ref_5936 = FrameData(
+        real=np.ones(5936, dtype=float),
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=0,
+    )
+    tgt_5936 = FrameData(
+        real=np.ones(5936, dtype=float) * 1.01,
+        imag=np.zeros(5936, dtype=float),
+        timestamp=0.0,
+        frame_index=1,
+    )
+    request_2160 = rc.ReconstructionRequest(
+        reference_frame=ref_2160,
+        target_frame=tgt_2160,
+        mesh_dimension=3,
+        metadata=base_meta,
+    )
+    request_5936 = rc.ReconstructionRequest(
+        reference_frame=ref_5936,
+        target_frame=tgt_5936,
+        mesh_dimension=3,
+        metadata=base_meta,
+    )
+
+    sig_2160, payload_2160 = rc._planned_one_step_rm_signature(
+        request_2160,
+        rc._prepare_single_step_cached_runtime(request_2160),
+    )
+    sig_5936, payload_5936 = rc._planned_one_step_rm_signature(
+        request_5936,
+        rc._prepare_single_step_cached_runtime(request_5936),
+    )
+
+    assert sig_2160 != sig_5936
+    assert payload_2160["stim_meas_protocol"]["n_measurements"] == 2160
+    assert payload_5936["stim_meas_protocol"]["n_measurements"] == 5936
+
+
 def test_smooth_rm_signature_tracks_graph_prior_semantics_not_storage_axes() -> None:
     base_meta = {
         "reconstruction_runtime": "single_step_cached",
@@ -640,6 +706,58 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert warm_diagnostics["runtime"]["rm_artifact_cache_hit"] is True
     assert warm_diagnostics["cache_lookups"]["rm_artifact"]["layer"] == "process"
     assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
+
+
+def test_single_step_cached_rm_artifact_rejects_measurement_count_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import write_rm_artifact
+
+    artifact = tmp_path / "wrong_measurement_count_rm.h5"
+    write_rm_artifact(
+        artifact,
+        rm=np.ones((2, 5), dtype=np.float64),
+        voxel_shape=np.asarray([2, 1, 1], dtype=np.int64),
+        metadata={"algorithm": "one-step-noser", "n_measurements": 5},
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.ones(3, dtype=float),
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.ones(3, dtype=float) * 1.01,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "dual_model_rm_path": str(artifact),
+            "device": "cpu",
+            "n_elec": 8,
+            "n_rings": 2,
+            "radius": 0.18,
+            "height": 0.16,
+        },
+    )
+
+    def _unexpected_runner():
+        raise AssertionError("mismatched RM artifact must fail before GN fallback.")
+
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    with pytest.raises(
+        ValueError,
+        match="RM artifact measurement dimension 5 does not match request measurement dimension 3",
+    ):
+        rc._run_single_step_cached_request(request)
 
 
 def test_single_step_cached_noser_rm_route_auto_builds_hdf5_hot_path(

@@ -132,6 +132,41 @@ def _request_measurement_count(req: ReconstructionRequest) -> int:
         return 0
 
 
+def _rm_artifact_measurement_mismatch_message(
+    *,
+    path: Path,
+    artifact_columns: int,
+    request_measurements: int,
+) -> str:
+    return (
+        "RM artifact measurement dimension "
+        f"{int(artifact_columns)} does not match request measurement dimension "
+        f"{int(request_measurements)} for {path}. Rebuild/select an artifact for "
+        "the current stimulation/measurement protocol."
+    )
+
+
+def _validate_rm_artifact_measurement_dimension(
+    artifact: dict[str, Any],
+    *,
+    path: Path,
+    expected_n_measurements: int | None,
+) -> None:
+    if expected_n_measurements is None or int(expected_n_measurements) <= 0:
+        return
+    rm = np.asarray(artifact["rm"])
+    artifact_columns = int(rm.shape[1])
+    request_measurements = int(expected_n_measurements)
+    if artifact_columns != request_measurements:
+        raise ValueError(
+            _rm_artifact_measurement_mismatch_message(
+                path=path,
+                artifact_columns=artifact_columns,
+                request_measurements=request_measurements,
+            )
+        )
+
+
 def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
     if value is None or value == "":
         return float(default)
@@ -896,6 +931,8 @@ def _planned_one_step_rm_signature(
             ),
         },
         stim_meas_protocol={
+            "n_measurements": n_meas,
+            "points_per_frame": int(meta.get("points_per_frame", n_meas) or n_meas),
             "measurement_protocol": str(
                 meta.get("measurement_protocol", "eidors_full_3d")
             ),
@@ -1109,6 +1146,13 @@ def _missing_rm_artifact_result(
         f"Build or attach the artifact in {task}, or use debug_fine_mesh_noser for "
         "the current fine-mesh dense baseline."
     )
+    mismatch_reason = str(
+        meta.get("rm_artifact_unavailable_reason")
+        or meta.get("greit_common_config_unavailable_reason")
+        or ""
+    ).strip()
+    if mismatch_reason:
+        message = f"{message} {mismatch_reason}"
     emit(message)
     result_meta = dict(meta)
     result_meta.update(
@@ -1257,6 +1301,7 @@ def _load_cached_rm_artifact(
     *,
     device: str,
     dtype: str,
+    expected_n_measurements: int | None = None,
 ) -> dict[str, Any]:
     from pyeidors.perf.gpu_kernels import prepare_rm_matmul
 
@@ -1264,6 +1309,11 @@ def _load_cached_rm_artifact(
     with _RM_ARTIFACT_CACHE_LOCK:
         cached = _RM_ARTIFACT_CACHE.get(key)
         if cached is not None:
+            _validate_rm_artifact_measurement_dimension(
+                cached,
+                path=path,
+                expected_n_measurements=expected_n_measurements,
+            )
             _RM_ARTIFACT_CACHE.move_to_end(key)
             result = dict(cached)
             result["rm_artifact_cache_hit"] = True
@@ -1271,6 +1321,11 @@ def _load_cached_rm_artifact(
             return result
 
     artifact = _load_rm_artifact(path, meta)
+    _validate_rm_artifact_measurement_dimension(
+        artifact,
+        path=path,
+        expected_n_measurements=expected_n_measurements,
+    )
     artifact["rm_handle"] = prepare_rm_matmul(
         artifact["rm"],
         device=device,
@@ -1383,19 +1438,20 @@ def _try_run_cached_rm_request(
             runtime.meta.get("rm_matmul_dtype", "float64"),
         )
     )
-    artifact = _load_cached_rm_artifact(
-        path,
-        runtime.meta,
-        device=device,
-        dtype=dtype,
-    )
-    node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
     ref_vec = np.asarray(
         req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64
     )
     tgt_vec = np.asarray(
         req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64
     )
+    artifact = _load_cached_rm_artifact(
+        path,
+        runtime.meta,
+        device=device,
+        dtype=dtype,
+        expected_n_measurements=int(ref_vec.size),
+    )
+    node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
     difference_mode = str(runtime.meta.get("difference_mode", "raw"))
     difference_orientation = str(
         runtime.meta.get("difference_orientation", "target_minus_reference")
