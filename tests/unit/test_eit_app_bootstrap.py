@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 
 import eit_app.app as app_module
+from eit_app.ui.main_window import EITWorkstation
 
 
 _QT_ENV_NAMES = (
@@ -62,3 +63,14 @@ def test_v51_explicit_qt_platform_is_preserved(monkeypatch):
     app_module._configure_qt_platform_for_embedded_vtk()
 
     assert os.environ["QT_QPA_PLATFORM"] == "offscreen"
+
+
+def test_v99_bogus_wslg_screen_geometry_does_not_collapse_main_window():
+    size = EITWorkstation._bounded_initial_size(
+        preferred_w=1360,
+        preferred_h=840,
+        available_w=131072,
+        available_h=1,
+    )
+
+    assert (size.width(), size.height()) == (1360, 840)

@@ -23,11 +23,21 @@ def graph_laplacian(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
     meshes, cells are adjacent when they share a facet
     (``vertices_per_cell - 1`` common vertices). For ``VoxelGrid`` inputs,
     face-neighbour adjacency is generated directly from the grid shape.
+    EIDORS ``prior_laplace`` contributes ``[2, -2; -2, 2]`` per shared
+    interior face, i.e. twice the plain graph Laplacian.
     """
 
     resolved_weight = resolve_graph_weight(weight)
     n_cells, edges, volumes = graph_edges_and_volumes(mesh)
-    return laplacian_from_edges(n_cells, edges, volumes=volumes, weight=resolved_weight)
+    return (
+        2.0
+        * laplacian_from_edges(
+            n_cells,
+            edges,
+            volumes=volumes,
+            weight=resolved_weight,
+        )
+    ).tocsr()
 
 
 def graph_difference_operator(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
@@ -41,24 +51,29 @@ def graph_difference_operator(mesh: Any, *, weight: str = "unit") -> sparse.csr_
 
 
 def graph_ltl(mesh: Any, *, weight: str = "unit") -> sparse.csr_matrix:
-    """Build ``L.T @ L`` from :func:`graph_difference_operator`."""
+    """Build a squared-Laplacian curvature prior.
 
-    difference = graph_difference_operator(mesh, weight=weight).tocsr()
-    n_cells = int(difference.shape[1])
-    if difference.shape[0] == 0:
+    ``graph_laplacian`` already returns the EIDORS Laplace RtR payload.  The
+    curvature variant applies the Laplace operator twice, so it is distinct
+    from the Laplace prior rather than a renamed graph incidence ``D.T @ D``.
+    """
+
+    laplace = graph_laplacian(mesh, weight=weight).tocsr()
+    n_cells = int(laplace.shape[1])
+    if laplace.shape[0] == 0 or laplace.nnz == 0:
         return sparse.csr_matrix((n_cells, n_cells), dtype=np.float64)
-    return (difference.T @ difference).tocsr()
+    return (laplace.T @ laplace).tocsr()
 
 
 def graph_ltl_prior(mesh: Any, *, weight: str = "unit") -> RtRPrior:
-    """Build a named ``graph_ltl`` RtR prior from the graph difference operator."""
+    """Build a named squared-Laplacian ``graph_ltl`` RtR prior."""
 
-    difference = graph_difference_operator(mesh, weight=weight).tocsr()
-    n_cells = int(difference.shape[1])
+    laplace = graph_laplacian(mesh, weight=weight).tocsr()
+    n_cells = int(laplace.shape[1])
     matrix = (
         sparse.csr_matrix((n_cells, n_cells), dtype=np.float64)
-        if difference.shape[0] == 0
-        else (difference.T @ difference).tocsr()
+        if laplace.shape[0] == 0 or laplace.nnz == 0
+        else (laplace.T @ laplace).tocsr()
     )
     return as_rtr_prior(
         matrix,
@@ -66,8 +81,8 @@ def graph_ltl_prior(mesh: Any, *, weight: str = "unit") -> RtRPrior:
         metadata={
             "prior_family": "graph_ltl",
             "graph_weight": str(weight).strip().lower(),
-            "difference_operator_shape": tuple(int(v) for v in difference.shape),
-            "regularization_source": "graph_difference_operator",
+            "laplace_operator_shape": tuple(int(v) for v in laplace.shape),
+            "regularization_source": "graph_laplacian_squared",
             "signature_hint": "graph_ltl",
         },
     )

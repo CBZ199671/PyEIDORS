@@ -174,6 +174,7 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
     payload = {
         "linear_backend": str(fwd_model.linear_backend),
         "forward_backend": str(getattr(fwd_model, "forward_backend", "dolfinx")),
+        "potential_order": int(getattr(fwd_model, "potential_order", 1)),
         "mesh_family": str(getattr(fwd_model, "mesh_family", "tetra")),
         "geometry_version": str(getattr(fwd_model, "geometry_version", "legacy")),
         "generator_revision": str(getattr(fwd_model, "generator_revision", "g3d0")),
@@ -264,6 +265,7 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
 
     payload = {
         "n_elec": int(fwd_model.n_elec),
+        "potential_order": int(getattr(fwd_model, "potential_order", 1)),
         "z": np.asarray(fwd_model.z, dtype=np.float64),
         "geometry_scale_to_m": float(getattr(fwd_model, "geometry_scale_to_m", 1.0)),
         "mesh": mesh_payload,

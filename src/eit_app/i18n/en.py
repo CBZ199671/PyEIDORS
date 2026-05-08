@@ -79,8 +79,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_reset": "Reset view",
     "sim.results.electrodes_toggle": "Show electrodes",
     # ------------------------------------------------------------------
-    # Help menu + About dialog (brand surface from claude.ai/design
-    # handoff — see docs/design/DESIGN_SYSTEM_README.md).
+    # Help menu + About dialog.
     # ------------------------------------------------------------------
     "menu.help": "&Help",
     "menu.help.about": "&About EIT Workstation",
@@ -88,7 +87,7 @@ TRANSLATIONS: dict[str, str] = {
     "about.brand_headline": "EIT Workstation \u00b7 Electrical Impedance Tomography",
     "about.version_line": "Version {version} \u00b7 {build}",
     "about.body": "Cross-platform PySide6 desktop app covering the full EIT workflow \u2014 hardware acquisition, simulation, dataset generation, and reconstruction. Bilingual zh / en, with PyVista 3D visualisation and PETSc / dolfinx solvers by default.",
-    "about.credit": "Brand surface authored via claude.ai/design (handoff WKRMymYpVs58OGTs9jRQ0A). The mark is a flat FEniCSx-style two-colour monogram with an English wordmark for a global audience. Design tokens, colours, typography, and the in-source QSS stay in 1:1 sync.",
+    "about.credit": "",
     "about.close": "Close",
     # ------------------------------------------------------------------
     # Language menu
@@ -444,9 +443,9 @@ TRANSLATIONS: dict[str, str] = {
         "artifact, then reconstruct with the RM @ dv hot path."
     ),
     "sim.inverse.method.greit3d_rm.tooltip": (
-        "3D GREIT common-config route: resolves or warms an HDF5 artifact and "
-        "uses RM @ dv. Scope: 48e official fixture passed; 5936 official "
-        "protocol remains pending T97."
+        "3D GREIT registry route: signs the current mesh/electrode/protocol "
+        "config, loads an exact HDF5 hit or builds a native GREIT artifact in "
+        "the worker, then applies RM @ dv."
     ),
     "sim.inverse.method.debug_full_gn.tooltip": (
         "Debug baseline: iterative full GN cold path; useful for comparison, not "

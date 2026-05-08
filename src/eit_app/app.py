@@ -214,8 +214,23 @@ def main() -> int:
     configure_runtime_fonts(app)
     apply_app_theme(app)
 
+    logger = logging.getLogger(__name__)
     window = EITWorkstation()
-    window.show()
+    logger.info(
+        "Main window constructed: size=%s geometry=%s",
+        (window.width(), window.height()),
+        window.geometry().getRect(),
+    )
+    window.showNormal()
+    window.raise_()
+    window.activateWindow()
+    QTimer.singleShot(0, window.raise_)
+    QTimer.singleShot(0, window.activateWindow)
+    logger.info(
+        "Main window show requested: visible=%s geometry=%s",
+        window.isVisible(),
+        window.geometry().getRect(),
+    )
 
     auto_quit_ms = os.getenv("EIT_APP_AUTO_QUIT_MS", "").strip()
     if auto_quit_ms:

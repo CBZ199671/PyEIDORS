@@ -1,9 +1,8 @@
-"""About dialog — shows the app brand mark, version, and credit lines.
+"""About dialog — shows the app brand mark and version.
 
-Brand surface lifted from the EIT Workstation design system handoff
-(``docs/design/DESIGN_SYSTEM_README.md``).  The dialog is intentionally
-minimal: logo, headline, meta, body paragraph, dismiss button — no
-icons elsewhere, matching the design's "no icons / no emoji" rule.
+The dialog is intentionally minimal: logo, headline, meta, body
+paragraph, dismiss button — no icons elsewhere, matching the design's
+"no icons / no emoji" rule.
 """
 
 from __future__ import annotations
@@ -127,7 +126,7 @@ class AboutDialog(QDialog):
         )
         outer.addWidget(self._body_label)
 
-        # Credit / acknowledgement line — kept subtle on purpose.
+        # Optional credit / acknowledgement line — hidden when empty.
         self._credit_label = QLabel("")
         set_hint_text(self._credit_label)
         self._credit_label.setWordWrap(True)
@@ -150,7 +149,9 @@ class AboutDialog(QDialog):
         self._title_label.setText(t("about.brand_headline"))
         self._version_label.setText(t("about.version_line"))
         self._body_label.setText(t("about.body"))
-        self._credit_label.setText(t("about.credit"))
+        credit = t("about.credit").strip()
+        self._credit_label.setText(credit)
+        self._credit_label.setVisible(bool(credit))
         self._buttons.button(QDialogButtonBox.StandardButton.Close).setText(
             t("about.close")
         )

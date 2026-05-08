@@ -77,7 +77,10 @@ def test_graph_core_matches_voxel_laplace_and_ltl_contract() -> None:
     np.testing.assert_allclose(
         difference.toarray(), graph_difference_operator(grid).toarray()
     )
-    np.testing.assert_allclose(laplace.toarray(), graph_laplacian(grid).toarray())
+    np.testing.assert_allclose(
+        (2.0 * laplace).toarray(),
+        graph_laplacian(grid).toarray(),
+    )
     np.testing.assert_allclose((difference.T @ difference).toarray(), laplace.toarray())
 
 

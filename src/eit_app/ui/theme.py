@@ -1198,6 +1198,13 @@ QTableView {
     outline: 0;
 }
 
+QTableView QWidget,
+QTreeView QWidget,
+QListView QWidget,
+QHeaderView {
+    background: #ffffff;
+}
+
 QTableView::item {
     padding: 4px 6px;
     border: none;
@@ -1226,6 +1233,17 @@ QHeaderView::section:first {
 
 QHeaderView::section:last {
     border-top-right-radius: 8px;
+}
+
+QTableCornerButton::section {
+    background: #f4f7fa;
+    border: none;
+    border-bottom: 2px solid #e0e6ee;
+}
+
+QAbstractScrollArea::corner {
+    background: #f4f7fa;
+    border: none;
 }
 
 QMenu {
@@ -1427,11 +1445,11 @@ QDateEdit::down-arrow:hover {
 #   Canvas:          #1a1f26  (near-black with a blue undertone)
 #   Panels:          #222831  (one step up so panels read as "on the canvas")
 #   Inputs:          #2a313a  (two steps up; QLineEdit / QComboBox fills)
-#   Borders:         #3e4754  (mid-grey, visible on both surface levels)
+#   Borders:         #323a45  (low-contrast structure on dark panels)
 #   Accent:          #5ca8e0  (brighter than light's #1f5d8b for contrast)
 #   Primary text:    #dbe1ea
 #   Muted text:      #8b97a7
-#   Group titles:    #8fc8ea  (accent-tinted, replaces light's #1f5d8b)
+#   Group titles:    #a7b2c2  (muted, avoids bright section seams)
 # Contrast ratios verified for WCAG AA — muted text on panels ~4.6:1,
 # primary text on inputs ~9.7:1.
 _DARK_OVERLAY = """
@@ -1519,11 +1537,11 @@ QWidget#workflowLeftContainer {
 /* === GroupBox / section panels === */
 QGroupBox {
     background: #222831;
-    border: 1px solid #3e4754;
+    border: 1px solid #323a45;
     color: #dbe1ea;
 }
 QGroupBox::title {
-    color: #8fc8ea;
+    color: #a7b2c2;
     /* The title sits in the GroupBox's 14px margin-top and would
        otherwise show the parent widget's background behind its
        letters.  Give the title its own opaque fill matching the
@@ -1536,10 +1554,10 @@ QGroupBox[panelRole="summary"] {
        group boxes so there's no visible vertical brightness
        cascade.  The accent border is what distinguishes them. */
     background: #222831;
-    border: 1px solid #4d6188;
+    border: 1px solid #364152;
 }
 QGroupBox[panelRole="summary"]::title {
-    color: #b3d4ed;
+    color: #a7b2c2;
     background: #222831;
 }
 QGroupBox[panelRole="workflow"] {
@@ -1550,7 +1568,7 @@ QGroupBox[panelRole="workflow"]::title {
 }
 QGroupBox[embeddedStepPanel="true"] {
     background: #222831;
-    border: 1px solid #3e4754;
+    border: 1px solid #323a45;
 }
 QGroupBox[embeddedStepPanel="true"]::title {
     background: #222831;
@@ -1696,10 +1714,16 @@ QTableView, QTreeView, QListView {
     background: #222831;
     alternate-background-color: #262d38;
     color: #dbe1ea;
-    border: 1px solid #3e4754;
+    border: 1px solid #323a45;
     gridline-color: #2a313a;
     selection-background-color: #1e4870;
     selection-color: #ecf4fb;
+}
+QTableView QWidget,
+QTreeView QWidget,
+QListView QWidget,
+QHeaderView {
+    background: #222831;
 }
 QTableView::item:selected, QTreeView::item:selected, QListView::item:selected {
     background: #1e4870;
@@ -1710,16 +1734,35 @@ QTableView::item:hover, QTreeView::item:hover, QListView::item:hover {
 }
 
 QHeaderView::section {
-    background: #2a313a;
+    background: #252c36;
     color: #a7b2c2;
-    border-bottom: 2px solid #3e4754;
+    border-bottom: 1px solid #323a45;
+}
+QHeaderView::section:first {
+    border-top-left-radius: 0px;
+}
+QHeaderView::section:last {
+    border-top-right-radius: 0px;
+}
+
+QTableCornerButton::section {
+    background: #252c36;
+    border: none;
+    border-right: 1px solid #323a45;
+    border-bottom: 1px solid #323a45;
+    border-top-left-radius: 0px;
+}
+
+QAbstractScrollArea::corner {
+    background: #252c36;
+    border: none;
 }
 
 /* === Menus === */
 QMenuBar {
     background: #1a1f26;
     color: #dbe1ea;
-    border-bottom: 1px solid #3e4754;
+    border-bottom: 1px solid #323a45;
 }
 QMenuBar::item:selected {
     background: #2d3543;
@@ -1727,7 +1770,7 @@ QMenuBar::item:selected {
 }
 QMenu {
     background: #222831;
-    border: 1px solid #3e4754;
+    border: 1px solid #323a45;
     color: #dbe1ea;
 }
 QMenu::item:selected {
@@ -1739,7 +1782,7 @@ QMenu::item:selected {
 QStatusBar {
     background: #222831;
     color: #a7b2c2;
-    border-top: 1px solid #3e4754;
+    border-top: 1px solid #323a45;
 }
 
 /* === Scrollbars === */

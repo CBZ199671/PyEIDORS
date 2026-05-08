@@ -81,8 +81,7 @@ TRANSLATIONS: dict[str, str] = {
     # 仿真显示：电极轮廓显示开关。2D 渲染线段，3D 渲染圆柱面贴片。
     "sim.results.electrodes_toggle": "\u663e\u793a\u7535\u6781",  # 显示电极
     # ------------------------------------------------------------------
-    # Help menu + About dialog (brand surface from claude.ai/design
-    # handoff — see docs/design/DESIGN_SYSTEM_README.md).
+    # Help menu + About dialog.
     # ------------------------------------------------------------------
     "menu.help": "\u5e2e\u52a9(&H)",  # 帮助(&H)
     "menu.help.about": "\u5173\u4e8e EIT \u5de5\u4f5c\u7ad9(&A)",  # 关于 EIT 工作站(&A)
@@ -90,7 +89,7 @@ TRANSLATIONS: dict[str, str] = {
     "about.brand_headline": "EIT \u5de5\u4f5c\u7ad9 \u00b7 \u7535\u963b\u6297\u65ad\u5c42\u6210\u50cf",  # EIT 工作站 · 电阻抗断层成像
     "about.version_line": "\u7248\u672c {version} \u00b7 {build}",  # 版本 {version} · {build}
     "about.body": "\u8de8\u5e73\u53f0 PySide6 \u684c\u9762\u5e94\u7528\uff0c\u8986\u76d6 EIT \u4ece\u786c\u4ef6\u91c7\u96c6\u3001\u4eff\u771f\u3001\u6570\u636e\u96c6\u751f\u6210\u5230\u91cd\u6784\u7684\u5168\u6d41\u7a0b\u3002\u4e2d\u82f1\u53cc\u8bed\uff0c\u9ed8\u8ba4 PyVista \u4e09\u7ef4\u53ef\u89c6\u5316\u3001PETSc / dolfinx \u6c42\u89e3\u3002",  # 跨平台 PySide6 桌面应用，覆盖 EIT 从硬件采集、仿真、数据集生成到重构的全流程。中英双语，默认 PyVista 三维可视化、PETSc / dolfinx 求解。
-    "about.credit": "\u54c1\u724c\u8bbe\u8ba1\u4ee5 claude.ai/design \u8f93\u51fa\u4e3a\u53c2\u8003\uff08handoff WKRMymYpVs58OGTs9jRQ0A\uff09\u3002\u6807\u8bc6\u4e3a FEniCSx \u98ce\u683c\u7684\u4e8c\u8272\u5e73\u9762 monogram\uff0c\u5168\u82f1\u6587\u9762\u5411\u5168\u7403\u3002\u8bbe\u8ba1\u4ee4\u724c\u3001\u989c\u8272\u3001\u5b57\u4f53\u4e0e\u6e90\u7801 QSS \u4fdd\u6301 1:1 \u540c\u6b65\u3002",  # 品牌设计以 claude.ai/design 输出为参考（handoff WKRMymYpVs58OGTs9jRQ0A）。标识为 FEniCSx 风格的二色平面 monogram，全英文面向全球。设计令牌、颜色、字体与源码 QSS 保持 1:1 同步。
+    "about.credit": "",
     "about.close": "\u5173\u95ed",  # 关闭
     # ------------------------------------------------------------------
     # Language menu
@@ -428,7 +427,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.method.noser_rm.tooltip": "NOSER RM \u9ed8\u8ba4\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 \u7c97\u9006\u6a21\u578b artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # NOSER RM 默认路由：冷构建或复用 HDF5 粗逆模型 artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-Laplacian artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Laplace RM 平滑路由：冷构建或复用 HDF5 graph-Laplacian artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.curvature_rm.tooltip": "Curvature RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-LtL artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Curvature RM 平滑路由：冷构建或复用 HDF5 graph-LtL artifact，然后用 RM @ dv 热路径重构。
-    "sim.inverse.method.greit3d_rm.tooltip": "3D GREIT common-config \u8def\u7531\uff1a\u89e3\u6790\u6216 warm HDF5 artifact\uff0c\u7136\u540e\u7528 RM @ dv\u300248e official fixture \u5df2\u901a\u8fc7\uff1b5936 official protocol \u4ecd\u7b49 T97\u3002",  # 3D GREIT common-config 路由：解析或 warm HDF5 artifact，然后用 RM @ dv。48e official fixture 已通过；5936 official protocol 仍等 T97。
+    "sim.inverse.method.greit3d_rm.tooltip": "3D GREIT registry \u8def\u7531\uff1a\u6309\u5f53\u524d\u7f51\u683c/\u7535\u6781/\u534f\u8bae\u751f\u6210\u7cbe\u786e\u7b7e\u540d\uff0c\u547d\u4e2d\u5219\u52a0\u8f7d HDF5\uff0c\u7f3a\u5931\u5219\u5728 worker \u6784\u5efa native GREIT artifact\uff0c\u518d\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # 3D GREIT registry 路由：按当前网格/电极/协议生成精确签名，命中则加载 HDF5，缺失则在 worker 构建 native GREIT artifact，再用 RM @ dv 热路径重构。
     "sim.inverse.method.debug_full_gn.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5bf9\u7167\uff0c\u4e0d\u662f\u5b9e\u65f6 RM \u8def\u7531\u3002",  # 调试基线：迭代 full GN 冷路径，适合对照，不是实时 RM 路由。
     # ==================================================================
     # Simulation tab — Right-side Metrics panel

@@ -42,6 +42,34 @@ _SHAPE_BUTTON_KEYS_3D = {
 }
 _Z_COLUMN = 3
 _SIZE_Z_COLUMN = 6
+_COLUMN_BASE_WIDTHS_2D = {
+    0: 112,  # shape
+    1: 78,  # X
+    2: 78,  # Y
+    4: 82,  # length
+    5: 82,  # width
+    7: 92,  # conductivity
+}
+_COLUMN_BASE_WIDTHS_3D = {
+    0: 108,  # shape
+    1: 68,  # X
+    2: 68,  # Y
+    3: 68,  # Z
+    4: 70,  # length
+    5: 70,  # width
+    6: 70,  # height
+    7: 88,  # conductivity
+}
+_COLUMN_EXTRA_WEIGHTS = {
+    0: 1.2,
+    1: 1.0,
+    2: 1.0,
+    3: 1.0,
+    4: 1.0,
+    5: 1.0,
+    6: 1.0,
+    7: 0.8,
+}
 
 
 class _InhomogeneityTableModel(QAbstractTableModel):
@@ -189,30 +217,12 @@ class InhomogeneityEditor(QGroupBox):
         self._table.setAlternatingRowColors(True)
         self._table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self._table.verticalHeader().setVisible(False)
         self._table.verticalHeader().setDefaultSectionSize(28)
-        # Column-width strategy:
-        # - The 8 columns sit inside the ~280px right context pane.
-        #   Header labels are single-char (X / Y / Z / 长 / 宽 / 高 / σ)
-        #   with the unit hint moved to a caption line above; that lets
-        #   each numeric column shrink to ~44 px without clipping.
-        # - Last column (σ) stretches to absorb leftover width.
-        # - Horizontal scroll falls back when the user squeezes the
-        #   panel below the natural sum.
         header = self._table.horizontalHeader()
-        header.setStretchLastSection(True)
+        header.setStretchLastSection(False)
         header.setSectionResizeMode(QHeaderView.ResizeMode.Interactive)
-        # (col_index, pixel_width)
-        for col, width in (
-            (0, 72),  # Shape — short word + small dropdown indicator
-            (1, 44),  # X
-            (2, 44),  # Y
-            (3, 44),  # Z (3D only)
-            (4, 44),  # 长 / L (size X)
-            (5, 44),  # 宽 / W (size Y)
-            (6, 44),  # 高 / H (3D only)
-            # Last column (σ) is left to stretch via setStretchLastSection.
-        ):
-            header.resizeSection(col, width)
+        header.setMinimumSectionSize(56)
         self._table.setHorizontalScrollMode(QTableView.ScrollMode.ScrollPerPixel)
         self._apply_column_visibility()
         layout.addWidget(self._table, 1)
@@ -234,6 +244,10 @@ class InhomogeneityEditor(QGroupBox):
         btn_row.addWidget(self._remove_btn)
 
         layout.addLayout(btn_row)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._resize_table_columns()
 
     # ── i18n ──
 
@@ -331,3 +345,37 @@ class InhomogeneityEditor(QGroupBox):
         show_z = self._mesh_dimension == 3
         self._table.setColumnHidden(_Z_COLUMN, not show_z)
         self._table.setColumnHidden(_SIZE_Z_COLUMN, not show_z)
+        self._resize_table_columns()
+
+    def _resize_table_columns(self) -> None:
+        """Keep Step 2 columns readable without letting sigma dominate."""
+        if not hasattr(self, "_table"):
+            return
+        base_widths = (
+            _COLUMN_BASE_WIDTHS_3D
+            if self._mesh_dimension == 3
+            else _COLUMN_BASE_WIDTHS_2D
+        )
+        visible_columns = [
+            col
+            for col in range(self._model.columnCount())
+            if not self._table.isColumnHidden(col)
+        ]
+        if not visible_columns:
+            return
+
+        widths = {col: int(base_widths.get(col, 70)) for col in visible_columns}
+        viewport_width = max(int(self._table.viewport().width()) - 4, 0)
+        natural_width = sum(widths.values())
+        extra = max(0, viewport_width - natural_width)
+        if extra > 0:
+            weight_sum = sum(
+                _COLUMN_EXTRA_WEIGHTS.get(col, 1.0) for col in visible_columns
+            )
+            for col in visible_columns:
+                share = extra * (_COLUMN_EXTRA_WEIGHTS.get(col, 1.0) / weight_sum)
+                widths[col] += int(round(share))
+
+        header = self._table.horizontalHeader()
+        for col in visible_columns:
+            header.resizeSection(col, widths[col])

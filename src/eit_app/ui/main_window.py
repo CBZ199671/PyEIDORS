@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import logging
+import hashlib
+import json
+import math
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -26,6 +29,7 @@ from eit_app.controllers.device_controller import DeviceController
 from eit_app.controllers.reconstruction_controller import (
     ReconstructionController,
     ReconstructionRequest,
+    default_rm_inverse_mesh_size,
     get_single_step_cached_cache_key,
 )
 from eit_app.controllers.dataset_generator_controller import (
@@ -97,11 +101,12 @@ _ONE_STEP_LAMBDA_EFF_ROUTES = {
 }
 _GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
 _GREIT_COMMON_CONFIG_SCOPE = {
-    "greit_official_fixture_scope": "48e official fixture passed",
-    "greit_5936_protocol_scope": "5936 official pending T97",
+    "greit_official_fixture_scope": "requires registered EIDORS parity artifact",
+    "greit_5936_protocol_scope": "production route rejects deterministic fixtures",
     "greit_official_equivalence_claim_allowed": False,
     "greit_official_equivalence_scope": (
-        "48e official fixture only; 5936 protocol official fixture pending T97"
+        "GREIT GUI hot path may use only EIDORS-parity artifacts matching the "
+        "current 3D geometry and protocol"
     ),
 }
 
@@ -185,21 +190,93 @@ def _greit_common_config_id_for_forward_config(
     *,
     n_measurements: int | None = None,
 ) -> str:
+    def _layout_key(value: object) -> str:
+        text = str(value or "").strip().lower().replace("_", "-")
+        if text in {"ring-major", "ring_major", "cylindrical-rings"}:
+            return "ring-major"
+        return text
+
+    if int(forward_cfg.mesh_dimension) != 3:
+        return ""
     total_electrodes = int(forward_cfg.total_electrodes())
     if total_electrodes in {16, 32, 48}:
         config_id = f"{total_electrodes}e"
         try:
             from pyeidors.inverse.greit_warmup import greit_common_config
 
-            expected_n_measurements = int(greit_common_config(config_id).n_measurements)
+            common_cfg = greit_common_config(config_id)
+            expected_n_measurements = int(common_cfg.n_measurements)
         except Exception:
             return config_id if not n_measurements else ""
+        if int(common_cfg.n_rings) != int(forward_cfg.n_rings):
+            return ""
+        if _layout_key(common_cfg.electrode_layout) != _layout_key(
+            forward_cfg.electrode_layout
+        ):
+            return ""
+        if not math.isclose(
+            float(common_cfg.radius),
+            float(forward_cfg.radius),
+            rel_tol=0.0,
+            abs_tol=1.0e-9,
+        ):
+            return ""
+        if not math.isclose(
+            float(common_cfg.height),
+            float(forward_cfg.height),
+            rel_tol=0.0,
+            abs_tol=1.0e-9,
+        ):
+            return ""
         observed_n_measurements = int(n_measurements or 0)
         if observed_n_measurements <= 0:
             observed_n_measurements = int(forward_cfg.point_count())
         if observed_n_measurements == expected_n_measurements:
             return config_id
     return ""
+
+
+def _greit_default_imgsz_for_forward_config(
+    forward_cfg: ForwardModelConfig,
+) -> tuple[int, int, int]:
+    total = int(forward_cfg.total_electrodes())
+    if total >= 48:
+        return (8, 8, 5)
+    if total >= 32:
+        return (7, 7, 4)
+    return (6, 6, 3)
+
+
+def _greit_registry_config_for_forward_config(
+    forward_cfg: ForwardModelConfig,
+    *,
+    n_measurements: int,
+    artifact_weight: float,
+) -> dict[str, object]:
+    mapping = forward_cfg.to_mapping()
+    imgsz = _greit_default_imgsz_for_forward_config(forward_cfg)
+    mapping.update(
+        {
+            "measurement_count": int(n_measurements),
+            "channel_order": list(range(int(n_measurements))),
+            "normalize_measurements": True,
+            "imgsz": imgsz,
+            "greit_imgsz": imgsz,
+            "target_size": 0.20,
+            "greit_target_size": 0.20,
+            "target_contrast": 1.0,
+            "weight": float(artifact_weight),
+            "greit_weight": float(artifact_weight),
+            "noise_covar": 1.0,
+            "training_mode": "forward",
+            "builder_backend": "native",
+            "builder_semantic_version": "native-greit-finite-target-v2",
+            "artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
+            "rec_mask": "cylindrical_fem_volume_v1",
+            "target_size_semantics": "fraction_of_tank_radius",
+        }
+    )
+    return mapping
 
 
 def _is_wsl() -> bool:
@@ -383,6 +460,7 @@ class EITWorkstation(QMainWindow):
         # in the left step panels are not clipped, while still
         # fitting a 1366-px laptop with room to spare.
         self.resize(self._preferred_initial_size(1360, 840))
+        self._move_to_launch_screen()
 
         self._state = AppState(self)
         self._sim_state = SimulationState(self)
@@ -670,10 +748,8 @@ class EITWorkstation(QMainWindow):
         self._action_lang_en.triggered.connect(lambda: set_language("en"))
         self._lang_action_group.addAction(self._action_lang_en)
 
-        # Help menu — single About entry that opens the brand surface
-        # built from the claude.ai/design handoff.  Kept after Language
-        # so it sits at the right edge of the menu bar, matching the
-        # Qt convention.
+        # Help menu — kept after Language so it sits at the right edge
+        # of the menu bar, matching the Qt convention.
         self._menu_help = menu_bar.addMenu("")
         self._action_about = self._menu_help.addAction("")
         self._action_about.triggered.connect(self._open_about_dialog)
@@ -712,6 +788,81 @@ class EITWorkstation(QMainWindow):
     # Shortcut slots
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _bounded_initial_size(
+        preferred_w: int,
+        preferred_h: int,
+        available_w: int,
+        available_h: int,
+    ):
+        from PySide6.QtCore import QSize
+
+        # WSLg/RDP can transiently report bogus virtual screen sizes
+        # such as 131072x1.  Treat those as unknown rather than opening a
+        # one-pixel-tall main window that looks like a startup hang.
+        if available_w < 640 or available_h < 480:
+            log.warning(
+                "Ignoring suspicious Qt screen geometry for initial size: %sx%s",
+                available_w,
+                available_h,
+            )
+            return QSize(preferred_w, preferred_h)
+        max_w = max(640, int(available_w * 0.9))
+        max_h = max(480, int(available_h * 0.9))
+        return QSize(min(preferred_w, max_w), min(preferred_h, max_h))
+
+    @staticmethod
+    def _screen_is_usable(screen) -> bool:  # noqa: ANN001
+        if screen is None:
+            return False
+        avail = screen.availableGeometry()
+        return avail.width() >= 640 and avail.height() >= 480
+
+    @classmethod
+    def _select_launch_screen(cls):  # noqa: ANN206
+        from PySide6.QtGui import QCursor, QGuiApplication
+
+        cursor_screen = QGuiApplication.screenAt(QCursor.pos())
+        if cls._screen_is_usable(cursor_screen):
+            return cursor_screen
+
+        screens = [
+            screen
+            for screen in QGuiApplication.screens()
+            if cls._screen_is_usable(screen)
+        ]
+        if not screens:
+            return QGuiApplication.primaryScreen()
+
+        # When WSLg/RDP reports an invalid cursor position, prefer the
+        # screen whose visible rectangle is closest to the virtual origin
+        # instead of blindly using a primary screen that may be off to the
+        # side of the user's currently visible desktop.
+        return min(
+            screens,
+            key=lambda screen: (
+                abs(screen.availableGeometry().x())
+                + abs(screen.availableGeometry().y()),
+                screen.availableGeometry().x(),
+                screen.availableGeometry().y(),
+            ),
+        )
+
+    def _move_to_launch_screen(self) -> None:
+        screen = self._select_launch_screen()
+        if not self._screen_is_usable(screen):
+            return
+        avail = screen.availableGeometry()
+        frame = self.frameGeometry()
+        frame.moveCenter(avail.center())
+        self.move(frame.topLeft())
+        log.info(
+            "Main window initial placement: screen=%s available=%s window=%s",
+            screen.name(),
+            avail.getRect(),
+            self.geometry().getRect(),
+        )
+
     def _preferred_initial_size(self, preferred_w: int, preferred_h: int):
         """Cap the initial window size to 90 % of the available screen
         so the app never opens wider / taller than the display it
@@ -719,15 +870,17 @@ class EITWorkstation(QMainWindow):
         resolve a primary screen (headless / tests).
         """
         from PySide6.QtCore import QSize
-        from PySide6.QtGui import QGuiApplication
 
-        screen = QGuiApplication.primaryScreen()
-        if screen is None:
+        screen = self._select_launch_screen()
+        if not self._screen_is_usable(screen):
             return QSize(preferred_w, preferred_h)
         avail = screen.availableGeometry()
-        max_w = int(avail.width() * 0.9)
-        max_h = int(avail.height() * 0.9)
-        return QSize(min(preferred_w, max_w), min(preferred_h, max_h))
+        return self._bounded_initial_size(
+            preferred_w,
+            preferred_h,
+            avail.width(),
+            avail.height(),
+        )
 
     def _open_recordings_folder(self) -> None:
         """File menu → open the active session's recordings directory.
@@ -1061,6 +1214,13 @@ class EITWorkstation(QMainWindow):
         sim = self._sim_tab
         sim.mesh_setup_panel.config_changed.connect(
             self._sync_sim_inhomogeneity_context
+        )
+        sim.mesh_setup_panel.config_changed.connect(self._on_simulation_inputs_changed)
+        sim.inhomogeneity_editor.inhomogeneities_changed.connect(
+            self._on_simulation_inputs_changed
+        )
+        sim.forward_problem_panel._noise_spin.valueChanged.connect(
+            lambda _value: self._on_simulation_inputs_changed()
         )
         sim.forward_problem_panel.run_forward_requested.connect(self._on_run_forward)
         sim.inverse_problem_panel.run_inverse_requested.connect(
@@ -3086,6 +3246,89 @@ class EITWorkstation(QMainWindow):
                     )
         return self._current_sim_forward_model_config()
 
+    @staticmethod
+    def _simulation_signature_value(value):
+        if isinstance(value, np.generic):
+            return value.item()
+        if isinstance(value, np.ndarray):
+            return EITWorkstation._simulation_signature_value(value.tolist())
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {
+                str(key): EITWorkstation._simulation_signature_value(val)
+                for key, val in sorted(value.items(), key=lambda item: str(item[0]))
+            }
+        if isinstance(value, (list, tuple)):
+            return [EITWorkstation._simulation_signature_value(item) for item in value]
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        return repr(value)
+
+    @staticmethod
+    def _inhomogeneity_signature_payload(specs) -> list[dict[str, object]]:
+        payload: list[dict[str, object]] = []
+        for spec in specs:
+            payload.append(
+                {
+                    "shape": str(getattr(spec, "shape", "")),
+                    "center_x": float(getattr(spec, "center_x", 0.0)),
+                    "center_y": float(getattr(spec, "center_y", 0.0)),
+                    "center_z": float(getattr(spec, "center_z", 0.0)),
+                    "size_x": float(getattr(spec, "size_x", 0.0)),
+                    "size_y": float(getattr(spec, "size_y", 0.0)),
+                    "size_z": float(getattr(spec, "size_z", 0.0)),
+                    "conductivity": float(getattr(spec, "conductivity", 0.0)),
+                }
+            )
+        return payload
+
+    def _current_simulation_input_signature(self) -> tuple[str, dict[str, object]]:
+        inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
+        payload: dict[str, object] = {
+            "schema": "simulation_forward_inputs_v1",
+            "forward_model_config": self._current_sim_forward_model_config().to_mapping(),
+            "inhomogeneities": self._inhomogeneity_signature_payload(inhomogeneities),
+        }
+        canonical = self._simulation_signature_value(payload)
+        encoded = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hashlib.sha256(encoded).hexdigest(), canonical
+
+    @staticmethod
+    def _forward_result_simulation_signature(
+        result: ForwardSolverResult | None,
+    ) -> str:
+        payload = getattr(result, "forward_model_config", None)
+        if not isinstance(payload, dict):
+            return ""
+        return str(payload.get("simulation_input_signature", "") or "").strip()
+
+    def _simulation_forward_result_is_stale(
+        self,
+        result: ForwardSolverResult | None,
+    ) -> tuple[bool, str, str]:
+        stored = self._forward_result_simulation_signature(result)
+        if not stored:
+            return False, "", ""
+        current, _payload = self._current_simulation_input_signature()
+        return current != stored, stored, current
+
+    @Slot()
+    def _on_simulation_inputs_changed(self) -> None:
+        stale, _stored, _current = self._simulation_forward_result_is_stale(
+            self._last_fwd_result
+        )
+        if not stale:
+            return
+        self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+        self._sim_tab.inverse_problem_panel.set_status(
+            "Simulation inputs changed; run the forward problem again before reconstruction."
+        )
+
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
         panel_cfg = self._dataset_tab.dataset_generator_panel.get_config()
@@ -3423,20 +3666,19 @@ class EITWorkstation(QMainWindow):
         dialog.exec()
 
     def _open_about_dialog(self) -> None:
-        """Show the brand About dialog (logo + version + credit)."""
+        """Show the brand About dialog (logo + version)."""
         from eit_app.ui.dialogs.about_dialog import AboutDialog
         from eit_app import __version__ as _app_version
 
         dialog = AboutDialog(self)
-        # Reformat the version line with the running app version + the
-        # design system handoff revision so users can match what they
-        # see against the docs/design checked-in copy.
+        # Reformat the version line with the running app version and
+        # visible design credit.
         version_template = dialog._version_label.text()
         try:
             dialog._version_label.setText(
                 version_template.format(
                     version=_app_version,
-                    build="design-system gui-polish-v4",
+                    build="designed by Bing-Zhou Chen!",
                 )
             )
         except (KeyError, IndexError):
@@ -3541,6 +3783,16 @@ class EITWorkstation(QMainWindow):
         mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
         inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
         forward_cfg = self._current_sim_forward_model_config()
+        sim_signature, sim_signature_payload = (
+            self._current_simulation_input_signature()
+        )
+        forward_model_config = forward_cfg.to_mapping()
+        forward_model_config.update(
+            {
+                "simulation_input_signature": sim_signature,
+                "simulation_input_signature_payload": sim_signature_payload,
+            }
+        )
 
         request = ForwardSolverRequest(
             mesh_dimension=mesh_cfg["mesh_dimension"],
@@ -3549,7 +3801,7 @@ class EITWorkstation(QMainWindow):
             background_conductivity=mesh_cfg["background_conductivity"],
             inhomogeneities=inhomogeneities,
             noise_level=forward_cfg.noise_level,
-            forward_model_config=forward_cfg.to_mapping(),
+            forward_model_config=forward_model_config,
         )
         self._sim_state.forward_running = True
         self._sim_tab.forward_problem_panel.set_running(True)
@@ -3590,6 +3842,25 @@ class EITWorkstation(QMainWindow):
             return
 
         result = self._last_fwd_result
+        stale, stored_signature, current_signature = (
+            self._simulation_forward_result_is_stale(result)
+        )
+        if stale:
+            message = (
+                "Simulation inputs changed after the last forward solve. "
+                "Run the forward problem again before reconstruction."
+            )
+            log.warning(
+                "%s stored=%s current=%s",
+                message,
+                stored_signature[:12],
+                current_signature[:12],
+            )
+            self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+            self._sim_tab.inverse_problem_panel.set_status(message)
+            self._status_bar.showMessage(message, 15000)
+            return
+
         inv_cfg = self._sim_tab.inverse_problem_panel.get_config()
         self._sim_state.inverse_running = True
         self._sim_tab.inverse_problem_panel.set_running(True)
@@ -3638,6 +3909,7 @@ class EITWorkstation(QMainWindow):
         # Legacy eidors-style strings are accepted only as saved-config
         # aliases, then normalized so they cannot silently select a stale path.
         route = normalize_simulation_inverse_method(str(inv_cfg.get("method", "")))
+        alpha_input = float(inv_cfg["regularization_alpha"])
         difference_preset = "eidors_one_step_noser"
         absolute_preset = "eidors_abs_gn"
         route_kind = "debug"
@@ -3685,19 +3957,44 @@ class EITWorkstation(QMainWindow):
             route_kind = "rm"
             rm_regularization = "greit"
             rm_route_requires_artifact = True
-            greit_common_config_id = _greit_common_config_id_for_forward_config(
+            rm_auto_build = True
+            greit_common_config_auto_warm = False
+            greit_scope_metadata = dict(_GREIT_COMMON_CONFIG_SCOPE)
+            greit_registry_config = _greit_registry_config_for_forward_config(
                 forward_cfg,
                 n_measurements=n_meas,
+                artifact_weight=alpha_input,
             )
-            rm_auto_build = bool(greit_common_config_id)
-            greit_common_config_auto_warm = bool(greit_common_config_id)
-            greit_scope_metadata = dict(_GREIT_COMMON_CONFIG_SCOPE)
-            if not greit_common_config_id:
-                greit_scope_metadata["greit_common_config_unavailable_reason"] = (
-                    "No GREIT common-config artifact matches the current "
-                    f"{forward_cfg.total_electrodes()}-electrode / "
-                    f"{n_meas}-measurement protocol."
+            try:
+                from pyeidors.inverse.greit_registry import (
+                    greit_artifact_signature,
+                    greit_artifact_signature_payload,
                 )
+
+                greit_registry_signature_payload = greit_artifact_signature_payload(
+                    greit_registry_config
+                )
+                greit_registry_signature = greit_artifact_signature(
+                    greit_registry_config
+                )
+            except Exception:
+                greit_registry_signature_payload = greit_registry_config
+                greit_registry_signature = ""
+            greit_scope_metadata.update(
+                {
+                    "greit_registry_config": greit_registry_config,
+                    "greit_registry_signature": greit_registry_signature,
+                    "greit_registry_signature_payload": greit_registry_signature_payload,
+                    "greit_registry_auto_resolve": True,
+                    "greit_registry_dir": ".pyeidors_cache/greit_artifacts",
+                    "greit_builder_backend": "native",
+                    "greit_builder_semantic_version": "native-greit-finite-target-v2",
+                    "greit_common_config_unavailable_reason": (
+                        "GREIT common-config selection replaced by exact "
+                        "config-driven registry artifact resolution."
+                    ),
+                }
+            )
         else:
             # Unknown route → safest fallback: iterative GN, no RM/cache claim.
             resolved_method = route or "gn-difference"
@@ -3707,14 +4004,24 @@ class EITWorkstation(QMainWindow):
         mesh_size = float(forward_cfg.mesh_refinement)
         rm_inverse_mesh_size = None
         if route in {"noser_rm", "laplace_rm", "curvature_rm"}:
-            rm_inverse_mesh_size = max(mesh_size, float(forward_cfg.radius) / 4.0)
+            rm_inverse_mesh_size = default_rm_inverse_mesh_size(
+                mesh_size,
+                float(forward_cfg.radius),
+                mesh_dimension=int(forward_cfg.mesh_dimension),
+            )
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
         )
-        alpha_input = float(inv_cfg["regularization_alpha"])
+        is_rm_difference = route_kind == "rm" and resolved_method == "gn-difference"
         # Match the EIDORS-style one-step paths: the GUI shows and records the
         # locked canonical lambda_eff instead of pretending user alpha applies.
-        difference_mode = "normalized" if is_3d_difference else "raw"
+        # Production RM paths build their RM in the same projected measurement
+        # space used online.  Using normalized dv/J keeps the canonical
+        # lambda_eff current-scale stable; raw voltage magnitudes over-weight
+        # boundary channels and can visibly suppress centered 2D inclusions.
+        difference_mode = (
+            "normalized" if (is_3d_difference or is_rm_difference) else "raw"
+        )
         locked_lambda_eff = (
             route in _ONE_STEP_LAMBDA_EFF_ROUTES
             and resolved_method == "gn-difference"
@@ -3762,9 +4069,22 @@ class EITWorkstation(QMainWindow):
                 "regularization_alpha_input": alpha_input,
                 "regularization_alpha_applied": True,
             }
+        forward_cfg_mapping = forward_cfg.to_mapping()
+        layout_metadata = measurement_layout_from_config(forward_cfg_mapping)
+        if (
+            int(forward_cfg.mesh_dimension) == 2
+            and forward_cfg.electrode_length_m_override is None
+        ):
+            layout_metadata["electrode_length_m_override"] = None
+            layout_metadata["electrode_coverage"] = float(
+                forward_cfg.electrode_coverage
+            )
         metadata = {
-            **forward_cfg.to_mapping(),
-            **measurement_layout_from_config(forward_cfg.to_mapping()),
+            **forward_cfg_mapping,
+            **layout_metadata,
+            "simulation_input_signature": self._forward_result_simulation_signature(
+                result
+            ),
             "mesh_size": mesh_size,
             "difference_mode": difference_mode,
             "difference_orientation": "target_minus_reference",
@@ -3778,9 +4098,12 @@ class EITWorkstation(QMainWindow):
             "rm_auto_build": rm_auto_build,
             "rm_route_pending_task": rm_route_pending_task,
             "rm_regularization": rm_regularization,
-            "rm_form": "measurement"
-            if route in {"noser_rm", "laplace_rm", "curvature_rm"}
-            else "",
+            "rm_form": {
+                "noser_rm": "measurement",
+                "laplace_rm": "param",
+                "curvature_rm": "param",
+                "greit3d_rm": "measurement",
+            }.get(route, ""),
             "rm_output_display_mode": "absolute_sigma"
             if route in {"noser_rm", "laplace_rm", "curvature_rm"}
             else "",

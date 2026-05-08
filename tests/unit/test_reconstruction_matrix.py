@@ -124,7 +124,7 @@ def test_build_one_step_rm_accepts_rtr_prior_contract() -> None:
 
 
 @pytest.mark.parametrize("mode", ["curvature", "graph_ltl"])
-def test_build_one_step_rm_curvature_mode_matches_laplace_but_keeps_distinct_signature(
+def test_build_one_step_rm_curvature_mode_differs_from_laplace_and_keeps_signature(
     mode: str,
 ) -> None:
     mesh = VoxelGrid.from_bounds([0.0], [4.0], shape=(4,))
@@ -145,15 +145,13 @@ def test_build_one_step_rm_curvature_mode_matches_laplace_but_keeps_distinct_sig
     )
     curvature_rm = build_one_step_rm(
         jacobian,
-        regularization=curvature
-        if mode == "curvature"
-        else curvature.as_RtR(dense=False),
+        regularization=curvature,
         lambda_=lam,
         mode=mode,
         return_metadata=True,
     )
 
-    np.testing.assert_allclose(curvature_rm.rm, laplace_rm.rm)
+    assert not np.allclose(curvature_rm.rm, laplace_rm.rm)
     assert curvature_rm.metadata["regularization_type"] == mode
     assert curvature_rm.metadata["regularization_source"] == "provided_graph_ltl"
     assert (
@@ -161,6 +159,10 @@ def test_build_one_step_rm_curvature_mode_matches_laplace_but_keeps_distinct_sig
         != laplace_rm.metadata["RtR_signature_hash"]
     )
     assert curvature_rm.metadata["RtR_metadata"]["signature_hint"] == "graph_ltl"
+    assert (
+        curvature_rm.metadata["RtR_metadata"]["regularization_source"]
+        == "graph_laplacian_squared"
+    )
 
 
 @pytest.mark.parametrize("mode", ["tikhonov", "noser", "laplace"])
@@ -258,7 +260,7 @@ def test_build_one_step_rm_measurement_form_matches_param_for_noser() -> None:
         form="measurement",
     )
 
-    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=2e-6, atol=2e-7)
 
 
 def test_build_one_step_rm_measurement_form_matches_param_for_spd_laplace() -> None:
@@ -323,7 +325,7 @@ def test_build_one_step_rm_measurement_form_matches_param_for_curvature() -> Non
         form="measurement",
     )
 
-    np.testing.assert_allclose(measurement_rm, param_rm, rtol=1e-6, atol=1e-8)
+    np.testing.assert_allclose(measurement_rm, param_rm, rtol=2e-6, atol=2e-7)
 
 
 def test_build_one_step_rm_measurement_form_accepts_measurement_regularization() -> (

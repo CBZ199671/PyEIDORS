@@ -511,6 +511,15 @@ def test_mesh_setup_panel_exposes_2d_length_and_3d_area_geometry():
     _get_app()
     panel = MeshSetupPanel()
     try:
+        panel.set_config({"mesh_dimension": 2, "radius": 1.0, "n_electrodes": 16})
+        cfg_default_2d = panel.get_config()
+        assert cfg_default_2d["electrode_length_m_override"] is None
+        assert cfg_default_2d["electrode_coverage"] == pytest.approx(0.5)
+        assert panel._electrode_length_spin.value() == pytest.approx(
+            2.0 * np.pi * 0.5 / 16.0,
+            abs=1.0e-6,
+        )
+
         panel.set_config(
             {
                 "mesh_dimension": 2,

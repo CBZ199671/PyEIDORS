@@ -116,6 +116,7 @@ class _DatasetGeneratorWorker(QObject):
                 device=runtime["device"],
                 forward_backend=runtime["forward_backend"],
                 mesh_family=runtime["mesh_family"],
+                potential_order=forward_cfg.potential_order,
                 acceleration_profile=runtime["acceleration_profile"],
             )
             system.setup(

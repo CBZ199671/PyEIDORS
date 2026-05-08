@@ -60,6 +60,9 @@ class RMArtifact:
     cell_connectivity: np.ndarray | None = None
     channel_mask: np.ndarray | None = None
     measurement_weights: np.ndarray | None = None
+    rec_model: np.ndarray | None = None
+    greit_y: np.ndarray | None = None
+    greit_d: np.ndarray | None = None
     path: str | None = None
     schema: str | None = None
 
@@ -163,6 +166,7 @@ def write_rm_artifact(
     cell_connectivity: Any | None = None,
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
+    jacobian: Any | None = None,
 ) -> Path:
     """Write a reconstruction matrix artifact in HDF5 format."""
 
@@ -183,6 +187,7 @@ def write_rm_artifact(
         ("cell_connectivity", cell_connectivity),
         ("channel_mask", channel_mask),
         ("measurement_weights", measurement_weights),
+        ("jacobian", jacobian),
     ):
         if value is not None:
             arrays[key] = np.asarray(value)
@@ -284,16 +289,30 @@ def _optional_artifact_array(
 ) -> np.ndarray | None:
     if key not in arrays:
         return None
+    if arrays[key] is None:
+        return None
     arr = np.asarray(arrays[key], dtype=dtype)
     if arr.size == 0:
         return None
     return arr
 
 
+def _optional_artifact_array_aliases(
+    arrays: Mapping[str, Any],
+    *keys: str,
+    dtype: Any,
+) -> np.ndarray | None:
+    for key in keys:
+        arr = _optional_artifact_array(arrays, key, dtype=dtype)
+        if arr is not None:
+            return arr
+    return None
+
+
 def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
     from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
-    artifact = read_hdf5_artifact(path)
+    artifact = read_hdf5_artifact(path, lazy=True)
     arrays = dict(artifact.arrays)
     rm_array = arrays.get("rm")
     if rm_array is None:
@@ -311,6 +330,19 @@ def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
         channel_mask=_optional_artifact_array(arrays, "channel_mask", dtype=bool),
         measurement_weights=_optional_artifact_array(
             arrays, "measurement_weights", dtype=np.float64
+        ),
+        rec_model=_optional_artifact_array(arrays, "rec_model", dtype=np.float64),
+        greit_y=_optional_artifact_array_aliases(
+            arrays,
+            "y",
+            "Y",
+            dtype=np.float64,
+        ),
+        greit_d=_optional_artifact_array_aliases(
+            arrays,
+            "d",
+            "D",
+            dtype=np.float64,
         ),
         path=str(path),
         schema=artifact.schema,
@@ -353,6 +385,19 @@ def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
         channel_mask=_optional_artifact_array(arrays, "channel_mask", dtype=bool),
         measurement_weights=_optional_artifact_array(
             arrays, "measurement_weights", dtype=np.float64
+        ),
+        rec_model=_optional_artifact_array(arrays, "rec_model", dtype=np.float64),
+        greit_y=_optional_artifact_array_aliases(
+            arrays,
+            "y",
+            "Y",
+            dtype=np.float64,
+        ),
+        greit_d=_optional_artifact_array_aliases(
+            arrays,
+            "d",
+            "D",
+            dtype=np.float64,
         ),
         path=str(path),
         schema="legacy-npz",

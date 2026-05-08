@@ -16,7 +16,12 @@ from eit_app.ui.electrode_overlay import (
     default_arc_segments,
 )
 from eit_app.ui.fonts import plot_font_families, serif_font_family
+from eit_app.ui.mesh_helpers import cell_to_node_average
 from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
+
+
+_IMAGE_AXES_RECT = (0.09, 0.14, 0.70, 0.74)
+_COLORBAR_AXES_RECT = (0.84, 0.22, 0.04, 0.58)
 
 
 def _triangle_area_xy(
@@ -106,6 +111,7 @@ class ConductivityImageWidget(QWidget):
         self._last_caption: tuple[str, str] | None = (
             None  # (text, kind: 'placeholder'|'loading'|'error')
         )
+        self._last_render_mode = ""
 
         # Electrode overlay state.  Cached LineCollection lives on the
         # axes; toggling visibility never rebuilds geometry.
@@ -117,7 +123,8 @@ class ConductivityImageWidget(QWidget):
         layout.setSpacing(2)
 
         palette = plot_palette()
-        self._figure = Figure(figsize=(5, 5), tight_layout=True)
+        self._figure = Figure(figsize=(5, 5), tight_layout=False)
+        self._figure.set_layout_engine(None)
         self._figure.patch.set_facecolor(palette["panel_bg"])
         self._canvas = FigureCanvasQTAgg(self._figure)
         layout.addWidget(self._canvas, 1)
@@ -138,12 +145,12 @@ class ConductivityImageWidget(QWidget):
         # Hidden until a forward result actually provides electrode geometry.
         self._controls.hide()
 
-        self._ax = self._figure.add_subplot(111)
+        self._ax = self._figure.add_axes(_IMAGE_AXES_RECT)
         self._ax.set_facecolor(palette["axes_bg"])
         self._ax.set_title(
             title, fontproperties=self._title_font, color=palette["text"]
         )
-        self._ax.set_aspect("equal")
+        self._ax.set_aspect("equal", adjustable="box")
         self._colorbar = None
         self._show_placeholder()
 
@@ -244,11 +251,23 @@ class ConductivityImageWidget(QWidget):
 
         if len(conductivity) == len(cell_connectivity):
             face_values = np.asarray(conductivity, dtype=float)[source_cells]
-            tpc = self._ax.tripcolor(tri, face_values, shading="flat", cmap="viridis")
+            try:
+                node_values = cell_to_node_average(face_values, triangles, len(x))
+            except ValueError:
+                tpc = self._ax.tripcolor(
+                    tri, face_values, shading="flat", cmap="viridis"
+                )
+                self._last_render_mode = "cell_flat"
+            else:
+                tpc = self._ax.tripcolor(
+                    tri, node_values, shading="gouraud", cmap="viridis"
+                )
+                self._last_render_mode = "cell_to_node_gouraud"
         elif len(conductivity) == len(x):
             tpc = self._ax.tripcolor(
                 tri, conductivity, shading="gouraud", cmap="viridis"
             )
+            self._last_render_mode = "node_gouraud"
         else:
             self._show_error(
                 f"Size mismatch: sigma={len(conductivity)}, "
@@ -261,21 +280,22 @@ class ConductivityImageWidget(QWidget):
         self._ax.set_title(
             display_title, fontproperties=self._title_font, color=palette["text"]
         )
-        self._ax.set_aspect("equal")
+        self._apply_fixed_layout()
+        self._apply_square_data_limits(x, y)
+        self._ax.set_aspect("equal", adjustable="box")
         self._apply_axes_chrome()
 
-        # shrink + aspect + pad keep the colorbar from dominating the
-        # plot height.  shrink=0.72 trims ~30% off its length, aspect=16
-        # keeps it slim, pad=0.04 pulls it closer to the image so the
-        # matplotlib auto-layout does not leave a huge right-hand gap.
+        # Use an explicit colorbar axes instead of ``colorbar(ax=...)``.
+        # The automatic path steals space from the main axes based on each
+        # colorbar's tick-label widths, so truth/reconstruction plots with
+        # different value ranges end up with visibly different disk sizes.
+        cax = self._figure.add_axes(_COLORBAR_AXES_RECT)
         self._colorbar = self._figure.colorbar(
             tpc,
-            ax=self._ax,
+            cax=cax,
             label="S/m",
-            shrink=0.72,
-            aspect=16,
-            pad=0.04,
         )
+        self._colorbar.ax.set_facecolor(palette["panel_bg"])
         self._colorbar.ax.yaxis.label.set_fontname(self._serif)
         self._colorbar.ax.yaxis.label.set_size(10)
         self._colorbar.ax.yaxis.label.set_color(palette["text"])
@@ -304,13 +324,8 @@ class ConductivityImageWidget(QWidget):
         self._electrode_geometry = geometry
         if geometry is None or not geometry.arcs:
             self._controls.hide()
-            if self._electrode_collection is not None:
-                try:
-                    self._electrode_collection.remove()
-                except (AttributeError, ValueError):
-                    pass
-                self._electrode_collection = None
-                self._canvas.draw_idle()
+            self._discard_electrode_collection()
+            self._canvas.draw_idle()
             return
         self._controls.show()
         self._redraw_electrodes()
@@ -328,6 +343,7 @@ class ConductivityImageWidget(QWidget):
         self._ax.set_title(
             self._default_title, fontproperties=self._title_font, color=palette["text"]
         )
+        self._last_render_mode = ""
         self._show_placeholder()
 
     def set_loading(self, message: str | None = None) -> None:
@@ -342,11 +358,37 @@ class ConductivityImageWidget(QWidget):
         """
         self._remove_colorbar()
         self._ax.clear()
+        self._last_render_mode = ""
         self._draw_caption(message or "Loading\u2026", kind="loading")
 
     # ------------------------------------------------------------------
     # Internal
     # ------------------------------------------------------------------
+
+    def _apply_fixed_layout(self) -> None:
+        """Pin image/colorbar geometry for comparable side-by-side views."""
+        self._ax.set_position(_IMAGE_AXES_RECT)
+
+    def _apply_square_data_limits(self, x: np.ndarray, y: np.ndarray) -> None:
+        """Use equal x/y physical extents so 2D domains render identically."""
+        finite = np.isfinite(x) & np.isfinite(y)
+        if not np.any(finite):
+            return
+        x_finite = x[finite]
+        y_finite = y[finite]
+        x_min = float(np.min(x_finite))
+        x_max = float(np.max(x_finite))
+        y_min = float(np.min(y_finite))
+        y_max = float(np.max(y_finite))
+        span = max(x_max - x_min, y_max - y_min)
+        if span <= 0.0:
+            span = 1.0
+        pad = span * 0.05
+        half = span / 2.0 + pad
+        x_mid = (x_min + x_max) / 2.0
+        y_mid = (y_min + y_max) / 2.0
+        self._ax.set_xlim(x_mid - half, x_mid + half)
+        self._ax.set_ylim(y_mid - half, y_mid + half)
 
     def _remove_colorbar(self) -> None:
         """Remove the existing colorbar even if matplotlib has orphaned it.
@@ -380,6 +422,21 @@ class ConductivityImageWidget(QWidget):
             # reconstruction image from being displayed.
             pass
 
+    def _discard_electrode_collection(self) -> None:
+        collection = self._electrode_collection
+        self._electrode_collection = None
+        if collection is None:
+            return
+        try:
+            collection.remove()
+            return
+        except (AttributeError, NotImplementedError, RuntimeError, ValueError):
+            pass
+        try:
+            collection.set_visible(False)
+        except (AttributeError, RuntimeError, ValueError):
+            pass
+
     def _redraw_electrodes(self) -> None:
         """Attach the cached electrode arcs to the current axes if visible.
 
@@ -387,12 +444,7 @@ class ConductivityImageWidget(QWidget):
         (after ax.clear, theme switch, language change) don't stack
         artists.
         """
-        if self._electrode_collection is not None:
-            try:
-                self._electrode_collection.remove()
-            except (AttributeError, ValueError):
-                pass
-            self._electrode_collection = None
+        self._discard_electrode_collection()
         geometry = self._electrode_geometry
         if (
             geometry is None
@@ -433,6 +485,7 @@ class ConductivityImageWidget(QWidget):
 
     def _show_error(self, msg: str) -> None:
         self._ax.clear()
+        self._last_render_mode = ""
         self._draw_caption(msg, kind="error")
 
     def _draw_caption(self, text: str, kind: str) -> None:
@@ -452,6 +505,7 @@ class ConductivityImageWidget(QWidget):
         # Make sure background colors track the theme even when the
         # caption pre-empts a render that would otherwise call
         # _apply_axes_chrome().
+        self._apply_fixed_layout()
         self._ax.set_facecolor(palette["axes_bg"])
         self._figure.patch.set_facecolor(palette["panel_bg"])
         self._ax.set_title(

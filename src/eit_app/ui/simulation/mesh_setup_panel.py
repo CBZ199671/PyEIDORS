@@ -44,6 +44,8 @@ class MeshSetupPanel(QGroupBox):
         # Title assigned by _retranslate() below so it follows the UI language.
         super().__init__("", parent)
         self._point_count_cache: int = 0
+        self._electrode_length_user_overridden = False
+        self._default_electrode_coverage = DEFAULT_ELECTRODE_COVERAGE
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -150,7 +152,7 @@ class MeshSetupPanel(QGroupBox):
         )
         self._electrode_length_spin.setSuffix(" m")
         self._electrode_length_spin.valueChanged.connect(
-            lambda _: self._on_any_change()
+            self._on_electrode_length_changed
         )
         self._lbl_electrode_length = QLabel("")
         mesh_form.addRow(self._lbl_electrode_length, self._electrode_length_spin)
@@ -401,11 +403,19 @@ class MeshSetupPanel(QGroupBox):
                 1.0,
             )
         else:
-            electrode_length_m = max(float(self._electrode_length_spin.value()), 1.0e-9)
-            electrode_coverage = min(
-                max(electrode_length_m / max(pitch_m, 1.0e-12), 1.0e-6),
-                1.0,
-            )
+            displayed_length_m = max(float(self._electrode_length_spin.value()), 1.0e-9)
+            if self._electrode_length_user_overridden:
+                electrode_length_m = displayed_length_m
+                electrode_coverage = min(
+                    max(electrode_length_m / max(pitch_m, 1.0e-12), 1.0e-6),
+                    1.0,
+                )
+            else:
+                electrode_length_m = None
+                electrode_coverage = min(
+                    max(float(self._default_electrode_coverage), 1.0e-6),
+                    1.0,
+                )
             electrode_area_m2 = None
             electrode_height_ratio = DEFAULT_3D_ELECTRODE_HEIGHT_RATIO
         return {
@@ -464,6 +474,22 @@ class MeshSetupPanel(QGroupBox):
         blockers = [widget.blockSignals(True) for widget in widgets]
         try:
             mesh_dimension = int(config.get("mesh_dimension", 2))
+            explicit_2d_length = (
+                mesh_dimension == 2
+                and "electrode_length_m_override" in config
+                and config.get("electrode_length_m_override") not in (None, "")
+            )
+            self._electrode_length_user_overridden = explicit_2d_length
+            self._default_electrode_coverage = min(
+                max(
+                    self._first_float(
+                        config.get("electrode_coverage"),
+                        DEFAULT_ELECTRODE_COVERAGE,
+                    ),
+                    1.0e-6,
+                ),
+                1.0,
+            )
             self._dim_combo.setCurrentIndex(0 if mesh_dimension == 2 else 1)
             mesh_family = (
                 str(
@@ -613,7 +639,13 @@ class MeshSetupPanel(QGroupBox):
         self._refresh_protocol_hint()
         self._on_any_change()
 
+    def _on_electrode_length_changed(self, _value: float) -> None:
+        if self._dim_combo.currentIndex() != 1:
+            self._electrode_length_user_overridden = True
+        self._on_any_change()
+
     def _on_any_change(self) -> None:
+        self._sync_default_2d_electrode_length_spin()
         self._refresh_protocol_enabled()
         self._clamp_3d_electrode_area_spin()
         # Recompute and cache the expected measurement point count so the
@@ -622,6 +654,35 @@ class MeshSetupPanel(QGroupBox):
         self._point_count_cache = int(layout.get("points_per_frame", 0))
         self._refresh_point_count_label()
         self.config_changed.emit()
+
+    def _sync_default_2d_electrode_length_spin(self) -> None:
+        if (
+            self._dim_combo.currentIndex() == 1
+            or self._electrode_length_user_overridden
+        ):
+            return
+        if not hasattr(self, "_electrode_length_spin"):
+            return
+        pitch_m = self._electrode_pitch_m(
+            radius=float(self._radius_spin.value()),
+            mesh_dimension=2,
+            n_electrodes=int(self._n_elec_spin.value()),
+            n_rings=1,
+            electrode_layout=str(
+                self._electrode_layout_combo.currentData() or "ring_major"
+            ),
+        )
+        target = max(
+            pitch_m * min(max(float(self._default_electrode_coverage), 1.0e-6), 1.0),
+            self._electrode_length_spin.minimum(),
+        )
+        if abs(float(self._electrode_length_spin.value()) - target) <= 1.0e-9:
+            return
+        blocked = self._electrode_length_spin.blockSignals(True)
+        try:
+            self._electrode_length_spin.setValue(target)
+        finally:
+            self._electrode_length_spin.blockSignals(blocked)
 
     def _clamp_3d_electrode_area_spin(self) -> None:
         if self._dim_combo.currentIndex() != 1:

@@ -697,6 +697,7 @@ class InteropSmokeValidator:
             regularization_alpha=float(preset.regularization_alpha),
             difference_mode=str(preset.difference_mode),
             difference_orientation=str(preset.difference_orientation),
+            potential_order=config.potential_order,
         )
         system.setup(
             mesh_source="generated",

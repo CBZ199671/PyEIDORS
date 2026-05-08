@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import sys
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 
 import numpy as np
 import pytest
@@ -111,6 +111,16 @@ def test_effective_refinement_accepts_simulation_mesh_size_without_inflation() -
     assert rc._compute_effective_refinement(1.0, 0.1) == 5
     assert rc._compute_effective_refinement(1.0, 10.0) == 20
     assert rc._compute_effective_refinement(1.0, 10.0, mesh_size=0.1) == 5
+
+
+def test_default_3d_rm_inverse_mesh_size_raises_one_resolution_tier() -> None:
+    size = rc.default_rm_inverse_mesh_size(0.1, 0.18, mesh_dimension=3)
+
+    assert size == pytest.approx(0.03)
+    assert rc._compute_effective_refinement(0.18, 0.1, mesh_size=size) == 3
+    assert rc.default_rm_inverse_mesh_size(
+        0.02, 0.18, mesh_dimension=3
+    ) == pytest.approx(0.02)
 
 
 def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
@@ -252,6 +262,109 @@ def test_single_step_cached_runtime_keys_semantics_with_version_fallback() -> No
     )
     assert default_runtime.cache_key != semantic_runtime.cache_key
     assert default_runtime.cache_key != version_runtime.cache_key
+
+
+def test_one_step_rm_signature_rejects_stale_normalized_jacobian_semantics() -> None:
+    from scripts.common import gn_difference_runner
+
+    assert (
+        gn_difference_runner.SINGLE_STEP_JACOBIAN_MATH_CONVENTION
+        == rc._SINGLE_STEP_JACOBIAN_MATH_CONVENTION
+    )
+    assert (
+        gn_difference_runner.SINGLE_STEP_PROJECTION_MATH_CONVENTION
+        == rc._SINGLE_STEP_PROJECTION_MATH_CONVENTION
+    )
+    assert (
+        gn_difference_runner.SINGLE_STEP_ALGORITHM_VERSION
+        == rc._SINGLE_STEP_CACHED_ALGORITHM_VERSION
+    )
+
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "simulation_inverse_route": "noser_rm",
+        "rm_auto_build": True,
+        "mesh_size": 0.1,
+        "rm_inverse_mesh_size": 0.1,
+        "difference_mode": "normalized",
+        "difference_orientation": "target_minus_reference",
+        "n_elec": 16,
+        "radius": 1.0,
+    }
+    current_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata=base_meta,
+    )
+    stale_request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        metadata={
+            **base_meta,
+            "single_step_jacobian_math_convention": (
+                "eidors_adapter_difference_dv_dsigma_v3"
+            ),
+            "single_step_projection_math_convention": (
+                "difference_projection_weights_v2"
+            ),
+            "single_step_algorithm_version": "eidors_noser_single_step_v4",
+            "one_step_rm_jacobian_build_convention": (
+                "dense_eidors_adapter_jacobian_v2"
+            ),
+            "one_step_rm_algorithm_version": (
+                "one_step_rm_auto_build_dense_jacobian_v6"
+            ),
+            "one_step_rm_content_contract": (
+                "one_step_rm_hdf5_dense_fit_jacobian_contract_v0"
+            ),
+            "single_step_context_cache_scope": "both",
+        },
+    )
+
+    current_runtime = rc._prepare_single_step_cached_runtime(current_request)
+    stale_runtime = rc._prepare_single_step_cached_runtime(stale_request)
+    current_signature, current_payload = rc._planned_one_step_rm_signature(
+        current_request,
+        current_runtime,
+    )
+    stale_signature, stale_payload = rc._planned_one_step_rm_signature(
+        stale_request,
+        stale_runtime,
+    )
+
+    assert current_runtime.cache_key != stale_runtime.cache_key
+    assert current_signature != stale_signature
+    assert current_runtime.meta["single_step_context_cache_scope"] == "process"
+    assert (
+        current_payload["hyperparameters"]["rm_jacobian_math_convention"]
+        == rc._SINGLE_STEP_JACOBIAN_MATH_CONVENTION
+    )
+    assert (
+        current_payload["hyperparameters"]["rm_projection_math_convention"]
+        == rc._SINGLE_STEP_PROJECTION_MATH_CONVENTION
+    )
+    assert (
+        current_payload["hyperparameters"]["rm_jacobian_build_convention"]
+        == rc._ONE_STEP_RM_JACOBIAN_BUILD_CONVENTION
+    )
+    assert (
+        current_payload["hyperparameters"]["rm_algorithm_version"]
+        == rc._ONE_STEP_RM_ALGORITHM_VERSION
+    )
+    assert (
+        current_payload["hyperparameters"]["rm_content_contract"]
+        == rc._ONE_STEP_RM_CONTENT_CONTRACT
+    )
+    assert (
+        current_payload["hyperparameters"]["rm_jacobian_source_cache_scope"]
+        == "process"
+    )
+    assert (
+        stale_payload["hyperparameters"]["rm_content_contract"]
+        != current_payload["hyperparameters"]["rm_content_contract"]
+    )
+    assert stale_payload["hyperparameters"]["rm_jacobian_source_cache_scope"] == "both"
+    assert stale_payload["difference_mode"] == "normalized"
 
 
 def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
@@ -428,9 +541,54 @@ def test_smooth_rm_signature_tracks_graph_prior_semantics_not_storage_axes() -> 
     assert laplace_cpu_signature == laplace_cuda_signature
     assert laplace_cpu_signature != curvature_signature
     assert laplace_payload["regularization_type"] == "laplace"
-    assert laplace_payload["hyperparameters"]["prior_operator"] == "graph_laplacian"
+    assert (
+        laplace_payload["hyperparameters"]["prior_operator"]
+        == "eidors_prior_laplace_graph_x2"
+    )
+    assert (
+        laplace_payload["hyperparameters"]["rm_jacobian_build_representation"]
+        == "dense"
+    )
+    assert laplace_payload["hyperparameters"]["form"] == "param"
+    assert (
+        laplace_payload["hyperparameters"]["singular_prior_form_policy"]
+        == "param_for_graph_laplace_curvature_v1"
+    )
+    assert (
+        laplace_payload["hyperparameters"]["rm_algorithm_version"]
+        == rc._ONE_STEP_RM_ALGORITHM_VERSION
+    )
     assert curvature_payload["regularization_type"] == "curvature"
-    assert curvature_payload["hyperparameters"]["prior_operator"] == "graph_ltl"
+    assert curvature_payload["hyperparameters"]["form"] == "param"
+    assert (
+        curvature_payload["hyperparameters"]["prior_operator"]
+        == "eidors_prior_laplace_squared"
+    )
+
+
+def test_greit_center_cloud_geometry_uses_axis_spacing_not_cloud_median() -> None:
+    centers = np.asarray(
+        [
+            [-0.75, -0.75, 0.0],
+            [-0.25, -0.75, 0.0],
+            [0.25, -0.75, 0.0],
+            [0.75, -0.75, 0.0],
+            [-0.25, -0.25, 0.0],
+            [0.25, -0.25, 0.0],
+            [-0.25, 0.25, 0.0],
+            [0.25, 0.25, 0.0],
+        ],
+        dtype=float,
+    )
+
+    coords, cells = rc._center_cloud_hexa_geometry(centers, {"radius": 1.0})
+
+    assert coords.shape == (centers.shape[0] * 8, 3)
+    assert cells.shape == (centers.shape[0], 8)
+    first_cell = coords[cells[0]]
+    assert np.ptp(first_cell[:, 0]) == pytest.approx(0.45)
+    assert np.ptp(first_cell[:, 1]) == pytest.approx(0.45)
+    assert np.ptp(first_cell[:, 2]) == pytest.approx(0.45)
 
 
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
@@ -954,7 +1112,7 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
         regularization=regularization,
         lambda_=0.5,
         mode=mode,
-        form="measurement",
+        form="param",
     )
     expected_delta = expected_rm @ (target - reference)
     np.testing.assert_allclose(result.conductivity, 1.0 + expected_delta)
@@ -965,8 +1123,11 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     assert result.metadata["online_hot_path"] == "rm_matmul"
     delta = result.conductivity - 1.0
     assert delta[1:3].mean() > delta[[0, 3]].mean()
-    assert abs(delta[1] - delta[2]) <= 1.0e-12
-    assert abs(delta[0] - delta[3]) <= 1.0e-12
+    if route == "laplace_rm":
+        assert abs(delta[1] - delta[2]) <= 1.0e-12
+        assert abs(delta[0] - delta[3]) <= 1.0e-12
+    else:
+        assert np.isfinite(delta).all()
 
     diagnostics = result.metadata["solver_diagnostics"]
     assert diagnostics["path"] == "single_step_cached_rm"
@@ -976,7 +1137,7 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     assert diagnostics["rm_metadata"]["regularization_type"] == mode
     assert diagnostics["rm_metadata"]["regularization_source"] == expected_source
     assert diagnostics["rm_metadata"]["RtR_signature_hash"]
-    assert diagnostics["rm_metadata"]["form"] == "measurement"
+    assert diagnostics["rm_metadata"]["form"] == "param"
 
     warm = rc._run_single_step_cached_request(request)
     np.testing.assert_allclose(warm.conductivity, result.conductivity)
@@ -984,6 +1145,152 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     assert (
         warm.metadata["solver_diagnostics"]["cache_lookups"]["rm_artifact"]["layer"]
         == "process"
+    )
+
+
+def test_single_step_cached_3d_rm_auto_build_forces_dense_jacobian_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+
+    from pyeidors.inverse import CellMesh
+    from pyeidors.inverse.prior import graph_laplacian
+    from pyeidors.inverse.reconstruction_matrix import build_one_step_rm
+
+    reference = np.ones(4, dtype=float)
+    target = reference + np.array([0.0, 1.0, 0.5, -0.25], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+            [0.0, 0.5],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+            [1.0, 1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2, 3], [1, 2, 3, 4]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(2, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    build_calls: list[dict[str, object]] = []
+
+    def _fake_build_shared_context(**kwargs):
+        build_calls.append(dict(kwargs))
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: None)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=_fake_build_shared_context),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "mesh_dimension": 3,
+            "simulation_inverse_route": "laplace_rm",
+            "rm_regularization": "laplace",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.04,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "solver_mode": "fast",
+            "jacobian_representation": "auto",
+            "device": "cpu",
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+    assert runtime.meta["jacobian_representation"] == "dense"
+    assert runtime.meta["rm_build_jacobian_representation_requested"] == "linearized"
+    assert runtime.meta["single_step_context_cache_scope"] == "process"
+
+    result = rc._run_single_step_cached_request(request)
+
+    inverse_mesh = CellMesh(node_coords, cells, name="expected-3d-laplace-rm")
+    expected_rm = build_one_step_rm(
+        jacobian,
+        regularization=graph_laplacian(inverse_mesh),
+        lambda_=0.2,
+        mode="laplace",
+        form="param",
+    )
+    expected_delta = expected_rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, 1.0 + expected_delta)
+    np.testing.assert_allclose(result.simulated, jacobian @ expected_delta)
+    assert result.error_msg is None
+    assert len(build_calls) == 1
+    assert build_calls[0]["jacobian_representation"] == "dense"
+    assert build_calls[0]["cache_scope"] == "process"
+    assert "_inmem_jacobian" not in result.metadata
+    assert result.metadata["rm_build_jacobian_representation"] == "dense"
+    assert result.metadata["rm_build_jacobian_representation_requested"] == "linearized"
+    assert (
+        result.metadata["solver_diagnostics"]["rm_metadata"][
+            "rm_jacobian_source_cache_scope"
+        ]
+        == "process"
+    )
+    assert (
+        result.metadata["solver_diagnostics"]["rm_metadata"]["rm_build_route"]
+        == "laplace_rm"
+    )
+
+    warm_result = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(warm_result.conductivity, 1.0 + expected_delta)
+    np.testing.assert_allclose(warm_result.simulated, jacobian @ expected_delta)
+    assert len(build_calls) == 1
+    assert "_inmem_jacobian" not in warm_result.metadata
+    assert warm_result.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert warm_result.metadata["rm_fit_jacobian_cache_status"] == "process_hit"
+
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+
+    artifact_fit_result = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(artifact_fit_result.conductivity, 1.0 + expected_delta)
+    np.testing.assert_allclose(artifact_fit_result.simulated, jacobian @ expected_delta)
+    assert len(build_calls) == 1
+    assert "_inmem_jacobian" not in artifact_fit_result.metadata
+    assert artifact_fit_result.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert artifact_fit_result.metadata["rm_fit_jacobian_cache_status"].startswith(
+        "artifact_hit_"
     )
 
 
@@ -1106,11 +1413,11 @@ def test_single_step_cached_request_resolves_greit_common_config_hot_path(
     assert diagnostics["rm_metadata"]["common_config_id"] == "16e"
 
 
-def test_single_step_cached_greit_common_config_auto_warms_hdf5_then_hot_path(
+def test_single_step_cached_greit_production_route_rejects_fixture_auto_warm(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from pyeidors.inverse import greit_common_config, load_greit_common_config
+    from pyeidors.inverse import greit_common_config
 
     cfg = greit_common_config("16e")
     reference = np.linspace(1.0, 2.0, cfg.n_measurements, dtype=float)
@@ -1143,8 +1450,8 @@ def test_single_step_cached_greit_common_config_auto_warms_hdf5_then_hot_path(
             "n_rings": 1,
             "radius": 0.18,
             "height": 0.16,
-            "greit_official_fixture_scope": "48e official fixture passed",
-            "greit_5936_protocol_scope": "5936 official pending T97",
+            "greit_official_fixture_scope": "requires registered EIDORS parity artifact",
+            "greit_5936_protocol_scope": "production route rejects deterministic fixtures",
             "greit_official_equivalence_claim_allowed": False,
         },
     )
@@ -1160,40 +1467,256 @@ def test_single_step_cached_greit_common_config_auto_warms_hdf5_then_hot_path(
 
     result = rc._run_single_step_cached_request(request)
 
-    loaded = load_greit_common_config("16e", artifact_dir=tmp_path)
-    expected_sigma = loaded.greit.rm @ (target - reference)
-    np.testing.assert_allclose(result.conductivity, expected_sigma)
-    artifact_path = Path(result.metadata["rm_artifact_path"])
-    assert artifact_path == loaded.artifact_path
-    assert artifact_path.suffix == ".h5"
-    assert artifact_path.exists()
-    assert result.metadata["greit_common_config_artifact_path"] == str(artifact_path)
-    assert result.metadata["greit_common_config_dir"] == str(tmp_path)
-    assert result.metadata["rm_artifact_auto_built"] is True
-    assert result.metadata["single_step_operator_space"] == "rm"
-    assert result.metadata["online_hot_path"] == "rm_matmul"
-    assert result.metadata["greit_official_fixture_scope"] == (
-        "48e official fixture passed"
+    assert result.error_msg
+    assert result.metadata["rm_artifact_missing"] is True
+    assert result.metadata["rm_artifact_required"] is True
+    assert "registered EIDORS-parity artifact" in result.error_msg
+    assert not (tmp_path / "greit3d_common_16e.h5").exists()
+
+
+def test_single_step_cached_greit_official_artifact_uses_rec_geometry_and_fit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import GREIT_EIDORS_HDF5_SCHEMA, GREITRM
+
+    artifact_path = tmp_path / "official_greit.h5"
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.5],
+            [0.0, 1.0, -0.25],
+        ],
+        dtype=float,
     )
-    assert result.metadata["greit_5936_protocol_scope"] == ("5936 official pending T97")
-    assert result.metadata["greit_official_equivalence_claim_allowed"] is False
+    y = np.array(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.5, -0.25],
+        ],
+        dtype=float,
+    )
+    d = np.eye(2, dtype=float)
+    rec_model = np.array(
+        [
+            [-0.2, -0.2, 0.0],
+            [0.0, -0.2, 0.0],
+            [-0.2, 0.0, 0.0],
+            [0.2, 0.2, 0.1],
+            [0.4, 0.2, 0.1],
+            [0.2, 0.4, 0.1],
+        ],
+        dtype=float,
+    )
+    GREITRM(
+        rm=rm,
+        metadata=MappingProxyType(
+            {
+                "algorithm": "greit-3d",
+                "artifact_schema": GREIT_EIDORS_HDF5_SCHEMA,
+                "artifact_format": "hdf5",
+                "eidors_parity": True,
+                "fixture_only": False,
+                "keep_model_components": True,
+                "online_hot_path": "rm_matmul",
+            }
+        ),
+        voxel_shape=(2, 1, 1),
+        y=y,
+        d=d,
+        rec_model=rec_model,
+    ).save(artifact_path)
+
+    reference = np.array([2.0, 3.0, 4.0], dtype=float)
+    target = reference + np.array([0.2, -0.1, 0.05], dtype=float)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros_like(reference),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros_like(target),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "greit3d_rm",
+            "rm_route_requires_artifact": True,
+            "greit_rm_path": str(artifact_path),
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+            "n_elec": 3,
+            "n_rings": 1,
+            "radius": 1.0,
+            "height": 1.0,
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("official GREIT artifact route must not build context.")
+
+    def _unexpected_runner():
+        raise AssertionError("official GREIT artifact route must not import GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    dv = target - reference
+    expected = rm @ dv
+    np.testing.assert_allclose(result.conductivity, expected)
+    assert result.node_coords.shape == (16, 3)
+    assert result.cell_connectivity.shape == (2, 8)
+    assert result.metadata["rm_geometry_source"] == "greit_rec_model_centers"
+    assert result.metadata["rm_fit_source"] == "greit_training_space_projection"
+    np.testing.assert_allclose(result.simulated, y @ expected)
     diagnostics = result.metadata["solver_diagnostics"]
     assert diagnostics["path"] == "single_step_cached_rm"
     assert diagnostics["runtime"]["forward_solve_count"] == 0
     assert diagnostics["runtime"]["adjoint_solve_count"] == 0
     assert diagnostics["runtime"]["jacobian_rebuild_count"] == 0
     assert diagnostics["runtime"]["ksp_solve_count"] == 0
-    assert diagnostics["rm_metadata"]["common_config_id"] == "16e"
-    assert diagnostics["rm_metadata"]["artifact_format"] == "hdf5"
-    assert diagnostics["rm_metadata"]["online_hot_path"] == "rm_matmul"
-    assert diagnostics["rm_metadata"]["eidors_parity"] is False
-    assert diagnostics["rm_metadata"]["official_fixture_scope"] == (
-        "48e official fixture passed"
+    assert diagnostics["rm_metadata"]["eidors_parity"] is True
+
+
+def test_single_step_cached_greit_registry_hot_path_requires_exact_signature(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import (
+        GREIT_EIDORS_HDF5_SCHEMA,
+        GREITRM,
+        greit_artifact_signature,
+        greit_artifact_signature_payload,
+        register_greit_artifact,
     )
-    assert diagnostics["rm_metadata"]["protocol_5936_official_status"] == (
-        "pending_T97"
+
+    reference = np.array([2.0, 3.0, 4.0], dtype=float)
+    target = reference + np.array([0.2, -0.1, 0.05], dtype=float)
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "simulation_inverse_route": "greit3d_rm",
+        "rm_route_requires_artifact": True,
+        "rm_auto_build": False,
+        "greit_registry_auto_resolve": True,
+        "greit_registry_dir": str(tmp_path),
+        "difference_mode": "raw",
+        "difference_orientation": "target_minus_reference",
+        "device": "cpu",
+        "n_elec": 3,
+        "n_rings": 1,
+        "radius": 1.0,
+        "height": 1.0,
+        "electrode_height_ratio": 0.2,
+        "electrode_level_fractions": (0.25, 0.75),
+        "electrode_layout": "ring_major",
+        "measurement_protocol": "eidors_full_3d",
+        "stim_pattern": "{ad}",
+        "meas_pattern": "{ad}",
+        "background_conductivity": 1.0,
+        "contact_impedance": 0.0,
+        "imgsz": (2, 1, 1),
+        "target_radius": 0.2,
+        "target_contrast": 1.0,
+        "weight": 0.5,
+        "artifact_schema": GREIT_EIDORS_HDF5_SCHEMA,
+        "builder_backend": "native",
+        "builder_semantic_version": "native-greit-finite-target-v1",
+    }
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros_like(reference),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros_like(target),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=3,
+        metadata=dict(base_meta),
     )
-    assert diagnostics["rm_metadata"]["official_equivalence_claim_allowed"] is False
+    runtime = rc._prepare_single_step_cached_runtime(request)
+    config = rc._greit_registry_config_from_runtime(request, runtime)
+    signature = greit_artifact_signature(config)
+    payload = greit_artifact_signature_payload(config)
+    artifact_path = tmp_path / "registered_greit.h5"
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.5],
+            [0.0, 1.0, -0.25],
+        ],
+        dtype=float,
+    )
+    y = np.array(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.5, -0.25],
+        ],
+        dtype=float,
+    )
+    d = np.eye(2, dtype=float)
+    rec_model = np.array([[-0.2, -0.2, 0.0], [0.2, -0.2, 0.0]], dtype=float)
+    GREITRM(
+        rm=rm,
+        metadata=MappingProxyType(
+            {
+                "algorithm": "greit-3d",
+                "artifact_schema": GREIT_EIDORS_HDF5_SCHEMA,
+                "artifact_format": "hdf5",
+                "eidors_parity": True,
+                "fixture_only": False,
+                "keep_model_components": True,
+                "online_hot_path": "rm_matmul",
+                "greit_registry_signature": signature,
+                "greit_registry_signature_payload": payload,
+            }
+        ),
+        voxel_shape=(2, 1, 1),
+        y=y,
+        d=d,
+        rec_model=rec_model,
+    ).save(artifact_path)
+    registered = register_greit_artifact(config, artifact_path, registry_dir=tmp_path)
+    assert registered.signature == signature
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("GREIT registry hit must not build context.")
+
+    def _unexpected_runner():
+        raise AssertionError("GREIT registry hit must not import GN runner.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    monkeypatch.setattr(rc, "_load_gn_difference_runner_module", _unexpected_runner)
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected = rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, expected)
+    assert result.metadata["greit_registry_signature"] == signature
+    assert result.metadata["greit_registry_cache_status"] == "disk_hit"
+    assert result.metadata["rm_artifact_path"] == str(artifact_path)
+
+    bad_request = rc.ReconstructionRequest(
+        reference_frame=request.reference_frame,
+        target_frame=request.target_frame,
+        mesh_dimension=3,
+        metadata={**base_meta, "n_rings": 2},
+    )
+    bad_result = rc._run_single_step_cached_request(bad_request)
+    assert bad_result.error_msg
+    assert bad_result.metadata["rm_artifact_missing"] is True
 
 
 def test_single_step_cached_request_uses_hardware_drive_metadata_for_context_and_cache(

@@ -932,6 +932,7 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
     _get_app().processEvents()
     try:
         header = editor._table.horizontalHeader()
+        assert not editor._table.verticalHeader().isVisible()
         widths = [header.sectionSize(c) for c in range(editor._model.columnCount())]
         # Shape column wider than the numeric columns; X/Y/W/H share size.
         assert widths[0] >= 70, f"Shape column too narrow: {widths[0]}"
@@ -955,6 +956,33 @@ def test_inhomogeneity_editor_uses_explicit_column_widths_no_overlap() -> None:
         editor.close()
         editor.deleteLater()
         _get_app().processEvents()
+
+
+@pytest.mark.gui
+def test_dark_stylesheet_uses_muted_section_chrome() -> None:
+    from eit_app.ui.theme import _build_stylesheet
+
+    css = _build_stylesheet("dark")
+    section_chrome = css.split("/* === GroupBox / section panels === */", 1)[1]
+    section_chrome = section_chrome.split("/* === Inputs === */", 1)[0]
+    data_chrome = css.split("/* === Tables / trees / lists === */", 1)[1]
+    data_chrome = data_chrome.split("/* === Scrollbars === */", 1)[0]
+
+    assert "#8fc8ea" not in section_chrome
+    assert "#b3d4ed" not in section_chrome
+    assert "#4d6188" not in section_chrome
+    assert "QGroupBox::title {\n    color: #a7b2c2;" in section_chrome
+    assert "border: 1px solid #323a45;" in section_chrome
+    assert "QHeaderView::section {\n    background: #252c36;" in data_chrome
+    assert "QTableCornerButton::section {\n    background: #252c36;" in data_chrome
+    assert (
+        "QHeaderView::section:first {\n    border-top-left-radius: 0px;" in data_chrome
+    )
+    assert (
+        "QHeaderView::section:last {\n    border-top-right-radius: 0px;" in data_chrome
+    )
+    assert "QAbstractScrollArea::corner {\n    background: #252c36;" in data_chrome
+    assert "border-bottom: 1px solid #323a45;" in data_chrome
 
 
 @pytest.mark.gui
@@ -1318,6 +1346,89 @@ def test_conductivity_image_widget_recovers_from_orphaned_colorbar() -> None:
     assert widget._colorbar is not None
     assert widget._colorbar is not old_colorbar
     assert old_colorbar_ax not in widget._figure.axes
+
+    widget.clear()
+    widget.close()
+
+
+@pytest.mark.gui
+def test_conductivity_image_widget_keeps_fixed_geometry_across_colorbar_ranges() -> (
+    None
+):
+    app = _get_app()
+    truth = ConductivityImageWidget("Truth")
+    reconstruction = ConductivityImageWidget("Reconstruction")
+    try:
+        for widget in (truth, reconstruction):
+            widget.resize(520, 520)
+            widget.show()
+        app.processEvents()
+
+        coords = np.array(
+            [
+                [-1.0, -1.0],
+                [1.0, -1.0],
+                [1.0, 1.0],
+                [-1.0, 1.0],
+                [0.0, 0.0],
+            ],
+            dtype=float,
+        )
+        cells = np.array(
+            [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+            dtype=int,
+        )
+
+        truth.update_image(np.array([1.0, 1.0, 2.0, 2.0], dtype=float), coords, cells)
+        reconstruction.update_image(
+            np.array([0.982, 1.013, 1.089, 1.177], dtype=float),
+            coords,
+            cells,
+        )
+        app.processEvents()
+
+        assert truth._ax.get_position().bounds == pytest.approx(
+            reconstruction._ax.get_position().bounds,
+            abs=1.0e-9,
+        )
+        assert truth._colorbar.ax.get_position().bounds == pytest.approx(
+            reconstruction._colorbar.ax.get_position().bounds,
+            abs=1.0e-9,
+        )
+        assert truth._ax.get_window_extent().bounds[2:] == pytest.approx(
+            reconstruction._ax.get_window_extent().bounds[2:],
+            abs=1.0e-6,
+        )
+    finally:
+        truth.clear()
+        reconstruction.clear()
+        truth.close()
+        reconstruction.close()
+
+
+@pytest.mark.gui
+def test_conductivity_image_widget_smooths_cell_values_to_node_gouraud() -> None:
+    _get_app()
+    widget = ConductivityImageWidget()
+    widget.show()
+    _get_app().processEvents()
+
+    coords = np.array(
+        [
+            [-1.0, -1.0],
+            [1.0, -1.0],
+            [1.0, 1.0],
+            [-1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [0, 2, 3]], dtype=int)
+
+    widget.update_image(np.array([1.0, 2.0], dtype=float), coords, cells)
+    _get_app().processEvents()
+
+    assert widget._last_render_mode == "cell_to_node_gouraud"
+    assert widget._colorbar is not None
 
     widget.clear()
     widget.close()
@@ -2503,6 +2614,31 @@ def test_simulation_voltage_index_uses_3d_ring_count() -> None:
 
 
 @pytest.mark.gui
+def test_simulation_forward_config_2d_default_uses_coverage_not_length_override() -> (
+    None
+):
+    window = EITWorkstation()
+    _show_window(window)
+
+    cfg = window._current_sim_forward_model_config()
+
+    assert cfg.mesh_dimension == 2
+    assert cfg.n_elec == 16
+    assert cfg.n_rings == 1
+    assert cfg.electrode_length_m_override is None
+    assert cfg.electrode_coverage == pytest.approx(0.5)
+    assert (
+        window._sim_tab.mesh_setup_panel.get_config()["electrode_length_m_override"]
+        is None
+    )
+    assert window._sim_tab.mesh_setup_panel._electrode_length_spin.value() == (
+        pytest.approx(2.0 * np.pi * 0.5 / 16.0, abs=1.0e-6)
+    )
+
+    _close_window(window)
+
+
+@pytest.mark.gui
 def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     window = EITWorkstation()
     _show_window(window)
@@ -2743,6 +2879,103 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
 
 
 @pytest.mark.gui
+@pytest.mark.parametrize("method", ["noser_rm", "laplace_rm", "curvature_rm"])
+def test_simulation_2d_rm_routes_use_normalized_difference_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    """2D production RM routes must not use raw voltage scale."""
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": method,
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["simulation_inverse_route"] == method
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["mesh_dimension"] == 2
+    assert request.metadata["electrode_length_m_override"] is None
+    assert request.metadata["electrode_coverage"] == pytest.approx(0.5)
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+@pytest.mark.parametrize("method", ["noser_rm", "laplace_rm", "curvature_rm"])
+def test_simulation_3d_rm_routes_use_normalized_difference_mode(
+    monkeypatch: pytest.MonkeyPatch,
+    method: str,
+) -> None:
+    """3D RM-based routes must build/apply normalized dv and J."""
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    # Switch the simulation tab to the 3D mesh so is_3d_difference fires.
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
+    _get_app().processEvents()
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": method,
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.metadata["simulation_inverse_route"] == method
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["mesh_dimension"] == 3
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
 @pytest.mark.parametrize(
     ("method", "pending_task", "regularization", "auto_build", "display_mode"),
     [
@@ -2804,8 +3037,10 @@ def test_simulation_rm_routes_record_artifact_requirement(
     assert request.metadata["difference_preset"] == method
     assert request.metadata["rm_output_display_mode"] == display_mode
     if method in {"noser_rm", "laplace_rm", "curvature_rm"}:
-        assert request.metadata["rm_form"] == "measurement"
-        assert request.metadata["rm_inverse_mesh_size"] >= request.metadata["mesh_size"]
+        assert request.metadata["difference_mode"] == "normalized"
+        expected_form = "measurement" if method == "noser_rm" else "param"
+        assert request.metadata["rm_form"] == expected_form
+        assert request.metadata["rm_inverse_mesh_size"] <= request.metadata["mesh_size"]
         assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"
         assert request.regularization_alpha == pytest.approx(1.0e-2)
         assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
@@ -2817,18 +3052,29 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["hp_squared"] == pytest.approx(1.0e-2)
     if method == "greit3d_rm":
         assert request.metadata["rm_form"] == "measurement"
-        assert request.metadata["greit_common_config"] == "16e"
+        assert "greit_common_config" not in request.metadata
+        assert "greit_common_config_dir" not in request.metadata
+        assert "greit_common_config_auto_warm" not in request.metadata
+        assert request.metadata["greit_registry_auto_resolve"] is True
+        assert request.metadata["greit_registry_signature"]
+        assert request.metadata["greit_registry_config"]["measurement_count"] == n_meas
         assert (
-            request.metadata["greit_common_config_dir"]
-            == ".pyeidors_cache/greit_common_configs"
+            request.metadata["greit_registry_config"]["builder_semantic_version"]
+            == "native-greit-finite-target-v2"
         )
-        assert request.metadata["greit_common_config_auto_warm"] is True
+        assert request.metadata["greit_registry_config"]["target_size_semantics"] == (
+            "fraction_of_tank_radius"
+        )
+        assert (
+            "config-driven registry artifact"
+            in request.metadata["greit_common_config_unavailable_reason"]
+        )
         assert (
             request.metadata["greit_official_fixture_scope"]
-            == "48e official fixture passed"
+            == "requires registered EIDORS parity artifact"
         )
         assert request.metadata["greit_5936_protocol_scope"] == (
-            "5936 official pending T97"
+            "production route rejects deterministic fixtures"
         )
         assert request.metadata["greit_official_equivalence_claim_allowed"] is False
         assert "difference_lambda" not in request.metadata
@@ -2880,7 +3126,7 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
     reference = np.full(4, 2.0, dtype=np.float64)
     target = reference + np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float64)
     expected_sigma = np.array([1.0, 1.2, 1.2, 1.0], dtype=np.float64)
-    rm = np.diag([0.0, 0.2, 0.2, 0.0]).astype(np.float64)
+    rm = np.diag([0.0, 0.4, 0.4, 0.0]).astype(np.float64)
     artifact_path = write_rm_artifact(
         tmp_path / "gui_default_noser_rm.h5",
         rm,
@@ -2975,7 +3221,7 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
 
 
 @pytest.mark.gui
-def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
+def test_simulation_greit3d_route_uses_registry_without_broad_claim(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window = EITWorkstation()
@@ -3021,17 +3267,22 @@ def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
 
     assert len(captured) == 1
     request = captured[0]
-    assert request.metadata["greit_common_config"] == "48e"
-    assert request.metadata["greit_common_config_auto_warm"] is True
+    assert "greit_common_config" not in request.metadata
+    assert request.metadata["greit_registry_auto_resolve"] is True
+    assert request.metadata["rm_auto_build"] is True
+    assert request.metadata["greit_registry_config"]["measurement_count"] == n_meas
+    assert request.metadata["greit_registry_config"]["n_rings"] == 3
+    assert request.metadata["greit_registry_config"]["imgsz"] == (8, 8, 5)
+    assert request.metadata["greit_registry_signature"]
     assert request.metadata["greit_official_fixture_scope"] == (
-        "48e official fixture passed"
+        "requires registered EIDORS parity artifact"
     )
     assert request.metadata["greit_5936_protocol_scope"] == (
-        "5936 official pending T97"
+        "production route rejects deterministic fixtures"
     )
     assert request.metadata["greit_official_equivalence_claim_allowed"] is False
     assert (
-        "5936 protocol official fixture pending T97"
+        "EIDORS-parity artifacts matching the current 3D geometry and protocol"
         in request.metadata["greit_official_equivalence_scope"]
     )
     assert "difference_lambda" not in request.metadata
@@ -3044,7 +3295,7 @@ def test_simulation_greit3d_route_selects_48e_common_config_without_broad_claim(
 
 
 @pytest.mark.gui
-def test_simulation_greit3d_route_rejects_48e_common_config_for_2160_adad(
+def test_simulation_greit3d_route_2160_adad_gets_distinct_registry_signature(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     window = EITWorkstation()
@@ -3092,9 +3343,13 @@ def test_simulation_greit3d_route_rejects_48e_common_config_for_2160_adad(
     request = captured[0]
     assert request.metadata["simulation_inverse_route"] == "greit3d_rm"
     assert "greit_common_config" not in request.metadata
-    assert request.metadata["rm_auto_build"] is False
+    assert request.metadata["rm_auto_build"] is True
+    assert request.metadata["greit_registry_auto_resolve"] is True
+    assert request.metadata["greit_registry_config"]["measurement_count"] == n_meas
+    assert request.metadata["greit_registry_config"]["imgsz"] == (8, 8, 5)
+    assert request.metadata["greit_registry_signature"]
     assert (
-        "2160-measurement protocol"
+        "config-driven registry artifact"
         in request.metadata["greit_common_config_unavailable_reason"]
     )
 
@@ -3222,6 +3477,78 @@ def test_simulation_inverse_uses_config_stored_with_forward_result(
     )
 
     window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_forward_request_records_input_signature(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    window._sim_tab.inhomogeneity_editor._add_shape("circle")
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._fwd_ctrl,
+        "solve",
+        lambda request: captured.append(request),
+    )
+
+    window._on_run_forward()
+
+    assert len(captured) == 1
+    request = captured[0]
+    signature = request.forward_model_config.get("simulation_input_signature")
+    payload = request.forward_model_config.get("simulation_input_signature_payload")
+    assert isinstance(signature, str) and len(signature) == 64
+    assert payload["schema"] == "simulation_forward_inputs_v1"
+    assert len(payload["inhomogeneities"]) == 1
+    assert payload["inhomogeneities"][0]["shape"] == "circle"
+
+    window._sim_state.forward_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_inverse_blocks_stale_forward_inputs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    signature, payload = window._current_simulation_input_signature()
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+        forward_model_config={
+            **window._current_sim_forward_model_config().to_mapping(),
+            "simulation_input_signature": signature,
+            "simulation_input_signature_payload": payload,
+        },
+    )
+    window._sim_tab.inhomogeneity_editor._add_shape("circle")
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert captured == []
+    assert (
+        "Run the forward problem again"
+        in window._sim_tab.inverse_problem_panel._status_label.text()
+    )
+
     _close_window(window)
 
 

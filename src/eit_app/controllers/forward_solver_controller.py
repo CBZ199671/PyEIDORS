@@ -164,6 +164,17 @@ def _contact_impedance_vector(value: Any, *, total_electrodes: int) -> np.ndarra
     return arr.astype(float, copy=False)
 
 
+def _forward_result_passthrough_metadata(mapping: dict[str, Any]) -> dict[str, Any]:
+    """Keep GUI/run provenance that ForwardModelConfig intentionally ignores."""
+
+    allowed_prefixes = ("simulation_", "inhomogeneities_")
+    return {
+        str(key): value
+        for key, value in dict(mapping or {}).items()
+        if str(key).startswith(allowed_prefixes)
+    }
+
+
 def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     mesh_dim = int(forward_cfg.mesh_dimension)
     gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
@@ -175,6 +186,12 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     requested_profile = _auto(forward_cfg.acceleration_profile, "default")
     mesh_family = _auto(forward_cfg.mesh_family, "tetra")
     forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
+    potential_order = max(1, int(getattr(forward_cfg, "potential_order", 1)))
+    if potential_order != 1 and forward_backend == "cuda_structured":
+        raise ValueError(
+            "potential_order > 1 requires the DOLFINx forward backend; "
+            "cuda_structured currently supports only P1."
+        )
     wants_gpu_request = gui_profile == "gpu" or requested_profile in {
         "gpu3d",
         "gpu3d_fused",
@@ -182,6 +199,7 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     wants_structured_gpu = (
         mesh_dim == 3
         and mesh_family == "hex"
+        and potential_order == 1
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
     wants_3d_cuda = mesh_dim == 3 and (
@@ -268,6 +286,7 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         "device": _auto(forward_cfg.device, "cuda" if wants_3d_cuda else "auto"),
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
+        "potential_order": potential_order,
         "acceleration_profile": acceleration_profile,
     }
 
@@ -283,6 +302,13 @@ def _forward_runtime_diagnostics(system: Any) -> dict[str, Any]:
     mesh = getattr(system, "mesh", None)
     return {
         "mesh_family": str(getattr(mesh, "mesh_family", "") or ""),
+        "potential_order": int(
+            backend_diag.get(
+                "potential_order", getattr(fwd_model, "potential_order", 1)
+            )
+            if fwd_model is not None
+            else 1
+        ),
         "forward_backend": str(getattr(system, "forward_backend", "") or ""),
         "forward_backend_effective": str(
             backend_diag.get(
@@ -328,6 +354,17 @@ class _ForwardSolverWorker(QObject):
     def __init__(self, request: ForwardSolverRequest) -> None:
         super().__init__()
         self._request = request
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
+
+    def _cancelled(self) -> bool:
+        thread = QThread.currentThread()
+        return bool(
+            self._cancel_requested
+            or (thread is not None and thread.isInterruptionRequested())
+        )
 
     def run(self) -> None:
         req = self._request
@@ -398,8 +435,11 @@ class _ForwardSolverWorker(QObject):
                 device=runtime["device"],
                 forward_backend=runtime["forward_backend"],
                 mesh_family=runtime["mesh_family"],
+                potential_order=forward_cfg.potential_order,
                 acceleration_profile=runtime["acceleration_profile"],
             )
+            if self._cancelled():
+                return
 
             self.progress.emit("Generating mesh...")
             system.setup(
@@ -416,6 +456,8 @@ class _ForwardSolverWorker(QObject):
                 geometry_version=forward_cfg.geometry_version,
                 electrode_layout=forward_cfg.electrode_layout,
             )
+            if self._cancelled():
+                return
 
             self.progress.emit("Building conductivity distribution...")
             fwd = system.fwd_model
@@ -430,11 +472,15 @@ class _ForwardSolverWorker(QObject):
 
             self.progress.emit("Running forward solve...")
             data = system.forward_solve(sigma)
+            if self._cancelled():
+                return
 
             # Also solve homogeneous for difference reference
             self.progress.emit("Computing homogeneous reference...")
             sigma_homog = np.full_like(sigma, forward_cfg.background_conductivity)
             data_homog = system.forward_solve(sigma_homog)
+            if self._cancelled():
+                return
 
             # Add noise if requested
             voltages = data.meas.copy()
@@ -464,6 +510,7 @@ class _ForwardSolverWorker(QObject):
                 homogeneous_voltages=np.asarray(homog_voltages, dtype=out_dtype),
                 forward_model_config={
                     **forward_cfg.to_mapping(),
+                    **_forward_result_passthrough_metadata(req.forward_model_config),
                     **runtime,
                     "runtime_diagnostics": _forward_runtime_diagnostics(system),
                 },
@@ -522,15 +569,33 @@ class ForwardSolverController(QObject):
         self._cleanup()
 
     def _cleanup(self) -> None:
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(3000)
-            self._thread.deleteLater()
-            self._thread = None
-        if self._worker is not None:
-            self._worker.deleteLater()
+        self._stop_worker_thread(force=False, grace_ms=3000)
+
+    def _stop_worker_thread(self, *, force: bool, grace_ms: int) -> None:
+        thread = self._thread
+        worker = self._worker
+        if worker is not None:
+            worker.cancel()
+        if thread is not None:
+            if thread.isRunning():
+                thread.requestInterruption()
+                thread.quit()
+                if not thread.wait(grace_ms):
+                    log.warning(
+                        "Forward solver thread did not stop within %d ms%s",
+                        grace_ms,
+                        "; terminating" if force else "",
+                    )
+                    if force:
+                        thread.terminate()
+                        thread.wait(3000)
+            if not thread.isRunning():
+                thread.deleteLater()
+                self._thread = None
+        if worker is not None and self._thread is None:
+            worker.deleteLater()
             self._worker = None
 
     def shutdown(self) -> None:
         """Stop any running worker and clean up."""
-        self._cleanup()
+        self._stop_worker_thread(force=True, grace_ms=3000)

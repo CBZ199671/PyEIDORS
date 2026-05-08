@@ -37,8 +37,8 @@ def test_common_config_precompute_writes_hdf5_and_reuses_existing(
     assert result.loaded is True
     assert result.artifact_path.suffix == ".h5"
     assert result.config.config_id == "16e"
-    assert result.greit.shape == (32, 208)
-    assert result.greit.voxel_shape == (4, 4, 2)
+    assert result.greit.shape == (108, 208)
+    assert result.greit.voxel_shape == (6, 6, 3)
 
     artifact = read_hdf5_artifact(result.artifact_path)
     assert artifact.schema == GREIT_RM_HDF5_SCHEMA
@@ -101,7 +101,7 @@ def test_register_external_common_config_artifact_keeps_hdf5_rm_loadable(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "source_eidors_greit.h5"
-    rm = np.eye(32, 208, dtype=np.float64)
+    rm = np.eye(108, 208, dtype=np.float64)
     greit = GREITRM(
         rm=rm,
         metadata=MappingProxyType(
@@ -114,7 +114,7 @@ def test_register_external_common_config_artifact_keeps_hdf5_rm_loadable(
                 "online_hot_path": "rm_matmul",
             }
         ),
-        voxel_shape=(4, 4, 2),
+        voxel_shape=(6, 6, 3),
     )
     greit.save(source)
     source_payload = read_hdf5_artifact(source)
@@ -130,7 +130,7 @@ def test_register_external_common_config_artifact_keeps_hdf5_rm_loadable(
     assert registered.metadata["common_config_id"] == "16e"
     assert registered.metadata["eidors_parity"] is True
     generic = load_rm_artifact(registered.artifact_path)
-    assert generic.rm.shape == (32, 208)
+    assert generic.rm.shape == (108, 208)
     np.testing.assert_allclose(generic.rm, rm)
 
 

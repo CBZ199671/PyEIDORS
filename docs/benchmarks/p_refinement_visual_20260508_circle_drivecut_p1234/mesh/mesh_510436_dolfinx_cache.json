@@ -1,0 +1,278 @@
+{
+  "adios2_file": null,
+  "adios4dolfinx_available": false,
+  "adios4dolfinx_engine": "BP4",
+  "adios4dolfinx_file": null,
+  "artifact_key": "e07194c1f22c74837e28d38dc03845489d98542ccb80dd625be6991c255ee860",
+  "artifact_manifest": {
+    "artifact_key": "e07194c1f22c74837e28d38dc03845489d98542ccb80dd625be6991c255ee860",
+    "artifact_kind": "dolfinx-mesh-cache",
+    "files": {
+      "adios2": null,
+      "adios4dolfinx": null,
+      "hdf5": {
+        "exists": true,
+        "is_dir": false,
+        "mtime_ns": 1778242000657541714,
+        "path": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.h5",
+        "resolved_path": "/home/tom/workspace/PyEidors_wsl2/docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.h5",
+        "size": 245048
+      },
+      "metadata": {
+        "exists": false,
+        "path": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436_dolfinx_cache.json"
+      },
+      "xdmf": {
+        "exists": true,
+        "is_dir": false,
+        "mtime_ns": 1778242000657541714,
+        "path": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.xdmf",
+        "resolved_path": "/home/tom/workspace/PyEidors_wsl2/docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.xdmf",
+        "size": 1675
+      }
+    },
+    "key_payload": {
+      "association_table": {
+        "domain": 1,
+        "electrode_1": 2,
+        "electrode_10": 11,
+        "electrode_11": 12,
+        "electrode_12": 13,
+        "electrode_13": 14,
+        "electrode_14": 15,
+        "electrode_15": 16,
+        "electrode_16": 17,
+        "electrode_2": 3,
+        "electrode_3": 4,
+        "electrode_4": 5,
+        "electrode_5": 6,
+        "electrode_6": 7,
+        "electrode_7": 8,
+        "electrode_8": 9,
+        "electrode_9": 10,
+        "gaps": 18
+      },
+      "format": "dolfinx-xdmf-hdf5",
+      "gdim": 2,
+      "generator_revision": null,
+      "geometry_version": null,
+      "mesh_content_signature": {
+        "geometry_hash": "3ca9a9a4ecfc4da5dd037730ca8fbeb94655bff074ff84a02456a30f0c927d9b",
+        "tdim": 2,
+        "topology_hash": "c8ae195ec91a73fcf5c3caa4e8609290680a9adcb48ca581521f439a97281af9"
+      },
+      "mesh_family": null,
+      "physical_groups": {
+        "domain": {
+          "dim": 2,
+          "tag": 1
+        },
+        "electrode_1": {
+          "dim": 1,
+          "tag": 2
+        },
+        "electrode_10": {
+          "dim": 1,
+          "tag": 11
+        },
+        "electrode_11": {
+          "dim": 1,
+          "tag": 12
+        },
+        "electrode_12": {
+          "dim": 1,
+          "tag": 13
+        },
+        "electrode_13": {
+          "dim": 1,
+          "tag": 14
+        },
+        "electrode_14": {
+          "dim": 1,
+          "tag": 15
+        },
+        "electrode_15": {
+          "dim": 1,
+          "tag": 16
+        },
+        "electrode_16": {
+          "dim": 1,
+          "tag": 17
+        },
+        "electrode_2": {
+          "dim": 1,
+          "tag": 3
+        },
+        "electrode_3": {
+          "dim": 1,
+          "tag": 4
+        },
+        "electrode_4": {
+          "dim": 1,
+          "tag": 5
+        },
+        "electrode_5": {
+          "dim": 1,
+          "tag": 6
+        },
+        "electrode_6": {
+          "dim": 1,
+          "tag": 7
+        },
+        "electrode_7": {
+          "dim": 1,
+          "tag": 8
+        },
+        "electrode_8": {
+          "dim": 1,
+          "tag": 9
+        },
+        "electrode_9": {
+          "dim": 1,
+          "tag": 10
+        },
+        "gaps": {
+          "dim": 1,
+          "tag": 18
+        }
+      },
+      "source_msh_signature": {
+        "mtime_ns": 1778242000617541726,
+        "path": "/home/tom/workspace/PyEidors_wsl2/docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.msh",
+        "sha256": "bbbc04bc80cec40b001a57e977aa1621abc994fffe2b6f199b719f6a4b9fbeb8",
+        "size": 187179
+      },
+      "structured_sidecar_signature": null,
+      "structured_sidecar_version": null
+    },
+    "manifest_version": 1,
+    "metadata": {
+      "cache_format": "dolfinx-xdmf-hdf5"
+    },
+    "namespace": "pyeidors",
+    "schema_version": 1,
+    "subkeys": {
+      "mesh_provenance": "7d136c9480756774117b6b35cc0e82dea7cec4a0621a8cfbeb5c265569e8563a"
+    }
+  },
+  "association_table": {
+    "domain": 1,
+    "electrode_1": 2,
+    "electrode_10": 11,
+    "electrode_11": 12,
+    "electrode_12": 13,
+    "electrode_13": 14,
+    "electrode_14": 15,
+    "electrode_15": 16,
+    "electrode_16": 17,
+    "electrode_2": 3,
+    "electrode_3": 4,
+    "electrode_4": 5,
+    "electrode_5": 6,
+    "electrode_6": 7,
+    "electrode_7": 8,
+    "electrode_8": 9,
+    "electrode_9": 10,
+    "gaps": 18
+  },
+  "cell_tags_name": "cell_tags",
+  "facet_tags_name": "facet_tags",
+  "format": "dolfinx-xdmf-hdf5",
+  "gdim": 2,
+  "generator_revision": null,
+  "geometry_version": null,
+  "hdf5_file": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.h5",
+  "mesh_content_signature": {
+    "geometry_hash": "3ca9a9a4ecfc4da5dd037730ca8fbeb94655bff074ff84a02456a30f0c927d9b",
+    "tdim": 2,
+    "topology_hash": "c8ae195ec91a73fcf5c3caa4e8609290680a9adcb48ca581521f439a97281af9"
+  },
+  "mesh_family": null,
+  "mesh_name": "mesh",
+  "physical_groups": {
+    "domain": {
+      "dim": 2,
+      "tag": 1
+    },
+    "electrode_1": {
+      "dim": 1,
+      "tag": 2
+    },
+    "electrode_10": {
+      "dim": 1,
+      "tag": 11
+    },
+    "electrode_11": {
+      "dim": 1,
+      "tag": 12
+    },
+    "electrode_12": {
+      "dim": 1,
+      "tag": 13
+    },
+    "electrode_13": {
+      "dim": 1,
+      "tag": 14
+    },
+    "electrode_14": {
+      "dim": 1,
+      "tag": 15
+    },
+    "electrode_15": {
+      "dim": 1,
+      "tag": 16
+    },
+    "electrode_16": {
+      "dim": 1,
+      "tag": 17
+    },
+    "electrode_2": {
+      "dim": 1,
+      "tag": 3
+    },
+    "electrode_3": {
+      "dim": 1,
+      "tag": 4
+    },
+    "electrode_4": {
+      "dim": 1,
+      "tag": 5
+    },
+    "electrode_5": {
+      "dim": 1,
+      "tag": 6
+    },
+    "electrode_6": {
+      "dim": 1,
+      "tag": 7
+    },
+    "electrode_7": {
+      "dim": 1,
+      "tag": 8
+    },
+    "electrode_8": {
+      "dim": 1,
+      "tag": 9
+    },
+    "electrode_9": {
+      "dim": 1,
+      "tag": 10
+    },
+    "gaps": {
+      "dim": 1,
+      "tag": 18
+    }
+  },
+  "source_msh_file": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.msh",
+  "source_msh_signature": {
+    "mtime_ns": 1778242000617541726,
+    "path": "/home/tom/workspace/PyEidors_wsl2/docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.msh",
+    "sha256": "bbbc04bc80cec40b001a57e977aa1621abc994fffe2b6f199b719f6a4b9fbeb8",
+    "size": 187179
+  },
+  "structured_sidecar_file": null,
+  "structured_sidecar_signature": null,
+  "structured_sidecar_version": null,
+  "version": 1,
+  "xdmf_file": "docs/benchmarks/p_refinement_visual_20260508_circle_drivecut_p1234/mesh/mesh_510436.xdmf"
+}

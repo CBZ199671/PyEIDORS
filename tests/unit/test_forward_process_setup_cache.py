@@ -53,6 +53,13 @@ def test_build_key_changes_with_content_hash():
     assert a != b
 
 
+def test_build_key_changes_with_potential_order():
+    p1 = build_process_forward_setup_key(**_default_key_kwargs(potential_order=1))
+    p2 = build_process_forward_setup_key(**_default_key_kwargs(potential_order=2))
+
+    assert p1 != p2
+
+
 def test_build_key_stable_for_same_inputs():
     a = build_process_forward_setup_key(**_default_key_kwargs())
     b = build_process_forward_setup_key(**_default_key_kwargs())

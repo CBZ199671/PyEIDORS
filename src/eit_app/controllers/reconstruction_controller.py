@@ -41,13 +41,22 @@ _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
 LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
 _SINGLE_STEP_SIGNATURE_SCHEMA_VERSION = "single_step_signature_schema_v1"
 _SINGLE_STEP_JACOBIAN_CALCULATOR = "EidorsJacobianAdapter"
-_SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v2"
-_SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v1"
+_SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v4"
+_SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v3"
 _SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
-_SINGLE_STEP_CACHED_ALGORITHM_VERSION = "eidors_noser_single_step_v3"
+_SINGLE_STEP_CACHED_ALGORITHM_VERSION = "eidors_noser_single_step_v5"
+_ONE_STEP_RM_SIGNATURE_SCHEMA_VERSION = "one_step_rm_signature_schema_v2"
+_ONE_STEP_RM_JACOBIAN_BUILD_CONVENTION = "dense_eidors_adapter_jacobian_v3"
+_ONE_STEP_RM_PRIOR_MATH_CONVENTION = "singular_graph_prior_param_form_hp2_rtr_v5"
+_ONE_STEP_RM_ALGORITHM_VERSION = "one_step_rm_auto_build_dense_jacobian_v7"
+_ONE_STEP_RM_CONTENT_CONTRACT = "one_step_rm_hdf5_dense_fit_jacobian_contract_v1"
 _RM_ARTIFACT_CACHE_LOCK = threading.Lock()
 _RM_ARTIFACT_CACHE_MAX_ITEMS = 4
 _RM_ARTIFACT_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
+_RM_FIT_JACOBIAN_CACHE_LOCK = threading.Lock()
+_RM_FIT_JACOBIAN_CACHE_MAX_ITEMS = 2
+_RM_FIT_JACOBIAN_CACHE_MAX_BYTES = 512 * 1024 * 1024
+_RM_FIT_JACOBIAN_CACHE: OrderedDict[str, np.ndarray] = OrderedDict()
 _RM_ARTIFACT_META_KEYS = (
     "rm_artifact_path",
     "dual_model_rm_path",
@@ -61,7 +70,7 @@ _PRODUCTION_RM_ROUTE_TASKS = {
     "noser_rm": "T100",
     "laplace_rm": "T101",
     "curvature_rm": "T101",
-    "greit3d_rm": "T102",
+    "greit3d_rm": "T105",
 }
 _ONE_STEP_RM_ROUTE_REGULARIZATION = {
     "noser_rm": "noser",
@@ -121,6 +130,18 @@ def precompute_greit_common_config(*args, **kwargs):
     return _warmup(*args, **kwargs)
 
 
+def greit_artifact_signature_payload(*args, **kwargs):
+    from pyeidors.inverse.greit_registry import greit_artifact_signature_payload as _sig
+
+    return _sig(*args, **kwargs)
+
+
+def resolve_or_build_greit_artifact(*args, **kwargs):
+    from pyeidors.inverse.greit_registry import resolve_or_build_greit_artifact as _res
+
+    return _res(*args, **kwargs)
+
+
 def _total_electrodes_from_meta(meta: dict[str, Any]) -> int:
     return max(int(meta.get("n_elec", 16)), 1) * max(int(meta.get("n_rings", 1)), 1)
 
@@ -165,6 +186,153 @@ def _validate_rm_artifact_measurement_dimension(
                 request_measurements=request_measurements,
             )
         )
+
+
+def _public_runtime_metadata(meta: dict[str, Any]) -> dict[str, Any]:
+    return {
+        str(key): value for key, value in meta.items() if not str(key).startswith("_")
+    }
+
+
+def _rm_fit_jacobian_cache_key(path: Path, signature: Any) -> str:
+    signature_text = str(signature or "").strip()
+    if signature_text:
+        return signature_text
+    try:
+        return str(path.resolve())
+    except OSError:
+        return str(path)
+
+
+def _fit_jacobian_array(
+    value: Any,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    try:
+        arr = np.asarray(value, dtype=np.float64)
+    except (TypeError, ValueError):
+        return None
+    if arr.ndim != 2 or 0 in arr.shape or not np.isfinite(arr).all():
+        return None
+    if expected_shape is not None and tuple(int(v) for v in arr.shape) != tuple(
+        int(v) for v in expected_shape
+    ):
+        return None
+    return np.ascontiguousarray(arr, dtype=np.float64)
+
+
+def _put_rm_fit_jacobian_cache(key: str, jacobian: np.ndarray) -> str:
+    arr = _fit_jacobian_array(jacobian)
+    if arr is None:
+        return "invalid"
+    if int(arr.nbytes) > _RM_FIT_JACOBIAN_CACHE_MAX_BYTES:
+        return "too_large"
+    with _RM_FIT_JACOBIAN_CACHE_LOCK:
+        _RM_FIT_JACOBIAN_CACHE[key] = arr
+        _RM_FIT_JACOBIAN_CACHE.move_to_end(key)
+        while len(_RM_FIT_JACOBIAN_CACHE) > _RM_FIT_JACOBIAN_CACHE_MAX_ITEMS:
+            _RM_FIT_JACOBIAN_CACHE.popitem(last=False)
+    return "stored"
+
+
+def _get_rm_fit_jacobian_cache(
+    key: str,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    with _RM_FIT_JACOBIAN_CACHE_LOCK:
+        cached = _RM_FIT_JACOBIAN_CACHE.get(key)
+        if cached is None:
+            return None
+        arr = _fit_jacobian_array(cached, expected_shape=expected_shape)
+        if arr is None:
+            _RM_FIT_JACOBIAN_CACHE.pop(key, None)
+            return None
+        _RM_FIT_JACOBIAN_CACHE.move_to_end(key)
+        return arr
+
+
+def _read_rm_artifact_fit_jacobian(
+    path: Path,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    if path.suffix.lower() not in {".h5", ".hdf5"}:
+        return None
+    try:
+        from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+
+        artifact = read_hdf5_artifact(
+            path,
+            lazy=True,
+            verify_checksums=False,
+        )
+        raw = artifact.arrays.get("jacobian")
+        if raw is None:
+            raw = artifact.arrays.get("fit_jacobian")
+        if raw is None:
+            return None
+        return _fit_jacobian_array(raw, expected_shape=expected_shape)
+    except Exception as exc:
+        log.debug("Could not restore RM fit Jacobian from %s: %s", path, exc)
+        return None
+
+
+def _stash_rm_fit_jacobian(
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    path: Path,
+    signature: Any,
+    jacobian: Any,
+    status_prefix: str,
+) -> np.ndarray | None:
+    arr = _fit_jacobian_array(jacobian)
+    if arr is None:
+        runtime.meta["rm_fit_jacobian_cache_status"] = f"{status_prefix}_invalid"
+        return None
+    runtime.meta["_inmem_jacobian"] = arr
+    cache_key = _rm_fit_jacobian_cache_key(path, signature)
+    cache_status = _put_rm_fit_jacobian_cache(cache_key, arr)
+    runtime.meta["rm_fit_jacobian_cache_status"] = f"{status_prefix}_{cache_status}"
+    return arr
+
+
+def _restore_rm_fit_jacobian(
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    path: Path,
+    signature: Any,
+    expected_shape: tuple[int, int] | None = None,
+) -> np.ndarray | None:
+    current = runtime.meta.get("_inmem_jacobian")
+    if current is not None:
+        arr = _fit_jacobian_array(current, expected_shape=expected_shape)
+        if arr is not None:
+            runtime.meta["_inmem_jacobian"] = arr
+            runtime.meta.setdefault("rm_fit_jacobian_cache_status", "runtime_hit")
+            return arr
+        runtime.meta.pop("_inmem_jacobian", None)
+
+    cache_key = _rm_fit_jacobian_cache_key(path, signature)
+    cached = _get_rm_fit_jacobian_cache(cache_key, expected_shape=expected_shape)
+    if cached is not None:
+        runtime.meta["_inmem_jacobian"] = cached
+        runtime.meta["rm_fit_jacobian_cache_status"] = "process_hit"
+        return cached
+
+    artifact_jacobian = _read_rm_artifact_fit_jacobian(
+        path,
+        expected_shape=expected_shape,
+    )
+    if artifact_jacobian is not None:
+        runtime.meta["_inmem_jacobian"] = artifact_jacobian
+        cache_status = _put_rm_fit_jacobian_cache(cache_key, artifact_jacobian)
+        runtime.meta["rm_fit_jacobian_cache_status"] = f"artifact_hit_{cache_status}"
+        return artifact_jacobian
+
+    runtime.meta["rm_fit_jacobian_cache_status"] = "miss"
+    return None
 
 
 def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
@@ -317,6 +485,12 @@ def _resolve_reconstruction_runtime(
     requested_profile = _auto("acceleration_profile", "default")
     mesh_family = _auto("mesh_family", "tetra")
     forward_backend = _auto("forward_backend", "dolfinx")
+    potential_order = max(1, int(meta.get("potential_order", 1) or 1))
+    if potential_order != 1 and forward_backend == "cuda_structured":
+        raise ValueError(
+            "potential_order > 1 requires the DOLFINx forward backend; "
+            "cuda_structured currently supports only P1."
+        )
     wants_gpu_request = gui_profile == "gpu" or requested_profile in {
         "gpu3d",
         "gpu3d_fused",
@@ -324,6 +498,7 @@ def _resolve_reconstruction_runtime(
     wants_structured_gpu = (
         int(mesh_dim) == 3
         and mesh_family == "hex"
+        and potential_order == 1
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
     wants_3d_cuda = int(mesh_dim) == 3 and (
@@ -406,6 +581,7 @@ def _resolve_reconstruction_runtime(
         "forward_backend": forward_backend,
         "mesh_family": mesh_family,
         "geometry_version": _auto("geometry_version", "geomv2"),
+        "potential_order": potential_order,
         "acceleration_profile": acceleration_profile,
     }
 
@@ -471,6 +647,10 @@ class _ReconstructionWorker(QObject):
         super().__init__()
         self._request: ReconstructionRequest | None = None
         self._eit_system = None  # lazy import pyeidors
+        self._cancel_requested = False
+
+    def cancel(self) -> None:
+        self._cancel_requested = True
 
     @Slot()
     def run(self) -> None:
@@ -478,8 +658,16 @@ class _ReconstructionWorker(QObject):
         if req is None:
             self.error.emit("No reconstruction request set")
             return
+        if self._cancel_requested:
+            return
 
-        result = run_reconstruction_request(req, progress_cb=self.progress.emit)
+        def _progress(message: str) -> None:
+            if not self._cancel_requested:
+                self.progress.emit(message)
+
+        result = run_reconstruction_request(req, progress_cb=_progress)
+        if self._cancel_requested:
+            return
         if result.error_msg:
             self.error.emit(result.error_msg)
         self.finished.emit(result)
@@ -651,6 +839,28 @@ def _compute_effective_refinement(
     return max(2, int(round(radius_f / max(mesh_size_f, 1e-6) / 2.0)))
 
 
+def default_rm_inverse_mesh_size(
+    requested_mesh_size: float,
+    radius: float,
+    *,
+    mesh_dimension: int = 3,
+) -> float:
+    """Return the default coarse inverse mesh size for auto-built RM routes."""
+
+    try:
+        requested = float(requested_mesh_size)
+    except (TypeError, ValueError):
+        requested = 0.1
+    if not np.isfinite(requested) or requested <= 0.0:
+        requested = 0.1
+    radius_f = max(float(radius), 1.0e-9)
+    if int(mesh_dimension) == 3:
+        target = radius_f / 6.0
+    else:
+        target = radius_f / 10.0
+    return float(min(requested, max(target, 1.0e-6)))
+
+
 def _resolve_drive_mode(
     meta: dict[str, Any],
     *,
@@ -696,6 +906,12 @@ def _first_present_meta_value(meta: dict[str, Any], *keys: str) -> Any | None:
 
 def _warm_greit_common_config_artifact_from_meta(meta: dict[str, Any]) -> Path | None:
     if not _flag_enabled(meta.get("greit_common_config_auto_warm", False)):
+        return None
+    if not _flag_enabled(meta.get("greit_fixture_auto_warm_allowed", False)):
+        meta["greit_common_config_unavailable_reason"] = (
+            "GREIT production route requires a registered EIDORS-parity artifact; "
+            "deterministic fixture auto-warm is disabled."
+        )
         return None
     config_id = _first_present_meta_value(
         meta,
@@ -744,10 +960,13 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
         raise FileNotFoundError(f"RM artifact path does not exist: {text}")
     try:
         common_path = resolve_greit_common_config_artifact_path_from_meta(meta)
-    except FileNotFoundError:
+    except FileNotFoundError as exc:
         common_path = _warm_greit_common_config_artifact_from_meta(meta)
         if common_path is None:
-            raise
+            meta["rm_artifact_unavailable_reason"] = str(
+                meta.get("greit_common_config_unavailable_reason") or exc
+            )
+            return None
     if common_path is not None:
         return common_path
     return None
@@ -826,6 +1045,24 @@ def _should_auto_build_rm_artifact(meta: dict[str, Any]) -> bool:
     )
 
 
+def _single_step_context_cache_scope(meta: dict[str, Any]) -> str:
+    raw = str(meta.get("single_step_context_cache_scope", "both") or "both")
+    scope = raw.strip().lower()
+    if scope in {"memory", "runtime", "session"}:
+        return "process"
+    if scope in {"process", "disk", "both", "off"}:
+        return scope
+    return "both"
+
+
+def _should_resolve_greit_registry(meta: dict[str, Any]) -> bool:
+    return _simulation_inverse_route(meta) == "greit3d_rm" and (
+        _flag_enabled(meta.get("greit_registry_auto_resolve", False))
+        or _flag_enabled(meta.get("rm_auto_build", False))
+        or bool(meta.get("greit_registry_signature"))
+    )
+
+
 def _channel_mask_from_meta(
     meta: dict[str, Any],
     *,
@@ -861,6 +1098,108 @@ def _measurement_weights_from_meta(
     return None
 
 
+def _greit_registry_config_from_runtime(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+) -> dict[str, Any]:
+    meta = runtime.meta
+    n_meas = max(_request_measurement_count(req), 1)
+    channel_mask = _channel_mask_from_meta(meta, n_measurements=n_meas)
+    weights = _measurement_weights_from_meta(meta, n_measurements=n_meas)
+    config = dict(meta.get("greit_registry_config") or {})
+    config.update(
+        {
+            "mesh_dimension": int(runtime.mesh_dim),
+            "mesh_refinement": meta.get("mesh_size", req.mesh_refinement),
+            "mesh_family": meta.get("mesh_family"),
+            "geometry_version": meta.get("geometry_version"),
+            "n_elec": int(meta.get("n_elec", 16)),
+            "n_rings": int(meta.get("n_rings", 1)),
+            "n_layers": int(meta.get("n_layers", meta.get("n_rings", 1))),
+            "radius": float(meta.get("radius", 1.0)),
+            "height": float(meta.get("height", meta.get("mesh_height", 1.0))),
+            "electrode_length_m_override": meta.get("electrode_length_m_override"),
+            "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
+            "electrode_height_ratio": float(
+                meta.get("electrode_height_ratio", runtime.electrode_height_ratio)
+            ),
+            "electrode_level_fractions": meta.get(
+                "electrode_level_fractions", (0.25, 0.75)
+            ),
+            "electrode_layout": str(meta.get("electrode_layout", "ring_major")),
+            "measurement_protocol": str(
+                meta.get("measurement_protocol", "eidors_full_3d")
+            ),
+            "stim_pattern": str(meta.get("stim_pattern", "{ad}")),
+            "meas_pattern": str(meta.get("meas_pattern", "{ad}")),
+            "rotate_meas": bool(meta.get("rotate_meas", True)),
+            "use_meas_current": bool(meta.get("use_meas_current", False)),
+            "use_meas_current_next": int(meta.get("use_meas_current_next", 0)),
+            "stim_direction": str(meta.get("stim_direction", "ccw")),
+            "meas_direction": str(meta.get("meas_direction", "ccw")),
+            "stim_first_positive": bool(meta.get("stim_first_positive", False)),
+            "custom_stim_matrix": meta.get("custom_stim_matrix"),
+            "custom_meas_matrices": meta.get("custom_meas_matrices"),
+            "measurement_count": n_meas,
+            "channel_order": np.arange(n_meas, dtype=np.int64),
+            "bad_channel_mask": channel_mask,
+            "measurement_weights": weights,
+            "background_conductivity": float(runtime.background_sigma),
+            "contact_impedance": runtime.contact_impedance,
+            "normalize_measurements": str(
+                meta.get("difference_mode", "normalized")
+            ).lower()
+            == "normalized",
+            "builder_backend": str(meta.get("greit_builder_backend", "native")),
+            "builder_semantic_version": str(
+                meta.get("greit_builder_semantic_version", "")
+            ),
+        }
+    )
+    for key in (
+        "imgsz",
+        "greit_imgsz",
+        "xvec",
+        "yvec",
+        "zvec",
+        "greit_xvec",
+        "greit_yvec",
+        "greit_zvec",
+        "downsample",
+        "greit_downsample",
+        "target_distribution",
+        "distr",
+        "target_size",
+        "greit_target_size",
+        "target_radius",
+        "greit_target_radius",
+        "target_contrast",
+        "greit_target_contrast",
+        "desired_solution_fn",
+        "desired_solution_params",
+        "greit_desired_options",
+        "noise_covar",
+        "weight",
+        "greit_weight",
+        "noise_figure",
+        "greit_noise_figure",
+        "image_SNR",
+        "image_snr",
+        "training_mode",
+        "artifact_schema",
+    ):
+        if key in meta and key not in config:
+            config[key] = meta[key]
+    return config
+
+
+def _greit_registry_dir_from_meta(meta: dict[str, Any]) -> Path:
+    return _repo_relative_or_absolute_path(
+        meta.get("greit_registry_dir", meta.get("rm_artifact_dir")),
+        default=".pyeidors_cache/greit_artifacts",
+    )
+
+
 def _array_pair_hash(*arrays: Any) -> str:
     digest = hashlib.sha256()
     for array in arrays:
@@ -869,6 +1208,22 @@ def _array_pair_hash(*arrays: Any) -> str:
         digest.update(str(arr.shape).encode("utf-8"))
         digest.update(arr.tobytes())
     return digest.hexdigest()
+
+
+def _one_step_rm_form(
+    meta: dict[str, Any], regularization_type: str | None = None
+) -> str:
+    regularization = (
+        str(regularization_type or _one_step_rm_regularization(meta) or "noser")
+        .strip()
+        .lower()
+    )
+    if regularization in {"laplace", "curvature", "graph_ltl", "tv_irls"}:
+        return "param"
+    requested = str(meta.get("rm_form", "")).strip().lower()
+    if requested in {"param", "measurement"}:
+        return requested
+    return "measurement"
 
 
 def _planned_one_step_rm_signature(
@@ -883,6 +1238,7 @@ def _planned_one_step_rm_signature(
     weights = _measurement_weights_from_meta(meta, n_measurements=n_meas)
     hp = math.sqrt(max(float(runtime.lam), 0.0))
     regularization_type = _one_step_rm_regularization(meta) or "noser"
+    rm_form = _one_step_rm_form(meta, regularization_type)
     graph_weight = str(meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
     forward_mesh_payload = {
         "mesh_dimension": runtime.mesh_dim,
@@ -962,12 +1318,42 @@ def _planned_one_step_rm_signature(
             "hp": hp,
             "hp_squared": hp * hp,
             "lambda_eff": float(runtime.lam),
-            "form": "measurement",
+            "form": rm_form,
+            "singular_prior_form_policy": "param_for_graph_laplace_curvature_v1"
+            if regularization_type in {"laplace", "curvature", "graph_ltl"}
+            else None,
+            "rm_signature_schema_version": str(
+                meta.get("one_step_rm_signature_schema_version", "")
+            ),
+            "rm_jacobian_calculator": str(
+                meta.get("single_step_jacobian_calculator", "")
+            ),
+            "rm_jacobian_math_convention": str(
+                meta.get("single_step_jacobian_math_convention", "")
+            ),
+            "rm_projection_math_convention": str(
+                meta.get("single_step_projection_math_convention", "")
+            ),
+            "rm_jacobian_build_representation": str(
+                meta.get(
+                    "rm_build_jacobian_representation",
+                    meta.get("jacobian_representation", "dense"),
+                )
+            ),
+            "rm_jacobian_build_convention": str(
+                meta.get("one_step_rm_jacobian_build_convention", "")
+            ),
+            "rm_jacobian_source_cache_scope": _single_step_context_cache_scope(meta),
+            "rm_prior_math_convention": str(
+                meta.get("one_step_rm_prior_math_convention", "")
+            ),
+            "rm_algorithm_version": str(meta.get("one_step_rm_algorithm_version", "")),
+            "rm_content_contract": str(meta.get("one_step_rm_content_contract", "")),
             "noser_exponent": 0.5 if regularization_type == "noser" else None,
             "prior_operator": {
-                "laplace": "graph_laplacian",
-                "curvature": "graph_ltl",
-                "graph_ltl": "graph_ltl",
+                "laplace": "eidors_prior_laplace_graph_x2",
+                "curvature": "eidors_prior_laplace_squared",
+                "graph_ltl": "eidors_prior_laplace_squared",
             }.get(regularization_type),
             "graph_weight": graph_weight
             if regularization_type in {"laplace", "curvature", "graph_ltl"}
@@ -1011,6 +1397,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         return None
     route = _simulation_inverse_route(runtime.meta)
     regularization_type = _one_step_rm_regularization(runtime.meta) or "noser"
+    rm_form = _one_step_rm_form(runtime.meta, regularization_type)
     artifact_path, signature, signature_payload = _planned_one_step_rm_artifact_path(
         req,
         runtime,
@@ -1022,11 +1409,20 @@ def _ensure_auto_built_one_step_rm_artifact(
         runtime.meta["dual_model_rm_path"] = str(artifact_path)
         runtime.meta["rm_artifact_auto_built"] = False
         runtime.meta["rm_artifact_cache_status"] = "disk_hit"
-        emit(f"Using cached {regularization_type.upper()} RM artifact...")
+        _restore_rm_fit_jacobian(
+            runtime,
+            path=artifact_path,
+            signature=signature,
+        )
+        message = f"Using cached {regularization_type.upper()} RM artifact..."
+        log.info(message)
+        emit(message)
         return artifact_path
 
     diff_runner = _load_gn_difference_runner_module()
-    emit(f"Building {regularization_type.upper()} RM artifact...")
+    message = f"Building {regularization_type.upper()} RM artifact..."
+    log.info(message)
+    emit(message)
     ctx = _ensure_single_step_cached_context(
         runtime,
         emit=emit,
@@ -1072,7 +1468,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         regularization=regularization,
         lambda_=hp,
         mode=regularization_type,
-        form="measurement",
+        form=rm_form,
         channel_mask=channel_mask,
         measurement_weights=weights,
         return_metadata=True,
@@ -1090,6 +1486,32 @@ def _ensure_auto_built_one_step_rm_artifact(
         "difference_orientation": str(
             runtime.meta.get("difference_orientation", "target_minus_reference")
         ),
+        "rm_build_jacobian_representation": str(
+            runtime.meta.get("rm_build_jacobian_representation", "dense")
+        ),
+        "rm_jacobian_source_cache_scope": str(
+            _single_step_context_cache_scope(runtime.meta)
+        ),
+        "rm_form": rm_form,
+        "singular_prior_form_policy": "param_for_graph_laplace_curvature_v1"
+        if regularization_type in {"laplace", "curvature", "graph_ltl"}
+        else "",
+        "one_step_rm_signature_schema_version": str(
+            runtime.meta.get("one_step_rm_signature_schema_version", "")
+        ),
+        "one_step_rm_jacobian_build_convention": str(
+            runtime.meta.get("one_step_rm_jacobian_build_convention", "")
+        ),
+        "one_step_rm_prior_math_convention": str(
+            runtime.meta.get("one_step_rm_prior_math_convention", "")
+        ),
+        "one_step_rm_algorithm_version": str(
+            runtime.meta.get("one_step_rm_algorithm_version", "")
+        ),
+        "one_step_rm_content_contract": str(
+            runtime.meta.get("one_step_rm_content_contract", "")
+        ),
+        "fit_jacobian_persisted": True,
         "rm_output_display_mode": str(
             runtime.meta.get("rm_output_display_mode", "absolute_sigma")
         ),
@@ -1115,12 +1537,88 @@ def _ensure_auto_built_one_step_rm_artifact(
         cell_connectivity=cell_connectivity,
         channel_mask=channel_mask,
         measurement_weights=weights,
+        jacobian=jacobian,
     )
     runtime.meta["rm_artifact_path"] = str(artifact_path)
     runtime.meta["dual_model_rm_path"] = str(artifact_path)
     runtime.meta["rm_artifact_auto_built"] = True
     runtime.meta["rm_artifact_cache_status"] = "built"
+    _stash_rm_fit_jacobian(
+        runtime,
+        path=artifact_path,
+        signature=signature,
+        jacobian=jacobian,
+        status_prefix="built",
+    )
     return artifact_path
+
+
+def _ensure_greit_registry_artifact(
+    req: ReconstructionRequest,
+    runtime: _SingleStepCachedRuntimeConfig,
+    *,
+    emit: Callable[[str], None],
+) -> Path | None:
+    if not _should_resolve_greit_registry(runtime.meta):
+        return None
+    config = _greit_registry_config_from_runtime(req, runtime)
+    payload = greit_artifact_signature_payload(config)
+    signature = _stable_json_digest(payload)
+    runtime.meta["greit_registry_signature"] = signature
+    runtime.meta["greit_registry_signature_payload"] = payload
+    runtime.meta["rm_signature"] = signature
+    registry_dir = _greit_registry_dir_from_meta(runtime.meta)
+    auto_build = _flag_enabled(runtime.meta.get("rm_auto_build", False))
+
+    def _builder(
+        build_config: dict[str, Any],
+        _payload: dict[str, Any],
+        artifact_path: Path,
+    ):
+        diff_runner = _load_gn_difference_runner_module()
+        emit("Building native GREIT registry artifact...")
+        ctx = _ensure_single_step_cached_context(
+            runtime,
+            emit=emit,
+            build_shared_context=diff_runner.build_shared_context,
+        )
+        from pyeidors.inverse.greit_registry import build_native_greit_artifact
+
+        return build_native_greit_artifact(
+            build_config,
+            fwd_model=ctx["fwd_model"],
+            artifact_path=artifact_path,
+            signature=signature,
+            signature_payload=payload,
+        )
+
+    try:
+        lookup = resolve_or_build_greit_artifact(
+            config,
+            registry_dir=registry_dir,
+            auto_build=auto_build,
+            builder=_builder if auto_build else None,
+            prepare_online=False,
+        )
+    except FileNotFoundError as exc:
+        runtime.meta["greit_registry_unavailable_reason"] = str(exc)
+        runtime.meta["rm_artifact_unavailable_reason"] = str(exc)
+        return None
+    runtime.meta["greit_registry_dir"] = str(registry_dir)
+    runtime.meta["greit_registry_manifest_path"] = str(lookup.manifest_path)
+    runtime.meta["greit_registry_signature"] = lookup.signature
+    runtime.meta["greit_registry_cache_status"] = lookup.cache_status
+    runtime.meta["greit_builder_backend"] = lookup.backend
+    runtime.meta["rm_artifact_path"] = str(lookup.artifact_path)
+    runtime.meta["greit_rm_path"] = str(lookup.artifact_path)
+    runtime.meta["rm_artifact_auto_built"] = bool(lookup.built)
+    runtime.meta["rm_artifact_cache_status"] = lookup.cache_status
+    emit(
+        "Using GREIT registry artifact..."
+        if not lookup.built
+        else "Built GREIT registry artifact."
+    )
+    return lookup.artifact_path
 
 
 def _single_step_rm_route_requires_artifact(meta: dict[str, Any]) -> bool:
@@ -1281,6 +1779,10 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         "cell_connectivity": cell_connectivity,
         "channel_mask": artifact.channel_mask,
         "measurement_weights": artifact.measurement_weights,
+        "rec_model": artifact.rec_model,
+        "greit_y": artifact.greit_y,
+        "greit_d": artifact.greit_d,
+        "schema": artifact.schema,
     }
 
 
@@ -1400,6 +1902,79 @@ def _voxel_grid_geometry(
     return coords, np.asarray(cells, dtype=np.int32)
 
 
+def _center_cloud_hexa_geometry(
+    centers: np.ndarray,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    centers = np.asarray(centers, dtype=np.float64)
+    if centers.ndim != 2 or centers.shape[1] != 3 or centers.shape[0] == 0:
+        return None
+    if not np.isfinite(centers).all():
+        return None
+    axis_spacing: list[float] = []
+    for axis in range(3):
+        unique = np.unique(np.round(centers[:, axis], decimals=12))
+        diffs = np.diff(np.sort(unique))
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        if diffs.size:
+            axis_spacing.append(float(np.median(diffs)))
+        else:
+            axis_spacing.append(float("nan"))
+    if not any(np.isfinite(value) and value > 0.0 for value in axis_spacing):
+        radius = float(meta.get("radius", 1.0) or 1.0)
+        fallback = radius / max(round(centers.shape[0] ** (1.0 / 3.0)), 1)
+        axis_spacing = [fallback, fallback, fallback]
+    finite_spacing = [
+        value for value in axis_spacing if np.isfinite(value) and value > 0.0
+    ]
+    fallback_spacing = float(min(finite_spacing)) if finite_spacing else 1.0
+    half_axes = np.asarray(
+        [
+            0.45 * (value if np.isfinite(value) and value > 0.0 else fallback_spacing)
+            for value in axis_spacing
+        ],
+        dtype=np.float64,
+    )
+    half_axes = np.maximum(half_axes, np.finfo(np.float64).eps)
+    offsets = np.asarray(
+        [
+            [-half_axes[0], -half_axes[1], -half_axes[2]],
+            [half_axes[0], -half_axes[1], -half_axes[2]],
+            [half_axes[0], half_axes[1], -half_axes[2]],
+            [-half_axes[0], half_axes[1], -half_axes[2]],
+            [-half_axes[0], -half_axes[1], half_axes[2]],
+            [half_axes[0], -half_axes[1], half_axes[2]],
+            [half_axes[0], half_axes[1], half_axes[2]],
+            [-half_axes[0], half_axes[1], half_axes[2]],
+        ],
+        dtype=np.float64,
+    )
+    coords = (centers[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
+    cells = np.asarray(
+        [[8 * idx + offset for offset in range(8)] for idx in range(centers.shape[0])],
+        dtype=np.int32,
+    )
+    return coords, cells
+
+
+def _greit_rec_model_geometry(
+    rec_model: Any,
+    *,
+    n_parameters: int,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    raw = np.asarray(rec_model, dtype=np.float64)
+    if raw.ndim != 2 or raw.shape[1] != 3 or raw.shape[0] == 0:
+        return None
+    if raw.shape[0] == int(n_parameters):
+        centers = raw
+    elif int(n_parameters) > 0 and raw.shape[0] % int(n_parameters) == 0:
+        centers = raw.reshape(int(n_parameters), -1, 3).mean(axis=1)
+    else:
+        return None
+    return _center_cloud_hexa_geometry(centers, meta)
+
+
 def _rm_artifact_geometry(
     artifact: dict[str, Any],
     meta: dict[str, Any],
@@ -1408,12 +1983,93 @@ def _rm_artifact_geometry(
     cells = artifact.get("cell_connectivity")
     if coords is not None and cells is not None:
         return np.asarray(coords, dtype=np.float64), np.asarray(cells, dtype=np.int32)
+    rec_model = artifact.get("rec_model")
+    if rec_model is not None:
+        generated_from_rec = _greit_rec_model_geometry(
+            rec_model,
+            n_parameters=int(np.asarray(artifact["rm"]).shape[0]),
+            meta=meta,
+        )
+        if generated_from_rec is not None:
+            meta["rm_geometry_source"] = "greit_rec_model_centers"
+            return generated_from_rec
     generated = _voxel_grid_geometry(tuple(artifact.get("voxel_shape", ())), meta)
     if generated is not None:
+        meta["rm_geometry_source"] = "voxel_shape_full_grid"
         return generated
     raise ValueError(
         "RM artifact hot path requires node/cell geometry or a 3D voxel_shape."
     )
+
+
+def _greit_artifact_unavailable_reason(
+    artifact: dict[str, Any],
+    meta: dict[str, Any],
+    *,
+    expected_n_measurements: int,
+) -> str:
+    if _simulation_inverse_route(meta) != "greit3d_rm":
+        return ""
+    artifact_meta = dict(artifact.get("metadata", {}) or {})
+    if bool(artifact_meta.get("fixture_only", False)):
+        return (
+            "GREIT artifact is a deterministic fixture, not an official EIDORS "
+            "parity artifact; refusing production greit3d_rm."
+        )
+    if not bool(artifact_meta.get("eidors_parity", False)):
+        return (
+            "GREIT artifact metadata does not declare eidors_parity=true; refusing "
+            "production greit3d_rm."
+        )
+    expected_signature = str(meta.get("greit_registry_signature") or "").strip()
+    if expected_signature:
+        actual_signature = str(
+            artifact_meta.get("greit_registry_signature") or ""
+        ).strip()
+        if actual_signature != expected_signature:
+            return (
+                "GREIT artifact registry signature mismatch; refusing production "
+                "greit3d_rm."
+            )
+    rm = np.asarray(artifact["rm"])
+    if int(rm.shape[1]) != int(expected_n_measurements):
+        return _rm_artifact_measurement_mismatch_message(
+            path=Path(str(artifact.get("path", "")) or "<artifact>"),
+            artifact_columns=int(rm.shape[1]),
+            request_measurements=int(expected_n_measurements),
+        )
+    return ""
+
+
+def _greit_training_space_fit(
+    artifact: dict[str, Any],
+    delta_conductivity: np.ndarray,
+    *,
+    n_measurements: int,
+) -> np.ndarray | None:
+    y = artifact.get("greit_y")
+    d = artifact.get("greit_d")
+    if y is None or d is None:
+        return None
+    y_matrix = np.asarray(y, dtype=np.float64)
+    d_matrix = np.asarray(d, dtype=np.float64)
+    delta = np.asarray(delta_conductivity, dtype=np.float64).reshape(-1)
+    if (
+        y_matrix.ndim != 2
+        or d_matrix.ndim != 2
+        or y_matrix.shape[0] != int(n_measurements)
+        or d_matrix.shape[0] != delta.size
+        or y_matrix.shape[1] != d_matrix.shape[1]
+    ):
+        return None
+    try:
+        coeff = np.linalg.pinv(d_matrix) @ delta
+        fitted = np.asarray(y_matrix @ coeff, dtype=np.float64).reshape(-1)
+    except np.linalg.LinAlgError:
+        return None
+    if fitted.size != int(n_measurements) or not np.isfinite(fitted).all():
+        return None
+    return fitted
 
 
 def _try_run_cached_rm_request(
@@ -1451,6 +2107,17 @@ def _try_run_cached_rm_request(
         dtype=dtype,
         expected_n_measurements=int(ref_vec.size),
     )
+    greit_unavailable = _greit_artifact_unavailable_reason(
+        artifact,
+        runtime.meta,
+        expected_n_measurements=int(ref_vec.size),
+    )
+    if greit_unavailable:
+        runtime.meta["rm_artifact_unavailable_reason"] = greit_unavailable
+        return _missing_rm_artifact_result(
+            runtime,
+            emit=progress_cb if progress_cb is not None else (lambda _msg: None),
+        )
     node_coords, cell_connectivity = _rm_artifact_geometry(artifact, runtime.meta)
     difference_mode = str(runtime.meta.get("difference_mode", "raw"))
     difference_orientation = str(
@@ -1478,7 +2145,42 @@ def _try_run_cached_rm_request(
         conductivity = delta_conductivity + float(runtime.background_sigma)
     else:
         conductivity = delta_conductivity
-    result_meta = dict(runtime.meta)
+
+    # Simulated boundary-voltage diff = J @ delta_sigma.  Auto-built RM
+    # artifacts persist an optional fit Jacobian and also keep a small
+    # process cache keyed by the RM semantic signature, so warm runs keep
+    # the GUI voltage-fit overlay without carrying J in result metadata.
+    simulated_dv: np.ndarray | None = None
+    artifact_meta = dict(artifact.get("metadata", {}) or {})
+    rm_signature = runtime.meta.get("rm_signature") or artifact_meta.get("rm_signature")
+    inmem_jacobian = _restore_rm_fit_jacobian(
+        runtime,
+        path=path,
+        signature=rm_signature,
+        expected_shape=(int(dv.size), int(delta_conductivity.size)),
+    )
+    if inmem_jacobian is not None:
+        try:
+            jac = np.asarray(inmem_jacobian, dtype=np.float64)
+            if (
+                jac.ndim == 2
+                and jac.shape[1] == delta_conductivity.size
+                and jac.shape[0] == int(dv.size)
+            ):
+                simulated_dv = np.asarray(jac @ delta_conductivity, dtype=np.float64)
+                if not np.isfinite(simulated_dv).all():
+                    simulated_dv = None
+        except Exception:
+            simulated_dv = None
+    if simulated_dv is None and _simulation_inverse_route(runtime.meta) == "greit3d_rm":
+        simulated_dv = _greit_training_space_fit(
+            artifact,
+            delta_conductivity,
+            n_measurements=int(dv.size),
+        )
+        if simulated_dv is not None:
+            runtime.meta["rm_fit_source"] = "greit_training_space_projection"
+    result_meta = _public_runtime_metadata(runtime.meta)
     result_meta.update(
         {
             "n_elec": int(runtime.meta["n_elec"]),
@@ -1555,7 +2257,7 @@ def _try_run_cached_rm_request(
         node_coords=node_coords,
         cell_connectivity=cell_connectivity,
         measured=dv,
-        simulated=None,
+        simulated=simulated_dv,
         metadata=result_meta,
     )
 
@@ -1607,6 +2309,7 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("forward_backend", "dolfinx")
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
+    meta.setdefault("potential_order", 1)
     meta.setdefault("acceleration_profile", "default")
     meta.setdefault(
         "single_step_signature_schema_version",
@@ -1629,6 +2332,20 @@ def _prepare_single_step_cached_runtime(
         "single_step_algorithm_version",
         _SINGLE_STEP_CACHED_ALGORITHM_VERSION,
     )
+    meta.setdefault(
+        "one_step_rm_signature_schema_version",
+        _ONE_STEP_RM_SIGNATURE_SCHEMA_VERSION,
+    )
+    meta.setdefault(
+        "one_step_rm_jacobian_build_convention",
+        _ONE_STEP_RM_JACOBIAN_BUILD_CONVENTION,
+    )
+    meta.setdefault(
+        "one_step_rm_prior_math_convention",
+        _ONE_STEP_RM_PRIOR_MATH_CONVENTION,
+    )
+    meta.setdefault("one_step_rm_algorithm_version", _ONE_STEP_RM_ALGORITHM_VERSION)
+    meta.setdefault("one_step_rm_content_contract", _ONE_STEP_RM_CONTENT_CONTRACT)
     mesh_dim = int(meta.get("mesh_dimension", req.mesh_dimension))
     meta["mesh_dimension"] = mesh_dim
     meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=mesh_dim)
@@ -1663,6 +2380,18 @@ def _prepare_single_step_cached_runtime(
         )
     else:
         meta["jacobian_representation_reason"] = f"explicit_{jac_repr}"
+    if _is_auto_built_one_step_rm_route(meta):
+        meta["rm_build_jacobian_representation"] = "dense"
+        meta.setdefault("single_step_context_cache_scope", "process")
+        if jac_repr != "dense":
+            meta["rm_build_jacobian_representation_requested"] = jac_repr
+            meta["rm_build_jacobian_representation_reason"] = (
+                f"rm_auto_build_requires_dense_from_{jac_repr}"
+            )
+            meta["jacobian_representation_reason"] = (
+                f"rm_auto_build_requires_dense_from_{jac_repr}"
+            )
+            jac_repr = "dense"
     meta["jacobian_representation"] = jac_repr
     radius = float(meta.get("radius", 1.0))
     mesh_size_for_runtime = meta.get("mesh_size")
@@ -1673,7 +2402,11 @@ def _prepare_single_step_cached_runtime(
             requested_mesh_size = float(req.mesh_refinement)
         inverse_mesh_size = meta.get("rm_inverse_mesh_size")
         if inverse_mesh_size in (None, ""):
-            inverse_mesh_size = max(float(requested_mesh_size), radius / 4.0)
+            inverse_mesh_size = default_rm_inverse_mesh_size(
+                requested_mesh_size,
+                radius,
+                mesh_dimension=int(meta.get("mesh_dimension", req.mesh_dimension)),
+            )
             meta["rm_inverse_mesh_size"] = inverse_mesh_size
         mesh_size_for_runtime = inverse_mesh_size
     meta["effective_inverse_mesh_size"] = mesh_size_for_runtime
@@ -1737,6 +2470,7 @@ def _prepare_single_step_cached_runtime(
         float(meta.get("drive_value", 1.0e-5)),
         str(meta.get("mesh_dir", "eit_meshes")),
         repr(meta.get("rm_inverse_mesh_size")),
+        _single_step_context_cache_scope(meta),
         str(req.use_part),
         str(meta.get("solver_mode", "auto")),
         str(meta.get("linear_solver", "auto")),
@@ -1754,6 +2488,7 @@ def _prepare_single_step_cached_runtime(
         str(meta.get("forward_backend", "dolfinx")),
         str(meta.get("mesh_family", "tetra")),
         str(meta.get("geometry_version", "geomv2")),
+        int(meta.get("potential_order", 1)),
         str(meta.get("acceleration_profile", "default")),
     )
     return _SingleStepCachedRuntimeConfig(
@@ -1798,6 +2533,9 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
     petsc_info = dict(ctx.get("petsc_backend_info", {}))
     return {
         "mesh_family": str(ctx.get("mesh_family", "")),
+        "potential_order": int(
+            petsc_info.get("potential_order", ctx.get("potential_order", 1)) or 1
+        ),
         "forward_backend": str(ctx.get("forward_backend", "")),
         "forward_backend_effective": str(
             petsc_info.get("forward_backend_effective", ctx.get("forward_backend", ""))
@@ -1957,7 +2695,7 @@ def _ensure_single_step_cached_context(
                 ),
                 background_sigma=runtime.background_sigma,
                 lam=runtime.lam,
-                cache_scope="both",
+                cache_scope=_single_step_context_cache_scope(meta),
                 solver_mode=str(meta.get("solver_mode", "strict")),
                 linear_solver=str(meta.get("linear_solver", "auto")),
                 preconditioner=str(meta.get("preconditioner", "auto")),
@@ -1983,6 +2721,7 @@ def _ensure_single_step_cached_context(
                 forward_backend=str(meta.get("forward_backend", "dolfinx")),
                 mesh_family=str(meta.get("mesh_family", "tetra")),
                 geometry_version=str(meta.get("geometry_version", "geomv2")),
+                potential_order=int(meta.get("potential_order", 1)),
                 single_step_signature_schema_version=str(
                     meta.get("single_step_signature_schema_version")
                 ),
@@ -2083,6 +2822,7 @@ def _run_full_gn_request(
     meta.setdefault("forward_backend", "dolfinx")
     meta.setdefault("mesh_family", "tetra")
     meta.setdefault("geometry_version", "geomv2")
+    meta.setdefault("potential_order", 1)
     meta.setdefault("acceleration_profile", "default")
     meta["drive_mode"] = _resolve_drive_mode(meta, mesh_dim=int(req.mesh_dimension))
     meta["drive_value"] = _resolve_drive_value(meta)
@@ -2231,6 +2971,7 @@ def _run_full_gn_request(
             device=str(meta.get("device", "auto")),
             forward_backend=str(meta.get("forward_backend", "dolfinx")),
             mesh_family=str(meta.get("mesh_family", "tetra")),
+            potential_order=int(meta.get("potential_order", 1)),
             acceleration_profile=str(meta.get("acceleration_profile", "default")),
         )
         mesh = load_or_create_mesh(
@@ -2319,6 +3060,8 @@ def _run_single_step_cached_request(
             progress_cb(message)
 
     runtime = _prepare_single_step_cached_runtime(req)
+    if _should_resolve_greit_registry(runtime.meta):
+        _ensure_greit_registry_artifact(req, runtime, emit=emit)
     rm_result = _try_run_cached_rm_request(req, runtime, progress_cb=progress_cb)
     if rm_result is not None:
         return rm_result
@@ -2549,6 +3292,7 @@ class ReconstructionController(QObject):
         self._thread: QThread | None = None
         self._worker: _ReconstructionWorker | None = None
         self._busy = False
+        self._shutting_down = False
 
     @property
     def is_busy(self) -> bool:
@@ -2560,6 +3304,7 @@ class ReconstructionController(QObject):
             self.error.emit("Reconstruction already in progress")
             return False
 
+        self._shutting_down = False
         self._busy = True
         self._thread = QThread()
         self._worker = _ReconstructionWorker()
@@ -2568,6 +3313,7 @@ class ReconstructionController(QObject):
 
         self._thread.started.connect(self._worker.run)
         self._worker.finished.connect(self._on_finished)
+        self._worker.finished.connect(self._thread.quit)
         self._worker.progress.connect(self.progress)
         self._worker.error.connect(self.error)
 
@@ -2576,12 +3322,36 @@ class ReconstructionController(QObject):
 
     def _on_finished(self, result: ReconstructionResult) -> None:
         self._busy = False
-        if self._thread is not None:
-            self._thread.quit()
-            self._thread.wait(5000)
-        self.reconstruction_done.emit(result)
+        self._stop_worker_thread(force=False, grace_ms=5000)
+        if not self._shutting_down:
+            self.reconstruction_done.emit(result)
 
     def shutdown(self) -> None:
-        if self._thread is not None and self._thread.isRunning():
-            self._thread.quit()
-            self._thread.wait(3000)
+        self._shutting_down = True
+        self._stop_worker_thread(force=True, grace_ms=3000)
+        self._busy = False
+
+    def _stop_worker_thread(self, *, force: bool, grace_ms: int) -> None:
+        thread = self._thread
+        worker = self._worker
+        if worker is not None:
+            worker.cancel()
+        if thread is not None:
+            if thread.isRunning():
+                thread.requestInterruption()
+                thread.quit()
+                if not thread.wait(grace_ms):
+                    log.warning(
+                        "Reconstruction thread did not stop within %d ms%s",
+                        grace_ms,
+                        "; terminating" if force else "",
+                    )
+                    if force:
+                        thread.terminate()
+                        thread.wait(3000)
+            if not thread.isRunning():
+                thread.deleteLater()
+                self._thread = None
+        if worker is not None and self._thread is None:
+            worker.deleteLater()
+            self._worker = None

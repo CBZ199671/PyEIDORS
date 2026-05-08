@@ -99,6 +99,7 @@ def collect_system_info(eit_system) -> dict[str, Any]:
         "n_elec": eit_system.n_elec,
         "pattern_config": eit_system.pattern_config,
         "mesh_config": eit_system.mesh_config,
+        "potential_order": int(getattr(eit_system, "potential_order", 1)),
         "difference_mode": getattr(eit_system, "difference_mode", "raw"),
         "difference_orientation": getattr(
             eit_system,

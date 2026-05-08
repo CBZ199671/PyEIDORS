@@ -89,10 +89,10 @@ CACHE_NAME_OPERATOR_PRECOND = "gn_diff_operator_precond"
 CACHE_NAME_OPERATOR_REDUCED_RM = "gn_diff_operator_reduced_rm"
 SINGLE_STEP_SIGNATURE_SCHEMA_VERSION = "single_step_signature_schema_v1"
 SINGLE_STEP_JACOBIAN_CALCULATOR = "EidorsJacobianAdapter"
-SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v2"
-SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v1"
+SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v4"
+SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v3"
 SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
-SINGLE_STEP_ALGORITHM_VERSION = "eidors_noser_single_step_v3"
+SINGLE_STEP_ALGORITHM_VERSION = "eidors_noser_single_step_v5"
 
 
 def _mesh_compatible_drive_mode(drive_mode: str | None, *, mesh_dim: int) -> str:
@@ -1281,6 +1281,7 @@ def build_shared_context(
     forward_backend: str = DEFAULT_FORWARD_BACKEND,
     mesh_family: str = DEFAULT_MESH_FAMILY,
     geometry_version: str = DEFAULT_3D_GEOMETRY_VERSION,
+    potential_order: int = 1,
     single_step_signature_schema_version: str = SINGLE_STEP_SIGNATURE_SCHEMA_VERSION,
     single_step_jacobian_calculator: str = SINGLE_STEP_JACOBIAN_CALCULATOR,
     single_step_jacobian_math_convention: str = SINGLE_STEP_JACOBIAN_MATH_CONVENTION,
@@ -1303,6 +1304,7 @@ def build_shared_context(
     rom_snapshot_source = str(rom_snapshot_source).strip().lower()
     forward_solver_preset = str(forward_solver_preset).strip().lower()
     forward_mat_solve = str(forward_mat_solve).strip().lower()
+    potential_order = max(1, int(potential_order))
     petsc_device = str(petsc_device).strip().lower()
     petsc_device = _mesh_compatible_petsc_device(petsc_device, mesh_dim=int(mesh_dim))
     device = str(device).strip().lower()
@@ -1483,6 +1485,7 @@ def build_shared_context(
             "petsc_device": petsc_device,
         },
         forward_backend=forward_backend,
+        potential_order=potential_order,
     )
     petsc_backend_info = dict(getattr(fwd_model, "_petsc_backend_info", {}) or {})
     runtime_selection = resolve_torch_device(
@@ -1517,6 +1520,7 @@ def build_shared_context(
         "background_sigma": float(background_sigma),
         "mesh_family": str(mesh_family),
         "geometry_version": str(geometry_version),
+        "potential_order": int(potential_order),
         "model_signature": model_signature_from_forward_model(fwd_model),
         "pattern_signature": pattern_signature_from_forward_model(fwd_model),
         "backend_signature": backend_signature_from_forward_model(fwd_model),
@@ -1824,6 +1828,7 @@ def build_shared_context(
             "forward_backend": forward_backend,
             "mesh_family": mesh_family,
             "geometry_version": geometry_version,
+            "potential_order": int(potential_order),
             "petsc_device": petsc_device,
             "petsc_backend_info": dict(petsc_backend_info),
             "device_requested": str(runtime_selection.requested),

@@ -243,9 +243,16 @@ class EITForwardModel:
         forward_backend: str = DEFAULT_FORWARD_BACKEND,
         cache_manager=None,
         performance_mode: str = "aggressive",
+        potential_order: int = 1,
     ):
         self.n_elec = n_elec
         self.z = np.asarray(z, dtype=float)
+        try:
+            self.potential_order = int(potential_order)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("potential_order must be a positive integer") from exc
+        if self.potential_order < 1:
+            raise ValueError("potential_order must be >= 1")
         if not isinstance(mesh, EITMesh):
             raise TypeError("EITForwardModel expects an EITMesh instance")
         self.eit_mesh = mesh
@@ -267,6 +274,11 @@ class EITForwardModel:
             forward_backend,
             default=DEFAULT_FORWARD_BACKEND,
         )
+        if self.forward_backend == "cuda_structured" and self.potential_order != 1:
+            raise ValueError(
+                "potential_order > 1 is supported by the DOLFINx forward backend; "
+                "cuda_structured currently supports only P1."
+            )
         self.backend_config = (
             backend_config
             if isinstance(backend_config, LinearBackendConfig)
@@ -294,6 +306,7 @@ class EITForwardModel:
             n_elec=self.n_elec,
             z=self.z,
             pattern_config=deepcopy(pattern_config),
+            potential_order=self.potential_order,
         )
         self._static_setup_lookup = {
             "hit": False,
@@ -309,6 +322,9 @@ class EITForwardModel:
         self._petsc_backend_info["mesh_family"] = self.mesh_family
         self._petsc_backend_info["geometry_version"] = self.geometry_version
         self._petsc_backend_info["generator_revision"] = self.generator_revision
+        self._petsc_backend_info["potential_order"] = self.potential_order
+        self._petsc_backend_info["potential_space_family"] = "Lagrange"
+        self._petsc_backend_info["conductivity_order"] = 0
         self._petsc_backend_info["static_setup_lookup"] = dict(
             self._static_setup_lookup
         )
@@ -369,7 +385,7 @@ class EITForwardModel:
             electrode_lengths_m=self.electrode_lengths_m,
             mesh_tdim=self.mesh.topology.dim,
         )
-        self.V = fem.functionspace(self.mesh, ("Lagrange", 1))
+        self.V = fem.functionspace(self.mesh, ("Lagrange", self.potential_order))
         self.V_sigma = fem.functionspace(self.mesh, ("DG", 0))
         dofmap = self.V.dofmap.index_map
         self.dofs = int(dofmap.size_local * self.V.dofmap.index_map_bs)
@@ -1556,6 +1572,7 @@ class EITForwardModel:
             "forward_backend": self.forward_backend,
             "sigma_hash": sigma_hash,
             "n_elec": self.n_elec,
+            "potential_order": int(getattr(self, "potential_order", 1)),
             "n_patterns": n_patterns,
             "z_hash": hashlib.sha256(
                 np.ascontiguousarray(self.z, dtype=np.float64).tobytes()
@@ -1876,6 +1893,7 @@ class EITForwardModel:
             "petsc_device_effective": str(
                 petsc_backend.get("petsc_device_effective", "cpu")
             ),
+            "potential_order": int(getattr(self, "potential_order", 1)),
             "dofs": int(getattr(self, "dofs", 0)),
             "n_elec": int(getattr(self, "n_elec", 0)),
         }

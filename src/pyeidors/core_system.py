@@ -222,6 +222,7 @@ class EITSystem(CoreSystemFacadeMixin):
         linear_backend_config: Optional[dict[str, Any]] = None,
         forward_backend: str = DEFAULT_FORWARD_BACKEND,
         mesh_family: str = DEFAULT_MESH_FAMILY,
+        potential_order: int = 1,
         petsc_device: str = DEFAULT_PETSC_DEVICE,
         device: str = "auto",
         acceleration_profile: str = DEFAULT_ACCELERATION_PROFILE,
@@ -326,6 +327,7 @@ class EITSystem(CoreSystemFacadeMixin):
             mesh_family,
             default=DEFAULT_MESH_FAMILY,
         )
+        self.potential_order = max(1, int(potential_order))
         self.petsc_device = normalize_petsc_device(
             petsc_device, default=DEFAULT_PETSC_DEVICE
         )
@@ -663,6 +665,7 @@ class EITSystem(CoreSystemFacadeMixin):
         requested_forward_backend = getattr(
             self, "forward_backend", DEFAULT_FORWARD_BACKEND
         )
+        potential_order = int(getattr(self, "potential_order", 1))
         requested_petsc_device = getattr(self, "petsc_device", DEFAULT_PETSC_DEVICE)
         requested_device = getattr(self, "device", "auto")
         requested_solver_mode = getattr(self, "solver_mode", "strict")
@@ -681,9 +684,18 @@ class EITSystem(CoreSystemFacadeMixin):
 
         resolved_forward_backend = requested_forward_backend
         if (
+            potential_order != 1
+            and resolved_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        ):
+            raise ValueError(
+                "potential_order > 1 requires the DOLFINx forward backend; "
+                "cuda_structured currently supports only P1."
+            )
+        if (
             easy_gpu_profile
             and resolved_forward_backend == DEFAULT_FORWARD_BACKEND
             and structured_supported
+            and potential_order == 1
         ):
             resolved_forward_backend = FORWARD_BACKEND_CUDA_STRUCTURED
 
@@ -751,6 +763,7 @@ class EITSystem(CoreSystemFacadeMixin):
             "acceleration_profile_requested": requested_profile,
             "acceleration_profile_effective": effective_profile,
             "structured_backend_supported": structured_supported,
+            "potential_order": potential_order,
             "forward_backend_requested": requested_forward_backend,
             "forward_backend_effective": resolved_forward_backend,
             "petsc_device_requested": requested_petsc_device,
@@ -796,6 +809,7 @@ class EITSystem(CoreSystemFacadeMixin):
             forward_backend=str(runtime_policy["forward_backend_effective"]),
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
+            potential_order=self.potential_order,
         )
         self.fwd_model._set_backend_diagnostic(
             **self._pattern_config_diagnostics,

@@ -94,6 +94,7 @@ class ForwardModelConfig:
 
     mesh_dimension: int = 2
     mesh_refinement: float = 0.1
+    potential_order: int = 1
     background_conductivity: float = 1.0
     noise_level: float = 0.0
 
@@ -145,6 +146,7 @@ class ForwardModelConfig:
 
     def __post_init__(self) -> None:
         self.mesh_dimension = int(self.mesh_dimension)
+        self.potential_order = max(1, int(self.potential_order))
         self.drive_mode = drive_mode_for_mesh_dimension(
             self.drive_mode,
             self.mesh_dimension,
@@ -186,6 +188,15 @@ class ForwardModelConfig:
             mesh_dimension=mesh_dimension,
             mesh_refinement=float(
                 raw.get("mesh_refinement", raw.get("mesh_size", 0.1))
+            ),
+            potential_order=int(
+                raw.get(
+                    "potential_order",
+                    raw.get(
+                        "fem_potential_order",
+                        raw.get("potential_degree", raw.get("p_order", 1)),
+                    ),
+                )
             ),
             background_conductivity=float(raw.get("background_conductivity", 1.0)),
             noise_level=float(raw.get("noise_level", 0.0)),
@@ -259,6 +270,7 @@ class ForwardModelConfig:
         return {
             "mesh_dimension": int(self.mesh_dimension),
             "mesh_refinement": float(self.mesh_refinement),
+            "potential_order": int(self.potential_order),
             "background_conductivity": float(self.background_conductivity),
             "noise_level": float(self.noise_level),
             "n_elec": int(self.n_elec),

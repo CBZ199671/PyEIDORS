@@ -29,7 +29,12 @@ def graph_edges_and_volumes(mesh: Any) -> tuple[int, list[tuple[int, int]], np.n
 
     cells = extract_cells(mesh)
     n_cells = int(cells.shape[0])
-    return n_cells, shared_facet_edges(cells), cell_volumes(mesh, cells, n_cells)
+    coords = extract_coordinates(mesh)
+    return (
+        n_cells,
+        shared_facet_edges(cells, coordinates=coords),
+        cell_volumes(mesh, cells, n_cells),
+    )
 
 
 def extract_cells(mesh: Any) -> np.ndarray:
@@ -84,23 +89,27 @@ def voxel_edges(shape: tuple[int, ...]) -> list[tuple[int, int]]:
     return edges
 
 
-def shared_facet_edges(cells: np.ndarray) -> list[tuple[int, int]]:
-    """Build cell edges from shared facets in simplex-like connectivity."""
+def shared_facet_edges(
+    cells: np.ndarray,
+    *,
+    coordinates: np.ndarray | None = None,
+) -> list[tuple[int, int]]:
+    """Build cell edges from shared facets in cell connectivity."""
 
-    required_shared = max(1, int(cells.shape[1] - 1))
+    required_shared = _minimum_shared_facet_vertices(cells, coordinates=coordinates)
     facets: dict[tuple[int, ...], int] = {}
     edges: set[tuple[int, int]] = set()
     for cell_idx, cell in enumerate(cells):
         vertices = tuple(int(v) for v in cell)
         if len(vertices) <= 1:
             continue
-        if required_shared == len(vertices):
+        if required_shared >= len(vertices):
             keys = [tuple(sorted(vertices))]
         else:
-            keys = []
-            for drop_idx in range(len(vertices)):
-                face = vertices[:drop_idx] + vertices[drop_idx + 1 :]
-                keys.append(tuple(sorted(face)))
+            keys = [
+                tuple(sorted(face))
+                for face in _vertex_combinations(vertices, required_shared)
+            ]
         for key in keys:
             previous = facets.get(key)
             if previous is None:
@@ -108,6 +117,55 @@ def shared_facet_edges(cells: np.ndarray) -> list[tuple[int, int]]:
             else:
                 edges.add(tuple(sorted((previous, int(cell_idx)))))
     return sorted(edges)
+
+
+def _minimum_shared_facet_vertices(
+    cells: np.ndarray,
+    *,
+    coordinates: np.ndarray | None = None,
+) -> int:
+    vertices_per_cell = int(cells.shape[1])
+    if vertices_per_cell <= 2:
+        return 1
+    if coordinates is not None:
+        coords = np.asarray(coordinates)
+        if coords.ndim == 2 and coords.shape[1] > 0:
+            dim = int(coords.shape[1])
+            if dim <= 1:
+                return 1
+            if dim == 2:
+                return 2
+            if vertices_per_cell >= 8:
+                return 4
+            return 3
+    if vertices_per_cell >= 6:
+        return 3
+    return max(1, vertices_per_cell - 1)
+
+
+def _vertex_combinations(
+    vertices: tuple[int, ...],
+    size: int,
+) -> list[tuple[int, ...]]:
+    if size <= 0:
+        return [()]
+    if size > len(vertices):
+        return []
+    if size == len(vertices):
+        return [vertices]
+    out: list[tuple[int, ...]] = []
+
+    def visit(start: int, prefix: tuple[int, ...]) -> None:
+        remaining = size - len(prefix)
+        if remaining == 0:
+            out.append(prefix)
+            return
+        stop = len(vertices) - remaining + 1
+        for idx in range(start, stop):
+            visit(idx + 1, prefix + (vertices[idx],))
+
+    visit(0, ())
+    return out
 
 
 def cell_volumes(mesh: Any, cells: np.ndarray, n_cells: int) -> np.ndarray:

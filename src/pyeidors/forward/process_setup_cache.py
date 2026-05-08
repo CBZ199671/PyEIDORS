@@ -57,6 +57,7 @@ def build_process_forward_setup_key(
     z: np.ndarray,
     pattern_config: PatternConfig,
     mesh_content_hash: str | None = None,
+    potential_order: int = 1,
 ) -> str:
     """Build a content-addressed cache key for forward static setup.
 
@@ -77,6 +78,7 @@ def build_process_forward_setup_key(
         "mesh_file": file_token,
         "mesh_content_hash": content_token,
         "n_elec": int(n_elec),
+        "potential_order": int(potential_order),
         "z_hash": hash_array(np.asarray(z, dtype=np.float64).reshape(-1)),
         "pattern_config": _pattern_signature(pattern_config),
     }
