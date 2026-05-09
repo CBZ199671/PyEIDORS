@@ -716,6 +716,7 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     """
     from eit_app.ui.simulation.forward_problem_panel import ForwardProblemPanel
     from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
+    from PySide6.QtWidgets import QSizePolicy
 
     app = _get_app()
 
@@ -744,6 +745,11 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     inv.show()
     app.processEvents()
     assert inv._busy_bar.isHidden()
+    assert inv._status_label.wordWrap()
+    assert inv._status_label.minimumWidth() == 0
+    assert (
+        inv._status_label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+    )
     assert inv._method_combo.isEnabled()
     assert not inv._alpha_spin.isEnabled()
     assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
@@ -3577,6 +3583,13 @@ def test_simulation_inverse_blocks_stale_forward_inputs(
         },
     )
     window._sim_tab.inhomogeneity_editor._add_shape("circle")
+    window._on_simulation_inputs_changed()
+    live_status = window._sim_tab.inverse_problem_panel._status_label.text()
+    assert live_status.splitlines() == [
+        "Simulation inputs changed.",
+        "Run the forward problem again before reconstruction.",
+    ]
+
     captured: list[object] = []
     monkeypatch.setattr(
         window._sim_recon_ctrl,
@@ -3587,10 +3600,11 @@ def test_simulation_inverse_blocks_stale_forward_inputs(
     window._on_run_sim_inverse()
 
     assert captured == []
-    assert (
-        "Run the forward problem again"
-        in window._sim_tab.inverse_problem_panel._status_label.text()
-    )
+    blocked_status = window._sim_tab.inverse_problem_panel._status_label.text()
+    assert blocked_status.splitlines() == [
+        "Simulation inputs changed after the last forward solve.",
+        "Run the forward problem again before reconstruction.",
+    ]
 
     _close_window(window)
 

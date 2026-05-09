@@ -3372,7 +3372,8 @@ class EITWorkstation(QMainWindow):
             return
         self._sim_tab.inverse_problem_panel.set_save_enabled(False)
         self._sim_tab.inverse_problem_panel.set_status(
-            "Simulation inputs changed; run the forward problem again before reconstruction."
+            "Simulation inputs changed.\n"
+            "Run the forward problem again before reconstruction."
         )
 
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
@@ -3892,19 +3893,24 @@ class EITWorkstation(QMainWindow):
             self._simulation_forward_result_is_stale(result)
         )
         if stale:
-            message = (
+            panel_message = (
                 "Simulation inputs changed after the last forward solve. "
                 "Run the forward problem again before reconstruction."
             )
+            status_message = panel_message
+            panel_message = panel_message.replace(
+                "solve. Run",
+                "solve.\nRun",
+            )
             log.warning(
                 "%s stored=%s current=%s",
-                message,
+                status_message,
                 stored_signature[:12],
                 current_signature[:12],
             )
             self._sim_tab.inverse_problem_panel.set_save_enabled(False)
-            self._sim_tab.inverse_problem_panel.set_status(message)
-            self._status_bar.showMessage(message, 15000)
+            self._sim_tab.inverse_problem_panel.set_status(panel_message)
+            self._status_bar.showMessage(status_message, 15000)
             return
 
         inv_cfg = self._sim_tab.inverse_problem_panel.get_config()

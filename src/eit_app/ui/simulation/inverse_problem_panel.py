@@ -9,6 +9,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QWidget,
 )
@@ -133,6 +134,12 @@ class InverseProblemPanel(QGroupBox):
         layout.addRow(self._busy_bar)
 
         self._status_label = QLabel("")
+        self._status_label.setWordWrap(True)
+        self._status_label.setMinimumWidth(0)
+        self._status_label.setSizePolicy(
+            QSizePolicy.Policy.Ignored,
+            QSizePolicy.Policy.Preferred,
+        )
         set_hint_text(self._status_label)
         layout.addRow(self._status_label)
 
