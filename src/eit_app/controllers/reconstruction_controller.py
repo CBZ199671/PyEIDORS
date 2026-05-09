@@ -855,7 +855,13 @@ def default_rm_inverse_mesh_size(
         requested = 0.1
     radius_f = max(float(radius), 1.0e-9)
     if int(mesh_dimension) == 3:
-        target = radius_f / 6.0
+        # A one-step 3D RM reconstruction has far fewer voltage
+        # measurements than cell parameters.  Auto-refining the inverse
+        # mesh makes NOSER chase boundary artifacts, so keep the hidden
+        # default deliberately coarse unless the user explicitly overrides
+        # ``rm_inverse_mesh_size``.
+        target = radius_f / 3.0
+        return float(max(requested, max(target, 1.0e-6)))
     else:
         target = radius_f / 10.0
     return float(min(requested, max(target, 1.0e-6)))

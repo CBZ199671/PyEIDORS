@@ -114,6 +114,24 @@ def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
     return np.asarray(np.abs(values - median) > threshold, dtype=bool)
 
 
+def _conductivity_color_limits(cell_sigma: np.ndarray) -> tuple[float, float]:
+    values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size == 0:
+        return 0.0, 1.0
+
+    sigma_min = float(np.nanmin(finite_values))
+    sigma_max = float(np.nanmax(finite_values))
+    median = float(np.nanmedian(finite_values))
+    if not all(np.isfinite(value) for value in (sigma_min, sigma_max, median)):
+        return 0.0, 1.0
+
+    floor = max(abs(median) * _INHOMOGENEITY_RELATIVE_FLOOR, 1.0e-6)
+    if sigma_max - sigma_min < 2.0 * floor:
+        return median - floor, median + floor
+    return sigma_min, sigma_max
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
@@ -1066,12 +1084,7 @@ class Conductivity3DWidget(QWidget):
         else:
             grid.point_data["sigma"] = sigma
 
-        sigma_min = float(np.nanmin(cell_sigma))
-        sigma_max = float(np.nanmax(cell_sigma))
-        if not np.isfinite(sigma_min) or not np.isfinite(sigma_max):
-            sigma_min, sigma_max = 0.0, 1.0
-        if sigma_max - sigma_min < 1.0e-12:
-            sigma_max = sigma_min + 1.0e-12
+        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
 
         palette = plot_palette()
         width, height = self._offscreen_render_size()
@@ -1230,14 +1243,7 @@ class Conductivity3DWidget(QWidget):
                 dtype=float,
             )
 
-        finite_values = face_values[np.isfinite(face_values)]
-        if finite_values.size == 0:
-            sigma_min, sigma_max = 0.0, 1.0
-        else:
-            sigma_min = float(np.nanmin(finite_values))
-            sigma_max = float(np.nanmax(finite_values))
-        if sigma_max - sigma_min < 1.0e-12:
-            sigma_max = sigma_min + 1.0e-12
+        sigma_min, sigma_max = _conductivity_color_limits(face_values)
 
         palette = plot_palette()
         cmap = colormaps["viridis"]
@@ -1400,12 +1406,7 @@ class Conductivity3DWidget(QWidget):
         else:
             grid.point_data["sigma"] = sigma
 
-        sigma_min = float(np.nanmin(cell_sigma))
-        sigma_max = float(np.nanmax(cell_sigma))
-        if not np.isfinite(sigma_min) or not np.isfinite(sigma_max):
-            sigma_min, sigma_max = 0.0, 1.0
-        if sigma_max - sigma_min < 1.0e-12:
-            sigma_max = sigma_min + 1.0e-12
+        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
 
         opacity = self._opacity_slider.value() / 100.0
         palette = plot_palette()

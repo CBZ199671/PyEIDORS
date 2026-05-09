@@ -113,14 +113,14 @@ def test_effective_refinement_accepts_simulation_mesh_size_without_inflation() -
     assert rc._compute_effective_refinement(1.0, 10.0, mesh_size=0.1) == 5
 
 
-def test_default_3d_rm_inverse_mesh_size_raises_one_resolution_tier() -> None:
+def test_v106_default_3d_rm_inverse_mesh_size_stays_coarse() -> None:
     size = rc.default_rm_inverse_mesh_size(0.1, 0.18, mesh_dimension=3)
 
-    assert size == pytest.approx(0.03)
-    assert rc._compute_effective_refinement(0.18, 0.1, mesh_size=size) == 3
+    assert size == pytest.approx(0.1)
+    assert rc._compute_effective_refinement(0.18, 0.1, mesh_size=size) == 2
     assert rc.default_rm_inverse_mesh_size(
         0.02, 0.18, mesh_dimension=3
-    ) == pytest.approx(0.02)
+    ) == pytest.approx(0.06)
 
 
 def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
