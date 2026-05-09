@@ -390,7 +390,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.sizey": "\u5bbd",  # 宽
     "sim.inhom.col.sizez": "\u9ad8",  # 高
     "sim.inhom.col.conductivity": "\u03c3",  # σ
-    "sim.inhom.units_hint": "\u5750\u6807 / \u5c3a\u5bf8\u5355\u4f4d\uff1am\uff0c\u03c3 \u5355\u4f4d\uff1aS/m",  # 坐标 / 尺寸单位：m，σ 单位：S/m
+    "sim.inhom.units_hint": "\u5750\u6807 / \u5b8c\u6574\u5c3a\u5bf8\u5355\u4f4d\uff1am\uff0c\u03c3 \u5355\u4f4d\uff1aS/m",  # 坐标 / 完整尺寸单位：m，σ 单位：S/m
     "sim.inhom.add_circle": "+ \u5706\u5f62",  # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",  # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",  # + 矩形

@@ -110,11 +110,11 @@ class _InhomogeneityTableModel(QAbstractTableModel):
         if col == 3:
             return spec.center_z
         if col == 4:
-            return spec.size_x
+            return spec.size_x * 2.0
         if col == 5:
-            return spec.size_y
+            return spec.size_y * 2.0
         if col == 6:
-            return spec.size_z
+            return spec.size_z * 2.0
         if col == 7:
             return spec.conductivity
         return None
@@ -135,11 +135,11 @@ class _InhomogeneityTableModel(QAbstractTableModel):
             elif col == 3:
                 spec.center_z = float(value)
             elif col == 4:
-                spec.size_x = float(value)
+                spec.size_x = abs(float(value)) * 0.5
             elif col == 5:
-                spec.size_y = float(value)
+                spec.size_y = abs(float(value)) * 0.5
             elif col == 6:
-                spec.size_z = float(value)
+                spec.size_z = abs(float(value)) * 0.5
             elif col == 7:
                 spec.conductivity = float(value)
             else:

@@ -387,7 +387,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.sizey": "W",
     "sim.inhom.col.sizez": "H",
     "sim.inhom.col.conductivity": "\u03c3",
-    "sim.inhom.units_hint": "Coords / sizes in metres; \u03c3 in S/m.",
+    "sim.inhom.units_hint": "Coords / full sizes in metres; \u03c3 in S/m.",
     "sim.inhom.add_circle": "+ Circle",
     "sim.inhom.add_ellipse": "+ Ellipse",
     "sim.inhom.add_rectangle": "+ Rectangle",
