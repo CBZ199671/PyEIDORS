@@ -39,6 +39,34 @@ def resolve_3d_cuda_mat_solve_policy(*args, **kwargs) -> dict[str, Any]:
     return _resolve(*args, **kwargs)
 
 
+_HEX_SAMPLE_AXIS = np.asarray([0.125, 0.375, 0.625, 0.875], dtype=np.float64)
+_HEX_SAMPLE_GRID = np.asarray(
+    [
+        [x, y, z]
+        for z in _HEX_SAMPLE_AXIS
+        for y in _HEX_SAMPLE_AXIS
+        for x in _HEX_SAMPLE_AXIS
+    ],
+    dtype=np.float64,
+)
+_TET_SAMPLE_BARYCENTRIC = np.asarray(
+    [
+        [0.25, 0.25, 0.25, 0.25],
+        [0.55, 0.15, 0.15, 0.15],
+        [0.15, 0.55, 0.15, 0.15],
+        [0.15, 0.15, 0.55, 0.15],
+        [0.15, 0.15, 0.15, 0.55],
+        [0.35, 0.35, 0.15, 0.15],
+        [0.35, 0.15, 0.35, 0.15],
+        [0.35, 0.15, 0.15, 0.35],
+        [0.15, 0.35, 0.35, 0.15],
+        [0.15, 0.35, 0.15, 0.35],
+        [0.15, 0.15, 0.35, 0.35],
+    ],
+    dtype=np.float64,
+)
+
+
 @dataclass
 class ForwardSolverRequest:
     """Input parameters for a single forward solve."""
@@ -50,6 +78,54 @@ class ForwardSolverRequest:
     inhomogeneities: list[InhomogeneitySpec] = field(default_factory=list)
     noise_level: float = 0.0
     forward_model_config: dict[str, Any] = field(default_factory=dict)
+
+
+def _cell_volume_sample_points(cell_vertices: np.ndarray) -> np.ndarray | None:
+    """Return deterministic interior sample points for supported 3D cells."""
+    vertices = np.asarray(cell_vertices, dtype=np.float64)
+    if vertices.ndim != 3 or vertices.shape[1] not in {4, 8} or vertices.shape[2] < 3:
+        return None
+    vertices = vertices[:, :, :3]
+    if vertices.shape[1] == 4:
+        return np.einsum("sv,nvd->nsd", _TET_SAMPLE_BARYCENTRIC, vertices)
+
+    u = _HEX_SAMPLE_GRID[:, 0]
+    v = _HEX_SAMPLE_GRID[:, 1]
+    w = _HEX_SAMPLE_GRID[:, 2]
+    weights = np.column_stack(
+        (
+            (1.0 - u) * (1.0 - v) * (1.0 - w),
+            u * (1.0 - v) * (1.0 - w),
+            u * v * (1.0 - w),
+            (1.0 - u) * v * (1.0 - w),
+            (1.0 - u) * (1.0 - v) * w,
+            u * (1.0 - v) * w,
+            u * v * w,
+            (1.0 - u) * v * w,
+        )
+    )
+    return np.einsum("sv,nvd->nsd", weights, vertices)
+
+
+def _apply_volume_fraction(
+    values: np.ndarray,
+    sample_points: np.ndarray | None,
+    inside: np.ndarray,
+    conductivity: float,
+) -> bool:
+    """Blend cell conductivity by sampled inclusion volume fraction."""
+    if sample_points is None:
+        return False
+    inside = np.asarray(inside, dtype=bool)
+    if inside.ndim != 2 or inside.shape[:2] != sample_points.shape[:2]:
+        return False
+    fractions = inside.mean(axis=1)
+    active = fractions > 0.0
+    if np.any(active):
+        values[active] = values[active] + fractions[active] * (
+            float(conductivity) - values[active]
+        )
+    return True
 
 
 @dataclass
@@ -73,6 +149,7 @@ def _paint_shape(
     spec: InhomogeneitySpec,
     *,
     mesh_dimension: int = 2,
+    cell_vertices: np.ndarray | None = None,
 ) -> None:
     """Paint a single inhomogeneity shape onto element-centered values."""
     if centers.size == 0:
@@ -90,10 +167,28 @@ def _paint_shape(
         rz = rx
 
     is_3d = int(mesh_dimension) == 3 and centers.shape[1] >= 3
+    sample_points = None
+    if is_3d and cell_vertices is not None:
+        vertices = np.asarray(cell_vertices, dtype=float)
+        if vertices.shape[0] == values.shape[0]:
+            sample_points = _cell_volume_sample_points(vertices)
 
     if spec.shape == "circle":
         if is_3d:
             cz = float(getattr(spec, "center_z", 0.0))
+            if sample_points is not None:
+                dist2_samples = (
+                    (sample_points[:, :, 0] - cx) ** 2
+                    + (sample_points[:, :, 1] - cy) ** 2
+                    + (sample_points[:, :, 2] - cz) ** 2
+                )
+                if _apply_volume_fraction(
+                    values,
+                    sample_points,
+                    dist2_samples <= rx**2,
+                    spec.conductivity,
+                ):
+                    return
             dist2 = (
                 (centers[:, 0] - cx) ** 2
                 + (centers[:, 1] - cy) ** 2
@@ -107,6 +202,19 @@ def _paint_shape(
     elif spec.shape == "ellipse":
         if is_3d:
             cz = float(getattr(spec, "center_z", 0.0))
+            if sample_points is not None:
+                norm_samples = (
+                    ((sample_points[:, :, 0] - cx) / rx) ** 2
+                    + ((sample_points[:, :, 1] - cy) / ry) ** 2
+                    + ((sample_points[:, :, 2] - cz) / rz) ** 2
+                )
+                if _apply_volume_fraction(
+                    values,
+                    sample_points,
+                    norm_samples <= 1.0,
+                    spec.conductivity,
+                ):
+                    return
             norm = (
                 ((centers[:, 0] - cx) / rx) ** 2
                 + ((centers[:, 1] - cy) / ry) ** 2
@@ -120,6 +228,16 @@ def _paint_shape(
     elif spec.shape == "rectangle":
         if is_3d:
             cz = float(getattr(spec, "center_z", 0.0))
+            if sample_points is not None:
+                mask_samples = (
+                    (np.abs(sample_points[:, :, 0] - cx) <= rx)
+                    & (np.abs(sample_points[:, :, 1] - cy) <= ry)
+                    & (np.abs(sample_points[:, :, 2] - cz) <= rz)
+                )
+                if _apply_volume_fraction(
+                    values, sample_points, mask_samples, spec.conductivity
+                ):
+                    return
             mask = (
                 (np.abs(centers[:, 0] - cx) < rx)
                 & (np.abs(centers[:, 1] - cy) < ry)
@@ -133,6 +251,19 @@ def _paint_shape(
         log.warning("Unknown shape %r, falling back to circle", spec.shape)
         if is_3d:
             cz = float(getattr(spec, "center_z", 0.0))
+            if sample_points is not None:
+                dist2_samples = (
+                    (sample_points[:, :, 0] - cx) ** 2
+                    + (sample_points[:, :, 1] - cy) ** 2
+                    + (sample_points[:, :, 2] - cz) ** 2
+                )
+                if _apply_volume_fraction(
+                    values,
+                    sample_points,
+                    dist2_samples <= rx**2,
+                    spec.conductivity,
+                ):
+                    return
             dist2 = (
                 (centers[:, 0] - cx) ** 2
                 + (centers[:, 1] - cy) ** 2
@@ -462,12 +593,28 @@ class _ForwardSolverWorker(QObject):
             self.progress.emit("Building conductivity distribution...")
             fwd = system.fwd_model
             centers = cell_midpoints(fwd.mesh)
+            mesh = system.mesh
+            node_coords = mesh.geometry.x[:, : forward_cfg.mesh_dimension].copy()
+            cells = mesh.topology.connectivity(mesh.topology.dim, 0)
+            n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
+            cell_connectivity = np.array(
+                [cells.links(i) for i in range(n_cells)], dtype=np.int32
+            )
+            cell_vertices = (
+                node_coords[cell_connectivity]
+                if int(forward_cfg.mesh_dimension) == 3
+                else None
+            )
             sigma = np.full(
                 len(centers), forward_cfg.background_conductivity, dtype=np.float64
             )
             for spec in req.inhomogeneities:
                 _paint_shape(
-                    sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension
+                    sigma,
+                    centers,
+                    spec,
+                    mesh_dimension=forward_cfg.mesh_dimension,
+                    cell_vertices=cell_vertices,
                 )
 
             self.progress.emit("Running forward solve...")
@@ -489,15 +636,6 @@ class _ForwardSolverWorker(QObject):
                 rng = np.random.default_rng()
                 noise_std = forward_cfg.noise_level * np.std(voltages)
                 voltages += noise_std * rng.standard_normal(voltages.shape)
-
-            # Extract mesh geometry
-            mesh = system.mesh
-            node_coords = mesh.geometry.x[:, : forward_cfg.mesh_dimension].copy()
-            cells = mesh.topology.connectivity(mesh.topology.dim, 0)
-            n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
-            cell_connectivity = np.array(
-                [cells.links(i) for i in range(n_cells)], dtype=np.int32
-            )
 
             out_dtype = compute_dtype()
             result = ForwardSolverResult(

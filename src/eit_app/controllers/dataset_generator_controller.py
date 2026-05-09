@@ -146,6 +146,11 @@ class _DatasetGeneratorWorker(QObject):
             cell_connectivity = np.array(
                 [cells_conn.links(i) for i in range(n_cells)], dtype=np.int32
             )
+            cell_vertices = (
+                node_coords[cell_connectivity]
+                if int(forward_cfg.mesh_dimension) == 3
+                else None
+            )
 
             # Compute homogeneous reference once
             sigma_homog = np.ones(n_elements, dtype=np.float64)
@@ -242,7 +247,11 @@ class _DatasetGeneratorWorker(QObject):
                     )
                     specs.append(spec)
                     _paint_shape(
-                        sigma, centers, spec, mesh_dimension=forward_cfg.mesh_dimension
+                        sigma,
+                        centers,
+                        spec,
+                        mesh_dimension=forward_cfg.mesh_dimension,
+                        cell_vertices=cell_vertices,
                     )
 
                 # Forward solve

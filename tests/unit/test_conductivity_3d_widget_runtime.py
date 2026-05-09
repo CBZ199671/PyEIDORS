@@ -158,6 +158,46 @@ def test_paint_circle_is_sphere_in_3d_not_vertical_cylinder():
     assert values.tolist() == [2.0, 1.0, 2.0]
 
 
+def test_v101_paint_3d_sphere_uses_volume_fraction_for_coarse_hex_layers():
+    x0, x1 = -0.04, 0.04
+    y0, y1 = -0.04, 0.04
+    z_levels = np.array([-0.08, -0.056, -0.024, 0.0, 0.024, 0.056, 0.08])
+    cell_vertices = []
+    for z0, z1 in zip(z_levels[:-1], z_levels[1:], strict=True):
+        cell_vertices.append(
+            [
+                [x0, y0, z0],
+                [x1, y0, z0],
+                [x1, y1, z0],
+                [x0, y1, z0],
+                [x0, y0, z1],
+                [x1, y0, z1],
+                [x1, y1, z1],
+                [x0, y1, z1],
+            ]
+        )
+    cell_vertices_arr = np.asarray(cell_vertices, dtype=float)
+    centers = cell_vertices_arr.mean(axis=1)
+    values = np.ones(centers.shape[0], dtype=float)
+    spec = InhomogeneitySpec(shape="circle", size_x=0.063, conductivity=2.0)
+
+    _paint_shape(
+        values,
+        centers,
+        spec,
+        mesh_dimension=3,
+        cell_vertices=cell_vertices_arr,
+    )
+
+    assert np.all(values > 1.0)
+    assert values[0] == pytest.approx(values[-1])
+    assert values[1] == pytest.approx(values[-2])
+    assert values[2] == pytest.approx(values[-3])
+    assert values[0] < values[1]
+    assert values[0] < values[2]
+    assert values[2] > 1.5
+
+
 def test_paint_ellipsoid_and_box_use_z_extent_in_3d():
     centers = np.array(
         [
