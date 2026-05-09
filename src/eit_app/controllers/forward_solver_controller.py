@@ -128,6 +128,11 @@ def _apply_volume_fraction(
     return True
 
 
+def _positive_min_radius(*radii: float) -> float:
+    values = [abs(float(value)) for value in radii if abs(float(value)) > 0.0]
+    return min(values) if values else 0.0
+
+
 @dataclass
 class ForwardSolverResult:
     """Output of a forward solve."""
@@ -167,6 +172,7 @@ def _paint_shape(
         rz = rx
 
     is_3d = int(mesh_dimension) == 3 and centers.shape[1] >= 3
+    sphere_radius = _positive_min_radius(rx, ry, rz) if is_3d else rx
     sample_points = None
     if is_3d and cell_vertices is not None:
         vertices = np.asarray(cell_vertices, dtype=float)
@@ -185,7 +191,7 @@ def _paint_shape(
                 if _apply_volume_fraction(
                     values,
                     sample_points,
-                    dist2_samples <= rx**2,
+                    dist2_samples <= sphere_radius**2,
                     spec.conductivity,
                 ):
                     return
@@ -194,7 +200,7 @@ def _paint_shape(
                 + (centers[:, 1] - cy) ** 2
                 + (centers[:, 2] - cz) ** 2
             )
-            values[dist2 < rx**2] = spec.conductivity
+            values[dist2 < sphere_radius**2] = spec.conductivity
             return
         dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
         values[dist2 < rx**2] = spec.conductivity
@@ -260,7 +266,7 @@ def _paint_shape(
                 if _apply_volume_fraction(
                     values,
                     sample_points,
-                    dist2_samples <= rx**2,
+                    dist2_samples <= sphere_radius**2,
                     spec.conductivity,
                 ):
                     return
@@ -269,8 +275,9 @@ def _paint_shape(
                 + (centers[:, 1] - cy) ** 2
                 + (centers[:, 2] - cz) ** 2
             )
-        else:
-            dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
+            values[dist2 < sphere_radius**2] = spec.conductivity
+            return
+        dist2 = (centers[:, 0] - cx) ** 2 + (centers[:, 1] - cy) ** 2
         values[dist2 < rx**2] = spec.conductivity
 
 

@@ -72,6 +72,15 @@ _COLUMN_EXTRA_WEIGHTS = {
 }
 
 
+def _sphere_radius(spec: InhomogeneitySpec) -> float:
+    values = [
+        abs(float(value))
+        for value in (spec.size_x, spec.size_y, spec.size_z)
+        if abs(float(value)) > 0.0
+    ]
+    return min(values) if values else 0.0
+
+
 class _InhomogeneityTableModel(QAbstractTableModel):
     """Editable table model for InhomogeneitySpec entries."""
 
@@ -109,6 +118,8 @@ class _InhomogeneityTableModel(QAbstractTableModel):
             return spec.center_y
         if col == 3:
             return spec.center_z
+        if spec.shape == "circle" and col in (4, 5, 6):
+            return _sphere_radius(spec) * 2.0
         if col == 4:
             return spec.size_x * 2.0
         if col == 5:
@@ -124,10 +135,18 @@ class _InhomogeneityTableModel(QAbstractTableModel):
             return False
         spec = self._data[index.row()]
         col = index.column()
+        changed_left = index
+        changed_right = index
         try:
             if col == 0:
                 if str(value).lower() in _SHAPES:
                     spec.shape = str(value).lower()
+                    if spec.shape == "circle":
+                        radius = _sphere_radius(spec)
+                        spec.size_x = radius
+                        spec.size_y = radius
+                        spec.size_z = radius
+                        changed_right = self.index(index.row(), 6)
             elif col == 1:
                 spec.center_x = float(value)
             elif col == 2:
@@ -135,18 +154,42 @@ class _InhomogeneityTableModel(QAbstractTableModel):
             elif col == 3:
                 spec.center_z = float(value)
             elif col == 4:
-                spec.size_x = abs(float(value)) * 0.5
+                size = abs(float(value)) * 0.5
+                if spec.shape == "circle":
+                    spec.size_x = size
+                    spec.size_y = size
+                    spec.size_z = size
+                    changed_left = self.index(index.row(), 4)
+                    changed_right = self.index(index.row(), 6)
+                else:
+                    spec.size_x = size
             elif col == 5:
-                spec.size_y = abs(float(value)) * 0.5
+                size = abs(float(value)) * 0.5
+                if spec.shape == "circle":
+                    spec.size_x = size
+                    spec.size_y = size
+                    spec.size_z = size
+                    changed_left = self.index(index.row(), 4)
+                    changed_right = self.index(index.row(), 6)
+                else:
+                    spec.size_y = size
             elif col == 6:
-                spec.size_z = abs(float(value)) * 0.5
+                size = abs(float(value)) * 0.5
+                if spec.shape == "circle":
+                    spec.size_x = size
+                    spec.size_y = size
+                    spec.size_z = size
+                    changed_left = self.index(index.row(), 4)
+                    changed_right = self.index(index.row(), 6)
+                else:
+                    spec.size_z = size
             elif col == 7:
                 spec.conductivity = float(value)
             else:
                 return False
         except (ValueError, TypeError):
             return False
-        self.dataChanged.emit(index, index)
+        self.dataChanged.emit(changed_left, changed_right)
         return True
 
     def flags(self, index: QModelIndex) -> Qt.ItemFlag:

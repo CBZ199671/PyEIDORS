@@ -178,6 +178,29 @@ def test_paint_circle_is_sphere_in_3d_not_vertical_cylinder():
     assert values.tolist() == [2.0, 1.0, 2.0]
 
 
+def test_v109_paint_3d_sphere_respects_z_radius_when_sizes_disagree():
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [0.0, 0.0, 0.07],
+            [0.04, 0.0, 0.0],
+        ],
+        dtype=float,
+    )
+    values = np.ones(centers.shape[0], dtype=float)
+    spec = InhomogeneitySpec(
+        shape="circle",
+        size_x=0.2,
+        size_y=0.2,
+        size_z=0.05,
+        conductivity=2.0,
+    )
+
+    _paint_shape(values, centers, spec, mesh_dimension=3)
+
+    assert values.tolist() == [2.0, 1.0, 2.0]
+
+
 def test_v101_paint_3d_sphere_uses_volume_fraction_for_coarse_hex_layers():
     x0, x1 = -0.04, 0.04
     y0, y1 = -0.04, 0.04

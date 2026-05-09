@@ -996,6 +996,32 @@ def test_v108_inhomogeneity_editor_height_is_full_size_for_3d_paint() -> None:
 
 
 @pytest.mark.gui
+def test_v109_inhomogeneity_editor_sphere_size_columns_stay_linked() -> None:
+    from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
+
+    _get_app()
+    editor = InhomogeneityEditor()
+    editor.set_domain_context(mesh_dimension=3, radius=0.18, height=0.16)
+    editor.show()
+    _get_app().processEvents()
+    try:
+        editor._add_shape("circle")
+        height_index = editor._model.index(0, 6)
+
+        assert editor._model.setData(height_index, 0.1)
+        spec = editor.get_inhomogeneities()[0]
+        assert spec.size_x == pytest.approx(0.05)
+        assert spec.size_y == pytest.approx(0.05)
+        assert spec.size_z == pytest.approx(0.05)
+        for col in (4, 5, 6):
+            assert editor._model.data(editor._model.index(0, col)) == pytest.approx(0.1)
+    finally:
+        editor.close()
+        editor.deleteLater()
+        _get_app().processEvents()
+
+
+@pytest.mark.gui
 def test_dark_stylesheet_uses_muted_section_chrome() -> None:
     from eit_app.ui.theme import _build_stylesheet
 
