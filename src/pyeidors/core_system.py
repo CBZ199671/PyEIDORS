@@ -51,6 +51,7 @@ from .physics import UnitCheckReport, run_unit_consistency_checks
 from .physics.current_drive import normalize_pattern_config_for_mesh
 from .perf.policy import (
     ACCELERATION_PROFILE_VALUES,
+    DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_3D_GEOMETRY_VERSION,
     DEFAULT_ACCELERATION_PROFILE,
     DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
@@ -646,7 +647,7 @@ class EITSystem(CoreSystemFacadeMixin):
             and str(getattr(self.mesh, "generator_revision", ""))
             .strip()
             .lower()
-            .startswith("g3d3")
+            .startswith(DEFAULT_3D_GENERATOR_REVISION)
             and str(getattr(self.mesh, "mesh_file", ""))
             .strip()
             .lower()

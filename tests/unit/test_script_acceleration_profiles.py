@@ -70,7 +70,7 @@ def test_gpu3d_fused_enables_fused_defaults_and_mesh_contract():
     assert args.lowrank_mode == "auto"
     assert mesh_family == "hex"
     assert geometry_version == "geomv2"
-    assert generator_revision == "g3d3"
+    assert generator_revision == module.DEFAULT_3D_GENERATOR_REVISION
 
 
 def test_2d_profile_does_not_override_runtime_defaults():

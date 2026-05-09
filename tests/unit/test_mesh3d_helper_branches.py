@@ -404,6 +404,30 @@ def test_geomv2_hex_z_levels_preserve_three_ring_mirror_symmetry():
     assert np.any(np.isclose(z_levels, cfg.z_center))
 
 
+def test_v110_geomv2_hex_z_levels_track_tall_cylinder_mesh_spacing():
+    """V110: tall cylinders need enough Z layers to avoid column-like spheres."""
+
+    cfg = mesh3d_module.Cylinder3DMeshConfig(
+        radius=0.18,
+        height=0.5,
+        z_center=0.0,
+        refinement=2,
+        electrode_height_ratio=0.2,
+        electrode_level_fractions=(0.25, 0.75),
+        electrode_layout=mesh3d_module.ELECTRODE_LAYOUT_RING_MAJOR,
+    )
+    electrodes = mesh3d_module.ElectrodeArcConfig(n_elec=16, coverage=0.5)
+    gen_hex = mesh3d_module._GeomV2HexCylinder3DMeshGenerator(cfg, electrodes)
+
+    z_levels = gen_hex._z_levels()
+    max_dz = float(np.max(np.diff(z_levels)))
+    radial_spacing_target = cfg.radius / (2 * cfg.refinement)
+
+    assert len(z_levels) - 1 >= int(np.ceil(cfg.height / radial_spacing_target))
+    assert max_dz <= radial_spacing_target * 1.25
+    assert np.any(np.isclose(z_levels, cfg.z_center))
+
+
 def test_legacy_and_geomv2_tetra_generator_helpers_and_dispatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):

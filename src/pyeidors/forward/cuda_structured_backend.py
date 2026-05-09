@@ -109,12 +109,14 @@ def resolve_cuda_structured_runtime(
     sidecar_path = structured_sidecar_path_for_mesh(mesh_path)
     if not sidecar_path.exists():
         raise ValueError(
-            "forward_backend='cuda_structured' requires a structured sidecar generated with the g3d3 hex mesh."
+            "forward_backend='cuda_structured' requires a structured sidecar "
+            f"generated with the {DEFAULT_3D_GENERATOR_REVISION} hex mesh."
         )
     sidecar = load_structured_sidecar(sidecar_path)
     if _norm(sidecar.get("generator_revision")) != DEFAULT_3D_GENERATOR_REVISION:
         raise ValueError(
-            "forward_backend='cuda_structured' requires a g3d3 structured sidecar matching the mesh."
+            "forward_backend='cuda_structured' requires a "
+            f"{DEFAULT_3D_GENERATOR_REVISION} structured sidecar matching the mesh."
         )
     return {
         "forward_backend_requested": "cuda_structured",

@@ -63,7 +63,7 @@ def _make_system(
         forward_backend=forward_backend,
         mesh_family="hex",
         geometry_version="geomv2",
-        generator_revision="g3d3",
+        generator_revision="g3d4",
         petsc_device=petsc_device,
         device=device,
         linear_backend_config={"petsc_device": petsc_device},
@@ -97,7 +97,7 @@ def mesh_root(tmp_path_factory: pytest.TempPathFactory) -> Path:
 def _load_mesh(mesh_root: Path, refinement: int):
     return load_or_create_mesh(
         mesh_dir=str(mesh_root),
-        mesh_name=f"cuda_structured_ref{refinement}_cfhex_geomv2_g3d3",
+        mesh_name=f"cuda_structured_ref{refinement}_cfhex_geomv2_g3d4",
         n_elec=16,
         dimension=3,
         radius=0.18,
@@ -108,7 +108,7 @@ def _load_mesh(mesh_root: Path, refinement: int):
         electrode_coverage=0.5,
         mesh_family="hex",
         geometry_version="geomv2",
-        generator_revision="g3d3",
+        generator_revision="g3d4",
     )
 
 

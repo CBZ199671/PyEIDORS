@@ -301,7 +301,7 @@ def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
         topology=SimpleNamespace(dim=3),
         mesh_family="hex",
         geometry_version="geomv2",
-        generator_revision="g3d3",
+        generator_revision="g3d4",
         mesh_file="mesh.msh",
     )
 

@@ -189,7 +189,7 @@ def test_geomv2_hex_mesh_is_file_backed_and_pure_hex(tmp_path):
     assert sidecar.exists()
     payload = load_structured_sidecar(sidecar)
     assert payload["version"] == STRUCTURED_SIDECAR_VERSION
-    assert payload["generator_revision"] == "g3d3"
+    assert payload["generator_revision"] == "g3d4"
     assert payload["mesh_family"] == "hex"
     assert payload["geometry_version"] == "geomv2"
     assert payload["block_topology"] == ["core", "east", "north", "west", "south"]

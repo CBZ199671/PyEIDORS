@@ -974,7 +974,16 @@ class _GeomV2HexCylinder3DMeshGenerator:
 
     def _z_levels(self) -> np.ndarray:
         intervals = _z_stage_intervals(self.config)
-        total_layers = max(len(intervals), max(6, self.config.refinement * 3))
+        refinement_i = max(1, int(self.config.refinement))
+        radial_spacing_target = max(
+            float(self.config.radius) / max(refinement_i * 2.0, 1.0),
+            1.0e-12,
+        )
+        total_layers = max(
+            len(intervals),
+            max(6, refinement_i * 3),
+            int(ceil(float(self.config.height) / radial_spacing_target)),
+        )
         total_height = max(self.config.height, 1e-12)
         counts = _allocate_z_layer_counts(
             intervals,
