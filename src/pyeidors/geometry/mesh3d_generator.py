@@ -422,6 +422,102 @@ def _z_stage_intervals(config: Cylinder3DMeshConfig) -> list[tuple[float, float]
     ]
 
 
+def _mirror_interval_groups(
+    intervals: Sequence[tuple[float, float]],
+    *,
+    center: float,
+    tol: float = 1.0e-10,
+) -> list[tuple[int, ...]] | None:
+    groups: list[tuple[int, ...]] = []
+    used: set[int] = set()
+    for idx, (z_start, z_stop) in enumerate(intervals):
+        if idx in used:
+            continue
+        mirror_start = 2.0 * float(center) - float(z_stop)
+        mirror_stop = 2.0 * float(center) - float(z_start)
+        partner = None
+        for cand, (cand_start, cand_stop) in enumerate(intervals):
+            if cand in used and cand != idx:
+                continue
+            if (
+                abs(float(cand_start) - mirror_start) <= tol
+                and abs(float(cand_stop) - mirror_stop) <= tol
+            ):
+                partner = cand
+                break
+        if partner is None:
+            return None
+        group = tuple(sorted({idx, int(partner)}))
+        used.update(group)
+        groups.append(group)
+    return groups
+
+
+def _allocate_symmetric_z_layer_counts(
+    intervals: Sequence[tuple[float, float]],
+    *,
+    total_layers: int,
+    center: float,
+) -> list[int] | None:
+    groups = _mirror_interval_groups(intervals, center=center)
+    if groups is None:
+        return None
+
+    counts = [1 for _ in intervals]
+    remaining = max(int(total_layers) - len(counts), 0)
+    has_single_interval = any(len(group) == 1 for group in groups)
+    if remaining % 2 == 1 and not has_single_interval:
+        remaining += 1
+
+    lengths = [float(z_stop - z_start) for z_start, z_stop in intervals]
+    while remaining > 0:
+        candidates = [group for group in groups if len(group) <= remaining]
+        if not candidates:
+            break
+
+        def _score(group: tuple[int, ...]) -> tuple[float, float, int]:
+            current_span = sum(lengths[idx] / counts[idx] for idx in group) / len(group)
+            total_span = sum(lengths[idx] for idx in group)
+            return (current_span, total_span, -len(group))
+
+        selected = max(candidates, key=_score)
+        for idx in selected:
+            counts[idx] += 1
+        remaining -= len(selected)
+    return counts
+
+
+def _allocate_z_layer_counts(
+    intervals: Sequence[tuple[float, float]],
+    *,
+    total_layers: int,
+    total_height: float,
+    center: float,
+) -> list[int]:
+    symmetric_counts = _allocate_symmetric_z_layer_counts(
+        intervals,
+        total_layers=total_layers,
+        center=center,
+    )
+    if symmetric_counts is not None:
+        return symmetric_counts
+
+    counts = [
+        max(1, int(round(total_layers * (z_stop - z_start) / total_height)))
+        for z_start, z_stop in intervals
+    ]
+    while sum(counts) > total_layers:
+        idx = int(np.argmax(np.asarray(counts, dtype=np.int32)))
+        counts[idx] -= 1
+    while sum(counts) < total_layers:
+        interval_lengths = np.asarray(
+            [z_stop - z_start for z_start, z_stop in intervals],
+            dtype=np.float64,
+        )
+        counts[int(np.argmax(interval_lengths))] += 1
+    return counts
+
+
 def _classify_sidewall_patch(
     *,
     theta: float,
@@ -880,19 +976,12 @@ class _GeomV2HexCylinder3DMeshGenerator:
         intervals = _z_stage_intervals(self.config)
         total_layers = max(len(intervals), max(6, self.config.refinement * 3))
         total_height = max(self.config.height, 1e-12)
-        counts = [
-            max(1, int(round(total_layers * (z_stop - z_start) / total_height)))
-            for z_start, z_stop in intervals
-        ]
-        while sum(counts) > total_layers:
-            idx = int(np.argmax(np.asarray(counts, dtype=np.int32)))
-            counts[idx] -= 1
-        while sum(counts) < total_layers:
-            interval_lengths = np.asarray(
-                [z_stop - z_start for z_start, z_stop in intervals],
-                dtype=np.float64,
-            )
-            counts[int(np.argmax(interval_lengths))] += 1
+        counts = _allocate_z_layer_counts(
+            intervals,
+            total_layers=total_layers,
+            total_height=total_height,
+            center=float(self.config.z_center),
+        )
 
         levels = [intervals[0][0]]
         for (z_start, z_stop), n_interval in zip(intervals, counts):

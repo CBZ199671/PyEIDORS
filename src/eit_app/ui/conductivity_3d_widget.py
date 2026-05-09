@@ -87,6 +87,7 @@ SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
 _MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
 _MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
+_INHOMOGENEITY_RELATIVE_FLOOR = 0.02
 _CELL_FACE_OFFSETS = {
     4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
     8: (
@@ -98,6 +99,19 @@ _CELL_FACE_OFFSETS = {
         (3, 0, 4, 7),
     ),
 }
+
+
+def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
+    values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
+    if values.size == 0 or not np.isfinite(values).any():
+        return np.zeros(values.shape, dtype=bool)
+    median = float(np.nanmedian(values))
+    spread = float(np.nanstd(values))
+    floor = max(abs(median) * _INHOMOGENEITY_RELATIVE_FLOOR, 1.0e-6)
+    if not np.isfinite(spread) or spread <= floor:
+        return np.zeros(values.shape, dtype=bool)
+    threshold = max(spread * 0.5, floor)
+    return np.asarray(np.abs(values - median) > threshold, dtype=bool)
 
 
 def _env_flag(name: str) -> bool:
@@ -1091,11 +1105,8 @@ class Conductivity3DWidget(QWidget):
         )
 
         if scalar_mode == "cell":
-            median = float(np.nanmedian(cell_sigma))
-            spread = float(np.nanstd(cell_sigma))
-            threshold = max(spread * 0.5, 1.0e-6)
-            inhom_mask = np.abs(cell_sigma - median) > threshold
-            if spread > 1.0e-6 and np.any(inhom_mask):
+            inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+            if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
                     self._offscreen_highlight_actor = plotter.add_mesh(
@@ -1256,11 +1267,8 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_facecolors = None
 
         if scalar_mode == "cell":
-            median = float(np.nanmedian(cell_sigma))
-            spread = float(np.nanstd(cell_sigma))
-            threshold = max(spread * 0.5, 1.0e-6)
-            inhom_indices = np.flatnonzero(np.abs(cell_sigma - median) > threshold)
-            if spread > 1.0e-6 and inhom_indices.size:
+            inhom_indices = np.flatnonzero(_cell_inhomogeneity_mask(cell_sigma))
+            if inhom_indices.size:
                 highlight_vertices: list[np.ndarray] = []
                 highlight_values: list[float] = []
                 offsets_for_cell = _CELL_FACE_OFFSETS.get(int(cells.shape[1]), ())
@@ -1431,11 +1439,8 @@ class Conductivity3DWidget(QWidget):
         # central inclusion still reads even when the bulk opacity is
         # high.  Built always; visibility toggles with the checkbox.
         if scalar_mode == "cell":
-            median = float(np.nanmedian(cell_sigma))
-            spread = float(np.nanstd(cell_sigma))
-            threshold = max(spread * 0.5, 1.0e-6)
-            inhom_mask = np.abs(cell_sigma - median) > threshold
-            if spread > 1.0e-6 and np.any(inhom_mask):
+            inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+            if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
                     self._highlight_actor = plotter.add_mesh(

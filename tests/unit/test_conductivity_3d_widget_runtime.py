@@ -32,6 +32,7 @@ from pyeidors.electrodes.layout import (  # noqa: E402
 from eit_app.ui.conductivity_3d_widget import (  # noqa: E402
     Conductivity3DWidget,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
+    _cell_inhomogeneity_mask,
     embedded_vtk_enabled,
     embedded_vtk_status,
 )
@@ -47,6 +48,14 @@ def _get_app() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+def test_v104_3d_highlight_ignores_near_constant_absolute_sigma_noise() -> None:
+    near_constant = np.array([1.0, 1.003, 0.997, 1.004, 0.998], dtype=np.float64)
+    visible_anomaly = np.array([1.0, 1.0, 1.0, 1.12, 1.0], dtype=np.float64)
+
+    assert not np.any(_cell_inhomogeneity_mask(near_constant))
+    assert np.flatnonzero(_cell_inhomogeneity_mask(visible_anomaly)).tolist() == [3]
 
 
 def _tetra_payload() -> tuple[np.ndarray, np.ndarray, np.ndarray]:

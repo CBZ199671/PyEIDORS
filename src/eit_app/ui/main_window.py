@@ -1598,6 +1598,52 @@ class EITWorkstation(QMainWindow):
             return ""
         return str(metadata.get("request_source", "")).strip().lower()
 
+    @staticmethod
+    def _simulation_reconstructed_voltage_fit(
+        result: object,
+        forward_result: ForwardSolverResult | None,
+    ) -> np.ndarray | None:
+        """Return reconstructed absolute boundary voltages for simulation plots."""
+        if forward_result is None:
+            return None
+        simulated = getattr(result, "simulated", None)
+        reference = getattr(forward_result, "homogeneous_voltages", None)
+        if simulated is None or reference is None:
+            return None
+        try:
+            diff_fit = np.asarray(simulated, dtype=np.float64).reshape(-1)
+            ref_vec = np.asarray(reference, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if diff_fit.size == 0 or diff_fit.size != ref_vec.size:
+            return None
+
+        metadata = getattr(result, "metadata", {}) or {}
+        if not isinstance(metadata, dict):
+            metadata = {}
+        mode = str(metadata.get("difference_mode", "raw")).strip().lower()
+        orientation = (
+            str(metadata.get("difference_orientation", "target_minus_reference"))
+            .strip()
+            .lower()
+        )
+        if orientation == "reference_minus_target":
+            diff_fit = -diff_fit
+
+        if mode == "normalized":
+            safe_ref = ref_vec.copy()
+            small = np.abs(safe_ref) < np.finfo(np.float64).eps
+            if np.any(small):
+                signs = np.sign(safe_ref[small])
+                signs[signs == 0.0] = 1.0
+                safe_ref[small] = signs * np.finfo(np.float64).eps
+            reconstructed = ref_vec + diff_fit * safe_ref
+        else:
+            reconstructed = ref_vec + diff_fit
+        if not np.isfinite(reconstructed).all():
+            return None
+        return np.asarray(reconstructed, dtype=np.float64)
+
     @Slot(str)
     def _on_auto_reconstruction_error(self, msg: str) -> None:
         self._auto_recon_busy = False
@@ -4167,34 +4213,16 @@ class EITWorkstation(QMainWindow):
                 f"Reconstruction complete.{_format_runtime_diagnostics(runtime_diag)}"
             )
             self._sim_tab.inverse_problem_panel.set_save_enabled(True)
+            reconstructed_voltages = self._simulation_reconstructed_voltage_fit(
+                recon_result,
+                self._last_fwd_result,
+            )
             self._sim_tab.results_widget.update_inverse_result(
                 reconstructed_conductivity=recon_result.conductivity,
                 node_coords=recon_result.node_coords,
                 cell_connectivity=recon_result.cell_connectivity,
+                reconstructed_voltages=reconstructed_voltages,
             )
-            # Surface the difference-voltage fit quality on the boundary
-            # plot.  ReconstructionResult.measured = target − reference =
-            # the *true* diff voltage induced by the inclusion.
-            # ReconstructionResult.simulated = forward solve of the
-            # reconstructed σ minus the reference solve = the *predicted*
-            # diff voltage — what the reconstruction would produce if we
-            # re-simulated it.  Plotting both side-by-side tells the user
-            # how well their reconstructed σ matches the measured data.
-            try:
-                measured = getattr(recon_result, "measured", None)
-                simulated = getattr(recon_result, "simulated", None)
-                if measured is not None and simulated is not None:
-                    plot_dtype = compute_dtype()
-                    self._sim_tab.results_widget.voltage_plot.update_simulation_voltages(
-                        ground_truth=np.asarray(measured, dtype=plot_dtype).reshape(-1),
-                        reconstructed=np.asarray(simulated, dtype=plot_dtype).reshape(
-                            -1
-                        ),
-                    )
-            except Exception as exc:
-                log.warning(
-                    "Failed to update simulation voltage plot with recon fit: %s", exc
-                )
             self._sim_tab.metrics_panel.update_metrics(
                 self._last_fwd_result.ground_truth_conductivity,
                 recon_result.conductivity,

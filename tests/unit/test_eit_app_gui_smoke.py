@@ -2926,6 +2926,49 @@ def test_simulation_2d_rm_routes_use_normalized_difference_mode(
     _close_window(window)
 
 
+def test_simulation_voltage_fit_restores_absolute_boundary_voltages() -> None:
+    """V102: simulation fit plots absolute voltage, not normalized/raw diff."""
+
+    forward = ForwardSolverResult(
+        boundary_voltages=np.array([11.0, 16.0], dtype=np.float64),
+        homogeneous_voltages=np.array([10.0, 20.0], dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=2,
+    )
+    normalized = ReconstructionResult(
+        conductivity=np.ones(1, dtype=np.float64),
+        node_coords=forward.node_coords,
+        cell_connectivity=forward.cell_connectivity,
+        simulated=np.array([0.1, -0.2], dtype=np.float64),
+        metadata={
+            "difference_mode": "normalized",
+            "difference_orientation": "target_minus_reference",
+        },
+    )
+    restored = EITWorkstation._simulation_reconstructed_voltage_fit(normalized, forward)
+    assert restored is not None
+    assert restored == pytest.approx([11.0, 16.0])
+
+    raw_reverse = ReconstructionResult(
+        conductivity=np.ones(1, dtype=np.float64),
+        node_coords=forward.node_coords,
+        cell_connectivity=forward.cell_connectivity,
+        simulated=np.array([-1.0, 4.0], dtype=np.float64),
+        metadata={
+            "difference_mode": "raw",
+            "difference_orientation": "reference_minus_target",
+        },
+    )
+    restored = EITWorkstation._simulation_reconstructed_voltage_fit(
+        raw_reverse, forward
+    )
+    assert restored is not None
+    assert restored == pytest.approx([11.0, 16.0])
+
+
 @pytest.mark.gui
 @pytest.mark.parametrize("method", ["noser_rm", "laplace_rm", "curvature_rm"])
 def test_simulation_3d_rm_routes_use_normalized_difference_mode(

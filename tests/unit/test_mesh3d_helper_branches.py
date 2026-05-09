@@ -380,6 +380,30 @@ def test_surface_selection_square_to_disk_and_hex_geometry_helpers(
     assert len(boundary_faces) == quads.shape[0]
 
 
+def test_geomv2_hex_z_levels_preserve_three_ring_mirror_symmetry():
+    """V103: symmetric electrode windows must produce symmetric hex z levels."""
+
+    cfg = mesh3d_module.Cylinder3DMeshConfig(
+        radius=0.18,
+        height=0.16,
+        z_center=0.0,
+        refinement=2,
+        electrode_height_ratio=0.3325,
+        electrode_level_fractions=(0.15, 0.5, 0.85),
+        electrode_layout=mesh3d_module.ELECTRODE_LAYOUT_RING_MAJOR,
+    )
+    electrodes = mesh3d_module.ElectrodeArcConfig(n_elec=16, coverage=0.5)
+    gen_hex = mesh3d_module._GeomV2HexCylinder3DMeshGenerator(cfg, electrodes)
+
+    z_levels = gen_hex._z_levels()
+    centered = z_levels - float(cfg.z_center)
+
+    assert z_levels[0] == pytest.approx(cfg.z_min)
+    assert z_levels[-1] == pytest.approx(cfg.z_max)
+    assert np.max(np.abs(centered + centered[::-1])) <= 1.0e-12
+    assert np.any(np.isclose(z_levels, cfg.z_center))
+
+
 def test_legacy_and_geomv2_tetra_generator_helpers_and_dispatch(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
