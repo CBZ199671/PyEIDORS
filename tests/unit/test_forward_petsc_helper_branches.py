@@ -573,13 +573,14 @@ def test_structural_diagonal_and_cuda_gauge_fix_helpers(
     assert out is fixed
     assert original.destroyed is True
     assert (
-        model.get_backend_diagnostics()["gpu_constraint_strategy"] == "electrode-zero"
+        model.get_backend_diagnostics()["gpu_constraint_strategy"]
+        == "reference-electrode-row"
     )
     fixed_csr = captured["matrix"].tocsr()
-    assert np.array_equal(fixed_csr.getrow(2).indices, np.array([2], dtype=np.int32))
-    assert np.array_equal(fixed_csr.getrow(4).indices, np.array([4], dtype=np.int32))
-    assert 2 not in fixed_csr.getrow(0).indices
-    assert 4 not in fixed_csr.getrow(0).indices
+    assert np.array_equal(fixed_csr.getrow(4).indices, np.array([2], dtype=np.int32))
+    np.testing.assert_allclose(fixed_csr.getrow(4).data, np.array([1.0]))
+    assert 2 in fixed_csr.getrow(0).indices
+    assert 4 in fixed_csr.getrow(0).indices
 
     monkeypatch.setattr(
         model,
@@ -614,7 +615,7 @@ def test_cuda_rhs_and_solution_recentering_respect_gpu_enablement():
 
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
     rhs_fixed = EITForwardModel._apply_cuda_gauge_fix_rhs(model, rhs.copy())
-    assert np.allclose(rhs_fixed[2, :], 0.0)
+    np.testing.assert_allclose(rhs_fixed[2, :], rhs[2, :])
     assert np.allclose(rhs_fixed[4, :], 0.0)
 
     sol_fixed = EITForwardModel._recenter_cuda_gauge_solution(model, sol.copy())
@@ -622,6 +623,39 @@ def test_cuda_rhs_and_solution_recentering_respect_gpu_enablement():
     np.testing.assert_allclose(sol_fixed[:2, :], sol[:2, :] - offsets)
     np.testing.assert_allclose(sol_fixed[2:4, :], sol[2:4, :] - offsets)
     np.testing.assert_allclose(sol_fixed[4, :], 0.0)
+
+
+def test_cuda_cem_requires_direct_solve_for_reference_gauge():
+    model = _make_model()
+    model._petsc_backend_info = {"petsc_device_effective": "cpu"}
+    iterative = forward_module.ForwardKSPSession(
+        ksp=object(),
+        current_A=object(),
+        current_solve_A=object(),
+        backend_name="petsc-ksp",
+        ksp_type="cg",
+        pc_type="gamg",
+        factor_solver_type=None,
+        solve_mat_type=None,
+        structural_fingerprint="fp",
+    )
+    assert EITForwardModel._cuda_cem_requires_direct_solve(model, iterative) is False
+
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    assert EITForwardModel._cuda_cem_requires_direct_solve(model, iterative) is True
+
+    direct = forward_module.ForwardKSPSession(
+        ksp=object(),
+        current_A=object(),
+        current_solve_A=object(),
+        backend_name="petsc-ksp-densecuda-lu",
+        ksp_type="preonly",
+        pc_type="lu",
+        factor_solver_type=None,
+        solve_mat_type="densecuda",
+        structural_fingerprint="fp",
+    )
+    assert EITForwardModel._cuda_cem_requires_direct_solve(model, direct) is False
 
 
 def test_make_petsc_dense_solver_bundle_validates_dense_type_and_builds_solver(

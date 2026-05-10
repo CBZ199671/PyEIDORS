@@ -1133,7 +1133,14 @@ class EITForwardModel:
             == "cuda"
         )
 
-    def _cuda_gauge_indices(self) -> tuple[int, int]:
+    def _cuda_gauge_rows(self) -> tuple[int, int]:
+        """Return ``(constraint_row, reference_electrode_col)`` for CUDA CEM gauge.
+
+        The CPU/EIDORS CEM system enforces ``sum(U)=0`` with a Lagrange
+        multiplier. PETSc CUDA iterative routes are fragile on that saddle-point
+        row, so the CUDA route uses the equivalent gauge ``U_0=0`` during the
+        solve and recenters electrode voltages back to zero mean afterwards.
+        """
         return self.dofs + self.n_elec, self.dofs
 
     def _apply_cuda_gauge_fix_matrix(self, mat):
@@ -1141,20 +1148,13 @@ class EITForwardModel:
             return mat
         try:
             gauge_matrix = self._petsc_to_csr(mat).tolil()
-            nrows = gauge_matrix.shape[0]
-            for idx in self._cuda_gauge_indices():
-                for row in range(nrows):
-                    if row == idx:
-                        continue
-                    row_cols = gauge_matrix.rows[row]
-                    if idx in row_cols:
-                        pos = row_cols.index(idx)
-                        row_cols.pop(pos)
-                        gauge_matrix.data[row].pop(pos)
-                gauge_matrix.rows[idx] = [idx]
-                gauge_matrix.data[idx] = [1.0]
+            constraint_row, reference_col = self._cuda_gauge_rows()
+            gauge_matrix[constraint_row, :] = 0.0
+            gauge_matrix[constraint_row, reference_col] = 1.0
             fixed = self._csr_to_petsc(gauge_matrix.tocsr())
-            self._set_backend_diagnostic(gpu_constraint_strategy="electrode-zero")
+            self._set_backend_diagnostic(
+                gpu_constraint_strategy="reference-electrode-row"
+            )
             if fixed is not mat and hasattr(mat, "destroy"):
                 try:
                     mat.destroy()
@@ -1167,9 +1167,8 @@ class EITForwardModel:
     def _apply_cuda_gauge_fix_rhs(self, rhs_matrix: np.ndarray) -> np.ndarray:
         if not self._gpu_gauge_fix_enabled():
             return rhs_matrix
-        last, gauge = self._cuda_gauge_indices()
-        rhs_matrix[last, :] = 0.0
-        rhs_matrix[gauge, :] = 0.0
+        constraint_row, _reference_col = self._cuda_gauge_rows()
+        rhs_matrix[constraint_row, :] = 0.0
         return rhs_matrix
 
     def _recenter_cuda_gauge_solution(self, sol_matrix: np.ndarray) -> np.ndarray:
@@ -1242,6 +1241,98 @@ class EITForwardModel:
             "reuse_preconditioner": reuse_requested,
             "reuse_preconditioner_applied": reuse_applied,
         }
+
+    def _solve_with_cuda_dense_lu_fallback(
+        self,
+        system_matrix,
+        rhs_matrix: np.ndarray,
+        *,
+        fallback_reason: str,
+        solve_start: float,
+    ) -> np.ndarray:
+        if PETSc is None:
+            raise RuntimeError("petsc4py is required for CUDA dense LU fallback")
+        dense_type = self._get_requested_dense_mat_type()
+        if dense_type is None:
+            raise RuntimeError("CUDA dense PETSc Mat type is unavailable")
+        cpu_mat_type, _ = self._stable_cpu_petsc_types()
+        host_mat = self._ensure_mat_type(system_matrix.copy(), cpu_mat_type)
+        if hasattr(host_mat, "assemble"):
+            host_mat.assemble()
+        solve_mat = self._ensure_mat_type(host_mat, dense_type)
+        if hasattr(solve_mat, "assemble"):
+            solve_mat.assemble()
+        ksp = PETSc.KSP().create(self.mesh.comm)
+        ksp.setOperators(solve_mat)
+        ksp.setType("preonly")
+        pc = ksp.getPC()
+        pc.setType("lu")
+        ksp.setTolerances(
+            rtol=self.backend_config.rtol,
+            atol=self.backend_config.atol,
+            max_it=self.backend_config.max_it,
+        )
+        ksp.setUp()
+
+        rhs = np.asarray(rhs_matrix, dtype=float)
+        sol_matrix = np.zeros_like(rhs)
+        b = self._ensure_vec_type(
+            solve_mat.createVecRight(), self._get_requested_petsc_vec_type()
+        )
+        x = self._ensure_vec_type(
+            solve_mat.createVecRight(), self._get_requested_petsc_vec_type()
+        )
+        b_array = b.getArray(readonly=False)
+        iterations_per_rhs: list[int | None] = []
+        reason = None
+        for i in range(rhs.shape[1]):
+            b_array[:] = rhs[:, i]
+            ksp.solve(b, x)
+            try:
+                iterations_per_rhs.append(int(ksp.getIterationNumber()))
+            except Exception:
+                iterations_per_rhs.append(None)
+            try:
+                reason = int(ksp.getConvergedReason())
+            except Exception:
+                reason = None
+            if reason is not None and reason < 0:
+                raise RuntimeError(
+                    "PETSc CUDA dense LU fallback failed with a negative "
+                    f"convergence reason ({reason})"
+                )
+            sol_matrix[:, i] = x.getArray(readonly=True)
+
+        total_iterations = sum(
+            int(value) for value in iterations_per_rhs if value is not None
+        )
+        self._set_backend_diagnostic(
+            gpu_fallback_reason=f"cuda_dense_lu_fallback:{fallback_reason}",
+            fallback_reason=f"cuda_dense_lu_fallback:{fallback_reason}",
+            forward_factor_backend=f"petsc-ksp-{str(dense_type).lower()}-lu",
+            petsc_solve_mat_type=str(solve_mat.getType())
+            if hasattr(solve_mat, "getType")
+            else str(dense_type),
+            forward_mat_solve_effective="vec-loop",
+            forward_ksp_mat_solve_count=0,
+            forward_ksp_solve_count=int(rhs.shape[1]),
+            forward_ksp_iterations_per_rhs=iterations_per_rhs,
+            forward_ksp_iterations_total=total_iterations,
+            forward_ksp_converged_reason=reason,
+            forward_ksp_converged=None if reason is None else bool(reason > 0),
+            forward_solve_seconds=float(time.perf_counter() - solve_start),
+        )
+        return self._recenter_cuda_gauge_solution(sol_matrix)
+
+    def _cuda_cem_requires_direct_solve(self, session: ForwardKSPSession) -> bool:
+        backend_info = getattr(self, "_petsc_backend_info", {}) or {}
+        if str(backend_info.get("petsc_device_effective", "cpu")) != "cuda":
+            return False
+        if not self._gpu_gauge_fix_enabled():
+            return False
+        ksp_type = str(session.ksp_type or "").strip().lower()
+        pc_type = str(session.pc_type or "").strip().lower()
+        return not (ksp_type == "preonly" and pc_type in {"lu", "cholesky", "qr"})
 
     def _assemble_electrode_matrix(self):
         b_form = 0
@@ -1383,12 +1474,13 @@ class EITForwardModel:
         mat_kind = self._get_requested_petsc_mat_type()
         if self._gpu_gauge_fix_enabled():
             scipy_full = self._create_full_matrix_scipy(sigma).tolil()
-            for idx in self._cuda_gauge_indices():
-                scipy_full[idx, :] = 0.0
-                scipy_full[:, idx] = 0.0
-                scipy_full[idx, idx] = 1.0
+            constraint_row, reference_col = self._cuda_gauge_rows()
+            scipy_full[constraint_row, :] = 0.0
+            scipy_full[constraint_row, reference_col] = 1.0
             full_matrix = self._csr_to_petsc(scipy_full.tocsr())
-            self._set_backend_diagnostic(gpu_constraint_strategy="electrode-zero")
+            self._set_backend_diagnostic(
+                gpu_constraint_strategy="reference-electrode-row"
+            )
         else:
             conductivity_mat = self._assemble_conductivity_matrix(sigma, mat_kind=None)
             conductivity_augmented = self._expand_conductivity_csr_to_full(
@@ -2179,6 +2271,14 @@ class EITForwardModel:
                 return None
 
         solve_t0 = time.perf_counter()
+        if self._cuda_cem_requires_direct_solve(session):
+            self._dispose_forward_ksp_session(session)
+            return self._solve_with_cuda_dense_lu_fallback(
+                A,
+                rhs_matrix,
+                fallback_reason="cuda_cem_reference_gauge_requires_direct_solve",
+                solve_start=solve_t0,
+            )
         if use_mat_solve and hasattr(ksp, "matSolve"):
             try:
                 B = PETSc.Mat().createDense(
@@ -2359,10 +2459,19 @@ class EITForwardModel:
                         forward_solve_seconds=float(time.perf_counter() - solve_t0),
                     )
                     self._dispose_forward_ksp_session(session)
-                    raise RuntimeError(
-                        "PETSc CUDA solve failed with a negative convergence reason "
-                        f"({reason}). {self._actionable_cuda_guidance()}"
-                    )
+                    try:
+                        return self._solve_with_cuda_dense_lu_fallback(
+                            A,
+                            rhs_matrix,
+                            fallback_reason=f"petsc_ksp_failed:{reason}",
+                            solve_start=solve_t0,
+                        )
+                    except Exception as fallback_exc:
+                        raise RuntimeError(
+                            "PETSc CUDA solve failed with a negative convergence "
+                            f"reason ({reason}) and dense LU fallback failed "
+                            f"({fallback_exc}). {self._actionable_cuda_guidance()}"
+                        ) from fallback_exc
                 self._set_backend_diagnostic(
                     fallback_reason=f"petsc_ksp_failed:{reason}",
                     forward_ksp_solve_count=int(i + 1),
@@ -2478,6 +2587,14 @@ class EITForwardModel:
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
         iterations_per_rhs: list[int | None] = []
         reason = None
+        if self._cuda_cem_requires_direct_solve(session):
+            self._dispose_forward_ksp_session(session)
+            return self._solve_with_cuda_dense_lu_fallback(
+                A,
+                rhs,
+                fallback_reason="full_rhs_cuda_cem_reference_gauge_requires_direct_solve",
+                solve_start=solve_t0,
+            )
         for i in range(n_rhs):
             b_array[:] = rhs[:, i]
             ksp.solve(b, x)
@@ -2503,10 +2620,20 @@ class EITForwardModel:
                 )
                 self._dispose_forward_ksp_session(session)
                 if effective_device == "cuda":
-                    raise RuntimeError(
-                        "PETSc CUDA full RHS solve failed with a negative "
-                        f"convergence reason ({reason}). {self._actionable_cuda_guidance()}"
-                    )
+                    try:
+                        return self._solve_with_cuda_dense_lu_fallback(
+                            A,
+                            rhs,
+                            fallback_reason=f"full_rhs_petsc_ksp_failed:{reason}",
+                            solve_start=solve_t0,
+                        )
+                    except Exception as fallback_exc:
+                        raise RuntimeError(
+                            "PETSc CUDA full RHS solve failed with a negative "
+                            f"convergence reason ({reason}) and dense LU fallback "
+                            f"failed ({fallback_exc}). "
+                            f"{self._actionable_cuda_guidance()}"
+                        ) from fallback_exc
                 return self._solve_full_rhs_with_scipy(sigma, rhs, rhs_kind=rhs_kind)
             sol_matrix[:, i] = x.getArray(readonly=True)
 

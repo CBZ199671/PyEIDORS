@@ -258,16 +258,10 @@ class StimMeasPatternManager:
                 "custom_stim_matrix must have shape (n_stim, n_elec*n_rings); "
                 f"got {stim_matrix.shape}, expected second dimension {self.tn_elec}."
             )
-        meas_payload = np.asarray(self.config.custom_meas_matrices, dtype=float)
-        if meas_payload.ndim == 2:
-            meas_matrices = [meas_payload.copy() for _ in range(stim_matrix.shape[0])]
-        elif meas_payload.ndim == 3:
-            meas_matrices = [np.asarray(item, dtype=float) for item in meas_payload]
-        else:
-            raise ValueError(
-                "custom_meas_matrices must be either (n_meas, total_elec) "
-                "or (n_stim, n_meas, total_elec)."
-            )
+        meas_matrices = self._coerce_custom_meas_matrices(
+            self.config.custom_meas_matrices,
+            n_stim=stim_matrix.shape[0],
+        )
         if len(meas_matrices) != stim_matrix.shape[0]:
             raise ValueError(
                 "custom_meas_matrices count must match custom_stim_matrix rows: "
@@ -292,6 +286,28 @@ class StimMeasPatternManager:
             self.n_meas_per_stim.append(mat.shape[0])
             self.n_meas_total += mat.shape[0]
         self.n_stim = int(stim_matrix.shape[0])
+
+    @staticmethod
+    def _coerce_custom_meas_matrices(
+        custom_meas_matrices: object, *, n_stim: int
+    ) -> list[np.ndarray]:
+        """Normalize custom measurement matrices, including ragged per-stim lists."""
+        if isinstance(custom_meas_matrices, (list, tuple)) and custom_meas_matrices:
+            candidates = [
+                np.asarray(item, dtype=float) for item in custom_meas_matrices
+            ]
+            if all(candidate.ndim == 2 for candidate in candidates):
+                return candidates
+
+        meas_payload = np.asarray(custom_meas_matrices, dtype=float)
+        if meas_payload.ndim == 2:
+            return [meas_payload.copy() for _ in range(n_stim)]
+        if meas_payload.ndim == 3:
+            return [np.asarray(item, dtype=float) for item in meas_payload]
+        raise ValueError(
+            "custom_meas_matrices must be either (n_meas, total_elec), "
+            "(n_stim, n_meas, total_elec), or a list of per-stim 2D matrices."
+        )
 
     def _build_measurement_projection(self) -> None:
         """Build a dense projection matrix to avoid per-pattern matmul loops."""

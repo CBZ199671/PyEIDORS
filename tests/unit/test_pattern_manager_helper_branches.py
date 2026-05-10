@@ -153,3 +153,46 @@ def test_filter_measurements_with_neighbor_exclusion_branch():
     )
     filtered = manager._filter_measurements(meas_mat, elec=0, ring=0)
     assert filtered.shape == (0, 4)
+
+
+def test_custom_protocol_accepts_ragged_per_stim_measurement_matrices():
+    stim_matrix = np.array(
+        [
+            [1.0, -1.0, 0.0, 0.0],
+            [0.0, 1.0, -1.0, 0.0],
+        ],
+        dtype=float,
+    )
+    meas_matrices = [
+        np.array([[1.0, -1.0, 0.0, 0.0]], dtype=float),
+        np.array(
+            [
+                [0.0, 1.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0, -1.0],
+            ],
+            dtype=float,
+        ),
+    ]
+    manager = StimMeasPatternManager(
+        _config(
+            measurement_protocol="custom",
+            custom_stim_matrix=stim_matrix,
+            custom_meas_matrices=meas_matrices,
+        ),
+        mesh_tdim=2,
+    )
+
+    assert manager.n_meas_per_stim == [1, 2]
+    assert manager.n_meas_total == 3
+    np.testing.assert_allclose(manager.stim_matrix, stim_matrix)
+    voltages = np.array(
+        [
+            [3.0, 1.0, 0.0, 0.0],
+            [0.0, 4.0, 1.0, -2.0],
+        ],
+        dtype=float,
+    )
+    np.testing.assert_allclose(
+        manager.apply_meas_pattern(voltages),
+        np.array([2.0, 3.0, 3.0], dtype=float),
+    )
