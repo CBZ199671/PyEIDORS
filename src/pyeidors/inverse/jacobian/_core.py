@@ -42,6 +42,8 @@ class JacobianGeometry(NamedTuple):
     Q_DG: fem.FunctionSpace
     DG0: fem.FunctionSpace
     cell_areas: np.ndarray
+    linear_cell_dofs: np.ndarray | None = None
+    linear_gradient_weights: np.ndarray | None = None
 
 
 def build_jacobian_geometry(fwd_model) -> JacobianGeometry:
@@ -56,6 +58,12 @@ def build_jacobian_geometry(fwd_model) -> JacobianGeometry:
     areas_vec = fem_petsc.assemble_vector(fem.form(test_v * ufl.dx))
     areas_vec.assemble()
     cell_areas = np.asarray(areas_vec.array, dtype=float)
+    linear_cell_dofs, linear_gradient_weights = _build_linear_gradient_cache(
+        fwd_model.V,
+        DG0,
+        gdim,
+        int(cell_areas.size),
+    )
 
     return JacobianGeometry(
         mesh=mesh,
@@ -65,7 +73,78 @@ def build_jacobian_geometry(fwd_model) -> JacobianGeometry:
         Q_DG=Q_DG,
         DG0=DG0,
         cell_areas=cell_areas,
+        linear_cell_dofs=linear_cell_dofs,
+        linear_gradient_weights=linear_gradient_weights,
     )
+
+
+def _build_linear_gradient_cache(
+    V: fem.FunctionSpace,
+    DG0: fem.FunctionSpace,
+    gdim: int,
+    n_cells: int,
+) -> tuple[np.ndarray | None, np.ndarray | None]:
+    """Precompute exact per-cell P1 simplex gradient weights when possible."""
+
+    if n_cells <= 0:
+        return None, None
+
+    try:
+        dof_coords = np.asarray(V.tabulate_dof_coordinates(), dtype=float)[:, :gdim]
+        dofmap = V.dofmap
+        dg0_dofmap = DG0.dofmap
+    except (AttributeError, TypeError, RuntimeError):
+        return None, None
+
+    expected_dofs = int(gdim) + 1
+    cell_dofs = np.empty((int(n_cells), expected_dofs), dtype=np.int64)
+    gradient_weights = np.empty((int(n_cells), int(gdim), expected_dofs), dtype=float)
+    seen_dg0_rows = np.zeros(int(n_cells), dtype=bool)
+    for cell in range(int(n_cells)):
+        try:
+            dofs = np.asarray(dofmap.cell_dofs(cell), dtype=np.int64)
+            dg0_dofs = np.asarray(dg0_dofmap.cell_dofs(cell), dtype=np.int64)
+        except (AttributeError, TypeError, RuntimeError, IndexError):
+            return None, None
+        if dofs.size != expected_dofs:
+            return None, None
+        if dg0_dofs.size != 1:
+            return None, None
+        dg0_row = int(dg0_dofs[0])
+        if dg0_row < 0 or dg0_row >= n_cells or seen_dg0_rows[dg0_row]:
+            return None, None
+
+        coords = dof_coords[dofs, :]
+        affine_matrix = np.column_stack(
+            [np.ones(dofs.size, dtype=float), coords],
+        )
+        if np.linalg.matrix_rank(affine_matrix) < expected_dofs:
+            return None, None
+
+        cell_dofs[dg0_row, :] = dofs
+        gradient_weights[dg0_row, :, :] = np.linalg.pinv(affine_matrix)[1:, :]
+        seen_dg0_rows[dg0_row] = True
+
+    if not bool(np.all(seen_dg0_rows)):
+        return None, None
+    return cell_dofs, gradient_weights
+
+
+def _compute_linear_cell_gradients(
+    field: np.ndarray,
+    cell_dofs: np.ndarray,
+    gradient_weights: np.ndarray,
+) -> np.ndarray:
+    """Apply precomputed P1 simplex gradient weights to one nodal field."""
+
+    values = np.asarray(field, dtype=float).reshape(-1)
+    if values.size <= int(np.max(cell_dofs)):
+        raise ValueError(
+            "Field vector is shorter than the local P1 cell dof map required "
+            "for Jacobian gradient assembly."
+        )
+    cell_values = values[cell_dofs]
+    return np.einsum("cgd,cd->cg", gradient_weights, cell_values, optimize=True)
 
 
 def compute_field_gradients(
@@ -73,6 +152,18 @@ def compute_field_gradients(
     geometry: JacobianGeometry,
 ) -> list[np.ndarray]:
     """Project nodal fields onto the per-cell DG-0 vector gradient space."""
+
+    linear_cell_dofs = getattr(geometry, "linear_cell_dofs", None)
+    linear_gradient_weights = getattr(geometry, "linear_gradient_weights", None)
+    if linear_cell_dofs is not None and linear_gradient_weights is not None:
+        return [
+            _compute_linear_cell_gradients(
+                field,
+                linear_cell_dofs,
+                linear_gradient_weights,
+            )
+            for field in field_solutions
+        ]
 
     interpolation_points = geometry.Q_DG.element.interpolation_points
     if callable(interpolation_points):

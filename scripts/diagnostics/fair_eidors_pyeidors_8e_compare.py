@@ -426,16 +426,10 @@ def run_pyeidors_case(
 
     t1 = time.perf_counter()
     jacobian_path = case_dir / f"pyeidors_{device}_projected_jacobian.npy"
-    use_torch_jacobian = device == "cuda" and case.dim == 3
+    use_torch_jacobian = device == "cuda"
     jacobian_device = device if use_torch_jacobian else "cpu"
-    reuse_jacobian_path = jacobian_path
-    if device == "cuda" and case.dim == 2:
-        cpu_jacobian_path = case_dir / "pyeidors_cpu_projected_jacobian.npy"
-        if cpu_jacobian_path.exists():
-            reuse_jacobian_path = cpu_jacobian_path
-            jacobian_device = "cpu-reused-for-2d-cuda"
-    if reuse_jacobian_path.exists():
-        jacobian = np.load(reuse_jacobian_path)
+    if jacobian_path.exists():
+        jacobian = np.load(jacobian_path)
     else:
         jac_calc = EidorsJacobianAdapter(
             system.fwd_model,
