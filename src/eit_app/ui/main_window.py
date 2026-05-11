@@ -3940,6 +3940,8 @@ class EITWorkstation(QMainWindow):
 
         n_meas = len(result.boundary_voltages)
         meas_dtype = compute_dtype()
+        compute_precision = current_precision()
+        compute_dtype_name = np.dtype(meas_dtype).name
         zero_imag = np.zeros(n_meas, dtype=meas_dtype)
 
         homog = (
@@ -4148,6 +4150,10 @@ class EITWorkstation(QMainWindow):
             "difference_preset": difference_preset,
             "absolute_preset": absolute_preset,
             "request_source": "simulation",
+            "compute_precision": compute_precision,
+            "compute_dtype": compute_dtype_name,
+            "rm_dtype": compute_dtype_name,
+            "rm_matmul_dtype": compute_dtype_name,
             "simulation_inverse_route": route,
             "simulation_inverse_route_kind": route_kind,
             "simulation_inverse_debug_route": route_kind == "debug",

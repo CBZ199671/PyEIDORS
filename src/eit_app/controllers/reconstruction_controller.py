@@ -194,6 +194,30 @@ def _public_runtime_metadata(meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _normalize_rm_dtype_name(value: Any, default: str = "float64") -> str:
+    try:
+        dtype = np.dtype(value)
+    except (TypeError, ValueError):
+        dtype = np.dtype(default)
+    if dtype == np.dtype(np.float32):
+        return "float32"
+    return "float64"
+
+
+def _rm_dtype_name_from_meta(meta: dict[str, Any]) -> str:
+    for key in (
+        "rm_dtype",
+        "rm_matmul_dtype",
+        "compute_dtype",
+        "compute_precision",
+        "precision",
+    ):
+        value = meta.get(key)
+        if value not in (None, ""):
+            return _normalize_rm_dtype_name(value)
+    return "float64"
+
+
 def _rm_fit_jacobian_cache_key(path: Path, signature: Any) -> str:
     signature_text = str(signature or "").strip()
     if signature_text:
@@ -210,16 +234,18 @@ def _fit_jacobian_array(
     expected_shape: tuple[int, int] | None = None,
 ) -> np.ndarray | None:
     try:
-        arr = np.asarray(value, dtype=np.float64)
+        arr = np.asarray(value)
     except (TypeError, ValueError):
         return None
+    if arr.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        arr = arr.astype(np.float64, copy=False)
     if arr.ndim != 2 or 0 in arr.shape or not np.isfinite(arr).all():
         return None
     if expected_shape is not None and tuple(int(v) for v in arr.shape) != tuple(
         int(v) for v in expected_shape
     ):
         return None
-    return np.ascontiguousarray(arr, dtype=np.float64)
+    return np.ascontiguousarray(arr)
 
 
 def _put_rm_fit_jacobian_cache(key: str, jacobian: np.ndarray) -> str:
@@ -1245,6 +1271,7 @@ def _planned_one_step_rm_signature(
     hp = math.sqrt(max(float(runtime.lam), 0.0))
     regularization_type = _one_step_rm_regularization(meta) or "noser"
     rm_form = _one_step_rm_form(meta, regularization_type)
+    rm_dtype_name = _rm_dtype_name_from_meta(meta)
     graph_weight = str(meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
     forward_mesh_payload = {
         "mesh_dimension": runtime.mesh_dim,
@@ -1355,6 +1382,7 @@ def _planned_one_step_rm_signature(
             ),
             "rm_algorithm_version": str(meta.get("one_step_rm_algorithm_version", "")),
             "rm_content_contract": str(meta.get("one_step_rm_content_contract", "")),
+            "rm_dtype": rm_dtype_name,
             "noser_exponent": 0.5 if regularization_type == "noser" else None,
             "prior_operator": {
                 "laplace": "eidors_prior_laplace_graph_x2",
@@ -1404,6 +1432,10 @@ def _ensure_auto_built_one_step_rm_artifact(
     route = _simulation_inverse_route(runtime.meta)
     regularization_type = _one_step_rm_regularization(runtime.meta) or "noser"
     rm_form = _one_step_rm_form(runtime.meta, regularization_type)
+    rm_dtype_name = _rm_dtype_name_from_meta(runtime.meta)
+    rm_dtype = np.dtype(rm_dtype_name)
+    runtime.meta["rm_dtype"] = rm_dtype_name
+    runtime.meta["rm_matmul_dtype"] = rm_dtype_name
     artifact_path, signature, signature_payload = _planned_one_step_rm_artifact_path(
         req,
         runtime,
@@ -1442,7 +1474,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         emit=emit,
         build_shared_context=diff_runner.build_shared_context,
     )
-    jacobian = np.asarray(ctx["J"], dtype=np.float64)
+    jacobian = np.asarray(ctx["J"], dtype=rm_dtype)
     if jacobian.ndim != 2 or 0 in jacobian.shape:
         raise ValueError(
             f"{route} RM build requires a non-empty dense J, got {jacobian.shape}."
@@ -1485,6 +1517,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         form=rm_form,
         channel_mask=channel_mask,
         measurement_weights=weights,
+        dtype=rm_dtype_name,
         return_metadata=True,
     )
     mesh_hash = _array_pair_hash(node_coords, cell_connectivity)
@@ -1507,6 +1540,8 @@ def _ensure_auto_built_one_step_rm_artifact(
             _single_step_context_cache_scope(runtime.meta)
         ),
         "rm_form": rm_form,
+        "rm_dtype": rm_dtype_name,
+        "rm_build_dtype": rm_dtype_name,
         "singular_prior_form_policy": "param_for_graph_laplace_curvature_v1"
         if regularization_type in {"laplace", "curvature", "graph_ltl"}
         else "",
@@ -1784,9 +1819,12 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
         )
     if rm.ndim != 2 or 0 in rm.shape:
         raise ValueError(f"RM artifact matrix must be non-empty 2D, got {rm.shape}.")
+    rm_array = np.asarray(rm)
+    if rm_array.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+        rm_array = rm_array.astype(np.float64, copy=False)
     return {
         "path": str(path),
-        "rm": np.ascontiguousarray(rm, dtype=np.float64),
+        "rm": np.ascontiguousarray(rm_array),
         "metadata": artifact_meta,
         "voxel_shape": tuple(int(v) for v in voxel_shape),
         "node_coords": node_coords,
@@ -1837,6 +1875,8 @@ def _load_cached_rm_artifact(
             return result
 
     artifact = _load_rm_artifact(path, meta)
+    rm_dtype = np.dtype(_normalize_rm_dtype_name(dtype))
+    artifact["rm"] = np.ascontiguousarray(artifact["rm"], dtype=rm_dtype)
     _validate_rm_artifact_measurement_dimension(
         artifact,
         path=path,
@@ -2102,17 +2142,15 @@ def _try_run_cached_rm_request(
     from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 
     device = str(runtime.meta.get("rm_device", runtime.meta.get("device", "auto")))
-    dtype = str(
-        runtime.meta.get(
-            "rm_dtype",
-            runtime.meta.get("rm_matmul_dtype", "float64"),
-        )
-    )
+    dtype = _rm_dtype_name_from_meta(runtime.meta)
+    runtime.meta["rm_dtype"] = dtype
+    runtime.meta["rm_matmul_dtype"] = dtype
+    np_dtype = np.dtype(dtype)
     ref_vec = np.asarray(
-        req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64
+        req.reference_frame.to_measurement_vector(req.use_part), dtype=np_dtype
     )
     tgt_vec = np.asarray(
-        req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64
+        req.target_frame.to_measurement_vector(req.use_part), dtype=np_dtype
     )
     artifact = _load_cached_rm_artifact(
         path,
@@ -2137,11 +2175,14 @@ def _try_run_cached_rm_request(
     difference_orientation = str(
         runtime.meta.get("difference_orientation", "target_minus_reference")
     )
-    dv = build_difference_vector(
-        tgt_vec,
-        ref_vec,
-        mode=difference_mode,
-        orientation=difference_orientation,
+    dv = np.asarray(
+        build_difference_vector(
+            tgt_vec,
+            ref_vec,
+            mode=difference_mode,
+            orientation=difference_orientation,
+        ),
+        dtype=np_dtype,
     )
     rm_result = reconstruct_difference_batch(
         artifact.get("rm_handle", artifact["rm"]),
@@ -2153,7 +2194,7 @@ def _try_run_cached_rm_request(
         dtype=dtype,
         return_metadata=True,
     )
-    delta_conductivity = np.asarray(rm_result.values, dtype=np.float64).reshape(-1)
+    delta_conductivity = np.asarray(rm_result.values, dtype=np_dtype).reshape(-1)
     output_display_mode = str(runtime.meta.get("rm_output_display_mode", "")).lower()
     if output_display_mode == "absolute_sigma":
         conductivity = delta_conductivity + float(runtime.background_sigma)
@@ -2175,7 +2216,7 @@ def _try_run_cached_rm_request(
     )
     if inmem_jacobian is not None:
         try:
-            jac = np.asarray(inmem_jacobian, dtype=np.float64)
+            jac = np.asarray(inmem_jacobian, dtype=np_dtype)
             if (
                 jac.ndim == 2
                 and jac.shape[1] == delta_conductivity.size
@@ -2315,6 +2356,9 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("forward_mat_solve", "auto")
     meta.setdefault("petsc_device", "auto")
     meta.setdefault("device", "auto")
+    rm_dtype_name = _rm_dtype_name_from_meta(meta)
+    meta["rm_dtype"] = rm_dtype_name
+    meta["rm_matmul_dtype"] = rm_dtype_name
     meta.setdefault("jacobian_representation", "auto")
     meta.setdefault("linearized_solver_strategy", "auto")
     meta.setdefault("linearized_maxiter", 0)
@@ -2499,6 +2543,7 @@ def _prepare_single_step_cached_runtime(
         str(meta.get("forward_mat_solve", "auto")),
         str(meta.get("petsc_device", "auto")),
         str(meta.get("device", "auto")),
+        str(meta.get("rm_dtype", "float64")),
         str(meta.get("forward_backend", "dolfinx")),
         str(meta.get("mesh_family", "tetra")),
         str(meta.get("geometry_version", "geomv2")),

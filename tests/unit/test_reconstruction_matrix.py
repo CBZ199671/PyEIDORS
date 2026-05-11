@@ -50,6 +50,50 @@ def test_build_one_step_rm_noser_defaults_to_eidors_sqrt_diag_jtj() -> None:
     np.testing.assert_allclose(rm, expected)
 
 
+def test_build_one_step_rm_preserves_requested_float32_dtype() -> None:
+    jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=np.float64)
+    lam = 0.1
+
+    result = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        form="measurement",
+        dtype="float32",
+        return_metadata=True,
+    )
+
+    assert result.rm.dtype == np.float32
+    assert result.metadata["rm_dtype"] == "float32"
+    assert result.metadata["build_dtype"] == "float32"
+    assert result.metadata["prior_inverse_solver"] == "diagonal"
+
+
+def test_build_one_step_rm_measurement_diagonal_prior_avoids_dense_param_matrix(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import reconstruction_matrix as rm_module
+
+    jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=np.float32)
+
+    def _unexpected_dense_prior(*_args, **_kwargs):
+        raise AssertionError("diagonal measurement-form prior should stay compact")
+
+    monkeypatch.setattr(rm_module, "_prior_to_dense_matrix", _unexpected_dense_prior)
+
+    result = rm_module.build_one_step_rm(
+        jacobian,
+        lambda_=0.1,
+        mode="noser",
+        form="measurement",
+        dtype="float32",
+        return_metadata=True,
+    )
+
+    assert result.rm.dtype == np.float32
+    assert result.metadata["prior_inverse_solver"] == "diagonal"
+
+
 def test_build_one_step_rm_noser_supports_legacy_exponent_one() -> None:
     jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=float)
     lam = 0.1

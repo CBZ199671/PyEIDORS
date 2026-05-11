@@ -3681,6 +3681,57 @@ def test_simulation_inverse_uses_config_stored_with_forward_result(
 
 
 @pytest.mark.gui
+def test_simulation_inverse_request_propagates_compute_precision(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from eit_app.models.precision import current_precision, set_precision
+
+    original_precision = current_precision()
+    set_precision("float32", persist=False)
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "noser_rm",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+
+    def _capture_reconstruct(request) -> bool:
+        captured.append(request)
+        return True
+
+    monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+    try:
+        window._on_run_sim_inverse()
+
+        assert len(captured) == 1
+        request = captured[0]
+        assert request.reference_frame.real.dtype == np.float32
+        assert request.target_frame.real.dtype == np.float32
+        assert request.metadata["compute_precision"] == "float32"
+        assert request.metadata["compute_dtype"] == "float32"
+        assert request.metadata["rm_dtype"] == "float32"
+        assert request.metadata["rm_matmul_dtype"] == "float32"
+    finally:
+        set_precision(original_precision, persist=False)
+        _close_window(window)
+
+
+@pytest.mark.gui
 def test_simulation_forward_request_records_input_signature(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -1252,6 +1252,97 @@ def test_single_step_cached_smooth_rm_routes_auto_build_graph_prior_hdf5_hot_pat
     )
 
 
+def test_single_step_cached_auto_built_rm_honors_float32_precision(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse.reconstruction_matrix import load_rm_artifact
+
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+
+    reference = np.ones(4, dtype=np.float32)
+    target = reference + np.array([0.0, 0.5, 1.0, 0.0], dtype=np.float32)
+    jacobian = np.eye(4, dtype=np.float64)
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+        dtype=np.float64,
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(4, dtype=np.float64),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+
+    monkeypatch.setattr(
+        rc,
+        "_ensure_single_step_cached_context",
+        lambda *_args, **_kwargs: fake_ctx,
+    )
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=lambda **_kwargs: fake_ctx),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(4, dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(4, dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_regularization": "noser",
+            "rm_form": "measurement",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_output_display_mode": "delta_sigma",
+            "difference_lambda": 0.25,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "compute_precision": "float32",
+            "compute_dtype": "float32",
+            "rm_dtype": "float32",
+            "rm_matmul_dtype": "float32",
+            "device": "cpu",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    artifact_path = Path(result.metadata["rm_artifact_path"])
+    artifact = load_rm_artifact(artifact_path)
+    diagnostics = result.metadata["solver_diagnostics"]
+
+    assert result.error_msg is None
+    assert artifact.rm.dtype == np.float32
+    assert artifact.metadata["rm_dtype"] == "float32"
+    assert artifact.metadata["build_dtype"] == "float32"
+    assert artifact.metadata["prior_inverse_solver"] == "diagonal"
+    assert diagnostics["runtime"]["rm_dtype"] == "float32"
+    assert diagnostics["rm_metadata"]["rm_dtype"] == "float32"
+    assert diagnostics["rm_matmul"]["rm_dtype"] == "float32"
+    assert result.metadata["rm_signature_payload"]["hyperparameters"]["rm_dtype"] == (
+        "float32"
+    )
+
+
 def test_single_step_cached_3d_rm_auto_build_forces_dense_jacobian_context(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

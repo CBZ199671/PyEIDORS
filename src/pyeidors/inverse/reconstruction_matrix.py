@@ -178,6 +178,7 @@ def write_rm_artifact(
     meta.setdefault("artifact_format", "hdf5")
     meta.setdefault("online_hot_path", "rm_matmul")
     meta["rm_shape"] = [int(v) for v in matrix.shape]
+    meta["rm_dtype"] = str(matrix.dtype)
     arrays: dict[str, Any] = {"rm": matrix}
     shape = _positive_int_shape(voxel_shape)
     if shape:
@@ -251,6 +252,22 @@ def migrate_rm_artifact_to_hdf5(
     )
 
 
+def _resolve_float_dtype(
+    dtype: str | np.dtype[Any] | type | None,
+    *,
+    values: Any | None = None,
+) -> np.dtype[Any]:
+    if dtype is None and values is not None:
+        resolved = np.asarray(values).dtype
+    else:
+        resolved = np.dtype(np.float64 if dtype is None else dtype)
+    if resolved == np.dtype(np.float32):
+        return np.dtype(np.float32)
+    if resolved == np.dtype(np.float64):
+        return np.dtype(np.float64)
+    return np.dtype(np.float64)
+
+
 def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     vector = np.asarray(values, dtype=np.float64)
     if vector.ndim > 2:
@@ -263,15 +280,20 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     return np.ascontiguousarray(vector, dtype=np.float64)
 
 
-def _as_rm_matrix(values: Any) -> np.ndarray:
-    matrix = np.asarray(values, dtype=np.float64)
+def _as_rm_matrix(
+    values: Any,
+    *,
+    dtype: str | np.dtype[Any] | type | None = None,
+) -> np.ndarray:
+    resolved_dtype = _resolve_float_dtype(dtype, values=values)
+    matrix = np.asarray(values, dtype=resolved_dtype)
     if matrix.ndim != 2 or 0 in matrix.shape:
         raise ValueError(
             f"RM artifact matrix must be non-empty 2D, got {matrix.shape}."
         )
     if not np.isfinite(matrix).all():
         raise FloatingPointError("RM artifact matrix contains non-finite values.")
-    return np.ascontiguousarray(matrix, dtype=np.float64)
+    return np.ascontiguousarray(matrix, dtype=resolved_dtype)
 
 
 def _positive_int_shape(value: Any) -> tuple[int, ...]:
@@ -489,18 +511,23 @@ def _apply_measurement_contract_to_frames(
     return np.asarray(out @ contract.weight_transform.T, dtype=np.float64)
 
 
-def _as_jacobian(jacobian: Any) -> np.ndarray:
+def _as_jacobian(
+    jacobian: Any,
+    *,
+    dtype: str | np.dtype[Any] | type = np.float64,
+) -> np.ndarray:
+    resolved_dtype = _resolve_float_dtype(dtype)
     if sparse.issparse(jacobian):
-        matrix = np.asarray(jacobian.toarray(), dtype=np.float64)
+        matrix = np.asarray(jacobian.toarray(), dtype=resolved_dtype)
     else:
-        matrix = np.asarray(jacobian, dtype=np.float64)
+        matrix = np.asarray(jacobian, dtype=resolved_dtype)
     if matrix.ndim != 2:
         raise ValueError("J must be a 2D measurement-by-parameter matrix.")
     if 0 in matrix.shape:
         raise ValueError("J must be non-empty.")
     if not np.isfinite(matrix).all():
         raise FloatingPointError("J contains non-finite values.")
-    return np.ascontiguousarray(matrix, dtype=np.float64)
+    return np.ascontiguousarray(matrix, dtype=resolved_dtype)
 
 
 def _as_regularization_prior(
@@ -524,32 +551,68 @@ def _as_regularization_prior(
     return prior
 
 
-def _prior_to_dense_matrix(prior: RtRPrior, *, name: str) -> np.ndarray:
+def _prior_to_dense_matrix(
+    prior: RtRPrior,
+    *,
+    name: str,
+    dtype: str | np.dtype[Any] | type = np.float64,
+) -> np.ndarray:
+    resolved_dtype = _resolve_float_dtype(dtype)
     explicit = prior.as_RtR(dense=True)
     if sparse.issparse(explicit):
-        matrix = np.asarray(explicit.toarray(), dtype=np.float64)
+        matrix = np.asarray(explicit.toarray(), dtype=resolved_dtype)
     elif isinstance(explicit, np.ndarray):
-        matrix = np.asarray(explicit, dtype=np.float64)
+        matrix = np.asarray(explicit, dtype=resolved_dtype)
     else:
         raise TypeError(f"{name} RtR prior did not produce an explicit matrix.")
     if matrix.shape != prior.shape:
         raise ValueError(f"{name} RtR shape mismatch: expected {prior.shape}.")
     if not np.isfinite(matrix).all():
         raise FloatingPointError(f"{name} RtR contains non-finite values.")
-    return np.ascontiguousarray(matrix, dtype=np.float64)
+    return np.ascontiguousarray(matrix, dtype=resolved_dtype)
+
+
+def _prior_diagonal(
+    prior: RtRPrior,
+    *,
+    dtype: str | np.dtype[Any] | type = np.float64,
+) -> np.ndarray | None:
+    diag = prior.diag()
+    if diag is None:
+        return None
+    resolved_dtype = _resolve_float_dtype(dtype)
+    diag = np.asarray(diag, dtype=resolved_dtype).reshape(-1)
+    if diag.size != prior.shape[0]:
+        raise ValueError(
+            f"RtR diag length {diag.size} does not match {prior.shape[0]}."
+        )
+    if not np.isfinite(diag).all():
+        raise FloatingPointError("RtR diag contains non-finite values.")
+    return np.ascontiguousarray(diag, dtype=resolved_dtype)
+
+
+def _prior_nnz(prior: RtRPrior) -> int:
+    if prior.nnz is not None:
+        return int(prior.nnz)
+    diag = prior.diag()
+    if diag is not None:
+        return int(np.count_nonzero(diag))
+    return int(np.prod(prior.shape))
 
 
 def _as_measurement_regularization(
     measurement_regularization: Any,
     *,
     n_measurements: int,
+    dtype: str | np.dtype[Any] | type = np.float64,
 ) -> tuple[np.ndarray, str]:
+    resolved_dtype = _resolve_float_dtype(dtype)
     if measurement_regularization is None:
-        return np.eye(n_measurements, dtype=np.float64), "identity"
+        return np.eye(n_measurements, dtype=resolved_dtype), "identity"
     if sparse.issparse(measurement_regularization):
-        matrix = np.asarray(measurement_regularization.toarray(), dtype=np.float64)
+        matrix = np.asarray(measurement_regularization.toarray(), dtype=resolved_dtype)
     else:
-        array = np.asarray(measurement_regularization, dtype=np.float64)
+        array = np.asarray(measurement_regularization, dtype=resolved_dtype)
         matrix = np.diag(array) if array.ndim == 1 else array
     if matrix.shape != (n_measurements, n_measurements):
         raise ValueError(
@@ -560,7 +623,7 @@ def _as_measurement_regularization(
         raise FloatingPointError(
             "measurement_regularization contains non-finite values."
         )
-    return np.ascontiguousarray(matrix, dtype=np.float64), "provided"
+    return np.ascontiguousarray(matrix, dtype=resolved_dtype), "provided"
 
 
 def _noser_regularization(
@@ -673,6 +736,7 @@ def build_one_step_rm(
     measurement_regularization: Any = None,
     noser_floor: float = 1e-12,
     noser_exponent: float = 0.5,
+    dtype: str | np.dtype[Any] = "float64",
     return_metadata: bool = False,
 ) -> np.ndarray | OneStepRMResult:
     """Build a one-step GN/NOSER/Laplace/curvature/TV-IRLS reconstruction matrix.
@@ -709,13 +773,15 @@ def build_one_step_rm(
     lam = float(lambda_)
     if lam < 0.0 or not np.isfinite(lam):
         raise ValueError("lambda_ must be finite and non-negative.")
+    calc_dtype = _resolve_float_dtype(dtype)
 
-    jac_raw = _as_jacobian(J)
+    jac_raw = _as_jacobian(J, dtype=calc_dtype)
     jac, measurement_contract = apply_measurement_contract_to_jacobian(
         jac_raw,
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
+    jac = np.ascontiguousarray(jac, dtype=calc_dtype)
     reg_prior, regularization_source = _regularization_for_mode(
         jac,
         regularization,
@@ -723,25 +789,41 @@ def build_one_step_rm(
         noser_floor=float(noser_floor),
         noser_exponent=float(noser_exponent),
     )
-    reg = _prior_to_dense_matrix(reg_prior, name=resolved_mode)
 
     if resolved_form == "measurement":
         rn, rn_source = _as_measurement_regularization(
             measurement_regularization,
             n_measurements=int(jac.shape[0]),
+            dtype=calc_dtype,
         )
-        p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac.T)
-        lhs = np.asarray(jac @ p_jt + (lam * lam) * rn, dtype=np.float64)
+        diag = _prior_diagonal(reg_prior, dtype=calc_dtype)
+        if (
+            reg_prior.kind == "diagonal_sparse"
+            and diag is not None
+            and np.all(diag > 0.0)
+        ):
+            p_jt = jac.T / diag.reshape(-1, 1)
+            prior_inverse_solver = "diagonal"
+        else:
+            reg = _prior_to_dense_matrix(
+                reg_prior,
+                name=resolved_mode,
+                dtype=calc_dtype,
+            )
+            p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac.T)
+            p_jt = np.asarray(p_jt, dtype=calc_dtype)
+        lhs = np.asarray(jac @ p_jt + (lam * lam) * rn, dtype=calc_dtype)
         rm_t, solver = _solve_or_pinv(lhs.T, p_jt.T)
         rm = rm_t.T
         inversion_dimension = "measurement"
     else:
         rn_source = "unused"
         prior_inverse_solver = "unused"
-        lhs = np.asarray(jac.T @ jac + (lam * lam) * reg, dtype=np.float64)
+        reg = _prior_to_dense_matrix(reg_prior, name=resolved_mode, dtype=calc_dtype)
+        lhs = np.asarray(jac.T @ jac + (lam * lam) * reg, dtype=calc_dtype)
         rm, solver = _solve_or_pinv(lhs, jac.T)
         inversion_dimension = "parameter"
-    rm = np.asarray(rm, dtype=np.float64)
+    rm = np.asarray(rm, dtype=calc_dtype)
     if not np.isfinite(rm).all():
         raise FloatingPointError("one-step RM contains non-finite values.")
     try:
@@ -764,23 +846,21 @@ def build_one_step_rm(
             "lambda_squared": lam * lam,
             "n_measurements": int(jac.shape[0]),
             "n_parameters": int(jac.shape[1]),
+            "rm_dtype": str(calc_dtype),
+            "build_dtype": str(calc_dtype),
             "bad_channel_count": int(measurement_contract.bad_channel_count),
             "measurement_weight_kind": measurement_contract.weight_kind,
             "expects_measurement_contract": True,
             "normal_equation_formula": "JtWJ_plus_hp2_RtR",
             "regularization_matrix_role": "RtR",
-            "RtR_shape": tuple(int(v) for v in reg.shape),
-            "RtR_nnz": int(
-                reg_prior.nnz if reg_prior.nnz is not None else np.count_nonzero(reg)
-            ),
+            "RtR_shape": tuple(int(v) for v in reg_prior.shape),
+            "RtR_nnz": _prior_nnz(reg_prior),
             "RtR_kind": reg_prior.kind,
             "RtR_signature_hash": reg_prior.signature_hash,
             "RtR_metadata": dict(reg_prior.metadata),
             "inversion_dimension": inversion_dimension,
             "regularization_source": regularization_source,
-            "regularization_nnz": int(
-                reg_prior.nnz if reg_prior.nnz is not None else np.count_nonzero(reg)
-            ),
+            "regularization_nnz": _prior_nnz(reg_prior),
             "noser_exponent": float(noser_exponent)
             if resolved_mode == "noser"
             else None,
