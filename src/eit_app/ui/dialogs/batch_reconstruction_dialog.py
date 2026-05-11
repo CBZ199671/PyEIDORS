@@ -29,17 +29,17 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.models.reconstruction_methods import (
+    CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+    DATABASE_RECONSTRUCTION_METHODS,
+    database_method_requires_reference,
+    database_method_supports_custom_lambda_eff,
+    database_method_uses_iterations,
+    database_method_uses_locked_lambda_eff,
+    normalize_database_reconstruction_method,
+)
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_button_role
-
-
-# (display, method_key, requires_reference)
-_ALGORITHMS = [
-    ("Gauss-Newton · Difference (single-step)", "gn-difference", True),
-    ("Gauss-Newton · Absolute", "gn-absolute", False),
-    ("Sparse Bayesian · Difference", "sparse-bayes-difference", True),
-    ("Sparse Bayesian · Absolute", "sparse-bayes-absolute", False),
-]
 
 
 class BatchReconstructionDialog(QDialog):
@@ -66,6 +66,8 @@ class BatchReconstructionDialog(QDialog):
         self._default_input = default_input
         self._default_output = default_output
         self._is_running = False
+        self._editable_alpha_value = 1.0
+        self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
         self._last_output_folder: str | None = None
         # Cached "finished" state so language switch re-renders the summary
         # line in the active locale.
@@ -84,7 +86,7 @@ class BatchReconstructionDialog(QDialog):
         self._progress_baseline: int = 0
         self._build_ui()
         self._connect_signals()
-        self._update_reference_requirement()
+        self._update_algorithm_state()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
 
@@ -210,8 +212,8 @@ class BatchReconstructionDialog(QDialog):
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._algo_combo = AutoCloseComboBox()
-        for label, _, _ in _ALGORITHMS:
-            self._algo_combo.addItem(label)
+        for option in DATABASE_RECONSTRUCTION_METHODS:
+            self._algo_combo.addItem(option.label, option.method)
         self._lbl_method = QLabel("")
         layout.addRow(self._lbl_method, self._algo_combo)
 
@@ -225,8 +227,13 @@ class BatchReconstructionDialog(QDialog):
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
+        self._alpha_spin.valueChanged.connect(self._remember_alpha_value)
         self._lbl_alpha = QLabel("")
         layout.addRow(self._lbl_alpha, self._alpha_spin)
+
+        self._custom_lambda_check = QCheckBox("")
+        self._custom_lambda_check.toggled.connect(self._on_custom_lambda_toggled)
+        layout.addRow(self._custom_lambda_check)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
@@ -295,7 +302,7 @@ class BatchReconstructionDialog(QDialog):
         self._input_browse_btn.clicked.connect(self._on_browse_input)
         self._output_browse_btn.clicked.connect(self._on_browse_output)
         self._ref_browse_btn.clicked.connect(self._on_browse_ref)
-        self._algo_combo.currentIndexChanged.connect(self._update_reference_requirement)
+        self._algo_combo.currentIndexChanged.connect(self._update_algorithm_state)
         self._input_edit.textChanged.connect(self._update_run_enabled)
         self._output_edit.textChanged.connect(self._update_run_enabled)
         self._ref_edit.textChanged.connect(self._update_run_enabled)
@@ -307,9 +314,15 @@ class BatchReconstructionDialog(QDialog):
         self._update_run_enabled()
 
     def _update_reference_requirement(self, *args) -> None:
-        needs_ref = _ALGORITHMS[self._algo_combo.currentIndex()][2]
+        self._update_algorithm_state()
+
+    def _update_algorithm_state(self, *args) -> None:
+        method = self._current_method()
+        needs_ref = database_method_requires_reference(method)
         self._ref_row_label.setEnabled(needs_ref)
         self._ref_row_w.setEnabled(needs_ref)
+        self._update_hyperparameter_control(method)
+        self._update_iteration_control(method)
         self._update_run_enabled()
 
     def _update_run_enabled(self, *args) -> None:
@@ -317,10 +330,72 @@ class BatchReconstructionDialog(QDialog):
             return
         has_input = bool(self._input_edit.text().strip())
         has_output = bool(self._output_edit.text().strip())
-        needs_ref = _ALGORITHMS[self._algo_combo.currentIndex()][2]
+        needs_ref = database_method_requires_reference(self._current_method())
         has_ref = bool(self._ref_edit.text().strip())
         ok = has_input and has_output and (not needs_ref or has_ref)
         self._run_btn.setEnabled(ok)
+
+    def _current_method(self) -> str:
+        data = self._algo_combo.currentData()
+        if data is None:
+            data = self._algo_combo.currentText()
+        return normalize_database_reconstruction_method(str(data))
+
+    def _remember_alpha_value(self, value: float) -> None:
+        method = self._current_method()
+        if (
+            database_method_supports_custom_lambda_eff(method)
+            and self._custom_lambda_check.isChecked()
+        ):
+            self._custom_lambda_eff_value = float(value)
+        elif not database_method_uses_locked_lambda_eff(method):
+            self._editable_alpha_value = float(value)
+
+    def _on_custom_lambda_toggled(self, checked: bool) -> None:
+        method = self._current_method()
+        if not checked and database_method_supports_custom_lambda_eff(method):
+            self._custom_lambda_eff_value = float(self._alpha_spin.value())
+        self._update_hyperparameter_control(method)
+
+    def _update_hyperparameter_control(self, method: str) -> None:
+        locked_lambda = database_method_uses_locked_lambda_eff(method)
+        custom_available = database_method_supports_custom_lambda_eff(method)
+        custom_enabled = custom_available and self._custom_lambda_check.isChecked()
+        blocked = self._alpha_spin.blockSignals(True)
+        try:
+            self._custom_lambda_check.setVisible(custom_available)
+            self._custom_lambda_check.setEnabled(
+                custom_available and not self._is_running
+            )
+            if custom_available:
+                self._custom_lambda_check.setToolTip(t("dlg.batch.custom_lambda_tip"))
+            if locked_lambda and not custom_enabled:
+                self._alpha_spin.setValue(CANONICAL_SINGLE_STEP_LAMBDA_EFF)
+                self._alpha_spin.setEnabled(False)
+                self._alpha_spin.setToolTip(t("dlg.batch.lambda_locked_tip"))
+                self._lbl_alpha.setText(t("dlg.batch.lambda_eff_label"))
+                self._lbl_alpha.setToolTip(t("dlg.batch.lambda_locked_tip"))
+            else:
+                if custom_enabled:
+                    self._alpha_spin.setValue(self._custom_lambda_eff_value)
+                    self._alpha_spin.setToolTip(t("dlg.batch.custom_lambda_tip"))
+                    self._lbl_alpha.setText(t("dlg.batch.lambda_eff_label"))
+                    self._lbl_alpha.setToolTip(t("dlg.batch.custom_lambda_tip"))
+                else:
+                    self._alpha_spin.setValue(self._editable_alpha_value)
+                    self._alpha_spin.setToolTip("")
+                    self._lbl_alpha.setText(t("dlg.batch.alpha_label"))
+                    self._lbl_alpha.setToolTip("")
+                self._alpha_spin.setEnabled(not self._is_running)
+        finally:
+            self._alpha_spin.blockSignals(blocked)
+
+    def _update_iteration_control(self, method: str) -> None:
+        show_iterations = database_method_uses_iterations(method)
+        self._lbl_iter.setVisible(show_iterations)
+        self._iter_spin.setVisible(show_iterations)
+        self._lbl_iter.setEnabled(show_iterations and not self._is_running)
+        self._iter_spin.setEnabled(show_iterations and not self._is_running)
 
     def _on_browse_input(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -352,11 +427,16 @@ class BatchReconstructionDialog(QDialog):
             self._ref_edit.setText(path)
 
     def _on_run(self) -> None:
-        idx = self._algo_combo.currentIndex()
-        label, method, needs_ref = _ALGORITHMS[idx]
+        method = self._current_method()
+        label = self._algo_combo.currentText()
+        needs_ref = database_method_requires_reference(method)
         ref_csv = self._ref_edit.text().strip() or None
         self._last_output_folder = self._output_edit.text().strip() or None
         self._open_output_btn.setVisible(False)
+        custom_lambda_enabled = (
+            database_method_supports_custom_lambda_eff(method)
+            and self._custom_lambda_check.isChecked()
+        )
         config: dict[str, Any] = {
             "input_folder": self._input_edit.text().strip(),
             "output_folder": self._output_edit.text().strip(),
@@ -365,6 +445,10 @@ class BatchReconstructionDialog(QDialog):
             "reference_csv": ref_csv if needs_ref else None,
             "use_part": self._use_part_combo.currentText(),
             "regularization_alpha": self._alpha_spin.value(),
+            "lambda_eff_custom_enabled": custom_lambda_enabled,
+            "custom_lambda_eff": self._alpha_spin.value()
+            if custom_lambda_enabled
+            else CANONICAL_SINGLE_STEP_LAMBDA_EFF,
             "max_iterations": self._iter_spin.value(),
             "save_recon_image": self._save_recon_check.isChecked(),
             "save_voltage_fit": self._save_voltage_check.isChecked(),
@@ -401,11 +485,14 @@ class BatchReconstructionDialog(QDialog):
             self._algo_combo,
             self._use_part_combo,
             self._alpha_spin,
+            self._custom_lambda_check,
             self._iter_spin,
             self._save_recon_check,
             self._save_voltage_check,
         ):
             w.setEnabled(not running)
+        if not running:
+            self._update_algorithm_state()
 
     # ---- Progress API (called by parent wiring controller signals) ----
 
@@ -540,8 +627,8 @@ class BatchReconstructionDialog(QDialog):
         self._algo_box.setTitle(t("dlg.batch.algo_params_group"))
         self._lbl_method.setText(t("dlg.batch.method_label"))
         self._lbl_part.setText(t("dlg.batch.part_label"))
-        self._lbl_alpha.setText(t("dlg.batch.alpha_label"))
         self._lbl_iter.setText(t("dlg.batch.iter_label"))
+        self._custom_lambda_check.setText(t("dlg.batch.custom_lambda_check"))
         self._ref_edit.setPlaceholderText(t("dlg.batch.ref_placeholder"))
         self._ref_browse_btn.setText(t("dlg.batch.ref_browse_button"))
         self._ref_row_label.setText(t("dlg.batch.ref_label"))
@@ -568,3 +655,4 @@ class BatchReconstructionDialog(QDialog):
             )
         else:
             self._progress_label.setText(t("dlg.batch.ready"))
+        self._update_algorithm_state()

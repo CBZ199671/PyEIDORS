@@ -719,6 +719,10 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.reconstruction.method_label": "\u65b9\u6cd5\uff1a",  # 方法：
     "dlg.reconstruction.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",  # 使用分量：
     "dlg.reconstruction.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",  # 正则化 α：
+    "dlg.reconstruction.lambda_eff_label": "\u03bb_eff\uff1a",  # λ_eff：
+    "dlg.reconstruction.custom_lambda_check": "\u9ad8\u7ea7\uff1a\u7528\u81ea\u5b9a\u4e49 \u03bb_eff \u91cd\u65b0\u6784\u5efa RM\uff08\u8f83\u6162\uff09",  # 高级：用自定义 λ_eff 重新构建 RM（较慢）
+    "dlg.reconstruction.custom_lambda_tip": "\u4f7f\u7528\u8f93\u5165\u7684 \u03bb_eff \u51b7\u6784\u5efa\u6216\u52a0\u8f7d\u72ec\u7acb\u7684 RM \u6587\u4ef6\u3002",  # 使用输入的 λ_eff 冷构建或加载独立的 RM 文件。
+    "dlg.reconstruction.lambda_locked_tip": "\u5355\u6b65/RM \u5dee\u5206\u8def\u5f84\u9ed8\u8ba4\u4f7f\u7528\u56fa\u5b9a \u03bb_eff=1e-2\u3002",  # 单步/RM 差分路径默认使用固定 λ_eff=1e-2。
     "dlg.reconstruction.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：
     "dlg.reconstruction.output_group": "\u8f93\u51fa\uff08\u53ef\u9009\uff09",  # 输出（可选）
     "dlg.reconstruction.output_placeholder": "\u7559\u7a7a\u5219\u4ec5\u663e\u793a\u7ed3\u679c\uff08\u4e0d\u4fdd\u5b58\uff09",  # 留空则仅显示结果（不保存）
@@ -747,6 +751,10 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.batch.method_label": "\u65b9\u6cd5\uff1a",  # 方法：
     "dlg.batch.part_label": "\u4f7f\u7528\u5206\u91cf\uff1a",  # 使用分量：
     "dlg.batch.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",  # 正则化 α：
+    "dlg.batch.lambda_eff_label": "\u03bb_eff\uff1a",  # λ_eff：
+    "dlg.batch.custom_lambda_check": "\u9ad8\u7ea7\uff1a\u7528\u81ea\u5b9a\u4e49 \u03bb_eff \u91cd\u65b0\u6784\u5efa RM\uff08\u8f83\u6162\uff09",  # 高级：用自定义 λ_eff 重新构建 RM（较慢）
+    "dlg.batch.custom_lambda_tip": "\u4f7f\u7528\u8f93\u5165\u7684 \u03bb_eff \u4e3a\u6279\u91cf\u4efb\u52a1\u51b7\u6784\u5efa\u6216\u52a0\u8f7d\u72ec\u7acb\u7684 RM \u6587\u4ef6\u3002",  # 使用输入的 λ_eff 为批量任务冷构建或加载独立的 RM 文件。
+    "dlg.batch.lambda_locked_tip": "\u5355\u6b65/RM \u5dee\u5206\u8def\u5f84\u9ed8\u8ba4\u4f7f\u7528\u56fa\u5b9a \u03bb_eff=1e-2\u3002",  # 单步/RM 差分路径默认使用固定 λ_eff=1e-2。
     "dlg.batch.iter_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：
     "dlg.batch.ref_browse_button": "\u6d4f\u89c8\u2026",  # 浏览…
     "dlg.batch.ref_label": "\u53c2\u8003\u5e27\uff1a",  # 参考帧：

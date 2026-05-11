@@ -71,6 +71,7 @@ from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
     SimulationState,
 )
+from eit_app.models.reconstruction_methods import prepare_database_reconstruction_method
 from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.simulation.inverse_problem_panel import (
@@ -2930,40 +2931,62 @@ class EITWorkstation(QMainWindow):
             return
 
         rc = self._state.reconstruction_config
+        precision_label = current_precision()
+        metadata = {
+            **self._measurement_layout_config(),
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            **self._hardware_reconstruction_drive_metadata(),
+            "geometry_scale_to_m": float(
+                self._device_config.get("geometry_scale_to_m", 1.0)
+            ),
+            "radius": float(self._device_config.get("radius", 1.0)),
+            "contact_impedance": float(
+                self._device_config.get("contact_impedance", 0.01)
+            ),
+            "electrode_length_m_override": self._device_config.get(
+                "electrode_length_m_override"
+            ),
+            "electrode_coverage": float(
+                self._device_config.get("electrode_coverage", 0.5)
+            ),
+            "compute_precision": precision_label,
+            "compute_dtype": precision_label,
+            "rm_dtype": precision_label,
+            "rm_matmul_dtype": precision_label,
+            "db_reconstruction": True,
+            "db_output_dir": config.get("output_dir"),
+            "db_save_recon_image": bool(config.get("save_recon_image", False)),
+            "db_save_voltage_fit": bool(config.get("save_voltage_fit", False)),
+            "db_method_label": config.get("method_label", method),
+            "request_source": "db",
+        }
+        alpha_value = (
+            float(
+                config.get("custom_lambda_eff", config.get("regularization_alpha", 1.0))
+            )
+            if bool(config.get("lambda_eff_custom_enabled", False))
+            else float(config.get("regularization_alpha", 1.0))
+        )
+        prepared_method = prepare_database_reconstruction_method(
+            method,
+            regularization_alpha=alpha_value,
+            max_iterations=int(config.get("max_iterations", 10)),
+            custom_lambda_eff_enabled=bool(
+                config.get("lambda_eff_custom_enabled", False)
+            ),
+            metadata=metadata,
+        )
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
             use_part=use_part,
-            method=method,
-            regularization_alpha=float(config.get("regularization_alpha", 1.0)),
-            max_iterations=int(config.get("max_iterations", 10)),
+            method=prepared_method.method,
+            regularization_alpha=prepared_method.regularization_alpha,
+            max_iterations=prepared_method.max_iterations,
             mesh_dimension=rc.mesh_dimension,
             mesh_refinement=rc.mesh_refinement,
-            metadata={
-                **self._measurement_layout_config(),
-                "difference_mode": "raw",
-                "difference_orientation": "target_minus_reference",
-                **self._hardware_reconstruction_drive_metadata(),
-                "geometry_scale_to_m": float(
-                    self._device_config.get("geometry_scale_to_m", 1.0)
-                ),
-                "radius": float(self._device_config.get("radius", 1.0)),
-                "contact_impedance": float(
-                    self._device_config.get("contact_impedance", 0.01)
-                ),
-                "electrode_length_m_override": self._device_config.get(
-                    "electrode_length_m_override"
-                ),
-                "electrode_coverage": float(
-                    self._device_config.get("electrode_coverage", 0.5)
-                ),
-                "db_reconstruction": True,
-                "db_output_dir": config.get("output_dir"),
-                "db_save_recon_image": bool(config.get("save_recon_image", False)),
-                "db_save_voltage_fit": bool(config.get("save_voltage_fit", False)),
-                "db_method_label": config.get("method_label", method),
-                "request_source": "db",
-            },
+            metadata=prepared_method.metadata,
         )
         accepted = self._db_recon_ctrl.reconstruct(request)
         if not accepted:
@@ -3171,6 +3194,31 @@ class EITWorkstation(QMainWindow):
     def _on_batch_start_requested(self, config: dict) -> None:
         """Launch a batch reconstruction job from the dialog's config."""
         try:
+            precision_label = current_precision()
+            metadata = {
+                **self._measurement_layout_config(),
+                **self._hardware_reconstruction_drive_metadata(),
+                "geometry_scale_to_m": float(
+                    self._device_config.get("geometry_scale_to_m", 1.0)
+                ),
+                "radius": float(self._device_config.get("radius", 1.0)),
+                "contact_impedance": float(
+                    self._device_config.get("contact_impedance", 0.01)
+                ),
+                "electrode_length_m_override": self._device_config.get(
+                    "electrode_length_m_override"
+                ),
+                "electrode_coverage": float(
+                    self._device_config.get("electrode_coverage", 0.5)
+                ),
+                "compute_precision": precision_label,
+                "compute_dtype": precision_label,
+                "rm_dtype": precision_label,
+                "rm_matmul_dtype": precision_label,
+                "request_source": "db_batch",
+                "db_batch_reconstruction": True,
+                "db_method_label": config.get("method_label", config["method"]),
+            }
             req = BatchReconstructionRequest(
                 input_folder=Path(config["input_folder"]),
                 output_folder=Path(config["output_folder"]),
@@ -3186,7 +3234,15 @@ class EITWorkstation(QMainWindow):
                 max_iterations=int(config.get("max_iterations", 10)),
                 save_recon_image=bool(config.get("save_recon_image", True)),
                 save_voltage_fit=bool(config.get("save_voltage_fit", True)),
-                metadata=self._measurement_layout_config(),
+                lambda_eff_custom_enabled=bool(
+                    config.get("lambda_eff_custom_enabled", False)
+                ),
+                custom_lambda_eff=(
+                    float(config["custom_lambda_eff"])
+                    if config.get("custom_lambda_eff") is not None
+                    else None
+                ),
+                metadata=metadata,
             )
             ok = self._batch_recon_ctrl.start(req)
             if not ok and self._batch_dialog is not None:

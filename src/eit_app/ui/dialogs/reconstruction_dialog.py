@@ -2,7 +2,7 @@
 
 Launched from the Database tab after the user picks frames to reconstruct.
 Supports:
-- Gauss-Newton difference (single-step) — default
+- Cached one-step RM difference methods — default
 - Gauss-Newton absolute
 - Sparse Bayesian difference
 - Sparse Bayesian absolute
@@ -35,6 +35,15 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.models.reconstruction_methods import (
+    CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+    DATABASE_RECONSTRUCTION_METHODS,
+    database_method_requires_reference,
+    database_method_supports_custom_lambda_eff,
+    database_method_uses_iterations,
+    database_method_uses_locked_lambda_eff,
+    normalize_database_reconstruction_method,
+)
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import card_palette, set_button_role
 
@@ -49,15 +58,6 @@ def _default_results_dir() -> Path:
     except Exception:
         pass
     return base
-
-
-# Algorithm options: (display_label, method_key, requires_reference)
-_ALGORITHMS = [
-    ("Gauss-Newton · Difference (single-step)", "gn-difference", True),
-    ("Gauss-Newton · Absolute", "gn-absolute", False),
-    ("Sparse Bayesian · Difference", "sparse-bayes-difference", True),
-    ("Sparse Bayesian · Absolute", "sparse-bayes-absolute", False),
-]
 
 
 class ReconstructionDialog(QDialog):
@@ -92,8 +92,10 @@ class ReconstructionDialog(QDialog):
         self.resize(780, 700)
         self._reference_entry = reference_entry
         self._target_entry = target_entry
+        self._editable_alpha_value = 1.0
+        self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
         self._build_ui()
-        self._update_reference_visibility()
+        self._update_algorithm_state()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
 
@@ -198,9 +200,9 @@ class ReconstructionDialog(QDialog):
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
 
         self._algo_combo = AutoCloseComboBox()
-        for label, _method, _needs_ref in _ALGORITHMS:
-            self._algo_combo.addItem(label)
-        self._algo_combo.currentIndexChanged.connect(self._update_reference_visibility)
+        for option in DATABASE_RECONSTRUCTION_METHODS:
+            self._algo_combo.addItem(option.label, option.method)
+        self._algo_combo.currentIndexChanged.connect(self._update_algorithm_state)
         self._lbl_method = QLabel("")
         layout.addRow(self._lbl_method, self._algo_combo)
 
@@ -214,8 +216,13 @@ class ReconstructionDialog(QDialog):
         self._alpha_spin.setValue(1.0)
         self._alpha_spin.setDecimals(4)
         self._alpha_spin.setSingleStep(0.1)
+        self._alpha_spin.valueChanged.connect(self._remember_alpha_value)
         self._lbl_alpha = QLabel("")
         layout.addRow(self._lbl_alpha, self._alpha_spin)
+
+        self._custom_lambda_check = QCheckBox("")
+        self._custom_lambda_check.toggled.connect(self._on_custom_lambda_toggled)
+        layout.addRow(self._custom_lambda_check)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
@@ -259,23 +266,95 @@ class ReconstructionDialog(QDialog):
     # ---- Event handlers ----
 
     def _update_reference_visibility(self, *args) -> None:
-        needs_ref = _ALGORITHMS[self._algo_combo.currentIndex()][2]
+        self._update_algorithm_state()
+
+    def _update_algorithm_state(self, *args) -> None:
+        method = self._current_method()
+        needs_ref = database_method_requires_reference(method)
         self._ref_label.setEnabled(needs_ref)
         self._ref_row_label.setEnabled(needs_ref)
         if not needs_ref:
             self._ref_label.setToolTip(t("dlg.reconstruction.absolute_no_ref_tip"))
         else:
             self._ref_label.setToolTip("")
+        self._update_hyperparameter_control(method)
+        self._update_iteration_control(method)
 
         # Validation: refresh run button enabled state
         self._update_run_enabled()
 
     def _update_run_enabled(self) -> None:
-        needs_ref = _ALGORITHMS[self._algo_combo.currentIndex()][2]
+        needs_ref = database_method_requires_reference(self._current_method())
         has_tgt = self._target_entry is not None
         has_ref = self._reference_entry is not None
         enabled = has_tgt and (not needs_ref or has_ref)
         self._run_btn.setEnabled(enabled)
+
+    def _current_method(self) -> str:
+        data = self._algo_combo.currentData()
+        if data is None:
+            data = self._algo_combo.currentText()
+        return normalize_database_reconstruction_method(str(data))
+
+    def _remember_alpha_value(self, value: float) -> None:
+        method = self._current_method()
+        if (
+            database_method_supports_custom_lambda_eff(method)
+            and self._custom_lambda_check.isChecked()
+        ):
+            self._custom_lambda_eff_value = float(value)
+        elif not database_method_uses_locked_lambda_eff(method):
+            self._editable_alpha_value = float(value)
+
+    def _on_custom_lambda_toggled(self, checked: bool) -> None:
+        method = self._current_method()
+        if not checked and database_method_supports_custom_lambda_eff(method):
+            self._custom_lambda_eff_value = float(self._alpha_spin.value())
+        self._update_hyperparameter_control(method)
+
+    def _update_hyperparameter_control(self, method: str) -> None:
+        locked_lambda = database_method_uses_locked_lambda_eff(method)
+        custom_available = database_method_supports_custom_lambda_eff(method)
+        custom_enabled = custom_available and self._custom_lambda_check.isChecked()
+        blocked = self._alpha_spin.blockSignals(True)
+        try:
+            self._custom_lambda_check.setVisible(custom_available)
+            self._custom_lambda_check.setEnabled(custom_available)
+            if custom_available:
+                self._custom_lambda_check.setToolTip(
+                    t("dlg.reconstruction.custom_lambda_tip")
+                )
+            if locked_lambda and not custom_enabled:
+                self._alpha_spin.setValue(CANONICAL_SINGLE_STEP_LAMBDA_EFF)
+                self._alpha_spin.setEnabled(False)
+                self._alpha_spin.setToolTip(t("dlg.reconstruction.lambda_locked_tip"))
+                self._lbl_alpha.setText(t("dlg.reconstruction.lambda_eff_label"))
+                self._lbl_alpha.setToolTip(t("dlg.reconstruction.lambda_locked_tip"))
+            else:
+                if custom_enabled:
+                    self._alpha_spin.setValue(self._custom_lambda_eff_value)
+                    self._alpha_spin.setToolTip(
+                        t("dlg.reconstruction.custom_lambda_tip")
+                    )
+                    self._lbl_alpha.setText(t("dlg.reconstruction.lambda_eff_label"))
+                    self._lbl_alpha.setToolTip(
+                        t("dlg.reconstruction.custom_lambda_tip")
+                    )
+                else:
+                    self._alpha_spin.setValue(self._editable_alpha_value)
+                    self._alpha_spin.setToolTip("")
+                    self._lbl_alpha.setText(t("dlg.reconstruction.alpha_label"))
+                    self._lbl_alpha.setToolTip("")
+                self._alpha_spin.setEnabled(True)
+        finally:
+            self._alpha_spin.blockSignals(blocked)
+
+    def _update_iteration_control(self, method: str) -> None:
+        show_iterations = database_method_uses_iterations(method)
+        self._lbl_iter.setVisible(show_iterations)
+        self._iter_spin.setVisible(show_iterations)
+        self._lbl_iter.setEnabled(show_iterations)
+        self._iter_spin.setEnabled(show_iterations)
 
     def _on_browse_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -287,12 +366,17 @@ class ReconstructionDialog(QDialog):
             self._dir_edit.setText(path)
 
     def _on_run(self) -> None:
-        idx = self._algo_combo.currentIndex()
-        label, method, needs_ref = _ALGORITHMS[idx]
+        method = self._current_method()
+        label = self._algo_combo.currentText()
+        needs_ref = database_method_requires_reference(method)
         if needs_ref and self._reference_entry is None:
             return
         if self._target_entry is None:
             return
+        custom_lambda_enabled = (
+            database_method_supports_custom_lambda_eff(method)
+            and self._custom_lambda_check.isChecked()
+        )
 
         config: dict[str, Any] = {
             "method": method,
@@ -300,6 +384,10 @@ class ReconstructionDialog(QDialog):
             "reference_entry": self._reference_entry if needs_ref else None,
             "target_entry": self._target_entry,
             "regularization_alpha": self._alpha_spin.value(),
+            "lambda_eff_custom_enabled": custom_lambda_enabled,
+            "custom_lambda_eff": self._alpha_spin.value()
+            if custom_lambda_enabled
+            else CANONICAL_SINGLE_STEP_LAMBDA_EFF,
             "max_iterations": self._iter_spin.value(),
             "use_part": self._use_part_combo.currentText(),
             "output_dir": self._dir_edit.text().strip() or None,
@@ -334,8 +422,8 @@ class ReconstructionDialog(QDialog):
         self._algo_box.setTitle(t("dlg.reconstruction.algo_params_group"))
         self._lbl_method.setText(t("dlg.reconstruction.method_label"))
         self._lbl_part.setText(t("dlg.reconstruction.part_label"))
-        self._lbl_alpha.setText(t("dlg.reconstruction.alpha_label"))
         self._lbl_iter.setText(t("dlg.reconstruction.iter_label"))
+        self._custom_lambda_check.setText(t("dlg.reconstruction.custom_lambda_check"))
         self._output_box.setTitle(t("dlg.reconstruction.output_group"))
         self._dir_edit.setPlaceholderText(t("dlg.reconstruction.output_placeholder"))
         self._dir_browse_btn.setText(t("dlg.reconstruction.browse_button"))
@@ -345,3 +433,4 @@ class ReconstructionDialog(QDialog):
         # Re-render frame chips (they use "<not selected>" placeholder)
         self._ref_label.setText(self._format_entry(self._reference_entry))
         self._tgt_label.setText(self._format_entry(self._target_entry))
+        self._update_algorithm_state()

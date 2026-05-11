@@ -25,12 +25,15 @@ from eit_app.controllers.reconstruction_controller import (
     run_reconstruction_request,
 )
 from eit_app.models.frame_model import FrameData
+from eit_app.models.reconstruction_methods import (
+    database_method_requires_reference,
+    prepare_database_reconstruction_method,
+)
 
 log = logging.getLogger(__name__)
 
 
 _FRAME_CSV_RE = re.compile(r"_frame_(\d+)\.csv$", re.IGNORECASE)
-_ABSOLUTE_METHODS = {"gn-absolute", "sparse-bayes-absolute"}
 
 
 def _discover_frame_csvs(folder: Path) -> list[Path]:
@@ -69,6 +72,8 @@ class BatchReconstructionRequest:
         max_iterations: int,
         save_recon_image: bool,
         save_voltage_fit: bool,
+        lambda_eff_custom_enabled: bool = False,
+        custom_lambda_eff: float | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         self.input_folder = Path(input_folder)
@@ -79,6 +84,10 @@ class BatchReconstructionRequest:
         self.use_part = use_part
         self.regularization_alpha = regularization_alpha
         self.max_iterations = max_iterations
+        self.lambda_eff_custom_enabled = bool(lambda_eff_custom_enabled)
+        self.custom_lambda_eff = (
+            float(custom_lambda_eff) if custom_lambda_eff is not None else None
+        )
         self.save_recon_image = save_recon_image
         self.save_voltage_fit = save_voltage_fit
         self.metadata = dict(metadata or {})
@@ -108,11 +117,11 @@ class _BatchWorker(QObject):
                 self.finished.emit(0, 0)
                 return
 
-            is_absolute = req.method in _ABSOLUTE_METHODS
+            needs_reference = database_method_requires_reference(req.method)
             ref_frame: FrameData | None = None
             ref_path_resolved: Path | None = None
 
-            if not is_absolute:
+            if needs_reference:
                 if req.reference_csv is None:
                     self.error.emit("Difference methods require a reference frame.")
                     self.finished.emit(0, 0)
@@ -232,16 +241,28 @@ def _build_request(
         "difference_orientation": "target_minus_reference",
     }
     meta.update(batch.metadata)
+    alpha = (
+        batch.custom_lambda_eff
+        if batch.lambda_eff_custom_enabled and batch.custom_lambda_eff is not None
+        else batch.regularization_alpha
+    )
+    prepared = prepare_database_reconstruction_method(
+        batch.method,
+        regularization_alpha=float(alpha),
+        max_iterations=batch.max_iterations,
+        custom_lambda_eff_enabled=batch.lambda_eff_custom_enabled,
+        metadata=meta,
+    )
     return ReconstructionRequest(
         reference_frame=reference,
         target_frame=target,
         use_part=batch.use_part,
-        method=batch.method,
-        regularization_alpha=batch.regularization_alpha,
-        max_iterations=batch.max_iterations,
+        method=prepared.method,
+        regularization_alpha=prepared.regularization_alpha,
+        max_iterations=prepared.max_iterations,
         mesh_dimension=2,
         mesh_refinement=4,
-        metadata=meta,
+        metadata=prepared.metadata,
     )
 
 
