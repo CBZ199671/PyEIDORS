@@ -429,6 +429,59 @@ def test_workflow_shell_context_layouts_match_tab_roles() -> None:
 
 
 @pytest.mark.gui
+def test_simulation_metrics_panel_reports_mesh_sizes() -> None:
+    from eit_app.i18n import current_language, set_language
+    from eit_app.ui.simulation.metrics_panel import MetricsPanel
+
+    _get_app()
+    previous_language = current_language()
+    set_language("en", persist=False)
+    panel = MetricsPanel()
+    try:
+        node_coords = np.array(
+            [
+                [0.0, 0.0],
+                [1.0, 0.0],
+                [1.0, 1.0],
+                [0.0, 1.0],
+                [0.5, 0.5],
+            ],
+            dtype=float,
+        )
+        cells = np.array(
+            [[0, 1, 4], [1, 2, 4], [2, 3, 4], [3, 0, 4]],
+            dtype=np.int32,
+        )
+
+        panel.update_mesh_stats(
+            ground_truth_node_coords=node_coords,
+            ground_truth_cell_connectivity=cells,
+        )
+
+        assert panel.title() == "Mesh & Metrics"
+        assert panel._truth_mesh_label.text() == "5 nodes / 4 elements"
+        assert panel._recon_mesh_label.text() == "\u2014"
+
+        panel.update_metrics(
+            np.ones(len(cells), dtype=float),
+            np.ones(len(cells), dtype=float),
+            ground_truth_node_coords=node_coords,
+            ground_truth_cell_connectivity=cells,
+            reconstructed_node_coords=node_coords,
+            reconstructed_cell_connectivity=cells,
+        )
+
+        assert panel._truth_mesh_label.text() == "5 nodes / 4 elements"
+        assert panel._recon_mesh_label.text() == "5 nodes / 4 elements"
+        assert panel._l2_label.text() == "0.0000"
+        set_language("zh", persist=False)
+        assert panel._truth_mesh_label.text() == "\u8282\u70b9 5 / \u5143\u7d20 4"
+        assert panel._recon_mesh_label.text() == "\u8282\u70b9 5 / \u5143\u7d20 4"
+    finally:
+        set_language(previous_language, persist=False)
+
+
+@pytest.mark.gui
 def test_batch_reconstruction_dialog_shows_eta_after_enough_samples(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -3330,6 +3383,14 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
     np.testing.assert_allclose(last_coords, node_coords)
     np.testing.assert_array_equal(last_cells, cells)
     assert _sample_pixmap_unique_rgb_count(recon_slot.grab()) > 1
+    assert (
+        str(len(node_coords)) in window._sim_tab.metrics_panel._truth_mesh_label.text()
+    )
+    assert str(len(cells)) in window._sim_tab.metrics_panel._truth_mesh_label.text()
+    assert (
+        str(len(node_coords)) in window._sim_tab.metrics_panel._recon_mesh_label.text()
+    )
+    assert str(len(cells)) in window._sim_tab.metrics_panel._recon_mesh_label.text()
     assert window._sim_tab.metrics_panel._l2_label.text() == "0.0000"
     assert float(window._sim_tab.metrics_panel._corr_label.text()) >= 0.999
 

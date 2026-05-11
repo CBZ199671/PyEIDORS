@@ -464,7 +464,10 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================
-    "sim.metrics.title": "Metrics",
+    "sim.metrics.title": "Mesh & Metrics",
+    "sim.metrics.truth_mesh_label": "Truth mesh:",
+    "sim.metrics.recon_mesh_label": "Recon mesh:",
+    "sim.metrics.mesh_value": "{nodes} nodes / {elements} elements",
     "sim.metrics.l2_label": "Relative L2 error:",
     "sim.metrics.correlation_label": "Correlation:",
     "sim.metrics.rmse_label": "RMSE:",

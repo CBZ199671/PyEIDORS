@@ -3876,10 +3876,15 @@ class EITWorkstation(QMainWindow):
                 result.forward_model_config.get("runtime_diagnostics", {}) or {}
             )
         self._sim_tab.forward_problem_panel.set_status(
-            f"Done: {result.n_elements} elements, {result.n_measurements} measurements"
+            f"Done: {len(result.node_coords)} nodes, {result.n_elements} elements, "
+            f"{result.n_measurements} measurements"
             f"{_format_runtime_diagnostics(runtime_diag)}"
         )
         self._sim_tab.metrics_panel.clear()
+        self._sim_tab.metrics_panel.update_mesh_stats(
+            ground_truth_node_coords=result.node_coords,
+            ground_truth_cell_connectivity=result.cell_connectivity,
+        )
         self._sim_tab.results_widget.update_forward_result(result)
 
     @Slot()

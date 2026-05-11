@@ -442,7 +442,10 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================
-    "sim.metrics.title": "\u8bef\u5dee\u6307\u6807",  # 误差指标
+    "sim.metrics.title": "\u7f51\u683c\u4e0e\u8bef\u5dee\u6307\u6807",  # 网格与误差指标
+    "sim.metrics.truth_mesh_label": "\u771f\u503c\u7f51\u683c\uff1a",  # 真值网格：
+    "sim.metrics.recon_mesh_label": "\u91cd\u6784\u7f51\u683c\uff1a",  # 重构网格：
+    "sim.metrics.mesh_value": "\u8282\u70b9 {nodes} / \u5143\u7d20 {elements}",  # 节点 {nodes} / 元素 {elements}
     "sim.metrics.l2_label": "\u76f8\u5bf9 L2 \u8bef\u5dee\uff1a",  # 相对 L2 误差：
     "sim.metrics.correlation_label": "\u76f8\u5173\u7cfb\u6570\uff1a",  # 相关系数：
     "sim.metrics.rmse_label": "\u5747\u65b9\u6839\u8bef\u5dee\uff1a",  # 均方根误差：

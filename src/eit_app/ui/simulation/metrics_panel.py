@@ -78,12 +78,43 @@ def _nearest_resample(
     return mapped
 
 
+def _mesh_counts(
+    node_coords: np.ndarray | None,
+    cell_connectivity: np.ndarray | None,
+) -> tuple[int, int] | None:
+    if node_coords is None or cell_connectivity is None:
+        return None
+    try:
+        coords = np.asarray(node_coords)
+        cells = np.asarray(cell_connectivity)
+    except Exception:
+        return None
+    if coords.ndim != 2 or cells.ndim != 2:
+        return None
+    if len(coords) <= 0 or len(cells) <= 0:
+        return None
+    return int(len(coords)), int(len(cells))
+
+
+def _format_mesh_count_value(counts: tuple[int, int] | None) -> str:
+    if counts is None:
+        return "\u2014"
+    n_nodes, n_elements = counts
+    return t(
+        "sim.metrics.mesh_value",
+        nodes=f"{n_nodes:,}",
+        elements=f"{n_elements:,}",
+    )
+
+
 class MetricsPanel(QGroupBox):
     """Displays reconstruction quality metrics (error, correlation, etc.)."""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
+        self._truth_mesh_counts: tuple[int, int] | None = None
+        self._recon_mesh_counts: tuple[int, int] | None = None
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -92,6 +123,16 @@ class MetricsPanel(QGroupBox):
         layout = QFormLayout(self)
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(6)
+
+        self._truth_mesh_label = QLabel("\u2014")
+        set_subtle_value(self._truth_mesh_label)
+        self._lbl_truth_mesh = QLabel("")
+        layout.addRow(self._lbl_truth_mesh, self._truth_mesh_label)
+
+        self._recon_mesh_label = QLabel("\u2014")
+        set_subtle_value(self._recon_mesh_label)
+        self._lbl_recon_mesh = QLabel("")
+        layout.addRow(self._lbl_recon_mesh, self._recon_mesh_label)
 
         self._l2_label = QLabel("\u2014")
         set_subtle_value(self._l2_label)
@@ -112,9 +153,38 @@ class MetricsPanel(QGroupBox):
 
     def _retranslate(self) -> None:
         self.setTitle(t("sim.metrics.title"))
+        self._lbl_truth_mesh.setText(t("sim.metrics.truth_mesh_label"))
+        self._lbl_recon_mesh.setText(t("sim.metrics.recon_mesh_label"))
         self._lbl_l2.setText(t("sim.metrics.l2_label"))
         self._lbl_corr.setText(t("sim.metrics.correlation_label"))
         self._lbl_rmse.setText(t("sim.metrics.rmse_label"))
+        self._refresh_mesh_count_labels()
+
+    def _refresh_mesh_count_labels(self) -> None:
+        self._truth_mesh_label.setText(
+            _format_mesh_count_value(self._truth_mesh_counts)
+        )
+        self._recon_mesh_label.setText(
+            _format_mesh_count_value(self._recon_mesh_counts)
+        )
+
+    def update_mesh_stats(
+        self,
+        *,
+        ground_truth_node_coords: np.ndarray | None = None,
+        ground_truth_cell_connectivity: np.ndarray | None = None,
+        reconstructed_node_coords: np.ndarray | None = None,
+        reconstructed_cell_connectivity: np.ndarray | None = None,
+    ) -> None:
+        self._truth_mesh_counts = _mesh_counts(
+            ground_truth_node_coords,
+            ground_truth_cell_connectivity,
+        )
+        self._recon_mesh_counts = _mesh_counts(
+            reconstructed_node_coords,
+            reconstructed_cell_connectivity,
+        )
+        self._refresh_mesh_count_labels()
 
     def update_metrics(
         self,
@@ -127,8 +197,14 @@ class MetricsPanel(QGroupBox):
         reconstructed_cell_connectivity: np.ndarray | None = None,
     ) -> None:
         """Compute and display metrics comparing ground truth to reconstruction."""
+        self.update_mesh_stats(
+            ground_truth_node_coords=ground_truth_node_coords,
+            ground_truth_cell_connectivity=ground_truth_cell_connectivity,
+            reconstructed_node_coords=reconstructed_node_coords,
+            reconstructed_cell_connectivity=reconstructed_cell_connectivity,
+        )
         if len(ground_truth) == 0 or len(reconstructed) == 0:
-            self.clear()
+            self._clear_metric_values()
             return
 
         gt_samples = _metric_samples(
@@ -146,7 +222,7 @@ class MetricsPanel(QGroupBox):
             rc_pos, rc_values = rc_samples
             rc = _nearest_resample(rc_pos, rc_values, gt_pos)
             if rc is None:
-                self.clear()
+                self._clear_metric_values()
                 return
         else:
             n = min(len(ground_truth), len(reconstructed))
@@ -155,7 +231,7 @@ class MetricsPanel(QGroupBox):
 
         finite = np.isfinite(gt) & np.isfinite(rc)
         if not np.any(finite):
-            self.clear()
+            self._clear_metric_values()
             return
         gt = gt[finite]
         rc = rc[finite]
@@ -177,7 +253,13 @@ class MetricsPanel(QGroupBox):
         rmse = np.sqrt(np.mean((gt - rc) ** 2))
         self._rmse_label.setText(f"{rmse:.6f}")
 
-    def clear(self) -> None:
+    def _clear_metric_values(self) -> None:
         self._l2_label.setText("\u2014")
         self._corr_label.setText("\u2014")
         self._rmse_label.setText("\u2014")
+
+    def clear(self) -> None:
+        self._truth_mesh_counts = None
+        self._recon_mesh_counts = None
+        self._refresh_mesh_count_labels()
+        self._clear_metric_values()
