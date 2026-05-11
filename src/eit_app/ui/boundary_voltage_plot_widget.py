@@ -127,8 +127,8 @@ class BoundaryVoltagePlotWidget(QWidget):
             symbolBrush=pg.mkBrush("#ff6b6b"),
             symbolPen=pg.mkPen("#ffffff", width=1.1),
         )
-        self._curve_primary.setZValue(2)
-        self._curve_reconstructed_outline.setZValue(3)
+        self._curve_reconstructed_outline.setZValue(2)
+        self._curve_primary.setZValue(3)
         self._curve_reconstructed.setZValue(4)
         self._curve_reconstructed_markers.setZValue(5)
         self._curve_reconstructed_outline.setVisible(False)
@@ -202,6 +202,10 @@ class BoundaryVoltagePlotWidget(QWidget):
     ) -> None:
         """Update the simulation-oriented voltage comparison plot."""
         ground_truth = np.asarray(ground_truth, dtype=np.float64).reshape(-1)
+        reconstructed_arr = self._coerce_reconstructed_overlay(
+            reconstructed,
+            expected_size=len(ground_truth),
+        )
         x = np.arange(1, len(ground_truth) + 1, dtype=np.float64)
         self._configure_index_axis(len(ground_truth))
         self._has_data = True
@@ -210,8 +214,9 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_primary.setData(x, ground_truth)
         self._curve_primary.setVisible(True)
         self._set_reconstructed_overlay(
-            x, reconstructed, expected_size=len(ground_truth)
+            x, reconstructed_arr, expected_size=len(ground_truth)
         )
+        self._apply_y_range(ground_truth, reconstructed_arr)
 
     def update_voltages(
         self,
@@ -230,6 +235,10 @@ class BoundaryVoltagePlotWidget(QWidget):
     ) -> None:
         """Update the hardware-oriented voltage fit plot."""
         measured = np.asarray(measured, dtype=np.float64).reshape(-1)
+        reconstructed_arr = self._coerce_reconstructed_overlay(
+            reconstructed,
+            expected_size=len(measured),
+        )
         x = np.arange(1, len(measured) + 1, dtype=np.float64)
         self._configure_index_axis(len(measured))
         self._has_data = True
@@ -237,7 +246,12 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._empty_overlay.hide()
         self._curve_primary.setData(x, measured)
         self._curve_primary.setVisible(True)
-        self._set_reconstructed_overlay(x, reconstructed, expected_size=len(measured))
+        self._set_reconstructed_overlay(
+            x,
+            reconstructed_arr,
+            expected_size=len(measured),
+        )
+        self._apply_y_range(measured, reconstructed_arr)
 
     def clear(self) -> None:
         """Clear all curves."""
@@ -339,12 +353,11 @@ class BoundaryVoltagePlotWidget(QWidget):
         if reconstructed is None:
             self._hide_reconstructed_overlay()
             return
-        try:
-            reconstructed_arr = np.asarray(reconstructed, dtype=np.float64).reshape(-1)
-        except Exception:
-            self._hide_reconstructed_overlay()
-            return
-        if reconstructed_arr.size != int(expected_size):
+        reconstructed_arr = self._coerce_reconstructed_overlay(
+            reconstructed,
+            expected_size=expected_size,
+        )
+        if reconstructed_arr is None:
             self._hide_reconstructed_overlay()
             return
 
@@ -366,6 +379,45 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed_outline.setVisible(False)
         self._curve_reconstructed.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
+
+    @staticmethod
+    def _coerce_reconstructed_overlay(
+        reconstructed: np.ndarray | None,
+        *,
+        expected_size: int,
+    ) -> np.ndarray | None:
+        if reconstructed is None:
+            return None
+        try:
+            reconstructed_arr = np.asarray(reconstructed, dtype=np.float64).reshape(-1)
+        except Exception:
+            return None
+        if reconstructed_arr.size != int(expected_size):
+            return None
+        return reconstructed_arr
+
+    def _apply_y_range(self, *series: np.ndarray | None) -> None:
+        finite_parts: list[np.ndarray] = []
+        for values in series:
+            if values is None:
+                continue
+            arr = np.asarray(values, dtype=np.float64).reshape(-1)
+            finite = arr[np.isfinite(arr)]
+            if finite.size:
+                finite_parts.append(finite)
+        if not finite_parts:
+            return
+        merged = np.concatenate(finite_parts)
+        y_min = float(np.min(merged))
+        y_max = float(np.max(merged))
+        span = y_max - y_min
+        if not np.isfinite(span):
+            return
+        if span <= 0.0:
+            padding = max(abs(y_min) * 0.08, 1.0e-12)
+        else:
+            padding = max(span * 0.08, 1.0e-12)
+        self._plot_widget.setYRange(y_min - padding, y_max + padding, padding=0.0)
 
     # ── i18n ──
 

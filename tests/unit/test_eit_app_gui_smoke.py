@@ -3242,12 +3242,14 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
     target = reference + np.array([0.0, 1.0, 1.0, 0.0], dtype=np.float64)
     expected_sigma = np.array([1.0, 1.2, 1.2, 1.0], dtype=np.float64)
     rm = np.diag([0.0, 0.4, 0.4, 0.0]).astype(np.float64)
+    fit_jacobian = np.diag([0.0, 2.5, 2.5, 0.0]).astype(np.float64)
     artifact_path = write_rm_artifact(
         tmp_path / "gui_default_noser_rm.h5",
         rm,
         metadata={"algorithm": "one-step-noser", "rm_build_route": "noser_rm"},
         node_coords=node_coords,
         cell_connectivity=cells,
+        jacobian=fit_jacobian,
     )
     window._last_fwd_result = ForwardSolverResult(
         boundary_voltages=target,
@@ -3330,6 +3332,28 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
     assert _sample_pixmap_unique_rgb_count(recon_slot.grab()) > 1
     assert window._sim_tab.metrics_panel._l2_label.text() == "0.0000"
     assert float(window._sim_tab.metrics_panel._corr_label.text()) >= 0.999
+
+    voltage_plot = window._sim_tab.results_widget.voltage_plot
+    assert voltage_plot._has_data is True
+    assert voltage_plot._curve_primary.isVisible() is True
+    assert voltage_plot._curve_reconstructed.isVisible() is True
+    primary_x, primary_y = voltage_plot._curve_primary.getData()
+    recon_x, recon_y = voltage_plot._curve_reconstructed.getData()
+    assert primary_x is not None and primary_y is not None
+    assert recon_x is not None and recon_y is not None
+    np.testing.assert_allclose(primary_y, target)
+    np.testing.assert_allclose(recon_y, target)
+    assert len(recon_y) == len(target)
+    plotted = np.concatenate(
+        [np.asarray(primary_y, dtype=float), np.asarray(recon_y, dtype=float)]
+    )
+    _x_range, y_range = voltage_plot._plot_widget.getPlotItem().getViewBox().viewRange()
+    assert y_range[0] <= float(np.nanmin(plotted))
+    assert y_range[1] >= float(np.nanmax(plotted))
+    assert (
+        voltage_plot._curve_reconstructed_outline.zValue()
+        < voltage_plot._curve_primary.zValue()
+    )
 
     window._sim_state.inverse_running = False
     _close_window(window)

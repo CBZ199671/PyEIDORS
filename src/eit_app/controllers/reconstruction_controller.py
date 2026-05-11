@@ -1411,19 +1411,27 @@ def _ensure_auto_built_one_step_rm_artifact(
     runtime.meta["rm_signature"] = signature
     runtime.meta["rm_signature_payload"] = signature_payload
     if artifact_path.exists():
-        runtime.meta["rm_artifact_path"] = str(artifact_path)
-        runtime.meta["dual_model_rm_path"] = str(artifact_path)
-        runtime.meta["rm_artifact_auto_built"] = False
-        runtime.meta["rm_artifact_cache_status"] = "disk_hit"
-        _restore_rm_fit_jacobian(
+        fit_jacobian = _restore_rm_fit_jacobian(
             runtime,
             path=artifact_path,
             signature=signature,
         )
-        message = f"Using cached {regularization_type.upper()} RM artifact..."
+        if fit_jacobian is not None:
+            runtime.meta["rm_artifact_path"] = str(artifact_path)
+            runtime.meta["dual_model_rm_path"] = str(artifact_path)
+            runtime.meta["rm_artifact_auto_built"] = False
+            runtime.meta["rm_artifact_cache_status"] = "disk_hit"
+            message = f"Using cached {regularization_type.upper()} RM artifact..."
+            log.info(message)
+            emit(message)
+            return artifact_path
+        runtime.meta["rm_artifact_cache_status"] = "disk_fit_jacobian_miss"
+        message = (
+            f"Cached {regularization_type.upper()} RM artifact lacks voltage-fit "
+            "Jacobian; rebuilding..."
+        )
         log.info(message)
         emit(message)
-        return artifact_path
 
     diff_runner = _load_gn_difference_runner_module()
     message = f"Building {regularization_type.upper()} RM artifact..."

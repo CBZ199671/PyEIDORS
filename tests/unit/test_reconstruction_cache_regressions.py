@@ -998,6 +998,7 @@ def test_single_step_cached_noser_rm_route_auto_builds_hdf5_hot_path(
     )
     expected_sigma = 1.0 + expected_rm @ expected_dv
     np.testing.assert_allclose(result.conductivity, expected_sigma)
+    np.testing.assert_allclose(result.simulated, jacobian @ (expected_sigma - 1.0))
     assert result.error_msg is None
     assert context_calls["count"] == 1
     assert result.metadata["single_step_operator_space"] == "rm"
@@ -1016,11 +1017,114 @@ def test_single_step_cached_noser_rm_route_auto_builds_hdf5_hot_path(
 
     warm = rc._run_single_step_cached_request(request)
     np.testing.assert_allclose(warm.conductivity, expected_sigma)
+    np.testing.assert_allclose(warm.simulated, jacobian @ (expected_sigma - 1.0))
     assert context_calls["count"] == 1
     assert (
         warm.metadata["solver_diagnostics"]["cache_lookups"]["rm_artifact"]["layer"]
         == "process"
     )
+
+
+def test_single_step_cached_auto_built_rm_rebuilds_stale_fitless_artifact(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import build_one_step_rm, write_rm_artifact
+
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    reference = np.array([2.0, 4.0, 8.0], dtype=float)
+    target = np.array([3.0, 5.0, 10.0], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(2, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    context_calls = {"count": 0}
+
+    def _fake_context(*_args, **_kwargs):
+        context_calls["count"] += 1
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _fake_context)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=lambda **_kwargs: fake_ctx),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.04,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+        },
+    )
+    runtime = rc._prepare_single_step_cached_runtime(request)
+    stale_path, _signature, _payload = rc._planned_one_step_rm_artifact_path(
+        request, runtime
+    )
+    stale_rm = build_one_step_rm(
+        jacobian,
+        lambda_=0.2,
+        mode="noser",
+        form="measurement",
+    )
+    write_rm_artifact(
+        stale_path,
+        stale_rm,
+        metadata={"algorithm": "one-step-noser", "rm_build_route": "noser_rm"},
+        node_coords=node_coords,
+        cell_connectivity=cells,
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_dv = target - reference
+    expected_sigma = 1.0 + stale_rm @ expected_dv
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    np.testing.assert_allclose(result.simulated, jacobian @ (expected_sigma - 1.0))
+    assert result.metadata["rm_artifact_cache_status"] == "built"
+    assert result.metadata["rm_fit_jacobian_cache_status"].startswith("built_")
+    assert context_calls["count"] == 1
 
 
 @pytest.mark.parametrize(
@@ -2242,6 +2346,41 @@ def test_boundary_voltage_plot_keeps_recon_overlay_visible_for_tiny_fit() -> Non
     assert len(marker_x) >= 2
     assert float(marker_x[0]) == pytest.approx(1.0)
     assert float(marker_x[-1]) == pytest.approx(208.0)
+
+
+def test_boundary_voltage_plot_truth_is_not_hidden_by_recon_outline() -> None:
+    _get_app()
+    widget = BoundaryVoltagePlotWidget(mode="simulation")
+
+    widget.update_simulation_voltages(
+        np.linspace(-1.0, 1.0, 16, dtype=float),
+        np.linspace(-1.0, 1.0, 16, dtype=float),
+    )
+
+    assert widget._curve_primary.isVisible() is True
+    assert widget._curve_reconstructed_outline.isVisible() is True
+    assert widget._curve_reconstructed_outline.zValue() < widget._curve_primary.zValue()
+    assert widget._curve_primary.zValue() < widget._curve_reconstructed.zValue()
+
+
+def test_boundary_voltage_plot_rescales_y_range_for_new_simulation_data() -> None:
+    _get_app()
+    widget = BoundaryVoltagePlotWidget(mode="simulation")
+    widget._plot_widget.setYRange(1000.0, 2000.0, padding=0.0)
+
+    truth = np.array([1.0e-6, 2.0e-6, 3.0e-6], dtype=float)
+    reconstructed = np.array([1.5e-6, -4.0e-6, 2.5e-6], dtype=float)
+    widget.update_simulation_voltages(truth, reconstructed)
+
+    _x_range, y_range = widget._plot_widget.getPlotItem().getViewBox().viewRange()
+    assert y_range[0] < -4.0e-6
+    assert y_range[1] > 3.0e-6
+    primary_x, primary_y = widget._curve_primary.getData()
+    recon_x, recon_y = widget._curve_reconstructed.getData()
+    assert primary_x is not None and primary_y is not None
+    assert recon_x is not None and recon_y is not None
+    np.testing.assert_allclose(primary_y, truth)
+    np.testing.assert_allclose(recon_y, reconstructed)
 
 
 def test_boundary_voltage_plot_hides_recon_overlay_without_fit_data() -> None:
