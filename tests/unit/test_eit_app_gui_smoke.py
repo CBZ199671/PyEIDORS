@@ -890,11 +890,16 @@ def test_simulation_inverse_panel_hyperparameter_semantics_follow_route() -> Non
     assert not inv._alpha_spin.isEnabled()
     assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
     assert inv.get_config()["regularization_alpha"] == pytest.approx(1.0e-2)
+    assert not inv.get_config()["lambda_eff_custom_enabled"]
+    assert not inv._custom_lambda_check.isHidden()
+    assert inv._custom_lambda_check.isEnabled()
+    assert not inv._custom_lambda_check.isChecked()
     assert "hp=0.1" in inv._alpha_spin.toolTip()
 
     inv.set_config({"method": "debug_full_gn", "regularization_alpha": 2.5})
     app.processEvents()
     assert inv._alpha_spin.isEnabled()
+    assert inv._custom_lambda_check.isHidden()
     assert "α" in inv._lbl_alpha.text()
     assert inv._alpha_spin.value() == pytest.approx(2.5)
     assert inv.get_config()["regularization_alpha"] == pytest.approx(2.5)
@@ -906,6 +911,51 @@ def test_simulation_inverse_panel_hyperparameter_semantics_follow_route() -> Non
     assert "HDF5" in inv._alpha_spin.toolTip()
     assert "α" in inv._alpha_spin.toolTip()
     assert inv.get_config()["regularization_alpha"] == pytest.approx(3.5)
+
+    inv.close()
+    inv.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.gui
+def test_simulation_inverse_panel_v117_custom_lambda_rebuild_entry() -> None:
+    from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
+
+    app = _get_app()
+    inv = InverseProblemPanel()
+    inv.show()
+    app.processEvents()
+
+    inv.set_config(
+        {
+            "method": "noser_rm",
+            "lambda_eff_custom_enabled": True,
+            "custom_lambda_eff": 0.04,
+        }
+    )
+    app.processEvents()
+    assert inv._custom_lambda_check.isChecked()
+    assert inv._alpha_spin.isEnabled()
+    assert "自定义" in inv._lbl_alpha.text() or "custom" in inv._lbl_alpha.text()
+    assert inv._alpha_spin.value() == pytest.approx(0.04)
+    assert inv.get_config()["lambda_eff_custom_enabled"] is True
+    assert inv.get_config()["custom_lambda_eff"] == pytest.approx(0.04)
+
+    inv._alpha_spin.setValue(0.09)
+    app.processEvents()
+    assert inv.get_config()["regularization_alpha"] == pytest.approx(0.09)
+    assert inv.get_config()["custom_lambda_eff"] == pytest.approx(0.09)
+
+    inv._custom_lambda_check.setChecked(False)
+    app.processEvents()
+    assert not inv.get_config()["lambda_eff_custom_enabled"]
+    assert not inv._alpha_spin.isEnabled()
+    assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
+
+    inv.set_config({"method": "greit3d_rm", "lambda_eff_custom_enabled": True})
+    app.processEvents()
+    assert inv._custom_lambda_check.isHidden()
+    assert not inv.get_config()["lambda_eff_custom_enabled"]
 
     inv.close()
     inv.deleteLater()
@@ -3266,6 +3316,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
         assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
         assert request.metadata["hyperparameter_ui_locked"] is True
+        assert request.metadata["lambda_eff_custom_enabled"] is False
         assert request.metadata["regularization_alpha_applied"] is False
         assert request.metadata["lambda_eff"] == pytest.approx(1.0e-2)
         assert request.metadata["hp"] == pytest.approx(0.1)
@@ -3306,6 +3357,82 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["difference_lambda_semantics"] == (
             "unused_for_greit_rm_artifact"
         )
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_rm_route_v117_custom_lambda_rebuilds_distinct_artifact(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "noser_rm",
+            "regularization_alpha": 0.04,
+            "lambda_eff_custom_enabled": True,
+            "custom_lambda_eff": 0.04,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "gn-difference"
+    assert request.regularization_alpha == pytest.approx(0.04)
+    assert request.metadata["simulation_inverse_route"] == "noser_rm"
+    assert request.metadata["difference_lambda"] == pytest.approx(0.04)
+    assert request.metadata["lambda_eff"] == pytest.approx(0.04)
+    assert request.metadata["hp"] == pytest.approx(0.2)
+    assert request.metadata["hp_squared"] == pytest.approx(0.04)
+    assert request.metadata["lambda_eff_custom_enabled"] is True
+    assert request.metadata["hyperparameter_ui_locked"] is False
+    assert request.metadata["hyperparameter_effective_source"] == "custom_rm_rebuild"
+    assert request.metadata["regularization_alpha_applied"] is False
+    assert request.metadata["rm_rebuild_required_by_custom_lambda"] is True
+    assert request.metadata["difference_lambda_semantics"] == (
+        "custom_lambda_eff_rebuilds_rm"
+    )
+    default_request = rc.ReconstructionRequest(
+        reference_frame=request.reference_frame,
+        target_frame=request.target_frame,
+        use_part=request.use_part,
+        method=request.method,
+        regularization_alpha=1.0e-2,
+        max_iterations=request.max_iterations,
+        mesh_dimension=request.mesh_dimension,
+        mesh_refinement=request.mesh_refinement,
+        metadata={
+            **request.metadata,
+            "difference_lambda": 1.0e-2,
+            "lambda_eff": 1.0e-2,
+            "lambda_eff_custom_enabled": False,
+        },
+    )
+    assert rc.get_single_step_cached_cache_key(
+        request
+    ) != rc.get_single_step_cached_cache_key(default_request)
 
     window._sim_state.inverse_running = False
     _close_window(window)

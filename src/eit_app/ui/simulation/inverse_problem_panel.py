@@ -2,6 +2,7 @@
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
@@ -53,6 +54,7 @@ _LOCKED_LAMBDA_EFF_METHODS = {
 }
 _ARTIFACT_HYPERPARAM_METHODS = {"greit3d_rm"}
 _ITERATION_CONTROL_METHODS = {"absolute_gn"}
+_CUSTOM_LAMBDA_EFF_METHODS = {"noser_rm", "laplace_rm", "curvature_rm"}
 
 
 def normalize_simulation_inverse_method(method: str) -> str:
@@ -72,6 +74,7 @@ class InverseProblemPanel(QGroupBox):
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
         self._editable_alpha_value = 1.0
+        self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
         self._running = False
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
@@ -105,6 +108,10 @@ class InverseProblemPanel(QGroupBox):
         self._alpha_spin.valueChanged.connect(self._remember_editable_alpha)
         self._lbl_alpha = QLabel("")
         layout.addRow(self._lbl_alpha, self._alpha_spin)
+
+        self._custom_lambda_check = QCheckBox("")
+        self._custom_lambda_check.toggled.connect(self._on_custom_lambda_toggled)
+        layout.addRow(self._custom_lambda_check)
 
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
@@ -150,11 +157,18 @@ class InverseProblemPanel(QGroupBox):
         layout.addRow(self._status_label)
 
     def get_config(self) -> dict:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        custom_lambda_enabled = (
+            method in _CUSTOM_LAMBDA_EFF_METHODS
+            and self._custom_lambda_check.isChecked()
+        )
         return {
-            "method": normalize_simulation_inverse_method(
-                self._method_combo.currentText()
-            ),
+            "method": method,
             "regularization_alpha": self._alpha_spin.value(),
+            "lambda_eff_custom_enabled": custom_lambda_enabled,
+            "custom_lambda_eff": self._alpha_spin.value()
+            if custom_lambda_enabled
+            else CANONICAL_SINGLE_STEP_LAMBDA_EFF,
             "max_iterations": self._iter_spin.value(),
         }
 
@@ -162,6 +176,7 @@ class InverseProblemPanel(QGroupBox):
         widgets = (
             self._method_combo,
             self._alpha_spin,
+            self._custom_lambda_check,
             self._iter_spin,
         )
         blockers = [widget.blockSignals(True) for widget in widgets]
@@ -173,6 +188,17 @@ class InverseProblemPanel(QGroupBox):
             if index >= 0:
                 self._method_combo.setCurrentIndex(index)
             alpha = float(config.get("regularization_alpha", 1.0))
+            custom_lambda_enabled = (
+                bool(config.get("lambda_eff_custom_enabled", False))
+                and method in _CUSTOM_LAMBDA_EFF_METHODS
+            )
+            custom_lambda = float(
+                config.get("custom_lambda_eff", config.get("lambda_eff", alpha))
+            )
+            self._custom_lambda_check.setChecked(custom_lambda_enabled)
+            if custom_lambda_enabled:
+                self._custom_lambda_eff_value = custom_lambda
+                alpha = custom_lambda
             if method not in _LOCKED_LAMBDA_EFF_METHODS:
                 self._editable_alpha_value = alpha
             self._alpha_spin.setValue(alpha)
@@ -210,14 +236,26 @@ class InverseProblemPanel(QGroupBox):
         self._hint.setText(t("sim.inverse.hint"))
         self._lbl_method.setText(t("sim.inverse.method_label"))
         self._lbl_iter.setText(t("sim.inverse.iterations_label"))
+        self._custom_lambda_check.setText(t("sim.inverse.custom_lambda_check"))
         self._recon_btn.setText(t("sim.inverse.reconstruct_button"))
         self._save_btn.setText(t("sim.inverse.save_button"))
         self._update_method_state()
 
     def _remember_editable_alpha(self, value: float) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
-        if method not in _LOCKED_LAMBDA_EFF_METHODS | _ARTIFACT_HYPERPARAM_METHODS:
+        if (
+            method in _CUSTOM_LAMBDA_EFF_METHODS
+            and self._custom_lambda_check.isChecked()
+        ):
+            self._custom_lambda_eff_value = float(value)
+        elif method not in _LOCKED_LAMBDA_EFF_METHODS | _ARTIFACT_HYPERPARAM_METHODS:
             self._editable_alpha_value = float(value)
+
+    def _on_custom_lambda_toggled(self, checked: bool) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        if not checked and method in _CUSTOM_LAMBDA_EFF_METHODS:
+            self._custom_lambda_eff_value = float(self._alpha_spin.value())
+        self._update_method_state()
 
     def _update_method_state(self) -> None:
         self._update_method_tooltip()
@@ -234,17 +272,34 @@ class InverseProblemPanel(QGroupBox):
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
         blocked = self._alpha_spin.blockSignals(True)
         try:
-            if method in _LOCKED_LAMBDA_EFF_METHODS:
+            custom_lambda_available = method in _CUSTOM_LAMBDA_EFF_METHODS
+            self._custom_lambda_check.setVisible(custom_lambda_available)
+            self._custom_lambda_check.setEnabled(
+                custom_lambda_available and not self._running
+            )
+            custom_lambda_enabled = (
+                custom_lambda_available and self._custom_lambda_check.isChecked()
+            )
+            custom_lambda_tooltip = t("sim.inverse.custom_lambda_tooltip")
+            self._custom_lambda_check.setToolTip(custom_lambda_tooltip)
+            if custom_lambda_enabled:
+                self._lbl_alpha.setText(t("sim.inverse.lambda_eff_custom_label"))
+                tooltip = custom_lambda_tooltip
+                self._alpha_spin.setValue(self._custom_lambda_eff_value)
+                self._alpha_spin.setEnabled(not self._running)
+            elif method in _LOCKED_LAMBDA_EFF_METHODS:
                 self._lbl_alpha.setText(t("sim.inverse.lambda_eff_locked_label"))
                 tooltip = t("sim.inverse.lambda_eff_locked_tooltip")
                 self._alpha_spin.setValue(CANONICAL_SINGLE_STEP_LAMBDA_EFF)
                 self._alpha_spin.setEnabled(False)
             elif method in _ARTIFACT_HYPERPARAM_METHODS:
+                self._custom_lambda_check.setVisible(False)
                 self._lbl_alpha.setText(t("sim.inverse.artifact_weight_label"))
                 tooltip = t("sim.inverse.artifact_weight_tooltip")
                 self._alpha_spin.setValue(self._editable_alpha_value)
                 self._alpha_spin.setEnabled(False)
             else:
+                self._custom_lambda_check.setVisible(False)
                 self._lbl_alpha.setText(t("sim.inverse.alpha_label"))
                 tooltip = t("sim.inverse.alpha_tooltip")
                 self._alpha_spin.setValue(self._editable_alpha_value)

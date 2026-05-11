@@ -99,6 +99,7 @@ _ONE_STEP_LAMBDA_EFF_ROUTES = {
     "curvature_rm",
     "debug_fine_mesh_noser",
 }
+_CUSTOM_RM_LAMBDA_EFF_ROUTES = {"noser_rm", "laplace_rm", "curvature_rm"}
 _GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
 _GREIT_COMMON_CONFIG_SCOPE = {
     "greit_official_fixture_scope": "requires registered EIDORS parity artifact",
@@ -4091,11 +4092,38 @@ class EITWorkstation(QMainWindow):
             and resolved_method == "gn-difference"
             and reconstruction_runtime == "single_step_cached"
         )
-        greit_artifact_hyperparameter = route == "greit3d_rm"
-        difference_lambda = (
-            _CANONICAL_SINGLE_STEP_LAMBDA_EFF if locked_lambda_eff else None
+        custom_lambda_eff = (
+            route in _CUSTOM_RM_LAMBDA_EFF_ROUTES
+            and locked_lambda_eff
+            and bool(inv_cfg.get("lambda_eff_custom_enabled", False))
         )
-        if locked_lambda_eff:
+        greit_artifact_hyperparameter = route == "greit3d_rm"
+        if custom_lambda_eff:
+            difference_lambda = max(float(alpha_input), 1.0e-12)
+        elif locked_lambda_eff:
+            difference_lambda = _CANONICAL_SINGLE_STEP_LAMBDA_EFF
+        else:
+            difference_lambda = None
+        hp_eff = float(np.sqrt(difference_lambda)) if difference_lambda else None
+        if custom_lambda_eff:
+            hyperparameter_meta = {
+                "hyperparameter_ui_name": "lambda_eff",
+                "hyperparameter_ui_value": difference_lambda,
+                "hyperparameter_ui_locked": False,
+                "hyperparameter_effective_source": "custom_rm_rebuild",
+                "hyperparameter_formula": "JtWJ_plus_hp2_RtR",
+                "hyperparameter_diagnostic": "custom_lambda_eff_rebuilds_rm",
+                "regularization_alpha_input": alpha_input,
+                "regularization_alpha_applied": False,
+                "lambda_eff": difference_lambda,
+                "lambda_eff_custom_enabled": True,
+                "rm_custom_lambda_eff": difference_lambda,
+                "rm_rebuild_required_by_custom_lambda": True,
+                "hp": hp_eff,
+                "hp_squared": difference_lambda,
+                "difference_lambda_semantics": "custom_lambda_eff_rebuilds_rm",
+            }
+        elif locked_lambda_eff:
             hyperparameter_meta = {
                 "hyperparameter_ui_name": "lambda_eff",
                 "hyperparameter_ui_value": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
@@ -4106,6 +4134,7 @@ class EITWorkstation(QMainWindow):
                 "regularization_alpha_input": alpha_input,
                 "regularization_alpha_applied": False,
                 "lambda_eff": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
+                "lambda_eff_custom_enabled": False,
                 "hp": _CANONICAL_SINGLE_STEP_HP,
                 "hp_squared": _CANONICAL_SINGLE_STEP_LAMBDA_EFF,
                 "difference_lambda_semantics": "lambda_eff_equals_hp_squared",

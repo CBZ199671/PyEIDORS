@@ -426,7 +426,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",  # 正则化 α：
     "sim.inverse.alpha_tooltip": "\u7edd\u5bf9 GN \u4e0e\u8c03\u8bd5 full-GN \u8def\u7531\u4f7f\u7528\u8be5\u503c\uff1bRM/\u5355\u6b65\u8def\u7531\u4e0d\u4f7f\u7528\u3002",  # 绝对 GN 与调试 full-GN 路由使用该值；RM/单步路由不使用。
     "sim.inverse.lambda_eff_locked_label": "\u03bb_eff\uff08\u9501\u5b9a\uff09\uff1a",  # λ_eff（锁定）：
-    "sim.inverse.lambda_eff_locked_tooltip": "\u5355\u6b65/RM \u8def\u7531\u56fa\u5b9a \u03bb_eff=1e-2\uff1b\u516c\u5f0f\u4f7f\u7528 hp^2 RtR\uff0chp=0.1\u3002",  # 单步/RM 路由固定 λ_eff=1e-2；公式使用 hp^2 RtR，hp=0.1。
+    "sim.inverse.lambda_eff_locked_tooltip": "\u5355\u6b65/RM \u8def\u7531\u9ed8\u8ba4\u56fa\u5b9a \u03bb_eff=1e-2\uff1b\u516c\u5f0f\u4f7f\u7528 hp^2 RtR\uff0chp=0.1\u3002\u5982\u9700\u4fee\u6539\uff0c\u8bf7\u52fe\u9009\u9ad8\u7ea7\u81ea\u5b9a\u4e49\u5e76\u91cd\u5efa RM\u3002",  # 单步/RM 路由默认固定 λ_eff=1e-2；公式使用 hp^2 RtR，hp=0.1。如需修改，请勾选高级自定义并重建 RM。
+    "sim.inverse.lambda_eff_custom_label": "\u03bb_eff\uff08\u81ea\u5b9a\u4e49\uff09\uff1a",  # λ_eff（自定义）：
+    "sim.inverse.custom_lambda_check": "\u9ad8\u7ea7\uff1a\u81ea\u5b9a\u4e49 \u03bb_eff",  # 高级：自定义 λ_eff
+    "sim.inverse.custom_lambda_tooltip": "\u52fe\u9009\u540e\u4f7f\u7528\u8f93\u5165\u7684 \u03bb_eff \u6784\u5efa/\u52a0\u8f7d\u72ec\u7acb RM artifact\uff1b\u9996\u6b21\u8fd0\u884c\u4f1a\u51b7\u6784\u5efa\uff0c\u901f\u5ea6\u660e\u663e\u66f4\u6162\u3002",  # 勾选后使用输入的 λ_eff 构建/加载独立 RM artifact；首次运行会冷构建，速度明显更慢。
     "sim.inverse.artifact_weight_label": "Artifact weight\uff1a",  # Artifact weight：
     "sim.inverse.artifact_weight_tooltip": "GREIT \u6743\u91cd\u5b58\u5728 HDF5 artifact \u4e2d\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\u3002",  # GREIT 权重存在 HDF5 artifact 中；该值不作为 α 使用。
     "sim.inverse.iterations_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：

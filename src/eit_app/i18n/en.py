@@ -427,8 +427,15 @@ TRANSLATIONS: dict[str, str] = {
     ),
     "sim.inverse.lambda_eff_locked_label": "\u03bb_eff (locked):",
     "sim.inverse.lambda_eff_locked_tooltip": (
-        "Fixed at \u03bb_eff=1e-2 for single-step/RM routes; the one-step "
-        "formula uses hp^2 RtR with hp=0.1."
+        "Defaults to fixed \u03bb_eff=1e-2 for single-step/RM routes; the "
+        "one-step formula uses hp^2 RtR with hp=0.1. To change it, enable "
+        "the advanced custom option and rebuild the RM."
+    ),
+    "sim.inverse.lambda_eff_custom_label": "\u03bb_eff (custom):",
+    "sim.inverse.custom_lambda_check": "Advanced: custom \u03bb_eff",
+    "sim.inverse.custom_lambda_tooltip": (
+        "When enabled, the entered \u03bb_eff builds/loads a separate RM artifact; "
+        "the first run is a cold build and will be noticeably slower."
     ),
     "sim.inverse.artifact_weight_label": "Artifact weight:",
     "sim.inverse.artifact_weight_tooltip": (
