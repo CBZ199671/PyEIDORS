@@ -381,12 +381,11 @@ def test_live_recon_voltage_widgets_expose_tri_state_overlay() -> None:
 
 
 @pytest.mark.gui
-def test_workflow_shell_tabs_share_right_context_minimum() -> None:
-    """Phase 7: the three WorkflowShell-based tabs (Hardware /
-    Simulation / Dataset) expose the same minimum width on their
-    right-side context panel so the pane doesn't visibly jump as the
-    user switches tabs.  The floor was relaxed from 300 → 220 to let
-    the main window shrink down to ~820 px on small laptop screens.
+def test_workflow_shell_context_layouts_match_tab_roles() -> None:
+    """Hardware / Dataset keep right context panels, Simulation does not.
+
+    Simulation moved its metrics + run guide into the left rail so the
+    central truth/reconstruction/voltage plots get the right-column width.
     """
     window = EITWorkstation()
     _show_window(window)
@@ -396,25 +395,35 @@ def test_workflow_shell_tabs_share_right_context_minimum() -> None:
         # Hardware → FrameBrowser is the context widget
         assert window._hw_tab._frame_browser.minimumWidth() == expected_context_min
 
-        # Simulation → splitter child #2 is the context widget
+        # Simulation → metrics and guide live in the left rail footer,
+        # leaving only left controls + center visualizations in the splitter.
         sim_splitter = window._sim_tab._shell._main_splitter
-        assert sim_splitter.widget(2).minimumWidth() == expected_context_min
+        assert sim_splitter.count() == 2
+        assert sim_splitter.widget(1) is window._sim_tab.results_widget
+        assert (
+            window._sim_tab.metrics_panel.parent() is window._sim_tab._left_status_panel
+        )
+        assert (
+            window._sim_tab._run_guide_box.parent()
+            is window._sim_tab._left_status_panel
+        )
+        window._tab_widget.setCurrentWidget(window._sim_tab)
+        _get_app().processEvents()
+        assert window._sim_tab._left_status_panel.isVisible()
+        assert window._sim_tab._left_status_panel.height() > 0
 
         # Dataset → DatasetSummaryPanel is the context widget
         assert window._dataset_tab._summary_panel.minimumWidth() == expected_context_min
 
-        # All three WorkflowShell tabs request the same right-pane
-        # default so the pane width doesn't visibly jump as the user
-        # switches between them.  The shared default was reduced
-        # alongside the minimums so the tab content fully fits a
-        # 1280-px laptop.
+        # Tabs that still expose a right pane request the same default
+        # so their context width doesn't visibly jump on tab switch.
         expected_default = 240
         for shell in (
             window._hw_tab._shell,
-            window._sim_tab._shell,
             window._dataset_tab._shell,
         ):
             assert shell._splitter_sizes[2] == expected_default
+        assert window._sim_tab._shell._splitter_sizes == [460, 720]
     finally:
         _close_window(window)
 

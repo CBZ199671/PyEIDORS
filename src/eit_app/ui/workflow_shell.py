@@ -20,7 +20,7 @@ from eit_app.ui.theme import set_embedded_step_panel
 
 
 class WorkflowShell(QWidget):
-    """Reusable left-steps / center-workspace / right-context layout."""
+    """Reusable left-steps / center-workspace / optional right-context layout."""
 
     _TAB_BUTTON_HEIGHT = 30
 
@@ -29,8 +29,9 @@ class WorkflowShell(QWidget):
         *,
         steps: Sequence[tuple[str, QWidget]],
         center_widget: QWidget,
-        context_widget: QWidget,
+        context_widget: QWidget | None,
         left_footer: QWidget | None = None,
+        left_footer_stretch: int = 1,
         compact_toolbox: bool = False,
         step_min_width: int = 220,
         context_min_width: int = 200,
@@ -46,6 +47,7 @@ class WorkflowShell(QWidget):
             center_widget=center_widget,
             context_widget=context_widget,
             left_footer=left_footer,
+            left_footer_stretch=left_footer_stretch,
             compact_toolbox=compact_toolbox,
             step_min_width=step_min_width,
             context_min_width=context_min_width,
@@ -58,8 +60,9 @@ class WorkflowShell(QWidget):
         *,
         steps: Sequence[tuple[str, QWidget]],
         center_widget: QWidget,
-        context_widget: QWidget,
+        context_widget: QWidget | None,
         left_footer: QWidget | None,
+        left_footer_stretch: int,
         compact_toolbox: bool,
         step_min_width: int,
         context_min_width: int,
@@ -116,22 +119,25 @@ class WorkflowShell(QWidget):
         else:
             left_layout.addWidget(self._toolbox, 1)
         if left_footer is not None:
-            left_layout.addWidget(left_footer, 1)
+            left_layout.addWidget(left_footer, left_footer_stretch)
         elif compact_toolbox:
             left_layout.addStretch(1)
         left_scroll.setWidget(left_container)
         self._left_scroll = left_scroll
 
         center_widget.setMinimumWidth(center_min_width)
-        context_widget.setMinimumWidth(context_min_width)
 
         self._main_splitter.addWidget(left_scroll)
         self._main_splitter.addWidget(center_widget)
-        self._main_splitter.addWidget(context_widget)
         self._main_splitter.setStretchFactor(0, 0)
         self._main_splitter.setStretchFactor(1, 1)
-        self._main_splitter.setStretchFactor(2, 0)
-        self._main_splitter.setSizes(self._splitter_sizes)
+        if context_widget is not None:
+            context_widget.setMinimumWidth(context_min_width)
+            self._main_splitter.addWidget(context_widget)
+            self._main_splitter.setStretchFactor(2, 0)
+            self._main_splitter.setSizes(self._splitter_sizes)
+        else:
+            self._main_splitter.setSizes(self._splitter_sizes[:2])
 
         root.addWidget(self._main_splitter)
 

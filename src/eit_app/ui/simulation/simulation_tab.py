@@ -38,11 +38,11 @@ class SimulationTab(QWidget):
         self._results_widget = SimulationResultsWidget()
         self._metrics_panel = MetricsPanel()
 
-        context_widget = QWidget()
-        context_layout = QVBoxLayout(context_widget)
-        context_layout.setContentsMargins(0, 0, 0, 0)
-        context_layout.setSpacing(6)
-        context_layout.addWidget(self._metrics_panel)
+        self._left_status_panel = QWidget()
+        status_layout = QVBoxLayout(self._left_status_panel)
+        status_layout.setContentsMargins(0, 0, 0, 0)
+        status_layout.setSpacing(6)
+        status_layout.addWidget(self._metrics_panel)
 
         self._run_guide_box = QGroupBox("")  # title assigned by _retranslate
         guide_layout = QVBoxLayout(self._run_guide_box)
@@ -61,8 +61,7 @@ class SimulationTab(QWidget):
         set_subtle_value(self._runguide_hint)
         guide_layout.addWidget(self._runguide_hint)
         guide_layout.addStretch()
-        context_layout.addWidget(self._run_guide_box)
-        context_layout.addStretch()
+        status_layout.addWidget(self._run_guide_box)
 
         # Step titles filled in by _retranslate below.
         # context_min_width unified to 300px across all WorkflowShell
@@ -75,15 +74,20 @@ class SimulationTab(QWidget):
                 ("", self._inverse_panel),
             ],
             center_widget=self._results_widget,
-            context_widget=context_widget,
+            # Simulation keeps quality metrics + flow hints in the left
+            # rail so the visualization workspace receives the width
+            # formerly consumed by the right context column.
+            context_widget=None,
+            left_footer=self._left_status_panel,
+            left_footer_stretch=0,
             # step_min_width sized to the densest simulation step
             # panel (mesh setup ≈ 480 px) — see Hardware tab for the
             # rationale.
             step_min_width=460,
-            context_min_width=220,
             # Total opens at ~1180 px so the simulation tab fits a
-            # 1280-px laptop without horizontal scroll.
-            splitter_sizes=(460, 480, 240),
+            # 1280-px laptop while giving the result plots the space
+            # previously reserved for the right context column.
+            splitter_sizes=(460, 720),
             parent=self,
         )
 
