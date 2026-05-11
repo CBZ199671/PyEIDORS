@@ -815,7 +815,8 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     assert inv._method_combo.isEnabled()
     assert not inv._alpha_spin.isEnabled()
     assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
-    assert inv._iter_spin.isEnabled()
+    assert inv._iter_spin.isHidden()
+    assert not inv._iter_spin.isEnabled()
 
     inv.set_running(True)
     app.processEvents()
@@ -831,6 +832,8 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     assert inv._recon_btn.isEnabled()
     assert inv._method_combo.isEnabled()
     assert not inv._alpha_spin.isEnabled()
+    assert inv._iter_spin.isHidden()
+    assert not inv._iter_spin.isEnabled()
     inv.close()
     inv.deleteLater()
     app.processEvents()
@@ -853,11 +856,16 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     assert "eidors_one_step_noser" not in methods
     assert "eidors_abs_gn" not in methods
     assert "eidors_demo3d_tv" not in methods
+    assert "absolute_gn" in methods
     assert inv.get_config()["method"] == "noser_rm"
     assert inv._method_combo.toolTip()
 
     inv.set_config({"method": "eidors_one_step_noser"})
     assert inv.get_config()["method"] == "debug_fine_mesh_noser"
+
+    inv.set_config({"method": "eidors_abs_gn"})
+    assert inv.get_config()["method"] == "absolute_gn"
+    assert "Absolute" in inv._method_combo.toolTip()
 
     inv.set_config({"method": "noser_rm"})
     assert inv.get_config()["method"] == "noser_rm"
@@ -898,6 +906,50 @@ def test_simulation_inverse_panel_hyperparameter_semantics_follow_route() -> Non
     assert "HDF5" in inv._alpha_spin.toolTip()
     assert "α" in inv._alpha_spin.toolTip()
     assert inv.get_config()["regularization_alpha"] == pytest.approx(3.5)
+
+    inv.close()
+    inv.deleteLater()
+    app.processEvents()
+
+
+@pytest.mark.gui
+def test_simulation_inverse_panel_v116_iterations_only_for_absolute_route() -> None:
+    from eit_app.ui.simulation.inverse_problem_panel import InverseProblemPanel
+
+    app = _get_app()
+    inv = InverseProblemPanel()
+    inv.show()
+    app.processEvents()
+
+    assert inv.get_config()["method"] == "noser_rm"
+    assert inv._iter_spin.isHidden()
+    assert inv._lbl_iter.isHidden()
+    assert not inv._iter_spin.isEnabled()
+
+    inv.set_config({"method": "debug_full_gn", "max_iterations": 7})
+    app.processEvents()
+    assert inv.get_config()["method"] == "debug_full_gn"
+    assert inv._iter_spin.isHidden()
+    assert not inv._iter_spin.isEnabled()
+    assert inv.get_config()["max_iterations"] == 7
+
+    inv.set_config({"method": "absolute_gn", "max_iterations": 7})
+    app.processEvents()
+    assert inv.get_config()["method"] == "absolute_gn"
+    assert not inv._iter_spin.isHidden()
+    assert not inv._lbl_iter.isHidden()
+    assert inv._iter_spin.isEnabled()
+    assert inv._iter_spin.toolTip()
+
+    inv.set_running(True)
+    app.processEvents()
+    assert not inv._iter_spin.isHidden()
+    assert not inv._iter_spin.isEnabled()
+
+    inv.set_running(False)
+    app.processEvents()
+    assert not inv._iter_spin.isHidden()
+    assert inv._iter_spin.isEnabled()
 
     inv.close()
     inv.deleteLater()
@@ -3602,6 +3654,60 @@ def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
     assert request.metadata["hyperparameter_ui_name"] == "alpha"
     assert request.metadata["hyperparameter_ui_locked"] is False
     assert request.metadata["hyperparameter_ui_value"] == pytest.approx(1.0)
+    assert request.metadata["regularization_alpha_applied"] is True
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_absolute_gn_route_v116_uses_absolute_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "absolute_gn",
+            "regularization_alpha": 1.25,
+            "max_iterations": 7,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.method == "gn-absolute"
+    assert request.max_iterations == 7
+    assert request.metadata["reconstruction_runtime"] == "full_gn"
+    assert request.metadata["simulation_inverse_route"] == "absolute_gn"
+    assert request.metadata["simulation_inverse_route_kind"] == "absolute"
+    assert request.metadata["simulation_inverse_debug_route"] is False
+    assert request.metadata["absolute_preset"] == "eidors_abs_gn"
+    assert request.metadata.get("online_hot_path") != "rm_matmul"
+    assert "difference_lambda" not in request.metadata
+    assert request.regularization_alpha == pytest.approx(1.25)
+    assert request.metadata["hyperparameter_ui_name"] == "alpha"
+    assert request.metadata["hyperparameter_ui_locked"] is False
+    assert request.metadata["hyperparameter_ui_value"] == pytest.approx(1.25)
     assert request.metadata["regularization_alpha_applied"] is True
 
     window._sim_state.inverse_running = False

@@ -421,7 +421,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.hint": "Reconstruct the conductivity distribution from boundary voltages.",
     "sim.inverse.method_label": "Method:",
     "sim.inverse.alpha_label": "Regularization \u03b1:",
-    "sim.inverse.alpha_tooltip": "Applied only by the iterative full-GN debug route.",
+    "sim.inverse.alpha_tooltip": (
+        "Applied by absolute GN and the debug full-GN route; RM/single-step "
+        "routes do not use it."
+    ),
     "sim.inverse.lambda_eff_locked_label": "\u03bb_eff (locked):",
     "sim.inverse.lambda_eff_locked_tooltip": (
         "Fixed at \u03bb_eff=1e-2 for single-step/RM routes; the one-step "
@@ -433,6 +436,10 @@ TRANSLATIONS: dict[str, str] = {
         "used as \u03b1."
     ),
     "sim.inverse.iterations_label": "Max iterations:",
+    "sim.inverse.iterations_tooltip": (
+        "Used only by the absolute GN route; difference/RM algorithms are "
+        "single-step or cached-matrix routes and do not accept this parameter."
+    ),
     "sim.inverse.reconstruct_button": "Reconstruct",
     "sim.inverse.save_button": "Save Results",
     "sim.inverse.status_reconstructing": "Reconstructing\u2026",
@@ -456,6 +463,11 @@ TRANSLATIONS: dict[str, str] = {
         "3D GREIT registry route: signs the current mesh/electrode/protocol "
         "config, loads an exact HDF5 hit or builds a native GREIT artifact in "
         "the worker, then applies RM @ dv."
+    ),
+    "sim.inverse.method.absolute_gn.tooltip": (
+        "Absolute imaging: estimates absolute conductivity directly from the "
+        "target boundary voltages without a reference frame; iterative full-GN "
+        "cold path, suitable for small-mesh comparisons."
     ),
     "sim.inverse.method.debug_full_gn.tooltip": (
         "Debug baseline: iterative full GN cold path; useful for comparison, not "

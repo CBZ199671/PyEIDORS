@@ -424,12 +424,13 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.hint": "\u4ece\u8fb9\u754c\u7535\u538b\u91cd\u6784\u7535\u5bfc\u7387\u5206\u5e03\u3002",  # 从边界电压重构电导率分布。
     "sim.inverse.method_label": "\u65b9\u6cd5\uff1a",  # 方法：
     "sim.inverse.alpha_label": "\u6b63\u5219\u5316 \u03b1\uff1a",  # 正则化 α：
-    "sim.inverse.alpha_tooltip": "\u4ec5\u8fed\u4ee3 full-GN \u8c03\u8bd5\u8def\u7531\u4f7f\u7528\u8be5\u503c\u3002",  # 仅迭代 full-GN 调试路由使用该值。
+    "sim.inverse.alpha_tooltip": "\u7edd\u5bf9 GN \u4e0e\u8c03\u8bd5 full-GN \u8def\u7531\u4f7f\u7528\u8be5\u503c\uff1bRM/\u5355\u6b65\u8def\u7531\u4e0d\u4f7f\u7528\u3002",  # 绝对 GN 与调试 full-GN 路由使用该值；RM/单步路由不使用。
     "sim.inverse.lambda_eff_locked_label": "\u03bb_eff\uff08\u9501\u5b9a\uff09\uff1a",  # λ_eff（锁定）：
     "sim.inverse.lambda_eff_locked_tooltip": "\u5355\u6b65/RM \u8def\u7531\u56fa\u5b9a \u03bb_eff=1e-2\uff1b\u516c\u5f0f\u4f7f\u7528 hp^2 RtR\uff0chp=0.1\u3002",  # 单步/RM 路由固定 λ_eff=1e-2；公式使用 hp^2 RtR，hp=0.1。
     "sim.inverse.artifact_weight_label": "Artifact weight\uff1a",  # Artifact weight：
     "sim.inverse.artifact_weight_tooltip": "GREIT \u6743\u91cd\u5b58\u5728 HDF5 artifact \u4e2d\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\u3002",  # GREIT 权重存在 HDF5 artifact 中；该值不作为 α 使用。
     "sim.inverse.iterations_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：
+    "sim.inverse.iterations_tooltip": "\u4ec5\u7edd\u5bf9\u6210\u50cf GN \u8def\u7531\u4f7f\u7528\uff1b\u5dee\u5206/RM \u7b97\u6cd5\u662f\u5355\u6b65\u6216\u7f13\u5b58\u77e9\u9635\u8def\u7531\uff0c\u4e0d\u63a5\u53d7\u8be5\u53c2\u6570\u3002",  # 仅绝对成像 GN 路由使用；差分/RM 算法是单步或缓存矩阵路由，不接受该参数。
     "sim.inverse.reconstruct_button": "\u91cd\u6784",  # 重构
     "sim.inverse.save_button": "\u4fdd\u5b58\u7ed3\u679c",  # 保存结果
     "sim.inverse.status_reconstructing": "\u91cd\u6784\u4e2d\u2026",  # 重构中…
@@ -438,6 +439,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-Laplacian artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Laplace RM 平滑路由：冷构建或复用 HDF5 graph-Laplacian artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.curvature_rm.tooltip": "Curvature RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-LtL artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Curvature RM 平滑路由：冷构建或复用 HDF5 graph-LtL artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.greit3d_rm.tooltip": "3D GREIT registry \u8def\u7531\uff1a\u6309\u5f53\u524d\u7f51\u683c/\u7535\u6781/\u534f\u8bae\u751f\u6210\u7cbe\u786e\u7b7e\u540d\uff0c\u547d\u4e2d\u5219\u52a0\u8f7d HDF5\uff0c\u7f3a\u5931\u5219\u5728 worker \u6784\u5efa native GREIT artifact\uff0c\u518d\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # 3D GREIT registry 路由：按当前网格/电极/协议生成精确签名，命中则加载 HDF5，缺失则在 worker 构建 native GREIT artifact，再用 RM @ dv 热路径重构。
+    "sim.inverse.method.absolute_gn.tooltip": "\u7edd\u5bf9\u6210\u50cf\uff1a\u76f4\u63a5\u4ece\u76ee\u6807\u8fb9\u754c\u7535\u538b\u4f30\u8ba1\u7edd\u5bf9\u7535\u5bfc\u7387\uff0c\u4e0d\u4f9d\u8d56\u53c2\u8003\u5e27\uff1b\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5c0f\u7f51\u683c\u5bf9\u7167\u3002",  # 绝对成像：直接从目标边界电压估计绝对电导率，不依赖参考帧；迭代 full GN 冷路径，适合小网格对照。
     "sim.inverse.method.debug_full_gn.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5bf9\u7167\uff0c\u4e0d\u662f\u5b9e\u65f6 RM \u8def\u7531\u3002",  # 调试基线：迭代 full GN 冷路径，适合对照，不是实时 RM 路由。
     # ==================================================================
     # Simulation tab — Right-side Metrics panel

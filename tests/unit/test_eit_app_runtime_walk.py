@@ -226,7 +226,7 @@ def test_simulation_tab_forward_then_inverse_each_method() -> None:
     """Drive forward solve + each inverse algorithm on a 2D mesh.
 
     Slow integration test (≥3 minutes): the real dolfinx forward solver
-    runs once, then each of the six SIMULATION_INVERSE_METHODS gets a
+    runs once, then each SIMULATION_INVERSE_METHODS route gets a
     real reconstruction.  Tagged ``slow`` so the default test run skips
     it; opt in with ``-m slow`` or by naming the test directly.
     """

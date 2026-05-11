@@ -3055,8 +3055,14 @@ def _run_full_gn_request(
     else:
         emit("Reusing cached reconstruction system...")
 
-    emit("Running reconstruction...")
     method = req.method.strip().lower()
+    if method == "gn-absolute" and getattr(system, "reconstructor", None) is not None:
+        max_iterations = max(1, int(req.max_iterations))
+        system.reconstructor.max_iterations = max_iterations
+        meta["max_iterations_requested"] = max_iterations
+        meta["max_iterations_effective"] = max_iterations
+
+    emit("Running reconstruction...")
     if method == "gn-absolute":
         recon = system.absolute_reconstruct(measurement_data=tgt_eit)
     elif method == "sparse-bayes-absolute":

@@ -4054,6 +4054,11 @@ class EITWorkstation(QMainWindow):
                     ),
                 }
             )
+        elif route == "absolute_gn":
+            resolved_method = "gn-absolute"
+            reconstruction_runtime = "full_gn"
+            absolute_preset = "eidors_abs_gn"
+            route_kind = "absolute"
         else:
             # Unknown route → safest fallback: iterative GN, no RM/cache claim.
             resolved_method = route or "gn-difference"

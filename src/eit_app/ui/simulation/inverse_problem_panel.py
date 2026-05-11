@@ -24,12 +24,15 @@ SIMULATION_INVERSE_METHODS = [
     "laplace_rm",
     "curvature_rm",
     "greit3d_rm",
+    "absolute_gn",
     "debug_fine_mesh_noser",
     "debug_full_gn",
 ]
 _LEGACY_METHOD_ALIASES = {
     "eidors_one_step_noser": "debug_fine_mesh_noser",
-    "eidors_abs_gn": "debug_full_gn",
+    "eidors_abs_gn": "absolute_gn",
+    "gn-absolute": "absolute_gn",
+    "gn_absolute": "absolute_gn",
     "eidors_demo3d_tv": "debug_full_gn",
 }
 _METHOD_TOOLTIP_KEYS = {
@@ -38,6 +41,7 @@ _METHOD_TOOLTIP_KEYS = {
     "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
     "curvature_rm": "sim.inverse.method.curvature_rm.tooltip",
     "greit3d_rm": "sim.inverse.method.greit3d_rm.tooltip",
+    "absolute_gn": "sim.inverse.method.absolute_gn.tooltip",
     "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
 }
 CANONICAL_SINGLE_STEP_LAMBDA_EFF = 1.0e-2
@@ -48,6 +52,7 @@ _LOCKED_LAMBDA_EFF_METHODS = {
     "debug_fine_mesh_noser",
 }
 _ARTIFACT_HYPERPARAM_METHODS = {"greit3d_rm"}
+_ITERATION_CONTROL_METHODS = {"absolute_gn"}
 
 
 def normalize_simulation_inverse_method(method: str) -> str:
@@ -67,6 +72,7 @@ class InverseProblemPanel(QGroupBox):
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
         self._editable_alpha_value = 1.0
+        self._running = False
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -180,15 +186,16 @@ class InverseProblemPanel(QGroupBox):
         self._status_label.setText(text)
 
     def set_running(self, running: bool) -> None:
+        self._running = running
         self._recon_btn.setEnabled(not running)
         # Lock adjacent inputs during busy so changing α / method / iters
         # mid-flight doesn't desync the next run's request.
         self._method_combo.setEnabled(not running)
-        self._iter_spin.setEnabled(not running)
         if running:
             self._alpha_spin.setEnabled(False)
+            self._iter_spin.setEnabled(False)
         else:
-            self._update_hyperparameter_control()
+            self._update_method_state()
         self._busy_bar.setVisible(running)
         if running:
             self._status_label.setText(t("sim.inverse.status_reconstructing"))
@@ -215,6 +222,7 @@ class InverseProblemPanel(QGroupBox):
     def _update_method_state(self) -> None:
         self._update_method_tooltip()
         self._update_hyperparameter_control()
+        self._update_iteration_control()
 
     def _update_method_tooltip(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
@@ -240,8 +248,18 @@ class InverseProblemPanel(QGroupBox):
                 self._lbl_alpha.setText(t("sim.inverse.alpha_label"))
                 tooltip = t("sim.inverse.alpha_tooltip")
                 self._alpha_spin.setValue(self._editable_alpha_value)
-                self._alpha_spin.setEnabled(True)
+                self._alpha_spin.setEnabled(not self._running)
         finally:
             self._alpha_spin.blockSignals(blocked)
         self._lbl_alpha.setToolTip(tooltip)
         self._alpha_spin.setToolTip(tooltip)
+
+    def _update_iteration_control(self) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        visible = method in _ITERATION_CONTROL_METHODS
+        self._lbl_iter.setVisible(visible)
+        self._iter_spin.setVisible(visible)
+        self._iter_spin.setEnabled(visible and not self._running)
+        tooltip = t("sim.inverse.iterations_tooltip") if visible else ""
+        self._lbl_iter.setToolTip(tooltip)
+        self._iter_spin.setToolTip(tooltip)
