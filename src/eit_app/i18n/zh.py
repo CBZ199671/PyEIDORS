@@ -80,11 +80,16 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_display_points": "\u70b9\u4e91\u6e32\u67d3",  # 点云渲染
     "sim.results.viewer3d_display_points_short": "\u70b9\u4e91",  # 点云
     "sim.results.viewer3d_opacity": "\u900f\u660e\u5ea6",  # 透明度
+    "sim.results.viewer3d_opacity_short": "\u900f\u660e",  # 透明
     "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",  # 突出内含物
+    "sim.results.viewer3d_highlight_short": "\u5185\u542b",  # 内含
     "sim.results.viewer3d_wireframe": "\u8f6e\u5ed3\u7ebf",  # 轮廓线
+    "sim.results.viewer3d_wireframe_short": "\u8f6e\u5ed3",  # 轮廓
     "sim.results.viewer3d_reset": "\u590d\u4f4d\u89c6\u89d2",  # 复位视角
+    "sim.results.viewer3d_reset_short": "\u590d\u4f4d",  # 复位
     # 仿真显示：电极轮廓显示开关。2D 渲染线段，3D 渲染圆柱面贴片。
     "sim.results.electrodes_toggle": "\u663e\u793a\u7535\u6781",  # 显示电极
+    "sim.results.electrodes_toggle_short": "\u7535\u6781",  # 电极
     # ------------------------------------------------------------------
     # Help menu + About dialog.
     # ------------------------------------------------------------------

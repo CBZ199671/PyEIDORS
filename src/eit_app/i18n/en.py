@@ -79,9 +79,14 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_display_points": "Point-cloud rendering",
     "sim.results.viewer3d_display_points_short": "Points",
     "sim.results.viewer3d_opacity": "Opacity",
+    "sim.results.viewer3d_opacity_short": "Alpha",
     "sim.results.viewer3d_highlight": "Highlight inclusions",
+    "sim.results.viewer3d_highlight_short": "Inclusion",
     "sim.results.viewer3d_wireframe": "Outline edges",
+    "sim.results.viewer3d_wireframe_short": "Edges",
     "sim.results.viewer3d_reset": "Reset view",
+    "sim.results.viewer3d_reset_short": "Reset",
+    "sim.results.electrodes_toggle_short": "Elec.",
     "sim.results.electrodes_toggle": "Show electrodes",
     # ------------------------------------------------------------------
     # Help menu + About dialog.

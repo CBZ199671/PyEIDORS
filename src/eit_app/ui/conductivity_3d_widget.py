@@ -53,9 +53,10 @@ from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QFrame,
-    QHBoxLayout,
+    QGridLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QStackedLayout,
     QVBoxLayout,
@@ -519,27 +520,29 @@ class Conductivity3DWidget(QWidget):
 
         outer.addWidget(self._stack_host, 1)
 
-        # Control row: display mode + opacity slider + visibility toggles + reset.
+        # Control panel: display mode + opacity slider + visibility toggles + reset.
         #
-        # Sizing here is deliberately *soft* — every child uses a
-        # shrinkable size policy and no fixed widths.  The old
-        # implementation pinned the slider to 120 px and the opacity
-        # readout to 36 px, which together pushed the whole simulation
-        # tab's minimum width past 1200 px and killed the main
-        # window's responsive shrink behaviour.
+        # The tools are deliberately split across two compact rows.
+        # A single long row looks fine in maximized windows, but each
+        # top-pane slot can be only ~500 px wide at the default launch
+        # size, and a one-line bar makes labels/buttons clip or spill
+        # across the splitter.
         self._controls = QFrame()
         self._controls.setObjectName("conductivity3DControls")
         self._controls.setSizePolicy(
-            self._controls.sizePolicy().horizontalPolicy(),
-            self._controls.sizePolicy().verticalPolicy(),
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum,
         )
-        bar = QHBoxLayout(self._controls)
-        bar.setContentsMargins(6, 2, 6, 2)
-        bar.setSpacing(6)
+        grid = QGridLayout(self._controls)
+        grid.setContentsMargins(6, 2, 6, 2)
+        grid.setHorizontalSpacing(6)
+        grid.setVerticalSpacing(2)
+        self._controls_layout = grid
 
         self._display_mode_label = QLabel("")
         set_hint_text(self._display_mode_label)
-        bar.addWidget(self._display_mode_label)
+        self._display_mode_label.setMinimumWidth(0)
+        grid.addWidget(self._display_mode_label, 0, 0)
 
         self._display_mode_group = QButtonGroup(self)
         self._display_mode_group.setExclusive(True)
@@ -547,49 +550,68 @@ class Conductivity3DWidget(QWidget):
         self._volume_mode_btn.setCheckable(True)
         self._volume_mode_btn.setChecked(True)
         set_button_role(self._volume_mode_btn, "tertiary")
+        self._volume_mode_btn.setMinimumWidth(34)
+        self._volume_mode_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._volume_mode_btn.clicked.connect(
             lambda checked: (
                 self.set_display_mode(DISPLAY_MODE_VOLUME) if checked else None
             )
         )
         self._display_mode_group.addButton(self._volume_mode_btn)
-        bar.addWidget(self._volume_mode_btn)
+        grid.addWidget(self._volume_mode_btn, 0, 1)
 
         self._points_mode_btn = QPushButton("")
         self._points_mode_btn.setCheckable(True)
         set_button_role(self._points_mode_btn, "tertiary")
+        self._points_mode_btn.setMinimumWidth(48)
+        self._points_mode_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._points_mode_btn.clicked.connect(
             lambda checked: (
                 self.set_display_mode(DISPLAY_MODE_POINTS) if checked else None
             )
         )
         self._display_mode_group.addButton(self._points_mode_btn)
-        bar.addWidget(self._points_mode_btn)
+        grid.addWidget(self._points_mode_btn, 0, 2)
 
         self._opacity_label = QLabel("")
         set_hint_text(self._opacity_label)
-        bar.addWidget(self._opacity_label)
+        self._opacity_label.setMinimumWidth(0)
+        grid.addWidget(self._opacity_label, 1, 0)
 
         self._opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self._opacity_slider.setRange(5, 100)
         self._opacity_slider.setValue(45)
-        self._opacity_slider.setMinimumWidth(60)
+        self._opacity_slider.setMinimumWidth(48)
+        self._opacity_slider.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         self._opacity_slider.valueChanged.connect(self._on_opacity_changed)
-        bar.addWidget(self._opacity_slider, 1)
+        grid.addWidget(self._opacity_slider, 1, 1, 1, 3)
 
         self._opacity_value = QLabel("0.45")
         set_hint_text(self._opacity_value)
-        bar.addWidget(self._opacity_value)
+        self._opacity_value.setMinimumWidth(0)
+        grid.addWidget(self._opacity_value, 1, 4)
 
         self._highlight_check = QCheckBox("")
         self._highlight_check.setChecked(True)
+        self._highlight_check.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._highlight_check.toggled.connect(self._on_highlight_toggled)
-        bar.addWidget(self._highlight_check)
+        grid.addWidget(self._highlight_check, 1, 5)
 
         self._wire_check = QCheckBox("")
         self._wire_check.setChecked(True)
+        self._wire_check.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._wire_check.toggled.connect(self._on_wire_toggled)
-        bar.addWidget(self._wire_check)
+        grid.addWidget(self._wire_check, 1, 6)
 
         # Electrode overlay toggle.  Disabled until a forward result
         # provides actual electrode geometry — checking it without a
@@ -597,13 +619,21 @@ class Conductivity3DWidget(QWidget):
         self._electrode_check = QCheckBox("")
         self._electrode_check.setChecked(False)
         self._electrode_check.setEnabled(False)
+        self._electrode_check.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._electrode_check.toggled.connect(self._on_electrode_toggled)
-        bar.addWidget(self._electrode_check)
+        grid.addWidget(self._electrode_check, 1, 7)
 
         self._reset_btn = QPushButton("")
         set_button_role(self._reset_btn, "tertiary")
+        self._reset_btn.setMinimumWidth(64)
+        self._reset_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
         self._reset_btn.clicked.connect(self._reset_camera)
-        bar.addWidget(self._reset_btn)
+        grid.addWidget(self._reset_btn, 0, 7)
+        grid.setColumnStretch(3, 1)
 
         outer.addWidget(self._controls)
         # Hidden by default — only shown while the VTK interactor is
@@ -1961,11 +1991,16 @@ class Conductivity3DWidget(QWidget):
         self._volume_mode_btn.setToolTip(t("sim.results.viewer3d_display_volume"))
         self._points_mode_btn.setText(t("sim.results.viewer3d_display_points_short"))
         self._points_mode_btn.setToolTip(t("sim.results.viewer3d_display_points"))
-        self._opacity_label.setText(t("sim.results.viewer3d_opacity"))
-        self._highlight_check.setText(t("sim.results.viewer3d_highlight"))
-        self._wire_check.setText(t("sim.results.viewer3d_wireframe"))
-        self._electrode_check.setText(t("sim.results.electrodes_toggle"))
-        self._reset_btn.setText(t("sim.results.viewer3d_reset"))
+        self._opacity_label.setText(t("sim.results.viewer3d_opacity_short"))
+        self._opacity_label.setToolTip(t("sim.results.viewer3d_opacity"))
+        self._highlight_check.setText(t("sim.results.viewer3d_highlight_short"))
+        self._highlight_check.setToolTip(t("sim.results.viewer3d_highlight"))
+        self._wire_check.setText(t("sim.results.viewer3d_wireframe_short"))
+        self._wire_check.setToolTip(t("sim.results.viewer3d_wireframe"))
+        self._electrode_check.setText(t("sim.results.electrodes_toggle_short"))
+        self._electrode_check.setToolTip(t("sim.results.electrodes_toggle"))
+        self._reset_btn.setText(t("sim.results.viewer3d_reset_short"))
+        self._reset_btn.setToolTip(t("sim.results.viewer3d_reset"))
         if self._last_image is None and not self._caption_label.text():
             self._show_caption(t("sim.results.viewer3d_no_data"), kind="placeholder")
 

@@ -18,6 +18,7 @@ from eit_app.controllers import reconstruction_controller as rc  # noqa: E402
 from eit_app.controllers.reconstruction_controller import (  # noqa: E402
     _resolve_reconstruction_runtime,
 )
+from eit_app.i18n import current_language, set_language  # noqa: E402
 from eit_app.models.frame_model import FrameData  # noqa: E402
 from eit_app.models.forward_model_config import (  # noqa: E402
     ForwardModelConfig,
@@ -1322,6 +1323,46 @@ def test_3d_display_mode_switch_rerenders_cached_payload(monkeypatch):
     assert widget._points_mode_btn.isChecked()
     assert not widget._volume_mode_btn.isChecked()
     widget.close()
+
+
+@pytest.mark.parametrize("language", ["zh", "en"])
+def test_v114_3d_controls_use_compact_two_row_layout(language: str) -> None:
+    app = _get_app()
+    previous_language = current_language()
+    set_language(language, persist=False)
+    widget = Conductivity3DWidget("Conductivity")
+    try:
+        widget._controls.show()
+        app.processEvents()
+
+        assert widget._controls_layout.rowCount() == 2
+        assert widget._controls.minimumSizeHint().width() <= 440
+        assert widget._controls.minimumSizeHint().height() <= 64
+        assert (
+            widget._controls_layout.getItemPosition(
+                widget._controls_layout.indexOf(widget._reset_btn)
+            )[0]
+            == 0
+        )
+        for control in (
+            widget._opacity_slider,
+            widget._highlight_check,
+            widget._wire_check,
+            widget._electrode_check,
+        ):
+            row, _column, _row_span, _col_span = (
+                widget._controls_layout.getItemPosition(
+                    widget._controls_layout.indexOf(control)
+                )
+            )
+            assert row == 1
+        assert widget._highlight_check.toolTip()
+        assert widget._wire_check.toolTip()
+        assert widget._electrode_check.toolTip()
+        assert widget._reset_btn.toolTip()
+    finally:
+        widget.close()
+        set_language(previous_language, persist=False)
 
 
 def test_matplotlib_point_cloud_mode_renders_cell_center_collection():
