@@ -1294,6 +1294,111 @@ def test_single_step_cached_3d_rm_auto_build_forces_dense_jacobian_context(
     )
 
 
+def test_single_step_cached_2d_cuda_rm_auto_build_uses_cuda_context(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    reference = np.ones(4, dtype=float)
+    target = reference + np.array([0.0, 0.20, -0.10, 0.05], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+            [0.2, 0.5],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(2, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    build_calls: list[dict[str, object]] = []
+
+    def _fake_build_shared_context(**kwargs):
+        build_calls.append(dict(kwargs))
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: None)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=_fake_build_shared_context),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(4, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "mesh_dimension": 2,
+            "mesh_size": 0.1,
+            "simulation_inverse_route": "noser_rm",
+            "rm_regularization": "noser",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_device": "cpu",
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 1.0e-2,
+            "difference_mode": "normalized",
+            "difference_orientation": "target_minus_reference",
+            "solver_mode": "strict",
+            "jacobian_representation": "auto",
+            "device": "cuda",
+            "petsc_device": "cuda",
+            "forward_backend": "dolfinx",
+            "mesh_family": "tetra",
+            "potential_order": 1,
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    assert result.error_msg is None
+    assert np.isfinite(result.conductivity).all()
+    assert len(build_calls) == 1
+    call = build_calls[0]
+    assert call["mesh_dim"] == 2
+    assert call["petsc_device"] == "cuda"
+    assert call["device"] == "cuda"
+    assert call["forward_backend"] == "dolfinx"
+    assert call["jacobian_representation"] == "dense"
+    assert call["cache_scope"] == "process"
+    assert call["difference_mode"] == "normalized"
+    assert (
+        result.metadata["solver_diagnostics"]["rm_metadata"][
+            "rm_jacobian_source_cache_scope"
+        ]
+        == "process"
+    )
+
+
 def test_single_step_cached_non_noser_rm_route_requires_artifact_before_dense_fallback(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
