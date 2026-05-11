@@ -31,6 +31,8 @@ from pyeidors.electrodes.layout import (  # noqa: E402
 )
 from eit_app.ui.conductivity_3d_widget import (  # noqa: E402
     Conductivity3DWidget,
+    DISPLAY_MODE_POINTS,
+    DISPLAY_MODE_VOLUME,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
     _cell_inhomogeneity_mask,
     _conductivity_color_limits,
@@ -993,6 +995,24 @@ def test_pyvista_offscreen_controls_keep_rendered_canvas(monkeypatch):
     widget.close()
 
 
+def test_pyvista_offscreen_backend_renders_point_cloud_mode(monkeypatch):
+    _get_app()
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    widget = Conductivity3DWidget("Conductivity")
+    widget.set_display_mode(DISPLAY_MODE_POINTS)
+
+    sigma, coords, cells = _inhomogeneous_tetra_payload()
+    widget.update_image(sigma, coords, cells, title="Truth")
+
+    assert widget._render_backend == "pyvista_offscreen"
+    assert widget._stack.currentWidget() is widget._offscreen_host
+    assert widget._offscreen_label.pixmap() is not None
+    assert widget._offscreen_mesh_actor is not None
+    assert widget._offscreen_highlight_actor is not None
+    widget.close()
+
+
 def test_pyvista_offscreen_drag_defaults_to_full_resolution_60fps(monkeypatch):
     _get_app()
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -1219,4 +1239,102 @@ def test_3d_widget_builds_pyvista_hex_grid():
     assert int(grid.celltypes[0]) == int(pv.CellType.HEXAHEDRON)
     assert kwargs["preference"] == "cell"
     assert fake_plotter.render_count == 1
+    widget.close()
+
+
+def test_3d_widget_point_cloud_mode_builds_cell_center_polydata():
+    pv = pytest.importorskip("pyvista")
+    _get_app()
+
+    class _FakeActor:
+        def __init__(self) -> None:
+            self.visible = True
+
+        def SetVisibility(self, visible):  # noqa: N802 (VTK API)
+            self.visible = bool(visible)
+
+        def GetProperty(self):  # noqa: N802 (VTK API)
+            return self
+
+        def SetOpacity(self, _opacity):  # noqa: N802 (VTK API)
+            pass
+
+    class _FakePlotter:
+        def __init__(self) -> None:
+            self.meshes = []
+            self.render_count = 0
+
+        def add_mesh(self, mesh, *args, **kwargs):
+            self.meshes.append((mesh, kwargs))
+            return _FakeActor()
+
+        def remove_actor(self, _actor, render=False):
+            pass
+
+        def reset_camera(self):
+            pass
+
+        def render(self):
+            self.render_count += 1
+
+    widget = Conductivity3DWidget("Hex")
+    widget.set_display_mode(DISPLAY_MODE_POINTS)
+    fake_plotter = _FakePlotter()
+    widget._plotter = fake_plotter
+
+    sigma, coords, cells = _hex_payload()
+    widget._build_scene(sigma, coords, cells)
+
+    cloud, kwargs = fake_plotter.meshes[0]
+    assert isinstance(cloud, pv.PolyData)
+    assert cloud.n_points == cells.shape[0]
+    np.testing.assert_allclose(cloud.points[0], coords[cells[0], :3].mean(axis=0))
+    assert kwargs["scalars"] == "sigma"
+    assert kwargs["render_points_as_spheres"] is True
+    assert kwargs["point_size"] >= 4.0
+    assert fake_plotter.render_count == 1
+    widget.close()
+
+
+def test_3d_display_mode_switch_rerenders_cached_payload(monkeypatch):
+    _get_app()
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    widget = Conductivity3DWidget("Conductivity")
+    calls: list[str] = []
+
+    def fake_offscreen_render(_sigma, _coords, _cells):
+        calls.append(widget.display_mode())
+        widget._render_backend = "pyvista_offscreen"
+        return True
+
+    monkeypatch.setattr(
+        widget,
+        "_render_pyvista_offscreen_scene",
+        fake_offscreen_render,
+    )
+
+    sigma, coords, cells = _tetra_payload()
+    widget.update_image(sigma, coords, cells, title="Truth")
+    widget.set_display_mode(DISPLAY_MODE_POINTS)
+
+    assert calls == [DISPLAY_MODE_VOLUME, DISPLAY_MODE_POINTS]
+    assert widget._points_mode_btn.isChecked()
+    assert not widget._volume_mode_btn.isChecked()
+    widget.close()
+
+
+def test_matplotlib_point_cloud_mode_renders_cell_center_collection():
+    _get_app()
+    widget = Conductivity3DWidget("Conductivity")
+    widget.set_display_mode(DISPLAY_MODE_POINTS)
+
+    sigma, coords, cells = _inhomogeneous_tetra_payload()
+    widget._render_matplotlib_scene(sigma, coords, cells)
+
+    assert widget._render_backend == "mpl3d"
+    assert widget._stack.currentWidget() is widget._mpl3d_host
+    assert widget._mpl3d_mesh_collection is not None
+    assert widget._mpl3d_mesh_facecolors is None
+    assert widget._mpl3d_highlight_collection is not None
     widget.close()

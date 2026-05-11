@@ -50,6 +50,7 @@ from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFrame,
     QHBoxLayout,
@@ -84,6 +85,9 @@ _OFFSCREEN_DRAG_FPS_ENV = "EIT_APP_3D_DRAG_FPS"
 _OFFSCREEN_DRAG_RENDER_SCALE_ENV = "EIT_APP_3D_DRAG_RENDER_SCALE"
 _OFFSCREEN_DRAG_IDLE_MS_ENV = "EIT_APP_3D_DRAG_IDLE_MS"
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
+DISPLAY_MODE_VOLUME = "volume"
+DISPLAY_MODE_POINTS = "points"
+DISPLAY_MODES = frozenset({DISPLAY_MODE_VOLUME, DISPLAY_MODE_POINTS})
 _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
 _MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
 _MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
@@ -130,6 +134,29 @@ def _conductivity_color_limits(cell_sigma: np.ndarray) -> tuple[float, float]:
     if sigma_max - sigma_min < 2.0 * floor:
         return median - floor, median + floor
     return sigma_min, sigma_max
+
+
+def _cell_center_sigma(
+    sigma: np.ndarray,
+    cells: np.ndarray,
+) -> tuple[np.ndarray, str]:
+    """Return cell-centered conductivity values for 3D display modes."""
+    values = np.asarray(sigma, dtype=float).reshape(-1)
+    if values.shape[0] == cells.shape[0]:
+        return values, "cell"
+    return values[cells].mean(axis=1), "point"
+
+
+def _cell_centers(coords: np.ndarray, cells: np.ndarray) -> np.ndarray:
+    return np.asarray(coords, dtype=float)[cells, :3].mean(axis=1)
+
+
+def _pyvista_point_size(n_cells: int) -> float:
+    return float(np.clip(1100.0 / max(np.sqrt(max(n_cells, 1)), 1.0), 4.0, 14.0))
+
+
+def _matplotlib_point_size(n_cells: int) -> float:
+    return float(np.clip(4500.0 / max(float(max(n_cells, 1)) ** 0.62, 1.0), 5.0, 32.0))
 
 
 def _env_flag(name: str) -> bool:
@@ -348,6 +375,7 @@ class Conductivity3DWidget(QWidget):
         self._electrode_geometry: ElectrodeGeometry | None = None
 
         self._render_backend = "caption"
+        self._display_mode = DISPLAY_MODE_VOLUME
         self._last_vtk_disabled_reason: str | None = None
         self._title_font = FontProperties(family=_plot_font_families(), size=14)
         self._mpl3d_colorbar = None
@@ -491,7 +519,7 @@ class Conductivity3DWidget(QWidget):
 
         outer.addWidget(self._stack_host, 1)
 
-        # Control row: opacity slider + visibility toggles + reset.
+        # Control row: display mode + opacity slider + visibility toggles + reset.
         #
         # Sizing here is deliberately *soft* — every child uses a
         # shrinkable size policy and no fixed widths.  The old
@@ -508,6 +536,35 @@ class Conductivity3DWidget(QWidget):
         bar = QHBoxLayout(self._controls)
         bar.setContentsMargins(6, 2, 6, 2)
         bar.setSpacing(6)
+
+        self._display_mode_label = QLabel("")
+        set_hint_text(self._display_mode_label)
+        bar.addWidget(self._display_mode_label)
+
+        self._display_mode_group = QButtonGroup(self)
+        self._display_mode_group.setExclusive(True)
+        self._volume_mode_btn = QPushButton("")
+        self._volume_mode_btn.setCheckable(True)
+        self._volume_mode_btn.setChecked(True)
+        set_button_role(self._volume_mode_btn, "tertiary")
+        self._volume_mode_btn.clicked.connect(
+            lambda checked: (
+                self.set_display_mode(DISPLAY_MODE_VOLUME) if checked else None
+            )
+        )
+        self._display_mode_group.addButton(self._volume_mode_btn)
+        bar.addWidget(self._volume_mode_btn)
+
+        self._points_mode_btn = QPushButton("")
+        self._points_mode_btn.setCheckable(True)
+        set_button_role(self._points_mode_btn, "tertiary")
+        self._points_mode_btn.clicked.connect(
+            lambda checked: (
+                self.set_display_mode(DISPLAY_MODE_POINTS) if checked else None
+            )
+        )
+        self._display_mode_group.addButton(self._points_mode_btn)
+        bar.addWidget(self._points_mode_btn)
 
         self._opacity_label = QLabel("")
         set_hint_text(self._opacity_label)
@@ -638,6 +695,28 @@ class Conductivity3DWidget(QWidget):
     def setTitle(self, title: str) -> None:
         self._default_title = title
         self._title_label.setText(title)
+
+    def display_mode(self) -> str:
+        return self._display_mode
+
+    def set_display_mode(self, mode: str) -> None:
+        """Switch between transparent volume and cell-center point-cloud views."""
+        if mode not in DISPLAY_MODES:
+            raise ValueError(f"unknown 3D display mode: {mode!r}")
+        if mode == self._display_mode:
+            self._sync_display_mode_buttons()
+            return
+
+        self._display_mode = mode
+        self._sync_display_mode_buttons()
+        if self._last_image is None:
+            return
+        sigma, coords, cells, title = self._last_image
+        self.update_image(sigma, coords, cells, title=title)
+
+    def _sync_display_mode_buttons(self) -> None:
+        self._volume_mode_btn.setChecked(self._display_mode == DISPLAY_MODE_VOLUME)
+        self._points_mode_btn.setChecked(self._display_mode == DISPLAY_MODE_POINTS)
 
     def update_image(
         self,
@@ -1040,6 +1119,70 @@ class Conductivity3DWidget(QWidget):
         pixmap.setDevicePixelRatio(target_dpr)
         self._offscreen_label.setPixmap(pixmap)
 
+    def _add_pyvista_point_cloud_actors(
+        self,
+        *,
+        pv,
+        plotter,
+        centers: np.ndarray,
+        cell_sigma: np.ndarray,
+        sigma_min: float,
+        sigma_max: float,
+        opacity: float,
+        text_color: tuple[float, float, float],
+        offscreen: bool,
+    ) -> None:
+        cloud = pv.PolyData(centers)
+        cloud["sigma"] = np.asarray(cell_sigma, dtype=float)
+        scalar_bar_y = 0.12 if offscreen else 0.05
+        scalar_bar_height = 0.55 if offscreen else 0.6
+        mesh_actor = plotter.add_mesh(
+            cloud,
+            scalars="sigma",
+            cmap="viridis",
+            clim=[sigma_min, sigma_max],
+            opacity=opacity,
+            render_points_as_spheres=True,
+            point_size=_pyvista_point_size(centers.shape[0]),
+            show_scalar_bar=True,
+            scalar_bar_args={
+                "title": "S/m",
+                "color": text_color,
+                "vertical": True,
+                "position_x": 0.88,
+                "position_y": scalar_bar_y,
+                "width": 0.06 if offscreen else 0.07,
+                "height": scalar_bar_height,
+                "title_font_size": 14,
+                "label_font_size": 10 if offscreen else 11,
+            },
+        )
+        if offscreen:
+            self._offscreen_mesh_actor = mesh_actor
+        else:
+            self._mesh_actor = mesh_actor
+
+        inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+        if not np.any(inhom_mask):
+            return
+        highlight_cloud = pv.PolyData(centers[inhom_mask])
+        highlight_cloud["sigma"] = np.asarray(cell_sigma, dtype=float)[inhom_mask]
+        highlight_actor = plotter.add_mesh(
+            highlight_cloud,
+            scalars="sigma",
+            cmap="viridis",
+            clim=[sigma_min, sigma_max],
+            opacity=1.0,
+            render_points_as_spheres=True,
+            point_size=max(_pyvista_point_size(centers.shape[0]) * 1.55, 6.0),
+            show_scalar_bar=False,
+        )
+        highlight_actor.SetVisibility(bool(self._highlight_check.isChecked()))
+        if offscreen:
+            self._offscreen_highlight_actor = highlight_actor
+        else:
+            self._highlight_actor = highlight_actor
+
     def _render_pyvista_offscreen_scene(
         self,
         sigma: np.ndarray,
@@ -1057,14 +1200,11 @@ class Conductivity3DWidget(QWidget):
         self._discard_offscreen_plotter()
 
         n_cells = cells.shape[0]
-        if sigma.shape[0] == n_cells:
-            cell_sigma = sigma
+        cell_sigma, scalar_mode = _cell_center_sigma(sigma, cells)
+        if scalar_mode == "cell":
             scalar_kw = {"scalars": "sigma", "preference": "cell"}
-            scalar_mode = "cell"
         else:
-            cell_sigma = sigma[cells].mean(axis=1)
             scalar_kw = {"scalars": "sigma", "preference": "point"}
-            scalar_mode = "point"
 
         verts_per_cell = cells.shape[1]
         if verts_per_cell == 4:
@@ -1096,28 +1236,41 @@ class Conductivity3DWidget(QWidget):
 
         opacity = self._opacity_slider.value() / 100.0
         text_color = _hex_to_rgb(palette.get("text", "#222"))
-        self._offscreen_mesh_actor = plotter.add_mesh(
-            grid,
-            cmap="viridis",
-            opacity=opacity,
-            clim=[sigma_min, sigma_max],
-            show_edges=False,
-            show_scalar_bar=True,
-            scalar_bar_args={
-                "title": "S/m",
-                "color": text_color,
-                "vertical": True,
-                "position_x": 0.88,
-                "position_y": 0.12,
-                "width": 0.06,
-                "height": 0.55,
-                "title_font_size": 14,
-                "label_font_size": 10,
-            },
-            **scalar_kw,
-        )
+        if self._display_mode == DISPLAY_MODE_POINTS:
+            self._add_pyvista_point_cloud_actors(
+                pv=pv,
+                plotter=plotter,
+                centers=_cell_centers(coords, cells),
+                cell_sigma=cell_sigma,
+                sigma_min=sigma_min,
+                sigma_max=sigma_max,
+                opacity=opacity,
+                text_color=text_color,
+                offscreen=True,
+            )
+        else:
+            self._offscreen_mesh_actor = plotter.add_mesh(
+                grid,
+                cmap="viridis",
+                opacity=opacity,
+                clim=[sigma_min, sigma_max],
+                show_edges=False,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    "title": "S/m",
+                    "color": text_color,
+                    "vertical": True,
+                    "position_x": 0.88,
+                    "position_y": 0.12,
+                    "width": 0.06,
+                    "height": 0.55,
+                    "title_font_size": 14,
+                    "label_font_size": 10,
+                },
+                **scalar_kw,
+            )
 
-        if scalar_mode == "cell":
+        if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
             inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
@@ -1195,6 +1348,115 @@ class Conductivity3DWidget(QWidget):
             label.set_color(text)
             label.set_fontfamily(_plot_font_families())
 
+    def _apply_mpl3d_bounds_and_labels(
+        self,
+        coords: np.ndarray,
+        *,
+        elev: float,
+        azim: float,
+    ) -> None:
+        points = coords[:, :3]
+        mins = np.nanmin(points, axis=0)
+        maxs = np.nanmax(points, axis=0)
+        spans = np.maximum(maxs - mins, 1.0e-9)
+        center = (mins + maxs) * 0.5
+        radius = float(np.nanmax(spans) * 0.56)
+        if radius <= 0.0 or not np.isfinite(radius):
+            radius = 1.0
+        xlim = (center[0] - radius, center[0] + radius)
+        ylim = (center[1] - radius, center[1] + radius)
+        zlim = (center[2] - radius, center[2] + radius)
+        self._mpl3d_ax.set_xlim(*xlim)
+        self._mpl3d_ax.set_ylim(*ylim)
+        self._mpl3d_ax.set_zlim(*zlim)
+        # Cache so the reset-view button can restore the original extent.
+        self._mpl3d_initial_bounds = (xlim, ylim, zlim)
+        try:
+            self._mpl3d_ax.set_box_aspect(tuple(spans))
+        except Exception:  # pragma: no cover — older matplotlib fallback
+            pass
+        self._mpl3d_ax.view_init(elev=elev, azim=azim)
+
+        palette = plot_palette()
+        self._mpl3d_ax.set_title(
+            self._default_title,
+            fontproperties=self._title_font,
+            color=palette.get("text", "#222"),
+            pad=8,
+        )
+        self._mpl3d_ax.set_xlabel("X")
+        self._mpl3d_ax.set_ylabel("Y")
+        self._mpl3d_ax.set_zlabel("Z")
+
+    def _render_matplotlib_point_cloud_scene(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+        *,
+        elev: float,
+        azim: float,
+    ) -> None:
+        cell_sigma, _scalar_mode = _cell_center_sigma(sigma, cells)
+        centers = _cell_centers(coords, cells)
+        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
+
+        palette = plot_palette()
+        cmap = colormaps["viridis"]
+        norm = Normalize(vmin=sigma_min, vmax=sigma_max)
+        opacity = self._opacity_slider.value() / 100.0
+        edge_color = (
+            palette.get("border", "#888") if self._wire_check.isChecked() else "none"
+        )
+        mesh = self._mpl3d_ax.scatter(
+            centers[:, 0],
+            centers[:, 1],
+            centers[:, 2],
+            c=cell_sigma,
+            cmap=cmap,
+            norm=norm,
+            s=_matplotlib_point_size(centers.shape[0]),
+            alpha=opacity,
+            edgecolors=edge_color,
+            linewidths=0.2,
+            depthshade=True,
+        )
+        self._mpl3d_mesh_collection = mesh
+        self._mpl3d_mesh_facecolors = None
+        self._mpl3d_highlight_collection = None
+        self._mpl3d_highlight_facecolors = None
+
+        inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+        if np.any(inhom_mask):
+            highlight = self._mpl3d_ax.scatter(
+                centers[inhom_mask, 0],
+                centers[inhom_mask, 1],
+                centers[inhom_mask, 2],
+                c=cell_sigma[inhom_mask],
+                cmap=cmap,
+                norm=norm,
+                s=max(_matplotlib_point_size(centers.shape[0]) * 1.8, 16.0),
+                alpha=1.0,
+                edgecolors=palette["highlight"],
+                linewidths=0.45,
+                depthshade=True,
+            )
+            highlight.set_visible(bool(self._highlight_check.isChecked()))
+            self._mpl3d_highlight_collection = highlight
+
+        self._apply_mpl3d_bounds_and_labels(coords, elev=elev, azim=azim)
+
+        scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
+        scalar_mappable.set_array(cell_sigma)
+        self._mpl3d_colorbar_ax.clear()
+        self._mpl3d_colorbar_ax.set_visible(True)
+        self._mpl3d_colorbar = self._mpl3d_figure.colorbar(
+            scalar_mappable,
+            cax=self._mpl3d_colorbar_ax,
+        )
+        self._mpl3d_colorbar.set_label("S/m", color=palette.get("text", "#222"))
+        self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
+
     def _render_matplotlib_scene(
         self,
         sigma: np.ndarray,
@@ -1214,6 +1476,23 @@ class Conductivity3DWidget(QWidget):
         azim = getattr(self._mpl3d_ax, "azim", -45.0)
         self._mpl3d_ax.clear()
         self._apply_mpl3d_chrome()
+
+        if self._display_mode == DISPLAY_MODE_POINTS:
+            self._render_matplotlib_point_cloud_scene(
+                sigma,
+                coords,
+                cells,
+                elev=elev,
+                azim=azim,
+            )
+            self._stack.setCurrentWidget(self._mpl3d_host)
+            self._controls.show()
+            self._render_backend = "mpl3d"
+            self._mpl3d_electrode_collection = None
+            if self._electrode_geometry is not None:
+                self._build_mpl3d_electrode_collection(self._electrode_geometry)
+            self._mpl3d_canvas.draw_idle()
+            return
 
         faces, source_cells = _boundary_faces(cells)
         valid_face_payload: list[tuple[tuple[int, ...], int]] = []
@@ -1300,40 +1579,7 @@ class Conductivity3DWidget(QWidget):
                     self._mpl3d_highlight_collection = highlight
                     self._mpl3d_highlight_facecolors = highlight_colors.copy()
 
-        points = coords[:, :3]
-        mins = np.nanmin(points, axis=0)
-        maxs = np.nanmax(points, axis=0)
-        spans = np.maximum(maxs - mins, 1.0e-9)
-        center = (mins + maxs) * 0.5
-        radius = float(np.nanmax(spans) * 0.56)
-        if radius <= 0.0 or not np.isfinite(radius):
-            radius = 1.0
-        xlim = (center[0] - radius, center[0] + radius)
-        ylim = (center[1] - radius, center[1] + radius)
-        zlim = (center[2] - radius, center[2] + radius)
-        self._mpl3d_ax.set_xlim(*xlim)
-        self._mpl3d_ax.set_ylim(*ylim)
-        self._mpl3d_ax.set_zlim(*zlim)
-        # Cache so the reset-view button can restore the original
-        # extent — view_init alone only resets the camera angle,
-        # not the user's pan / zoom.
-        self._mpl3d_initial_bounds = (xlim, ylim, zlim)
-        try:
-            self._mpl3d_ax.set_box_aspect(tuple(spans))
-        except Exception:  # pragma: no cover — older matplotlib fallback
-            pass
-        self._mpl3d_ax.view_init(elev=elev, azim=azim)
-
-        title = self._default_title
-        self._mpl3d_ax.set_title(
-            title,
-            fontproperties=self._title_font,
-            color=palette.get("text", "#222"),
-            pad=8,
-        )
-        self._mpl3d_ax.set_xlabel("X")
-        self._mpl3d_ax.set_ylabel("Y")
-        self._mpl3d_ax.set_zlabel("Z")
+        self._apply_mpl3d_bounds_and_labels(coords, elev=elev, azim=azim)
 
         scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
         scalar_mappable.set_array(face_values)
@@ -1374,15 +1620,12 @@ class Conductivity3DWidget(QWidget):
         self._discard_actors()
 
         n_cells = cells.shape[0]
-        if sigma.shape[0] == n_cells:
-            cell_sigma = sigma
+        cell_sigma, scalar_mode = _cell_center_sigma(sigma, cells)
+        if scalar_mode == "cell":
             scalar_kw = {"scalars": "sigma", "preference": "cell"}
-            scalar_mode = "cell"
         else:
             # Node-centered sigma — VTK takes that natively.
-            cell_sigma = sigma[cells].mean(axis=1)
             scalar_kw = {"scalars": "sigma", "preference": "point"}
-            scalar_mode = "point"
 
         # Build the unstructured volume grid.  VTK expects
         # [n_pts, p0, p1, ...] rows; support both tetra meshes from the
@@ -1412,34 +1655,47 @@ class Conductivity3DWidget(QWidget):
         palette = plot_palette()
         text_color = _hex_to_rgb(palette.get("text", "#222"))
 
-        # Bulk volume: alpha-blended so we can see through to interior
-        # cells whose conductivity differs from background.
-        self._mesh_actor = plotter.add_mesh(
-            grid,
-            cmap="viridis",
-            opacity=opacity,
-            clim=[sigma_min, sigma_max],
-            show_edges=False,
-            show_scalar_bar=True,
-            scalar_bar_args={
-                "title": "S/m",
-                "color": text_color,
-                "vertical": True,
-                "position_x": 0.88,
-                "position_y": 0.05,
-                "width": 0.07,
-                "height": 0.6,
-                "title_font_size": 14,
-                "label_font_size": 11,
-            },
-            **scalar_kw,
-        )
+        if self._display_mode == DISPLAY_MODE_POINTS:
+            self._add_pyvista_point_cloud_actors(
+                pv=pv,
+                plotter=plotter,
+                centers=_cell_centers(coords, cells),
+                cell_sigma=cell_sigma,
+                sigma_min=sigma_min,
+                sigma_max=sigma_max,
+                opacity=opacity,
+                text_color=text_color,
+                offscreen=False,
+            )
+        else:
+            # Bulk volume: alpha-blended so we can see through to interior
+            # cells whose conductivity differs from background.
+            self._mesh_actor = plotter.add_mesh(
+                grid,
+                cmap="viridis",
+                opacity=opacity,
+                clim=[sigma_min, sigma_max],
+                show_edges=False,
+                show_scalar_bar=True,
+                scalar_bar_args={
+                    "title": "S/m",
+                    "color": text_color,
+                    "vertical": True,
+                    "position_x": 0.88,
+                    "position_y": 0.05,
+                    "width": 0.07,
+                    "height": 0.6,
+                    "title_font_size": 14,
+                    "label_font_size": 11,
+                },
+                **scalar_kw,
+            )
 
         # Highlight overlay: cells whose conductivity is far from the
         # median (i.e. the "inhomogeneity") rendered opaque so a small
         # central inclusion still reads even when the bulk opacity is
         # high.  Built always; visibility toggles with the checkbox.
-        if scalar_mode == "cell":
+        if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
             inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
@@ -1498,6 +1754,8 @@ class Conductivity3DWidget(QWidget):
         ):
             self._mpl3d_mesh_facecolors[:, 3] = opacity
             self._mpl3d_mesh_collection.set_facecolors(self._mpl3d_mesh_facecolors)
+        elif self._mpl3d_mesh_collection is not None:
+            self._mpl3d_mesh_collection.set_alpha(opacity)
         if (
             self._mpl3d_highlight_collection is not None
             and self._mpl3d_highlight_facecolors is not None
@@ -1506,6 +1764,8 @@ class Conductivity3DWidget(QWidget):
             self._mpl3d_highlight_collection.set_facecolors(
                 self._mpl3d_highlight_facecolors
             )
+        elif self._mpl3d_highlight_collection is not None:
+            self._mpl3d_highlight_collection.set_alpha(1.0)
 
     def _apply_mpl3d_wire_visibility(self, checked: bool) -> None:
         palette = plot_palette()
@@ -1696,6 +1956,11 @@ class Conductivity3DWidget(QWidget):
     # ------------------------------------------------------------------
 
     def _retranslate(self) -> None:
+        self._display_mode_label.setText(t("sim.results.viewer3d_display"))
+        self._volume_mode_btn.setText(t("sim.results.viewer3d_display_volume_short"))
+        self._volume_mode_btn.setToolTip(t("sim.results.viewer3d_display_volume"))
+        self._points_mode_btn.setText(t("sim.results.viewer3d_display_points_short"))
+        self._points_mode_btn.setToolTip(t("sim.results.viewer3d_display_points"))
         self._opacity_label.setText(t("sim.results.viewer3d_opacity"))
         self._highlight_check.setText(t("sim.results.viewer3d_highlight"))
         self._wire_check.setText(t("sim.results.viewer3d_wireframe"))

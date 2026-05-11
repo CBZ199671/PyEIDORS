@@ -74,7 +74,12 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6539\u7528\u5b89\u5168\u5185\u7f6e 3D \u6e32\u67d3\u5668\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；改用安全内置 3D 渲染器。
     "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u652f\u6301\u7684\u4e09\u7ef4\u56db\u9762\u4f53/\u516d\u9762\u4f53\u4f53\u7f51\u683c",  # 网格不是支持的三维四面体/六面体体网格
     "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d",  # 电导率长度与网格不匹配
-    "sim.results.viewer3d_opacity": "\u5916\u58f3\u900f\u660e\u5ea6",  # 外壳透明度
+    "sim.results.viewer3d_display": "\u663e\u793a",  # 显示
+    "sim.results.viewer3d_display_volume": "\u4f53\u7f51\u683c\u6e32\u67d3",  # 体网格渲染
+    "sim.results.viewer3d_display_volume_short": "\u4f53",  # 体
+    "sim.results.viewer3d_display_points": "\u70b9\u4e91\u6e32\u67d3",  # 点云渲染
+    "sim.results.viewer3d_display_points_short": "\u70b9\u4e91",  # 点云
+    "sim.results.viewer3d_opacity": "\u900f\u660e\u5ea6",  # 透明度
     "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",  # 突出内含物
     "sim.results.viewer3d_wireframe": "\u8f6e\u5ed3\u7ebf",  # 轮廓线
     "sim.results.viewer3d_reset": "\u590d\u4f4d\u89c6\u89d2",  # 复位视角
