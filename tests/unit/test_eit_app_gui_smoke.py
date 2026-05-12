@@ -1185,6 +1185,78 @@ def test_v109_inhomogeneity_editor_sphere_size_columns_stay_linked() -> None:
         _get_app().processEvents()
 
 
+def test_v119_inhomogeneity_boundary_warning_uses_visible_full_diameter() -> None:
+    from eit_app.models.simulation_state import InhomogeneitySpec
+    from eit_app.ui.simulation.inhomogeneity_editor import (
+        inhomogeneity_boundary_violations,
+    )
+
+    centered_offset_sphere = InhomogeneitySpec(
+        shape="circle",
+        center_x=0.05,
+        center_y=0.05,
+        center_z=0.0,
+        size_x=0.063,
+        size_y=0.063,
+        size_z=0.063,
+    )
+    mistaken_radius_sphere = InhomogeneitySpec(
+        shape="circle",
+        center_x=0.05,
+        center_y=0.05,
+        center_z=0.0,
+        size_x=0.126,
+        size_y=0.126,
+        size_z=0.126,
+    )
+
+    assert (
+        inhomogeneity_boundary_violations(
+            [centered_offset_sphere],
+            mesh_dimension=3,
+            radius=0.18,
+            height=0.5,
+            z_center=0.0,
+        )
+        == []
+    )
+    assert inhomogeneity_boundary_violations(
+        [mistaken_radius_sphere],
+        mesh_dimension=3,
+        radius=0.18,
+        height=0.5,
+        z_center=0.0,
+    ) == [1]
+
+
+@pytest.mark.gui
+def test_v119_inhomogeneity_editor_shows_boundary_warning_label() -> None:
+    from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
+
+    _get_app()
+    editor = InhomogeneityEditor()
+    editor.set_domain_context(mesh_dimension=3, radius=0.18, height=0.5)
+    editor.show()
+    _get_app().processEvents()
+    try:
+        editor._add_shape("circle")
+        assert editor._model.setData(editor._model.index(0, 1), 0.13)
+        assert editor._model.setData(editor._model.index(0, 4), 0.126)
+        _get_app().processEvents()
+
+        assert editor._boundary_warning.isVisible()
+        assert "1" in editor._boundary_warning.text()
+
+        assert editor._model.setData(editor._model.index(0, 1), 0.05)
+        assert editor._model.setData(editor._model.index(0, 2), 0.05)
+        _get_app().processEvents()
+        assert not editor._boundary_warning.isVisible()
+    finally:
+        editor.close()
+        editor.deleteLater()
+        _get_app().processEvents()
+
+
 @pytest.mark.gui
 def test_dark_stylesheet_uses_muted_section_chrome() -> None:
     from eit_app.ui.theme import _build_stylesheet

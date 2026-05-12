@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import math
+
 from PySide6.QtCore import QAbstractTableModel, QModelIndex, Qt, Signal
 from PySide6.QtWidgets import (
     QGroupBox,
@@ -79,6 +81,106 @@ def _sphere_radius(spec: InhomogeneitySpec) -> float:
         if abs(float(value)) > 0.0
     ]
     return min(values) if values else 0.0
+
+
+def _ellipse_inside_circle(
+    *,
+    center_x: float,
+    center_y: float,
+    radius_x: float,
+    radius_y: float,
+    domain_radius: float,
+) -> bool:
+    if radius_x <= 0.0 or radius_y <= 0.0:
+        return True
+    samples = 96
+    limit = max(float(domain_radius), 0.0)
+    for idx in range(samples):
+        theta = 2.0 * math.pi * idx / samples
+        x = float(center_x) + float(radius_x) * math.cos(theta)
+        y = float(center_y) + float(radius_y) * math.sin(theta)
+        if math.hypot(x, y) > limit + 1.0e-9:
+            return False
+    return True
+
+
+def _box_xy_inside_circle(
+    *,
+    center_x: float,
+    center_y: float,
+    half_x: float,
+    half_y: float,
+    domain_radius: float,
+) -> bool:
+    limit = max(float(domain_radius), 0.0)
+    for sx in (-1.0, 1.0):
+        for sy in (-1.0, 1.0):
+            x = float(center_x) + sx * float(half_x)
+            y = float(center_y) + sy * float(half_y)
+            if math.hypot(x, y) > limit + 1.0e-9:
+                return False
+    return True
+
+
+def _z_extent_inside_domain(
+    spec: InhomogeneitySpec,
+    *,
+    height: float,
+    z_center: float,
+) -> bool:
+    half_height = abs(float(height)) * 0.5
+    z_min = float(z_center) - half_height
+    z_max = float(z_center) + half_height
+    if spec.shape == "circle":
+        half_z = _sphere_radius(spec)
+    else:
+        half_z = abs(float(spec.size_z))
+    cz = float(spec.center_z)
+    return cz - half_z >= z_min - 1.0e-9 and cz + half_z <= z_max + 1.0e-9
+
+
+def inhomogeneity_boundary_violations(
+    specs: list[InhomogeneitySpec],
+    *,
+    mesh_dimension: int,
+    radius: float,
+    height: float = 1.0,
+    z_center: float = 0.0,
+) -> list[int]:
+    """Return 1-based rows whose full-size inclusions exceed the domain."""
+    domain_radius = max(abs(float(radius)), 1.0e-12)
+    rows: list[int] = []
+    is_3d = int(mesh_dimension) == 3
+    for row, spec in enumerate(specs, start=1):
+        cx = float(spec.center_x)
+        cy = float(spec.center_y)
+        if spec.shape == "circle":
+            sphere_radius = _sphere_radius(spec)
+            xy_inside = math.hypot(cx, cy) + sphere_radius <= domain_radius + 1.0e-9
+        elif spec.shape == "ellipse":
+            xy_inside = _ellipse_inside_circle(
+                center_x=cx,
+                center_y=cy,
+                radius_x=abs(float(spec.size_x)),
+                radius_y=abs(float(spec.size_y)),
+                domain_radius=domain_radius,
+            )
+        else:
+            xy_inside = _box_xy_inside_circle(
+                center_x=cx,
+                center_y=cy,
+                half_x=abs(float(spec.size_x)),
+                half_y=abs(float(spec.size_y)),
+                domain_radius=domain_radius,
+            )
+        z_inside = True
+        if is_3d:
+            z_inside = _z_extent_inside_domain(
+                spec, height=float(height), z_center=float(z_center)
+            )
+        if not (xy_inside and z_inside):
+            rows.append(row)
+    return rows
 
 
 class _InhomogeneityTableModel(QAbstractTableModel):
@@ -240,9 +342,9 @@ class InhomogeneityEditor(QGroupBox):
         layout.setSpacing(6)
 
         self._model = _InhomogeneityTableModel(self)
-        self._model.dataChanged.connect(lambda *_: self.inhomogeneities_changed.emit())
-        self._model.rowsInserted.connect(lambda *_: self.inhomogeneities_changed.emit())
-        self._model.rowsRemoved.connect(lambda *_: self.inhomogeneities_changed.emit())
+        self._model.dataChanged.connect(lambda *_: self._on_model_changed())
+        self._model.rowsInserted.connect(lambda *_: self._on_model_changed())
+        self._model.rowsRemoved.connect(lambda *_: self._on_model_changed())
 
         # Caption above the table — single line that consolidates the
         # unit info that previously lived in every column header.  This
@@ -254,6 +356,18 @@ class InhomogeneityEditor(QGroupBox):
             (self._units_hint.styleSheet() or "") + " padding: 0 0 4px 0;"
         )
         layout.addWidget(self._units_hint)
+
+        self._boundary_warning = QLabel("")
+        self._boundary_warning.setWordWrap(True)
+        self._boundary_warning.setVisible(False)
+        set_hint_text(self._boundary_warning)
+        self._boundary_warning.setStyleSheet(
+            (self._boundary_warning.styleSheet() or "")
+            + " color: #9a4f00; padding: 3px 6px; "
+            + "border: 1px solid #f1c27d; border-radius: 4px; "
+            + "background: #fff7e6;"
+        )
+        layout.addWidget(self._boundary_warning)
 
         self._table = QTableView()
         self._table.setModel(self._model)
@@ -313,10 +427,15 @@ class InhomogeneityEditor(QGroupBox):
         self._model.headerDataChanged.emit(
             Qt.Orientation.Horizontal, 0, self._model.columnCount() - 1
         )
+        self._update_boundary_warning()
 
     def _add_shape(self, shape: str) -> None:
         spec = self._default_spec(shape)
         self._model.add_spec(spec)
+
+    def _on_model_changed(self) -> None:
+        self._update_boundary_warning()
+        self.inhomogeneities_changed.emit()
 
     def _default_spec(self, shape: str) -> InhomogeneitySpec:
         """Create a domain-scaled default inclusion for the active dimension."""
@@ -362,6 +481,7 @@ class InhomogeneityEditor(QGroupBox):
 
     def set_inhomogeneities(self, specs: list[InhomogeneitySpec]) -> None:
         self._model.set_specs(specs)
+        self._update_boundary_warning()
 
     def set_domain_context(
         self,
@@ -383,12 +503,39 @@ class InhomogeneityEditor(QGroupBox):
         self._apply_column_visibility()
         if self._mesh_dimension != old_dimension:
             self._retranslate()
+        self._update_boundary_warning()
 
     def _apply_column_visibility(self) -> None:
         show_z = self._mesh_dimension == 3
         self._table.setColumnHidden(_Z_COLUMN, not show_z)
         self._table.setColumnHidden(_SIZE_Z_COLUMN, not show_z)
         self._resize_table_columns()
+
+    def _update_boundary_warning(self) -> None:
+        if not hasattr(self, "_boundary_warning"):
+            return
+        rows = inhomogeneity_boundary_violations(
+            self._model.get_specs(),
+            mesh_dimension=self._mesh_dimension,
+            radius=self._domain_radius,
+            height=self._domain_height,
+            z_center=self._domain_z_center,
+        )
+        if not rows:
+            self._boundary_warning.clear()
+            self._boundary_warning.setVisible(False)
+            return
+        row_text = ", ".join(str(row) for row in rows[:4])
+        if len(rows) > 4:
+            row_text += "..."
+        self._boundary_warning.setText(
+            t(
+                "sim.inhom.boundary_warning",
+                count=len(rows),
+                rows=row_text,
+            )
+        )
+        self._boundary_warning.setVisible(True)
 
     def _resize_table_columns(self) -> None:
         """Keep Step 2 columns readable without letting sigma dominate."""

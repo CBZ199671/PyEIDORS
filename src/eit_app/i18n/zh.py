@@ -79,10 +79,17 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_display_volume_short": "\u4f53",  # 体
     "sim.results.viewer3d_display_points": "\u70b9\u4e91\u6e32\u67d3",  # 点云渲染
     "sim.results.viewer3d_display_points_short": "\u70b9\u4e91",  # 点云
+    "sim.results.viewer3d_anomaly_mode": "\u5f02\u5e38",  # 异常
+    "sim.results.viewer3d_anomaly_positive": "\u4ec5\u7a81\u51fa\u9ad8\u4e8e\u80cc\u666f\u4e2d\u503c\u7684\u6b63\u5f02\u5e38",  # 仅突出高于背景中值的正异常
+    "sim.results.viewer3d_anomaly_positive_short": "\u6b63",  # 正
+    "sim.results.viewer3d_anomaly_negative": "\u4ec5\u7a81\u51fa\u4f4e\u4e8e\u80cc\u666f\u4e2d\u503c\u7684\u8d1f\u5f02\u5e38",  # 仅突出低于背景中值的负异常
+    "sim.results.viewer3d_anomaly_negative_short": "\u8d1f",  # 负
+    "sim.results.viewer3d_anomaly_absolute": "\u7a81\u51fa\u6b63\u8d1f\u53cc\u5411\u7edd\u5bf9\u504f\u79bb",  # 突出正负双向绝对偏离
+    "sim.results.viewer3d_anomaly_absolute_short": "\u7edd\u5bf9",  # 绝对
     "sim.results.viewer3d_opacity": "\u900f\u660e\u5ea6",  # 透明度
     "sim.results.viewer3d_opacity_short": "\u900f\u660e",  # 透明
-    "sim.results.viewer3d_highlight": "\u7a81\u51fa\u5185\u542b\u7269",  # 突出内含物
-    "sim.results.viewer3d_highlight_short": "\u5185\u542b",  # 内含
+    "sim.results.viewer3d_highlight": "\u7a81\u51fa\u9009\u5b9a\u5f02\u5e38",  # 突出选定异常
+    "sim.results.viewer3d_highlight_short": "\u7a81\u51fa",  # 突出
     "sim.results.viewer3d_wireframe": "\u8f6e\u5ed3\u7ebf",  # 轮廓线
     "sim.results.viewer3d_wireframe_short": "\u8f6e\u5ed3",  # 轮廓
     "sim.results.viewer3d_reset": "\u590d\u4f4d\u89c6\u89d2",  # 复位视角
@@ -401,6 +408,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inhom.col.sizez": "\u9ad8",  # 高
     "sim.inhom.col.conductivity": "\u03c3",  # σ
     "sim.inhom.units_hint": "\u5750\u6807 / \u5b8c\u6574\u5c3a\u5bf8\u5355\u4f4d\uff1am\uff0c\u03c3 \u5355\u4f4d\uff1aS/m",  # 坐标 / 完整尺寸单位：m，σ 单位：S/m
+    "sim.inhom.boundary_warning": "\u7b2c {rows} \u9879\u975e\u5747\u5300\u4f53\u8d85\u51fa\u5f85\u6d4b\u57df\uff1b\u6b63\u95ee\u9898\u4ec5\u4f7f\u7528\u57df\u5185\u90e8\u5206\uff0c\u9006\u95ee\u9898\u53ef\u80fd\u51fa\u73b0\u660e\u663e\u4f2a\u5f71\u3002",  # 第 {rows} 项非均匀体超出待测域；正问题仅使用域内部分，逆问题可能出现明显伪影。
     "sim.inhom.add_circle": "+ \u5706\u5f62",  # + 圆形
     "sim.inhom.add_ellipse": "+ \u692d\u5706",  # + 椭圆
     "sim.inhom.add_rectangle": "+ \u77e9\u5f62",  # + 矩形

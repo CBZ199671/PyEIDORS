@@ -89,6 +89,12 @@ SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 DISPLAY_MODE_VOLUME = "volume"
 DISPLAY_MODE_POINTS = "points"
 DISPLAY_MODES = frozenset({DISPLAY_MODE_VOLUME, DISPLAY_MODE_POINTS})
+ANOMALY_MODE_POSITIVE = "positive"
+ANOMALY_MODE_NEGATIVE = "negative"
+ANOMALY_MODE_ABSOLUTE = "absolute"
+ANOMALY_MODES = frozenset(
+    {ANOMALY_MODE_POSITIVE, ANOMALY_MODE_NEGATIVE, ANOMALY_MODE_ABSOLUTE}
+)
 _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
 _MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
 _MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
@@ -106,17 +112,37 @@ _CELL_FACE_OFFSETS = {
 }
 
 
-def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
+def _cell_anomaly_mask(
+    cell_sigma: np.ndarray,
+    mode: str = ANOMALY_MODE_ABSOLUTE,
+) -> np.ndarray:
     values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
     if values.size == 0 or not np.isfinite(values).any():
         return np.zeros(values.shape, dtype=bool)
+    if mode not in ANOMALY_MODES:
+        raise ValueError(f"unknown anomaly mode: {mode!r}")
     median = float(np.nanmedian(values))
     spread = float(np.nanstd(values))
     floor = max(abs(median) * _INHOMOGENEITY_RELATIVE_FLOOR, 1.0e-6)
     if not np.isfinite(spread) or spread <= floor:
         return np.zeros(values.shape, dtype=bool)
-    threshold = max(spread * 0.5, floor)
-    return np.asarray(np.abs(values - median) > threshold, dtype=bool)
+    residual = values - median
+    if mode == ANOMALY_MODE_POSITIVE:
+        score = residual
+    elif mode == ANOMALY_MODE_NEGATIVE:
+        score = -residual
+    else:
+        score = np.abs(residual)
+    finite_scores = score[np.isfinite(score) & (score > floor)]
+    if finite_scores.size == 0:
+        return np.zeros(values.shape, dtype=bool)
+    threshold = max(spread * 0.5, floor, float(np.nanpercentile(finite_scores, 80.0)))
+    tolerance = max(1.0e-12, abs(threshold) * 1.0e-12)
+    return np.asarray(score >= threshold - tolerance, dtype=bool)
+
+
+def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
+    return _cell_anomaly_mask(cell_sigma, ANOMALY_MODE_ABSOLUTE)
 
 
 def _conductivity_color_limits(cell_sigma: np.ndarray) -> tuple[float, float]:
@@ -377,6 +403,7 @@ class Conductivity3DWidget(QWidget):
 
         self._render_backend = "caption"
         self._display_mode = DISPLAY_MODE_VOLUME
+        self._anomaly_mode = ANOMALY_MODE_POSITIVE
         self._last_vtk_disabled_reason: str | None = None
         self._title_font = FontProperties(family=_plot_font_families(), size=14)
         self._mpl3d_colorbar = None
@@ -577,6 +604,59 @@ class Conductivity3DWidget(QWidget):
         self._display_mode_group.addButton(self._points_mode_btn)
         grid.addWidget(self._points_mode_btn, 0, 2)
 
+        self._anomaly_mode_label = QLabel("")
+        set_hint_text(self._anomaly_mode_label)
+        self._anomaly_mode_label.setMinimumWidth(0)
+        grid.addWidget(self._anomaly_mode_label, 0, 3)
+
+        self._anomaly_mode_group = QButtonGroup(self)
+        self._anomaly_mode_group.setExclusive(True)
+        self._positive_anomaly_btn = QPushButton("")
+        self._positive_anomaly_btn.setCheckable(True)
+        self._positive_anomaly_btn.setChecked(True)
+        set_button_role(self._positive_anomaly_btn, "tertiary")
+        self._positive_anomaly_btn.setMinimumWidth(34)
+        self._positive_anomaly_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
+        self._positive_anomaly_btn.clicked.connect(
+            lambda checked: (
+                self.set_anomaly_mode(ANOMALY_MODE_POSITIVE) if checked else None
+            )
+        )
+        self._anomaly_mode_group.addButton(self._positive_anomaly_btn)
+        grid.addWidget(self._positive_anomaly_btn, 0, 4)
+
+        self._negative_anomaly_btn = QPushButton("")
+        self._negative_anomaly_btn.setCheckable(True)
+        set_button_role(self._negative_anomaly_btn, "tertiary")
+        self._negative_anomaly_btn.setMinimumWidth(34)
+        self._negative_anomaly_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
+        self._negative_anomaly_btn.clicked.connect(
+            lambda checked: (
+                self.set_anomaly_mode(ANOMALY_MODE_NEGATIVE) if checked else None
+            )
+        )
+        self._anomaly_mode_group.addButton(self._negative_anomaly_btn)
+        grid.addWidget(self._negative_anomaly_btn, 0, 5)
+
+        self._absolute_anomaly_btn = QPushButton("")
+        self._absolute_anomaly_btn.setCheckable(True)
+        set_button_role(self._absolute_anomaly_btn, "tertiary")
+        self._absolute_anomaly_btn.setMinimumWidth(40)
+        self._absolute_anomaly_btn.setSizePolicy(
+            QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Fixed
+        )
+        self._absolute_anomaly_btn.clicked.connect(
+            lambda checked: (
+                self.set_anomaly_mode(ANOMALY_MODE_ABSOLUTE) if checked else None
+            )
+        )
+        self._anomaly_mode_group.addButton(self._absolute_anomaly_btn)
+        grid.addWidget(self._absolute_anomaly_btn, 0, 6)
+
         self._opacity_label = QLabel("")
         set_hint_text(self._opacity_label)
         self._opacity_label.setMinimumWidth(0)
@@ -747,6 +827,35 @@ class Conductivity3DWidget(QWidget):
     def _sync_display_mode_buttons(self) -> None:
         self._volume_mode_btn.setChecked(self._display_mode == DISPLAY_MODE_VOLUME)
         self._points_mode_btn.setChecked(self._display_mode == DISPLAY_MODE_POINTS)
+
+    def anomaly_mode(self) -> str:
+        return self._anomaly_mode
+
+    def set_anomaly_mode(self, mode: str) -> None:
+        """Choose which conductivity deviation sign is highlighted."""
+        if mode not in ANOMALY_MODES:
+            raise ValueError(f"unknown anomaly mode: {mode!r}")
+        if mode == self._anomaly_mode:
+            self._sync_anomaly_mode_buttons()
+            return
+
+        self._anomaly_mode = mode
+        self._sync_anomaly_mode_buttons()
+        if self._last_image is None:
+            return
+        sigma, coords, cells, title = self._last_image
+        self.update_image(sigma, coords, cells, title=title)
+
+    def _sync_anomaly_mode_buttons(self) -> None:
+        self._positive_anomaly_btn.setChecked(
+            self._anomaly_mode == ANOMALY_MODE_POSITIVE
+        )
+        self._negative_anomaly_btn.setChecked(
+            self._anomaly_mode == ANOMALY_MODE_NEGATIVE
+        )
+        self._absolute_anomaly_btn.setChecked(
+            self._anomaly_mode == ANOMALY_MODE_ABSOLUTE
+        )
 
     def update_image(
         self,
@@ -1192,7 +1301,7 @@ class Conductivity3DWidget(QWidget):
         else:
             self._mesh_actor = mesh_actor
 
-        inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+        inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
         if not np.any(inhom_mask):
             return
         highlight_cloud = pv.PolyData(centers[inhom_mask])
@@ -1301,7 +1410,7 @@ class Conductivity3DWidget(QWidget):
             )
 
         if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
-            inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+            inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
@@ -1456,7 +1565,7 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_collection = None
         self._mpl3d_highlight_facecolors = None
 
-        inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+        inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
         if np.any(inhom_mask):
             highlight = self._mpl3d_ax.scatter(
                 centers[inhom_mask, 0],
@@ -1582,7 +1691,9 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_facecolors = None
 
         if scalar_mode == "cell":
-            inhom_indices = np.flatnonzero(_cell_inhomogeneity_mask(cell_sigma))
+            inhom_indices = np.flatnonzero(
+                _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+            )
             if inhom_indices.size:
                 highlight_vertices: list[np.ndarray] = []
                 highlight_values: list[float] = []
@@ -1726,7 +1837,7 @@ class Conductivity3DWidget(QWidget):
         # central inclusion still reads even when the bulk opacity is
         # high.  Built always; visibility toggles with the checkbox.
         if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
-            inhom_mask = _cell_inhomogeneity_mask(cell_sigma)
+            inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
@@ -1991,6 +2102,25 @@ class Conductivity3DWidget(QWidget):
         self._volume_mode_btn.setToolTip(t("sim.results.viewer3d_display_volume"))
         self._points_mode_btn.setText(t("sim.results.viewer3d_display_points_short"))
         self._points_mode_btn.setToolTip(t("sim.results.viewer3d_display_points"))
+        self._anomaly_mode_label.setText(t("sim.results.viewer3d_anomaly_mode"))
+        self._positive_anomaly_btn.setText(
+            t("sim.results.viewer3d_anomaly_positive_short")
+        )
+        self._positive_anomaly_btn.setToolTip(
+            t("sim.results.viewer3d_anomaly_positive")
+        )
+        self._negative_anomaly_btn.setText(
+            t("sim.results.viewer3d_anomaly_negative_short")
+        )
+        self._negative_anomaly_btn.setToolTip(
+            t("sim.results.viewer3d_anomaly_negative")
+        )
+        self._absolute_anomaly_btn.setText(
+            t("sim.results.viewer3d_anomaly_absolute_short")
+        )
+        self._absolute_anomaly_btn.setToolTip(
+            t("sim.results.viewer3d_anomaly_absolute")
+        )
         self._opacity_label.setText(t("sim.results.viewer3d_opacity_short"))
         self._opacity_label.setToolTip(t("sim.results.viewer3d_opacity"))
         self._highlight_check.setText(t("sim.results.viewer3d_highlight_short"))

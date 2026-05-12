@@ -31,10 +31,14 @@ from pyeidors.electrodes.layout import (  # noqa: E402
     effective_pattern_layout_for_zigzag_3d_mesh,
 )
 from eit_app.ui.conductivity_3d_widget import (  # noqa: E402
+    ANOMALY_MODE_ABSOLUTE,
+    ANOMALY_MODE_NEGATIVE,
+    ANOMALY_MODE_POSITIVE,
     Conductivity3DWidget,
     DISPLAY_MODE_POINTS,
     DISPLAY_MODE_VOLUME,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
+    _cell_anomaly_mask,
     _cell_inhomogeneity_mask,
     _conductivity_color_limits,
     embedded_vtk_enabled,
@@ -60,6 +64,24 @@ def test_v104_3d_highlight_ignores_near_constant_absolute_sigma_noise() -> None:
 
     assert not np.any(_cell_inhomogeneity_mask(near_constant))
     assert np.flatnonzero(_cell_inhomogeneity_mask(visible_anomaly)).tolist() == [3]
+
+
+def test_v119_3d_anomaly_mask_separates_positive_negative_absolute_modes() -> None:
+    values = np.array([1.0, 1.18, 0.82, 1.01, 0.99], dtype=np.float64)
+
+    positive = _cell_anomaly_mask(values, ANOMALY_MODE_POSITIVE)
+    negative = _cell_anomaly_mask(values, ANOMALY_MODE_NEGATIVE)
+    absolute = _cell_anomaly_mask(values, ANOMALY_MODE_ABSOLUTE)
+
+    assert np.flatnonzero(positive).tolist() == [1]
+    assert np.flatnonzero(negative).tolist() == [2]
+    assert np.flatnonzero(absolute).tolist() == [1, 2]
+    assert np.array_equal(_cell_inhomogeneity_mask(values), absolute)
+
+
+def test_v119_3d_anomaly_mask_rejects_unknown_mode() -> None:
+    with pytest.raises(ValueError, match="unknown anomaly mode"):
+        _cell_anomaly_mask(np.array([1.0, 2.0]), "signed")
 
 
 def test_v107_3d_color_limits_do_not_amplify_near_constant_sigma_noise() -> None:

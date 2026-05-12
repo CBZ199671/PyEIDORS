@@ -18,8 +18,9 @@ class InhomogeneitySpec:
     center_x: float = 0.0
     center_y: float = 0.0
     center_z: float = 0.0
-    size_x: float = 0.2  # radius for circle; half-width for rect/ellipse
-    size_y: float = 0.2  # same as size_x for circle; half-height for rect/ellipse
+    # Internal half-extents/radii. The GUI table displays full physical sizes.
+    size_x: float = 0.2
+    size_y: float = 0.2
     size_z: float = 0.2  # 3D radius/depth; ignored by 2D paints
     conductivity: float = 2.0
 
