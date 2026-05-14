@@ -103,6 +103,34 @@ class GREITRMComponents:
 
 
 @dataclass(frozen=True)
+class GREITNativeTrainingPipeline:
+    """Native PyEIDORS GREIT training pipeline artifact.
+
+    The bundle makes the full offline path explicit: target distribution,
+    PyEIDORS forward responses ``vh/vi/Y``, desired images ``D``, and the final
+    RM built by the shared GREIT algebra.
+    """
+
+    distribution: GREIT3DDistribution | None
+    responses: GREITFiniteTargetResponses
+    desired_images: GREITDesiredImages
+    greit: GREITRM
+    metadata: MappingProxyType
+
+    @property
+    def rm(self) -> np.ndarray:
+        return self.greit.rm
+
+    @property
+    def y(self) -> np.ndarray:
+        return self.responses.contracted_y
+
+    @property
+    def d(self) -> np.ndarray:
+        return self.desired_images.values
+
+
+@dataclass(frozen=True)
 class GREITWeightSearchResult:
     """Scalar GREIT weight search result over ``log10(weight)``."""
 
@@ -492,6 +520,7 @@ def build_greit_finite_target_responses(
     target_contrast: Any = 1.0,
     background_conductivity: Any = 1.0,
     normalize: bool = True,
+    measurement_order: Any | None = None,
     channel_mask: Any | None = None,
     measurement_weights: Any | None = None,
     batch_size: int | None = None,
@@ -558,6 +587,13 @@ def build_greit_finite_target_responses(
         raise ValueError(
             f"vi measurement rows {vi.shape[0]} do not match vh length {vh.size}."
         )
+    order, order_metadata = _resolve_measurement_order(
+        measurement_order,
+        n_measurements=vh.size,
+    )
+    if order is not None:
+        vh = np.ascontiguousarray(vh[order], dtype=np.float64)
+        vi = np.ascontiguousarray(vi[order, :], dtype=np.float64)
     y = _calc_greit_difference_data(vh, vi, normalize=normalize)
     contracted_y, measurement_contract = _contract_training_responses(
         y,
@@ -590,6 +626,7 @@ def build_greit_finite_target_responses(
             "batch_size": resolved_batch_size,
             "cache_key": cache_key,
             "cache_hit": False,
+            **order_metadata,
             "bad_channel_count": int(measurement_contract.bad_channel_count),
             "measurement_weight_kind": measurement_contract.weight_kind,
             **plane_metadata,
@@ -1766,6 +1803,137 @@ def build_3d_greit_rm(
     return result
 
 
+def build_native_greit_training_pipeline(
+    fwd_model: Any,
+    *,
+    distribution: GREIT3DDistribution | None = None,
+    rec_model: Any | None = None,
+    imgsz: Any | None = None,
+    xvec: Any | None = None,
+    yvec: Any | None = None,
+    zvec: Any | None = None,
+    bounds: Any | None = None,
+    downsample: Any | None = None,
+    point_in_volume: Any | None = None,
+    centers: Any | None = None,
+    target_radius: float | None = None,
+    target_size: float | None = None,
+    target_plane: Any | None = None,
+    target_offset: Any | None = None,
+    target_contrast: Any = 1.0,
+    background_conductivity: Any = 1.0,
+    normalize: bool = True,
+    measurement_order: Any | None = None,
+    channel_mask: Any | None = None,
+    measurement_weights: Any | None = None,
+    batch_size: int | None = None,
+    desired_radius: Any | None = None,
+    desired_solution_fn: Any | None = None,
+    desired_options: dict[str, Any] | None = None,
+    weight: Any = 0.5,
+    noise_covar: Any = 1.0,
+    artifact_path: str | Path | None = None,
+    keep_model_components: bool = True,
+    fwd_model_signature: str | None = None,
+    metadata: dict[str, Any] | None = None,
+) -> GREITNativeTrainingPipeline:
+    """Build a GREIT RM from native PyEIDORS finite-target forward solves.
+
+    This is the public orchestration entry for fair PyEIDORS/EIDORS GREIT
+    comparisons: PyEIDORS generates ``V_h``, ``V_i`` and ``Y`` itself, then
+    uses the same desired-image and ``calc_GREIT_RM`` algebra as the parity
+    component path.
+    """
+
+    built_distribution = distribution
+    if built_distribution is None and rec_model is None:
+        built_distribution = build_greit3d_distribution(
+            fwd_model,
+            imgsz=imgsz,
+            xvec=xvec,
+            yvec=yvec,
+            zvec=zvec,
+            bounds=bounds,
+            downsample=downsample,
+            point_in_volume=point_in_volume,
+        )
+    resolved_rec_model = rec_model if rec_model is not None else built_distribution
+    if resolved_rec_model is None:
+        raise ValueError(
+            "native GREIT training requires rec_model or a buildable distribution."
+        )
+    if centers is None and built_distribution is None:
+        raise ValueError(
+            "native GREIT training requires centers or GREIT3D distribution targets."
+        )
+
+    responses = build_greit_finite_target_responses(
+        fwd_model,
+        distribution=built_distribution,
+        centers=centers,
+        target_radius=target_radius,
+        target_size=target_size,
+        target_plane=target_plane,
+        target_offset=target_offset,
+        target_contrast=target_contrast,
+        background_conductivity=background_conductivity,
+        normalize=normalize,
+        measurement_order=measurement_order,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+        batch_size=batch_size,
+    )
+    desired = build_greit_desired_images(
+        resolved_rec_model,
+        responses=responses,
+        distribution=built_distribution,
+        radius=desired_radius,
+        desired_solution_fn=desired_solution_fn,
+        desired_options=desired_options,
+    )
+    resolved_signature = (
+        str(fwd_model_signature)
+        if fwd_model_signature is not None
+        else _greit_forward_model_signature(fwd_model, responses.conductivities)
+    )
+    pipeline_meta = {
+        "training_data_source": "native_pyeidors_forward",
+        "uses_eidors_exported_vh_vi_d": False,
+        "fairness_contract": {
+            "target_distribution": dict(built_distribution.metadata)
+            if built_distribution is not None
+            else {"target_source": "centers"},
+            "forward_model_signature": resolved_signature,
+            "difference_normalization": responses.metadata["difference_normalization"],
+            "measurement_order_hash": responses.metadata["measurement_order_hash"],
+            "bad_channel_count": responses.metadata["bad_channel_count"],
+            "measurement_weight_kind": responses.metadata["measurement_weight_kind"],
+            "desired_solution_fn": desired.metadata["desired_solution_fn"],
+            "desired_image_sampling": desired.metadata["desired_image_sampling"],
+        },
+    }
+    if metadata:
+        pipeline_meta.update(metadata)
+    greit = build_greit_rm_from_eidors_components(
+        responses,
+        desired,
+        weight=weight,
+        noise_covar=noise_covar,
+        artifact_path=artifact_path,
+        keep_model_components=keep_model_components,
+        fwd_model_signature=resolved_signature,
+        rec_model=resolved_rec_model,
+        metadata=pipeline_meta,
+    )
+    return GREITNativeTrainingPipeline(
+        distribution=built_distribution,
+        responses=responses,
+        desired_images=desired,
+        greit=greit,
+        metadata=MappingProxyType(pipeline_meta),
+    )
+
+
 def build_greit_rm_from_eidors_components(
     responses: GREITFiniteTargetResponses,
     desired_images: GREITDesiredImages,
@@ -2548,6 +2716,41 @@ def _solve_measurement_batch(
     if any(column.size != first_size for column in columns):
         raise ValueError("finite-target response columns have inconsistent lengths.")
     return np.ascontiguousarray(np.column_stack(columns), dtype=np.float64)
+
+
+def _resolve_measurement_order(
+    measurement_order: Any | None,
+    *,
+    n_measurements: int,
+) -> tuple[np.ndarray | None, dict[str, Any]]:
+    if measurement_order is None:
+        identity = np.arange(int(n_measurements), dtype=np.int64)
+        return None, {
+            "measurement_order_source": "identity",
+            "measurement_order_hash": _array_digest(identity),
+            "measurement_order_first_indices": tuple(int(v) for v in identity[:8]),
+        }
+    order = np.asarray(measurement_order, dtype=np.int64).reshape(-1)
+    if order.size != int(n_measurements):
+        raise ValueError(
+            f"measurement_order length {order.size} does not match {n_measurements}."
+        )
+    if np.any((order < 0) | (order >= int(n_measurements))):
+        raise ValueError("measurement_order indices are out of range.")
+    if np.unique(order).size != order.size:
+        raise ValueError("measurement_order must be a permutation.")
+    identity = np.arange(int(n_measurements), dtype=np.int64)
+    if np.array_equal(order, identity):
+        return None, {
+            "measurement_order_source": "identity",
+            "measurement_order_hash": _array_digest(identity),
+            "measurement_order_first_indices": tuple(int(v) for v in identity[:8]),
+        }
+    return np.ascontiguousarray(order, dtype=np.int64), {
+        "measurement_order_source": "provided",
+        "measurement_order_hash": _array_digest(order),
+        "measurement_order_first_indices": tuple(int(v) for v in order[:8]),
+    }
 
 
 def _call_fwd_solve(fwd_model: Any, conductivity: np.ndarray) -> Any:
@@ -3537,6 +3740,7 @@ __all__ = [
     "GREIT_RM_HDF5_SCHEMA",
     "GREITRM",
     "GREITRMComponents",
+    "GREITNativeTrainingPipeline",
     "GREITTrainingTargets",
     "GREITWeightSearchResult",
     "build_3d_greit_rm",
@@ -3544,6 +3748,7 @@ __all__ = [
     "build_greit_finite_target_responses",
     "build_greit_rm_from_eidors_components",
     "build_greit3d_distribution",
+    "build_native_greit_training_pipeline",
     "calc_greit_rm",
     "generate_spherical_targets",
     "greit_cache_signature",

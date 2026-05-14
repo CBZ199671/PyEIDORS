@@ -19,12 +19,14 @@ from pyeidors.inverse import (
     GREITFiniteTargetResponses,
     GREIT_METRIC_KEYS,
     GREITRM,
+    GREITNativeTrainingPipeline,
     VoxelGrid,
     build_3d_greit_rm,
     build_greit_desired_images,
     build_greit_finite_target_responses,
     build_greit_rm_from_eidors_components,
     build_greit3d_distribution,
+    build_native_greit_training_pipeline,
     generate_spherical_targets,
     greit_metrics,
     load_greit_rm,
@@ -272,6 +274,62 @@ def test_build_greit_finite_target_responses_raw_batch_and_cache() -> None:
     assert model.batch_calls == 2
     assert cached.metadata["cache_hit"] is True
     np.testing.assert_allclose(cached.y, responses.y)
+
+
+def test_build_greit_finite_target_responses_applies_measurement_order_before_contract() -> (
+    None
+):
+    centers = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+        ],
+        dtype=float,
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 0.0, 0.0],
+            [0.0, 2.0, 0.0],
+            [0.0, 0.0, 3.0],
+            [1.0, 1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    model = _FiniteTargetForwardModel(centers, measurement_matrix)
+    order = np.array([2, 0, 3, 1], dtype=np.int64)
+
+    responses = build_greit_finite_target_responses(
+        model,
+        centers=[[0.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        target_radius=0.25,
+        target_contrast=0.5,
+        normalize=False,
+        measurement_order=order,
+        channel_mask=[False, True, False, False],
+        measurement_weights=np.array([1.0, 4.0, 9.0, 16.0]),
+    )
+
+    expected_vh_raw = measurement_matrix @ np.ones(3, dtype=float)
+    expected_vi_raw = np.column_stack(
+        [
+            measurement_matrix @ np.array([1.5, 1.0, 1.0]),
+            measurement_matrix @ np.array([1.0, 1.0, 1.5]),
+        ]
+    )
+    expected_y = expected_vi_raw[order, :] - expected_vh_raw[order].reshape(-1, 1)
+    expected_contracted = expected_y.copy()
+    expected_contracted[1, :] = 0.0
+    expected_contracted[2, :] *= 3.0
+    expected_contracted[3, :] *= 4.0
+
+    np.testing.assert_allclose(responses.vh, expected_vh_raw[order])
+    np.testing.assert_allclose(responses.vi, expected_vi_raw[order, :])
+    np.testing.assert_allclose(responses.y, expected_y)
+    np.testing.assert_allclose(responses.contracted_y, expected_contracted)
+    assert responses.metadata["measurement_order_source"] == "provided"
+    assert responses.metadata["measurement_order_first_indices"] == (2, 0, 3, 1)
+    assert responses.metadata["bad_channel_count"] == 1
 
 
 def test_build_greit_desired_images_default_sigmoid_is_independent_from_targets() -> (
@@ -572,6 +630,89 @@ def test_eidors_greit_hdf5_artifact_stores_model_components_and_signature(
     np.testing.assert_allclose(loaded.rec_model, grid.cell_centers())
     assert loaded.fwd_model_signature == "unit-fwd-signature"
     assert loaded.cache_signature == greit.cache_signature
+
+
+def test_build_native_greit_training_pipeline_uses_native_forward_y_d_and_rm_formula(
+    tmp_path,
+) -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 2.0, 1.0],
+        shape=(2, 2, 1),
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 0.5, 0.25, 0.0],
+            [0.0, 1.0, -0.5, 0.75],
+            [0.25, -0.25, 1.0, 0.5],
+            [1.5, 0.0, 0.0, -0.5],
+        ],
+        dtype=float,
+    )
+    model = _FiniteTargetForwardModel(grid.cell_centers(), measurement_matrix)
+    artifact_path = tmp_path / "native_training_pipeline.h5"
+
+    pipeline = build_native_greit_training_pipeline(
+        model,
+        rec_model=grid,
+        centers=grid.cell_centers()[:2],
+        target_radius=0.4,
+        target_contrast=0.25,
+        normalize=False,
+        desired_solution_fn="gauss",
+        desired_options={
+            "desired_img_threshold": 0.0,
+            "desired_img_gauss_order": 3,
+        },
+        weight=0.2,
+        noise_covar=1.5,
+        artifact_path=artifact_path,
+        fwd_model_signature="native-unit-fwd",
+    )
+
+    assert isinstance(pipeline, GREITNativeTrainingPipeline)
+    assert artifact_path.exists()
+    assert model.solve_calls == 3
+    assert pipeline.metadata["training_data_source"] == "native_pyeidors_forward"
+    assert pipeline.greit.metadata["uses_eidors_exported_vh_vi_d"] is False
+    assert pipeline.greit.metadata["training_mode"] == "forward"
+    assert pipeline.greit.metadata["eidors_parity"] is True
+    assert pipeline.greit.metadata["difference_normalization"] == "raw"
+    assert pipeline.greit.metadata["desired_solution_fn"] == (
+        "GREIT_desired_img_sigmoid:gauss"
+    )
+
+    expected_conductivities = np.array(
+        [
+            [1.25, 1.0, 1.0, 1.0],
+            [1.0, 1.25, 1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    expected_vh = measurement_matrix @ np.ones(4, dtype=float)
+    expected_vi = np.column_stack(
+        [measurement_matrix @ row for row in expected_conductivities]
+    )
+    np.testing.assert_allclose(pipeline.responses.vh, expected_vh)
+    np.testing.assert_allclose(pipeline.responses.vi, expected_vi)
+    np.testing.assert_allclose(
+        pipeline.responses.y,
+        expected_vi - expected_vh.reshape(-1, 1),
+    )
+    np.testing.assert_allclose(pipeline.greit.y, pipeline.responses.contracted_y)
+    np.testing.assert_allclose(pipeline.greit.d, pipeline.desired_images.values)
+
+    y = pipeline.responses.contracted_y
+    d = pipeline.desired_images.values
+    expected_pjt = d @ y.T
+    noiselev = 0.2 * float(np.mean(np.abs(y)))
+    expected_m = y @ y.T + (noiselev * noiselev) * 1.5 * np.eye(y.shape[0])
+    expected_rm = np.linalg.solve(expected_m.T, expected_pjt.T).T
+
+    np.testing.assert_allclose(pipeline.greit.pjt, expected_pjt)
+    np.testing.assert_allclose(pipeline.greit.m, expected_m)
+    np.testing.assert_allclose(pipeline.greit.rm, expected_rm)
+    np.testing.assert_allclose(pipeline.rm, expected_rm)
 
 
 def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(

@@ -19,10 +19,8 @@ import numpy as np
 from pyeidors.inverse.greit import (
     GREIT_EIDORS_HDF5_SCHEMA,
     GREITRM,
-    build_greit_desired_images,
-    build_greit_finite_target_responses,
-    build_greit_rm_from_eidors_components,
     build_greit3d_distribution,
+    build_native_greit_training_pipeline,
     load_greit_rm,
 )
 
@@ -506,33 +504,6 @@ def build_native_greit_artifact(
     )
     normalize = bool(payload["normalize_measurements"])
     target_radius = _greit_target_radius_from_config(cfg, radius=radius)
-    responses = build_greit_finite_target_responses(
-        fwd_model,
-        distribution=distribution,
-        target_radius=target_radius,
-        target_size=None,
-        target_contrast=cfg.get(
-            "target_contrast", cfg.get("greit_target_contrast", 1.0)
-        ),
-        background_conductivity=cfg.get(
-            "background_conductivity",
-            cfg.get("sigma0", 1.0),
-        ),
-        normalize=normalize,
-        channel_mask=cfg.get("channel_mask", cfg.get("bad_channel_mask")),
-        measurement_weights=cfg.get("measurement_weights"),
-        batch_size=_int_or_none(cfg.get("greit_response_batch_size")) or 8,
-        cache_key=sig,
-    )
-    desired = build_greit_desired_images(
-        distribution,
-        responses=responses,
-        distribution=distribution,
-        radius=cfg.get("desired_radius", target_radius),
-        desired_solution_fn=cfg.get("desired_solution_fn"),
-        desired_options=cfg.get("desired_solution_params")
-        or cfg.get("greit_desired_options"),
-    )
     weight = cfg.get("weight", cfg.get("greit_weight"))
     if weight is None:
         weight = cfg.get("noise_figure", cfg.get("greit_noise_figure", 0.5))
@@ -553,17 +524,35 @@ def build_native_greit_artifact(
         "target_size_semantics": "fraction_of_tank_radius",
         "target_radius_effective": float(target_radius),
     }
-    greit = build_greit_rm_from_eidors_components(
-        responses,
-        desired,
+    pipeline = build_native_greit_training_pipeline(
+        fwd_model,
+        distribution=distribution,
+        rec_model=distribution,
+        target_radius=target_radius,
+        target_contrast=cfg.get(
+            "target_contrast", cfg.get("greit_target_contrast", 1.0)
+        ),
+        background_conductivity=cfg.get(
+            "background_conductivity",
+            cfg.get("sigma0", 1.0),
+        ),
+        normalize=normalize,
+        measurement_order=cfg.get("measurement_order", cfg.get("channel_order")),
+        channel_mask=cfg.get("channel_mask", cfg.get("bad_channel_mask")),
+        measurement_weights=cfg.get("measurement_weights"),
+        batch_size=_int_or_none(cfg.get("greit_response_batch_size")) or 8,
+        desired_radius=cfg.get("desired_radius", target_radius),
+        desired_solution_fn=cfg.get("desired_solution_fn"),
+        desired_options=cfg.get("desired_solution_params")
+        or cfg.get("greit_desired_options"),
         weight=0.5 if weight is None else float(weight),
         noise_covar=cfg.get("noise_covar", 1.0),
         artifact_path=None,
         keep_model_components=True,
         fwd_model_signature=str(payload["mesh_hash"]),
-        rec_model=distribution,
         metadata=metadata,
     )
+    greit = pipeline.greit
     greit = replace(
         greit,
         voxel_shape=tuple(int(v) for v in distribution.volume_mask.shape),

@@ -200,6 +200,25 @@ def test_native_greit_builder_scales_target_size_by_tank_radius(tmp_path) -> Non
     assert lookup.signature_payload["target_radius_effective"] == pytest.approx(0.5)
 
 
+def test_native_greit_builder_applies_channel_order_from_signature_config(
+    tmp_path,
+) -> None:
+    config = _base_config()
+    config["channel_order"] = [2, 0, 3, 1]
+    model = _FakeForwardModel()
+
+    lookup = resolve_or_build_greit_artifact(
+        config,
+        registry_dir=tmp_path,
+        fwd_model=model,
+    )
+
+    expected_vh = model._sensitivity @ np.ones(2, dtype=float)
+    np.testing.assert_allclose(lookup.greit.vh, expected_vh[[2, 0, 3, 1]])
+    assert lookup.greit.metadata["fairness_contract"]["measurement_order_hash"]
+    assert lookup.greit.metadata["eidors_parity"] is True
+
+
 def test_native_greit_builder_masks_cylindrical_rec_model(tmp_path) -> None:
     config = _base_config()
     config.update(
