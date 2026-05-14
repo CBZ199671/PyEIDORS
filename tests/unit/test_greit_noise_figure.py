@@ -6,6 +6,7 @@ import pytest
 from pyeidors.inverse.greit import (
     GREITWeightSearchResult,
     build_3d_greit_rm,
+    optimize_greit_weight_eidors_nf,
     optimize_greit_weight_for_metric,
     search_greit_weight_for_metric,
 )
@@ -107,6 +108,61 @@ def test_metric_optimizer_uses_calc_greit_rm_as_black_box() -> None:
     assert result.metadata["pjt_cache_source"] == "computed_once"
     assert result.metadata["pjt_cache_reused_across_weight_search"] is True
     assert result.metadata["noise_source"] == "provided"
+
+
+def test_eidors_nf_optimizer_matches_vi_nf_and_signal_y_paths() -> None:
+    y = np.array(
+        [
+            [0.9, 0.1, -0.2],
+            [0.3, 0.7, 0.4],
+            [-0.1, 0.2, 0.8],
+            [0.5, -0.4, 0.2],
+        ],
+        dtype=float,
+    )
+    d = np.array(
+        [
+            [1.0, 0.1, 0.0],
+            [0.2, 0.8, 0.1],
+            [0.0, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    vh = np.array([1.1, -0.3, 0.6, -0.8], dtype=float)
+    signal_y = np.array([0.03, -0.015, 0.022, -0.011], dtype=float)
+    vi_nf = vh + signal_y
+    volumes = np.array([0.7, 1.2, 1.0], dtype=float)
+
+    reference = optimize_greit_weight_eidors_nf(
+        y,
+        d,
+        vh=vh,
+        signal_y=signal_y,
+        volume_weights=volumes,
+        target_noise_figure=2.5,
+        bracket=(-3.0, 2.0),
+        tolerance=1.0e-3,
+    )
+    result = optimize_greit_weight_eidors_nf(
+        y,
+        d,
+        vh=vh,
+        vi_nf=vi_nf,
+        volume_weights=volumes,
+        target_noise_figure=2.5,
+        bracket=(-3.0, 2.0),
+        tolerance=1.0e-3,
+    )
+
+    assert result.objective_value <= 1.0e-6
+    assert result.weight == pytest.approx(reference.weight, rel=2.0e-3)
+    assert result.metadata["algorithm"] == "eidors_greit_noise_figure_search"
+    assert result.metadata["metric"] == "noise_figure"
+    assert result.metadata["signal_source"] == "computed_from_vi_nf"
+    assert result.metadata["volume_weight_source"] == "provided"
+    assert result.metadata["vh_std_ddof"] == 1
+    assert result.metadata["boundary_margin"] == pytest.approx(0.1)
+    assert result.metadata["pjt_cache_reused_across_weight_search"] is True
 
 
 def test_build_3d_greit_rm_can_choose_weight_from_metric_search() -> None:

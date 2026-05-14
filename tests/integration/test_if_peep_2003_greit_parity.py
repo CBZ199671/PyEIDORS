@@ -17,7 +17,11 @@ import numpy as np
 import pytest
 from scipy.io import loadmat
 
-from pyeidors.inverse.greit import build_greit_desired_images, calc_greit_rm
+from pyeidors.inverse.greit import (
+    build_greit_desired_images,
+    calc_greit_rm,
+    optimize_greit_weight_eidors_nf,
+)
 from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 
 
@@ -72,6 +76,34 @@ def test_if_peep_2003_greit_training_components_close_to_eidors() -> None:
     assert _relative_l2(components.m, eidors_m) < 1.0e-12
     assert _relative_l2(components.rm, eidors_rm) < 1.0e-8
     assert _corr(components.rm, eidors_rm) > 1.0 - 1.0e-12
+
+
+def test_if_peep_2003_eidors_noise_figure_weight_search_matches_eidors() -> None:
+    payload = _load_payload()
+    eidors_y = _as_2d(payload["train_y"])
+    eidors_d = _as_2d(payload["train_d"])
+    train_vh = _as_vector(payload["train_vh"])
+    nf_target_y = _as_vector(payload["nf_target_y"])
+    rec_volume_weights = _as_vector(payload["rec_volume_weights"])
+    eidors_weight = float(np.asarray(payload["eidors_greit_weight"]).reshape(-1)[0])
+
+    result = optimize_greit_weight_eidors_nf(
+        eidors_y,
+        eidors_d,
+        vh=train_vh,
+        signal_y=nf_target_y,
+        volume_weights=rec_volume_weights,
+        target_noise_figure=1.0,
+        noise_covar=1.0,
+        bracket=(-2.0, 2.0),
+        tolerance=2.0e-4,
+        maxiter=128,
+    )
+
+    assert result.weight == pytest.approx(eidors_weight, rel=2.0e-3)
+    assert result.achieved_metric == pytest.approx(1.0, abs=1.0e-2)
+    assert result.metadata["algorithm"] == "eidors_greit_noise_figure_search"
+    assert result.metadata["nf_formula"] == "eidors_calc_noise_figure_linear"
 
 
 def test_if_peep_2003_all_1500_frames_replay_eidors_reconstruction() -> None:

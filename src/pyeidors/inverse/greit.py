@@ -1351,6 +1351,7 @@ def search_greit_weight_for_metric(
     tolerance: float = 1.0e-3,
     maxiter: int = 64,
     max_expand: int = 3,
+    boundary_margin: float | None = None,
 ) -> GREITWeightSearchResult:
     """Choose scalar GREIT weight by bounded search over ``log10(weight)``.
 
@@ -1393,7 +1394,12 @@ def search_greit_weight_for_metric(
         success = bool(result["success"])
         message = str(result["message"])
         best_x = float(result["x"])
-        if attempt >= max_expand or _inside_bracket(best_x, lo=lo, hi=hi):
+        if attempt >= max_expand or _inside_bracket(
+            best_x,
+            lo=lo,
+            hi=hi,
+            boundary_margin=boundary_margin,
+        ):
             break
         width = hi - lo
         if best_x <= lo + 0.1 * width:
@@ -1422,6 +1428,9 @@ def search_greit_weight_for_metric(
             "objective_value": objective_value,
             "tolerance": float(tolerance),
             "maxiter": int(maxiter),
+            "boundary_margin": None
+            if boundary_margin is None
+            else float(boundary_margin),
             "evaluations": len(records),
             "success": success,
             "message": message,
@@ -1518,6 +1527,135 @@ def optimize_greit_weight_for_metric(
         target_metric=result.target_metric,
         achieved_metric=result.achieved_metric,
         objective_value=result.objective_value,
+        initial_bracket=result.initial_bracket,
+        bracket=result.bracket,
+        evaluations=result.evaluations,
+        metadata=MappingProxyType(metadata),
+    )
+
+
+def optimize_greit_weight_eidors_nf(
+    y: Any,
+    d: Any,
+    *,
+    vh: Any,
+    vi_nf: Any | None = None,
+    signal_y: Any | None = None,
+    volume_weights: Any | None = None,
+    normalize: bool = False,
+    target_noise_figure: float = 1.0,
+    noise_covar: Any = 1.0,
+    pjt_cache: Any | None = None,
+    bracket: tuple[float, float] = (-2.0, 2.0),
+    tolerance: float = 1.0e-4,
+    maxiter: int = 96,
+) -> GREITWeightSearchResult:
+    """Optimize GREIT weight with EIDORS ``calc_noise_figure`` semantics.
+
+    EIDORS fixes the desired noise figure, then searches the scalar GREIT
+    ``weight`` used by ``calc_GREIT_RM``.  The metric here mirrors the linear
+    ``solve_use_matrix`` branch of ``calc_noise_figure``: measurement noise is
+    ``0.01 * std(vh) * I``, image/data SNR use mean absolute signal divided by
+    sample standard deviation noise, and optional reconstruction-element volume
+    weights are applied before measuring image SNR.
+    """
+
+    target = float(target_noise_figure)
+    if target <= 0.0 or not np.isfinite(target):
+        raise ValueError("target_noise_figure must be finite and positive.")
+    y_matrix = _validate_training_response_matrix(y)
+    d_matrix = _validate_desired_component_matrix(d, n_targets=y_matrix.shape[1])
+    vh_vector = _eidors_nf_vh_vector(vh, n_measurements=y_matrix.shape[0])
+    signal_matrix, signal_source = _eidors_nf_signal_matrix(
+        vi_nf=vi_nf,
+        signal_y=signal_y,
+        vh=vh_vector,
+        normalize=normalize,
+    )
+    volumes, volume_source = _eidors_nf_volume_weights(
+        volume_weights,
+        n_rec_parameters=d_matrix.shape[0],
+    )
+    pjt = (
+        np.ascontiguousarray(
+            d_matrix @ y_matrix.T,
+            dtype=np.result_type(y_matrix, d_matrix),
+        )
+        if pjt_cache is None
+        else _validate_pjt_cache(
+            pjt_cache,
+            n_rec_parameters=d_matrix.shape[0],
+            n_measurements=y_matrix.shape[0],
+            dtype=np.result_type(y_matrix, d_matrix),
+        )
+    )
+
+    def metric_fn(log10_weight: float) -> float:
+        components = calc_greit_rm(
+            y_matrix,
+            d_matrix,
+            weight=10.0 ** float(log10_weight),
+            noise_covar=noise_covar,
+            pjt_cache=pjt,
+        )
+        metric, _ = _eidors_noise_figure_metric(
+            components.rm,
+            vh_vector,
+            signal_matrix,
+            volume_weights=volumes,
+            normalize=normalize,
+        )
+        return metric
+
+    result = search_greit_weight_for_metric(
+        metric_fn,
+        target_metric=target,
+        bracket=bracket,
+        tolerance=tolerance,
+        maxiter=maxiter,
+        boundary_margin=0.1,
+    )
+    final_components = calc_greit_rm(
+        y_matrix,
+        d_matrix,
+        weight=result.weight,
+        noise_covar=noise_covar,
+        pjt_cache=pjt,
+    )
+    achieved, nf_metadata = _eidors_noise_figure_metric(
+        final_components.rm,
+        vh_vector,
+        signal_matrix,
+        volume_weights=volumes,
+        normalize=normalize,
+    )
+    objective_value = float((achieved - target) ** 2)
+    metadata = dict(result.metadata)
+    metadata.update(
+        {
+            "algorithm": "eidors_greit_noise_figure_search",
+            "metric": "noise_figure",
+            "eidors_reference": "mk_GREIT_model opt.noise_figure -> calc_noise_figure linear solve_use_matrix",
+            "target_noise_figure": target,
+            "achieved_noise_figure": achieved,
+            "objective_value": objective_value,
+            "uses_calc_greit_rm_as_black_box": True,
+            "pjt_cache_source": "computed_once" if pjt_cache is None else "provided",
+            "pjt_cache_reused_across_weight_search": True,
+            "pjt_shape": tuple(int(v) for v in pjt.shape),
+            "signal_source": signal_source,
+            "normalize": bool(normalize),
+            "volume_weight_source": volume_source,
+            "final_noiselev": float(final_components.noiselev),
+            **nf_metadata,
+        }
+    )
+    return GREITWeightSearchResult(
+        weight=result.weight,
+        log10_weight=result.log10_weight,
+        target_metric=target,
+        achieved_metric=achieved,
+        objective_value=objective_value,
         initial_bracket=result.initial_bracket,
         bracket=result.bracket,
         evaluations=result.evaluations,
@@ -3183,11 +3321,20 @@ def _bounded_minimize(
     }
 
 
-def _inside_bracket(value: float, *, lo: float, hi: float) -> bool:
+def _inside_bracket(
+    value: float,
+    *,
+    lo: float,
+    hi: float,
+    boundary_margin: float | None = None,
+) -> bool:
     width = hi - lo
     if width <= 0.0:
         return True
-    margin = max(0.1 * width, 1.0e-12)
+    if boundary_margin is None:
+        margin = max(0.1 * width, 1.0e-12)
+    else:
+        margin = max(float(boundary_margin), 1.0e-12)
     return (lo + margin) < value < (hi - margin)
 
 
@@ -3254,6 +3401,163 @@ def _greit_noise_metric(
     if metric == "image_snr":
         return float(image_snr)
     return float(input_snr / max(image_snr, 1.0e-15))
+
+
+def _eidors_nf_vh_vector(values: Any, *, n_measurements: int) -> np.ndarray:
+    raw = np.asarray(values)
+    dtype = np.complex128 if np.iscomplexobj(raw) else np.float64
+    vector = np.asarray(values, dtype=dtype).reshape(-1)
+    if vector.size != n_measurements:
+        raise ValueError(
+            f"vh must contain {n_measurements} measurements, got {vector.size}."
+        )
+    if vector.size < 2:
+        raise ValueError("EIDORS noise-figure search requires at least two channels.")
+    if not np.isfinite(vector).all():
+        raise FloatingPointError("vh contains non-finite values.")
+    return np.ascontiguousarray(vector, dtype=dtype)
+
+
+def _eidors_nf_signal_matrix(
+    *,
+    vi_nf: Any | None,
+    signal_y: Any | None,
+    vh: np.ndarray,
+    normalize: bool,
+) -> tuple[np.ndarray, str]:
+    if (vi_nf is None) == (signal_y is None):
+        raise ValueError("Provide exactly one of vi_nf or signal_y.")
+    if signal_y is not None:
+        return (
+            _eidors_nf_measurement_matrix(
+                signal_y,
+                n_measurements=vh.size,
+                name="signal_y",
+            ),
+            "provided_signal_y",
+        )
+    vi_matrix = _eidors_nf_measurement_matrix(
+        vi_nf,
+        n_measurements=vh.size,
+        name="vi_nf",
+    )
+    if normalize:
+        _ensure_nonzero_vh_for_normalization(vh)
+        signal = vi_matrix / vh.reshape(-1, 1) - 1.0
+    else:
+        signal = vi_matrix - vh.reshape(-1, 1)
+    if not np.isfinite(signal).all():
+        raise FloatingPointError("EIDORS NF signal_y contains non-finite values.")
+    return np.ascontiguousarray(signal), "computed_from_vi_nf"
+
+
+def _eidors_nf_measurement_matrix(
+    values: Any,
+    *,
+    n_measurements: int,
+    name: str,
+) -> np.ndarray:
+    raw = np.asarray(values)
+    dtype = np.complex128 if np.iscomplexobj(raw) else np.float64
+    matrix = np.asarray(values, dtype=dtype)
+    if matrix.ndim == 1:
+        matrix = matrix.reshape(-1, 1)
+    if matrix.ndim != 2 or matrix.shape[0] != n_measurements:
+        raise ValueError(
+            f"{name} must have shape ({n_measurements}, n_targets), got {matrix.shape}."
+        )
+    if matrix.shape[1] == 0:
+        raise ValueError(f"{name} must contain at least one target column.")
+    if not np.isfinite(matrix).all():
+        raise FloatingPointError(f"{name} contains non-finite values.")
+    return np.ascontiguousarray(matrix, dtype=dtype)
+
+
+def _eidors_nf_volume_weights(
+    values: Any | None,
+    *,
+    n_rec_parameters: int,
+) -> tuple[np.ndarray, str]:
+    if values is None:
+        return np.ones(n_rec_parameters, dtype=np.float64), "unit"
+    vector = np.asarray(values, dtype=np.float64).reshape(-1)
+    if vector.size != n_rec_parameters:
+        raise ValueError(
+            f"volume_weights must contain {n_rec_parameters} entries, "
+            f"got {vector.size}."
+        )
+    if not np.isfinite(vector).all():
+        raise FloatingPointError("volume_weights contains non-finite values.")
+    return np.ascontiguousarray(vector, dtype=np.float64), "provided"
+
+
+def _ensure_nonzero_vh_for_normalization(vh: np.ndarray) -> None:
+    if np.any(np.abs(vh) <= np.finfo(np.float64).eps):
+        raise ValueError("normalize=True requires non-zero vh entries.")
+
+
+def _eidors_noise_figure_metric(
+    rm: np.ndarray,
+    vh: np.ndarray,
+    signal_y: np.ndarray,
+    *,
+    volume_weights: np.ndarray,
+    normalize: bool,
+) -> tuple[float, dict[str, Any]]:
+    rm_matrix = np.asarray(rm)
+    if rm_matrix.ndim != 2 or rm_matrix.shape[1] != vh.size:
+        raise ValueError(
+            f"rm must have shape (n_rec, {vh.size}), got {rm_matrix.shape}."
+        )
+    if rm_matrix.shape[0] < 2:
+        raise ValueError("EIDORS image noise standard deviation requires >=2 pixels.")
+    if volume_weights.shape != (rm_matrix.shape[0],):
+        raise ValueError(
+            "volume_weights shape must match RM rows: "
+            f"{volume_weights.shape} vs {rm_matrix.shape[0]}."
+        )
+    if signal_y.shape[0] != vh.size:
+        raise ValueError(f"signal_y must have {vh.size} rows, got {signal_y.shape[0]}.")
+    if normalize:
+        _ensure_nonzero_vh_for_normalization(vh)
+    vh_std = float(np.std(vh, ddof=1))
+    if vh_std <= 0.0 or not np.isfinite(vh_std):
+        raise ValueError("EIDORS NF noise amplitude requires non-zero std(vh).")
+    noise_amplitude = 0.01 * vh_std
+    channel_noise = np.full(
+        vh.size, noise_amplitude, dtype=np.result_type(vh, rm_matrix)
+    )
+    if normalize:
+        channel_noise = channel_noise / vh
+
+    weighted_rm = rm_matrix * volume_weights.reshape(-1, 1)
+    signal_x = weighted_rm @ signal_y
+    noise_x = weighted_rm * channel_noise.reshape(1, -1)
+
+    signal_x_amp = np.mean(np.abs(signal_x), axis=0)
+    noise_x_amp = float(np.mean(np.std(noise_x, axis=0, ddof=1)))
+    signal_y_amp = np.mean(np.abs(signal_y), axis=0)
+    noise_y_amp = float(np.mean(np.abs(channel_noise)) / np.sqrt(float(vh.size)))
+    if noise_x_amp <= 0.0 or noise_y_amp <= 0.0:
+        raise ValueError("EIDORS NF noise standard deviation must be non-zero.")
+    snr_x = signal_x_amp / noise_x_amp
+    snr_y = signal_y_amp / noise_y_amp
+    nf_values = np.asarray(snr_y / snr_x, dtype=np.float64).reshape(-1)
+    if not np.isfinite(nf_values).all():
+        raise FloatingPointError("EIDORS NF calculation produced non-finite values.")
+    nf = float(np.mean(nf_values))
+    metadata = {
+        "nf_formula": "eidors_calc_noise_figure_linear",
+        "nf_values": [float(v) for v in nf_values],
+        "nf_value_count": int(nf_values.size),
+        "vh_std_ddof": 1,
+        "noise_amplitude": float(noise_amplitude),
+        "noise_y_std_mean": noise_y_amp,
+        "noise_x_std_mean": noise_x_amp,
+        "signal_y_abs_mean": float(np.mean(signal_y_amp)),
+        "signal_x_abs_mean": float(np.mean(signal_x_amp)),
+    }
+    return nf, metadata
 
 
 def _validate_training_response_matrix(values: Any) -> np.ndarray:
@@ -3757,6 +4061,7 @@ __all__ = [
     "greit_desired_image_sigmoid",
     "load_greit_rm",
     "migrate_greit_rm_to_hdf5",
+    "optimize_greit_weight_eidors_nf",
     "optimize_greit_weight_for_metric",
     "search_greit_weight_for_metric",
     "write_greit_metrics_artifact",
