@@ -300,7 +300,8 @@ def test_build_greit_desired_images_default_sigmoid_is_independent_from_targets(
     assert isinstance(desired, GREITDesiredImages)
     assert desired.shape == (grid.num_cells(), 1)
     assert desired.metadata["builder"] == "GREIT_desired_img"
-    assert desired.metadata["desired_solution_fn"] == "GREIT_desired_img_sigmoid"
+    assert desired.metadata["desired_solution_fn"] == "GREIT_desired_img_sigmoid:gauss"
+    assert desired.metadata["desired_image_sampling"] == "gauss"
     assert desired.metadata["eidors_component_parity"] is True
     assert desired.metadata["target_values_used"] is False
     assert desired.metadata["target_values_requires_explicit_opt_in"] is True
@@ -312,9 +313,102 @@ def test_build_greit_desired_images_default_sigmoid_is_independent_from_targets(
     center_idx = int(np.argmin(distances))
     neighbor_idx = int(np.argsort(distances)[1])
     far_idx = int(np.argmax(distances))
-    assert desired.values[center_idx, 0] > 0.99
+    assert desired.values[center_idx, 0] > 0.9
     assert 0.0 < desired.values[neighbor_idx, 0] < desired.values[center_idx, 0]
-    assert desired.values[far_idx, 0] == pytest.approx(0.0)
+    assert 0.0 < desired.values[far_idx, 0] < 0.01
+
+
+def test_build_greit_desired_images_supports_sampling_modes() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        shape=(1, 1, 1),
+    )
+    center = np.array([[0.5, 0.5, 0.5]], dtype=float)
+
+    center_sampled = build_greit_desired_images(
+        grid,
+        xyz=center,
+        radius=0.2,
+        desired_solution_fn="center",
+        desired_options={"desired_img_threshold": 0.0},
+    )
+    gauss = build_greit_desired_images(
+        grid,
+        xyz=center,
+        radius=0.2,
+        desired_solution_fn="gauss",
+        desired_options={"desired_img_threshold": 0.0, "desired_img_gauss_order": 3},
+    )
+    adaptive = build_greit_desired_images(
+        grid,
+        xyz=center,
+        radius=0.2,
+        desired_solution_fn="adaptive_gauss",
+        desired_options={
+            "desired_img_threshold": 0.0,
+            "desired_img_adaptive_base_order": 2,
+            "desired_img_adaptive_fine_order": 5,
+        },
+    )
+    sobol = build_greit_desired_images(
+        grid,
+        xyz=center,
+        radius=0.2,
+        desired_solution_fn="sobol_qmc",
+        desired_options={
+            "desired_img_threshold": 0.0,
+            "desired_img_sobol_samples": 16,
+            "desired_img_sobol_seed": 7,
+        },
+    )
+
+    assert center_sampled.metadata["desired_image_sampling"] == "center"
+    assert gauss.metadata["desired_image_sampling"] == "gauss"
+    assert adaptive.metadata["desired_image_sampling"] == "adaptive_gauss"
+    assert sobol.metadata["desired_image_sampling"] == "sobol_qmc"
+    assert center_sampled.values[0, 0] > gauss.values[0, 0]
+    assert center_sampled.values[0, 0] > adaptive.values[0, 0]
+    assert np.isfinite(sobol.values).all()
+
+
+def test_build_greit_desired_images_adaptive_gauss_refines_boundary_cells() -> None:
+    grid = VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [2.0, 1.0, 1.0],
+        shape=(2, 1, 1),
+    )
+    xyz = np.array([[0.5, 0.5, 0.5]], dtype=float)
+
+    coarse = build_greit_desired_images(
+        grid,
+        xyz=xyz,
+        radius=0.5,
+        desired_solution_fn="gauss",
+        desired_options={"desired_img_threshold": 0.0, "desired_img_gauss_order": 2},
+    )
+    adaptive = build_greit_desired_images(
+        grid,
+        xyz=xyz,
+        radius=0.5,
+        desired_solution_fn="adaptive_gauss",
+        desired_options={
+            "desired_img_threshold": 0.0,
+            "desired_img_adaptive_base_order": 2,
+            "desired_img_adaptive_fine_order": 5,
+        },
+    )
+    fine = build_greit_desired_images(
+        grid,
+        xyz=xyz,
+        radius=0.5,
+        desired_solution_fn="gauss",
+        desired_options={"desired_img_threshold": 0.0, "desired_img_gauss_order": 5},
+    )
+
+    assert np.linalg.norm(adaptive.values - fine.values) < np.linalg.norm(
+        coarse.values - fine.values
+    )
 
 
 def test_build_greit_desired_images_uses_custom_solution_fn_signature() -> None:

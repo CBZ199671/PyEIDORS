@@ -84,6 +84,54 @@ def test_v119_3d_anomaly_mask_rejects_unknown_mode() -> None:
         _cell_anomaly_mask(np.array([1.0, 2.0]), "signed")
 
 
+def test_v120_3d_anomaly_mask_suppresses_diffuse_low_amplitude_artifacts() -> None:
+    values = np.ones(100, dtype=np.float64)
+    values[10:15] = 1.60
+    values[50:80] = 1.30
+
+    mask = _cell_anomaly_mask(values, ANOMALY_MODE_POSITIVE)
+
+    assert np.flatnonzero(mask).tolist() == list(range(10, 15))
+
+
+def test_v120_3d_anomaly_mask_keeps_strongest_spatially_coherent_blob() -> None:
+    cluster = np.array(
+        [
+            [0.00, 0.00, 0.00],
+            [0.04, 0.00, 0.00],
+            [0.00, 0.04, 0.00],
+            [0.04, 0.04, 0.00],
+            [0.02, 0.02, 0.04],
+            [0.02, 0.02, -0.04],
+        ],
+        dtype=np.float64,
+    )
+    isolated = np.array(
+        [
+            [3.0, 0.0, 0.0],
+            [0.0, 3.0, 0.0],
+            [0.0, 0.0, 3.0],
+        ],
+        dtype=np.float64,
+    )
+    background = np.array(
+        [[1.0 + idx, 1.0, 1.0] for idx in range(21)],
+        dtype=np.float64,
+    )
+    centers = np.vstack([cluster, isolated, background])
+    values = np.ones(centers.shape[0], dtype=np.float64)
+    values[: cluster.shape[0]] = 1.70
+    values[cluster.shape[0] : cluster.shape[0] + isolated.shape[0]] = 1.90
+
+    mask = _cell_anomaly_mask(
+        values,
+        ANOMALY_MODE_POSITIVE,
+        cell_centers=centers,
+    )
+
+    assert np.flatnonzero(mask).tolist() == list(range(cluster.shape[0]))
+
+
 def test_v107_3d_color_limits_do_not_amplify_near_constant_sigma_noise() -> None:
     near_constant = np.array([1.0, 1.003, 0.997, 1.004, 0.998], dtype=np.float64)
     visible_anomaly = np.array([1.0, 1.0, 1.0, 1.12, 1.0], dtype=np.float64)

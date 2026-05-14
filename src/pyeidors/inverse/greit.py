@@ -12,6 +12,7 @@ from typing import Any
 
 import numpy as np
 from scipy import sparse
+from scipy.stats import qmc
 
 from pyeidors.data.channels import (
     apply_measurement_contract_to_jacobian,
@@ -26,6 +27,7 @@ GREIT_METRIC_KEYS = ("AR", "PE", "RES", "SD", "RNG")
 GREIT_RM_HDF5_SCHEMA = "pyeidors-greit-rm-hdf5-v1"
 GREIT_EIDORS_HDF5_SCHEMA = "pyeidors-greit-eidors-hdf5-v1"
 GREIT_CACHE_SIGNATURE_SCHEMA = "pyeidors-greit-cache-signature-v1"
+GREIT_DESIRED_IMAGE_DEFAULT_SAMPLING = "gauss"
 
 
 @dataclass(frozen=True)
@@ -639,23 +641,35 @@ def build_greit_desired_images(
     options.setdefault("dimension", int(rec_centers.shape[1]))
 
     if desired_solution_fn is None:
+        mode = _desired_sampling_mode(options)
+        options["desired_img_sampling"] = mode
         raw_values = greit_desired_image_sigmoid(xyz_matrix, radii, options)
-        fn_label = "GREIT_desired_img_sigmoid"
+        fn_label = f"GREIT_desired_img_sigmoid:{mode}"
         parity_default = True
         target_values_used = False
     elif isinstance(desired_solution_fn, str):
-        token = desired_solution_fn.strip().lower()
+        token = desired_solution_fn.strip().lower().replace("-", "_")
         if token in {
             "greit_desired_img",
             "greit_desired_img_sigmoid",
             "sigmoid",
             "default",
         }:
+            mode = _desired_sampling_mode(options)
+            options["desired_img_sampling"] = mode
             raw_values = greit_desired_image_sigmoid(xyz_matrix, radii, options)
-            fn_label = "GREIT_desired_img_sigmoid"
+            fn_label = f"GREIT_desired_img_sigmoid:{mode}"
             parity_default = True
             target_values_used = False
+        elif token in _DESIRED_SAMPLING_MODE_ALIASES:
+            mode = _desired_sampling_mode(options, explicit=token)
+            options["desired_img_sampling"] = mode
+            raw_values = greit_desired_image_sigmoid(xyz_matrix, radii, options)
+            fn_label = f"GREIT_desired_img_sigmoid:{mode}"
+            parity_default = mode != "center"
+            target_values_used = False
         elif token in {"target_values", "target", "raw_target", "t"}:
+            options["desired_img_sampling"] = "target_values"
             raw_values = _desired_from_target_values(
                 target_values,
                 n_rec_parameters=rec_centers.shape[0],
@@ -667,9 +681,11 @@ def build_greit_desired_images(
         else:
             raise ValueError(
                 "desired_solution_fn string must be one of: "
-                "'sigmoid' or 'target_values'."
+                "'sigmoid', 'center', 'gauss', 'adaptive_gauss', "
+                "'sobol_qmc', or 'target_values'."
             )
     elif callable(desired_solution_fn):
+        options["desired_img_sampling"] = "custom_callable"
         raw_values = desired_solution_fn(xyz_matrix, radii, MappingProxyType(options))
         fn_label = getattr(desired_solution_fn, "__name__", "custom_callable")
         parity_default = False
@@ -686,6 +702,10 @@ def build_greit_desired_images(
         {
             "builder": "GREIT_desired_img",
             "desired_solution_fn": fn_label,
+            "desired_image_sampling": options.get(
+                "desired_img_sampling", "custom_callable"
+            ),
+            "desired_image_default_sampling": GREIT_DESIRED_IMAGE_DEFAULT_SAMPLING,
             "eidors_component_parity": parity_default,
             "target_values_used": target_values_used,
             "target_values_requires_explicit_opt_in": True,
@@ -716,18 +736,17 @@ def greit_desired_image_sigmoid(
     """Default EIDORS-like sigmoid desired image function.
 
     The public signature mirrors EIDORS' ``desired_solution_fn(xyz, radius,
-    options)`` hook.  The implementation samples a smooth radial sigmoid at
-    reconstruction-cell centers, producing ``D`` with shape
-    ``n_rec_parameters × n_targets``.
+    options)`` hook.  The implementation can either sample cell centres or
+    approximate the element-average target image by quadrature/QMC sampling,
+    producing ``D`` with shape ``n_rec_parameters × n_targets``.
     """
 
     opts = dict(options or {})
     if "desired_img_radius" in opts and opts["desired_img_radius"] is not None:
         radius = opts["desired_img_radius"]
+    rec_model = opts.get("rec_model")
     rec_centers = _desired_rec_centers(
-        opts.get("rec_centers")
-        if opts.get("rec_centers") is not None
-        else opts.get("rec_model")
+        opts.get("rec_centers") if opts.get("rec_centers") is not None else rec_model
     )
     xyz_matrix, embedded_radii = _as_eidors_xyz(xyz)
     radii = _desired_radii(
@@ -743,16 +762,449 @@ def greit_desired_image_sigmoid(
     if threshold < 0.0 or threshold >= 0.5 or not np.isfinite(threshold):
         raise ValueError("desired_img_threshold must be finite in [0, 0.5).")
 
+    mode = _desired_sampling_mode(opts)
+    if mode == "center":
+        desired = _greit_sigmoid_from_centers(
+            rec_centers,
+            xyz_matrix,
+            radii,
+            steepness,
+        )
+    elif mode == "adaptive_gauss":
+        desired = _greit_sigmoid_adaptive_gauss(
+            rec_model,
+            rec_centers,
+            xyz_matrix,
+            radii,
+            steepness,
+            opts,
+        )
+    else:
+        samples, weights, _ = _desired_cell_samples(
+            rec_model,
+            rec_centers,
+            mode=mode,
+            options=opts,
+        )
+        desired = _greit_sigmoid_average_over_samples(
+            samples,
+            weights,
+            xyz_matrix,
+            radii,
+            steepness,
+        )
+    desired = _postprocess_desired_image(desired, threshold=threshold, options=opts)
+
+    return np.ascontiguousarray(desired, dtype=np.float64)
+
+
+_DESIRED_SAMPLING_MODE_ALIASES = {
+    "center": "center",
+    "centre": "center",
+    "center_sample": "center",
+    "center_sampled": "center",
+    "centre_sampled": "center",
+    "cell_center": "center",
+    "cell_centers": "center",
+    "fast": "center",
+    "gauss": "gauss",
+    "gaussian": "gauss",
+    "gauss_quadrature": "gauss",
+    "quadrature": "gauss",
+    "fixed_gauss": "gauss",
+    "element_integrated": "gauss",
+    "adaptive": "adaptive_gauss",
+    "adaptive_gauss": "adaptive_gauss",
+    "adaptive_gaussian": "adaptive_gauss",
+    "adaptive_quadrature": "adaptive_gauss",
+    "sobol": "sobol_qmc",
+    "sobol_qmc": "sobol_qmc",
+    "qmc": "sobol_qmc",
+    "quasi_monte_carlo": "sobol_qmc",
+}
+
+
+def _desired_sampling_mode(
+    options: dict[str, Any] | None,
+    *,
+    explicit: Any | None = None,
+) -> str:
+    opts = dict(options or {})
+    raw = explicit
+    if raw is None:
+        for key in (
+            "desired_img_sampling",
+            "desired_image_sampling",
+            "desired_img_integration",
+            "desired_integration",
+            "integration_mode",
+            "sampling_mode",
+        ):
+            if opts.get(key) is not None:
+                raw = opts[key]
+                break
+    if raw is None or str(raw).strip() == "":
+        raw = GREIT_DESIRED_IMAGE_DEFAULT_SAMPLING
+    token = str(raw).strip().lower().replace("-", "_")
+    try:
+        return _DESIRED_SAMPLING_MODE_ALIASES[token]
+    except KeyError as exc:
+        valid = ", ".join(sorted(set(_DESIRED_SAMPLING_MODE_ALIASES.values())))
+        raise ValueError(
+            f"unknown desired image sampling mode {raw!r}; use {valid}."
+        ) from exc
+
+
+def _greit_sigmoid_from_centers(
+    rec_centers: np.ndarray,
+    xyz_matrix: np.ndarray,
+    radii: np.ndarray,
+    steepness: np.ndarray,
+) -> np.ndarray:
     distances = np.linalg.norm(
         rec_centers[:, None, :3] - xyz_matrix.T[None, :, :],
         axis=2,
     )
+    return _greit_sigmoid_from_distances(distances, radii, steepness)
+
+
+def _greit_sigmoid_from_distances(
+    distances: np.ndarray,
+    radii: np.ndarray,
+    steepness: np.ndarray,
+) -> np.ndarray:
     scaled = steepness.reshape(1, -1) * (distances / radii.reshape(1, -1) - 1.0)
-    desired = 1.0 / (1.0 + np.exp(np.clip(scaled, -700.0, 700.0)))
+    return 1.0 / (1.0 + np.exp(np.clip(scaled, -700.0, 700.0)))
+
+
+def _greit_sigmoid_average_over_samples(
+    samples: np.ndarray,
+    weights: np.ndarray,
+    xyz_matrix: np.ndarray,
+    radii: np.ndarray,
+    steepness: np.ndarray,
+) -> np.ndarray:
+    n_cells, n_samples, _ = samples.shape
+    flat_samples = samples.reshape(n_cells * n_samples, 3)
+    desired = np.empty((n_cells, xyz_matrix.shape[1]), dtype=np.float64)
+    for target_idx in range(xyz_matrix.shape[1]):
+        distances = np.linalg.norm(
+            flat_samples - xyz_matrix[:, target_idx].reshape(1, 3),
+            axis=1,
+        ).reshape(n_cells, n_samples)
+        values = _greit_sigmoid_from_distances(
+            distances,
+            radii[target_idx : target_idx + 1],
+            steepness[target_idx : target_idx + 1],
+        )
+        desired[:, target_idx] = values @ weights
+    return desired
+
+
+def _greit_sigmoid_adaptive_gauss(
+    rec_model: Any,
+    rec_centers: np.ndarray,
+    xyz_matrix: np.ndarray,
+    radii: np.ndarray,
+    steepness: np.ndarray,
+    options: dict[str, Any],
+) -> np.ndarray:
+    base_options = dict(options)
+    base_options["desired_img_gauss_order"] = int(
+        options.get("desired_img_adaptive_base_order", 2)
+    )
+    base_samples, base_weights, extents = _desired_cell_samples(
+        rec_model,
+        rec_centers,
+        mode="gauss",
+        options=base_options,
+    )
+    desired = _greit_sigmoid_average_over_samples(
+        base_samples,
+        base_weights,
+        xyz_matrix,
+        radii,
+        steepness,
+    )
+    half_diagonal = 0.5 * np.linalg.norm(extents, axis=1)
+    center_distances = np.linalg.norm(
+        rec_centers[:, None, :3] - xyz_matrix.T[None, :, :],
+        axis=2,
+    )
+    band = _desired_adaptive_band(options, steepness)
+    fine_order = int(options.get("desired_img_adaptive_fine_order", 5))
+    if fine_order <= 0:
+        raise ValueError("desired_img_adaptive_fine_order must be positive.")
+    fine_offsets, fine_weights = _gauss_offsets_for_extents(extents, fine_order)
+    for target_idx in range(xyz_matrix.shape[1]):
+        boundary_distance = np.abs(center_distances[:, target_idx] - radii[target_idx])
+        refine = (
+            boundary_distance <= half_diagonal + band[target_idx] * radii[target_idx]
+        )
+        if not np.any(refine):
+            continue
+        fine_samples = (
+            rec_centers[refine, None, :3]
+            + fine_offsets[None, :, :] * extents[refine, None, :]
+        )
+        refined = _greit_sigmoid_average_over_samples(
+            fine_samples,
+            fine_weights,
+            xyz_matrix[:, target_idx : target_idx + 1],
+            radii[target_idx : target_idx + 1],
+            steepness[target_idx : target_idx + 1],
+        )
+        desired[refine, target_idx] = refined[:, 0]
+    return desired
+
+
+def _gauss_offsets_for_extents(
+    extents: np.ndarray,
+    order: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    active = np.any(extents > np.finfo(np.float64).eps, axis=0)
+    if not np.any(active):
+        return (
+            np.zeros((1, 3), dtype=np.float64),
+            np.ones(1, dtype=np.float64),
+        )
+    offsets_active, weights = _gauss_reference_offsets(int(np.sum(active)), order)
+    offsets = np.zeros((offsets_active.shape[0], 3), dtype=np.float64)
+    offsets[:, active] = offsets_active
+    return np.ascontiguousarray(offsets), weights
+
+
+def _desired_cell_samples(
+    rec_model: Any,
+    rec_centers: np.ndarray,
+    *,
+    mode: str,
+    options: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    extents = _desired_cell_extents(rec_model, rec_centers, options)
+    active = np.any(extents > np.finfo(np.float64).eps, axis=0)
+    if not np.any(active):
+        samples = rec_centers[:, None, :3].copy()
+        weights = np.ones(1, dtype=np.float64)
+        return samples, weights, extents
+
+    if mode == "gauss":
+        order = int(options.get("desired_img_gauss_order", 3))
+        if order <= 0:
+            raise ValueError("desired_img_gauss_order must be positive.")
+        offsets_active, weights = _gauss_reference_offsets(int(np.sum(active)), order)
+    elif mode == "sobol_qmc":
+        requested = int(options.get("desired_img_sobol_samples", 32))
+        if requested <= 0:
+            raise ValueError("desired_img_sobol_samples must be positive.")
+        seed = int(options.get("desired_img_sobol_seed", 0))
+        scramble = bool(options.get("desired_img_sobol_scramble", True))
+        offsets_active, weights = _sobol_reference_offsets(
+            int(np.sum(active)),
+            requested,
+            seed=seed,
+            scramble=scramble,
+        )
+    else:
+        raise ValueError(f"unsupported desired image sampling mode {mode!r}.")
+
+    offsets = np.zeros((offsets_active.shape[0], 3), dtype=np.float64)
+    offsets[:, active] = offsets_active
+    samples = rec_centers[:, None, :3] + offsets[None, :, :] * extents[:, None, :]
+    return (
+        np.ascontiguousarray(samples, dtype=np.float64),
+        np.ascontiguousarray(weights, dtype=np.float64),
+        np.ascontiguousarray(extents, dtype=np.float64),
+    )
+
+
+def _desired_cell_extents(
+    rec_model: Any,
+    rec_centers: np.ndarray,
+    options: dict[str, Any],
+) -> np.ndarray:
+    explicit = options.get("desired_img_cell_extents")
+    if explicit is None:
+        explicit = options.get("cell_extents")
+    if explicit is not None:
+        return _as_desired_cell_extents(explicit, n_cells=rec_centers.shape[0])
+
+    spacing = options.get("desired_img_cell_spacing")
+    if spacing is None:
+        spacing = options.get("cell_spacing")
+    if spacing is not None:
+        extent = _as_extent_vector(spacing)
+        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+
+    if isinstance(rec_model, VoxelGrid):
+        extent = _as_extent_vector(rec_model.spacing)
+        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+
+    if isinstance(rec_model, CellMesh):
+        vertices = rec_model.coordinates[rec_model.cells]
+        extents = vertices.max(axis=1) - vertices.min(axis=1)
+        return _as_desired_cell_extents(extents, n_cells=rec_centers.shape[0])
+
+    if isinstance(rec_model, dict):
+        for key in ("cell_extents", "extents", "cell_spacing", "spacing"):
+            if rec_model.get(key) is not None:
+                raw = rec_model[key]
+                if "extent" in key:
+                    return _as_desired_cell_extents(raw, n_cells=rec_centers.shape[0])
+                extent = _as_extent_vector(raw)
+                return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+
+    for attr_name in ("cell_extents", "extents", "cell_spacing", "spacing"):
+        attr = getattr(rec_model, attr_name, None)
+        if attr is None:
+            continue
+        raw = attr() if callable(attr) else attr
+        if "extent" in attr_name:
+            return _as_desired_cell_extents(raw, n_cells=rec_centers.shape[0])
+        extent = _as_extent_vector(raw)
+        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+
+    extent = _infer_center_spacing(rec_centers)
+    return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+
+
+def _as_desired_cell_extents(values: Any, *, n_cells: int) -> np.ndarray:
+    array = np.asarray(values, dtype=np.float64)
+    if array.ndim == 1:
+        extent = _as_extent_vector(array)
+        array = np.broadcast_to(extent, (n_cells, 3)).copy()
+    elif array.ndim == 2:
+        if array.shape[0] != n_cells:
+            raise ValueError(
+                f"cell_extents rows {array.shape[0]} do not match {n_cells} cells."
+            )
+        if array.shape[1] > 3:
+            raise ValueError("cell_extents must have at most 3 columns.")
+        if array.shape[1] < 3:
+            array = np.pad(array, ((0, 0), (0, 3 - array.shape[1])))
+        else:
+            array = array[:, :3]
+    else:
+        raise ValueError("cell_extents must be a vector or 2D matrix.")
+    if not np.isfinite(array).all():
+        raise FloatingPointError("cell_extents contain non-finite values.")
+    if np.any(array < 0.0):
+        raise ValueError("cell_extents entries must be non-negative.")
+    return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _as_extent_vector(values: Any) -> np.ndarray:
+    extent = np.asarray(values, dtype=np.float64).reshape(-1)
+    if extent.size == 1:
+        extent = np.repeat(float(extent[0]), 3)
+    elif extent.size < 3:
+        extent = np.pad(extent, (0, 3 - extent.size))
+    elif extent.size > 3:
+        raise ValueError("cell spacing/extents must have at most 3 entries.")
+    if not np.isfinite(extent).all():
+        raise FloatingPointError("cell spacing/extents contain non-finite values.")
+    if np.any(extent < 0.0):
+        raise ValueError("cell spacing/extents entries must be non-negative.")
+    return np.ascontiguousarray(extent[:3], dtype=np.float64)
+
+
+def _infer_center_spacing(rec_centers: np.ndarray) -> np.ndarray:
+    centers = np.asarray(rec_centers, dtype=np.float64)
+    spacing = np.zeros(3, dtype=np.float64)
+    for axis in range(min(3, centers.shape[1])):
+        coords = np.unique(np.round(centers[:, axis], decimals=12))
+        diffs = np.diff(np.sort(coords))
+        diffs = diffs[diffs > np.finfo(np.float64).eps]
+        if diffs.size:
+            spacing[axis] = float(np.median(diffs))
+    if not np.any(spacing > 0.0):
+        nearest = _nearest_center_distance(centers[:, :3])
+        if nearest > 0.0:
+            spacing[:] = nearest
+    return np.ascontiguousarray(spacing, dtype=np.float64)
+
+
+def _nearest_center_distance(centers: np.ndarray) -> float:
+    if centers.shape[0] <= 1:
+        return 0.0
+    distances = np.linalg.norm(
+        centers[:, None, :] - centers[None, :, :],
+        axis=2,
+    )
+    distances[distances <= np.finfo(np.float64).eps] = np.inf
+    nearest = float(np.min(distances))
+    return 0.0 if not np.isfinite(nearest) else nearest
+
+
+def _gauss_reference_offsets(
+    dimension: int,
+    order: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    nodes, weights_1d = np.polynomial.legendre.leggauss(order)
+    nodes = 0.5 * nodes
+    weights_1d = 0.5 * weights_1d
+    grids = np.meshgrid(*([nodes] * dimension), indexing="ij")
+    weight_grids = np.meshgrid(*([weights_1d] * dimension), indexing="ij")
+    offsets = np.stack([grid.ravel(order="C") for grid in grids], axis=1)
+    weights = np.prod(
+        np.stack([grid.ravel(order="C") for grid in weight_grids], axis=1),
+        axis=1,
+    )
+    weights = weights / float(np.sum(weights))
+    return np.ascontiguousarray(offsets), np.ascontiguousarray(weights)
+
+
+def _sobol_reference_offsets(
+    dimension: int,
+    n_samples: int,
+    *,
+    seed: int,
+    scramble: bool,
+) -> tuple[np.ndarray, np.ndarray]:
+    n_power = 1 << int(np.ceil(np.log2(n_samples)))
+    sampler = qmc.Sobol(d=dimension, scramble=scramble, seed=seed)
+    points = sampler.random_base2(int(np.log2(n_power)))
+    offsets = points - 0.5
+    weights = np.full(offsets.shape[0], 1.0 / offsets.shape[0], dtype=np.float64)
+    return np.ascontiguousarray(offsets), weights
+
+
+def _desired_adaptive_band(
+    options: dict[str, Any],
+    steepness: np.ndarray,
+) -> np.ndarray:
+    value = options.get("desired_img_adaptive_band")
+    if value is None:
+        band = 1.0 / steepness
+    else:
+        band = np.asarray(value, dtype=np.float64).reshape(-1)
+        if band.size == 1:
+            band = np.full(steepness.size, float(band[0]), dtype=np.float64)
+        elif band.size != steepness.size:
+            raise ValueError(
+                "desired_img_adaptive_band length must be one or n_targets."
+            )
+    if not np.isfinite(band).all():
+        raise FloatingPointError(
+            "desired_img_adaptive_band contains non-finite values."
+        )
+    if np.any(band < 0.0):
+        raise ValueError("desired_img_adaptive_band entries must be non-negative.")
+    return np.ascontiguousarray(band, dtype=np.float64)
+
+
+def _postprocess_desired_image(
+    desired: np.ndarray,
+    *,
+    threshold: float,
+    options: dict[str, Any],
+) -> np.ndarray:
+    desired = np.asarray(desired, dtype=np.float64)
     if threshold > 0.0:
+        desired = desired.copy()
         desired[desired < threshold] = 0.0
         desired[desired > 1.0 - threshold] = 1.0
-    if bool(opts.get("normalize_peak", False)):
+    if bool(options.get("normalize_peak", False)):
         peaks = np.max(desired, axis=0)
         good = peaks > np.finfo(np.float64).eps
         desired[:, good] = desired[:, good] / peaks[good].reshape(1, -1)

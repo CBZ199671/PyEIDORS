@@ -99,6 +99,14 @@ _MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
 _MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
 _MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
 _INHOMOGENEITY_RELATIVE_FLOOR = 0.02
+_ANOMALY_PEAK_FRACTION = 0.35
+_ANOMALY_MAD_SIGMA = 3.0
+_ANOMALY_MAX_VISIBLE_FRACTION = 0.08
+_ANOMALY_CROWDED_PERCENTILE = 95.0
+_ANOMALY_CROWDED_PEAK_CAP = 0.75
+_ANOMALY_SPATIAL_MIN_CANDIDATES = 8
+_ANOMALY_SPATIAL_RADIUS_FACTOR = 2.75
+_ANOMALY_COMPONENT_KEEP_FRACTION = 0.22
 _CELL_FACE_OFFSETS = {
     4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
     8: (
@@ -115,6 +123,8 @@ _CELL_FACE_OFFSETS = {
 def _cell_anomaly_mask(
     cell_sigma: np.ndarray,
     mode: str = ANOMALY_MODE_ABSOLUTE,
+    *,
+    cell_centers: np.ndarray | None = None,
 ) -> np.ndarray:
     values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
     if values.size == 0 or not np.isfinite(values).any():
@@ -133,12 +143,126 @@ def _cell_anomaly_mask(
         score = -residual
     else:
         score = np.abs(residual)
-    finite_scores = score[np.isfinite(score) & (score > floor)]
+    finite_score_values = score[np.isfinite(score)]
+    finite_scores = finite_score_values[finite_score_values > floor]
     if finite_scores.size == 0:
         return np.zeros(values.shape, dtype=bool)
-    threshold = max(spread * 0.5, floor, float(np.nanpercentile(finite_scores, 80.0)))
+    peak = float(np.nanmax(finite_scores))
+    residual_mad = float(np.nanmedian(np.abs(residual[np.isfinite(residual)])))
+    robust_floor = min(
+        _ANOMALY_MAD_SIGMA * 1.4826 * residual_mad,
+        peak * _ANOMALY_CROWDED_PEAK_CAP,
+    )
+    threshold = max(floor, peak * _ANOMALY_PEAK_FRACTION, robust_floor)
+    mask = np.asarray(score >= threshold, dtype=bool)
+    visible_fraction = float(np.count_nonzero(mask)) / float(max(values.size, 1))
+    if visible_fraction > _ANOMALY_MAX_VISIBLE_FRACTION and finite_scores.size > 1:
+        crowded_threshold = float(
+            np.nanpercentile(finite_score_values, _ANOMALY_CROWDED_PERCENTILE)
+        )
+        crowded_threshold = min(
+            crowded_threshold,
+            peak * _ANOMALY_CROWDED_PEAK_CAP,
+        )
+        threshold = max(threshold, crowded_threshold)
+        threshold = float(np.nextafter(threshold, np.inf))
     tolerance = max(1.0e-12, abs(threshold) * 1.0e-12)
-    return np.asarray(score >= threshold - tolerance, dtype=bool)
+    mask = np.asarray(score >= threshold - tolerance, dtype=bool)
+    return _spatially_coherent_anomaly_mask(mask, score, cell_centers)
+
+
+def _spatially_coherent_anomaly_mask(
+    mask: np.ndarray,
+    score: np.ndarray,
+    cell_centers: np.ndarray | None,
+) -> np.ndarray:
+    """Keep coherent anomaly blobs while dropping isolated high-score speckles."""
+
+    candidate_idx = np.flatnonzero(mask)
+    if candidate_idx.size < _ANOMALY_SPATIAL_MIN_CANDIDATES:
+        return mask
+    if cell_centers is None:
+        return mask
+
+    centers = np.asarray(cell_centers, dtype=np.float64)
+    if centers.ndim != 2 or centers.shape[0] != mask.size or centers.shape[1] < 3:
+        return mask
+    candidate_centers = np.ascontiguousarray(centers[candidate_idx, :3])
+    if not np.isfinite(candidate_centers).all():
+        return mask
+
+    try:
+        from scipy.spatial import cKDTree
+    except Exception:  # pragma: no cover - optional visualization refinement
+        return mask
+
+    try:
+        tree = cKDTree(candidate_centers)
+        distances, _ = tree.query(candidate_centers, k=2)
+    except Exception:  # pragma: no cover - scipy edge case fallback
+        return mask
+
+    nearest = np.asarray(distances[:, 1], dtype=np.float64)
+    nearest = nearest[np.isfinite(nearest) & (nearest > 1.0e-12)]
+    if nearest.size == 0:
+        return mask
+    radius = float(np.nanmedian(nearest) * _ANOMALY_SPATIAL_RADIUS_FACTOR)
+    if not np.isfinite(radius) or radius <= 0.0:
+        return mask
+
+    neighbours = tree.query_ball_point(candidate_centers, radius)
+    seen = np.zeros(candidate_idx.size, dtype=bool)
+    components: list[np.ndarray] = []
+    for start in range(candidate_idx.size):
+        if seen[start]:
+            continue
+        stack = [start]
+        seen[start] = True
+        component: list[int] = []
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for nxt in neighbours[current]:
+                if not seen[nxt]:
+                    seen[nxt] = True
+                    stack.append(int(nxt))
+        components.append(np.asarray(component, dtype=np.int64))
+
+    if len(components) <= 1:
+        return mask
+
+    candidate_scores = np.asarray(score[candidate_idx], dtype=np.float64)
+    masses = np.asarray(
+        [float(np.nansum(candidate_scores[component])) for component in components],
+        dtype=np.float64,
+    )
+    if masses.size == 0 or not np.isfinite(masses).any():
+        return mask
+
+    best_idx = int(np.nanargmax(masses))
+    best_mass = float(masses[best_idx])
+    if not np.isfinite(best_mass) or best_mass <= 0.0:
+        return mask
+
+    min_component_size = (
+        2
+        if candidate_idx.size < 16
+        else max(3, int(np.ceil(candidate_idx.size * 0.015)))
+    )
+    keep = np.zeros(candidate_idx.size, dtype=bool)
+    for component_idx, component in enumerate(components):
+        if component_idx != best_idx and component.size < min_component_size:
+            continue
+        if component_idx == best_idx or masses[component_idx] >= (
+            best_mass * _ANOMALY_COMPONENT_KEEP_FRACTION
+        ):
+            keep[component] = True
+
+    if not np.any(keep):
+        return mask
+    coherent = np.zeros_like(mask, dtype=bool)
+    coherent[candidate_idx[keep]] = True
+    return coherent
 
 
 def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
@@ -1301,7 +1425,11 @@ class Conductivity3DWidget(QWidget):
         else:
             self._mesh_actor = mesh_actor
 
-        inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+        inhom_mask = _cell_anomaly_mask(
+            cell_sigma,
+            self._anomaly_mode,
+            cell_centers=centers,
+        )
         if not np.any(inhom_mask):
             return
         highlight_cloud = pv.PolyData(centers[inhom_mask])
@@ -1410,7 +1538,11 @@ class Conductivity3DWidget(QWidget):
             )
 
         if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
-            inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+            inhom_mask = _cell_anomaly_mask(
+                cell_sigma,
+                self._anomaly_mode,
+                cell_centers=_cell_centers(coords, cells),
+            )
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
@@ -1565,7 +1697,11 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_collection = None
         self._mpl3d_highlight_facecolors = None
 
-        inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+        inhom_mask = _cell_anomaly_mask(
+            cell_sigma,
+            self._anomaly_mode,
+            cell_centers=centers,
+        )
         if np.any(inhom_mask):
             highlight = self._mpl3d_ax.scatter(
                 centers[inhom_mask, 0],
@@ -1692,7 +1828,11 @@ class Conductivity3DWidget(QWidget):
 
         if scalar_mode == "cell":
             inhom_indices = np.flatnonzero(
-                _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+                _cell_anomaly_mask(
+                    cell_sigma,
+                    self._anomaly_mode,
+                    cell_centers=_cell_centers(coords, cells),
+                )
             )
             if inhom_indices.size:
                 highlight_vertices: list[np.ndarray] = []
@@ -1837,7 +1977,11 @@ class Conductivity3DWidget(QWidget):
         # central inclusion still reads even when the bulk opacity is
         # high.  Built always; visibility toggles with the checkbox.
         if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
-            inhom_mask = _cell_anomaly_mask(cell_sigma, self._anomaly_mode)
+            inhom_mask = _cell_anomaly_mask(
+                cell_sigma,
+                self._anomaly_mode,
+                cell_centers=_cell_centers(coords, cells),
+            )
             if np.any(inhom_mask):
                 inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
                 if inhom_grid.n_cells > 0:
