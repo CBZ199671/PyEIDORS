@@ -591,6 +591,29 @@ def test_greit_center_cloud_geometry_uses_axis_spacing_not_cloud_median() -> Non
     assert np.ptp(first_cell[:, 2]) == pytest.approx(0.45)
 
 
+def test_v125_greit_2d_rec_model_geometry_uses_planar_quads() -> None:
+    centers = np.asarray(
+        [
+            [-0.75, -0.75, 0.0],
+            [-0.25, -0.75, 0.0],
+            [-0.75, -0.25, 0.0],
+            [-0.25, -0.25, 0.0],
+        ],
+        dtype=float,
+    )
+
+    coords, cells = rc._greit_rec_model_geometry(
+        centers,
+        n_parameters=centers.shape[0],
+        meta={"mesh_dimension": 2, "radius": 1.0},
+    )
+
+    assert coords.shape == (centers.shape[0] * 4, 2)
+    assert cells.shape == (centers.shape[0], 4)
+    assert np.ptp(coords[cells[0]][:, 0]) == pytest.approx(0.45)
+    assert np.ptp(coords[cells[0]][:, 1]) == pytest.approx(0.45)
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

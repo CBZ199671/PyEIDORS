@@ -904,12 +904,10 @@ def test_simulation_inverse_panel_hyperparameter_semantics_follow_route() -> Non
     assert inv._alpha_spin.value() == pytest.approx(2.5)
     assert inv.get_config()["regularization_alpha"] == pytest.approx(2.5)
 
-    inv.set_config({"method": "greit3d_rm", "regularization_alpha": 3.5})
+    inv.set_config({"method": "greit", "regularization_alpha": 3.5})
     app.processEvents()
-    assert not inv._alpha_spin.isEnabled()
-    assert "Artifact" in inv._lbl_alpha.text()
-    assert "HDF5" in inv._alpha_spin.toolTip()
-    assert "α" in inv._alpha_spin.toolTip()
+    assert inv._lbl_alpha.isHidden()
+    assert inv._alpha_spin.isHidden()
     assert inv.get_config()["regularization_alpha"] == pytest.approx(3.5)
     assert not inv._greit_group.isHidden()
     assert inv.get_config()["greit_weight"] == pytest.approx(3.5)
@@ -933,7 +931,7 @@ def test_simulation_inverse_panel_greit_advanced_controls_are_serialized() -> No
 
     inv.set_config(
         {
-            "method": "greit3d_rm",
+            "method": "greit",
             "greit_desired_image_mode": "adaptive_gauss",
             "greit_training_target_count": 128,
             "greit_target_size": 0.15,
@@ -950,6 +948,8 @@ def test_simulation_inverse_panel_greit_advanced_controls_are_serialized() -> No
     assert cfg["greit_desired_image_mode"] == "adaptive_gauss"
     assert cfg["greit_training_target_count"] == 128
     assert cfg["greit_target_size"] == pytest.approx(0.15)
+    assert cfg["greit_weight_strategy"] == "fixed"
+    assert cfg["greit_noise_figure"] is None
     assert cfg["greit_weight"] == pytest.approx(0.75)
     assert cfg["greit_use_cached_rm"] is False
     assert cfg["greit_rebuild_rm"] is True
@@ -964,6 +964,20 @@ def test_simulation_inverse_panel_greit_advanced_controls_are_serialized() -> No
     inv.set_running(False)
     app.processEvents()
     assert inv._greit_group.isEnabled()
+
+    inv.set_config(
+        {
+            "method": "greit",
+            "greit_weight_strategy": "eidors_nf1",
+            "greit_weight": 0.75,
+        }
+    )
+    app.processEvents()
+    cfg = inv.get_config()
+    assert cfg["greit_weight_strategy"] == "eidors_nf1"
+    assert cfg["greit_noise_figure"] == pytest.approx(1.0)
+    assert cfg["regularization_alpha"] == pytest.approx(1.0)
+    assert not inv._greit_weight_spin.isEnabled()
 
     inv.close()
     inv.deleteLater()
@@ -1005,7 +1019,7 @@ def test_simulation_inverse_panel_v117_custom_lambda_rebuild_entry() -> None:
     assert not inv._alpha_spin.isEnabled()
     assert inv._alpha_spin.value() == pytest.approx(1.0e-2)
 
-    inv.set_config({"method": "greit3d_rm", "lambda_eff_custom_enabled": True})
+    inv.set_config({"method": "greit", "lambda_eff_custom_enabled": True})
     app.processEvents()
     assert inv._custom_lambda_check.isHidden()
     assert not inv.get_config()["lambda_eff_custom_enabled"]
@@ -3377,7 +3391,7 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
         ("noser_rm", "", "noser", True, "absolute_sigma"),
         ("laplace_rm", "", "laplace", True, "absolute_sigma"),
         ("curvature_rm", "", "curvature", True, "absolute_sigma"),
-        ("greit3d_rm", "", "greit", True, ""),
+        ("greit", "", "greit", True, ""),
     ],
 )
 def test_simulation_rm_routes_record_artifact_requirement(
@@ -3446,7 +3460,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["lambda_eff"] == pytest.approx(1.0e-2)
         assert request.metadata["hp"] == pytest.approx(0.1)
         assert request.metadata["hp_squared"] == pytest.approx(1.0e-2)
-    if method == "greit3d_rm":
+    if method == "greit":
         assert request.metadata["rm_form"] == "measurement"
         assert "greit_common_config" not in request.metadata
         assert "greit_common_config_dir" not in request.metadata
@@ -3461,6 +3475,8 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["greit_registry_config"]["target_size_semantics"] == (
             "fraction_of_tank_radius"
         )
+        assert request.metadata["greit_registry_config"]["weight_strategy"] == "fixed"
+        assert request.metadata["greit_weight_strategy"] == "fixed"
         assert (
             "config-driven registry artifact"
             in request.metadata["greit_common_config_unavailable_reason"]
@@ -3475,7 +3491,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
         assert request.metadata["greit_official_equivalence_claim_allowed"] is False
         assert "difference_lambda" not in request.metadata
         assert request.regularization_alpha == pytest.approx(1.0)
-        assert request.metadata["hyperparameter_ui_name"] == "greit_artifact_weight"
+        assert request.metadata["hyperparameter_ui_name"] == "greit_weight"
         assert request.metadata["hyperparameter_ui_value"] == pytest.approx(1.0)
         assert request.metadata["hyperparameter_ui_locked"] is False
         assert request.metadata["hyperparameter_effective_source"] == (
@@ -3483,7 +3499,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
         )
         assert request.metadata["regularization_alpha_applied"] is False
         assert request.metadata["difference_lambda_semantics"] == (
-            "unused_for_greit_rm_artifact"
+            "unused_for_greit_artifact"
         )
 
     window._sim_state.inverse_running = False
@@ -3758,7 +3774,7 @@ def test_simulation_greit3d_route_uses_registry_without_broad_claim(
     )
     window._sim_tab.inverse_problem_panel.set_config(
         {
-            "method": "greit3d_rm",
+            "method": "greit",
             "regularization_alpha": 1.0,
             "max_iterations": 10,
         }
@@ -3779,7 +3795,7 @@ def test_simulation_greit3d_route_uses_registry_without_broad_claim(
     assert request.metadata["rm_auto_build"] is True
     assert request.metadata["greit_registry_config"]["measurement_count"] == n_meas
     assert request.metadata["greit_registry_config"]["n_rings"] == 3
-    assert request.metadata["greit_registry_config"]["imgsz"] == (8, 8, 5)
+    assert request.metadata["greit_registry_config"]["imgsz"] == (16, 16, 8)
     assert request.metadata["greit_registry_config"]["desired_solution_fn"] == "gauss"
     assert request.metadata["greit_registry_config"]["target_size"] == pytest.approx(
         0.20
@@ -3793,11 +3809,11 @@ def test_simulation_greit3d_route_uses_registry_without_broad_claim(
     )
     assert request.metadata["greit_official_equivalence_claim_allowed"] is False
     assert (
-        "EIDORS-parity artifacts matching the current 3D geometry and protocol"
+        "EIDORS-parity artifacts matching the current geometry and protocol"
         in request.metadata["greit_official_equivalence_scope"]
     )
     assert "difference_lambda" not in request.metadata
-    assert request.metadata["hyperparameter_ui_name"] == "greit_artifact_weight"
+    assert request.metadata["hyperparameter_ui_name"] == "greit_weight"
     assert request.metadata["hyperparameter_ui_locked"] is False
     assert request.metadata["regularization_alpha_applied"] is False
 
@@ -3836,7 +3852,7 @@ def test_simulation_greit3d_route_uses_advanced_registry_params(
     )
     window._sim_tab.inverse_problem_panel.set_config(
         {
-            "method": "greit3d_rm",
+            "method": "greit",
             "greit_desired_image_mode": "adaptive_gauss",
             "greit_training_target_count": 96,
             "greit_target_size": 0.15,
@@ -3866,15 +3882,82 @@ def test_simulation_greit3d_route_uses_advanced_registry_params(
     assert registry_config["greit_training_target_count_requested"] == 96
     assert np.prod(registry_config["imgsz"]) >= 96
     assert registry_config["target_size"] == pytest.approx(0.15)
+    assert registry_config["weight_strategy"] == "fixed"
     assert registry_config["weight"] == pytest.approx(0.75)
     assert registry_config["greit_use_cached_rm"] is False
     assert registry_config["greit_rebuild_rm"] is True
     assert request.metadata["greit_desired_image_mode"] == "adaptive_gauss"
     assert request.metadata["greit_training_target_count"] == 96
+    assert request.metadata["greit_weight_strategy"] == "fixed"
     assert request.metadata["greit_use_cached_rm"] is False
     assert request.metadata["greit_rebuild_rm"] is True
     assert request.metadata["hyperparameter_ui_value"] == pytest.approx(0.75)
     assert request.metadata["hyperparameter_effective_source"] == ("greit_gui_advanced")
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_greit_route_supports_2d_and_eidors_nf1_strategy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 208
+    forward_config = {
+        "mesh_dimension": 2,
+        "mesh_refinement": 0.1,
+        "n_elec": 16,
+        "n_rings": 1,
+        "electrode_layout": "ring_major",
+        "measurement_protocol": "eidors_adjacent",
+        "radius": 1.0,
+        "height": 2.0,
+        "drive_mode": "total_current",
+    }
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+        forward_model_config=forward_config,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "greit",
+            "greit_weight_strategy": "eidors_nf1",
+            "greit_weight": 0.75,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    registry_config = request.metadata["greit_registry_config"]
+    assert request.metadata["simulation_inverse_route"] == "greit"
+    assert registry_config["mesh_dimension"] == 2
+    assert registry_config["imgsz"] == (32, 32, 1)
+    assert registry_config["rec_mask"] == "circular_fem_area_v1"
+    assert registry_config["weight_strategy"] == "eidors_nf1"
+    assert "weight" not in registry_config
+    assert registry_config["noise_figure"] == pytest.approx(1.0)
+    assert request.regularization_alpha == pytest.approx(1.0)
+    assert request.metadata["hyperparameter_ui_name"] == "greit_noise_figure"
+    assert request.metadata["hyperparameter_ui_locked"] is True
+    assert request.metadata["regularization_alpha_applied"] is False
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -3911,7 +3994,7 @@ def test_simulation_greit3d_route_2160_adad_gets_distinct_registry_signature(
     )
     window._sim_tab.inverse_problem_panel.set_config(
         {
-            "method": "greit3d_rm",
+            "method": "greit",
             "regularization_alpha": 1.0,
             "max_iterations": 10,
         }
@@ -3927,12 +4010,12 @@ def test_simulation_greit3d_route_2160_adad_gets_distinct_registry_signature(
 
     assert len(captured) == 1
     request = captured[0]
-    assert request.metadata["simulation_inverse_route"] == "greit3d_rm"
+    assert request.metadata["simulation_inverse_route"] == "greit"
     assert "greit_common_config" not in request.metadata
     assert request.metadata["rm_auto_build"] is True
     assert request.metadata["greit_registry_auto_resolve"] is True
     assert request.metadata["greit_registry_config"]["measurement_count"] == n_meas
-    assert request.metadata["greit_registry_config"]["imgsz"] == (8, 8, 5)
+    assert request.metadata["greit_registry_config"]["imgsz"] == (16, 16, 8)
     assert request.metadata["greit_registry_signature"]
     assert (
         "config-driven registry artifact"

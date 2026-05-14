@@ -101,6 +101,7 @@ _ONE_STEP_LAMBDA_EFF_ROUTES = {
     "debug_fine_mesh_noser",
 }
 _CUSTOM_RM_LAMBDA_EFF_ROUTES = {"noser_rm", "laplace_rm", "curvature_rm"}
+_GREIT_SIMULATION_ROUTES = {"greit", "greit_rm", "greit2d_rm", "greit3d_rm"}
 _GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
 _GREIT_COMMON_CONFIG_SCOPE = {
     "greit_official_fixture_scope": "requires registered EIDORS parity artifact",
@@ -108,7 +109,7 @@ _GREIT_COMMON_CONFIG_SCOPE = {
     "greit_official_equivalence_claim_allowed": False,
     "greit_official_equivalence_scope": (
         "GREIT GUI hot path may use only EIDORS-parity artifacts matching the "
-        "current 3D geometry and protocol"
+        "current geometry and protocol"
     ),
 }
 
@@ -241,12 +242,15 @@ def _greit_common_config_id_for_forward_config(
 def _greit_default_imgsz_for_forward_config(
     forward_cfg: ForwardModelConfig,
 ) -> tuple[int, int, int]:
+    if int(forward_cfg.mesh_dimension) == 2:
+        return (32, 32, 1)
+    rings = max(int(getattr(forward_cfg, "n_rings", 1) or 1), 1)
     total = int(forward_cfg.total_electrodes())
-    if total >= 48:
-        return (8, 8, 5)
-    if total >= 32:
-        return (7, 7, 4)
-    return (6, 6, 3)
+    if rings >= 3 or total >= 48:
+        return (16, 16, 8)
+    if rings >= 2 or total >= 32:
+        return (14, 14, 7)
+    return (12, 12, 6)
 
 
 def _greit_imgsz_for_training_target_count(
@@ -258,6 +262,9 @@ def _greit_imgsz_for_training_target_count(
     requested = int(target_count or 0)
     if requested <= 0:
         return _greit_default_imgsz_for_forward_config(forward_cfg)
+    if int(forward_cfg.mesh_dimension) == 2:
+        xy = max(2, int(math.ceil(math.sqrt(requested))))
+        return (int(xy), int(xy), 1)
 
     radius = max(float(forward_cfg.radius), 1.0e-12)
     height = max(float(forward_cfg.height), 1.0e-12)
@@ -304,6 +311,7 @@ def _greit_registry_config_for_forward_config(
     desired_image_mode: str = "gauss",
     training_target_count: int = 0,
     target_size: float = 0.20,
+    weight_strategy: str = "fixed",
     use_cached_rm: bool = True,
     rebuild_rm: bool = False,
 ) -> dict[str, object]:
@@ -317,6 +325,16 @@ def _greit_registry_config_for_forward_config(
         desired_mode = "gauss"
     target_size_value = max(float(target_size), 1.0e-9)
     weight_value = max(float(artifact_weight), 1.0e-12)
+    strategy = str(weight_strategy or "fixed").strip().lower()
+    if strategy not in {"fixed", "eidors_nf1"}:
+        strategy = "fixed"
+    mesh_dim = int(forward_cfg.mesh_dimension)
+    rec_mask = "circular_fem_area_v1" if mesh_dim == 2 else "cylindrical_fem_volume_v1"
+    point_in_volume_signature = (
+        "analytic_disk_radius_v1"
+        if mesh_dim == 2
+        else "analytic_cylinder_radius_height_v1"
+    )
     mapping.update(
         {
             "measurement_count": int(n_measurements),
@@ -327,8 +345,8 @@ def _greit_registry_config_for_forward_config(
             "target_size": target_size_value,
             "greit_target_size": target_size_value,
             "target_contrast": 1.0,
-            "weight": weight_value,
-            "greit_weight": weight_value,
+            "weight_strategy": strategy,
+            "greit_weight_strategy": strategy,
             "noise_covar": 1.0,
             "training_mode": "forward",
             "desired_solution_fn": desired_mode,
@@ -340,10 +358,25 @@ def _greit_registry_config_for_forward_config(
             "builder_backend": "native",
             "builder_semantic_version": "native-greit-finite-target-v2",
             "artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
-            "rec_mask": "cylindrical_fem_volume_v1",
+            "rec_mask": rec_mask,
+            "point_in_volume_signature": point_in_volume_signature,
             "target_size_semantics": "fraction_of_tank_radius",
         }
     )
+    if strategy == "eidors_nf1":
+        mapping.update(
+            {
+                "noise_figure": 1.0,
+                "greit_noise_figure": 1.0,
+            }
+        )
+    else:
+        mapping.update(
+            {
+                "weight": weight_value,
+                "greit_weight": weight_value,
+            }
+        )
     return mapping
 
 
@@ -4132,10 +4165,11 @@ class EITWorkstation(QMainWindow):
             rm_regularization = "curvature"
             rm_route_requires_artifact = True
             rm_auto_build = True
-        elif route == "greit3d_rm":
+        elif route in _GREIT_SIMULATION_ROUTES:
+            route = "greit"
             resolved_method = "gn-difference"
             reconstruction_runtime = "single_step_cached"
-            difference_preset = "greit3d_rm"
+            difference_preset = "greit"
             route_kind = "rm"
             rm_regularization = "greit"
             rm_route_requires_artifact = True
@@ -4150,6 +4184,16 @@ class EITWorkstation(QMainWindow):
             )
             greit_target_size = float(inv_cfg.get("greit_target_size", 0.20))
             greit_weight = float(inv_cfg.get("greit_weight", alpha_input))
+            greit_weight_strategy = (
+                str(inv_cfg.get("greit_weight_strategy", "fixed")).strip().lower()
+            )
+            if greit_weight_strategy not in {"fixed", "eidors_nf1"}:
+                greit_weight_strategy = "fixed"
+            greit_noise_figure = (
+                1.0
+                if greit_weight_strategy == "eidors_nf1"
+                else inv_cfg.get("greit_noise_figure")
+            )
             greit_use_cached_rm = bool(inv_cfg.get("greit_use_cached_rm", True))
             greit_rebuild_rm = bool(inv_cfg.get("greit_rebuild_rm", False))
             greit_registry_config = _greit_registry_config_for_forward_config(
@@ -4159,6 +4203,7 @@ class EITWorkstation(QMainWindow):
                 desired_image_mode=greit_desired_image_mode,
                 training_target_count=greit_training_target_count,
                 target_size=greit_target_size,
+                weight_strategy=greit_weight_strategy,
                 use_cached_rm=greit_use_cached_rm,
                 rebuild_rm=greit_rebuild_rm,
             )
@@ -4189,19 +4234,24 @@ class EITWorkstation(QMainWindow):
                     "greit_desired_image_mode": greit_desired_image_mode,
                     "greit_training_target_count": greit_training_target_count,
                     "greit_target_size": greit_target_size,
+                    "greit_weight_strategy": greit_weight_strategy,
                     "greit_weight": greit_weight,
+                    "greit_noise_figure": greit_noise_figure,
                     "greit_use_cached_rm": greit_use_cached_rm,
                     "greit_rebuild_rm": greit_rebuild_rm,
                     "greit_cold_build_warning": (
                         "Changing GREIT desired image, target count, target "
-                        "size, or weight changes the registry signature; "
-                        "disabling cache or forcing rebuild cold-builds RM."
+                        "size, weight strategy, or weight changes the registry "
+                        "signature; disabling cache or forcing rebuild "
+                        "cold-builds RM."
                     ),
                     "greit_advanced_params": {
                         "desired_image_mode": greit_desired_image_mode,
                         "training_target_count": greit_training_target_count,
                         "target_size": greit_target_size,
+                        "weight_strategy": greit_weight_strategy,
                         "weight": greit_weight,
+                        "noise_figure": greit_noise_figure,
                         "use_cached_rm": greit_use_cached_rm,
                         "rebuild_rm": greit_rebuild_rm,
                     },
@@ -4253,7 +4303,7 @@ class EITWorkstation(QMainWindow):
             and locked_lambda_eff
             and bool(inv_cfg.get("lambda_eff_custom_enabled", False))
         )
-        greit_artifact_hyperparameter = route == "greit3d_rm"
+        greit_artifact_hyperparameter = route in _GREIT_SIMULATION_ROUTES
         if custom_lambda_eff:
             difference_lambda = max(float(alpha_input), 1.0e-12)
         elif locked_lambda_eff:
@@ -4296,17 +4346,37 @@ class EITWorkstation(QMainWindow):
                 "difference_lambda_semantics": "lambda_eff_equals_hp_squared",
             }
         elif greit_artifact_hyperparameter:
-            hyperparameter_meta = {
-                "hyperparameter_ui_name": "greit_artifact_weight",
-                "hyperparameter_ui_value": alpha_input,
-                "hyperparameter_ui_locked": False,
-                "hyperparameter_effective_source": "greit_gui_advanced",
-                "hyperparameter_formula": "calc_GREIT_RM_artifact",
-                "hyperparameter_diagnostic": "greit_weight_selects_registry_artifact",
-                "regularization_alpha_input": alpha_input,
-                "regularization_alpha_applied": False,
-                "difference_lambda_semantics": "unused_for_greit_rm_artifact",
-            }
+            greit_strategy = (
+                str(inv_cfg.get("greit_weight_strategy", "fixed")).strip().lower()
+            )
+            if greit_strategy == "eidors_nf1":
+                hyperparameter_meta = {
+                    "hyperparameter_ui_name": "greit_noise_figure",
+                    "hyperparameter_ui_value": 1.0,
+                    "hyperparameter_ui_locked": True,
+                    "hyperparameter_effective_source": "greit_eidors_nf1_search",
+                    "hyperparameter_formula": "eidors_calc_noise_figure_weight_search",
+                    "hyperparameter_diagnostic": (
+                        "cold_build_searches_greit_weight_for_nf1"
+                    ),
+                    "regularization_alpha_input": alpha_input,
+                    "regularization_alpha_applied": False,
+                    "difference_lambda_semantics": "unused_for_greit_artifact",
+                }
+            else:
+                hyperparameter_meta = {
+                    "hyperparameter_ui_name": "greit_weight",
+                    "hyperparameter_ui_value": alpha_input,
+                    "hyperparameter_ui_locked": False,
+                    "hyperparameter_effective_source": "greit_gui_advanced",
+                    "hyperparameter_formula": "calc_GREIT_RM_artifact",
+                    "hyperparameter_diagnostic": (
+                        "greit_weight_selects_registry_artifact"
+                    ),
+                    "regularization_alpha_input": alpha_input,
+                    "regularization_alpha_applied": False,
+                    "difference_lambda_semantics": "unused_for_greit_artifact",
+                }
         else:
             hyperparameter_meta = {
                 "hyperparameter_ui_name": "alpha",
@@ -4355,6 +4425,7 @@ class EITWorkstation(QMainWindow):
                 "noser_rm": "measurement",
                 "laplace_rm": "param",
                 "curvature_rm": "param",
+                "greit": "measurement",
                 "greit3d_rm": "measurement",
             }.get(route, ""),
             "rm_output_display_mode": "absolute_sigma"

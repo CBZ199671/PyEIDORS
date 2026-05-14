@@ -440,6 +440,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.custom_lambda_tooltip": "\u52fe\u9009\u540e\u4f7f\u7528\u8f93\u5165\u7684 \u03bb_eff \u6784\u5efa/\u52a0\u8f7d\u72ec\u7acb RM artifact\uff1b\u9996\u6b21\u8fd0\u884c\u4f1a\u51b7\u6784\u5efa\uff0c\u901f\u5ea6\u660e\u663e\u66f4\u6162\u3002",  # 勾选后使用输入的 λ_eff 构建/加载独立 RM artifact；首次运行会冷构建，速度明显更慢。
     "sim.inverse.artifact_weight_label": "Artifact weight\uff1a",  # Artifact weight：
     "sim.inverse.artifact_weight_tooltip": "GREIT \u6743\u91cd\u5b58\u5728 HDF5 artifact \u4e2d\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\u3002",  # GREIT 权重存在 HDF5 artifact 中；该值不作为 α 使用。
+    "sim.inverse.artifact_nf1_tooltip": "GREIT \u4f7f\u7528 EIDORS NF=1 \u81ea\u52a8\u641c\u7d22 weight\uff1b\u8be5\u503c\u4e0d\u4f5c\u4e3a \u03b1 \u4f7f\u7528\uff0c\u51b7\u6784\u5efa\u4f1a\u66f4\u6162\u3002",  # GREIT 使用 EIDORS NF=1 自动搜索 weight；该值不作为 α 使用，冷构建会更慢。
     "sim.inverse.greit.group_title": "GREIT \u9ad8\u7ea7\u53c2\u6570",  # GREIT 高级参数
     "sim.inverse.greit.desired_label": "desired image\uff1a",  # desired image：
     "sim.inverse.greit.desired.center": "\u4e2d\u5fc3\u91c7\u6837",  # 中心采样
@@ -450,13 +451,17 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.greit.target_count_tooltip": "0 \u8868\u793a\u81ea\u52a8\u6839\u636e\u7535\u6781\u6570\u9009\u62e9 rec grid\uff1b\u6570\u91cf\u8d8a\u5927\uff0c\u51b7\u6784\u5efa\u8d8a\u6162\u3002",  # 0 表示自动根据电极数选择 rec grid；数量越大，冷构建越慢。
     "sim.inverse.greit.target_size_label": "\u76ee\u6807\u534a\u5f84 (R\u6bd4\u4f8b)\uff1a",  # 目标半径 (R比例)：
     "sim.inverse.greit.target_size_tooltip": "EIDORS/GREIT target_size \u8bed\u4e49\uff1a\u6309\u5f85\u6d4b\u57df\u534a\u5f84 R \u7684\u6bd4\u4f8b\u7ed9\u51fa\uff0c\u4f8b\u5982 0.20 \u4ee3\u8868 0.2R\u3002",  # EIDORS/GREIT target_size 语义：按待测域半径 R 的比例给出，例如 0.20 代表 0.2R。
+    "sim.inverse.greit.weight_strategy_label": "\u6743\u91cd\u7b56\u7565\uff1a",  # 权重策略：
+    "sim.inverse.greit.weight_strategy.fixed": "\u56fa\u5b9a weight",  # 固定 weight
+    "sim.inverse.greit.weight_strategy.eidors_nf1": "EIDORS NF=1 \u81ea\u52a8\u641c\u7d22",  # EIDORS NF=1 自动搜索
+    "sim.inverse.greit.weight_strategy_tooltip": "\u56fa\u5b9a weight \u76f4\u63a5\u4f7f\u7528\u4e0b\u65b9\u6570\u503c\uff1bEIDORS NF=1 \u4f1a\u5728\u51b7\u6784\u5efa RM \u65f6\u641c\u7d22 weight\uff0c\u4f7f\u566a\u58f0\u56fe\u6307\u6807\u63a5\u8fd1 1\u3002",  # 固定 weight 直接使用下方数值；EIDORS NF=1 会在冷构建 RM 时搜索 weight，使噪声图指标接近 1。
     "sim.inverse.greit.weight_label": "weight / NF\uff1a",  # weight / NF：
     "sim.inverse.greit.weight_tooltip": "\u7528\u4e8e GREIT RM \u8bad\u7ec3\u7684\u6743\u91cd/\u6b63\u5219\u5f3a\u5ea6\uff1b\u6539\u53d8\u5b83\u4f1a\u9009\u62e9\u6216\u6784\u5efa\u53e6\u4e00\u4e2a artifact\u3002",  # 用于 GREIT RM 训练的权重/正则强度；改变它会选择或构建另一个 artifact。
     "sim.inverse.greit.use_cache_check": "\u4f7f\u7528\u7f13\u5b58 RM",  # 使用缓存 RM
     "sim.inverse.greit.cache_tooltip": "\u52fe\u9009\u65f6\u4f18\u5148\u590d\u7528\u7b7e\u540d\u5b8c\u5168\u4e00\u81f4\u7684 GREIT RM artifact\u3002",  # 勾选时优先复用签名完全一致的 GREIT RM artifact。
     "sim.inverse.greit.rebuild_check": "\u91cd\u5efa RM",  # 重建 RM
     "sim.inverse.greit.rebuild_tooltip": "\u5ffd\u7565\u5df2\u6709 artifact \u5e76\u51b7\u6784\u5efa\u5f53\u524d GREIT RM\uff1b\u8017\u65f6\u660e\u663e\u589e\u52a0\u3002",  # 忽略已有 artifact 并冷构建当前 GREIT RM；耗时明显增加。
-    "sim.inverse.greit.cold_build_hint": "\u63d0\u9192\uff1a\u6539\u53d8 desired image\u3001\u76ee\u6807\u6570\u3001\u76ee\u6807\u534a\u5f84\u6216 weight/NF \u4f1a\u6539\u53d8 GREIT \u7b7e\u540d\uff1b\u9996\u6b21\u8fd0\u884c\u9700\u8981\u51b7\u6784\u5efa RM\uff0c\u901f\u5ea6\u4f1a\u660e\u663e\u53d8\u6162\u3002",  # 提醒：改变 desired image、目标数、目标半径或 weight/NF 会改变 GREIT 签名；首次运行需要冷构建 RM，速度会明显变慢。
+    "sim.inverse.greit.cold_build_hint": "\u63d0\u9192\uff1a\u6539\u53d8 desired image\u3001\u76ee\u6807\u6570\u3001\u76ee\u6807\u534a\u5f84\u3001\u6743\u91cd\u7b56\u7565\u6216 weight/NF \u4f1a\u6539\u53d8 GREIT \u7b7e\u540d\uff1b\u9996\u6b21\u8fd0\u884c\u9700\u8981\u51b7\u6784\u5efa RM\uff0cNF=1 \u81ea\u52a8\u641c\u7d22\u4f1a\u66f4\u6162\u3002",  # 提醒：改变 desired image、目标数、目标半径、权重策略或 weight/NF 会改变 GREIT 签名；首次运行需要冷构建 RM，NF=1 自动搜索会更慢。
     "sim.inverse.iterations_label": "\u6700\u5927\u8fed\u4ee3\u6b21\u6570\uff1a",  # 最大迭代次数：
     "sim.inverse.iterations_tooltip": "\u4ec5\u7edd\u5bf9\u6210\u50cf GN \u8def\u7531\u4f7f\u7528\uff1b\u5dee\u5206/RM \u7b97\u6cd5\u662f\u5355\u6b65\u6216\u7f13\u5b58\u77e9\u9635\u8def\u7531\uff0c\u4e0d\u63a5\u53d7\u8be5\u53c2\u6570\u3002",  # 仅绝对成像 GN 路由使用；差分/RM 算法是单步或缓存矩阵路由，不接受该参数。
     "sim.inverse.reconstruct_button": "\u91cd\u6784",  # 重构
@@ -466,7 +471,8 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.method.noser_rm.tooltip": "NOSER RM \u9ed8\u8ba4\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 \u7c97\u9006\u6a21\u578b artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # NOSER RM 默认路由：冷构建或复用 HDF5 粗逆模型 artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-Laplacian artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Laplace RM 平滑路由：冷构建或复用 HDF5 graph-Laplacian artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.curvature_rm.tooltip": "Curvature RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-LtL artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Curvature RM 平滑路由：冷构建或复用 HDF5 graph-LtL artifact，然后用 RM @ dv 热路径重构。
-    "sim.inverse.method.greit3d_rm.tooltip": "3D GREIT registry \u8def\u7531\uff1a\u6309\u5f53\u524d\u7f51\u683c/\u7535\u6781/\u534f\u8bae\u548c\u9ad8\u7ea7\u8bad\u7ec3\u53c2\u6570\u751f\u6210\u7cbe\u786e\u7b7e\u540d\uff0c\u547d\u4e2d\u5219\u52a0\u8f7d HDF5\uff0c\u7f3a\u5931\u6216\u9009\u62e9\u91cd\u5efa\u65f6\u5728 worker \u51b7\u6784\u5efa native GREIT artifact\uff0c\u518d\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # 3D GREIT registry 路由：按当前网格/电极/协议和高级训练参数生成精确签名，命中则加载 HDF5，缺失或选择重建时在 worker 冷构建 native GREIT artifact，再用 RM @ dv 热路径重构。
+    "sim.inverse.method.greit.tooltip": "GREIT \u8def\u7531\uff1a\u6839\u636e\u5f53\u524d 2D/3D \u7f51\u683c\u3001\u7535\u6781\u3001\u534f\u8bae\u548c\u9ad8\u7ea7\u8bad\u7ec3\u53c2\u6570\u6784\u5efa/\u590d\u7528 HDF5 artifact\uff0c\u518d\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # GREIT 路由：根据当前 2D/3D 网格、电极、协议和高级训练参数构建/复用 HDF5 artifact，再用 RM @ dv 热路径重构。
+    "sim.inverse.method.greit3d_rm.tooltip": "GREIT \u65e7\u540d\u517c\u5bb9\u8def\u7531\uff1bGUI \u73b0\u5728\u7edf\u4e00\u663e\u793a\u4e3a greit\u3002",  # GREIT 旧名兼容路由；GUI 现在统一显示为 greit。
     "sim.inverse.method.absolute_gn.tooltip": "\u7edd\u5bf9\u6210\u50cf\uff1a\u76f4\u63a5\u4ece\u76ee\u6807\u8fb9\u754c\u7535\u538b\u4f30\u8ba1\u7edd\u5bf9\u7535\u5bfc\u7387\uff0c\u4e0d\u4f9d\u8d56\u53c2\u8003\u5e27\uff1b\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5c0f\u7f51\u683c\u5bf9\u7167\u3002",  # 绝对成像：直接从目标边界电压估计绝对电导率，不依赖参考帧；迭代 full GN 冷路径，适合小网格对照。
     "sim.inverse.method.debug_full_gn.tooltip": "\u8c03\u8bd5\u57fa\u7ebf\uff1a\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5bf9\u7167\uff0c\u4e0d\u662f\u5b9e\u65f6 RM \u8def\u7531\u3002",  # 调试基线：迭代 full GN 冷路径，适合对照，不是实时 RM 路由。
     # ==================================================================

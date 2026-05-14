@@ -40,6 +40,7 @@ def _project_cells_to_triangles(
     cell_connectivity: np.ndarray,
     x: np.ndarray,
     y: np.ndarray,
+    z: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return 2D triangles plus the source cell index for each triangle."""
     cells = np.asarray(cell_connectivity, dtype=np.int64)
@@ -50,20 +51,31 @@ def _project_cells_to_triangles(
         triangles = cells.astype(np.int32, copy=False)
         sources = np.arange(len(cells), dtype=np.int32)
     elif cells.shape[1] == 4:
-        # Tetrahedra: draw boundary faces only, otherwise internal faces
-        # overpaint the projection and make 3D phantoms unreadable.
-        faces: dict[tuple[int, int, int], tuple[tuple[int, int, int], int] | None] = {}
-        face_offsets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
-        for cell_idx, cell in enumerate(cells):
-            for offsets in face_offsets:
-                face = tuple(int(cell[offset]) for offset in offsets)
-                key = tuple(sorted(face))
-                faces[key] = None if key in faces else (face, cell_idx)
-        kept = [payload for payload in faces.values() if payload is not None]
-        if not kept:
-            return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
-        triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
-        sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
+        z_arr = None if z is None else np.asarray(z, dtype=float)
+        planar = z_arr is None or not bool(np.ptp(z_arr) > 1.0e-9)
+        if planar:
+            tris = np.empty((len(cells) * 2, 3), dtype=np.int32)
+            tris[0::2] = cells[:, [0, 1, 2]]
+            tris[1::2] = cells[:, [0, 2, 3]]
+            triangles = tris
+            sources = np.repeat(np.arange(len(cells), dtype=np.int32), 2)
+        else:
+            # Tetrahedra: draw boundary faces only, otherwise internal faces
+            # overpaint the projection and make 3D phantoms unreadable.
+            faces: dict[
+                tuple[int, int, int], tuple[tuple[int, int, int], int] | None
+            ] = {}
+            face_offsets = ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3))
+            for cell_idx, cell in enumerate(cells):
+                for offsets in face_offsets:
+                    face = tuple(int(cell[offset]) for offset in offsets)
+                    key = tuple(sorted(face))
+                    faces[key] = None if key in faces else (face, cell_idx)
+            kept = [payload for payload in faces.values() if payload is not None]
+            if not kept:
+                return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
+            triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
+            sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
     else:
         tris: list[tuple[int, int, int]] = []
         sources_list: list[int] = []
@@ -237,8 +249,11 @@ class ConductivityImageWidget(QWidget):
 
         x = node_coords[:, 0]
         y = node_coords[:, 1]
+        z = node_coords[:, 2] if node_coords.shape[1] > 2 else None
 
-        triangles, source_cells = _project_cells_to_triangles(cell_connectivity, x, y)
+        triangles, source_cells = _project_cells_to_triangles(
+            cell_connectivity, x, y, z
+        )
         if len(triangles) == 0:
             self._show_error("Triangulation failed: no drawable 2D projection")
             return

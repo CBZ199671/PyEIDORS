@@ -70,6 +70,7 @@ _PRODUCTION_RM_ROUTE_TASKS = {
     "noser_rm": "T100",
     "laplace_rm": "T101",
     "curvature_rm": "T101",
+    "greit": "T105",
     "greit3d_rm": "T105",
 }
 _ONE_STEP_RM_ROUTE_REGULARIZATION = {
@@ -78,6 +79,7 @@ _ONE_STEP_RM_ROUTE_REGULARIZATION = {
     "curvature_rm": "curvature",
 }
 _AUTO_BUILD_RM_ROUTES = frozenset(_ONE_STEP_RM_ROUTE_REGULARIZATION)
+_GREIT_REGISTRY_ROUTES = frozenset({"greit", "greit_rm", "greit2d_rm", "greit3d_rm"})
 
 
 def build_difference_vector(*args, **kwargs):
@@ -1088,7 +1090,7 @@ def _single_step_context_cache_scope(meta: dict[str, Any]) -> str:
 
 
 def _should_resolve_greit_registry(meta: dict[str, Any]) -> bool:
-    return _simulation_inverse_route(meta) == "greit3d_rm" and (
+    return _simulation_inverse_route(meta) in _GREIT_REGISTRY_ROUTES and (
         _flag_enabled(meta.get("greit_registry_auto_resolve", False))
         or _flag_enabled(meta.get("rm_auto_build", False))
         or bool(meta.get("greit_registry_signature"))
@@ -1211,6 +1213,8 @@ def _greit_registry_config_from_runtime(
         "desired_solution_params",
         "greit_desired_options",
         "noise_covar",
+        "weight_strategy",
+        "greit_weight_strategy",
         "weight",
         "greit_weight",
         "noise_figure",
@@ -2013,6 +2017,61 @@ def _center_cloud_hexa_geometry(
     return coords, cells
 
 
+def _center_cloud_quad_geometry(
+    centers: np.ndarray,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray] | None:
+    centers = np.asarray(centers, dtype=np.float64)
+    if centers.ndim != 2 or centers.shape[1] < 2 or centers.shape[0] == 0:
+        return None
+    centers_xy = centers[:, :2]
+    if not np.isfinite(centers_xy).all():
+        return None
+    axis_spacing: list[float] = []
+    for axis in range(2):
+        unique = np.unique(np.round(centers_xy[:, axis], decimals=12))
+        diffs = np.diff(np.sort(unique))
+        diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        if diffs.size:
+            axis_spacing.append(float(np.median(diffs)))
+        else:
+            axis_spacing.append(float("nan"))
+    if not any(np.isfinite(value) and value > 0.0 for value in axis_spacing):
+        radius = float(meta.get("radius", 1.0) or 1.0)
+        fallback = radius / max(round(centers_xy.shape[0] ** 0.5), 1)
+        axis_spacing = [fallback, fallback]
+    finite_spacing = [
+        value for value in axis_spacing if np.isfinite(value) and value > 0.0
+    ]
+    fallback_spacing = float(min(finite_spacing)) if finite_spacing else 1.0
+    half_axes = np.asarray(
+        [
+            0.45 * (value if np.isfinite(value) and value > 0.0 else fallback_spacing)
+            for value in axis_spacing
+        ],
+        dtype=np.float64,
+    )
+    half_axes = np.maximum(half_axes, np.finfo(np.float64).eps)
+    offsets = np.asarray(
+        [
+            [-half_axes[0], -half_axes[1]],
+            [half_axes[0], -half_axes[1]],
+            [half_axes[0], half_axes[1]],
+            [-half_axes[0], half_axes[1]],
+        ],
+        dtype=np.float64,
+    )
+    coords = (centers_xy[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
+    cells = np.asarray(
+        [
+            [4 * idx + offset for offset in range(4)]
+            for idx in range(centers_xy.shape[0])
+        ],
+        dtype=np.int32,
+    )
+    return coords, cells
+
+
 def _greit_rec_model_geometry(
     rec_model: Any,
     *,
@@ -2020,14 +2079,22 @@ def _greit_rec_model_geometry(
     meta: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray] | None:
     raw = np.asarray(rec_model, dtype=np.float64)
-    if raw.ndim != 2 or raw.shape[1] != 3 or raw.shape[0] == 0:
+    if raw.ndim != 2 or raw.shape[1] < 2 or raw.shape[0] == 0:
         return None
     if raw.shape[0] == int(n_parameters):
         centers = raw
     elif int(n_parameters) > 0 and raw.shape[0] % int(n_parameters) == 0:
-        centers = raw.reshape(int(n_parameters), -1, 3).mean(axis=1)
+        centers = raw.reshape(int(n_parameters), -1, raw.shape[1]).mean(axis=1)
     else:
         return None
+    if int(meta.get("mesh_dimension", meta.get("dim", 3)) or 3) == 2:
+        return _center_cloud_quad_geometry(centers, meta)
+    if centers.shape[1] == 2:
+        centers = np.column_stack(
+            [centers, np.zeros((centers.shape[0],), dtype=np.float64)]
+        )
+    elif centers.shape[1] > 3:
+        centers = centers[:, :3]
     return _center_cloud_hexa_geometry(centers, meta)
 
 
@@ -2047,7 +2114,11 @@ def _rm_artifact_geometry(
             meta=meta,
         )
         if generated_from_rec is not None:
-            meta["rm_geometry_source"] = "greit_rec_model_centers"
+            meta["rm_geometry_source"] = (
+                "greit_rec_model_centers_2d"
+                if generated_from_rec[0].shape[1] == 2
+                else "greit_rec_model_centers"
+            )
             return generated_from_rec
     generated = _voxel_grid_geometry(tuple(artifact.get("voxel_shape", ())), meta)
     if generated is not None:
@@ -2064,18 +2135,19 @@ def _greit_artifact_unavailable_reason(
     *,
     expected_n_measurements: int,
 ) -> str:
-    if _simulation_inverse_route(meta) != "greit3d_rm":
+    route = _simulation_inverse_route(meta)
+    if route not in _GREIT_REGISTRY_ROUTES:
         return ""
     artifact_meta = dict(artifact.get("metadata", {}) or {})
     if bool(artifact_meta.get("fixture_only", False)):
         return (
             "GREIT artifact is a deterministic fixture, not an official EIDORS "
-            "parity artifact; refusing production greit3d_rm."
+            f"parity artifact; refusing production {route}."
         )
     if not bool(artifact_meta.get("eidors_parity", False)):
         return (
             "GREIT artifact metadata does not declare eidors_parity=true; refusing "
-            "production greit3d_rm."
+            f"production {route}."
         )
     expected_signature = str(meta.get("greit_registry_signature") or "").strip()
     if expected_signature:
@@ -2085,7 +2157,7 @@ def _greit_artifact_unavailable_reason(
         if actual_signature != expected_signature:
             return (
                 "GREIT artifact registry signature mismatch; refusing production "
-                "greit3d_rm."
+                f"{route}."
             )
     rm = np.asarray(artifact["rm"])
     if int(rm.shape[1]) != int(expected_n_measurements):
@@ -2229,7 +2301,10 @@ def _try_run_cached_rm_request(
                     simulated_dv = None
         except Exception:
             simulated_dv = None
-    if simulated_dv is None and _simulation_inverse_route(runtime.meta) == "greit3d_rm":
+    if (
+        simulated_dv is None
+        and _simulation_inverse_route(runtime.meta) in _GREIT_REGISTRY_ROUTES
+    ):
         simulated_dv = _greit_training_space_fit(
             artifact,
             delta_conductivity,

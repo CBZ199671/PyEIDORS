@@ -24,24 +24,28 @@ SIMULATION_INVERSE_METHODS = [
     "noser_rm",
     "laplace_rm",
     "curvature_rm",
-    "greit3d_rm",
+    "greit",
     "absolute_gn",
     "debug_fine_mesh_noser",
     "debug_full_gn",
 ]
+_GREIT_METHODS = {"greit"}
 _LEGACY_METHOD_ALIASES = {
     "eidors_one_step_noser": "debug_fine_mesh_noser",
     "eidors_abs_gn": "absolute_gn",
     "gn-absolute": "absolute_gn",
     "gn_absolute": "absolute_gn",
     "eidors_demo3d_tv": "debug_full_gn",
+    "greit_rm": "greit",
+    "greit2d_rm": "greit",
+    "greit3d_rm": "greit",
 }
 _METHOD_TOOLTIP_KEYS = {
     "debug_fine_mesh_noser": "sim.inverse.method.debug_fine_mesh_noser.tooltip",
     "noser_rm": "sim.inverse.method.noser_rm.tooltip",
     "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
     "curvature_rm": "sim.inverse.method.curvature_rm.tooltip",
-    "greit3d_rm": "sim.inverse.method.greit3d_rm.tooltip",
+    "greit": "sim.inverse.method.greit.tooltip",
     "absolute_gn": "sim.inverse.method.absolute_gn.tooltip",
     "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
 }
@@ -52,12 +56,17 @@ _LOCKED_LAMBDA_EFF_METHODS = {
     "curvature_rm",
     "debug_fine_mesh_noser",
 }
-_ARTIFACT_HYPERPARAM_METHODS = {"greit3d_rm"}
+_ARTIFACT_HYPERPARAM_METHODS = set(_GREIT_METHODS)
 _ITERATION_CONTROL_METHODS = {"absolute_gn"}
 _CUSTOM_LAMBDA_EFF_METHODS = {"noser_rm", "laplace_rm", "curvature_rm"}
 _DEFAULT_GREIT_DESIRED_IMAGE_MODE = "gauss"
+_DEFAULT_GREIT_WEIGHT_STRATEGY = "fixed"
 _DEFAULT_GREIT_TARGET_SIZE = 0.20
 _DEFAULT_GREIT_ARTIFACT_WEIGHT = 1.0
+_GREIT_WEIGHT_STRATEGIES = (
+    ("fixed", "sim.inverse.greit.weight_strategy.fixed"),
+    ("eidors_nf1", "sim.inverse.greit.weight_strategy.eidors_nf1"),
+)
 _GREIT_DESIRED_IMAGE_MODES = (
     ("center", "sim.inverse.greit.desired.center"),
     ("gauss", "sim.inverse.greit.desired.gauss"),
@@ -155,6 +164,18 @@ class InverseProblemPanel(QGroupBox):
         self._lbl_greit_target_size = QLabel("")
         greit_layout.addRow(self._lbl_greit_target_size, self._greit_target_size_spin)
 
+        self._greit_weight_strategy_combo = AutoCloseComboBox()
+        for strategy, key in _GREIT_WEIGHT_STRATEGIES:
+            self._greit_weight_strategy_combo.addItem(t(key), strategy)
+        self._greit_weight_strategy_combo.currentIndexChanged.connect(
+            lambda _index: self._update_method_state()
+        )
+        self._lbl_greit_weight_strategy = QLabel("")
+        greit_layout.addRow(
+            self._lbl_greit_weight_strategy,
+            self._greit_weight_strategy_combo,
+        )
+
         self._greit_weight_spin = QDoubleSpinBox()
         self._greit_weight_spin.setRange(1.0e-6, 1000.0)
         self._greit_weight_spin.setDecimals(4)
@@ -228,8 +249,11 @@ class InverseProblemPanel(QGroupBox):
             and self._custom_lambda_check.isChecked()
         )
         greit_weight = float(self._greit_weight_spin.value())
+        greit_weight_strategy = self._greit_weight_strategy()
         regularization_alpha = (
-            greit_weight if method == "greit3d_rm" else float(self._alpha_spin.value())
+            (1.0 if greit_weight_strategy == "eidors_nf1" else greit_weight)
+            if method in _GREIT_METHODS
+            else float(self._alpha_spin.value())
         )
         return {
             "method": method,
@@ -242,6 +266,10 @@ class InverseProblemPanel(QGroupBox):
             "greit_desired_image_mode": self._greit_desired_mode(),
             "greit_training_target_count": self._greit_target_count_spin.value(),
             "greit_target_size": self._greit_target_size_spin.value(),
+            "greit_weight_strategy": greit_weight_strategy,
+            "greit_noise_figure": 1.0
+            if greit_weight_strategy == "eidors_nf1"
+            else None,
             "greit_weight": greit_weight,
             "greit_use_cached_rm": self._greit_use_cache_check.isChecked(),
             "greit_rebuild_rm": self._greit_rebuild_check.isChecked(),
@@ -255,6 +283,7 @@ class InverseProblemPanel(QGroupBox):
             self._greit_desired_combo,
             self._greit_target_count_spin,
             self._greit_target_size_spin,
+            self._greit_weight_strategy_combo,
             self._greit_weight_spin,
             self._greit_use_cache_check,
             self._greit_rebuild_check,
@@ -298,6 +327,14 @@ class InverseProblemPanel(QGroupBox):
             )
             self._greit_target_size_spin.setValue(
                 float(config.get("greit_target_size", _DEFAULT_GREIT_TARGET_SIZE))
+            )
+            self._select_greit_weight_strategy(
+                str(
+                    config.get(
+                        "greit_weight_strategy",
+                        _DEFAULT_GREIT_WEIGHT_STRATEGY,
+                    )
+                )
             )
             self._greit_use_cache_check.setChecked(
                 bool(config.get("greit_use_cached_rm", True))
@@ -359,7 +396,7 @@ class InverseProblemPanel(QGroupBox):
     def _remember_greit_weight(self, value: float) -> None:
         if (
             normalize_simulation_inverse_method(self._method_combo.currentText())
-            == "greit3d_rm"
+            in _GREIT_METHODS
         ):
             self._editable_alpha_value = float(value)
             blocked = self._alpha_spin.blockSignals(True)
@@ -389,6 +426,7 @@ class InverseProblemPanel(QGroupBox):
     def _update_hyperparameter_control(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
         blocked = self._alpha_spin.blockSignals(True)
+        alpha_visible = True
         try:
             custom_lambda_available = method in _CUSTOM_LAMBDA_EFF_METHODS
             self._custom_lambda_check.setVisible(custom_lambda_available)
@@ -412,9 +450,13 @@ class InverseProblemPanel(QGroupBox):
                 self._alpha_spin.setEnabled(False)
             elif method in _ARTIFACT_HYPERPARAM_METHODS:
                 self._custom_lambda_check.setVisible(False)
-                self._lbl_alpha.setText(t("sim.inverse.artifact_weight_label"))
-                tooltip = t("sim.inverse.artifact_weight_tooltip")
-                self._alpha_spin.setValue(self._greit_weight_spin.value())
+                alpha_visible = False
+                if self._greit_weight_strategy() == "eidors_nf1":
+                    tooltip = t("sim.inverse.artifact_nf1_tooltip")
+                    self._alpha_spin.setValue(1.0)
+                else:
+                    tooltip = t("sim.inverse.artifact_weight_tooltip")
+                    self._alpha_spin.setValue(self._greit_weight_spin.value())
                 self._alpha_spin.setEnabled(False)
             else:
                 self._custom_lambda_check.setVisible(False)
@@ -424,14 +466,17 @@ class InverseProblemPanel(QGroupBox):
                 self._alpha_spin.setEnabled(not self._running)
         finally:
             self._alpha_spin.blockSignals(blocked)
+        self._lbl_alpha.setVisible(alpha_visible)
+        self._alpha_spin.setVisible(alpha_visible)
         self._lbl_alpha.setToolTip(tooltip)
         self._alpha_spin.setToolTip(tooltip)
 
     def _update_greit_controls(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
-        visible = method == "greit3d_rm"
+        visible = method in _GREIT_METHODS
         self._greit_group.setVisible(visible)
         self._greit_group.setEnabled(visible and not self._running)
+        self._update_greit_weight_strategy_state(visible=visible)
 
     def _update_iteration_control(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
@@ -445,14 +490,22 @@ class InverseProblemPanel(QGroupBox):
 
     def _retranslate_greit_controls(self) -> None:
         current_mode = self._greit_desired_mode()
+        current_strategy = self._greit_weight_strategy()
         self._greit_group.setTitle(t("sim.inverse.greit.group_title"))
         self._lbl_greit_desired.setText(t("sim.inverse.greit.desired_label"))
         for idx, (_mode, key) in enumerate(_GREIT_DESIRED_IMAGE_MODES):
             self._greit_desired_combo.setItemText(idx, t(key))
         self._select_greit_desired_mode(current_mode)
+        self._lbl_greit_weight_strategy.setText(
+            t("sim.inverse.greit.weight_strategy_label")
+        )
+        for idx, (_strategy, key) in enumerate(_GREIT_WEIGHT_STRATEGIES):
+            self._greit_weight_strategy_combo.setItemText(idx, t(key))
+        self._select_greit_weight_strategy(current_strategy)
 
         target_count_tooltip = t("sim.inverse.greit.target_count_tooltip")
         target_size_tooltip = t("sim.inverse.greit.target_size_tooltip")
+        strategy_tooltip = t("sim.inverse.greit.weight_strategy_tooltip")
         weight_tooltip = t("sim.inverse.greit.weight_tooltip")
         cache_tooltip = t("sim.inverse.greit.cache_tooltip")
         rebuild_tooltip = t("sim.inverse.greit.rebuild_tooltip")
@@ -463,6 +516,8 @@ class InverseProblemPanel(QGroupBox):
         self._lbl_greit_target_size.setText(t("sim.inverse.greit.target_size_label"))
         self._lbl_greit_target_size.setToolTip(target_size_tooltip)
         self._greit_target_size_spin.setToolTip(target_size_tooltip)
+        self._lbl_greit_weight_strategy.setToolTip(strategy_tooltip)
+        self._greit_weight_strategy_combo.setToolTip(strategy_tooltip)
         self._lbl_greit_weight.setText(t("sim.inverse.greit.weight_label"))
         self._lbl_greit_weight.setToolTip(weight_tooltip)
         self._greit_weight_spin.setToolTip(weight_tooltip)
@@ -477,6 +532,13 @@ class InverseProblemPanel(QGroupBox):
         mode = str(data or "").strip()
         return mode or _DEFAULT_GREIT_DESIRED_IMAGE_MODE
 
+    def _greit_weight_strategy(self) -> str:
+        data = self._greit_weight_strategy_combo.currentData()
+        strategy = str(data or "").strip().lower()
+        if strategy not in {item[0] for item in _GREIT_WEIGHT_STRATEGIES}:
+            return _DEFAULT_GREIT_WEIGHT_STRATEGY
+        return strategy
+
     def _select_greit_desired_mode(self, mode: str) -> None:
         normalized = str(mode or _DEFAULT_GREIT_DESIRED_IMAGE_MODE).strip()
         for idx in range(self._greit_desired_combo.count()):
@@ -484,3 +546,18 @@ class InverseProblemPanel(QGroupBox):
                 self._greit_desired_combo.setCurrentIndex(idx)
                 return
         self._greit_desired_combo.setCurrentIndex(1)
+
+    def _select_greit_weight_strategy(self, strategy: str) -> None:
+        normalized = str(strategy or _DEFAULT_GREIT_WEIGHT_STRATEGY).strip().lower()
+        for idx in range(self._greit_weight_strategy_combo.count()):
+            if self._greit_weight_strategy_combo.itemData(idx) == normalized:
+                self._greit_weight_strategy_combo.setCurrentIndex(idx)
+                return
+        self._greit_weight_strategy_combo.setCurrentIndex(0)
+
+    def _update_greit_weight_strategy_state(self, *, visible: bool) -> None:
+        fixed_weight = self._greit_weight_strategy() == "fixed"
+        enabled = visible and fixed_weight and not self._running
+        self._lbl_greit_weight.setEnabled(visible and fixed_weight)
+        self._greit_weight_spin.setEnabled(enabled)
+        self._greit_weight_strategy_combo.setEnabled(visible and not self._running)

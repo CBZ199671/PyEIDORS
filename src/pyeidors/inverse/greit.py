@@ -1969,6 +1969,11 @@ def build_native_greit_training_pipeline(
     desired_solution_fn: Any | None = None,
     desired_options: dict[str, Any] | None = None,
     weight: Any = 0.5,
+    weight_strategy: str = "fixed",
+    target_noise_figure: float | None = None,
+    weight_search_bracket: tuple[float, float] = (-2.0, 2.0),
+    weight_search_tolerance: float = 1.0e-3,
+    weight_search_maxiter: int = 64,
     noise_covar: Any = 1.0,
     artifact_path: str | Path | None = None,
     keep_model_components: bool = True,
@@ -2034,9 +2039,66 @@ def build_native_greit_training_pipeline(
         if fwd_model_signature is not None
         else _greit_forward_model_signature(fwd_model, responses.conductivities)
     )
+    strategy = str(weight_strategy or "fixed").strip().lower()
+    if strategy in {"eidors_nf1", "eidors_nf", "nf1", "noise_figure_1"}:
+        strategy = "eidors_nf1"
+    else:
+        strategy = "fixed"
+    search_result: GREITWeightSearchResult | None = None
+    if strategy == "eidors_nf1":
+        target_nf = 1.0 if target_noise_figure is None else float(target_noise_figure)
+        if target_nf <= 0.0 or not np.isfinite(target_nf):
+            raise ValueError("target_noise_figure must be finite and positive.")
+        nf_center = _default_greit_noise_figure_target_center(
+            fwd_model,
+            distribution=built_distribution,
+        )
+        nf_responses = build_greit_finite_target_responses(
+            fwd_model,
+            centers=nf_center,
+            target_radius=target_radius,
+            target_size=target_size,
+            target_plane=target_plane,
+            target_offset=target_offset,
+            target_contrast=target_contrast,
+            background_conductivity=background_conductivity,
+            normalize=normalize,
+            measurement_order=measurement_order,
+            channel_mask=channel_mask,
+            measurement_weights=measurement_weights,
+            batch_size=1,
+        )
+        pjt_cache = np.ascontiguousarray(
+            desired.values @ responses.contracted_y.T,
+            dtype=np.result_type(desired.values, responses.contracted_y),
+        )
+        search_result = optimize_greit_weight_eidors_nf(
+            responses.contracted_y,
+            desired.values,
+            vh=responses.vh,
+            signal_y=nf_responses.contracted_y,
+            target_noise_figure=target_nf,
+            noise_covar=noise_covar,
+            pjt_cache=pjt_cache,
+            bracket=weight_search_bracket,
+            tolerance=weight_search_tolerance,
+            maxiter=weight_search_maxiter,
+        )
+        resolved_weight = search_result.weight
+        weight_source = "eidors_nf1_search"
+    else:
+        resolved_weight = float(weight)
+        if resolved_weight < 0.0 or not np.isfinite(resolved_weight):
+            raise ValueError("GREIT weight must be finite and non-negative.")
+        weight_source = "fixed"
+        target_nf = None
     pipeline_meta = {
         "training_data_source": "native_pyeidors_forward",
         "uses_eidors_exported_vh_vi_d": False,
+        "greit_weight_strategy": strategy,
+        "greit_weight_source": weight_source,
+        "greit_weight": float(resolved_weight),
+        "greit_noise_figure_target": target_nf,
         "fairness_contract": {
             "target_distribution": dict(built_distribution.metadata)
             if built_distribution is not None
@@ -2050,12 +2112,21 @@ def build_native_greit_training_pipeline(
             "desired_image_sampling": desired.metadata["desired_image_sampling"],
         },
     }
+    if search_result is not None:
+        pipeline_meta["greit_weight_search"] = {
+            "weight": float(search_result.weight),
+            "target_noise_figure": float(search_result.target_metric),
+            "achieved_noise_figure": float(search_result.achieved_metric),
+            "objective_value": float(search_result.objective_value),
+            "evaluations": int(search_result.evaluations),
+            "metadata": dict(search_result.metadata),
+        }
     if metadata:
         pipeline_meta.update(metadata)
     greit = build_greit_rm_from_eidors_components(
         responses,
         desired,
-        weight=weight,
+        weight=resolved_weight,
         noise_covar=noise_covar,
         artifact_path=artifact_path,
         keep_model_components=keep_model_components,
@@ -2070,6 +2141,21 @@ def build_native_greit_training_pipeline(
         greit=greit,
         metadata=MappingProxyType(pipeline_meta),
     )
+
+
+def _default_greit_noise_figure_target_center(
+    fwd_model: Any,
+    *,
+    distribution: GREIT3DDistribution | None,
+) -> np.ndarray:
+    nodes = _model_nodes(fwd_model)
+    if nodes is not None and nodes.size:
+        center = np.mean(nodes[:, :3], axis=0)
+    elif distribution is not None and distribution.centers.size:
+        center = np.mean(np.asarray(distribution.centers, dtype=np.float64), axis=0)
+    else:
+        center = np.zeros(3, dtype=np.float64)
+    return np.ascontiguousarray(center.reshape(1, 3), dtype=np.float64)
 
 
 def build_greit_rm_from_eidors_components(
@@ -2448,6 +2534,13 @@ def _resolve_distribution_bounds(
         return None
     lower = np.min(nodes[:, :3], axis=0)
     upper = np.max(nodes[:, :3], axis=0)
+    span = upper - lower
+    flat = span <= np.finfo(np.float64).eps
+    if flat[2] and not (flat[0] or flat[1]):
+        z_mid = 0.5 * (lower[2] + upper[2])
+        z_span = max(float(np.max(span[:2])), 1.0) * 1.0e-6
+        lower[2] = z_mid - 0.5 * z_span
+        upper[2] = z_mid + 0.5 * z_span
     if np.any(upper <= lower):
         return None
     return np.ascontiguousarray(np.vstack([lower, upper]), dtype=np.float64)
@@ -2652,8 +2745,10 @@ def _resolve_finite_target_geometry(
             "finite-target GREIT responses require centers, distribution, "
             "or GREITTrainingTargets with 3D centers."
         )
-    if target_centers.shape[1] != 3:
-        raise ValueError("finite-target GREIT centers must be 3D.")
+    target_centers = _as_xyz_points(
+        target_centers,
+        name="finite-target GREIT centers",
+    )
 
     n_targets = int(target_centers.shape[0])
     if target_radius is not None and target_size is not None:
@@ -2979,11 +3074,11 @@ def _forward_cell_centers(fwd_model: Any) -> np.ndarray:
             "or V_sigma.tabulate_dof_coordinates()."
         )
     array = np.asarray(centers, dtype=np.float64)
-    if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] < 3:
-        raise ValueError("forward target centers must have shape (n_cells, >=3).")
+    if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] < 2:
+        raise ValueError("forward target centers must have shape (n_cells, >=2).")
     if not np.isfinite(array).all():
         raise FloatingPointError("forward target centers contain non-finite values.")
-    return np.ascontiguousarray(array[:, :3], dtype=np.float64)
+    return _as_xyz_points(array, name="forward target centers")
 
 
 def _desired_rec_centers(rec_model: Any) -> np.ndarray:
@@ -2993,11 +3088,11 @@ def _desired_rec_centers(rec_model: Any) -> np.ndarray:
         centers = np.asarray(rec_model, dtype=np.float64)
     else:
         centers = _cell_centers(rec_model)
-    if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] < 3:
-        raise ValueError("GREIT desired images require 3D rec-model centers.")
+    if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] < 2:
+        raise ValueError("GREIT desired images require 2D or 3D rec-model centers.")
     if not np.isfinite(centers).all():
         raise FloatingPointError("rec-model centers contain non-finite values.")
-    return np.ascontiguousarray(centers[:, :3], dtype=np.float64)
+    return _as_xyz_points(centers, name="GREIT desired rec-model centers")
 
 
 def _resolve_desired_xyz_radius(
@@ -3163,11 +3258,24 @@ def _model_nodes(fwd_model: Any | None) -> np.ndarray | None:
     if raw is None:
         return None
     nodes = np.asarray(raw, dtype=np.float64)
-    if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] < 3:
+    if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] < 2:
         return None
     if not np.isfinite(nodes).all():
         return None
-    return np.ascontiguousarray(nodes[:, :3], dtype=np.float64)
+    return _as_xyz_points(nodes, name="model nodes")
+
+
+def _as_xyz_points(values: Any, *, name: str) -> np.ndarray:
+    points = np.asarray(values, dtype=np.float64)
+    if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] < 2:
+        raise ValueError(f"{name} must have shape (n, >=2).")
+    if not np.isfinite(points).all():
+        raise FloatingPointError(f"{name} contain non-finite values.")
+    if points.shape[1] == 2:
+        points = np.column_stack([points, np.zeros(points.shape[0], dtype=np.float64)])
+    else:
+        points = points[:, :3]
+    return np.ascontiguousarray(points, dtype=np.float64)
 
 
 def _inside_mask_from_model_nodes(
@@ -3740,13 +3848,15 @@ def _rec_model_array(model: Any | None) -> np.ndarray | None:
     if model is None:
         return None
     try:
-        return np.asarray(_cell_centers(model), dtype=np.float64)
+        return _as_xyz_points(_cell_centers(model), name="rec_model")
     except (TypeError, ValueError, FloatingPointError):
         array = np.asarray(model, dtype=np.float64)
         if array.size == 0:
             return None
         if not np.isfinite(array).all():
             raise FloatingPointError("rec_model contains non-finite values.")
+        if array.ndim == 2 and array.shape[1] >= 2:
+            return _as_xyz_points(array, name="rec_model")
         return np.ascontiguousarray(array, dtype=np.float64)
 
 

@@ -80,6 +80,14 @@ def greit_artifact_path_for_signature(
     return greit_registry_dir(registry_dir) / f"greit3d_{sig[:24]}.h5"
 
 
+def _greit_weight_strategy_from_config(cfg: Mapping[str, Any]) -> str:
+    raw = cfg.get("weight_strategy", cfg.get("greit_weight_strategy", "fixed"))
+    strategy = str(raw or "fixed").strip().lower()
+    if strategy in {"eidors_nf1", "eidors_nf", "nf1", "noise_figure_1"}:
+        return "eidors_nf1"
+    return "fixed"
+
+
 def greit_artifact_signature_payload(config: Mapping[str, Any]) -> dict[str, Any]:
     """Build V92 hard-field signature payload from a mapping."""
 
@@ -233,6 +241,7 @@ def greit_artifact_signature_payload(config: Mapping[str, Any]) -> dict[str, Any
             cfg.get("desired_solution_params", cfg.get("greit_desired_options"))
         ),
         "noise_covar": _canonical_value(cfg.get("noise_covar", cfg.get("Sn", 1.0))),
+        "weight_strategy": _greit_weight_strategy_from_config(cfg),
         "weight": _float_or_none(cfg.get("weight", cfg.get("greit_weight"))),
         "noise_figure": _float_or_none(
             cfg.get("noise_figure", cfg.get("greit_noise_figure"))
@@ -508,8 +517,15 @@ def build_native_greit_artifact(
     )
     normalize = bool(payload["normalize_measurements"])
     target_radius = _greit_target_radius_from_config(cfg, radius=radius)
+    weight_strategy = _greit_weight_strategy_from_config(cfg)
     weight = cfg.get("weight", cfg.get("greit_weight"))
-    if weight is None:
+    target_noise_figure = None
+    if weight_strategy == "eidors_nf1":
+        target_noise_figure = cfg.get(
+            "noise_figure", cfg.get("greit_noise_figure", 1.0)
+        )
+        weight = None
+    elif weight is None:
         weight = cfg.get("noise_figure", cfg.get("greit_noise_figure", 0.5))
     metadata = {
         "greit_registry_schema": GREIT_ARTIFACT_REGISTRY_SCHEMA,
@@ -522,6 +538,8 @@ def build_native_greit_artifact(
         "rec_model_source": "GREIT3D_distribution",
         "voxel_shape": tuple(int(v) for v in distribution.volume_mask.shape),
         "rec_mask": cfg.get("rec_mask", "cylindrical_fem_volume_v1"),
+        "greit_weight_strategy": weight_strategy,
+        "greit_noise_figure_target": target_noise_figure,
         "point_in_volume_signature": cfg.get(
             "point_in_volume_signature", "analytic_cylinder_radius_height_v1"
         ),
@@ -550,6 +568,8 @@ def build_native_greit_artifact(
         desired_options=cfg.get("desired_solution_params")
         or cfg.get("greit_desired_options"),
         weight=0.5 if weight is None else float(weight),
+        weight_strategy=weight_strategy,
+        target_noise_figure=target_noise_figure,
         noise_covar=cfg.get("noise_covar", 1.0),
         artifact_path=None,
         keep_model_components=True,
@@ -599,16 +619,18 @@ def _cylindrical_point_in_volume_from_config(
     height: float,
 ) -> Callable[[np.ndarray], np.ndarray] | None:
     mesh_dim = _int_or_none(cfg.get("mesh_dimension"))
-    if mesh_dim != 3:
+    if mesh_dim not in {2, 3}:
         return None
     z_center = _float_or_none(cfg.get("z_center")) or 0.0
     eps = max(float(radius), float(height), 1.0) * 1.0e-9
 
     def _inside(points: np.ndarray) -> np.ndarray:
         arr = np.asarray(points, dtype=np.float64)
-        if arr.ndim != 2 or arr.shape[1] < 3:
-            raise ValueError("point_in_volume points must have shape (N, >=3).")
+        if arr.ndim != 2 or arr.shape[1] < 2:
+            raise ValueError("point_in_volume points must have shape (N, >=2).")
         radial = np.hypot(arr[:, 0], arr[:, 1])
+        if mesh_dim == 2:
+            return radial <= float(radius) + eps
         z_rel = arr[:, 2] - float(z_center)
         return (radial <= float(radius) + eps) & (
             np.abs(z_rel) <= 0.5 * float(height) + eps

@@ -450,6 +450,10 @@ TRANSLATIONS: dict[str, str] = {
         "GREIT weighting is stored in the HDF5 artifact; this value is not "
         "used as \u03b1."
     ),
+    "sim.inverse.artifact_nf1_tooltip": (
+        "GREIT uses EIDORS NF=1 automatic weight search; this value is not "
+        "used as \u03b1, and cold builds will be slower."
+    ),
     "sim.inverse.greit.group_title": "GREIT Advanced Parameters",
     "sim.inverse.greit.desired_label": "Desired image:",
     "sim.inverse.greit.desired.center": "Center sample",
@@ -466,6 +470,13 @@ TRANSLATIONS: dict[str, str] = {
         "EIDORS/GREIT target_size semantics: fraction of the tank radius R; "
         "for example 0.20 means 0.2R."
     ),
+    "sim.inverse.greit.weight_strategy_label": "Weight strategy:",
+    "sim.inverse.greit.weight_strategy.fixed": "Fixed weight",
+    "sim.inverse.greit.weight_strategy.eidors_nf1": "EIDORS NF=1 auto search",
+    "sim.inverse.greit.weight_strategy_tooltip": (
+        "Fixed weight uses the value below directly; EIDORS NF=1 searches the "
+        "weight during a cold RM build so the noise figure is close to 1."
+    ),
     "sim.inverse.greit.weight_label": "Weight / NF:",
     "sim.inverse.greit.weight_tooltip": (
         "GREIT RM training weight / regularization strength; changing it "
@@ -481,9 +492,9 @@ TRANSLATIONS: dict[str, str] = {
         "this is noticeably slower."
     ),
     "sim.inverse.greit.cold_build_hint": (
-        "Changing desired image, target count, target radius, or weight/NF "
-        "changes the GREIT signature. The first run cold-builds the RM and "
-        "will be noticeably slower."
+        "Changing desired image, target count, target radius, weight strategy, "
+        "or weight/NF changes the GREIT signature. The first run cold-builds "
+        "the RM; NF=1 auto search is slower."
     ),
     "sim.inverse.iterations_label": "Max iterations:",
     "sim.inverse.iterations_tooltip": (
@@ -509,11 +520,13 @@ TRANSLATIONS: dict[str, str] = {
         "Curvature RM smooth route: cold-build or reuse an HDF5 graph-LtL "
         "artifact, then reconstruct with the RM @ dv hot path."
     ),
+    "sim.inverse.method.greit.tooltip": (
+        "GREIT route: builds or reuses an HDF5 artifact from the current 2D/3D "
+        "mesh, electrodes, protocol, and advanced training parameters, then "
+        "reconstructs with the RM @ dv hot path."
+    ),
     "sim.inverse.method.greit3d_rm.tooltip": (
-        "3D GREIT registry route: signs the current mesh/electrode/protocol "
-        "config plus advanced training parameters, loads an exact HDF5 hit "
-        "or cold-builds a native GREIT artifact in the worker when missing or "
-        "forced, then applies RM @ dv."
+        "Legacy GREIT route name; the GUI now shows the unified greit method."
     ),
     "sim.inverse.method.absolute_gn.tooltip": (
         "Absolute imaging: estimates absolute conductivity directly from the "

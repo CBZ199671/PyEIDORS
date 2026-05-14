@@ -715,6 +715,53 @@ def test_build_native_greit_training_pipeline_uses_native_forward_y_d_and_rm_for
     np.testing.assert_allclose(pipeline.rm, expected_rm)
 
 
+def test_native_greit_pipeline_supports_2d_centers_and_eidors_nf1_search() -> None:
+    centers_2d = np.array(
+        [
+            [-0.5, -0.5],
+            [0.5, -0.5],
+            [-0.5, 0.5],
+            [0.5, 0.5],
+        ],
+        dtype=float,
+    )
+    measurement_matrix = np.array(
+        [
+            [1.0, 0.2, 0.1, 0.3],
+            [0.3, 1.2, 0.4, 0.2],
+            [0.2, 0.4, 1.1, 0.5],
+            [0.5, 0.2, 0.3, 1.3],
+        ],
+        dtype=float,
+    )
+    model = _FiniteTargetForwardModel(centers_2d, measurement_matrix)
+
+    pipeline = build_native_greit_training_pipeline(
+        model,
+        rec_model=centers_2d,
+        centers=centers_2d[:3],
+        target_radius=0.55,
+        target_contrast=0.2,
+        normalize=False,
+        desired_solution_fn="center",
+        weight_strategy="eidors_nf1",
+        target_noise_figure=1.0,
+        fwd_model_signature="native-2d-unit-fwd",
+    )
+
+    assert pipeline.metadata["greit_weight_strategy"] == "eidors_nf1"
+    assert pipeline.metadata["greit_weight_source"] == "eidors_nf1_search"
+    assert pipeline.metadata["greit_noise_figure_target"] == pytest.approx(1.0)
+    assert pipeline.metadata["greit_weight_search"]["weight"] == pytest.approx(
+        pipeline.greit.metadata["weight"]
+    )
+    assert pipeline.responses.xyzr.shape == (4, 3)
+    np.testing.assert_allclose(pipeline.responses.xyzr[2], 0.0)
+    assert pipeline.desired_images.rec_centers.shape == (4, 3)
+    np.testing.assert_allclose(pipeline.desired_images.rec_centers[:, 2], 0.0)
+    assert pipeline.greit.rec_model.shape == (4, 3)
+
+
 def test_build_3d_greit_rm_reconstructs_training_sphere_and_saves_artifact(
     tmp_path,
 ) -> None:
