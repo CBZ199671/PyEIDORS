@@ -183,6 +183,36 @@ def test_resolve_or_build_native_greit_artifact_registers_warm_hit(tmp_path) -> 
         )
 
 
+def test_resolve_or_build_native_greit_artifact_honors_cache_policy(tmp_path) -> None:
+    config = _base_config()
+    first = resolve_or_build_greit_artifact(
+        config,
+        registry_dir=tmp_path,
+        fwd_model=_FakeForwardModel(),
+    )
+
+    no_cache = dict(config)
+    no_cache["greit_use_cached_rm"] = False
+    with pytest.raises(FileNotFoundError):
+        resolve_or_build_greit_artifact(
+            no_cache,
+            registry_dir=tmp_path,
+            auto_build=False,
+        )
+
+    rebuild = dict(config)
+    rebuild["greit_rebuild_rm"] = True
+    second = resolve_or_build_greit_artifact(
+        rebuild,
+        registry_dir=tmp_path,
+        fwd_model=_FakeForwardModel(),
+    )
+    assert second.built is True
+    assert second.cache_status == "built"
+    assert second.signature == first.signature
+    assert second.artifact_path == first.artifact_path
+
+
 def test_native_greit_builder_scales_target_size_by_tank_radius(tmp_path) -> None:
     config = _base_config()
     config["target_radius"] = None

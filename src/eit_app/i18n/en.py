@@ -450,6 +450,41 @@ TRANSLATIONS: dict[str, str] = {
         "GREIT weighting is stored in the HDF5 artifact; this value is not "
         "used as \u03b1."
     ),
+    "sim.inverse.greit.group_title": "GREIT Advanced Parameters",
+    "sim.inverse.greit.desired_label": "Desired image:",
+    "sim.inverse.greit.desired.center": "Center sample",
+    "sim.inverse.greit.desired.gauss": "Gauss integration",
+    "sim.inverse.greit.desired.adaptive_gauss": "Adaptive integration",
+    "sim.inverse.greit.desired.sobol_qmc": "Sobol-QMC",
+    "sim.inverse.greit.target_count_label": "Training targets:",
+    "sim.inverse.greit.target_count_tooltip": (
+        "0 lets the GUI choose the reconstruction grid from the electrode "
+        "count; larger counts make cold builds slower."
+    ),
+    "sim.inverse.greit.target_size_label": "Target radius (R ratio):",
+    "sim.inverse.greit.target_size_tooltip": (
+        "EIDORS/GREIT target_size semantics: fraction of the tank radius R; "
+        "for example 0.20 means 0.2R."
+    ),
+    "sim.inverse.greit.weight_label": "Weight / NF:",
+    "sim.inverse.greit.weight_tooltip": (
+        "GREIT RM training weight / regularization strength; changing it "
+        "selects or builds a different artifact."
+    ),
+    "sim.inverse.greit.use_cache_check": "Use cached RM",
+    "sim.inverse.greit.cache_tooltip": (
+        "When enabled, the registry first reuses an exact-signature GREIT RM artifact."
+    ),
+    "sim.inverse.greit.rebuild_check": "Rebuild RM",
+    "sim.inverse.greit.rebuild_tooltip": (
+        "Ignore any existing artifact and cold-build the current GREIT RM; "
+        "this is noticeably slower."
+    ),
+    "sim.inverse.greit.cold_build_hint": (
+        "Changing desired image, target count, target radius, or weight/NF "
+        "changes the GREIT signature. The first run cold-builds the RM and "
+        "will be noticeably slower."
+    ),
     "sim.inverse.iterations_label": "Max iterations:",
     "sim.inverse.iterations_tooltip": (
         "Used only by the absolute GN route; difference/RM algorithms are "
@@ -476,8 +511,9 @@ TRANSLATIONS: dict[str, str] = {
     ),
     "sim.inverse.method.greit3d_rm.tooltip": (
         "3D GREIT registry route: signs the current mesh/electrode/protocol "
-        "config, loads an exact HDF5 hit or builds a native GREIT artifact in "
-        "the worker, then applies RM @ dv."
+        "config plus advanced training parameters, loads an exact HDF5 hit "
+        "or cold-builds a native GREIT artifact in the worker when missing or "
+        "forced, then applies RM @ dv."
     ),
     "sim.inverse.method.absolute_gn.tooltip": (
         "Absolute imaging: estimates absolute conductivity directly from the "

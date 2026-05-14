@@ -55,6 +55,15 @@ _LOCKED_LAMBDA_EFF_METHODS = {
 _ARTIFACT_HYPERPARAM_METHODS = {"greit3d_rm"}
 _ITERATION_CONTROL_METHODS = {"absolute_gn"}
 _CUSTOM_LAMBDA_EFF_METHODS = {"noser_rm", "laplace_rm", "curvature_rm"}
+_DEFAULT_GREIT_DESIRED_IMAGE_MODE = "gauss"
+_DEFAULT_GREIT_TARGET_SIZE = 0.20
+_DEFAULT_GREIT_ARTIFACT_WEIGHT = 1.0
+_GREIT_DESIRED_IMAGE_MODES = (
+    ("center", "sim.inverse.greit.desired.center"),
+    ("gauss", "sim.inverse.greit.desired.gauss"),
+    ("adaptive_gauss", "sim.inverse.greit.desired.adaptive_gauss"),
+    ("sobol_qmc", "sim.inverse.greit.desired.sobol_qmc"),
+)
 
 
 def normalize_simulation_inverse_method(method: str) -> str:
@@ -113,6 +122,62 @@ class InverseProblemPanel(QGroupBox):
         self._custom_lambda_check.toggled.connect(self._on_custom_lambda_toggled)
         layout.addRow(self._custom_lambda_check)
 
+        self._greit_group = QGroupBox("")
+        self._greit_group.setVisible(False)
+        greit_layout = QFormLayout(self._greit_group)
+        greit_layout.setContentsMargins(10, 12, 10, 10)
+        greit_layout.setSpacing(8)
+        greit_layout.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+
+        self._greit_desired_combo = AutoCloseComboBox()
+        for mode, key in _GREIT_DESIRED_IMAGE_MODES:
+            self._greit_desired_combo.addItem(t(key), mode)
+        self._lbl_greit_desired = QLabel("")
+        greit_layout.addRow(self._lbl_greit_desired, self._greit_desired_combo)
+
+        self._greit_target_count_spin = QSpinBox()
+        self._greit_target_count_spin.setRange(0, 1_000_000)
+        self._greit_target_count_spin.setValue(0)
+        self._greit_target_count_spin.setSingleStep(64)
+        self._lbl_greit_target_count = QLabel("")
+        greit_layout.addRow(
+            self._lbl_greit_target_count,
+            self._greit_target_count_spin,
+        )
+
+        self._greit_target_size_spin = QDoubleSpinBox()
+        self._greit_target_size_spin.setRange(0.001, 1.0)
+        self._greit_target_size_spin.setDecimals(4)
+        self._greit_target_size_spin.setSingleStep(0.01)
+        self._greit_target_size_spin.setValue(_DEFAULT_GREIT_TARGET_SIZE)
+        self._lbl_greit_target_size = QLabel("")
+        greit_layout.addRow(self._lbl_greit_target_size, self._greit_target_size_spin)
+
+        self._greit_weight_spin = QDoubleSpinBox()
+        self._greit_weight_spin.setRange(1.0e-6, 1000.0)
+        self._greit_weight_spin.setDecimals(4)
+        self._greit_weight_spin.setSingleStep(0.1)
+        self._greit_weight_spin.setValue(_DEFAULT_GREIT_ARTIFACT_WEIGHT)
+        self._greit_weight_spin.valueChanged.connect(self._remember_greit_weight)
+        self._lbl_greit_weight = QLabel("")
+        greit_layout.addRow(self._lbl_greit_weight, self._greit_weight_spin)
+
+        self._greit_use_cache_check = QCheckBox("")
+        self._greit_use_cache_check.setChecked(True)
+        greit_layout.addRow(self._greit_use_cache_check)
+
+        self._greit_rebuild_check = QCheckBox("")
+        greit_layout.addRow(self._greit_rebuild_check)
+
+        self._greit_cold_build_hint = QLabel("")
+        self._greit_cold_build_hint.setWordWrap(True)
+        set_hint_text(self._greit_cold_build_hint)
+        greit_layout.addRow(self._greit_cold_build_hint)
+
+        layout.addRow(self._greit_group)
+
         self._iter_spin = QSpinBox()
         self._iter_spin.setRange(1, 200)
         self._iter_spin.setValue(10)
@@ -162,14 +227,24 @@ class InverseProblemPanel(QGroupBox):
             method in _CUSTOM_LAMBDA_EFF_METHODS
             and self._custom_lambda_check.isChecked()
         )
+        greit_weight = float(self._greit_weight_spin.value())
+        regularization_alpha = (
+            greit_weight if method == "greit3d_rm" else float(self._alpha_spin.value())
+        )
         return {
             "method": method,
-            "regularization_alpha": self._alpha_spin.value(),
+            "regularization_alpha": regularization_alpha,
             "lambda_eff_custom_enabled": custom_lambda_enabled,
             "custom_lambda_eff": self._alpha_spin.value()
             if custom_lambda_enabled
             else CANONICAL_SINGLE_STEP_LAMBDA_EFF,
             "max_iterations": self._iter_spin.value(),
+            "greit_desired_image_mode": self._greit_desired_mode(),
+            "greit_training_target_count": self._greit_target_count_spin.value(),
+            "greit_target_size": self._greit_target_size_spin.value(),
+            "greit_weight": greit_weight,
+            "greit_use_cached_rm": self._greit_use_cache_check.isChecked(),
+            "greit_rebuild_rm": self._greit_rebuild_check.isChecked(),
         }
 
     def set_config(self, config: dict) -> None:
@@ -177,6 +252,12 @@ class InverseProblemPanel(QGroupBox):
             self._method_combo,
             self._alpha_spin,
             self._custom_lambda_check,
+            self._greit_desired_combo,
+            self._greit_target_count_spin,
+            self._greit_target_size_spin,
+            self._greit_weight_spin,
+            self._greit_use_cache_check,
+            self._greit_rebuild_check,
             self._iter_spin,
         )
         blockers = [widget.blockSignals(True) for widget in widgets]
@@ -202,6 +283,28 @@ class InverseProblemPanel(QGroupBox):
             if method not in _LOCKED_LAMBDA_EFF_METHODS:
                 self._editable_alpha_value = alpha
             self._alpha_spin.setValue(alpha)
+            greit_weight = float(config.get("greit_weight", alpha))
+            self._greit_weight_spin.setValue(greit_weight)
+            self._select_greit_desired_mode(
+                str(
+                    config.get(
+                        "greit_desired_image_mode",
+                        _DEFAULT_GREIT_DESIRED_IMAGE_MODE,
+                    )
+                )
+            )
+            self._greit_target_count_spin.setValue(
+                int(config.get("greit_training_target_count", 0))
+            )
+            self._greit_target_size_spin.setValue(
+                float(config.get("greit_target_size", _DEFAULT_GREIT_TARGET_SIZE))
+            )
+            self._greit_use_cache_check.setChecked(
+                bool(config.get("greit_use_cached_rm", True))
+            )
+            self._greit_rebuild_check.setChecked(
+                bool(config.get("greit_rebuild_rm", False))
+            )
             self._iter_spin.setValue(int(config.get("max_iterations", 10)))
         finally:
             for widget, blocked in zip(widgets, blockers):
@@ -220,6 +323,7 @@ class InverseProblemPanel(QGroupBox):
         if running:
             self._alpha_spin.setEnabled(False)
             self._iter_spin.setEnabled(False)
+            self._greit_group.setEnabled(False)
         else:
             self._update_method_state()
         self._busy_bar.setVisible(running)
@@ -237,6 +341,7 @@ class InverseProblemPanel(QGroupBox):
         self._lbl_method.setText(t("sim.inverse.method_label"))
         self._lbl_iter.setText(t("sim.inverse.iterations_label"))
         self._custom_lambda_check.setText(t("sim.inverse.custom_lambda_check"))
+        self._retranslate_greit_controls()
         self._recon_btn.setText(t("sim.inverse.reconstruct_button"))
         self._save_btn.setText(t("sim.inverse.save_button"))
         self._update_method_state()
@@ -251,6 +356,18 @@ class InverseProblemPanel(QGroupBox):
         elif method not in _LOCKED_LAMBDA_EFF_METHODS | _ARTIFACT_HYPERPARAM_METHODS:
             self._editable_alpha_value = float(value)
 
+    def _remember_greit_weight(self, value: float) -> None:
+        if (
+            normalize_simulation_inverse_method(self._method_combo.currentText())
+            == "greit3d_rm"
+        ):
+            self._editable_alpha_value = float(value)
+            blocked = self._alpha_spin.blockSignals(True)
+            try:
+                self._alpha_spin.setValue(float(value))
+            finally:
+                self._alpha_spin.blockSignals(blocked)
+
     def _on_custom_lambda_toggled(self, checked: bool) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
         if not checked and method in _CUSTOM_LAMBDA_EFF_METHODS:
@@ -260,6 +377,7 @@ class InverseProblemPanel(QGroupBox):
     def _update_method_state(self) -> None:
         self._update_method_tooltip()
         self._update_hyperparameter_control()
+        self._update_greit_controls()
         self._update_iteration_control()
 
     def _update_method_tooltip(self) -> None:
@@ -296,7 +414,7 @@ class InverseProblemPanel(QGroupBox):
                 self._custom_lambda_check.setVisible(False)
                 self._lbl_alpha.setText(t("sim.inverse.artifact_weight_label"))
                 tooltip = t("sim.inverse.artifact_weight_tooltip")
-                self._alpha_spin.setValue(self._editable_alpha_value)
+                self._alpha_spin.setValue(self._greit_weight_spin.value())
                 self._alpha_spin.setEnabled(False)
             else:
                 self._custom_lambda_check.setVisible(False)
@@ -309,6 +427,12 @@ class InverseProblemPanel(QGroupBox):
         self._lbl_alpha.setToolTip(tooltip)
         self._alpha_spin.setToolTip(tooltip)
 
+    def _update_greit_controls(self) -> None:
+        method = normalize_simulation_inverse_method(self._method_combo.currentText())
+        visible = method == "greit3d_rm"
+        self._greit_group.setVisible(visible)
+        self._greit_group.setEnabled(visible and not self._running)
+
     def _update_iteration_control(self) -> None:
         method = normalize_simulation_inverse_method(self._method_combo.currentText())
         visible = method in _ITERATION_CONTROL_METHODS
@@ -318,3 +442,45 @@ class InverseProblemPanel(QGroupBox):
         tooltip = t("sim.inverse.iterations_tooltip") if visible else ""
         self._lbl_iter.setToolTip(tooltip)
         self._iter_spin.setToolTip(tooltip)
+
+    def _retranslate_greit_controls(self) -> None:
+        current_mode = self._greit_desired_mode()
+        self._greit_group.setTitle(t("sim.inverse.greit.group_title"))
+        self._lbl_greit_desired.setText(t("sim.inverse.greit.desired_label"))
+        for idx, (_mode, key) in enumerate(_GREIT_DESIRED_IMAGE_MODES):
+            self._greit_desired_combo.setItemText(idx, t(key))
+        self._select_greit_desired_mode(current_mode)
+
+        target_count_tooltip = t("sim.inverse.greit.target_count_tooltip")
+        target_size_tooltip = t("sim.inverse.greit.target_size_tooltip")
+        weight_tooltip = t("sim.inverse.greit.weight_tooltip")
+        cache_tooltip = t("sim.inverse.greit.cache_tooltip")
+        rebuild_tooltip = t("sim.inverse.greit.rebuild_tooltip")
+
+        self._lbl_greit_target_count.setText(t("sim.inverse.greit.target_count_label"))
+        self._lbl_greit_target_count.setToolTip(target_count_tooltip)
+        self._greit_target_count_spin.setToolTip(target_count_tooltip)
+        self._lbl_greit_target_size.setText(t("sim.inverse.greit.target_size_label"))
+        self._lbl_greit_target_size.setToolTip(target_size_tooltip)
+        self._greit_target_size_spin.setToolTip(target_size_tooltip)
+        self._lbl_greit_weight.setText(t("sim.inverse.greit.weight_label"))
+        self._lbl_greit_weight.setToolTip(weight_tooltip)
+        self._greit_weight_spin.setToolTip(weight_tooltip)
+        self._greit_use_cache_check.setText(t("sim.inverse.greit.use_cache_check"))
+        self._greit_use_cache_check.setToolTip(cache_tooltip)
+        self._greit_rebuild_check.setText(t("sim.inverse.greit.rebuild_check"))
+        self._greit_rebuild_check.setToolTip(rebuild_tooltip)
+        self._greit_cold_build_hint.setText(t("sim.inverse.greit.cold_build_hint"))
+
+    def _greit_desired_mode(self) -> str:
+        data = self._greit_desired_combo.currentData()
+        mode = str(data or "").strip()
+        return mode or _DEFAULT_GREIT_DESIRED_IMAGE_MODE
+
+    def _select_greit_desired_mode(self, mode: str) -> None:
+        normalized = str(mode or _DEFAULT_GREIT_DESIRED_IMAGE_MODE).strip()
+        for idx in range(self._greit_desired_combo.count()):
+            if self._greit_desired_combo.itemData(idx) == normalized:
+                self._greit_desired_combo.setCurrentIndex(idx)
+                return
+        self._greit_desired_combo.setCurrentIndex(1)

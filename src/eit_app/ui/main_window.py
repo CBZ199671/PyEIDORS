@@ -249,14 +249,74 @@ def _greit_default_imgsz_for_forward_config(
     return (6, 6, 3)
 
 
+def _greit_imgsz_for_training_target_count(
+    forward_cfg: ForwardModelConfig,
+    target_count: int,
+) -> tuple[int, int, int]:
+    """Choose a compact cylindrical GREIT grid for a requested target count."""
+
+    requested = int(target_count or 0)
+    if requested <= 0:
+        return _greit_default_imgsz_for_forward_config(forward_cfg)
+
+    radius = max(float(forward_cfg.radius), 1.0e-12)
+    height = max(float(forward_cfg.height), 1.0e-12)
+    z_aspect = max(0.25, min(4.0, height / (2.0 * radius)))
+    xy = max(2, int(round((requested / z_aspect) ** (1.0 / 3.0))))
+    nz = max(1, int(round(xy * z_aspect)))
+    while xy * xy * nz < requested:
+        if nz < xy * z_aspect:
+            nz += 1
+        else:
+            xy += 1
+    return (int(xy), int(xy), int(nz))
+
+
+def _greit_desired_solution_params(mode: str) -> dict[str, object]:
+    """Return stable native desired-image options for a GUI GREIT mode."""
+
+    normalized = str(mode or "gauss").strip().lower()
+    if normalized == "center":
+        return {"desired_img_sampling": "center"}
+    if normalized == "adaptive_gauss":
+        return {
+            "desired_img_sampling": "adaptive_gauss",
+            "desired_img_adaptive_base_order": 2,
+            "desired_img_adaptive_fine_order": 5,
+        }
+    if normalized == "sobol_qmc":
+        return {
+            "desired_img_sampling": "sobol_qmc",
+            "desired_img_sobol_samples": 32,
+            "desired_img_sobol_seed": 0,
+        }
+    return {
+        "desired_img_sampling": "gauss",
+        "desired_img_gauss_order": 3,
+    }
+
+
 def _greit_registry_config_for_forward_config(
     forward_cfg: ForwardModelConfig,
     *,
     n_measurements: int,
     artifact_weight: float,
+    desired_image_mode: str = "gauss",
+    training_target_count: int = 0,
+    target_size: float = 0.20,
+    use_cached_rm: bool = True,
+    rebuild_rm: bool = False,
 ) -> dict[str, object]:
     mapping = forward_cfg.to_mapping()
-    imgsz = _greit_default_imgsz_for_forward_config(forward_cfg)
+    imgsz = _greit_imgsz_for_training_target_count(
+        forward_cfg,
+        int(training_target_count or 0),
+    )
+    desired_mode = str(desired_image_mode or "gauss").strip().lower()
+    if desired_mode not in {"center", "gauss", "adaptive_gauss", "sobol_qmc"}:
+        desired_mode = "gauss"
+    target_size_value = max(float(target_size), 1.0e-9)
+    weight_value = max(float(artifact_weight), 1.0e-12)
     mapping.update(
         {
             "measurement_count": int(n_measurements),
@@ -264,13 +324,19 @@ def _greit_registry_config_for_forward_config(
             "normalize_measurements": True,
             "imgsz": imgsz,
             "greit_imgsz": imgsz,
-            "target_size": 0.20,
-            "greit_target_size": 0.20,
+            "target_size": target_size_value,
+            "greit_target_size": target_size_value,
             "target_contrast": 1.0,
-            "weight": float(artifact_weight),
-            "greit_weight": float(artifact_weight),
+            "weight": weight_value,
+            "greit_weight": weight_value,
             "noise_covar": 1.0,
             "training_mode": "forward",
+            "desired_solution_fn": desired_mode,
+            "greit_desired_solution_fn": desired_mode,
+            "desired_solution_params": _greit_desired_solution_params(desired_mode),
+            "greit_training_target_count_requested": int(training_target_count or 0),
+            "greit_use_cached_rm": bool(use_cached_rm),
+            "greit_rebuild_rm": bool(rebuild_rm),
             "builder_backend": "native",
             "builder_semantic_version": "native-greit-finite-target-v2",
             "artifact_schema": "pyeidors-greit-eidors-hdf5-v1",
@@ -4076,10 +4142,25 @@ class EITWorkstation(QMainWindow):
             rm_auto_build = True
             greit_common_config_auto_warm = False
             greit_scope_metadata = dict(_GREIT_COMMON_CONFIG_SCOPE)
+            greit_desired_image_mode = str(
+                inv_cfg.get("greit_desired_image_mode", "gauss")
+            )
+            greit_training_target_count = int(
+                inv_cfg.get("greit_training_target_count", 0)
+            )
+            greit_target_size = float(inv_cfg.get("greit_target_size", 0.20))
+            greit_weight = float(inv_cfg.get("greit_weight", alpha_input))
+            greit_use_cached_rm = bool(inv_cfg.get("greit_use_cached_rm", True))
+            greit_rebuild_rm = bool(inv_cfg.get("greit_rebuild_rm", False))
             greit_registry_config = _greit_registry_config_for_forward_config(
                 forward_cfg,
                 n_measurements=n_meas,
-                artifact_weight=alpha_input,
+                artifact_weight=greit_weight,
+                desired_image_mode=greit_desired_image_mode,
+                training_target_count=greit_training_target_count,
+                target_size=greit_target_size,
+                use_cached_rm=greit_use_cached_rm,
+                rebuild_rm=greit_rebuild_rm,
             )
             try:
                 from pyeidors.inverse.greit_registry import (
@@ -4105,6 +4186,25 @@ class EITWorkstation(QMainWindow):
                     "greit_registry_dir": ".pyeidors_cache/greit_artifacts",
                     "greit_builder_backend": "native",
                     "greit_builder_semantic_version": "native-greit-finite-target-v2",
+                    "greit_desired_image_mode": greit_desired_image_mode,
+                    "greit_training_target_count": greit_training_target_count,
+                    "greit_target_size": greit_target_size,
+                    "greit_weight": greit_weight,
+                    "greit_use_cached_rm": greit_use_cached_rm,
+                    "greit_rebuild_rm": greit_rebuild_rm,
+                    "greit_cold_build_warning": (
+                        "Changing GREIT desired image, target count, target "
+                        "size, or weight changes the registry signature; "
+                        "disabling cache or forcing rebuild cold-builds RM."
+                    ),
+                    "greit_advanced_params": {
+                        "desired_image_mode": greit_desired_image_mode,
+                        "training_target_count": greit_training_target_count,
+                        "target_size": greit_target_size,
+                        "weight": greit_weight,
+                        "use_cached_rm": greit_use_cached_rm,
+                        "rebuild_rm": greit_rebuild_rm,
+                    },
                     "greit_common_config_unavailable_reason": (
                         "GREIT common-config selection replaced by exact "
                         "config-driven registry artifact resolution."
@@ -4198,11 +4298,11 @@ class EITWorkstation(QMainWindow):
         elif greit_artifact_hyperparameter:
             hyperparameter_meta = {
                 "hyperparameter_ui_name": "greit_artifact_weight",
-                "hyperparameter_ui_value": None,
-                "hyperparameter_ui_locked": True,
-                "hyperparameter_effective_source": "hdf5_artifact",
+                "hyperparameter_ui_value": alpha_input,
+                "hyperparameter_ui_locked": False,
+                "hyperparameter_effective_source": "greit_gui_advanced",
                 "hyperparameter_formula": "calc_GREIT_RM_artifact",
-                "hyperparameter_diagnostic": "greit_weight_loaded_from_hdf5_artifact",
+                "hyperparameter_diagnostic": "greit_weight_selects_registry_artifact",
                 "regularization_alpha_input": alpha_input,
                 "regularization_alpha_applied": False,
                 "difference_lambda_semantics": "unused_for_greit_rm_artifact",

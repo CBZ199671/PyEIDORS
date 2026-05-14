@@ -392,13 +392,17 @@ def resolve_or_build_greit_artifact(
 ) -> GREITRegistryLookup:
     """Resolve exact artifact or build/register it with the requested backend."""
 
-    resolved = resolve_greit_artifact(
-        config,
-        registry_dir=registry_dir,
-        prepare_online=prepare_online,
-        device=device,
-        dtype=dtype,
-    )
+    use_cached = _bool_value(config.get("greit_use_cached_rm", True))
+    force_rebuild = _bool_value(config.get("greit_rebuild_rm", False))
+    resolved = None
+    if use_cached and not force_rebuild:
+        resolved = resolve_greit_artifact(
+            config,
+            registry_dir=registry_dir,
+            prepare_online=prepare_online,
+            device=device,
+            dtype=dtype,
+        )
     if resolved is not None:
         return resolved
     if not auto_build:

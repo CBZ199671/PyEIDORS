@@ -1219,6 +1219,8 @@ def _greit_registry_config_from_runtime(
         "image_snr",
         "training_mode",
         "artifact_schema",
+        "greit_use_cached_rm",
+        "greit_rebuild_rm",
     ):
         if key in meta and key not in config:
             config[key] = meta[key]
