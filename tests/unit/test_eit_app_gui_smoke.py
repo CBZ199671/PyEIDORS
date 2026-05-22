@@ -119,6 +119,15 @@ def _as_wsl_unc(path: Path) -> str:
     return "\\\\wsl.localhost\\Ubuntu-22.04" + posix_path.replace("/", "\\")
 
 
+def test_v126_default_db_path_honors_explicit_env_override(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db_path = tmp_path / "isolated.sqlite"
+    monkeypatch.setenv("EIT_APP_DB_PATH", str(db_path))
+
+    assert EITWorkstation._default_db_path() == db_path
+
+
 def _sample_pixmap_unique_rgb_count(pixmap, *, samples_per_axis: int = 8) -> int:
     image = pixmap.toImage()
     if image.isNull():

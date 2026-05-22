@@ -9,6 +9,7 @@ from eit_app.controllers.database_controller import (
     _BackfillWorker,
 )
 from eit_app.ui.database.database_tab import DatabaseTab
+from pyeidors.data.frame_io import frame_index_from_csv_name, scan_frame_dir
 
 
 def test_backfill_worker_request_cancel_stops_after_current_session(
@@ -99,6 +100,79 @@ def test_database_controller_shutdown_cancels_backfill_before_closing_db(
     assert any(entry.startswith("wait:") for entry in calls)
     assert "close" in calls
     assert calls.index("cancel") < calls.index("interrupt") < calls.index("close")
+
+
+def test_v126_database_controller_hides_unavailable_sessions_and_frames(
+    tmp_path: Path,
+) -> None:
+    controller = DatabaseController(tmp_path / "frames.sqlite")
+    existing_dir = tmp_path / "session_existing"
+    existing_dir.mkdir()
+    missing_dir = tmp_path / "session_missing"
+
+    existing_id = controller.db.add_session(
+        existing_dir,
+        {"session_start": "2026-05-22T12:00:00"},
+        name="session_existing",
+    )
+    missing_id = controller.db.add_session(
+        missing_dir,
+        {"session_start": "2026-05-22T12:01:00"},
+        name="session_missing",
+    )
+
+    available_csv = existing_dir / "20260522_120000_frame_0000_1000Hz.csv"
+    available_csv.write_text("1.0,0.0\n", encoding="utf-8")
+    missing_csv = existing_dir / "20260522_120000_frame_0001_1000Hz.csv"
+    controller.db.add_frame(existing_id, 0, 1.0, available_csv)
+    controller.db.add_frame(existing_id, 1, 2.0, missing_csv)
+    controller.db.add_frame(
+        missing_id,
+        0,
+        3.0,
+        missing_dir / "20260522_120100_frame_0000_1000Hz.csv",
+    )
+
+    assert [row["id"] for row in controller.query_sessions()] == [existing_id]
+    frames = controller.query_frames(existing_id)
+    assert [row["frame_index"] for row in frames] == [0]
+    assert frames[0]["csv_path"] == str(available_csv.resolve())
+
+    controller.shutdown()
+
+
+def test_v126_frequency_suffixed_frame_csvs_are_indexed(tmp_path: Path) -> None:
+    session_dir = tmp_path / "session_20260522_120000"
+    session_dir.mkdir()
+    metadata_path = session_dir / "session_metadata.yaml"
+    metadata_path.write_text(
+        "session_start: '2026-05-22T12:00:00'\nfrequency_hz: 1000\n",
+        encoding="utf-8",
+    )
+    csv_path = session_dir / "20260522_120000_frame_0007_1000Hz.csv"
+    yaml_path = csv_path.with_suffix(".yaml")
+    csv_path.write_text("1.0,0.0\n", encoding="utf-8")
+    yaml_path.write_text("timestamp: 1.0\nfrequency_hz: 1000\n", encoding="utf-8")
+
+    assert frame_index_from_csv_name(csv_path.name) == 7
+    assert scan_frame_dir(session_dir) == [(csv_path, yaml_path)]
+
+    controller = DatabaseController(tmp_path / "frames.sqlite")
+    worker = _BackfillWorker(controller.db, tmp_path)
+    session_id = controller.db.add_session(
+        session_dir,
+        {"session_start": "2026-05-22T12:00:00", "frequency_hz": 1000},
+        name=session_dir.name,
+    )
+
+    worker._ingest_frames(session_id, session_dir)
+
+    frames = controller.query_frames(session_id)
+    assert len(frames) == 1
+    assert frames[0]["frame_index"] == 7
+    assert frames[0]["csv_path"] == str(csv_path.resolve())
+
+    controller.shutdown()
 
 
 def test_database_tab_skips_refresh_after_prepare_for_shutdown(

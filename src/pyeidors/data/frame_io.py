@@ -3,9 +3,10 @@
 File naming convention::
 
     session_20260409_143000/
-      session_metadata.yaml            # shared session metadata (n_elec, patterns, etc.)
-      20260409_143000_frame_000.csv    # 208 rows, 2 columns (real, imag)
-      20260409_143000_frame_000.yaml   # per-frame metadata
+      session_metadata.yaml                 # shared session metadata (n_elec, patterns, etc.)
+      20260409_143000_frame_000.csv         # 208 rows, 2 columns (real, imag)
+      20260409_143000_frame_000_1000Hz.csv  # optional frequency suffix
+      20260409_143000_frame_000.yaml        # per-frame metadata
 """
 
 from __future__ import annotations
@@ -95,23 +96,35 @@ def read_session_metadata(path: Path) -> dict[str, Any]:
     return read_frame_yaml(path)
 
 
-_FRAME_RE = re.compile(r"_frame_(\d+)\.csv$")
+_FRAME_RE = re.compile(r"_frame_(\d+)(?:_[^.\\/]+)?\.csv$", re.IGNORECASE)
+
+
+def frame_index_from_csv_name(name: str | Path) -> int | None:
+    """Return frame index from a per-frame CSV filename, or ``None``.
+
+    Accepts both the original ``*_frame_0001.csv`` form and the
+    frequency-suffixed files written by the GUI recorder, e.g.
+    ``*_frame_0001_1000Hz.csv``.
+    """
+    match = _FRAME_RE.search(Path(name).name)
+    return int(match.group(1)) if match else None
 
 
 def scan_frame_dir(dir_path: Path) -> list[tuple[Path, Path]]:
     """Find all ``(csv, yaml)`` frame pairs in a session directory.
 
-    Looks for files matching ``*_frame_NNN.csv`` with a corresponding
-    ``*_frame_NNN.yaml`` sidecar.  Returns pairs sorted by frame index.
+    Looks for files matching ``*_frame_NNN.csv`` (optionally with a
+    metadata suffix such as ``_1000Hz``) and a corresponding YAML
+    sidecar.  Returns pairs sorted by frame index.
     """
     dir_path = Path(dir_path)
     pairs: list[tuple[int, Path, Path]] = []
     for csv_path in sorted(dir_path.glob("*_frame_*.csv")):
-        m = _FRAME_RE.search(csv_path.name)
-        if m is None:
+        frame_index = frame_index_from_csv_name(csv_path.name)
+        if frame_index is None:
             continue
         yaml_path = csv_path.with_suffix(".yaml")
         if yaml_path.exists():
-            pairs.append((int(m.group(1)), csv_path, yaml_path))
+            pairs.append((frame_index, csv_path, yaml_path))
     pairs.sort(key=lambda t: t[0])
     return [(csv, yml) for _, csv, yml in pairs]

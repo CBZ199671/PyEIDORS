@@ -12,11 +12,9 @@ from typing import Any
 from PySide6.QtCore import QObject, QThread, Signal
 
 from eit_app.models.frame_database import FrameDatabase
+from pyeidors.data.frame_io import frame_index_from_csv_name
 
 log = logging.getLogger(__name__)
-
-
-_FRAME_CSV_RE = re.compile(r"_frame_(\d+)\.csv$", re.IGNORECASE)
 
 
 def _read_yaml(path: Path) -> dict[str, Any]:
@@ -109,7 +107,7 @@ class _BackfillWorker(QObject):
             if parent in seen:
                 continue
             # Skip if this is a per-frame CSV inside an already-registered session
-            if _FRAME_CSV_RE.search(csv_file.name):
+            if frame_index_from_csv_name(csv_file.name) is not None:
                 continue
             # Treat this parent as a legacy session once
             yaml_sibling = csv_file.with_suffix(".yaml")
@@ -148,10 +146,9 @@ class _BackfillWorker(QObject):
         for csv_file in sorted(session_dir.glob("*_frame_*.csv")):
             if self._is_cancel_requested():
                 return
-            match = _FRAME_CSV_RE.search(csv_file.name)
-            if not match:
+            frame_index = frame_index_from_csv_name(csv_file.name)
+            if frame_index is None:
                 continue
-            frame_index = int(match.group(1))
             yaml_file = csv_file.with_suffix(".yaml")
             frame_meta = _read_yaml(yaml_file) if yaml_file.exists() else {}
             timestamp = float(frame_meta.get("timestamp", csv_file.stat().st_mtime))
@@ -283,7 +280,7 @@ class DatabaseController(QObject):
         stim_amp_ua_min: int | None = None,
         stim_amp_ua_max: int | None = None,
     ) -> list[dict[str, Any]]:
-        return self._db.query_sessions(
+        rows = self._db.query_sessions(
             frequency_hz=frequency_hz,
             frequency_hz_min=frequency_hz_min,
             frequency_hz_max=frequency_hz_max,
@@ -295,9 +292,45 @@ class DatabaseController(QObject):
             stim_amp_ua_min=stim_amp_ua_min,
             stim_amp_ua_max=stim_amp_ua_max,
         )
+        available = [row for row in rows if self._session_storage_available(row)]
+        skipped = len(rows) - len(available)
+        if skipped:
+            log.info(
+                "Database query hid %d session(s) whose session_dir is unavailable",
+                skipped,
+            )
+        return available
 
     def query_frames(self, session_id: int) -> list[dict[str, Any]]:
-        return self._db.query_frames(session_id)
+        rows = self._db.query_frames(session_id)
+        available = [row for row in rows if self._frame_file_available(row)]
+        skipped = len(rows) - len(available)
+        if skipped:
+            log.info(
+                "Database query hid %d frame(s) whose CSV file is unavailable",
+                skipped,
+            )
+        return available
+
+    @staticmethod
+    def _session_storage_available(row: dict[str, Any]) -> bool:
+        raw = str(row.get("session_dir") or "").strip()
+        if not raw:
+            return False
+        try:
+            return Path(raw).exists()
+        except (OSError, ValueError):
+            return False
+
+    @staticmethod
+    def _frame_file_available(row: dict[str, Any]) -> bool:
+        raw = str(row.get("csv_path") or row.get("file_path") or "").strip()
+        if not raw:
+            return False
+        try:
+            return Path(raw).is_file()
+        except (OSError, ValueError):
+            return False
 
     # ---- Backfill ----
 

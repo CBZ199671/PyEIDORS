@@ -11,7 +11,6 @@ lives inside the same folder it is skipped as a target.
 from __future__ import annotations
 
 import logging
-import re
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -29,11 +28,9 @@ from eit_app.models.reconstruction_methods import (
     database_method_requires_reference,
     prepare_database_reconstruction_method,
 )
+from pyeidors.data.frame_io import frame_index_from_csv_name
 
 log = logging.getLogger(__name__)
-
-
-_FRAME_CSV_RE = re.compile(r"_frame_(\d+)\.csv$", re.IGNORECASE)
 
 
 def _discover_frame_csvs(folder: Path) -> list[Path]:
@@ -50,8 +47,8 @@ def _discover_frame_csvs(folder: Path) -> list[Path]:
 
     # Sort by frame index if names follow the per-frame pattern, else name
     def key(p: Path) -> tuple:
-        m = _FRAME_CSV_RE.search(p.name)
-        return (0, int(m.group(1))) if m else (1, p.name)
+        frame_index = frame_index_from_csv_name(p.name)
+        return (0, frame_index) if frame_index is not None else (1, p.name)
 
     return sorted(results, key=key)
 
@@ -202,8 +199,7 @@ def _load_frame(path: Path) -> FrameData:
     from pyeidors.data.frame_io import read_frame_csv
 
     real, imag = read_frame_csv(path)
-    match = _FRAME_CSV_RE.search(path.name)
-    frame_index = int(match.group(1)) if match else 0
+    frame_index = frame_index_from_csv_name(path.name) or 0
     timestamp = path.stat().st_mtime
     return FrameData(
         real=real,

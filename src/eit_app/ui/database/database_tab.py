@@ -658,9 +658,13 @@ class DatabaseTab(QWidget):
         self._count_label.setText(t("db.stats.count", count=len(sessions)))
         self._frame_model.set_rows([])
         self._current_session_id = None
+        self._selected_reference = None
+        self._selected_target = None
         self._as_ref_btn.setEnabled(False)
         self._as_tgt_btn.setEnabled(False)
         self._open_folder_btn.setEnabled(False)
+        self._batch_recon_btn.setEnabled(False)
+        self._update_selection_status()
 
     def _clear_filters(self) -> None:
         self._filter_name.clear()
@@ -688,6 +692,9 @@ class DatabaseTab(QWidget):
 
     def _on_session_selection_changed(self, *args) -> None:
         session = self._selected_session()
+        self._selected_reference = None
+        self._selected_target = None
+        self._update_selection_status()
         if session is None:
             self._current_session_id = None
             self._frame_model.set_rows([])

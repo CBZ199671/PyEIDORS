@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import hashlib
 import os
 import sys
 from pathlib import Path
@@ -124,6 +125,17 @@ def _cleanup_qt_runtime() -> None:
             app.processEvents()
         except Exception:
             pass
+
+
+@pytest.fixture(autouse=True)
+def _isolate_app_persistence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path_factory, request
+):
+    """Keep GUI/database tests from writing into the developer's app data."""
+    test_id = hashlib.sha1(request.node.nodeid.encode("utf-8")).hexdigest()
+    app_data = tmp_path_factory.getbasetemp() / "app-data" / test_id
+    monkeypatch.setenv("XDG_DATA_HOME", str(app_data))
+    monkeypatch.delenv("EIT_APP_DB_PATH", raising=False)
 
 
 @pytest.fixture(autouse=True)

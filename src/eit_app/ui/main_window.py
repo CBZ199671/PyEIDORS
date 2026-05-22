@@ -2437,6 +2437,9 @@ class EITWorkstation(QMainWindow):
         """Return a platform-appropriate path for the frame database."""
         import os
 
+        override = os.environ.get("EIT_APP_DB_PATH")
+        if override:
+            return Path(override).expanduser()
         if os.name == "nt":
             base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
         else:
