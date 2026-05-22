@@ -763,6 +763,45 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.reconstruction.save_voltage_check": "\u4fdd\u5b58\u8fb9\u754c\u7535\u538b\u62df\u5408\u56fe (PNG)",  # 保存边界电压拟合图 (PNG)
     "dlg.reconstruction.not_selected": "<\u672a\u9009\u62e9>",  # <未选择>
     "dlg.reconstruction.absolute_no_ref_tip": "\u7edd\u5bf9\u65b9\u6cd5\u4e0d\u9700\u8981\u53c2\u8003\u5e27\u3002",  # 绝对方法不需要参考帧。
+    "dlg.recon_settings.toggle_show": "\u663e\u793a\u6b63/\u9006\u95ee\u9898\u53c2\u6570",  # 显示正/逆问题参数
+    "dlg.recon_settings.toggle_hide": "\u9690\u85cf\u6b63/\u9006\u95ee\u9898\u53c2\u6570",  # 隐藏正/逆问题参数
+    "dlg.recon_settings.tab_mesh": "\u7f51\u683c\u4e0e\u7535\u6781",  # 网格与电极
+    "dlg.recon_settings.tab_protocol": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf",  # 激励与测量
+    "dlg.recon_settings.tab_solver": "\u6c42\u89e3\u5668\u4e0e\u8fd0\u884c\u65f6",  # 求解器与运行时
+    "dlg.recon_settings.mesh_dimension": "\u5f85\u6d4b\u57df\uff1a",  # 待测域：
+    "dlg.recon_settings.mesh_refinement": "\u7f51\u683c\u5c3a\u5bf8/\u7ec6\u5316\uff1a",  # 网格尺寸/细化：
+    "dlg.recon_settings.rm_inverse_mesh": "RM \u9006\u7f51\u683c\u5c3a\u5bf8\uff1a",  # RM 逆网格尺寸：
+    "dlg.recon_settings.n_elec": "\u6bcf\u73af\u7535\u6781\u6570\uff1a",  # 每环电极数：
+    "dlg.recon_settings.n_rings": "\u7535\u6781\u73af\u6570\uff1a",  # 电极环数：
+    "dlg.recon_settings.electrode_layout": "\u7535\u6781\u6392\u5217\uff1a",  # 电极排列：
+    "dlg.recon_settings.radius": "\u534a\u5f84\uff1a",  # 半径：
+    "dlg.recon_settings.height": "\u9ad8\u5ea6\uff1a",  # 高度：
+    "dlg.recon_settings.geometry_scale": "\u51e0\u4f55\u5230\u7c73\u7684\u7f29\u653e\uff1a",  # 几何到米的缩放：
+    "dlg.recon_settings.electrode_coverage": "\u7535\u6781\u8986\u76d6\u7387\uff1a",  # 电极覆盖率：
+    "dlg.recon_settings.electrode_length": "\u7535\u6781\u957f\u5ea6\uff1a",  # 电极长度：
+    "dlg.recon_settings.electrode_area": "\u7535\u6781\u9762\u79ef\uff1a",  # 电极面积：
+    "dlg.recon_settings.electrode_height_ratio": "\u7535\u6781\u9ad8\u5ea6\u6bd4\uff1a",  # 电极高度比：
+    "dlg.recon_settings.stim_pattern": "\u6fc0\u52b1\u6a21\u5f0f\uff1a",  # 激励模式：
+    "dlg.recon_settings.meas_pattern": "\u6d4b\u91cf\u6a21\u5f0f\uff1a",  # 测量模式：
+    "dlg.recon_settings.measurement_protocol": "\u6d4b\u91cf\u534f\u8bae\uff1a",  # 测量协议：
+    "dlg.recon_settings.rotate_meas": "\u65cb\u8f6c\u6d4b\u91cf\u987a\u5e8f",  # 旋转测量顺序
+    "dlg.recon_settings.use_meas_current": "\u5305\u542b\u6d4b\u91cf\u7535\u6d41\u7535\u6781",  # 包含测量电流电极
+    "dlg.recon_settings.use_meas_current_next": "\u6d4b\u91cf\u7535\u6d41 next\uff1a",  # 测量电流 next：
+    "dlg.recon_settings.stim_direction": "\u6fc0\u52b1\u65b9\u5411\uff1a",  # 激励方向：
+    "dlg.recon_settings.meas_direction": "\u6d4b\u91cf\u65b9\u5411\uff1a",  # 测量方向：
+    "dlg.recon_settings.stim_first_positive": "\u7b2c\u4e00\u4e2a\u6fc0\u52b1\u7535\u6781\u4e3a\u6b63",  # 第一个激励电极为正
+    "dlg.recon_settings.drive_mode": "\u9a71\u52a8\u6a21\u5f0f\uff1a",  # 驱动模式：
+    "dlg.recon_settings.drive_value": "\u9a71\u52a8\u503c\uff1a",  # 驱动值：
+    "dlg.recon_settings.contact_impedance": "\u63a5\u89e6\u963b\u6297\uff1a",  # 接触阻抗：
+    "dlg.recon_settings.solver_mode": "\u9006\u95ee\u9898\u6c42\u89e3\u6a21\u5f0f\uff1a",  # 逆问题求解模式：
+    "dlg.recon_settings.linear_solver": "\u7ebf\u6027\u6c42\u89e3\u5668\uff1a",  # 线性求解器：
+    "dlg.recon_settings.preconditioner": "\u9884\u6761\u4ef6\uff1a",  # 预条件：
+    "dlg.recon_settings.jacobian_representation": "Jacobian \u8868\u793a\uff1a",  # Jacobian 表示：
+    "dlg.recon_settings.forward_solver_preset": "\u6b63\u95ee\u9898\u6c42\u89e3\u9884\u8bbe\uff1a",  # 正问题求解预设：
+    "dlg.recon_settings.forward_mat_solve": "\u6b63\u95ee\u9898 mat-solve\uff1a",  # 正问题 mat-solve：
+    "dlg.recon_settings.petsc_device": "PETSc \u8bbe\u5907\uff1a",  # PETSc 设备：
+    "dlg.recon_settings.runtime_device": "\u8fd0\u884c\u65f6\u8bbe\u5907\uff1a",  # 运行时设备：
+    "dlg.recon_settings.acceleration_profile": "\u52a0\u901f profile\uff1a",  # 加速 profile：
     # ==================================================================
     # Dialog — Batch Reconstruct
     # ==================================================================

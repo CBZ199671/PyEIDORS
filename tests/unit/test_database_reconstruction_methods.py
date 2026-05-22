@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
@@ -100,6 +101,8 @@ def test_v118_batch_build_request_resolves_rm_route_to_controller_metadata(
         max_iterations=44,
         save_recon_image=False,
         save_voltage_fit=False,
+        mesh_dimension=3,
+        mesh_refinement=0.2,
         metadata={"n_elec": 8, "compute_precision": "float32"},
     )
     frame = FrameData(
@@ -113,7 +116,11 @@ def test_v118_batch_build_request_resolves_rm_route_to_controller_metadata(
 
     assert request.method == "gn-difference"
     assert request.max_iterations == 1
+    assert request.mesh_dimension == 3
+    assert request.mesh_refinement == 0.2
     assert request.metadata["n_elec"] == 8
+    assert request.metadata["mesh_dimension"] == 3
+    assert request.metadata["mesh_size"] == 0.2
     assert request.metadata["difference_mode"] == "normalized"
     assert request.metadata["simulation_inverse_route"] == "curvature_rm"
     assert request.metadata["rm_regularization"] == "curvature"
@@ -146,6 +153,103 @@ def test_v118_single_frame_dialog_hides_iterations_for_difference_methods() -> N
         assert dialog._custom_lambda_check.isHidden()
     finally:
         dialog.close()
+
+
+def test_v127_single_frame_dialog_emits_advanced_reconstruction_settings() -> None:
+    from eit_app.ui.dialogs.reconstruction_dialog import ReconstructionDialog
+
+    app = _app()
+    emitted: list[dict] = []
+    frame_meta = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.08,
+        "n_elec": 24,
+        "n_rings": 2,
+        "stim_pattern": "{op}",
+        "meas_pattern": "{ad}",
+        "radius": 0.18,
+        "height": 0.16,
+        "drive_value": 2.5e-5,
+    }
+    dialog = ReconstructionDialog(
+        reference_entry={
+            "frame_index": 0,
+            "csv_path": "/tmp/ref.csv",
+            "frame_metadata_json": json.dumps(frame_meta),
+        },
+        target_entry={
+            "frame_index": 1,
+            "csv_path": "/tmp/tgt.csv",
+            "frame_metadata_json": json.dumps(frame_meta | {"n_elec": 32}),
+        },
+    )
+    dialog.run_requested.connect(emitted.append)
+    dialog.show()
+    app.processEvents()
+
+    try:
+        assert dialog._settings_panel.mesh_dimension() == 3
+        assert dialog._settings_panel.metadata()["n_elec"] == 32
+        dialog._settings_panel._n_rings.setValue(4)
+        dialog._settings_panel._mesh_refinement.setValue(0.05)
+        dialog._on_run()
+    finally:
+        dialog.close()
+
+    assert emitted
+    config = emitted[0]
+    assert config["mesh_dimension"] == 3
+    assert config["mesh_refinement"] == 0.05
+    assert config["reconstruction_settings"]["n_elec"] == 32
+    assert config["reconstruction_settings"]["n_rings"] == 4
+    assert config["reconstruction_settings"]["stim_pattern"] == "{op}"
+    assert config["reconstruction_settings"]["drive_value"] == 2.5e-5
+
+
+def test_v127_batch_dialog_prefills_and_emits_advanced_settings(
+    tmp_path: Path,
+) -> None:
+    from eit_app.ui.dialogs.batch_reconstruction_dialog import BatchReconstructionDialog
+
+    app = _app()
+    emitted: list[dict] = []
+    (tmp_path / "session_metadata.yaml").write_text(
+        "\n".join(
+            [
+                "mesh_dimension: 3",
+                "mesh_refinement: 0.07",
+                "n_elec: 16",
+                "n_rings: 3",
+                "electrode_layout: ring_major",
+                "stim_pattern: '{ad}'",
+                "meas_pattern: '{op}'",
+                "radius: 0.18",
+                "height: 0.16",
+                "contact_impedance: 0.02",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    dialog = BatchReconstructionDialog(default_input=tmp_path, default_output=tmp_path)
+    dialog.start_requested.connect(emitted.append)
+    dialog.show()
+    app.processEvents()
+
+    try:
+        dialog._ref_edit.setText(str(tmp_path / "ref.csv"))
+        dialog._settings_panel._n_elec.setValue(48)
+        dialog._on_run()
+    finally:
+        dialog.close()
+
+    assert emitted
+    config = emitted[0]
+    assert config["mesh_dimension"] == 3
+    assert config["mesh_refinement"] == 0.07
+    assert config["reconstruction_settings"]["n_elec"] == 48
+    assert config["reconstruction_settings"]["n_rings"] == 3
+    assert config["reconstruction_settings"]["meas_pattern"] == "{op}"
+    assert config["reconstruction_settings"]["contact_impedance"] == 0.02
 
 
 def test_v118_batch_dialog_hides_iterations_for_difference_methods(

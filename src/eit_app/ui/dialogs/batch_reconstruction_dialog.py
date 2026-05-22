@@ -39,6 +39,10 @@ from eit_app.models.reconstruction_methods import (
     normalize_database_reconstruction_method,
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+from eit_app.ui.dialogs.reconstruction_settings_panel import (
+    ReconstructionSettingsPanel,
+    metadata_from_session_folder,
+)
 from eit_app.ui.theme import set_button_role
 
 
@@ -65,6 +69,9 @@ class BatchReconstructionDialog(QDialog):
         self.resize(820, 640)
         self._default_input = default_input
         self._default_output = default_output
+        self._initial_reconstruction_metadata = metadata_from_session_folder(
+            default_input
+        )
         self._is_running = False
         self._editable_alpha_value = 1.0
         self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
@@ -123,6 +130,10 @@ class BatchReconstructionDialog(QDialog):
 
         root.addWidget(self._build_folders_section())
         root.addWidget(self._build_algorithm_section())
+        self._settings_panel = ReconstructionSettingsPanel(
+            initial_metadata=self._initial_reconstruction_metadata
+        )
+        root.addWidget(self._settings_panel)
         root.addWidget(self._build_output_section())
         root.addWidget(self._build_progress_section())
 
@@ -304,6 +315,7 @@ class BatchReconstructionDialog(QDialog):
         self._ref_browse_btn.clicked.connect(self._on_browse_ref)
         self._algo_combo.currentIndexChanged.connect(self._update_algorithm_state)
         self._input_edit.textChanged.connect(self._update_run_enabled)
+        self._input_edit.editingFinished.connect(self._load_settings_from_input_folder)
         self._output_edit.textChanged.connect(self._update_run_enabled)
         self._ref_edit.textChanged.connect(self._update_run_enabled)
 
@@ -405,6 +417,7 @@ class BatchReconstructionDialog(QDialog):
         )
         if path:
             self._input_edit.setText(path)
+            self._load_settings_from_input_folder()
 
     def _on_browse_output(self) -> None:
         path = QFileDialog.getExistingDirectory(
@@ -443,6 +456,9 @@ class BatchReconstructionDialog(QDialog):
             "method": method,
             "method_label": label,
             "reference_csv": ref_csv if needs_ref else None,
+            "mesh_dimension": self._settings_panel.mesh_dimension(),
+            "mesh_refinement": self._settings_panel.mesh_refinement(),
+            "reconstruction_settings": self._settings_panel.metadata(),
             "use_part": self._use_part_combo.currentText(),
             "regularization_alpha": self._alpha_spin.value(),
             "lambda_eff_custom_enabled": custom_lambda_enabled,
@@ -455,6 +471,13 @@ class BatchReconstructionDialog(QDialog):
         }
         self._set_running(True)
         self.start_requested.emit(config)
+
+    def _load_settings_from_input_folder(self) -> None:
+        if self._is_running:
+            return
+        metadata = metadata_from_session_folder(self._input_edit.text().strip())
+        if metadata:
+            self._settings_panel.load_metadata(metadata)
 
     def _on_cancel(self) -> None:
         self._progress_label.setText(t("dlg.batch.cancelling"))
@@ -487,6 +510,7 @@ class BatchReconstructionDialog(QDialog):
             self._alpha_spin,
             self._custom_lambda_check,
             self._iter_spin,
+            self._settings_panel,
             self._save_recon_check,
             self._save_voltage_check,
         ):

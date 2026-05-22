@@ -3034,6 +3034,19 @@ class EITWorkstation(QMainWindow):
 
         rc = self._state.reconstruction_config
         precision_label = current_precision()
+        reconstruction_settings = dict(config.get("reconstruction_settings") or {})
+        mesh_dimension = int(
+            config.get(
+                "mesh_dimension",
+                reconstruction_settings.get("mesh_dimension", rc.mesh_dimension),
+            )
+        )
+        mesh_refinement = float(
+            config.get(
+                "mesh_refinement",
+                reconstruction_settings.get("mesh_refinement", rc.mesh_refinement),
+            )
+        )
         metadata = {
             **self._measurement_layout_config(),
             "difference_mode": "raw",
@@ -3052,6 +3065,7 @@ class EITWorkstation(QMainWindow):
             "electrode_coverage": float(
                 self._device_config.get("electrode_coverage", 0.5)
             ),
+            **reconstruction_settings,
             "compute_precision": precision_label,
             "compute_dtype": precision_label,
             "rm_dtype": precision_label,
@@ -3086,8 +3100,8 @@ class EITWorkstation(QMainWindow):
             method=prepared_method.method,
             regularization_alpha=prepared_method.regularization_alpha,
             max_iterations=prepared_method.max_iterations,
-            mesh_dimension=rc.mesh_dimension,
-            mesh_refinement=rc.mesh_refinement,
+            mesh_dimension=mesh_dimension,
+            mesh_refinement=mesh_refinement,
             metadata=prepared_method.metadata,
         )
         accepted = self._db_recon_ctrl.reconstruct(request)
@@ -3297,6 +3311,20 @@ class EITWorkstation(QMainWindow):
         """Launch a batch reconstruction job from the dialog's config."""
         try:
             precision_label = current_precision()
+            reconstruction_settings = dict(config.get("reconstruction_settings") or {})
+            rc = self._state.reconstruction_config
+            mesh_dimension = int(
+                config.get(
+                    "mesh_dimension",
+                    reconstruction_settings.get("mesh_dimension", rc.mesh_dimension),
+                )
+            )
+            mesh_refinement = float(
+                config.get(
+                    "mesh_refinement",
+                    reconstruction_settings.get("mesh_refinement", rc.mesh_refinement),
+                )
+            )
             metadata = {
                 **self._measurement_layout_config(),
                 **self._hardware_reconstruction_drive_metadata(),
@@ -3313,6 +3341,7 @@ class EITWorkstation(QMainWindow):
                 "electrode_coverage": float(
                     self._device_config.get("electrode_coverage", 0.5)
                 ),
+                **reconstruction_settings,
                 "compute_precision": precision_label,
                 "compute_dtype": precision_label,
                 "rm_dtype": precision_label,
@@ -3344,6 +3373,8 @@ class EITWorkstation(QMainWindow):
                     if config.get("custom_lambda_eff") is not None
                     else None
                 ),
+                mesh_dimension=mesh_dimension,
+                mesh_refinement=mesh_refinement,
                 metadata=metadata,
             )
             ok = self._batch_recon_ctrl.start(req)

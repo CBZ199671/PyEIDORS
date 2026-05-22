@@ -45,6 +45,10 @@ from eit_app.models.reconstruction_methods import (
     normalize_database_reconstruction_method,
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+from eit_app.ui.dialogs.reconstruction_settings_panel import (
+    ReconstructionSettingsPanel,
+    metadata_from_frame_entries,
+)
 from eit_app.ui.theme import card_palette, set_button_role
 
 log = logging.getLogger(__name__)
@@ -92,6 +96,9 @@ class ReconstructionDialog(QDialog):
         self.resize(780, 700)
         self._reference_entry = reference_entry
         self._target_entry = target_entry
+        self._initial_reconstruction_metadata = metadata_from_frame_entries(
+            reference_entry, target_entry
+        )
         self._editable_alpha_value = 1.0
         self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
         self._build_ui()
@@ -135,6 +142,12 @@ class ReconstructionDialog(QDialog):
 
         # Algorithm section
         root.addWidget(self._build_algorithm_section())
+
+        # Forward/inverse settings section
+        self._settings_panel = ReconstructionSettingsPanel(
+            initial_metadata=self._initial_reconstruction_metadata
+        )
+        root.addWidget(self._settings_panel)
 
         # Output section
         root.addWidget(self._build_output_section())
@@ -383,6 +396,9 @@ class ReconstructionDialog(QDialog):
             "method_label": label,
             "reference_entry": self._reference_entry if needs_ref else None,
             "target_entry": self._target_entry,
+            "mesh_dimension": self._settings_panel.mesh_dimension(),
+            "mesh_refinement": self._settings_panel.mesh_refinement(),
+            "reconstruction_settings": self._settings_panel.metadata(),
             "regularization_alpha": self._alpha_spin.value(),
             "lambda_eff_custom_enabled": custom_lambda_enabled,
             "custom_lambda_eff": self._alpha_spin.value()

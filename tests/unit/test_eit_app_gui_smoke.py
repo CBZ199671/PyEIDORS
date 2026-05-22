@@ -128,6 +128,80 @@ def test_v126_default_db_path_honors_explicit_env_override(
     assert EITWorkstation._default_db_path() == db_path
 
 
+@pytest.mark.gui
+def test_v127_database_reconstruction_uses_advanced_settings(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pyeidors.data.frame_io as frame_io
+
+    window = EITWorkstation()
+    _show_window(window)
+    captured: list[object] = []
+
+    monkeypatch.setattr(
+        frame_io,
+        "read_frame_csv",
+        lambda _path: (
+            np.array([1.0, 2.0, 3.0], dtype=float),
+            np.zeros(3, dtype=float),
+        ),
+    )
+    monkeypatch.setattr(
+        window._db_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_db_reconstruct_requested(
+        {
+            "method": "gn-absolute",
+            "method_label": "Absolute GN",
+            "target_entry": {
+                "frame_index": 5,
+                "csv_path": "/tmp/target.csv",
+                "timestamp": 1.0,
+            },
+            "regularization_alpha": 0.2,
+            "max_iterations": 7,
+            "use_part": "real",
+            "mesh_dimension": 3,
+            "mesh_refinement": 0.12,
+            "reconstruction_settings": {
+                "mesh_dimension": 3,
+                "mesh_refinement": 0.12,
+                "mesh_size": 0.12,
+                "n_elec": 32,
+                "n_rings": 2,
+                "stim_pattern": "{op}",
+                "meas_pattern": "{ad}",
+                "radius": 0.18,
+                "mesh_height": 0.16,
+                "contact_impedance": 0.02,
+                "drive_mode": "total_current",
+                "drive_value": 2.5e-5,
+                "solver_mode": "strict",
+            },
+        }
+    )
+
+    try:
+        assert captured
+        request = captured[0]
+        assert request.mesh_dimension == 3
+        assert request.mesh_refinement == 0.12
+        assert request.max_iterations == 7
+        assert request.metadata["n_elec"] == 32
+        assert request.metadata["n_rings"] == 2
+        assert request.metadata["stim_pattern"] == "{op}"
+        assert request.metadata["radius"] == 0.18
+        assert request.metadata["mesh_height"] == 0.16
+        assert request.metadata["contact_impedance"] == 0.02
+        assert request.metadata["drive_value"] == 2.5e-5
+        assert request.metadata["solver_mode"] == "strict"
+    finally:
+        _close_window(window)
+
+
 def _sample_pixmap_unique_rgb_count(pixmap, *, samples_per_axis: int = 8) -> int:
     image = pixmap.toImage()
     if image.isNull():

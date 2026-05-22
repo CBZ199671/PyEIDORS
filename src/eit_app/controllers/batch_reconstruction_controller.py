@@ -71,6 +71,8 @@ class BatchReconstructionRequest:
         save_voltage_fit: bool,
         lambda_eff_custom_enabled: bool = False,
         custom_lambda_eff: float | None = None,
+        mesh_dimension: int = 2,
+        mesh_refinement: float = 4.0,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         self.input_folder = Path(input_folder)
@@ -85,6 +87,8 @@ class BatchReconstructionRequest:
         self.custom_lambda_eff = (
             float(custom_lambda_eff) if custom_lambda_eff is not None else None
         )
+        self.mesh_dimension = int(mesh_dimension)
+        self.mesh_refinement = float(mesh_refinement)
         self.save_recon_image = save_recon_image
         self.save_voltage_fit = save_voltage_fit
         self.metadata = dict(metadata or {})
@@ -233,6 +237,9 @@ def _build_request(
         "electrode_coverage": 0.5,
         "electrode_length_m_override": None,
         "contact_impedance": 0.01,
+        "mesh_dimension": int(batch.mesh_dimension),
+        "mesh_refinement": float(batch.mesh_refinement),
+        "mesh_size": float(batch.mesh_refinement),
         "difference_mode": "raw",
         "difference_orientation": "target_minus_reference",
     }
@@ -256,8 +263,8 @@ def _build_request(
         method=prepared.method,
         regularization_alpha=prepared.regularization_alpha,
         max_iterations=prepared.max_iterations,
-        mesh_dimension=2,
-        mesh_refinement=4,
+        mesh_dimension=batch.mesh_dimension,
+        mesh_refinement=batch.mesh_refinement,
         metadata=prepared.metadata,
     )
 
