@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -155,46 +156,74 @@ def test_v118_single_frame_dialog_hides_iterations_for_difference_methods() -> N
         dialog.close()
 
 
-def test_v127_single_frame_dialog_emits_advanced_reconstruction_settings() -> None:
+class _NoopSignal:
+    def connect(self, _slot) -> None:
+        return None
+
+
+def test_v127_single_frame_dialog_keeps_settings_out_of_reconstruct_dialog() -> None:
     from eit_app.ui.dialogs.reconstruction_dialog import ReconstructionDialog
 
     app = _app()
     emitted: list[dict] = []
-    frame_meta = {
-        "mesh_dimension": 3,
-        "mesh_refinement": 0.08,
-        "n_elec": 24,
-        "n_rings": 2,
-        "stim_pattern": "{op}",
-        "meas_pattern": "{ad}",
-        "radius": 0.18,
-        "height": 0.16,
-        "drive_value": 2.5e-5,
-    }
     dialog = ReconstructionDialog(
-        reference_entry={
-            "frame_index": 0,
-            "csv_path": "/tmp/ref.csv",
-            "frame_metadata_json": json.dumps(frame_meta),
-        },
-        target_entry={
-            "frame_index": 1,
-            "csv_path": "/tmp/tgt.csv",
-            "frame_metadata_json": json.dumps(frame_meta | {"n_elec": 32}),
-        },
+        reference_entry={"frame_index": 0, "csv_path": "/tmp/ref.csv"},
+        target_entry={"frame_index": 1, "csv_path": "/tmp/tgt.csv"},
     )
     dialog.run_requested.connect(emitted.append)
     dialog.show()
     app.processEvents()
 
     try:
-        assert dialog._settings_panel.mesh_dimension() == 3
-        assert dialog._settings_panel.metadata()["n_elec"] == 32
-        dialog._settings_panel._n_rings.setValue(4)
-        dialog._settings_panel._mesh_refinement.setValue(0.05)
+        assert not hasattr(dialog, "_settings_panel")
         dialog._on_run()
     finally:
         dialog.close()
+
+    assert emitted
+    config = emitted[0]
+    assert "reconstruction_settings" not in config
+    assert "mesh_dimension" not in config
+    assert "mesh_refinement" not in config
+
+
+def test_v127_database_tab_injects_standalone_reconstruction_settings() -> None:
+    from eit_app.ui.database.database_tab import DatabaseTab
+
+    app = _app()
+    emitted: list[dict] = []
+    tab = DatabaseTab(
+        SimpleNamespace(
+            query_sessions=lambda **_filters: [],
+            is_shutting_down=False,
+            session_added=_NoopSignal(),
+            frame_added=_NoopSignal(),
+            backfill_progress=_NoopSignal(),
+            backfill_done=_NoopSignal(),
+        )
+    )
+    tab.reconstruct_requested.connect(emitted.append)
+    tab._reconstruction_settings_override = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.05,
+        "mesh_size": 0.05,
+        "n_elec": 32,
+        "n_rings": 4,
+        "stim_pattern": "{op}",
+        "drive_value": 2.5e-5,
+    }
+    tab.show()
+    app.processEvents()
+
+    try:
+        tab._emit_reconstruct_requested(
+            {
+                "method": "gn-absolute",
+                "target_entry": {"frame_index": 1, "csv_path": "/tmp/tgt.csv"},
+            }
+        )
+    finally:
+        tab.close()
 
     assert emitted
     config = emitted[0]
@@ -206,7 +235,58 @@ def test_v127_single_frame_dialog_emits_advanced_reconstruction_settings() -> No
     assert config["reconstruction_settings"]["drive_value"] == 2.5e-5
 
 
-def test_v127_batch_dialog_prefills_and_emits_advanced_settings(
+def test_v127_reconstruction_settings_dialog_prefills_frame_metadata() -> None:
+    from eit_app.ui.dialogs.reconstruction_settings_panel import (
+        ReconstructionSettingsDialog,
+        metadata_from_frame_entries,
+    )
+
+    app = _app()
+    frame_meta = {
+        "mesh_dimension": 3,
+        "mesh_refinement": 0.08,
+        "n_elec": 24,
+        "n_rings": 2,
+        "stim_pattern": "{op}",
+        "meas_pattern": "{ad}",
+        "radius": 0.18,
+        "height": 0.16,
+        "drive_value": 2.5e-5,
+    }
+    metadata = metadata_from_frame_entries(
+        {
+            "frame_index": 0,
+            "csv_path": "/tmp/ref.csv",
+            "frame_metadata_json": json.dumps(frame_meta),
+        },
+        {
+            "frame_index": 1,
+            "csv_path": "/tmp/tgt.csv",
+            "frame_metadata_json": json.dumps(frame_meta | {"n_elec": 32}),
+        },
+    )
+    dialog = ReconstructionSettingsDialog(initial_metadata=metadata)
+    dialog.show()
+    app.processEvents()
+
+    try:
+        assert dialog.mesh_dimension() == 3
+        assert dialog.metadata()["n_elec"] == 32
+        dialog._panel._n_rings.setValue(4)
+        dialog._panel._mesh_refinement.setValue(0.05)
+        settings = dialog.metadata()
+    finally:
+        dialog.close()
+
+    assert settings["mesh_dimension"] == 3
+    assert settings["mesh_refinement"] == 0.05
+    assert settings["n_elec"] == 32
+    assert settings["n_rings"] == 4
+    assert settings["stim_pattern"] == "{op}"
+    assert settings["drive_value"] == 2.5e-5
+
+
+def test_v127_batch_dialog_emits_external_advanced_settings(
     tmp_path: Path,
 ) -> None:
     from eit_app.ui.dialogs.batch_reconstruction_dialog import BatchReconstructionDialog
@@ -230,14 +310,26 @@ def test_v127_batch_dialog_prefills_and_emits_advanced_settings(
         ),
         encoding="utf-8",
     )
-    dialog = BatchReconstructionDialog(default_input=tmp_path, default_output=tmp_path)
+    dialog = BatchReconstructionDialog(
+        default_input=tmp_path,
+        default_output=tmp_path,
+        reconstruction_settings={
+            "mesh_dimension": 3,
+            "mesh_refinement": 0.07,
+            "mesh_size": 0.07,
+            "n_elec": 48,
+            "n_rings": 3,
+            "meas_pattern": "{op}",
+            "contact_impedance": 0.02,
+        },
+    )
     dialog.start_requested.connect(emitted.append)
     dialog.show()
     app.processEvents()
 
     try:
+        assert not hasattr(dialog, "_settings_panel")
         dialog._ref_edit.setText(str(tmp_path / "ref.csv"))
-        dialog._settings_panel._n_elec.setValue(48)
         dialog._on_run()
     finally:
         dialog.close()

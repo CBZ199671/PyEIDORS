@@ -3282,9 +3282,11 @@ class EITWorkstation(QMainWindow):
                 pass
             default_out = results_root / src.name
 
+        db_reconstruction_settings = self._db_tab.reconstruction_settings()
         dialog = BatchReconstructionDialog(
             default_input=src,
             default_output=default_out,
+            reconstruction_settings=db_reconstruction_settings or None,
             parent=self,
         )
         self._batch_dialog = dialog

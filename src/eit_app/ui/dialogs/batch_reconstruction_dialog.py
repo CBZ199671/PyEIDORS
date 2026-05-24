@@ -40,7 +40,6 @@ from eit_app.models.reconstruction_methods import (
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.dialogs.reconstruction_settings_panel import (
-    ReconstructionSettingsPanel,
     metadata_from_session_folder,
 )
 from eit_app.ui.theme import set_button_role
@@ -62,6 +61,7 @@ class BatchReconstructionDialog(QDialog):
         *,
         default_input: Path | None = None,
         default_output: Path | None = None,
+        reconstruction_settings: dict[str, Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -69,8 +69,9 @@ class BatchReconstructionDialog(QDialog):
         self.resize(820, 640)
         self._default_input = default_input
         self._default_output = default_output
-        self._initial_reconstruction_metadata = metadata_from_session_folder(
-            default_input
+        self._reconstruction_settings_external = reconstruction_settings is not None
+        self._reconstruction_settings: dict[str, Any] = dict(
+            reconstruction_settings or metadata_from_session_folder(default_input)
         )
         self._is_running = False
         self._editable_alpha_value = 1.0
@@ -130,10 +131,6 @@ class BatchReconstructionDialog(QDialog):
 
         root.addWidget(self._build_folders_section())
         root.addWidget(self._build_algorithm_section())
-        self._settings_panel = ReconstructionSettingsPanel(
-            initial_metadata=self._initial_reconstruction_metadata
-        )
-        root.addWidget(self._settings_panel)
         root.addWidget(self._build_output_section())
         root.addWidget(self._build_progress_section())
 
@@ -456,9 +453,6 @@ class BatchReconstructionDialog(QDialog):
             "method": method,
             "method_label": label,
             "reference_csv": ref_csv if needs_ref else None,
-            "mesh_dimension": self._settings_panel.mesh_dimension(),
-            "mesh_refinement": self._settings_panel.mesh_refinement(),
-            "reconstruction_settings": self._settings_panel.metadata(),
             "use_part": self._use_part_combo.currentText(),
             "regularization_alpha": self._alpha_spin.value(),
             "lambda_eff_custom_enabled": custom_lambda_enabled,
@@ -469,15 +463,31 @@ class BatchReconstructionDialog(QDialog):
             "save_recon_image": self._save_recon_check.isChecked(),
             "save_voltage_fit": self._save_voltage_check.isChecked(),
         }
+        reconstruction_settings = self._effective_reconstruction_settings()
+        if reconstruction_settings:
+            config["reconstruction_settings"] = reconstruction_settings
+            mesh_dimension = reconstruction_settings.get("mesh_dimension")
+            if mesh_dimension is not None:
+                config["mesh_dimension"] = int(mesh_dimension)
+            mesh_refinement = reconstruction_settings.get(
+                "mesh_refinement", reconstruction_settings.get("mesh_size")
+            )
+            if mesh_refinement is not None:
+                config["mesh_refinement"] = float(mesh_refinement)
         self._set_running(True)
         self.start_requested.emit(config)
 
     def _load_settings_from_input_folder(self) -> None:
-        if self._is_running:
+        if self._is_running or self._reconstruction_settings_external:
             return
         metadata = metadata_from_session_folder(self._input_edit.text().strip())
         if metadata:
-            self._settings_panel.load_metadata(metadata)
+            self._reconstruction_settings = dict(metadata)
+
+    def _effective_reconstruction_settings(self) -> dict[str, Any]:
+        if self._reconstruction_settings:
+            return dict(self._reconstruction_settings)
+        return metadata_from_session_folder(self._input_edit.text().strip())
 
     def _on_cancel(self) -> None:
         self._progress_label.setText(t("dlg.batch.cancelling"))
@@ -510,7 +520,6 @@ class BatchReconstructionDialog(QDialog):
             self._alpha_spin,
             self._custom_lambda_check,
             self._iter_spin,
-            self._settings_panel,
             self._save_recon_check,
             self._save_voltage_check,
         ):

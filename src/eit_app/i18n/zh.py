@@ -614,6 +614,9 @@ TRANSLATIONS: dict[str, str] = {
     "db.frames.set_ref_button": "\u8bbe\u4e3a\u53c2\u8003",  # 设为参考
     "db.frames.set_tgt_button": "\u8bbe\u4e3a\u76ee\u6807",  # 设为目标
     "db.frames.reconstruct_button": "\u91cd\u6784\u2026",  # 重构…
+    "db.frames.recon_settings_button": "\u91cd\u6784\u53c2\u6570\u2026",  # 重构参数…
+    "db.frames.recon_settings_tip": "\u8bbe\u7f6e\u5355\u5e27\u3001\u5dee\u5206\u548c\u6279\u91cf\u91cd\u6784\u5171\u7528\u7684\u6b63/\u9006\u95ee\u9898\u53c2\u6570\u3002",  # 设置单帧、差分和批量重构共用的正/逆问题参数。
+    "db.frames.recon_settings_custom_tip": "\u5df2\u4e3a\u6570\u636e\u5e93\u91cd\u6784\u542f\u7528\u81ea\u5b9a\u4e49\u6b63/\u9006\u95ee\u9898\u53c2\u6570\u3002",  # 已为数据库重构启用自定义正/逆问题参数。
     "db.frames.clear_button": "\u6e05\u9664",  # 清除
     # ==================================================================
     # Database tab — Right-side preview panel
@@ -763,6 +766,11 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.reconstruction.save_voltage_check": "\u4fdd\u5b58\u8fb9\u754c\u7535\u538b\u62df\u5408\u56fe (PNG)",  # 保存边界电压拟合图 (PNG)
     "dlg.reconstruction.not_selected": "<\u672a\u9009\u62e9>",  # <未选择>
     "dlg.reconstruction.absolute_no_ref_tip": "\u7edd\u5bf9\u65b9\u6cd5\u4e0d\u9700\u8981\u53c2\u8003\u5e27\u3002",  # 绝对方法不需要参考帧。
+    "dlg.recon_settings.dialog_title": "\u91cd\u6784\u53c2\u6570",  # 重构参数
+    "dlg.recon_settings.dialog_heading": "\u6b63/\u9006\u95ee\u9898\u53c2\u6570",  # 正/逆问题参数
+    "dlg.recon_settings.reset_button": "\u91cd\u8f7d\u5f53\u524d\u6570\u636e",  # 重载当前数据
+    "dlg.recon_settings.cancel_button": "\u53d6\u6d88",  # 取消
+    "dlg.recon_settings.apply_button": "\u5e94\u7528",  # 应用
     "dlg.recon_settings.toggle_show": "\u663e\u793a\u6b63/\u9006\u95ee\u9898\u53c2\u6570",  # 显示正/逆问题参数
     "dlg.recon_settings.toggle_hide": "\u9690\u85cf\u6b63/\u9006\u95ee\u9898\u53c2\u6570",  # 隐藏正/逆问题参数
     "dlg.recon_settings.tab_mesh": "\u7f51\u683c\u4e0e\u7535\u6781",  # 网格与电极

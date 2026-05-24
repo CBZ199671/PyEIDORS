@@ -8,8 +8,10 @@ from typing import Any
 
 from PySide6.QtWidgets import (
     QCheckBox,
+    QDialog,
     QDoubleSpinBox,
     QFormLayout,
+    QHBoxLayout,
     QLabel,
     QPushButton,
     QScrollArea,
@@ -125,19 +127,23 @@ def _optional_float(value: float) -> float | None:
 
 
 class ReconstructionSettingsPanel(QWidget):
-    """Collapsible settings panel shared by single-frame and batch dialogs."""
+    """Forward/inverse settings editor used by the database settings dialog."""
 
     def __init__(
         self,
         *,
         initial_metadata: dict[str, Any] | None = None,
+        show_toggle: bool = True,
+        expanded: bool = False,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._show_toggle = bool(show_toggle)
         self._metadata: dict[str, Any] = {}
         self._build_ui()
         self.load_metadata(initial_metadata or {})
-        self._set_expanded(False)
+        self._toggle_btn.setVisible(self._show_toggle)
+        self._set_expanded(bool(expanded) or not self._show_toggle)
         self._retranslate()
 
     def _build_ui(self) -> None:
@@ -384,11 +390,16 @@ class ReconstructionSettingsPanel(QWidget):
     def _set_expanded(self, expanded: bool) -> None:
         self._body.setVisible(bool(expanded))
         self._toggle_btn.setChecked(bool(expanded))
+        if not self._show_toggle:
+            return
         self._toggle_btn.setText(
             t("dlg.recon_settings.toggle_hide")
             if expanded
             else t("dlg.recon_settings.toggle_show")
         )
+
+    def set_expanded(self, expanded: bool) -> None:
+        self._set_expanded(expanded)
 
     def load_metadata(self, metadata: dict[str, Any]) -> None:
         self._metadata = dict(metadata or {})
@@ -628,3 +639,80 @@ class ReconstructionSettingsPanel(QWidget):
         self._acceleration_profile_label.setText(
             t("dlg.recon_settings.acceleration_profile")
         )
+
+
+class ReconstructionSettingsDialog(QDialog):
+    """Standalone editor for database reconstruction forward/inverse settings."""
+
+    def __init__(
+        self,
+        *,
+        initial_metadata: dict[str, Any] | None = None,
+        reset_metadata: dict[str, Any] | None = None,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setMinimumWidth(760)
+        self.resize(840, 620)
+        self._reset_metadata = dict(reset_metadata or initial_metadata or {})
+        self._build_ui(initial_metadata or {})
+        self._retranslate()
+
+    def _build_ui(self, initial_metadata: dict[str, Any]) -> None:
+        root = QVBoxLayout(self)
+        root.setContentsMargins(18, 18, 18, 16)
+        root.setSpacing(12)
+
+        self._title_label = QLabel("")
+        self._title_label.setStyleSheet("font-size: 16px; font-weight: 700;")
+        root.addWidget(self._title_label)
+
+        self._panel = ReconstructionSettingsPanel(
+            initial_metadata=initial_metadata,
+            show_toggle=False,
+            expanded=True,
+            parent=self,
+        )
+        root.addWidget(self._panel, 1)
+
+        btn_row = QHBoxLayout()
+        btn_row.setContentsMargins(0, 4, 0, 0)
+        btn_row.setSpacing(8)
+
+        self._reset_btn = QPushButton("")
+        set_button_role(self._reset_btn, "subtle")
+        self._reset_btn.clicked.connect(self._on_reset)
+        btn_row.addWidget(self._reset_btn)
+        btn_row.addStretch()
+
+        self._cancel_btn = QPushButton("")
+        set_button_role(self._cancel_btn, "subtle")
+        self._cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(self._cancel_btn)
+
+        self._apply_btn = QPushButton("")
+        set_button_role(self._apply_btn, "primary")
+        self._apply_btn.setMinimumWidth(120)
+        self._apply_btn.clicked.connect(self.accept)
+        btn_row.addWidget(self._apply_btn)
+
+        root.addLayout(btn_row)
+
+    def _on_reset(self) -> None:
+        self._panel.load_metadata(self._reset_metadata)
+
+    def metadata(self) -> dict[str, Any]:
+        return self._panel.metadata()
+
+    def mesh_dimension(self) -> int:
+        return self._panel.mesh_dimension()
+
+    def mesh_refinement(self) -> float:
+        return self._panel.mesh_refinement()
+
+    def _retranslate(self) -> None:
+        self.setWindowTitle(t("dlg.recon_settings.dialog_title"))
+        self._title_label.setText(t("dlg.recon_settings.dialog_heading"))
+        self._reset_btn.setText(t("dlg.recon_settings.reset_button"))
+        self._cancel_btn.setText(t("dlg.recon_settings.cancel_button"))
+        self._apply_btn.setText(t("dlg.recon_settings.apply_button"))

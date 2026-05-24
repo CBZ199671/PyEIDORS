@@ -263,6 +263,7 @@ class DatabaseTab(QWidget):
         self._current_session_id: int | None = None
         self._selected_reference: dict | None = None
         self._selected_target: dict | None = None
+        self._reconstruction_settings_override: dict[str, Any] | None = None
         self._is_shutting_down = False
         # Cache the most recent dynamic strings so _retranslate can rebuild
         # them in the active language without re-querying the controller.
@@ -558,11 +559,14 @@ class DatabaseTab(QWidget):
         # confirmation action red.
         set_button_role(self._reconstruct_btn, "primary")
         self._reconstruct_btn.setEnabled(False)
+        self._recon_settings_btn = QPushButton("")
+        set_button_role(self._recon_settings_btn, "subtle")
         self._clear_sel_btn = QPushButton("")
         set_button_role(self._clear_sel_btn, "subtle")
         frame_actions.addWidget(self._as_ref_btn)
         frame_actions.addWidget(self._as_tgt_btn)
         frame_actions.addWidget(self._reconstruct_btn)
+        frame_actions.addWidget(self._recon_settings_btn)
         frame_actions.addStretch()
         frame_actions.addWidget(self._clear_sel_btn)
         frames_layout.addLayout(frame_actions)
@@ -612,6 +616,7 @@ class DatabaseTab(QWidget):
         self._as_ref_btn.clicked.connect(self._on_set_reference)
         self._as_tgt_btn.clicked.connect(self._on_set_target)
         self._reconstruct_btn.clicked.connect(self._on_open_reconstruct_dialog)
+        self._recon_settings_btn.clicked.connect(self._on_open_reconstruction_settings)
         self._clear_sel_btn.clicked.connect(self._on_clear_selection)
 
         self._db_ctrl.session_added.connect(self._on_session_added)
@@ -770,6 +775,65 @@ class DatabaseTab(QWidget):
         if session_dir:
             self.batch_reconstruct_requested.emit(session_dir)
 
+    def reconstruction_settings(self) -> dict[str, Any]:
+        if self._reconstruction_settings_override is not None:
+            return dict(self._reconstruction_settings_override)
+        return self._current_reconstruction_metadata()
+
+    def _current_reconstruction_metadata(self) -> dict[str, Any]:
+        from eit_app.ui.dialogs.reconstruction_settings_panel import (
+            metadata_from_frame_entries,
+            metadata_from_session_folder,
+        )
+
+        merged: dict[str, Any] = {}
+        session = self._selected_session()
+        if session is not None:
+            session_dir = session.get("session_dir")
+            if session_dir:
+                merged.update(metadata_from_session_folder(str(session_dir)))
+            merged.update(metadata_from_frame_entries(session))
+        merged.update(metadata_from_frame_entries(self._selected_frame()))
+        merged.update(
+            metadata_from_frame_entries(self._selected_reference, self._selected_target)
+        )
+        return merged
+
+    def _with_reconstruction_settings(self, config: dict[str, Any]) -> dict[str, Any]:
+        enriched = dict(config)
+        settings = self.reconstruction_settings()
+        if settings:
+            enriched["reconstruction_settings"] = settings
+            if "mesh_dimension" in settings:
+                enriched["mesh_dimension"] = int(settings["mesh_dimension"])
+            mesh_refinement = settings.get("mesh_refinement", settings.get("mesh_size"))
+            if mesh_refinement is not None:
+                enriched["mesh_refinement"] = float(mesh_refinement)
+        return enriched
+
+    def _emit_reconstruct_requested(self, config: dict[str, Any]) -> None:
+        self.reconstruct_requested.emit(self._with_reconstruction_settings(config))
+
+    def _on_open_reconstruction_settings(self) -> None:
+        from eit_app.ui.dialogs.reconstruction_settings_panel import (
+            ReconstructionSettingsDialog,
+        )
+
+        reset_metadata = self._current_reconstruction_metadata()
+        initial_metadata = (
+            self._reconstruction_settings_override
+            if self._reconstruction_settings_override is not None
+            else reset_metadata
+        )
+        dialog = ReconstructionSettingsDialog(
+            initial_metadata=dict(initial_metadata),
+            reset_metadata=reset_metadata,
+            parent=self,
+        )
+        if dialog.exec() == dialog.DialogCode.Accepted:
+            self._reconstruction_settings_override = dialog.metadata()
+            self._update_reconstruction_settings_tip()
+
     def _on_open_reconstruct_dialog(self) -> None:
         from eit_app.ui.dialogs.reconstruction_dialog import ReconstructionDialog
 
@@ -778,7 +842,7 @@ class DatabaseTab(QWidget):
             target_entry=self._selected_target,
             parent=self,
         )
-        dialog.run_requested.connect(self.reconstruct_requested)
+        dialog.run_requested.connect(self._emit_reconstruct_requested)
         dialog.exec()
 
     def _update_selection_status(self) -> None:
@@ -793,6 +857,15 @@ class DatabaseTab(QWidget):
         else:
             self._selection_status.setText(f"{ref_txt}   |   {tgt_txt}")
         self._reconstruct_btn.setEnabled(self._selected_target is not None)
+        self._update_reconstruction_settings_tip()
+
+    def _update_reconstruction_settings_tip(self) -> None:
+        if self._reconstruction_settings_override is None:
+            self._recon_settings_btn.setToolTip(t("db.frames.recon_settings_tip"))
+        else:
+            self._recon_settings_btn.setToolTip(
+                t("db.frames.recon_settings_custom_tip")
+            )
 
     @staticmethod
     def _format_selection(entry: dict | None, role: str) -> str:
@@ -898,7 +971,9 @@ class DatabaseTab(QWidget):
         self._as_ref_btn.setText(t("db.frames.set_ref_button"))
         self._as_tgt_btn.setText(t("db.frames.set_tgt_button"))
         self._reconstruct_btn.setText(t("db.frames.reconstruct_button"))
+        self._recon_settings_btn.setText(t("db.frames.recon_settings_button"))
         self._clear_sel_btn.setText(t("db.frames.clear_button"))
+        self._update_reconstruction_settings_tip()
 
         # Selection status line — refreshes role text in current language
         self._update_selection_status()

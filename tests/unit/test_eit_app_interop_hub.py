@@ -6,6 +6,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -14,13 +15,19 @@ from eit_app.interop import (
     EidorsEnvironment,
     EidorsExportJob,
     EidorsScriptCaptureService,
+    InteropBridgeManifest,
 )
 from eit_app.interop import (
     InteropBundleExporter,
     InteropBundleImporter,
     save_bridge_package,
 )
-from eit_app.interop.bridge_package import default_manifest
+from eit_app.interop.bridge_package import default_manifest, load_bridge_package
+from eit_app.interop.matlab_templates import (
+    CAPTURE_SCRIPT_TEMPLATE,
+    RUN_IN_EIDORS_TEMPLATE,
+)
+from eit_app.interop.services import EidorsBridgeRunner
 from eit_app.i18n import t
 from eit_app.models.forward_model_config import ForwardModelConfig
 import eit_app.ui.path_explorer as path_explorer_module
@@ -309,6 +316,346 @@ def test_interop_hub_open_does_not_auto_detect_environments_and_has_no_diagnosti
     ]
 
     dialog.close()
+
+
+@pytest.mark.gui
+def test_v128_interop_profile_save_uses_profiles_page_fields(
+    tmp_path: Path,
+) -> None:
+    _get_app()
+
+    class _MemoryCaptureService:
+        def __init__(self) -> None:
+            self.profiles: list[EidorsEnvironment] = []
+
+        def load_profiles(self) -> list[EidorsEnvironment]:
+            return list(self.profiles)
+
+        def save_profiles(self, profiles: list[EidorsEnvironment]) -> None:
+            self.profiles = list(profiles)
+
+    capture_service = _MemoryCaptureService()
+    dialog = InteropHubDialog(
+        None,
+        capture_service=capture_service,  # type: ignore[arg-type]
+        importer=InteropBundleImporter(),
+        exporter=InteropBundleExporter(),
+    )
+    try:
+        dialog._matlab_edit.setText("/wrong/import/matlab")
+        dialog._startup_edit.setText("/wrong/import/startup.m")
+        dialog._source_edit.setText("/wrong/import/source.m")
+        dialog._capture_output_edit.setText("/wrong/import/output")
+
+        dialog._profile_name_edit.setText("Profile Form")
+        dialog._profile_matlab_edit.setText("/opt/MATLAB/bin/matlab")
+        dialog._profile_startup_edit.setText("/opt/eidors/startup.m")
+        dialog._profile_script_edit.setText(str(tmp_path / "case.m"))
+        dialog._profile_output_edit.setText(str(tmp_path / "bridge"))
+        dialog._save_current_profile()
+
+        assert len(capture_service.profiles) == 1
+        saved = capture_service.profiles[0]
+        assert saved.name == "Profile Form"
+        assert saved.matlab_command == "/opt/MATLAB/bin/matlab"
+        assert saved.eidors_startup == "/opt/eidors/startup.m"
+        assert saved.last_script_path == str(tmp_path / "case.m")
+        assert saved.last_output_dir == str(tmp_path / "bridge")
+        assert "wrong/import" not in saved.to_mapping()["matlab_command"]
+    finally:
+        dialog.close()
+
+
+@pytest.mark.gui
+def test_v128_interop_hub_secondary_menu_actions_smoke(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _get_app()
+    bridge_dir = _make_bridge_dir(tmp_path, n_elec=8)
+    picked_path = tmp_path / "picked_source"
+    saved_profiles: list[EidorsEnvironment] = [
+        EidorsEnvironment(
+            name="Saved EIDORS",
+            matlab_command="/opt/matlab/bin/matlab",
+            eidors_startup="/opt/eidors/startup.m",
+            last_script_path=str(bridge_dir),
+            last_output_dir=str(tmp_path / "capture"),
+        )
+    ]
+
+    class _MemoryCaptureService:
+        def load_profiles(self) -> list[EidorsEnvironment]:
+            return list(saved_profiles)
+
+        def save_profiles(self, profiles: list[EidorsEnvironment]) -> None:
+            saved_profiles[:] = list(profiles)
+
+        def save_last_environment(self, _environment: EidorsEnvironment) -> None:
+            return None
+
+        def capture_or_load(
+            self,
+            source_path: str | Path,
+            *,
+            environment: EidorsEnvironment | None = None,
+            output_dir: str | Path | None = None,
+        ):
+            return InteropBundleImporter().load_package(source_path)
+
+    monkeypatch.setattr(
+        QMessageBox,
+        "information",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "warning",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
+    )
+    monkeypatch.setattr(
+        QMessageBox,
+        "critical",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Ok,
+    )
+    import eit_app.ui.dialogs.interop_hub_dialog as interop_dialog_module
+
+    monkeypatch.setattr(
+        interop_dialog_module,
+        "pick_visual_path",
+        lambda *args, **kwargs: str(picked_path),
+    )
+
+    applied_targets: list[str] = []
+    smoke_calls: list[bool] = []
+    cfg = ForwardModelConfig(n_elec=8)
+    measurements = {
+        "homogeneous": np.linspace(0.0, 1.0, cfg.point_count(), dtype=float),
+        "target": np.linspace(0.1, 1.1, cfg.point_count(), dtype=float),
+    }
+
+    def _fake_apply(target: str, _bundle) -> str:
+        applied_targets.append(target)
+        return f"applied {target}"
+
+    def _fake_smoke(_bundle) -> str:
+        smoke_calls.append(True)
+        return "smoke ok"
+
+    def _snapshots() -> dict[str, dict[str, object]]:
+        return {
+            key: {
+                "name": key,
+                "forward_model_config": cfg,
+                "geometry_payload": _standard_geometry_payload(n_elec=8),
+                "measurements": measurements,
+                "reconstruction_preset": None,
+                "notes": [],
+            }
+            for key in ("simulation", "hardware", "recording")
+        }
+
+    dialog = InteropHubDialog(
+        None,
+        capture_service=_MemoryCaptureService(),  # type: ignore[arg-type]
+        importer=InteropBundleImporter(),
+        exporter=InteropBundleExporter(),
+        export_snapshot_provider=_snapshots,
+        apply_import_callback=_fake_apply,
+        smoke_validate_callback=_fake_smoke,
+    )
+    try:
+        dialog._generate_preview()
+        assert dialog._loaded_bundle is None
+
+        dialog._reload_current_bundle()
+        assert t("dlg.interop.msg.bundle_no_preview") in dialog._import_status.text()
+
+        dialog._browse_into(
+            dialog._source_edit,
+            title_key="dlg.interop.source.pick_title",
+            mode="file_or_directory",
+        )
+        assert dialog._source_edit.text() == str(picked_path)
+
+        script_path = tmp_path / "script_case.m"
+        script_path.write_text("% EIDORS script placeholder\n", encoding="utf-8")
+        dialog._matlab_edit.clear()
+        dialog._startup_edit.clear()
+        dialog._source_edit.setText(str(script_path))
+        dialog._generate_preview()
+        assert dialog._loaded_bundle is None
+
+        dialog._env_combo.setCurrentIndex(1)
+        assert dialog._matlab_edit.text() == "/opt/matlab/bin/matlab"
+        assert dialog._startup_edit.text() == "/opt/eidors/startup.m"
+
+        dialog._source_edit.setText(str(bridge_dir))
+        dialog._generate_preview()
+        assert dialog._loaded_bundle is not None
+        assert dialog._apply_import_btn.isEnabled()
+        assert dialog._run_smoke_btn.isEnabled()
+        assert dialog._source_table.rowCount() > 0
+        assert dialog._mapping_table.rowCount() > 0
+
+        dialog._reload_current_bundle()
+        assert dialog._preview is not None
+
+        target_order = [
+            "hardware",
+            "simulation",
+            "dataset",
+            "measurements",
+            "geometry",
+        ]
+        for index, target in enumerate(target_order):
+            dialog._import_target_combo.setCurrentIndex(index)
+            dialog._apply_import()
+            assert applied_targets[-1] == target
+        assert applied_targets == target_order
+        assert len(smoke_calls) == len(target_order)
+
+        message = dialog._run_smoke_validation(show_dialog=False)
+        assert "smoke ok" in message
+
+        for index, source_kind in enumerate(("simulation", "hardware", "recording")):
+            output_dir = tmp_path / f"export_{source_kind}"
+            dialog._export_source_combo.setCurrentIndex(index)
+            dialog._export_dir_edit.setText(str(output_dir))
+            dialog._generate_export()
+            assert (output_dir / "manifest.json").exists()
+            assert (output_dir / "bridge_runtime.json").exists()
+
+        dialog._profile_name_edit.setText("New Profile")
+        dialog._profile_matlab_edit.setText("/new/matlab")
+        dialog._profile_startup_edit.setText("/new/startup.m")
+        dialog._profile_script_edit.setText(str(bridge_dir))
+        dialog._profile_output_edit.setText(str(tmp_path / "new_capture"))
+        dialog._save_current_profile()
+        assert any(profile.name == "New Profile" for profile in saved_profiles)
+
+        for row in range(dialog._profiles_list.count()):
+            item = dialog._profiles_list.item(row)
+            profile = item.data(Qt.ItemDataRole.UserRole)
+            if isinstance(profile, EidorsEnvironment) and profile.name == "New Profile":
+                dialog._profiles_list.setCurrentRow(row)
+                break
+        dialog._remove_selected_profile()
+        assert all(profile.name != "New Profile" for profile in saved_profiles)
+    finally:
+        dialog.close()
+
+
+@pytest.mark.gui
+def test_v128_tools_menu_opens_interop_hub_dialog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _get_app()
+    import eit_app.ui.dialogs.interop_hub_dialog as interop_dialog_module
+
+    opened: list[InteropHubDialog] = []
+
+    def _fake_exec(dialog: InteropHubDialog) -> int:
+        opened.append(dialog)
+        return 0
+
+    monkeypatch.setattr(
+        interop_dialog_module.InteropHubDialog,
+        "exec",
+        _fake_exec,
+    )
+
+    window = EITWorkstation()
+    window.show()
+    _get_app().processEvents()
+    try:
+        window._action_interop_hub.trigger()
+        _get_app().processEvents()
+        assert opened
+        dialog = opened[0]
+        assert dialog._capture_service is window._interop_capture_service
+        assert dialog._importer is window._interop_importer
+        assert dialog._exporter is window._interop_exporter
+        assert dialog._apply_import_callback is not None
+        assert dialog._smoke_validate_callback is not None
+    finally:
+        for dialog in opened:
+            dialog.close()
+        window.close()
+
+
+def test_v129_matlab_bridge_templates_match_real_eidors_roundtrip() -> None:
+    assert "evalin('caller', 'fmdl')" in CAPTURE_SCRIPT_TEMPLATE
+    assert "imdl_candidate = evalin('caller', 'imdl')" in CAPTURE_SCRIPT_TEMPLATE
+    assert "img_candidate = evalin('caller', 'img')" in CAPTURE_SCRIPT_TEMPLATE
+
+    assert "mk_common_gridmdl('backproj')" not in RUN_IN_EIDORS_TEMPLATE
+    assert "pyeidors_bridge_homogeneous" in RUN_IN_EIDORS_TEMPLATE
+    assert "EIDORS bridge measurements loaded" in RUN_IN_EIDORS_TEMPLATE
+
+
+def test_v129_bridge_runner_uses_tolerant_matlab_output_capture(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import eit_app.interop.services as services_module
+
+    calls: list[list[str]] = []
+
+    def _fake_run_command_capture(command: list[str], *, timeout=None):
+        calls.append(command)
+        return 1, "", "MATLAB 输出包含非 UTF-8 字节但已容错解码"
+
+    monkeypatch.setattr(
+        services_module, "_run_command_capture", _fake_run_command_capture
+    )
+
+    source = tmp_path / "target.m"
+    source.write_text("fmdl = struct();\n", encoding="utf-8")
+    runner = EidorsBridgeRunner()
+    env = EidorsEnvironment(
+        name="MATLAB",
+        matlab_command="/matlab/bin/matlab",
+        eidors_startup="/eidors/startup.m",
+    )
+
+    with pytest.raises(RuntimeError, match="非 UTF-8"):
+        runner.run_capture(env, source, tmp_path / "out")
+
+    assert calls
+    assert calls[0][1] == "-batch"
+
+
+def test_v129_bridge_package_filters_matlab_private_loadmat_keys(
+    tmp_path: Path,
+) -> None:
+    from scipy.io import savemat
+
+    root = tmp_path / "bridge"
+    root.mkdir()
+    savemat(
+        root / "geometry.mat",
+        {
+            "exchange_format": "eidors_pyeidors_bridge_v1",
+            "source_framework": "eidors",
+            "nodes": np.zeros((3, 2), dtype=float),
+            "elems": np.array([[1, 2, 3]], dtype=np.int64),
+            "n_elec": 8,
+            "contact_impedance": 0.01,
+        },
+    )
+    manifest = InteropBridgeManifest(
+        files={"geometry": "geometry.mat"},
+        source_framework="eidors",
+    )
+    (root / "manifest.json").write_text(
+        json.dumps(manifest.to_mapping()), encoding="utf-8"
+    )
+
+    loaded = load_bridge_package(root)
+
+    assert loaded.geometry_payload is not None
+    assert all(not key.startswith("__") for key in loaded.geometry_payload)
 
 
 def test_visual_path_roots_include_wsl_and_windows_mounts_in_wsl(

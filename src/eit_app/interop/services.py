@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import re
-import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +26,7 @@ from .bridge_package import (
 )
 from .environment import (
     EidorsEnvironmentDetector,
+    _run_command_capture,
     matlab_command_for_execution,
     matlab_runtime_path,
     to_posix_path,
@@ -385,18 +385,13 @@ class EidorsBridgeRunner:
         expression = (
             f"addpath('{escaped_root}'); run_capture_from_eidors('{escaped_request}');"
         )
-        result = subprocess.run(
+        returncode, stdout, stderr = _run_command_capture(
             [matlab_command_for_execution(environment), "-batch", expression],
-            capture_output=True,
-            text=True,
-            check=False,
             timeout=180,
         )
-        if result.returncode != 0:
+        if returncode != 0:
             raise RuntimeError(
-                result.stderr.strip()
-                or result.stdout.strip()
-                or "MATLAB bridge capture failed."
+                stderr.strip() or stdout.strip() or "MATLAB bridge capture failed."
             )
 
         loaded = load_bridge_package(root)

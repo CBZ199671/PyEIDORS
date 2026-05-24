@@ -215,6 +215,10 @@ def _load_reconstruction_preset(
     return ReconstructionPreset(**json.loads(preset_path.read_text(encoding="utf-8")))
 
 
+def _public_mat_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    return {key: value for key, value in payload.items() if not key.startswith("__")}
+
+
 def _load_measurements(
     root: Path, manifest: InteropBridgeManifest
 ) -> dict[str, np.ndarray] | None:
@@ -242,7 +246,9 @@ def _load_measurements(
 def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
     source = Path(path)
     if source.is_file() and source.suffix.lower() == ".mat":
-        payload = loadmat(source, squeeze_me=True, struct_as_record=False)
+        payload = _public_mat_payload(
+            loadmat(source, squeeze_me=True, struct_as_record=False)
+        )
         manifest = default_manifest(
             source_framework=str(
                 np.asarray(payload.get("source_framework", "eidors")).reshape(-1)[0]
@@ -275,8 +281,8 @@ def load_bridge_package(path: str | Path) -> LoadedBridgePackage:
     geometry_path = root / geometry_name
     geometry_payload = None
     if geometry_path.exists():
-        geometry_payload = loadmat(
-            geometry_path, squeeze_me=True, struct_as_record=False
+        geometry_payload = _public_mat_payload(
+            loadmat(geometry_path, squeeze_me=True, struct_as_record=False)
         )
 
     forward_model_config = _load_forward_model_config(root, manifest)

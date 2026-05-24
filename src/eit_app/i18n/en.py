@@ -676,6 +676,9 @@ TRANSLATIONS: dict[str, str] = {
     "db.frames.set_ref_button": "Set as Reference",
     "db.frames.set_tgt_button": "Set as Target",
     "db.frames.reconstruct_button": "Reconstruct\u2026",
+    "db.frames.recon_settings_button": "Reconstruction Settings\u2026",
+    "db.frames.recon_settings_tip": "Edit forward/inverse parameters used by single-frame, difference, and batch reconstruction.",
+    "db.frames.recon_settings_custom_tip": "Custom forward/inverse parameters are active for database reconstruction.",
     "db.frames.clear_button": "Clear",
     # ==================================================================
     # Database tab — Right-side preview panel
@@ -825,6 +828,11 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.reconstruction.save_voltage_check": "Save boundary voltage fit plot (PNG)",
     "dlg.reconstruction.not_selected": "<not selected>",
     "dlg.reconstruction.absolute_no_ref_tip": "Absolute methods do not use a reference frame.",
+    "dlg.recon_settings.dialog_title": "Reconstruction Settings",
+    "dlg.recon_settings.dialog_heading": "Forward / Inverse Problem Parameters",
+    "dlg.recon_settings.reset_button": "Reload Current Data",
+    "dlg.recon_settings.cancel_button": "Cancel",
+    "dlg.recon_settings.apply_button": "Apply",
     "dlg.recon_settings.toggle_show": "Show forward/inverse parameters",
     "dlg.recon_settings.toggle_hide": "Hide forward/inverse parameters",
     "dlg.recon_settings.tab_mesh": "Mesh && Electrodes",

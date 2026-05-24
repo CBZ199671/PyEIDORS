@@ -946,15 +946,29 @@ class InteropHubDialog(QDialog):
         self._refresh_manual_environment_state()
 
     def _save_current_profile(self) -> None:
+        profile_values = (
+            self._profile_matlab_edit.text().strip(),
+            self._profile_startup_edit.text().strip(),
+            self._profile_script_edit.text().strip(),
+            self._profile_output_edit.text().strip(),
+        )
+        if any(profile_values):
+            matlab, startup, script, output_dir = profile_values
+        else:
+            matlab = self._matlab_edit.text().strip()
+            startup = self._startup_edit.text().strip()
+            script = self._source_edit.text().strip()
+            output_dir = self._capture_output_edit.text().strip()
+
         profile = EidorsEnvironment(
             name=self._profile_name_edit.text().strip()
             or t("dlg.interop.profiles.custom_default"),
-            matlab_command=self._matlab_edit.text().strip(),
+            matlab_command=matlab,
             matlab_root="",
-            eidors_startup=self._startup_edit.text().strip(),
+            eidors_startup=startup,
             source="manual",
-            last_script_path=self._source_edit.text().strip(),
-            last_output_dir=self._capture_output_edit.text().strip(),
+            last_script_path=script,
+            last_output_dir=output_dir,
         )
         profiles = self._capture_service.load_profiles()
         profiles = [item for item in profiles if item.name != profile.name]

@@ -112,23 +112,30 @@ end
 
 function value = local_pick_fmdl()
 value = [];
-if exist('fmdl', 'var')
-    value = fmdl;
+if evalin('caller', 'exist(''fmdl'', ''var'')')
+    value = evalin('caller', 'fmdl');
     return;
 end
-if exist('imdl', 'var') && isstruct(imdl) && isfield(imdl, 'fwd_model')
-    value = imdl.fwd_model;
-    return;
+if evalin('caller', 'exist(''imdl'', ''var'')')
+    imdl_candidate = evalin('caller', 'imdl');
+    if isstruct(imdl_candidate) && isfield(imdl_candidate, 'fwd_model')
+        value = imdl_candidate.fwd_model;
+        return;
+    end
 end
-if exist('img', 'var') && isstruct(img) && isfield(img, 'fwd_model')
-    value = img.fwd_model;
+if evalin('caller', 'exist(''img'', ''var'')')
+    img_candidate = evalin('caller', 'img');
+    if isstruct(img_candidate) && isfield(img_candidate, 'fwd_model')
+        value = img_candidate.fwd_model;
+    end
+    return;
 end
 end
 
 function value = local_pick_imdl()
 value = [];
-if exist('imdl', 'var')
-    value = imdl;
+if evalin('caller', 'exist(''imdl'', ''var'')')
+    value = evalin('caller', 'imdl');
 end
 end
 
@@ -295,7 +302,11 @@ if isfield(cfg, 'measurements_csv') && exist(cfg.measurements_csv, 'file') == 2
     T = readtable(cfg.measurements_csv);
     vh_meas = double(T{:, 1});
     vi_meas = double(T{:, 2});
-    rimg = inv_solve(mk_common_gridmdl('backproj'), vh_meas, vi_meas); %#ok<NASGU>
+    vh = eidors_obj('data', 'pyeidors_bridge_homogeneous'); %#ok<NASGU>
+    vh.meas = vh_meas;
+    vi = eidors_obj('data', 'pyeidors_bridge_target'); %#ok<NASGU>
+    vi.meas = vi_meas;
+    fprintf('EIDORS bridge measurements loaded: %d points\n', numel(vi_meas));
 end
 
 fprintf('EIDORS bridge project loaded from %s\n', cfg.geometry_mat);
