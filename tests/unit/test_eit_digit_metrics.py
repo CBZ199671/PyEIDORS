@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import math
 from pathlib import Path
 import subprocess
@@ -11,6 +12,7 @@ import sys
 import numpy as np
 import pytest
 
+import pyeidors.data.eit_digit_metrics as digit_module
 from pyeidors.data.eit_digit_metrics import (
     adjacent_measurement_count,
     build_surrogate_sensitivity,
@@ -23,6 +25,16 @@ from pyeidors.data.eit_digit_metrics import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_v496_digit_metric_validators_use_bounded_finite_scan() -> None:
+    vector_source = inspect.getsource(digit_module._as_float_vector)
+    matrix_source = inspect.getsource(digit_module._as_float_matrix)
+
+    assert "all_finite_values(arr)" in vector_source
+    assert "all_finite_values(arr)" in matrix_source
+    assert "np.all(np.isfinite(arr))" not in vector_source
+    assert "np.all(np.isfinite(arr))" not in matrix_source
 
 
 def test_adjacent_measurement_count_matches_ad_pattern_frame_sizes() -> None:
@@ -41,6 +53,44 @@ def test_surrogate_forward_inverse_round_trips_without_adc_error() -> None:
     reconstructed = inverse_surrogate(voltages, sensitivity, ridge=0.0)
 
     np.testing.assert_allclose(reconstructed, sigma, rtol=1e-10, atol=1e-10)
+
+
+def test_v516_digit_metric_ridge_terms_are_added_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    surrogate_source = inspect.getsource(digit_module.inverse_surrogate)
+    measurement_source = inspect.getsource(digit_module.inverse_measurement_rm)
+    assert "ridge_value * np.eye" not in surrogate_source
+    assert "(lam * lam) * np.eye" not in measurement_source
+    assert "add_scaled_diagonal_in_place(normal, identity_diag, ridge_value)" in (
+        surrogate_source
+    )
+    assert "add_scaled_diagonal_in_place(lhs, identity_diag, lam * lam)" in (
+        measurement_source
+    )
+
+    def _fail_eye(*_args, **_kwargs):
+        raise AssertionError("digit metric ridge paths must not materialize np.eye")
+
+    monkeypatch.setattr(digit_module.np, "eye", _fail_eye)
+
+    sensitivity = np.array(
+        [[1.0, 0.2], [0.5, 2.0], [0.1, 0.3]],
+        dtype=float,
+    )
+    voltages = sensitivity @ np.array([1.2, 0.85], dtype=float)
+
+    surrogate = inverse_surrogate(voltages, sensitivity, ridge=0.05)
+    measurement = digit_module.inverse_measurement_rm(
+        voltages,
+        sensitivity,
+        lambda_=0.1,
+    )
+
+    assert surrogate.shape == (2,)
+    assert measurement.shape == (2,)
+    assert np.isfinite(surrogate).all()
+    assert np.isfinite(measurement).all()
 
 
 def test_pyeidors_rm_inverse_round_trips_without_adc_error() -> None:

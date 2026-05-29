@@ -23,9 +23,13 @@ from scipy.io import loadmat
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
 DEFAULT_DATA_DIR = ROOT / "results" / "eidors_same_pyeidors_mesh"
+
+from scripts.common.array_metrics import finite_pearson_correlation
 
 from pyeidors import EITSystem
 from pyeidors.data.difference import build_difference_vector
@@ -80,16 +84,7 @@ def apply_times_ticks(ax) -> None:
 
 
 def safe_corr(a: np.ndarray, b: np.ndarray) -> float:
-    aa = np.asarray(a, dtype=float).reshape(-1)
-    bb = np.asarray(b, dtype=float).reshape(-1)
-    mask = np.isfinite(aa) & np.isfinite(bb)
-    if mask.sum() < 3:
-        return float("nan")
-    if np.std(aa[mask]) <= np.finfo(float).eps:
-        return float("nan")
-    if np.std(bb[mask]) <= np.finfo(float).eps:
-        return float("nan")
-    return float(np.corrcoef(aa[mask], bb[mask])[0, 1])
+    return finite_pearson_correlation(a, b, min_count=3)
 
 
 def vector_fit(reference: np.ndarray, candidate: np.ndarray) -> VectorFit:
@@ -145,6 +140,25 @@ def payload_measurement_matrices(
     return stim, matrices, meas_concat, starts, counts
 
 
+def _stack_measurement_matrices(matrices: list[np.ndarray]) -> np.ndarray:
+    if not matrices:
+        return np.empty((0, 0), dtype=float)
+    arrays = [np.asarray(matrix, dtype=float) for matrix in matrices]
+    n_cols = arrays[0].shape[1]
+    total_rows = 0
+    for matrix in arrays:
+        if matrix.ndim != 2 or matrix.shape[1] != n_cols:
+            raise ValueError("measurement matrices must be 2D with matching columns")
+        total_rows += int(matrix.shape[0])
+    out = np.empty((total_rows, n_cols), dtype=float)
+    start = 0
+    for matrix in arrays:
+        stop = start + int(matrix.shape[0])
+        out[start:stop, :] = matrix
+        start = stop
+    return out
+
+
 def build_custom_pattern(payload: dict[str, np.ndarray]) -> PatternConfig:
     stim, meas_matrices, _, _, _ = payload_measurement_matrices(payload)
     return PatternConfig(
@@ -166,7 +180,7 @@ def build_custom_pattern(payload: dict[str, np.ndarray]) -> PatternConfig:
 def verify_pattern_manager(system, payload: dict[str, np.ndarray]) -> dict[str, object]:
     stim, _, meas_concat, _, counts = payload_measurement_matrices(payload)
     manager = system.fwd_model.pattern_manager
-    actual_concat = np.vstack(manager.meas_matrices)
+    actual_concat = _stack_measurement_matrices(manager.meas_matrices)
     actual_counts = np.asarray(manager.n_meas_per_stim, dtype=np.int64)
     return {
         "stim_exact": bool(np.allclose(manager.stim_matrix, stim)),

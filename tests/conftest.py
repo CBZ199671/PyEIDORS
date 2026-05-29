@@ -16,6 +16,49 @@ SRC_PATH = REPO_ROOT / "src"
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+DEFAULT_SKIP_MARKERS = {
+    "slow": "--run-slow",
+    "gpu": "--run-gpu",
+    "integration": "--run-integration",
+    "gui": "--run-gui",
+    "hardware": "--run-hardware",
+}
+
+GUI_TEST_FILES = {
+    "test_conductivity_3d_widget_runtime.py",
+    "test_database_backfill_shutdown.py",
+    "test_eit_app_full_button_smoke.py",
+    "test_eit_app_gui_smoke.py",
+    "test_eit_app_interop_environment.py",
+    "test_eit_app_interop_hub.py",
+    "test_eit_app_measurement_layout.py",
+    "test_eit_app_runtime_walk.py",
+    "test_runtime_threads.py",
+}
+
+HARDWARE_TEST_FILES = {
+    "test_eit_app_connection_preflight.py",
+    "test_eit_app_protocol_legacy.py",
+    "test_eit_app_relay_transport.py",
+    "test_eit_app_serial_device.py",
+    "test_eit_app_serial_port_discovery.py",
+    "test_eit_app_simulator.py",
+    "test_eit_app_windows_serial_transport.py",
+    "test_frame_io_legacy_compat.py",
+}
+
+SLOW_TEST_FILES = {
+    "test_bucket_dense_experiments.py",
+    "test_dual_model_rm_benchmark.py",
+    "test_dynamic_t65_t66_t67_sweep_benchmark.py",
+    "test_dynamic_validation_benchmark.py",
+    "test_gn_diff_3d_operator_cache.py",
+    "test_mesh_generator_lazy_gmsh.py",
+    "test_mesh_io_format_benchmark.py",
+    "test_prior_travelling_wave_benchmark.py",
+    "test_real_mesh_generation.py",
+}
+
 _TEST_STACK_IMPORT_ERROR: Exception | None = None
 try:
     from dolfinx import mesh as dmesh
@@ -84,6 +127,79 @@ def _populate_lazy_mesh_gmsh_imports() -> None:
 
 
 _populate_lazy_mesh_gmsh_imports()
+
+
+def pytest_addoption(parser: pytest.Parser) -> None:
+    group = parser.getgroup("pyeidors")
+    group.addoption(
+        "--run-slow",
+        action="store_true",
+        help="Run tests marked slow. Skipped by default to keep pytest under the local quick gate.",
+    )
+    group.addoption(
+        "--run-gpu",
+        action="store_true",
+        help="Run tests marked gpu. Skipped by default unless a CUDA validation is requested.",
+    )
+    group.addoption(
+        "--run-integration",
+        action="store_true",
+        help="Run tests under tests/integration. Skipped by default for the quick local suite.",
+    )
+    group.addoption(
+        "--run-gui",
+        action="store_true",
+        help="Run GUI tests marked gui. Skipped by default to avoid long Qt smoke walks.",
+    )
+    group.addoption(
+        "--run-hardware",
+        action="store_true",
+        help="Run hardware-facing tests. Skipped by default; use only when validating hardware paths.",
+    )
+
+
+def _item_path(item: pytest.Item) -> Path:
+    path = getattr(item, "path", None)
+    if path is not None:
+        return Path(path)
+    return Path(str(item.fspath))
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    skip_by_marker = {
+        marker: pytest.mark.skip(
+            reason=f"requires explicit {option} opt-in for this validation tier"
+        )
+        for marker, option in DEFAULT_SKIP_MARKERS.items()
+        if not config.getoption(option)
+    }
+
+    for item in items:
+        path = _item_path(item)
+        try:
+            rel_path = path.relative_to(REPO_ROOT)
+        except ValueError:
+            rel_path = path
+        filename = path.name
+
+        if rel_path.parts[:2] == ("tests", "integration"):
+            item.add_marker(pytest.mark.integration)
+            item.add_marker(pytest.mark.slow)
+        if filename in GUI_TEST_FILES:
+            item.add_marker(pytest.mark.gui)
+        if filename in HARDWARE_TEST_FILES:
+            item.add_marker(pytest.mark.hardware)
+        if filename in SLOW_TEST_FILES:
+            item.add_marker(pytest.mark.slow)
+        if "cuda" in filename:
+            item.add_marker(pytest.mark.gpu)
+
+        for marker, skip_marker in skip_by_marker.items():
+            if item.get_closest_marker(marker):
+                item.add_marker(skip_marker)
+                break
 
 
 def _cleanup_qt_runtime() -> None:

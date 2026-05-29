@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -11,6 +12,7 @@ from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
 import pyeidors.inverse.solvers.gauss_newton_engine as gn_engine
+import pyeidors.inverse.solvers.gauss_newton_regularization as gn_regularization
 from pyeidors.inverse.prior import as_rtr_prior
 
 
@@ -63,6 +65,37 @@ def test_ensure_regularization_ready_rejects_empty_and_nonfinite_sparse():
     )
     with pytest.raises(FloatingPointError, match="contains non-finite values"):
         nonfinite_sparse.ensure_regularization_ready()
+
+
+def test_v415_regularization_finite_min_max_scans_without_subset_copy():
+    min_val, max_val = gn_regularization._finite_min_max(
+        np.array([np.nan, -2.0, np.inf, 4.0], dtype=float)
+    )
+
+    assert min_val == -2.0
+    assert max_val == 4.0
+    assert all(np.isnan(value) for value in gn_regularization._finite_min_max([np.nan]))
+    helper_source = inspect.getsource(gn_regularization._finite_min_max)
+    ready_source = inspect.getsource(gn_regularization.ensure_regularization_ready)
+    assert "[np.isfinite" not in helper_source
+    assert "matrix.data[np.isfinite" not in ready_source
+    assert "dense[np.isfinite" not in ready_source
+
+
+def test_v489_regularization_ready_uses_bounded_finite_guards():
+    ready_source = inspect.getsource(gn_regularization.ensure_regularization_ready)
+    compact_source = "".join(ready_source.split())
+
+    assert "all_finite_values(check)" in ready_source
+    assert "all_finite_values(reconstructor.R_diag)" in compact_source
+    assert "all_finite_values(dense)" in ready_source
+    assert "all_finite_values(matrix.data)" in ready_source
+    assert "np.diag(dense)" not in ready_source
+    assert "dense.diagonal()" in ready_source
+    assert "np.isfinite(check).all()" not in ready_source
+    assert "np.isfinite(reconstructor.R_diag).all()" not in ready_source
+    assert "np.isfinite(dense).all()" not in ready_source
+    assert "np.isfinite(matrix.data).all()" not in ready_source
 
 
 def test_ensure_regularization_ready_extracts_diag_from_noncsr_sparse():

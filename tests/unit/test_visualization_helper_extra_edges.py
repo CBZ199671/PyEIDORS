@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 from unittest import mock
 
@@ -115,6 +116,14 @@ def test_extract_tags_and_overlay_error_paths(monkeypatch: pytest.MonkeyPatch):
 def test_overlay_electrode_labels_handles_empty_segments_and_zero_norm(
     monkeypatch: pytest.MonkeyPatch,
 ):
+    def _fail_vstack(*_args, **_kwargs):
+        raise AssertionError(
+            "electrode label centroid assembly must not call np.vstack"
+        )
+
+    monkeypatch.setattr(helper.np, "vstack", _fail_vstack)
+    assert "np.vstack" not in inspect.getsource(helper.overlay_electrode_labels)
+
     class _Connectivity:
         @staticmethod
         def links(_idx):

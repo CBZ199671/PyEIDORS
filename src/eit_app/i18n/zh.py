@@ -48,6 +48,7 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.difference": "\u5dee\u5206\u91cd\u6784(&D)\u2026",  # 差分重构(&D)…
     "menu.tools.batch_reconstruction": "\u6279\u91cf\u91cd\u6784(&B)\u2026",  # 批量重构(&B)…
     "menu.tools.reconstruction": "\u5355\u5e27\u91cd\u6784(&R)\u2026",  # 单帧重构(&R)…
+    "menu.tools.cache_telemetry": "\u7f13\u5b58\u9065\u6d4b(&C)\u2026",  # 缓存遥测(&C)…
     "main.status.need_frames_for_difference": "\u8bf7\u5148\u5728\u786c\u4ef6\u9875\u91c7\u96c6\u81f3\u5c11 2 \u5e27\u518d\u6253\u5f00\u5dee\u5206\u91cd\u6784\u3002",  # 请先在硬件页采集至少 2 帧再打开差分重构。
     "main.status.reconstruction_hint": "\u5df2\u5207\u6362\u81f3\u6570\u636e\u5e93\u9875 \u2014 \u8bf7\u9009\u62e9\u53c2\u8003\u5e27\u4e0e\u76ee\u6807\u5e27\uff0c\u7136\u540e\u70b9\u51fb\u201c\u91cd\u6784\u201d\u3002",  # 已切换至数据库页 — 请选择参考帧与目标帧，然后点击"重构"。
     "main.status.recon_running": "\u6b63\u5728\u8fd0\u884c {method}\u2026",  # 正在运行 {method}…
@@ -60,6 +61,20 @@ TRANSLATIONS: dict[str, str] = {
     "main.popup.recon_complete.informative": "\u8f93\u51fa\u6587\u4ef6\u5939\uff1a\n{folder}",  # 输出文件夹：\n{folder}
     "main.popup.recon_complete.open_folder": "\u6253\u5f00\u6587\u4ef6\u5939",  # 打开文件夹
     "main.popup.recon_complete.close": "\u5173\u95ed",  # 关闭
+    "cache.telemetry.title": "\u7f13\u5b58\u9065\u6d4b",  # 缓存遥测
+    "cache.telemetry.refresh": "\u5237\u65b0",  # 刷新
+    "cache.telemetry.gc": "\u6e05\u7406\u7f13\u5b58",  # 清理缓存
+    "cache.telemetry.max_size": "\u76ee\u6807\u5927\u5c0f",  # 目标大小
+    "cache.telemetry.include_worker": "Worker \u7f13\u5b58",  # Worker 缓存
+    "cache.telemetry.include_legacy": "\u65e7 npz/npy",  # 旧 npz/npy
+    "cache.telemetry.idle": "\u7f13\u5b58\u9065\u6d4b\u5df2\u5c31\u7eea\u3002",  # 缓存遥测已就绪。
+    "cache.telemetry.refreshing": "\u6b63\u5728\u5237\u65b0\u7f13\u5b58\u9065\u6d4b\u2026",  # 正在刷新缓存遥测…
+    "cache.telemetry.gc_running": "\u6b63\u5728\u540e\u53f0\u6e05\u7406\u7f13\u5b58\u2026",  # 正在后台清理缓存…
+    "cache.telemetry.summary": (
+        "\u78c1\u76d8\u6761\u76ee\uff1a{disk_items} ({disk_mib:.1f} MiB) | "
+        "\u5df2\u7d22\u5f15\uff1a{indexed} | Worker\uff1a{workers} | "
+        "\u8c03\u5ea6\u5668 \u8fd0\u884c/\u7b49\u5f85\uff1a{active}/{pending}"
+    ),
     # ==================================================================
     # Loading / busy overlay messages (shared across plots)
     # ==================================================================
@@ -365,7 +380,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.electrode_layout_label": "3D 电极编号：",
     "sim.mesh.electrode_layout.ring_major": "Ring-major（EIDORS 标准）",
     "sim.mesh.electrode_layout.zigzag": "Zigzag（旧版兼容）",
-    "sim.mesh.conductivity_label": "\u80cc\u666f \u03c3\uff1a",  # 背景 σ：
+    "sim.mesh.conductivity_label": "背景 γ/σ：",
+    "sim.mesh.contact_impedance_label": "接触阻抗 z：",
+    "sim.mesh.complex_admittivity_tooltip": "可输入实数或复导纳，例如 1.0 或 1+0.25j S/m。",
+    "sim.mesh.complex_impedance_tooltip": "可输入实数或复接触阻抗，例如 0.01 或 0.01+0.002j Ω·m²。",
     "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",  # 激励与测量模式
     "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。
     "sim.mesh.measurement_protocol_label": "3D 协议（激励→测量）：",
@@ -387,6 +405,14 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.custom_pattern_label": "自定义矩阵 JSON：",
     "sim.mesh.custom_pattern_placeholder": '{"stim_matrix": [[1, -1, 0, 0]], "meas_matrices": [[1, 0, -1, 0]]}',
     "sim.mesh.point_count_hint": "\u9884\u8ba1\u8fb9\u754c\u91c7\u6837\u70b9\u6570\uff1a{count}",  # 预计边界采样点数：{count}
+    "sim.results.mode_real": "实值 EIT",
+    "sim.results.mode_complex": "复导纳 EIT",
+    "sim.results.channel_label": "视图：",
+    "sim.results.channel.real": "实部 Re",
+    "sim.results.channel.imag": "虚部 Im",
+    "sim.results.channel.magnitude": "幅值 |·|",
+    "sim.results.channel.phase": "相位 ∠",
+    "sim.results.channel.composite": "复合幅相",
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities
     # ==================================================================
@@ -652,6 +678,12 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.prewarming": "\u6b63\u5728\u9884\u70ed\u5b9e\u65f6\u91cd\u6784\u4e0a\u4e0b\u6587\u2026",
     "main.status.prewarm_done": "\u5b9e\u65f6\u91cd\u6784\u4e0a\u4e0b\u6587\u5df2\u9884\u70ed\uff0c\u540e\u7eed\u91c7\u96c6\u5c06\u76f4\u63a5\u8d70\u70ed\u542f\u52a8\u3002",
     "main.status.prewarm_failed": "\u5b9e\u65f6\u91cd\u6784\u9884\u70ed\u5931\u8d25\uff0c\u5c06\u5728\u9700\u8981\u65f6\u91cd\u8bd5\uff1a{reason}",
+    "main.status.sim_backend_warm_start": "\u6b63\u5728\u9884\u70ed\u4e09\u7ef4\u540e\u7aef worker\uff08{profile}\uff09\u2026",
+    "main.status.sim_backend_warm_done": "\u4e09\u7ef4\u540e\u7aef worker \u5df2\u9884\u70ed\uff1aprofile={profile}, pid={pid}, RSS={rss}, prime={prime_ms:.0f} ms\uff0cPETSc probe={probe}\u3002",
+    "main.status.sim_backend_warm_failed": "\u4e09\u7ef4\u540e\u7aef worker \u9884\u70ed\u5931\u8d25\uff08{profile}\uff09\uff1a{reason}",
+    "main.status.sim_backend_setup_start": "\u6b63\u5728\u9884\u70ed\u4e09\u7ef4\u6b63\u95ee\u9898 setup\uff08{profile}\uff09\u2026",
+    "main.status.sim_backend_setup_done": "\u4e09\u7ef4\u6b63\u95ee\u9898 setup \u5df2\u9884\u70ed\uff1aprofile={profile}, pid={pid}, RSS={rss}, setup={prime_ms:.0f} ms\uff0cPETSc probe={probe}\u3002",
+    "main.status.sim_backend_setup_failed": "\u4e09\u7ef4\u6b63\u95ee\u9898 setup \u9884\u70ed\u5931\u8d25\uff08{profile}\uff09\uff1a{reason}",
     # Frame browser / reference / target
     "main.status.reference_updated": "\u53c2\u8003\u5e27\u5df2\u66f4\u65b0\uff1a#{index}",
     "main.status.reference_selected": "\u53c2\u8003\u5e27\u5df2\u9009\u62e9\uff1a#{index}",

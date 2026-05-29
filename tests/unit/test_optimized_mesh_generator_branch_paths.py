@@ -6,6 +6,7 @@ import configparser
 from pathlib import Path
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 from pyeidors.geometry import optimized_mesh_generator as opt_mesh_module
@@ -351,9 +352,12 @@ def test_cached_3d_validator_and_load_or_create_branches(
         radius=1.0,
         refinement=3,
         electrode_coverage=0.4,
+        geometry_dtype=np.float32,
         extra_flag="unused",
     )
     assert mesh2d.kind == "2d"
+    assert mesh2d.kwargs["geometry_dtype"] == np.dtype(np.float32)
+    assert mesh2d.kwargs["mesh_name"] == "mesh_8e_r1_ref3_cov0p4_f32"
 
 
 def test_load_or_create_3d_ring_order_uses_distinct_cache_and_generator_kwargs(

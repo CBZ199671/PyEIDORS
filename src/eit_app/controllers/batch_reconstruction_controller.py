@@ -53,6 +53,22 @@ def _discover_frame_csvs(folder: Path) -> list[Path]:
     return sorted(results, key=key)
 
 
+def _display_float_array(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if np.issubdtype(arr.dtype, np.floating):
+        return arr
+    return np.asarray(arr, dtype=np.float32)
+
+
+def _display_int_array(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.integer):
+        return arr
+    return np.asarray(arr, dtype=np.intp)
+
+
 class BatchReconstructionRequest:
     """Configuration for a batch reconstruction run."""
 
@@ -286,9 +302,9 @@ def _save_outputs(
     out = batch.output_folder
 
     if batch.save_recon_image:
-        sigma = np.asarray(result.conductivity, dtype=float).reshape(-1)
-        coords = np.asarray(result.node_coords, dtype=float)
-        cells = np.asarray(result.cell_connectivity, dtype=int)
+        sigma = _display_float_array(result.conductivity).reshape(-1)
+        coords = _display_float_array(result.node_coords)
+        cells = _display_int_array(result.cell_connectivity)
         if sigma.size > 0 and coords.size > 0 and cells.size > 0:
             fig, ax = plt.subplots(figsize=(6, 6), dpi=120)
             fig.patch.set_facecolor("#f4f7fb")
@@ -306,7 +322,7 @@ def _save_outputs(
             plt.close(fig)
 
     if batch.save_voltage_fit and result.measured is not None:
-        measured = np.asarray(result.measured, dtype=float).reshape(-1)
+        measured = _display_float_array(result.measured).reshape(-1)
         if measured.size > 0:
             x = np.arange(1, measured.size + 1)
             fig, ax = plt.subplots(figsize=(8, 4), dpi=120)
@@ -314,7 +330,7 @@ def _save_outputs(
             ax.set_facecolor("#fbfdff")
             ax.plot(x, measured, color="#4ecdc4", label="Measured")
             if result.simulated is not None:
-                sim = np.asarray(result.simulated, dtype=float).reshape(-1)
+                sim = _display_float_array(result.simulated).reshape(-1)
                 ax.plot(
                     x, sim, color="#ff6b6b", linestyle="--", label="Reconstructed fit"
                 )

@@ -18,6 +18,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import pyeidors.inverse.jacobian.process_jacobian_cache as jac_cache_module
 from pyeidors.inverse.jacobian import (
     build_process_jacobian_key,
     clear_process_jacobian_cache,
@@ -135,6 +136,10 @@ def test_put_then_get_round_trip():
     np.testing.assert_array_equal(cached, payload)
     assert cached.dtype == payload.dtype
     assert cached.shape == payload.shape
+    assert cached.flags.c_contiguous
+    assert not cached.flags.writeable
+    with pytest.raises(ValueError):
+        cached[0, 0] = -1.0
 
 
 def test_lru_eviction_drops_oldest_entry():
@@ -155,6 +160,29 @@ def test_lru_eviction_drops_oldest_entry():
     assert get_process_cached_jacobian(keys[1]) is None
     for key in keys[2:]:
         assert get_process_cached_jacobian(key) is not None
+
+
+def test_v605_process_jacobian_cache_skips_entries_above_byte_budget(monkeypatch):
+    key = build_process_jacobian_key(
+        sigma_fingerprint="oversize",
+        mesh_content_hash="mesh",
+    )
+    payload = np.ones(8, dtype=np.float64)
+    put_process_cached_jacobian(key, payload)
+    assert get_process_cached_jacobian(key) is not None
+
+    monkeypatch.setattr(
+        jac_cache_module,
+        "_RESOLVED_PROCESS_JACOBIAN_CACHE_MAX_BYTES",
+        int(payload.nbytes) - 1,
+    )
+
+    put_process_cached_jacobian(key, payload)
+
+    assert get_process_cached_jacobian(key) is None
+    stats = process_jacobian_cache_stats()
+    assert stats["items"] == 0
+    assert "max_bytes" in stats
 
 
 def test_clear_drops_all_entries():

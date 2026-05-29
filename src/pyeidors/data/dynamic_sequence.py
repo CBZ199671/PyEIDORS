@@ -11,6 +11,7 @@ import numpy as np
 
 from pyeidors.data.channels import normalize_bad_channel_mask
 from pyeidors.io.hdf5_artifacts import read_hdf5_artifact, write_hdf5_artifact
+from pyeidors.utils.numeric_ops import all_finite_values
 
 
 DYNAMIC_MEASUREMENT_SEQUENCE_SCHEMA = "pyeidors-dynamic-measurement-sequence-v1"
@@ -235,7 +236,7 @@ def _frame_batch(values: Any) -> np.ndarray:
         raise ValueError("frames must be a 1D vector or 2D frame batch.")
     if 0 in arr.shape:
         raise ValueError("frames must be non-empty.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError("frames contain non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -264,7 +265,7 @@ def _timestamps(
         values = np.asarray(value, dtype=np.float64).reshape(-1)
     if values.size != int(n_frames):
         raise ValueError(f"t length {values.size} does not match {n_frames}.")
-    if not np.isfinite(values).all():
+    if not all_finite_values(values):
         raise FloatingPointError("t contains non-finite values.")
     return np.ascontiguousarray(values, dtype=np.float64)
 
@@ -291,9 +292,9 @@ def _dt(
             values = arr.reshape(-1)
     if values.size != n_frames:
         raise ValueError(f"dt length {values.size} does not match {n_frames}.")
-    if not np.isfinite(values).all():
+    if not all_finite_values(values):
         raise FloatingPointError("dt contains non-finite values.")
-    if np.any(values < 0.0):
+    if values.size and float(np.min(values)) < 0.0:
         raise ValueError("dt must be non-negative.")
     return np.ascontiguousarray(values, dtype=np.float64)
 
@@ -320,7 +321,8 @@ def _bad_channel_mask_frames(
         arr = np.asarray(value)
         if arr.ndim == 1:
             base = normalize_bad_channel_mask(arr, n_measurements=n_measurements)
-            mask = np.broadcast_to(base.reshape(1, -1), (n_frames, n_measurements))
+            mask = np.empty((n_frames, n_measurements), dtype=bool)
+            np.copyto(mask, base.reshape(1, -1), casting="no")
         elif arr.ndim == 2 and arr.shape == (n_frames, n_measurements):
             mask = arr.astype(bool, copy=False)
         else:
@@ -339,9 +341,9 @@ def _measurement_weights(
     if value is None:
         return np.ones(n_measurements, dtype=np.float64), "identity"
     arr = np.asarray(value, dtype=np.float64)
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError("measurement_weights contain non-finite values.")
-    if np.any(arr < 0.0):
+    if arr.size and float(np.min(arr)) < 0.0:
         raise ValueError("measurement_weights entries must be non-negative.")
     if arr.ndim == 1:
         if arr.size != n_measurements:
@@ -382,9 +384,9 @@ def _frequency_hz(value: Any | None, *, n_frames: int) -> np.ndarray:
         raise ValueError(
             f"frequency_hz length {values.size} does not match {n_frames}."
         )
-    if not np.isfinite(values).all():
+    if not all_finite_values(values):
         raise FloatingPointError("frequency_hz contains non-finite values.")
-    if np.any(values < 0.0):
+    if values.size and float(np.min(values)) < 0.0:
         raise ValueError("frequency_hz must be non-negative.")
     return np.ascontiguousarray(values, dtype=np.float64)
 

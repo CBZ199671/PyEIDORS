@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
 from pyeidors.data.difference import normalize_time_difference
+import pyeidors.data.temporal_filtering as temporal_filtering_module
 from pyeidors.data.temporal_filtering import filter_measurement_frames
+from pyeidors.inverse import reconstruction_matrix as rm_module
 from pyeidors.inverse import (
     reconstruct_difference_batch,
     reconstruct_temporal_difference_batch,
@@ -58,6 +62,61 @@ def test_filter_measurement_frames_moving_average_is_causal_and_keeps_timestamps
     )
     np.testing.assert_allclose(resumed.values, np.array([[6.0, 60.0]], dtype=float))
     assert resumed.metadata["initial_state_used"] is True
+
+
+def test_v309_moving_average_state_resume_direct_fill_without_concatenate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fail_concatenate(*_args, **_kwargs):
+        raise AssertionError("moving-average state resume must not call np.concatenate")
+
+    frames = np.array(
+        [
+            [1.0, 10.0],
+            [3.0, 20.0],
+            [5.0, 40.0],
+            [7.0, 80.0],
+        ],
+        dtype=float,
+    )
+    full = filter_measurement_frames(
+        frames,
+        temporal="moving_average",
+        moving_window=3,
+        return_metadata=True,
+    )
+    first = filter_measurement_frames(
+        frames[:2],
+        temporal="moving_average",
+        moving_window=3,
+        return_metadata=True,
+    )
+
+    with monkeypatch.context() as patch_ctx:
+        patch_ctx.setattr(temporal_filtering_module.np, "concatenate", fail_concatenate)
+        second = filter_measurement_frames(
+            frames[2:],
+            temporal="moving_average",
+            moving_window=3,
+            initial_state=first.metadata["final_state"],
+            return_metadata=True,
+        )
+
+    np.testing.assert_allclose(
+        np.vstack([first.values, second.values]),
+        full.values,
+    )
+    assert (
+        second.metadata["final_state"]["history_tail"]
+        == (
+            (3.0, 20.0),
+            (5.0, 40.0),
+            (7.0, 80.0),
+        )[-2:]
+    )
+    assert "np.concatenate" not in inspect.getsource(
+        temporal_filtering_module._moving_average
+    )
 
 
 def test_filter_measurement_frames_ema_state_matches_unsplit_batch():
@@ -127,6 +186,63 @@ def test_filter_measurement_frames_supports_bandpass_or_lockin_hooks():
         )
 
 
+def test_v484_temporal_filtering_state_and_hook_guards_use_bounded_scanner() -> None:
+    checked_functions = (
+        temporal_filtering_module._apply_hook,
+        temporal_filtering_module._state_history_tail,
+        temporal_filtering_module._state_last_output,
+        temporal_filtering_module._timestamps,
+    )
+    old_payload_scans = (
+        "np.isfinite(out).all()",
+        "np.isfinite(arr).all()",
+    )
+
+    for func in checked_functions:
+        source = inspect.getsource(func)
+        assert "all_finite_values(" in source
+        for old_payload_scan in old_payload_scans:
+            assert old_payload_scan not in source
+
+
+def test_v554_temporal_measurement_filter_preserves_float32_and_direct_fills_ma() -> (
+    None
+):
+    source = inspect.getsource(temporal_filtering_module._moving_average)
+    assert "denom =" not in source
+    assert "csum[indices + 1]" not in source
+    assert "dtype=np.float64" not in source
+
+    frames = np.array(
+        [
+            [1.0, 10.0],
+            [3.0, 20.0],
+            [5.0, 40.0],
+        ],
+        dtype=np.float32,
+    )
+
+    moving = filter_measurement_frames(
+        frames,
+        temporal="moving_average",
+        moving_window=2,
+        return_metadata=True,
+    )
+    exponential = filter_measurement_frames(
+        frames,
+        temporal="ema",
+        exponential_alpha=0.25,
+        return_metadata=True,
+    )
+
+    assert moving.values.dtype == np.dtype(np.float32)
+    assert exponential.values.dtype == np.dtype(np.float32)
+    np.testing.assert_allclose(
+        moving.values,
+        np.array([[1.0, 10.0], [2.0, 15.0], [4.0, 30.0]], dtype=np.float32),
+    )
+
+
 def test_reconstruct_temporal_difference_batch_filters_before_contract_and_rm():
     rm = np.array([[1.0, 0.0, 2.0], [-1.0, 3.0, 0.5]], dtype=float)
     reference = np.array([2.0, 4.0, 1.0], dtype=float)
@@ -194,6 +310,72 @@ def test_reconstruct_temporal_difference_batch_filters_before_contract_and_rm():
     assert result.metadata["offline_rm_build_seconds"] == 0.0
     assert result.metadata["online_temporal_filter_seconds"] >= 0.0
     assert result.metadata["online_rm_apply_seconds"] >= 0.0
+
+
+def test_v421_temporal_diagonal_contract_skips_prepared_dense_contract(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = inspect.getsource(rm_module.reconstruct_temporal_difference_batch)
+    assert "_apply_measurement_contract_to_frames_with_metadata" in source
+    assert "contract = prepare_measurement_contract" not in source
+    assert "contract.bad_channel_count" not in source
+
+    def _unexpected_prepare(*_args, **_kwargs):
+        raise AssertionError(
+            "diagonal temporal online path should not prepare dense contract"
+        )
+
+    monkeypatch.setattr(rm_module, "prepare_measurement_contract", _unexpected_prepare)
+
+    rm = np.array([[1.0, 0.0, 2.0]], dtype=float)
+    frames = np.array([[1.0, 9.0, 2.0], [3.0, 10.0, 4.0]], dtype=float)
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 0.25], dtype=float)
+
+    result = reconstruct_temporal_difference_batch(
+        rm,
+        frames,
+        normalize=False,
+        temporal="none",
+        channel_mask=mask,
+        measurement_weights=weights,
+        device="cpu",
+        return_metadata=True,
+    )
+
+    expected_payload = frames.copy()
+    expected_payload[:, 1] = 0.0
+    expected_payload *= np.sqrt(np.array([4.0, 0.0, 0.25], dtype=float)).reshape(1, -1)
+    np.testing.assert_allclose(result.values, expected_payload @ rm.T)
+    assert result.metadata["bad_channel_count"] == 1
+    assert result.metadata["measurement_weight_kind"] == "diagonal"
+
+
+def test_v555_temporal_rm_online_path_preserves_float32_payload_dtype() -> None:
+    rm = np.array([[1.0, 0.0, 2.0]], dtype=np.float32)
+    frames = np.array(
+        [[1.0, 9.0, 2.0], [3.0, 10.0, 4.0], [5.0, 11.0, 6.0]],
+        dtype=np.float32,
+    )
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 0.25], dtype=np.float32)
+
+    result = reconstruct_temporal_difference_batch(
+        rm,
+        frames,
+        normalize=False,
+        temporal="moving_average",
+        moving_window=2,
+        channel_mask=mask,
+        measurement_weights=weights,
+        dtype="float32",
+        device="cpu",
+        return_metadata=True,
+    )
+
+    assert result.values.dtype == np.dtype(np.float32)
+    assert result.metadata["rm_dtype"] == "float32"
+    assert result.metadata["temporal_filter_metadata"]["output_shape"] == (3, 3)
 
 
 def test_reconstruct_difference_batch_exposes_difference_orientation_contract():

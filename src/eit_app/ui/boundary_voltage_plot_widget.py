@@ -10,6 +10,11 @@ from PySide6.QtWidgets import QLabel, QStackedLayout, QVBoxLayout, QWidget
 import pyqtgraph as pg
 
 from eit_app.i18n import t, translator
+from eit_app.ui.complex_channels import (
+    COMPOSITE_CHANNEL,
+    REAL_CHANNEL,
+    channel_values,
+)
 from eit_app.ui.fonts import serif_font_family
 from eit_app.ui.plot_legend_overlay import LegendEntry, PlotLegendOverlay
 from eit_app.ui.theme import (
@@ -18,6 +23,40 @@ from eit_app.ui.theme import (
     plot_palette,
     subscribe_theme_mode,
 )
+
+
+_FINITE_SCAN_CHUNK_ITEMS = 1_048_576
+
+
+def _plot_component(component: str) -> str:
+    selected = str(component or REAL_CHANNEL).strip().lower()
+    # A one-dimensional voltage curve cannot encode hue+brightness; for the
+    # composite admittance view, magnitude is the least surprising curve.
+    return "magnitude" if selected == COMPOSITE_CHANNEL else selected
+
+
+def _finite_min_max(values: np.ndarray) -> tuple[float, float] | None:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    arr = arr.reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    y_min = np.inf
+    y_max = -np.inf
+    found = False
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        finite = work[: chunk.size]
+        np.isfinite(chunk, out=finite)
+        if not bool(finite.any()):
+            continue
+        found = True
+        y_min = min(y_min, float(np.min(chunk, where=finite, initial=np.inf)))
+        y_max = max(y_max, float(np.max(chunk, where=finite, initial=-np.inf)))
+    if not found:
+        return None
+    return y_min, y_max
 
 
 class _PlotHost(QWidget):
@@ -87,6 +126,7 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._has_data = False
         # Phase 4 tri-state overlay: "empty" | "loading" | "data".
         self._overlay_state = "empty"
+        self._component = REAL_CHANNEL
         self._label_style = {
             "color": self._plot_text,
             "font-family": self._serif,
@@ -199,12 +239,16 @@ class BoundaryVoltagePlotWidget(QWidget):
         self,
         ground_truth: np.ndarray,
         reconstructed: np.ndarray | None = None,
+        *,
+        component: str = REAL_CHANNEL,
     ) -> None:
         """Update the simulation-oriented voltage comparison plot."""
-        ground_truth = np.asarray(ground_truth, dtype=np.float64).reshape(-1)
+        self._component = str(component or REAL_CHANNEL)
+        ground_truth = self._project_voltage_values(ground_truth).reshape(-1)
         reconstructed_arr = self._coerce_reconstructed_overlay(
             reconstructed,
             expected_size=len(ground_truth),
+            component=self._component,
         )
         x = np.arange(1, len(ground_truth) + 1, dtype=np.float64)
         self._configure_index_axis(len(ground_truth))
@@ -223,21 +267,31 @@ class BoundaryVoltagePlotWidget(QWidget):
         simulated: np.ndarray,
         reconstructed: np.ndarray | None = None,
         homogeneous: np.ndarray | None = None,
+        *,
+        component: str = REAL_CHANNEL,
     ) -> None:
         """Backward-compatible wrapper for legacy simulation call sites."""
         _ = homogeneous
-        self.update_simulation_voltages(simulated, reconstructed)
+        self.update_simulation_voltages(
+            simulated,
+            reconstructed,
+            component=component,
+        )
 
     def update_hardware_voltages(
         self,
         measured: np.ndarray,
         reconstructed: np.ndarray | None = None,
+        *,
+        component: str = REAL_CHANNEL,
     ) -> None:
         """Update the hardware-oriented voltage fit plot."""
-        measured = np.asarray(measured, dtype=np.float64).reshape(-1)
+        self._component = str(component or REAL_CHANNEL)
+        measured = self._project_voltage_values(measured).reshape(-1)
         reconstructed_arr = self._coerce_reconstructed_overlay(
             reconstructed,
             expected_size=len(measured),
+            component=self._component,
         )
         x = np.arange(1, len(measured) + 1, dtype=np.float64)
         self._configure_index_axis(len(measured))
@@ -353,11 +407,16 @@ class BoundaryVoltagePlotWidget(QWidget):
         if reconstructed is None:
             self._hide_reconstructed_overlay()
             return
-        reconstructed_arr = self._coerce_reconstructed_overlay(
-            reconstructed,
-            expected_size=expected_size,
-        )
-        if reconstructed_arr is None:
+        try:
+            reconstructed_arr = np.asarray(reconstructed)
+            if np.iscomplexobj(reconstructed_arr):
+                reconstructed_arr = np.real(reconstructed_arr)
+            if not np.issubdtype(reconstructed_arr.dtype, np.floating):
+                reconstructed_arr = np.asarray(reconstructed_arr, dtype=np.float32)
+            reconstructed_arr = reconstructed_arr.reshape(-1)
+        except Exception:
+            reconstructed_arr = None
+        if reconstructed_arr is None or reconstructed_arr.size != int(expected_size):
             self._hide_reconstructed_overlay()
             return
 
@@ -385,31 +444,39 @@ class BoundaryVoltagePlotWidget(QWidget):
         reconstructed: np.ndarray | None,
         *,
         expected_size: int,
+        component: str = REAL_CHANNEL,
     ) -> np.ndarray | None:
         if reconstructed is None:
             return None
         try:
-            reconstructed_arr = np.asarray(reconstructed, dtype=np.float64).reshape(-1)
+            reconstructed_arr = channel_values(
+                reconstructed,
+                _plot_component(component),
+            ).reshape(-1)
         except Exception:
             return None
         if reconstructed_arr.size != int(expected_size):
             return None
         return reconstructed_arr
 
+    def _project_voltage_values(self, values: np.ndarray) -> np.ndarray:
+        return channel_values(values, _plot_component(self._component))
+
     def _apply_y_range(self, *series: np.ndarray | None) -> None:
-        finite_parts: list[np.ndarray] = []
+        y_min = np.inf
+        y_max = -np.inf
+        has_finite = False
         for values in series:
             if values is None:
                 continue
-            arr = np.asarray(values, dtype=np.float64).reshape(-1)
-            finite = arr[np.isfinite(arr)]
-            if finite.size:
-                finite_parts.append(finite)
-        if not finite_parts:
+            bounds = _finite_min_max(values)
+            if bounds is None:
+                continue
+            y_min = min(y_min, bounds[0])
+            y_max = max(y_max, bounds[1])
+            has_finite = True
+        if not has_finite:
             return
-        merged = np.concatenate(finite_parts)
-        y_min = float(np.min(merged))
-        y_max = float(np.max(merged))
         span = y_max - y_min
         if not np.isfinite(span):
             return

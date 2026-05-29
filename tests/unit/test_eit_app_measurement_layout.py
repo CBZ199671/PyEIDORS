@@ -156,6 +156,25 @@ def test_forward_model_config_derives_coverage_from_explicit_2d_length() -> None
     assert cfg.electrode_coverage == pytest.approx(expected_coverage)
 
 
+def test_forward_model_config_round_trips_complex_admittance() -> None:
+    cfg = ForwardModelConfig.from_mapping(
+        {
+            "background_conductivity": "1+0.25j",
+            "contact_impedance": "0.01+0.002j",
+        }
+    )
+
+    assert cfg.background_conductivity == pytest.approx(1.0 + 0.25j)
+    assert cfg.contact_impedance == pytest.approx(0.01 + 0.002j)
+
+    payload = cfg.to_mapping()
+    assert payload["background_conductivity"] == "1+0.25j"
+    assert payload["contact_impedance"] == "0.01+0.002j"
+    assert ForwardModelConfig.from_mapping(payload).background_conductivity == (
+        pytest.approx(1.0 + 0.25j)
+    )
+
+
 def test_radius_change_recomputes_coverage_when_length_is_fixed() -> None:
     layout = measurement_layout_from_config(
         {

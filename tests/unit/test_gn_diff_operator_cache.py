@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -22,6 +23,151 @@ OPERATOR_CACHE_KEYS = (
     "operator_A",
     "operator_lu",
 )
+
+
+def test_v256_gn_difference_sigma_hash_uses_streaming_payload_helper() -> None:
+    source = inspect.getsource(gn_difference_runner.build_shared_context)
+
+    assert "hash_array_payload" in source
+    assert ".tobytes()" not in source
+    assert "sigma_hash = hashlib.sha256" not in source
+
+
+def test_gn_difference_column_scaled_jjt_streams_column_blocks() -> None:
+    jacobian = np.array(
+        [[1.0, 2.0, -1.0, 0.5], [0.25, -0.5, 3.0, 1.5]],
+        dtype=np.float64,
+    )
+    scale = np.array([0.5, 2.0, 0.25, 1.5], dtype=np.float64)
+
+    actual = gn_difference_runner._column_scaled_jjt(
+        jacobian,
+        scale,
+        chunk_target_bytes=16,
+    )
+    expected = (jacobian * scale.reshape(1, -1)) @ jacobian.T
+
+    np.testing.assert_allclose(actual, expected)
+    source = inspect.getsource(gn_difference_runner)
+    assert "jacobian * inv_reg_diag[None, :]" not in source
+    assert "_column_scaled_jjt(" in source
+
+
+def test_gn_difference_reduced_rm_regularization_uses_row_scaled_jtj() -> None:
+    jacobian = np.array(
+        [
+            [0.5, 1.0, -0.25, 0.75],
+            [1.5, -0.5, 0.25, 1.25],
+            [0.25, 0.75, 1.0, -0.5],
+        ],
+        dtype=np.float64,
+    )
+    basis = np.array(
+        [
+            [1.0, 0.0],
+            [0.5, 0.5],
+            [0.0, 1.0],
+            [0.25, -0.5],
+        ],
+        dtype=np.float64,
+    )
+    reg_diag = np.array([0.5, 2.0, 1.5, 0.75], dtype=np.float64)
+    lam = 0.2
+
+    u_tru = gn_difference_runner._row_scaled_jtj(
+        basis,
+        reg_diag,
+        chunk_target_bytes=16,
+    )
+    expected_u_tru = basis.T @ (reg_diag[:, None] * basis)
+    np.testing.assert_allclose(u_tru, expected_u_tru)
+
+    actual = gn_difference_runner._build_reduced_rm(
+        jacobian=jacobian,
+        reg_diag=reg_diag,
+        lam=lam,
+        basis=basis,
+    )
+    ju = jacobian @ basis
+    expected_h = ju.T @ ju + lam * expected_u_tru
+    expected_h = 0.5 * (expected_h + expected_h.T)
+    expected_h_inv = np.linalg.inv(expected_h)
+    expected_rm = basis @ expected_h_inv @ ju.T
+
+    np.testing.assert_allclose(actual["JU"], ju)
+    np.testing.assert_allclose(actual["H"], expected_h)
+    np.testing.assert_allclose(actual["H_inv"], expected_h_inv)
+    np.testing.assert_allclose(actual["RM_reduced"], expected_rm)
+
+    source = inspect.getsource(gn_difference_runner._build_reduced_rm)
+    assert "r_diag[:, None] * b_mat" not in source
+    assert "_row_scaled_jtj" in source
+
+
+def test_v521_gn_difference_system_diagonal_terms_added_in_place(monkeypatch) -> None:
+    source = inspect.getsource(gn_difference_runner.build_shared_context)
+    assert "float(lam) * np.eye(jacobian.shape[0]" not in source
+    assert "float(lam) * np.diag(reg_diag)" not in source
+    assert "np.diag(system_matrix)" not in source
+    assert "_with_identity_shift(" in source
+    assert "_with_diagonal_shift(" in source
+    assert "_preconditioner_diagonal(system_matrix)" in source
+
+    def _unexpected_dense_diagonal(*_args, **_kwargs):
+        raise AssertionError("dense identity/diagonal helper must not be called")
+
+    monkeypatch.setattr(gn_difference_runner.np, "eye", _unexpected_dense_diagonal)
+    monkeypatch.setattr(gn_difference_runner.np, "diag", _unexpected_dense_diagonal)
+
+    base = np.array([[2.0, 0.5], [0.5, 3.0]], dtype=np.float64, order="F")
+    shifted_identity = gn_difference_runner._with_identity_shift(base, 0.25)
+    np.testing.assert_allclose(
+        shifted_identity,
+        np.array([[2.25, 0.5], [0.5, 3.25]], dtype=np.float64),
+    )
+    assert shifted_identity.flags.c_contiguous
+
+    shifted_diagonal = gn_difference_runner._with_diagonal_shift(
+        base,
+        np.array([4.0, 6.0], dtype=np.float64),
+        0.5,
+    )
+    np.testing.assert_allclose(
+        shifted_diagonal,
+        np.array([[4.0, 0.5], [0.5, 6.0]], dtype=np.float64),
+    )
+    assert shifted_diagonal.flags.c_contiguous
+
+    precond = gn_difference_runner._preconditioner_diagonal(
+        np.array([[0.0, 1.0], [2.0, -3.0]], dtype=np.float64)
+    )
+    np.testing.assert_allclose(precond, np.array([1.0e-12, 1.0e-12]))
+
+
+def test_v545_lsmr_augmented_operator_direct_fills_without_concatenate() -> None:
+    source = inspect.getsource(gn_difference_runner._solve_linearized_lsmr)
+    assert "np.concatenate" not in source
+    assert "np.empty(n_meas + n_param" in source
+    assert "np.zeros(n_meas + n_param" in source
+    assert "out[:n_meas]" in source
+    assert "rhs_aug[:n_meas]" in source
+
+
+def test_v276_gn_difference_snapshot_columns_direct_fill_matrix() -> None:
+    columns = [
+        np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        np.array([7, 8, 9], dtype=np.int32),
+    ]
+
+    actual = gn_difference_runner._stack_columns_direct(columns)
+
+    np.testing.assert_allclose(actual, np.column_stack(columns))
+    assert actual.dtype == np.float64
+    assert actual.flags.c_contiguous
+    assert "np.column_stack" not in inspect.getsource(
+        gn_difference_runner._stack_columns_direct
+    )
 
 
 def test_v83_2d_auto_petsc_device_uses_cpu_without_blocking_explicit_cuda():

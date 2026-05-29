@@ -19,6 +19,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from pyeidors.inverse.greit import GREIT_METRIC_KEYS, calc_greit_rm, greit_metrics
 from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+from pyeidors.utils.numeric_ops import all_finite_values, any_abs_less_equal_values
 
 
 REPORT_SCHEMA = "pyeidors-greit-eidors-parity-report-v1"
@@ -402,7 +403,7 @@ def _difference_data_from_vh_vi(
         raise ValueError(f"vi rows {vi.shape[0]} do not match vh length {vh.size}.")
     if normalize:
         denom = vh.reshape(-1, 1)
-        if np.any(np.abs(denom) <= np.finfo(np.float64).eps):
+        if any_abs_less_equal_values(vh, np.finfo(np.float64).eps):
             raise ValueError(
                 "vh contains zero entries; ratio normalization is undefined."
             )
@@ -551,7 +552,7 @@ def _as_vector(values: Any, *, name: str) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     if array.size == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(array).all():
+    if not all_finite_values(array):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -560,7 +561,7 @@ def _as_matrix(values: Any, *, name: str) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim != 2 or 0 in array.shape:
         raise ValueError(f"{name} must be a non-empty 2D matrix.")
-    if not np.isfinite(array).all():
+    if not all_finite_values(array):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -569,7 +570,7 @@ def _as_scalar_array(values: Any, *, name: str) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64).reshape(-1)
     if array.size != 1:
         raise ValueError(f"{name} must be scalar.")
-    if not np.isfinite(array).all():
+    if not all_finite_values(array):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 

@@ -23,6 +23,7 @@ from regressing the shared surface or the V7/V8/V9 contracts.
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -33,6 +34,7 @@ from scipy.sparse.linalg import LinearOperator
 from pyeidors.inverse.jacobian.linearized import (
     JacobianLinearization,
     LazyAdjointJacobianLinearization,
+    _weighted_contrib_power_sum,
 )
 
 
@@ -190,6 +192,56 @@ def test_eager_hessian_diag_matches_jt_w_j_diagonal_with_floor() -> None:
         floor=floor,
     )
     np.testing.assert_allclose(actual, expected, rtol=1e-10, atol=1e-12)
+
+
+def test_v228_lazy_hessian_diag_chunk_reduction_avoids_broadcast_matrices() -> None:
+    exact_source = inspect.getsource(
+        LazyAdjointJacobianLinearization._exact_hessian_diag_chunked
+    )
+    sampled_source = inspect.getsource(
+        LazyAdjointJacobianLinearization._sampled_hessian_diag
+    )
+
+    assert "block_weights[:, None]" not in exact_source
+    assert "selected_weights[:, None]" not in sampled_source
+    assert "self.cell_areas[None" not in exact_source
+    assert "self.cell_areas[None" not in sampled_source
+    assert "_weighted_contrib_power_sum" in exact_source
+    assert "_weighted_contrib_power_sum" in sampled_source
+
+    contrib = np.array(
+        [
+            [1.0 + 2.0j, -0.5 + 0.25j, 2.0 - 1.0j],
+            [0.25 - 0.5j, 1.5 + 0.0j, -1.0 + 0.75j],
+        ],
+        dtype=np.complex128,
+    )
+    weights = np.array([0.5, 2.0], dtype=np.float64)
+    cell_areas = np.array([2.0, 0.5, 1.5], dtype=np.float64)
+    expected = (
+        np.real(np.conj(contrib) * contrib)
+        * weights[:, None]
+        * (cell_areas[None, :] ** 2)
+    ).sum(axis=0)
+
+    np.testing.assert_allclose(
+        _weighted_contrib_power_sum(contrib, weights, cell_areas * cell_areas),
+        expected,
+    )
+
+
+def test_v229_eager_to_dense_fills_output_blocks_in_place() -> None:
+    source = inspect.getsource(JacobianLinearization.to_dense)
+
+    assert "out=block_view" in source
+    assert "self.cell_areas[None" not in source
+    assert "block_view *= self.sign" in source
+    assert "block_view *= self.cell_areas[start:end]" in source
+
+    eager = _eager_fixture()
+    dense_default = eager.to_dense()
+    dense_blocked = eager.to_dense(block_size=2)
+    np.testing.assert_allclose(dense_blocked, dense_default)
 
 
 def test_eager_normal_matvec_matches_jtwjv_plus_alpha_rv() -> None:

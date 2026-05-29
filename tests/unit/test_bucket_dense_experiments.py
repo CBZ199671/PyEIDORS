@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import importlib.util
 import json
 from pathlib import Path
 
 import numpy as np
 
+import pyeidors.data.bucket_dense_experiments as bucket_module
 from pyeidors.data.bucket_dense_experiments import (
     BUCKET_DENSE_FIELD_FIELDS,
     BUCKET_DENSE_SUMMARY_FIELDS,
@@ -68,6 +70,99 @@ def test_circle_bucket_linearized_model_uses_dense_circle_geometry() -> None:
     assert np.max(np.linalg.norm(model.parameter_points, axis=1)) <= 1.0 + 1e-10
     assert np.max(np.abs(model.voltage_true)) > 0.0
     assert np.max(np.abs(model.voltage_reference)) > 0.0
+
+
+def test_v241_bucket_weighted_structure_reuses_holdout_moment_helper() -> None:
+    source = inspect.getsource(bucket_module._weighted_structure)
+
+    assert "_masked_weighted_structure_stats_2d" in source
+    assert "weights[:, None]" not in source
+    assert "coords * weights" not in source
+    assert "centered * weights" not in source
+    mask, cx, cy, area, eccentricity, major_axis, minor_axis = (
+        bucket_module._weighted_structure(
+            values=np.array([0.0, 2.0, 1.0], dtype=float),
+            points=np.array(
+                [[0.0, 0.0], [2.0, 0.0], [2.0, 2.0]],
+                dtype=float,
+            ),
+            areas=np.ones(3, dtype=float),
+            threshold=0.5,
+        )
+    )
+
+    np.testing.assert_array_equal(mask, [False, True, True])
+    np.testing.assert_allclose([cx, cy], [2.0, 2.0 / 3.0])
+    assert area == 2.0
+    assert np.isfinite(eccentricity)
+    assert major_axis >= minor_axis >= 0.0
+
+
+def test_v551_bucket_structure_metrics_stream_masked_reductions() -> None:
+    structure_source = inspect.getsource(bucket_module._weighted_structure)
+    metrics_source = inspect.getsource(bucket_module._structure_metrics)
+
+    for legacy in (
+        "weights_raw[mask]",
+        "areas[mask]",
+        "points[mask",
+        "contrast[outside]",
+        "areas[outside]",
+        "artifact_active = mask & outside",
+    ):
+        assert legacy not in structure_source
+        assert legacy not in metrics_source
+    assert "_masked_area_sum(areas, mask, exclude_mask=truth_mask)" in metrics_source
+    assert "_masked_square_area_sum(" in metrics_source
+    assert "_masked_abs_peak(" in metrics_source
+
+
+def test_v242_bucket_source_gradient_uses_final_output_buffer() -> None:
+    source = inspect.getsource(bucket_module._source_gradient)
+
+    assert "r2[:, None]" not in source
+    assert "diff =" not in source
+    assert "out=gradient" in source
+    points = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=float)
+    electrode = np.array([0.0, 0.0], dtype=float)
+    expected_diff = points - electrode
+    r2 = np.sum(expected_diff * expected_diff, axis=1) + 0.1**2
+    expected = expected_diff / (2.0 * np.pi * r2[:, None])
+
+    np.testing.assert_allclose(
+        bucket_module._source_gradient(points, electrode, softening=0.1),
+        expected,
+    )
+
+
+def test_v243_bucket_source_potential_reuses_squared_distance_helper() -> None:
+    source = inspect.getsource(bucket_module._source_potential)
+
+    assert "diff =" not in source
+    assert "squared_distances_to_point" in source
+    points = np.array([[1.0, 0.0], [0.0, 2.0]], dtype=float)
+    electrode = np.array([0.0, 0.0], dtype=float)
+    r2 = np.sum((points - electrode) ** 2, axis=1) + 0.1**2
+    expected = 0.5 * np.log(r2) / (2.0 * np.pi)
+
+    np.testing.assert_allclose(
+        bucket_module._source_potential(points, electrode, softening=0.1),
+        expected,
+    )
+
+
+def test_v497_bucket_dense_builders_use_bounded_finite_scan() -> None:
+    voltage_source = inspect.getsource(
+        bucket_module._build_circle_bucket_reference_voltage
+    )
+    sensitivity_source = inspect.getsource(
+        bucket_module._build_circle_bucket_sensitivity
+    )
+
+    assert "all_finite_values(voltage)" in voltage_source
+    assert "all_finite_values(sensitivity)" in sensitivity_source
+    assert "np.all(np.isfinite(voltage))" not in voltage_source
+    assert "np.all(np.isfinite(sensitivity))" not in sensitivity_source
 
 
 def test_v40_full256_circle_bucket_model_keeps_drive_related_points() -> None:
@@ -497,3 +592,17 @@ def test_eit_bucket_all_modes_noise_sweep_cli_writes_expected_outputs(
     assert "add_noise" in report.read_text(encoding="utf-8")
     for path in [metrics, recon, errors]:
         assert path.read_bytes().startswith(b"\x89PNG\r\n\x1a\n")
+
+
+def test_v543_noise_sweep_plot_ranges_stream_without_concatenate() -> None:
+    source = inspect.getsource(_NOISE_SWEEP_SCRIPT.plot_noise_recon_grid)
+    assert "np.concatenate(values)" not in source
+    assert "_value_range(values)" in source
+    assert "_max_abs_value(values)" in source
+
+    values = [
+        np.array([1.0, 3.0], dtype=np.float64),
+        np.array([-2.0, 4.0], dtype=np.float64),
+    ]
+    assert _NOISE_SWEEP_SCRIPT._value_range(values) == (-2.0, 4.0)
+    assert _NOISE_SWEEP_SCRIPT._max_abs_value(values) == 4.0

@@ -15,9 +15,10 @@ Two non-obvious design points worth keeping in mind for future
 maintenance:
 
 1.  ``QtInteractor`` remains the preferred display path for real 3D
-    simulation output on native desktop runtimes.  WSLg defaults to
-    PyVista offscreen rendering so the main UI can stay on Wayland and
-    avoid XWayland blur; Matplotlib 3D is only the last-resort fallback.
+    simulation output on native desktop runtimes.  WSLg/Wayland defaults to
+    the Matplotlib 3D fallback because first-use PyVista offscreen startup can
+    block the GUI for tens of seconds; users can opt back into PyVista
+    offscreen with ``EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN=1``.
 
 2.  When enabled, ``QtInteractor`` is constructed only after the host
     widget is shown and owns a native child window.  Initialising VTK
@@ -64,6 +65,7 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.ui.array_geometry_cache import _compute_cell_centers, cached_cell_centers
 from eit_app.ui.electrode_overlay import (
     ElectrodeGeometry,
     default_patch_quads,
@@ -85,6 +87,15 @@ _TRUE_ENV_VALUES = {"1", "true", "yes", "on"}
 _OFFSCREEN_DRAG_FPS_ENV = "EIT_APP_3D_DRAG_FPS"
 _OFFSCREEN_DRAG_RENDER_SCALE_ENV = "EIT_APP_3D_DRAG_RENDER_SCALE"
 _OFFSCREEN_DRAG_IDLE_MS_ENV = "EIT_APP_3D_DRAG_IDLE_MS"
+_AUTO_POINTS_CELLS_ENV = "EIT_APP_3D_AUTO_POINTS_CELLS"
+_POINT_CLOUD_MAX_POINTS_ENV = "EIT_APP_3D_POINT_CLOUD_MAX_POINTS"
+_PROGRESSIVE_VOLUME_UPGRADE_ENV = "EIT_APP_3D_PROGRESSIVE_VOLUME_UPGRADE"
+_PROGRESSIVE_VOLUME_DELAY_MS_ENV = "EIT_APP_3D_PROGRESSIVE_VOLUME_DELAY_MS"
+_PYVISTA_OFFSCREEN_MAX_CELLS_ENV = "EIT_APP_3D_PYVISTA_OFFSCREEN_MAX_CELLS"
+_PYVISTA_OFFSCREEN_NEGATIVE_CACHE_ENV = "EIT_APP_3D_PYVISTA_OFFSCREEN_NEGATIVE_CACHE"
+_PYVISTA_OFFSCREEN_WSLG_ENV = "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"
+_DEFAULT_AUTO_POINTS_CELLS = 12000
+_DEFAULT_PYVISTA_OFFSCREEN_MAX_CELLS = _DEFAULT_AUTO_POINTS_CELLS
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 DISPLAY_MODE_VOLUME = "volume"
 DISPLAY_MODE_POINTS = "points"
@@ -107,6 +118,8 @@ _ANOMALY_CROWDED_PEAK_CAP = 0.75
 _ANOMALY_SPATIAL_MIN_CANDIDATES = 8
 _ANOMALY_SPATIAL_RADIUS_FACTOR = 2.75
 _ANOMALY_COMPONENT_KEEP_FRACTION = 0.22
+_FINITE_SCAN_CHUNK_ITEMS = 1_048_576
+_POINT_CLOUD_SAMPLE_CHUNK_ITEMS = 1_048_576
 _CELL_FACE_OFFSETS = {
     4: ((0, 1, 2), (0, 1, 3), (0, 2, 3), (1, 2, 3)),
     8: (
@@ -118,6 +131,132 @@ _CELL_FACE_OFFSETS = {
         (3, 0, 4, 7),
     ),
 }
+_PYVISTA_OFFSCREEN_FAILURE_REASON: str | None = None
+
+
+def _display_float_values(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if not np.issubdtype(arr.dtype, np.floating):
+        arr = np.asarray(arr, dtype=np.float32)
+    return np.asarray(arr).reshape(-1)
+
+
+def _finite_mask_or_none(values: np.ndarray) -> np.ndarray | None:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if bool(chunk_mask.all()):
+            continue
+
+        finite_mask = np.empty(arr.shape, dtype=bool)
+        if start > 0:
+            finite_mask[:start] = True
+        finite_mask[start : start + chunk.size] = chunk_mask
+        for tail_start in range(start + chunk.size, arr.size, chunk_items):
+            tail = arr[tail_start : tail_start + chunk_items]
+            tail_mask = work[: tail.size]
+            np.isfinite(tail, out=tail_mask)
+            finite_mask[tail_start : tail_start + tail.size] = tail_mask
+        return finite_mask
+    return None
+
+
+def _all_finite_values(values: np.ndarray) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if not bool(chunk_mask.all()):
+            return False
+    return True
+
+
+def _any_finite_values(values: np.ndarray) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if bool(chunk_mask.any()):
+            return True
+    return False
+
+
+def _nan_invalid_nearest_distances(nearest: np.ndarray) -> bool:
+    arr = np.asarray(nearest).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    has_valid = False
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        mask = work[: chunk.size]
+        np.isfinite(chunk, out=mask)
+        np.logical_not(mask, out=mask)
+        if bool(mask.any()):
+            np.copyto(chunk, np.nan, where=mask)
+        np.greater(chunk, 1.0e-12, out=mask)
+        if bool(mask.any()):
+            has_valid = True
+        np.logical_not(mask, out=mask)
+        if bool(mask.any()):
+            np.copyto(chunk, np.nan, where=mask)
+    return has_valid
+
+
+def _score_count_peak_above_floor(
+    score: np.ndarray,
+    floor: float,
+    *,
+    all_finite: bool,
+    finite_mask: np.ndarray | None = None,
+    return_mask: bool = False,
+) -> tuple[int, float] | tuple[int, float, np.ndarray]:
+    candidate_mask = np.greater(score, floor)
+    if not all_finite:
+        if finite_mask is None:
+            finite_mask = _finite_mask_or_none(score)
+        if finite_mask is not None:
+            np.logical_and(candidate_mask, finite_mask, out=candidate_mask)
+    candidate_count = int(np.count_nonzero(candidate_mask))
+    if candidate_count == 0:
+        if return_mask:
+            return 0, float("nan"), candidate_mask
+        return 0, float("nan")
+    peak = float(np.max(score, where=candidate_mask, initial=-np.inf))
+    if return_mask:
+        return candidate_count, peak, candidate_mask
+    return candidate_count, peak
+
+
+def _nanpercentile_with_finite_mask(
+    score: np.ndarray,
+    percentile: float,
+    *,
+    finite_mask: np.ndarray | None,
+    invalid_mask: np.ndarray,
+) -> float:
+    if finite_mask is not None:
+        np.logical_not(finite_mask, out=invalid_mask)
+        np.copyto(score, np.nan, where=invalid_mask)
+    return float(np.nanpercentile(score, percentile))
+
+
+def _nanmedian_with_finite_mask(values: np.ndarray, finite_mask: np.ndarray) -> float:
+    work = np.array(values, copy=True)
+    np.logical_not(finite_mask, out=finite_mask)
+    np.copyto(work, np.nan, where=finite_mask)
+    return float(np.nanmedian(work))
 
 
 def _cell_anomaly_mask(
@@ -126,39 +265,56 @@ def _cell_anomaly_mask(
     *,
     cell_centers: np.ndarray | None = None,
 ) -> np.ndarray:
-    values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
-    if values.size == 0 or not np.isfinite(values).any():
+    values = _display_float_values(cell_sigma)
+    if values.size == 0:
+        return np.zeros(values.shape, dtype=bool)
+    finite_values = _finite_mask_or_none(values)
+    all_finite = finite_values is None
+    if not all_finite and not finite_values.any():
         return np.zeros(values.shape, dtype=bool)
     if mode not in ANOMALY_MODES:
         raise ValueError(f"unknown anomaly mode: {mode!r}")
-    median = float(np.nanmedian(values))
-    spread = float(np.nanstd(values))
+    if all_finite:
+        median = float(np.median(values))
+        spread = float(np.std(values))
+    else:
+        median = float(np.nanmedian(values))
+        spread = float(np.nanstd(values))
     floor = max(abs(median) * _INHOMOGENEITY_RELATIVE_FLOOR, 1.0e-6)
     if not np.isfinite(spread) or spread <= floor:
         return np.zeros(values.shape, dtype=bool)
-    residual = values - median
-    if mode == ANOMALY_MODE_POSITIVE:
-        score = residual
-    elif mode == ANOMALY_MODE_NEGATIVE:
-        score = -residual
+    score = values - median
+    if mode == ANOMALY_MODE_ABSOLUTE:
+        np.abs(score, out=score)
+        residual_mad = float(np.nanmedian(score))
     else:
-        score = np.abs(residual)
-    finite_score_values = score[np.isfinite(score)]
-    finite_scores = finite_score_values[finite_score_values > floor]
-    if finite_scores.size == 0:
-        return np.zeros(values.shape, dtype=bool)
-    peak = float(np.nanmax(finite_scores))
-    residual_mad = float(np.nanmedian(np.abs(residual[np.isfinite(residual)])))
+        np.abs(score, out=score)
+        residual_mad = float(np.nanmedian(score))
+        np.subtract(values, median, out=score)
+        if mode == ANOMALY_MODE_NEGATIVE:
+            np.negative(score, out=score)
+    candidate_count, peak, mask = _score_count_peak_above_floor(
+        score,
+        floor,
+        all_finite=all_finite,
+        finite_mask=finite_values,
+        return_mask=True,
+    )
+    if candidate_count == 0:
+        return mask
     robust_floor = min(
         _ANOMALY_MAD_SIGMA * 1.4826 * residual_mad,
         peak * _ANOMALY_CROWDED_PEAK_CAP,
     )
     threshold = max(floor, peak * _ANOMALY_PEAK_FRACTION, robust_floor)
-    mask = np.asarray(score >= threshold, dtype=bool)
+    np.greater_equal(score, threshold, out=mask)
     visible_fraction = float(np.count_nonzero(mask)) / float(max(values.size, 1))
-    if visible_fraction > _ANOMALY_MAX_VISIBLE_FRACTION and finite_scores.size > 1:
-        crowded_threshold = float(
-            np.nanpercentile(finite_score_values, _ANOMALY_CROWDED_PERCENTILE)
+    if visible_fraction > _ANOMALY_MAX_VISIBLE_FRACTION and candidate_count > 1:
+        crowded_threshold = _nanpercentile_with_finite_mask(
+            score,
+            _ANOMALY_CROWDED_PERCENTILE,
+            finite_mask=None if all_finite else finite_values,
+            invalid_mask=mask,
         )
         crowded_threshold = min(
             crowded_threshold,
@@ -167,7 +323,7 @@ def _cell_anomaly_mask(
         threshold = max(threshold, crowded_threshold)
         threshold = float(np.nextafter(threshold, np.inf))
     tolerance = max(1.0e-12, abs(threshold) * 1.0e-12)
-    mask = np.asarray(score >= threshold - tolerance, dtype=bool)
+    np.greater_equal(score, threshold - tolerance, out=mask)
     return _spatially_coherent_anomaly_mask(mask, score, cell_centers)
 
 
@@ -178,17 +334,19 @@ def _spatially_coherent_anomaly_mask(
 ) -> np.ndarray:
     """Keep coherent anomaly blobs while dropping isolated high-score speckles."""
 
-    candidate_idx = np.flatnonzero(mask)
-    if candidate_idx.size < _ANOMALY_SPATIAL_MIN_CANDIDATES:
-        return mask
     if cell_centers is None:
         return mask
+    candidate_count = int(np.count_nonzero(mask))
+    if candidate_count < _ANOMALY_SPATIAL_MIN_CANDIDATES:
+        return mask
 
-    centers = np.asarray(cell_centers, dtype=np.float64)
+    centers = np.asarray(cell_centers)
     if centers.ndim != 2 or centers.shape[0] != mask.size or centers.shape[1] < 3:
         return mask
-    candidate_centers = np.ascontiguousarray(centers[candidate_idx, :3])
-    if not np.isfinite(candidate_centers).all():
+    candidate_idx, candidate_centers = _candidate_indices_and_centers(
+        mask, centers, candidate_count
+    )
+    if not _all_finite_values(candidate_centers):
         return mask
 
     try:
@@ -202,9 +360,8 @@ def _spatially_coherent_anomaly_mask(
     except Exception:  # pragma: no cover - scipy edge case fallback
         return mask
 
-    nearest = np.asarray(distances[:, 1], dtype=np.float64)
-    nearest = nearest[np.isfinite(nearest) & (nearest > 1.0e-12)]
-    if nearest.size == 0:
+    nearest = np.asarray(distances[:, 1])
+    if not _nan_invalid_nearest_distances(nearest):
         return mask
     radius = float(np.nanmedian(nearest) * _ANOMALY_SPATIAL_RADIUS_FACTOR)
     if not np.isfinite(radius) or radius <= 0.0:
@@ -231,12 +388,9 @@ def _spatially_coherent_anomaly_mask(
     if len(components) <= 1:
         return mask
 
-    candidate_scores = np.asarray(score[candidate_idx], dtype=np.float64)
-    masses = np.asarray(
-        [float(np.nansum(candidate_scores[component])) for component in components],
-        dtype=np.float64,
-    )
-    if masses.size == 0 or not np.isfinite(masses).any():
+    score_values = _display_float_values(score)
+    masses = _component_score_masses(score_values, candidate_idx, components)
+    if masses.size == 0 or not _any_finite_values(masses):
         return mask
 
     best_idx = int(np.nanargmax(masses))
@@ -261,8 +415,65 @@ def _spatially_coherent_anomaly_mask(
     if not np.any(keep):
         return mask
     coherent = np.zeros_like(mask, dtype=bool)
-    coherent[candidate_idx[keep]] = True
+    _apply_candidate_keep_mask(coherent, candidate_idx, keep)
     return coherent
+
+
+def _apply_candidate_keep_mask(
+    coherent: np.ndarray, candidate_idx: np.ndarray, keep: np.ndarray
+) -> None:
+    for local_idx, is_kept in enumerate(np.asarray(keep, dtype=bool).reshape(-1)):
+        if not bool(is_kept):
+            continue
+        global_idx = int(candidate_idx[int(local_idx)])
+        if 0 <= global_idx < coherent.size:
+            coherent[global_idx] = True
+
+
+def _candidate_indices_and_centers(
+    mask: np.ndarray, centers: np.ndarray, candidate_count: int
+) -> tuple[np.ndarray, np.ndarray]:
+    centers_arr = np.asarray(centers)
+    center_dtype = (
+        centers_arr.dtype
+        if np.issubdtype(centers_arr.dtype, np.floating)
+        else np.dtype(np.float32)
+    )
+    candidate_idx = np.empty(int(candidate_count), dtype=np.int64)
+    candidate_centers = np.empty((int(candidate_count), 3), dtype=center_dtype)
+    out_idx = 0
+    mask_arr = np.asarray(mask, dtype=bool).reshape(-1)
+    for center_idx, is_active in enumerate(mask_arr):
+        if not bool(is_active):
+            continue
+        candidate_idx[out_idx] = center_idx
+        candidate_centers[out_idx] = centers_arr[center_idx, :3]
+        out_idx += 1
+    return candidate_idx, candidate_centers
+
+
+def _component_score_masses(
+    score_values: np.ndarray,
+    candidate_idx: np.ndarray,
+    components: list[np.ndarray],
+) -> np.ndarray:
+    masses = np.empty(len(components), dtype=np.float64)
+    for component_pos, component in enumerate(components):
+        total = 0.0
+        for local_idx in component:
+            value = float(score_values[int(candidate_idx[int(local_idx)])])
+            if np.isnan(value):
+                continue
+            total += value
+        masses[component_pos] = total
+    return masses
+
+
+def _face_cell_values(cell_sigma: np.ndarray, source_indices: np.ndarray) -> np.ndarray:
+    values = np.asarray(cell_sigma)
+    out = np.empty(len(source_indices), dtype=values.dtype)
+    np.take(values, source_indices, out=out)
+    return out
 
 
 def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
@@ -270,14 +481,21 @@ def _cell_inhomogeneity_mask(cell_sigma: np.ndarray) -> np.ndarray:
 
 
 def _conductivity_color_limits(cell_sigma: np.ndarray) -> tuple[float, float]:
-    values = np.asarray(cell_sigma, dtype=np.float64).reshape(-1)
-    finite_values = values[np.isfinite(values)]
-    if finite_values.size == 0:
+    values = _display_float_values(cell_sigma)
+    if values.size == 0:
+        return 0.0, 1.0
+    finite_mask = _finite_mask_or_none(values)
+    if finite_mask is not None and not finite_mask.any():
         return 0.0, 1.0
 
-    sigma_min = float(np.nanmin(finite_values))
-    sigma_max = float(np.nanmax(finite_values))
-    median = float(np.nanmedian(finite_values))
+    if finite_mask is None:
+        sigma_min = float(np.min(values))
+        sigma_max = float(np.max(values))
+        median = float(np.median(values))
+    else:
+        sigma_min = float(np.min(values, where=finite_mask, initial=np.inf))
+        sigma_max = float(np.max(values, where=finite_mask, initial=-np.inf))
+        median = _nanmedian_with_finite_mask(values, finite_mask)
     if not all(np.isfinite(value) for value in (sigma_min, sigma_max, median)):
         return 0.0, 1.0
 
@@ -292,14 +510,47 @@ def _cell_center_sigma(
     cells: np.ndarray,
 ) -> tuple[np.ndarray, str]:
     """Return cell-centered conductivity values for 3D display modes."""
-    values = np.asarray(sigma, dtype=float).reshape(-1)
+    raw_values = np.asarray(sigma)
+    if np.issubdtype(raw_values.dtype, np.floating):
+        values = raw_values.reshape(-1)
+    else:
+        values = np.asarray(raw_values, dtype=np.float32).reshape(-1)
     if values.shape[0] == cells.shape[0]:
         return values, "cell"
-    return values[cells].mean(axis=1), "point"
+    return _cell_mean_values(values, cells), "point"
+
+
+def _display_coords_array(node_coords: np.ndarray) -> np.ndarray:
+    coords = np.asarray(node_coords)
+    if coords.dtype == np.dtype(np.float32):
+        return coords
+    return np.asarray(coords, dtype=np.float32)
+
+
+def _display_cells_array(cell_connectivity: np.ndarray) -> np.ndarray:
+    cells = np.asarray(cell_connectivity)
+    if np.issubdtype(cells.dtype, np.integer):
+        return cells
+    return np.asarray(cells, dtype=np.intp)
+
+
+def _display_sigma_array(conductivity: np.ndarray) -> np.ndarray:
+    sigma = np.asarray(conductivity)
+    if np.iscomplexobj(sigma):
+        sigma = np.real(sigma)
+    if np.asarray(sigma).dtype == np.dtype(np.float32):
+        return np.asarray(sigma)
+    return np.asarray(sigma, dtype=np.float32)
 
 
 def _cell_centers(coords: np.ndarray, cells: np.ndarray) -> np.ndarray:
-    return np.asarray(coords, dtype=float)[cells, :3].mean(axis=1)
+    centers = cached_cell_centers(coords, cells, coordinate_dims=3)
+    if centers is None:
+        return _compute_cell_centers(
+            _display_coords_array(coords)[:, :3],
+            np.asarray(cells),
+        )
+    return centers
 
 
 def _pyvista_point_size(n_cells: int) -> float:
@@ -330,6 +581,326 @@ def _env_float(name: str, default: float, *, lower: float, upper: float) -> floa
 def _env_int(name: str, default: int, *, lower: int, upper: int) -> int:
     value = _env_float(name, float(default), lower=float(lower), upper=float(upper))
     return int(round(value))
+
+
+def _auto_points_cell_threshold() -> int:
+    return _env_int(
+        _AUTO_POINTS_CELLS_ENV,
+        _DEFAULT_AUTO_POINTS_CELLS,
+        lower=0,
+        upper=2_000_000,
+    )
+
+
+def _should_auto_points(n_cells: int) -> bool:
+    threshold = _auto_points_cell_threshold()
+    return threshold > 0 and int(n_cells) >= threshold
+
+
+def _point_cloud_max_points() -> int:
+    raw = os.environ.get(_POINT_CLOUD_MAX_POINTS_ENV, "").strip().lower()
+    if raw in {"0", "false", "no", "off", "none", "disabled"}:
+        return 0
+    return _env_int(_POINT_CLOUD_MAX_POINTS_ENV, 60000, lower=0, upper=2_000_000)
+
+
+def _progressive_volume_upgrade_enabled() -> bool:
+    return _env_flag(_PROGRESSIVE_VOLUME_UPGRADE_ENV)
+
+
+def _progressive_volume_delay_ms() -> int:
+    return _env_int(
+        _PROGRESSIVE_VOLUME_DELAY_MS_ENV,
+        750,
+        lower=0,
+        upper=60_000,
+    )
+
+
+def _pyvista_offscreen_max_cells() -> int:
+    raw = os.environ.get(_PYVISTA_OFFSCREEN_MAX_CELLS_ENV, "").strip().lower()
+    if raw in {"0", "false", "no", "off", "none", "disabled"}:
+        return 0
+    return _env_int(
+        _PYVISTA_OFFSCREEN_MAX_CELLS_ENV,
+        _DEFAULT_PYVISTA_OFFSCREEN_MAX_CELLS,
+        lower=0,
+        upper=2_000_000,
+    )
+
+
+def _should_skip_pyvista_offscreen(n_cells: int, display_mode: str) -> bool:
+    if display_mode != DISPLAY_MODE_POINTS:
+        return False
+    threshold = _pyvista_offscreen_max_cells()
+    return threshold > 0 and int(n_cells) >= threshold
+
+
+def _wslg_pyvista_offscreen_enabled() -> bool:
+    raw = os.environ.get(_PYVISTA_OFFSCREEN_WSLG_ENV, "").strip().lower()
+    return raw in _TRUE_ENV_VALUES
+
+
+def _should_skip_pyvista_offscreen_for_reason(
+    n_cells: int,
+    display_mode: str,
+    reason: str,
+) -> bool:
+    if _should_skip_pyvista_offscreen(n_cells, display_mode):
+        return True
+    if (
+        _running_under_wsl()
+        and "WSLg embedded VTK requires" in str(reason)
+        and not _wslg_pyvista_offscreen_enabled()
+    ):
+        return True
+    return False
+
+
+def _pyvista_offscreen_negative_cache_enabled() -> bool:
+    raw = os.environ.get(_PYVISTA_OFFSCREEN_NEGATIVE_CACHE_ENV, "1").strip().lower()
+    return raw not in {"0", "false", "no", "off", "none", "disabled"}
+
+
+def _pyvista_offscreen_failure_reason() -> str | None:
+    if not _pyvista_offscreen_negative_cache_enabled():
+        return None
+    return _PYVISTA_OFFSCREEN_FAILURE_REASON
+
+
+def _mark_pyvista_offscreen_failure(reason: object) -> None:
+    if not _pyvista_offscreen_negative_cache_enabled():
+        return
+    global _PYVISTA_OFFSCREEN_FAILURE_REASON
+    text = str(reason).strip()
+    _PYVISTA_OFFSCREEN_FAILURE_REASON = text or "unknown PyVista offscreen failure"
+
+
+def _clear_pyvista_offscreen_failure_cache() -> None:
+    global _PYVISTA_OFFSCREEN_FAILURE_REASON
+    _PYVISTA_OFFSCREEN_FAILURE_REASON = None
+
+
+def _evenly_spaced_range(size: int, max_count: int) -> np.ndarray:
+    size = max(int(size), 0)
+    max_count = int(max_count)
+    if max_count <= 0 or size <= 0:
+        return np.empty((0,), dtype=np.int64)
+    if size <= max_count:
+        return np.arange(size, dtype=np.int64)
+    return np.linspace(0, size - 1, num=max_count, dtype=np.int64)
+
+
+def _evenly_spaced_subset(indices: np.ndarray, max_count: int) -> np.ndarray:
+    indices = np.asarray(indices, dtype=np.int64).reshape(-1)
+    if max_count <= 0 or indices.size <= max_count:
+        return indices
+    positions = _evenly_spaced_range(indices.size, max_count)
+    return indices[positions]
+
+
+def _sample_background_indices(
+    anomaly_mask: np.ndarray,
+    anomaly_idx: np.ndarray,
+    max_count: int,
+) -> np.ndarray:
+    if max_count <= 0:
+        return np.empty((0,), dtype=np.int64)
+    mask_arr = np.asarray(anomaly_mask, dtype=bool).reshape(-1)
+    n_points = int(mask_arr.size)
+    background_count = n_points - int(anomaly_idx.size)
+    if background_count <= 0:
+        return np.empty((0,), dtype=np.int64)
+    actual_background_count = background_count
+    if actual_background_count <= 0:
+        return np.empty((0,), dtype=np.int64)
+    if actual_background_count <= max_count:
+        return _background_indices_from_mask(mask_arr, actual_background_count)
+    ranks = _evenly_spaced_range(background_count, max_count)
+    if anomaly_idx.size == 0:
+        return ranks
+    candidates = ranks
+    while True:
+        shifted = ranks + np.searchsorted(anomaly_idx, candidates, side="right")
+        if np.array_equal(shifted, candidates):
+            return candidates.astype(np.int64, copy=False)
+        candidates = shifted
+
+
+def _background_indices_from_mask(
+    mask: np.ndarray, background_count: int
+) -> np.ndarray:
+    out = np.empty(int(background_count), dtype=np.int64)
+    out_pos = 0
+    for point_idx, is_anomaly in enumerate(np.asarray(mask, dtype=bool).reshape(-1)):
+        if bool(is_anomaly):
+            continue
+        if out_pos >= out.size:
+            break
+        out[out_pos] = point_idx
+        out_pos += 1
+    return out[:out_pos]
+
+
+def _true_indices_from_mask(mask: np.ndarray, true_count: int) -> np.ndarray:
+    out = np.empty(int(true_count), dtype=np.int64)
+    out_pos = 0
+    for point_idx, is_true in enumerate(np.asarray(mask, dtype=bool).reshape(-1)):
+        if not bool(is_true):
+            continue
+        if out_pos >= out.size:
+            break
+        out[out_pos] = point_idx
+        out_pos += 1
+    return out[:out_pos]
+
+
+def _sample_true_indices(
+    mask: np.ndarray,
+    true_count: int,
+    max_count: int,
+) -> np.ndarray:
+    if max_count <= 0 or true_count <= 0:
+        return np.empty((0,), dtype=np.int64)
+    if true_count <= max_count:
+        return _true_indices_from_mask(mask, true_count)
+
+    ranks = _evenly_spaced_range(true_count, max_count)
+    out = np.empty(ranks.size, dtype=np.int64)
+    rank_pos = 0
+    true_seen = 0
+    mask_flat = np.asarray(mask, dtype=bool).reshape(-1)
+    chunk_items = max(1, int(_POINT_CLOUD_SAMPLE_CHUNK_ITEMS))
+    for start in range(0, mask_flat.size, chunk_items):
+        chunk = mask_flat[start : start + chunk_items]
+        for local_idx, is_true in enumerate(chunk):
+            if not bool(is_true):
+                continue
+            if true_seen == int(ranks[rank_pos]):
+                out[rank_pos] = start + local_idx
+                rank_pos += 1
+                if rank_pos >= out.size:
+                    return out
+            true_seen += 1
+    return out[:rank_pos]
+
+
+def _point_cloud_sample_indices(
+    cell_sigma: np.ndarray,
+    centers: np.ndarray,
+    *,
+    anomaly_mode: str,
+    max_points: int | None = None,
+) -> np.ndarray:
+    values = _display_float_values(cell_sigma)
+    n_points = int(values.size)
+    if n_points == 0:
+        return np.array([], dtype=np.int64)
+    limit = _point_cloud_max_points() if max_points is None else int(max_points)
+    if limit <= 0 or n_points <= limit:
+        return np.arange(n_points, dtype=np.int64)
+
+    center_values = np.asarray(centers)
+    if center_values.ndim != 2 or center_values.shape[0] != n_points:
+        return _evenly_spaced_range(n_points, limit)
+
+    # Keep the full-data pass O(n); spatial coherence is applied later on the
+    # sampled display set for highlight rendering.
+    anomaly_mask = _cell_anomaly_mask(values, anomaly_mode)
+    anomaly_count = int(np.count_nonzero(anomaly_mask))
+    if anomaly_count >= limit:
+        return _sample_true_indices(anomaly_mask, anomaly_count, limit)
+    anomaly_idx = (
+        _true_indices_from_mask(anomaly_mask, anomaly_count)
+        if anomaly_count > 0
+        else np.empty((0,), dtype=np.int64)
+    )
+
+    background_budget = limit - int(anomaly_idx.size)
+    sampled_background = _sample_background_indices(
+        anomaly_mask,
+        anomaly_idx,
+        background_budget,
+    )
+    sampled = np.empty(anomaly_idx.size + sampled_background.size, dtype=np.int64)
+    sampled[: anomaly_idx.size] = anomaly_idx
+    sampled[anomaly_idx.size :] = sampled_background
+    sampled.sort()
+    return sampled
+
+
+def _point_cloud_display_arrays(
+    centers: np.ndarray,
+    cell_sigma: np.ndarray,
+    sample_idx: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    sample = np.asarray(sample_idx, dtype=np.int64).reshape(-1)
+    center_values = np.asarray(centers)
+    if np.issubdtype(center_values.dtype, np.floating):
+        display_centers = np.empty(
+            (sample.size, center_values.shape[1]), dtype=center_values.dtype
+        )
+        np.take(center_values, sample, axis=0, out=display_centers)
+    else:
+        display_centers = np.empty(
+            (sample.size, center_values.shape[1]), dtype=np.float32
+        )
+        for row_idx, source_idx in enumerate(sample):
+            display_centers[row_idx] = center_values[int(source_idx)]
+
+    sigma_values = _display_float_values(cell_sigma)
+    display_sigma = np.empty(sample.size, dtype=sigma_values.dtype)
+    np.take(sigma_values, sample, out=display_sigma)
+    return display_centers, display_sigma
+
+
+def _point_cloud_highlight_arrays(
+    display_centers: np.ndarray,
+    display_sigma: np.ndarray,
+    inhom_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    centers_arr = np.asarray(display_centers)
+    sigma_arr = np.asarray(display_sigma)
+    mask_arr = np.asarray(inhom_mask, dtype=bool).reshape(-1)
+    n_points = min(mask_arr.size, centers_arr.shape[0], sigma_arr.shape[0])
+    if n_points <= 0:
+        return (
+            np.empty((0, *centers_arr.shape[1:]), dtype=centers_arr.dtype),
+            np.empty((0,), dtype=sigma_arr.dtype),
+        )
+    active_mask = mask_arr[:n_points]
+    active_count = int(np.count_nonzero(active_mask))
+    if active_count <= 0:
+        return (
+            np.empty((0, *centers_arr.shape[1:]), dtype=centers_arr.dtype),
+            np.empty((0,), dtype=sigma_arr.dtype),
+        )
+
+    highlight_centers = np.empty(
+        (active_count, *centers_arr.shape[1:]), dtype=centers_arr.dtype
+    )
+    highlight_sigma = np.empty(active_count, dtype=sigma_arr.dtype)
+    out_idx = 0
+    for point_idx, is_active in enumerate(active_mask):
+        if not bool(is_active):
+            continue
+        highlight_centers[out_idx] = centers_arr[point_idx]
+        highlight_sigma[out_idx] = sigma_arr[point_idx]
+        out_idx += 1
+    return highlight_centers, highlight_sigma
+
+
+def _extract_cells_from_mask(grid, inhom_mask: np.ndarray):
+    mask_arr = np.asarray(inhom_mask, dtype=bool).reshape(-1)
+    if mask_arr.size == 0:
+        return None
+    try:
+        return grid.extract_cells(mask_arr)
+    except Exception:
+        inhom_indices = np.flatnonzero(mask_arr)
+        if inhom_indices.size == 0:
+            return None
+        return grid.extract_cells(inhom_indices)
 
 
 def _plot_font_families() -> list[str]:
@@ -479,10 +1050,176 @@ def _boundary_faces(cells: np.ndarray) -> tuple[list[tuple[int, ...]], np.ndarra
             key = tuple(sorted(face))
             faces[key] = None if key in faces else (face, cell_idx)
 
-    kept = [payload for payload in faces.values() if payload is not None]
-    return [face for face, _idx in kept], np.asarray(
-        [idx for _face, idx in kept], dtype=np.int64
-    )
+    kept_count = sum(1 for payload in faces.values() if payload is not None)
+    if kept_count <= 0:
+        return [], np.empty((0,), dtype=np.int64)
+
+    boundary_faces: list[tuple[int, ...]] = [()] * kept_count
+    source_cells = np.empty(kept_count, dtype=np.int64)
+    kept_idx = 0
+    for payload in faces.values():
+        if payload is None:
+            continue
+        face, cell_idx = payload
+        boundary_faces[kept_idx] = face
+        source_cells[kept_idx] = int(cell_idx)
+        kept_idx += 1
+    return boundary_faces, source_cells
+
+
+def _valid_boundary_faces_and_sources(
+    faces: list[tuple[int, ...]], source_cells: np.ndarray, n_coords: int
+) -> tuple[list[tuple[int, ...]], np.ndarray]:
+    if not faces:
+        return [], np.empty((0,), dtype=np.intp)
+
+    all_valid = True
+    for face in faces:
+        for idx in face:
+            if idx < 0 or idx >= n_coords:
+                all_valid = False
+                break
+        if not all_valid:
+            break
+    if all_valid:
+        return faces, np.asarray(source_cells, dtype=np.intp)
+
+    valid_count = 0
+    for face in faces:
+        if all(0 <= idx < n_coords for idx in face):
+            valid_count += 1
+    if valid_count <= 0:
+        return [], np.empty((0,), dtype=np.intp)
+
+    valid_faces: list[tuple[int, ...]] = [()] * valid_count
+    source_indices = np.empty(valid_count, dtype=np.intp)
+    out_idx = 0
+    for face, source_cell in zip(faces, source_cells, strict=False):
+        if not all(0 <= idx < n_coords for idx in face):
+            continue
+        valid_faces[out_idx] = face
+        source_indices[out_idx] = int(source_cell)
+        out_idx += 1
+    return valid_faces, source_indices
+
+
+def _cell_mean_values(point_values: np.ndarray, cells: np.ndarray) -> np.ndarray:
+    """Average point values per cell without materializing ``values[cells]``."""
+
+    values = np.asarray(point_values)
+    if np.iscomplexobj(values):
+        values = np.real(values)
+    if np.issubdtype(values.dtype, np.floating):
+        dtype = np.result_type(values.dtype, np.float32)
+        source = np.asarray(values, dtype=dtype).reshape(-1)
+    else:
+        source = np.asarray(values, dtype=np.float32).reshape(-1)
+        dtype = source.dtype
+    cells_i = np.asarray(cells)
+    if not np.issubdtype(cells_i.dtype, np.integer):
+        cells_i = np.asarray(cells_i, dtype=np.intp)
+    if cells_i.ndim != 2 or cells_i.shape[0] == 0:
+        return np.empty((0,), dtype=dtype)
+    out = np.zeros(cells_i.shape[0], dtype=dtype)
+    work = np.empty(cells_i.shape[0], dtype=dtype)
+    for local_idx in range(cells_i.shape[1]):
+        np.take(source, cells_i[:, local_idx], out=work)
+        out += work
+    out /= float(cells_i.shape[1])
+    return out
+
+
+def _face_nanmean_value(point_values: np.ndarray, face: tuple[int, ...]) -> float:
+    total = 0.0
+    count = 0
+    for idx in face:
+        value = float(point_values[int(idx)])
+        if np.isnan(value):
+            continue
+        total += value
+        count += 1
+    if count == 0:
+        return float("nan")
+    return total / float(count)
+
+
+def _face_vertices(coords: np.ndarray, face: tuple[int, ...]) -> np.ndarray:
+    coords_arr = np.asarray(coords)
+    vertices = np.empty((len(face), 3), dtype=coords_arr.dtype)
+    for row, idx in enumerate(face):
+        vertices[row] = coords_arr[int(idx), :3]
+    return vertices
+
+
+def _face_vertices_array(
+    coords: np.ndarray, faces: list[tuple[int, ...]]
+) -> np.ndarray:
+    coords_arr = np.asarray(coords)
+    if not faces:
+        return np.empty((0, 0, 3), dtype=coords_arr.dtype)
+    vertices_per_face = len(faces[0])
+    vertices = np.empty((len(faces), vertices_per_face, 3), dtype=coords_arr.dtype)
+    for face_idx, face in enumerate(faces):
+        for vertex_idx, idx in enumerate(face):
+            vertices[face_idx, vertex_idx] = coords_arr[int(idx), :3]
+    return vertices
+
+
+def _highlight_face_vertices_and_values(
+    coords: np.ndarray,
+    cells: np.ndarray,
+    cell_sigma: np.ndarray,
+    inhom_mask: np.ndarray,
+) -> tuple[np.ndarray, np.ndarray]:
+    coords_arr = np.asarray(coords)
+    cells_arr = np.asarray(cells)
+    sigma_arr = np.asarray(cell_sigma)
+    mask_arr = np.asarray(inhom_mask, dtype=bool).reshape(-1)
+    offsets_for_cell = _CELL_FACE_OFFSETS.get(int(cells_arr.shape[1]))
+    if offsets_for_cell is None or mask_arr.size == 0:
+        return (
+            np.empty((0, 0, 3), dtype=coords_arr.dtype),
+            np.empty((0,), dtype=sigma_arr.dtype),
+        )
+
+    active_mask = mask_arr[: cells_arr.shape[0]]
+    active_count = int(np.count_nonzero(active_mask))
+    if active_count <= 0:
+        vertices_per_face = len(offsets_for_cell[0])
+        return (
+            np.empty((0, vertices_per_face, 3), dtype=coords_arr.dtype),
+            np.empty((0,), dtype=sigma_arr.dtype),
+        )
+
+    vertices_per_face = len(offsets_for_cell[0])
+    max_faces = active_count * len(offsets_for_cell)
+    vertices = np.empty((max_faces, vertices_per_face, 3), dtype=coords_arr.dtype)
+    values = np.empty(max_faces, dtype=sigma_arr.dtype)
+    n_coords = len(coords_arr)
+    out_idx = 0
+    for cell_idx, is_active in enumerate(active_mask):
+        if not bool(is_active):
+            continue
+        cell = cells_arr[cell_idx]
+        for offsets in offsets_for_cell:
+            valid = True
+            for vertex_idx, offset in enumerate(offsets):
+                node_idx = int(cell[offset])
+                if node_idx < 0 or node_idx >= n_coords:
+                    valid = False
+                    break
+                vertices[out_idx, vertex_idx] = coords_arr[node_idx, :3]
+            if not valid:
+                continue
+            values[out_idx] = sigma_arr[cell_idx]
+            out_idx += 1
+
+    if out_idx <= 0:
+        return (
+            np.empty((0, vertices_per_face, 3), dtype=coords_arr.dtype),
+            np.empty((0,), dtype=sigma_arr.dtype),
+        )
+    return vertices[:out_idx], values[:out_idx]
 
 
 def _configure_vtk_logging() -> None:
@@ -528,6 +1265,8 @@ class Conductivity3DWidget(QWidget):
         self._render_backend = "caption"
         self._display_mode = DISPLAY_MODE_VOLUME
         self._anomaly_mode = ANOMALY_MODE_POSITIVE
+        self._point_cloud_original_count = 0
+        self._point_cloud_display_count = 0
         self._last_vtk_disabled_reason: str | None = None
         self._title_font = FontProperties(family=_plot_font_families(), size=14)
         self._mpl3d_colorbar = None
@@ -561,6 +1300,8 @@ class Conductivity3DWidget(QWidget):
         self._pending_render: Optional[
             tuple[np.ndarray, np.ndarray, np.ndarray, str | None]
         ] = None
+        self._progressive_volume_pending_signature: tuple[int, int, int] | None = None
+        self._suppress_auto_points_once = False
 
         # Drag throttle: coalesce rapid mouseMove events for the
         # offscreen backend.  Default to a high-performance 60 fps,
@@ -597,6 +1338,11 @@ class Conductivity3DWidget(QWidget):
             _env_int(_OFFSCREEN_DRAG_IDLE_MS_ENV, 80, lower=16, upper=1000)
         )
         self._drag_release_timer.timeout.connect(self._on_drag_idle)
+        self._progressive_volume_timer = QTimer(self)
+        self._progressive_volume_timer.setSingleShot(True)
+        self._progressive_volume_timer.timeout.connect(
+            self._run_progressive_volume_upgrade
+        )
 
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
@@ -874,8 +1620,12 @@ class Conductivity3DWidget(QWidget):
                 if title is not None:
                     self.setTitle(title)
                 self._last_image = (sigma, coords, cells, title)
-                if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
-                    self._render_matplotlib_scene(sigma, coords, cells)
+                self._render_without_embedded_vtk(
+                    sigma,
+                    coords,
+                    cells,
+                    reason=reason,
+                )
             else:
                 self._show_caption(
                     t("sim.results.viewer3d_embedded_disabled"), kind="placeholder"
@@ -895,8 +1645,12 @@ class Conductivity3DWidget(QWidget):
                 if title is not None:
                     self.setTitle(title)
                 self._last_image = (sigma, coords, cells, title)
-                if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
-                    self._render_matplotlib_scene(sigma, coords, cells)
+                self._render_without_embedded_vtk(
+                    sigma,
+                    coords,
+                    cells,
+                    reason=str(exc),
+                )
             else:
                 self._show_caption(t("sim.results.viewer3d_unavailable"), kind="error")
             return
@@ -981,6 +1735,49 @@ class Conductivity3DWidget(QWidget):
             self._anomaly_mode == ANOMALY_MODE_ABSOLUTE
         )
 
+    def _render_without_embedded_vtk(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+        *,
+        reason: str,
+    ) -> None:
+        offscreen_failure = _pyvista_offscreen_failure_reason()
+        skip_offscreen = (
+            offscreen_failure is not None
+            or _should_skip_pyvista_offscreen_for_reason(
+                cells.shape[0],
+                self._display_mode,
+                reason,
+            )
+        )
+        log_reason = (
+            f"{reason}; PyVista offscreen disabled after previous failure: "
+            f"{offscreen_failure}"
+            if offscreen_failure is not None
+            else reason
+        )
+        if log_reason != self._last_vtk_disabled_reason:
+            action = (
+                "using Matplotlib point-cloud fallback"
+                if skip_offscreen
+                else "trying PyVista offscreen"
+            )
+            log.info(
+                "embedded PyVistaQt viewer unavailable: %s; %s",
+                log_reason,
+                action,
+            )
+            self._last_vtk_disabled_reason = log_reason
+        self._pending_render = None
+        self._discard_actors()
+        if skip_offscreen:
+            self._render_matplotlib_scene(sigma, coords, cells)
+            return
+        if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
+            self._render_matplotlib_scene(sigma, coords, cells)
+
     def update_image(
         self,
         conductivity: np.ndarray,
@@ -989,8 +1786,8 @@ class Conductivity3DWidget(QWidget):
         title: str | None = None,
     ) -> None:
         """Render a 3D volume conductivity field."""
-        cells = np.asarray(cell_connectivity, dtype=np.int64)
-        coords = np.asarray(node_coords, dtype=float)
+        cells = _display_cells_array(cell_connectivity)
+        coords = _display_coords_array(node_coords)
         if (
             coords.ndim != 2
             or cells.ndim != 2
@@ -1000,7 +1797,7 @@ class Conductivity3DWidget(QWidget):
             self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
             return
 
-        sigma = np.asarray(conductivity, dtype=float)
+        sigma = _display_sigma_array(conductivity)
         if sigma.shape[0] not in (cells.shape[0], coords.shape[0]):
             self._show_caption(t("sim.results.viewer3d_size_mismatch"), kind="error")
             return
@@ -1008,19 +1805,28 @@ class Conductivity3DWidget(QWidget):
         if title is not None:
             self.setTitle(title)
         self._last_image = (sigma, coords, cells, title)
+        auto_points = (
+            self._display_mode == DISPLAY_MODE_VOLUME
+            and not self._suppress_auto_points_once
+            and _should_auto_points(cells.shape[0])
+        )
+        self._suppress_auto_points_once = False
+        if auto_points:
+            self._display_mode = DISPLAY_MODE_POINTS
+            self._sync_display_mode_buttons()
+            self._schedule_progressive_volume_upgrade(sigma, coords, cells)
+        else:
+            self._progressive_volume_pending_signature = None
+            self._progressive_volume_timer.stop()
 
         vtk_enabled, reason = embedded_vtk_status()
         if not vtk_enabled:
-            if reason != self._last_vtk_disabled_reason:
-                log.info(
-                    "embedded PyVistaQt viewer unavailable: %s; trying PyVista offscreen",
-                    reason,
-                )
-                self._last_vtk_disabled_reason = reason
-            self._pending_render = None
-            self._discard_actors()
-            if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
-                self._render_matplotlib_scene(sigma, coords, cells)
+            self._render_without_embedded_vtk(
+                sigma,
+                coords,
+                cells,
+                reason=reason,
+            )
             return
 
         # Switching the stacked layout to the interactor host first
@@ -1039,11 +1845,37 @@ class Conductivity3DWidget(QWidget):
 
         self._build_scene(sigma, coords, cells)
 
+    def _schedule_progressive_volume_upgrade(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> None:
+        if not _progressive_volume_upgrade_enabled():
+            return
+        self._progressive_volume_pending_signature = (id(sigma), id(coords), id(cells))
+        self._progressive_volume_timer.start(_progressive_volume_delay_ms())
+
+    def _run_progressive_volume_upgrade(self) -> None:
+        signature = self._progressive_volume_pending_signature
+        self._progressive_volume_pending_signature = None
+        if signature is None or self._last_image is None:
+            return
+        sigma, coords, cells, _title = self._last_image
+        if signature != (id(sigma), id(coords), id(cells)):
+            return
+        if self._display_mode != DISPLAY_MODE_POINTS:
+            return
+        self._suppress_auto_points_once = True
+        self.set_display_mode(DISPLAY_MODE_VOLUME)
+
     def clear(self) -> None:
         """Drop any rendered data and show the placeholder caption."""
         self._discard_actors()
         self._last_image = None
         self._pending_render = None
+        self._progressive_volume_pending_signature = None
+        self._progressive_volume_timer.stop()
         self._show_caption(t("sim.results.viewer3d_no_data"), kind="placeholder")
 
     def set_loading(self, message: str | None = None) -> None:
@@ -1193,7 +2025,7 @@ class Conductivity3DWidget(QWidget):
         face_buffer = np.empty((triangles.shape[0], 4), dtype=np.int64)
         face_buffer[:, 0] = 3
         face_buffer[:, 1:] = triangles
-        return pv.PolyData(points, face_buffer.flatten())
+        return pv.PolyData(points, face_buffer.ravel())
 
     def _build_mpl3d_electrode_collection(self, geometry: ElectrodeGeometry) -> None:
         if self._mpl3d_electrode_collection is not None:
@@ -1212,27 +2044,21 @@ class Conductivity3DWidget(QWidget):
             thetas = np.linspace(patch.theta_start, patch.theta_end, n_theta)
             cos_t = np.cos(thetas)
             sin_t = np.sin(thetas)
-            lower = np.column_stack(
-                (
-                    geometry.radius * cos_t,
-                    geometry.radius * sin_t,
-                    np.full_like(cos_t, patch.z_lower),
-                )
-            )
-            upper = np.column_stack(
-                (
-                    geometry.radius * cos_t,
-                    geometry.radius * sin_t,
-                    np.full_like(cos_t, patch.z_upper),
-                )
-            )
+            lower = np.empty((n_theta, 3), dtype=np.float32)
+            lower[:, 0] = geometry.radius * cos_t
+            lower[:, 1] = geometry.radius * sin_t
+            lower[:, 2] = patch.z_lower
+            upper = np.empty((n_theta, 3), dtype=np.float32)
+            upper[:, 0] = lower[:, 0]
+            upper[:, 1] = lower[:, 1]
+            upper[:, 2] = patch.z_upper
             for i in range(n_theta - 1):
-                polys.append(
-                    np.array(
-                        [lower[i], lower[i + 1], upper[i + 1], upper[i]],
-                        dtype=float,
-                    )
-                )
+                quad = np.empty((4, 3), dtype=np.float32)
+                quad[0] = lower[i]
+                quad[1] = lower[i + 1]
+                quad[2] = upper[i + 1]
+                quad[3] = upper[i]
+                polys.append(quad)
         if not polys:
             return
         collection = Poly3DCollection(
@@ -1345,10 +2171,10 @@ class Conductivity3DWidget(QWidget):
         height = min(max(1, int(round(label_height * dpr))), 1800)
         return width, height, dpr
 
-    def _refresh_offscreen_pixmap(self) -> None:
+    def _refresh_offscreen_pixmap(self) -> bool:
         plotter = self._offscreen_plotter
         if plotter is None:
-            return
+            return False
         width, height = self._offscreen_render_size()
         try:
             window_size = (width, height)
@@ -1359,9 +2185,9 @@ class Conductivity3DWidget(QWidget):
             image = np.ascontiguousarray(plotter.screenshot(return_img=True))
         except Exception as exc:  # pragma: no cover — VTK runtime edge case
             log.warning("PyVista offscreen render failed: %s", exc)
-            return
+            return False
         if image.ndim != 3 or image.shape[2] < 3:
-            return
+            return False
         image = image[:, :, :3]
         qimage = QImage(
             image.data,
@@ -1381,6 +2207,7 @@ class Conductivity3DWidget(QWidget):
             )
         pixmap.setDevicePixelRatio(target_dpr)
         self._offscreen_label.setPixmap(pixmap)
+        return True
 
     def _add_pyvista_point_cloud_actors(
         self,
@@ -1395,8 +2222,21 @@ class Conductivity3DWidget(QWidget):
         text_color: tuple[float, float, float],
         offscreen: bool,
     ) -> None:
-        cloud = pv.PolyData(centers)
-        cloud["sigma"] = np.asarray(cell_sigma, dtype=float)
+        sample_idx = _point_cloud_sample_indices(
+            cell_sigma,
+            centers,
+            anomaly_mode=self._anomaly_mode,
+        )
+        display_centers, display_sigma = _point_cloud_display_arrays(
+            centers,
+            cell_sigma,
+            sample_idx,
+        )
+        self._point_cloud_original_count = int(np.asarray(cell_sigma).size)
+        self._point_cloud_display_count = int(display_sigma.size)
+
+        cloud = pv.PolyData(display_centers)
+        cloud["sigma"] = display_sigma
         scalar_bar_y = 0.12 if offscreen else 0.05
         scalar_bar_height = 0.55 if offscreen else 0.6
         mesh_actor = plotter.add_mesh(
@@ -1406,7 +2246,7 @@ class Conductivity3DWidget(QWidget):
             clim=[sigma_min, sigma_max],
             opacity=opacity,
             render_points_as_spheres=True,
-            point_size=_pyvista_point_size(centers.shape[0]),
+            point_size=_pyvista_point_size(display_centers.shape[0]),
             show_scalar_bar=True,
             scalar_bar_args={
                 "title": "S/m",
@@ -1426,14 +2266,19 @@ class Conductivity3DWidget(QWidget):
             self._mesh_actor = mesh_actor
 
         inhom_mask = _cell_anomaly_mask(
-            cell_sigma,
+            display_sigma,
             self._anomaly_mode,
-            cell_centers=centers,
+            cell_centers=display_centers,
         )
-        if not np.any(inhom_mask):
+        highlight_centers, highlight_sigma = _point_cloud_highlight_arrays(
+            display_centers,
+            display_sigma,
+            inhom_mask,
+        )
+        if highlight_sigma.size == 0:
             return
-        highlight_cloud = pv.PolyData(centers[inhom_mask])
-        highlight_cloud["sigma"] = np.asarray(cell_sigma, dtype=float)[inhom_mask]
+        highlight_cloud = pv.PolyData(highlight_centers)
+        highlight_cloud["sigma"] = highlight_sigma
         highlight_actor = plotter.add_mesh(
             highlight_cloud,
             scalars="sigma",
@@ -1441,7 +2286,10 @@ class Conductivity3DWidget(QWidget):
             clim=[sigma_min, sigma_max],
             opacity=1.0,
             render_points_as_spheres=True,
-            point_size=max(_pyvista_point_size(centers.shape[0]) * 1.55, 6.0),
+            point_size=max(
+                _pyvista_point_size(display_centers.shape[0]) * 1.55,
+                6.0,
+            ),
             show_scalar_bar=False,
         )
         highlight_actor.SetVisibility(bool(self._highlight_check.isChecked()))
@@ -1462,6 +2310,7 @@ class Conductivity3DWidget(QWidget):
             _configure_vtk_logging()
         except Exception as exc:
             log.info("PyVista offscreen renderer unavailable: %s", exc)
+            _mark_pyvista_offscreen_failure(exc)
             return False
 
         self._discard_offscreen_plotter()
@@ -1473,29 +2322,16 @@ class Conductivity3DWidget(QWidget):
         else:
             scalar_kw = {"scalars": "sigma", "preference": "point"}
 
-        verts_per_cell = cells.shape[1]
-        if verts_per_cell == 4:
-            cell_type = pv.CellType.TETRA
-        elif verts_per_cell == 8:
-            cell_type = pv.CellType.HEXAHEDRON
-        else:
-            return False
-
-        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
-        cell_array[:, 0] = verts_per_cell
-        cell_array[:, 1:] = cells
-        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
-        grid = pv.UnstructuredGrid(cell_array.flatten(), cell_types, coords)
-        if scalar_mode == "cell":
-            grid.cell_data["sigma"] = cell_sigma
-        else:
-            grid.point_data["sigma"] = sigma
-
         sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
 
         palette = plot_palette()
         width, height = self._offscreen_render_size()
-        plotter = pv.Plotter(off_screen=True, window_size=(width, height))
+        try:
+            plotter = pv.Plotter(off_screen=True, window_size=(width, height))
+        except Exception as exc:  # pragma: no cover — VTK runtime edge case
+            log.info("PyVista offscreen plotter init failed: %s", exc)
+            _mark_pyvista_offscreen_failure(exc)
+            return False
         plotter.set_background(_hex_to_rgb(palette.get("axes_bg", "#ffffff")))
         plotter.add_axes()
         self._offscreen_plotter = plotter
@@ -1515,27 +2351,56 @@ class Conductivity3DWidget(QWidget):
                 text_color=text_color,
                 offscreen=True,
             )
+            plotter.reset_camera()
+            self._stack.setCurrentWidget(self._offscreen_host)
+            self._controls.show()
+            self._render_backend = "pyvista_offscreen"
+            if self._electrode_geometry is not None:
+                self._build_offscreen_electrode_actor(self._electrode_geometry)
+            if not self._refresh_offscreen_pixmap():
+                _mark_pyvista_offscreen_failure("initial offscreen render failed")
+                self._discard_offscreen_plotter()
+                return False
+            return True
+
+        verts_per_cell = cells.shape[1]
+        if verts_per_cell == 4:
+            cell_type = pv.CellType.TETRA
+        elif verts_per_cell == 8:
+            cell_type = pv.CellType.HEXAHEDRON
         else:
-            self._offscreen_mesh_actor = plotter.add_mesh(
-                grid,
-                cmap="viridis",
-                opacity=opacity,
-                clim=[sigma_min, sigma_max],
-                show_edges=False,
-                show_scalar_bar=True,
-                scalar_bar_args={
-                    "title": "S/m",
-                    "color": text_color,
-                    "vertical": True,
-                    "position_x": 0.88,
-                    "position_y": 0.12,
-                    "width": 0.06,
-                    "height": 0.55,
-                    "title_font_size": 14,
-                    "label_font_size": 10,
-                },
-                **scalar_kw,
-            )
+            return False
+
+        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
+        cell_array[:, 0] = verts_per_cell
+        cell_array[:, 1:] = cells
+        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
+        grid = pv.UnstructuredGrid(cell_array.ravel(), cell_types, coords)
+        if scalar_mode == "cell":
+            grid.cell_data["sigma"] = cell_sigma
+        else:
+            grid.point_data["sigma"] = sigma
+
+        self._offscreen_mesh_actor = plotter.add_mesh(
+            grid,
+            cmap="viridis",
+            opacity=opacity,
+            clim=[sigma_min, sigma_max],
+            show_edges=False,
+            show_scalar_bar=True,
+            scalar_bar_args={
+                "title": "S/m",
+                "color": text_color,
+                "vertical": True,
+                "position_x": 0.88,
+                "position_y": 0.12,
+                "width": 0.06,
+                "height": 0.55,
+                "title_font_size": 14,
+                "label_font_size": 10,
+            },
+            **scalar_kw,
+        )
 
         if scalar_mode == "cell" and self._display_mode == DISPLAY_MODE_VOLUME:
             inhom_mask = _cell_anomaly_mask(
@@ -1543,22 +2408,21 @@ class Conductivity3DWidget(QWidget):
                 self._anomaly_mode,
                 cell_centers=_cell_centers(coords, cells),
             )
-            if np.any(inhom_mask):
-                inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
-                if inhom_grid.n_cells > 0:
-                    self._offscreen_highlight_actor = plotter.add_mesh(
-                        inhom_grid,
-                        scalars="sigma",
-                        preference="cell",
-                        cmap="viridis",
-                        clim=[sigma_min, sigma_max],
-                        opacity=1.0,
-                        show_edges=False,
-                        show_scalar_bar=False,
-                    )
-                    self._offscreen_highlight_actor.SetVisibility(
-                        bool(self._highlight_check.isChecked())
-                    )
+            inhom_grid = _extract_cells_from_mask(grid, inhom_mask)
+            if inhom_grid is not None and inhom_grid.n_cells > 0:
+                self._offscreen_highlight_actor = plotter.add_mesh(
+                    inhom_grid,
+                    scalars="sigma",
+                    preference="cell",
+                    cmap="viridis",
+                    clim=[sigma_min, sigma_max],
+                    opacity=1.0,
+                    show_edges=False,
+                    show_scalar_bar=False,
+                )
+                self._offscreen_highlight_actor.SetVisibility(
+                    bool(self._highlight_check.isChecked())
+                )
 
         outline = grid.extract_surface(
             algorithm="dataset_surface"
@@ -1588,7 +2452,10 @@ class Conductivity3DWidget(QWidget):
         # actor pointer.
         if self._electrode_geometry is not None:
             self._build_offscreen_electrode_actor(self._electrode_geometry)
-        self._refresh_offscreen_pixmap()
+        if not self._refresh_offscreen_pixmap():
+            _mark_pyvista_offscreen_failure("initial offscreen render failed")
+            self._discard_offscreen_plotter()
+            return False
         return True
 
     def _remove_mpl3d_colorbar(self) -> None:
@@ -1670,6 +2537,18 @@ class Conductivity3DWidget(QWidget):
     ) -> None:
         cell_sigma, _scalar_mode = _cell_center_sigma(sigma, cells)
         centers = _cell_centers(coords, cells)
+        sample_idx = _point_cloud_sample_indices(
+            cell_sigma,
+            centers,
+            anomaly_mode=self._anomaly_mode,
+        )
+        display_centers, display_sigma = _point_cloud_display_arrays(
+            centers,
+            cell_sigma,
+            sample_idx,
+        )
+        self._point_cloud_original_count = int(cell_sigma.size)
+        self._point_cloud_display_count = int(display_sigma.size)
         sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
 
         palette = plot_palette()
@@ -1680,13 +2559,13 @@ class Conductivity3DWidget(QWidget):
             palette.get("border", "#888") if self._wire_check.isChecked() else "none"
         )
         mesh = self._mpl3d_ax.scatter(
-            centers[:, 0],
-            centers[:, 1],
-            centers[:, 2],
-            c=cell_sigma,
+            display_centers[:, 0],
+            display_centers[:, 1],
+            display_centers[:, 2],
+            c=display_sigma,
             cmap=cmap,
             norm=norm,
-            s=_matplotlib_point_size(centers.shape[0]),
+            s=_matplotlib_point_size(display_centers.shape[0]),
             alpha=opacity,
             edgecolors=edge_color,
             linewidths=0.2,
@@ -1698,19 +2577,27 @@ class Conductivity3DWidget(QWidget):
         self._mpl3d_highlight_facecolors = None
 
         inhom_mask = _cell_anomaly_mask(
-            cell_sigma,
+            display_sigma,
             self._anomaly_mode,
-            cell_centers=centers,
+            cell_centers=display_centers,
         )
-        if np.any(inhom_mask):
+        highlight_centers, highlight_sigma = _point_cloud_highlight_arrays(
+            display_centers,
+            display_sigma,
+            inhom_mask,
+        )
+        if highlight_sigma.size > 0:
             highlight = self._mpl3d_ax.scatter(
-                centers[inhom_mask, 0],
-                centers[inhom_mask, 1],
-                centers[inhom_mask, 2],
-                c=cell_sigma[inhom_mask],
+                highlight_centers[:, 0],
+                highlight_centers[:, 1],
+                highlight_centers[:, 2],
+                c=highlight_sigma,
                 cmap=cmap,
                 norm=norm,
-                s=max(_matplotlib_point_size(centers.shape[0]) * 1.8, 16.0),
+                s=max(
+                    _matplotlib_point_size(display_centers.shape[0]) * 1.8,
+                    16.0,
+                ),
                 alpha=1.0,
                 edgecolors=palette["highlight"],
                 linewidths=0.45,
@@ -1770,32 +2657,25 @@ class Conductivity3DWidget(QWidget):
             return
 
         faces, source_cells = _boundary_faces(cells)
-        valid_face_payload: list[tuple[tuple[int, ...], int]] = []
-        for face, source_cell in zip(faces, source_cells, strict=False):
-            if all(0 <= idx < len(coords) for idx in face):
-                valid_face_payload.append((face, int(source_cell)))
-        if not valid_face_payload:
+        valid_faces, source_indices = _valid_boundary_faces_and_sources(
+            faces, source_cells, len(coords)
+        )
+        if not valid_faces:
             self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
             return
 
         n_cells = cells.shape[0]
         if sigma.shape[0] == n_cells:
             scalar_mode = "cell"
-            cell_sigma = sigma.astype(float, copy=False)
-            face_values = np.asarray(
-                [cell_sigma[source_cell] for _face, source_cell in valid_face_payload],
-                dtype=float,
-            )
+            cell_sigma = _display_float_values(sigma)
+            face_values = _face_cell_values(cell_sigma, source_indices)
         else:
             scalar_mode = "point"
-            cell_sigma = sigma[cells].mean(axis=1)
-            face_values = np.asarray(
-                [
-                    float(np.nanmean(sigma[np.asarray(face, dtype=np.int64)]))
-                    for face, _source_cell in valid_face_payload
-                ],
-                dtype=float,
-            )
+            point_sigma = _display_float_values(sigma)
+            cell_sigma = _cell_mean_values(point_sigma, cells)
+            face_values = np.empty(len(valid_faces), dtype=cell_sigma.dtype)
+            for face_idx, face in enumerate(valid_faces):
+                face_values[face_idx] = _face_nanmean_value(point_sigma, face)
 
         sigma_min, sigma_max = _conductivity_color_limits(face_values)
 
@@ -1803,10 +2683,7 @@ class Conductivity3DWidget(QWidget):
         cmap = colormaps["viridis"]
         norm = Normalize(vmin=sigma_min, vmax=sigma_max)
         opacity = self._opacity_slider.value() / 100.0
-        face_vertices = [
-            coords[np.asarray(face, dtype=np.int64), :3]
-            for face, _ in valid_face_payload
-        ]
+        face_vertices = _face_vertices_array(coords, valid_faces)
         colors = cmap(norm(face_values))
         colors[:, 3] = opacity
         edge_color = (
@@ -1822,43 +2699,33 @@ class Conductivity3DWidget(QWidget):
         )
         self._mpl3d_ax.add_collection3d(mesh)
         self._mpl3d_mesh_collection = mesh
-        self._mpl3d_mesh_facecolors = colors.copy()
+        self._mpl3d_mesh_facecolors = colors
         self._mpl3d_highlight_collection = None
         self._mpl3d_highlight_facecolors = None
 
         if scalar_mode == "cell":
-            inhom_indices = np.flatnonzero(
-                _cell_anomaly_mask(
-                    cell_sigma,
-                    self._anomaly_mode,
-                    cell_centers=_cell_centers(coords, cells),
-                )
+            inhom_mask = _cell_anomaly_mask(
+                cell_sigma,
+                self._anomaly_mode,
+                cell_centers=_cell_centers(coords, cells),
             )
-            if inhom_indices.size:
-                highlight_vertices: list[np.ndarray] = []
-                highlight_values: list[float] = []
-                offsets_for_cell = _CELL_FACE_OFFSETS.get(int(cells.shape[1]), ())
-                for cell_idx in inhom_indices:
-                    cell = cells[int(cell_idx)]
-                    for offsets in offsets_for_cell:
-                        face = tuple(int(cell[offset]) for offset in offsets)
-                        if all(0 <= idx < len(coords) for idx in face):
-                            highlight_vertices.append(coords[np.asarray(face), :3])
-                            highlight_values.append(float(cell_sigma[int(cell_idx)]))
-                if highlight_vertices:
-                    highlight_colors = cmap(norm(np.asarray(highlight_values)))
-                    highlight_colors[:, 3] = max(0.82, opacity)
-                    highlight = Poly3DCollection(
-                        highlight_vertices,
-                        facecolors=highlight_colors,
-                        edgecolors=palette["highlight"],
-                        linewidths=0.45,
-                        alpha=None,
-                    )
-                    self._mpl3d_ax.add_collection3d(highlight)
-                    highlight.set_visible(bool(self._highlight_check.isChecked()))
-                    self._mpl3d_highlight_collection = highlight
-                    self._mpl3d_highlight_facecolors = highlight_colors.copy()
+            highlight_vertices, highlight_values = _highlight_face_vertices_and_values(
+                coords, cells, cell_sigma, inhom_mask
+            )
+            if highlight_values.size:
+                highlight_colors = cmap(norm(highlight_values))
+                highlight_colors[:, 3] = max(0.82, opacity)
+                highlight = Poly3DCollection(
+                    highlight_vertices,
+                    facecolors=highlight_colors,
+                    edgecolors=palette["highlight"],
+                    linewidths=0.45,
+                    alpha=None,
+                )
+                self._mpl3d_ax.add_collection3d(highlight)
+                highlight.set_visible(bool(self._highlight_check.isChecked()))
+                self._mpl3d_highlight_collection = highlight
+                self._mpl3d_highlight_facecolors = highlight_colors
 
         self._apply_mpl3d_bounds_and_labels(coords, elev=elev, azim=azim)
 
@@ -1908,30 +2775,7 @@ class Conductivity3DWidget(QWidget):
             # Node-centered sigma — VTK takes that natively.
             scalar_kw = {"scalars": "sigma", "preference": "point"}
 
-        # Build the unstructured volume grid.  VTK expects
-        # [n_pts, p0, p1, ...] rows; support both tetra meshes from the
-        # CPU path and hex meshes from the CUDA-structured path.
-        verts_per_cell = cells.shape[1]
-        if verts_per_cell == 4:
-            cell_type = pv.CellType.TETRA
-        elif verts_per_cell == 8:
-            cell_type = pv.CellType.HEXAHEDRON
-        else:  # update_image() guards this; keep a defensive fallback.
-            self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
-            return
-
-        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
-        cell_array[:, 0] = verts_per_cell
-        cell_array[:, 1:] = cells
-        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
-        grid = pv.UnstructuredGrid(cell_array.flatten(), cell_types, coords)
-        if scalar_mode == "cell":
-            grid.cell_data["sigma"] = cell_sigma
-        else:
-            grid.point_data["sigma"] = sigma
-
         sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
-
         opacity = self._opacity_slider.value() / 100.0
         palette = plot_palette()
         text_color = _hex_to_rgb(palette.get("text", "#222"))
@@ -1948,29 +2792,54 @@ class Conductivity3DWidget(QWidget):
                 text_color=text_color,
                 offscreen=False,
             )
+            plotter.reset_camera()
+            plotter.render()
+            return
+
+        # Build the unstructured volume grid.  VTK expects
+        # [n_pts, p0, p1, ...] rows; support both tetra meshes from the
+        # CPU path and hex meshes from the CUDA-structured path.
+        verts_per_cell = cells.shape[1]
+        if verts_per_cell == 4:
+            cell_type = pv.CellType.TETRA
+        elif verts_per_cell == 8:
+            cell_type = pv.CellType.HEXAHEDRON
+        else:  # update_image() guards this; keep a defensive fallback.
+            self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
+            return
+
+        cell_array = np.empty((n_cells, verts_per_cell + 1), dtype=np.int64)
+        cell_array[:, 0] = verts_per_cell
+        cell_array[:, 1:] = cells
+        cell_types = np.full(n_cells, cell_type, dtype=np.uint8)
+        grid = pv.UnstructuredGrid(cell_array.ravel(), cell_types, coords)
+        if scalar_mode == "cell":
+            grid.cell_data["sigma"] = cell_sigma
         else:
-            # Bulk volume: alpha-blended so we can see through to interior
-            # cells whose conductivity differs from background.
-            self._mesh_actor = plotter.add_mesh(
-                grid,
-                cmap="viridis",
-                opacity=opacity,
-                clim=[sigma_min, sigma_max],
-                show_edges=False,
-                show_scalar_bar=True,
-                scalar_bar_args={
-                    "title": "S/m",
-                    "color": text_color,
-                    "vertical": True,
-                    "position_x": 0.88,
-                    "position_y": 0.05,
-                    "width": 0.07,
-                    "height": 0.6,
-                    "title_font_size": 14,
-                    "label_font_size": 11,
-                },
-                **scalar_kw,
-            )
+            grid.point_data["sigma"] = sigma
+
+        # Bulk volume: alpha-blended so we can see through to interior
+        # cells whose conductivity differs from background.
+        self._mesh_actor = plotter.add_mesh(
+            grid,
+            cmap="viridis",
+            opacity=opacity,
+            clim=[sigma_min, sigma_max],
+            show_edges=False,
+            show_scalar_bar=True,
+            scalar_bar_args={
+                "title": "S/m",
+                "color": text_color,
+                "vertical": True,
+                "position_x": 0.88,
+                "position_y": 0.05,
+                "width": 0.07,
+                "height": 0.6,
+                "title_font_size": 14,
+                "label_font_size": 11,
+            },
+            **scalar_kw,
+        )
 
         # Highlight overlay: cells whose conductivity is far from the
         # median (i.e. the "inhomogeneity") rendered opaque so a small
@@ -1982,22 +2851,21 @@ class Conductivity3DWidget(QWidget):
                 self._anomaly_mode,
                 cell_centers=_cell_centers(coords, cells),
             )
-            if np.any(inhom_mask):
-                inhom_grid = grid.extract_cells(np.where(inhom_mask)[0])
-                if inhom_grid.n_cells > 0:
-                    self._highlight_actor = plotter.add_mesh(
-                        inhom_grid,
-                        scalars="sigma",
-                        preference="cell",
-                        cmap="viridis",
-                        clim=[sigma_min, sigma_max],
-                        opacity=1.0,
-                        show_edges=False,
-                        show_scalar_bar=False,
-                    )
-                    self._highlight_actor.SetVisibility(
-                        bool(self._highlight_check.isChecked())
-                    )
+            inhom_grid = _extract_cells_from_mask(grid, inhom_mask)
+            if inhom_grid is not None and inhom_grid.n_cells > 0:
+                self._highlight_actor = plotter.add_mesh(
+                    inhom_grid,
+                    scalars="sigma",
+                    preference="cell",
+                    cmap="viridis",
+                    clim=[sigma_min, sigma_max],
+                    opacity=1.0,
+                    show_edges=False,
+                    show_scalar_bar=False,
+                )
+                self._highlight_actor.SetVisibility(
+                    bool(self._highlight_check.isChecked())
+                )
 
         # Wireframe overlay: feature edges of the boundary surface,
         # gives the bulk shape a clean silhouette at low opacity.

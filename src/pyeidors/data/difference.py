@@ -13,6 +13,24 @@ _VALID_DIFFERENCE_ORIENTATIONS: Final[set[str]] = {
     "target_minus_reference",
     "reference_minus_target",
 }
+_REFERENCE_FLOOR_CHUNK_ITEMS: Final[int] = 65536
+
+
+def _complex_or_float_dtype(*values) -> np.dtype:
+    dtypes = [np.asarray(value).dtype for value in values]
+    complex_dtypes = [
+        dtype for dtype in dtypes if np.issubdtype(dtype, np.complexfloating)
+    ]
+    if complex_dtypes:
+        if any(dtype != np.dtype(np.complex64) for dtype in complex_dtypes):
+            return np.dtype(np.complex128)
+        return np.dtype(np.complex64)
+    float_dtypes = [dtype for dtype in dtypes if np.issubdtype(dtype, np.floating)]
+    if float_dtypes and all(
+        dtype.itemsize <= np.dtype(np.float32).itemsize for dtype in float_dtypes
+    ):
+        return np.dtype(np.float32)
+    return np.dtype(np.float64)
 
 
 def normalize_difference_mode(
@@ -46,7 +64,8 @@ def normalize_difference_orientation(
 
 
 def _as_measurement_vector(values, *, name: str) -> np.ndarray:
-    array = np.asarray(values, dtype=np.float64)
+    dtype = _complex_or_float_dtype(values)
+    array = np.asarray(values, dtype=dtype)
     if array.ndim > 2:
         raise ValueError(
             f"{name} must be a 1D or 2D measurement vector, got {array.ndim}D."
@@ -54,21 +73,102 @@ def _as_measurement_vector(values, *, name: str) -> np.ndarray:
     return array.reshape(-1)
 
 
-def _safe_reference(
-    reference_meas: np.ndarray, *, floor: float | None = None
-) -> np.ndarray:
-    """Clamp near-zero reference values to ``+/-eps``, preserving sign."""
-    safe = np.asarray(reference_meas, dtype=np.float64).copy()
-    eps = (
+def _reference_floor_eps(floor: float | None) -> float:
+    return (
         np.finfo(np.float64).eps
         if floor is None
         else float(max(floor, np.finfo(np.float64).eps))
     )
-    small = np.abs(safe) < eps
-    # Preserve sign for tiny nonzero values; default to +eps for exact zeros
-    signs = np.sign(safe[small])
-    signs[signs == 0] = 1.0
-    safe[small] = signs * eps
+
+
+def _abs_work_dtype(values: np.ndarray) -> np.dtype:
+    dtype = np.asarray(values).dtype
+    if np.issubdtype(dtype, np.floating):
+        return (
+            dtype
+            if dtype.itemsize <= np.dtype(np.float32).itemsize
+            else np.dtype(np.float64)
+        )
+    if np.issubdtype(dtype, np.complexfloating):
+        return (
+            np.dtype(np.float32)
+            if dtype.itemsize <= np.dtype(np.complex64).itemsize
+            else np.dtype(np.float64)
+        )
+    return np.dtype(np.float64)
+
+
+def _reference_has_near_zero(
+    reference_meas: np.ndarray,
+    eps: float,
+    *,
+    chunk_size: int = _REFERENCE_FLOOR_CHUNK_ITEMS,
+) -> bool:
+    arr = np.asarray(reference_meas).reshape(-1)
+    if arr.size == 0:
+        return False
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    abs_work = np.empty(block_size, dtype=_abs_work_dtype(arr))
+    small_work = np.empty(block_size, dtype=bool)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        abs_chunk = abs_work[: chunk.size]
+        small_chunk = small_work[: chunk.size]
+        np.abs(chunk, out=abs_chunk)
+        np.less(abs_chunk, eps, out=small_chunk)
+        if bool(small_chunk.any()):
+            return True
+    return False
+
+
+def _clamp_reference_floor_in_place(
+    reference_meas: np.ndarray,
+    eps: float,
+    *,
+    chunk_size: int = _REFERENCE_FLOOR_CHUNK_ITEMS,
+) -> bool:
+    arr = np.asarray(reference_meas).reshape(-1)
+    if arr.size == 0:
+        return False
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    abs_work = np.empty(block_size, dtype=_abs_work_dtype(arr))
+    small_work = np.empty(block_size, dtype=bool)
+    aux_work = np.empty(block_size, dtype=bool)
+    replacement_work = np.empty(block_size, dtype=arr.dtype)
+    changed = False
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        abs_chunk = abs_work[: chunk.size]
+        small_chunk = small_work[: chunk.size]
+        aux_chunk = aux_work[: chunk.size]
+        replacement = replacement_work[: chunk.size]
+        np.abs(chunk, out=abs_chunk)
+        np.less(abs_chunk, eps, out=small_chunk)
+        if not bool(small_chunk.any()):
+            continue
+        changed = True
+        if np.iscomplexobj(arr):
+            replacement.fill(1.0 + 0.0j)
+            np.greater(abs_chunk, 0.0, out=aux_chunk)
+            np.divide(chunk, abs_chunk, out=replacement, where=aux_chunk)
+        else:
+            np.sign(chunk, out=replacement)
+            np.equal(replacement, 0.0, out=aux_chunk)
+            np.copyto(replacement, 1.0, where=aux_chunk)
+        replacement *= eps
+        np.copyto(chunk, replacement, where=small_chunk)
+    return changed
+
+
+def _safe_reference(
+    reference_meas: np.ndarray, *, floor: float | None = None
+) -> np.ndarray:
+    """Clamp near-zero reference values to ``+/-eps``, preserving sign."""
+    dtype = _complex_or_float_dtype(reference_meas)
+    safe = np.asarray(reference_meas, dtype=dtype).copy()
+    _clamp_reference_floor_in_place(safe, _reference_floor_eps(floor))
     return safe
 
 
@@ -94,10 +194,16 @@ def build_difference_vector(
 
     diff = target - reference
     if resolved_mode == "normalized":
-        diff = diff / _safe_reference(reference, floor=floor)
+        eps = _reference_floor_eps(floor)
+        safe = (
+            _safe_reference(reference, floor=floor)
+            if _reference_has_near_zero(reference, eps)
+            else reference
+        )
+        np.divide(diff, safe, out=diff)
     if resolved_orientation == "reference_minus_target":
-        diff = -diff
-    return np.asarray(diff, dtype=np.float64)
+        np.negative(diff, out=diff)
+    return np.asarray(diff, dtype=np.result_type(target.dtype, reference.dtype))
 
 
 def build_difference_frames(
@@ -110,37 +216,49 @@ def build_difference_frames(
 ) -> np.ndarray:
     """Vectorized 2D batch of :func:`build_difference_vector`.
 
-    Both ``targets`` and ``references`` must already be ``(n_frames, n_meas)``
-    float64 arrays. Returns a contiguous float64 ``(n_frames, n_meas)`` array.
+    ``targets`` must be a ``(n_frames, n_meas)`` array. ``references`` may be
+    either the same shape, a single ``(n_meas,)`` vector, or a ``(1, n_meas)``
+    row that broadcasts across frames. Real float32 inputs preserve float32;
+    complex inputs preserve complex phase.
     """
-    target_batch = np.asarray(targets, dtype=np.float64)
-    reference_batch = np.asarray(references, dtype=np.float64)
-    if target_batch.ndim != 2 or reference_batch.ndim != 2:
-        raise ValueError("targets and references must be 2D frame batches.")
-    if target_batch.shape != reference_batch.shape:
+    dtype = _complex_or_float_dtype(targets, references)
+    target_batch = np.asarray(targets, dtype=dtype)
+    reference_raw = np.asarray(references, dtype=dtype)
+    if target_batch.ndim != 2:
+        raise ValueError("targets must be a 2D frame batch.")
+    if reference_raw.ndim == 1:
+        if reference_raw.size != target_batch.shape[1]:
+            raise ValueError(
+                "1D references length must match target measurements: "
+                f"{reference_raw.size!r} vs {target_batch.shape[1]!r}."
+            )
+        reference_batch = reference_raw.reshape(1, -1)
+    elif reference_raw.ndim == 2:
+        reference_batch = reference_raw
+    else:
+        raise ValueError("references must be a 1D vector or 2D frame batch.")
+    if target_batch.shape != reference_batch.shape and reference_batch.shape != (
+        1,
+        target_batch.shape[1],
+    ):
         raise ValueError(
-            "targets and references must have identical 2D shapes: "
+            "targets and references must have compatible frame shapes: "
             f"{target_batch.shape!r} vs {reference_batch.shape!r}."
         )
     resolved_mode = normalize_difference_mode(mode)
     resolved_orientation = normalize_difference_orientation(orientation)
-    diff = target_batch - reference_batch
+    diff = np.empty(target_batch.shape, dtype=dtype, order="C")
+    np.subtract(target_batch, reference_batch, out=diff)
     if resolved_mode == "normalized":
-        eps = (
-            np.finfo(np.float64).eps
-            if floor is None
-            else float(max(floor, np.finfo(np.float64).eps))
-        )
-        safe = reference_batch.copy()
-        small = np.abs(safe) < eps
-        if np.any(small):
-            signs = np.sign(safe[small])
-            signs[signs == 0] = 1.0
-            safe[small] = signs * eps
-        diff = diff / safe
+        eps = _reference_floor_eps(floor)
+        safe = reference_batch
+        if _reference_has_near_zero(reference_batch, eps):
+            safe = reference_batch.copy()
+            _clamp_reference_floor_in_place(safe, eps)
+        np.divide(diff, safe, out=diff)
     if resolved_orientation == "reference_minus_target":
-        diff = -diff
-    return np.ascontiguousarray(diff, dtype=np.float64)
+        np.negative(diff, out=diff)
+    return np.ascontiguousarray(diff, dtype=dtype)
 
 
 def normalize_time_difference(
@@ -199,7 +317,8 @@ def project_measurement_jacobian(
     floor: float | None = None,
 ) -> np.ndarray:
     """Map an absolute Jacobian into the active inverse-data space."""
-    jac = np.asarray(jacobian, dtype=np.float64)
+    jac_dtype = _complex_or_float_dtype(jacobian)
+    jac = np.asarray(jacobian, dtype=jac_dtype)
     if jac.ndim != 2:
         raise ValueError(f"jacobian must be a 2D array, got shape {jac.shape!r}.")
     if str(measurement_type).strip().lower() != "difference" or reference_meas is None:
@@ -215,9 +334,23 @@ def project_measurement_jacobian(
     resolved_mode = normalize_difference_mode(difference_mode)
     resolved_orientation = normalize_difference_orientation(difference_orientation)
 
-    projected = jac
+    result_dtype = np.result_type(jac.dtype, reference.dtype)
+    owns_projection = False
+    projected = np.asarray(jac, dtype=result_dtype)
     if resolved_mode == "normalized":
-        projected = projected / _safe_reference(reference, floor=floor)[:, None]
+        projected = np.empty(jac.shape, dtype=result_dtype)
+        eps = _reference_floor_eps(floor)
+        safe = (
+            _safe_reference(reference, floor=floor)
+            if _reference_has_near_zero(reference, eps)
+            else reference
+        )
+        safe_reference = np.asarray(safe, dtype=result_dtype)
+        np.divide(jac, safe_reference.reshape(-1, 1), out=projected)
+        owns_projection = True
     if resolved_orientation == "reference_minus_target":
-        projected = -projected
-    return np.asarray(projected, dtype=np.float64)
+        if owns_projection:
+            np.negative(projected, out=projected)
+        else:
+            projected = np.negative(projected, out=np.empty_like(projected))
+    return np.asarray(projected, dtype=result_dtype)

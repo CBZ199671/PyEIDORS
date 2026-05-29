@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from pathlib import Path
+import threading
+import time
 
 import numpy as np
 
@@ -94,6 +96,64 @@ def test_cache_manager_process_store_shared_across_managers(tmp_path: Path):
     assert lookup2.layer == "process"
     assert calls["count"] == 1
     np.testing.assert_allclose(value2["value"], np.arange(4, dtype=float))
+
+
+def test_cache_manager_singleflights_concurrent_process_miss(tmp_path: Path):
+    manager = CacheManager(
+        scope="process",
+        cache_dir=tmp_path / "singleflight-cache",
+        policy=CachePolicy(process_max_bytes=2 * 1024**2),
+        code_fingerprint="singleflight-test",
+    )
+    manager.clear(scope="process")
+    started = threading.Event()
+    release = threading.Event()
+    calls_lock = threading.Lock()
+    calls = {"count": 0}
+    results: list[tuple[dict[str, np.ndarray], object]] = []
+    errors: list[BaseException] = []
+
+    def _compute():
+        with calls_lock:
+            calls["count"] += 1
+        started.set()
+        if not release.wait(timeout=5.0):
+            raise AssertionError("singleflight compute was not released")
+        return {"value": np.arange(3, dtype=float)}
+
+    def _run_lookup():
+        try:
+            results.append(
+                manager.get_or_compute(
+                    artifact="jacobian",
+                    payload={"id": "concurrent"},
+                    compute_fn=_compute,
+                    persist=False,
+                )
+            )
+        except BaseException as exc:  # pragma: no cover - surfaced below
+            errors.append(exc)
+
+    first = threading.Thread(target=_run_lookup)
+    second = threading.Thread(target=_run_lookup)
+    first.start()
+    assert started.wait(timeout=2.0)
+    second.start()
+    time.sleep(0.1)
+    with calls_lock:
+        assert calls["count"] == 1
+    release.set()
+    first.join(timeout=3.0)
+    second.join(timeout=3.0)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert errors == []
+    assert len(results) == 2
+    assert calls["count"] == 1
+    assert {lookup.layer for _, lookup in results} == {"compute", "process"}
+    for value, _lookup in results:
+        np.testing.assert_allclose(value["value"], np.arange(3, dtype=float))
 
 
 def test_cache_manager_disk_persistence(tmp_path: Path):
@@ -221,6 +281,68 @@ def test_cache_manager_semantic_helpers_and_name_controls(tmp_path: Path):
 
     removed = manager.clear_name("inv_solve_diff_GN_one_step", namespace="difference")
     assert removed >= 1
+
+
+def test_cache_manager_list_entries_filters_queryable_index_fields(tmp_path: Path):
+    cache_dir = tmp_path / "indexed-cache"
+    policy = CachePolicy(
+        disk_lifecycle="persistent",
+        cleanup_on_exit=False,
+        process_max_bytes=8 * 1024**2,
+        disk_max_bytes=8 * 1024**2,
+    )
+    manager = CacheManager(scope="both", cache_dir=cache_dir, policy=policy)
+    payload = {
+        "backend": "petsc",
+        "scalar_dtype": "complex64",
+        "n_elec": 16,
+        "petsc_backend": {"effective": "cuda"},
+        "mesh": {"tdim": 3, "mesh_file_hash": "mesh-abc"},
+    }
+
+    manager.get_or_compute(
+        artifact="forward_factor",
+        name="forward_factor",
+        namespace="forward",
+        payload=payload,
+        compute_fn=lambda: {"factor": "ok"},
+        persist=True,
+    )
+
+    entries = manager.list_entries(
+        name="forward_factor",
+        namespace="forward",
+        dtype="complex64",
+        backend="petsc",
+        device="cuda",
+        dim=3,
+        n_elec=16,
+        mesh_hash="mesh-abc",
+    )
+
+    assert entries
+    assert {entry["layer"] for entry in entries} == {"process", "disk"}
+    for entry in entries:
+        assert entry["dtype"] == "complex64"
+        assert entry["backend"] == "petsc"
+        assert entry["device"] == "cuda"
+        assert entry["dim"] == 3
+        assert entry["n_elec"] == 16
+        assert entry["mesh_hash"] == "mesh-abc"
+
+    assert manager.list_entries(name="forward_factor", dim=2) == []
+
+    disk_only = CacheManager(scope="disk", cache_dir=cache_dir, policy=policy)
+    disk_entries = disk_only.list_entries(
+        dtype="complex64",
+        backend="petsc",
+        device="cuda",
+        dim=3,
+        n_elec=16,
+        mesh_hash="mesh-abc",
+    )
+    assert len(disk_entries) == 1
+    assert disk_entries[0]["layer"] == "disk"
 
 
 def test_cache_manager_uses_session_disk_cache_by_default(tmp_path: Path):

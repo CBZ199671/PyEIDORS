@@ -142,6 +142,17 @@ def _finding_kind(api: str, suffixes: tuple[str, ...]) -> str:
     return "other"
 
 
+def _target_names(node: ast.AST) -> tuple[str, ...]:
+    if isinstance(node, ast.Name):
+        return (node.id,)
+    if isinstance(node, (ast.Tuple, ast.List)):
+        names: list[str] = []
+        for elt in node.elts:
+            names.extend(_target_names(elt))
+        return tuple(names)
+    return ()
+
+
 def _classify(path: str, kind: str, legacy_id: str) -> str:
     if _is_test_path(path):
         return "test-only"
@@ -160,6 +171,9 @@ class PersistenceVisitor(ast.NodeVisitor):
         self.gmsh_modules: set[str] = {"gmsh"}
         self.meshio_modules: set[str] = {"meshio"}
         self.h5py_modules: set[str] = {"h5py"}
+        self.io_modules: set[str] = {"io"}
+        self.bytesio_names: set[str] = {"BytesIO"}
+        self.memory_buffer_names: set[str] = set()
         self.xdmf_file_names: set[str] = {"XDMFFile"}
 
     def visit_Import(self, node: ast.Import) -> None:  # noqa: N802
@@ -173,6 +187,8 @@ class PersistenceVisitor(ast.NodeVisitor):
                 self.meshio_modules.add(local)
             elif alias.name == "h5py":
                 self.h5py_modules.add(local)
+            elif alias.name == "io":
+                self.io_modules.add(local)
             elif alias.name == "dolfinx.io.XDMFFile":
                 self.xdmf_file_names.add(local)
         self.generic_visit(node)
@@ -188,6 +204,10 @@ class PersistenceVisitor(ast.NodeVisitor):
             for alias in node.names:
                 if alias.name == "XDMFFile":
                     self.xdmf_file_names.add(alias.asname or alias.name)
+        elif module == "io":
+            for alias in node.names:
+                if alias.name == "BytesIO":
+                    self.bytesio_names.add(alias.asname or alias.name)
         self.generic_visit(node)
 
     def visit_ClassDef(self, node: ast.ClassDef) -> None:  # noqa: N802
@@ -203,14 +223,43 @@ class PersistenceVisitor(ast.NodeVisitor):
     def visit_AsyncFunctionDef(self, node: ast.AsyncFunctionDef) -> None:  # noqa: N802
         self.visit_FunctionDef(node)
 
+    def visit_Assign(self, node: ast.Assign) -> None:  # noqa: N802
+        if self._is_bytesio_constructor(node.value):
+            for target in node.targets:
+                self.memory_buffer_names.update(_target_names(target))
+        self.generic_visit(node)
+
+    def visit_AnnAssign(self, node: ast.AnnAssign) -> None:  # noqa: N802
+        if node.value is not None and self._is_bytesio_constructor(node.value):
+            self.memory_buffer_names.update(_target_names(node.target))
+        self.generic_visit(node)
+
     def visit_Call(self, node: ast.Call) -> None:  # noqa: N802
         api = self._normalized_api(_call_name(node.func))
         target_node = node.args[0] if node.args else None
         target = _safe_unparse(target_node)
         suffixes = _suffixes_from_strings(_string_literals(target_node))
         if api in NUMPY_WRITER_APIS | NUMPY_READER_APIS | MESH_WRITER_APIS | HDF5_APIS:
-            self._add(node, api=api, target=target, suffixes=suffixes)
+            kind = (
+                "numpy_memory_serializer"
+                if api in NUMPY_WRITER_APIS
+                and self._is_memory_buffer_target(target_node)
+                else None
+            )
+            self._add(node, api=api, target=target, suffixes=suffixes, kind=kind)
         self.generic_visit(node)
+
+    def _is_bytesio_constructor(self, node: ast.AST) -> bool:
+        if not isinstance(node, ast.Call):
+            return False
+        call = _call_name(node.func)
+        if call in self.bytesio_names:
+            return True
+        base, _, attr = call.rpartition(".")
+        return attr == "BytesIO" and base in self.io_modules
+
+    def _is_memory_buffer_target(self, node: ast.AST | None) -> bool:
+        return isinstance(node, ast.Name) and node.id in self.memory_buffer_names
 
     def _normalized_api(self, api: str) -> str:
         if api in self.numpy_functions:
@@ -248,9 +297,10 @@ class PersistenceVisitor(ast.NodeVisitor):
         api: str,
         target: str,
         suffixes: tuple[str, ...],
+        kind: str | None = None,
     ) -> None:
         qname = ".".join(self.stack) if self.stack else "<module>"
-        kind = _finding_kind(api, suffixes)
+        kind = kind or _finding_kind(api, suffixes)
         legacy_id = f"{self.path}|{qname}|{api}|{target}"
         classification = _classify(self.path, kind, legacy_id)
         self.findings.append(

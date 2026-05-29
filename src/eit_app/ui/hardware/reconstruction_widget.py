@@ -24,6 +24,15 @@ if TYPE_CHECKING:
     from eit_app.controllers.reconstruction_controller import ReconstructionResult
 
 
+def _display_float_array(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if np.issubdtype(arr.dtype, np.floating):
+        return arr
+    return np.asarray(arr, dtype=np.float32)
+
+
 class ReconstructionWidget(QWidget):
     """Displays conductivity maps with a cached static scene and fast image refresh."""
 
@@ -45,6 +54,11 @@ class ReconstructionWidget(QWidget):
         self._grid_vertices: np.ndarray | None = None
         self._grid_weights: np.ndarray | None = None
         self._grid_valid_mask: np.ndarray | None = None
+        self._grid_invalid_mask: np.ndarray | None = None
+        self._grid_sample_values: np.ndarray | None = None
+        self._grid_interpolated: np.ndarray | None = None
+        self._grid_abs_values: np.ndarray | None = None
+        self._grid_normalized: np.ndarray | None = None
         self._grid_shape = (self._GRID_SIZE, self._GRID_SIZE)
         self._grid_rect = QRectF(-1.0, 1.0, 2.0, -2.0)
         self._electrode_label_items: list[pg.TextItem] = []
@@ -180,9 +194,9 @@ class ReconstructionWidget(QWidget):
             self._show_status(result.error_msg or "Empty result", error=True)
             return
 
-        coords = np.asarray(result.node_coords, dtype=np.float64)
+        coords = _display_float_array(result.node_coords)
         cells = np.asarray(result.cell_connectivity, dtype=np.int32)
-        sigma = np.asarray(result.conductivity, dtype=np.float64).reshape(-1)
+        sigma = _display_float_array(result.conductivity).reshape(-1)
 
         if coords.ndim != 2 or coords.shape[1] < 2:
             self._show_status("Invalid mesh coordinates", error=True)
@@ -365,28 +379,41 @@ class ReconstructionWidget(QWidget):
         xmax, ymax = xy.max(axis=0)
         x_coords = np.linspace(xmin, xmax, self._GRID_SIZE, dtype=np.float64)
         y_coords = np.linspace(ymax, ymin, self._GRID_SIZE, dtype=np.float64)
-        grid_x, grid_y = np.meshgrid(x_coords, y_coords)
-        sample_points = np.column_stack((grid_x.ravel(), grid_y.ravel()))
+        grid_shape = (int(y_coords.size), int(x_coords.size))
+        sample_points = np.empty((grid_shape[0] * grid_shape[1], 2), dtype=np.float64)
+        sample_x = sample_points[:, 0].reshape(grid_shape)
+        sample_y = sample_points[:, 1].reshape(grid_shape)
+        np.copyto(sample_x, x_coords)
+        np.copyto(sample_y, y_coords[:, None])
 
         delaunay = Delaunay(xy)
         simplex = delaunay.find_simplex(sample_points)
         valid_mask = simplex >= 0
         vertices = np.zeros((sample_points.shape[0], 3), dtype=np.int32)
         weights = np.zeros((sample_points.shape[0], 3), dtype=np.float64)
-
-        if np.any(valid_mask):
-            valid_simplex = simplex[valid_mask]
-            transforms = delaunay.transform[valid_simplex, :2]
-            offsets = sample_points[valid_mask] - delaunay.transform[valid_simplex, 2]
-            bary = np.einsum("nij,nj->ni", transforms, offsets)
-            weights_valid = np.column_stack((bary, 1.0 - bary.sum(axis=1)))
-            vertices[valid_mask] = delaunay.simplices[valid_simplex]
-            weights[valid_mask] = weights_valid
+        invalid_mask = np.empty_like(valid_mask)
+        np.logical_not(valid_mask, out=invalid_mask)
+        safe_simplex = simplex.copy()
+        np.maximum(safe_simplex, 0, out=safe_simplex)
+        transforms = delaunay.transform[safe_simplex, :2]
+        offsets = sample_points - delaunay.transform[safe_simplex, 2]
+        np.einsum("nij,nj->ni", transforms, offsets, out=weights[:, :2])
+        np.add(weights[:, 0], weights[:, 1], out=weights[:, 2])
+        weights[:, 2] *= -1.0
+        weights[:, 2] += 1.0
+        np.take(delaunay.simplices, safe_simplex, axis=0, out=vertices)
+        np.copyto(weights, 0.0, where=invalid_mask[:, None])
+        np.copyto(vertices, 0, where=invalid_mask[:, None])
 
         self._grid_vertices = vertices
         self._grid_weights = weights
         self._grid_valid_mask = valid_mask
-        self._grid_shape = grid_x.shape
+        self._grid_invalid_mask = invalid_mask
+        self._grid_sample_values = None
+        self._grid_interpolated = None
+        self._grid_abs_values = None
+        self._grid_normalized = None
+        self._grid_shape = grid_shape
         self._grid_rect = QRectF(
             float(xmin), float(ymax), float(xmax - xmin), float(ymin - ymax)
         )
@@ -394,6 +421,7 @@ class ReconstructionWidget(QWidget):
     def _to_node_values(
         self, sigma: np.ndarray, cells: np.ndarray, n_nodes: int
     ) -> np.ndarray:
+        sigma = _display_float_array(sigma).reshape(-1)
         if sigma.size == n_nodes:
             return sigma
         if sigma.size != len(cells):
@@ -401,14 +429,20 @@ class ReconstructionWidget(QWidget):
                 f"Conductivity size ({sigma.size}) doesn't match cells ({len(cells)}) or nodes ({n_nodes})"
             )
 
-        node_sum = np.zeros(n_nodes, dtype=np.float64)
-        node_hits = np.zeros(n_nodes, dtype=np.float64)
+        if np.issubdtype(sigma.dtype, np.floating):
+            dtype = np.result_type(sigma.dtype, np.float32)
+        else:
+            dtype = np.dtype(np.float32)
+            sigma = np.asarray(sigma, dtype=dtype)
+        node_sum = np.zeros(n_nodes, dtype=dtype)
+        node_hits = np.zeros(n_nodes, dtype=dtype)
         tri_cells = cells[:, :3]
         for local_index in range(tri_cells.shape[1]):
             node_ids = tri_cells[:, local_index]
             np.add.at(node_sum, node_ids, sigma)
             np.add.at(node_hits, node_ids, 1.0)
-        return node_sum / np.maximum(node_hits, 1.0)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            return np.divide(node_sum, node_hits, out=node_sum, where=node_hits > 0)
 
     def _interpolate_to_rgba(self, node_values: np.ndarray) -> np.ndarray | None:
         if (
@@ -418,25 +452,73 @@ class ReconstructionWidget(QWidget):
         ):
             return None
 
-        interpolated = np.zeros(self._grid_vertices.shape[0], dtype=np.float64)
-        if np.any(self._grid_valid_mask):
-            valid_vertices = self._grid_vertices[self._grid_valid_mask]
-            valid_weights = self._grid_weights[self._grid_valid_mask]
-            interpolated[self._grid_valid_mask] = np.einsum(
-                "ij,ij->i",
-                node_values[valid_vertices],
-                valid_weights,
-            )
-
-        valid_values = interpolated[self._grid_valid_mask]
-        if valid_values.size == 0:
+        if not np.any(self._grid_valid_mask):
             return None
 
-        vmax = float(np.nanpercentile(np.abs(valid_values), 98))
+        node_values = _display_float_array(node_values).reshape(-1)
+        sample_shape = self._grid_vertices.shape
+        if (
+            self._grid_sample_values is None
+            or self._grid_sample_values.shape != sample_shape
+            or self._grid_sample_values.dtype != node_values.dtype
+        ):
+            self._grid_sample_values = np.empty(sample_shape, dtype=node_values.dtype)
+        if (
+            self._grid_interpolated is None
+            or self._grid_interpolated.shape[0] != self._grid_vertices.shape[0]
+            or self._grid_interpolated.dtype != node_values.dtype
+        ):
+            self._grid_interpolated = np.empty(
+                self._grid_vertices.shape[0], dtype=node_values.dtype
+            )
+        if (
+            self._grid_abs_values is None
+            or self._grid_abs_values.shape[0] != self._grid_vertices.shape[0]
+            or self._grid_abs_values.dtype != node_values.dtype
+        ):
+            self._grid_abs_values = np.empty(
+                self._grid_vertices.shape[0], dtype=node_values.dtype
+            )
+        if (
+            self._grid_normalized is None
+            or self._grid_normalized.shape[0] != self._grid_vertices.shape[0]
+            or self._grid_normalized.dtype != node_values.dtype
+        ):
+            self._grid_normalized = np.empty(
+                self._grid_vertices.shape[0], dtype=node_values.dtype
+            )
+        if (
+            self._grid_invalid_mask is None
+            or self._grid_invalid_mask.shape != self._grid_valid_mask.shape
+        ):
+            self._grid_invalid_mask = np.empty_like(self._grid_valid_mask)
+            np.logical_not(self._grid_valid_mask, out=self._grid_invalid_mask)
+
+        sample_values = self._grid_sample_values
+        interpolated = self._grid_interpolated
+        abs_values = self._grid_abs_values
+        normalized = self._grid_normalized
+        invalid_mask = self._grid_invalid_mask
+        np.take(node_values, self._grid_vertices, out=sample_values)
+        np.einsum(
+            "ij,ij->i",
+            sample_values,
+            self._grid_weights,
+            out=interpolated,
+            casting="same_kind",
+        )
+        np.copyto(interpolated, np.nan, where=invalid_mask)
+
+        np.abs(interpolated, out=abs_values)
+        vmax = float(np.nanpercentile(abs_values, 98))
         vmax = max(vmax, 1e-9)
-        normalized = np.clip((interpolated / vmax + 1.0) * 0.5, 0.0, 1.0)
+        np.copyto(interpolated, 0.0, where=invalid_mask)
+        np.divide(interpolated, vmax, out=normalized)
+        normalized += 1.0
+        normalized *= 0.5
+        np.clip(normalized, 0.0, 1.0, out=normalized)
         rgba = self._colormap.map(normalized, mode="byte").reshape(*self._grid_shape, 4)
-        rgba[~self._grid_valid_mask.reshape(self._grid_shape), 3] = 0
+        np.copyto(rgba[..., 3].reshape(-1), 0, where=invalid_mask)
         return rgba
 
     @staticmethod

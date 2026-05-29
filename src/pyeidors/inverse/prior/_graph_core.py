@@ -50,7 +50,7 @@ def extract_cells(mesh: Any) -> np.ndarray:
     cells = np.asarray(cells, dtype=np.int64)
     if cells.ndim != 2 or cells.shape[0] == 0 or cells.shape[1] == 0:
         raise ValueError("mesh cells must be a non-empty 2D array.")
-    if np.any(cells < 0):
+    if int(np.min(cells, initial=0)) < 0:
         raise ValueError("mesh cells contain negative vertex indices.")
     return cells
 
@@ -177,17 +177,52 @@ def cell_volumes(mesh: Any, cells: np.ndarray, n_cells: int) -> np.ndarray:
     if int(cells.max()) >= coords.shape[0]:
         raise ValueError("mesh cells reference missing coordinates.")
     volumes = np.ones(n_cells, dtype=np.float64)
+    coord_dim = int(coords.shape[1])
+    max_local_dim = min(max(int(cells.shape[1]) - 1, 0), coord_dim)
+    cell_vertices = np.empty((cells.shape[1], coord_dim), dtype=np.float64)
+    basis = np.empty((coord_dim, max_local_dim), dtype=np.float64)
+    gram = np.empty((max_local_dim, max_local_dim), dtype=np.float64)
     for idx, cell in enumerate(cells):
-        vertices = coords[cell]
-        local_dim = int(vertices.shape[0] - 1)
-        if local_dim <= 0 or local_dim > vertices.shape[1]:
+        local_dim = int(cell.size - 1)
+        if local_dim <= 0 or local_dim > coord_dim:
             volumes[idx] = 1.0
             continue
-        basis = (vertices[1:] - vertices[0]).T
-        gram = basis.T @ basis
-        det = max(float(np.linalg.det(gram)), 0.0)
+        _fill_cell_vertices(cell_vertices, coords, cell)
+        active_gram = _simplex_gram_from_vertices(
+            cell_vertices,
+            local_dim=local_dim,
+            basis=basis,
+            gram=gram,
+        )
+        det = max(float(np.linalg.det(active_gram)), 0.0)
         volumes[idx] = np.sqrt(det)
     return np.maximum(volumes, np.finfo(np.float64).eps)
+
+
+def _fill_cell_vertices(out: np.ndarray, coords: np.ndarray, cell: np.ndarray) -> None:
+    for local_idx, vertex_idx in enumerate(cell):
+        out[local_idx, :] = coords[int(vertex_idx)]
+
+
+def _simplex_gram_from_vertices(
+    vertices: np.ndarray,
+    *,
+    local_dim: int,
+    basis: np.ndarray,
+    gram: np.ndarray,
+) -> np.ndarray:
+    coord_dim = int(vertices.shape[1])
+    active_basis = basis[:coord_dim, :local_dim]
+    origin = vertices[0, :coord_dim]
+    for basis_idx in range(local_dim):
+        np.subtract(
+            vertices[basis_idx + 1, :coord_dim],
+            origin,
+            out=active_basis[:, basis_idx],
+        )
+    active_gram = gram[:local_dim, :local_dim]
+    np.matmul(active_basis.T, active_basis, out=active_gram)
+    return active_gram
 
 
 def dolfinx_facet_edges(mesh: Any) -> list[tuple[int, int]]:

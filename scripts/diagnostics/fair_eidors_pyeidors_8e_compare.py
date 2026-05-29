@@ -19,6 +19,7 @@ matplotlib.use("Agg")
 import matplotlib.font_manager as fm
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+import h5py
 import numpy as np
 from scipy.io import loadmat, savemat
 
@@ -29,8 +30,12 @@ except Exception:  # pragma: no cover
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
+
+from scripts.common.array_metrics import finite_pearson_correlation
 
 from pyeidors import EITSystem
 from pyeidors.data.difference import (
@@ -164,16 +169,7 @@ def apply_times_ticks(ax) -> None:
 
 
 def safe_corr(a: np.ndarray, b: np.ndarray) -> float:
-    aa = np.asarray(a, dtype=float).reshape(-1)
-    bb = np.asarray(b, dtype=float).reshape(-1)
-    mask = np.isfinite(aa) & np.isfinite(bb)
-    if mask.sum() < 3:
-        return float("nan")
-    if np.std(aa[mask]) <= np.finfo(float).eps:
-        return float("nan")
-    if np.std(bb[mask]) <= np.finfo(float).eps:
-        return float("nan")
-    return float(np.corrcoef(aa[mask], bb[mask])[0, 1])
+    return finite_pearson_correlation(a, b, min_count=3)
 
 
 def rel_l2(a: np.ndarray, b: np.ndarray) -> float:
@@ -190,14 +186,62 @@ def boundary_facets_3d(eit_mesh) -> np.ndarray:
     f2v = mesh.topology.connectivity(fdim, 0)
     if f2v is None:
         raise RuntimeError("mesh has no facet-to-vertex connectivity")
-    rows: list[np.ndarray] = []
-    for facet in np.asarray(tags.indices, dtype=np.int64).reshape(-1):
+    facets = np.asarray(tags.indices, dtype=np.int64).reshape(-1)
+    n_triangles = 0
+    for facet in facets:
+        if np.asarray(f2v.links(int(facet))).reshape(-1).size == 3:
+            n_triangles += 1
+    if n_triangles == 0:
+        raise RuntimeError("no triangular boundary facets were found")
+    out = np.empty((n_triangles, 3), dtype=np.int64)
+    row = 0
+    for facet in facets:
         verts = np.asarray(f2v.links(int(facet)), dtype=np.int64).reshape(-1)
         if verts.size == 3:
-            rows.append(verts + 1)
-    if not rows:
-        raise RuntimeError("no triangular boundary facets were found")
-    return np.vstack(rows).astype(np.int64)
+            out[row, :] = verts + 1
+            row += 1
+    return out
+
+
+def _measurement_starts(meas_counts: np.ndarray) -> np.ndarray:
+    counts = np.asarray(meas_counts, dtype=np.int64).reshape(-1)
+    starts = np.empty(counts.size, dtype=np.int64)
+    if counts.size:
+        starts[0] = 0
+        if counts.size > 1:
+            np.cumsum(counts[:-1], out=starts[1:])
+    return starts
+
+
+def _stack_measurement_matrices(matrices: list[np.ndarray]) -> np.ndarray:
+    if not matrices:
+        return np.empty((0, 0), dtype=float)
+    arrays = [np.asarray(matrix, dtype=float) for matrix in matrices]
+    n_cols = arrays[0].shape[1]
+    total_rows = 0
+    for matrix in arrays:
+        if matrix.ndim != 2 or matrix.shape[1] != n_cols:
+            raise ValueError("measurement matrices must be 2D with matching columns")
+        total_rows += int(matrix.shape[0])
+    out = np.empty((total_rows, n_cols), dtype=float)
+    start = 0
+    for matrix in arrays:
+        stop = start + int(matrix.shape[0])
+        out[start:stop, :] = matrix
+        start = stop
+    return out
+
+
+def _concatenate_vectors_direct(vectors: list[np.ndarray]) -> np.ndarray:
+    arrays = [np.asarray(vector, dtype=float).reshape(-1) for vector in vectors]
+    total = sum(int(array.size) for array in arrays)
+    out = np.empty(total, dtype=float)
+    start = 0
+    for array in arrays:
+        stop = start + int(array.size)
+        out[start:stop] = array
+        start = stop
+    return out
 
 
 def build_case_mesh(case: CaseConfig, case_dir: Path):
@@ -300,7 +344,7 @@ def export_case(case: CaseConfig, out_root: Path) -> None:
     pattern = build_pattern_config(case)
     pm = StimMeasPatternManager(pattern, mesh_tdim=case.dim)
     meas_counts = np.asarray(pm.n_meas_per_stim, dtype=np.int64)
-    meas_start = np.concatenate([[0], np.cumsum(meas_counts[:-1])]).astype(np.int64)
+    meas_start = _measurement_starts(meas_counts)
 
     nodes = np.asarray(mesh.coordinates(), dtype=float)
     if case.dim == 2 and nodes.shape[1] > 2:
@@ -317,7 +361,7 @@ def export_case(case: CaseConfig, out_root: Path) -> None:
         "truth_elem_data": truth.reshape(-1, 1),
         "truth_mask": truth_mask.reshape(-1, 1),
         "stim_matrix": np.asarray(pm.stim_matrix, dtype=float),
-        "meas_matrix_concat": np.vstack(pm.meas_matrices).astype(float),
+        "meas_matrix_concat": _stack_measurement_matrices(pm.meas_matrices),
         "meas_start": meas_start.reshape(-1, 1) + 1,
         "meas_counts": meas_counts.reshape(-1, 1),
         "radius": case.radius,
@@ -425,11 +469,15 @@ def run_pyeidors_case(
         forward_parity_corr = safe_corr(eidors_dv, dv_truth)
 
     t1 = time.perf_counter()
-    jacobian_path = case_dir / f"pyeidors_{device}_projected_jacobian.npy"
+    jacobian_path = case_dir / f"pyeidors_{device}_projected_jacobian.h5"
+    legacy_jacobian_path = case_dir / f"pyeidors_{device}_projected_jacobian.npy"
     use_torch_jacobian = device == "cuda"
     jacobian_device = device if use_torch_jacobian else "cpu"
     if jacobian_path.exists():
-        jacobian = np.load(jacobian_path)
+        with h5py.File(jacobian_path, "r") as h5:
+            jacobian = np.asarray(h5["jacobian"], dtype=np.float64)
+    elif legacy_jacobian_path.exists():
+        jacobian = np.load(legacy_jacobian_path)
     else:
         jac_calc = EidorsJacobianAdapter(
             system.fwd_model,
@@ -446,7 +494,8 @@ def run_pyeidors_case(
             difference_mode="normalized",
             difference_orientation="target_minus_reference",
         )
-        np.save(jacobian_path, jacobian)
+        with h5py.File(jacobian_path, "w") as h5:
+            h5.create_dataset("jacobian", data=jacobian, compression="gzip")
     rm = build_one_step_rm(jacobian, lambda_=hp, mode="noser", form="param")
     delta = np.asarray(rm @ dv_truth, dtype=np.float64).reshape(-1)
     sigma = base_sigma + delta
@@ -479,16 +528,19 @@ def run_pyeidors_case(
         "torch_jacobian": bool(use_torch_jacobian),
         "backend_diagnostics": system.fwd_model.get_backend_diagnostics(),
     }
-    np.savez_compressed(
-        case_dir / f"pyeidors_{device}_result.npz",
-        sigma=sigma,
-        delta=delta,
-        dv_truth=dv_truth,
-        dv_pred=dv_pred,
-        vh=np.asarray(vh.meas, dtype=float),
-        vi=np.asarray(vi.meas, dtype=float),
-        metrics=np.asarray(json.dumps(metrics, ensure_ascii=False), dtype=object),
-    )
+    result_path = case_dir / f"pyeidors_{device}_result.h5"
+    with h5py.File(result_path, "w") as h5:
+        h5.create_dataset("sigma", data=sigma, compression="gzip")
+        h5.create_dataset("delta", data=delta, compression="gzip")
+        h5.create_dataset("dv_truth", data=dv_truth, compression="gzip")
+        h5.create_dataset("dv_pred", data=dv_pred, compression="gzip")
+        h5.create_dataset(
+            "vh", data=np.asarray(vh.meas, dtype=float), compression="gzip"
+        )
+        h5.create_dataset(
+            "vi", data=np.asarray(vi.meas, dtype=float), compression="gzip"
+        )
+        h5.attrs["metrics_json"] = json.dumps(metrics, ensure_ascii=False)
     (case_dir / f"pyeidors_{device}_metrics.json").write_text(
         json.dumps(metrics, indent=2, ensure_ascii=False), encoding="utf-8"
     )
@@ -501,6 +553,18 @@ def run_pyeidors_case(
 
 
 def load_pyeidors_result(case_dir: Path, device: str) -> dict[str, object]:
+    h5_path = case_dir / f"pyeidors_{device}_result.h5"
+    if h5_path.exists():
+        with h5py.File(h5_path, "r") as h5:
+            metrics = json.loads(str(h5.attrs["metrics_json"]))
+            return {
+                "sigma": np.asarray(h5["sigma"], dtype=float),
+                "delta": np.asarray(h5["delta"], dtype=float),
+                "dv_truth": np.asarray(h5["dv_truth"], dtype=float),
+                "dv_pred": np.asarray(h5["dv_pred"], dtype=float),
+                "metrics": metrics,
+            }
+
     data = np.load(case_dir / f"pyeidors_{device}_result.npz", allow_pickle=True)
     metrics = json.loads(str(data["metrics"].item()))
     return {
@@ -648,7 +712,9 @@ def render_case(case: CaseConfig, out_root: Path) -> dict[str, object]:
     cpu = load_pyeidors_result(case_dir, "cpu")
     cuda = load_pyeidors_result(case_dir, "cuda")
 
-    recon_values = np.concatenate([eidors["sigma"], cpu["sigma"], cuda["sigma"]])
+    recon_values = _concatenate_vectors_direct(
+        [eidors["sigma"], cpu["sigma"], cuda["sigma"]]
+    )
     clim = (
         float(min(0.95, np.nanpercentile(recon_values, 2))),
         float(max(2.0, np.nanpercentile(recon_values, 98))),

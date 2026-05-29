@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
+import pyeidors.data.noise as noise_module
 from pyeidors.data.noise import add_noise
 from pyeidors.data.structures import EITData
 
@@ -42,6 +44,61 @@ def test_add_noise_uses_difference_signal_and_eidors_column_broadcast() -> None:
 
     assert noisy.shape == v1.shape
     np.testing.assert_allclose(_snr(signal, noise), 0.5, rtol=1e-14, atol=1e-14)
+
+
+def test_v244_broadcast_v2_fills_column_case_directly() -> None:
+    source = inspect.getsource(noise_module._broadcast_v2)
+
+    assert "[:, None]" not in source
+    assert "broadcast_to" not in source
+    assert "np.empty" in source
+    assert "np.copyto" in source
+    v2 = np.array([2.1, 2.9, 4.2], dtype=float)
+    broadcast = noise_module._broadcast_v2(v2, target_shape=(3, 2))
+
+    np.testing.assert_allclose(
+        broadcast,
+        np.array([[2.1, 2.1], [2.9, 2.9], [4.2, 4.2]], dtype=float),
+    )
+    assert not np.shares_memory(broadcast, v2)
+
+
+def test_v487_add_noise_numeric_guards_use_bounded_finite_scans() -> None:
+    measurement_source = inspect.getsource(noise_module._extract_measurements)
+    signal_source = inspect.getsource(noise_module._eidors_noise_signal)
+
+    assert "all_finite_values(arr)" in measurement_source
+    assert "np.all(np.isfinite(arr))" not in measurement_source
+    assert "all_finite_values(signal)" in signal_source
+    assert "np.all(np.isfinite(signal))" not in signal_source
+
+
+def test_v578_add_noise_reuses_readonly_measurement_inputs_until_output() -> None:
+    v1 = np.array([2.0, 3.0, 4.0], dtype=np.float64)
+    v2 = np.array([1.5, 2.5, 3.5], dtype=np.float64)
+
+    extracted, _ = noise_module._extract_measurements(v1, name="v1")
+    broadcast = noise_module._broadcast_v2(v2, target_shape=v1.shape)
+    noisy = add_noise(2.0, v1, v2, seed=12)
+
+    assert extracted is v1
+    assert broadcast is v2
+    assert not np.shares_memory(noisy, v1)
+    assert not np.shares_memory(noisy, v2)
+    np.testing.assert_allclose(v1, np.array([2.0, 3.0, 4.0]))
+    np.testing.assert_allclose(v2, np.array([1.5, 2.5, 3.5]))
+
+
+def test_broadcast_v2_generic_broadcast_uses_direct_output_copy() -> None:
+    v2 = np.array([[1.0, 2.0, 3.0]], dtype=float)
+    broadcast = noise_module._broadcast_v2(v2, target_shape=(2, 3))
+
+    assert broadcast.flags.c_contiguous
+    assert not np.shares_memory(broadcast, v2)
+    np.testing.assert_allclose(
+        broadcast,
+        np.array([[1.0, 2.0, 3.0], [1.0, 2.0, 3.0]], dtype=float),
+    )
 
 
 def test_add_noise_norm_option_uses_normalized_difference_signal() -> None:

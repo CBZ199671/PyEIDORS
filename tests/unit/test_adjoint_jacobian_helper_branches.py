@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
 
+import pyeidors.inverse.jacobian.adjoint_jacobian as adjoint_module
 import pyeidors.inverse.jacobian._core as core_module
 import pyeidors.inverse.jacobian.base_jacobian as base_module
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
@@ -205,6 +207,59 @@ def test_measurement_patterns_and_numpy_torch_assembly_cover_remaining_paths(
         jac, grad_u_all, grad_adj_all
     )
     np.testing.assert_allclose(assembled_all, expected, atol=1e-6, rtol=1e-6)
+
+
+def test_v291_adjoint_torch_assembly_direct_fills_gradient_blocks(monkeypatch):
+    jac = EidorsJacobianAdapter.__new__(EidorsJacobianAdapter)
+    jac.fwd_model = SimpleNamespace(
+        pattern_manager=SimpleNamespace(
+            n_meas_total=3,
+            n_meas_per_stim=[2, 1],
+        ),
+    )
+    jac.cell_areas = np.array([2.0, 3.0], dtype=float)
+    jac.torch_device = torch.device("cpu")
+    jac.torch_dtype = torch.float32
+    jac.torch_batch_all = False
+    grad_u_all = [
+        np.array([[1.0, 2.0], [0.5, 1.0]], dtype=float),
+        np.array([[2.0, 1.0], [1.0, 0.5]], dtype=float),
+    ]
+    grad_adj_all = [
+        np.array([[0.5, 1.0], [1.0, 1.5]], dtype=float),
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
+        np.array([[1.5, 0.5], [0.5, 1.5]], dtype=float),
+    ]
+    expected = np.array(
+        [
+            [-5.0, -6.0],
+            [-2.0, -3.0],
+            [-7.0, -3.75],
+        ],
+        dtype=float,
+    )
+
+    def _fail_stack(*_args, **_kwargs):
+        raise AssertionError("adjoint torch assembly must direct-fill blocks")
+
+    monkeypatch.setattr(adjoint_module.np, "stack", _fail_stack)
+
+    assembled = EidorsJacobianAdapter._assemble_torch(jac, grad_u_all, grad_adj_all)
+    np.testing.assert_allclose(assembled, expected, atol=1e-6, rtol=1e-6)
+
+    jac.torch_batch_all = True
+    assembled_all = EidorsJacobianAdapter._assemble_torch(jac, grad_u_all, grad_adj_all)
+    np.testing.assert_allclose(assembled_all, expected, atol=1e-6, rtol=1e-6)
+
+    assert "np.stack" not in inspect.getsource(
+        adjoint_module._stack_gradient_block_direct
+    )
+    assert "np.stack" not in inspect.getsource(
+        adjoint_module.EidorsJacobianAdapter._assemble_torch
+    )
+    assert "np.stack" not in inspect.getsource(
+        adjoint_module.EidorsJacobianAdapter._assemble_torch_all
+    )
 
 
 def test_linearize_returns_matrix_free_operator_matching_dense_assembly():

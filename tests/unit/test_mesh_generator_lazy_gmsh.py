@@ -69,6 +69,20 @@ def _assert_gmsh_stack_not_bound(module_name: str, probe: dict[str, object]) -> 
         f"{module_name} import eagerly bound gmsh to module.gmsh; "
         "defer via _ensure_gmsh()."
     )
+    assert "mpi4py" not in loaded, (
+        f"{module_name} import eagerly loaded mpi4py; defer until mesh IO."
+    )
+
+
+def test_geometry_package_import_is_lazy_light() -> None:
+    probe = _cold_start_probe("pyeidors.geometry")
+    loaded = set(probe["modules"])
+
+    assert "pyeidors.geometry.mesh_generator" not in loaded
+    assert "pyeidors.geometry.mesh_converter" not in loaded
+    assert "pyeidors.geometry.derived_cache" not in loaded
+    assert "mpi4py" not in loaded
+    assert "dolfinx" not in loaded
 
 
 def test_optimized_mesh_generator_import_does_not_load_gmsh_stack() -> None:

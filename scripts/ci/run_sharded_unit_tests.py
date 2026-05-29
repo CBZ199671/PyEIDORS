@@ -304,6 +304,7 @@ def emitted_shell_command(
         "uv",
         "run",
         *PYTEST_BASE_ARGS,
+        *_pytest_opt_in_args_for_shard(shard),
         *shard.relative_files,
         *extra_pytest_args,
         "-q",
@@ -322,10 +323,21 @@ def current_python_command(
         sys.executable,
         "-m",
         *PYTEST_BASE_ARGS,
+        *_pytest_opt_in_args_for_shard(shard),
         *shard.relative_files,
         *extra_pytest_args,
         "-q",
     ]
+
+
+def _pytest_opt_in_args_for_shard(shard: Shard) -> tuple[str, ...]:
+    if shard.name == "gui":
+        return ("--run-gui", "--run-slow")
+    if shard.name == "hardware":
+        return ("--run-hardware",)
+    if shard.name == "perf-cuda":
+        return ("--run-gpu", "--run-slow")
+    return ()
 
 
 def _command_for_runner(
@@ -342,6 +354,7 @@ def _command_for_runner(
             "uv",
             "run",
             *PYTEST_BASE_ARGS,
+            *_pytest_opt_in_args_for_shard(shard),
             *shard.relative_files,
             *extra_pytest_args,
             "-q",

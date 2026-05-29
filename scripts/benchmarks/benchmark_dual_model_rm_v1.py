@@ -149,10 +149,16 @@ def _build_fine_mesh(coarse: VoxelGrid, *, fine_per_coarse: int) -> CellMesh:
             f"fine_per_coarse is capped at {rng_offsets.shape[0]} for this benchmark."
         )
     spacing = np.asarray(coarse.spacing, dtype=np.float64)
+    coarse_centers = np.asarray(coarse.cell_centers(), dtype=np.float64)
     offsets = rng_offsets[:fine_per_coarse] * spacing.reshape(1, -1)
-    centers = np.vstack(
-        [center + offset for center in coarse.cell_centers() for offset in offsets]
+    centers = np.empty(
+        (coarse_centers.shape[0] * fine_per_coarse, coarse_centers.shape[1]),
+        dtype=np.float64,
     )
+    for offset_idx, offset in enumerate(offsets):
+        block = centers[offset_idx::fine_per_coarse, :]
+        np.copyto(block, coarse_centers)
+        block += offset
     return _cell_mesh_from_centers(centers, name="fine-cem-surrogate")
 
 
@@ -185,23 +191,31 @@ def _build_synthetic_coarse_j(
     fields -= fields.mean(axis=1, keepdims=True)
     fields /= np.maximum(np.linalg.norm(fields, axis=1, keepdims=True), 1.0e-12)
 
-    rows = []
+    out = np.empty((int(n_measurements), centers.shape[0]), dtype=np.float64)
+    work = np.empty(centers.shape[0], dtype=np.float64)
     for meas in range(n_measurements):
         a = meas % n_elec
         b = (meas * 7 + 5) % n_elec
         c = (meas * 11 + 3) % n_elec
         d = (meas * 13 + 1) % n_elec
-        row = (fields[a] - fields[b]) * (fields[c] - fields[d])
-        row += 0.05 * np.sin((meas + 1) * centers[:, 0])
+        row = out[meas, :]
+        np.subtract(fields[a], fields[b], out=row)
+        np.subtract(fields[c], fields[d], out=work)
+        np.multiply(row, work, out=row)
+        np.sin((meas + 1) * centers[:, 0], out=work)
+        work *= 0.05
+        row += work
         norm = float(np.linalg.norm(row))
-        rows.append(row / max(norm, 1.0e-12))
-    return np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
+        row /= max(norm, 1.0e-12)
+    return np.ascontiguousarray(out, dtype=np.float64)
 
 
 def _coarse_j_to_fine_j(coarse_j: np.ndarray, dual: DualMesh) -> np.ndarray:
     counts = np.asarray(dual.coarse2fine.sum(axis=0)).reshape(-1)
-    inv_counts = np.diag(1.0 / np.maximum(counts, 1.0))
-    return np.asarray(coarse_j @ inv_counts @ dual.coarse2fine.T.toarray())
+    inv_counts = 1.0 / np.maximum(counts, 1.0)
+    return np.asarray(
+        (coarse_j * inv_counts.reshape(1, -1)) @ dual.coarse2fine.T.toarray()
+    )
 
 
 def _target_vector(coarse: VoxelGrid) -> tuple[np.ndarray, np.ndarray]:

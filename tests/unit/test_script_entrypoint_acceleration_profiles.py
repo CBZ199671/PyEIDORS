@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
+import subprocess
 import sys
 from argparse import Namespace
 from pathlib import Path
+from types import SimpleNamespace
 
 
 def _load_script_module(*parts: str):
@@ -29,6 +32,7 @@ def test_v51_gui_launcher_defaults_to_fast_startup_contract():
     assert 'SKIP_CUDA_PROBE="1"' in text
     assert "--probe-cuda" in text
     assert "PYEIDORS_ENV_SYNC_CACHE" in text
+    assert 'PROFILE="auto"' in text
 
 
 def test_v52_gui_launcher_prefers_system_env_for_path_shadow():
@@ -41,6 +45,50 @@ def test_v52_gui_launcher_prefers_system_env_for_path_shadow():
     assert '"/usr/bin/env"' in text
     assert 'export PATH="/usr/bin:/bin:$PATH"' in text
     assert "PYEIDORS_LAUNCH_VERBOSE" in text
+
+
+def _run_gui_launcher_dry_run(*args: str, gpu_available: bool = True) -> str:
+    launcher = (
+        Path(__file__).resolve().parents[2] / "scripts" / "gui" / "run_eit_app.sh"
+    )
+    env = os.environ.copy()
+    env["PYEIDORS_GUI_GPU_AVAILABLE"] = "1" if gpu_available else "0"
+    result = subprocess.run(
+        ["bash", str(launcher), "--dry-run", *args],
+        check=True,
+        cwd=launcher.parents[2],
+        env=env,
+        text=True,
+        capture_output=True,
+    )
+    return result.stdout
+
+
+def test_v132_gui_launcher_auto_defaults_to_universal_complex_gpu_profile():
+    output = _run_gui_launcher_dry_run(gpu_available=True)
+
+    assert "requested_profile=auto" in output
+    assert "precision=complex64" in output
+    assert "gui_profile=gpu" in output
+    assert "nix_profile=complex64-cuda" in output
+    assert "EIT_APP_GUI_RUNTIME_PROFILE=complex64-cuda" in output
+
+
+def test_v132_gui_launcher_auto_falls_back_to_complex_cpu_without_gpu():
+    output = _run_gui_launcher_dry_run("--precision", "complex128", gpu_available=False)
+
+    assert "requested_profile=auto" in output
+    assert "precision=complex128" in output
+    assert "gui_profile=cpu" in output
+    assert "nix_profile=complex" in output
+
+
+def test_v132_gui_launcher_keeps_explicit_real_gpu_escape_hatch():
+    output = _run_gui_launcher_dry_run("--real-gpu", gpu_available=True)
+
+    assert "requested_profile=real-gpu" in output
+    assert "gui_profile=gpu" in output
+    assert "nix_profile=cuda" in output
 
 
 def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
@@ -259,6 +307,209 @@ def test_probe_petsc_cuda_script_includes_mpi_diagnostics(monkeypatch, capsys):
     assert payload["petsc_cuda"] is False
     assert payload["mpi"]["mpi_size"] == 1
     assert payload["mpi"]["mpi_size_supported"] is True
+
+
+def test_v324_forward_first_load_benchmark_builds_3d_setup_request() -> None:
+    module = _load_script_module(
+        "scripts",
+        "diagnostics",
+        "benchmark_gui_forward_first_load.py",
+    )
+
+    args = module.parse_args(
+        [
+            "--mode",
+            "both",
+            "--profile",
+            "cuda",
+            "--mesh-refinement",
+            "0.2",
+            "--n-electrodes",
+            "32",
+            "--n-rings",
+            "4",
+            "--electrode-level-fractions",
+            "0.1,0.4,0.7,0.9",
+            "--petsc-device",
+            "cuda",
+        ]
+    )
+    config = module.build_forward_config(args)
+    request = module.build_forward_request(args)
+
+    assert config["mesh_dimension"] == 3
+    assert config["mesh_refinement"] == 0.2
+    assert config["n_elec"] == 32
+    assert config["n_rings"] == 4
+    assert config["electrode_level_fractions"] == [0.1, 0.4, 0.7, 0.9]
+    assert config["petsc_device"] == "cuda"
+    assert request.mesh_dimension == 3
+    assert request.n_electrodes == 32
+    assert request.forward_model_config["measurement_protocol"] == "eidors_full_3d"
+
+
+def test_v324_forward_first_load_benchmark_extracts_timing_summary() -> None:
+    module = _load_script_module(
+        "scripts",
+        "diagnostics",
+        "benchmark_gui_forward_first_load.py",
+    )
+
+    summary = module._timing_from_mapping(
+        {
+            "forward_timing_schema": "eit_app_forward_timing_v1",
+            "forward_timing_ms": {"setup_mesh_and_forward_model": 12.5},
+            "forward_timing_phase_order": ["setup_mesh_and_forward_model", "total"],
+            "forward_timing_total_ms": 13.5,
+        }
+    )
+
+    assert summary["timing_schema"] == "eit_app_forward_timing_v1"
+    assert summary["timing_ms"]["setup_mesh_and_forward_model"] == 12.5
+    assert summary["phase_order"] == ["setup_mesh_and_forward_model", "total"]
+    assert summary["total_ms"] == 13.5
+
+
+def test_v328_forward_first_load_benchmark_can_prewarm_worker(
+    monkeypatch,
+) -> None:
+    module = _load_script_module(
+        "scripts",
+        "diagnostics",
+        "benchmark_gui_forward_first_load.py",
+    )
+    calls: list[dict[str, object]] = []
+
+    def _fake_warm_backend_worker(
+        *,
+        repo,
+        profile,
+        repair_jit=False,
+        forward_request=None,
+    ):
+        calls.append(
+            {
+                "repo": repo,
+                "profile": profile,
+                "repair_jit": repair_jit,
+                "forward_request": forward_request,
+            }
+        )
+        if forward_request is None:
+            return {
+                "warm_mode": "worker",
+                "profile": profile,
+                "prime_command": "prime_runtime",
+                "prime_metadata": {"petsc_cuda_probe": {"probe_cache": {"hit": True}}},
+            }
+        return {
+            "warm_mode": "forward_setup",
+            "profile": profile,
+            "prime_command": "prime_forward_setup",
+            "prime_metadata": {
+                "forward_timing_schema": "eit_app_forward_timing_v1",
+                "forward_timing_ms": {
+                    "configure.runtime": 1.0,
+                    "setup_mesh_and_forward_model": 2.0,
+                },
+                "forward_timing_phase_order": [
+                    "configure.runtime",
+                    "setup_mesh_and_forward_model",
+                    "total",
+                ],
+                "forward_timing_total_ms": 3.0,
+            },
+        }
+
+    monkeypatch.setattr(
+        "pyeidors.cache.ops.warm_backend_worker",
+        _fake_warm_backend_worker,
+    )
+    args = module.parse_args(
+        [
+            "--mode",
+            "setup",
+            "--profile",
+            "cuda",
+            "--prewarm-worker",
+            "--repair-jit",
+        ]
+    )
+
+    payload = module.run_benchmark(args)
+
+    assert payload["prewarm_worker"] is True
+    assert payload["worker_prewarm"]["report"]["warm_mode"] == "worker"
+    assert (
+        payload["worker_prewarm"]["report"]["prime_metadata"]["petsc_cuda_probe"][
+            "probe_cache"
+        ]["hit"]
+        is True
+    )
+    assert payload["setup_prime"]["report"]["warm_mode"] == "forward_setup"
+    assert payload["setup_prime"]["timing"]["timing_ms"]["configure.runtime"] == 1.0
+    assert len(calls) == 2
+    assert calls[0]["forward_request"] is None
+    assert calls[0]["repair_jit"] is True
+    assert calls[1]["forward_request"] is not None
+    assert calls[1]["repair_jit"] is False
+
+
+def test_v331_forward_first_load_benchmark_caps_solve_messages(monkeypatch) -> None:
+    module = _load_script_module(
+        "scripts",
+        "diagnostics",
+        "benchmark_gui_forward_first_load.py",
+    )
+
+    def _fake_execute_forward_request_in_backend(
+        request,
+        *,
+        profile,
+        route_reason,
+        progress_cb=None,
+    ):
+        assert request == "request"
+        assert profile == "cuda"
+        assert route_reason == "diagnostic_forward_first_load"
+        if progress_cb is not None:
+            for index in range(4):
+                progress_cb(f"solve message {index}")
+        return SimpleNamespace(
+            n_elements=11,
+            n_measurements=22,
+            forward_model_config={
+                "forward_timing_schema": "eit_app_forward_timing_v1",
+                "forward_timing_ms": {"total": 1.5},
+                "forward_timing_phase_order": ["total"],
+                "forward_timing_total_ms": 1.5,
+                "backend_worker_profile": "cuda",
+            },
+        )
+
+    monkeypatch.setattr(
+        "eit_app.controllers.forward_solver_controller.execute_forward_request_in_backend",
+        _fake_execute_forward_request_in_backend,
+    )
+    args = module.parse_args(
+        [
+            "--mode",
+            "solve",
+            "--profile",
+            "cuda",
+            "--progress-message-limit",
+            "2",
+        ]
+    )
+
+    payload = module._run_solve(args=args, request="request")
+
+    assert payload["messages"] == ["solve message 0", "solve message 1"]
+    assert payload["message_count"] == 4
+    assert payload["message_limit"] == 2
+    assert payload["messages_truncated"] == 2
+    assert payload["n_elements"] == 11
+    assert payload["timing"]["total_ms"] == 1.5
 
 
 def test_benchmark_3d_fair_compare_forwards_acceleration_profile(

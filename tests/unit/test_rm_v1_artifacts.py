@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 
+import h5py
 import numpy as np
 import pytest
 from scipy import sparse
 
+import pyeidors.inverse.reconstruction_matrix as rm_module
 from pyeidors.inverse import (
     load_rm_artifact,
     migrate_rm_artifact_to_hdf5,
@@ -33,6 +37,44 @@ def _signature_kwargs() -> dict:
         "regularization_type": "noser",
         "hyperparameters": {"lambda": 0.1, "noise_figure": 0.5},
     }
+
+
+def test_rm_digest_value_streams_payload_without_tobytes_copy() -> None:
+    base = np.array(
+        [[1.0, 0.0], [-2.0, 4.0], [3.5, 5.25], [6.0, -7.5]],
+        dtype=np.float64,
+    )
+    array = base[::2].T
+    assert not array.flags.c_contiguous
+    contiguous = np.ascontiguousarray(array)
+    expected = hashlib.sha256(
+        str(contiguous.dtype).encode()
+        + b"|"
+        + json.dumps([int(v) for v in contiguous.shape]).encode()
+        + b"|"
+        + contiguous.tobytes()
+    ).hexdigest()
+
+    assert rm_module._digest_value(array) == expected
+    source = inspect.getsource(rm_module._digest_value)
+    assert "update_digest_with_array_payload" in source
+    assert "np.ascontiguousarray" not in source
+    assert ".tobytes(" not in source
+
+
+def test_rm_reference_frames_broadcasts_vector_without_broadcast_to_copy() -> None:
+    reference = np.array([2.0, 4.0, 8.0], dtype=float)
+    frames = rm_module._reference_frames(
+        reference, n_frames=2, n_measurements=reference.size
+    )
+
+    assert frames.shape == (1, reference.size)
+    np.testing.assert_allclose(frames[0], reference)
+    assert frames.flags.c_contiguous
+    assert np.shares_memory(frames, reference)
+    source = inspect.getsource(rm_module._reference_frames)
+    assert "broadcast_to" not in source
+    assert "np.copyto" not in source
 
 
 def test_rm_signature_is_math_strong_and_device_independent() -> None:
@@ -129,6 +171,16 @@ def test_rm_artifact_hdf5_roundtrip_and_legacy_migration(tmp_path) -> None:
 
     loaded = load_rm_artifact(path)
 
+    with h5py.File(path, "r") as handle:
+        dataset = handle["arrays"]["rm"]
+        metadata = json.loads(handle.attrs["metadata_json"])
+        assert dataset.chunks == rm.shape
+        assert dataset.compression == "lzf"
+        assert metadata["rm_hdf5_chunk_layout"] == "row_full_width_v1"
+        assert metadata["rm_hdf5_chunk_target_bytes"] == 8 * 1024 * 1024
+        assert metadata["rm_hdf5_chunks"] == [2, 3]
+        assert metadata["rm_hdf5_compression"] == "lzf"
+
     assert path.suffix == ".h5"
     assert loaded.schema == "pyeidors-rm-hdf5-v1"
     assert loaded.metadata["artifact_format"] == "hdf5"
@@ -152,3 +204,51 @@ def test_rm_artifact_hdf5_roundtrip_and_legacy_migration(tmp_path) -> None:
     assert migrated.metadata["migrated_from"] == str(legacy_path)
     assert migrated.metadata["legacy_format"] == "npz"
     np.testing.assert_allclose(migrated.rm, rm)
+
+
+def test_v210_rm_artifact_preserves_float32_node_coords(tmp_path) -> None:
+    rm = np.arange(6, dtype=np.float32).reshape(2, 3)
+    node_coords = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    cells = np.array([[0, 1, 2]], dtype=np.int32)
+
+    path = write_rm_artifact(
+        tmp_path / "float32_geometry_rm.h5",
+        rm,
+        node_coords=node_coords,
+        cell_connectivity=cells,
+    )
+
+    loaded = load_rm_artifact(path)
+
+    assert loaded.rm.dtype == np.dtype(np.float32)
+    assert loaded.node_coords is not None
+    assert loaded.node_coords.dtype == np.dtype(np.float32)
+    assert loaded.cell_connectivity is not None
+    assert loaded.cell_connectivity.dtype == np.dtype(np.int32)
+    np.testing.assert_allclose(loaded.node_coords, node_coords)
+    np.testing.assert_array_equal(loaded.cell_connectivity, cells)
+
+
+def test_rm_artifact_uses_row_full_width_hdf5_chunks(tmp_path) -> None:
+    rm = np.arange(100 * 16, dtype=np.float64).reshape(100, 16)
+    path = write_rm_artifact(
+        tmp_path / "chunked_rm.h5",
+        rm,
+        metadata={
+            "algorithm": "one-step-noser",
+            "rm_hdf5_streaming_chunk_bytes": 16 * 8 * 7,
+        },
+    )
+
+    with h5py.File(path, "r") as handle:
+        dataset = handle["arrays"]["rm"]
+        metadata = json.loads(handle.attrs["metadata_json"])
+        assert dataset.chunks == (7, 16)
+        assert dataset.compression == "lzf"
+        assert metadata["rm_hdf5_chunk_layout"] == "row_full_width_v1"
+        assert metadata["rm_hdf5_chunk_target_bytes"] == 16 * 8 * 7
+        assert metadata["rm_hdf5_chunks"] == [7, 16]
+        assert metadata["rm_hdf5_compression"] == "lzf"

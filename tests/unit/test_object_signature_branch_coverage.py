@@ -26,14 +26,12 @@ def test_normalize_callable_and_signature_payload_cover_edge_types(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(
-        sig_module.inspect,
-        "getsourcefile",
-        lambda _func: (_ for _ in ()).throw(RuntimeError("no src")),
-    )
-    monkeypatch.setattr(
-        sig_module.inspect,
-        "getfile",
-        lambda _func: (_ for _ in ()).throw(RuntimeError("no file")),
+        sig_module,
+        "inspect",
+        SimpleNamespace(
+            getsourcefile=lambda _func: (_ for _ in ()).throw(RuntimeError("no src")),
+            getfile=lambda _func: (_ for _ in ()).throw(RuntimeError("no file")),
+        ),
     )
     payload = sig_module._normalize_callable(_demo_callable)
     assert payload["module"] == __name__
@@ -57,6 +55,19 @@ def test_normalize_callable_and_signature_payload_cover_edge_types(
     assert normalized["blob"]["__bytes__"]
     assert normalized["items"][0] == [1, 2, 3]
     assert normalized["callable"]["__callable__"]["qualname"].endswith("_demo_callable")
+
+
+def test_v585_object_signature_hashes_array_views_without_local_contiguous_copy():
+    base = np.arange(24, dtype=np.float64).reshape(4, 6)
+    view = base[:, ::2]
+
+    normalized = sig_module._normalize_for_signature(view)
+
+    assert normalized["shape"] == [4, 3]
+    assert normalized["hash"] == sig_module.hash_array(view)
+    source = sig_module.inspect.getsource(sig_module._normalize_for_signature)
+    assert "np.ascontiguousarray(obj)" not in source
+    assert "hash_array(array)" in source
 
 
 def test_forward_model_signature_helpers_cover_comm_backend_and_model_paths(

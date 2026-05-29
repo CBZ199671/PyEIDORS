@@ -86,16 +86,46 @@ class _LinearForwardModel:
 
     def fwd_solve_batch(self, images):
         self.batch_calls += 1
-        sigma = np.column_stack(
-            [
-                np.asarray(image.elem_data, dtype=np.float64).reshape(-1)
-                for image in images
-            ]
-        )
+        sigma = _stack_image_elem_data(images)
         measurements = self.measurement_matrix @ sigma
         return [
             SimpleNamespace(meas=measurements[:, idx]) for idx in range(sigma.shape[1])
         ]
+
+
+def _dense_identity(size: int) -> np.ndarray:
+    n = int(size)
+    out = np.zeros((n, n), dtype=np.float64)
+    if n:
+        out.reshape(-1)[:: n + 1] = 1.0
+    return out
+
+
+def _add_diagonal_in_place(matrix: np.ndarray, value: float) -> np.ndarray:
+    arr = np.asarray(matrix, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("matrix must be square")
+    if not arr.flags.c_contiguous:
+        arr = np.ascontiguousarray(arr)
+    n = int(arr.shape[0])
+    if n:
+        arr.reshape(-1)[:: n + 1] += float(value)
+    return arr
+
+
+def _stack_image_elem_data(images) -> np.ndarray:
+    image_list = list(images)
+    if not image_list:
+        return np.empty((0, 0), dtype=np.float64)
+    first = np.asarray(image_list[0].elem_data, dtype=np.float64).reshape(-1)
+    out = np.empty((first.size, len(image_list)), dtype=np.float64)
+    out[:, 0] = first
+    for idx, image in enumerate(image_list[1:], start=1):
+        values = np.asarray(image.elem_data, dtype=np.float64).reshape(-1)
+        if values.size != first.size:
+            raise ValueError("all images must have the same element-data size")
+        out[:, idx] = values
+    return out
 
 
 def run_benchmark(
@@ -491,7 +521,7 @@ def _case_from_fixture(
         if name not in arrays:
             raise ValueError(f"fixture missing required export: {name}")
     arrays["vh"] = np.asarray(arrays["vh"], dtype=np.float64).reshape(-1)
-    arrays.setdefault("Sn", np.eye(np.asarray(arrays["vh"]).reshape(-1).size))
+    arrays.setdefault("Sn", _dense_identity(np.asarray(arrays["vh"]).reshape(-1).size))
     arrays.setdefault("rec_model", _rec_centers_from_voxel_shape(voxel_shape))
     arrays.setdefault("normalize", np.asarray([1], dtype=np.int64))
     raw_y = _difference_data_from_vh_vi(arrays["vh"], arrays["vi"])
@@ -599,13 +629,13 @@ def _calc_large_scalar_noise_components(
     m_matrix = np.ascontiguousarray(y @ y.T, dtype=np.float64)
     diag = np.diag_indices(m_matrix.shape[0])
     m_matrix[diag] += noiselev * noiselev
-    gram = y.T @ y + (noiselev * noiselev) * np.eye(y.shape[1], dtype=np.float64)
+    gram = _add_diagonal_in_place(y.T @ y, noiselev * noiselev)
     rm = np.ascontiguousarray(d @ np.linalg.solve(gram, y.T), dtype=np.float64)
     return {
         "RM": rm,
         "PJt": pjt,
         "M": m_matrix,
-        "Sn": np.eye(y.shape[0], dtype=np.float64),
+        "Sn": _dense_identity(y.shape[0]),
         "noiselev": noiselev,
     }
 
@@ -624,19 +654,26 @@ def _measurement_matrix(
     fields = 1.0 / np.sqrt(dist2 + 2.5e-3)
     fields -= fields.mean(axis=1, keepdims=True)
     fields /= np.maximum(np.linalg.norm(fields, axis=1, keepdims=True), 1.0e-12)
-    rows = []
+    out = np.empty((int(n_measurements), centers.shape[0]), dtype=np.float64)
+    work = np.empty(centers.shape[0], dtype=np.float64)
     base = np.full(centers.shape[0], 1.0 / centers.shape[0], dtype=np.float64)
     for meas in range(n_measurements):
         a = meas % n_elec
         b = (meas * 7 + 5) % n_elec
         c = (meas * 11 + 3) % n_elec
         d = (meas * 13 + 1) % n_elec
-        row = (fields[a] - fields[b]) * (fields[c] - fields[d])
-        row += 0.05 * np.sin((meas + 1) * centers[:, 0] / 0.18)
+        row = out[meas, :]
+        np.subtract(fields[a], fields[b], out=row)
+        np.subtract(fields[c], fields[d], out=work)
+        np.multiply(row, work, out=row)
+        np.sin((meas + 1) * centers[:, 0] / 0.18, out=work)
+        work *= 0.05
+        row += work
         row -= float(np.mean(row))
         norm = max(float(np.linalg.norm(row)), 1.0e-12)
-        rows.append(base + 0.035 * row / norm)
-    return np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
+        row *= 0.035 / norm
+        row += base
+    return np.ascontiguousarray(out, dtype=np.float64)
 
 
 def _electrode_positions(*, n_elec: int, n_rings: int) -> np.ndarray:

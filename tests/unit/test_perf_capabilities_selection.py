@@ -327,6 +327,36 @@ def test_probe_petsc_cuda_runtime_accepts_working_types(monkeypatch):
     assert probe["petsc_amgx_cuda_candidate"] is True
 
 
+def test_v325_probe_petsc_cuda_runtime_uses_opt_in_disk_cache(monkeypatch, tmp_path):
+    monkeypatch.setenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE", "1")
+    monkeypatch.setenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR", str(tmp_path))
+    perf_caps.probe_petsc_cuda_runtime.cache_clear()
+    perf_caps.detect_performance_capabilities.cache_clear()
+    monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+
+    first = probe_petsc_cuda_runtime()
+
+    assert first["petsc_cuda"] is True
+    assert first["probe_cache"]["enabled"] is True
+    assert first["probe_cache"]["hit"] is False
+    assert first["probe_cache"]["stored"] is True
+
+    perf_caps.probe_petsc_cuda_runtime.cache_clear()
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_mat_type",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            AssertionError("disk cache hit must skip PETSc Mat probes")
+        ),
+    )
+
+    second = probe_petsc_cuda_runtime()
+
+    assert second["petsc_cuda"] is True
+    assert second["probe_cache"]["hit"] is True
+    assert second["probe_cache"]["layer"] == "disk"
+
+
 def test_probe_petsc_cuda_runtime_cache_tracks_runtime_identity(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()

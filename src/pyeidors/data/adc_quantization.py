@@ -8,6 +8,8 @@ from typing import Iterable
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 
 DEFAULT_BOUNDARY_VOLTAGES = np.array(
     [
@@ -72,7 +74,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray) -> np.ndarray:
     arr = np.asarray(values, dtype=float)
     if arr.ndim == 0:
         arr = arr.reshape(1)
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError("voltages must be finite")
     return arr
 

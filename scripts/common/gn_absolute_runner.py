@@ -48,6 +48,7 @@ from pyeidors.perf.policy import (
 from pyeidors.physics.current_drive import normalize_pattern_config_for_mesh
 from pyeidors.visualization import EITVisualizer
 
+from .array_metrics import pearson_correlation
 from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .io_utils import align_measurement_polarity
 
@@ -401,7 +402,7 @@ def run_absolute_reconstruction(
     fig_cond.savefig(output_dir / "conductivity.png", dpi=300, bbox_inches="tight")
     plt.close(fig_cond)
 
-    corr = np.corrcoef(measured_vec, predicted_vec)[0, 1]
+    corr = pearson_correlation(measured_vec, predicted_vec)
 
     fig_cmp, axes = plt.subplots(1, 2, figsize=(14, 5))
     ax_left, ax_right = axes

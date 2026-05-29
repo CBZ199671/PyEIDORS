@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import numbers
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -71,6 +72,93 @@ def _to_float_list(values: Any) -> list[float] | None:
     return None
 
 
+def _real_if_close(value: complex | float) -> complex | float:
+    z = complex(value)
+    if abs(z.imag) <= 1.0e-15:
+        return float(z.real)
+    return z
+
+
+def _format_complex_scalar(value: complex | float) -> str:
+    z = complex(value)
+    if abs(z.imag) <= 1.0e-15:
+        return f"{z.real:g}"
+    return f"{z.real:g}{z.imag:+g}j"
+
+
+def parse_complex_scalar(value: Any, default: complex | float = 1.0) -> complex | float:
+    """Parse GUI/user scalar admittance input.
+
+    Accepts normal real input (``1.0``), Python-style complex input
+    (``1+0.25j``), engineering ``i`` notation, or a compact ``real,imag`` pair.
+    Pure-real values are returned as ``float`` for backward compatibility.
+    """
+
+    if value is None or value == "":
+        return _real_if_close(default)
+    if isinstance(value, numbers.Real):
+        return float(value)
+    if isinstance(value, numbers.Complex):
+        return _real_if_close(complex(value))
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return _real_if_close(default)
+        text = text.replace(" ", "").replace("I", "j").replace("i", "j")
+        if "," in text and ";" not in text and "j" not in text:
+            parts = [part for part in text.split(",") if part]
+            if len(parts) == 2:
+                return _real_if_close(complex(float(parts[0]), float(parts[1])))
+        return _real_if_close(complex(text))
+    return _real_if_close(complex(value))
+
+
+def parse_complex_scalar_list(
+    values: Any, default: complex | float | None = None
+) -> complex | float | list[complex | float] | None:
+    """Parse scalar or vector admittance/contact-impedance input."""
+
+    if values is None or values == "":
+        return default
+    if isinstance(values, str):
+        text = values.strip()
+        if not text:
+            return default
+        if ";" in text:
+            return [
+                parse_complex_scalar(part) for part in text.split(";") if part.strip()
+            ]
+        if "," in text and "j" in text.replace("I", "j").replace("i", "j"):
+            return [
+                parse_complex_scalar(part) for part in text.split(",") if part.strip()
+            ]
+        return parse_complex_scalar(text)
+    if isinstance(values, (list, tuple)):
+        return [parse_complex_scalar(value) for value in values]
+    return parse_complex_scalar(values, default=default if default is not None else 0.0)
+
+
+def format_complex_scalar(value: Any, default: complex | float = 1.0) -> str:
+    return _format_complex_scalar(parse_complex_scalar(value, default=default))
+
+
+def _mapping_complex_value(value: Any) -> Any:
+    if isinstance(value, numbers.Complex) and not isinstance(value, numbers.Real):
+        z = complex(value)
+        if abs(z.imag) <= 1.0e-15:
+            return float(z.real)
+        return _format_complex_scalar(z)
+    if isinstance(value, (list, tuple)):
+        return [_mapping_complex_value(item) for item in value]
+    return value
+
+
+def mapping_complex_value(value: Any) -> Any:
+    """Return a JSON-friendly scalar/list while preserving complex values."""
+
+    return _mapping_complex_value(value)
+
+
 def _parse_custom_pattern_payload(value: Any) -> dict[str, Any]:
     if value in (None, ""):
         return {}
@@ -95,7 +183,7 @@ class ForwardModelConfig:
     mesh_dimension: int = 2
     mesh_refinement: float = 0.1
     potential_order: int = 1
-    background_conductivity: float = 1.0
+    background_conductivity: float | complex = 1.0
     noise_level: float = 0.0
 
     n_elec: int = 16
@@ -117,7 +205,7 @@ class ForwardModelConfig:
     electrode_length_m_override: float | list[float] | None = None
     electrode_coverage: float = 0.5
     electrode_area_m2_override: float | None = None
-    contact_impedance: float | list[float] | None = None
+    contact_impedance: float | complex | list[float | complex] | None = None
     custom_pattern_json: str = ""
     custom_stim_matrix: Any | None = None
     custom_meas_matrices: Any | None = None
@@ -198,7 +286,9 @@ class ForwardModelConfig:
                     ),
                 )
             ),
-            background_conductivity=float(raw.get("background_conductivity", 1.0)),
+            background_conductivity=parse_complex_scalar(
+                raw.get("background_conductivity", 1.0)
+            ),
             noise_level=float(raw.get("noise_level", 0.0)),
             n_elec=int(raw.get("n_elec", raw.get("n_electrodes", 16))),
             n_rings=int(raw.get("n_rings", 1)),
@@ -237,11 +327,7 @@ class ForwardModelConfig:
                 if layout.get("electrode_area_m2_override") in (None, "")
                 else float(layout.get("electrode_area_m2_override"))
             ),
-            contact_impedance=(
-                _to_float_list(contact_impedance)
-                if not isinstance(contact_impedance, (int, float))
-                else float(contact_impedance)
-            ),
+            contact_impedance=parse_complex_scalar_list(contact_impedance),
             custom_pattern_json=str(raw.get("custom_pattern_json", "")),
             custom_stim_matrix=custom_stim_matrix,
             custom_meas_matrices=custom_meas_matrices,
@@ -271,7 +357,9 @@ class ForwardModelConfig:
             "mesh_dimension": int(self.mesh_dimension),
             "mesh_refinement": float(self.mesh_refinement),
             "potential_order": int(self.potential_order),
-            "background_conductivity": float(self.background_conductivity),
+            "background_conductivity": _mapping_complex_value(
+                self.background_conductivity
+            ),
             "noise_level": float(self.noise_level),
             "n_elec": int(self.n_elec),
             "n_rings": int(self.n_rings),
@@ -291,7 +379,7 @@ class ForwardModelConfig:
             "electrode_length_m_override": self.electrode_length_m_override,
             "electrode_coverage": float(self.electrode_coverage),
             "electrode_area_m2_override": self.electrode_area_m2_override,
-            "contact_impedance": self.contact_impedance,
+            "contact_impedance": _mapping_complex_value(self.contact_impedance),
             "custom_pattern_json": self.custom_pattern_json,
             "custom_stim_matrix": self.custom_stim_matrix,
             "custom_meas_matrices": self.custom_meas_matrices,

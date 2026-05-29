@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import threading
 from collections import OrderedDict
+from collections.abc import Callable
 from pathlib import Path
 from typing import Generic, Mapping, TypeVar
 
@@ -66,8 +68,43 @@ def path_signature(path: str | Path) -> str:
         return str(mesh_path)
 
 
+def _default_sizeof(value: object) -> int:
+    raw = getattr(value, "nbytes", None)
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return 1
+
+
+def env_bytes_limit(*names: str, default: int) -> int:
+    """Resolve a byte limit from the first valid environment variable."""
+
+    for name in names:
+        raw = os.environ.get(name)
+        if raw is None or not str(raw).strip():
+            continue
+        text = str(raw).strip().lower()
+        multipliers = {
+            "kb": 1024,
+            "kib": 1024,
+            "mb": 1024**2,
+            "mib": 1024**2,
+            "gb": 1024**3,
+            "gib": 1024**3,
+        }
+        try:
+            for suffix, multiplier in multipliers.items():
+                if text.endswith(suffix):
+                    value = float(text[: -len(suffix)].strip()) * multiplier
+                    return int(max(0, value))
+            return int(max(0, float(text)))
+        except ValueError:
+            return int(default)
+    return int(default)
+
+
 class ProcessLRUCache(Generic[V]):
-    """Thread-safe in-process LRU cache with a fixed item budget.
+    """Thread-safe in-process LRU cache with item and optional byte budgets.
 
     Mirrors the historical pattern (``OrderedDict`` LRU +
     ``threading.Lock`` + ``max_items`` eviction) that
@@ -78,18 +115,40 @@ class ProcessLRUCache(Generic[V]):
     so existing public callsites stay unchanged.
     """
 
-    __slots__ = ("_cache", "_lock", "_max_items")
+    __slots__ = (
+        "_cache",
+        "_lock",
+        "_max_bytes",
+        "_max_items",
+        "_sizeof",
+        "_total_bytes",
+        "_sizes",
+    )
 
-    def __init__(self, *, max_items: int = 8) -> None:
+    def __init__(
+        self,
+        *,
+        max_items: int = 8,
+        max_bytes: int | None = None,
+        sizeof: Callable[[V], int] | None = None,
+    ) -> None:
         if int(max_items) <= 0:
             raise ValueError(f"max_items must be positive, got {max_items!r}")
         self._cache: "OrderedDict[str, V]" = OrderedDict()
         self._lock = threading.Lock()
         self._max_items = int(max_items)
+        self._max_bytes = None if max_bytes is None else int(max(0, max_bytes))
+        self._sizeof: Callable[[V], int] = sizeof or _default_sizeof
+        self._sizes: dict[str, int] = {}
+        self._total_bytes = 0
 
     @property
     def max_items(self) -> int:
         return self._max_items
+
+    @property
+    def max_bytes(self) -> int | None:
+        return self._max_bytes
 
     def get(self, key: str) -> V | None:
         with self._lock:
@@ -102,14 +161,37 @@ class ProcessLRUCache(Generic[V]):
     def put(self, key: str, value: V) -> None:
         with self._lock:
             self._cache.pop(key, None)
+            self._total_bytes -= self._sizes.pop(key, 0)
+            size = 0
+            if self._max_bytes is not None:
+                size = max(0, int(self._sizeof(value)))
+                if self._max_bytes <= 0 or size > self._max_bytes:
+                    return
             self._cache[key] = value
-            while len(self._cache) > self._max_items:
-                self._cache.popitem(last=False)
+            if self._max_bytes is not None:
+                self._sizes[key] = size
+                self._total_bytes += size
+            while len(self._cache) > self._max_items or (
+                self._max_bytes is not None and self._total_bytes > self._max_bytes
+            ):
+                old_key, _ = self._cache.popitem(last=False)
+                self._total_bytes -= self._sizes.pop(old_key, 0)
+
+    def discard(self, key: str) -> None:
+        with self._lock:
+            self._cache.pop(key, None)
+            self._total_bytes -= self._sizes.pop(key, 0)
 
     def clear(self) -> None:
         with self._lock:
             self._cache.clear()
+            self._sizes.clear()
+            self._total_bytes = 0
 
     def stats(self) -> dict[str, int]:
         with self._lock:
-            return {"items": len(self._cache), "max_items": self._max_items}
+            stats = {"items": len(self._cache), "max_items": self._max_items}
+            if self._max_bytes is not None:
+                stats["total_bytes"] = self._total_bytes
+                stats["max_bytes"] = self._max_bytes
+            return stats

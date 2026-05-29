@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import sys
@@ -151,6 +152,44 @@ def test_dynamic_validation_fixture_input_validation() -> None:
             assert message in str(exc)
         else:  # pragma: no cover - assertion clarity
             raise AssertionError(f"expected ValueError containing {message!r}")
+
+
+def test_v529_dynamic_validation_builders_direct_fill_without_vstack() -> None:
+    module = _load_module()
+
+    for obj in (
+        module._gaussian_frame_sequence,
+        module.build_travelling_wave_fixture,
+        module.build_plant_slow_pulse_fixture,
+        module.synthetic_measurement_jacobian,
+    ):
+        source = inspect.getsource(obj)
+        assert "np.vstack" not in source
+
+    spatial_source = inspect.getsource(module.spatial_metric_summary)
+    assert "np.mean([record[key] for record in records])" not in spatial_source
+    assert "totals = {key: 0.0 for key in GREIT_METRIC_KEYS}" in spatial_source
+
+    positions = np.array([0.0, 0.5, 1.0], dtype=np.float64)
+    centers = np.array([0.0, 1.0], dtype=np.float64)
+    amplitude = np.array([1.0, 2.0], dtype=np.float64)
+    actual = module._gaussian_frame_sequence(
+        positions=positions,
+        centers=centers,
+        amplitude=amplitude,
+        width=0.5,
+    )
+    expected = np.empty((2, 3), dtype=np.float64)
+    expected[0] = amplitude[0] * np.exp(-0.5 * ((positions - centers[0]) / 0.5) ** 2)
+    expected[1] = amplitude[1] * np.exp(-0.5 * ((positions - centers[1]) / 0.5) ** 2)
+    np.testing.assert_allclose(actual, expected)
+
+    jacobian = module.synthetic_measurement_jacobian(
+        positions,
+        n_measurements=4,
+    )
+    assert jacobian.shape == (4, 3)
+    np.testing.assert_allclose(np.linalg.norm(jacobian, axis=1), np.ones(4))
 
 
 def test_eidors_noise_figure_and_solution_error_formulas() -> None:

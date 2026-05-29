@@ -165,7 +165,10 @@ def build_boundary_edges(mesh) -> np.ndarray:
         edges.append(edge)
     if not edges:
         raise ValueError("No boundary edges found")
-    return np.vstack(edges)
+    out = np.empty((len(edges), 2), dtype=np.int64)
+    for edge_idx, edge in enumerate(edges):
+        out[edge_idx, :] = edge
+    return out
 
 
 def validate_exchange_payload(payload: dict[str, Any]) -> None:
@@ -202,7 +205,7 @@ def _load_standard_electrode_node_lists(
     node_lists = []
     for row, count in zip(electrode_nodes, counts):
         active_nodes = np.asarray(row[: int(count)], dtype=np.int64).reshape(-1)
-        if np.any(active_nodes < 1):
+        if int(np.min(active_nodes, initial=1)) < 1:
             raise ValueError("'electrode_nodes' must use one-based node ids")
         node_lists.append(active_nodes - 1)
     return node_lists
@@ -231,7 +234,7 @@ def _load_one_based_connectivity(
         raise ValueError(
             f"'{field}' must be a two-dimensional array with width {width}"
         )
-    if np.any(data < 1):
+    if int(np.min(data, initial=1)) < 1:
         raise ValueError(f"'{field}' must use one-based node ids")
     return np.ascontiguousarray(data - 1, dtype=np.int64)
 

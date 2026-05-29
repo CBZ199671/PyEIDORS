@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
+
+import numpy as np
 
 
 def _load_script_module(*parts: str):
@@ -158,3 +161,36 @@ def test_dual_model_rm_benchmark_writes_t36_report(
     assert "RM Build And Load" in report
     assert "Online Apply" in report
     assert "Previous GREIT Baseline" in report
+
+
+def test_v536_dual_model_benchmark_direct_fills_fine_mesh_and_jacobian() -> None:
+    module = _load_script_module(
+        "scripts", "benchmarks", "benchmark_dual_model_rm_v1.py"
+    )
+
+    fine_source = inspect.getsource(module._build_fine_mesh)
+    jac_source = inspect.getsource(module._build_synthetic_coarse_j)
+    projection_source = inspect.getsource(module._coarse_j_to_fine_j)
+    assert "np.vstack" not in fine_source
+    assert "np.vstack" not in jac_source
+    assert "np.diag" not in projection_source
+    assert "coarse_j * inv_counts.reshape(1, -1)" in projection_source
+
+    coarse = module.VoxelGrid.from_bounds(
+        [0.0, 0.0, 0.0],
+        [1.0, 1.0, 1.0],
+        shape=(2, 1, 1),
+        name="test-coarse",
+    )
+    fine = module._build_fine_mesh(coarse, fine_per_coarse=2)
+    assert fine.num_cells() == coarse.num_cells() * 2
+
+    centers = coarse.cell_centers()
+    jacobian = module._build_synthetic_coarse_j(
+        centers,
+        n_measurements=4,
+        n_elec=6,
+        n_rings=2,
+    )
+    assert jacobian.shape == (4, centers.shape[0])
+    np.testing.assert_allclose(np.linalg.norm(jacobian, axis=1), 1.0)

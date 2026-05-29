@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
 import json
 
 import h5py
 import numpy as np
 import pytest
 
+import pyeidors.io.hdf5_artifacts as hdf5_mod
 from pyeidors.io.hdf5_artifacts import (
     HDF5LazyDataset,
+    _array_digest,
+    _dataset_array_digest,
     migrate_npz_to_hdf5,
     read_hdf5_artifact,
     verify_hdf5_artifact_checksums,
+    write_hdf5_artifact,
     write_large_cache_hdf5_artifact,
 )
 
@@ -50,6 +56,160 @@ def _greit_component_arrays() -> dict[str, np.ndarray]:
         "vi": y + 1.0,
         "xyzr": np.vstack([np.arange(4), np.arange(4) + 1.0, np.ones(4), np.ones(4)]),
     }
+
+
+def _legacy_array_digest(value: object) -> str:
+    arr = np.ascontiguousarray(np.asarray(value))
+    if arr.dtype.kind in {"S", "U", "O"}:
+        flat = [
+            item.decode("utf-8") if isinstance(item, bytes) else str(item)
+            for item in arr.reshape(-1)
+        ]
+        arr = np.asarray(flat, dtype=np.str_).reshape(arr.shape)
+    encoded = (
+        str(arr.dtype).encode()
+        + b"|"
+        + json.dumps([int(v) for v in arr.shape]).encode()
+        + b"|"
+        + arr.tobytes()
+    )
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def test_hdf5_array_digest_streams_payload_without_tobytes_copy() -> None:
+    numeric = np.arange(24, dtype=np.float64).reshape(6, 4)[:, ::2]
+    strings = np.asarray([["alpha", "beta"], ["gamma", "delta"]], dtype=np.str_)
+
+    assert _array_digest(numeric) == _legacy_array_digest(numeric)
+    assert _array_digest(strings) == _legacy_array_digest(strings)
+    source = inspect.getsource(_array_digest)
+    source += inspect.getsource(hdf5_mod._update_digest_with_array_bytes)
+    assert "memoryview" in source
+    assert ".tobytes(" not in source
+    assert "np.ascontiguousarray(np.asarray(value))" not in source
+
+
+def test_v570_hdf5_array_digest_chunks_noncontiguous_numeric_views(
+    monkeypatch,
+) -> None:
+    base = np.arange(1024 * 64, dtype=np.float32).reshape(1024, 64)
+    view = base[::2, ::2]
+    expected = _legacy_array_digest(view)
+    full_contiguous_nbytes = np.ascontiguousarray(view).nbytes
+    copied_nbytes: list[int] = []
+    real_ascontiguousarray = hdf5_mod.np.ascontiguousarray
+
+    def _tracking_ascontiguousarray(value, *args, **kwargs):
+        copied_nbytes.append(int(np.asarray(value).nbytes))
+        return real_ascontiguousarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(hdf5_mod, "_DATASET_DIGEST_CHUNK_BYTES", 2048)
+    monkeypatch.setattr(
+        hdf5_mod.np,
+        "ascontiguousarray",
+        _tracking_ascontiguousarray,
+    )
+
+    assert _array_digest(view) == expected
+    assert copied_nbytes
+    assert max(copied_nbytes) < full_contiguous_nbytes
+
+
+def test_v564_verify_hdf5_checksums_streams_numeric_datasets(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arrays = {"RM": np.arange(96, dtype=np.float64).reshape(12, 8)}
+    path = write_large_cache_hdf5_artifact(
+        tmp_path / "streaming_verify.h5",
+        arrays,
+        {"role": "unit"},
+        schema="unit-streaming-verify-v1",
+    )
+
+    with h5py.File(path, "r") as handle:
+        dataset = handle["arrays"]["RM"]
+        assert _dataset_array_digest(dataset) == _array_digest(arrays["RM"])
+
+    real_asarray = hdf5_mod.np.asarray
+
+    def _guard_asarray(value, *args, **kwargs):
+        if isinstance(value, h5py.Dataset):
+            raise AssertionError("verify should not materialize full HDF5 datasets")
+        return real_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(hdf5_mod.np, "asarray", _guard_asarray)
+
+    digests = verify_hdf5_artifact_checksums(path)
+
+    assert set(digests) == {"RM"}
+    source = inspect.getsource(verify_hdf5_artifact_checksums)
+    source += inspect.getsource(_dataset_array_digest)
+    assert "np.asarray(dataset)" not in source
+    assert "dataset[start:stop]" in source
+
+
+def test_large_cache_artifacts_are_written_swmr_ready(tmp_path) -> None:
+    arrays = {"RM": np.arange(12, dtype=np.float32).reshape(3, 4)}
+
+    path = write_large_cache_hdf5_artifact(
+        tmp_path / "swmr_ready.h5",
+        arrays,
+        {"role": "unit"},
+        schema="unit-swmr-ready-v1",
+    )
+
+    with h5py.File(path, "r", libver="latest", swmr=True) as handle:
+        assert bool(handle.attrs["swmr_ready"]) is True
+        metadata = json.loads(str(handle.attrs["metadata_json"]))
+        assert metadata["hdf5_swmr_ready"] is True
+        assert metadata["hdf5_libver"] == "latest"
+
+    artifact = read_hdf5_artifact(path, lazy=True, swmr=True)
+    assert isinstance(artifact.arrays["RM"], HDF5LazyDataset)
+    assert artifact.arrays["RM"].info.swmr is True
+    np.testing.assert_array_equal(artifact.arrays["RM"].read(), arrays["RM"])
+
+
+def test_hdf5_writer_reuses_manifest_digests_for_dataset_attrs(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    import pyeidors.io.hdf5_artifacts as hdf5_mod
+
+    arrays = {
+        "RM": np.arange(12, dtype=np.float64).reshape(3, 4),
+        "weights": np.linspace(1.0, 2.0, 4),
+    }
+    real_digest = hdf5_mod._array_digest
+    calls: list[str] = []
+
+    def _counting_digest(value: object) -> str:
+        arr = np.asarray(value)
+        calls.append(str(arr.shape))
+        return real_digest(value)
+
+    monkeypatch.setattr(hdf5_mod, "_array_digest", _counting_digest)
+
+    path = write_hdf5_artifact(
+        tmp_path / "single_digest_pass.h5",
+        arrays,
+        {"role": "unit"},
+        schema="unit-single-digest-pass-v1",
+    )
+
+    assert len(calls) == len(arrays)
+    artifact = read_hdf5_artifact(path, lazy=True)
+    for name, values in arrays.items():
+        expected = real_digest(values)
+        assert (
+            artifact.metadata["artifact_manifest"]["key_payload"]["arrays"][name][
+                "sha256"
+            ]
+            == expected
+        )
+        with h5py.File(path, "r") as handle:
+            assert handle["arrays"][name].attrs["sha256"] == expected
 
 
 def test_large_cache_hdf5_writes_chunked_compressed_checksummed_greit_components(
@@ -172,6 +332,44 @@ def test_legacy_hdf5_without_manifest_gets_in_memory_artifact_key(tmp_path) -> N
         persisted = json.loads(str(handle.attrs["metadata_json"]))
     assert "artifact_key" not in persisted
     assert "artifact_manifest" not in persisted
+
+
+def test_v565_legacy_hdf5_manifest_fallback_streams_dataset_digest(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    arrays = {"RM": np.arange(120, dtype=np.float64).reshape(15, 8)}
+    path = write_large_cache_hdf5_artifact(
+        tmp_path / "legacy_missing_digest.h5",
+        arrays,
+        {"package_role": "legacy-fallback"},
+        schema="unit-legacy-manifest-streaming-v1",
+    )
+    with h5py.File(path, "a") as handle:
+        metadata = json.loads(str(handle.attrs["metadata_json"]))
+        metadata.pop("artifact_key", None)
+        metadata.pop("artifact_manifest", None)
+        handle.attrs["metadata_json"] = json.dumps(metadata, sort_keys=True)
+        del handle["arrays"]["RM"].attrs["sha256"]
+
+    real_asarray = hdf5_mod.np.asarray
+
+    def _guard_asarray(value, *args, **kwargs):
+        if isinstance(value, h5py.Dataset):
+            raise AssertionError("manifest fallback should stream HDF5 datasets")
+        return real_asarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(hdf5_mod.np, "asarray", _guard_asarray)
+
+    artifact = read_hdf5_artifact(path, lazy=True, verify_checksums=False)
+
+    digest = artifact.metadata["artifact_manifest"]["key_payload"]["arrays"]["RM"][
+        "sha256"
+    ]
+    assert digest == _array_digest(arrays["RM"])
+    source = inspect.getsource(hdf5_mod._hdf5_manifest_array_payload_from_group)
+    assert "np.asarray(dataset)" not in source
+    assert "_dataset_array_digest(dataset)" in source
 
 
 def test_hdf5_artifact_checksum_mismatch_fails_eager_and_lazy_reads(tmp_path) -> None:

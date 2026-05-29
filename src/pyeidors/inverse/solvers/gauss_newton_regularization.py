@@ -11,6 +11,7 @@ from scipy.sparse.linalg import LinearOperator
 
 from ..prior import RtRPrior
 from ..regularization.base_regularization import BaseRegularization
+from ...utils.numeric_ops import all_finite_values
 
 
 def _is_rtr_prior_contract(value: Any) -> bool:
@@ -18,6 +19,28 @@ def _is_rtr_prior_contract(value: Any) -> bool:
         callable(getattr(value, attr, None))
         for attr in ("apply", "diag", "as_RtR", "as_linear_operator")
     )
+
+
+def _finite_min_max(values: np.ndarray) -> tuple[float, float]:
+    min_val = np.inf
+    max_val = -np.inf
+    count = 0
+    for raw_value in np.nditer(
+        np.asarray(values).reshape(-1),
+        flags=["refs_ok"],
+        op_flags=["readonly"],
+    ):
+        value = float(raw_value)
+        if not np.isfinite(value):
+            continue
+        count += 1
+        if value < min_val:
+            min_val = value
+        if value > max_val:
+            max_val = value
+    if count == 0:
+        return float("nan"), float("nan")
+    return float(min_val), float(max_val)
 
 
 def ensure_regularization_ready(reconstructor) -> None:
@@ -48,7 +71,7 @@ def ensure_regularization_ready(reconstructor) -> None:
         reconstructor.R_linear_operator = matrix.as_linear_operator()
         probe = np.ones(reconstructor.n_elements, dtype=np.float64)
         check = np.asarray(matrix.apply(probe), dtype=np.float64)
-        if not np.isfinite(check).all():
+        if not all_finite_values(check):
             raise FloatingPointError(
                 "Regularization RtRPrior produces non-finite values."
             )
@@ -56,9 +79,8 @@ def ensure_regularization_ready(reconstructor) -> None:
         reconstructor.R_diag = (
             None if diag is None else np.asarray(diag, dtype=np.float64).reshape(-1)
         )
-        if (
-            reconstructor.R_diag is not None
-            and not np.isfinite(reconstructor.R_diag).all()
+        if reconstructor.R_diag is not None and not all_finite_values(
+            reconstructor.R_diag
         ):
             raise FloatingPointError("Regularization RtRPrior diag is non-finite.")
         if needs_dense_tensor and reconstructor.solver_mode == "strict":
@@ -72,7 +94,7 @@ def ensure_regularization_ready(reconstructor) -> None:
                 )
             else:
                 dense = np.asarray(dense_like, dtype=np.float64)
-            if not np.isfinite(dense).all():
+            if not all_finite_values(dense):
                 raise FloatingPointError(
                     "Regularization RtRPrior dense view contains non-finite values."
                 )
@@ -104,10 +126,8 @@ def ensure_regularization_ready(reconstructor) -> None:
     if isspmatrix(matrix):
         if matrix.nnz == 0:
             raise FloatingPointError("Regularization sparse matrix is empty.")
-        if not np.isfinite(matrix.data).all():
-            finite = matrix.data[np.isfinite(matrix.data)]
-            min_val = float(finite.min()) if finite.size else float("nan")
-            max_val = float(finite.max()) if finite.size else float("nan")
+        if not all_finite_values(matrix.data):
+            min_val, max_val = _finite_min_max(matrix.data)
             raise FloatingPointError(
                 "Regularization sparse matrix contains non-finite values: "
                 f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
@@ -132,7 +152,7 @@ def ensure_regularization_ready(reconstructor) -> None:
     if isinstance(matrix, LinearOperator):
         probe = np.ones(reconstructor.n_elements, dtype=np.float64)
         check = np.asarray(matrix.matvec(probe), dtype=np.float64)
-        if not np.isfinite(check).all():
+        if not all_finite_values(check):
             raise FloatingPointError(
                 "Regularization LinearOperator produces non-finite values."
             )
@@ -146,15 +166,13 @@ def ensure_regularization_ready(reconstructor) -> None:
         return
 
     dense = np.asarray(matrix, dtype=np.float64)
-    if not np.isfinite(dense).all():
-        finite = dense[np.isfinite(dense)]
-        min_val = float(finite.min()) if finite.size else float("nan")
-        max_val = float(finite.max()) if finite.size else float("nan")
+    if not all_finite_values(dense):
+        min_val, max_val = _finite_min_max(dense)
         raise FloatingPointError(
             "Regularization matrix contains non-finite values: "
             f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
         )
-    reconstructor.R_diag = np.asarray(np.diag(dense), dtype=np.float64)
+    reconstructor.R_diag = np.asarray(dense.diagonal(), dtype=np.float64)
     if needs_dense_tensor:
         reconstructor.R_torch = torch.from_numpy(dense).to(
             reconstructor.device,

@@ -30,6 +30,17 @@ def _sum_group_columns(
     return [jacobian[:, idx].sum(axis=1) for idx in groups]
 
 
+def _build_grouped_coarse_matrix(
+    jacobian: np.ndarray,
+    groups: list[np.ndarray],
+) -> np.ndarray:
+    j_mat = np.asarray(jacobian)
+    out = np.empty((int(j_mat.shape[0]), len(groups)), dtype=j_mat.dtype)
+    for col, idx in enumerate(groups):
+        out[:, col] = j_mat[:, idx].sum(axis=1)
+    return np.ascontiguousarray(out)
+
+
 def _init_power_vector(matrix: np.ndarray, rng: np.random.Generator) -> np.ndarray:
     vec = rng.standard_normal(matrix.shape[1])
     norm = np.linalg.norm(vec)
@@ -69,8 +80,7 @@ def get_coarse_matrix(
 ) -> np.ndarray:
     """Get or build grouped coarse matrix."""
     if group_size not in cache:
-        coarse_columns = _sum_group_columns(jacobian, groups)
-        cache[group_size] = np.column_stack(coarse_columns)
+        cache[group_size] = _build_grouped_coarse_matrix(jacobian, groups)
     return cache[group_size]
 
 

@@ -17,6 +17,7 @@ from .data.difference import (
     normalize_difference_orientation,
 )
 from .data.structures import EITData, EITImage
+from .utils.numeric_ops import squared_distances_to_point
 
 
 def conductivity_to_image(
@@ -56,8 +57,8 @@ def difference_measurement(
         n_stim=data.n_stim,
         n_meas=data.n_meas,
         type="difference",
-        reference_meas=np.asarray(reference_data.meas, dtype=np.float64).copy(),
-        target_meas=np.asarray(data.meas, dtype=np.float64).copy(),
+        reference_meas=np.asarray(reference_data.meas),
+        target_meas=np.asarray(data.meas),
         difference_mode=resolved_mode,
         difference_orientation=resolved_orientation,
     )
@@ -67,11 +68,10 @@ def create_homogeneous_image(
     eit_system, conductivity: Optional[float] = None
 ) -> EITImage:
     """Create a homogeneous conductivity image for an initialized system."""
-    value = (
-        eit_system.base_conductivity if conductivity is None else float(conductivity)
-    )
+    value = eit_system.base_conductivity if conductivity is None else conductivity
+    dtype = np.complex128 if np.iscomplexobj(value) else float
     n_elements = int(fem.Function(eit_system.fwd_model.V_sigma).x.array.size)
-    elem_data = np.full(n_elements, value, dtype=float)
+    elem_data = np.full(n_elements, value, dtype=dtype)
     return EITImage(elem_data=elem_data, fwd_model=eit_system.fwd_model)
 
 
@@ -87,9 +87,8 @@ def add_circular_phantom(
     dof_coordinates = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
     elem_data = np.full(len(dof_coordinates), base_conductivity, dtype=float)
 
-    center = np.asarray(phantom_center, dtype=float)
-    distances = np.linalg.norm(dof_coordinates[:, :2] - center[None, :], axis=1)
-    elem_data[distances <= phantom_radius] = phantom_conductivity
+    dist2 = squared_distances_to_point(dof_coordinates, phantom_center, ndim=2)
+    elem_data[dist2 <= float(phantom_radius) ** 2] = phantom_conductivity
     return EITImage(elem_data=elem_data, fwd_model=eit_system.fwd_model)
 
 

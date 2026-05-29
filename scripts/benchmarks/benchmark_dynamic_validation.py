@@ -32,6 +32,7 @@ from pyeidors.inverse import (
     solve_batch_spatiotemporal_gn,
 )
 from pyeidors.io._json import json_ready as _json_ready
+from pyeidors.utils.numeric_ops import all_finite_values
 
 
 SCHEMA = "pyeidors-dynamic-validation-benchmark-v1"
@@ -312,6 +313,30 @@ def evaluate_fixture(
     }
 
 
+def _gaussian_frame_sequence(
+    *,
+    positions: np.ndarray,
+    centers: np.ndarray,
+    amplitude: np.ndarray,
+    width: float,
+) -> np.ndarray:
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1)
+    centers_arr = np.asarray(centers, dtype=np.float64).reshape(-1)
+    amp_arr = np.asarray(amplitude, dtype=np.float64).reshape(-1)
+    if centers_arr.size != amp_arr.size:
+        raise ValueError("centers and amplitude must have the same length")
+    out = np.empty((centers_arr.size, pos.size), dtype=np.float64)
+    resolved_width = max(float(width), 1.0e-12)
+    for row, center, amp in zip(out, centers_arr, amp_arr, strict=True):
+        np.subtract(pos, center, out=row)
+        row /= resolved_width
+        np.square(row, out=row)
+        row *= -0.5
+        np.exp(row, out=row)
+        row *= float(amp)
+    return out
+
+
 def build_travelling_wave_fixture(
     *,
     n_cells: int,
@@ -327,11 +352,11 @@ def build_travelling_wave_fixture(
     centers = 0.16 + 0.68 * times
     width = 0.065
     amplitude = 0.85 + 0.15 * np.sin(np.pi * times)
-    truth = np.vstack(
-        [
-            amp * np.exp(-0.5 * ((positions - center) / width) ** 2)
-            for amp, center in zip(amplitude, centers, strict=True)
-        ]
+    truth = _gaussian_frame_sequence(
+        positions=positions,
+        centers=centers,
+        amplitude=amplitude,
+        width=width,
     )
     return _fixture_payload(
         name="travelling_wave",
@@ -365,11 +390,11 @@ def build_plant_slow_pulse_fixture(
     rise = sigmoid((times - 0.18) / 0.045)
     decay = 1.0 - 0.35 * sigmoid((times - 0.76) / 0.08)
     amplitude = 0.75 * rise * decay
-    truth = np.vstack(
-        [
-            amp * np.exp(-0.5 * ((positions - center) / width) ** 2)
-            for amp, center in zip(amplitude, centers, strict=True)
-        ]
+    truth = _gaussian_frame_sequence(
+        positions=positions,
+        centers=centers,
+        amplitude=amplitude,
+        width=width,
     )
     return _fixture_payload(
         name="plant_slow_pulse",
@@ -433,20 +458,28 @@ def synthetic_measurement_jacobian(
     *,
     n_measurements: int,
 ) -> np.ndarray:
-    x = np.asarray(positions, dtype=np.float64).reshape(1, -1)
+    pos = np.asarray(positions, dtype=np.float64).reshape(-1)
     sensor_centers = np.linspace(0.0, 1.0, int(n_measurements), dtype=np.float64)
-    rows = []
+    out = np.empty((sensor_centers.size, pos.size), dtype=np.float64)
+    negative = np.empty(pos.size, dtype=np.float64)
     for idx, center in enumerate(sensor_centers):
         width = 0.10 + 0.045 * ((idx % 4) / 3.0)
-        positive = np.exp(-0.5 * ((x - center) / width) ** 2).reshape(-1)
+        row = out[idx]
+        np.subtract(pos, center, out=row)
+        row /= width
+        np.square(row, out=row)
+        row *= -0.5
+        np.exp(row, out=row)
         negative_center = (center + 0.41) % 1.0
-        negative = np.exp(-0.5 * ((x - negative_center) / (width * 1.35)) ** 2).reshape(
-            -1
-        )
-        row = positive - 0.32 * negative + 0.04
+        np.subtract(pos, negative_center, out=negative)
+        negative /= width * 1.35
+        np.square(negative, out=negative)
+        negative *= -0.5
+        np.exp(negative, out=negative)
+        row -= 0.32 * negative
+        row += 0.04
         row /= max(float(np.linalg.norm(row)), 1.0e-12)
-        rows.append(row)
-    return np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
+    return np.ascontiguousarray(out, dtype=np.float64)
 
 
 def dynamic_fidelity_metrics(
@@ -585,10 +618,12 @@ def spatial_metric_summary(
         )
     if not records:
         return {key: 0.0 for key in GREIT_METRIC_KEYS}
-    return {
-        key: float(np.mean([record[key] for record in records]))
-        for key in GREIT_METRIC_KEYS
-    }
+    totals = {key: 0.0 for key in GREIT_METRIC_KEYS}
+    for record in records:
+        for key in GREIT_METRIC_KEYS:
+            totals[key] += float(record[key])
+    scale = 1.0 / float(len(records))
+    return {key: float(value * scale) for key, value in totals.items()}
 
 
 def evaluate_peak_delay_gate(
@@ -951,7 +986,7 @@ def _frame_array(values: Any, *, name: str) -> np.ndarray:
     arr = np.asarray(values, dtype=np.float64)
     if arr.ndim != 2 or 0 in arr.shape:
         raise ValueError(f"{name} must be a non-empty 2D frame array.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 

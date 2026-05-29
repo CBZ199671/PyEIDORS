@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 
@@ -62,6 +63,29 @@ def test_resolve_cuda_structured_runtime_accepts_narrow_happy_path(
         payload["structured_backend_version"] == module.CUDA_STRUCTURED_BACKEND_VERSION
     )
     assert payload["operator_backend"] == "torch-cuda"
+
+
+def test_v593_cuda_structured_stable_hash_streams_noncontiguous_float64(
+    monkeypatch,
+) -> None:
+    values = np.arange(24, dtype=np.float64).reshape(8, 3)[:, 1]
+    assert not values.flags.c_contiguous
+    expected = module.hash_array_payload(np.ascontiguousarray(values, dtype=np.float64))
+    original_hash = module.hash_array_payload
+    captured: dict[str, np.ndarray] = {}
+
+    def _capture_hash(arr: np.ndarray) -> str:
+        captured["arr"] = arr
+        return original_hash(arr)
+
+    monkeypatch.setattr(module, "hash_array_payload", _capture_hash)
+
+    actual = module.CudaStructuredForwardBackend._stable_hash(values)
+
+    assert actual == expected
+    assert captured["arr"] is values
+    assert captured["arr"].dtype == np.float64
+    assert not captured["arr"].flags.c_contiguous
 
 
 @pytest.mark.parametrize(
@@ -149,6 +173,34 @@ def test_resolve_cuda_structured_runtime_rejects_unsupported_cases(
         module.resolve_cuda_structured_runtime(**payload)
 
 
+def test_cuda_structured_complex_rejection_points_to_dolfinx_cuda(
+    tmp_path, monkeypatch
+):
+    mesh_file = tmp_path / "mesh.msh"
+    mesh_file.write_text("$MeshFormat\n2.2 0 8\n", encoding="utf-8")
+    _write_sidecar(module.structured_sidecar_path_for_mesh(mesh_file))
+    monkeypatch.setattr(module, "_torch_cuda_available", lambda: True)
+    monkeypatch.setattr(module, "meshio", object())
+
+    with pytest.raises(ValueError) as excinfo:
+        module.resolve_cuda_structured_runtime(
+            mesh_dim=3,
+            mesh_file=str(mesh_file),
+            mesh_family="hex",
+            geometry_version="geomv2",
+            generator_revision="g3d4",
+            petsc_device_requested="cuda",
+            scalar_type="complex",
+            mesh_comm_size=1,
+        )
+
+    message = str(excinfo.value)
+    assert "forward_backend='dolfinx'" in message
+    assert "petsc_device='cuda'" in message
+    assert ".#complex-cuda" in message
+    assert ".#complex64-cuda" in message
+
+
 def test_resolve_cuda_structured_runtime_rejects_missing_sidecar(tmp_path, monkeypatch):
     mesh_file = tmp_path / "mesh.msh"
     mesh_file.write_text("$MeshFormat\n2.2 0 8\n", encoding="utf-8")
@@ -202,6 +254,22 @@ def test_block_pcg_solves_small_spd_system():
     np.testing.assert_allclose(
         solved.detach().cpu().numpy(), expected, rtol=1e-10, atol=1e-10
     )
+
+
+def test_v238_build_sigma_state_constructs_jacobi_inverse_on_torch_device():
+    source = inspect.getsource(module.CudaStructuredForwardBackend._build_sigma_state)
+
+    assert "(1.0 / diag)[:, None]" not in source
+    assert "torch.reciprocal" in source
+
+
+def test_v476_build_sigma_state_validates_diag_with_bounded_finite_scan():
+    source = inspect.getsource(module.CudaStructuredForwardBackend._build_sigma_state)
+
+    assert "all_finite_values(diag)" in source
+    assert "np.all(np.isfinite(diag))" not in source
+    assert "np.isfinite(diag).all()" not in source
+    assert ".reshape(-1, 1)" in source
 
 
 def test_resolve_cuda_structured_runtime_additional_validation_paths(

@@ -1,7 +1,10 @@
 [CmdletBinding()]
 param(
-    [ValidateSet('cpu', 'gpu')]
-    [string]$Profile = 'cpu',
+    [ValidateSet('auto', 'cpu', 'gpu', 'real-cpu', 'real-gpu', 'complex-cpu', 'complex-gpu', 'complex64-cpu', 'complex64-gpu', 'complex128-cpu', 'complex128-gpu')]
+    [string]$Profile = 'auto',
+
+    [ValidateSet('complex64', 'complex128')]
+    [string]$Precision = 'complex64',
 
     [switch]$SkipCudaProbe,
 
@@ -53,8 +56,12 @@ function Invoke-WslGuiLauncher {
         [string]$RepoRootWindows,
 
         [Parameter(Mandatory = $true)]
-        [ValidateSet('cpu', 'gpu')]
+        [ValidateSet('auto', 'cpu', 'gpu', 'real-cpu', 'real-gpu', 'complex-cpu', 'complex-gpu', 'complex64-cpu', 'complex64-gpu', 'complex128-cpu', 'complex128-gpu')]
         [string]$LaunchProfile,
+
+        [Parameter(Mandatory = $true)]
+        [ValidateSet('complex64', 'complex128')]
+        [string]$LaunchPrecision,
 
         [switch]$PassSkipCudaProbe,
 
@@ -68,7 +75,15 @@ function Invoke-WslGuiLauncher {
     if ($resolved.Distro) {
         $wslArgs += @('-d', $resolved.Distro)
     }
-    $wslArgs += @('--cd', $resolved.LinuxPath, 'bash', 'scripts/gui/run_eit_app.sh', "--$LaunchProfile")
+    $wslArgs += @(
+        '--cd',
+        $resolved.LinuxPath,
+        'bash',
+        'scripts/gui/run_eit_app.sh',
+        "--$LaunchProfile",
+        '--precision',
+        $LaunchPrecision
+    )
     if ($PassSkipCudaProbe) {
         $wslArgs += '--skip-cuda-probe'
     }
@@ -91,6 +106,7 @@ $repoRoot = Get-RepoRoot
 Invoke-WslGuiLauncher `
     -RepoRootWindows $repoRoot `
     -LaunchProfile $Profile `
+    -LaunchPrecision $Precision `
     -PassSkipCudaProbe:$SkipCudaProbe `
     -PassDryRun:$DryRun `
     -ForwardArgs $AppArgs

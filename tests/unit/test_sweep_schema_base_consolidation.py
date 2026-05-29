@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import fields
+import inspect
+
+import numpy as np
 
 from pyeidors.data._sweep_core import (
     RECON_METRIC_FIELDS,
@@ -22,6 +25,7 @@ from pyeidors.data.bucket_dense_experiments import (
     BucketDenseSummaryRow,
     BucketFull256CompareSummaryRow,
 )
+from pyeidors.data.bucket_domain_audit import build_circle_bucket_domain
 from pyeidors.data.holdout_fit_diff import (
     FIELD_FIELDS,
     STRUCTURE_FIELDS,
@@ -30,6 +34,7 @@ from pyeidors.data.holdout_fit_diff import (
     HoldoutFitDiffSummary,
     HoldoutStructureMetricRow,
 )
+import pyeidors.data.holdout_fit_diff as holdout_module
 from pyeidors.data.voltage_digit_sweep import (
     VoltageDigitFieldRow,
     VoltageDigitSweepSummary,
@@ -64,6 +69,54 @@ def test_structure_metrics_shared_value_object_replaces_local_duplicate() -> Non
     assert issubclass(HoldoutStructureMetricRow, StructureMetricRow)
     assert _field_order(StructureMetrics) == tuple(STRUCTURE_METRIC_FIELDS)
     assert _field_order(HoldoutStructureMetricRow) == tuple(STRUCTURE_FIELDS)
+
+
+def test_v299_circle_bucket_sensitivity_direct_fills_rows(monkeypatch) -> None:
+    bucket = build_circle_bucket_domain(mesh_h=0.18, n_elec=8, allow_coarse_smoke=True)
+
+    def _fail_stack(*_args, **_kwargs):
+        raise AssertionError("circle bucket sensitivity must direct-fill")
+
+    monkeypatch.setattr(bucket_dense_module.np, "vstack", _fail_stack)
+    monkeypatch.setattr(bucket_dense_module.np, "column_stack", _fail_stack)
+    source = inspect.getsource(bucket_dense_module._build_circle_bucket_sensitivity)
+    assert "np.vstack" not in source
+    electrode_source = inspect.getsource(bucket_dense_module._electrode_center_points)
+    assert "np.column_stack" not in electrode_source
+
+    sensitivity = bucket_dense_module._build_circle_bucket_sensitivity(bucket)
+    assert sensitivity.shape == (bucket.n_measurements, bucket.n_dofs)
+    assert np.isfinite(sensitivity).all()
+
+
+def test_v312_sweep_plot_value_ranges_stream_without_concatenate() -> None:
+    bucket_source = inspect.getsource(bucket_dense_module._field_value_range)
+    bucket_source += inspect.getsource(
+        bucket_dense_module.plot_bucket_dense_recon_compare
+    )
+    bucket_source += inspect.getsource(
+        bucket_dense_module.plot_bucket_full256_compare_recon
+    )
+    bucket_source += inspect.getsource(
+        bucket_dense_module.plot_bucket_full256_compare_recon_with_full208_delta
+    )
+    holdout_source = inspect.getsource(holdout_module._field_value_range)
+    holdout_source += inspect.getsource(holdout_module.plot_holdout_recon_compare)
+
+    assert "np.concatenate" not in bucket_source
+    assert "np.concatenate" not in holdout_source
+    assert bucket_dense_module._field_value_range(
+        [
+            ("a", np.array([2.0, -1.0], dtype=float)),
+            ("b", np.array([4.0, 0.5], dtype=float)),
+        ]
+    ) == (-1.0, 4.0)
+    assert holdout_module._field_value_range(
+        [
+            ("a", np.array([3.0, 1.0], dtype=float)),
+            ("b", np.array([-2.0, 5.0], dtype=float)),
+        ]
+    ) == (-2.0, 5.0)
 
 
 def test_field_rows_use_shared_sweep_row_serializer_without_schema_changes() -> None:

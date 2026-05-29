@@ -87,7 +87,7 @@ def perform_sparse_absolute_reconstruction(
     measured_vector = measurement_data.meas
     result_metadata = merge_workflow_metadata(
         {
-            "baseline_used": baseline_image.elem_data.copy(),
+            "baseline_used": baseline_image.elem_data,
             "display_values": conductivity_values,
             "solver": "sparse_bayesian",
             "likelihood_noise_std": solver_output.likelihood_noise_std,
@@ -166,7 +166,7 @@ def perform_sparse_difference_reconstruction(
     )
     result_metadata = merge_workflow_metadata(
         {
-            "reference_measured": reference_data.meas.copy(),
+            "reference_measured": reference_data.meas,
             "display_values": conductivity_values,
             "solver": "sparse_bayesian",
             "likelihood_noise_std": solver_output.likelihood_noise_std,

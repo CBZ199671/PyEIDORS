@@ -154,6 +154,31 @@ def test_xdmf_cache_loads_after_source_msh_is_removed(tmp_path: Path, monkeypatc
     assert loaded.structured_sidecar_version == "test-sidecar-v1"
 
 
+def test_xdmf_cache_rejects_geometry_dtype_mismatch(tmp_path: Path) -> None:
+    source_msh = tmp_path / "dtype_guard.msh"
+    source_msh.write_text("placeholder source", encoding="utf-8")
+    mesh_data = _unit_square_mesh_data()
+
+    assert write_dolfinx_mesh_cache(
+        mesh_data,
+        source_msh_file=source_msh,
+        association_table={"domain": 1, "electrode_1": 2},
+        gdim=2,
+    )
+    metadata = json.loads(
+        dolfinx_cache_metadata_path_for_mesh(source_msh).read_text(encoding="utf-8")
+    )
+    assert metadata["geometry_dtype"] == str(mesh_data.mesh.geometry.x.dtype)
+
+    loaded = load_dolfinx_mesh_cache(
+        xdmf_cache_path_for_mesh(source_msh),
+        gdim=2,
+        expected_geometry_dtype=np.float32,
+    )
+
+    assert loaded is None
+
+
 def test_legacy_xdmf_metadata_without_manifest_gets_in_memory_artifact_key(
     tmp_path: Path,
 ) -> None:

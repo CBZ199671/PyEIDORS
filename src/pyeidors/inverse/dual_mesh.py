@@ -9,6 +9,8 @@ import numpy as np
 from scipy import sparse
 from scipy.spatial import cKDTree
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 OutsidePolicy = Literal["nearest", "raise"]
 
 
@@ -18,7 +20,7 @@ def _as_coordinates(values: Any, *, name: str) -> np.ndarray:
         raise ValueError(f"{name} coordinates must be a 2D array.")
     if coords.shape[0] == 0 or coords.shape[1] == 0:
         raise ValueError(f"{name} coordinates must be non-empty.")
-    if not np.isfinite(coords).all():
+    if not all_finite_values(coords):
         raise ValueError(f"{name} coordinates contain non-finite values.")
     return np.ascontiguousarray(coords, dtype=np.float64)
 
@@ -29,9 +31,112 @@ def _as_cells(values: Any, *, name: str) -> np.ndarray:
         raise ValueError(f"{name} cells must be a 2D connectivity array.")
     if cells.shape[0] == 0 or cells.shape[1] == 0:
         raise ValueError(f"{name} cells must be non-empty.")
-    if np.any(cells < 0):
+    if cells.size and int(np.min(cells)) < 0:
         raise ValueError(f"{name} cells contain negative vertex indices.")
     return np.ascontiguousarray(cells, dtype=np.int64)
+
+
+def _cell_centers_from_arrays(coordinates: np.ndarray, cells: np.ndarray) -> np.ndarray:
+    coords = np.asarray(coordinates)
+    cells_i = np.asarray(cells)
+    if cells_i.ndim != 2 or cells_i.shape[0] == 0:
+        return np.empty((0, coords.shape[1]), dtype=coords.dtype)
+    out = np.zeros((cells_i.shape[0], coords.shape[1]), dtype=coords.dtype)
+    work = np.empty_like(out)
+    for local_idx in range(cells_i.shape[1]):
+        np.take(coords, cells_i[:, local_idx], axis=0, out=work)
+        out += work
+    out /= float(cells_i.shape[1])
+    return out
+
+
+def _fill_repeated_axis_column(
+    centers: np.ndarray,
+    axis: int,
+    values: np.ndarray,
+    *,
+    outer_repeats: int,
+    inner_repeats: int,
+) -> None:
+    axis_values = np.asarray(values, dtype=centers.dtype).reshape(-1)
+    outer = int(outer_repeats)
+    inner = int(inner_repeats)
+    if axis_values.size == 0 or outer <= 0 or inner <= 0:
+        return
+    column = centers[:, int(axis)]
+    expected = outer * int(axis_values.size) * inner
+    if column.shape[0] != expected:
+        raise ValueError(
+            f"axis-column fill shape mismatch: {column.shape[0]!r} vs {expected!r}."
+        )
+    row_stride = column.strides[0]
+    view = np.lib.stride_tricks.as_strided(
+        column,
+        shape=(outer, int(axis_values.size), inner),
+        strides=(
+            int(axis_values.size) * inner * row_stride,
+            inner * row_stride,
+            row_stride,
+        ),
+        writeable=True,
+    )
+    view[...] = axis_values.reshape(1, -1, 1)
+
+
+def _inside_scaled_rows(scaled: np.ndarray, upper: np.ndarray) -> np.ndarray:
+    inside = np.ones(scaled.shape[0], dtype=bool)
+    axis_mask = np.empty(scaled.shape[0], dtype=bool)
+    for axis in range(scaled.shape[1]):
+        np.greater_equal(scaled[:, axis], 0, out=axis_mask)
+        np.logical_and(inside, axis_mask, out=inside)
+        np.less(scaled[:, axis], int(upper[axis]), out=axis_mask)
+        np.logical_and(inside, axis_mask, out=inside)
+    return inside
+
+
+def _scaled_point_indices(
+    pts: np.ndarray, origin: np.ndarray, spacing: np.ndarray
+) -> np.ndarray:
+    scaled_work = np.empty(pts.shape, dtype=np.float64)
+    np.subtract(pts, origin, out=scaled_work)
+    np.divide(scaled_work, spacing, out=scaled_work)
+    np.floor(scaled_work, out=scaled_work)
+    return scaled_work.astype(np.int64)
+
+
+def _ravel_scaled_rows(scaled: np.ndarray, shape: tuple[int, ...]) -> np.ndarray:
+    indices = np.empty(scaled.shape[0], dtype=np.int64)
+    if scaled.shape[0] == 0:
+        return indices
+    np.copyto(indices, scaled[:, 0])
+    for axis in range(1, scaled.shape[1]):
+        indices *= int(shape[axis])
+        indices += scaled[:, axis]
+    return indices
+
+
+def _compact_rows_where(
+    rows: np.ndarray, mask: np.ndarray, *, count: int | None = None
+) -> np.ndarray:
+    if count is None:
+        count = int(np.count_nonzero(mask))
+    out = np.empty((count, rows.shape[1]), dtype=rows.dtype)
+    write_idx = 0
+    for row_idx, keep in enumerate(mask):
+        if keep:
+            out[write_idx] = rows[row_idx]
+            write_idx += 1
+    return out
+
+
+def _scatter_values_where(
+    out: np.ndarray, values: np.ndarray, mask: np.ndarray
+) -> None:
+    read_idx = 0
+    for row_idx, keep in enumerate(mask):
+        if keep:
+            out[row_idx] = values[read_idx]
+            read_idx += 1
 
 
 @dataclass
@@ -52,7 +157,7 @@ class CellMesh:
         return int(self.cells.shape[0])
 
     def cell_centers(self) -> np.ndarray:
-        return self.coordinates[self.cells].mean(axis=1)
+        return _cell_centers_from_arrays(self.coordinates, self.cells)
 
 
 @dataclass
@@ -81,9 +186,9 @@ class VoxelGrid:
             )
         if any(v <= 0 for v in self.shape):
             raise ValueError("VoxelGrid shape entries must be positive.")
-        if np.any(~np.isfinite(self.origin)) or np.any(~np.isfinite(self.spacing)):
+        if not all_finite_values(self.origin) or not all_finite_values(self.spacing):
             raise ValueError("VoxelGrid origin and spacing must be finite.")
-        if np.any(self.spacing <= 0.0):
+        if self.spacing.size and float(np.min(self.spacing)) <= 0.0:
             raise ValueError("VoxelGrid spacing entries must be positive.")
 
     @classmethod
@@ -102,7 +207,7 @@ class VoxelGrid:
             raise ValueError("VoxelGrid bounds must have matching dimensions.")
         if len(shape_tuple) != lower_arr.size:
             raise ValueError("VoxelGrid bounds and shape dimensions must match.")
-        if np.any(upper_arr <= lower_arr):
+        if lower_arr.size and float(np.min(upper_arr - lower_arr)) <= 0.0:
             raise ValueError("VoxelGrid upper bounds must exceed lower bounds.")
         spacing = (upper_arr - lower_arr) / np.asarray(shape_tuple, dtype=np.float64)
         return cls(origin=lower_arr, spacing=spacing, shape=shape_tuple, name=name)
@@ -115,13 +220,24 @@ class VoxelGrid:
         return int(np.prod(self.shape))
 
     def cell_centers(self) -> np.ndarray:
-        axes = [
-            self.origin[axis]
-            + (np.arange(size, dtype=np.float64) + 0.5) * self.spacing[axis]
-            for axis, size in enumerate(self.shape)
-        ]
-        grids = np.meshgrid(*axes, indexing="ij")
-        return np.stack([grid.ravel(order="C") for grid in grids], axis=1)
+        centers = np.empty((self.num_cells(), self.dimension), dtype=np.float64)
+        trailing = 1
+        for axis in range(self.dimension - 1, -1, -1):
+            size = int(self.shape[axis])
+            axis_values = (
+                self.origin[axis]
+                + (np.arange(size, dtype=np.float64) + 0.5) * self.spacing[axis]
+            )
+            leading = self.num_cells() // (size * trailing)
+            _fill_repeated_axis_column(
+                centers,
+                axis,
+                axis_values,
+                outer_repeats=leading,
+                inner_repeats=trailing,
+            )
+            trailing *= size
+        return centers
 
     def locate_points(
         self,
@@ -135,19 +251,15 @@ class VoxelGrid:
         if pts.shape[1] < self.dimension:
             raise ValueError("points have fewer dimensions than the voxel grid.")
         pts = pts[:, : self.dimension]
-        scaled = np.floor((pts - self.origin) / self.spacing).astype(np.int64)
+        scaled = _scaled_point_indices(pts, self.origin, self.spacing)
         upper = np.asarray(self.shape, dtype=np.int64)
-        inside = np.all((scaled >= 0) & (scaled < upper), axis=1)
+        inside = _inside_scaled_rows(scaled, upper)
 
-        indices = np.empty(pts.shape[0], dtype=np.int64)
-        if np.any(inside):
-            inside_scaled = scaled[inside].T
-            indices[inside] = np.ravel_multi_index(
-                tuple(inside_scaled),
-                self.shape,
-                order="C",
-            )
-        if np.any(~inside):
+        indices = _ravel_scaled_rows(scaled, self.shape)
+        outside_mask = np.empty_like(inside)
+        np.logical_not(inside, out=outside_mask)
+        outside_count = int(np.count_nonzero(outside_mask))
+        if outside_count:
             if outside == "raise":
                 raise ValueError(
                     "Some fine-cell centers lie outside the coarse voxel grid."
@@ -155,8 +267,11 @@ class VoxelGrid:
             if outside != "nearest":
                 raise ValueError("outside must be 'nearest' or 'raise'.")
             tree = cKDTree(self.cell_centers())
-            _, nearest = tree.query(pts[~inside])
-            indices[~inside] = np.asarray(nearest, dtype=np.int64)
+            outside_points = _compact_rows_where(pts, outside_mask, count=outside_count)
+            _, nearest = tree.query(outside_points)
+            _scatter_values_where(
+                indices, np.asarray(nearest, dtype=np.int64), outside_mask
+            )
         return indices
 
 
@@ -352,7 +467,7 @@ def _cell_centers(mesh: Any) -> np.ndarray:
     cells = _cells(mesh)
     if int(cells.max()) >= coords.shape[0]:
         raise ValueError("Mesh cells reference missing coordinates.")
-    return np.asarray(coords[cells].mean(axis=1), dtype=np.float64)
+    return np.asarray(_cell_centers_from_arrays(coords, cells), dtype=np.float64)
 
 
 def _locate_points_in_cell_mesh(
@@ -374,15 +489,26 @@ def _locate_points_in_cell_mesh(
     centers = _cell_centers(mesh)
     tree = cKDTree(centers)
     out = np.empty(search_points.shape[0], dtype=np.int64)
-    cell_vertices = coords[cells]
-    mins = cell_vertices.min(axis=1) - containment_tol
-    maxs = cell_vertices.max(axis=1) + containment_tol
+    mins = np.full((cells.shape[0], coords.shape[1]), np.inf, dtype=coords.dtype)
+    maxs = np.full((cells.shape[0], coords.shape[1]), -np.inf, dtype=coords.dtype)
+    work = np.empty_like(mins)
+    for local_idx in range(cells.shape[1]):
+        np.take(coords, cells[:, local_idx], axis=0, out=work)
+        np.minimum(mins, work, out=mins)
+        np.maximum(maxs, work, out=maxs)
+    mins -= containment_tol
+    maxs += containment_tol
 
+    candidate_mask = np.empty(cells.shape[0], dtype=bool)
+    candidate_vertices = np.empty((cells.shape[1], coords.shape[1]), dtype=coords.dtype)
     for point_idx, point in enumerate(search_points):
-        candidates = np.flatnonzero(np.all((point >= mins) & (point <= maxs), axis=1))
+        _bbox_candidate_mask(point, mins, maxs, candidate_mask)
         match = -1
-        for cell_idx in candidates:
-            if _point_in_simplex(point, cell_vertices[cell_idx], tol=containment_tol):
+        for cell_idx, is_candidate in enumerate(candidate_mask):
+            if not bool(is_candidate):
+                continue
+            _fill_cell_vertices(coords, cells[cell_idx], candidate_vertices)
+            if _point_in_simplex(point, candidate_vertices, tol=containment_tol):
                 match = int(cell_idx)
                 break
         if match >= 0:
@@ -394,6 +520,26 @@ def _locate_points_in_cell_mesh(
             raise ValueError("outside must be 'nearest' or 'raise'.")
         _, nearest = tree.query(point)
         out[point_idx] = int(nearest)
+    return out
+
+
+def _fill_cell_vertices(coords: np.ndarray, cell: np.ndarray, out: np.ndarray) -> None:
+    for vertex_idx, coord_idx in enumerate(cell):
+        out[vertex_idx] = coords[int(coord_idx)]
+
+
+def _bbox_candidate_mask(
+    point: np.ndarray, mins: np.ndarray, maxs: np.ndarray, out: np.ndarray
+) -> np.ndarray:
+    if out.size == 0:
+        return out
+    dims = int(mins.shape[1])
+    np.less_equal(mins[:, 0], point[0], out=out)
+    np.greater_equal(maxs[:, 0], point[0], out=out, where=out)
+    for axis in range(1, dims):
+        value = point[axis]
+        np.less_equal(mins[:, axis], value, out=out, where=out)
+        np.greater_equal(maxs[:, axis], value, out=out, where=out)
     return out
 
 
@@ -417,7 +563,9 @@ def _point_in_simplex(point: np.ndarray, vertices: np.ndarray, *, tol: float) ->
     )
     if float(np.linalg.norm(reconstructed - point[:gdim])) > tol * scale * 10.0:
         return False
-    bary = np.concatenate(([1.0 - float(np.sum(bary_tail))], bary_tail))
+    bary = np.empty(bary_tail.size + 1, dtype=np.float64)
+    bary[0] = 1.0 - float(np.sum(bary_tail))
+    bary[1:] = bary_tail
     return bool(np.all(bary >= -tol) and np.all(bary <= 1.0 + tol))
 
 

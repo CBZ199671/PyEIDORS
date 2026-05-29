@@ -14,20 +14,74 @@ import numpy as np
 from scipy import sparse
 from scipy.stats import qmc
 
+from pyeidors.cache.keys import update_digest_with_array_payload
 from pyeidors.data.channels import (
     apply_measurement_contract_to_jacobian,
     apply_measurement_contract_to_vector,
 )
 from pyeidors.data.structures import EITImage
-from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid
+from pyeidors.inverse.dual_mesh import CellMesh, VoxelGrid, _fill_repeated_axis_column
 from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 from pyeidors.perf.gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul
+from pyeidors.utils.numeric_ops import (
+    add_scaled_diagonal_in_place,
+    add_scaled_values_in_place,
+    min_positive_finite_value,
+)
 
 GREIT_METRIC_KEYS = ("AR", "PE", "RES", "SD", "RNG")
 GREIT_RM_HDF5_SCHEMA = "pyeidors-greit-rm-hdf5-v1"
 GREIT_EIDORS_HDF5_SCHEMA = "pyeidors-greit-eidors-hdf5-v1"
 GREIT_CACHE_SIGNATURE_SCHEMA = "pyeidors-greit-cache-signature-v1"
 GREIT_DESIRED_IMAGE_DEFAULT_SAMPLING = "gauss"
+
+
+def _cartesian_centers_from_axes(
+    axes: tuple[np.ndarray, ...] | list[np.ndarray],
+    *,
+    order: str,
+) -> np.ndarray:
+    axis_values = tuple(np.asarray(axis, dtype=np.float64).reshape(-1) for axis in axes)
+    dimension = len(axis_values)
+    shape = tuple(int(axis.size) for axis in axis_values)
+    if dimension == 0:
+        return np.empty((0, 0), dtype=np.float64)
+    if any(size <= 0 for size in shape):
+        return np.empty((0, dimension), dtype=np.float64)
+    n_points = int(np.prod(shape))
+    centers = np.empty((n_points, dimension), dtype=np.float64)
+    resolved_order = str(order).upper()
+    if resolved_order == "C":
+        stride = 1
+        for axis in range(dimension - 1, -1, -1):
+            values = axis_values[axis]
+            size = shape[axis]
+            leading = n_points // (size * stride)
+            _fill_repeated_axis_column(
+                centers,
+                axis,
+                values,
+                outer_repeats=leading,
+                inner_repeats=stride,
+            )
+            stride *= size
+        return centers
+    if resolved_order == "F":
+        stride = 1
+        for axis in range(dimension):
+            values = axis_values[axis]
+            size = shape[axis]
+            trailing = n_points // (size * stride)
+            _fill_repeated_axis_column(
+                centers,
+                axis,
+                values,
+                outer_repeats=trailing,
+                inner_repeats=stride,
+            )
+            stride *= size
+        return centers
+    raise ValueError("order must be 'C' or 'F'.")
 
 
 @dataclass(frozen=True)
@@ -379,20 +433,26 @@ def generate_spherical_targets(
     if not np.isfinite(amp):
         raise ValueError("amplitude must be finite.")
 
-    values = []
-    masks = []
-    for center in target_centers:
-        distance = np.linalg.norm(cell_centers - center.reshape(1, -1), axis=1)
-        mask = distance <= resolved_radius
+    n_targets = int(target_centers.shape[0])
+    n_parameters = int(cell_centers.shape[0])
+    values = np.empty((n_targets, n_parameters), dtype=np.float64)
+    masks = np.empty((n_targets, n_parameters), dtype=bool)
+    radius2 = resolved_radius * resolved_radius
+    for target_idx, center in enumerate(target_centers):
+        distance2 = _squared_distances_to_point(cell_centers, center)
+        mask = masks[target_idx]
+        np.less_equal(distance2, radius2, out=mask)
         if not np.any(mask):
-            mask[int(np.argmin(distance))] = True
+            mask[int(np.argmin(distance2))] = True
+        target = values[target_idx]
         if resolved_kind == "sphere":
-            target = mask.astype(np.float64) * amp
+            target[:] = mask
+            target *= amp
         else:
-            target = amp * np.exp(-0.5 * (distance / resolved_radius) ** 2)
-            target[~mask] = 0.0
-        values.append(target)
-        masks.append(mask)
+            np.multiply(distance2, -0.5 / radius2, out=target)
+            np.exp(target, out=target)
+            target *= amp
+            np.multiply(target, mask, out=target)
 
     voxel_shape = tuple(int(v) for v in getattr(inverse_mesh, "shape", ()))
     metadata = MappingProxyType(
@@ -400,16 +460,16 @@ def generate_spherical_targets(
             "kind": resolved_kind,
             "radius": resolved_radius,
             "amplitude": amp,
-            "n_targets": int(len(values)),
-            "n_parameters": int(cell_centers.shape[0]),
+            "n_targets": n_targets,
+            "n_parameters": n_parameters,
             "voxel_shape": voxel_shape or None,
         }
     )
     return GREITTrainingTargets(
-        values=np.asarray(values, dtype=np.float64),
-        masks=np.asarray(masks, dtype=bool),
+        values=np.ascontiguousarray(values, dtype=np.float64),
+        masks=np.ascontiguousarray(masks, dtype=bool),
         centers=np.asarray(target_centers, dtype=np.float64),
-        radii=np.full(len(values), resolved_radius, dtype=np.float64),
+        radii=np.full(n_targets, resolved_radius, dtype=np.float64),
         metadata=metadata,
     )
 
@@ -449,11 +509,10 @@ def build_greit3d_distribution(
     y_pts = _downsample_axis(raw_y_pts, factor=factors[1], phase=phases[1], name="y")
     z_pts = _downsample_axis(raw_z_pts, factor=factors[2], phase=phases[2], name="z")
 
-    grids = np.meshgrid(x_pts, y_pts, z_pts, indexing="ij")
-    candidate_shape = tuple(int(grid.shape[axis]) for axis, grid in enumerate(grids))
-    candidate_centers = np.stack(
-        [grid.ravel(order="F") for grid in grids],
-        axis=1,
+    candidate_shape = (int(x_pts.size), int(y_pts.size), int(z_pts.size))
+    candidate_centers = _cartesian_centers_from_axes(
+        (x_pts, y_pts, z_pts),
+        order="F",
     )
     inside_mask = _distribution_inside_mask(
         candidate_centers,
@@ -461,12 +520,17 @@ def build_greit3d_distribution(
         fwd_model=fwd_model,
         point_in_volume=point_in_volume,
     )
-    if not bool(np.any(inside_mask)):
+    inside_count = int(np.count_nonzero(inside_mask))
+    if inside_count <= 0:
         raise ValueError(
             "GREIT3D_distribution produced no target centers inside volume."
         )
 
-    centers = np.ascontiguousarray(candidate_centers[inside_mask], dtype=np.float64)
+    centers = _compact_centers_by_mask(
+        candidate_centers,
+        inside_mask,
+        count=inside_count,
+    )
     distr = np.ascontiguousarray(centers.T, dtype=np.float64)
     volume_mask = np.ascontiguousarray(
         inside_mask.reshape(candidate_shape, order="F"),
@@ -600,12 +664,11 @@ def build_greit_finite_target_responses(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    xyzr = np.vstack(
-        [
-            target_centers.T,
-            target_radii.reshape(1, -1),
-        ]
+    xyzr = np.empty(
+        (target_centers.shape[1] + 1, target_centers.shape[0]), dtype=np.float64
     )
+    xyzr[: target_centers.shape[1], :] = target_centers.T
+    xyzr[target_centers.shape[1], :] = target_radii
 
     metadata = MappingProxyType(
         {
@@ -817,14 +880,16 @@ def greit_desired_image_sigmoid(
             opts,
         )
     else:
-        samples, weights, _ = _desired_cell_samples(
+        offsets, weights, extents = _desired_cell_offsets(
             rec_model,
             rec_centers,
             mode=mode,
             options=opts,
         )
-        desired = _greit_sigmoid_average_over_samples(
-            samples,
+        desired = _greit_sigmoid_average_over_offsets(
+            rec_centers,
+            extents,
+            offsets,
             weights,
             xyz_matrix,
             radii,
@@ -898,11 +963,42 @@ def _greit_sigmoid_from_centers(
     radii: np.ndarray,
     steepness: np.ndarray,
 ) -> np.ndarray:
-    distances = np.linalg.norm(
-        rec_centers[:, None, :3] - xyz_matrix.T[None, :, :],
-        axis=2,
-    )
-    return _greit_sigmoid_from_distances(distances, radii, steepness)
+    centers = np.ascontiguousarray(rec_centers[:, :3], dtype=np.float64)
+    desired = np.empty((centers.shape[0], xyz_matrix.shape[1]), dtype=np.float64)
+    for target_idx in range(xyz_matrix.shape[1]):
+        distances = _distances_to_point(centers, xyz_matrix[:, target_idx])
+        desired[:, target_idx] = _greit_sigmoid_1d(
+            distances,
+            float(radii[target_idx]),
+            float(steepness[target_idx]),
+        )
+    return desired
+
+
+def _distances_to_point(points: np.ndarray, point: np.ndarray) -> np.ndarray:
+    distances = _squared_distances_to_point(points, point)
+    np.sqrt(distances, out=distances)
+    return distances
+
+
+def _squared_distances_to_point(points: np.ndarray, point: np.ndarray) -> np.ndarray:
+    points_array = np.asarray(points, dtype=np.float64)
+    point_array = np.asarray(point, dtype=np.float64).reshape(-1)
+    if points_array.ndim != 2:
+        raise ValueError("points must be a 2D array.")
+    dimension = min(points_array.shape[1], point_array.size)
+    if dimension <= 0:
+        return np.zeros(points_array.shape[0], dtype=np.float64)
+    distances2 = np.empty(points_array.shape[0], dtype=np.float64)
+    np.subtract(points_array[:, 0], point_array[0], out=distances2)
+    np.square(distances2, out=distances2)
+    if dimension > 1:
+        work = np.empty(points_array.shape[0], dtype=np.float64)
+        for axis in range(1, dimension):
+            np.subtract(points_array[:, axis], point_array[axis], out=work)
+            np.square(work, out=work)
+            distances2 += work
+    return distances2
 
 
 def _greit_sigmoid_from_distances(
@@ -911,6 +1007,15 @@ def _greit_sigmoid_from_distances(
     steepness: np.ndarray,
 ) -> np.ndarray:
     scaled = steepness.reshape(1, -1) * (distances / radii.reshape(1, -1) - 1.0)
+    return 1.0 / (1.0 + np.exp(np.clip(scaled, -700.0, 700.0)))
+
+
+def _greit_sigmoid_1d(
+    distances: np.ndarray,
+    radius: float,
+    steepness: float,
+) -> np.ndarray:
+    scaled = float(steepness) * (distances / float(radius) - 1.0)
     return 1.0 / (1.0 + np.exp(np.clip(scaled, -700.0, 700.0)))
 
 
@@ -925,9 +1030,9 @@ def _greit_sigmoid_average_over_samples(
     flat_samples = samples.reshape(n_cells * n_samples, 3)
     desired = np.empty((n_cells, xyz_matrix.shape[1]), dtype=np.float64)
     for target_idx in range(xyz_matrix.shape[1]):
-        distances = np.linalg.norm(
-            flat_samples - xyz_matrix[:, target_idx].reshape(1, 3),
-            axis=1,
+        distances = _distances_to_point(
+            flat_samples,
+            xyz_matrix[:, target_idx],
         ).reshape(n_cells, n_samples)
         values = _greit_sigmoid_from_distances(
             distances,
@@ -935,6 +1040,76 @@ def _greit_sigmoid_average_over_samples(
             steepness[target_idx : target_idx + 1],
         )
         desired[:, target_idx] = values @ weights
+    return desired
+
+
+def _distances_to_shifted_centers(
+    centers: np.ndarray,
+    extents: np.ndarray,
+    offset: np.ndarray,
+    point: np.ndarray,
+) -> np.ndarray:
+    centers_array = np.asarray(centers, dtype=np.float64)
+    extents_array = np.asarray(extents, dtype=np.float64)
+    offset_array = np.asarray(offset, dtype=np.float64).reshape(-1)
+    point_array = np.asarray(point, dtype=np.float64).reshape(-1)
+    if centers_array.ndim != 2 or extents_array.ndim != 2:
+        raise ValueError("centers and extents must be 2D arrays.")
+    n_cells = centers_array.shape[0]
+    dimension = min(
+        centers_array.shape[1],
+        extents_array.shape[1],
+        offset_array.size,
+        point_array.size,
+    )
+    if dimension <= 0:
+        return np.zeros(n_cells, dtype=np.float64)
+    distances = np.empty(n_cells, dtype=np.float64)
+    np.multiply(extents_array[:, 0], offset_array[0], out=distances)
+    distances += centers_array[:, 0]
+    distances -= point_array[0]
+    np.square(distances, out=distances)
+    if dimension > 1:
+        work = np.empty(n_cells, dtype=np.float64)
+        for axis in range(1, dimension):
+            np.multiply(extents_array[:, axis], offset_array[axis], out=work)
+            work += centers_array[:, axis]
+            work -= point_array[axis]
+            np.square(work, out=work)
+            distances += work
+    np.sqrt(distances, out=distances)
+    return distances
+
+
+def _greit_sigmoid_average_over_offsets(
+    rec_centers: np.ndarray,
+    extents: np.ndarray,
+    offsets: np.ndarray,
+    weights: np.ndarray,
+    xyz_matrix: np.ndarray,
+    radii: np.ndarray,
+    steepness: np.ndarray,
+) -> np.ndarray:
+    centers = np.ascontiguousarray(rec_centers[:, :3], dtype=np.float64)
+    extents_array = np.ascontiguousarray(extents[:, :3], dtype=np.float64)
+    offsets_array = np.ascontiguousarray(offsets[:, :3], dtype=np.float64)
+    weights_array = np.asarray(weights, dtype=np.float64).reshape(-1)
+    desired = np.zeros((centers.shape[0], xyz_matrix.shape[1]), dtype=np.float64)
+    for target_idx in range(xyz_matrix.shape[1]):
+        target_column = desired[:, target_idx]
+        target_point = xyz_matrix[:, target_idx]
+        for offset, weight in zip(offsets_array, weights_array, strict=True):
+            distances = _distances_to_shifted_centers(
+                centers,
+                extents_array,
+                offset,
+                target_point,
+            )
+            target_column += float(weight) * _greit_sigmoid_1d(
+                distances,
+                float(radii[target_idx]),
+                float(steepness[target_idx]),
+            )
     return desired
 
 
@@ -950,42 +1125,42 @@ def _greit_sigmoid_adaptive_gauss(
     base_options["desired_img_gauss_order"] = int(
         options.get("desired_img_adaptive_base_order", 2)
     )
-    base_samples, base_weights, extents = _desired_cell_samples(
+    base_offsets, base_weights, extents = _desired_cell_offsets(
         rec_model,
         rec_centers,
         mode="gauss",
         options=base_options,
     )
-    desired = _greit_sigmoid_average_over_samples(
-        base_samples,
+    desired = _greit_sigmoid_average_over_offsets(
+        rec_centers,
+        extents,
+        base_offsets,
         base_weights,
         xyz_matrix,
         radii,
         steepness,
     )
     half_diagonal = 0.5 * np.linalg.norm(extents, axis=1)
-    center_distances = np.linalg.norm(
-        rec_centers[:, None, :3] - xyz_matrix.T[None, :, :],
-        axis=2,
-    )
     band = _desired_adaptive_band(options, steepness)
     fine_order = int(options.get("desired_img_adaptive_fine_order", 5))
     if fine_order <= 0:
         raise ValueError("desired_img_adaptive_fine_order must be positive.")
     fine_offsets, fine_weights = _gauss_offsets_for_extents(extents, fine_order)
     for target_idx in range(xyz_matrix.shape[1]):
-        boundary_distance = np.abs(center_distances[:, target_idx] - radii[target_idx])
+        target_distances = _distances_to_point(
+            rec_centers[:, :3],
+            xyz_matrix[:, target_idx],
+        )
+        boundary_distance = np.abs(target_distances - radii[target_idx])
         refine = (
             boundary_distance <= half_diagonal + band[target_idx] * radii[target_idx]
         )
         if not np.any(refine):
             continue
-        fine_samples = (
-            rec_centers[refine, None, :3]
-            + fine_offsets[None, :, :] * extents[refine, None, :]
-        )
-        refined = _greit_sigmoid_average_over_samples(
-            fine_samples,
+        refined = _greit_sigmoid_average_over_offsets(
+            rec_centers[refine, :3],
+            extents[refine, :3],
+            fine_offsets,
             fine_weights,
             xyz_matrix[:, target_idx : target_idx + 1],
             radii[target_idx : target_idx + 1],
@@ -999,19 +1174,34 @@ def _gauss_offsets_for_extents(
     extents: np.ndarray,
     order: int,
 ) -> tuple[np.ndarray, np.ndarray]:
-    active = np.any(extents > np.finfo(np.float64).eps, axis=0)
-    if not np.any(active):
+    active, active_count = _active_extent_axes(extents)
+    if active_count <= 0:
         return (
             np.zeros((1, 3), dtype=np.float64),
             np.ones(1, dtype=np.float64),
         )
-    offsets_active, weights = _gauss_reference_offsets(int(np.sum(active)), order)
+    offsets_active, weights = _gauss_reference_offsets(active_count, order)
     offsets = np.zeros((offsets_active.shape[0], 3), dtype=np.float64)
     offsets[:, active] = offsets_active
     return np.ascontiguousarray(offsets), weights
 
 
-def _desired_cell_samples(
+def _active_extent_axes(extents: np.ndarray) -> tuple[np.ndarray, int]:
+    arr = np.asarray(extents, dtype=np.float64)
+    active = np.zeros(3, dtype=bool)
+    if arr.ndim != 2 or arr.shape[0] == 0:
+        return active, 0
+
+    eps = np.finfo(np.float64).eps
+    active_count = 0
+    for axis in range(min(3, arr.shape[1])):
+        axis_active = bool(np.max(arr[:, axis]) > eps)
+        active[axis] = axis_active
+        active_count += int(axis_active)
+    return active, active_count
+
+
+def _desired_cell_offsets(
     rec_model: Any,
     rec_centers: np.ndarray,
     *,
@@ -1019,17 +1209,17 @@ def _desired_cell_samples(
     options: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     extents = _desired_cell_extents(rec_model, rec_centers, options)
-    active = np.any(extents > np.finfo(np.float64).eps, axis=0)
-    if not np.any(active):
-        samples = rec_centers[:, None, :3].copy()
+    active, active_count = _active_extent_axes(extents)
+    if active_count <= 0:
+        offsets = np.zeros((1, 3), dtype=np.float64)
         weights = np.ones(1, dtype=np.float64)
-        return samples, weights, extents
+        return offsets, weights, extents
 
     if mode == "gauss":
         order = int(options.get("desired_img_gauss_order", 3))
         if order <= 0:
             raise ValueError("desired_img_gauss_order must be positive.")
-        offsets_active, weights = _gauss_reference_offsets(int(np.sum(active)), order)
+        offsets_active, weights = _gauss_reference_offsets(active_count, order)
     elif mode == "sobol_qmc":
         requested = int(options.get("desired_img_sobol_samples", 32))
         if requested <= 0:
@@ -1037,7 +1227,7 @@ def _desired_cell_samples(
         seed = int(options.get("desired_img_sobol_seed", 0))
         scramble = bool(options.get("desired_img_sobol_scramble", True))
         offsets_active, weights = _sobol_reference_offsets(
-            int(np.sum(active)),
+            active_count,
             requested,
             seed=seed,
             scramble=scramble,
@@ -1047,9 +1237,8 @@ def _desired_cell_samples(
 
     offsets = np.zeros((offsets_active.shape[0], 3), dtype=np.float64)
     offsets[:, active] = offsets_active
-    samples = rec_centers[:, None, :3] + offsets[None, :, :] * extents[:, None, :]
     return (
-        np.ascontiguousarray(samples, dtype=np.float64),
+        np.ascontiguousarray(offsets, dtype=np.float64),
         np.ascontiguousarray(weights, dtype=np.float64),
         np.ascontiguousarray(extents, dtype=np.float64),
     )
@@ -1071,11 +1260,11 @@ def _desired_cell_extents(
         spacing = options.get("cell_spacing")
     if spacing is not None:
         extent = _as_extent_vector(spacing)
-        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+        return _repeat_extent_rows(extent, n_cells=rec_centers.shape[0])
 
     if isinstance(rec_model, VoxelGrid):
         extent = _as_extent_vector(rec_model.spacing)
-        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+        return _repeat_extent_rows(extent, n_cells=rec_centers.shape[0])
 
     if isinstance(rec_model, CellMesh):
         vertices = rec_model.coordinates[rec_model.cells]
@@ -1089,7 +1278,7 @@ def _desired_cell_extents(
                 if "extent" in key:
                     return _as_desired_cell_extents(raw, n_cells=rec_centers.shape[0])
                 extent = _as_extent_vector(raw)
-                return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+                return _repeat_extent_rows(extent, n_cells=rec_centers.shape[0])
 
     for attr_name in ("cell_extents", "extents", "cell_spacing", "spacing"):
         attr = getattr(rec_model, attr_name, None)
@@ -1099,17 +1288,17 @@ def _desired_cell_extents(
         if "extent" in attr_name:
             return _as_desired_cell_extents(raw, n_cells=rec_centers.shape[0])
         extent = _as_extent_vector(raw)
-        return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+        return _repeat_extent_rows(extent, n_cells=rec_centers.shape[0])
 
     extent = _infer_center_spacing(rec_centers)
-    return np.broadcast_to(extent, (rec_centers.shape[0], 3)).copy()
+    return _repeat_extent_rows(extent, n_cells=rec_centers.shape[0])
 
 
 def _as_desired_cell_extents(values: Any, *, n_cells: int) -> np.ndarray:
     array = np.asarray(values, dtype=np.float64)
     if array.ndim == 1:
         extent = _as_extent_vector(array)
-        array = np.broadcast_to(extent, (n_cells, 3)).copy()
+        array = _repeat_extent_rows(extent, n_cells=n_cells)
     elif array.ndim == 2:
         if array.shape[0] != n_cells:
             raise ValueError(
@@ -1123,24 +1312,32 @@ def _as_desired_cell_extents(values: Any, *, n_cells: int) -> np.ndarray:
             array = array[:, :3]
     else:
         raise ValueError("cell_extents must be a vector or 2D matrix.")
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("cell_extents contain non-finite values.")
-    if np.any(array < 0.0):
+    if array.size and float(np.min(array)) < 0.0:
         raise ValueError("cell_extents entries must be non-negative.")
     return np.ascontiguousarray(array, dtype=np.float64)
+
+
+def _repeat_extent_rows(extent: np.ndarray, *, n_cells: int) -> np.ndarray:
+    array = np.empty((int(n_cells), 3), dtype=np.float64)
+    np.copyto(array, np.asarray(extent, dtype=np.float64).reshape(1, 3), casting="no")
+    return array
 
 
 def _as_extent_vector(values: Any) -> np.ndarray:
     extent = np.asarray(values, dtype=np.float64).reshape(-1)
     if extent.size == 1:
-        extent = np.repeat(float(extent[0]), 3)
+        scalar_extent = float(extent[0])
+        extent = np.empty(3, dtype=np.float64)
+        extent[:] = scalar_extent
     elif extent.size < 3:
         extent = np.pad(extent, (0, 3 - extent.size))
     elif extent.size > 3:
         raise ValueError("cell spacing/extents must have at most 3 entries.")
-    if not np.isfinite(extent).all():
+    if not _all_finite_values(extent):
         raise FloatingPointError("cell spacing/extents contain non-finite values.")
-    if np.any(extent < 0.0):
+    if float(np.min(extent, initial=np.inf)) < 0.0:
         raise ValueError("cell spacing/extents entries must be non-negative.")
     return np.ascontiguousarray(extent[:3], dtype=np.float64)
 
@@ -1150,27 +1347,36 @@ def _infer_center_spacing(rec_centers: np.ndarray) -> np.ndarray:
     spacing = np.zeros(3, dtype=np.float64)
     for axis in range(min(3, centers.shape[1])):
         coords = np.unique(np.round(centers[:, axis], decimals=12))
-        diffs = np.diff(np.sort(coords))
-        diffs = diffs[diffs > np.finfo(np.float64).eps]
-        if diffs.size:
-            spacing[axis] = float(np.median(diffs))
-    if not np.any(spacing > 0.0):
+        spacing[axis] = _median_positive_adjacent_spacing(coords)
+    if float(np.max(spacing, initial=-np.inf)) <= 0.0:
         nearest = _nearest_center_distance(centers[:, :3])
         if nearest > 0.0:
             spacing[:] = nearest
     return np.ascontiguousarray(spacing, dtype=np.float64)
 
 
-def _nearest_center_distance(centers: np.ndarray) -> float:
-    if centers.shape[0] <= 1:
+def _median_positive_adjacent_spacing(sorted_values: np.ndarray) -> float:
+    values = np.asarray(sorted_values, dtype=np.float64).reshape(-1)
+    if values.size < 2:
         return 0.0
-    distances = np.linalg.norm(
-        centers[:, None, :] - centers[None, :, :],
-        axis=2,
-    )
-    distances[distances <= np.finfo(np.float64).eps] = np.inf
-    nearest = float(np.min(distances))
-    return 0.0 if not np.isfinite(nearest) else nearest
+    eps = np.finfo(np.float64).eps
+    diffs = np.empty(values.size - 1, dtype=np.float64)
+    count = 0
+    prev = float(values[0])
+    for current_raw in values[1:]:
+        current = float(current_raw)
+        diff = current - prev
+        prev = current
+        if diff > eps:
+            diffs[count] = diff
+            count += 1
+    if count <= 0:
+        return 0.0
+    return float(np.median(diffs[:count], overwrite_input=True))
+
+
+def _nearest_center_distance(centers: np.ndarray) -> float:
+    return _nearest_unique_center_distance(centers, fallback=0.0)
 
 
 def _gauss_reference_offsets(
@@ -1180,13 +1386,9 @@ def _gauss_reference_offsets(
     nodes, weights_1d = np.polynomial.legendre.leggauss(order)
     nodes = 0.5 * nodes
     weights_1d = 0.5 * weights_1d
-    grids = np.meshgrid(*([nodes] * dimension), indexing="ij")
-    weight_grids = np.meshgrid(*([weights_1d] * dimension), indexing="ij")
-    offsets = np.stack([grid.ravel(order="C") for grid in grids], axis=1)
-    weights = np.prod(
-        np.stack([grid.ravel(order="C") for grid in weight_grids], axis=1),
-        axis=1,
-    )
+    offsets = _cartesian_centers_from_axes([nodes] * dimension, order="C")
+    weight_columns = _cartesian_centers_from_axes([weights_1d] * dimension, order="C")
+    weights = np.prod(weight_columns, axis=1)
     weights = weights / float(np.sum(weights))
     return np.ascontiguousarray(offsets), np.ascontiguousarray(weights)
 
@@ -1221,11 +1423,11 @@ def _desired_adaptive_band(
             raise ValueError(
                 "desired_img_adaptive_band length must be one or n_targets."
             )
-    if not np.isfinite(band).all():
+    if not _all_finite_values(band):
         raise FloatingPointError(
             "desired_img_adaptive_band contains non-finite values."
         )
-    if np.any(band < 0.0):
+    if float(np.min(band, initial=np.inf)) < 0.0:
         raise ValueError("desired_img_adaptive_band entries must be non-negative.")
     return np.ascontiguousarray(band, dtype=np.float64)
 
@@ -1268,7 +1470,7 @@ def calc_greit_rm(
     y_matrix = _validate_training_response_matrix(y)
     d_matrix = _validate_desired_component_matrix(d, n_targets=y_matrix.shape[1])
     scalar_weight = _as_scalar_weight(weight)
-    sn, sn_source = _noise_covar_matrix(
+    sn, sn_source, sn_kind = _noise_covar_term(
         noise_covar,
         n_measurements=y_matrix.shape[0],
     )
@@ -1286,10 +1488,11 @@ def calc_greit_rm(
         )
         pjt_source = "provided_cache"
     noiselev = float(scalar_weight * np.mean(np.abs(y_matrix)))
-    m = np.ascontiguousarray(
-        y_matrix @ y_matrix.T + (noiselev * noiselev) * sn,
-        dtype=component_dtype,
-    )
+    m = np.ascontiguousarray(y_matrix @ y_matrix.T, dtype=component_dtype)
+    if sn_kind == "diagonal":
+        add_scaled_diagonal_in_place(m, sn, noiselev * noiselev)
+    else:
+        add_scaled_values_in_place(m, sn, noiselev * noiselev)
 
     rhs_t = pjt.T
     try:
@@ -1301,7 +1504,7 @@ def calc_greit_rm(
         solver = "pinv"
         singular_fallback = True
     rm = np.ascontiguousarray(rm, dtype=component_dtype)
-    if not np.isfinite(rm).all():
+    if not _all_finite_values(rm):
         raise FloatingPointError("GREIT RM contains non-finite values.")
 
     try:
@@ -1317,7 +1520,10 @@ def calc_greit_rm(
             "pjt_source": pjt_source,
             "y_shape": tuple(int(v) for v in y_matrix.shape),
             "d_shape": tuple(int(v) for v in d_matrix.shape),
-            "sn_shape": tuple(int(v) for v in sn.shape),
+            "sn_shape": (int(y_matrix.shape[0]), int(y_matrix.shape[0]))
+            if sn_kind == "diagonal"
+            else tuple(int(v) for v in sn.shape),
+            "sn_kind": sn_kind,
             "m_shape": tuple(int(v) for v in m.shape),
             "rm_shape": tuple(int(v) for v in rm.shape),
             "weight": scalar_weight,
@@ -2347,29 +2553,32 @@ def greit_metrics(
         raise ValueError("target_mask must mark at least one target cell.")
     weights = _as_cell_volumes(cell_volumes, n_cells=image.size)
     coords = _metric_centers(centers, original_shape, n_cells=image.size)
-    target = _as_target_values(target_values, mask=mask)
-
-    target_integral = float(np.sum(target * weights))
+    if target_values is None:
+        target_integral = float(np.sum(weights, where=mask))
+        target_center = _masked_weighted_centroid(coords, weights, mask)
+    else:
+        target = _as_target_values(target_values, mask=mask)
+        target_integral = float(np.dot(target, weights))
+        target_center = _weighted_abs_centroid(coords, target, weights)
     if abs(target_integral) <= np.finfo(np.float64).eps:
         raise ValueError("target amplitude integral must be non-zero.")
-    ar = float(np.sum(image * weights) / target_integral)
+    ar = float(np.dot(image, weights) / target_integral)
 
     signal_sign = 1.0 if target_integral >= 0.0 else -1.0
-    signed_image = signal_sign * image
-    positive = np.maximum(signed_image, 0.0)
-    centroid_weights = positive * weights
+    signed_image = image if signal_sign > 0.0 else -image
+    centroid_weights = np.maximum(signed_image, 0.0)
+    centroid_weights *= weights
     if float(np.sum(centroid_weights)) <= np.finfo(np.float64).eps:
         recon_center = coords[int(np.argmax(np.abs(image)))]
     else:
         recon_center = _weighted_centroid(coords, centroid_weights)
-    target_center = _weighted_centroid(coords, np.abs(target) * weights)
     pe = float(np.linalg.norm(recon_center - target_center))
 
     threshold = _quarter_max_threshold(signed_image, threshold_fraction)
     qmi = signed_image >= threshold
     if not np.any(qmi):
         qmi[int(np.argmax(signed_image))] = True
-    qmi_volume = float(np.sum(weights[qmi]))
+    qmi_volume = float(np.sum(weights, where=qmi))
     domain_volume = float(np.sum(weights))
     dimension = _metric_dimension(coords)
     res = float((qmi_volume / domain_volume) ** (1.0 / dimension))
@@ -2380,15 +2589,22 @@ def greit_metrics(
         center=recon_center,
         target_volume=qmi_volume,
     )
-    outside_ball_volume = float(np.sum(weights[qmi & ~equivalent_ball]))
+    work_mask = np.empty(qmi.shape, dtype=bool)
+    np.logical_not(equivalent_ball, out=work_mask)
+    np.logical_and(qmi, work_mask, out=work_mask)
+    outside_ball_volume = float(np.sum(weights, where=work_mask))
     sd = float(outside_ball_volume / qmi_volume) if qmi_volume > 0.0 else 0.0
 
-    qmi_signal = float(np.sum(signed_image[qmi] * weights[qmi]))
-    opposite = (signed_image < 0.0) & ~qmi
+    qmi_signal = _masked_weighted_sum(signed_image, weights, qmi)
+    np.less(signed_image, 0.0, out=work_mask)
+    np.logical_not(qmi, out=equivalent_ball)
+    np.logical_and(work_mask, equivalent_ball, out=work_mask)
     if qmi_signal <= np.finfo(np.float64).eps:
         rng = 0.0
     else:
-        rng = float(-np.sum(signed_image[opposite] * weights[opposite]) / qmi_signal)
+        rng = float(
+            -_masked_weighted_sum(signed_image, weights, work_mask) / qmi_signal
+        )
 
     metrics = {
         "AR": ar,
@@ -2464,7 +2680,7 @@ def _resolve_jacobian(fwd_model: Any, jacobian: Any | None) -> np.ndarray:
         raise ValueError("J must be a 2D measurement-by-parameter matrix.")
     if 0 in matrix.shape:
         raise ValueError("J must be non-empty.")
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("J contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
@@ -2484,7 +2700,7 @@ def _resolve_targets(
         values = np.asarray(targets, dtype=np.float64)
         if values.ndim != 2 or 0 in values.shape:
             raise ValueError("targets must be a non-empty 2D target matrix.")
-        if not np.isfinite(values).all():
+        if not _all_finite_values(values):
             raise FloatingPointError("targets contain non-finite values.")
         masks = np.asarray(values != 0.0, dtype=bool)
         metadata = MappingProxyType(
@@ -2523,9 +2739,9 @@ def _resolve_distribution_bounds(
         arr = np.asarray(bounds, dtype=np.float64)
         if arr.shape != (2, 3):
             raise ValueError("bounds must have shape (2, 3).")
-        if not np.isfinite(arr).all():
+        if not _all_finite_values(arr):
             raise FloatingPointError("bounds contain non-finite values.")
-        if np.any(arr[1] <= arr[0]):
+        if float(np.min(arr[1] - arr[0], initial=np.inf)) <= 0.0:
             raise ValueError("bounds upper row must exceed lower row.")
         return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -2541,9 +2757,12 @@ def _resolve_distribution_bounds(
         z_span = max(float(np.max(span[:2])), 1.0) * 1.0e-6
         lower[2] = z_mid - 0.5 * z_span
         upper[2] = z_mid + 0.5 * z_span
-    if np.any(upper <= lower):
+    if float(np.min(upper - lower, initial=np.inf)) <= 0.0:
         return None
-    return np.ascontiguousarray(np.vstack([lower, upper]), dtype=np.float64)
+    bounds_out = np.empty((2, 3), dtype=np.float64)
+    bounds_out[0, :] = lower
+    bounds_out[1, :] = upper
+    return np.ascontiguousarray(bounds_out, dtype=np.float64)
 
 
 def _resolve_distribution_edges(
@@ -2585,7 +2804,7 @@ def _parse_imgsz(imgsz: Any | None) -> tuple[int | None, int | None, int | None]
     arr = np.asarray(imgsz, dtype=np.int64).reshape(-1)
     if arr.size not in {2, 3}:
         raise ValueError("imgsz must contain 2 or 3 entries.")
-    if np.any(arr <= 0):
+    if int(np.min(arr, initial=1)) <= 0:
         raise ValueError("imgsz entries must be positive.")
     if arr.size == 2:
         return int(arr[0]), int(arr[1]), None
@@ -2635,9 +2854,9 @@ def _resolve_axis_edges(
         )
     if arr.size < 2:
         raise ValueError(f"{name} must contain at least two cut planes.")
-    if not np.isfinite(arr).all():
+    if not _all_finite_values(arr):
         raise FloatingPointError(f"{name} contains non-finite values.")
-    if np.any(np.diff(arr) <= 0.0):
+    if float(np.min(arr[1:] - arr[:-1], initial=np.inf)) <= 0.0:
         raise ValueError(f"{name} cut planes must be strictly increasing.")
     return np.ascontiguousarray(arr, dtype=np.float64), f"{name}:explicit"
 
@@ -2671,9 +2890,12 @@ def _parse_downsample(downsample: Any | None) -> tuple[np.ndarray, np.ndarray]:
         phases = np.asarray(reshaped[:, 1], dtype=np.int64)
     else:
         raise ValueError("downsample must be scalar, [N, PHASE], length-3, or 3x2.")
-    if np.any(factors <= 0):
+    if int(np.min(factors, initial=1)) <= 0:
         raise ValueError("downsample factors must be positive.")
-    if np.any(phases < 0) or np.any(phases >= factors):
+    if (
+        int(np.min(phases, initial=0)) < 0
+        or int(np.min(factors - phases, initial=1)) <= 0
+    ):
         raise ValueError("downsample phases must satisfy 0 <= phase < factor.")
     return factors, phases
 
@@ -2723,6 +2945,24 @@ def _distribution_inside_mask(
     return np.ascontiguousarray(mask, dtype=bool)
 
 
+def _compact_centers_by_mask(
+    centers: np.ndarray, mask: np.ndarray, *, count: int | None = None
+) -> np.ndarray:
+    values = np.asarray(centers, dtype=np.float64)
+    keep = np.asarray(mask, dtype=bool).reshape(-1)
+    if values.ndim != 2 or keep.shape[0] != values.shape[0]:
+        raise ValueError("centers and mask must describe the same candidate rows.")
+    if count is None:
+        count = int(np.count_nonzero(keep))
+    out = np.empty((int(count), values.shape[1]), dtype=np.float64)
+    write_idx = 0
+    for row_idx, is_inside in enumerate(keep):
+        if is_inside:
+            out[write_idx] = values[row_idx]
+            write_idx += 1
+    return out
+
+
 def _resolve_finite_target_geometry(
     *,
     distribution: GREIT3DDistribution | None,
@@ -2770,9 +3010,9 @@ def _resolve_finite_target_geometry(
             raise ValueError(
                 f"target radius length {radii.size} does not match {n_targets}."
             )
-    if not np.isfinite(radii).all():
+    if not _all_finite_values(radii):
         raise FloatingPointError("target radii contain non-finite values.")
-    if np.any(radii <= 0.0):
+    if float(np.min(radii, initial=np.inf)) <= 0.0:
         raise ValueError("target radii must be positive.")
     return (
         np.ascontiguousarray(target_centers, dtype=np.float64),
@@ -2787,13 +3027,15 @@ def _apply_target_plane_offset(
     target_plane: Any | None,
     target_offset: Any | None,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    shifted = np.asarray(centers, dtype=np.float64).copy()
+    center_values = np.asarray(centers, dtype=np.float64)
     metadata: dict[str, Any] = {
         "target_plane": None,
         "target_offset": None,
     }
     if target_plane is None and target_offset is None:
-        return shifted, metadata
+        return np.ascontiguousarray(center_values, dtype=np.float64), metadata
+
+    shifted = np.array(center_values, dtype=np.float64, copy=True, order="C")
 
     if target_plane is None:
         offset = _as_3d_offset(target_offset)
@@ -2848,7 +3090,7 @@ def _as_3d_offset(value: Any) -> np.ndarray:
         offset = np.full(3, float(offset[0]), dtype=np.float64)
     if offset.size != 3:
         raise ValueError("target_offset must be scalar or length-3.")
-    if not np.isfinite(offset).all():
+    if not _all_finite_values(offset):
         raise FloatingPointError("target_offset contains non-finite values.")
     return np.ascontiguousarray(offset, dtype=np.float64)
 
@@ -2861,9 +3103,9 @@ def _resolve_background_conductivity(values: Any, *, n_cells: int) -> np.ndarray
         raise ValueError(
             f"background_conductivity length {array.size} does not match {n_cells}."
         )
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("background_conductivity contains non-finite values.")
-    if np.any(array <= 0.0):
+    if float(np.min(array)) <= 0.0:
         raise ValueError("background_conductivity entries must be positive.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -2876,7 +3118,7 @@ def _as_target_contrasts(values: Any, *, n_targets: int) -> np.ndarray:
         raise ValueError(
             f"target_contrast length {array.size} does not match {n_targets}."
         )
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("target_contrast contains non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -2898,22 +3140,34 @@ def _build_finite_target_conductivities(
     target_radii: np.ndarray,
     target_contrasts: np.ndarray,
 ) -> np.ndarray:
-    conductivities = []
-    for center, radius, contrast in zip(
-        target_centers,
-        target_radii,
-        target_contrasts,
-        strict=True,
+    n_targets = int(target_centers.shape[0])
+    conductivities = np.empty((n_targets, background.size), dtype=np.float64)
+    dist2 = np.empty(fwd_centers.shape[0], dtype=np.float64)
+    axis_work = np.empty(fwd_centers.shape[0], dtype=np.float64)
+    inside_mask = np.empty(fwd_centers.shape[0], dtype=bool)
+    for row, (center, radius, contrast) in enumerate(
+        zip(
+            target_centers,
+            target_radii,
+            target_contrasts,
+            strict=True,
+        )
     ):
-        distance = np.linalg.norm(fwd_centers - center.reshape(1, 3), axis=1)
-        mask = distance <= float(radius)
-        if not np.any(mask):
-            mask[int(np.argmin(distance))] = True
-        sigma = background.copy()
-        sigma[mask] = sigma[mask] + float(contrast)
-        if np.any(sigma <= 0.0):
+        np.subtract(fwd_centers[:, 0], float(center[0]), out=dist2)
+        np.square(dist2, out=dist2)
+        for axis in range(1, int(fwd_centers.shape[1])):
+            np.subtract(fwd_centers[:, axis], float(center[axis]), out=axis_work)
+            np.square(axis_work, out=axis_work)
+            np.add(dist2, axis_work, out=dist2)
+        radius2 = float(radius) * float(radius)
+        np.less_equal(dist2, radius2, out=inside_mask)
+        if not np.any(inside_mask):
+            inside_mask[int(np.argmin(dist2))] = True
+        sigma = conductivities[row]
+        sigma[:] = background
+        np.add(sigma, float(contrast), out=sigma, where=inside_mask)
+        if float(np.min(sigma)) <= 0.0:
             raise ValueError("finite-target conductivity must stay positive.")
-        conductivities.append(sigma)
     return np.ascontiguousarray(conductivities, dtype=np.float64)
 
 
@@ -2932,23 +3186,37 @@ def _solve_measurement_batch(
     batch_size: int,
 ) -> np.ndarray:
     batch_solver = getattr(fwd_model, "fwd_solve_batch", None)
-    columns = []
+    n_targets = int(conductivities.shape[0])
+    matrix: np.ndarray | None = None
+    out_col = 0
+
+    def store(vector: np.ndarray) -> None:
+        nonlocal matrix, out_col
+        column = np.asarray(vector, dtype=np.float64).reshape(-1)
+        if matrix is None:
+            matrix = np.empty((column.size, n_targets), dtype=np.float64)
+        elif column.size != int(matrix.shape[0]):
+            raise ValueError(
+                "finite-target response columns have inconsistent lengths."
+            )
+        if out_col >= n_targets:
+            raise ValueError("finite-target response batch produced too many columns.")
+        matrix[:, out_col] = column
+        out_col += 1
+
     if callable(batch_solver):
         for start in range(0, conductivities.shape[0], batch_size):
             chunk = conductivities[start : start + batch_size]
             images = [_eit_image(fwd_model, sigma) for sigma in chunk]
             results = batch_solver(images)
             for result in results:
-                columns.append(_measurement_vector_from_result(result))
+                store(_measurement_vector_from_result(result))
     else:
         for sigma in conductivities:
-            columns.append(_solve_measurement_vector(fwd_model, sigma))
-    if not columns:
+            store(_solve_measurement_vector(fwd_model, sigma))
+    if matrix is None or out_col == 0:
         raise ValueError("finite-target response batch produced no columns.")
-    first_size = columns[0].size
-    if any(column.size != first_size for column in columns):
-        raise ValueError("finite-target response columns have inconsistent lengths.")
-    return np.ascontiguousarray(np.column_stack(columns), dtype=np.float64)
+    return np.ascontiguousarray(matrix[:, :out_col], dtype=np.float64)
 
 
 def _resolve_measurement_order(
@@ -2968,22 +3236,38 @@ def _resolve_measurement_order(
         raise ValueError(
             f"measurement_order length {order.size} does not match {n_measurements}."
         )
-    if np.any((order < 0) | (order >= int(n_measurements))):
+    if order.size and (
+        int(np.min(order)) < 0 or int(np.max(order)) >= int(n_measurements)
+    ):
         raise ValueError("measurement_order indices are out of range.")
-    if np.unique(order).size != order.size:
+    is_permutation, is_identity = _measurement_order_flags(order)
+    if not is_permutation:
         raise ValueError("measurement_order must be a permutation.")
-    identity = np.arange(int(n_measurements), dtype=np.int64)
-    if np.array_equal(order, identity):
+    if is_identity:
         return None, {
             "measurement_order_source": "identity",
-            "measurement_order_hash": _array_digest(identity),
-            "measurement_order_first_indices": tuple(int(v) for v in identity[:8]),
+            "measurement_order_hash": _array_digest(order),
+            "measurement_order_first_indices": tuple(int(v) for v in order[:8]),
         }
     return np.ascontiguousarray(order, dtype=np.int64), {
         "measurement_order_source": "provided",
         "measurement_order_hash": _array_digest(order),
         "measurement_order_first_indices": tuple(int(v) for v in order[:8]),
     }
+
+
+def _measurement_order_flags(order: np.ndarray) -> tuple[bool, bool]:
+    values = np.asarray(order, dtype=np.int64).reshape(-1)
+    seen = np.zeros(values.size, dtype=bool)
+    is_identity = True
+    for position, raw_idx in enumerate(values):
+        idx = int(raw_idx)
+        if seen[idx]:
+            return False, False
+        seen[idx] = True
+        if idx != position:
+            is_identity = False
+    return True, is_identity
 
 
 def _call_fwd_solve(fwd_model: Any, conductivity: np.ndarray) -> Any:
@@ -3006,7 +3290,7 @@ def _measurement_vector_from_result(result: Any) -> np.ndarray:
     data = result[0] if isinstance(result, tuple) else result
     values = getattr(data, "meas", data)
     vector = np.asarray(values, dtype=np.float64).reshape(-1)
-    if not np.isfinite(vector).all():
+    if not _all_finite_values(vector):
         raise FloatingPointError(
             "forward solve measurement contains non-finite values."
         )
@@ -3020,12 +3304,12 @@ def _calc_greit_difference_data(
     normalize: bool,
 ) -> np.ndarray:
     if normalize:
-        if np.any(np.abs(vh) <= np.finfo(np.float64).eps):
+        if _min_abs_value(vh) <= np.finfo(np.float64).eps:
             raise ValueError("normalize=True requires non-zero homogeneous vh entries.")
         y = vi / vh.reshape(-1, 1) - 1.0
     else:
         y = vi - vh.reshape(-1, 1)
-    if not np.isfinite(y).all():
+    if not _all_finite_values(y):
         raise FloatingPointError(
             "GREIT training response Y contains non-finite values."
         )
@@ -3038,17 +3322,23 @@ def _contract_training_responses(
     channel_mask: Any | None,
     measurement_weights: Any | None,
 ):
-    columns = []
+    contracted: np.ndarray | None = None
     contract = None
-    for column in y.T:
+    for col_idx, column in enumerate(y.T):
         weighted, contract = apply_measurement_contract_to_vector(
             column,
             channel_mask=channel_mask,
             measurement_weights=measurement_weights,
         )
-        columns.append(weighted)
+        weighted = np.asarray(weighted, dtype=np.float64).reshape(-1)
+        if contracted is None:
+            contracted = np.empty((weighted.size, int(y.shape[1])), dtype=np.float64)
+        elif weighted.size != int(contracted.shape[0]):
+            raise ValueError("contracted training response columns are inconsistent.")
+        contracted[:, col_idx] = weighted
     assert contract is not None
-    return np.ascontiguousarray(np.column_stack(columns), dtype=np.float64), contract
+    assert contracted is not None
+    return np.ascontiguousarray(contracted, dtype=np.float64), contract
 
 
 def _forward_cell_centers(fwd_model: Any) -> np.ndarray:
@@ -3076,7 +3366,7 @@ def _forward_cell_centers(fwd_model: Any) -> np.ndarray:
     array = np.asarray(centers, dtype=np.float64)
     if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] < 2:
         raise ValueError("forward target centers must have shape (n_cells, >=2).")
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("forward target centers contain non-finite values.")
     return _as_xyz_points(array, name="forward target centers")
 
@@ -3090,7 +3380,7 @@ def _desired_rec_centers(rec_model: Any) -> np.ndarray:
         centers = _cell_centers(rec_model)
     if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] < 2:
         raise ValueError("GREIT desired images require 2D or 3D rec-model centers.")
-    if not np.isfinite(centers).all():
+    if not _all_finite_values(centers):
         raise FloatingPointError("rec-model centers contain non-finite values.")
     return _as_xyz_points(centers, name="GREIT desired rec-model centers")
 
@@ -3150,11 +3440,11 @@ def _as_eidors_xyz(values: Any) -> tuple[np.ndarray, np.ndarray | None]:
         raise ValueError("xyz must be a vector or 2D matrix.")
     if xyz.size == 0 or xyz.shape[0] != 3 or xyz.shape[1] == 0:
         raise ValueError("xyz must contain at least one 3D target center.")
-    if not np.isfinite(xyz).all():
+    if not _all_finite_values(xyz):
         raise FloatingPointError("xyz contains non-finite values.")
     if embedded_radii is not None:
         embedded_radii = np.asarray(embedded_radii, dtype=np.float64).reshape(-1)
-        if not np.isfinite(embedded_radii).all():
+        if not _all_finite_values(embedded_radii):
             raise FloatingPointError("embedded xyz radii contain non-finite values.")
     return np.ascontiguousarray(xyz, dtype=np.float64), embedded_radii
 
@@ -3173,9 +3463,9 @@ def _desired_radii(
             radii = np.full(n_targets, float(radii[0]), dtype=np.float64)
         elif radii.size != n_targets:
             raise ValueError(f"radius length {radii.size} does not match {n_targets}.")
-    if not np.isfinite(radii).all():
+    if not _all_finite_values(radii):
         raise FloatingPointError("desired image radius contains non-finite values.")
-    if np.any(radii <= 0.0):
+    if float(np.min(radii, initial=np.inf)) <= 0.0:
         raise ValueError("desired image radii must be positive.")
     return np.ascontiguousarray(radii, dtype=np.float64)
 
@@ -3188,9 +3478,9 @@ def _desired_steepness(values: Any, *, n_targets: int) -> np.ndarray:
         raise ValueError(
             f"desired image steepness length {steepness.size} does not match {n_targets}."
         )
-    if not np.isfinite(steepness).all():
+    if not _all_finite_values(steepness):
         raise FloatingPointError("desired image steepness contains non-finite values.")
-    if np.any(steepness <= 0.0):
+    if float(np.min(steepness, initial=np.inf)) <= 0.0:
         raise ValueError("desired image steepness must be positive.")
     return np.ascontiguousarray(steepness, dtype=np.float64)
 
@@ -3232,7 +3522,7 @@ def _validate_desired_matrix(
             "desired image matrix D must have shape "
             f"{(n_rec_parameters, n_targets)}, got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("desired image matrix D contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
@@ -3260,22 +3550,45 @@ def _model_nodes(fwd_model: Any | None) -> np.ndarray | None:
     nodes = np.asarray(raw, dtype=np.float64)
     if nodes.ndim != 2 or nodes.shape[0] == 0 or nodes.shape[1] < 2:
         return None
-    if not np.isfinite(nodes).all():
+    if not _all_finite_values(nodes):
         return None
-    return _as_xyz_points(nodes, name="model nodes")
+    return _as_xyz_points(nodes, name="model nodes", finite_checked=True)
 
 
-def _as_xyz_points(values: Any, *, name: str) -> np.ndarray:
+def _as_xyz_points(
+    values: Any,
+    *,
+    name: str,
+    finite_checked: bool = False,
+) -> np.ndarray:
     points = np.asarray(values, dtype=np.float64)
     if points.ndim != 2 or points.shape[0] == 0 or points.shape[1] < 2:
         raise ValueError(f"{name} must have shape (n, >=2).")
-    if not np.isfinite(points).all():
+    if not finite_checked and not _all_finite_values(points):
         raise FloatingPointError(f"{name} contain non-finite values.")
     if points.shape[1] == 2:
-        points = np.column_stack([points, np.zeros(points.shape[0], dtype=np.float64)])
+        xyz = np.zeros((points.shape[0], 3), dtype=np.float64)
+        xyz[:, :2] = points
+        points = xyz
     else:
         points = points[:, :3]
     return np.ascontiguousarray(points, dtype=np.float64)
+
+
+def _all_finite_values(values: np.ndarray, *, chunk_size: int = 65536) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return True
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size, dtype=bool)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        count = stop - start
+        work_view = work[:count]
+        np.isfinite(arr[start:stop], out=work_view)
+        if not bool(work_view.all()):
+            return False
+    return True
 
 
 def _inside_mask_from_model_nodes(
@@ -3294,13 +3607,23 @@ def _inside_mask_from_model_nodes(
         lower = np.min(nodes, axis=0)
         upper = np.max(nodes, axis=0)
         eps = np.finfo(np.float64).eps * max(1.0, float(np.max(np.abs(upper - lower))))
-        return np.asarray(
-            np.all(
-                (centers[:, :3] >= lower - eps) & (centers[:, :3] <= upper + eps),
-                axis=1,
-            ),
-            dtype=bool,
-        )
+        return _points_within_bounds_mask(centers[:, :3], lower - eps, upper + eps)
+
+
+def _points_within_bounds_mask(
+    points: np.ndarray,
+    lower: np.ndarray,
+    upper: np.ndarray,
+) -> np.ndarray:
+    pts = np.asarray(points)
+    mask = np.ones(pts.shape[0], dtype=bool)
+    axis_mask = np.empty(pts.shape[0], dtype=bool)
+    for axis in range(3):
+        np.greater_equal(pts[:, axis], float(lower[axis]), out=axis_mask)
+        np.logical_and(mask, axis_mask, out=mask)
+        np.less_equal(pts[:, axis], float(upper[axis]), out=axis_mask)
+        np.logical_and(mask, axis_mask, out=mask)
+    return mask
 
 
 def _cell_centers(mesh: Any) -> np.ndarray:
@@ -3320,7 +3643,7 @@ def _cell_centers(mesh: Any) -> np.ndarray:
     array = np.asarray(centers, dtype=np.float64)
     if array.ndim != 2 or array.shape[0] == 0 or array.shape[1] == 0:
         raise ValueError("inverse mesh cell centers must be a non-empty 2D array.")
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("inverse mesh cell centers contain non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -3331,21 +3654,33 @@ def _as_centers(values: Any) -> np.ndarray:
         centers = centers.reshape(1, -1)
     if centers.ndim != 2 or centers.shape[0] == 0 or centers.shape[1] == 0:
         raise ValueError("centers must be a non-empty 2D array.")
-    if not np.isfinite(centers).all():
+    if not _all_finite_values(centers):
         raise FloatingPointError("centers contain non-finite values.")
     return np.ascontiguousarray(centers, dtype=np.float64)
 
 
-def _default_radius(centers: np.ndarray) -> float:
-    if centers.shape[0] <= 1:
-        return 1.0
-    distances = np.linalg.norm(
-        centers[:, None, :] - centers[None, :, :],
-        axis=2,
+def _nearest_unique_center_distance(centers: np.ndarray, *, fallback: float) -> float:
+    centers_array = np.asarray(centers, dtype=np.float64)
+    if centers_array.ndim == 0 or centers_array.shape[0] <= 1:
+        return float(fallback)
+    center_matrix = np.ascontiguousarray(
+        centers_array.reshape(centers_array.shape[0], -1)
     )
-    distances[distances == 0.0] = np.inf
-    nearest = float(np.min(distances))
-    if not np.isfinite(nearest):
+    if not _all_finite_values(center_matrix):
+        return float(fallback)
+    unique_centers = np.unique(center_matrix, axis=0)
+    if unique_centers.shape[0] <= 1:
+        return float(fallback)
+    from scipy.spatial import cKDTree
+
+    distances, _ = cKDTree(unique_centers).query(unique_centers, k=2)
+    nearest_values = np.asarray(distances[:, 1], dtype=np.float64)
+    return min_positive_finite_value(nearest_values, fallback=float(fallback))
+
+
+def _default_radius(centers: np.ndarray) -> float:
+    nearest = _nearest_unique_center_distance(centers, fallback=0.0)
+    if nearest <= 0.0:
         return 1.0
     return max(0.51 * nearest, np.finfo(np.float64).eps)
 
@@ -3356,18 +3691,30 @@ def _measurement_regularisation(
     n_measurements: int,
 ) -> tuple[np.ndarray, str]:
     if values is None:
-        return np.eye(n_measurements, dtype=np.float64), "identity"
+        return np.ones(n_measurements, dtype=np.float64), "identity"
     if sparse.issparse(values):
         matrix = np.asarray(values.toarray(), dtype=np.float64)
     else:
         array = np.asarray(values, dtype=np.float64)
-        matrix = np.diag(array) if array.ndim == 1 else array
+        if array.ndim == 1:
+            diag = np.ascontiguousarray(array.reshape(-1), dtype=np.float64)
+            if diag.shape != (n_measurements,):
+                raise ValueError(
+                    "regularisation must have shape "
+                    f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+                    f"got {array.shape}."
+                )
+            if not _all_finite_values(diag):
+                raise FloatingPointError("regularisation contains non-finite values.")
+            return diag, "provided"
+        matrix = array
     if matrix.shape != (n_measurements, n_measurements):
         raise ValueError(
             "regularisation must have shape "
-            f"{(n_measurements, n_measurements)}, got {matrix.shape}."
+            f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+            f"got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("regularisation contains non-finite values.")
     if not np.allclose(matrix, matrix.T, rtol=1e-10, atol=1e-12):
         raise ValueError("regularisation matrix must be symmetric.")
@@ -3379,7 +3726,7 @@ def _validate_log10_bracket(bracket: tuple[float, float]) -> tuple[float, float]
         raise ValueError("bracket must contain exactly two log10 bounds.")
     lo = float(bracket[0])
     hi = float(bracket[1])
-    if not np.isfinite([lo, hi]).all() or lo >= hi:
+    if not _all_finite_values([lo, hi]) or lo >= hi:
         raise ValueError("bracket bounds must be finite and increasing.")
     return lo, hi
 
@@ -3480,7 +3827,7 @@ def _measurement_noise_matrix(values: Any | None, *, y: np.ndarray) -> np.ndarra
             std = float(np.std(noise))
         scale = max(float(np.mean(np.abs(y))), 1.0e-12) * 1.0e-2
         noise = noise / max(std, 1.0e-12) * scale
-    if not np.isfinite(noise).all():
+    if not _all_finite_values(noise):
         raise FloatingPointError("measurement_noise contains non-finite values.")
     if float(np.std(noise)) <= 1.0e-15:
         raise ValueError("measurement_noise must have non-zero standard deviation.")
@@ -3521,7 +3868,7 @@ def _eidors_nf_vh_vector(values: Any, *, n_measurements: int) -> np.ndarray:
         )
     if vector.size < 2:
         raise ValueError("EIDORS noise-figure search requires at least two channels.")
-    if not np.isfinite(vector).all():
+    if not _all_finite_values(vector):
         raise FloatingPointError("vh contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=dtype)
 
@@ -3554,7 +3901,7 @@ def _eidors_nf_signal_matrix(
         signal = vi_matrix / vh.reshape(-1, 1) - 1.0
     else:
         signal = vi_matrix - vh.reshape(-1, 1)
-    if not np.isfinite(signal).all():
+    if not _all_finite_values(signal):
         raise FloatingPointError("EIDORS NF signal_y contains non-finite values.")
     return np.ascontiguousarray(signal), "computed_from_vi_nf"
 
@@ -3576,7 +3923,7 @@ def _eidors_nf_measurement_matrix(
         )
     if matrix.shape[1] == 0:
         raise ValueError(f"{name} must contain at least one target column.")
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=dtype)
 
@@ -3594,14 +3941,34 @@ def _eidors_nf_volume_weights(
             f"volume_weights must contain {n_rec_parameters} entries, "
             f"got {vector.size}."
         )
-    if not np.isfinite(vector).all():
+    if not _all_finite_values(vector):
         raise FloatingPointError("volume_weights contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64), "provided"
 
 
 def _ensure_nonzero_vh_for_normalization(vh: np.ndarray) -> None:
-    if np.any(np.abs(vh) <= np.finfo(np.float64).eps):
+    if _min_abs_value(vh) <= np.finfo(np.float64).eps:
         raise ValueError("normalize=True requires non-zero vh entries.")
+
+
+def _min_abs_value(values: np.ndarray, *, chunk_size: int = 65536) -> float:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return float("inf")
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size, dtype=np.float64)
+    best = float("inf")
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        count = stop - start
+        work_view = work[:count]
+        np.abs(arr[start:stop], out=work_view)
+        local = float(np.min(work_view))
+        if local < best:
+            best = local
+            if best <= 0.0:
+                break
+    return best
 
 
 def _eidors_noise_figure_metric(
@@ -3651,7 +4018,7 @@ def _eidors_noise_figure_metric(
     snr_x = signal_x_amp / noise_x_amp
     snr_y = signal_y_amp / noise_y_amp
     nf_values = np.asarray(snr_y / snr_x, dtype=np.float64).reshape(-1)
-    if not np.isfinite(nf_values).all():
+    if not _all_finite_values(nf_values):
         raise FloatingPointError("EIDORS NF calculation produced non-finite values.")
     nf = float(np.mean(nf_values))
     metadata = {
@@ -3674,7 +4041,7 @@ def _validate_training_response_matrix(values: Any) -> np.ndarray:
     matrix = np.asarray(values, dtype=dtype)
     if matrix.ndim != 2 or matrix.shape[0] == 0 or matrix.shape[1] == 0:
         raise ValueError("GREIT response matrix Y must be non-empty 2D.")
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("GREIT response matrix Y contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=dtype)
 
@@ -3688,7 +4055,7 @@ def _validate_desired_component_matrix(values: Any, *, n_targets: int) -> np.nda
             "desired image matrix D must have shape "
             f"(n_rec_parameters, {n_targets}), got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("desired image matrix D contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=dtype)
 
@@ -3706,29 +4073,57 @@ def _as_scalar_weight(value: Any) -> float:
     return scalar
 
 
-def _noise_covar_matrix(values: Any, *, n_measurements: int) -> tuple[np.ndarray, str]:
+def _noise_covar_term(
+    values: Any, *, n_measurements: int
+) -> tuple[np.ndarray, str, str]:
     if sparse.issparse(values):
         matrix = np.asarray(values.toarray(), dtype=np.float64)
-        source = "matrix"
+        kind = "matrix"
     else:
         array = np.asarray(values, dtype=np.float64)
         if array.size == 1:
             scalar = float(array.reshape(-1)[0])
             if scalar < 0.0 or not np.isfinite(scalar):
                 raise ValueError("noise_covar scalar must be finite and non-negative.")
-            matrix = scalar * np.eye(n_measurements, dtype=np.float64)
-            source = "scalar"
+            return (
+                np.full(n_measurements, scalar, dtype=np.float64),
+                "scalar",
+                "diagonal",
+            )
+        if array.ndim == 1:
+            diag = np.ascontiguousarray(array.reshape(-1), dtype=np.float64)
+            if diag.shape != (n_measurements,):
+                raise ValueError(
+                    "noise_covar must be scalar or have shape "
+                    f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+                    f"got {array.shape}."
+                )
+            if not _all_finite_values(diag):
+                raise FloatingPointError("noise_covar contains non-finite values.")
+            return diag, "diagonal", "diagonal"
         else:
             matrix = np.asarray(array, dtype=np.float64)
-            source = "matrix"
+            kind = "matrix"
     if matrix.shape != (n_measurements, n_measurements):
         raise ValueError(
             "noise_covar must be scalar or have shape "
-            f"{(n_measurements, n_measurements)}, got {matrix.shape}."
+            f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+            f"got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("noise_covar contains non-finite values.")
-    return np.ascontiguousarray(matrix, dtype=np.float64), source
+    return np.ascontiguousarray(matrix, dtype=np.float64), "matrix", kind
+
+
+def _noise_covar_matrix(values: Any, *, n_measurements: int) -> tuple[np.ndarray, str]:
+    term, source, kind = _noise_covar_term(values, n_measurements=n_measurements)
+    if not _all_finite_values(term):
+        raise FloatingPointError("noise_covar contains non-finite values.")
+    if kind != "diagonal":
+        return np.ascontiguousarray(term, dtype=np.float64), source
+    matrix = np.zeros((n_measurements, n_measurements), dtype=np.float64)
+    add_scaled_diagonal_in_place(matrix, term, 1.0)
+    return matrix, source
 
 
 def _stored_measurement_weights(values: Any | None) -> np.ndarray | None:
@@ -3750,7 +4145,7 @@ def _validate_pjt_cache(
     expected = (int(n_rec_parameters), int(n_measurements))
     if matrix.shape != expected:
         raise ValueError(f"PJt cache must have shape {expected}, got {matrix.shape}.")
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("PJt cache contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=dtype)
 
@@ -3853,7 +4248,7 @@ def _rec_model_array(model: Any | None) -> np.ndarray | None:
         array = np.asarray(model, dtype=np.float64)
         if array.size == 0:
             return None
-        if not np.isfinite(array).all():
+        if not _all_finite_values(array):
             raise FloatingPointError("rec_model contains non-finite values.")
         if array.ndim == 2 and array.shape[1] >= 2:
             return _as_xyz_points(array, name="rec_model")
@@ -3912,7 +4307,7 @@ def _canonical_signature_value(value: Any) -> Any:
 
 
 def _array_signature(value: Any) -> dict[str, Any]:
-    array = np.ascontiguousarray(np.asarray(value))
+    array = np.asarray(value)
     return {
         "kind": "ndarray",
         "dtype": str(array.dtype),
@@ -3922,17 +4317,18 @@ def _array_signature(value: Any) -> dict[str, Any]:
 
 
 def _array_digest(value: Any) -> str:
-    array = np.ascontiguousarray(np.asarray(value))
+    array = np.asarray(value)
     if array.dtype.kind in {"U", "O"}:
         array = np.ascontiguousarray(array.astype(str))
-    encoded = (
-        str(array.dtype).encode("utf-8")
-        + b"|"
-        + json.dumps([int(v) for v in array.shape], sort_keys=True).encode("utf-8")
-        + b"|"
-        + array.tobytes()
+    digest = hashlib.sha256()
+    digest.update(str(array.dtype).encode("utf-8"))
+    digest.update(b"|")
+    digest.update(
+        json.dumps([int(v) for v in array.shape], sort_keys=True).encode("utf-8")
     )
-    return hashlib.sha256(encoded).hexdigest()
+    digest.update(b"|")
+    update_digest_with_array_payload(digest, array)
+    return digest.hexdigest()
 
 
 def _signature_hash(payload: dict[str, Any]) -> str:
@@ -4024,7 +4420,7 @@ def _as_flat_image(values: Any, *, name: str) -> tuple[np.ndarray, tuple[int, ..
     array = np.asarray(values, dtype=np.float64)
     if array.size == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(array.reshape(-1), dtype=np.float64), tuple(array.shape)
 
@@ -4037,9 +4433,9 @@ def _as_cell_volumes(values: Any | None, *, n_cells: int) -> np.ndarray:
         raise ValueError(
             f"cell_volumes length {volumes.size} does not match {n_cells}."
         )
-    if not np.isfinite(volumes).all():
+    if not _all_finite_values(volumes):
         raise FloatingPointError("cell_volumes contain non-finite values.")
-    if np.any(volumes <= 0.0):
+    if float(np.min(volumes)) <= 0.0:
         raise ValueError("cell_volumes entries must be positive.")
     return np.ascontiguousarray(volumes, dtype=np.float64)
 
@@ -4057,14 +4453,13 @@ def _metric_centers(
                 "centers must have shape (n_cells, dimension); "
                 f"got {coords.shape}, expected first dimension {n_cells}."
             )
-        if not np.isfinite(coords).all():
+        if not _all_finite_values(coords):
             raise FloatingPointError("centers contain non-finite values.")
         return np.ascontiguousarray(coords, dtype=np.float64)
     if len(original_shape) <= 1:
         return np.arange(n_cells, dtype=np.float64).reshape(-1, 1)
     axes = [np.arange(size, dtype=np.float64) for size in original_shape]
-    grids = np.meshgrid(*axes, indexing="ij")
-    return np.stack([grid.ravel(order="C") for grid in grids], axis=1)
+    return _cartesian_centers_from_axes(axes, order="C")
 
 
 def _as_target_values(values: Any | None, *, mask: np.ndarray) -> np.ndarray:
@@ -4075,7 +4470,7 @@ def _as_target_values(values: Any | None, *, mask: np.ndarray) -> np.ndarray:
         raise ValueError(
             f"target_values size {target.size} does not match mask size {mask.size}."
         )
-    if not np.isfinite(target).all():
+    if not _all_finite_values(target):
         raise FloatingPointError("target_values contain non-finite values.")
     return np.ascontiguousarray(target, dtype=np.float64)
 
@@ -4084,7 +4479,66 @@ def _weighted_centroid(coords: np.ndarray, weights: np.ndarray) -> np.ndarray:
     total = float(np.sum(weights))
     if total <= np.finfo(np.float64).eps:
         raise ValueError("centroid weights must have positive sum.")
-    return np.asarray((coords * weights[:, None]).sum(axis=0) / total, dtype=np.float64)
+    return np.asarray(weights @ coords / total, dtype=np.float64)
+
+
+def _weighted_abs_centroid(
+    coords: np.ndarray, values: np.ndarray, weights: np.ndarray
+) -> np.ndarray:
+    centroid_weights = np.empty(
+        values.shape, dtype=np.result_type(values.dtype, weights.dtype, np.float64)
+    )
+    np.abs(values, out=centroid_weights)
+    centroid_weights *= weights
+    return _weighted_centroid(coords, centroid_weights)
+
+
+def _masked_weighted_centroid(
+    coords: np.ndarray, weights: np.ndarray, mask: np.ndarray
+) -> np.ndarray:
+    weights_arr = np.asarray(weights)
+    mask_arr = np.asarray(mask, dtype=bool)
+    if weights_arr.shape != mask_arr.shape or coords.shape[0] != weights_arr.size:
+        raise ValueError("coords, weights, and mask must describe the same cells.")
+    total = float(np.sum(weights_arr, where=mask_arr))
+    if total <= np.finfo(np.float64).eps:
+        raise ValueError("centroid weights must have positive sum.")
+    center = np.empty(coords.shape[1], dtype=np.float64)
+    for axis in range(coords.shape[1]):
+        center[axis] = _masked_weighted_sum(coords[:, axis], weights_arr, mask_arr)
+    center /= total
+    return center
+
+
+def _masked_weighted_sum(
+    values: np.ndarray,
+    weights: np.ndarray,
+    mask: np.ndarray,
+    *,
+    chunk_size: int = 65536,
+) -> float:
+    values_arr = np.asarray(values)
+    weights_arr = np.asarray(weights)
+    mask_arr = np.asarray(mask, dtype=bool)
+    if values_arr.shape != weights_arr.shape or values_arr.shape != mask_arr.shape:
+        raise ValueError("values, weights, and mask must have the same shape.")
+    if values_arr.size == 0:
+        return 0.0
+
+    block_size = max(1, min(int(chunk_size), int(values_arr.size)))
+    work = np.empty(
+        block_size,
+        dtype=np.result_type(values_arr.dtype, weights_arr.dtype, np.float64),
+    )
+    total = 0.0
+    for start in range(0, int(values_arr.size), block_size):
+        stop = min(start + block_size, int(values_arr.size))
+        count = stop - start
+        work_view = work[:count]
+        mask_chunk = mask_arr[start:stop]
+        np.multiply(values_arr[start:stop], weights_arr[start:stop], out=work_view)
+        total += float(np.sum(work_view, where=mask_chunk))
+    return total
 
 
 def _quarter_max_threshold(image: np.ndarray, fraction: float) -> float:
@@ -4111,7 +4565,7 @@ def _equivalent_ball_mask(
     center: np.ndarray,
     target_volume: float,
 ) -> np.ndarray:
-    order = np.argsort(np.linalg.norm(coords - center.reshape(1, -1), axis=1))
+    order = np.argsort(_squared_distances_to_point(coords, center))
     selected = np.zeros(coords.shape[0], dtype=bool)
     cumulative = 0.0
     for idx in order:

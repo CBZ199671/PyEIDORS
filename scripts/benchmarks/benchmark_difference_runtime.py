@@ -34,7 +34,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from pyeidors import EITSystem
-from pyeidors.cache import hash_array
+from pyeidors.cache import hash_array_payload, update_digest_with_array_payload
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array, function_set_array, mesh_num_vertices
@@ -42,6 +42,173 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
+
+_COLUMN_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
+_ROW_WEIGHTED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _column_scaled_jjt(
+    matrix: np.ndarray,
+    column_scale: np.ndarray,
+    *,
+    chunk_target_bytes: int = _COLUMN_SCALED_GRAM_CHUNK_BYTES,
+) -> np.ndarray:
+    """Return ``matrix @ diag(column_scale) @ matrix.T`` in bounded chunks."""
+    mat = np.asarray(matrix, dtype=np.float64)
+    scale = np.asarray(column_scale, dtype=np.float64).reshape(-1)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if scale.size != mat.shape[1]:
+        raise ValueError(
+            f"column_scale length {scale.size} does not match {mat.shape[1]} columns."
+        )
+    result = np.zeros((mat.shape[0], mat.shape[0]), dtype=np.float64)
+    bytes_per_column = max(1, mat.shape[0] * np.dtype(np.float64).itemsize)
+    cols_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_column)
+    for start in range(0, mat.shape[1], cols_per_chunk):
+        stop = min(start + cols_per_chunk, mat.shape[1])
+        block = np.asarray(mat[:, start:stop], dtype=np.float64)
+        result += (block * scale[start:stop]) @ block.T
+    return result
+
+
+def _row_weighted_column_sumsq(
+    matrix: np.ndarray,
+    row_weights: np.ndarray | None,
+    *,
+    chunk_target_bytes: int = _ROW_WEIGHTED_GRAM_CHUNK_BYTES,
+) -> np.ndarray:
+    """Return column sums of ``diag(row_weights) @ matrix**2`` in row chunks."""
+
+    mat = np.asarray(matrix, dtype=np.float64)
+    weights = (
+        None
+        if row_weights is None
+        else np.asarray(row_weights, dtype=np.float64).reshape(-1)
+    )
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if weights is not None and weights.size != mat.shape[0]:
+        raise ValueError(
+            f"row_weights length {weights.size} does not match {mat.shape[0]} rows."
+        )
+    result = np.zeros(mat.shape[1], dtype=np.float64)
+    bytes_per_row = max(1, mat.shape[1] * np.dtype(np.float64).itemsize)
+    rows_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_row)
+    for start in range(0, mat.shape[0], rows_per_chunk):
+        stop = min(start + rows_per_chunk, mat.shape[0])
+        block = np.asarray(mat[start:stop, :], dtype=np.float64)
+        if weights is None:
+            result += np.sum(block * block, axis=0)
+        else:
+            result += np.sum(block * block * weights[start:stop, None], axis=0)
+    return result
+
+
+def _row_weighted_jtj(
+    matrix: np.ndarray,
+    row_weights: np.ndarray | None,
+    *,
+    chunk_target_bytes: int = _ROW_WEIGHTED_GRAM_CHUNK_BYTES,
+) -> np.ndarray:
+    """Return ``matrix.T @ diag(row_weights) @ matrix`` in row chunks."""
+
+    mat = np.asarray(matrix, dtype=np.float64)
+    weights = (
+        None
+        if row_weights is None
+        else np.asarray(row_weights, dtype=np.float64).reshape(-1)
+    )
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if weights is not None and weights.size != mat.shape[0]:
+        raise ValueError(
+            f"row_weights length {weights.size} does not match {mat.shape[0]} rows."
+        )
+    result = np.zeros((mat.shape[1], mat.shape[1]), dtype=np.float64)
+    bytes_per_row = max(1, mat.shape[1] * np.dtype(np.float64).itemsize)
+    rows_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_row)
+    for start in range(0, mat.shape[0], rows_per_chunk):
+        stop = min(start + rows_per_chunk, mat.shape[0])
+        block = np.asarray(mat[start:stop, :], dtype=np.float64)
+        if weights is None:
+            result += block.T @ block
+        else:
+            result += block.T @ (block * weights[start:stop, None])
+    return result
+
+
+def _weighted_jt_vec(
+    matrix: np.ndarray,
+    vector: np.ndarray,
+    row_weights: np.ndarray | None,
+) -> np.ndarray:
+    """Return ``matrix.T @ (row_weights * vector)`` without scaling matrix rows."""
+
+    mat = np.asarray(matrix, dtype=np.float64)
+    vec = np.asarray(vector, dtype=np.float64).reshape(-1)
+    if row_weights is None:
+        return mat.T @ vec
+    weights = np.asarray(row_weights, dtype=np.float64).reshape(-1)
+    if weights.size != mat.shape[0]:
+        raise ValueError(
+            f"row_weights length {weights.size} does not match {mat.shape[0]} rows."
+        )
+    return mat.T @ (weights * vec)
+
+
+def _add_diagonal_in_place(
+    matrix: np.ndarray, diagonal: np.ndarray | float
+) -> np.ndarray:
+    arr = np.asarray(matrix, dtype=np.float64)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError("matrix must be square")
+    if not arr.flags.c_contiguous:
+        arr = np.ascontiguousarray(arr)
+    diagonal_view = arr.reshape(-1)[:: arr.shape[1] + 1][: arr.shape[0]]
+    if np.ndim(diagonal) == 0:
+        diagonal_view += float(diagonal)
+    else:
+        diag = np.asarray(diagonal, dtype=np.float64).reshape(-1)
+        if diag.size != arr.shape[0]:
+            raise ValueError("diagonal size must match matrix size")
+        diagonal_view += diag
+    return arr
+
+
+def _hash_row_scaled_array(
+    matrix: np.ndarray,
+    row_scale: np.ndarray | None,
+    *,
+    chunk_target_bytes: int = _ROW_WEIGHTED_GRAM_CHUNK_BYTES,
+) -> str:
+    """Hash ``diag(row_scale) @ matrix`` with legacy ``hash_array`` bytes."""
+
+    mat = np.asarray(matrix, dtype=np.float64)
+    scale = (
+        None
+        if row_scale is None
+        else np.asarray(row_scale, dtype=np.float64).reshape(-1)
+    )
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if scale is not None and scale.size != mat.shape[0]:
+        raise ValueError(
+            f"row_scale length {scale.size} does not match {mat.shape[0]} rows."
+        )
+    digest = hashlib.sha256()
+    digest.update(f"{np.dtype(np.float64)}:{mat.shape}:".encode("utf-8"))
+    bytes_per_row = max(1, mat.shape[1] * np.dtype(np.float64).itemsize)
+    rows_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_row)
+    for start in range(0, mat.shape[0], rows_per_chunk):
+        stop = min(start + rows_per_chunk, mat.shape[0])
+        block = np.asarray(mat[start:stop, :], dtype=np.float64)
+        if scale is not None:
+            block = block * scale[start:stop, None]
+        update_digest_with_array_payload(
+            digest, np.ascontiguousarray(block, dtype=np.float64)
+        )
+    return digest.hexdigest()
 
 
 def _solve_with_cached_factor(
@@ -295,9 +462,10 @@ def build_measurement_weights(
         reference = np.asarray(diff_vector, dtype=float)
     else:
         reference = np.asarray(baseline_vector, dtype=float)
-    weights = reference**2
-    weights = np.where(np.isfinite(weights), weights, 0.0)
-    weights = np.maximum(weights, floor)
+    weights = np.array(reference, dtype=np.float64, copy=True)
+    np.square(weights, out=weights)
+    np.nan_to_num(weights, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    np.maximum(weights, float(floor), out=weights)
     return weights
 
 
@@ -321,30 +489,26 @@ def solve_single_step_delta(
         raw_baseline, raw_diff, args.meas_weight_strategy, args.meas_weight_floor
     )
     dv = np.asarray(raw_diff, dtype=float)
-    if weights is None:
-        jacobian_weighted = jacobian
-        dv_weighted = dv
-    else:
-        sqrt_weights = np.sqrt(weights)
-        jacobian_weighted = jacobian * sqrt_weights[:, None]
-        dv_weighted = dv * sqrt_weights
+    row_weights = None if weights is None else np.asarray(weights, dtype=np.float64)
+    row_scale = None if row_weights is None else np.sqrt(row_weights)
+    dv_weighted = dv if row_scale is None else dv * row_scale
 
-    diag_entries = np.sum(jacobian_weighted**2, axis=0)
+    diag_entries = _row_weighted_column_sumsq(jacobian, row_weights)
     diag_entries = np.maximum(diag_entries, args.noser_floor)
     noser_diag = diag_entries**args.noser_exponent
 
     hp = max(args.difference_hyperparameter, 0.0)
     solver_choice = solver_space or args.single_step_space
-    jac_hash = hash_array(np.ascontiguousarray(jacobian_weighted, dtype=np.float64))
-    noser_hash = hashlib.sha256(
-        np.ascontiguousarray(noser_diag, dtype=np.float64).tobytes()
-    ).hexdigest()
+    jac_hash = _hash_row_scaled_array(jacobian, row_scale)
+    noser_hash = hash_array_payload(np.ascontiguousarray(noser_diag, dtype=np.float64))
     if solver_choice == "measurement":
         inv_noser = 1.0 / noser_diag
-        jw_scaled = jacobian_weighted * inv_noser[None, :]
-        lhs = np.dot(jw_scaled, jacobian_weighted.T)
+        lhs = _column_scaled_jjt(jacobian, inv_noser)
+        if row_scale is not None:
+            lhs *= row_scale[:, None]
+            lhs *= row_scale[None, :]
         if hp > 0:
-            lhs = lhs + (hp**2) * np.eye(lhs.shape[0])
+            lhs = _add_diagonal_in_place(lhs, hp**2)
         rhs = dv_weighted
         payload = {
             "space": "measurement",
@@ -362,11 +526,12 @@ def solve_single_step_delta(
             y = _solve_with_cached_factor(
                 system, lhs, rhs, payload=payload, persist=True
             )
-        delta = inv_noser * np.dot(jacobian_weighted.T, y)
+        delta = inv_noser * _weighted_jt_vec(jacobian, y, row_scale)
     else:
-        RtR = np.diag(noser_diag)
-        lhs = np.dot(jacobian_weighted.T, jacobian_weighted) + (hp**2) * RtR
-        rhs = np.dot(jacobian_weighted.T, dv_weighted)
+        lhs = _row_weighted_jtj(jacobian, row_weights)
+        if hp > 0:
+            lhs = _add_diagonal_in_place(lhs, (hp**2) * noser_diag)
+        rhs = _weighted_jt_vec(jacobian, dv, row_weights)
         payload = {
             "space": "parameter",
             "hp": float(hp),

@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
 import numpy as np
-from mpi4py import MPI
 
 from ..data.structures import EITMesh, ElectrodePosition, MeshConfig
 from ._helpers import (
@@ -21,6 +20,7 @@ from ._helpers import (
     validate_mesh_data_tags,
 )
 from .dolfinx_mesh_cache import write_dolfinx_mesh_cache, xdmf_cache_path_for_mesh
+from ._runtime import mpi_comm_world
 
 build_eit_mesh = None
 
@@ -121,7 +121,12 @@ class MeshGenerator:
 
             self._extract_electrode_vertices()
             assert_unique_physical_group_ownership(gmsh.model)
-            mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2)
+            mesh_data = gmshio.model_to_mesh(
+                gmsh.model,
+                mpi_comm_world(),
+                rank=0,
+                gdim=2,
+            )
 
         electrode_names = [
             f"electrode_{idx}" for idx in range(1, self.electrodes.L + 1)

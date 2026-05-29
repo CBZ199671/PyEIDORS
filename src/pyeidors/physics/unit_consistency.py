@@ -8,7 +8,7 @@ from typing import Any, TYPE_CHECKING
 
 import numpy as np
 
-from .current_drive import validate_drive_config
+from pyeidors.utils.numeric_ops import all_finite_values
 
 if TYPE_CHECKING:
     from ..forward.eit_forward_model import EITForwardModel
@@ -70,6 +70,8 @@ def run_unit_consistency_checks(
     density_rel_tol: float = 1e-8,
 ) -> UnitCheckReport:
     """Run five unit consistency checks on a prepared forward model."""
+    from .current_drive import validate_drive_config
+
     report = UnitCheckReport()
     cfg = fwd_model.pattern_manager.config
     mesh_tdim = fwd_model.mesh.topology.dim
@@ -109,7 +111,8 @@ def run_unit_consistency_checks(
             fwd_model.mesh, float(cfg.geometry_scale_to_m)
         )
         finite_and_positive = bool(
-            np.all(np.isfinite(extents_m)) and np.all(extents_m > 0.0)
+            all_finite_values(extents_m)
+            and float(np.min(extents_m, initial=np.inf)) > 0.0
         )
         if not finite_and_positive:
             report.items.append(
@@ -177,8 +180,8 @@ def run_unit_consistency_checks(
     lengths = np.asarray(fwd_model.electrode_lengths_m, dtype=float).reshape(-1)
     lengths_ok = bool(
         lengths.size == n_elec
-        and np.all(np.isfinite(lengths))
-        and np.all(lengths > 0.0)
+        and all_finite_values(lengths)
+        and float(np.min(lengths, initial=np.inf)) > 0.0
     )
     if lengths_ok:
         report.items.append(

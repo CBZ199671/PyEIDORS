@@ -16,11 +16,10 @@ import logging
 from pathlib import Path
 from typing import Callable, Dict, Optional, Tuple
 
-from mpi4py import MPI
-
 from ..data.structures import EITMesh
 from ._helpers import validate_mesh_data_tags, write_association_table
 from .dolfinx_mesh_cache import write_dolfinx_mesh_cache
+from ._runtime import mpi_comm_world
 
 build_eit_mesh = None
 
@@ -97,7 +96,7 @@ class MeshConverter:
             raise ImportError("gmsh Python bindings are required to convert meshes.")
         mesh_data = gmshio.read_from_msh(
             str(self.mesh_file),
-            MPI.COMM_WORLD,
+            mpi_comm_world(),
             rank=0,
             gdim=self.gdim,
         )

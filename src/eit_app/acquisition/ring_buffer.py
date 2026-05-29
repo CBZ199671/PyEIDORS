@@ -75,13 +75,17 @@ class FrameRingBuffer:
         offset = HEADER_SIZE + slot * self._slot_size
 
         buf = self._shm.buf
-        real_bytes = np.asarray(real, dtype=np.float64).tobytes()
-        imag_bytes = np.asarray(imag, dtype=np.float64).tobytes()
         n = self._n_meas * 8
 
-        buf[offset : offset + n] = real_bytes
+        real_slot = np.frombuffer(
+            buf, dtype=np.float64, count=self._n_meas, offset=offset
+        )
+        np.copyto(real_slot, self._frame_component(real, name="real"), casting="safe")
         offset += n
-        buf[offset : offset + n] = imag_bytes
+        imag_slot = np.frombuffer(
+            buf, dtype=np.float64, count=self._n_meas, offset=offset
+        )
+        np.copyto(imag_slot, self._frame_component(imag, name="imag"), casting="safe")
         offset += n
         struct.pack_into("<d", buf, offset, timestamp)
         offset += 8
@@ -119,15 +123,27 @@ class FrameRingBuffer:
         n = self._n_meas * 8
         buf = self._shm.buf
 
-        real = np.frombuffer(bytes(buf[offset : offset + n]), dtype=np.float64).copy()
+        real = np.frombuffer(
+            buf, dtype=np.float64, count=self._n_meas, offset=offset
+        ).copy()
         offset += n
-        imag = np.frombuffer(bytes(buf[offset : offset + n]), dtype=np.float64).copy()
+        imag = np.frombuffer(
+            buf, dtype=np.float64, count=self._n_meas, offset=offset
+        ).copy()
         offset += n
         timestamp = struct.unpack_from("<d", buf, offset)[0]
         offset += 8
         frame_index = struct.unpack_from("<q", buf, offset)[0]
 
         return real, imag, timestamp, frame_index
+
+    def _frame_component(self, value: np.ndarray, *, name: str) -> np.ndarray:
+        array = np.asarray(value).reshape(-1)
+        if array.size != self._n_meas:
+            raise ValueError(
+                f"{name} frame length {array.size} does not match {self._n_meas}."
+            )
+        return array
 
     def close(self) -> None:
         """Close the shared memory handle (does not unlink)."""

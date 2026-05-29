@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import math
 from pathlib import Path
 import subprocess
@@ -8,6 +9,7 @@ import sys
 
 import numpy as np
 
+import pyeidors.data.bucket_domain_audit as bucket_domain_module
 from pyeidors.data.bucket_domain_audit import (
     BUCKET_DOMAIN_AUDIT_FIELDS,
     build_bucket_domain_audit_rows,
@@ -37,6 +39,37 @@ def test_circle_bucket_mesh_is_dense_disk_not_square_clip() -> None:
     assert np.min(bucket.nodes[:, 0]) < -0.99 * bucket.bucket_radius
     assert np.max(bucket.nodes[:, 1]) > 0.99 * bucket.bucket_radius
     assert np.min(bucket.nodes[:, 1]) < -0.99 * bucket.bucket_radius
+
+
+def test_v298_circle_bucket_nodes_direct_fill_without_vstack(monkeypatch) -> None:
+    def _fail_stack(*_args, **_kwargs):
+        raise AssertionError("circle bucket node assembly must direct-fill")
+
+    monkeypatch.setattr(bucket_domain_module.np, "vstack", _fail_stack)
+    monkeypatch.setattr(bucket_domain_module.np, "column_stack", _fail_stack)
+    source = inspect.getsource(bucket_domain_module._circle_nodes)
+    assert "np.vstack" not in source
+    assert "np.column_stack" not in source
+
+    nodes = bucket_domain_module._circle_nodes(radius=1.0, mesh_h=0.25, n_elec=8)
+    assert nodes.ndim == 2
+    assert nodes.shape[1] == 2
+    assert np.max(np.linalg.norm(nodes, axis=1)) <= 1.0 + 1.0e-10
+
+
+def test_v497_bucket_domain_truth_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(bucket_domain_module._sigma_truth_for_cells)
+    node_source = inspect.getsource(bucket_domain_module._circle_nodes)
+    cell_source = inspect.getsource(bucket_domain_module._circle_cells)
+
+    assert "all_finite_values(center)" in source
+    assert "all_finite_values(sigma)" in source
+    assert "np.max(radii, initial=-np.inf)" in node_source
+    assert "np.max(center_radii, initial=-np.inf)" in cell_source
+    assert "np.all(np.isfinite(center))" not in source
+    assert "np.all(np.isfinite(sigma))" not in source
+    assert "np.any(radii > radius + 1e-10)" not in node_source
+    assert "np.any(np.linalg.norm(centers, axis=1) > radius + 1e-10)" not in cell_source
 
 
 def test_circle_bucket_electrodes_are_equal_angle_and_audited() -> None:

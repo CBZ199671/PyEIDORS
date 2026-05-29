@@ -3,14 +3,20 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
+import inspect
 from pathlib import Path
 import time
+from types import SimpleNamespace
 
 import numpy as np
 
-from pyeidors.cache.keys import _normalize, hash_array, hash_path
+import pyeidors.cache.keys as cache_keys_mod
+from pyeidors.cache.keys import _normalize, hash_array, hash_array_payload, hash_path
+from pyeidors.cache.manager import CacheManager
 from pyeidors.cache.store_disk import DiskCacheStore
 from pyeidors.cache.store_process import ProcessCacheStore, estimate_object_size_bytes
+from pyeidors.cache.types import CachePolicy
 
 
 @dataclass(frozen=True)
@@ -59,6 +65,59 @@ def test_normalize_and_hash_helpers_cover_special_types(tmp_path: Path):
     assert hash_array(arr64) != hash_array(arr32)
 
 
+def test_cache_hash_helpers_stream_payloads_without_legacy_full_copy(tmp_path: Path):
+    arr = np.arange(48, dtype=np.float64).reshape(6, 8)[:, ::2]
+    arr_c = np.ascontiguousarray(arr)
+    legacy_array_payload = f"{arr_c.dtype}:{arr_c.shape}:".encode("utf-8")
+    expected_array_hash = hashlib.sha256(
+        legacy_array_payload + arr_c.tobytes()
+    ).hexdigest()
+    expected_content_hash = hashlib.sha256(arr.tobytes()).hexdigest()
+    expected_prefixed_hash = hashlib.sha256(b"prefix\0" + arr_c.tobytes()).hexdigest()
+
+    assert hash_array(arr) == expected_array_hash
+    assert _normalize(arr)["sha256"] == expected_content_hash
+    assert hash_array_payload(arr) == expected_content_hash
+    assert hash_array_payload(arr, prefix=b"prefix\0") == expected_prefixed_hash
+    assert ".tobytes(" not in inspect.getsource(hash_array)
+    assert ".tobytes(" not in inspect.getsource(hash_array_payload)
+
+    payload_path = tmp_path / "large-ish.bin"
+    payload_path.write_bytes((b"abcdef0123456789" * 1024) + b"tail")
+    stat = payload_path.stat()
+    content_hash = hashlib.sha256(payload_path.read_bytes()).hexdigest()
+    legacy_path_payload = (
+        f"{payload_path.resolve()}::{stat.st_size}::{stat.st_mtime_ns}::{content_hash}"
+    ).encode("utf-8")
+
+    assert hash_path(payload_path) == hashlib.sha256(legacy_path_payload).hexdigest()
+    assert ".read_bytes(" not in inspect.getsource(hash_path)
+
+
+def test_v571_cache_hash_helpers_chunk_noncontiguous_numeric_views(monkeypatch):
+    base = np.arange(2048 * 64, dtype=np.float32).reshape(2048, 64)
+    view = base[::2, ::2]
+    full_contiguous = np.ascontiguousarray(view)
+    expected = hashlib.sha256(full_contiguous.tobytes()).hexdigest()
+    copied_nbytes: list[int] = []
+    real_ascontiguousarray = cache_keys_mod.np.ascontiguousarray
+
+    def _tracking_ascontiguousarray(value, *args, **kwargs):
+        copied_nbytes.append(int(np.asarray(value).nbytes))
+        return real_ascontiguousarray(value, *args, **kwargs)
+
+    monkeypatch.setattr(cache_keys_mod, "_HASH_CHUNK_BYTES", 4096)
+    monkeypatch.setattr(
+        cache_keys_mod.np,
+        "ascontiguousarray",
+        _tracking_ascontiguousarray,
+    )
+
+    assert hash_array_payload(view) == expected
+    assert copied_nbytes
+    assert max(copied_nbytes) < full_contiguous.nbytes
+
+
 def test_estimate_object_size_and_process_store_eviction():
     class _Unpicklable:
         def __getstate__(self):
@@ -91,6 +150,77 @@ def test_estimate_object_size_and_process_store_eviction():
     assert store2.get("beta-1") == [7]
     store2.clear()
     assert store2.stats()["items"] == 0
+
+
+def test_process_store_size_estimate_avoids_pickle_for_array_backed_objects(
+    monkeypatch,
+) -> None:
+    from scipy import sparse
+
+    import pyeidors.cache.store_process as store_process
+
+    _ = monkeypatch
+    assert "pickle.dumps" not in inspect.getsource(
+        store_process._estimate_object_size_bytes
+    )
+    arr = np.arange(128, dtype=np.float64)
+    wrapped = SimpleNamespace(arr=arr, label="wrapped")
+    csr = sparse.eye(16, dtype=np.float64, format="csr")
+
+    assert estimate_object_size_bytes(wrapped) >= arr.nbytes
+    assert estimate_object_size_bytes(csr) >= (
+        csr.data.nbytes + csr.indices.nbytes + csr.indptr.nbytes
+    )
+
+    cyclic: list[object] = []
+    cyclic.append(cyclic)
+    assert estimate_object_size_bytes(cyclic) >= 96
+
+
+def test_process_store_admission_rejects_oversize_and_immediate_eviction():
+    store = ProcessCacheStore(max_bytes=256)
+    assert store.put("hot-a", b"a" * 120, artifact="jacobian", cost=1.0, priority=100)
+    assert store.put("hot-b", b"b" * 100, artifact="jacobian", cost=1.0, priority=100)
+
+    assert not store.put("cold", b"c" * 80, artifact="jacobian", cost=1.0)
+    assert store.get("cold") is None
+    assert store.get("hot-a") == b"a" * 120
+    assert store.get("hot-b") == b"b" * 100
+
+    stats = store.stats()
+    assert stats["admission_rejections"] == 1
+    assert stats["admission_rejected_bytes"] == 80
+    assert stats["admission_rejection_reasons"] == {"would_evict_immediately": 1}
+
+    assert not store.put("huge", b"x" * 512, artifact="jacobian", cost=1000.0)
+    assert store.get("huge") is None
+    stats = store.stats()
+    assert stats["admission_rejections"] == 2
+    assert stats["admission_rejection_reasons"]["entry_too_large"] == 1
+
+
+def test_cache_manager_exposes_process_admission_rejection_stats(tmp_path: Path):
+    manager = CacheManager(
+        scope="process",
+        cache_dir=tmp_path / "cache",
+        policy=CachePolicy(process_max_bytes=128),
+        code_fingerprint="admission-test",
+    )
+
+    value, lookup = manager.get_or_compute(
+        artifact="jacobian",
+        payload={"case": "oversize"},
+        compute_fn=lambda: b"x" * 256,
+        persist=False,
+    )
+
+    assert value == b"x" * 256
+    assert lookup.layer == "compute"
+    stats = manager.stats()
+    assert stats["process_items"] == 0
+    assert stats["process_admission_rejections"] == 1
+    assert stats["process_admission_rejected_bytes"] == 256
+    assert stats["process_admission_rejection_reasons"] == {"entry_too_large": 1}
 
 
 def test_disk_store_ttl_invalidate_and_corruption_recovery(tmp_path: Path):
@@ -130,3 +260,36 @@ def test_disk_store_size_zero_evicts_everything(tmp_path: Path):
     assert store.put("a", np.arange(10), artifact="jacobian", cost=1.0)
     assert store.stats()["items"] == 0
     assert store.get("a") is None
+
+
+def test_disk_store_streams_pickle_payloads_without_whole_file_bytes(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    def _fail_read_bytes(self):  # noqa: ANN001
+        raise AssertionError(f"unexpected whole-file read: {self}")
+
+    def _fail_write_bytes(self, data):  # noqa: ANN001
+        del data
+        raise AssertionError(f"unexpected whole-file write: {self}")
+
+    monkeypatch.setattr(Path, "read_bytes", _fail_read_bytes)
+    monkeypatch.setattr(Path, "write_bytes", _fail_write_bytes)
+    store = DiskCacheStore(
+        tmp_path / "streaming-disk-cache",
+        max_bytes=8 * 1024**2,
+        compress_payloads=True,
+    )
+    payload = {"arr": np.arange(2048, dtype=np.float64), "label": "stream"}
+
+    assert store.put("stream-key", payload, artifact="jacobian", cost=1.0)
+    restored = store.get("stream-key")
+    restored_by_value = store.get_value("stream-key")
+
+    assert restored["label"] == "stream"
+    np.testing.assert_allclose(restored["arr"], payload["arr"])
+    np.testing.assert_allclose(restored_by_value["arr"], payload["arr"])
+    assert "pickle.dumps" not in inspect.getsource(DiskCacheStore)
+    assert ".read_bytes(" not in inspect.getsource(DiskCacheStore.get)
+    assert ".read_bytes(" not in inspect.getsource(DiskCacheStore.get_value)
+    assert ".write_bytes(" not in inspect.getsource(DiskCacheStore.put)

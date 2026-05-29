@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -334,6 +335,36 @@ def test_electrode_matrix_petsc_helpers_cover_none_cache_and_full_expansion(
     )
 
 
+def test_v417_electrode_coupling_nonzero_arrays_direct_fill():
+    indices, values = forward_module._nonzero_index_value_arrays(
+        np.array([0.0, 2.0, np.nan, 0.0, -3.0], dtype=np.float64)
+    )
+
+    np.testing.assert_array_equal(indices, np.array([1, 2, 4], dtype=np.int32))
+    np.testing.assert_allclose(
+        values,
+        np.array([2.0, np.nan, -3.0], dtype=np.float64),
+        equal_nan=True,
+    )
+    complex_indices, complex_values = forward_module._nonzero_index_value_arrays(
+        np.array([0.0 + 0.0j, 1.0 - 2.0j], dtype=np.complex128)
+    )
+    np.testing.assert_array_equal(complex_indices, np.array([1], dtype=np.int32))
+    np.testing.assert_allclose(
+        complex_values,
+        np.array([1.0 - 2.0j], dtype=np.complex128),
+    )
+
+    helper_source = inspect.getsource(forward_module._nonzero_index_value_arrays)
+    assemble_source = inspect.getsource(
+        EITForwardModel._assemble_electrode_matrix_petsc
+    )
+    assert "np.flatnonzero" not in assemble_source
+    assert "c_i[nz]" not in assemble_source
+    assert "np.nditer" in helper_source
+    assert "out_values = np.empty" in helper_source
+
+
 def test_electrode_matrix_petsc_helpers_cover_destroy_and_ground_value_exceptions(
     monkeypatch: pytest.MonkeyPatch,
 ):
@@ -414,7 +445,8 @@ def test_create_full_matrix_petsc_predict_payload_and_scipy_solver_cover_branche
     out_gpu = EITForwardModel._create_full_matrix_petsc(model, sigma=None)
     assert out_gpu is gpu_mat
     assert (
-        model.get_backend_diagnostics()["gpu_constraint_strategy"] == "electrode-zero"
+        model.get_backend_diagnostics()["gpu_constraint_strategy"]
+        == "reference-electrode-row"
     )
 
     model._petsc_backend_info = {"petsc_device_effective": "cpu", "capability": {}}

@@ -9,7 +9,36 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 from .gauss_newton_runtime import _solve_linear_system_fast
+
+
+def _dense_matrix_is_effectively_diagonal(
+    matrix: np.ndarray,
+    *,
+    atol: float = 1e-14,
+    chunk_size: int = 65536,
+) -> bool:
+    dense = np.asarray(matrix)
+    if dense.ndim != 2 or dense.shape[0] != dense.shape[1]:
+        return False
+    n = int(dense.shape[0])
+    if n <= 1:
+        return True
+    block_size = max(1, min(int(chunk_size), n))
+    work = np.empty(block_size, dtype=np.float64)
+    for row_idx in range(n):
+        row = dense[row_idx]
+        for segment in (row[:row_idx], row[row_idx + 1 :]):
+            for start in range(0, int(segment.size), block_size):
+                stop = min(start + block_size, int(segment.size))
+                chunk = segment[start:stop]
+                abs_chunk = work[: chunk.size]
+                np.abs(chunk, out=abs_chunk)
+                if float(np.max(abs_chunk, initial=0.0)) > float(atol):
+                    return False
+    return True
 
 
 @dataclass(frozen=True)
@@ -58,11 +87,27 @@ def solve_matrix_free_gn_step(
     alpha_value = _nonnegative_float(alpha, name="alpha")
     damping_value = _nonnegative_float(damping, name="damping")
 
-    residual_vec = _as_vector(residual, name="residual")
+    value_dtype = _complex_preserving_dtype(
+        _dtype_hint(jacobian),
+        residual,
+        current,
+        prior,
+    )
+    residual_vec = _as_vector(residual, name="residual", dtype=value_dtype)
     n_measurements = residual_vec.size
     n_parameters = _infer_n_parameters(jacobian)
-    current_vec = _optional_vector(current, n_parameters=n_parameters, name="current")
-    prior_vec = _optional_vector(prior, n_parameters=n_parameters, name="prior")
+    current_vec = _optional_vector(
+        current,
+        n_parameters=n_parameters,
+        name="current",
+        dtype=value_dtype,
+    )
+    prior_vec = _optional_vector(
+        prior,
+        n_parameters=n_parameters,
+        name="prior",
+        dtype=value_dtype,
+    )
     current_minus_prior = current_vec - prior_vec
 
     reg_base = _as_regularization(regularization, n_parameters=n_parameters)
@@ -119,11 +164,49 @@ def solve_matrix_free_gn_step(
         }
     )
     return MatrixFreeGNStepResult(
-        delta=np.asarray(delta, dtype=np.float64).reshape(-1),
+        delta=np.asarray(delta, dtype=_complex_preserving_dtype(delta)).reshape(-1),
         delta_norm=float(delta_norm),
         jtr_norm=float(jtr_norm),
         metadata=MappingProxyType(metadata),
     )
+
+
+def _dtype_hint(value: Any) -> np.dtype | None:
+    dtype = getattr(value, "dtype", None)
+    if dtype is not None:
+        try:
+            return np.dtype(dtype)
+        except TypeError:
+            return None
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        return None
+    return arr.dtype
+
+
+def _complex_preserving_dtype(*values: Any) -> np.dtype:
+    dtypes: list[np.dtype] = []
+    for value in values:
+        if value is None:
+            continue
+        if isinstance(value, (np.dtype, type)):
+            try:
+                dtypes.append(np.dtype(value))
+            except TypeError:
+                pass
+            continue
+        dtype = _dtype_hint(value)
+        if dtype is not None:
+            dtypes.append(dtype)
+    complex_dtypes = [
+        dtype for dtype in dtypes if np.issubdtype(dtype, np.complexfloating)
+    ]
+    if complex_dtypes:
+        if any(dtype != np.dtype(np.complex64) for dtype in complex_dtypes):
+            return np.dtype(np.complex128)
+        return np.dtype(np.complex64)
+    return np.dtype(np.float64)
 
 
 def _nonnegative_float(value: float, *, name: str) -> float:
@@ -133,19 +216,26 @@ def _nonnegative_float(value: float, *, name: str) -> float:
     return out
 
 
-def _as_vector(values: Any, *, name: str) -> np.ndarray:
-    vector = np.asarray(values, dtype=np.float64).reshape(-1)
+def _as_vector(values: Any, *, name: str, dtype: np.dtype | None = None) -> np.ndarray:
+    resolved_dtype = _complex_preserving_dtype(values) if dtype is None else dtype
+    vector = np.asarray(values, dtype=resolved_dtype).reshape(-1)
     if vector.size == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
-    return np.ascontiguousarray(vector, dtype=np.float64)
+    return np.ascontiguousarray(vector, dtype=resolved_dtype)
 
 
-def _optional_vector(values: Any | None, *, n_parameters: int, name: str) -> np.ndarray:
+def _optional_vector(
+    values: Any | None,
+    *,
+    n_parameters: int,
+    name: str,
+    dtype: np.dtype,
+) -> np.ndarray:
     if values is None:
-        return np.zeros(int(n_parameters), dtype=np.float64)
-    vector = _as_vector(values, name=name)
+        return np.zeros(int(n_parameters), dtype=dtype)
+    vector = _as_vector(values, name=name, dtype=dtype)
     if vector.size != int(n_parameters):
         raise ValueError(f"{name} length {vector.size} does not match {n_parameters}.")
     return vector
@@ -184,7 +274,7 @@ def _as_regularization(
             matrix = sparse.csr_matrix(array, dtype=np.float64)
     if matrix.shape != (n, n):
         raise ValueError(f"regularization shape {matrix.shape} != {(n, n)}.")
-    if not np.isfinite(matrix.data).all():
+    if matrix.nnz and not all_finite_values(matrix.data):
         raise FloatingPointError("regularization contains non-finite values.")
     return matrix
 
@@ -213,19 +303,16 @@ def _effective_current_for_existing_solver(
 ) -> np.ndarray:
     """Map ``alpha R m`` onto existing solver's ``R_eff @ de_current`` slot."""
 
+    dtype = _complex_preserving_dtype(current_minus_prior)
     target = np.asarray(
-        float(alpha) * (base @ current_minus_prior), dtype=np.float64
+        float(alpha) * (base @ current_minus_prior), dtype=dtype
     ).reshape(-1)
     if np.linalg.norm(target) <= np.finfo(np.float64).eps:
         return np.zeros_like(target)
     try:
-        return np.asarray(
-            sparse.linalg.spsolve(effective.tocsc(), target), dtype=np.float64
-        )
+        return np.asarray(sparse.linalg.spsolve(effective.tocsc(), target), dtype=dtype)
     except Exception:
-        return np.asarray(
-            np.linalg.pinv(effective.toarray()) @ target, dtype=np.float64
-        )
+        return np.asarray(np.linalg.pinv(effective.toarray()) @ target, dtype=dtype)
 
 
 def _sqrt_measurement_weights(
@@ -240,11 +327,11 @@ def _sqrt_measurement_weights(
         diag = weights.reshape(-1)
         kind = "diagonal"
     elif weights.ndim == 2 and weights.shape == (n_measurements, n_measurements):
-        if not np.allclose(weights, np.diag(np.diag(weights)), rtol=1e-12, atol=1e-14):
+        if not _dense_matrix_is_effectively_diagonal(weights, atol=1e-14):
             raise NotImplementedError(
                 "Full measurement covariance is phase-2+; pass diagonal precision weights."
             )
-        diag = np.diag(weights)
+        diag = np.asarray(weights.diagonal(), dtype=np.float64)
         kind = "diagonal-matrix"
     else:
         raise ValueError(
@@ -254,9 +341,9 @@ def _sqrt_measurement_weights(
         raise ValueError(
             f"measurement_weights length {diag.size} does not match {n_measurements}."
         )
-    if not np.isfinite(diag).all():
+    if not all_finite_values(diag):
         raise FloatingPointError("measurement_weights contain non-finite values.")
-    if np.any(diag < 0.0):
+    if float(np.min(diag, initial=np.inf)) < 0.0:
         raise ValueError("measurement_weights must be non-negative precision weights.")
     return np.sqrt(diag).astype(np.float64), kind
 

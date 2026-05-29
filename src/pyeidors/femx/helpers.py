@@ -10,6 +10,7 @@ from dolfinx.mesh import Mesh, MeshTags
 import ufl
 
 from ..data.structures import EITMesh
+from ..utils.numeric_ops import squared_distances_to_point
 
 
 def mesh_coordinates(mesh: Mesh) -> np.ndarray:
@@ -47,10 +48,9 @@ def mesh_cell_vertices(mesh: Mesh) -> np.ndarray:
         return np.empty((0, 0), dtype=np.int32)
 
     verts_per_cell = len(connectivity.links(0))
-    data = np.array(
-        [connectivity.links(cell) for cell in range(num_cells)],
-        dtype=np.int32,
-    ).reshape(num_cells, verts_per_cell)
+    data = np.empty((num_cells, verts_per_cell), dtype=np.int32)
+    for cell_idx in range(num_cells):
+        data[cell_idx] = np.asarray(connectivity.links(cell_idx), dtype=np.int32)
     return data
 
 
@@ -71,10 +71,9 @@ def mesh_facet_vertices(mesh: Mesh) -> np.ndarray:
         return np.empty((0, 0), dtype=np.int32)
 
     verts_per_facet = len(connectivity.links(0))
-    data = np.array(
-        [connectivity.links(facet) for facet in range(num_facets)],
-        dtype=np.int32,
-    ).reshape(num_facets, verts_per_facet)
+    data = np.empty((num_facets, verts_per_facet), dtype=np.int32)
+    for facet_idx in range(num_facets):
+        data[facet_idx] = np.asarray(connectivity.links(facet_idx), dtype=np.int32)
     return data
 
 
@@ -84,7 +83,12 @@ def cell_midpoints(mesh: Mesh) -> np.ndarray:
     c2v = mesh_cell_vertices(mesh)
     if c2v.size == 0:
         return np.empty((0, mesh.geometry.dim), dtype=coords.dtype)
-    return coords[c2v].mean(axis=1)
+    dim = int(mesh.geometry.dim)
+    midpoints = np.zeros((c2v.shape[0], dim), dtype=coords.dtype)
+    for local_vertex in range(c2v.shape[1]):
+        midpoints += coords[c2v[:, local_vertex], :dim]
+    midpoints /= float(c2v.shape[1])
+    return np.ascontiguousarray(midpoints, dtype=coords.dtype)
 
 
 def estimate_radius(mesh: Mesh) -> float:
@@ -92,7 +96,8 @@ def estimate_radius(mesh: Mesh) -> float:
     if coords.size == 0:
         return 0.0
     center = coords.mean(axis=0)
-    return float(np.linalg.norm(coords - center, axis=1).max())
+    distances2 = squared_distances_to_point(coords, center, ndim=coords.shape[1])
+    return float(np.sqrt(float(np.max(distances2))))
 
 
 def build_eit_mesh(

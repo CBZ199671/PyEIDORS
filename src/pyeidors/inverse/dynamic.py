@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 import warnings
 
 import numpy as np
@@ -27,6 +27,41 @@ from pyeidors.inverse.reconstruction_matrix import (
 SPATIOTEMPORAL_GN_SCHEMA = "pyeidors-spatiotemporal-gn-v1"
 SPATIOTEMPORAL_TV_HUBER_SCHEMA = "pyeidors-spatiotemporal-tv-huber-v1"
 DYNAMIC_KALMAN_SCHEMA = "pyeidors-dynamic-kalman-fixed-lag-v1"
+
+
+def _all_finite_values(values: np.ndarray, *, chunk_size: int = 65536) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return True
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size, dtype=bool)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        count = stop - start
+        work_view = work[:count]
+        np.isfinite(arr[start:stop], out=work_view)
+        if not bool(work_view.all()):
+            return False
+    return True
+
+
+def _dense_identity(n: int, *, scale: float = 1.0) -> np.ndarray:
+    """Build a dense scaled identity without an intermediate identity product."""
+
+    size = int(n)
+    matrix = np.zeros((size, size), dtype=np.float64)
+    if size > 0 and float(scale) != 0.0:
+        matrix.reshape(-1)[:: size + 1] = float(scale)
+    return matrix
+
+
+def _dense_diagonal(values: Any) -> np.ndarray:
+    diagonal = np.asarray(values, dtype=np.float64).reshape(-1)
+    size = int(diagonal.size)
+    matrix = np.zeros((size, size), dtype=np.float64)
+    if size > 0:
+        matrix.reshape(-1)[:: size + 1] = diagonal
+    return matrix
 
 
 @dataclass(frozen=True)
@@ -84,6 +119,30 @@ class DynamicKalmanResult:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.smoothed, dtype=dtype)
+
+
+def _stack_row_vectors_direct(
+    rows: Sequence[Any],
+    *,
+    dtype: Any = np.float64,
+    name: str = "rows",
+) -> np.ndarray:
+    """Build a 2D frame-by-state matrix without retaining a vstack temporary."""
+
+    if not rows:
+        raise ValueError(f"{name} must contain at least one row.")
+    resolved_dtype = np.dtype(dtype)
+    first = np.asarray(rows[0], dtype=resolved_dtype).reshape(-1)
+    out = np.empty((len(rows), first.size), dtype=resolved_dtype)
+    out[0, :] = first
+    for row_idx in range(1, len(rows)):
+        row = np.asarray(rows[row_idx], dtype=resolved_dtype).reshape(-1)
+        if row.size != first.size:
+            raise ValueError(
+                f"{name} row {row_idx} length {row.size} does not match {first.size}."
+            )
+        out[row_idx, :] = row
+    return np.ascontiguousarray(out, dtype=resolved_dtype)
 
 
 def temporal_difference_operator(n_frames: int, *, order: int = 1) -> sparse.csr_matrix:
@@ -168,7 +227,7 @@ def solve_batch_spatiotemporal_gn(
     dt = temporal_difference_operator(n_frames, order=temporal_order)
 
     frame_normals: list[sparse.csr_matrix] = []
-    rhs_blocks: list[np.ndarray] = []
+    rhs = np.empty(n_frames * n_parameters, dtype=np.float64)
     weight_kinds: list[str] = []
     bad_counts: list[int] = []
     for frame_idx in range(n_frames):
@@ -195,7 +254,11 @@ def solve_batch_spatiotemporal_gn(
             measurement_weights=weights_t,
         )
         frame_normals.append(sparse.csr_matrix(weighted_j.T @ weighted_j))
-        rhs_blocks.append(np.asarray(weighted_j.T @ weighted_y, dtype=np.float64))
+        rhs_start = frame_idx * n_parameters
+        rhs[rhs_start : rhs_start + n_parameters] = np.asarray(
+            weighted_j.T @ weighted_y,
+            dtype=np.float64,
+        ).reshape(-1)
         weight_kinds.append(contract.weight_kind)
         bad_counts.append(contract.bad_channel_count)
 
@@ -214,7 +277,6 @@ def solve_batch_spatiotemporal_gn(
             format="csr",
         )
     normal = normal.tocsr()
-    rhs = np.concatenate(rhs_blocks).astype(np.float64, copy=False)
     solution, solver_used = _solve_block_system(normal, rhs, solver=solver)
     values = np.ascontiguousarray(solution.reshape(n_frames, n_parameters))
 
@@ -350,7 +412,13 @@ def solve_spatiotemporal_tv_huber(
         measurement_weights=resolved_weights,
     )
     data_normal = sparse.block_diag(frame_normals, format="csr")
-    rhs = np.concatenate(rhs_blocks).astype(np.float64, copy=False)
+    rhs = np.empty(n_frames * n_parameters, dtype=np.float64)
+    for frame_idx, rhs_block in enumerate(rhs_blocks):
+        rhs_start = frame_idx * n_parameters
+        rhs[rhs_start : rhs_start + n_parameters] = np.asarray(
+            rhs_block,
+            dtype=np.float64,
+        ).reshape(-1)
 
     l2 = solve_batch_spatiotemporal_gn(
         jac_stack,
@@ -561,7 +629,7 @@ def run_dynamic_kalman_filter(
     measurement_noise_sources: list[str] = []
     x_prev = initial
     p_prev = initial_cov
-    identity_state = np.eye(n_state, dtype=np.float64)
+    identity_state = _dense_identity(n_state)
     for frame_idx in range(n_frames):
         q_t, q_source = _resolve_kalman_noise(
             process_noise,
@@ -591,9 +659,9 @@ def run_dynamic_kalman_filter(
         kalman_gain = _kalman_gain(p_pred, h_t, innovation_cov)
         x_filt = x_pred + kalman_gain @ innovation
         kh = kalman_gain @ h_t
-        p_filt = (identity_state - kh) @ p_pred @ (
-            identity_state - kh
-        ).T + kalman_gain @ r_t @ kalman_gain.T
+        i_minus_kh = identity_state.copy()
+        np.subtract(i_minus_kh, kh, out=i_minus_kh)
+        p_filt = i_minus_kh @ p_pred @ i_minus_kh.T + kalman_gain @ r_t @ kalman_gain.T
         predicted_states.append(np.ascontiguousarray(x_pred, dtype=np.float64))
         predicted_covs.append(_symmetrize(p_pred))
         filtered_states.append(np.ascontiguousarray(x_filt, dtype=np.float64))
@@ -605,8 +673,16 @@ def run_dynamic_kalman_filter(
         x_prev = x_filt
         p_prev = _symmetrize(p_filt)
 
-    predicted = np.ascontiguousarray(np.vstack(predicted_states), dtype=np.float64)
-    filtered = np.ascontiguousarray(np.vstack(filtered_states), dtype=np.float64)
+    predicted = _stack_row_vectors_direct(
+        predicted_states,
+        dtype=np.float64,
+        name="predicted_states",
+    )
+    filtered = _stack_row_vectors_direct(
+        filtered_states,
+        dtype=np.float64,
+        name="filtered_states",
+    )
     smoothed, smoother_meta = _fixed_lag_smoother(
         filtered_states,
         filtered_covs,
@@ -762,7 +838,7 @@ def _as_sparse_difference(
         raise ValueError(
             f"{name} column count {matrix.shape[1]} does not match {n_parameters}."
         )
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    if matrix.nnz and not _all_finite_values(matrix.data):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return matrix.tocsr()
 
@@ -795,17 +871,26 @@ def _restrict_difference_rows_to_roi(
     matrix: sparse.csr_matrix,
     roi_mask: np.ndarray,
 ) -> sparse.csr_matrix:
-    if bool(np.all(roi_mask)):
+    roi = np.asarray(roi_mask, dtype=bool).reshape(-1)
+    if bool(np.all(roi)):
         return matrix.tocsr()
     csr = matrix.tocsr()
     keep: list[int] = []
     for row in range(csr.shape[0]):
         cols = csr.indices[csr.indptr[row] : csr.indptr[row + 1]]
-        if cols.size and bool(np.all(roi_mask[cols])):
+        if cols.size and _all_mask_indices_enabled(roi, cols):
             keep.append(row)
     if not keep:
         return sparse.csr_matrix((0, csr.shape[1]), dtype=np.float64)
     return csr[keep, :].tocsr()
+
+
+def _all_mask_indices_enabled(mask: np.ndarray, indices: np.ndarray) -> bool:
+    values = np.asarray(mask, dtype=bool).reshape(-1)
+    for raw_idx in np.asarray(indices).reshape(-1):
+        if not bool(values[int(raw_idx)]):
+            return False
+    return True
 
 
 def _spatial_robust_normal(
@@ -860,8 +945,19 @@ def _temporal_robust_normal(
         huber_delta=huber_delta,
         epsilon=epsilon,
     )
-    weights[:, ~roi_mask] = 0.0
-    return _temporal_weighted_normal(dt, weights), _weight_range(weights[:, roi_mask])
+    roi_all = bool(np.all(roi_mask))
+    if not roi_all:
+        _zero_non_roi_columns_in_place(weights, roi_mask)
+    return _temporal_weighted_normal(dt, weights), _weight_range(
+        weights,
+        column_mask=None if roi_all else roi_mask,
+    )
+
+
+def _zero_non_roi_columns_in_place(values: np.ndarray, roi_mask: np.ndarray) -> None:
+    for col_idx, enabled in enumerate(np.asarray(roi_mask, dtype=bool).reshape(-1)):
+        if not bool(enabled):
+            values[:, col_idx] = 0.0
 
 
 def _temporal_weighted_normal(
@@ -877,7 +973,7 @@ def _temporal_weighted_normal(
     data: list[float] = []
     for param_idx in range(n_parameters):
         column_weights = weights[:, param_idx]
-        if not np.any(column_weights > 0.0):
+        if not _has_positive_value(column_weights):
             continue
         block = (dt.T @ sparse.diags(column_weights, 0, format="csr") @ dt).tocoo()
         rows.extend((block.row * n_parameters + param_idx).astype(int).tolist())
@@ -887,6 +983,11 @@ def _temporal_weighted_normal(
     return sparse.csr_matrix((data, (rows, cols)), shape=shape, dtype=np.float64)
 
 
+def _has_positive_value(values: np.ndarray) -> bool:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    return bool(arr.size) and float(np.max(arr)) > 0.0
+
+
 def _robust_irls_weights(
     values: np.ndarray,
     *,
@@ -894,10 +995,17 @@ def _robust_irls_weights(
     huber_delta: float,
     epsilon: float,
 ) -> np.ndarray:
-    abs_values = np.sqrt(np.asarray(values, dtype=np.float64) ** 2 + epsilon * epsilon)
+    abs_values = np.array(values, dtype=np.float64, copy=True)
+    np.square(abs_values, out=abs_values)
+    abs_values += epsilon * epsilon
+    np.sqrt(abs_values, out=abs_values)
     if penalty == "tv":
-        return 1.0 / abs_values
-    return np.where(abs_values <= huber_delta, 1.0, huber_delta / abs_values)
+        np.reciprocal(abs_values, out=abs_values)
+        return abs_values
+    weights = np.empty_like(abs_values)
+    np.divide(huber_delta, abs_values, out=weights)
+    np.minimum(weights, 1.0, out=weights)
+    return weights
 
 
 def _robust_penalty_values(
@@ -907,15 +1015,70 @@ def _robust_penalty_values(
     huber_delta: float,
     epsilon: float,
 ) -> np.ndarray:
-    arr = np.asarray(values, dtype=np.float64)
-    abs_values = np.sqrt(arr * arr + epsilon * epsilon)
+    abs_values = np.array(values, dtype=np.float64, copy=True)
+    np.square(abs_values, out=abs_values)
+    abs_values += epsilon * epsilon
+    np.sqrt(abs_values, out=abs_values)
     if penalty == "tv":
         return abs_values
-    return np.where(
-        abs_values <= huber_delta,
-        0.5 * abs_values * abs_values,
-        huber_delta * (abs_values - 0.5 * huber_delta),
-    )
+    quadratic_mask = abs_values <= huber_delta
+    penalty_values = np.empty_like(abs_values)
+    np.multiply(abs_values, huber_delta, out=penalty_values)
+    penalty_values -= 0.5 * huber_delta * huber_delta
+    np.square(abs_values, out=penalty_values, where=quadratic_mask)
+    np.multiply(penalty_values, 0.5, out=penalty_values, where=quadratic_mask)
+    return penalty_values
+
+
+def _robust_penalty_sum(
+    values: np.ndarray,
+    *,
+    penalty: str,
+    huber_delta: float,
+    epsilon: float,
+    column_mask: np.ndarray | None = None,
+) -> float:
+    arr = np.asarray(values)
+    if column_mask is None or arr.ndim != 2:
+        return float(
+            np.sum(
+                _robust_penalty_values(
+                    arr,
+                    penalty=penalty,
+                    huber_delta=huber_delta,
+                    epsilon=epsilon,
+                )
+            )
+        )
+    mask = np.asarray(column_mask, dtype=bool).reshape(-1)
+    if mask.size != arr.shape[1]:
+        raise ValueError("column_mask length must match values columns.")
+    if bool(np.all(mask)):
+        return float(
+            np.sum(
+                _robust_penalty_values(
+                    arr,
+                    penalty=penalty,
+                    huber_delta=huber_delta,
+                    epsilon=epsilon,
+                )
+            )
+        )
+    total = 0.0
+    for column_idx, enabled in enumerate(mask):
+        if not bool(enabled):
+            continue
+        total += float(
+            np.sum(
+                _robust_penalty_values(
+                    arr[:, column_idx],
+                    penalty=penalty,
+                    huber_delta=huber_delta,
+                    epsilon=epsilon,
+                )
+            )
+        )
+    return total
 
 
 def _robust_spatiotemporal_objective(
@@ -952,16 +1115,12 @@ def _robust_spatiotemporal_objective(
     temporal = 0.0
     if dt.shape[0]:
         temporal_diffs = np.asarray(dt @ values)
-        temporal_diffs[:, ~roi_mask] = 0.0
-        temporal = float(
-            np.sum(
-                _robust_penalty_values(
-                    temporal_diffs[:, roi_mask],
-                    penalty=penalty,
-                    huber_delta=huber_delta,
-                    epsilon=epsilon,
-                )
-            )
+        temporal = _robust_penalty_sum(
+            temporal_diffs,
+            penalty=penalty,
+            huber_delta=huber_delta,
+            epsilon=epsilon,
+            column_mask=roi_mask,
         )
     return float(data + lambda_s * lambda_s * spatial + lambda_t * lambda_t * temporal)
 
@@ -980,7 +1139,7 @@ def _initial_dynamic_state(
         raise ValueError(
             f"initial shape {arr.shape} does not match {(n_frames, n_parameters)}."
         )
-    if not np.isfinite(arr).all():
+    if not _all_finite_values(arr):
         raise FloatingPointError("initial contains non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -997,11 +1156,18 @@ def _roi_mask(value: Any | None, *, n_parameters: int) -> np.ndarray:
             )
         return np.ascontiguousarray(mask, dtype=bool)
     indices = arr.astype(np.int64, copy=False).reshape(-1)
-    if np.any((indices < 0) | (indices >= int(n_parameters))):
+    if not _indices_within_range(indices, upper=int(n_parameters)):
         raise ValueError("roi_mask indices are out of range.")
     mask = np.zeros(int(n_parameters), dtype=bool)
     mask[indices] = True
     return mask
+
+
+def _indices_within_range(indices: np.ndarray, *, upper: int) -> bool:
+    values = np.asarray(indices, dtype=np.int64).reshape(-1)
+    if values.size == 0:
+        return True
+    return int(np.min(values)) >= 0 and int(np.max(values)) < int(upper)
 
 
 def _robust_penalty_kind(value: str) -> str:
@@ -1011,12 +1177,64 @@ def _robust_penalty_kind(value: str) -> str:
     return resolved
 
 
-def _weight_range(weights: np.ndarray) -> tuple[float, float]:
+def _weight_range(
+    weights: np.ndarray,
+    *,
+    column_mask: np.ndarray | None = None,
+) -> tuple[float, float]:
+    if column_mask is not None:
+        matrix = np.asarray(weights, dtype=np.float64)
+        if matrix.ndim != 2:
+            raise ValueError("column_mask requires 2D weights.")
+        mask = np.asarray(column_mask, dtype=bool).reshape(-1)
+        if mask.size != matrix.shape[1]:
+            raise ValueError("column_mask length must match weights columns.")
+        if not bool(np.all(mask)):
+            return _positive_range_masked_columns(matrix, mask)
     arr = np.asarray(weights, dtype=np.float64).reshape(-1)
-    positive = arr[arr > 0.0]
-    if positive.size == 0:
+    min_val = np.inf
+    max_val = 0.0
+    count = 0
+    for raw_value in np.nditer(arr, flags=["refs_ok"], op_flags=["readonly"]):
+        value = float(raw_value)
+        if value <= 0.0:
+            continue
+        count += 1
+        if value < min_val:
+            min_val = value
+        if value > max_val:
+            max_val = value
+    if count == 0:
         return (0.0, 0.0)
-    return (float(np.min(positive)), float(np.max(positive)))
+    return (float(min_val), float(max_val))
+
+
+def _positive_range_masked_columns(
+    weights: np.ndarray,
+    column_mask: np.ndarray,
+) -> tuple[float, float]:
+    min_val = np.inf
+    max_val = 0.0
+    count = 0
+    for column_idx, enabled in enumerate(column_mask):
+        if not bool(enabled):
+            continue
+        for raw_value in np.nditer(
+            weights[:, column_idx],
+            flags=["refs_ok"],
+            op_flags=["readonly"],
+        ):
+            value = float(raw_value)
+            if value <= 0.0:
+                continue
+            count += 1
+            if value < min_val:
+                min_val = value
+            if value > max_val:
+                max_val = value
+    if count == 0:
+        return (0.0, 0.0)
+    return (float(min_val), float(max_val))
 
 
 def _resolve_residuals(
@@ -1093,8 +1311,13 @@ def _kalman_observations(
             )
             for idx in range(n_frames)
         ]
-        projected = np.ascontiguousarray(np.vstack(projected_rows), dtype=np.float64)
-        h_stack = [np.eye(rm.shape[0], dtype=np.float64) for _ in range(n_frames)]
+        projected = _stack_row_vectors_direct(
+            projected_rows,
+            dtype=np.float64,
+            name="projected_rows",
+        )
+        identity_observation = _dense_identity(rm.shape[0])
+        h_stack = [identity_observation] * n_frames
         return projected, h_stack, ["state_observation"] * n_frames, [0] * n_frames
 
     h_raw_stack, _ = _as_jacobian_stack(
@@ -1134,7 +1357,11 @@ def _kalman_observations(
         contract_kinds.append(contract.weight_kind)
         bad_counts.append(contract.bad_channel_count)
     return (
-        np.ascontiguousarray(np.vstack(projected_rows), dtype=np.float64),
+        _stack_row_vectors_direct(
+            projected_rows,
+            dtype=np.float64,
+            name="projected_rows",
+        ),
         h_stack,
         contract_kinds,
         bad_counts,
@@ -1152,21 +1379,21 @@ def _rm_matrix(value: Any, *, n_measurements: int) -> np.ndarray:
         raise ValueError(
             f"RM column count {matrix.shape[1]} does not match observation length {n_measurements}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("RM observation model contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
 
 def _transition_matrix(value: Any | None, *, n_state: int) -> np.ndarray:
     if value is None:
-        matrix = np.eye(n_state, dtype=np.float64)
+        matrix = _dense_identity(n_state)
     else:
         matrix = np.asarray(value, dtype=np.float64)
     if matrix.shape != (n_state, n_state):
         raise ValueError(
             f"transition shape {matrix.shape} does not match {(n_state, n_state)}."
         )
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError("transition contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
@@ -1177,7 +1404,7 @@ def _kalman_initial_state(value: Any | None, *, n_state: int) -> np.ndarray:
     arr = np.asarray(value, dtype=np.float64).reshape(-1)
     if arr.size != int(n_state):
         raise ValueError(f"initial_state length {arr.size} does not match {n_state}.")
-    if not np.isfinite(arr).all():
+    if not _all_finite_values(arr):
         raise FloatingPointError("initial_state contains non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -1190,7 +1417,7 @@ def _kalman_covariance(
     default_scale: float,
 ) -> np.ndarray:
     if value is None:
-        matrix = float(default_scale) * np.eye(n, dtype=np.float64)
+        matrix = _dense_identity(n, scale=float(default_scale))
     else:
         matrix = _covariance_matrix(value, n=n, name=name)
     return matrix
@@ -1220,7 +1447,7 @@ def _resolve_kalman_noise(
         )
         return _covariance_matrix(raw, n=n, name=name), "hook"
     if value is None:
-        return default_scale * np.eye(n, dtype=np.float64), "default"
+        return _dense_identity(n, scale=float(default_scale)), "default"
     return _frame_covariance(value, frame_idx=frame_idx, n=n, name=name), "provided"
 
 
@@ -1253,7 +1480,7 @@ def _resolve_measurement_noise(
             "hook",
         )
     if value is None:
-        return default_scale * np.eye(n_observations, dtype=np.float64), "default"
+        return _dense_identity(n_observations, scale=float(default_scale)), "default"
     return (
         _frame_covariance(
             value,
@@ -1289,11 +1516,11 @@ def _frame_covariance(
 def _covariance_matrix(value: Any, *, n: int, name: str) -> np.ndarray:
     arr = np.asarray(value, dtype=np.float64)
     if arr.ndim == 0:
-        matrix = float(arr) * np.eye(n, dtype=np.float64)
+        matrix = _dense_identity(n, scale=float(arr))
     elif arr.ndim == 1:
         if arr.size != int(n):
             raise ValueError(f"{name} diagonal length {arr.size} does not match {n}.")
-        matrix = np.diag(arr)
+        matrix = _dense_diagonal(arr)
     elif arr.ndim == 2:
         if arr.shape != (n, n):
             raise ValueError(
@@ -1302,7 +1529,7 @@ def _covariance_matrix(value: Any, *, n: int, name: str) -> np.ndarray:
         matrix = arr
     else:
         raise ValueError(f"{name} must be scalar, diagonal, or covariance matrix.")
-    if not np.isfinite(matrix).all():
+    if not _all_finite_values(matrix):
         raise FloatingPointError(f"{name} contains non-finite values.")
     if not np.allclose(matrix, matrix.T, rtol=1.0e-10, atol=1.0e-12):
         raise ValueError(f"{name} covariance matrix must be symmetric.")
@@ -1335,7 +1562,11 @@ def _fixed_lag_smoother(
 ) -> tuple[np.ndarray, dict[str, Any]]:
     n_frames = len(filtered_states)
     if fixed_lag <= 0 or n_frames == 0:
-        return np.ascontiguousarray(np.vstack(filtered_states)), {
+        return _stack_row_vectors_direct(
+            filtered_states,
+            dtype=np.float64,
+            name="filtered_states",
+        ), {
             "enabled": False,
             "fixed_lag": int(fixed_lag),
         }
@@ -1362,7 +1593,11 @@ def _fixed_lag_smoother(
         for offset, state in enumerate(x_window):
             smoothed[start + offset] = np.ascontiguousarray(state, dtype=np.float64)
         window_count += 1
-    return np.ascontiguousarray(np.vstack(smoothed), dtype=np.float64), {
+    return _stack_row_vectors_direct(
+        smoothed,
+        dtype=np.float64,
+        name="smoothed_states",
+    ), {
         "enabled": True,
         "fixed_lag": int(fixed_lag),
         "window_count": int(window_count),
@@ -1389,7 +1624,7 @@ def _optional_timestamps(value: Any | None, *, n_frames: int) -> np.ndarray | No
     arr = np.asarray(value, dtype=np.float64).reshape(-1)
     if arr.size != int(n_frames):
         raise ValueError(f"timestamps length {arr.size} does not match {n_frames}.")
-    if not np.isfinite(arr).all():
+    if not _all_finite_values(arr):
         raise FloatingPointError("timestamps contain non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -1468,7 +1703,7 @@ def _jacobian_matrix(value: Any) -> np.ndarray:
     array = np.asarray(raw, dtype=np.float64)
     if array.ndim not in {2, 3} or 0 in array.shape:
         raise ValueError("jacobian must be a non-empty 2D matrix or 3D stack.")
-    if not np.isfinite(array).all():
+    if not _all_finite_values(array):
         raise FloatingPointError("jacobian contains non-finite values.")
     return np.ascontiguousarray(array, dtype=np.float64)
 
@@ -1501,7 +1736,7 @@ def _resolve_spatial_prior(
         raise ValueError(
             f"spatial_prior shape {matrix.shape} does not match {(n_parameters, n_parameters)}."
         )
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    if matrix.nnz and not _all_finite_values(matrix.data):
         raise FloatingPointError("spatial_prior contains non-finite values.")
     return _SpatialPrior(prior=prior, matrix=matrix)
 
@@ -1521,13 +1756,13 @@ def _solve_block_system(
             try:
                 solution = spla.spsolve(normal, rhs)
                 out = np.asarray(solution, dtype=np.float64).reshape(-1)
-                if np.isfinite(out).all():
+                if _all_finite_values(out):
                     return np.ascontiguousarray(out), "spsolve"
             except (spla.MatrixRankWarning, RuntimeError, ValueError):
                 pass
     lsmr = spla.lsmr(normal, rhs)
     out = np.asarray(lsmr[0], dtype=np.float64).reshape(-1)
-    if not np.isfinite(out).all():
+    if not _all_finite_values(out):
         raise FloatingPointError("spatiotemporal GN solve produced non-finite values.")
     return np.ascontiguousarray(out), "lsmr"
 
@@ -1581,7 +1816,11 @@ def _rowwise_rm_baseline(
         )
         solvers.append(str(rm.metadata.get("solver", "")))
         signatures.append(str(rm.metadata.get("RtR_signature_hash", "")))
-    baseline = np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
+    baseline = _stack_row_vectors_direct(
+        rows,
+        dtype=np.float64,
+        name="rowwise_rm_baseline_rows",
+    )
     return baseline, {
         "enabled": True,
         "mode": str(rowwise_rm_mode),
@@ -1611,7 +1850,7 @@ def _frame_batch(values: Any, *, name: str) -> np.ndarray:
         arr = arr.reshape(1, -1)
     if arr.ndim != 2 or 0 in arr.shape:
         raise ValueError(f"{name} must be a non-empty 1D/2D frame array.")
-    if not np.isfinite(arr).all():
+    if not _all_finite_values(arr):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 

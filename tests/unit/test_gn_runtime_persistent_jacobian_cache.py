@@ -18,6 +18,7 @@ This module covers:
 
 from __future__ import annotations
 
+import inspect
 import numpy as np
 import pytest
 from dolfinx import fem
@@ -32,6 +33,7 @@ from pyeidors.inverse.jacobian import (
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.regularization.smoothness import TikhonovRegularization
 from pyeidors.inverse.solvers.gauss_newton import GaussNewtonReconstructor
+from pyeidors.inverse.solvers import gauss_newton_runtime as gn_runtime_module
 
 # Reuse the shared 2D unit-square fixture maker that other forward smoke
 # tests already validate.
@@ -126,6 +128,9 @@ def test_persistent_cache_skips_recompute_on_repeat_run():
     ]
     assert lookup_second.get("hit") is True
     assert counter["calls"] == calls_after_first
+    source = inspect.getsource(gn_runtime_module._calculate_iteration_jacobian)
+    assert "np.array(cached, copy=True)" not in source
+    assert "jacobian = cached" in source
 
 
 def test_persistent_cache_key_tracks_calculator_identity_after_swap():

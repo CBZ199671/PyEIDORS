@@ -10,6 +10,102 @@ from ...data.structures import EITImage
 from ...femx import function_get_array
 
 
+def _max_machine_epsilon_alpha(
+    x: np.ndarray,
+    dx: np.ndarray,
+    *,
+    eps_machine: float,
+    chunk_size: int = 65_536,
+) -> float:
+    """Scan the lower alpha guard without materialising ``abs(x) / abs(dx)``."""
+    x_arr, dx_arr = np.broadcast_arrays(np.asarray(x), np.asarray(dx))
+    x_flat = x_arr.reshape(-1)
+    dx_flat = dx_arr.reshape(-1)
+    if x_flat.size == 0:
+        return 0.0
+
+    block_size = max(1, min(int(chunk_size), x_flat.size))
+    x_abs = np.empty(block_size, dtype=np.float64)
+    dx_abs = np.empty(block_size, dtype=np.float64)
+    alpha_work = np.empty(block_size, dtype=np.float64)
+    finite_mask = np.empty(block_size, dtype=bool)
+    max_alpha = 0.0
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        for start in range(0, x_flat.size, block_size):
+            stop = min(start + block_size, x_flat.size)
+            n_values = stop - start
+            x_abs_chunk = x_abs[:n_values]
+            dx_abs_chunk = dx_abs[:n_values]
+            alpha_chunk = alpha_work[:n_values]
+            finite_chunk = finite_mask[:n_values]
+
+            np.abs(x_flat[start:stop], out=x_abs_chunk)
+            np.abs(dx_flat[start:stop], out=dx_abs_chunk)
+            np.divide(x_abs_chunk, dx_abs_chunk, out=alpha_chunk)
+            np.multiply(alpha_chunk, eps_machine, out=alpha_chunk)
+            np.isfinite(alpha_chunk, out=finite_chunk)
+            np.logical_not(finite_chunk, out=finite_chunk)
+            np.copyto(alpha_chunk, 0.0, where=finite_chunk)
+
+            chunk_max = float(np.max(alpha_chunk))
+            if chunk_max > max_alpha:
+                max_alpha = chunk_max
+
+    return max_alpha
+
+
+def _min_stable_upper_alpha(
+    x: np.ndarray,
+    dx: np.ndarray,
+    *,
+    realmax: float,
+    chunk_size: int = 65_536,
+) -> float:
+    """Scan upper alpha limits without materialising positive/negative arrays."""
+    x_arr, dx_arr = np.broadcast_arrays(np.asarray(x), np.asarray(dx))
+    x_flat = x_arr.reshape(-1)
+    dx_flat = dx_arr.reshape(-1)
+    if x_flat.size == 0:
+        return np.inf
+
+    block_size = max(1, min(int(chunk_size), x_flat.size))
+    alpha_work = np.empty(block_size, dtype=np.float64)
+    limit_mask = np.empty(block_size, dtype=bool)
+    best_pos = np.inf
+    best_neg = np.inf
+    upper_limit = float(realmax)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        for start in range(0, x_flat.size, block_size):
+            stop = min(start + block_size, x_flat.size)
+            n_values = stop - start
+            x_chunk = x_flat[start:stop]
+            dx_chunk = dx_flat[start:stop]
+            alpha_chunk = alpha_work[:n_values]
+            mask_chunk = limit_mask[:n_values]
+
+            np.subtract(upper_limit, x_chunk, out=alpha_chunk)
+            np.divide(alpha_chunk, dx_chunk, out=alpha_chunk)
+            np.less_equal(dx_chunk, 0, out=mask_chunk)
+            np.copyto(alpha_chunk, np.inf, where=mask_chunk)
+            np.isfinite(alpha_chunk, out=mask_chunk)
+            np.logical_not(mask_chunk, out=mask_chunk)
+            np.copyto(alpha_chunk, np.inf, where=mask_chunk)
+            best_pos = min(best_pos, float(np.min(alpha_chunk)))
+
+            np.subtract(-upper_limit, x_chunk, out=alpha_chunk)
+            np.divide(alpha_chunk, dx_chunk, out=alpha_chunk)
+            np.greater_equal(dx_chunk, 0, out=mask_chunk)
+            np.copyto(alpha_chunk, np.inf, where=mask_chunk)
+            np.isfinite(alpha_chunk, out=mask_chunk)
+            np.logical_not(mask_chunk, out=mask_chunk)
+            np.copyto(alpha_chunk, np.inf, where=mask_chunk)
+            best_neg = min(best_neg, float(np.min(alpha_chunk)))
+
+    return min(best_pos, best_neg)
+
+
 def line_search_torch(
     reconstructor,
     sigma_current,
@@ -43,7 +139,7 @@ def line_search_torch(
             continue
 
         sigma_test_np = x + alpha * delta_sigma_np
-        if reconstructor.clip_values is not None:
+        if reconstructor.clip_values is not None and not np.iscomplexobj(sigma_test_np):
             sigma_test_np = np.clip(
                 sigma_test_np,
                 reconstructor.clip_values[0],
@@ -85,7 +181,10 @@ def line_search_torch(
             dv_torch * weight_vector if weight_vector is not None else dv_torch
         )
 
-        meas_misfit = 0.5 * torch.dot(weighted_dv, weighted_dv).item()
+        if weighted_dv.is_complex():
+            meas_misfit = 0.5 * torch.vdot(weighted_dv, weighted_dv).real.item()
+        else:
+            meas_misfit = 0.5 * torch.dot(weighted_dv, weighted_dv).item()
         prior_misfit = 0.0
         if (
             reconstructor.use_prior_term
@@ -98,7 +197,12 @@ def line_search_torch(
             )
             de_torch = sigma_test_torch - prior_torch
             RtR_de = torch.mv(reconstructor.R_torch, de_torch)
-            prior_misfit = 0.5 * lambda_eff * torch.dot(de_torch, RtR_de).item()
+            if de_torch.is_complex() or RtR_de.is_complex():
+                prior_misfit = (
+                    0.5 * lambda_eff * torch.vdot(de_torch, RtR_de).real.item()
+                )
+            else:
+                prior_misfit = 0.5 * lambda_eff * torch.dot(de_torch, RtR_de).item()
 
         total_objective = meas_misfit + prior_misfit
         if np.isnan(total_objective) or np.isinf(total_objective):
@@ -109,14 +213,21 @@ def line_search_torch(
         if baseline_objective > 0 and mlist[i] / baseline_objective > 1e10:
             break
 
-    valid_idx = np.where(np.isfinite(mlist))[0]
-    if len(valid_idx) == 0:
+    best_idx, valid_count, last_valid_idx = _finite_metric_summary(mlist)
+    if best_idx < 0:
         chosen_step = 0.0
     else:
-        best_idx = valid_idx[np.argmin(mlist[valid_idx])]
         chosen_step = float(perturb[best_idx])
 
-    update_perturb_eidors_style(reconstructor, chosen_step, perturb, mlist, valid_idx)
+    update_perturb_eidors_style(
+        reconstructor,
+        chosen_step,
+        perturb,
+        mlist,
+        None,
+        valid_count=valid_count,
+        last_valid_idx=last_valid_idx,
+    )
 
     if chosen_step == 0 and retry < 5:
         return line_search_torch(
@@ -137,26 +248,19 @@ def calc_perturb_limits(reconstructor, x: np.ndarray, dx: np.ndarray) -> np.ndar
     """Compute numerically stable line-search samples for ``alpha``."""
     perturb = reconstructor._line_search_perturb.copy()
     if perturb[0] != 0:
-        perturb = np.concatenate([[0], perturb])
+        expanded = np.empty(perturb.size + 1, dtype=perturb.dtype)
+        expanded[0] = 0.0
+        expanded[1:] = perturb
+        perturb = expanded
+
+    if np.iscomplexobj(x) or np.iscomplexobj(dx):
+        return np.asarray(np.clip(perturb, 0.0, 1.0), dtype=np.float64)
 
     eps_machine = np.finfo(np.float64).eps
     realmax = np.finfo(np.float64).max / 2
 
-    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
-        au_pos = (realmax - x) / dx
-        au_pos[dx <= 0] = np.inf
-        au_pos[~np.isfinite(au_pos)] = np.inf
-
-        au_neg = (-realmax - x) / dx
-        au_neg[dx >= 0] = np.inf
-        au_neg[~np.isfinite(au_neg)] = np.inf
-
-        max_alpha = min(np.min(au_pos), np.min(au_neg))
-
-    with np.errstate(divide="ignore", invalid="ignore"):
-        al = eps_machine * np.abs(x) / np.abs(dx)
-        al[~np.isfinite(al)] = 0
-        min_alpha = np.max(al) if len(al) > 0 else 0
+    max_alpha = _min_stable_upper_alpha(x, dx, realmax=realmax)
+    min_alpha = _max_machine_epsilon_alpha(x, dx, eps_machine=eps_machine)
 
     max_alpha = min(max_alpha, 1.0)
 
@@ -180,9 +284,69 @@ def calc_perturb_limits(reconstructor, x: np.ndarray, dx: np.ndarray) -> np.ndar
         elif log_p[0] < log_min:
             log_p = log_p + (log_min - log_p[0])
 
-        perturb = np.concatenate([[0], 10**log_p])
+        log_values = 10**log_p
+        perturb = np.empty(log_values.size + 1, dtype=np.float64)
+        perturb[0] = 0.0
+        perturb[1:] = log_values
 
     return perturb
+
+
+def _finite_metric_summary(values: np.ndarray) -> tuple[int, int, int]:
+    """Return best finite index, finite count, and last finite index."""
+    best_idx = -1
+    best_value = np.inf
+    valid_count = 0
+    last_valid_idx = -1
+    for idx, raw_value in enumerate(np.asarray(values)):
+        value = float(raw_value)
+        if not np.isfinite(value):
+            continue
+        valid_count += 1
+        last_valid_idx = idx
+        if value < best_value:
+            best_value = value
+            best_idx = idx
+    return best_idx, valid_count, last_valid_idx
+
+
+def _valid_metric_count_last(
+    values: np.ndarray,
+    valid_idx: np.ndarray | None,
+    *,
+    valid_count: int | None,
+    last_valid_idx: int | None,
+) -> tuple[int, int]:
+    if valid_count is not None and last_valid_idx is not None:
+        return int(valid_count), int(last_valid_idx)
+    if valid_idx is None:
+        _, scanned_count, scanned_last = _finite_metric_summary(values)
+        return scanned_count, scanned_last
+    if len(valid_idx) == 0:
+        return 0, -1
+    return len(valid_idx), int(valid_idx[-1])
+
+
+def _valid_metrics_all_similar(
+    values: np.ndarray,
+    valid_idx: np.ndarray | None,
+    baseline_objective: float,
+    dtol: float,
+    *,
+    valid_count: int,
+) -> bool:
+    if valid_count <= 0 or baseline_objective <= 0:
+        return False
+    threshold = -10 * dtol
+    if valid_idx is None:
+        iterator = enumerate(np.asarray(values))
+    else:
+        iterator = ((int(idx), values[int(idx)]) for idx in valid_idx)
+    for _, raw_value in iterator:
+        value = float(raw_value)
+        if not np.isfinite(value) or value / baseline_objective - 1 <= threshold:
+            return False
+    return True
 
 
 def update_perturb_eidors_style(
@@ -190,14 +354,22 @@ def update_perturb_eidors_style(
     chosen_step: float,
     perturb: np.ndarray,
     mlist: np.ndarray,
-    valid_idx: np.ndarray,
+    valid_idx: np.ndarray | None,
+    *,
+    valid_count: int | None = None,
+    last_valid_idx: int | None = None,
 ) -> None:
     """Adapt line-search sample schedule using EIDORS heuristic."""
     dtol = reconstructor.convergence_tol
-    goodi = valid_idx
+    goodi_count, goodi_last = _valid_metric_count_last(
+        mlist,
+        valid_idx,
+        valid_count=valid_count,
+        last_valid_idx=last_valid_idx,
+    )
 
     if chosen_step == 0:
-        if len(goodi) > 1 and mlist[0] * 1.05 < mlist[goodi[-1]]:
+        if goodi_count > 1 and mlist[0] * 1.05 < mlist[goodi_last]:
             reconstructor._line_search_perturb = reconstructor._line_search_perturb / 10
         elif perturb[-1] > 1.0 - 1e-9:
             pass
@@ -209,10 +381,12 @@ def update_perturb_eidors_style(
             reconstructor._line_search_perturb = reconstructor._line_search_perturb * 10
     else:
         baseline_objective = float(mlist[0])
-        all_similar = (
-            len(goodi) > 0
-            and baseline_objective > 0
-            and np.all(mlist[goodi] / baseline_objective - 1 > -10 * dtol)
+        all_similar = _valid_metrics_all_similar(
+            mlist,
+            valid_idx,
+            baseline_objective,
+            dtol,
+            valid_count=goodi_count,
         )
         if all_similar and perturb[-1] * 10 < 1.0 + 1e-9:
             reconstructor._line_search_perturb = reconstructor._line_search_perturb * 10

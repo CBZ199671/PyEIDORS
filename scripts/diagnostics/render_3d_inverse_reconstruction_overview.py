@@ -47,6 +47,7 @@ from pyeidors.geometry.mesh3d_generator import (
 )
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.utils.numeric_ops import squared_distances_to_point
 
 from common.acceleration_profiles import (
     add_acceleration_profile_argument,
@@ -97,10 +98,8 @@ def _build_3d_phantom(
     image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
     sigma = np.asarray(image.elem_data, dtype=float).copy()
     coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
-    distances = np.linalg.norm(
-        coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1
-    )
-    sigma[distances <= float(radius)] = float(phantom_conductivity)
+    distances2 = squared_distances_to_point(coords, center, ndim=3)
+    sigma[distances2 <= float(radius) ** 2] = float(phantom_conductivity)
     return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
 
 
@@ -119,8 +118,8 @@ def _build_cylinder_wireframe(
     y = radius * np.sin(theta)
 
     segments: list[np.ndarray] = []
-    segments.append(np.column_stack([x, y, np.full_like(x, z_top)]))
-    segments.append(np.column_stack([x, y, np.full_like(x, z_bottom)]))
+    segments.append(_three_column_points(x, y, z_top))
+    segments.append(_three_column_points(x, y, z_bottom))
 
     vertical_angles = np.linspace(0.0, 2.0 * math.pi, n_vertical, endpoint=False)
     for ang in vertical_angles:
@@ -147,13 +146,33 @@ def _build_electrode_markers(
             np.arange(n_elec, dtype=np.int32) % len(electrode_level_fractions)
         ]
     )
-    return np.column_stack(
-        [
-            radius * np.cos(theta),
-            radius * np.sin(theta),
-            np.asarray(z_levels, dtype=float),
-        ]
+    return _three_column_points(
+        radius * np.cos(theta),
+        radius * np.sin(theta),
+        np.asarray(z_levels, dtype=float),
     )
+
+
+def _three_column_points(
+    x_values: np.ndarray,
+    y_values: np.ndarray,
+    z_values: np.ndarray | float,
+) -> np.ndarray:
+    x_arr = np.asarray(x_values, dtype=np.float64).reshape(-1)
+    y_arr = np.asarray(y_values, dtype=np.float64).reshape(-1)
+    if x_arr.size != y_arr.size:
+        raise ValueError("x/y point columns must have the same length")
+    out = np.empty((x_arr.size, 3), dtype=np.float64)
+    out[:, 0] = x_arr
+    out[:, 1] = y_arr
+    if np.ndim(z_values) == 0:
+        out[:, 2] = float(z_values)
+    else:
+        z_arr = np.asarray(z_values, dtype=np.float64).reshape(-1)
+        if z_arr.size != x_arr.size:
+            raise ValueError("z point column must match x/y length")
+        out[:, 2] = z_arr
+    return out
 
 
 def _choose_threshold(
@@ -184,8 +203,12 @@ def _compute_shape_metrics(
     *,
     threshold: float,
 ) -> dict[str, float]:
-    mask = np.isfinite(values) & (values >= float(threshold))
-    if not np.any(mask):
+    value_arr = np.asarray(values, dtype=float).reshape(-1)
+    coord_arr = np.asarray(coords, dtype=float)
+    mask = np.isfinite(value_arr)
+    np.greater_equal(value_arr, float(threshold), out=mask, where=mask)
+    selected_count = int(np.count_nonzero(mask))
+    if selected_count == 0:
         return {
             "selected_count": 0,
             "threshold": float(threshold),
@@ -195,12 +218,17 @@ def _compute_shape_metrics(
             "z_to_xy_mean_ratio": float("nan"),
             "xy_aspect_ratio": float("nan"),
         }
-    region = np.asarray(coords[mask], dtype=float)
-    extents = np.max(region, axis=0) - np.min(region, axis=0)
+    mins = np.empty(3, dtype=float)
+    maxs = np.empty(3, dtype=float)
+    for axis in range(3):
+        column = coord_arr[:, axis]
+        mins[axis] = np.min(column, where=mask, initial=np.inf)
+        maxs[axis] = np.max(column, where=mask, initial=-np.inf)
+    extents = maxs - mins
     xy_extent_min = max(float(min(extents[0], extents[1])), 1e-12)
     xy_extent_mean = max(float(0.5 * (extents[0] + extents[1])), 1e-12)
     return {
-        "selected_count": int(mask.sum()),
+        "selected_count": selected_count,
         "threshold": float(threshold),
         "extent_x": float(extents[0]),
         "extent_y": float(extents[1]),
@@ -208,6 +236,55 @@ def _compute_shape_metrics(
         "z_to_xy_mean_ratio": float(extents[2] / xy_extent_mean),
         "xy_aspect_ratio": float(max(extents[0], extents[1]) / xy_extent_min),
     }
+
+
+def _apply_cylindrical_nan_mask_in_place(
+    volume: np.ndarray,
+    x_centers: np.ndarray,
+    y_centers: np.ndarray,
+    *,
+    radius: float,
+) -> None:
+    x2 = np.square(np.asarray(x_centers, dtype=float))
+    y2 = np.square(np.asarray(y_centers, dtype=float))
+    outside_xy = np.add.outer(x2, y2) > (float(radius) * 0.995) ** 2
+    if np.any(outside_xy):
+        volume[outside_xy, :] = np.nan
+
+
+def _pearson_correlation(left: np.ndarray, right: np.ndarray) -> float:
+    left_arr = np.asarray(left, dtype=float).reshape(-1)
+    right_arr = np.asarray(right, dtype=float).reshape(-1)
+    if left_arr.size <= 1 or left_arr.size != right_arr.size:
+        return float("nan")
+    left_centered = np.array(left_arr, dtype=np.float64, copy=True)
+    right_centered = np.array(right_arr, dtype=np.float64, copy=True)
+    left_centered -= float(np.mean(left_centered))
+    right_centered -= float(np.mean(right_centered))
+    numerator = float(np.dot(left_centered, right_centered))
+    left_norm2 = float(np.dot(left_centered, left_centered))
+    right_norm2 = float(np.dot(right_centered, right_centered))
+    denominator = math.sqrt(left_norm2 * right_norm2)
+    if denominator <= 0.0:
+        return float("nan")
+    return float(numerator / denominator)
+
+
+def _rmse(left: np.ndarray, right: np.ndarray) -> float:
+    work = np.array(left, dtype=np.float64, copy=True)
+    work -= np.asarray(right, dtype=np.float64)
+    np.square(work, out=work)
+    return float(math.sqrt(float(np.mean(work))))
+
+
+def _mean_where(values: np.ndarray, mask: np.ndarray) -> float:
+    mask_arr = np.asarray(mask, dtype=bool)
+    count = int(np.count_nonzero(mask_arr))
+    if count == 0:
+        return float("nan")
+    value_arr = np.asarray(values, dtype=float)
+    total = np.sum(value_arr, where=mask_arr, initial=0.0, dtype=np.float64)
+    return float(total / count)
 
 
 def _compute_regular_volume_payload(
@@ -230,7 +307,12 @@ def _compute_regular_volume_payload(
     )
     if smooth_sigma > 0.0:
         volume = gaussian_filter(volume, sigma=smooth_sigma)
-    radial_mask = (Xc**2 + Yc**2) <= (radius * 0.995) ** 2
+    _apply_cylindrical_nan_mask_in_place(
+        volume,
+        x_centers,
+        y_centers,
+        radius=float(radius),
+    )
 
     x_edges = np.linspace(-radius, radius, nx + 1)
     y_edges = np.linspace(-radius, radius, ny + 1)
@@ -239,7 +321,7 @@ def _compute_regular_volume_payload(
         "x_edges": np.asarray(x_edges, dtype=float),
         "y_edges": np.asarray(y_edges, dtype=float),
         "z_edges": np.asarray(z_edges, dtype=float),
-        "volume": np.where(radial_mask, volume, np.nan),
+        "volume": np.asarray(volume, dtype=float),
     }
 
 
@@ -287,8 +369,12 @@ def _add_voxel_volume(
     mask = valid & (values >= threshold)
     if not np.any(mask):
         return
-    mapped = cmap(norm(np.where(mask, values, np.nan)))
-    mapped[..., 3] = np.where(mask, alpha_surface, 0.0)
+    color_values = np.array(values, dtype=float, copy=True)
+    color_values[~mask] = np.nan
+    mapped = cmap(norm(color_values))
+    alpha = mapped[..., 3]
+    alpha.fill(0.0)
+    alpha[mask] = float(alpha_surface)
     ax.voxels(
         X,
         Y,
@@ -455,12 +541,8 @@ def run_case(
     recon_sigma = function_get_array(recon.conductivity).copy()
     coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()[:, :3]
 
-    cond_rmse = float(np.sqrt(np.mean((recon_sigma - truth_sigma) ** 2)))
-    cond_corr = (
-        float(np.corrcoef(truth_sigma, recon_sigma)[0, 1])
-        if truth_sigma.size > 1
-        else float("nan")
-    )
+    cond_rmse = _rmse(recon_sigma, truth_sigma)
+    cond_corr = _pearson_correlation(truth_sigma, recon_sigma)
     pred_img = EITImage(elem_data=recon_sigma, fwd_model=system.fwd_model)
     pred_data = system.forward_solve(pred_img)
     vh = np.asarray(reference_data.meas, dtype=float).copy()
@@ -497,7 +579,7 @@ def run_case(
         measurement_vector = dv_data_space
         prediction_vector = pred_dv_data_space
     residual_vector = prediction_vector - measurement_vector
-    volt_rmse = float(np.sqrt(np.mean((prediction_vector - measurement_vector) ** 2)))
+    volt_rmse = _rmse(prediction_vector, measurement_vector)
     residual_l2 = float(np.linalg.norm(residual_vector))
     residual_max = float(np.max(np.abs(residual_vector)))
     truth_threshold = _choose_threshold(
@@ -510,16 +592,8 @@ def run_case(
     recon_shape = _compute_shape_metrics(coords, recon_sigma, threshold=recon_threshold)
     target_mask = truth_sigma > (base_sigma + 0.5 * (target_sigma - base_sigma))
     background_mask = ~target_mask
-    target_mean = (
-        float(np.mean(recon_sigma[target_mask]))
-        if np.any(target_mask)
-        else float("nan")
-    )
-    background_mean = (
-        float(np.mean(recon_sigma[background_mask]))
-        if np.any(background_mask)
-        else float("nan")
-    )
+    target_mean = _mean_where(recon_sigma, target_mask)
+    background_mean = _mean_where(recon_sigma, background_mask)
     peak_conductivity = float(np.max(recon_sigma))
     contrast_recovery = float(
         (target_mean - background_mean) / (target_sigma - base_sigma)
@@ -532,7 +606,7 @@ def run_case(
         norm = mcolors.Normalize(
             vmin=base_sigma, vmax=max(np.max(truth_sigma), np.max(recon_sigma))
         )
-        grid_X, grid_Y, grid_Z, truth_volume = _build_regular_volume(
+        truth_volume_payload = _compute_regular_volume_payload(
             coords=coords,
             values=truth_sigma,
             radius=radius,
@@ -541,7 +615,7 @@ def run_case(
             resolution=(34, 34, 24),
             smooth_sigma=0.6,
         )
-        _, _, _, recon_volume = _build_regular_volume(
+        recon_volume_payload = _compute_regular_volume_payload(
             coords=coords,
             values=recon_sigma,
             radius=radius,
@@ -550,6 +624,17 @@ def run_case(
             resolution=(34, 34, 24),
             smooth_sigma=1.0,
         )
+        x_edges = np.asarray(truth_volume_payload["x_edges"], dtype=float)
+        y_edges = np.asarray(truth_volume_payload["y_edges"], dtype=float)
+        z_edges = np.asarray(truth_volume_payload["z_edges"], dtype=float)
+        grid_X, grid_Y, grid_Z = np.meshgrid(
+            x_edges,
+            y_edges,
+            z_edges,
+            indexing="ij",
+        )
+        truth_volume = np.asarray(truth_volume_payload["volume"], dtype=float)
+        recon_volume = np.asarray(recon_volume_payload["volume"], dtype=float)
 
         fig = plt.figure(figsize=(11.6, 5.6), facecolor="white")
         ax_truth = fig.add_subplot(1, 2, 1, projection="3d")

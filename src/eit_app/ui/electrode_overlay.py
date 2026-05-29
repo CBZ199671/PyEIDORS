@@ -208,9 +208,10 @@ def default_arc_segments(
     samples = max(int(n_samples), 2)
     for arc in arcs:
         thetas = np.linspace(arc.theta_start, arc.theta_end, samples)
-        xs = radius * np.cos(thetas)
-        ys = radius * np.sin(thetas)
-        segments.append(np.column_stack((xs, ys)))
+        segment = np.empty((samples, 2), dtype=np.float64)
+        segment[:, 0] = radius * np.cos(thetas)
+        segment[:, 1] = radius * np.sin(thetas)
+        segments.append(segment)
     return segments
 
 
@@ -233,31 +234,31 @@ def default_patch_quads(
             np.empty((0, 3), dtype=np.int64),
         )
 
-    pts: list[np.ndarray] = []
-    tris: list[tuple[int, int, int]] = []
+    points = np.empty((len(patches) * 2 * samples, 3), dtype=np.float32)
+    triangles = np.empty((len(patches) * 2 * (samples - 1), 3), dtype=np.int64)
     base = 0
+    tri_idx = 0
     for patch in patches:
         thetas = np.linspace(patch.theta_start, patch.theta_end, samples)
         cos_t = np.cos(thetas)
         sin_t = np.sin(thetas)
         # Lay out vertices as 2 rows × n_theta cols (lower z first, then upper z).
-        lower = np.column_stack(
-            (radius * cos_t, radius * sin_t, np.full_like(cos_t, patch.z_lower))
-        )
-        upper = np.column_stack(
-            (radius * cos_t, radius * sin_t, np.full_like(cos_t, patch.z_upper))
-        )
-        pts.append(lower)
-        pts.append(upper)
+        lower = points[base : base + samples]
+        upper = points[base + samples : base + 2 * samples]
+        lower[:, 0] = radius * cos_t
+        lower[:, 1] = radius * sin_t
+        lower[:, 2] = patch.z_lower
+        upper[:, 0] = lower[:, 0]
+        upper[:, 1] = lower[:, 1]
+        upper[:, 2] = patch.z_upper
         for i in range(samples - 1):
             l0 = base + i
             l1 = base + i + 1
             u0 = base + samples + i
             u1 = base + samples + i + 1
-            tris.append((l0, l1, u1))
-            tris.append((l0, u1, u0))
+            triangles[tri_idx] = (l0, l1, u1)
+            triangles[tri_idx + 1] = (l0, u1, u0)
+            tri_idx += 2
         base += 2 * samples
 
-    points = np.vstack(pts).astype(np.float32, copy=False)
-    triangles = np.asarray(tris, dtype=np.int64)
     return points, triangles

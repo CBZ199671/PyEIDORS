@@ -22,7 +22,7 @@ class InhomogeneitySpec:
     size_x: float = 0.2
     size_y: float = 0.2
     size_z: float = 0.2  # 3D radius/depth; ignored by 2D paints
-    conductivity: float = 2.0
+    conductivity: float | complex = 2.0
 
 
 @dataclass
@@ -32,7 +32,7 @@ class SimulationConfig:
     mesh_dimension: int = 2
     mesh_refinement: float = 0.1  # mesh_size parameter for EITSystem
     n_electrodes: int = 16
-    background_conductivity: float = 1.0
+    background_conductivity: float | complex = 1.0
     noise_level: float = 0.0
     inhomogeneities: list[InhomogeneitySpec] = field(default_factory=list)
 

@@ -1,96 +1,108 @@
 """PyEIDORS data processing module.
 
-Keep this package import lightweight: pure I/O helpers such as
-``pyeidors.data.frame_io`` should not eagerly pull in heavy FEniCSx
-dependencies through ``synthetic_data``.
+Keep this package import lightweight: pure I/O helpers and simple data classes
+should not eagerly pull in digit-sweep, reporting, or synthetic-data helpers.
 """
 
-from .structures import (
-    PatternConfig,
-    EITData,
-    EITImage,
-    EITMesh,
-    MeshConfig,
-    ElectrodePosition,
-    FrameMetadata,
-)
-from .difference import (
-    DEFAULT_DIFFERENCE_MODE,
-    DEFAULT_DIFFERENCE_ORIENTATION,
-    build_difference_vector,
-    normalize_difference_mode,
-    normalize_difference_orientation,
-    normalize_time_difference,
-    project_measurement_jacobian,
-    project_measurement_vector,
-)
-from .noise import EIDORS_NOISE_NORM_OPTION, add_noise
-from .channels import (
-    MeasurementContract,
-    apply_measurement_contract_to_jacobian,
-    apply_measurement_contract_to_vector,
-    bad_channel_mask,
-    normalize_bad_channel_mask,
-    prepare_measurement_contract,
-    zero_bad_channel_rows,
-    zero_bad_channel_vector,
-    zero_bad_channel_weights,
-)
-from .adc_quantization import (
-    DEFAULT_BOUNDARY_VOLTAGES,
-    ADCInjectionConfig,
-    ADCQuantizationSummary,
-    adc_lsb,
-    add_voltage_noise,
-    effective_digits_from_rmse,
-    effective_adc_bits,
-    ideal_decimal_digits,
-    inject_adc_measurement,
-    noise_standard_deviation,
-    pointwise_effective_digits,
-    quantize_voltages,
-    rmse,
-    summarize_adc_quantization,
-    summarize_adc_sweep,
-)
-from .eit_digit_metrics import (
-    EITDigitSummary,
-    EITLinearizedModel,
-    adjacent_measurement_count,
-    build_pyeidors_fem_linearized_model,
-    build_surrogate_sensitivity,
-    build_surrogate_linearized_model,
-    default_sigma_true,
-    forward_surrogate,
-    inverse_pyeidors_rm,
-    inverse_surrogate,
-    reconstruct_linearized_sigma,
-    sigma_true_from_anomaly_rule,
-    summarize_eit_digit_run,
-    summarize_eit_digit_sweep,
-)
-from .voltage_digit_sweep import (
-    VoltageDigitFieldRow,
-    VoltageDigitSweepSummary,
-    keep_significant_digits,
-    run_voltage_digit_sweep,
-    run_voltage_digit_sweep_from_backend,
-)
-from .digit_report import (
-    DigitReportCase,
-    DigitReportRow,
-    format_markdown_report,
-    format_markdown_table,
-    read_eit_digit_case,
-    read_eit_digit_cases,
-    write_report_files,
-)
-from .factor_sweep import (
-    FactorSweepRow,
-    format_factor_sweep_report,
-    normalize_enob_level,
-    run_factor_sweep,
-)
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+_EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
+    ".structures": (
+        "PatternConfig",
+        "EITData",
+        "EITImage",
+        "EITMesh",
+        "MeshConfig",
+        "ElectrodePosition",
+        "FrameMetadata",
+    ),
+    ".difference": (
+        "DEFAULT_DIFFERENCE_MODE",
+        "DEFAULT_DIFFERENCE_ORIENTATION",
+        "build_difference_vector",
+        "normalize_difference_mode",
+        "normalize_difference_orientation",
+        "normalize_time_difference",
+        "project_measurement_jacobian",
+        "project_measurement_vector",
+    ),
+    ".noise": ("EIDORS_NOISE_NORM_OPTION", "add_noise"),
+    ".channels": (
+        "MeasurementContract",
+        "apply_measurement_contract_to_jacobian",
+        "apply_measurement_contract_to_vector",
+        "bad_channel_mask",
+        "normalize_bad_channel_mask",
+        "prepare_measurement_contract",
+        "zero_bad_channel_rows",
+        "zero_bad_channel_vector",
+        "zero_bad_channel_weights",
+    ),
+    ".adc_quantization": (
+        "DEFAULT_BOUNDARY_VOLTAGES",
+        "ADCInjectionConfig",
+        "ADCQuantizationSummary",
+        "adc_lsb",
+        "add_voltage_noise",
+        "effective_digits_from_rmse",
+        "effective_adc_bits",
+        "ideal_decimal_digits",
+        "inject_adc_measurement",
+        "noise_standard_deviation",
+        "pointwise_effective_digits",
+        "quantize_voltages",
+        "rmse",
+        "summarize_adc_quantization",
+        "summarize_adc_sweep",
+    ),
+    ".eit_digit_metrics": (
+        "EITDigitSummary",
+        "EITLinearizedModel",
+        "adjacent_measurement_count",
+        "build_pyeidors_fem_linearized_model",
+        "build_surrogate_sensitivity",
+        "build_surrogate_linearized_model",
+        "default_sigma_true",
+        "forward_surrogate",
+        "inverse_pyeidors_rm",
+        "inverse_surrogate",
+        "reconstruct_linearized_sigma",
+        "sigma_true_from_anomaly_rule",
+        "summarize_eit_digit_run",
+        "summarize_eit_digit_sweep",
+    ),
+    ".voltage_digit_sweep": (
+        "VoltageDigitFieldRow",
+        "VoltageDigitSweepSummary",
+        "keep_significant_digits",
+        "run_voltage_digit_sweep",
+        "run_voltage_digit_sweep_from_backend",
+    ),
+    ".digit_report": (
+        "DigitReportCase",
+        "DigitReportRow",
+        "format_markdown_report",
+        "format_markdown_table",
+        "read_eit_digit_case",
+        "read_eit_digit_cases",
+        "write_report_files",
+    ),
+    ".factor_sweep": (
+        "FactorSweepRow",
+        "format_factor_sweep_report",
+        "normalize_enob_level",
+        "run_factor_sweep",
+    ),
+    ".synthetic_data": ("create_synthetic_data", "create_custom_phantom"),
+    ".measurement_dataset": ("MeasurementDataset",),
+}
+
+_EXPORT_MODULES = {
+    name: module_name for module_name, names in _EXPORT_GROUPS.items() for name in names
+}
 
 __all__ = [
     "PatternConfig",
@@ -169,17 +181,46 @@ __all__ = [
     "FrameMetadata",
 ]
 
+_SUBMODULE_NAMES = frozenset(
+    {
+        "_sweep_core",
+        "_temporal_core",
+        "adc_quantization",
+        "bucket_dense_experiments",
+        "bucket_domain_audit",
+        "channels",
+        "difference",
+        "digit_plot",
+        "digit_report",
+        "dynamic_sequence",
+        "factor_sweep",
+        "frame_io",
+        "holdout_fit_diff",
+        "holdout_point_audit",
+        "measurement_dataset",
+        "noise",
+        "structures",
+        "synthetic_data",
+        "temporal_filtering",
+        "visual_audit",
+        "voltage_digit_sweep",
+    }
+)
 
-def __getattr__(name: str):
-    if name == "MeasurementDataset":
-        from .measurement_dataset import MeasurementDataset
 
-        globals()["MeasurementDataset"] = MeasurementDataset
-        return MeasurementDataset
-    if name in {"create_synthetic_data", "create_custom_phantom"}:
-        from .synthetic_data import create_custom_phantom, create_synthetic_data
-
-        globals()["create_synthetic_data"] = create_synthetic_data
-        globals()["create_custom_phantom"] = create_custom_phantom
-        return globals()[name]
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is not None:
+        module = import_module(module_name, __name__)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    if name in _SUBMODULE_NAMES:
+        module = import_module(f".{name}", __name__)
+        globals()[name] = module
+        return module
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__) | set(_SUBMODULE_NAMES))

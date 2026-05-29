@@ -259,6 +259,7 @@ def test_jacobian_action_bundle_field_set_is_locked() -> None:
         "matvec",
         "rmatvec",
         "linearization",
+        "hessian_diag",
     )
 
 

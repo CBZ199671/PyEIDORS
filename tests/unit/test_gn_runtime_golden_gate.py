@@ -16,6 +16,7 @@ Three deliberately small fixtures plus an iteration-log passthrough.
 from __future__ import annotations
 
 import hashlib
+import inspect
 import json
 from types import SimpleNamespace
 
@@ -159,6 +160,44 @@ EXPECTED_STARTUP_CACHE_PAYLOAD_SHA256 = (
 )
 
 
+def test_v594_startup_cache_payload_streams_noncontiguous_sigma(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pyeidors.inverse.solvers.gauss_newton_startup_cache as startup_cache
+
+    monkeypatch.setattr(
+        startup_cache, "model_signature_from_forward_model", _fake_signature
+    )
+    monkeypatch.setattr(
+        startup_cache, "pattern_signature_from_forward_model", _fake_signature
+    )
+    monkeypatch.setattr(
+        startup_cache, "backend_signature_from_forward_model", _fake_signature
+    )
+
+    sigma_view = np.arange(24, dtype=np.float64).reshape(8, 3)[:, 1]
+    assert not sigma_view.flags.c_contiguous
+    expected = startup_cache.hash_array_payload(
+        np.ascontiguousarray(sigma_view, dtype=np.float64)
+    )
+    original_hash = startup_cache.hash_array_payload
+    captured: dict[str, np.ndarray] = {}
+
+    def _capture_hash(arr: np.ndarray, *, prefix: bytes = b"") -> str:
+        captured["arr"] = arr
+        return original_hash(arr, prefix=prefix)
+
+    monkeypatch.setattr(startup_cache, "hash_array_payload", _capture_hash)
+
+    reconstructor = SimpleNamespace(fwd_model=SimpleNamespace(), solver_mode="fast")
+    payload = _startup_cache_payload(reconstructor, sigma_view, "efficient")
+
+    assert payload["sigma_hash"] == expected
+    assert captured["arr"] is sigma_view
+    assert captured["arr"].dtype == np.float64
+    assert not captured["arr"].flags.c_contiguous
+
+
 def test_startup_cache_payload_sha256_locked_for_synthetic_reconstructor(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -198,6 +237,14 @@ def test_startup_cache_payload_sha256_locked_for_synthetic_reconstructor(
             np.ascontiguousarray(sigma_array, dtype=np.float64).tobytes()
         ).hexdigest()
     )
+    complex_sigma = np.array([1.0 + 0.25j, 2.0 - 0.5j], dtype=np.complex64)
+    complex_payload = _startup_cache_payload(reconstructor, complex_sigma, "efficient")
+    complex_sigma_values = np.ascontiguousarray(complex_sigma, dtype=np.complex64)
+    assert (
+        complex_payload["sigma_hash"]
+        == hashlib.sha256(b"complex64\0" + complex_sigma_values.tobytes()).hexdigest()
+    )
+    assert ".tobytes(" not in inspect.getsource(_startup_cache_payload)
 
     expected_solver_config = {
         "linear_solver": "auto",

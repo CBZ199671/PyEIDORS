@@ -74,6 +74,26 @@ def test_guard_exempts_test_only_numpy_writer(tmp_path):
     )
 
 
+def test_guard_exempts_in_memory_numpy_serializer(tmp_path):
+    module = _load_module()
+    _write(
+        tmp_path / "src" / "pkg" / "hash_payload.py",
+        "import io\n"
+        "import numpy as np\n\n"
+        "def digest(values):\n"
+        "    buffer = io.BytesIO()\n"
+        "    np.save(buffer, values, allow_pickle=True)\n"
+        "    return buffer.getbuffer()\n",
+    )
+
+    findings = module.scan_repo(tmp_path)
+    serializers = [item for item in findings if item.kind == "numpy_memory_serializer"]
+
+    assert len(serializers) == 1
+    assert serializers[0].classification == "production"
+    assert not module.guard_violations(findings)
+
+
 def test_guard_classifies_hdf5_mesh_and_legacy_readers(tmp_path):
     module = _load_module()
     _write(

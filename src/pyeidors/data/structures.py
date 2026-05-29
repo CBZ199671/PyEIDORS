@@ -139,6 +139,9 @@ class EITMesh:
     generator_revision: str | None = None
     structured_sidecar_file: str | None = None
     structured_sidecar_version: str | None = None
+    _derived_arrays: Any | None = field(
+        default=None, init=False, repr=False, compare=False
+    )
 
     @property
     def comm(self):
@@ -167,23 +170,34 @@ class EITMesh:
 
     def cells(self) -> np.ndarray:
         """Return local cell-to-vertex connectivity."""
-        tdim = self.mesh.topology.dim
-        self.mesh.topology.create_connectivity(tdim, 0)
-        c2v = self.mesh.topology.connectivity(tdim, 0)
-        if c2v is None:
-            return np.empty((0, 0), dtype=np.int32)
+        return np.asarray(self._mesh_derived_arrays().cell_connectivity, dtype=np.int32)
 
-        n_cells = self.num_cells()
-        if n_cells == 0:
-            return np.empty((0, 0), dtype=np.int32)
+    def cell_centers(self) -> np.ndarray:
+        """Return local cell centroids, memoized with other derived arrays."""
+        return np.asarray(self._mesh_derived_arrays().cell_centers)
 
-        first = c2v.links(0)
-        verts_per_cell = len(first)
-        data = np.zeros((n_cells, verts_per_cell), dtype=np.int32)
-        data[0] = first
-        for idx in range(1, n_cells):
-            data[idx] = c2v.links(idx)
-        return data
+    def cell_measures(self) -> np.ndarray:
+        """Return local cell length/area/volume estimates."""
+        return np.asarray(self._mesh_derived_arrays().cell_measures)
+
+    def _mesh_derived_arrays(self):
+        cached = self._derived_arrays
+        if cached is not None:
+            return cached
+        from pyeidors.geometry.derived_cache import build_mesh_derived_arrays
+
+        self._derived_arrays = build_mesh_derived_arrays(
+            self.mesh,
+            metadata={
+                "mesh_file": self.mesh_file,
+                "mesh_family": self.mesh_family,
+                "geometry_version": self.geometry_version,
+                "generator_revision": self.generator_revision,
+                "structured_sidecar_file": self.structured_sidecar_file,
+                "structured_sidecar_version": self.structured_sidecar_version,
+            },
+        )
+        return self._derived_arrays
 
     def get_info(self) -> dict[str, Any]:
         coords = self.coordinates()

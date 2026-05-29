@@ -31,16 +31,18 @@ def test_calc_greit_rm_matches_exported_eidors_components() -> None:
 
     expected_pjt = d @ y.T
     expected_noiselev = weight * np.mean(np.abs(y))
-    expected_sn = noise_covar * np.eye(y.shape[0])
+    expected_sn_diag = np.full(y.shape[0], noise_covar, dtype=float)
+    expected_sn = np.diag(expected_sn_diag)
     expected_m = y @ y.T + expected_noiselev**2 * expected_sn
     expected_rm = np.linalg.solve(expected_m.T, expected_pjt.T).T
 
     assert isinstance(result, GREITRMComponents)
     np.testing.assert_allclose(result.pjt, expected_pjt)
     assert result.noiselev == pytest.approx(expected_noiselev)
-    np.testing.assert_allclose(result.sn, expected_sn)
+    np.testing.assert_allclose(result.sn, expected_sn_diag)
     np.testing.assert_allclose(result.m, expected_m)
     np.testing.assert_allclose(result.rm, expected_rm)
+    assert result.metadata["sn_kind"] == "diagonal"
     assert result.metadata["solver"] == "solve"
     assert result.metadata["singular_fallback"] is False
     assert result.metadata["eidors_component_parity"] is True

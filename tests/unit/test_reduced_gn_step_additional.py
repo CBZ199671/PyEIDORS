@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -28,6 +30,61 @@ def test_build_reduced_operator_validates_input_shapes():
             regularization_apply=lambda vec: vec,
             lambda_eff=1.0,
         )
+
+
+def test_v279_build_reduced_operator_direct_fills_regularized_basis(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    jacobian = np.array(
+        [
+            [1.0, 2.0, 0.0],
+            [0.0, 1.0, 3.0],
+            [2.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    basis = np.array(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    reg_diag = np.array([2.0, 3.0, 4.0], dtype=float)
+
+    def _apply_regularization(vec: np.ndarray) -> np.ndarray:
+        return reg_diag * vec
+
+    expected_r_u = np.empty((3, 2), dtype=np.float64)
+    expected_r_u[:, 0] = reg_diag * basis[:, 0]
+    expected_r_u[:, 1] = reg_diag * basis[:, 1]
+    actual_r_u = reduced_step_module._apply_regularization_to_basis(
+        basis, _apply_regularization
+    )
+    np.testing.assert_allclose(actual_r_u, expected_r_u)
+
+    def _fail_column_stack(*_args, **_kwargs):
+        raise AssertionError("reduced regularization columns must direct-fill")
+
+    monkeypatch.setattr(reduced_step_module.np, "column_stack", _fail_column_stack)
+
+    result = build_reduced_operator(
+        jacobian=jacobian,
+        basis=basis,
+        regularization_apply=_apply_regularization,
+        lambda_eff=0.25,
+    )
+    expected_ju = jacobian @ basis
+    expected_h = expected_ju.T @ expected_ju + 0.25 * (basis.T @ expected_r_u)
+    np.testing.assert_allclose(result["JU"], expected_ju)
+    np.testing.assert_allclose(result["H"], 0.5 * (expected_h + expected_h.T))
+    assert "np.column_stack" not in inspect.getsource(
+        reduced_step_module._apply_regularization_to_basis
+    )
+    assert "np.column_stack" not in inspect.getsource(
+        reduced_step_module.build_reduced_operator
+    )
 
 
 def test_solve_reduced_step_uses_cg_when_inexact_succeeds(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -122,6 +123,17 @@ def test_to_runtime_tensor_copies_readonly_numpy_inputs(
     )
 
 
+def test_v518_gn_initial_and_prior_vectors_use_reshape_views() -> None:
+    init_source = inspect.getsource(gn_runtime._init_sigma_function)
+    prior_source = inspect.getsource(gn_runtime._prepare_prior)
+
+    assert ".flatten()" not in init_source
+    assert ".flatten()" not in prior_source
+    assert "np.asarray(initial_conductivity).reshape(-1)" in init_source
+    assert "np.asarray(prior_data).reshape(-1)" in prior_source
+    assert "np.asarray(initial_conductivity).reshape(-1)" in prior_source
+
+
 def test_measurement_weights_cover_disabled_and_verbose_paths(
     monkeypatch: pytest.MonkeyPatch, capsys
 ):
@@ -158,6 +170,43 @@ def test_measurement_weights_cover_disabled_and_verbose_paths(
     assert "measurement weights" in capsys.readouterr().out
 
 
+def test_v405_measurement_weights_sanitize_and_normalize_in_place(
+    monkeypatch: pytest.MonkeyPatch, capsys
+):
+    source = inspect.getsource(gn_runtime.ensure_measurement_weights)
+
+    assert "np.where(np.isfinite(weights)" not in source
+    assert "weights[np.isfinite(weights)]" not in source
+    assert "np.nan_to_num(weights, copy=False" in source
+    assert "np.maximum(weights, reconstructor.weight_floor, out=weights)" in source
+    assert "weights /= median" in source
+
+    monkeypatch.setattr(
+        gn_runtime,
+        "function_get_array",
+        lambda _sigma: np.array([0.5, 1.5], dtype=float),
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "build_weight_reference",
+        lambda **_kwargs: np.array([4.0, np.nan, np.inf, 0.1], dtype=float),
+    )
+    monkeypatch.setattr(
+        gn_runtime,
+        "project_measurement_vector",
+        lambda meas, **_kwargs: np.asarray(meas, dtype=float) * 2.0,
+    )
+
+    recon = _solve_reconstructor(verbose=True)
+    gn_runtime.ensure_measurement_weights(recon, sigma_function=object())
+
+    np.testing.assert_allclose(
+        recon._meas_weight_sqrt.detach().cpu().numpy(),
+        np.array([8.0, 1.0, 1.0, 1.0], dtype=float),
+    )
+    assert "measurement weights" in capsys.readouterr().out
+
+
 def test_finite_helpers_raise_with_context_and_summary():
     assert (
         gn_runtime._finite_summary(np.array([np.nan, np.inf], dtype=float))
@@ -166,14 +215,35 @@ def test_finite_helpers_raise_with_context_and_summary():
     summary = gn_runtime._finite_summary(np.array([1.0, np.nan, 3.0], dtype=float))
     assert "finite_count=2" in summary
     assert "l2=" in summary
+    complex_summary = gn_runtime._finite_summary(
+        np.array([1.0 + 1.0j, np.nan + 0.0j, 3.0 + 4.0j], dtype=np.complex128)
+    )
+    assert "finite_count=2" in complex_summary
+    assert "max=5.000000e+00" in complex_summary
+    source = inspect.getsource(gn_runtime._finite_summary)
+    assert "[np.isfinite" not in source
+    assert "np.linalg.norm" not in source
 
     with pytest.raises(FloatingPointError, match="iteration=init"):
         gn_runtime._require_finite(
             "demo", torch.tensor([1.0, float("nan")], dtype=torch.float64)
         )
 
+    with pytest.raises(FloatingPointError, match="max=5.000000e\\+00"):
+        gn_runtime._require_finite(
+            "complex_demo",
+            np.array([1.0 + 1.0j, np.nan + 0.0j, 3.0 + 4.0j]),
+        )
+
     with pytest.raises(FloatingPointError, match="iteration=3"):
         gn_runtime._require_scalar_finite("scalar", float("nan"), iteration=3)
+
+
+def test_gn_runtime_final_fit_reuses_owned_sigma_array() -> None:
+    source = inspect.getsource(gn_runtime.run_reconstruction)
+
+    assert "elem_data=sigma_final_array.copy()" not in source
+    assert "elem_data=sigma_final_array," in source
 
 
 def test_apply_regularization_np_and_diag_preconditioner_cover_all_matrix_kinds():

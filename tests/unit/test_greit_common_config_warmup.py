@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 import json
 from pathlib import Path
 from types import MappingProxyType
@@ -25,6 +26,8 @@ from pyeidors.inverse import (
     register_greit_common_config_artifact,
     resolve_greit_common_config_artifact_path,
 )
+from pyeidors.inverse import greit_warmup as warmup_module
+from pyeidors.inverse.greit_warmup import GREITCommonConfig
 from scripts.diagnostics import precompute_greit_common_configs as warmup_cli
 
 
@@ -59,6 +62,41 @@ def test_common_config_precompute_writes_hdf5_and_reuses_existing(
     assert warm.built is False
     assert warm.loaded is True
     np.testing.assert_allclose(warm.greit.rm, result.greit.rm)
+
+
+def test_deterministic_fixture_rm_streams_blocks_without_full_broadcasts(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    cfg = GREITCommonConfig(
+        config_id="tiny",
+        total_electrodes=8,
+        n_rings=1,
+        n_measurements=7,
+        voxel_shape=(2, 3, 1),
+        radius=0.18,
+        height=0.16,
+        description="tiny deterministic fixture",
+    )
+    monkeypatch.setattr(
+        warmup_module,
+        "_DETERMINISTIC_FIXTURE_RM_SCRATCH_BYTES",
+        2 * cfg.n_measurements * np.dtype(np.float64).itemsize,
+    )
+
+    matrix = warmup_module._deterministic_fixture_rm(cfg)
+    rows = np.arange(cfg.n_parameters, dtype=np.float64)[:, None] + 1.0
+    cols = np.arange(cfg.n_measurements, dtype=np.float64)[None, :] + 1.0
+    scale = max(float(np.sqrt(cfg.n_measurements)), 1.0)
+    expected = (
+        np.sin(rows * (cols + 3.0) * 0.00037) + np.cos((rows + 5.0) * cols * 0.00019)
+    ) / (2.0 * scale)
+
+    assert matrix.flags.c_contiguous
+    np.testing.assert_allclose(matrix, expected, rtol=0.0, atol=0.0)
+    source = inspect.getsource(warmup_module._deterministic_fixture_rm)
+    assert "np.multiply.outer" in source
+    assert "[:, None]" not in source
+    assert "[None, :]" not in source
 
 
 def test_common_config_load_prepare_online_and_runtime_metadata(

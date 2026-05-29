@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import json
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ import sys
 
 import numpy as np
 
+import pyeidors.data.factor_sweep as factor_sweep_module
 from pyeidors.data.factor_sweep import (
     CSV_FIELDS,
     format_factor_sweep_report,
@@ -22,6 +24,13 @@ from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_v497_factor_sweep_vector_validator_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(factor_sweep_module._as_float_vector)
+
+    assert "all_finite_values(arr)" in source
+    assert "np.all(np.isfinite(arr))" not in source
 
 
 def _small_surrogate_rows():

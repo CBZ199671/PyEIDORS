@@ -19,7 +19,7 @@ REPO_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 #    `nix develop --command bash -c '<inline script>'`.  This launcher uses
 #    the inline form, re-execing the committed inner script from inside it.
 #
-# Together these keep `bash scripts/gui/run_eit_app.sh --cpu` working
+# Together these keep `bash scripts/gui/run_eit_app.sh --auto` working
 # identically from either the main repo or any linked worktree.
 NIX_REPO_ROOT="$REPO_ROOT"
 EIT_APP_WORKTREE_SRC=""
@@ -43,9 +43,11 @@ if [[ -f "$REPO_ROOT/.git" ]]; then
   fi
 fi
 
-PROFILE="cpu"
+PROFILE="auto"
+PRECISION="${PYEIDORS_GUI_PRECISION:-complex64}"
 SKIP_CUDA_PROBE="1"
 ENV_SYNC_CACHE="${PYEIDORS_ENV_SYNC_CACHE:-1}"
+DRY_RUN="0"
 APP_ARGS=()
 NIX_OPTS=(--option warn-dirty false)
 
@@ -57,6 +59,39 @@ nix_daemon_proxy_unreachable() {
     return 1
   fi
   return 0
+}
+
+proxy_url_reachable() {
+  local url="$1"
+  [[ -n "$url" ]] || return 1
+  local endpoint="${url#*://}"
+  endpoint="${endpoint#*@}"
+  endpoint="${endpoint%%/*}"
+  local host="${endpoint%%:*}"
+  local port="${endpoint##*:}"
+  [[ -n "$host" && -n "$port" && "$host" != "$port" ]] || return 1
+  timeout 1 bash -c "</dev/tcp/$host/$port" >/dev/null 2>&1
+}
+
+reachable_shell_proxy_configured() {
+  local candidate
+  for candidate in \
+    "${https_proxy:-}" \
+    "${HTTPS_PROXY:-}" \
+    "${http_proxy:-}" \
+    "${HTTP_PROXY:-}" \
+    "http://127.0.0.1:7890"; do
+    if proxy_url_reachable "$candidate"; then
+      export http_proxy="${http_proxy:-$candidate}"
+      export https_proxy="${https_proxy:-$candidate}"
+      export HTTP_PROXY="${HTTP_PROXY:-$candidate}"
+      export HTTPS_PROXY="${HTTPS_PROXY:-$candidate}"
+      export no_proxy="${no_proxy:-localhost,127.0.0.1,::1}"
+      export NO_PROXY="${NO_PROXY:-localhost,127.0.0.1,::1}"
+      return 0
+    fi
+  done
+  return 1
 }
 
 prefer_system_env_first() {
@@ -72,25 +107,181 @@ prefer_system_env_first() {
 
 prefer_system_env_first
 
+normalize_precision() {
+  case "${1,,}" in
+    complex128|128|double|float64)
+      printf '%s\n' "complex128"
+      ;;
+    complex64|64|single|float32)
+      printf '%s\n' "complex64"
+      ;;
+    *)
+      echo "[run_eit_app] unsupported precision '$1'; expected complex64 or complex128" >&2
+      return 2
+      ;;
+  esac
+}
+
+gpu_available() {
+  case "${PYEIDORS_GUI_GPU_AVAILABLE:-auto}" in
+    1|true|TRUE|yes|YES|on|ON)
+      return 0
+      ;;
+    0|false|FALSE|no|NO|off|OFF)
+      return 1
+      ;;
+  esac
+
+  if command -v nvidia-smi >/dev/null 2>&1 && nvidia-smi -L >/dev/null 2>&1; then
+    return 0
+  fi
+  [[ -e /usr/lib/wsl/lib/libcuda.so || -e /usr/lib/wsl/lib/libcuda.so.1 ]]
+}
+
+resolve_launch_profile() {
+  local requested="$1"
+  local precision="$2"
+  NIX_PROFILE="default"
+  GUI_PROFILE="cpu"
+  case "$requested" in
+    auto)
+      if gpu_available; then
+        GUI_PROFILE="gpu"
+        if [[ "$precision" == "complex128" ]]; then
+          NIX_PROFILE="complex-cuda"
+        else
+          NIX_PROFILE="complex64-cuda"
+        fi
+      else
+        GUI_PROFILE="cpu"
+        if [[ "$precision" == "complex128" ]]; then
+          NIX_PROFILE="complex"
+        else
+          NIX_PROFILE="complex64"
+        fi
+      fi
+      ;;
+    cpu)
+      GUI_PROFILE="cpu"
+      if [[ "$precision" == "complex128" ]]; then
+        NIX_PROFILE="complex"
+      else
+        NIX_PROFILE="complex64"
+      fi
+      ;;
+    gpu)
+      GUI_PROFILE="gpu"
+      if [[ "$precision" == "complex128" ]]; then
+        NIX_PROFILE="complex-cuda"
+      else
+        NIX_PROFILE="complex64-cuda"
+      fi
+      ;;
+    real-cpu)
+      GUI_PROFILE="cpu"
+      NIX_PROFILE="default"
+      ;;
+    real-gpu)
+      GUI_PROFILE="gpu"
+      NIX_PROFILE="cuda"
+      ;;
+    complex-cpu|complex128-cpu)
+      GUI_PROFILE="cpu"
+      NIX_PROFILE="complex"
+      PRECISION="complex128"
+      ;;
+    complex64-cpu)
+      GUI_PROFILE="cpu"
+      NIX_PROFILE="complex64"
+      PRECISION="complex64"
+      ;;
+    complex-gpu|complex128-gpu)
+      GUI_PROFILE="gpu"
+      NIX_PROFILE="complex-cuda"
+      PRECISION="complex128"
+      ;;
+    complex64-gpu)
+      GUI_PROFILE="gpu"
+      NIX_PROFILE="complex64-cuda"
+      PRECISION="complex64"
+      ;;
+    *)
+      echo "[run_eit_app] unsupported profile '$requested'" >&2
+      echo "[run_eit_app] use --auto, --cpu, --gpu, --real-cpu, --real-gpu, --complex64-cpu, --complex64-gpu, --complex128-cpu, or --complex128-gpu" >&2
+      return 2
+      ;;
+  esac
+}
+
 if nix_daemon_proxy_unreachable; then
-  # The daemon-level proxy is outside this script's environment.  When it
-  # points at a closed localhost port, Nix emits repeated cache.nixos.org
-  # download warnings before falling back to local store/build behaviour.
-  # Disable substituter lookup for this launch only; do not mutate Nix config.
-  NIX_OPTS+=(--option substituters "")
-  if [[ "${PYEIDORS_LAUNCH_VERBOSE:-0}" == "1" ]]; then
-    echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable; skipping substituter lookup for this launch" >&2
+  if reachable_shell_proxy_configured; then
+    if [[ "${PYEIDORS_LAUNCH_VERBOSE:-0}" == "1" ]]; then
+      echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable, but current shell proxy is reachable; keeping substituters enabled" >&2
+    fi
+  else
+    # The daemon-level proxy is outside this script's environment.  When it
+    # points at a closed localhost port and no usable shell proxy exists, Nix
+    # emits repeated cache.nixos.org warnings before falling back to local
+    # store/build behaviour. Disable lookup for this launch only.
+    NIX_OPTS+=(--option substituters "")
+    if [[ "${PYEIDORS_LAUNCH_VERBOSE:-0}" == "1" ]]; then
+      echo "[run_eit_app] Nix daemon proxy 127.0.0.1:7897 is unreachable; skipping substituter lookup for this launch" >&2
+    fi
   fi
 fi
 
 while (($# > 0)); do
   case "$1" in
+    --auto|auto)
+      PROFILE="auto"
+      shift
+      ;;
     --cpu|cpu)
       PROFILE="cpu"
       shift
       ;;
     --gpu|gpu)
       PROFILE="gpu"
+      shift
+      ;;
+    --real-cpu|real-cpu)
+      PROFILE="real-cpu"
+      shift
+      ;;
+    --real-gpu|real-gpu)
+      PROFILE="real-gpu"
+      shift
+      ;;
+    --complex-cpu|--complex128-cpu|complex-cpu|complex128-cpu)
+      PROFILE="complex128-cpu"
+      shift
+      ;;
+    --complex64-cpu|complex64-cpu)
+      PROFILE="complex64-cpu"
+      shift
+      ;;
+    --complex-gpu|--complex128-gpu|complex-gpu|complex128-gpu)
+      PROFILE="complex128-gpu"
+      shift
+      ;;
+    --complex64-gpu|complex64-gpu)
+      PROFILE="complex64-gpu"
+      shift
+      ;;
+    --precision)
+      if (($# < 2)); then
+        echo "[run_eit_app] --precision requires complex64 or complex128" >&2
+        exit 2
+      fi
+      PRECISION="$2"
+      shift 2
+      ;;
+    --complex64)
+      PRECISION="complex64"
+      shift
+      ;;
+    --complex128)
+      PRECISION="complex128"
       shift
       ;;
     --skip-cuda-probe)
@@ -105,6 +296,10 @@ while (($# > 0)); do
       ENV_SYNC_CACHE="0"
       shift
       ;;
+    --dry-run)
+      DRY_RUN="1"
+      shift
+      ;;
     --)
       shift
       APP_ARGS+=("$@")
@@ -116,6 +311,9 @@ while (($# > 0)); do
       ;;
   esac
 done
+
+PRECISION="$(normalize_precision "$PRECISION")"
+resolve_launch_profile "$PROFILE" "$PRECISION"
 
 cd "$NIX_REPO_ROOT"
 
@@ -137,15 +335,30 @@ export UV_NO_PROGRESS="${UV_NO_PROGRESS:-1}"
 
 BASH_PAYLOAD=$(cat <<EOF
 set -euo pipefail
-export EIT_APP_GUI_PROFILE=$(printf '%q' "$PROFILE")
+export EIT_APP_GUI_PROFILE=$(printf '%q' "$GUI_PROFILE")
+export EIT_APP_GUI_REQUESTED_PROFILE=$(printf '%q' "$PROFILE")
+export EIT_APP_GUI_RUNTIME_PROFILE=$(printf '%q' "$NIX_PROFILE")
+export EIT_APP_GUI_PRECISION=$(printf '%q' "$PRECISION")
 export EIT_APP_SKIP_CUDA_PROBE=$(printf '%q' "$SKIP_CUDA_PROBE")
 export EIT_APP_WORKTREE_SRC=$(printf '%q' "$EIT_APP_WORKTREE_SRC")
 exec bash $(printf '%q' "$INNER_SCRIPT") "\$@"
 EOF
 )
 
-if [[ "$PROFILE" == "gpu" ]]; then
-  exec nix "${NIX_OPTS[@]}" develop .#cuda --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
+NIX_TARGET=()
+if [[ "$NIX_PROFILE" != "default" ]]; then
+  NIX_TARGET=(".#$NIX_PROFILE")
 fi
 
-exec nix "${NIX_OPTS[@]}" develop --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
+if [[ "$DRY_RUN" == "1" ]]; then
+  echo "[run_eit_app] requested_profile=$PROFILE"
+  echo "[run_eit_app] precision=$PRECISION"
+  echo "[run_eit_app] gui_profile=$GUI_PROFILE"
+  echo "[run_eit_app] nix_profile=$NIX_PROFILE"
+  printf '[run_eit_app] nix command: nix'
+  printf ' %q' "${NIX_OPTS[@]}" develop "${NIX_TARGET[@]}" --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"
+  printf '\n'
+  exit 0
+fi
+
+exec nix "${NIX_OPTS[@]}" develop "${NIX_TARGET[@]}" --command bash -c "$BASH_PAYLOAD" _ "${APP_ARGS[@]}"

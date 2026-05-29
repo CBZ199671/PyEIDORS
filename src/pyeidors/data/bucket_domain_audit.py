@@ -7,6 +7,8 @@ import math
 from pathlib import Path
 
 import numpy as np
+
+from pyeidors.utils.numeric_ops import all_finite_values
 from scipy.spatial import Delaunay
 
 from .eit_digit_metrics import ADJACENT_PATTERN, adjacent_measurement_count
@@ -155,7 +157,9 @@ def _circle_nodes(*, radius: float, mesh_h: float, n_elec: int) -> np.ndarray:
         int(math.ceil((2.0 * math.pi * radius) / (0.75 * mesh_h))),
     )
     angles = np.linspace(0.0, 2.0 * math.pi, boundary_count, endpoint=False)
-    boundary = radius * np.column_stack([np.cos(angles), np.sin(angles)])
+    boundary = np.empty((boundary_count, 2), dtype=float)
+    boundary[:, 0] = radius * np.cos(angles)
+    boundary[:, 1] = radius * np.sin(angles)
 
     interior: list[tuple[float, float]] = [(0.0, 0.0)]
     dy = mesh_h * math.sqrt(3.0) / 2.0
@@ -167,12 +171,18 @@ def _circle_nodes(*, radius: float, mesh_h: float, n_elec: int) -> np.ndarray:
             if x_value * x_value + y_value * y_value <= (radius - 0.25 * mesh_h) ** 2:
                 interior.append((float(x_value), float(y_value)))
 
-    raw_points = np.vstack([boundary, np.asarray(interior, dtype=float)])
+    interior_points = np.asarray(interior, dtype=float)
+    raw_points = np.empty(
+        (boundary.shape[0] + interior_points.shape[0], 2),
+        dtype=float,
+    )
+    raw_points[: boundary.shape[0], :] = boundary
+    raw_points[boundary.shape[0] :, :] = interior_points
     rounded = np.round(raw_points, decimals=12)
     _, unique_indices = np.unique(rounded, axis=0, return_index=True)
     points = raw_points[np.sort(unique_indices)]
     radii = np.linalg.norm(points, axis=1)
-    if np.any(radii > radius + 1e-10):
+    if float(np.max(radii, initial=-np.inf)) > radius + 1e-10:
         raise RuntimeError("circle bucket nodes leaked outside the disk")
     return points
 
@@ -205,7 +215,8 @@ def _circle_cells(
     areas = areas[non_degenerate]
     if cells.size == 0:
         raise RuntimeError("circle bucket mesh has no valid cells")
-    if np.any(np.linalg.norm(centers, axis=1) > radius + 1e-10):
+    center_radii = np.linalg.norm(centers, axis=1)
+    if float(np.max(center_radii, initial=-np.inf)) > radius + 1e-10:
         raise RuntimeError("circle bucket cell centers leaked outside the disk")
     return cells, centers, areas
 
@@ -254,7 +265,7 @@ def _sigma_truth_for_cells(
     anomaly_conductivity: float,
 ) -> np.ndarray:
     center = np.asarray(anomaly_center, dtype=float)
-    if center.shape != (2,) or not np.all(np.isfinite(center)):
+    if center.shape != (2,) or not all_finite_values(center):
         raise ValueError("anomaly_center must be two finite coordinates")
     radius = _as_positive_float(anomaly_radius, name="anomaly_radius")
     if float(np.linalg.norm(center)) + radius > bucket_radius + 1e-12:
@@ -264,7 +275,7 @@ def _sigma_truth_for_cells(
     if not np.any(mask):
         raise RuntimeError("anomaly did not cover any mesh cells")
     sigma[mask] = float(anomaly_conductivity)
-    if not np.all(np.isfinite(sigma)):
+    if not all_finite_values(sigma):
         raise RuntimeError("sigma_true contains non-finite values")
     return sigma
 

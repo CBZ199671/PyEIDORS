@@ -14,6 +14,7 @@ from typing import Any, Mapping
 import numpy as np
 from scipy import sparse
 
+from pyeidors.cache.keys import update_digest_with_array_payload
 from pyeidors.data.channels import (
     apply_measurement_contract_to_jacobian,
     apply_measurement_contract_to_vector,
@@ -25,13 +26,19 @@ from pyeidors.data.difference import (
     build_difference_frames,
     normalize_time_difference,
 )
+from pyeidors.data._temporal_core import as_real_float_array as _as_real_float_array
 from pyeidors.data.temporal_filtering import (
     MeasurementTemporalFilterResult,
     filter_measurement_frames,
 )
 from pyeidors.inverse.prior import RtRPrior, as_rtr_prior
 from pyeidors.perf.gpu_kernels import RMMatmulResult, rm_matmul
-from pyeidors.utils.numeric_ops import safe_dot
+from pyeidors.utils.numeric_ops import (
+    add_scaled_diagonal_in_place,
+    add_scaled_values_in_place,
+    all_finite_values,
+    safe_dot,
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +72,10 @@ class RMArtifact:
     greit_d: np.ndarray | None = None
     path: str | None = None
     schema: str | None = None
+
+
+_RM_HDF5_STREAMING_CHUNK_TARGET_BYTES = 8 * 1024 * 1024
+_RM_HDF5_DEFAULT_COMPRESSION = "lzf"
 
 
 def rm_signature_payload(
@@ -192,12 +203,70 @@ def write_rm_artifact(
     ):
         if value is not None:
             arrays[key] = np.asarray(value)
+    rm_chunk_target_bytes = _positive_chunk_target_bytes(
+        meta.get(
+            "rm_hdf5_streaming_chunk_bytes",
+            _RM_HDF5_STREAMING_CHUNK_TARGET_BYTES,
+        )
+    )
+    rm_chunks = _rm_hdf5_streaming_chunks(
+        matrix,
+        target_chunk_bytes=rm_chunk_target_bytes,
+    )
+    chunks: bool | dict[str, tuple[int, ...]]
+    if rm_chunks is None:
+        chunks = True
+    else:
+        meta.setdefault("rm_hdf5_chunk_layout", "row_full_width_v1")
+        meta.setdefault("rm_hdf5_chunk_target_bytes", rm_chunk_target_bytes)
+        meta.setdefault("rm_hdf5_chunks", [int(v) for v in rm_chunks])
+        chunks = {"rm": rm_chunks}
+    compression = _rm_hdf5_compression(meta.get("rm_hdf5_compression"))
+    meta.setdefault("rm_hdf5_compression", compression or "none")
     return write_hdf5_artifact(
         path,
         arrays,
         meta,
         schema="pyeidors-rm-hdf5-v1",
+        compression=compression,
+        chunks=chunks,
     )
+
+
+def _positive_chunk_target_bytes(value: Any) -> int:
+    try:
+        target = int(value)
+    except (TypeError, ValueError):
+        target = _RM_HDF5_STREAMING_CHUNK_TARGET_BYTES
+    return max(1, target)
+
+
+def _rm_hdf5_compression(value: Any) -> str | None:
+    raw = str(_RM_HDF5_DEFAULT_COMPRESSION if value is None else value).strip().lower()
+    if raw in {"", "auto", "fast"}:
+        return _RM_HDF5_DEFAULT_COMPRESSION
+    if raw in {"none", "off", "false", "0"}:
+        return None
+    return raw
+
+
+def _rm_hdf5_streaming_chunks(
+    matrix: np.ndarray,
+    *,
+    target_chunk_bytes: int = _RM_HDF5_STREAMING_CHUNK_TARGET_BYTES,
+) -> tuple[int, int] | None:
+    """Choose row-block/full-width chunks for streaming ``RM @ dv`` reads."""
+
+    if matrix.ndim != 2 or matrix.size == 0:
+        return None
+    n_rows, n_cols = (int(v) for v in matrix.shape)
+    if n_cols <= 0:
+        return None
+    itemsize = max(1, int(matrix.dtype.itemsize))
+    row_bytes = max(1, n_cols * itemsize)
+    rows_per_chunk = max(1, int(target_chunk_bytes) // row_bytes)
+    rows_per_chunk = min(n_rows, rows_per_chunk)
+    return (int(rows_per_chunk), n_cols)
 
 
 def load_rm_artifact(path: str | Path) -> RMArtifact:
@@ -275,7 +344,7 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
     vector = vector.reshape(-1)
     if vector.size == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
 
@@ -291,7 +360,7 @@ def _as_rm_matrix(
         raise ValueError(
             f"RM artifact matrix must be non-empty 2D, got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError("RM artifact matrix contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=resolved_dtype)
 
@@ -317,6 +386,23 @@ def _optional_artifact_array(
     if arr.size == 0:
         return None
     return arr
+
+
+def _optional_node_coords_array(
+    arrays: Mapping[str, Any], key: str
+) -> np.ndarray | None:
+    if key not in arrays:
+        return None
+    if arrays[key] is None:
+        return None
+    arr = np.asarray(arrays[key])
+    if arr.size == 0:
+        return None
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if np.issubdtype(np.asarray(arr).dtype, np.floating):
+        return np.asarray(arr)
+    return np.asarray(arr, dtype=np.float64)
 
 
 def _optional_artifact_array_aliases(
@@ -345,7 +431,7 @@ def _load_hdf5_rm_artifact(path: Path) -> RMArtifact:
         rm=_as_rm_matrix(rm_array),
         metadata=MappingProxyType(dict(artifact.metadata)),
         voxel_shape=_positive_int_shape(arrays.get("voxel_shape")),
-        node_coords=_optional_artifact_array(arrays, "node_coords", dtype=np.float64),
+        node_coords=_optional_node_coords_array(arrays, "node_coords"),
         cell_connectivity=_optional_artifact_array(
             arrays, "cell_connectivity", dtype=np.int32
         ),
@@ -386,11 +472,9 @@ def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
             except json.JSONDecodeError:
                 metadata["metadata_json"] = raw
         arrays = {str(name): np.asarray(payload[name]) for name in payload.files}
-    node_coords = _optional_artifact_array(arrays, "node_coords", dtype=np.float64)
+    node_coords = _optional_node_coords_array(arrays, "node_coords")
     if node_coords is None:
-        node_coords = _optional_artifact_array(
-            arrays, "display_node_coords", dtype=np.float64
-        )
+        node_coords = _optional_node_coords_array(arrays, "display_node_coords")
     cell_connectivity = _optional_artifact_array(
         arrays, "cell_connectivity", dtype=np.int32
     )
@@ -427,7 +511,7 @@ def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
 
 
 def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]:
-    array = np.asarray(values, dtype=np.float64)
+    array = _as_real_float_array(values)
     if array.ndim == 1:
         frames = array.reshape(1, -1)
         was_vector = True
@@ -438,9 +522,9 @@ def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]
         raise ValueError(f"{name} must be a 1D vector or 2D frame batch.")
     if frames.shape[0] == 0 or frames.shape[1] == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(frames).all():
+    if not all_finite_values(frames):
         raise FloatingPointError(f"{name} contains non-finite values.")
-    return np.ascontiguousarray(frames, dtype=np.float64), was_vector
+    return np.ascontiguousarray(frames), was_vector
 
 
 def _reference_frames(
@@ -452,7 +536,7 @@ def _reference_frames(
             raise ValueError(
                 f"v_ref length {ref.size} does not match {n_measurements} measurements."
             )
-        return np.broadcast_to(ref.reshape(1, -1), (n_frames, n_measurements)).copy()
+        return np.ascontiguousarray(ref.reshape(1, -1), dtype=np.float64)
     if ref.ndim == 2:
         if ref.shape != (n_frames, n_measurements):
             raise ValueError(
@@ -489,26 +573,59 @@ def _apply_measurement_contract_to_frames(
     channel_mask: Any | None,
     measurement_weights: Any | None,
 ) -> np.ndarray:
+    payload, _, _ = _apply_measurement_contract_to_frames_with_metadata(
+        frames,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    return payload
+
+
+def _apply_measurement_contract_to_frames_with_metadata(
+    frames: np.ndarray,
+    *,
+    channel_mask: Any | None,
+    measurement_weights: Any | None,
+) -> tuple[np.ndarray, int, str]:
     n_measurements = int(frames.shape[1])
     mask = normalize_bad_channel_mask(channel_mask, n_measurements=n_measurements)
-    out = np.asarray(frames, dtype=np.float64).copy()
-    if np.any(mask):
-        out[:, mask] = 0.0
-    weights, _ = zero_bad_channel_weights(
+    bad_channel_count = int(np.count_nonzero(mask))
+    out = np.array(_as_real_float_array(frames), copy=True, order="C")
+    if bad_channel_count:
+        _zero_bad_measurement_columns_in_place(out, mask)
+    weights, weight_kind = zero_bad_channel_weights(
         measurement_weights,
         mask,
         n_measurements=n_measurements,
     )
     if weights.ndim == 1:
-        out *= np.sqrt(weights).reshape(1, -1)
-        return np.ascontiguousarray(out, dtype=np.float64)
+        np.sqrt(weights, out=weights)
+        out *= weights.reshape(1, -1)
+        return (
+            np.ascontiguousarray(out),
+            bad_channel_count,
+            weight_kind,
+        )
 
     contract = prepare_measurement_contract(
         n_measurements=n_measurements,
         channel_mask=mask,
         measurement_weights=weights,
     )
-    return np.asarray(out @ contract.weight_transform.T, dtype=np.float64)
+    return (
+        np.asarray(out @ contract.weight_transform.T, dtype=out.dtype),
+        bad_channel_count,
+        contract.weight_kind,
+    )
+
+
+def _zero_bad_measurement_columns_in_place(
+    frames: np.ndarray,
+    mask: np.ndarray,
+) -> None:
+    for col_idx, is_bad in enumerate(np.asarray(mask, dtype=bool).reshape(-1)):
+        if bool(is_bad):
+            frames[:, col_idx] = 0.0
 
 
 def _as_jacobian(
@@ -525,7 +642,7 @@ def _as_jacobian(
         raise ValueError("J must be a 2D measurement-by-parameter matrix.")
     if 0 in matrix.shape:
         raise ValueError("J must be non-empty.")
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError("J contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=resolved_dtype)
 
@@ -567,7 +684,7 @@ def _prior_to_dense_matrix(
         raise TypeError(f"{name} RtR prior did not produce an explicit matrix.")
     if matrix.shape != prior.shape:
         raise ValueError(f"{name} RtR shape mismatch: expected {prior.shape}.")
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError(f"{name} RtR contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=resolved_dtype)
 
@@ -586,7 +703,7 @@ def _prior_diagonal(
         raise ValueError(
             f"RtR diag length {diag.size} does not match {prior.shape[0]}."
         )
-    if not np.isfinite(diag).all():
+    if not all_finite_values(diag):
         raise FloatingPointError("RtR diag contains non-finite values.")
     return np.ascontiguousarray(diag, dtype=resolved_dtype)
 
@@ -605,25 +722,41 @@ def _as_measurement_regularization(
     *,
     n_measurements: int,
     dtype: str | np.dtype[Any] | type = np.float64,
-) -> tuple[np.ndarray, str]:
+) -> tuple[np.ndarray, str, str]:
     resolved_dtype = _resolve_float_dtype(dtype)
     if measurement_regularization is None:
-        return np.eye(n_measurements, dtype=resolved_dtype), "identity"
+        return np.ones(n_measurements, dtype=resolved_dtype), "identity", "diagonal"
     if sparse.issparse(measurement_regularization):
         matrix = np.asarray(measurement_regularization.toarray(), dtype=resolved_dtype)
+        kind = "matrix"
     else:
         array = np.asarray(measurement_regularization, dtype=resolved_dtype)
-        matrix = np.diag(array) if array.ndim == 1 else array
+        if array.ndim == 1:
+            diag = np.ascontiguousarray(array.reshape(-1), dtype=resolved_dtype)
+            if diag.shape != (n_measurements,):
+                raise ValueError(
+                    "measurement_regularization must have shape "
+                    f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+                    f"got {array.shape}."
+                )
+            if not all_finite_values(diag):
+                raise FloatingPointError(
+                    "measurement_regularization contains non-finite values."
+                )
+            return diag, "provided", "diagonal"
+        matrix = array
+        kind = "matrix"
     if matrix.shape != (n_measurements, n_measurements):
         raise ValueError(
             "measurement_regularization must have shape "
-            f"{(n_measurements, n_measurements)}, got {matrix.shape}."
+            f"{(n_measurements, n_measurements)} or {(n_measurements,)}, "
+            f"got {matrix.shape}."
         )
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError(
             "measurement_regularization contains non-finite values."
         )
-    return np.ascontiguousarray(matrix, dtype=resolved_dtype), "provided"
+    return np.ascontiguousarray(matrix, dtype=resolved_dtype), "provided", kind
 
 
 def _noser_regularization(
@@ -791,7 +924,7 @@ def build_one_step_rm(
     )
 
     if resolved_form == "measurement":
-        rn, rn_source = _as_measurement_regularization(
+        rn, rn_source, rn_kind = _as_measurement_regularization(
             measurement_regularization,
             n_measurements=int(jac.shape[0]),
             dtype=calc_dtype,
@@ -812,7 +945,11 @@ def build_one_step_rm(
             )
             p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac.T)
             p_jt = np.asarray(p_jt, dtype=calc_dtype)
-        lhs = np.asarray(jac @ p_jt + (lam * lam) * rn, dtype=calc_dtype)
+        lhs = np.ascontiguousarray(jac @ p_jt, dtype=calc_dtype)
+        if rn_kind == "diagonal":
+            add_scaled_diagonal_in_place(lhs, rn, lam * lam)
+        else:
+            add_scaled_values_in_place(lhs, rn, lam * lam)
         rm_t, solver = _solve_or_pinv(lhs.T, p_jt.T)
         rm = rm_t.T
         inversion_dimension = "measurement"
@@ -824,7 +961,7 @@ def build_one_step_rm(
         rm, solver = _solve_or_pinv(lhs, jac.T)
         inversion_dimension = "parameter"
     rm = np.asarray(rm, dtype=calc_dtype)
-    if not np.isfinite(rm).all():
+    if not all_finite_values(rm):
         raise FloatingPointError("one-step RM contains non-finite values.")
     try:
         condition_estimate = float(np.linalg.cond(lhs))
@@ -898,7 +1035,7 @@ def _matvec(rm: Any, vector: np.ndarray) -> np.ndarray:
         out = np.asarray(
             safe_dot(matrix, vector, "reconstruction_matrix.apply"), dtype=np.float64
         )
-    if not np.isfinite(out).all():
+    if not all_finite_values(out):
         raise FloatingPointError("RM application produced non-finite values.")
     return out.reshape(-1)
 
@@ -933,10 +1070,7 @@ def reconstruct_difference(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    return np.asarray(
-        rm_matmul(rm, measurement, device=device, dtype=dtype),
-        dtype=np.float64,
-    )
+    return np.asarray(rm_matmul(rm, measurement, device=device, dtype=dtype))
 
 
 def reconstruct_difference_batch(
@@ -1049,12 +1183,11 @@ def reconstruct_temporal_difference_batch(
     filter_seconds = time.perf_counter() - filter_start
 
     contract_start = time.perf_counter()
-    contract = prepare_measurement_contract(
-        n_measurements=filtered_batch.shape[1],
-        channel_mask=channel_mask,
-        measurement_weights=measurement_weights,
-    )
-    measurement_payload = _apply_measurement_contract_to_frames(
+    (
+        measurement_payload,
+        bad_channel_count,
+        measurement_weight_kind,
+    ) = _apply_measurement_contract_to_frames_with_metadata(
         filtered_batch,
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
@@ -1088,8 +1221,8 @@ def reconstruct_temporal_difference_batch(
             "normalize": bool(normalize and v_ref is not None),
             "difference_orientation": str(difference_orientation),
             "measurement_contract_applied": True,
-            "bad_channel_count": int(contract.bad_channel_count),
-            "measurement_weight_kind": contract.weight_kind,
+            "bad_channel_count": bad_channel_count,
+            "measurement_weight_kind": measurement_weight_kind,
             "temporal_filter_metadata": MappingProxyType(dict(filter_result.metadata)),
             "temporal_filter_state": filter_result.metadata["final_state"],
             "timestamp_policy": "metadata_only_no_smoothing",
@@ -1107,7 +1240,7 @@ def reconstruct_temporal_difference_batch(
         }
     )
     result = RMMatmulResult(
-        values=np.asarray(matmul.values, dtype=np.float64),
+        values=np.asarray(matmul.values),
         metadata=MappingProxyType(metadata),
     )
     return result if return_metadata else result.values
@@ -1125,7 +1258,7 @@ def _annotate_online_hot_path_metadata(result: RMMatmulResult) -> RMMatmulResult
         }
     )
     return RMMatmulResult(
-        values=np.asarray(result.values, dtype=np.float64),
+        values=np.asarray(result.values),
         metadata=MappingProxyType(meta),
     )
 
@@ -1171,22 +1304,21 @@ def _digest_value(value: Any) -> str:
     if sparse.issparse(value):
         return _digest_value(_canonical_signature_value(value))
     array = np.asarray(value)
+    digest = hashlib.sha256()
     if array.dtype == object:
         encoded = json.dumps(
             _canonical_signature_value(array.tolist()),
             sort_keys=True,
             separators=(",", ":"),
         ).encode()
+        digest.update(encoded)
     else:
-        contiguous = np.ascontiguousarray(array)
-        encoded = (
-            str(contiguous.dtype).encode()
-            + b"|"
-            + json.dumps([int(v) for v in contiguous.shape]).encode()
-            + b"|"
-            + contiguous.tobytes()
-        )
-    return hashlib.sha256(encoded).hexdigest()
+        digest.update(str(array.dtype).encode())
+        digest.update(b"|")
+        digest.update(json.dumps([int(v) for v in array.shape]).encode())
+        digest.update(b"|")
+        update_digest_with_array_payload(digest, array)
+    return digest.hexdigest()
 
 
 def _nonnegative_seconds(value: float, *, name: str) -> float:

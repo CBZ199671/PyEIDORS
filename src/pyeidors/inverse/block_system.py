@@ -11,6 +11,8 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse import linalg as spla
 
+from pyeidors.utils.numeric_ops import all_finite_values, any_equal_values
+
 try:  # pragma: no cover - optional in non-Nix/unit environments
     from petsc4py import PETSc as _PETSc
 except Exception:  # pragma: no cover
@@ -203,7 +205,7 @@ def _finite_vector(
         raise ValueError(f"{name} must be non-empty.")
     if length is not None and arr.size != int(length):
         raise ValueError(f"{name} length {arr.size} does not match {int(length)}.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(arr, dtype=np.float64)
 
@@ -218,7 +220,7 @@ def _as_csr_matrix(name: str, value: Any) -> sparse.csr_matrix:
         matrix = sparse.csr_matrix(arr)
     if matrix.ndim != 2 or 0 in matrix.shape:
         raise ValueError(f"{name} must be a non-empty 2D matrix.")
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    if matrix.nnz and not all_finite_values(matrix.data):
         raise FloatingPointError(f"{name} contains non-finite values.")
     matrix.sort_indices()
     return matrix
@@ -248,7 +250,7 @@ def _regularization_to_csr(
             raise ValueError(
                 f"{name} shape {matrix.shape} does not match {(size, size)}."
             )
-        if matrix.nnz and not np.isfinite(matrix.data).all():
+        if matrix.nnz and not all_finite_values(matrix.data):
             raise FloatingPointError(f"{name} contains non-finite values.")
         matrix.sort_indices()
         return matrix
@@ -257,7 +259,7 @@ def _regularization_to_csr(
     if arr.ndim == 1:
         if arr.size != size:
             raise ValueError(f"{name} length {arr.size} does not match {size}.")
-        if not np.isfinite(arr).all() or np.any(arr < 0.0):
+        if not all_finite_values(arr) or float(np.min(arr, initial=np.inf)) < 0.0:
             raise FloatingPointError(
                 f"{name} diagonal must be finite and non-negative."
             )
@@ -265,7 +267,7 @@ def _regularization_to_csr(
     if arr.ndim == 2:
         if arr.shape != (size, size):
             raise ValueError(f"{name} shape {arr.shape} does not match {(size, size)}.")
-        if not np.isfinite(arr).all():
+        if not all_finite_values(arr):
             raise FloatingPointError(f"{name} contains non-finite values.")
         return sparse.csr_matrix(arr)
     raise ValueError(f"{name} must be scalar, diagonal vector, or square matrix.")
@@ -293,7 +295,7 @@ def _measurement_weights_to_csr(
                 raise ValueError(
                     f"measurement_weights length {arr.size} does not match {size}."
                 )
-            if not np.isfinite(arr).all() or np.any(arr < 0.0):
+            if not all_finite_values(arr) or float(np.min(arr, initial=np.inf)) < 0.0:
                 raise FloatingPointError(
                     "measurement_weights diagonal must be finite and non-negative."
                 )
@@ -307,7 +309,7 @@ def _measurement_weights_to_csr(
         raise ValueError(
             f"measurement_weights shape {matrix.shape} does not match {(size, size)}."
         )
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    if matrix.nnz and not all_finite_values(matrix.data):
         raise FloatingPointError("measurement_weights contains non-finite values.")
     if not _matrix_is_symmetric(matrix):
         raise ValueError("measurement_weights matrix must be symmetric.")
@@ -553,19 +555,20 @@ def assemble_sigma_contact_normal_system(
         format="csr",
         dtype=np.float64,
     )
-    rhs = np.concatenate(
-        [
-            np.asarray(j_sigma_csr.T @ weighted_residual, dtype=np.float64).reshape(-1),
-            np.asarray(j_contact_csr.T @ weighted_residual, dtype=np.float64).reshape(
-                -1
-            ),
-        ]
-    )
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    rhs = np.empty(n_sigma + n_contact, dtype=np.float64)
+    rhs[:n_sigma] = np.asarray(
+        j_sigma_csr.T @ weighted_residual,
+        dtype=np.float64,
+    ).reshape(-1)
+    rhs[n_sigma:] = np.asarray(
+        j_contact_csr.T @ weighted_residual,
+        dtype=np.float64,
+    ).reshape(-1)
+    if matrix.nnz and not all_finite_values(matrix.data):
         raise FloatingPointError(
             "sigma/contact normal matrix contains non-finite values."
         )
-    if not np.isfinite(rhs).all():
+    if not all_finite_values(rhs):
         raise FloatingPointError("sigma/contact normal rhs contains non-finite values.")
     matrix.sort_indices()
     return SigmaContactNormalSystem(
@@ -743,7 +746,7 @@ def _solve_sigma_contact_with_petsc(
         reason = (
             int(ksp.getConvergedReason()) if hasattr(ksp, "getConvergedReason") else 1
         )
-        if not np.isfinite(solution).all():
+        if not all_finite_values(solution):
             raise FloatingPointError(
                 "PETSc fieldsplit solve produced non-finite values."
             )
@@ -770,7 +773,7 @@ def _solve_sigma_contact_with_scipy(
         try:
             solution = spla.spsolve(system.matrix, system.rhs)
             out = np.asarray(solution, dtype=np.float64).reshape(-1)
-            if np.isfinite(out).all():
+            if all_finite_values(out):
                 return np.ascontiguousarray(out), {
                     "backend": "scipy",
                     "solver": "spsolve",
@@ -787,7 +790,7 @@ def _solve_sigma_contact_with_scipy(
         maxiter=int(max(1, maxiter)),
     )
     out = np.asarray(lsmr[0], dtype=np.float64).reshape(-1)
-    if not np.isfinite(out).all():
+    if not all_finite_values(out):
         raise FloatingPointError(
             "sigma/contact fieldsplit solve produced non-finite values."
         )
@@ -942,13 +945,13 @@ def build_electrode_movement_jacobian(
     baseline = np.asarray(baseline_measurements, dtype=np.float64).reshape(-1)
     if baseline.size == 0:
         raise ValueError("baseline_measurements must be non-empty.")
-    if not np.isfinite(baseline).all():
+    if not all_finite_values(baseline):
         raise FloatingPointError("baseline_measurements contain non-finite values.")
 
     perturbed = np.asarray(perturbed_measurements, dtype=np.float64)
     if perturbed.ndim != 2 or 0 in perturbed.shape:
         raise ValueError("perturbed_measurements must be a non-empty 2D array.")
-    if not np.isfinite(perturbed).all():
+    if not all_finite_values(perturbed):
         raise FloatingPointError("perturbed_measurements contain non-finite values.")
 
     orientation = str(orientation).strip().lower()
@@ -979,7 +982,7 @@ def build_electrode_movement_jacobian(
         raise ValueError(
             f"perturbation_steps length {steps.size} does not match {n_movement}."
         )
-    if not np.isfinite(steps).all() or np.any(steps == 0.0):
+    if not all_finite_values(steps) or any_equal_values(steps, 0.0):
         raise FloatingPointError("perturbation_steps must be finite and non-zero.")
 
     jacobian = (movement_major - baseline[np.newaxis, :]) / steps[:, np.newaxis]
@@ -1014,7 +1017,7 @@ def scale_contact_impedance_update(
         raise ValueError(
             f"contact update shape mismatch: current={z.shape}, delta={delta.shape}."
         )
-    if not np.isfinite(z).all() or not np.isfinite(delta).all():
+    if not all_finite_values(z) or not all_finite_values(delta):
         raise FloatingPointError("contact impedance update contains non-finite values.")
 
     max_relative_step = float(max_relative_step)
@@ -1033,6 +1036,6 @@ def scale_contact_impedance_update(
     ratios = allowed / np.maximum(np.abs(delta[nonzero]), floor)
     step = float(min(1.0, np.min(ratios)))
     updated = np.maximum(z + step * delta, floor)
-    if not np.isfinite(updated).all():
+    if not all_finite_values(updated):
         raise FloatingPointError("contact impedance update produced non-finite values.")
     return updated.astype(np.float64), step

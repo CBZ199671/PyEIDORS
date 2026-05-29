@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 import torch
 
 import pyeidors.inverse.solvers.sparse_optimizers as sparse_opt_module
@@ -105,6 +107,30 @@ def test_solve_irls_cpu_and_lstsq_fallback(monkeypatch):
     assert calls["solve"] > 0
     assert fallback.shape == (2,)
     assert np.isfinite(fallback).all()
+
+
+def test_v513_solve_irls_cpu_diagonal_regularization_stays_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    source = inspect.getsource(sparse_opt_module.solve_irls)
+    assert "lambda_reg * np.diag(weights)" not in source
+    assert "add_scaled_diagonal_in_place(M, weights, lambda_reg)" in source
+
+    def _fail_diag(*_args, **_kwargs):
+        raise AssertionError("solve_irls must not materialize dense diagonal weights")
+
+    monkeypatch.setattr(sparse_opt_module.np, "diag", _fail_diag)
+    result = solve_irls(
+        linear_matrix=np.array([[2.0, 0.0], [0.0, 1.0], [1.0, 1.0]], dtype=float),
+        data_vector=np.array([1.0, 1.0, 0.0], dtype=float),
+        noise_sigma=0.8,
+        prior_scale=0.25,
+        warm_start=np.zeros(2, dtype=float),
+        config=_config(linear_max_iterations=4),
+    )
+
+    assert result.shape == (2,)
+    assert np.isfinite(result).all()
 
 
 def test_solve_irls_gpu_requested_without_cuda_falls_back_to_cpu():

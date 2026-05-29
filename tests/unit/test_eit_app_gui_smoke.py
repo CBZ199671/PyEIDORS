@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import inspect
 import os
 import time
 from pathlib import Path
@@ -105,6 +106,147 @@ def _connect_simulator(window: EITWorkstation) -> None:
 def _splitter_has_center_priority(splitter) -> bool:
     sizes = splitter.sizes()
     return len(sizes) == 3 and sizes[1] > sizes[0] and sizes[1] > sizes[2]
+
+
+def test_v361_main_window_save_helpers_preserve_display_dtype() -> None:
+    recon_source = inspect.getsource(EITWorkstation._save_reconstruction_image)
+    voltage_source = inspect.getsource(EITWorkstation._save_voltage_fit_plot)
+
+    assert "dtype=float" not in recon_source
+    assert "dtype=int" not in recon_source
+    assert "dtype=float" not in voltage_source
+    assert '_display_float_array(getattr(result, "conductivity", []))' in recon_source
+    assert (
+        '_display_int_array(getattr(result, "cell_connectivity", []))' in recon_source
+    )
+    assert "_display_float_array(measured)" in voltage_source
+    assert "_display_float_array(simulated)" in voltage_source
+
+    values = np.array([1.0, 2.0], dtype=np.float32)
+    display_values = main_window_module._display_float_array(values)
+
+    assert display_values.dtype == np.dtype(np.float32)
+    assert np.shares_memory(display_values, values)
+
+    cells = np.array([[0, 1, 2]], dtype=np.int32)
+    display_cells = main_window_module._display_int_array(cells)
+
+    assert display_cells.dtype == np.dtype(np.int32)
+    assert np.shares_memory(display_cells, cells)
+
+
+def test_v362_main_window_voltage_paths_preserve_display_dtype(monkeypatch) -> None:
+    auto_source = inspect.getsource(EITWorkstation._on_auto_reconstruction_done)
+    hardware_source = inspect.getsource(EITWorkstation._on_hardware_reconstruction_done)
+    recording_source = inspect.getsource(EITWorkstation._recording_measurement_export)
+
+    assert "dtype=np.float64" not in auto_source
+    assert "dtype=float" not in hardware_source
+    assert "dtype=float" not in recording_source
+    assert "_display_float_array(backend_measured)" in auto_source
+    assert "_display_float_array(simulated)" in auto_source
+    assert "_display_float_array(measured)" in hardware_source
+    assert "_display_float_array(reconstructed)" in hardware_source
+    assert "_display_float_array(ref_real)" in recording_source
+    assert "_display_float_array(tgt_real)" in recording_source
+
+    class _CaptureVoltagePlot:
+        def __init__(self) -> None:
+            self.calls: list[tuple[np.ndarray, np.ndarray | None]] = []
+
+        def set_loading(self, _on: bool) -> None:
+            return None
+
+        def update_hardware_voltages(
+            self, measured: np.ndarray, reconstructed: np.ndarray | None
+        ) -> None:
+            self.calls.append((measured, reconstructed))
+
+    class _NoopWidget:
+        def set_loading(self, _on: bool) -> None:
+            return None
+
+        def update_reconstruction(self, _result: object) -> None:
+            return None
+
+    ref_frame = SimpleNamespace(real=np.array([1.0, 2.0], dtype=np.float32))
+    tgt_frame = SimpleNamespace(real=np.array([1.5, 2.75], dtype=np.float32))
+    simulated = np.array([0.45, 0.7], dtype=np.float32)
+    auto_plot = _CaptureVoltagePlot()
+    auto_window = SimpleNamespace(
+        _reconstruction_result_source=lambda _result: "hardware_auto_live",
+        _auto_recon_busy=True,
+        _auto_reconstruct=False,
+        _pending_auto_target_frame=None,
+        _recon_widget=_NoopWidget(),
+        _equipotential_widget=_NoopWidget(),
+        _last_auto_ref_frame=ref_frame,
+        _last_auto_tgt_frame=tgt_frame,
+        _voltage_plot=auto_plot,
+        _status_bar=SimpleNamespace(showMessage=lambda *args, **kwargs: None),
+    )
+
+    EITWorkstation._on_auto_reconstruction_done(
+        auto_window,
+        SimpleNamespace(error_msg=None, measured=None, simulated=simulated),
+    )
+
+    measured_diff, simulated_arr = auto_plot.calls[-1]
+    assert measured_diff.dtype == np.dtype(np.float32)
+    assert simulated_arr is not None
+    assert simulated_arr.dtype == np.dtype(np.float32)
+    assert np.shares_memory(simulated_arr, simulated)
+
+    measured = np.array([0.1, 0.2], dtype=np.float32)
+    reconstructed = np.array([0.11, 0.18], dtype=np.float32)
+    hardware_plot = _CaptureVoltagePlot()
+    hw_tab = object()
+    hardware_window = SimpleNamespace(
+        _recon_widget=_NoopWidget(),
+        _equipotential_widget=_NoopWidget(),
+        _voltage_plot=hardware_plot,
+        _tab_widget=SimpleNamespace(currentWidget=lambda: hw_tab),
+        _hw_tab=hw_tab,
+        _reconstruction_result_source=lambda _result: "hardware_manual",
+        _auto_reconstruct=False,
+        _last_auto_tgt_frame=None,
+    )
+
+    EITWorkstation._on_hardware_reconstruction_done(
+        hardware_window,
+        SimpleNamespace(measured=measured, simulated=reconstructed),
+    )
+
+    measured_arr, reconstructed_arr = hardware_plot.calls[-1]
+    assert measured_arr.dtype == np.dtype(np.float32)
+    assert reconstructed_arr is not None
+    assert reconstructed_arr.dtype == np.dtype(np.float32)
+    assert np.shares_memory(measured_arr, measured)
+    assert np.shares_memory(reconstructed_arr, reconstructed)
+
+    ref_csv = np.array([1.0, 2.0], dtype=np.float32)
+    tgt_csv = np.array([1.1, 2.3], dtype=np.float32)
+
+    def _fake_read_frame_csv(path: str) -> tuple[np.ndarray, np.ndarray]:
+        values = ref_csv if path == "ref.csv" else tgt_csv
+        return values, np.zeros_like(values)
+
+    import pyeidors.data.frame_io as frame_io
+
+    monkeypatch.setattr(frame_io, "read_frame_csv", _fake_read_frame_csv)
+    recording_window = SimpleNamespace(
+        _selected_reference_entry={"file_path": "ref.csv"},
+        _selected_target_entry={"file_path": "tgt.csv"},
+    )
+
+    payload = EITWorkstation._recording_measurement_export(recording_window)
+
+    assert payload is not None
+    assert payload["homogeneous"].dtype == np.dtype(np.float32)
+    assert payload["target"].dtype == np.dtype(np.float32)
+    assert payload["difference"].dtype == np.dtype(np.float32)
+    assert np.shares_memory(payload["homogeneous"], ref_csv)
+    assert np.shares_memory(payload["target"], tgt_csv)
 
 
 def _close_window(window: EITWorkstation) -> None:
@@ -3328,6 +3470,59 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
 
 
 @pytest.mark.gui
+def test_simulation_inverse_preserves_complex_forward_measurements(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    n_meas = 4
+    window._last_fwd_result = ForwardSolverResult(
+        boundary_voltages=np.array(
+            [1.0 + 0.10j, 1.2 + 0.20j, 1.4 + 0.30j, 1.6 + 0.40j],
+            dtype=np.complex64,
+        ),
+        homogeneous_voltages=np.array(
+            [0.8 + 0.05j, 1.0 + 0.10j, 1.2 + 0.15j, 1.4 + 0.20j],
+            dtype=np.complex64,
+        ),
+        ground_truth_conductivity=np.ones(1, dtype=np.complex64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "debug_fine_mesh_noser",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.use_part == "complex"
+    assert request.metadata["eit_value_mode"] == "complex_admittance"
+    assert request.metadata["complex_reconstruction_dispatch"] == "native_complex"
+    assert np.allclose(request.reference_frame.real, [0.8, 1.0, 1.2, 1.4])
+    assert np.allclose(request.reference_frame.imag, [0.05, 0.10, 0.15, 0.20])
+    assert np.allclose(request.target_frame.real, [1.0, 1.2, 1.4, 1.6])
+    assert np.allclose(request.target_frame.imag, [0.10, 0.20, 0.30, 0.40])
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
 @pytest.mark.parametrize("method", ["noser_rm", "laplace_rm", "curvature_rm"])
 def test_simulation_2d_rm_routes_use_normalized_difference_mode(
     monkeypatch: pytest.MonkeyPatch,
@@ -3416,6 +3611,61 @@ def test_simulation_voltage_fit_restores_absolute_boundary_voltages() -> None:
     )
     assert restored is not None
     assert restored == pytest.approx([11.0, 16.0])
+
+    complex_forward = ForwardSolverResult(
+        boundary_voltages=np.array([11.0 + 1.5j, 16.0 + 2.0j], dtype=np.complex128),
+        homogeneous_voltages=np.array([10.0 + 1.0j, 20.0 + 1.0j], dtype=np.complex128),
+        ground_truth_conductivity=np.ones(1, dtype=np.complex128),
+        node_coords=forward.node_coords,
+        cell_connectivity=forward.cell_connectivity,
+        n_elements=1,
+        n_measurements=2,
+    )
+    complex_raw = ReconstructionResult(
+        conductivity=np.ones(1, dtype=np.complex128),
+        node_coords=forward.node_coords,
+        cell_connectivity=forward.cell_connectivity,
+        simulated=np.array([1.0 + 0.5j, -4.0 + 1.0j], dtype=np.complex128),
+        metadata={
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+        },
+    )
+    restored = EITWorkstation._simulation_reconstructed_voltage_fit(
+        complex_raw, complex_forward
+    )
+    assert restored is not None
+    assert np.allclose(restored, np.array([11.0 + 1.5j, 16.0 + 2.0j]))
+
+
+def test_v474_simulation_voltage_fit_finite_check_uses_bounded_scan() -> None:
+    source = inspect.getsource(EITWorkstation._simulation_reconstructed_voltage_fit)
+    helper_source = inspect.getsource(main_window_module._all_finite_values)
+
+    assert "np.isfinite(reconstructed).all()" not in source
+    assert "_all_finite_values(reconstructed)" in source
+    assert "np.isfinite(chunk, out=chunk_mask)" in helper_source
+    assert main_window_module._all_finite_values(np.array([1.0, 2.0]))
+    assert not main_window_module._all_finite_values(np.array([1.0, np.nan]))
+
+    forward = ForwardSolverResult(
+        boundary_voltages=np.array([1.0, 2.0], dtype=np.float64),
+        homogeneous_voltages=np.array([1.0, 2.0], dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=2,
+    )
+    result = ReconstructionResult(
+        conductivity=np.ones(1, dtype=np.float64),
+        node_coords=forward.node_coords,
+        cell_connectivity=forward.cell_connectivity,
+        simulated=np.array([0.0, np.nan], dtype=np.float64),
+        metadata={"difference_mode": "raw"},
+    )
+
+    assert EITWorkstation._simulation_reconstructed_voltage_fit(result, forward) is None
 
 
 @pytest.mark.gui
@@ -4364,6 +4614,410 @@ def test_simulation_forward_request_records_input_signature(
     assert payload["inhomogeneities"][0]["shape"] == "circle"
 
     window._sim_state.forward_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v140_simulation_forward_prewarm_uses_same_request_builder(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_START_MS", "25")
+    window = EITWorkstation()
+    _show_window(window)
+    assert window._initial_sim_forward_prewarm_delay_ms() == 25
+
+    captured: list[object] = []
+
+    def _fake_solve(request) -> bool:
+        captured.append(request)
+        return True
+
+    monkeypatch.setattr(window._fwd_prewarm_ctrl, "solve", _fake_solve)
+
+    window._run_sim_forward_prewarm()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert (
+        request.forward_model_config["request_source"] == "simulation_forward_prewarm"
+    )
+    assert isinstance(
+        request.forward_model_config["simulation_input_signature"],
+        str,
+    )
+    assert window._fwd_prewarm_busy is True
+
+    window._on_sim_forward_prewarm_done(
+        ForwardSolverResult(
+            boundary_voltages=np.array([1.0], dtype=np.float32),
+            ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+            node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+            cell_connectivity=np.array([[0, 0, 0]], dtype=np.int32),
+            n_elements=1,
+            n_measurements=1,
+        )
+    )
+    assert window._fwd_prewarm_busy is False
+    assert window._fwd_prewarm_ready_signature is not None
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v610_3d_simulation_prewarm_defaults_to_setup_prime(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    monkeypatch.delenv("EIT_APP_FORWARD_PREWARM_3D_MODE", raising=False)
+    window = EITWorkstation()
+    _show_window(window)
+    window._sim_tab.mesh_setup_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "mesh_family": "tetra",
+            "mesh_refinement": 0.1,
+            "n_electrodes": 16,
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+        }
+    )
+    warmed: list[object] = []
+
+    setup_flags: list[bool] = []
+
+    def _fake_warm_backend(request, *, setup_prime=False):
+        warmed.append(request)
+        setup_flags.append(bool(setup_prime))
+
+    monkeypatch.setattr(
+        window, "_warm_sim_forward_backend_if_needed", _fake_warm_backend
+    )
+    monkeypatch.setattr(
+        window._fwd_prewarm_ctrl,
+        "solve",
+        lambda _request: (_ for _ in ()).throw(
+            AssertionError("3D default prewarm must not run a full solve")
+        ),
+    )
+
+    window._schedule_sim_forward_prewarm()
+
+    assert len(warmed) == 1
+    assert warmed[0].mesh_dimension == 3
+    assert setup_flags == [True]
+    assert window._fwd_prewarm_busy is False
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v148_3d_simulation_prewarm_worker_mode_keeps_import_only_warmup(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "worker")
+    window = EITWorkstation()
+    _show_window(window)
+    window._sim_tab.mesh_setup_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "mesh_family": "tetra",
+            "mesh_refinement": 0.1,
+            "n_electrodes": 16,
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+        }
+    )
+    setup_flags: list[bool] = []
+
+    def _fake_warm_backend(request, *, setup_prime=False):
+        assert request.mesh_dimension == 3
+        setup_flags.append(bool(setup_prime))
+
+    monkeypatch.setattr(
+        window, "_warm_sim_forward_backend_if_needed", _fake_warm_backend
+    )
+    monkeypatch.setattr(
+        window._fwd_prewarm_ctrl,
+        "solve",
+        lambda _request: (_ for _ in ()).throw(
+            AssertionError("3D worker prewarm must not run a full solve")
+        ),
+    )
+
+    window._schedule_sim_forward_prewarm()
+
+    assert setup_flags == [False]
+    assert window._fwd_prewarm_busy is False
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v317_3d_simulation_backend_warmup_reports_status_and_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "worker")
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_START_MS", "5000")
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+
+    class _ImmediateBackgroundScheduler:
+        def __init__(self, *args, **kwargs) -> None:
+            self.handles = []
+
+        def submit(self, *, key, name, priority, fn, coalesce=True):
+            handle = SimpleNamespace(
+                key=key,
+                name=name,
+                priority=priority,
+                accepted=True,
+                reason="",
+            )
+            self.handles.append(handle)
+            fn()
+            return handle
+
+        def shutdown(self, *, wait=True, timeout=2.0) -> None:
+            return None
+
+    monkeypatch.setattr(
+        main_window_module,
+        "BackgroundTaskScheduler",
+        _ImmediateBackgroundScheduler,
+    )
+    warmed: list[tuple[Path, str]] = []
+
+    def _fake_warm_backend_worker(*, repo, profile, progress_cb=None):
+        warmed.append((Path(repo), str(profile)))
+        if progress_cb is not None:
+            progress_cb("fake backend warm progress")
+        return SimpleNamespace(
+            profile=str(profile),
+            pid=4242,
+            rss_bytes=2 * 1024 * 1024,
+            rss_limit_bytes=4 * 1024 * 1024,
+            primed_runtime=True,
+            prime_command="prime_runtime",
+            prime_duration_ms=8.0,
+            prime_metadata={
+                "petsc_cuda_probe": {
+                    "petsc_cuda": True,
+                    "probe_cache": {"hit": True, "layer": "disk"},
+                },
+            },
+            recycled_after_request=False,
+            recycle_reason="",
+        )
+
+    monkeypatch.setattr(
+        "eit_app.backend_worker_pool.warm_persistent_backend_worker",
+        _fake_warm_backend_worker,
+    )
+    window = EITWorkstation()
+    _show_window(window)
+    messages: list[str] = []
+    window.sim_backend_warm_status.connect(messages.append)
+    window._sim_tab.mesh_setup_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "mesh_family": "tetra",
+            "mesh_refinement": 0.1,
+            "n_electrodes": 16,
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+        }
+    )
+
+    window._schedule_sim_forward_prewarm()
+
+    assert len(warmed) == 1
+    assert warmed[0][1] == "cuda"
+    report = window._fwd_backend_warm_reports["cuda"]
+    assert report["pid"] == 4242
+    assert report["primed_runtime"] is True
+    assert report["prime_duration_ms"] == 8.0
+    assert report["petsc_cuda_available"] is True
+    assert report["petsc_cuda_probe_cache_hit"] is True
+    assert report["petsc_cuda_probe_cache_layer"] == "disk"
+    assert report["petsc_cuda_probe_status"] == "hit/disk"
+    assert _wait_until(
+        lambda: any("4242" in item and "2.0 MiB" in item for item in messages),
+        timeout=1.0,
+    )
+    assert any("cuda" in item for item in messages)
+    assert any("4242" in item and "2.0 MiB" in item for item in messages)
+    assert any("PETSc probe=hit/disk" in item for item in messages)
+
+    _close_window(window)
+
+
+def test_v329_backend_worker_probe_summary_accepts_setup_metadata() -> None:
+    summary = main_window_module._backend_worker_probe_summary(
+        {
+            "petsc_cuda": True,
+            "petsc_cuda_probe_cache": {"hit": False, "layer": "disk"},
+        }
+    )
+
+    assert summary["petsc_cuda"] is True
+    assert summary["cache_hit"] is False
+    assert summary["cache_layer"] == "disk"
+    assert summary["status_text"] == "miss/disk"
+
+
+@pytest.mark.gui
+def test_v319_forward_done_records_gui_visualization_timing() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+    result = ForwardSolverResult(
+        boundary_voltages=np.array([1.0], dtype=np.float32),
+        ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+        node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=1,
+        forward_model_config={
+            "runtime_diagnostics": {},
+            "forward_timing_ms": {"total": 4.0},
+            "forward_timing_phase_order": ["total"],
+        },
+    )
+
+    window._on_forward_done(result)
+
+    timings = result.forward_model_config["forward_timing_ms"]
+    assert timings["gui_visualization_update"] >= 0.0
+    assert (
+        result.forward_model_config["gui_forward_visualization_update_ms"]
+        == timings["gui_visualization_update"]
+    )
+    assert (
+        "gui_visualization_update"
+        in result.forward_model_config["forward_timing_phase_order"]
+    )
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v148_3d_simulation_prewarm_solve_mode_keeps_full_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "solve")
+    window = EITWorkstation()
+    _show_window(window)
+    window._sim_tab.mesh_setup_panel.set_config(
+        {
+            "mesh_dimension": 3,
+            "mesh_family": "tetra",
+            "mesh_refinement": 0.1,
+            "n_electrodes": 16,
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+        }
+    )
+    captured: list[object] = []
+
+    monkeypatch.setattr(
+        window._fwd_prewarm_ctrl,
+        "solve",
+        lambda request: captured.append(request) or True,
+    )
+
+    window._run_sim_forward_prewarm()
+
+    assert len(captured) == 1
+    assert captured[0].mesh_dimension == 3
+    assert window._fwd_prewarm_busy is True
+
+    window._fwd_prewarm_busy = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v140_run_forward_promotes_matching_inflight_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    window = EITWorkstation()
+    _show_window(window)
+
+    signature, _payload = window._current_simulation_input_signature()
+    window._fwd_prewarm_busy = True
+    window._fwd_prewarm_active_signature = signature
+
+    def _fail_solve(_request) -> bool:
+        raise AssertionError("matching prewarm should be promoted, not restarted")
+
+    monkeypatch.setattr(window._fwd_ctrl, "solve", _fail_solve)
+
+    window._on_run_forward()
+
+    assert window._fwd_prewarm_promote_to_user is True
+    assert window._sim_state.forward_running is True
+
+    result = ForwardSolverResult(
+        boundary_voltages=np.array([1.0], dtype=np.float32),
+        ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+        node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=1,
+        forward_model_config={
+            "simulation_input_signature": signature,
+        },
+    )
+    window._on_sim_forward_prewarm_done(result)
+
+    assert window._fwd_prewarm_promote_to_user is False
+    assert window._sim_state.forward_running is False
+    assert window._last_fwd_result is result
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v140_run_forward_reuses_completed_matching_prewarm(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_FORWARD_PREWARM", "1")
+    window = EITWorkstation()
+    _show_window(window)
+
+    signature, _payload = window._current_simulation_input_signature()
+    result = ForwardSolverResult(
+        boundary_voltages=np.array([1.0], dtype=np.float32),
+        ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+        node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 0, 0]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=1,
+        forward_model_config={
+            "simulation_input_signature": signature,
+            "request_source": "simulation_forward_prewarm",
+        },
+    )
+    window._fwd_prewarm_ready_signature = signature
+    window._fwd_prewarm_ready_result = result
+
+    def _fail_solve(_request) -> bool:
+        raise AssertionError("completed matching prewarm should be reused")
+
+    monkeypatch.setattr(window._fwd_ctrl, "solve", _fail_solve)
+
+    window._on_run_forward()
+
+    assert window._last_fwd_result is result
+    assert window._sim_state.forward_running is False
+    assert window._fwd_prewarm_ready_result is None
+    assert window._fwd_prewarm_ready_signature is None
+    assert result.forward_model_config["request_source"] == "simulation_forward"
+    assert result.forward_model_config["served_from_sim_forward_prewarm"] is True
+
     _close_window(window)
 
 

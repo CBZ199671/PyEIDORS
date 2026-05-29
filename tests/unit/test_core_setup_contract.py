@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from types import SimpleNamespace
 
+import pyeidors.core_system as core_module
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
@@ -52,17 +53,25 @@ def test_setup_dispatches_cache(monkeypatch):
         mesh_dir: str,
         mesh_name: str | None,
         gdim: int = 2,
+        initialize_inverse: bool = True,
     ):
         calls["mesh_dir"] = mesh_dir
         calls["mesh_name"] = mesh_name
         calls["gdim"] = gdim
+        calls["initialize_inverse"] = initialize_inverse
 
     monkeypatch.setattr(system, "setup_from_cache", _fake_setup_from_cache)
-    system.setup(mesh_source="cache", mesh_dir="my_meshes", mesh_name="mesh_001")
+    system.setup(
+        mesh_source="cache",
+        mesh_dir="my_meshes",
+        mesh_name="mesh_001",
+        initialize_inverse=False,
+    )
 
     assert calls["mesh_dir"] == "my_meshes"
     assert calls["mesh_name"] == "mesh_001"
     assert calls["gdim"] == 2
+    assert calls["initialize_inverse"] is False
 
 
 def test_setup_dispatches_generated(monkeypatch):
@@ -74,6 +83,7 @@ def test_setup_dispatches_generated(monkeypatch):
         radius: float | None,
         mesh_size: float | None,
         dimension: int = 2,
+        mesh_dir: str = "eit_meshes",
         height: float | None = None,
         electrode_coverage: float | None = None,
         electrode_height_ratio: float | None = None,
@@ -82,10 +92,12 @@ def test_setup_dispatches_generated(monkeypatch):
         mesh_family: str | None = None,
         geometry_version: str | None = None,
         electrode_layout: str | None = None,
+        initialize_inverse: bool = True,
     ):
         calls["radius"] = radius
         calls["mesh_size"] = mesh_size
         calls["dimension"] = dimension
+        calls["mesh_dir"] = mesh_dir
         calls["height"] = height
         calls["electrode_coverage"] = electrode_coverage
         calls["electrode_height_ratio"] = electrode_height_ratio
@@ -94,6 +106,7 @@ def test_setup_dispatches_generated(monkeypatch):
         calls["mesh_family"] = mesh_family
         calls["geometry_version"] = geometry_version
         calls["electrode_layout"] = electrode_layout
+        calls["initialize_inverse"] = initialize_inverse
 
     monkeypatch.setattr(system, "setup_generated_mesh", _fake_setup_generated_mesh)
     system.setup(
@@ -102,14 +115,17 @@ def test_setup_dispatches_generated(monkeypatch):
         mesh_size=0.08,
         mesh_family="hex",
         geometry_version="geomv2",
+        initialize_inverse=False,
     )
 
     assert calls["radius"] == 1.5
     assert calls["mesh_size"] == 0.08
     assert calls["dimension"] == 2
+    assert calls["mesh_dir"] == "eit_meshes"
     assert calls["mesh_family"] == "hex"
     assert calls["geometry_version"] == "geomv2"
     assert calls["electrode_coverage"] is None
+    assert calls["initialize_inverse"] is False
 
 
 def test_setup_with_mesh_type_guard():
@@ -144,7 +160,11 @@ def test_setup_with_mesh_normalizes_3d_drive_mode(tmp_path, monkeypatch):
         mesh_family="hex",
         geometry_version="geomv2",
     )
-    monkeypatch.setattr(system, "_initialize_components", lambda: None)
+    monkeypatch.setattr(
+        system,
+        "_initialize_components",
+        lambda *, initialize_inverse=True: None,
+    )
     system.setup_with_mesh(mesh)
     assert system.pattern_config.drive_mode == "total_current"
     assert system._pattern_config_diagnostics == {
@@ -170,7 +190,9 @@ def test_setup_from_cache_calls_loader_paths(monkeypatch):
 
     monkeypatch.setattr("pyeidors.core_system.MeshLoader", _FakeLoader)
     monkeypatch.setattr(
-        system, "setup_with_mesh", lambda mesh: captured.__setitem__("mesh", mesh)
+        system,
+        "setup_with_mesh",
+        lambda mesh, **_kwargs: captured.__setitem__("mesh", mesh),
     )
 
     system.setup_from_cache(mesh_dir="cache_dir", mesh_name="foo")
@@ -190,22 +212,26 @@ def test_setup_generated_mesh_uses_defaults_and_overrides(monkeypatch):
 
     generated_calls = []
     monkeypatch.setattr(
-        "pyeidors.core_system.create_simple_eit_mesh",
+        "pyeidors.core_system.load_or_create_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-mesh",
     )
     monkeypatch.setattr(
-        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+        system,
+        "setup_with_mesh",
+        lambda mesh, **kwargs: generated_calls.append({"mesh": mesh, **kwargs}),
     )
 
     system.setup_generated_mesh()
     system.setup_generated_mesh(radius=2.0, mesh_size=0.05)
 
     assert generated_calls[0]["radius"] == 1.23
-    assert generated_calls[0]["mesh_size"] == 0.07
+    assert generated_calls[0]["refinement"] == 9
     assert generated_calls[0]["electrode_coverage"] == 0.4
+    assert generated_calls[0]["mesh_dir"] == "eit_meshes"
     assert generated_calls[1]["mesh"] == "generated-mesh"
+    assert generated_calls[1]["initialize_inverse"] is True
     assert generated_calls[2]["radius"] == 2.0
-    assert generated_calls[2]["mesh_size"] == 0.05
+    assert generated_calls[2]["refinement"] == 20
     assert generated_calls[2]["electrode_coverage"] == 0.4
 
     system.setup_generated_mesh(electrode_coverage=0.6)
@@ -242,6 +268,35 @@ def test_system_stores_public_device_policy():
     assert system_unknown.forward_backend == "dolfinx"
 
 
+def test_forward_only_initialization_skips_inverse_components(monkeypatch):
+    system = _new_system()
+    system.mesh = SimpleNamespace(topology=SimpleNamespace(dim=2))
+
+    class _FakeForwardModel:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+            self.mesh = kwargs["mesh"]
+            self.backend_diagnostic = {}
+
+        def _set_backend_diagnostic(self, **kwargs) -> None:
+            self.backend_diagnostic = kwargs
+
+    def _fail_inverse_init(*_args, **_kwargs):
+        raise AssertionError("forward-only setup must not build Jacobian")
+
+    monkeypatch.setattr(core_module, "EITForwardModel", _FakeForwardModel)
+    monkeypatch.setattr(core_module, "DirectJacobianCalculator", _fail_inverse_init)
+
+    system._initialize_components(initialize_inverse=False)
+
+    assert isinstance(system.fwd_model, _FakeForwardModel)
+    assert system.reconstructor is None
+    assert system._is_initialized is True
+    system._require_initialized(require_reconstructor=False)
+    with pytest.raises(RuntimeError, match="System not initialized"):
+        system._require_initialized()
+
+
 def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
     system = EITSystem(
         n_elec=16,
@@ -255,14 +310,17 @@ def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
     monkeypatch.setattr(
-        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+        system,
+        "setup_with_mesh",
+        lambda mesh, **kwargs: generated_calls.append({"mesh": mesh, **kwargs}),
     )
 
-    system.setup_generated_mesh(dimension=3)
+    system.setup_generated_mesh(dimension=3, initialize_inverse=False)
 
     assert generated_calls[0]["mesh_family"] == "hex"
     assert generated_calls[0]["geometry_version"] == "geomv2"
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
+    assert generated_calls[1]["initialize_inverse"] is False
 
 
 def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypatch):
@@ -277,7 +335,9 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
     monkeypatch.setattr(
-        system, "setup_with_mesh", lambda mesh: generated_calls.append({"mesh": mesh})
+        system,
+        "setup_with_mesh",
+        lambda mesh, **kwargs: generated_calls.append({"mesh": mesh, **kwargs}),
     )
 
     system.setup_generated_mesh(
@@ -288,6 +348,7 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
     assert generated_calls[0]["n_elec"] == 16
     assert generated_calls[0]["electrode_layout"] == "ring_major"
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
+    assert generated_calls[1]["initialize_inverse"] is True
 
 
 def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
@@ -313,6 +374,74 @@ def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
     assert policy["device_effective"] == "cuda"
     assert policy["solver_mode_effective"] == "fast"
     assert policy["line_search_mode_effective"] == "fast"
+
+
+def test_runtime_policy_routes_complex_gpu3d_to_dolfinx_petsc_cuda(monkeypatch):
+    monkeypatch.setattr(core_module, "petsc_scalar_is_complex", lambda: True)
+    monkeypatch.setattr(core_module, "petsc_scalar_dtype_name", lambda: "complex128")
+    monkeypatch.setattr(
+        core_module,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "densecuda",
+        },
+    )
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5 + 2e-6j, dtype=np.complex128),
+        acceleration_profile="gpu3d",
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="hex",
+        geometry_version="geomv2",
+        generator_revision="g3d4",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["complex_admittivity_requested"] is True
+    assert policy["petsc_scalar_is_complex"] is True
+    assert policy["complex_route_effective"] is True
+    assert policy["forward_backend_effective"] == "dolfinx"
+    assert policy["petsc_device_effective"] == "cuda"
+    assert policy["device_effective"] == "cuda"
+    assert policy["forward_backend_fallback_reason"] is None
+
+
+def test_runtime_policy_falls_back_from_cuda_structured_in_complex_runtime(
+    monkeypatch,
+):
+    monkeypatch.setattr(core_module, "petsc_scalar_is_complex", lambda: True)
+    monkeypatch.setattr(core_module, "petsc_scalar_dtype_name", lambda: "complex64")
+    system = EITSystem(
+        n_elec=16,
+        pattern_config=PatternConfig(n_elec=16),
+        contact_impedance=np.full(16, 1e-5, dtype=float),
+        forward_backend="cuda_structured",
+    )
+    system.mesh = SimpleNamespace(
+        topology=SimpleNamespace(dim=3),
+        mesh_family="hex",
+        geometry_version="geomv2",
+        generator_revision="g3d4",
+        mesh_file="mesh.msh",
+    )
+
+    policy = system._resolve_runtime_policy()
+
+    assert policy["complex_admittivity_requested"] is False
+    assert policy["petsc_scalar_is_complex"] is True
+    assert policy["forward_backend_effective"] == "dolfinx"
+    assert (
+        policy["forward_backend_fallback_reason"]
+        == "cuda_structured_unavailable_in_complex_petsc_runtime"
+    )
 
 
 def test_v83_runtime_policy_keeps_2d_auto_petsc_on_cpu_for_gpu_profile():

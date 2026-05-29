@@ -7,6 +7,35 @@ from ..physics.current_drive import (
     build_stim_currents,
     validate_drive_config,
 )
+from ..utils.numeric_ops import all_finite_values
+
+
+def _rows_zero_at_columns(matrix: np.ndarray, columns: list[int]) -> np.ndarray:
+    mat = np.asarray(matrix)
+    mask = np.ones(mat.shape[0], dtype=bool)
+    if not columns:
+        return mask
+    work = np.empty(mat.shape[0], dtype=bool)
+    for column in columns:
+        np.equal(mat[:, int(column)], 0, out=work)
+        np.logical_and(mask, work, out=mask)
+    return mask
+
+
+def _select_rows_by_mask(matrix: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    mat = np.asarray(matrix)
+    row_mask = np.asarray(mask, dtype=bool).reshape(-1)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if row_mask.size != mat.shape[0]:
+        raise ValueError("mask length must match matrix rows.")
+    out = np.empty((int(np.count_nonzero(row_mask)), mat.shape[1]), dtype=mat.dtype)
+    write = 0
+    for row_idx, keep in enumerate(row_mask):
+        if keep:
+            out[write, :] = mat[row_idx, :]
+            write += 1
+    return out
 
 
 class StimMeasPatternManager:
@@ -91,14 +120,18 @@ class StimMeasPatternManager:
 
         lengths = np.asarray(electrode_lengths_m, dtype=float).reshape(-1)
         if lengths.size == self.n_elec and self.n_rings > 1:
-            lengths = np.tile(lengths, self.n_rings)
+            expanded = np.empty(self.tn_elec, dtype=lengths.dtype)
+            for ring in range(self.n_rings):
+                start = ring * self.n_elec
+                expanded[start : start + self.n_elec] = lengths
+            lengths = expanded
         if lengths.size != self.tn_elec:
             raise ValueError(
                 "electrode_lengths_m size mismatch: "
                 f"expected {self.tn_elec}, got {lengths.size}."
             )
-        if np.any(lengths <= 0.0):
-            bad = int(np.nonzero(lengths <= 0.0)[0][0])
+        bad = int(np.argmin(lengths))
+        if float(lengths[bad]) <= 0.0:
             raise ValueError(
                 f"electrode_lengths_m[{bad}] must be positive, got {lengths[bad]!r}."
             )
@@ -228,7 +261,9 @@ class StimMeasPatternManager:
             self.meas_selector = np.ones(full_count, dtype=bool)
             return
 
-        selector = []
+        full_count = sum(int(mat.shape[0]) for mat in self._full_meas_matrices)
+        selector = np.empty(full_count, dtype=bool)
+        offset = 0
         for i in range(self.n_stim):
             full_meas_mat = self._full_meas_matrices[i]
             filtered_meas_mat = self.meas_matrices[i]
@@ -237,9 +272,11 @@ class StimMeasPatternManager:
             filtered_set_hash = self._create_meas_hash(filtered_meas_mat)
 
             frame_selector = np.isin(full_set_hash, filtered_set_hash)
-            selector.append(frame_selector)
+            next_offset = offset + frame_selector.size
+            selector[offset:next_offset] = frame_selector
+            offset = next_offset
 
-        self.meas_selector = np.concatenate(selector)
+        self.meas_selector = selector
 
     def _load_custom_patterns(self) -> None:
         if (
@@ -328,11 +365,12 @@ class StimMeasPatternManager:
         if meas_mat.size == 0:
             return np.array([])
 
-        pos_indices = np.argmax(meas_mat > 0, axis=1)
-        neg_indices = np.argmax(meas_mat < 0, axis=1)
-
-        pos_mask = np.any(meas_mat > 0, axis=1)
-        neg_mask = np.any(meas_mat < 0, axis=1)
+        pos_hits = meas_mat > 0
+        neg_hits = meas_mat < 0
+        pos_indices = np.argmax(pos_hits, axis=1)
+        neg_indices = np.argmax(neg_hits, axis=1)
+        pos_mask = pos_hits.any(axis=1)
+        neg_mask = neg_hits.any(axis=1)
 
         hash_vals = (pos_indices * pos_mask) * 1e7 + (neg_indices * neg_mask)
         return hash_vals
@@ -348,7 +386,14 @@ class StimMeasPatternManager:
             cross_layer = self._make_cross_layer_meas_matrix(elec)
             if cross_layer.size == 0:
                 return same_layer
-            return np.vstack([same_layer, cross_layer])
+            dtype = np.result_type(same_layer.dtype, cross_layer.dtype)
+            combined = np.empty(
+                (same_layer.shape[0] + cross_layer.shape[0], same_layer.shape[1]),
+                dtype=dtype,
+            )
+            combined[: same_layer.shape[0], :] = same_layer
+            combined[same_layer.shape[0] :, :] = cross_layer
+            return np.ascontiguousarray(combined, dtype=dtype)
         return self._make_meas_matrix_for_rings(elec, range(self.n_rings))
 
     def _make_meas_matrix_for_rings(self, elec: int, rings: object) -> np.ndarray:
@@ -416,27 +461,31 @@ class StimMeasPatternManager:
                     extended.append((base + offset) % self.n_elec + ring_base)
             stim_indices = list(set(extended))
 
-        mask = ~np.any(meas_mat[:, stim_indices] != 0, axis=1)
-        return meas_mat[mask]
+        mask = _rows_zero_at_columns(meas_mat, stim_indices)
+        return _select_rows_by_mask(meas_mat, mask)
 
     def get_stim_matrix(self) -> np.ndarray:
         return self.stim_matrix
 
     def apply_meas_pattern(self, electrode_voltages: np.ndarray) -> np.ndarray:
-        voltages = np.asarray(electrode_voltages, dtype=float)
+        voltages = np.asarray(electrode_voltages)
         if voltages.shape != (self.n_stim, self.tn_elec):
             raise ValueError(
                 "electrode_voltages shape mismatch: "
                 f"expected {(self.n_stim, self.tn_elec)}, got {voltages.shape}"
             )
-        if not np.isfinite(voltages).all():
+        if not all_finite_values(voltages):
             raise FloatingPointError(
                 "electrode_voltages contains non-finite values: "
                 f"{self._finite_summary(voltages)}"
             )
         with np.errstate(divide="ignore", over="ignore", invalid="ignore"):
             measured = self._meas_projection @ voltages.reshape(-1)
-        if not np.isfinite(measured).all():
+        if np.issubdtype(voltages.dtype, np.floating) or np.issubdtype(
+            voltages.dtype, np.complexfloating
+        ):
+            measured = np.asarray(measured, dtype=voltages.dtype)
+        if not all_finite_values(measured):
             raise FloatingPointError(
                 "Measurement projection produced non-finite values: "
                 f"{self._finite_summary(measured)}"
@@ -445,11 +494,25 @@ class StimMeasPatternManager:
 
     @staticmethod
     def _finite_summary(values: np.ndarray) -> str:
-        finite = values[np.isfinite(values)]
-        if finite.size == 0:
+        arr = np.asarray(values).reshape(-1)
+        finite_count = 0
+        min_value = np.inf
+        max_value = -np.inf
+        use_abs_range = np.iscomplexobj(arr)
+        for raw_value in np.nditer(arr, flags=["refs_ok"], op_flags=["readonly"]):
+            value = raw_value.item()
+            if not bool(np.isfinite(value)):
+                continue
+            finite_count += 1
+            range_value = float(abs(value)) if use_abs_range else float(value)
+            if range_value < min_value:
+                min_value = range_value
+            if range_value > max_value:
+                max_value = range_value
+        if finite_count == 0:
             return "finite_count=0"
         return (
-            f"finite_count={finite.size} "
-            f"min={float(finite.min()):.6e} "
-            f"max={float(finite.max()):.6e}"
+            f"finite_count={finite_count} "
+            f"min={float(min_value):.6e} "
+            f"max={float(max_value):.6e}"
         )

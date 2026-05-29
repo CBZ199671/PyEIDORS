@@ -8,7 +8,61 @@ from scipy.sparse import csr_matrix, diags
 
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
 from ..prior._graph_core import dolfinx_cell_difference_operator
+from ...utils.numeric_ops import all_finite_values
 from .base_regularization import BaseRegularization
+
+
+def _finite_median_or_default(
+    values: np.ndarray,
+    default: float = 1.0,
+    *,
+    chunk_size: int = 65536,
+) -> float:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size == 0:
+        return float(default)
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    mask_work = np.empty(block_size, dtype=bool)
+    finite_count = 0
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        mask_chunk = mask_work[: chunk.size]
+        np.isfinite(chunk, out=mask_chunk)
+        finite_count += int(np.count_nonzero(mask_chunk))
+    if finite_count == 0:
+        return float(default)
+    finite_values = np.empty(finite_count, dtype=np.float64)
+    offset = 0
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        mask_chunk = mask_work[: chunk.size]
+        np.isfinite(chunk, out=mask_chunk)
+        n_finite = int(np.count_nonzero(mask_chunk))
+        if n_finite:
+            np.compress(
+                mask_chunk,
+                chunk,
+                out=finite_values[offset : offset + n_finite],
+            )
+            offset += n_finite
+    return float(np.median(finite_values))
+
+
+def _scaled_identity_csr(n_elements: int, alpha: float) -> csr_matrix:
+    diagonal = np.full(int(n_elements), float(alpha), dtype=np.float64)
+    return diags(diagonal, offsets=0, format="csr")
+
+
+def _dense_scaled_diagonal(values: np.ndarray, scale: float) -> np.ndarray:
+    diagonal = np.asarray(values, dtype=np.float64).reshape(-1)
+    size = int(diagonal.size)
+    matrix = np.zeros((size, size), dtype=np.float64)
+    if size > 0 and float(scale) != 0.0:
+        matrix_diagonal = matrix.reshape(-1)[:: size + 1]
+        np.multiply(diagonal, float(scale), out=matrix_diagonal)
+    return matrix
 
 
 class SmoothnessRegularization(BaseRegularization):
@@ -21,7 +75,7 @@ class SmoothnessRegularization(BaseRegularization):
     def create_matrix(self):
         L = _cell_difference_operator(self.mesh, self.n_elements)
         if L.shape[0] == 0:
-            return csr_matrix(self.alpha * np.eye(self.n_elements))
+            return _scaled_identity_csr(self.n_elements, self.alpha)
         return (self.alpha * (L.T @ L)).tocsr()
 
 
@@ -36,8 +90,8 @@ class TikhonovRegularization(BaseRegularization):
         super().__init__(fwd_model)
         self.alpha = alpha
 
-    def create_matrix(self) -> np.ndarray:
-        return self.alpha * np.eye(self.n_elements)
+    def create_matrix(self) -> csr_matrix:
+        return _scaled_identity_csr(self.n_elements, self.alpha)
 
 
 class TotalVariationRegularization(BaseRegularization):
@@ -73,21 +127,26 @@ class TotalVariationRegularization(BaseRegularization):
     def create_matrix(self):
         L = _cell_difference_operator(self.mesh, self.n_elements)
         if L.shape[0] == 0:
-            return csr_matrix(self.alpha * np.eye(self.n_elements))
+            return _scaled_identity_csr(self.n_elements, self.alpha)
         reference = self._reference_vector()
-        grad_ref = np.asarray(L @ reference, dtype=np.float64).reshape(-1)
-        weights = 1.0 / np.sqrt(np.square(grad_ref) + float(self.epsilon) ** 2)
-        finite_weights = weights[np.isfinite(weights)]
-        median_weight = float(np.median(finite_weights)) if finite_weights.size else 1.0
+        weights = np.asarray(L @ reference, dtype=np.float64).reshape(-1)
+        np.square(weights, out=weights)
+        weights += float(self.epsilon) ** 2
+        np.sqrt(weights, out=weights)
+        np.reciprocal(weights, out=weights)
+        if all_finite_values(weights):
+            median_weight = float(np.median(weights)) if weights.size else 1.0
+        else:
+            median_weight = _finite_median_or_default(weights)
         if median_weight > 0.0:
-            weights = weights / median_weight
+            weights /= median_weight
         W = diags(weights, offsets=0, format="csr")
         return (self.alpha * (L.T @ W @ L)).tocsr()
 
     def create_nonlinear_term(self, sigma_current: np.ndarray) -> np.ndarray:
         grad_magnitude = np.abs(np.gradient(sigma_current))
         weights = 1.0 / (grad_magnitude + self.epsilon)
-        return self.alpha * np.diag(weights)
+        return _dense_scaled_diagonal(weights, self.alpha)
 
 
 class NOSERRegularization(BaseRegularization):

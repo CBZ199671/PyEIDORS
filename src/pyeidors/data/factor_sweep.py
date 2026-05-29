@@ -25,6 +25,7 @@ from .eit_digit_metrics import (
 )
 from ._sweep_core import dataclass_csv_row
 from .voltage_digit_sweep import keep_significant_digits
+from pyeidors.utils.numeric_ops import all_finite_values
 
 
 @dataclass(frozen=True)
@@ -82,7 +83,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.n
         raise ValueError(f"{name} must be a 1D vector")
     if arr.size == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 

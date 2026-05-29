@@ -199,6 +199,10 @@ def test_forward_ksp_session_reuses_across_calls(monkeypatch):
     assert diag2["forward_factor_cache_hit"] is True
     assert diag2["forward_pc_session_total_setups"] == 1
     assert diag2["forward_reuse_preconditioner_applied"] is True
+    assert diag2["forward_ksp_session"]["schema"].endswith("telemetry-v1")
+    assert diag2["forward_ksp_session"]["cache_hit"] is True
+    assert diag2["forward_ksp_session"]["session_reused"] is True
+    assert diag2["forward_ksp_session"]["structural_fingerprint_short"]
 
     # Second call set PETSc operators once and asked PETSc to reuse PC.
     assert len(ksp.set_operators_calls) == 1
@@ -390,6 +394,17 @@ def test_forward_ksp_session_as_bundle_and_record_solve_roundtrip():
 
     session.mark_refresh("iter_count_12_gt_threshold_5")
     assert session.total_setups == 2
+    telemetry = session.as_observability(
+        cache_hit=True,
+        session_reused=True,
+        setup_seconds=0.125,
+        rhs_count=16,
+        rhs_kind="unit",
+    )
+    assert telemetry["schema"] == "pyeidors-forward-ksp-session-telemetry-v1"
+    assert telemetry["rhs_count"] == 16
+    assert telemetry["rhs_kind"] == "unit"
+    assert telemetry["structural_fingerprint_short"] == "fp"
     assert session.solves_since_setup == 0
     bundle_refresh = session.as_bundle()
     assert bundle_refresh["ksp_setup_count"] == 1

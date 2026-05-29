@@ -16,12 +16,13 @@ from eit_app.ui.electrode_overlay import (
     default_arc_segments,
 )
 from eit_app.ui.fonts import plot_font_families, serif_font_family
-from eit_app.ui.mesh_helpers import cell_to_node_average
+from eit_app.ui.mesh_helpers import _integer_cells, cell_to_node_average
 from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
 
 
 _IMAGE_AXES_RECT = (0.09, 0.14, 0.70, 0.74)
 _COLORBAR_AXES_RECT = (0.84, 0.22, 0.04, 0.58)
+_IMAGE_SCAN_CHUNK_ITEMS = 1_048_576
 
 
 def _triangle_area_xy(
@@ -36,6 +37,65 @@ def _triangle_area_xy(
     return 0.5 * np.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0))
 
 
+def _display_conductivity_values(conductivity: np.ndarray) -> np.ndarray:
+    values = np.asarray(conductivity)
+    if np.iscomplexobj(values):
+        values = np.real(values)
+    if np.issubdtype(values.dtype, np.floating):
+        return values
+    return np.asarray(values, dtype=np.float32)
+
+
+def _finite_xy_bounds(
+    x: np.ndarray, y: np.ndarray
+) -> tuple[float, float, float, float] | None:
+    x_arr = np.asarray(x).reshape(-1)
+    y_arr = np.asarray(y).reshape(-1)
+    n_items = min(x_arr.size, y_arr.size)
+    if n_items == 0:
+        return None
+
+    chunk_items = max(1, int(_IMAGE_SCAN_CHUNK_ITEMS))
+    x_min = np.inf
+    x_max = -np.inf
+    y_min = np.inf
+    y_max = -np.inf
+    found = False
+    work_size = min(chunk_items, max(n_items, 1))
+    finite_work = np.empty(work_size, dtype=bool)
+    axis_work = np.empty(work_size, dtype=bool)
+    for start in range(0, n_items, chunk_items):
+        stop = min(start + chunk_items, n_items)
+        x_chunk = x_arr[start:stop]
+        y_chunk = y_arr[start:stop]
+        finite = finite_work[: stop - start]
+        other_finite = axis_work[: stop - start]
+        np.isfinite(x_chunk, out=finite)
+        np.isfinite(y_chunk, out=other_finite)
+        np.logical_and(finite, other_finite, out=finite)
+        if not bool(finite.any()):
+            continue
+        found = True
+        if bool(finite.all()):
+            chunk_x_min = float(np.min(x_chunk))
+            chunk_x_max = float(np.max(x_chunk))
+            chunk_y_min = float(np.min(y_chunk))
+            chunk_y_max = float(np.max(y_chunk))
+        else:
+            chunk_x_min = float(np.min(x_chunk, where=finite, initial=np.inf))
+            chunk_x_max = float(np.max(x_chunk, where=finite, initial=-np.inf))
+            chunk_y_min = float(np.min(y_chunk, where=finite, initial=np.inf))
+            chunk_y_max = float(np.max(y_chunk, where=finite, initial=-np.inf))
+        x_min = min(x_min, chunk_x_min)
+        x_max = max(x_max, chunk_x_max)
+        y_min = min(y_min, chunk_y_min)
+        y_max = max(y_max, chunk_y_max)
+
+    if not found:
+        return None
+    return x_min, x_max, y_min, y_max
+
+
 def _project_cells_to_triangles(
     cell_connectivity: np.ndarray,
     x: np.ndarray,
@@ -43,7 +103,7 @@ def _project_cells_to_triangles(
     z: np.ndarray | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Return 2D triangles plus the source cell index for each triangle."""
-    cells = np.asarray(cell_connectivity, dtype=np.int64)
+    cells = _integer_cells(cell_connectivity)
     if cells.ndim != 2 or cells.shape[0] == 0 or cells.shape[1] < 3:
         return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
 
@@ -51,14 +111,16 @@ def _project_cells_to_triangles(
         triangles = cells.astype(np.int32, copy=False)
         sources = np.arange(len(cells), dtype=np.int32)
     elif cells.shape[1] == 4:
-        z_arr = None if z is None else np.asarray(z, dtype=float)
+        z_arr = None if z is None else np.asarray(z)
         planar = z_arr is None or not bool(np.ptp(z_arr) > 1.0e-9)
         if planar:
             tris = np.empty((len(cells) * 2, 3), dtype=np.int32)
             tris[0::2] = cells[:, [0, 1, 2]]
             tris[1::2] = cells[:, [0, 2, 3]]
             triangles = tris
-            sources = np.repeat(np.arange(len(cells), dtype=np.int32), 2)
+            sources = np.empty(len(cells) * 2, dtype=np.int32)
+            sources[0::2] = np.arange(len(cells), dtype=np.int32)
+            sources[1::2] = sources[0::2]
         else:
             # Tetrahedra: draw boundary faces only, otherwise internal faces
             # overpaint the projection and make 3D phantoms unreadable.
@@ -71,11 +133,19 @@ def _project_cells_to_triangles(
                     face = tuple(int(cell[offset]) for offset in offsets)
                     key = tuple(sorted(face))
                     faces[key] = None if key in faces else (face, cell_idx)
-            kept = [payload for payload in faces.values() if payload is not None]
-            if not kept:
+            kept_count = sum(1 for payload in faces.values() if payload is not None)
+            if kept_count <= 0:
                 return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
-            triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
-            sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
+            triangles = np.empty((kept_count, 3), dtype=np.int32)
+            sources = np.empty(kept_count, dtype=np.int32)
+            kept_idx = 0
+            for payload in faces.values():
+                if payload is None:
+                    continue
+                face, cell_idx = payload
+                triangles[kept_idx] = face
+                sources[kept_idx] = int(cell_idx)
+                kept_idx += 1
     else:
         tris: list[tuple[int, int, int]] = []
         sources_list: list[int] = []
@@ -93,9 +163,15 @@ def _project_cells_to_triangles(
 
     valid_index = (triangles >= 0).all(axis=1) & (triangles < len(x)).all(axis=1)
     if np.any(valid_index):
-        valid_triangles = triangles[valid_index]
-        valid_sources = sources[valid_index]
+        if bool(np.all(valid_index)):
+            valid_triangles = triangles
+            valid_sources = sources
+        else:
+            valid_triangles = triangles[valid_index]
+            valid_sources = sources[valid_index]
         area_index = _triangle_area_xy(valid_triangles, x, y) > 1.0e-14
+        if bool(np.all(area_index)):
+            return valid_triangles, valid_sources
         return valid_triangles[area_index], valid_sources[area_index]
     return np.empty((0, 3), dtype=np.int32), np.empty((0,), dtype=np.int32)
 
@@ -264,8 +340,10 @@ class ConductivityImageWidget(QWidget):
             self._show_error(f"Triangulation failed: {exc}")
             return
 
-        if len(conductivity) == len(cell_connectivity):
-            face_values = np.asarray(conductivity, dtype=float)[source_cells]
+        display_conductivity = _display_conductivity_values(conductivity)
+
+        if len(display_conductivity) == len(cell_connectivity):
+            face_values = display_conductivity[source_cells]
             try:
                 node_values = cell_to_node_average(face_values, triangles, len(x))
             except ValueError:
@@ -278,14 +356,14 @@ class ConductivityImageWidget(QWidget):
                     tri, node_values, shading="gouraud", cmap="viridis"
                 )
                 self._last_render_mode = "cell_to_node_gouraud"
-        elif len(conductivity) == len(x):
+        elif len(display_conductivity) == len(x):
             tpc = self._ax.tripcolor(
-                tri, conductivity, shading="gouraud", cmap="viridis"
+                tri, display_conductivity, shading="gouraud", cmap="viridis"
             )
             self._last_render_mode = "node_gouraud"
         else:
             self._show_error(
-                f"Size mismatch: sigma={len(conductivity)}, "
+                f"Size mismatch: sigma={len(display_conductivity)}, "
                 f"cells={len(cell_connectivity)}, nodes={len(x)}"
             )
             return
@@ -386,15 +464,10 @@ class ConductivityImageWidget(QWidget):
 
     def _apply_square_data_limits(self, x: np.ndarray, y: np.ndarray) -> None:
         """Use equal x/y physical extents so 2D domains render identically."""
-        finite = np.isfinite(x) & np.isfinite(y)
-        if not np.any(finite):
+        bounds = _finite_xy_bounds(x, y)
+        if bounds is None:
             return
-        x_finite = x[finite]
-        y_finite = y[finite]
-        x_min = float(np.min(x_finite))
-        x_max = float(np.max(x_finite))
-        y_min = float(np.min(y_finite))
-        y_max = float(np.max(y_finite))
+        x_min, x_max, y_min, y_max = bounds
         span = max(x_max - x_min, y_max - y_min)
         if span <= 0.0:
             span = 1.0

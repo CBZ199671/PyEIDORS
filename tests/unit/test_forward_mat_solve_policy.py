@@ -177,6 +177,11 @@ def test_forward_mat_solve_mode_off_overrides_cuda_dense_auto(monkeypatch):
         "petsc_device_effective": "cuda",
         "capability": {"petsc_cuda_dense": True},
     }
+    monkeypatch.setattr(
+        model,
+        "_cuda_cem_requires_direct_solve",
+        lambda _session, **_kwargs: False,
+    )
     monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
 
     pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
@@ -188,6 +193,45 @@ def test_forward_mat_solve_mode_off_overrides_cuda_dense_auto(monkeypatch):
     diag = model.get_backend_diagnostics()
     assert diag["forward_mat_solve_effective"] == "vec-loop"
     assert diag["forward_ksp_mat_solve_count"] == 0
+
+
+def test_v135_large_cuda_complex_cem_uses_vec_loop_not_dense_fallback(monkeypatch):
+    model, ksp = _make_model(
+        mat_solve_mode="off",
+        mesh_tdim=3,
+        solve_mat_type="aijcusparse",
+    )
+    model.dofs = 20000
+    model.n_elec = 1
+    model.backend_config.cuda_dense_fallback_max_gib = 0.01
+    model._active_scalar_dtype = lambda: np.dtype(np.complex64)
+    model._ensure_vec_type = lambda vec, _kind: (
+        setattr(
+            vec,
+            "arr",
+            vec.arr.astype(np.complex64),
+        )
+        or vec
+    )
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    pattern_matrix = np.array([[1.0], [2.0]], dtype=float)
+    sol = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert ksp.mat_calls == 0
+    assert ksp.solve_calls == pattern_matrix.shape[0]
+    assert sol.dtype == np.complex64
+    diag = model.get_backend_diagnostics()
+    assert diag["forward_mat_solve_effective"] == "vec-loop"
+    assert diag["cuda_dense_lu_fallback_skipped"] is True
+    assert str(diag["cuda_dense_lu_fallback_skip_reason"]).startswith(
+        "cuda_dense_lu_estimated_memory_exceeds_limit"
+    )
 
 
 def test_forward_mat_solve_mode_auto_prefers_mat_solve_for_3d(monkeypatch):

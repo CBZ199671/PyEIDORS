@@ -6,10 +6,24 @@ from typing import TYPE_CHECKING
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QStackedLayout, QSplitter, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QLabel,
+    QStackedLayout,
+    QSplitter,
+    QVBoxLayout,
+    QWidget,
+)
 
 from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
+from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
+from eit_app.ui.complex_channels import (
+    DISPLAY_CHANNELS,
+    REAL_CHANNEL,
+    channel_values,
+    has_complex_component,
+)
 from eit_app.ui.conductivity_3d_widget import (
     Conductivity3DWidget,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
@@ -165,8 +179,13 @@ class SimulationResultsWidget(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._build_ui()
+        self._complex_mode = False
+        self._current_channel = REAL_CHANNEL
+        self._updating_channel_combo = False
         self._last_forward_result: ForwardSolverResult | None = None
+        self._last_reconstruction_payload: dict[str, np.ndarray | None] | None = None
+        self._last_electrode_geometry = None
+        self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
 
@@ -174,6 +193,24 @@ class SimulationResultsWidget(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
+
+        self._mode_toolbar = QWidget()
+        toolbar_layout = QHBoxLayout(self._mode_toolbar)
+        toolbar_layout.setContentsMargins(6, 0, 6, 0)
+        toolbar_layout.setSpacing(8)
+        self._mode_label = QLabel("")
+        self._channel_label = QLabel("")
+        self._channel_combo = AutoCloseComboBox()
+        for channel in DISPLAY_CHANNELS:
+            self._channel_combo.addItem("", channel)
+        self._channel_combo.currentIndexChanged.connect(
+            lambda _idx: self._on_channel_changed()
+        )
+        toolbar_layout.addWidget(self._mode_label)
+        toolbar_layout.addStretch(1)
+        toolbar_layout.addWidget(self._channel_label)
+        toolbar_layout.addWidget(self._channel_combo)
+        layout.addWidget(self._mode_toolbar)
 
         # Top: side-by-side conductivity images — initial titles come from
         # the i18n dict; _retranslate() re-applies them on language change.
@@ -231,6 +268,7 @@ class SimulationResultsWidget(QWidget):
     def update_forward_result(self, result: ForwardSolverResult) -> None:
         """Show ground truth and boundary voltages from forward solve."""
         self._last_forward_result = result
+        self._last_reconstruction_payload = None
 
         if result.error_msg:
             return
@@ -242,21 +280,16 @@ class SimulationResultsWidget(QWidget):
         geometry = electrode_geometry_from_config(
             getattr(result, "forward_model_config", None) or {}
         )
-
-        self._ground_truth_widget.update_image(
-            result.ground_truth_conductivity,
-            result.node_coords,
-            result.cell_connectivity,
-            title=t("sim.results.ground_truth_title"),
+        self._last_electrode_geometry = geometry
+        self._set_complex_mode(
+            has_complex_component(
+                result.ground_truth_conductivity,
+                result.boundary_voltages,
+                result.homogeneous_voltages,
+            )
         )
-        self._ground_truth_widget.set_electrode_geometry(geometry)
-        self._reconstruction_widget.clear()
-        self._reconstruction_widget.set_electrode_geometry(geometry)
-        self._balance_top_splitter()
 
-        self._voltage_plot.update_simulation_voltages(
-            ground_truth=result.boundary_voltages,
-        )
+        self._render_result_views()
 
     def update_inverse_result(
         self,
@@ -266,31 +299,28 @@ class SimulationResultsWidget(QWidget):
         reconstructed_voltages: np.ndarray | None = None,
     ) -> None:
         """Show reconstruction alongside ground truth."""
-        self._reconstruction_widget.update_image(
-            reconstructed_conductivity,
-            node_coords,
-            cell_connectivity,
-            title=t("sim.results.reconstruction_title"),
+        self._last_reconstruction_payload = {
+            "conductivity": np.asarray(reconstructed_conductivity),
+            "node_coords": np.asarray(node_coords),
+            "cell_connectivity": np.asarray(cell_connectivity),
+            "voltages": None
+            if reconstructed_voltages is None
+            else np.asarray(reconstructed_voltages),
+        }
+        self._set_complex_mode(
+            self._complex_mode
+            or has_complex_component(reconstructed_conductivity, reconstructed_voltages)
         )
-        # Re-apply the cached electrode overlay — update_image clears it.
-        if self._last_forward_result is not None:
-            geometry = electrode_geometry_from_config(
-                getattr(self._last_forward_result, "forward_model_config", None) or {}
-            )
-            self._reconstruction_widget.set_electrode_geometry(geometry)
-        self._balance_top_splitter()
-
-        if self._last_forward_result is not None:
-            self._voltage_plot.update_simulation_voltages(
-                ground_truth=self._last_forward_result.boundary_voltages,
-                reconstructed=reconstructed_voltages,
-            )
+        self._render_result_views()
 
     def clear(self) -> None:
         self._ground_truth_widget.clear()
         self._reconstruction_widget.clear()
         self._voltage_plot.clear()
         self._last_forward_result = None
+        self._last_reconstruction_payload = None
+        self._last_electrode_geometry = None
+        self._set_complex_mode(False)
         self._balance_top_splitter()
 
     def set_loading_forward(self, on: bool) -> None:
@@ -330,12 +360,109 @@ class SimulationResultsWidget(QWidget):
     def set_expected_point_count(self, point_count: int) -> None:
         self._voltage_plot.set_expected_point_count(point_count)
 
+    def current_result_mode(self) -> str:
+        return "complex" if self._complex_mode else "real"
+
+    def current_channel(self) -> str:
+        return self._current_channel
+
+    def _on_channel_changed(self) -> None:
+        if self._updating_channel_combo:
+            return
+        channel = str(self._channel_combo.currentData() or REAL_CHANNEL)
+        if channel == self._current_channel:
+            return
+        self._current_channel = channel
+        self._render_result_views()
+
+    def _set_complex_mode(self, enabled: bool) -> None:
+        self._complex_mode = bool(enabled)
+        if not self._complex_mode:
+            self._current_channel = REAL_CHANNEL
+        self._refresh_channel_controls()
+
+    def _refresh_channel_controls(self) -> None:
+        self._updating_channel_combo = True
+        try:
+            self._mode_label.setText(
+                t(
+                    "sim.results.mode_complex"
+                    if self._complex_mode
+                    else "sim.results.mode_real"
+                )
+            )
+            self._channel_label.setText(t("sim.results.channel_label"))
+            for idx in range(self._channel_combo.count()):
+                channel = str(self._channel_combo.itemData(idx) or REAL_CHANNEL)
+                self._channel_combo.setItemText(
+                    idx,
+                    t(f"sim.results.channel.{channel}"),
+                )
+                if channel == self._current_channel:
+                    self._channel_combo.setCurrentIndex(idx)
+            if not self._complex_mode:
+                self._channel_combo.setCurrentIndex(0)
+            self._channel_combo.setEnabled(self._complex_mode)
+            self._channel_label.setEnabled(self._complex_mode)
+        finally:
+            self._updating_channel_combo = False
+
+    def _display_channel(self) -> str:
+        return self._current_channel if self._complex_mode else REAL_CHANNEL
+
+    def _channel_title(self, base_key: str) -> str:
+        base = t(base_key)
+        if not self._complex_mode:
+            return base
+        return f"{base} · {t(f'sim.results.channel.{self._display_channel()}')}"
+
+    def _render_result_views(self) -> None:
+        result = self._last_forward_result
+        if result is None or result.error_msg:
+            return
+        channel = self._display_channel()
+        geometry = self._last_electrode_geometry
+
+        self._ground_truth_widget.update_image(
+            channel_values(result.ground_truth_conductivity, channel),
+            result.node_coords,
+            result.cell_connectivity,
+            title=self._channel_title("sim.results.ground_truth_title"),
+        )
+        self._ground_truth_widget.set_electrode_geometry(geometry)
+
+        reconstructed_voltages = None
+        payload = self._last_reconstruction_payload
+        if payload is None:
+            self._reconstruction_widget.clear()
+            self._reconstruction_widget.set_electrode_geometry(geometry)
+        else:
+            self._reconstruction_widget.update_image(
+                channel_values(payload["conductivity"], channel),
+                np.asarray(payload["node_coords"]),
+                np.asarray(payload["cell_connectivity"]),
+                title=self._channel_title("sim.results.reconstruction_title"),
+            )
+            self._reconstruction_widget.set_electrode_geometry(geometry)
+            reconstructed_voltages = payload.get("voltages")
+        self._balance_top_splitter()
+
+        self._voltage_plot.update_simulation_voltages(
+            ground_truth=result.boundary_voltages,
+            reconstructed=reconstructed_voltages,
+            component=channel,
+        )
+
     # ── i18n ──
 
     def _retranslate(self) -> None:
         """Refresh the two conductivity-image titles on language change."""
-        self._ground_truth_widget.setTitle(t("sim.results.ground_truth_title"))
-        self._reconstruction_widget.setTitle(t("sim.results.reconstruction_title"))
+        self._refresh_channel_controls()
+        if self._last_forward_result is None:
+            self._ground_truth_widget.setTitle(t("sim.results.ground_truth_title"))
+            self._reconstruction_widget.setTitle(t("sim.results.reconstruction_title"))
+        else:
+            self._render_result_views()
 
     @property
     def voltage_plot(self) -> BoundaryVoltagePlotWidget:

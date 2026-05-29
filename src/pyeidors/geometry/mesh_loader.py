@@ -9,7 +9,6 @@ from typing import Dict
 
 import numpy as np
 from dolfinx.io import gmsh as gmshio
-from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
@@ -37,6 +36,7 @@ from .process_mesh_cache import (
     get_process_cached_mesh,
     put_process_cached_mesh,
 )
+from ._runtime import mpi_comm_world
 
 logger = logging.getLogger(__name__)
 
@@ -135,7 +135,7 @@ class MeshLoader:
 
         mesh_data = gmshio.read_from_msh(
             str(msh_file),
-            MPI.COMM_WORLD,
+            mpi_comm_world(),
             rank=0,
             gdim=self.gdim,
         )

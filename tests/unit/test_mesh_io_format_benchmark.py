@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
@@ -145,3 +146,16 @@ def test_tag_signature_detects_tag_value_drift() -> None:
         left_signature,
         module.tag_signature(right),
     )
+
+
+def test_v542_mesh_io_pair_hash_direct_fills_pairs() -> None:
+    module = _load_module()
+    source = inspect.getsource(module.pairs_sha256)
+    assert "np.column_stack" not in source
+    assert "pairs[:, 0] = index_array" in source
+    assert "pairs[:, 1] = value_array" in source
+
+    direct = module.pairs_sha256([1, 2, 3], [4, 5, 6])
+    expected_pairs = np.array([[1, 4], [2, 5], [3, 6]], dtype=np.int64)
+    expected = module.hash_array_payload(np.ascontiguousarray(expected_pairs))
+    assert direct == expected

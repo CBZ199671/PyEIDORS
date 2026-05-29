@@ -33,6 +33,21 @@ def _rank_from_energy(singular_values: np.ndarray, energy: float, max_rank: int)
     return chosen
 
 
+def _stack_basis_blocks(blocks: list[np.ndarray], *, n_param: int) -> np.ndarray:
+    total_cols = int(sum(int(block.shape[1]) for block in blocks))
+    if total_cols <= 0:
+        return np.zeros((int(n_param), 0), dtype=np.float64)
+    out = np.empty((int(n_param), total_cols), dtype=np.float64)
+    offset = 0
+    for block in blocks:
+        width = int(block.shape[1])
+        if width <= 0:
+            continue
+        out[:, offset : offset + width] = block
+        offset += width
+    return np.ascontiguousarray(out[:, :offset], dtype=np.float64)
+
+
 def compute_pod_basis(
     snapshots: np.ndarray,
     *,
@@ -94,10 +109,12 @@ def merge_orthonormal_bases(
         rows = 0 if n_param is None else int(n_param)
         return np.zeros((rows, 0), dtype=np.float64)
 
-    merged = np.column_stack(valid_blocks)
+    merged = _stack_basis_blocks(valid_blocks, n_param=int(n_param))
     with np.errstate(all="ignore"):
         q_mat, r_mat = np.linalg.qr(merged, mode="reduced")
-    diag = np.abs(np.diag(r_mat)) if r_mat.ndim == 2 else np.array([], dtype=np.float64)
+    diag = (
+        np.abs(r_mat.diagonal()) if r_mat.ndim == 2 else np.array([], dtype=np.float64)
+    )
     if diag.size:
         keep = diag > float(max(eps, 0.0))
         if np.any(keep):

@@ -38,11 +38,13 @@ from dolfinx import fem
 from dolfinx import mesh as dmesh
 from mpi4py import MPI
 
+from pyeidors.cache import update_digest_with_array_payload
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import build_eit_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.forward.process_setup_cache import clear_process_forward_setup_cache
 from pyeidors.io import write_hdf5_artifact
+from pyeidors.utils.numeric_ops import all_finite_values
 
 try:
     from pyeidors.geometry.mesh3d_generator import (
@@ -169,16 +171,38 @@ def _percentile(values: np.ndarray, q: float) -> float:
 
 
 def _array_sha256(array: np.ndarray) -> str:
-    arr = np.ascontiguousarray(np.asarray(array))
+    arr = np.asarray(array)
     digest = hashlib.sha256()
-    digest.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    update_digest_with_array_payload(digest, np.asarray(arr.shape, dtype=np.int64))
     digest.update(str(arr.dtype).encode("utf-8"))
-    digest.update(arr.tobytes())
+    update_digest_with_array_payload(digest, arr)
     return digest.hexdigest()
 
 
 def _sigma_sequence_hash(sigma_sequence: np.ndarray) -> str:
-    return _array_sha256(np.ascontiguousarray(sigma_sequence, dtype=np.float64))
+    return _array_sha256(np.asarray(sigma_sequence, dtype=np.float64))
+
+
+def _any_value_below(
+    values: np.ndarray,
+    threshold: float,
+    *,
+    chunk_size: int = 1_048_576,
+) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return False
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size, dtype=bool)
+    limit = float(threshold)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        mask = work[: chunk.size]
+        np.less(chunk, limit, out=mask)
+        if bool(mask.any()):
+            return True
+    return False
 
 
 def _generate_sigma_sequence(
@@ -291,9 +315,9 @@ def _run_regime(
                 f"sigma_sequence shape {sigma_sequence.shape} does not match "
                 f"{expected_shape} for regime {regime!r}."
             )
-        if not np.isfinite(sigma_sequence).all():
+        if not all_finite_values(sigma_sequence):
             raise FloatingPointError("sigma_sequence contains non-finite values.")
-        if np.any(sigma_sequence < float(args.sigma_floor)):
+        if _any_value_below(sigma_sequence, float(args.sigma_floor)):
             raise ValueError("sigma_sequence violates sigma_floor.")
     sigma_hash = _sigma_sequence_hash(sigma_sequence)
 

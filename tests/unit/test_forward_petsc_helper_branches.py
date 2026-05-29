@@ -272,6 +272,52 @@ def test_stable_cpu_petsc_types_handles_none_mpi_and_fallback(
     assert EITForwardModel._stable_cpu_petsc_types(model) == ("seqaij", "seq")
 
 
+def test_v135_large_cuda_complex_cem_skips_dense_lu_fallback() -> None:
+    model = _make_model(dofs=20000, n_elec=16)
+    model.backend_config = SimpleNamespace(cuda_dense_fallback_max_gib=0.01)
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    model._active_scalar_dtype = lambda: np.complex64
+    session = SimpleNamespace(ksp_type="gmres", pc_type="gamg")
+
+    assert (
+        EITForwardModel._cuda_cem_requires_direct_solve(
+            model,
+            session,
+            rhs_count=208,
+        )
+        is False
+    )
+
+    diag = model.get_backend_diagnostics()
+    assert diag["cuda_dense_lu_fallback_skipped"] is True
+    assert diag["cuda_dense_lu_fallback_scalar_dtype"] == "complex64"
+    assert diag["cuda_dense_lu_fallback_estimated_gib"] > 0.01
+    assert str(diag["cuda_dense_lu_fallback_skip_reason"]).startswith(
+        "cuda_dense_lu_estimated_memory_exceeds_limit"
+    )
+    assert str(diag["gpu_fallback_reason"]).startswith("cuda_dense_lu_fallback_skipped")
+
+
+def test_v135_small_cuda_cem_can_still_use_dense_lu_fallback() -> None:
+    model = _make_model(dofs=64, n_elec=16)
+    model.backend_config = SimpleNamespace(cuda_dense_fallback_max_gib=2.0)
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+    model._active_scalar_dtype = lambda: np.complex64
+    session = SimpleNamespace(ksp_type="gmres", pc_type="gamg")
+
+    assert (
+        EITForwardModel._cuda_cem_requires_direct_solve(
+            model,
+            session,
+            rhs_count=16,
+        )
+        is True
+    )
+
+    diag = model.get_backend_diagnostics()
+    assert diag["cuda_dense_lu_fallback_skipped"] is False
+
+
 def test_mpi_backend_info_reports_current_single_rank_boundary():
     model = _make_model()
     model.mesh = SimpleNamespace(

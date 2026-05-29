@@ -10,6 +10,18 @@ from scipy.sparse.linalg import cg
 from ...utils.numeric_ops import safe_dot
 
 
+def _apply_regularization_to_basis(
+    u_mat: np.ndarray,
+    regularization_apply: Callable[[np.ndarray], np.ndarray],
+) -> np.ndarray:
+    n_param, n_basis = int(u_mat.shape[0]), int(u_mat.shape[1])
+    r_u = np.empty((n_param, n_basis), dtype=np.float64)
+    for col in range(n_basis):
+        applied = np.asarray(regularization_apply(u_mat[:, col]), dtype=np.float64)
+        r_u[:, col] = applied.reshape(-1)
+    return np.ascontiguousarray(r_u, dtype=np.float64)
+
+
 def build_reduced_operator(
     *,
     jacobian: np.ndarray,
@@ -34,12 +46,7 @@ def build_reduced_operator(
         dtype=np.float64,
     )
 
-    r_u = np.column_stack(
-        [
-            np.asarray(regularization_apply(u_mat[:, col]), dtype=np.float64)
-            for col in range(u_mat.shape[1])
-        ]
-    )
+    r_u = _apply_regularization_to_basis(u_mat, regularization_apply)
     h_reg = np.asarray(
         safe_dot(u_mat.T, r_u, "gauss_newton.reduced.h_reg"),
         dtype=np.float64,

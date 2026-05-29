@@ -69,6 +69,43 @@ if TYPE_CHECKING:
 
 
 log = logging.getLogger(__name__)
+_FINITE_SCAN_CHUNK_ITEMS = 1_048_576
+
+
+def _finite_min_max(values: np.ndarray) -> tuple[float, float] | None:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    min_value = np.inf
+    max_value = -np.inf
+    found = False
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        finite = work[: chunk.size]
+        np.isfinite(chunk, out=finite)
+        if not bool(finite.any()):
+            continue
+        found = True
+        min_value = min(
+            min_value,
+            float(np.min(chunk, where=finite, initial=np.inf)),
+        )
+        max_value = max(
+            max_value,
+            float(np.max(chunk, where=finite, initial=-np.inf)),
+        )
+    if not found:
+        return None
+    return min_value, max_value
+
+
+def _display_float_array(values: np.ndarray) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if np.issubdtype(arr.dtype, np.floating):
+        return arr
+    return np.asarray(arr, dtype=np.float32)
 
 
 class EquipotentialPlotWidget(QWidget):
@@ -181,9 +218,9 @@ class EquipotentialPlotWidget(QWidget):
             self._show_status(result.error_msg or "Empty result", error=True)
             return
 
-        coords = np.asarray(result.node_coords, dtype=np.float64)
+        coords = _display_float_array(result.node_coords)
         cells = np.asarray(result.cell_connectivity, dtype=np.int32)
-        sigma = np.asarray(result.conductivity, dtype=np.float64).reshape(-1)
+        sigma = _display_float_array(result.conductivity).reshape(-1)
 
         if coords.ndim != 2 or coords.shape[1] < 2:
             self._show_status(t("hw.equipotential.bad_coords"), error=True)
@@ -271,12 +308,12 @@ class EquipotentialPlotWidget(QWidget):
             # scalar.  warp_by_scalar later promotes Z = factor * sigma
             # so the field becomes a 3D surface.
             n_pts = coords.shape[0]
-            points = np.zeros((n_pts, 3), dtype=np.float64)
+            points = np.zeros((n_pts, 3), dtype=np.asarray(coords).dtype)
             points[:, :2] = coords[:, :2]
             faces = np.empty((cells.shape[0], 4), dtype=np.int64)
             faces[:, 0] = 3
             faces[:, 1:] = cells
-            mesh = pv.PolyData(points, faces.flatten())
+            mesh = pv.PolyData(points, faces.ravel())
             mesh.point_data["sigma"] = node_values
 
             warp_factor = self._compute_warp_factor(node_values, coords)
@@ -370,8 +407,8 @@ class EquipotentialPlotWidget(QWidget):
             the scene, matching the recon's "up" direction)
           * Z (sigma height) points straight up
         """
-        x = np.asarray(coords[:, 0], dtype=float)
-        y = np.asarray(coords[:, 1], dtype=float)
+        x = _display_float_array(coords[:, 0])
+        y = _display_float_array(coords[:, 1])
         if x.size == 0 or y.size == 0:
             return
         cx = float((np.nanmin(x) + np.nanmax(x)) / 2.0)
@@ -411,10 +448,10 @@ class EquipotentialPlotWidget(QWidget):
         diameter, so the height variation reads naturally regardless
         of σ's absolute magnitude.
         """
-        finite = node_values[np.isfinite(node_values)]
-        if finite.size == 0:
+        finite_range = _finite_min_max(node_values)
+        if finite_range is None:
             return 1.0
-        sigma_span = float(np.nanmax(finite) - np.nanmin(finite))
+        sigma_span = finite_range[1] - finite_range[0]
         if sigma_span < 1.0e-12:
             return 0.0
         x = coords[:, 0]
@@ -606,8 +643,8 @@ class EquipotentialPlotWidget(QWidget):
         warped PyVista mesh.  Used by _reset_camera so the button
         works without re-running the full warp pipeline.
         """
-        x = np.asarray(coords[:, 0], dtype=float)
-        y = np.asarray(coords[:, 1], dtype=float)
+        x = _display_float_array(coords[:, 0])
+        y = _display_float_array(coords[:, 1])
         if x.size == 0 or y.size == 0:
             return
         cx = float((np.nanmin(x) + np.nanmax(x)) / 2.0)

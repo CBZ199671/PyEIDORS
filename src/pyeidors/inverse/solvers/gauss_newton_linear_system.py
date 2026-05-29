@@ -35,13 +35,19 @@ from ...cache.object_signature import (
     pattern_signature_from_forward_model,
     rom_signature,
 )
+from ...cache.keys import hash_array_payload
 from ...perf.capabilities import (
     detect_performance_capabilities,
     select_fast_linear_path,
     select_fused_strategy,
     select_preconditioner,
 )
-from ...utils.numeric_ops import safe_dot
+from ...utils.numeric_ops import (
+    add_scaled_diagonal_in_place,
+    add_scaled_values_in_place,
+    all_finite_values,
+    safe_dot,
+)
 from ..jacobian.linearized import JacobianLinearization
 from ..matrix_free.dual_mesh import DualMeshJacobianOperator
 from ..reduced.inexact_controller import InexactController
@@ -55,17 +61,34 @@ def _petsc_vec_to_numpy(vec) -> np.ndarray:
     """Safely extract a dense numpy array from a PETSc Vec wrapper."""
     if hasattr(vec, "array_r"):
         try:
-            return np.asarray(vec.array_r, dtype=np.float64)
+            return np.asarray(vec.array_r)
         except Exception:
             pass
     if hasattr(vec, "getArray"):
         try:
-            return np.asarray(vec.getArray(readonly=True), dtype=np.float64)
+            return np.asarray(vec.getArray(readonly=True))
         except Exception:
             pass
     if hasattr(vec, "array"):
-        return np.asarray(vec.array, dtype=np.float64)
+        return np.asarray(vec.array)
     raise TypeError("Unsupported PETSc Vec wrapper in matrix-free CG helper.")
+
+
+def _dense_identity_matrix(n: int) -> np.ndarray:
+    size = int(n)
+    dense = np.zeros((size, size), dtype=np.float64)
+    if size > 0:
+        dense.reshape(-1)[:: size + 1] = 1.0
+    return dense
+
+
+def _dense_diagonal_matrix(diagonal: np.ndarray) -> np.ndarray:
+    values = np.asarray(diagonal, dtype=np.float64).reshape(-1)
+    size = int(values.size)
+    dense = np.zeros((size, size), dtype=np.float64)
+    if size > 0:
+        dense.reshape(-1)[:: size + 1] = values
+    return dense
 
 
 class _PETScMatrixFreeHessianContext:
@@ -77,7 +100,7 @@ class _PETScMatrixFreeHessianContext:
         self._op = op
 
     def mult(self, _mat, x, y) -> None:
-        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)), dtype=np.float64)
+        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)))
         y.getArray(readonly=False)[:] = result
 
 
@@ -90,7 +113,7 @@ class _PETScMatrixFreePCContext:
         self._op = op
 
     def apply(self, _pc, x, y) -> None:
-        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)), dtype=np.float64)
+        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)))
         y.getArray(readonly=False)[:] = result
 
 
@@ -135,11 +158,11 @@ def _solve_matrix_free_hessian_via_petsc(
         ksp.setUp()
 
     b = h_mat.createVecRight()
-    b.getArray(readonly=False)[:] = np.asarray(rhs, dtype=np.float64)
+    b.getArray(readonly=False)[:] = np.asarray(rhs)
     x = h_mat.createVecRight()
     try:
         ksp.solve(b, x)
-        result = np.asarray(_petsc_vec_to_numpy(x), dtype=np.float64).reshape(-1).copy()
+        result = np.asarray(_petsc_vec_to_numpy(x)).reshape(-1).copy()
         iterations = (
             int(ksp.getIterationNumber()) if hasattr(ksp, "getIterationNumber") else 0
         )
@@ -168,17 +191,53 @@ class _JacobianActionBundle:
     matvec: Callable[[np.ndarray], np.ndarray]
     rmatvec: Callable[[np.ndarray], np.ndarray]
     linearization: "JacobianLinearization | None" = None
+    hessian_diag: Callable[[], np.ndarray] | None = None
+
+
+def _complex_preserving_dtype(*values) -> np.dtype:
+    dtypes = [
+        np.dtype(value)
+        if isinstance(value, (np.dtype, type))
+        else np.asarray(value).dtype
+        for value in values
+        if value is not None
+    ]
+    complex_dtypes = [
+        dtype for dtype in dtypes if np.issubdtype(dtype, np.complexfloating)
+    ]
+    if complex_dtypes:
+        if any(dtype != np.dtype(np.complex64) for dtype in complex_dtypes):
+            return np.dtype(np.complex128)
+        return np.dtype(np.complex64)
+    return np.dtype(np.float64)
 
 
 def _finite_summary(values: np.ndarray) -> str:
-    finite = values[np.isfinite(values)]
-    if finite.size == 0:
+    arr = np.asarray(values).reshape(-1)
+    use_abs_range = np.iscomplexobj(arr)
+    finite_count = 0
+    min_value = np.inf
+    max_value = -np.inf
+    norm2 = 0.0
+    for raw_value in np.nditer(arr, flags=["refs_ok"], op_flags=["readonly"]):
+        value = raw_value.item()
+        if not bool(np.isfinite(value)):
+            continue
+        finite_count += 1
+        abs_value = float(abs(value))
+        range_value = abs_value if use_abs_range else float(value)
+        if range_value < min_value:
+            min_value = range_value
+        if range_value > max_value:
+            max_value = range_value
+        norm2 += abs_value * abs_value
+    if finite_count == 0:
         return "finite_count=0"
     return (
-        f"finite_count={finite.size} "
-        f"min={float(finite.min()):.6e} "
-        f"max={float(finite.max()):.6e} "
-        f"l2={float(np.linalg.norm(finite)):.6e}"
+        f"finite_count={finite_count} "
+        f"min={float(min_value):.6e} "
+        f"max={float(max_value):.6e} "
+        f"l2={float(np.sqrt(norm2)):.6e}"
     )
 
 
@@ -187,12 +246,12 @@ def _require_finite(name: str, values, iteration: int | None = None) -> None:
         arr = values.detach().cpu().numpy()
     else:
         arr = np.asarray(values)
-    if np.isfinite(arr).all():
+    if all_finite_values(arr):
         return
     iter_tag = "init" if iteration is None else str(iteration)
     raise FloatingPointError(
         f"Non-finite values detected in {name} at iteration={iter_tag}. "
-        f"{_finite_summary(arr.astype(np.float64, copy=False))}"
+        f"{_finite_summary(arr)}"
     )
 
 
@@ -212,18 +271,240 @@ def _apply_regularization_np(reconstructor, vector: np.ndarray) -> np.ndarray:
     if matrix is None:
         raise RuntimeError("Regularization matrix is not initialized.")
 
-    vec = np.asarray(vector, dtype=np.float64)
+    raw_vec = np.asarray(vector)
+    dtype = _complex_preserving_dtype(raw_vec.dtype)
+    vec = np.asarray(raw_vec, dtype=dtype)
     apply = getattr(matrix, "apply", None)
     if callable(apply):
-        return np.asarray(apply(vec), dtype=np.float64)
+        return np.asarray(apply(vec), dtype=dtype)
     if isspmatrix(matrix):
-        return np.asarray(matrix.dot(vec), dtype=np.float64)
+        return np.asarray(matrix.dot(vec), dtype=dtype)
     if isinstance(matrix, LinearOperator):
-        return np.asarray(matrix.matvec(vec), dtype=np.float64)
+        return np.asarray(matrix.matvec(vec), dtype=dtype)
     if callable(matrix):
-        return np.asarray(matrix(vec), dtype=np.float64)
-    dense = np.asarray(matrix, dtype=np.float64)
-    return np.asarray(dense @ vec, dtype=np.float64)
+        return np.asarray(matrix(vec), dtype=dtype)
+    dense_raw = np.asarray(matrix)
+    dense = np.asarray(dense_raw, dtype=np.result_type(dtype, dense_raw.dtype))
+    return np.asarray(dense @ vec, dtype=np.result_type(dtype, dense.dtype))
+
+
+def _regularization_matrix_for_native_complex(
+    regularization,
+    n_param: int,
+) -> np.ndarray:
+    """Return a dense regularization matrix for native complex normal equations."""
+
+    if regularization is None:
+        return _dense_identity_matrix(int(n_param))
+    if isspmatrix(regularization):
+        return np.asarray(regularization.toarray(), dtype=np.float64)
+    if isinstance(regularization, LinearOperator):
+        n = int(n_param)
+        dense = np.empty((n, n), dtype=np.float64)
+        unit = np.zeros(n, dtype=np.float64)
+        for idx in range(n):
+            unit[idx] = 1.0
+            column = np.asarray(regularization.matvec(unit), dtype=np.float64).reshape(
+                -1
+            )
+            if column.shape[0] != n:
+                raise ValueError(
+                    "LinearOperator regularization matvec returned "
+                    f"{column.shape[0]} entries, expected {n}."
+                )
+            dense[:, idx] = column
+            unit[idx] = 0.0
+        return dense
+    as_rtr = getattr(regularization, "as_RtR", None)
+    if not callable(as_rtr):
+        as_rtr = getattr(regularization, "as_rtr", None)
+    if callable(as_rtr):
+        explicit = as_rtr(dense=True)
+        if isspmatrix(explicit):
+            return np.asarray(explicit.toarray(), dtype=np.float64)
+        return np.asarray(explicit, dtype=np.float64)
+    arr = np.asarray(regularization, dtype=np.float64)
+    if arr.ndim == 1:
+        if arr.size != int(n_param):
+            raise ValueError(
+                f"Regularization diagonal length mismatch: expected {n_param}, got {arr.size}."
+            )
+        return _dense_diagonal_matrix(arr)
+    if arr.shape != (int(n_param), int(n_param)):
+        raise ValueError(
+            "Regularization matrix shape mismatch: "
+            f"expected {(int(n_param), int(n_param))}, got {arr.shape}."
+        )
+    return arr
+
+
+def _regularization_payload_for_native_complex(
+    regularization,
+    n_param: int,
+    dtype: np.dtype,
+) -> tuple[np.ndarray | None, str]:
+    if regularization is None:
+        return None, "identity"
+    if not isspmatrix(regularization) and not isinstance(
+        regularization, LinearOperator
+    ):
+        as_rtr = getattr(regularization, "as_RtR", None)
+        if not callable(as_rtr):
+            as_rtr = getattr(regularization, "as_rtr", None)
+        if not callable(as_rtr):
+            arr = np.asarray(regularization)
+            if arr.ndim == 1:
+                diag = np.asarray(arr, dtype=np.float64).reshape(-1)
+                if diag.size != int(n_param):
+                    raise ValueError(
+                        "Regularization diagonal length mismatch: "
+                        f"expected {n_param}, got {diag.size}."
+                    )
+                return np.asarray(diag, dtype=dtype), "diagonal"
+    reg = _regularization_matrix_for_native_complex(regularization, n_param).astype(
+        dtype,
+        copy=False,
+    )
+    return np.ascontiguousarray(reg, dtype=dtype), "matrix"
+
+
+def _dense_matrix_is_effectively_diagonal(
+    matrix: np.ndarray,
+    *,
+    atol: float = 1e-12,
+    chunk_size: int = 65536,
+) -> bool:
+    dense = np.asarray(matrix)
+    if dense.ndim != 2 or dense.shape[0] != dense.shape[1]:
+        return False
+    n = int(dense.shape[0])
+    if n <= 1:
+        return True
+    block_size = max(1, min(int(chunk_size), n))
+    work = np.empty(block_size, dtype=np.float64)
+    for row_idx in range(n):
+        row = dense[row_idx]
+        for segment in (row[:row_idx], row[row_idx + 1 :]):
+            for start in range(0, int(segment.size), block_size):
+                stop = min(start + block_size, int(segment.size))
+                chunk = segment[start:stop]
+                abs_chunk = work[: chunk.size]
+                np.abs(chunk, out=abs_chunk)
+                if float(np.max(abs_chunk, initial=0.0)) > float(atol):
+                    return False
+    return True
+
+
+def _stack_columns_direct(
+    columns: list[np.ndarray] | tuple[np.ndarray, ...],
+) -> np.ndarray:
+    """Stack 1D columns into a C-order matrix by direct column assignment."""
+
+    if not columns:
+        return np.empty((0, 0), dtype=np.float64)
+    first = np.asarray(columns[0], dtype=np.float64).reshape(-1)
+    out = np.empty((first.shape[0], len(columns)), dtype=np.float64)
+    out[:, 0] = first
+    for idx, column in enumerate(columns[1:], start=1):
+        arr = np.asarray(column, dtype=np.float64).reshape(-1)
+        if arr.shape[0] != out.shape[0]:
+            raise ValueError(
+                f"column {idx} length {arr.shape[0]} does not match {out.shape[0]}."
+            )
+        out[:, idx] = arr
+    return out
+
+
+def solve_native_complex_normal_step(
+    *,
+    jacobian: np.ndarray,
+    residual: np.ndarray,
+    lambda_eff: float,
+    regularization=None,
+    prior_delta: np.ndarray | None = None,
+) -> tuple[np.ndarray, dict[str, object]]:
+    """Solve one native complex Gauss-Newton normal-equation step.
+
+    ``residual`` follows the runtime convention ``simulated - measured``.
+    The solve uses the Hermitian transpose ``Jᴴ`` and therefore keeps real and
+    imaginary measurement channels coupled in one linear system.
+    """
+
+    J = np.asarray(jacobian)
+    r = np.asarray(residual).reshape(-1)
+    if J.ndim != 2:
+        raise ValueError(f"Jacobian must be 2-D, got shape={J.shape}.")
+    if r.size != J.shape[0]:
+        raise ValueError(
+            f"Residual length mismatch: expected {J.shape[0]}, got {r.size}."
+        )
+    dtype = _complex_preserving_dtype(J.dtype, r.dtype)
+    J = np.asarray(J, dtype=dtype)
+    r = np.asarray(r, dtype=dtype)
+    n_param = int(J.shape[1])
+    reg_payload, reg_kind = _regularization_payload_for_native_complex(
+        regularization,
+        n_param,
+        dtype,
+    )
+    if prior_delta is None:
+        prior = np.zeros(n_param, dtype=dtype)
+    else:
+        prior = np.asarray(prior_delta, dtype=dtype).reshape(-1)
+        if prior.size != n_param:
+            raise ValueError(
+                f"Prior delta length mismatch: expected {n_param}, got {prior.size}."
+            )
+
+    lam = float(lambda_eff)
+    J_h = J.conj().T
+    hessian = np.ascontiguousarray(J_h @ J, dtype=dtype)
+    if lam != 0.0:
+        if reg_kind == "identity":
+            add_scaled_diagonal_in_place(
+                hessian,
+                np.ones(n_param, dtype=np.float64),
+                lam,
+            )
+            reg_prior = prior
+        elif reg_kind == "diagonal":
+            add_scaled_diagonal_in_place(hessian, reg_payload, lam)
+            reg_prior = np.asarray(reg_payload, dtype=dtype) * prior
+        else:
+            add_scaled_values_in_place(hessian, reg_payload, lam)
+            reg_prior = reg_payload @ prior
+    elif reg_kind == "matrix":
+        reg_prior = reg_payload @ prior
+    elif reg_kind == "diagonal":
+        reg_prior = np.asarray(reg_payload, dtype=dtype) * prior
+    else:
+        reg_prior = prior
+    jhr = J_h @ r
+    rhs = -(jhr + lam * reg_prior)
+    try:
+        delta = np.linalg.solve(hessian, rhs)
+        solver = "numpy.linalg.solve"
+    except np.linalg.LinAlgError:
+        delta = np.linalg.lstsq(hessian, rhs, rcond=None)[0]
+        solver = "numpy.linalg.lstsq"
+    if not all_finite_values(delta):
+        raise FloatingPointError("Native complex GN step produced non-finite values.")
+    meta = {
+        "native_complex_linear_algebra": True,
+        "normal_equation": "J_h_J_plus_lambda_R",
+        "transpose": "hermitian_conjugate",
+        "solver": solver,
+        "jacobian_dtype": str(J.dtype),
+        "residual_dtype": str(r.dtype),
+        "lambda_eff": float(lambda_eff),
+        "n_measurements": int(J.shape[0]),
+        "n_parameters": n_param,
+        "residual_norm": float(np.linalg.norm(r)),
+        "jhr_norm": float(np.linalg.norm(jhr)),
+        "delta_norm": float(np.linalg.norm(delta)),
+        "regularization_kind": reg_kind,
+    }
+    return np.asarray(delta, dtype=dtype), meta
 
 
 def _as_sparse_regularization_matrix(matrix) -> sparse.spmatrix | None:
@@ -241,7 +522,9 @@ def _as_sparse_regularization_matrix(matrix) -> sparse.spmatrix | None:
 def _diag_preconditioner(
     reconstructor, J_weighted_np: np.ndarray, lambda_eff: float
 ) -> np.ndarray:
-    diag_h = np.sum(J_weighted_np * J_weighted_np, axis=0).astype(np.float64)
+    diag_h = np.real(np.sum(np.conj(J_weighted_np) * J_weighted_np, axis=0)).astype(
+        np.float64
+    )
     reg_diag = getattr(reconstructor, "R_diag", None)
     if reg_diag is not None and reg_diag.shape[0] == diag_h.shape[0]:
         diag_h = diag_h + float(lambda_eff) * reg_diag
@@ -249,6 +532,57 @@ def _diag_preconditioner(
         diag_h = diag_h + float(lambda_eff)
     diag_h = np.maximum(diag_h, 1e-12)
     return np.asarray(diag_h, dtype=np.float64)
+
+
+def _woodbury_column_block_size(reconstructor, *, n_meas: int, n_param: int) -> int:
+    explicit = getattr(reconstructor, "woodbury_column_block_size", None)
+    if explicit is not None:
+        try:
+            value = int(explicit)
+        except (TypeError, ValueError):
+            value = 0
+        if value > 0:
+            return max(1, min(int(n_param), value))
+    target_mib = getattr(reconstructor, "woodbury_column_block_target_mib", 64.0)
+    try:
+        target_bytes = int(float(target_mib) * 1024.0 * 1024.0)
+    except (TypeError, ValueError):
+        target_bytes = 64 * 1024 * 1024
+    bytes_per_column = max(1, int(n_meas) * np.dtype(np.float64).itemsize)
+    block = max(1, target_bytes // bytes_per_column)
+    return max(1, min(int(n_param), int(block)))
+
+
+def _woodbury_small_system_from_dense(
+    J_weighted_dense_np: np.ndarray,
+    inv_diag: np.ndarray,
+    *,
+    column_block_size: int,
+) -> np.ndarray:
+    jacobian = np.asarray(J_weighted_dense_np, dtype=np.float64)
+    inv = np.asarray(inv_diag, dtype=np.float64).reshape(-1)
+    if jacobian.ndim != 2:
+        raise ValueError("Woodbury dense Jacobian must be a 2D array.")
+    n_meas, n_param = jacobian.shape
+    if inv.shape[0] != n_param:
+        raise ValueError(
+            f"Woodbury inv_diag length mismatch: expected {n_param}, got {inv.shape[0]}."
+        )
+    block = max(1, min(int(column_block_size), int(n_param)))
+    small = _dense_identity_matrix(n_meas)
+    for start in range(0, n_param, block):
+        end = min(start + block, n_param)
+        jac_block = jacobian[:, start:end]
+        scaled_block = jac_block * inv[start:end]
+        small += np.asarray(
+            safe_dot(
+                scaled_block,
+                jac_block.T,
+                "gauss_newton.fast.woodbury.small_system_block",
+            ),
+            dtype=np.float64,
+        )
+    return small
 
 
 def _coerce_preconditioner_diag(values, n_param: int) -> np.ndarray | None:
@@ -287,6 +621,38 @@ def _regularization_looks_like_noser(reconstructor) -> bool:
     return "noser" in reg_name or type_name == "noser" or preset_name.endswith("noser")
 
 
+def _preconditioner_diag_needs_clamp(
+    values: np.ndarray,
+    floor: float,
+    *,
+    chunk_size: int = 65_536,
+) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return False
+
+    block_size = max(1, min(int(chunk_size), arr.size))
+    mask_work = np.empty(block_size, dtype=bool)
+    floor_value = float(floor)
+
+    with np.errstate(invalid="ignore"):
+        for start in range(0, arr.size, block_size):
+            stop = min(start + block_size, arr.size)
+            chunk = arr[start:stop]
+            mask_chunk = mask_work[: stop - start]
+
+            np.isfinite(chunk, out=mask_chunk)
+            np.logical_not(mask_chunk, out=mask_chunk)
+            if bool(np.any(mask_chunk)):
+                return True
+
+            np.less_equal(chunk, floor_value, out=mask_chunk)
+            if bool(np.any(mask_chunk)):
+                return True
+
+    return False
+
+
 def _sanitize_preconditioner_diag(
     diag: np.ndarray,
     *,
@@ -294,15 +660,25 @@ def _sanitize_preconditioner_diag(
     floor: float,
     source: str,
 ) -> tuple[np.ndarray, str | None]:
-    arr = np.asarray(diag, dtype=np.float64).reshape(-1)
+    arr = np.array(diag, dtype=np.float64, copy=True).reshape(-1)
     if arr.shape[0] != int(n_param):
         raise ValueError(
             f"Preconditioner diagonal length mismatch: expected {n_param}, got {arr.shape[0]}."
         )
-    bad_mask = (~np.isfinite(arr)) | (arr <= float(floor))
-    reason = f"{source}_diag_clamped" if bool(np.any(bad_mask)) else None
-    arr = np.where(np.isfinite(arr), arr, float(floor))
-    return np.maximum(arr, float(floor)).astype(np.float64), reason
+    reason = (
+        f"{source}_diag_clamped"
+        if _preconditioner_diag_needs_clamp(arr, floor)
+        else None
+    )
+    np.nan_to_num(
+        arr,
+        copy=False,
+        nan=float(floor),
+        posinf=float(floor),
+        neginf=float(floor),
+    )
+    np.maximum(arr, float(floor), out=arr)
+    return arr, reason
 
 
 def _operator_diag_preconditioner(
@@ -387,7 +763,7 @@ def _operator_diag_preconditioner(
                 reason = f"auto_hessian_diag_failed:{type(exc).__name__}"
             else:
                 arr = np.asarray(computed, dtype=np.float64).reshape(-1)
-                if arr.shape[0] == int(n_param) and np.isfinite(arr).all():
+                if arr.shape[0] == int(n_param) and all_finite_values(arr):
                     diag_h = arr
                     source = "auto_linearization_diag"
                 else:
@@ -462,7 +838,7 @@ def _build_matrix_free_custom_pc_operator(
             probe = _apply(np.ones(int(n_param), dtype=np.float64))
         except Exception as exc:
             return None, {}, f"{attr}_failed:{type(exc).__name__}"
-        if probe.shape != (int(n_param),) or not np.isfinite(probe).all():
+        if probe.shape != (int(n_param),) or not all_finite_values(probe):
             return None, {}, f"{attr}_invalid_output"
 
         return (
@@ -514,7 +890,7 @@ def _build_matrix_free_pmat_inverse_operator(
             mat = pmat.tocsc().astype(np.float64)
             if mat.shape != (n, n):
                 return None, {}, f"pmat_shape_mismatch:{mat.shape[0]}x{mat.shape[1]}"
-            if mat.nnz == 0 or not np.isfinite(mat.data).all():
+            if mat.nnz == 0 or not all_finite_values(mat.data):
                 return None, {}, "pmat_invalid_sparse_data"
             coo = mat.tocoo(copy=False)
             if coo.nnz <= n and np.all(coo.row == coo.col):
@@ -567,9 +943,14 @@ def _build_matrix_free_pmat_inverse_operator(
                         {},
                         f"pmat_shape_mismatch:{dense.shape[0]}x{dense.shape[1]}",
                     )
-                if not np.isfinite(dense).all():
+                if not all_finite_values(dense):
                     return None, {}, "pmat_invalid_dense_data"
-                dense = dense + np.eye(n, dtype=np.float64) * shift
+                dense = np.array(dense, dtype=np.float64, copy=True, order="C")
+                add_scaled_diagonal_in_place(
+                    dense,
+                    np.ones(n, dtype=np.float64),
+                    shift,
+                )
                 if np.allclose(dense, dense.T, rtol=1e-8, atol=1e-12):
                     factor, lower = cho_factor(
                         dense, overwrite_a=False, check_finite=False
@@ -602,7 +983,7 @@ def _build_matrix_free_pmat_inverse_operator(
     except Exception as exc:
         return None, {}, f"pmat_factor_failed:{type(exc).__name__}"
 
-    if probe.shape != (n,) or not np.isfinite(probe).all():
+    if probe.shape != (n,) or not all_finite_values(probe):
         return None, {}, "pmat_invalid_inverse_action"
     meta = {
         "matrix_free_pc_source": source,
@@ -645,30 +1026,36 @@ def _as_jacobian_action_bundle(
     *,
     measurement_weight_np: np.ndarray | None = None,
 ) -> _JacobianActionBundle:
-    """Normalize dense and matrix-free Jacobian inputs into Jv/J^T r actions."""
+    """Normalize dense and matrix-free Jacobian inputs into Jv/J^H r actions."""
     weight = None
     if measurement_weight_np is not None:
         weight = np.asarray(measurement_weight_np, dtype=np.float64).reshape(-1)
 
     def _apply_weight(values: np.ndarray) -> np.ndarray:
-        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        arr = np.asarray(values).reshape(-1)
         if weight is None:
             return arr
         if arr.size != weight.size:
             raise ValueError(
                 f"Jacobian measurement dimension mismatch: expected {weight.size}, got {arr.size}."
             )
-        return np.asarray(weight * arr, dtype=np.float64)
+        return np.asarray(
+            weight * arr,
+            dtype=_complex_preserving_dtype(arr.dtype, weight.dtype),
+        )
 
     def _apply_weight_to_residual(values: np.ndarray) -> np.ndarray:
-        arr = np.asarray(values, dtype=np.float64).reshape(-1)
+        arr = np.asarray(values).reshape(-1)
         if weight is None:
             return arr
         if arr.size != weight.size:
             raise ValueError(
                 f"Residual dimension mismatch: expected {weight.size}, got {arr.size}."
             )
-        return np.asarray(weight * arr, dtype=np.float64)
+        return np.asarray(
+            weight * arr,
+            dtype=_complex_preserving_dtype(arr.dtype, weight.dtype),
+        )
 
     if isinstance(jacobian, JacobianLinearization):
         n_meas, n_param = jacobian.shape
@@ -681,9 +1068,7 @@ def _as_jacobian_action_bundle(
             return _apply_weight(jacobian.matvec(v))
 
         def _rmatvec(r: np.ndarray) -> np.ndarray:
-            return np.asarray(
-                jacobian.rmatvec(_apply_weight_to_residual(r)), dtype=np.float64
-            )
+            return np.asarray(jacobian.rmatvec(_apply_weight_to_residual(r)))
 
         return _JacobianActionBundle(
             shape=(int(n_meas), int(n_param)),
@@ -702,13 +1087,10 @@ def _as_jacobian_action_bundle(
             )
 
         def _matvec(v: np.ndarray) -> np.ndarray:
-            return _apply_weight(jacobian.matvec(np.asarray(v, dtype=np.float64)))
+            return _apply_weight(jacobian.matvec(np.asarray(v)))
 
         def _rmatvec(r: np.ndarray) -> np.ndarray:
-            return np.asarray(
-                jacobian.rmatvec(_apply_weight_to_residual(r)),
-                dtype=np.float64,
-            )
+            return np.asarray(jacobian.rmatvec(_apply_weight_to_residual(r)))
 
         return _JacobianActionBundle(
             shape=(n_meas, n_param),
@@ -726,13 +1108,10 @@ def _as_jacobian_action_bundle(
             )
 
         def _matvec(v: np.ndarray) -> np.ndarray:
-            return _apply_weight(jacobian.Jv(np.asarray(v, dtype=np.float64)))
+            return _apply_weight(jacobian.Jv(np.asarray(v)))
 
         def _rmatvec(r: np.ndarray) -> np.ndarray:
-            return np.asarray(
-                jacobian.JTr(_apply_weight_to_residual(r)),
-                dtype=np.float64,
-            )
+            return np.asarray(jacobian.JTr(_apply_weight_to_residual(r)))
 
         return _JacobianActionBundle(
             shape=(n_meas, n_param),
@@ -742,7 +1121,7 @@ def _as_jacobian_action_bundle(
             rmatvec=_rmatvec,
         )
 
-    dense = np.asarray(jacobian, dtype=np.float64)
+    dense = np.asarray(jacobian)
     if dense.ndim != 2:
         raise ValueError(
             "Jacobian input must be a 2D array, LinearOperator, "
@@ -753,19 +1132,66 @@ def _as_jacobian_action_bundle(
             raise ValueError(
                 f"Expected {dense.shape[0]} measurement weights, got {weight.size}."
             )
-        dense = dense * weight[:, None]
-    dense = np.asarray(dense, dtype=np.float64)
+        dense_unweighted = np.asarray(dense)
+
+        def _matvec(v: np.ndarray) -> np.ndarray:
+            dtype = _complex_preserving_dtype(
+                dense_unweighted.dtype, np.asarray(v).dtype
+            )
+            projected = dense_unweighted @ np.asarray(v, dtype=dtype)
+            return np.asarray(
+                weight * projected,
+                dtype=_complex_preserving_dtype(projected.dtype, weight.dtype),
+            )
+
+        def _rmatvec(r: np.ndarray) -> np.ndarray:
+            dtype = _complex_preserving_dtype(
+                dense_unweighted.dtype, np.asarray(r).dtype
+            )
+            weighted_r = weight * np.asarray(r, dtype=dtype)
+            return np.asarray(
+                dense_unweighted.conj().T @ weighted_r,
+                dtype=_complex_preserving_dtype(
+                    weighted_r.dtype, dense_unweighted.dtype
+                ),
+            )
+
+        def _hessian_diag() -> np.ndarray:
+            weight_sq = weight * weight
+            return np.asarray(
+                np.einsum(
+                    "mn,mn,m->n",
+                    np.conj(dense_unweighted),
+                    dense_unweighted,
+                    weight_sq,
+                    optimize=True,
+                ).real,
+                dtype=np.float64,
+            )
+
+        return _JacobianActionBundle(
+            shape=(int(dense.shape[0]), int(dense.shape[1])),
+            representation="weighted_dense",
+            dense=None,
+            matvec=_matvec,
+            rmatvec=_rmatvec,
+            hessian_diag=_hessian_diag,
+        )
+    dense = np.asarray(dense)
 
     def _matvec(v: np.ndarray) -> np.ndarray:
+        dtype = _complex_preserving_dtype(dense.dtype, np.asarray(v).dtype)
         return np.asarray(
-            safe_dot(dense, np.asarray(v, dtype=np.float64), "gauss_newton.fast.jv"),
-            dtype=np.float64,
+            dense @ np.asarray(v, dtype=dtype),
+            dtype=dtype,
         )
 
     def _rmatvec(r: np.ndarray) -> np.ndarray:
+        dtype = _complex_preserving_dtype(dense.dtype, np.asarray(r).dtype)
+        r_arr = np.asarray(r, dtype=dtype)
         return np.asarray(
-            safe_dot(dense.T, np.asarray(r, dtype=np.float64), "gauss_newton.fast.jtr"),
-            dtype=np.float64,
+            dense.conj().T @ r_arr,
+            dtype=dtype,
         )
 
     return _JacobianActionBundle(
@@ -797,10 +1223,8 @@ def _solve_linear_system_fast(
         measurement_weight_np=measurement_weight_np,
     )
     J_weighted_dense_np = jacobian_actions.dense
-    weighted_residual_np = np.asarray(weighted_residual_np, dtype=np.float64).reshape(
-        -1
-    )
-    de_current_np = np.asarray(de_current_np, dtype=np.float64).reshape(-1)
+    weighted_residual_np = np.asarray(weighted_residual_np).reshape(-1)
+    de_current_np = np.asarray(de_current_np).reshape(-1)
 
     n_param = int(jacobian_actions.shape[1])
     n_meas = int(jacobian_actions.shape[0])
@@ -813,7 +1237,7 @@ def _solve_linear_system_fast(
             f"Current conductivity vector length mismatch: expected {n_param}, got {de_current_np.shape[0]}."
         )
 
-    jtr = np.asarray(jacobian_actions.rmatvec(weighted_residual_np), dtype=np.float64)
+    jtr = np.asarray(jacobian_actions.rmatvec(weighted_residual_np))
     rhs = -jtr
     if reconstructor.use_prior_term:
         rhs = rhs - float(lambda_eff) * _apply_regularization_np(
@@ -822,22 +1246,20 @@ def _solve_linear_system_fast(
     _require_finite("rhs_fast", rhs, iteration)
 
     def _matvec(v: np.ndarray) -> np.ndarray:
-        vv = np.asarray(v, dtype=np.float64)
-        projected = np.asarray(jacobian_actions.matvec(vv), dtype=np.float64)
-        back_projected = np.asarray(
-            jacobian_actions.rmatvec(projected), dtype=np.float64
-        )
+        vv = np.asarray(v, dtype=_complex_preserving_dtype(rhs.dtype, v))
+        projected = np.asarray(jacobian_actions.matvec(vv))
+        back_projected = np.asarray(jacobian_actions.rmatvec(projected))
         return np.asarray(
             back_projected
             + float(lambda_eff) * _apply_regularization_np(reconstructor, vv),
-            dtype=np.float64,
+            dtype=_complex_preserving_dtype(back_projected.dtype, vv.dtype),
         )
 
     h_op = LinearOperator(
         (n_param, n_param),
         matvec=_matvec,
         rmatvec=_matvec,
-        dtype=np.float64,
+        dtype=_complex_preserving_dtype(rhs.dtype),
     )
 
     solver_mode = str(getattr(reconstructor, "linear_solver", "auto")).strip().lower()
@@ -872,8 +1294,10 @@ def _solve_linear_system_fast(
         }
     else:
         auto_hessian_diag_fn: Callable[[], np.ndarray] | None = None
-        linearization = jacobian_actions.linearization
-        if linearization is not None:
+        if jacobian_actions.hessian_diag is not None:
+            auto_hessian_diag_fn = jacobian_actions.hessian_diag
+        elif jacobian_actions.linearization is not None:
+            linearization = jacobian_actions.linearization
             weights_sqrt = (
                 np.asarray(measurement_weight_np, dtype=np.float64).reshape(-1)
                 if measurement_weight_np is not None
@@ -897,8 +1321,14 @@ def _solve_linear_system_fast(
         )
     diag_inv_op = LinearOperator(
         (n_param, n_param),
-        matvec=lambda x: np.asarray(x, dtype=np.float64) / diag_precond,
-        dtype=np.float64,
+        matvec=lambda x: (
+            np.asarray(
+                x,
+                dtype=_complex_preserving_dtype(rhs.dtype, x),
+            )
+            / diag_precond
+        ),
+        dtype=_complex_preserving_dtype(rhs.dtype),
     )
     explicit_pc_op: LinearOperator | None = None
     explicit_pc_meta: dict[str, object] = {}
@@ -964,15 +1394,13 @@ def _solve_linear_system_fast(
             mat = reg.tocsr()
             payload = {
                 "shape": list(mat.shape),
-                "indptr_hash": hashlib.sha256(
-                    np.ascontiguousarray(mat.indptr, dtype=np.int64).tobytes()
-                ).hexdigest(),
-                "indices_hash": hashlib.sha256(
-                    np.ascontiguousarray(mat.indices, dtype=np.int64).tobytes()
-                ).hexdigest(),
-                "data_hash": hashlib.sha256(
-                    np.ascontiguousarray(mat.data, dtype=np.float64).tobytes()
-                ).hexdigest(),
+                "indptr_hash": hash_array_payload(
+                    np.asarray(mat.indptr, dtype=np.int64)
+                ),
+                "indices_hash": hash_array_payload(
+                    np.asarray(mat.indices, dtype=np.int64)
+                ),
+                "data_hash": hash_array_payload(np.asarray(mat.data, dtype=np.float64)),
             }
             return hashlib.sha256(
                 json.dumps(payload, sort_keys=True, separators=(",", ":")).encode(
@@ -983,8 +1411,8 @@ def _solve_linear_system_fast(
             return f"linear_operator:{reg.shape[0]}x{reg.shape[1]}"
         if callable(reg):
             return f"callable:{type(reg).__module__}.{type(reg).__qualname__}:{n_param}"
-        dense = np.ascontiguousarray(np.asarray(reg, dtype=np.float64))
-        return hashlib.sha256(dense.tobytes()).hexdigest()
+        dense = np.asarray(reg, dtype=np.float64)
+        return hash_array_payload(dense)
 
     def _regularization_meta() -> dict[str, object]:
         cache = getattr(reconstructor, "_regularization_meta_cache", None)
@@ -1010,7 +1438,10 @@ def _solve_linear_system_fast(
             if reg_csr.shape[0] == reg_csr.shape[1]:
                 diff = reg_csr - reg_csr.T
                 symmetric = diff.nnz == 0 or np.max(np.abs(diff.data)) <= 1e-9
-            positive_diag = diag_vec.size == n_param and np.all(diag_vec > 0)
+            positive_diag = (
+                diag_vec.size == n_param
+                and float(np.min(diag_vec, initial=np.inf)) > 0.0
+            )
             meta.update(
                 {
                     "is_diagonal": is_diag,
@@ -1052,15 +1483,23 @@ def _solve_linear_system_fast(
                 }
                 return dict(meta)
             dense = np.asarray(explicit, dtype=np.float64)
-            diag_vec = np.asarray(np.diag(dense), dtype=np.float64)
-            is_diag = bool(dense.ndim == 2 and dense.shape == (n_param, n_param))
-            if is_diag:
-                off_diag = dense - np.diag(diag_vec)
-                is_diag = bool(np.all(np.abs(off_diag) <= 1e-12))
-            symmetric = bool(
-                dense.ndim == 2 and np.allclose(dense, dense.T, rtol=1e-8, atol=1e-12)
+            diag_vec = np.asarray(dense.diagonal(), dtype=np.float64)
+            is_diag = bool(
+                dense.shape == (n_param, n_param)
+                and _dense_matrix_is_effectively_diagonal(dense, atol=1e-12)
             )
-            positive_diag = diag_vec.size == n_param and np.all(diag_vec > 0)
+            symmetric = (
+                True
+                if is_diag
+                else bool(
+                    dense.ndim == 2
+                    and np.allclose(dense, dense.T, rtol=1e-8, atol=1e-12)
+                )
+            )
+            positive_diag = (
+                diag_vec.size == n_param
+                and float(np.min(diag_vec, initial=np.inf)) > 0.0
+            )
             meta.update(
                 {
                     "is_diagonal": is_diag,
@@ -1080,21 +1519,29 @@ def _solve_linear_system_fast(
         inv_diag = 1.0 / diag_scaled
 
         u = inv_diag * rhs
-        ja_inv = J_weighted_dense_np * inv_diag[None, :]
         small_rhs = np.asarray(
             safe_dot(J_weighted_dense_np, u, "gauss_newton.fast.woodbury.small_rhs"),
             dtype=np.float64,
         )
-        s_matrix = np.eye(n_meas, dtype=np.float64) + np.asarray(
-            safe_dot(
-                ja_inv, J_weighted_dense_np.T, "gauss_newton.fast.woodbury.small_system"
+        s_matrix = _woodbury_small_system_from_dense(
+            J_weighted_dense_np,
+            inv_diag,
+            column_block_size=_woodbury_column_block_size(
+                reconstructor,
+                n_meas=n_meas,
+                n_param=n_param,
             ),
-            dtype=np.float64,
         )
         s_matrix = 0.5 * (s_matrix + s_matrix.T)
         jitter = 1e-12
+        s_matrix_shifted = np.ascontiguousarray(s_matrix, dtype=np.float64)
+        add_scaled_diagonal_in_place(
+            s_matrix_shifted,
+            np.ones(n_meas, dtype=np.float64),
+            jitter,
+        )
         factor, lower = cho_factor(
-            s_matrix + (jitter * np.eye(n_meas, dtype=np.float64)),
+            s_matrix_shifted,
             overwrite_a=False,
             check_finite=False,
         )
@@ -1296,7 +1743,12 @@ def _solve_linear_system_fast(
                 if not petsc_converged:
                     reason = petsc_fallback or "pcg_not_converged"
                     return None, path, choice, reason
-                return np.asarray(delta_arr, dtype=np.float64), path, choice, fallback
+                return (
+                    np.asarray(delta_arr, dtype=_complex_preserving_dtype(rhs.dtype)),
+                    path,
+                    choice,
+                    fallback,
+                )
 
         delta, info = cg(
             h_op,
@@ -1309,7 +1761,12 @@ def _solve_linear_system_fast(
         linear_iterations = int(iteration_counter["count"])
         if info != 0:
             return None, path, choice, "pcg_not_converged"
-        return np.asarray(delta, dtype=np.float64), path, choice, fallback
+        return (
+            np.asarray(delta, dtype=_complex_preserving_dtype(rhs.dtype)),
+            path,
+            choice,
+            fallback,
+        )
 
     def _solve_cholmod_direct_debug() -> tuple[np.ndarray | None, str | None]:
         if J_weighted_dense_np is None:
@@ -1344,6 +1801,41 @@ def _solve_linear_system_fast(
     reg_meta = _regularization_meta()
     regularization_is_diagonal = bool(reg_meta.get("is_diagonal", False))
     regularization_is_sparse_spd = bool(reg_meta.get("is_sparse_spd", False))
+    native_complex_dense = J_weighted_dense_np is not None and (
+        np.iscomplexobj(J_weighted_dense_np)
+        or np.iscomplexobj(weighted_residual_np)
+        or np.iscomplexobj(de_current_np)
+    )
+    if native_complex_dense:
+        delta_np, solve_meta = solve_native_complex_normal_step(
+            jacobian=J_weighted_dense_np,
+            residual=weighted_residual_np,
+            lambda_eff=lambda_eff,
+            regularization=getattr(reconstructor, "R_matrix", None),
+            prior_delta=de_current_np if reconstructor.use_prior_term else None,
+        )
+        linear_iterations = 0
+        fast_solver_path = "native-complex-dense"
+        resolved_preconditioner = "native-complex"
+        selected_fast_path = "native-complex"
+        fast_linear_path_reason = "complex_dense_hermitian_normal_equation"
+        _require_finite("delta_sigma_fast", delta_np, iteration)
+        delta_norm = float(np.linalg.norm(delta_np))
+        _require_scalar_finite("delta_norm_fast", delta_norm, iteration)
+        jtr_norm = float(np.linalg.norm(jtr))
+        _require_scalar_finite("jtr_norm_fast", jtr_norm, iteration)
+        _set_fast_meta(
+            path=fast_solver_path,
+            resolved_precond=resolved_preconditioner,
+            reason=None,
+            selected_path=selected_fast_path,
+            path_reason=fast_linear_path_reason,
+            extra={
+                "native_complex_linear_algebra": True,
+                "native_complex_solver": solve_meta,
+            },
+        )
+        return delta_np, delta_norm, jtr_norm
     mesh_dim = 2
     if hasattr(reconstructor, "fwd_model"):
         try:
@@ -1406,10 +1898,7 @@ def _solve_linear_system_fast(
 
     def _synthetic_snapshots(diag_vector: np.ndarray | None) -> np.ndarray:
         if J_weighted_dense_np is None:
-            return np.ascontiguousarray(
-                np.column_stack([rhs, de_current_np]),
-                dtype=np.float64,
-            )
+            return _stack_columns_direct([rhs, de_current_np])
         snapshots: list[np.ndarray] = []
         snapshots.append(np.asarray(rhs, dtype=np.float64))
         snapshots.append(np.asarray(de_current_np, dtype=np.float64))
@@ -1427,7 +1916,7 @@ def _solve_linear_system_fast(
             snapshots.append(inv_diag * rhs)
         for idx in range(min(6, n_meas)):
             snapshots.append(np.asarray(J_weighted_dense_np[idx, :], dtype=np.float64))
-        return np.ascontiguousarray(np.column_stack(snapshots), dtype=np.float64)
+        return _stack_columns_direct(snapshots)
 
     def _build_global_basis(diag_vector: np.ndarray | None) -> tuple[np.ndarray, str]:
         source = (
@@ -1492,9 +1981,9 @@ def _solve_linear_system_fast(
             "backend_signature": backend_signature_from_forward_model(
                 reconstructor.fwd_model
             ),
-            "snapshot_hash": hashlib.sha256(
-                np.ascontiguousarray(snapshot_matrix, dtype=np.float64).tobytes()
-            ).hexdigest(),
+            "snapshot_hash": hash_array_payload(
+                np.asarray(snapshot_matrix, dtype=np.float64)
+            ),
             "rank_global": int(rank_global),
             "source": source,
         }
@@ -1559,9 +2048,9 @@ def _solve_linear_system_fast(
         payload = {
             "solver": "gn_absolute",
             "artifact": "rom_adaptive_basis",
-            "jacobian_hash": hashlib.sha256(
-                np.ascontiguousarray(J_weighted_dense_np, dtype=np.float64).tobytes()
-            ).hexdigest(),
+            "jacobian_hash": hash_array_payload(
+                np.asarray(J_weighted_dense_np, dtype=np.float64)
+            ),
             "rank_adaptive": int(rank_adaptive),
             "lowrank_rank": int(lowrank_rank),
             "lowrank_method": str(lowrank_method),
@@ -1674,14 +2163,12 @@ def _solve_linear_system_fast(
                 op_payload = {
                     "solver": "gn_absolute",
                     "artifact": "rom_reduced_operator_absolute",
-                    "basis_hash": hashlib.sha256(
-                        np.ascontiguousarray(stage_basis, dtype=np.float64).tobytes()
-                    ).hexdigest(),
-                    "jacobian_hash": hashlib.sha256(
-                        np.ascontiguousarray(
-                            J_weighted_dense_np, dtype=np.float64
-                        ).tobytes()
-                    ).hexdigest(),
+                    "basis_hash": hash_array_payload(
+                        np.asarray(stage_basis, dtype=np.float64)
+                    ),
+                    "jacobian_hash": hash_array_payload(
+                        np.asarray(J_weighted_dense_np, dtype=np.float64)
+                    ),
                     "lambda_eff": float(lambda_eff),
                     "reg_signature": _regularization_signature(),
                     "stage": stage["name"],
@@ -1730,7 +2217,7 @@ def _solve_linear_system_fast(
                     inexact_tol=inexact_tol,
                     maxiter=max(50, stage_basis.shape[1] * 4),
                 )
-                if not np.isfinite(delta_candidate).all():
+                if not all_finite_values(delta_candidate):
                     raise FloatingPointError("non_finite_delta")
                 full_residual = np.asarray(
                     _matvec(delta_candidate) - rhs, dtype=np.float64
@@ -1882,7 +2369,10 @@ def _solve_linear_system_fast(
             lsmr_result = lsmr(
                 h_op, rhs, atol=cg_rtol, btol=cg_rtol, maxiter=cg_maxiter
             )
-            delta_np = np.asarray(lsmr_result[0], dtype=np.float64)
+            delta_np = np.asarray(
+                lsmr_result[0],
+                dtype=_complex_preserving_dtype(rhs.dtype),
+            )
             if len(lsmr_result) > 2:
                 linear_iterations = int(lsmr_result[2])
             fast_solver_path = "lsmr-direct"
@@ -1929,7 +2419,10 @@ def _solve_linear_system_fast(
                 lsmr_result = lsmr(
                     h_op, rhs, atol=1e-7, btol=1e-7, maxiter=cg_maxiter * 2
                 )
-                delta_np = np.asarray(lsmr_result[0], dtype=np.float64)
+                delta_np = np.asarray(
+                    lsmr_result[0],
+                    dtype=_complex_preserving_dtype(rhs.dtype),
+                )
                 if len(lsmr_result) > 2:
                     linear_iterations = int(lsmr_result[2])
                 fast_solver_path = "lsmr-fallback"

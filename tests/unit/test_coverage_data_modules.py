@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -180,6 +182,10 @@ class TestSyntheticDataEdgeCases:
         _paint_circle(values, centers, (0.0, 0.0, 0.0), 0.2, 2.0)
 
         np.testing.assert_allclose(values, [2.0, 1.0, 2.0])
+        source = inspect.getsource(_paint_circle)
+        assert "center_vec[None" not in source
+        assert "deltas" not in source
+        assert "squared_distances_to_point" in source
 
     def test_paint_box_uses_depth_for_3d_centers(self):
         from pyeidors.data.synthetic_data import _paint_rectangle
@@ -202,3 +208,42 @@ class TestSyntheticDataEdgeCases:
         if anomalies is None:
             anomalies = []
         assert anomalies == []
+
+
+def test_v240_digit_and_holdout_fallback_points_avoid_meshgrid() -> None:
+    from pyeidors.data import holdout_fit_diff
+    from pyeidors.data.eit_digit_metrics import (
+        EITLinearizedModel,
+        _fallback_parameter_points,
+    )
+
+    source = inspect.getsource(_fallback_parameter_points)
+    holdout_source = inspect.getsource(holdout_fit_diff._parameter_points)
+
+    assert "np.meshgrid" not in source
+    assert "np.meshgrid" not in holdout_source
+    assert "_fallback_parameter_points" in holdout_source
+    expected = np.array(
+        [
+            [1.0 / 6.0, 5.0 / 6.0],
+            [0.5, 5.0 / 6.0],
+            [5.0 / 6.0, 5.0 / 6.0],
+            [1.0 / 6.0, 0.5],
+            [0.5, 0.5],
+        ],
+        dtype=float,
+    )
+
+    np.testing.assert_allclose(_fallback_parameter_points(5), expected)
+    model = EITLinearizedModel(
+        sigma_true=np.ones(5, dtype=float),
+        sigma_reference=np.ones(5, dtype=float),
+        voltage_true=np.zeros(2, dtype=float),
+        voltage_reference=np.zeros(2, dtype=float),
+        sensitivity=np.zeros((2, 5), dtype=float),
+        label="fallback",
+    )
+    np.testing.assert_allclose(
+        holdout_fit_diff._parameter_points(model, 5),
+        expected,
+    )

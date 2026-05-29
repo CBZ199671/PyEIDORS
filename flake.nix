@@ -53,13 +53,30 @@
           ];
           hasPy = name: builtins.hasAttr name py;
           pyOpt = name: if hasPy name then [ (builtins.getAttr name py) ] else [ ];
-          fenicsDolfinx = py."fenics-dolfinx".overridePythonAttrs (
+          mkFenicsDolfinx = petsc4pyPkg: (py."fenics-dolfinx".override {
+            petsc4py = petsc4pyPkg;
+          }).overridePythonAttrs (
             old: {
               nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ py.cmake ];
               doCheck = false;
               doInstallCheck = false;
             }
           );
+          fenicsDolfinx = mkFenicsDolfinx py.petsc4py;
+          petsc4pyComplex = py.petsc4py.override {
+            scalarType = "complex";
+            withHypre = false;
+          };
+          petsc4pyComplexSingle = py.petsc4py.override {
+            scalarType = "complex";
+            precision = "single";
+            withHypre = false;
+            withSuperLuDist = false;
+            withFftw = false;
+            withSuitesparse = false;
+          };
+          fenicsDolfinxComplex = mkFenicsDolfinx petsc4pyComplex;
+          fenicsDolfinxComplexSingle = mkFenicsDolfinx petsc4pyComplexSingle;
 
           linuxCudaSupported = system == "x86_64-linux";
           pkgsCuda = if linuxCudaSupported then import nixpkgs {
@@ -83,61 +100,91 @@
           pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
           hasCudaPy = name: linuxCudaSupported && builtins.hasAttr name pyCuda;
           pyCudaOpt = name: if hasCudaPy name then [ (builtins.getAttr name pyCuda) ] else [ ];
-          cudaPetsc = if linuxCudaSupported then
-            (pkgsCuda.petsc.override {
-              mpi = pkgsCuda.openmpi;
-              python3Packages = pyCuda;
-              pythonSupport = true;
-            }).overrideAttrs (old: {
-              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgsCuda.cudaPackages.cuda_nvcc ];
-              buildInputs = (old.buildInputs or [ ]) ++ [
-                pkgsCuda.cudaPackages.cuda_cudart
-                pkgsCuda.cudaPackages.libcublas
-                pkgsCuda.cudaPackages.libcusolver
-                pkgsCuda.cudaPackages.libcusparse
-              ];
-              configureFlags = (old.configureFlags or [ ]) ++ [
-                "--with-cuda=1"
-                "--with-cudac=${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
-                "--with-cuda-dir=${pkgsCuda.cudaPackages.cudatoolkit}"
-                "--with-cublas=1"
-                "--with-cusparse=1"
-                "--with-cusolver=1"
-              ];
-              doInstallCheck = false;
-              postInstall = lib.replaceStrings [ "--replace-fail" ] [ "--replace" ] (old.postInstall or "");
-            })
-          else null;
+          mkCudaPetsc = { scalarType ? null, precision ? null }:
+            if linuxCudaSupported then
+              (pkgsCuda.petsc.override ({
+                mpi = pkgsCuda.openmpi;
+                python3Packages = pyCuda;
+                pythonSupport = true;
+              } // lib.optionalAttrs (scalarType != null) {
+                inherit scalarType;
+                withHypre = false;
+                withSuperLuDist = false;
+                withFftw = false;
+                withSuitesparse = false;
+              } // lib.optionalAttrs (precision != null) {
+                inherit precision;
+              })).overrideAttrs (old: {
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgsCuda.cudaPackages.cuda_nvcc ];
+                buildInputs = (old.buildInputs or [ ]) ++ [
+                  pkgsCuda.cudaPackages.cuda_cudart
+                  pkgsCuda.cudaPackages.libcublas
+                  pkgsCuda.cudaPackages.libcusolver
+                  pkgsCuda.cudaPackages.libcusparse
+                ];
+                configureFlags = (old.configureFlags or [ ]) ++ [
+                  "--with-cuda=1"
+                  "--with-cudac=${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                  "--with-cuda-dir=${pkgsCuda.cudaPackages.cudatoolkit}"
+                  "--with-cublas=1"
+                  "--with-cusparse=1"
+                  "--with-cusolver=1"
+                ];
+                doInstallCheck = false;
+                postInstall = lib.replaceStrings [ "--replace-fail" ] [ "--replace" ] (old.postInstall or "");
+              })
+            else null;
+          cudaPetsc = mkCudaPetsc { };
+          cudaPetscComplex = mkCudaPetsc { scalarType = "complex"; };
+          cudaPetscComplexSingle = mkCudaPetsc { scalarType = "complex"; precision = "single"; };
           cudaPetsc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetsc else null;
-          cudaSlepc = if linuxCudaSupported then (
+          cudaPetscComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplex else null;
+          cudaPetscComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexSingle else null;
+
+          mkCudaSlepc = petscPkg: if linuxCudaSupported then (
             pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/sl/slepc/package.nix" {
               python3Packages = pyCuda;
-              petsc = cudaPetsc;
+              petsc = petscPkg;
               pythonSupport = true;
             }
           ).overrideAttrs (old: {
             doInstallCheck = false;
             doCheck = false;
           }) else null;
+          cudaSlepc = mkCudaSlepc cudaPetsc;
+          cudaSlepcComplex = mkCudaSlepc cudaPetscComplex;
+          cudaSlepcComplexSingle = mkCudaSlepc cudaPetscComplexSingle;
           cudaSlepc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepc else null;
-          cudaDolfinx = if linuxCudaSupported then pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
-            python3Packages = pyCuda;
-            petsc = cudaPetsc;
-            slepc = cudaSlepc;
-          } else null;
-          cudaFenicsDolfinx = if linuxCudaSupported then (
-            pyCuda.callPackage "${nixpkgsPath}/pkgs/development/python-modules/fenics-dolfinx/default.nix" {
-              dolfinx = cudaDolfinx;
-              petsc4py = cudaPetsc4py;
-              slepc4py = cudaSlepc4py;
-            }
-          ).overridePythonAttrs (
-            old: {
-              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyCuda.cmake ];
-              doCheck = false;
-              doInstallCheck = false;
-            }
-          ) else null;
+          cudaSlepcComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplex else null;
+          cudaSlepcComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexSingle else null;
+
+          mkCudaDolfinx = petscPkg: slepcPkg:
+            if linuxCudaSupported then pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
+              python3Packages = pyCuda;
+              petsc = petscPkg;
+              slepc = slepcPkg;
+            } else null;
+          cudaDolfinx = mkCudaDolfinx cudaPetsc cudaSlepc;
+          cudaDolfinxComplex = mkCudaDolfinx cudaPetscComplex cudaSlepcComplex;
+          cudaDolfinxComplexSingle = mkCudaDolfinx cudaPetscComplexSingle cudaSlepcComplexSingle;
+
+          mkCudaFenicsDolfinx = dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
+            if linuxCudaSupported then (
+              pyCuda.callPackage "${nixpkgsPath}/pkgs/development/python-modules/fenics-dolfinx/default.nix" {
+                dolfinx = dolfinxPkg;
+                petsc4py = petsc4pyPkg;
+                slepc4py = slepc4pyPkg;
+              }
+            ).overridePythonAttrs (
+              old: {
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyCuda.cmake ];
+                doCheck = false;
+                doInstallCheck = false;
+              }
+            ) else null;
+          cudaFenicsDolfinx = mkCudaFenicsDolfinx cudaDolfinx cudaPetsc4py cudaSlepc4py;
+          cudaFenicsDolfinxComplex = mkCudaFenicsDolfinx cudaDolfinxComplex cudaPetscComplex4py cudaSlepcComplex4py;
+          cudaFenicsDolfinxComplexSingle = mkCudaFenicsDolfinx cudaDolfinxComplexSingle cudaPetscComplexSingle4py cudaSlepcComplexSingle4py;
 
           mkShellHook = {
             pkgsFor,
@@ -306,9 +353,16 @@ PY
                   echo "$perf_status"
                 fi
 
-                if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ]; then
+                if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
                   echo "[nix+uv] CUDA profile ready. Verify PETSc CUDA backend with:"
                   echo "  python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty"
+                fi
+
+                if [ "$PYEIDORS_ENV_PROFILE" = "complex" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
+                  echo "[nix+uv] Complex PETSc profile ready. Verify scalar type with:"
+                  echo "  python - <<'PY'"
+                  echo "from petsc4py import PETSc; import numpy as np; print(np.dtype(PETSc.ScalarType))"
+                  echo "PY"
                 fi
 
                 echo "[nix+uv] Dev shell ready ($PYEIDORS_ENV_PROFILE)."
@@ -376,6 +430,68 @@ PY
               '';
             };
           };
+
+          complex = pkgs.mkShell {
+            packages = [
+              pkgs.uv
+              python
+              pkgs.openmpi
+              pkgs.hdf5
+              pkgs.gmsh
+              pkgs.pkg-config
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.gfortran
+              pkgs.openblas
+              pkgs.suitesparse
+              pkgs.zstd
+              pkgs.glib
+              pkgs.dbus
+              pkgs.fontconfig
+              pkgs.freetype
+              pkgs.liberation_ttf
+              pkgs.expat
+
+              petsc4pyComplex
+              fenicsDolfinxComplex
+              py."fenics-basix"
+              py."fenics-ffcx"
+              py."fenics-ufl"
+              py.mpi4py
+
+              py.numpy
+              py.scipy
+              py.matplotlib
+              py.pandas
+              py.h5py
+              py.pyyaml
+              py.meshio
+              py.gmsh
+            ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
+              py.pytest
+              py."pytest-cov"
+              py.black
+              py.flake8
+              pkgs.pre-commit
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgs;
+              pythonFor = python;
+              envProfile = "complex";
+              venvDir = ".venv-complex";
+              extraLinuxRuntimeLibs = linuxGuiLibs;
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export PYEIDORS_PETSC_SCALAR_TYPE="complex"
+                export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
+            };
+          };
+
         }
         // lib.optionalAttrs linuxCudaSupported {
           cuda = pkgsCuda.mkShell {
@@ -453,6 +569,233 @@ PY
                 export SLEPC_DIR="${cudaSlepc}"
                 export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
                 export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
+            };
+          };
+
+          "complex-cuda" = pkgsCuda.mkShell {
+            packages = [
+              pkgsCuda.uv
+              pythonCuda
+              pkgsCuda.openmpi
+              pkgsCuda.hdf5
+              pkgsCuda.gmsh
+              pkgsCuda.pkg-config
+              pkgsCuda.cmake
+              pkgsCuda.ninja
+              pkgsCuda.gfortran
+              pkgsCuda.openblas
+              pkgsCuda.suitesparse
+              pkgsCuda.zstd
+              pkgsCuda.glib
+              pkgsCuda.dbus
+              pkgsCuda.fontconfig
+              pkgsCuda.freetype
+              pkgsCuda.liberation_ttf
+              pkgsCuda.expat
+              pkgsCuda.cudaPackages.cuda_nvcc
+              pkgsCuda.cudaPackages.cudatoolkit
+              pkgsCuda.cudaPackages.cuda_cudart
+              pkgsCuda.cudaPackages.libcublas
+              pkgsCuda.cudaPackages.libcusolver
+              pkgsCuda.cudaPackages.libcusparse
+              pkgsCuda.cudaPackages.libnvjitlink
+
+              cudaPetscComplex
+              cudaPetscComplex4py
+              cudaSlepcComplex
+              cudaSlepcComplex4py
+              cudaFenicsDolfinxComplex
+              pyCuda."fenics-basix"
+              pyCuda."fenics-ffcx"
+              pyCuda."fenics-ufl"
+              pyCuda.mpi4py
+
+              pyCuda.numpy
+              pyCuda.scipy
+              pyCuda.matplotlib
+              pyCuda.pandas
+              pyCuda.h5py
+              pyCuda.pyyaml
+              pyCuda.meshio
+              pyCuda.gmsh
+            ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
+              pyCuda.pytest
+              pyCuda."pytest-cov"
+              pyCuda.black
+              pyCuda.flake8
+              pkgsCuda.pre-commit
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgsCuda;
+              pythonFor = pythonCuda;
+              envProfile = "complex-cuda";
+              venvDir = ".venv-complex-cuda";
+              extraLinuxRuntimeLibs = linuxGuiLibs ++ [
+                pkgsCuda.cudaPackages.cuda_cudart
+                pkgsCuda.cudaPackages.libcublas
+                pkgsCuda.cudaPackages.libcusolver
+                pkgsCuda.cudaPackages.libcusparse
+                pkgsCuda.cudaPackages.libnvjitlink
+              ];
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export PYEIDORS_PETSC_SCALAR_TYPE="complex"
+                export CUDA_HOME="${pkgsCuda.cudaPackages.cudatoolkit}"
+                export CUDA_PATH="$CUDA_HOME"
+                export CUDACXX="${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                export PETSC_DIR="${cudaPetscComplex}"
+                export SLEPC_DIR="${cudaSlepcComplex}"
+                export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
+                export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
+            };
+          };
+
+          "complex64-cuda" = pkgsCuda.mkShell {
+            packages = [
+              pkgsCuda.uv
+              pythonCuda
+              pkgsCuda.openmpi
+              pkgsCuda.hdf5
+              pkgsCuda.gmsh
+              pkgsCuda.pkg-config
+              pkgsCuda.cmake
+              pkgsCuda.ninja
+              pkgsCuda.gfortran
+              pkgsCuda.openblas
+              pkgsCuda.suitesparse
+              pkgsCuda.zstd
+              pkgsCuda.glib
+              pkgsCuda.dbus
+              pkgsCuda.fontconfig
+              pkgsCuda.freetype
+              pkgsCuda.liberation_ttf
+              pkgsCuda.expat
+              pkgsCuda.cudaPackages.cuda_nvcc
+              pkgsCuda.cudaPackages.cudatoolkit
+              pkgsCuda.cudaPackages.cuda_cudart
+              pkgsCuda.cudaPackages.libcublas
+              pkgsCuda.cudaPackages.libcusolver
+              pkgsCuda.cudaPackages.libcusparse
+              pkgsCuda.cudaPackages.libnvjitlink
+
+              cudaPetscComplexSingle
+              cudaPetscComplexSingle4py
+              cudaSlepcComplexSingle
+              cudaSlepcComplexSingle4py
+              cudaFenicsDolfinxComplexSingle
+              pyCuda."fenics-basix"
+              pyCuda."fenics-ffcx"
+              pyCuda."fenics-ufl"
+              pyCuda.mpi4py
+
+              pyCuda.numpy
+              pyCuda.scipy
+              pyCuda.matplotlib
+              pyCuda.pandas
+              pyCuda.h5py
+              pyCuda.pyyaml
+              pyCuda.meshio
+              pyCuda.gmsh
+            ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
+              pyCuda.pytest
+              pyCuda."pytest-cov"
+              pyCuda.black
+              pyCuda.flake8
+              pkgsCuda.pre-commit
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgsCuda;
+              pythonFor = pythonCuda;
+              envProfile = "complex64-cuda";
+              venvDir = ".venv-complex64-cuda";
+              extraLinuxRuntimeLibs = linuxGuiLibs ++ [
+                pkgsCuda.cudaPackages.cuda_cudart
+                pkgsCuda.cudaPackages.libcublas
+                pkgsCuda.cudaPackages.libcusolver
+                pkgsCuda.cudaPackages.libcusparse
+                pkgsCuda.cudaPackages.libnvjitlink
+              ];
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export PYEIDORS_PETSC_SCALAR_TYPE="complex64"
+                export CUDA_HOME="${pkgsCuda.cudaPackages.cudatoolkit}"
+                export CUDA_PATH="$CUDA_HOME"
+                export CUDACXX="${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                export PETSC_DIR="${cudaPetscComplexSingle}"
+                export SLEPC_DIR="${cudaSlepcComplexSingle}"
+                export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
+                export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
+            };
+          };
+
+          complex64 = pkgs.mkShell {
+            packages = [
+              pkgs.uv
+              python
+              pkgs.openmpi
+              pkgs.hdf5
+              pkgs.gmsh
+              pkgs.pkg-config
+              pkgs.cmake
+              pkgs.ninja
+              pkgs.gfortran
+              pkgs.openblas
+              pkgs.suitesparse
+              pkgs.zstd
+              pkgs.glib
+              pkgs.dbus
+              pkgs.fontconfig
+              pkgs.freetype
+              pkgs.liberation_ttf
+              pkgs.expat
+
+              petsc4pyComplexSingle
+              fenicsDolfinxComplexSingle
+              py."fenics-basix"
+              py."fenics-ffcx"
+              py."fenics-ufl"
+              py.mpi4py
+
+              py.numpy
+              py.scipy
+              py.matplotlib
+              py.pandas
+              py.h5py
+              py.pyyaml
+              py.meshio
+              py.gmsh
+            ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
+              py.pytest
+              py."pytest-cov"
+              py.black
+              py.flake8
+              pkgs.pre-commit
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgs;
+              pythonFor = python;
+              envProfile = "complex64";
+              venvDir = ".venv-complex64";
+              extraLinuxRuntimeLibs = linuxGuiLibs;
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export PYEIDORS_PETSC_SCALAR_TYPE="complex64"
+                export LIBGL_DRIVERS_PATH="${pkgs.mesa}/lib/dri"
                 if [ -d /usr/lib/wsl/lib ]; then
                   export PATH="/usr/lib/wsl/lib:$PATH"
                 fi

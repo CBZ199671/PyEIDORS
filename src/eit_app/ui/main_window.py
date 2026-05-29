@@ -8,11 +8,13 @@ import json
 import math
 import os
 from pathlib import Path
+import tempfile
+import time
 from typing import TYPE_CHECKING
 from urllib.parse import urlparse
 
 import numpy as np
-from PySide6.QtCore import QTimer, Slot
+from PySide6.QtCore import QTimer, Signal, Slot
 from PySide6.QtGui import QActionGroup, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
@@ -24,6 +26,7 @@ from PySide6.QtWidgets import (
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
+from eit_app.background_scheduler import BackgroundTaskPriority, BackgroundTaskScheduler
 from eit_app.controllers.acquisition_controller import AcquisitionController
 from eit_app.controllers.device_controller import DeviceController
 from eit_app.controllers.reconstruction_controller import (
@@ -66,6 +69,7 @@ from eit_app.models.forward_model_config import (
     INTERACTIVE_3D_DEFAULT_HEIGHT,
     INTERACTIVE_3D_DEFAULT_RADIUS,
     electrode_level_fractions_for_rings,
+    mapping_complex_value,
 )
 from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
@@ -74,6 +78,7 @@ from eit_app.models.simulation_state import (
 from eit_app.models.reconstruction_methods import prepare_database_reconstruction_method
 from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
+from eit_app.ui.cache_telemetry_panel import CacheTelemetryDialog
 from eit_app.ui.simulation.inverse_problem_panel import (
     normalize_simulation_inverse_method,
 )
@@ -86,6 +91,77 @@ from eit_app.ui.theme import current_theme_mode, set_theme_mode
 from eit_app.models.frame_model import FrameData
 
 log = logging.getLogger(__name__)
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def _display_float_array(values: object) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    if np.issubdtype(arr.dtype, np.floating):
+        return arr
+    return np.asarray(arr, dtype=np.float32)
+
+
+def _all_finite_values(values: object, *, chunk_size: int = 65536) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return True
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size, dtype=bool)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if not bool(chunk_mask.all()):
+            return False
+    return True
+
+
+def _has_abs_value_above(
+    values: object,
+    *,
+    threshold: float,
+    chunk_size: int = 65536,
+) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    if arr.size == 0:
+        return False
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    arr_dtype = arr.dtype
+    if np.issubdtype(arr_dtype, np.floating):
+        abs_dtype = arr_dtype if arr_dtype.itemsize <= 4 else np.dtype(np.float64)
+    elif np.issubdtype(arr_dtype, np.complexfloating):
+        abs_dtype = (
+            np.dtype(np.float32) if arr_dtype.itemsize <= 8 else np.dtype(np.float64)
+        )
+    else:
+        abs_dtype = np.dtype(np.float64)
+    abs_work = np.empty(block_size, dtype=abs_dtype)
+    mask_work = np.empty(block_size, dtype=bool)
+    resolved_threshold = float(threshold)
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        chunk = arr[start:stop]
+        abs_chunk = abs_work[: chunk.size]
+        mask_chunk = mask_work[: chunk.size]
+        np.abs(chunk, out=abs_chunk)
+        np.greater(abs_chunk, resolved_threshold, out=mask_chunk)
+        if bool(mask_chunk.any()):
+            return True
+    return False
+
+
+def _display_int_array(values: object) -> np.ndarray:
+    arr = np.asarray(values)
+    if np.issubdtype(arr.dtype, np.integer):
+        return arr
+    return np.asarray(arr, dtype=np.intp)
+
 
 if TYPE_CHECKING:
     from eit_app.interop.models import ReconstructionPreset
@@ -112,6 +188,86 @@ _GREIT_COMMON_CONFIG_SCOPE = {
         "current geometry and protocol"
     ),
 }
+
+
+def _format_status_bytes(value: object) -> str:
+    try:
+        size = float(value)
+    except (TypeError, ValueError):
+        size = 0.0
+    if size <= 0:
+        return "--"
+    units = ("B", "KiB", "MiB", "GiB")
+    unit_index = 0
+    while size >= 1024.0 and unit_index < len(units) - 1:
+        size /= 1024.0
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(size)} {units[unit_index]}"
+    return f"{size:.1f} {units[unit_index]}"
+
+
+def _backend_worker_probe_summary(metadata: object) -> dict[str, object]:
+    if not isinstance(metadata, dict):
+        return {
+            "petsc_cuda": None,
+            "cache_hit": None,
+            "cache_layer": "",
+            "status_text": "--",
+        }
+    nested_probe = metadata.get("petsc_cuda_probe")
+    if isinstance(nested_probe, dict):
+        probe_cache = nested_probe.get("probe_cache")
+        petsc_cuda = nested_probe.get("petsc_cuda")
+    else:
+        probe_cache = metadata.get("petsc_cuda_probe_cache")
+        petsc_cuda = metadata.get("petsc_cuda")
+    if not isinstance(probe_cache, dict):
+        probe_cache = {}
+    cache_hit_raw = probe_cache.get("hit")
+    cache_hit = bool(cache_hit_raw) if cache_hit_raw is not None else None
+    cache_layer = str(probe_cache.get("layer", "") or "")
+    if cache_hit is None:
+        status_text = "--"
+    else:
+        hit_label = "hit" if cache_hit else "miss"
+        status_text = f"{hit_label}/{cache_layer}" if cache_layer else hit_label
+    return {
+        "petsc_cuda": petsc_cuda if isinstance(petsc_cuda, bool) else None,
+        "cache_hit": cache_hit,
+        "cache_layer": cache_layer,
+        "status_text": status_text,
+    }
+
+
+def _simulation_backend_warm_report(
+    meta: object,
+    *,
+    profile: str,
+    warm_key: str,
+    setup_prime: bool,
+) -> dict[str, object]:
+    prime_metadata = dict(getattr(meta, "prime_metadata", {}) or {})
+    probe_summary = _backend_worker_probe_summary(prime_metadata)
+    return {
+        "profile": str(getattr(meta, "profile", profile)),
+        "pid": int(getattr(meta, "pid", 0) or 0),
+        "rss_bytes": int(getattr(meta, "rss_bytes", 0) or 0),
+        "rss_limit_bytes": int(getattr(meta, "rss_limit_bytes", 0) or 0),
+        "primed_runtime": bool(getattr(meta, "primed_runtime", False)),
+        "prime_command": str(getattr(meta, "prime_command", "") or ""),
+        "prime_duration_ms": float(getattr(meta, "prime_duration_ms", 0.0) or 0.0),
+        "prime_metadata": prime_metadata,
+        "petsc_cuda_probe_cache_hit": probe_summary["cache_hit"],
+        "petsc_cuda_probe_cache_layer": probe_summary["cache_layer"],
+        "petsc_cuda_probe_status": probe_summary["status_text"],
+        "petsc_cuda_available": probe_summary["petsc_cuda"],
+        "request_duration_ms": float(getattr(meta, "request_duration_ms", 0.0) or 0.0),
+        "setup_prime": bool(setup_prime),
+        "warm_key": warm_key,
+        "recycled_after_request": bool(getattr(meta, "recycled_after_request", False)),
+        "recycle_reason": str(getattr(meta, "recycle_reason", "") or ""),
+    }
 
 
 def _runtime_diagnostics_enabled() -> bool:
@@ -186,6 +342,26 @@ def _format_runtime_diagnostics(
         parts.append(f"pc={lazy_pc}")
     parts.append(f"cache={cache_label}")
     return " | " + ", ".join(parts) if parts else ""
+
+
+def _record_forward_visualization_timing(
+    result: ForwardSolverResult,
+    *,
+    visual_ms: float,
+) -> None:
+    if not isinstance(result.forward_model_config, dict):
+        return
+    elapsed = max(0.0, float(visual_ms))
+    timings = dict(result.forward_model_config.get("forward_timing_ms") or {})
+    timings["gui_visualization_update"] = elapsed
+    phase_order = list(
+        result.forward_model_config.get("forward_timing_phase_order") or []
+    )
+    if "gui_visualization_update" not in phase_order:
+        phase_order.append("gui_visualization_update")
+    result.forward_model_config["forward_timing_ms"] = timings
+    result.forward_model_config["forward_timing_phase_order"] = phase_order
+    result.forward_model_config["gui_forward_visualization_update_ms"] = elapsed
 
 
 def _greit_common_config_id_for_forward_config(
@@ -548,6 +724,11 @@ def _with_interactive_3d_geometry_defaults(
 class EITWorkstation(QMainWindow):
     """Main window for the EIT Workstation application."""
 
+    sim_backend_warm_status = Signal(str)
+    _background_ui_task_requested = Signal(object)
+    _cache_telemetry_ready = Signal(object)
+    _cache_telemetry_error = Signal(str)
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         # Window title is set via _retranslate() so it follows the active
@@ -583,7 +764,9 @@ class EITWorkstation(QMainWindow):
         # Tools→Difference clicks raise the existing window instead
         # of stacking a new one.
         self._difference_dialog = None
+        self._cache_telemetry_dialog = None
         self._fwd_ctrl = ForwardSolverController(self)
+        self._fwd_prewarm_ctrl = ForwardSolverController(self)
         self._dataset_ctrl = DatasetGeneratorController(self)
         self._last_fwd_result: ForwardSolverResult | None = None
         self._interop_capture_service = None
@@ -611,9 +794,16 @@ class EITWorkstation(QMainWindow):
         self._plan_timer = QTimer(self)
         self._plan_timer.setSingleShot(True)
         self._plan_timer.timeout.connect(self._run_next_planned_acquisition)
+        self._background_scheduler = BackgroundTaskScheduler(name="eit-gui-background")
+        self._background_ui_task_requested.connect(self._run_background_ui_task)
+        self._cache_telemetry_ready.connect(self._on_cache_telemetry_ready)
+        self._cache_telemetry_error.connect(self._on_cache_telemetry_error)
         self._recon_prewarm_timer = QTimer(self)
         self._recon_prewarm_timer.setSingleShot(True)
         self._recon_prewarm_timer.timeout.connect(self._run_realtime_recon_prewarm)
+        self._fwd_prewarm_timer = QTimer(self)
+        self._fwd_prewarm_timer.setSingleShot(True)
+        self._fwd_prewarm_timer.timeout.connect(self._run_sim_forward_prewarm)
         self._plan_active = False
         self._plan_completed_count = 0
         self._plan_frequencies: list[int] = []
@@ -635,12 +825,22 @@ class EITWorkstation(QMainWindow):
         self._recon_prewarm_active_signature: tuple[object, ...] | None = None
         self._recon_prewarm_requested_signature: tuple[object, ...] | None = None
         self._recon_prewarm_ready_signature: tuple[object, ...] | None = None
+        self._fwd_prewarm_busy = False
+        self._fwd_prewarm_active_signature: str | None = None
+        self._fwd_prewarm_requested_signature: str | None = None
+        self._fwd_prewarm_ready_signature: str | None = None
+        self._fwd_prewarm_ready_result: ForwardSolverResult | None = None
+        self._fwd_prewarm_promote_to_user = False
+        self._fwd_backend_warm_profiles: set[str] = set()
+        self._fwd_backend_warm_active_profiles: set[str] = set()
+        self._fwd_backend_warm_reports: dict[str, dict[str, object]] = {}
 
         # Database-driven reconstruction state
         self._pending_db_reconstruction: dict | None = None
         self._pending_auto_target_frame: FrameData | None = None
 
         self._build_ui()
+        self.sim_backend_warm_status.connect(self._on_sim_backend_warm_status)
         self._apply_window_icon()
         self._acq_panel.set_output_dir(self._default_output_dir())
         self._connect_signals()
@@ -658,6 +858,10 @@ class EITWorkstation(QMainWindow):
         # Kick off DB backfill shortly after startup so the UI shows
         # historical sessions without blocking window initialization.
         QTimer.singleShot(500, self._trigger_backfill)
+        QTimer.singleShot(
+            self._initial_sim_forward_prewarm_delay_ms(),
+            self._schedule_initial_sim_forward_prewarm,
+        )
 
     # --- Convenience accessors that delegate to the hardware tab ---
 
@@ -700,6 +904,31 @@ class EITWorkstation(QMainWindow):
     @property
     def _equipotential_widget(self):
         return self._hw_tab.equipotential_widget
+
+    def _submit_scheduled_ui_task(
+        self,
+        *,
+        key: str,
+        name: str,
+        priority: int,
+        callback,
+        coalesce: bool = True,
+    ):
+        return self._background_scheduler.submit(
+            key=key,
+            name=name,
+            priority=priority,
+            coalesce=coalesce,
+            fn=lambda: self._background_ui_task_requested.emit(callback),
+        )
+
+    @Slot(object)
+    def _run_background_ui_task(self, callback) -> None:
+        try:
+            callback()
+        except Exception as exc:
+            log.exception("Scheduled GUI task failed")
+            self._on_error(str(exc))
 
     def _build_ui(self) -> None:
         self._tab_widget = QTabWidget()
@@ -833,6 +1062,11 @@ class EITWorkstation(QMainWindow):
         self._action_reconstruction.triggered.connect(
             self._open_reconstruction_from_menu
         )
+
+        self._menu_tools.addSeparator()
+        self._action_cache_telemetry = self._menu_tools.addAction("")
+        self._action_cache_telemetry.setShortcut(QKeySequence("Ctrl+Shift+C"))
+        self._action_cache_telemetry.triggered.connect(self._open_cache_telemetry_panel)
 
         # Language menu ----------------------------------------------------
         self._menu_language = menu_bar.addMenu("")
@@ -1174,6 +1408,7 @@ class EITWorkstation(QMainWindow):
         self._action_difference.setText(t("menu.tools.difference"))
         self._action_batch_reconstruction.setText(t("menu.tools.batch_reconstruction"))
         self._action_reconstruction.setText(t("menu.tools.reconstruction"))
+        self._action_cache_telemetry.setText(t("menu.tools.cache_telemetry"))
 
         self._menu_language.setTitle(t("menu.language"))
         self._menu_language.setToolTip(t("menu.language.tooltip"))
@@ -1236,6 +1471,9 @@ class EITWorkstation(QMainWindow):
             self._on_realtime_recon_prewarm_done
         )
         self._recon_prewarm_ctrl.error.connect(self._on_realtime_recon_prewarm_error)
+
+        self._fwd_prewarm_ctrl.forward_done.connect(self._on_sim_forward_prewarm_done)
+        self._fwd_prewarm_ctrl.error.connect(self._on_sim_forward_prewarm_error)
 
         self._hw_recon_ctrl.reconstruction_done.connect(
             self._recon_widget.update_reconstruction
@@ -1686,8 +1924,20 @@ class EITWorkstation(QMainWindow):
             reference_frame=self._reference_frame,
             request_source="hardware_auto_live",
         )
-        accepted = self._recon_ctrl.reconstruct(request)
-        if not accepted:
+
+        def _start() -> None:
+            accepted = self._recon_ctrl.reconstruct(request)
+            if not accepted:
+                self._auto_recon_busy = False
+                self._pending_auto_target_frame = target_frame
+
+        handle = self._submit_scheduled_ui_task(
+            key="reconstruction:hardware-auto-live",
+            name="hardware-auto-reconstruction",
+            priority=BackgroundTaskPriority.RECONSTRUCTION,
+            callback=_start,
+        )
+        if not handle.accepted:
             self._auto_recon_busy = False
             self._pending_auto_target_frame = target_frame
         return
@@ -1712,12 +1962,15 @@ class EITWorkstation(QMainWindow):
         if simulated is None or reference is None:
             return None
         try:
-            diff_fit = np.asarray(simulated, dtype=np.float64).reshape(-1)
-            ref_vec = np.asarray(reference, dtype=np.float64).reshape(-1)
+            diff_raw = np.asarray(simulated).reshape(-1)
+            ref_raw = np.asarray(reference).reshape(-1)
         except Exception:
             return None
-        if diff_fit.size == 0 or diff_fit.size != ref_vec.size:
+        if diff_raw.size == 0 or diff_raw.size != ref_raw.size:
             return None
+        dtype = np.result_type(diff_raw.dtype, ref_raw.dtype, np.float64)
+        diff_fit = diff_raw.astype(dtype, copy=False)
+        ref_vec = ref_raw.astype(dtype, copy=False)
 
         metadata = getattr(result, "metadata", {}) or {}
         if not isinstance(metadata, dict):
@@ -1733,17 +1986,21 @@ class EITWorkstation(QMainWindow):
 
         if mode == "normalized":
             safe_ref = ref_vec.copy()
-            small = np.abs(safe_ref) < np.finfo(np.float64).eps
+            eps = np.finfo(np.float64).eps
+            small = np.abs(safe_ref) < eps
             if np.any(small):
-                signs = np.sign(safe_ref[small])
-                signs[signs == 0.0] = 1.0
-                safe_ref[small] = signs * np.finfo(np.float64).eps
+                if np.iscomplexobj(safe_ref):
+                    safe_ref[small] = eps + 0.0j
+                else:
+                    signs = np.sign(safe_ref[small])
+                    signs[signs == 0.0] = 1.0
+                    safe_ref[small] = signs * eps
             reconstructed = ref_vec + diff_fit * safe_ref
         else:
             reconstructed = ref_vec + diff_fit
-        if not np.isfinite(reconstructed).all():
+        if not _all_finite_values(reconstructed):
             return None
-        return np.asarray(reconstructed, dtype=np.float64)
+        return np.asarray(reconstructed, dtype=dtype)
 
     @Slot(str)
     def _on_auto_reconstruction_error(self, msg: str) -> None:
@@ -1794,9 +2051,9 @@ class EITWorkstation(QMainWindow):
         measured_diff: np.ndarray | None = None
         if ref_frame is not None and tgt_frame is not None:
             try:
-                measured_diff = np.asarray(
-                    tgt_frame.real - ref_frame.real, dtype=np.float64
-                )
+                measured_diff = _display_float_array(
+                    tgt_frame.real - ref_frame.real
+                ).reshape(-1)
             except Exception as exc:
                 log.debug("Failed to compute measured diff: %s", exc)
 
@@ -1804,7 +2061,7 @@ class EITWorkstation(QMainWindow):
         backend_measured = getattr(result, "measured", None)
         if backend_measured is not None:
             try:
-                backend_arr = np.asarray(backend_measured, dtype=np.float64).reshape(-1)
+                backend_arr = _display_float_array(backend_measured).reshape(-1)
                 if measured_diff is None or backend_arr.size == measured_diff.size:
                     measured_diff = backend_arr
             except Exception:
@@ -1814,7 +2071,7 @@ class EITWorkstation(QMainWindow):
         simulated_arr: np.ndarray | None = None
         if simulated is not None:
             try:
-                simulated_arr = np.asarray(simulated, dtype=np.float64).reshape(-1)
+                simulated_arr = _display_float_array(simulated).reshape(-1)
                 if (
                     measured_diff is not None
                     and simulated_arr.size != measured_diff.size
@@ -2178,7 +2435,7 @@ class EITWorkstation(QMainWindow):
         if measured is None:
             return
         try:
-            measured_arr = np.asarray(measured, dtype=float).reshape(-1)
+            measured_arr = _display_float_array(measured).reshape(-1)
         except Exception:
             return
         if measured_arr.size == 0:
@@ -2186,7 +2443,7 @@ class EITWorkstation(QMainWindow):
         reconstructed_arr = None
         if reconstructed is not None:
             try:
-                reconstructed_arr = np.asarray(reconstructed, dtype=float).reshape(-1)
+                reconstructed_arr = _display_float_array(reconstructed).reshape(-1)
             except Exception:
                 reconstructed_arr = None
         self._voltage_plot.update_hardware_voltages(measured_arr, reconstructed_arr)
@@ -2338,8 +2595,20 @@ class EITWorkstation(QMainWindow):
             return
         self._recon_prewarm_busy = True
         self._recon_prewarm_active_signature = signature
-        accepted = self._recon_prewarm_ctrl.reconstruct(request)
-        if not accepted:
+
+        def _start() -> None:
+            accepted = self._recon_prewarm_ctrl.reconstruct(request)
+            if not accepted:
+                self._recon_prewarm_busy = False
+                self._recon_prewarm_active_signature = None
+
+        handle = self._submit_scheduled_ui_task(
+            key=f"reconstruction:hardware-prewarm:{hash(signature)}",
+            name="hardware-reconstruction-prewarm",
+            priority=BackgroundTaskPriority.PREWARM,
+            callback=_start,
+        )
+        if not handle.accepted:
             self._recon_prewarm_busy = False
             self._recon_prewarm_active_signature = None
             return
@@ -2918,6 +3187,114 @@ class EITWorkstation(QMainWindow):
         self._tab_widget.setCurrentWidget(self._db_tab)
         self._status_bar.showMessage(t("main.status.reconstruction_hint"), 5000)
 
+    def _open_cache_telemetry_panel(self) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is None:
+            dialog = CacheTelemetryDialog(self)
+            dialog.refresh_requested.connect(self._refresh_cache_telemetry_panel)
+            dialog.gc_requested.connect(self._run_cache_gc_from_panel)
+            dialog.finished.connect(self._on_cache_telemetry_closed)
+            self._cache_telemetry_dialog = dialog
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+        self._refresh_cache_telemetry_panel()
+
+    @Slot(int)
+    def _on_cache_telemetry_closed(self, _result: int) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is not None:
+            dialog.deleteLater()
+        self._cache_telemetry_dialog = None
+
+    @Slot()
+    def _refresh_cache_telemetry_panel(self) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is not None:
+            dialog.set_busy(t("cache.telemetry.refreshing"))
+
+        def _collect() -> None:
+            try:
+                from pyeidors.cache.ops import doctor_cache
+
+                repo = _repo_root()
+                report = {
+                    "doctor": doctor_cache(
+                        repo=repo,
+                        cache_dir=repo / ".pyeidors_cache" / "v2",
+                        repair_jit=False,
+                    ),
+                    "background_scheduler": self._background_scheduler.snapshot(),
+                }
+            except Exception as exc:
+                self._cache_telemetry_error.emit(str(exc))
+            else:
+                self._cache_telemetry_ready.emit(report)
+
+        self._background_scheduler.submit(
+            key="cache-telemetry:refresh",
+            name="cache-telemetry-refresh",
+            priority=BackgroundTaskPriority.GC,
+            fn=_collect,
+        )
+
+    @Slot(object)
+    def _on_cache_telemetry_ready(self, report: object) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is not None and isinstance(report, dict):
+            dialog.set_report(report)
+
+    @Slot(str)
+    def _on_cache_telemetry_error(self, message: str) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is not None:
+            dialog.set_error(message)
+        self._on_error(message)
+
+    @Slot(dict)
+    def _run_cache_gc_from_panel(self, options: dict) -> None:
+        dialog = getattr(self, "_cache_telemetry_dialog", None)
+        if dialog is not None:
+            dialog.set_busy(t("cache.telemetry.gc_running"))
+
+        def _gc() -> None:
+            try:
+                from pyeidors.cache.ops import doctor_cache, gc_cache
+
+                repo = _repo_root()
+                gc_report = gc_cache(
+                    repo=repo,
+                    cache_dir=repo / ".pyeidors_cache" / "v2",
+                    max_bytes=int(options.get("max_bytes", 8 * 1024**3)),
+                    include_worker_cache=bool(
+                        options.get("include_worker_cache", False)
+                    ),
+                    include_legacy_arrays=bool(
+                        options.get("include_legacy_arrays", True)
+                    ),
+                    dry_run=False,
+                )
+                report = {
+                    "gc": gc_report,
+                    "doctor": doctor_cache(
+                        repo=repo,
+                        cache_dir=repo / ".pyeidors_cache" / "v2",
+                        repair_jit=False,
+                    ),
+                    "background_scheduler": self._background_scheduler.snapshot(),
+                }
+            except Exception as exc:
+                self._cache_telemetry_error.emit(str(exc))
+            else:
+                self._cache_telemetry_ready.emit(report)
+
+        self._background_scheduler.submit(
+            key="cache-telemetry:gc",
+            name="cache-telemetry-gc",
+            priority=BackgroundTaskPriority.GC,
+            fn=_gc,
+        )
+
     @staticmethod
     def _entry_index(entries: list[dict], selected: dict | None) -> int:
         if not selected:
@@ -2988,7 +3365,24 @@ class EITWorkstation(QMainWindow):
         self._recon_widget.set_loading(True)
         self._equipotential_widget.set_loading(True)
         self._voltage_plot.set_loading(True)
-        self._hw_recon_ctrl.reconstruct(request)
+
+        def _start() -> None:
+            accepted = self._hw_recon_ctrl.reconstruct(request)
+            if not accepted:
+                self._recon_widget.set_loading(False)
+                self._equipotential_widget.set_loading(False)
+                self._voltage_plot.set_loading(False)
+
+        handle = self._submit_scheduled_ui_task(
+            key="reconstruction:hardware-manual",
+            name="hardware-manual-reconstruction",
+            priority=BackgroundTaskPriority.RECONSTRUCTION,
+            callback=_start,
+        )
+        if not handle.accepted:
+            self._recon_widget.set_loading(False)
+            self._equipotential_widget.set_loading(False)
+            self._voltage_plot.set_loading(False)
 
     @Slot(dict)
     def _on_db_reconstruct_requested(self, config: dict) -> None:
@@ -3104,10 +3498,20 @@ class EITWorkstation(QMainWindow):
             mesh_refinement=mesh_refinement,
             metadata=prepared_method.metadata,
         )
-        accepted = self._db_recon_ctrl.reconstruct(request)
-        if not accepted:
+
+        def _start() -> None:
+            accepted = self._db_recon_ctrl.reconstruct(request)
+            if accepted:
+                self._pending_db_reconstruction = dict(config)
+
+        handle = self._submit_scheduled_ui_task(
+            key="reconstruction:database",
+            name="database-reconstruction",
+            priority=BackgroundTaskPriority.RECONSTRUCTION,
+            callback=_start,
+        )
+        if not handle.accepted:
             return
-        self._pending_db_reconstruction = dict(config)
         self._status_bar.showMessage(
             t(
                 "main.status.recon_running",
@@ -3213,9 +3617,9 @@ class EITWorkstation(QMainWindow):
         from matplotlib import pyplot as plt
         from matplotlib.tri import Triangulation
 
-        sigma = np.asarray(getattr(result, "conductivity", []), dtype=float).reshape(-1)
-        coords = np.asarray(getattr(result, "node_coords", []), dtype=float)
-        cells = np.asarray(getattr(result, "cell_connectivity", []), dtype=int)
+        sigma = _display_float_array(getattr(result, "conductivity", [])).reshape(-1)
+        coords = _display_float_array(getattr(result, "node_coords", []))
+        cells = _display_int_array(getattr(result, "cell_connectivity", []))
         if sigma.size == 0 or coords.size == 0 or cells.size == 0:
             return
 
@@ -3245,7 +3649,7 @@ class EITWorkstation(QMainWindow):
         simulated = getattr(result, "simulated", None)
         if measured is None:
             return
-        measured = np.asarray(measured, dtype=float).reshape(-1)
+        measured = _display_float_array(measured).reshape(-1)
         x = np.arange(1, measured.size + 1)
 
         fig, ax = plt.subplots(figsize=(8, 4), dpi=150)
@@ -3253,7 +3657,7 @@ class EITWorkstation(QMainWindow):
         ax.set_facecolor("#fbfdff")
         ax.plot(x, measured, color="#4ecdc4", label="Measured")
         if simulated is not None:
-            sim = np.asarray(simulated, dtype=float).reshape(-1)
+            sim = _display_float_array(simulated).reshape(-1)
             ax.plot(x, sim, color="#ff6b6b", linestyle="--", label="Reconstructed fit")
         ax.set_xlabel("Measurement index")
         ax.set_ylabel("Voltage (V)")
@@ -3379,8 +3783,19 @@ class EITWorkstation(QMainWindow):
                 mesh_refinement=mesh_refinement,
                 metadata=metadata,
             )
-            ok = self._batch_recon_ctrl.start(req)
-            if not ok and self._batch_dialog is not None:
+
+            def _start() -> None:
+                ok = self._batch_recon_ctrl.start(req)
+                if not ok and self._batch_dialog is not None:
+                    self._batch_dialog.on_error("A batch job is already running.")
+
+            handle = self._submit_scheduled_ui_task(
+                key="reconstruction:database-batch",
+                name="database-batch-reconstruction",
+                priority=BackgroundTaskPriority.RECONSTRUCTION,
+                callback=_start,
+            )
+            if not handle.accepted and self._batch_dialog is not None:
                 self._batch_dialog.on_error("A batch job is already running.")
         except Exception as exc:
             log.exception("Batch start failed")
@@ -3438,6 +3853,10 @@ class EITWorkstation(QMainWindow):
             electrode_coverage=float(mesh_cfg.get("electrode_coverage", 0.5)),
             electrode_area_m2_override=mesh_cfg.get("electrode_area_m2_override"),
             electrode_height_ratio=float(mesh_cfg.get("electrode_height_ratio", 0.2)),
+            contact_impedance=mesh_cfg.get(
+                "contact_impedance",
+                self._sim_forward_model_config.contact_impedance,
+            ),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=self._sim_tab.forward_problem_panel.noise_level,
             measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
@@ -3487,9 +3906,11 @@ class EITWorkstation(QMainWindow):
     @staticmethod
     def _simulation_signature_value(value):
         if isinstance(value, np.generic):
-            return value.item()
+            return EITWorkstation._simulation_signature_value(value.item())
         if isinstance(value, np.ndarray):
             return EITWorkstation._simulation_signature_value(value.tolist())
+        if isinstance(value, complex):
+            return mapping_complex_value(value)
         if isinstance(value, Path):
             return str(value)
         if isinstance(value, dict):
@@ -3516,7 +3937,9 @@ class EITWorkstation(QMainWindow):
                     "size_x": float(getattr(spec, "size_x", 0.0)),
                     "size_y": float(getattr(spec, "size_y", 0.0)),
                     "size_z": float(getattr(spec, "size_z", 0.0)),
-                    "conductivity": float(getattr(spec, "conductivity", 0.0)),
+                    "conductivity": mapping_complex_value(
+                        getattr(spec, "conductivity", 0.0)
+                    ),
                 }
             )
         return payload
@@ -3535,6 +3958,60 @@ class EITWorkstation(QMainWindow):
             separators=(",", ":"),
         ).encode("utf-8")
         return hashlib.sha256(encoded).hexdigest(), canonical
+
+    @staticmethod
+    def _backend_forward_setup_warm_key(
+        *,
+        profile: str,
+        request: ForwardSolverRequest,
+        setup_prime: bool,
+    ) -> str:
+        profile_name = str(profile or "default").strip() or "default"
+        if not setup_prime:
+            return profile_name
+        config = dict(request.forward_model_config or {})
+        volatile_or_non_setup_keys = {
+            "background_conductivity",
+            "noise_level",
+            "request_source",
+            "simulation_input_signature",
+            "simulation_input_signature_payload",
+        }
+
+        def _setup_config(payload: dict[str, object]) -> dict[str, object]:
+            return {
+                str(key): value
+                for key, value in payload.items()
+                if str(key) not in volatile_or_non_setup_keys
+                and str(key) != "inhomogeneities"
+                and not str(key).startswith("inhomogeneities_")
+            }
+
+        setup_payload = {
+            "schema": "simulation_forward_setup_prime_v1",
+            "profile": profile_name,
+            "mesh_dimension": int(request.mesh_dimension),
+            "mesh_refinement": float(request.mesh_refinement),
+            "n_electrodes": int(request.n_electrodes),
+            "background_is_complex": bool(
+                np.iscomplexobj(np.asarray(request.background_conductivity))
+            ),
+            "forward_model_config": _setup_config(config),
+        }
+        signature_payload = config.get("simulation_input_signature_payload")
+        if isinstance(signature_payload, dict):
+            signature_config = signature_payload.get("forward_model_config")
+            if isinstance(signature_config, dict):
+                setup_payload["forward_model_config"] = _setup_config(
+                    dict(signature_config)
+                )
+        canonical = EITWorkstation._simulation_signature_value(setup_payload)
+        encoded = json.dumps(
+            canonical,
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return f"{profile_name}:setup:{hashlib.sha256(encoded).hexdigest()[:16]}"
 
     @staticmethod
     def _forward_result_simulation_signature(
@@ -3557,6 +4034,7 @@ class EITWorkstation(QMainWindow):
 
     @Slot()
     def _on_simulation_inputs_changed(self) -> None:
+        self._schedule_sim_forward_prewarm()
         stale, _stored, _current = self._simulation_forward_result_is_stale(
             self._last_fwd_result
         )
@@ -3567,6 +4045,300 @@ class EITWorkstation(QMainWindow):
             "Simulation inputs changed.\n"
             "Run the forward problem again before reconstruction."
         )
+
+    def _sim_forward_prewarm_enabled(self) -> bool:
+        raw = os.getenv("EIT_APP_FORWARD_PREWARM", "").strip().lower()
+        if raw in {"0", "false", "no", "off"}:
+            return False
+        if raw in {"1", "true", "yes", "on"}:
+            return True
+        return not bool(os.getenv("PYTEST_CURRENT_TEST"))
+
+    def _initial_sim_forward_prewarm_delay_ms(self) -> int:
+        raw = os.getenv("EIT_APP_FORWARD_PREWARM_START_MS", "150").strip()
+        try:
+            value = int(raw)
+        except ValueError:
+            value = 150
+        return max(0, min(value, 5000))
+
+    def _sim_forward_prewarm_mode(self, *, mesh_dimension: int) -> str:
+        if int(mesh_dimension) != 3:
+            return "solve"
+        raw = os.getenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "setup").strip().lower()
+        if raw in {"0", "false", "no", "off", "none", "disabled"}:
+            return "off"
+        if raw in {"1", "true", "yes", "on", "solve", "full"}:
+            return "solve"
+        if raw in {"setup", "forward_setup", "jit", "prime", "setup_prime"}:
+            return "setup"
+        return "worker"
+
+    @Slot()
+    def _schedule_initial_sim_forward_prewarm(self) -> None:
+        self._schedule_sim_forward_prewarm(immediate=True)
+
+    def _build_sim_forward_request(
+        self,
+        *,
+        request_source: str,
+    ) -> ForwardSolverRequest:
+        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
+        inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
+        forward_cfg = self._current_sim_forward_model_config()
+        sim_signature, sim_signature_payload = (
+            self._current_simulation_input_signature()
+        )
+        forward_model_config = forward_cfg.to_mapping()
+        forward_model_config.update(
+            {
+                "request_source": request_source,
+                "simulation_input_signature": sim_signature,
+                "simulation_input_signature_payload": sim_signature_payload,
+            }
+        )
+        return ForwardSolverRequest(
+            mesh_dimension=mesh_cfg["mesh_dimension"],
+            mesh_refinement=mesh_cfg["mesh_refinement"],
+            n_electrodes=mesh_cfg["n_electrodes"],
+            background_conductivity=mesh_cfg["background_conductivity"],
+            inhomogeneities=inhomogeneities,
+            noise_level=forward_cfg.noise_level,
+            forward_model_config=forward_model_config,
+        )
+
+    def _warm_sim_forward_backend_if_needed(
+        self,
+        request: ForwardSolverRequest,
+        *,
+        setup_prime: bool = False,
+    ) -> None:
+        try:
+            from eit_app.backend_routing import select_forward_backend_route
+            from eit_app.backend_worker_pool import (
+                prime_persistent_backend_worker_forward_setup,
+                warm_persistent_backend_worker,
+            )
+
+            route = select_forward_backend_route(request)
+        except Exception as exc:
+            log.debug("Failed to resolve simulation backend warmup route: %s", exc)
+            return
+        if not route.external:
+            return
+        profile = str(route.profile or "default").strip() or "default"
+        warm_key = self._backend_forward_setup_warm_key(
+            profile=profile,
+            request=request,
+            setup_prime=setup_prime,
+        )
+        if (
+            warm_key in self._fwd_backend_warm_profiles
+            or warm_key in self._fwd_backend_warm_active_profiles
+        ):
+            return
+        self._fwd_backend_warm_active_profiles.add(warm_key)
+        self.sim_backend_warm_status.emit(
+            t(
+                "main.status.sim_backend_setup_start"
+                if setup_prime
+                else "main.status.sim_backend_warm_start",
+                profile=profile,
+            )
+        )
+
+        def _run() -> None:
+            try:
+                if setup_prime:
+                    from eit_app.backend_worker_protocol import write_forward_request
+
+                    with tempfile.TemporaryDirectory(
+                        prefix="pyeidors-gui-forward-setup-prime-"
+                    ) as tmp:
+                        input_path = Path(tmp) / "forward_request.h5"
+                        write_forward_request(input_path, request)
+                        meta = prime_persistent_backend_worker_forward_setup(
+                            repo=_repo_root(),
+                            profile=profile,
+                            input_path=input_path,
+                            progress_cb=lambda message: log.debug(
+                                "Simulation backend setup prime: %s", message
+                            ),
+                        )
+                else:
+                    meta = warm_persistent_backend_worker(
+                        repo=_repo_root(),
+                        profile=profile,
+                        progress_cb=lambda message: log.debug(
+                            "Simulation backend warmup: %s", message
+                        ),
+                    )
+            except Exception as exc:
+                log.debug(
+                    "Simulation backend warmup failed for profile=%s: %s",
+                    profile,
+                    exc,
+                )
+                self.sim_backend_warm_status.emit(
+                    t(
+                        "main.status.sim_backend_setup_failed"
+                        if setup_prime
+                        else "main.status.sim_backend_warm_failed",
+                        profile=profile,
+                        reason=str(exc),
+                    )
+                )
+            else:
+                report = _simulation_backend_warm_report(
+                    meta,
+                    profile=profile,
+                    warm_key=warm_key,
+                    setup_prime=setup_prime,
+                )
+                self._fwd_backend_warm_reports[profile] = report
+                self._fwd_backend_warm_profiles.add(warm_key)
+                self.sim_backend_warm_status.emit(
+                    t(
+                        "main.status.sim_backend_setup_done"
+                        if setup_prime
+                        else "main.status.sim_backend_warm_done",
+                        profile=profile,
+                        pid=report["pid"],
+                        rss=_format_status_bytes(report["rss_bytes"]),
+                        prime_ms=float(report["prime_duration_ms"]),
+                        probe=str(report["petsc_cuda_probe_status"]),
+                    )
+                )
+            finally:
+                self._fwd_backend_warm_active_profiles.discard(warm_key)
+
+        handle = self._background_scheduler.submit(
+            key=f"sim-forward-warm:{warm_key}",
+            name=f"eit-sim-backend-warmup-{profile}",
+            priority=BackgroundTaskPriority.PREWARM,
+            fn=_run,
+        )
+        if not handle.accepted:
+            self._fwd_backend_warm_active_profiles.discard(warm_key)
+            log.debug(
+                "Simulation backend warmup not scheduled profile=%s reason=%s",
+                profile,
+                handle.reason,
+            )
+
+    @Slot(str)
+    def _on_sim_backend_warm_status(self, message: str) -> None:
+        text = str(message or "").strip()
+        if text:
+            self._status_bar.showMessage(text, 6000)
+
+    def _schedule_sim_forward_prewarm(self, *, immediate: bool = False) -> None:
+        if not self._sim_forward_prewarm_enabled():
+            return
+        try:
+            request = self._build_sim_forward_request(
+                request_source="simulation_forward_prewarm"
+            )
+            signature, _payload = self._current_simulation_input_signature()
+        except Exception as exc:
+            log.debug("Failed to build simulation forward prewarm signature: %s", exc)
+            return
+        self._fwd_prewarm_requested_signature = signature
+        if self._fwd_prewarm_ready_signature != signature:
+            self._fwd_prewarm_ready_result = None
+        mode = self._sim_forward_prewarm_mode(mesh_dimension=request.mesh_dimension)
+        if mode == "off":
+            return
+        if mode in {"worker", "setup"}:
+            self._warm_sim_forward_backend_if_needed(
+                request,
+                setup_prime=mode == "setup",
+            )
+            return
+        if (
+            self._fwd_prewarm_ready_signature == signature
+            and not self._fwd_prewarm_busy
+            and self._fwd_prewarm_ready_result is not None
+        ):
+            return
+        if self._fwd_prewarm_busy and self._fwd_prewarm_active_signature == signature:
+            return
+        self._fwd_prewarm_timer.start(0 if immediate else 500)
+
+    @Slot()
+    def _run_sim_forward_prewarm(self) -> None:
+        if (
+            self._fwd_prewarm_busy
+            or self._sim_state.forward_running
+            or self._fwd_ctrl.is_busy
+        ):
+            return
+        try:
+            request = self._build_sim_forward_request(
+                request_source="simulation_forward_prewarm"
+            )
+            signature, _payload = self._current_simulation_input_signature()
+        except Exception as exc:
+            log.debug("Failed to build simulation forward prewarm request: %s", exc)
+            return
+        mode = self._sim_forward_prewarm_mode(mesh_dimension=request.mesh_dimension)
+        if mode == "off":
+            return
+        if mode in {"worker", "setup"}:
+            self._warm_sim_forward_backend_if_needed(
+                request,
+                setup_prime=mode == "setup",
+            )
+            return
+        if (
+            self._fwd_prewarm_ready_signature == signature
+            and self._fwd_prewarm_ready_result is not None
+        ):
+            return
+        self._fwd_prewarm_busy = True
+        self._fwd_prewarm_active_signature = signature
+        accepted = self._fwd_prewarm_ctrl.solve(request)
+        if not accepted:
+            self._fwd_prewarm_busy = False
+            self._fwd_prewarm_active_signature = None
+
+    @Slot(object)
+    def _on_sim_forward_prewarm_done(self, result: ForwardSolverResult) -> None:
+        active_signature = self._fwd_prewarm_active_signature
+        promote_to_user = self._fwd_prewarm_promote_to_user
+        self._fwd_prewarm_busy = False
+        self._fwd_prewarm_promote_to_user = False
+        self._fwd_prewarm_active_signature = None
+        if promote_to_user:
+            if result.error_msg:
+                self._on_error(result.error_msg)
+            self._on_forward_done(result)
+            return
+        if result.error_msg:
+            log.debug("Simulation forward prewarm returned error: %s", result.error_msg)
+        elif active_signature is not None:
+            self._fwd_prewarm_ready_signature = active_signature
+            self._fwd_prewarm_ready_result = result
+        if (
+            self._fwd_prewarm_requested_signature is not None
+            and self._fwd_prewarm_requested_signature
+            != self._fwd_prewarm_ready_signature
+        ):
+            QTimer.singleShot(0, self._run_sim_forward_prewarm)
+
+    @Slot(str)
+    def _on_sim_forward_prewarm_error(self, msg: str) -> None:
+        promote_to_user = self._fwd_prewarm_promote_to_user
+        self._fwd_prewarm_busy = False
+        self._fwd_prewarm_promote_to_user = False
+        self._fwd_prewarm_active_signature = None
+        self._fwd_prewarm_ready_result = None
+        if promote_to_user:
+            self._on_error(msg)
+            self._sim_state.forward_running = False
+            self._sim_tab.forward_problem_panel.set_running(False)
+            self._sim_tab.results_widget.set_loading_forward(False)
+        log.debug("Simulation forward prewarm failed: %s", msg)
 
     def _current_dataset_forward_model_config(self) -> ForwardModelConfig:
         mesh_cfg = self._dataset_tab.mesh_setup_panel.get_config()
@@ -3587,6 +4359,10 @@ class EITWorkstation(QMainWindow):
             electrode_coverage=float(mesh_cfg.get("electrode_coverage", 0.5)),
             electrode_area_m2_override=mesh_cfg.get("electrode_area_m2_override"),
             electrode_height_ratio=float(mesh_cfg.get("electrode_height_ratio", 0.2)),
+            contact_impedance=mesh_cfg.get(
+                "contact_impedance",
+                self._dataset_forward_model_config.contact_impedance,
+            ),
             background_conductivity=mesh_cfg["background_conductivity"],
             noise_level=panel_cfg["noise_level"],
             measurement_protocol=mesh_cfg.get("measurement_protocol", "eidors_full_3d"),
@@ -3638,13 +4414,11 @@ class EITWorkstation(QMainWindow):
         if self._last_fwd_result is None or self._last_fwd_result.error_msg:
             return None
         measurements = {
-            "target": np.asarray(
-                self._last_fwd_result.boundary_voltages, dtype=float
-            ).reshape(-1),
+            "target": np.asarray(self._last_fwd_result.boundary_voltages).reshape(-1),
         }
         if self._last_fwd_result.homogeneous_voltages is not None:
             homogeneous = np.asarray(
-                self._last_fwd_result.homogeneous_voltages, dtype=float
+                self._last_fwd_result.homogeneous_voltages
             ).reshape(-1)
             measurements["homogeneous"] = homogeneous
             measurements["difference"] = measurements["target"] - homogeneous
@@ -3665,8 +4439,8 @@ class EITWorkstation(QMainWindow):
         except Exception as exc:
             log.warning("Failed to build recording export payload: %s", exc)
             return None
-        homogeneous = np.asarray(ref_real, dtype=float).reshape(-1)
-        target = np.asarray(tgt_real, dtype=float).reshape(-1)
+        homogeneous = _display_float_array(ref_real).reshape(-1)
+        target = _display_float_array(tgt_real).reshape(-1)
         return {
             "homogeneous": homogeneous,
             "target": target,
@@ -3809,6 +4583,7 @@ class EITWorkstation(QMainWindow):
                     "electrode_area_m2_override": config.electrode_area_m2_override,
                     "electrode_height_ratio": config.electrode_height_ratio,
                     "background_conductivity": config.background_conductivity,
+                    "contact_impedance": config.contact_impedance,
                     "measurement_protocol": config.measurement_protocol,
                     "custom_pattern_json": config.custom_pattern_json,
                     "stim_pattern": config.stim_pattern,
@@ -3846,6 +4621,7 @@ class EITWorkstation(QMainWindow):
                     "electrode_area_m2_override": config.electrode_area_m2_override,
                     "electrode_height_ratio": config.electrode_height_ratio,
                     "background_conductivity": config.background_conductivity,
+                    "contact_impedance": config.contact_impedance,
                     "measurement_protocol": config.measurement_protocol,
                     "custom_pattern_json": config.custom_pattern_json,
                     "stim_pattern": config.stim_pattern,
@@ -4019,29 +4795,52 @@ class EITWorkstation(QMainWindow):
 
     @Slot()
     def _on_run_forward(self) -> None:
-        mesh_cfg = self._sim_tab.mesh_setup_panel.get_config()
-        inhomogeneities = self._sim_tab.inhomogeneity_editor.get_inhomogeneities()
-        forward_cfg = self._current_sim_forward_model_config()
-        sim_signature, sim_signature_payload = (
-            self._current_simulation_input_signature()
+        request = self._build_sim_forward_request(request_source="simulation_forward")
+        request_signature = str(
+            request.forward_model_config.get("simulation_input_signature", "")
         )
-        forward_model_config = forward_cfg.to_mapping()
-        forward_model_config.update(
-            {
-                "simulation_input_signature": sim_signature,
-                "simulation_input_signature_payload": sim_signature_payload,
+        if (
+            self._fwd_prewarm_busy
+            and self._fwd_prewarm_active_signature == request_signature
+        ):
+            self._fwd_prewarm_timer.stop()
+            self._fwd_prewarm_promote_to_user = True
+            self._sim_state.forward_running = True
+            self._sim_tab.forward_problem_panel.set_running(True)
+            self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+            self._sim_tab.results_widget.set_loading_forward(True)
+            return
+        if (
+            self._fwd_prewarm_ready_signature == request_signature
+            and self._fwd_prewarm_ready_result is not None
+            and not self._fwd_prewarm_busy
+        ):
+            self._fwd_prewarm_timer.stop()
+            result = self._fwd_prewarm_ready_result
+            result.forward_model_config = {
+                **dict(result.forward_model_config or {}),
+                "request_source": "simulation_forward",
+                "served_from_sim_forward_prewarm": True,
             }
+            self._fwd_prewarm_ready_result = None
+            self._fwd_prewarm_ready_signature = None
+            self._sim_state.forward_running = True
+            self._sim_tab.forward_problem_panel.set_running(True)
+            self._sim_tab.inverse_problem_panel.set_save_enabled(False)
+            self._sim_tab.results_widget.set_loading_forward(True)
+            self._on_forward_done(result)
+            return
+        self._fwd_prewarm_timer.stop()
+        self._background_scheduler.cancel_pending(
+            min_priority=BackgroundTaskPriority.PREWARM,
+            reason="foreground_forward_requested",
         )
-
-        request = ForwardSolverRequest(
-            mesh_dimension=mesh_cfg["mesh_dimension"],
-            mesh_refinement=mesh_cfg["mesh_refinement"],
-            n_electrodes=mesh_cfg["n_electrodes"],
-            background_conductivity=mesh_cfg["background_conductivity"],
-            inhomogeneities=inhomogeneities,
-            noise_level=forward_cfg.noise_level,
-            forward_model_config=forward_model_config,
-        )
+        if self._fwd_prewarm_busy:
+            self._fwd_prewarm_ctrl.shutdown()
+            self._fwd_prewarm_busy = False
+            self._fwd_prewarm_active_signature = None
+            self._fwd_prewarm_promote_to_user = False
+            self._fwd_prewarm_ready_result = None
         self._sim_state.forward_running = True
         self._sim_tab.forward_problem_panel.set_running(True)
         self._sim_tab.inverse_problem_panel.set_save_enabled(False)
@@ -4049,7 +4848,27 @@ class EITWorkstation(QMainWindow):
         # so the user sees a "Solving…" caption instead of a blank or
         # stale panel while the forward solver runs (5-60s range).
         self._sim_tab.results_widget.set_loading_forward(True)
-        self._fwd_ctrl.solve(request)
+
+        def _start() -> None:
+            accepted = self._fwd_ctrl.solve(request)
+            if not accepted:
+                self._sim_state.forward_running = False
+                self._sim_tab.forward_problem_panel.set_running(False)
+                self._sim_tab.inverse_problem_panel.set_save_enabled(True)
+                self._sim_tab.results_widget.set_loading_forward(False)
+
+        handle = self._submit_scheduled_ui_task(
+            key="forward:simulation",
+            name="simulation-forward-solve",
+            priority=BackgroundTaskPriority.FOREGROUND,
+            callback=_start,
+            coalesce=False,
+        )
+        if not handle.accepted:
+            self._sim_state.forward_running = False
+            self._sim_tab.forward_problem_panel.set_running(False)
+            self._sim_tab.inverse_problem_panel.set_save_enabled(True)
+            self._sim_tab.results_widget.set_loading_forward(False)
 
     @Slot(object)
     def _on_forward_done(self, result: ForwardSolverResult) -> None:
@@ -4072,12 +4891,15 @@ class EITWorkstation(QMainWindow):
             f"{result.n_measurements} measurements"
             f"{_format_runtime_diagnostics(runtime_diag)}"
         )
+        visual_started = time.perf_counter()
         self._sim_tab.metrics_panel.clear()
         self._sim_tab.metrics_panel.update_mesh_stats(
             ground_truth_node_coords=result.node_coords,
             ground_truth_cell_connectivity=result.cell_connectivity,
         )
         self._sim_tab.results_widget.update_forward_result(result)
+        visual_ms = max(0.0, (time.perf_counter() - visual_started) * 1000.0)
+        _record_forward_visualization_timing(result, visual_ms=visual_ms)
 
     @Slot()
     def _on_run_sim_inverse(self) -> None:
@@ -4117,15 +4939,11 @@ class EITWorkstation(QMainWindow):
         # image + voltage plot while the inverse solver runs.
         self._sim_tab.results_widget.set_loading_inverse(True)
 
-        # Build a ReconstructionRequest using the forward result data.
-        #
-        # pyeidors's forward solver returns a REAL-VALUED measurement vector
-        # (no I/Q encoding), so we store the whole vector in `real` and keep
-        # `imag` as zeros.  The prior implementation split the vector in
-        # half and treated the second half as fake imaginary, which halved
-        # the effective measurement count and produced the
-        # "got 104 columns, expected 208 columns" mismatch between
-        # simulation forward output and the reconstruction pattern.
+        # Build a ReconstructionRequest using the forward result data.  Real
+        # EIT keeps the old scalar vector layout; complex-admittance EIT stores
+        # the native real/imaginary components so the reconstruction controller
+        # can route them through stable result channels without changing the
+        # outer GUI skeleton.
         from eit_app.models.frame_model import FrameData
         from eit_app.models.precision import compute_dtype
         import numpy as np
@@ -4134,22 +4952,34 @@ class EITWorkstation(QMainWindow):
         meas_dtype = compute_dtype()
         compute_precision = current_precision()
         compute_dtype_name = np.dtype(meas_dtype).name
-        zero_imag = np.zeros(n_meas, dtype=meas_dtype)
 
-        homog = (
-            np.asarray(result.homogeneous_voltages, dtype=meas_dtype)
-            if result.homogeneous_voltages is not None
-            else np.zeros(n_meas, dtype=meas_dtype)
+        def _split_measurement(values) -> tuple[np.ndarray, np.ndarray]:
+            if values is None:
+                arr = np.zeros(n_meas, dtype=meas_dtype)
+            else:
+                arr = np.asarray(values).reshape(-1)
+            if arr.size != n_meas:
+                arr = np.resize(arr, n_meas)
+            return (
+                np.asarray(np.real(arr), dtype=meas_dtype),
+                np.asarray(np.imag(arr), dtype=meas_dtype),
+            )
+
+        homog_real, homog_imag = _split_measurement(result.homogeneous_voltages)
+        target_real, target_imag = _split_measurement(result.boundary_voltages)
+        has_complex_measurements = bool(
+            _has_abs_value_above(homog_imag, threshold=1.0e-12)
+            or _has_abs_value_above(target_imag, threshold=1.0e-12)
         )
         ref_frame = FrameData(
-            real=homog,
-            imag=zero_imag,
+            real=homog_real,
+            imag=homog_imag,
             timestamp=0.0,
             frame_index=0,
         )
         tgt_frame = FrameData(
-            real=np.asarray(result.boundary_voltages, dtype=meas_dtype),
-            imag=zero_imag,
+            real=target_real,
+            imag=target_imag,
             timestamp=0.0,
             frame_index=1,
         )
@@ -4476,6 +5306,14 @@ class EITWorkstation(QMainWindow):
             **hyperparameter_meta,
             **greit_scope_metadata,
         }
+        if has_complex_measurements:
+            metadata.update(
+                {
+                    "eit_value_mode": "complex_admittance",
+                    "complex_measurement_mode": "native_real_imag",
+                    "complex_reconstruction_dispatch": "native_complex",
+                }
+            )
         if greit_common_config_id:
             metadata["greit_common_config"] = greit_common_config_id
             metadata["greit_common_config_dir"] = _GREIT_COMMON_CONFIG_DIR
@@ -4490,7 +5328,7 @@ class EITWorkstation(QMainWindow):
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
-            use_part="real",
+            use_part="complex" if has_complex_measurements else "real",
             method=resolved_method,
             regularization_alpha=alpha_input,
             max_iterations=inv_cfg["max_iterations"],
@@ -4498,12 +5336,6 @@ class EITWorkstation(QMainWindow):
             mesh_refinement=mesh_size,
             metadata=metadata,
         )
-        accepted = self._sim_recon_ctrl.reconstruct(request)
-        if not accepted:
-            self._sim_state.inverse_running = False
-            self._sim_tab.inverse_problem_panel.set_running(False)
-            self._sim_tab.results_widget.set_loading_inverse(False)
-            return
 
         # Connect one-shot handler for simulation inverse result
         def _on_sim_recon_done(recon_result):
@@ -4537,9 +5369,18 @@ class EITWorkstation(QMainWindow):
                 cell_connectivity=recon_result.cell_connectivity,
                 reconstructed_voltages=reconstructed_voltages,
             )
+            ground_truth_for_metrics = np.asarray(
+                self._last_fwd_result.ground_truth_conductivity
+            )
+            reconstructed_for_metrics = np.asarray(recon_result.conductivity)
+            if np.iscomplexobj(ground_truth_for_metrics) or np.iscomplexobj(
+                reconstructed_for_metrics
+            ):
+                ground_truth_for_metrics = np.real(ground_truth_for_metrics)
+                reconstructed_for_metrics = np.real(reconstructed_for_metrics)
             self._sim_tab.metrics_panel.update_metrics(
-                self._last_fwd_result.ground_truth_conductivity,
-                recon_result.conductivity,
+                ground_truth_for_metrics,
+                reconstructed_for_metrics,
                 ground_truth_node_coords=self._last_fwd_result.node_coords,
                 ground_truth_cell_connectivity=self._last_fwd_result.cell_connectivity,
                 reconstructed_node_coords=recon_result.node_coords,
@@ -4553,6 +5394,24 @@ class EITWorkstation(QMainWindow):
             pass
         self._sim_recon_handler = _on_sim_recon_done
         self._sim_recon_ctrl.reconstruction_done.connect(self._sim_recon_handler)
+
+        def _start() -> None:
+            accepted = self._sim_recon_ctrl.reconstruct(request)
+            if not accepted:
+                self._sim_state.inverse_running = False
+                self._sim_tab.inverse_problem_panel.set_running(False)
+                self._sim_tab.results_widget.set_loading_inverse(False)
+
+        handle = self._submit_scheduled_ui_task(
+            key="reconstruction:simulation",
+            name="simulation-inverse-reconstruction",
+            priority=BackgroundTaskPriority.RECONSTRUCTION,
+            callback=_start,
+        )
+        if not handle.accepted:
+            self._sim_state.inverse_running = False
+            self._sim_tab.inverse_problem_panel.set_running(False)
+            self._sim_tab.results_widget.set_loading_inverse(False)
 
     @Slot()
     def _on_save_sim_results(self) -> None:
@@ -4644,6 +5503,8 @@ class EITWorkstation(QMainWindow):
         self._db_tab.prepare_for_shutdown()
         self._on_stop_acquisition()
         self._recon_prewarm_timer.stop()
+        self._fwd_prewarm_timer.stop()
+        self._fwd_prewarm_ready_result = None
         if self._state.connection_status is ConnectionStatus.CONNECTED:
             try:
                 self._device_ctrl.power_off_device()
@@ -4656,6 +5517,7 @@ class EITWorkstation(QMainWindow):
         self._db_recon_ctrl.shutdown()
         self._sim_recon_ctrl.shutdown()
         self._fwd_ctrl.shutdown()
+        self._fwd_prewarm_ctrl.shutdown()
         self._dataset_ctrl.shutdown()
         try:
             self._batch_recon_ctrl.shutdown()
@@ -4665,4 +5527,8 @@ class EITWorkstation(QMainWindow):
             self._db_ctrl.shutdown()
         except Exception as exc:
             log.warning("Database shutdown failed: %s", exc)
+        try:
+            self._background_scheduler.shutdown(wait=False)
+        except Exception as exc:
+            log.warning("Background scheduler shutdown failed: %s", exc)
         super().closeEvent(event)

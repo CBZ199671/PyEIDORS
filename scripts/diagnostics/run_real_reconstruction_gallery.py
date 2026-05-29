@@ -180,6 +180,22 @@ def _griddata_fill(
     return np.asarray(sampled, dtype=np.float64)
 
 
+def _query_points(size: int, *columns: np.ndarray | float) -> np.ndarray:
+    count = int(size)
+    out = np.empty((count, len(columns)), dtype=np.float64)
+    for idx, column in enumerate(columns):
+        if np.ndim(column) == 0:
+            out[:, idx] = float(column)
+            continue
+        arr = np.asarray(column, dtype=np.float64).reshape(-1)
+        if arr.size != count:
+            raise ValueError(
+                f"query column length {arr.size} does not match {count} samples"
+            )
+        out[:, idx] = arr
+    return out
+
+
 def _sample_2d_field(
     *,
     coords: np.ndarray,
@@ -191,11 +207,10 @@ def _sample_2d_field(
     y_norm = np.linspace(-1.0, 1.0, int(resolution))
     x_grid, y_grid = np.meshgrid(x_norm, y_norm)
     center = coords.mean(axis=0)
-    query = np.column_stack(
-        [
-            center[0] + x_grid.ravel() * float(radius),
-            center[1] + y_grid.ravel() * float(radius),
-        ]
+    query = _query_points(
+        x_grid.size,
+        center[0] + x_grid.ravel() * float(radius),
+        center[1] + y_grid.ravel() * float(radius),
     )
     sampled = _griddata_fill(
         coords[:, :2], np.asarray(values, dtype=np.float64), query
@@ -229,12 +244,11 @@ def _sample_3d_slice(
         y_norm = np.linspace(-1.0, 1.0, int(resolution))
         x_grid, y_grid = np.meshgrid(x_norm, y_norm)
         z_value = center[2] + float(plane_value_norm) * float(z_half_height)
-        query = np.column_stack(
-            [
-                center[0] + x_grid.ravel() * float(radius),
-                center[1] + y_grid.ravel() * float(radius),
-                np.full(x_grid.size, z_value, dtype=np.float64),
-            ]
+        query = _query_points(
+            x_grid.size,
+            center[0] + x_grid.ravel() * float(radius),
+            center[1] + y_grid.ravel() * float(radius),
+            z_value,
         )
         sampled = _griddata_fill(coords[:, :3], values, query).reshape(x_grid.shape)
         sampled[(x_grid**2 + y_grid**2) > 1.0] = np.nan
@@ -245,12 +259,11 @@ def _sample_3d_slice(
 
     x_grid, z_grid = np.meshgrid(x_norm, z_norm)
     y_value = center[1] + float(plane_value_norm) * float(radius)
-    query = np.column_stack(
-        [
-            center[0] + x_grid.ravel() * float(radius),
-            np.full(x_grid.size, y_value, dtype=np.float64),
-            center[2] + z_grid.ravel() * float(z_half_height),
-        ]
+    query = _query_points(
+        x_grid.size,
+        center[0] + x_grid.ravel() * float(radius),
+        y_value,
+        center[2] + z_grid.ravel() * float(z_half_height),
     )
     sampled = _griddata_fill(coords[:, :3], values, query).reshape(x_grid.shape)
     sampled[np.abs(x_grid) > 1.0] = np.nan

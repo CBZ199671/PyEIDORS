@@ -2,16 +2,59 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+
 import numpy as np
 import pytest
 from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
+import pyeidors.inverse.prior.rtr as rtr_module
 from pyeidors.inverse.prior import (
     as_rtr_prior,
     load_rtr_prior_artifact,
     write_rtr_prior_artifact,
 )
+
+
+def _legacy_rtr_signature(payload, *, metadata: dict) -> str:
+    semantic = json.dumps(
+        {
+            "schema": rtr_module.RTR_PRIOR_SCHEMA,
+            "signature_hint": metadata.get("signature_hint"),
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+    if sparse.issparse(payload):
+        mat = payload.tocsr()
+        encoded = (
+            semantic
+            + b"|"
+            + str(mat.dtype).encode()
+            + b"|"
+            + json.dumps(list(mat.shape)).encode()
+            + b"|"
+            + np.ascontiguousarray(mat.indptr, dtype=np.int64).tobytes()
+            + b"|"
+            + np.ascontiguousarray(mat.indices, dtype=np.int64).tobytes()
+            + b"|"
+            + np.ascontiguousarray(mat.data, dtype=np.float64).tobytes()
+        )
+        return hashlib.sha256(encoded).hexdigest()
+    arr = np.ascontiguousarray(payload, dtype=np.float64)
+    encoded = (
+        semantic
+        + b"|"
+        + str(arr.dtype).encode()
+        + b"|"
+        + json.dumps(list(arr.shape)).encode()
+        + b"|"
+        + arr.tobytes()
+    )
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def test_rtr_prior_accepts_dense_sparse_operator_and_callable() -> None:
@@ -67,6 +110,26 @@ def test_rtr_prior_infers_diagonal_shape_and_guards_dense_materialization() -> N
     np.testing.assert_allclose(call_prior.as_RtR(dense=True), np.eye(3))
 
 
+def test_v288_rtr_prior_dense_materialization_direct_fills(monkeypatch) -> None:
+    expected = np.diag([2.0, 3.0, 4.0])
+    prior = as_rtr_prior(
+        lambda v: np.array([2.0, 3.0, 4.0], dtype=float) * np.asarray(v, dtype=float),
+        shape=(3, 3),
+        metadata={"signature_hint": "diag-callable"},
+    )
+
+    def _fail_dense_helper(*_args, **_kwargs):
+        raise AssertionError("RtR dense materialization must direct-fill columns")
+
+    monkeypatch.setattr(rtr_module.np, "eye", _fail_dense_helper)
+    monkeypatch.setattr(rtr_module.np, "column_stack", _fail_dense_helper)
+
+    np.testing.assert_allclose(prior.as_RtR(dense=True), expected)
+    source = inspect.getsource(rtr_module.RtRPrior.as_RtR)
+    assert "np.eye" not in source
+    assert "np.column_stack" not in source
+
+
 def test_rtr_prior_signature_hint_distinguishes_semantically_named_explicit_priors() -> (
     None
 ):
@@ -83,6 +146,53 @@ def test_rtr_prior_signature_hint_distinguishes_semantically_named_explicit_prio
     )
 
     assert laplace.signature_hash != graph_ltl.signature_hash
+
+
+def test_rtr_prior_signatures_stream_payloads_without_tobytes_copy() -> None:
+    dense = np.array([[2.0, 0.5], [0.5, 3.0]], dtype=float)
+    dense_metadata = {"signature_hint": "dense-stream"}
+    dense_prior = as_rtr_prior(dense, metadata=dense_metadata)
+    assert dense_prior.signature_hash == _legacy_rtr_signature(
+        dense, metadata=dense_metadata
+    )
+
+    sparse_matrix = sparse.csr_matrix(
+        np.array(
+            [[4.0, 0.0, -1.0], [0.0, 5.0, 0.25], [-1.0, 0.25, 6.0]],
+            dtype=float,
+        )
+    )
+    sparse_metadata = {"signature_hint": "sparse-stream"}
+    sparse_prior = as_rtr_prior(sparse_matrix, metadata=sparse_metadata)
+    assert sparse_prior.signature_hash == _legacy_rtr_signature(
+        sparse_matrix, metadata=sparse_metadata
+    )
+
+    source = inspect.getsource(rtr_module._signature_for_payload)
+    assert "update_digest_with_array_payload" in source
+    assert ".tobytes(" not in source
+    assert "np.ascontiguousarray" not in source
+
+
+def test_v488_rtr_prior_guards_use_bounded_finite_scans() -> None:
+    apply_source = inspect.getsource(rtr_module.RtRPrior.apply)
+    diag_source = inspect.getsource(rtr_module.RtRPrior.diag)
+    as_prior_source = inspect.getsource(rtr_module.as_rtr_prior)
+    sparse_source = inspect.getsource(rtr_module._validate_sparse_payload)
+    vector_source = inspect.getsource(rtr_module._as_vector)
+
+    assert "all_finite_values(result)" in apply_source
+    assert "np.isfinite(result).all()" not in apply_source
+    assert "all_finite_values(diag)" in diag_source
+    assert "np.isfinite(diag).all()" not in diag_source
+    assert "np.diag(self._payload)" not in diag_source
+    assert "self._payload.diagonal()" in diag_source
+    assert "all_finite_values(array)" in as_prior_source
+    assert "np.isfinite(array).all()" not in as_prior_source
+    assert "all_finite_values(matrix.data)" in sparse_source
+    assert "np.isfinite(matrix.data).all()" not in sparse_source
+    assert "all_finite_values(vector)" in vector_source
+    assert "np.isfinite(vector).all()" not in vector_source
 
 
 def test_rtr_prior_hdf5_round_trips_explicit_priors(tmp_path) -> None:

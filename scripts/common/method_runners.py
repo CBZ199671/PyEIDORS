@@ -65,6 +65,22 @@ from .recon_cli_models import (
 )
 
 
+def _stack_frame_rows(*frames: np.ndarray) -> np.ndarray:
+    if not frames:
+        return np.empty((0, 0), dtype=np.float64)
+    arrays = [np.asarray(frame).reshape(-1) for frame in frames]
+    n_cols = arrays[0].size
+    for idx, arr in enumerate(arrays[1:], start=1):
+        if arr.size != n_cols:
+            raise ValueError(
+                f"frame {idx} has {arr.size} measurements, expected {n_cols}"
+            )
+    out = np.empty((len(arrays), n_cols), dtype=np.result_type(*arrays))
+    for row, arr in enumerate(arrays):
+        out[row, :] = arr
+    return out
+
+
 def _default(value: Optional[float], fallback: float) -> float:
     return fallback if value is None else float(value)
 
@@ -408,7 +424,7 @@ def run_gn_difference_cases(
                     use_part=str(args.use_part),
                     measurement_gain=float(args.measurement_gain),
                 )
-                vh_vi = np.vstack([vh, vi])
+                vh_vi = _stack_frame_rows(vh, vi)
                 vh_vi_aligned, _ = align_frames_polarity(vh_vi, ctx["base_meas"])
                 vh, vi = vh_vi_aligned
             else:
@@ -629,7 +645,9 @@ def run_sparse_bayes_difference_cases(
                     )
                     cols_to_align = [args.reference_col, args.target_col, calib_col]
                     unique_cols = list(dict.fromkeys(cols_to_align))
-                    selected = np.vstack([raw_measurements[:, c] for c in unique_cols])
+                    selected = _stack_frame_rows(
+                        *(raw_measurements[:, c] for c in unique_cols)
+                    )
                     aligned, _ = align_frames_polarity(
                         selected,
                         baseline_vector,
@@ -676,7 +694,7 @@ def run_sparse_bayes_difference_cases(
                         target_frame,
                         baseline_vector,
                     )
-                    diff_measurements = np.vstack([ref_frame, target_frame])
+                    diff_measurements = _stack_frame_rows(ref_frame, target_frame)
 
                 diff_dataset = sparse_bayes_runner.measurement_to_dataset(
                     diff_measurements,

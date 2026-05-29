@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.forward.eit_forward_model import EITForwardModel
+import pyeidors.physics.unit_consistency as unit_module
 from pyeidors.physics import UnitCheckLevel, run_unit_consistency_checks
 
 
@@ -26,6 +29,15 @@ def _build_forward_model(
     )
     z = np.full(16, 1e-5, dtype=float)
     return EITForwardModel(n_elec=16, pattern_config=config, z=z, mesh=eit_mesh)
+
+
+def test_v498_unit_consistency_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(unit_module.run_unit_consistency_checks)
+
+    assert "all_finite_values(extents_m)" in source
+    assert "all_finite_values(lengths)" in source
+    assert "np.all(np.isfinite(extents_m))" not in source
+    assert "np.all(np.isfinite(lengths))" not in source
 
 
 def test_unit_consistency_checks_happy_path(eit_mesh):

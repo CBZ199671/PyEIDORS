@@ -10,11 +10,11 @@ import numpy as np
 
 from pyeidors.data._temporal_core import (
     as_frame_batch as _as_frame_batch,
+    as_real_float_array as _as_real_float_array,
     positive_int as _positive_int,
     unit_interval as _unit_interval,
 )
-
-from .tv import TVRefinementResult, refine_tv_pdhg
+from pyeidors.utils.numeric_ops import all_finite_values
 
 
 @dataclass(frozen=True)
@@ -28,6 +28,33 @@ class TemporalTVPipelineResult:
         return np.asarray(self.values, dtype=dtype)
 
 
+def _stack_frame_rows_direct(
+    rows: list[np.ndarray],
+    *,
+    dtype: Any | None = None,
+    name: str = "rows",
+) -> np.ndarray:
+    if not rows:
+        raise ValueError(f"{name} must contain at least one row.")
+    if dtype is None:
+        first_raw = _as_real_float_array(rows[0]).reshape(-1)
+        resolved_dtype = first_raw.dtype
+        first = np.ascontiguousarray(first_raw)
+    else:
+        resolved_dtype = np.dtype(dtype)
+        first = np.asarray(rows[0], dtype=resolved_dtype).reshape(-1)
+    out = np.empty((len(rows), first.size), dtype=resolved_dtype)
+    out[0, :] = first
+    for row_idx in range(1, len(rows)):
+        row = np.asarray(rows[row_idx], dtype=resolved_dtype).reshape(-1)
+        if row.size != first.size:
+            raise ValueError(
+                f"{name} row {row_idx} length {row.size} does not match {first.size}."
+            )
+        out[row_idx, :] = row
+    return np.ascontiguousarray(out, dtype=resolved_dtype)
+
+
 def moving_average_frames(frames: Any, *, window: int = 3) -> np.ndarray:
     """Causal moving-average smoothing over reconstruction frames."""
 
@@ -35,14 +62,16 @@ def moving_average_frames(frames: Any, *, window: int = 3) -> np.ndarray:
     width = _positive_int(window, "window")
     n_frames = batch.shape[0]
     if n_frames == 0:
-        return np.empty_like(batch, dtype=np.float64)
-    csum = np.empty((n_frames + 1, batch.shape[1]), dtype=np.float64)
+        return np.empty_like(batch)
+    csum = np.empty((n_frames + 1, batch.shape[1]), dtype=batch.dtype)
     csum[0] = 0.0
-    np.cumsum(batch, axis=0, dtype=np.float64, out=csum[1:])
-    indices = np.arange(n_frames)
-    starts = np.maximum(0, indices + 1 - width)
-    denom = (indices + 1 - starts).astype(np.float64).reshape(-1, 1)
-    return (csum[indices + 1] - csum[starts]) / denom
+    np.cumsum(batch, axis=0, dtype=batch.dtype, out=csum[1:])
+    out = np.empty_like(batch)
+    for frame_idx in range(n_frames):
+        start = max(0, frame_idx + 1 - width)
+        np.subtract(csum[frame_idx + 1], csum[start], out=out[frame_idx])
+        out[frame_idx] /= frame_idx + 1 - start
+    return out
 
 
 def exponential_smooth_frames(
@@ -55,20 +84,23 @@ def exponential_smooth_frames(
 
     batch, _ = _as_frame_batch(frames)
     alpha_value = _unit_interval(alpha, "alpha")
-    out = np.empty_like(batch, dtype=np.float64)
+    out = np.empty_like(batch)
     if initial is None:
         previous = batch[0].copy()
     else:
-        previous = np.asarray(initial, dtype=np.float64).reshape(-1)
+        previous = np.asarray(_as_real_float_array(initial), dtype=batch.dtype).reshape(
+            -1
+        )
         if previous.size != batch.shape[1]:
             raise ValueError(
                 f"initial length {previous.size} does not match {batch.shape[1]}."
             )
-        if not np.isfinite(previous).all():
+        if not all_finite_values(previous):
             raise FloatingPointError("initial contains non-finite values.")
     for idx, frame in enumerate(batch):
-        current = alpha_value * frame + (1.0 - alpha_value) * previous
-        out[idx] = current
+        current = out[idx]
+        np.multiply(frame, alpha_value, out=current)
+        current += (1.0 - alpha_value) * previous
         previous = current
     return out
 
@@ -110,6 +142,8 @@ def postprocess_rm_frames(
         raise ValueError("temporal must be one of: none, moving_average, exponential.")
 
     if apply_tv:
+        from .tv import TVRefinementResult, refine_tv_pdhg
+
         refined_rows: list[np.ndarray] = []
         tv_metadata: list[dict[str, Any]] = []
         for frame in smoothed:
@@ -125,9 +159,13 @@ def postprocess_rm_frames(
                 seed_source=f"temporal_{temporal_mode}",
             )
             assert isinstance(result, TVRefinementResult)
-            refined_rows.append(np.asarray(result.values, dtype=np.float64))
+            refined_rows.append(np.asarray(result.values, dtype=smoothed.dtype))
             tv_metadata.append(dict(result.metadata))
-        values = np.vstack(refined_rows)
+        values = _stack_frame_rows_direct(
+            refined_rows,
+            dtype=smoothed.dtype,
+            name="refined_rows",
+        )
     else:
         values = smoothed
         tv_metadata = []

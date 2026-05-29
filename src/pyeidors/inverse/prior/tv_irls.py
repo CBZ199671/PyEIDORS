@@ -11,10 +11,12 @@ from typing import Any, Mapping
 import numpy as np
 from scipy import sparse
 
+from pyeidors.cache.keys import update_digest_with_array_payload
 from pyeidors.data.channels import (
     apply_measurement_contract_to_jacobian,
     apply_measurement_contract_to_vector,
 )
+from pyeidors.utils.numeric_ops import all_finite_values
 
 from .laplace import graph_difference_operator
 from .rtr import RtRPrior, as_rtr_prior
@@ -36,6 +38,28 @@ class TVIRLSResult:
         return np.asarray(self.values, dtype=dtype)
 
 
+def _stack_frame_rows_direct(
+    rows: list[np.ndarray],
+    *,
+    dtype: Any = np.float64,
+    name: str = "rows",
+) -> np.ndarray:
+    if not rows:
+        raise ValueError(f"{name} must contain at least one row.")
+    resolved_dtype = np.dtype(dtype)
+    first = np.asarray(rows[0], dtype=resolved_dtype).reshape(-1)
+    out = np.empty((len(rows), first.size), dtype=resolved_dtype)
+    out[0, :] = first
+    for row_idx in range(1, len(rows)):
+        row = np.asarray(rows[row_idx], dtype=resolved_dtype).reshape(-1)
+        if row.size != first.size:
+            raise ValueError(
+                f"{name} row {row_idx} length {row.size} does not match {first.size}."
+            )
+        out[row_idx, :] = row
+    return np.ascontiguousarray(out, dtype=resolved_dtype)
+
+
 def tv_irls_prior_from_state(
     mesh_or_difference: Any,
     state: Any,
@@ -53,12 +77,12 @@ def tv_irls_prior_from_state(
     n_parameters = int(difference.shape[1])
     state_vec = _state_vector(state, n_parameters=n_parameters)
     gradient = np.asarray(difference @ state_vec, dtype=np.float64).reshape(-1)
-    if not np.isfinite(gradient).all():
+    if not all_finite_values(gradient):
         raise FloatingPointError("TV-IRLS graph gradient contains non-finite values.")
     weights = 1.0 / np.sqrt(
         np.maximum(gradient * gradient + effective_beta, beta_floor)
     )
-    if not np.isfinite(weights).all():
+    if not all_finite_values(weights):
         raise FloatingPointError("TV-IRLS weights contain non-finite values.")
     matrix = (
         difference.T @ sparse.diags(weights, 0, format="csr") @ difference
@@ -308,8 +332,10 @@ def solve_tv_irls_batch(
         )
         for idx, frame in enumerate(frame_batch)
     ]
-    values = np.vstack(
-        [np.asarray(result.values, dtype=np.float64) for result in results]
+    values = _stack_frame_rows_direct(
+        [np.asarray(result.values, dtype=np.float64) for result in results],
+        dtype=np.float64,
+        name="tv_irls_frame_values",
     )
     if was_vector:
         values = values.reshape(-1)
@@ -431,7 +457,7 @@ def _difference_operator(
         difference = graph_difference_operator(mesh_or_difference, weight=graph_weight)
     if difference.ndim != 2 or difference.shape[1] == 0:
         raise ValueError("TV-IRLS difference operator must be non-empty 2D.")
-    if difference.nnz and not np.isfinite(difference.data).all():
+    if difference.nnz and not all_finite_values(difference.data):
         raise FloatingPointError(
             "TV-IRLS difference operator contains non-finite data."
         )
@@ -464,7 +490,7 @@ def _state_vector(value: Any, *, n_parameters: int) -> np.ndarray:
         raise ValueError(
             f"TV-IRLS state length {vector.size} does not match {n_parameters}."
         )
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError("TV-IRLS state contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
 
@@ -473,7 +499,7 @@ def _measurement_vector(value: Any) -> np.ndarray:
     vector = np.asarray(value, dtype=np.float64).reshape(-1)
     if vector.size == 0:
         raise ValueError("measurement must be non-empty.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError("measurement contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
 
@@ -483,11 +509,11 @@ def _frame_batch(value: Any) -> tuple[np.ndarray, bool]:
     if arr.ndim == 1:
         if arr.size == 0:
             raise ValueError("frames must be a non-empty 1D or 2D array.")
-        if not np.isfinite(arr).all():
+        if not all_finite_values(arr):
             raise FloatingPointError("frames contain non-finite values.")
         return np.ascontiguousarray(arr.reshape(1, -1), dtype=np.float64), True
     if arr.ndim == 2 and 0 not in arr.shape:
-        if not np.isfinite(arr).all():
+        if not all_finite_values(arr):
             raise FloatingPointError("frames contain non-finite values.")
         return np.ascontiguousarray(arr, dtype=np.float64), False
     raise ValueError("frames must be a non-empty 1D or 2D array.")
@@ -497,25 +523,26 @@ def _initial_batch(initial: Any | None, *, n_frames: int) -> np.ndarray | None:
     if initial is None:
         return None
     arr = np.asarray(initial, dtype=np.float64)
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError("initial contains non-finite values.")
     if arr.ndim == 1:
-        return np.broadcast_to(arr.reshape(1, -1), (int(n_frames), arr.size)).copy()
+        batch = np.empty((int(n_frames), arr.size), dtype=np.float64)
+        np.copyto(batch, arr.reshape(1, -1), casting="no")
+        return batch
     if arr.ndim == 2 and arr.shape[0] == int(n_frames):
         return np.ascontiguousarray(arr, dtype=np.float64)
     raise ValueError("initial must be a 1D state or a frame-aligned 2D state batch.")
 
 
 def _digest_array(value: np.ndarray) -> str:
-    arr = np.ascontiguousarray(np.asarray(value, dtype=np.float64))
-    payload = (
-        str(arr.dtype).encode()
-        + b"|"
-        + json.dumps([int(v) for v in arr.shape]).encode()
-        + b"|"
-        + arr.tobytes()
-    )
-    return hashlib.sha256(payload).hexdigest()
+    arr = np.asarray(value, dtype=np.float64)
+    digest = hashlib.sha256()
+    digest.update(str(arr.dtype).encode())
+    digest.update(b"|")
+    digest.update(json.dumps([int(v) for v in arr.shape]).encode())
+    digest.update(b"|")
+    update_digest_with_array_payload(digest, arr)
+    return digest.hexdigest()
 
 
 def _is_nonincreasing(values: list[float] | tuple[float, ...]) -> bool:

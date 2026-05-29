@@ -3,15 +3,43 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-PROFILE_ARG=(--cpu)
+PROFILE_ARG=(--auto)
 if (($# > 0)); then
   case "$1" in
+    --auto|auto)
+      PROFILE_ARG=(--auto)
+      shift
+      ;;
     --gpu|gpu)
       PROFILE_ARG=(--gpu)
       shift
       ;;
     --cpu|cpu)
       PROFILE_ARG=(--cpu)
+      shift
+      ;;
+    --real-gpu|real-gpu)
+      PROFILE_ARG=(--real-gpu)
+      shift
+      ;;
+    --real-cpu|real-cpu)
+      PROFILE_ARG=(--real-cpu)
+      shift
+      ;;
+    --complex-gpu|--complex128-gpu|complex-gpu|complex128-gpu)
+      PROFILE_ARG=(--complex128-gpu)
+      shift
+      ;;
+    --complex64-gpu|complex64-gpu)
+      PROFILE_ARG=(--complex64-gpu)
+      shift
+      ;;
+    --complex-cpu|--complex128-cpu|complex-cpu|complex128-cpu)
+      PROFILE_ARG=(--complex128-cpu)
+      shift
+      ;;
+    --complex64-cpu|complex64-cpu)
+      PROFILE_ARG=(--complex64-cpu)
       shift
       ;;
   esac

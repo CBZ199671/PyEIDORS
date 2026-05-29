@@ -14,6 +14,7 @@ import gc
 import os
 from unittest.mock import patch
 
+import numpy as np
 import pytest
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import (
@@ -341,6 +342,79 @@ def test_mesh_setup_panel_dimension_toggle_no_crash() -> None:
     panel.close()
 
 
+def test_mesh_setup_panel_accepts_complex_admittance_inputs() -> None:
+    from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel
+
+    panel = MeshSetupPanel()
+    panel._bg_cond_edit.setText("1+0.25j")
+    panel._contact_impedance_edit.setText("0.01+0.002j")
+    cfg = panel.get_config()
+
+    assert cfg["background_conductivity"] == pytest.approx(1.0 + 0.25j)
+    assert cfg["contact_impedance"] == pytest.approx(0.01 + 0.002j)
+
+    panel.set_config({"contact_impedance": [0.01 + 0.001j, 0.02 + 0.002j]})
+    cfg = panel.get_config()
+    assert cfg["contact_impedance"] == pytest.approx([0.01 + 0.001j, 0.02 + 0.002j])
+    panel.close()
+
+
+def test_inhomogeneity_table_accepts_complex_admittance() -> None:
+    from eit_app.ui.simulation.inhomogeneity_editor import InhomogeneityEditor
+
+    editor = InhomogeneityEditor()
+    editor._add_shape("circle")
+    index = editor._model.index(0, 7)
+
+    assert editor._model.setData(index, "2+0.5j")
+    assert editor.get_inhomogeneities()[0].conductivity == pytest.approx(2.0 + 0.5j)
+    assert editor._model.data(index) == "2+0.5j"
+    editor.close()
+
+
+def test_simulation_results_switches_to_complex_workspace_channels() -> None:
+    from eit_app.controllers.forward_solver_controller import ForwardSolverResult
+    from eit_app.ui.simulation.simulation_results_widget import SimulationResultsWidget
+
+    widget = SimulationResultsWidget()
+    result = ForwardSolverResult(
+        boundary_voltages=np.array([1.0 + 0.1j, 0.8 + 0.2j, 0.6 + 0.3j]),
+        ground_truth_conductivity=np.array([1.0 + 0.2j, 1.5 + 0.4j]),
+        node_coords=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        cell_connectivity=np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32),
+        n_elements=2,
+        n_measurements=3,
+    )
+
+    widget.update_forward_result(result)
+    _get_app().processEvents()
+
+    assert widget.current_result_mode() == "complex"
+    assert widget._channel_combo.isEnabled()
+
+    for idx in range(widget._channel_combo.count()):
+        if widget._channel_combo.itemData(idx) == "imag":
+            widget._channel_combo.setCurrentIndex(idx)
+            break
+    else:  # pragma: no cover - defensive guard for broken test setup
+        pytest.fail("imag channel not found")
+    _get_app().processEvents()
+    assert widget.current_channel() == "imag"
+
+    widget.update_inverse_result(
+        np.array([0.9 + 0.05j, 1.2 + 0.25j]),
+        result.node_coords,
+        result.cell_connectivity,
+        reconstructed_voltages=np.array([0.95 + 0.05j, 0.75 + 0.1j, 0.65 + 0.2j]),
+    )
+    _get_app().processEvents()
+    assert widget.current_result_mode() == "complex"
+    widget.close()
+
+
 def test_dataset_generator_panel_buttons_no_crash() -> None:
     from eit_app.ui.simulation.dataset_generator_panel import (
         DatasetGeneratorPanel,
@@ -580,6 +654,13 @@ def test_main_window_every_button_click_no_crash() -> None:
     # Acquisition panel — start/stop/single-frame need a connected device
     for attr in ("_start_btn", "_stop_btn", "_single_frame_btn"):
         btn = getattr(win._acq_panel, attr, None)
+        if btn is not None:
+            skip_objects.add(id(btn))
+    # Dataset generation starts a real FEM solve in a worker thread; cover the
+    # panel controls separately without launching that backend from this walk.
+    dataset_panel = win._dataset_tab.dataset_generator_panel
+    for attr in ("_gen_btn", "_cancel_btn"):
+        btn = getattr(dataset_panel.run_panel, attr, None)
         if btn is not None:
             skip_objects.add(id(btn))
 

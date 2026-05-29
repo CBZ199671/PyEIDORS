@@ -9,6 +9,7 @@ from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
 from pyeidors.inverse.dual_mesh import DualMesh
+from pyeidors.utils.numeric_ops import all_finite_values
 
 ArrayAction = Callable[[np.ndarray], Any]
 
@@ -179,8 +180,13 @@ class DualMeshJacobianOperator:
     def to_dense(self) -> np.ndarray:
         """Materialize dense coarse Jacobian for tests and tiny references."""
 
-        cols = [self.Jv(basis) for basis in np.eye(self.n_coarse_cells)]
-        return np.column_stack(cols)
+        dense = np.empty(self.shape, dtype=np.float64)
+        basis = np.zeros(self.n_coarse_cells, dtype=np.float64)
+        for col in range(self.n_coarse_cells):
+            basis[col] = 1.0
+            dense[:, col] = self.Jv(basis)
+            basis[col] = 0.0
+        return np.ascontiguousarray(dense, dtype=np.float64)
 
     def as_linear_operator(self) -> LinearOperator:
         """Return SciPy LinearOperator exposing ``Jv`` and ``JTr``."""
@@ -202,7 +208,7 @@ def _optional_matrix(action: Any) -> np.ndarray | None:
         matrix = np.asarray(action, dtype=np.float64)
     if matrix.ndim != 2 or 0 in matrix.shape:
         raise ValueError("matrix action must be a non-empty 2D array.")
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError("matrix action contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=np.float64)
 
@@ -274,7 +280,7 @@ def _as_vector(values: Any, *, name: str, expected: int | None = None) -> np.nda
         raise ValueError(f"{name} must be non-empty.")
     if expected is not None and vector.size != int(expected):
         raise ValueError(f"{name} length {vector.size} does not match {expected}.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
 

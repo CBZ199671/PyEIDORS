@@ -9,6 +9,8 @@ from typing import Any
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 EIDORS_NOISE_NORM_OPTION = "norm"
 
 
@@ -66,20 +68,24 @@ def _extract_measurements(value: Any, *, name: str) -> tuple[np.ndarray, Any | N
         arr = arr.reshape(1)
     if arr.size == 0:
         raise ValueError(f"{name} must be non-empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise FloatingPointError(f"{name} contains non-finite values")
-    return arr.copy(), template
+    return arr, template
 
 
 def _broadcast_v2(v2: np.ndarray, *, target_shape: tuple[int, ...]) -> np.ndarray:
     if v2.shape == target_shape:
-        return v2.copy()
+        return v2
 
     if len(target_shape) == 2 and v2.ndim == 1 and v2.shape[0] == target_shape[0]:
-        v2 = v2[:, None]
+        out = np.empty(target_shape, dtype=np.float64)
+        out[...] = v2.reshape(-1, 1)
+        return out
 
+    out = np.empty(target_shape, dtype=np.float64)
     try:
-        return np.broadcast_to(v2, target_shape).astype(np.float64, copy=True)
+        np.copyto(out, v2, casting="unsafe")
+        return out
     except ValueError as exc:
         raise ValueError(
             "v2 measurements must match v1 shape or be broadcastable to v1 shape: "
@@ -101,7 +107,7 @@ def _eidors_noise_signal(
     else:
         raise ValueError("options must be None or 'norm'")
 
-    if not np.all(np.isfinite(signal)):
+    if not all_finite_values(signal):
         raise FloatingPointError("EIDORS noise signal contains non-finite values")
     return np.asarray(signal, dtype=np.float64)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import json
 import math
 from pathlib import Path
@@ -11,6 +12,7 @@ import sys
 
 import numpy as np
 
+import pyeidors.data.voltage_digit_sweep as voltage_sweep_module
 from pyeidors.data.eit_digit_metrics import build_surrogate_linearized_model
 from pyeidors.data.voltage_digit_sweep import (
     keep_significant_digits,
@@ -21,6 +23,13 @@ from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_v497_voltage_sweep_vector_validator_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(voltage_sweep_module._as_float_vector)
+
+    assert "all_finite_values(arr)" in source
+    assert "np.all(np.isfinite(arr))" not in source
 
 
 def test_keep_significant_digits_truncates_like_word_table() -> None:

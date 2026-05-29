@@ -61,9 +61,13 @@ class MeasurementDataset:
     data_type: str = "real"
 
     def __post_init__(self) -> None:
-        self.measurements = self._as_read_only(
-            np.asarray(self.measurements, dtype=float)
+        raw_measurements = np.asarray(self.measurements)
+        measurements = (
+            np.asarray(raw_measurements)
+            if np.iscomplexobj(raw_measurements)
+            else np.asarray(raw_measurements, dtype=np.float64)
         )
+        self.measurements = self._as_read_only(measurements)
         self.stim_matrix = self._as_read_only(np.asarray(self.stim_matrix, dtype=float))
         self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
         self.metadata = dict(self.metadata)
@@ -198,7 +202,12 @@ class MeasurementDataset:
     def _normalize_measurements(
         measurements: np.ndarray | Sequence[Sequence[float]],
     ) -> np.ndarray:
-        array = np.asarray(measurements, dtype=float)
+        raw = np.asarray(measurements)
+        array = (
+            np.asarray(raw)
+            if np.iscomplexobj(raw)
+            else np.asarray(raw, dtype=np.float64)
+        )
         if array.ndim == 1:
             array = array.reshape(1, -1)
         if array.ndim != 2:

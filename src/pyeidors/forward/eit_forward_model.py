@@ -23,12 +23,18 @@ except ImportError:  # pragma: no cover
     PETSc = None
 
 from ..data.structures import EITData, EITImage, EITMesh, PatternConfig
+from ..cache.keys import update_digest_with_array_payload
 from ..electrodes.patterns import StimMeasPatternManager
 from ..femx import create_ds_measure
+from ..utils.numeric_ops import (
+    all_finite_values,
+    has_nonzero_imaginary as _array_has_nonzero_imaginary,
+)
 from .cuda_structured_backend import (
     CudaStructuredForwardBackend,
     resolve_cuda_structured_runtime,
 )
+from .complex_support import petsc_scalar_dtype, runtime_scalar_summary
 from .process_setup_cache import (
     ForwardStaticSetupBundle,
     build_process_forward_setup_key,
@@ -41,6 +47,33 @@ from ..perf.forward_solver_policy import (
 )
 from ..perf.policy import DEFAULT_FORWARD_BACKEND, normalize_forward_backend
 from ..physics.current_drive import resolve_electrode_lengths_m
+
+
+def _nonzero_index_value_arrays(
+    values: np.ndarray,
+    *,
+    index_dtype=np.int32,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return non-zero indices and matching values without advanced indexing."""
+    arr = np.asarray(values).reshape(-1)
+    count = 0
+    for raw_value in np.nditer(arr, flags=["refs_ok"], op_flags=["readonly"]):
+        if raw_value.item() != 0:
+            count += 1
+
+    indices = np.empty(count, dtype=index_dtype)
+    out_values = np.empty(count, dtype=arr.dtype)
+    out_pos = 0
+    for idx, raw_value in enumerate(
+        np.nditer(arr, flags=["refs_ok"], op_flags=["readonly"])
+    ):
+        value = raw_value.item()
+        if value == 0:
+            continue
+        indices[out_pos] = idx
+        out_values[out_pos] = value
+        out_pos += 1
+    return indices, out_values
 
 
 @dataclass(frozen=True)
@@ -67,6 +100,7 @@ class LinearBackendConfig:
     forward_pc_refresh_lag: int = 0
     forward_mat_solve_min_patterns: int = 0
     forward_template_reuse: bool = False
+    cuda_dense_fallback_max_gib: float = 2.0
 
     @classmethod
     def from_dict(cls, payload: dict | None) -> "LinearBackendConfig":
@@ -116,6 +150,9 @@ class LinearBackendConfig:
                 payload.get("forward_mat_solve_min_patterns", 0) or 0
             ),
             forward_template_reuse=bool(payload.get("forward_template_reuse", False)),
+            cuda_dense_fallback_max_gib=float(
+                payload.get("cuda_dense_fallback_max_gib", 2.0) or 2.0
+            ),
         )
 
 
@@ -183,6 +220,39 @@ class ForwardKSPSession:
             "reuse_preconditioner_applied": bool(self.reuse_applied),
         }
 
+    def as_observability(
+        self,
+        *,
+        cache_hit: bool,
+        session_reused: bool,
+        setup_seconds: float,
+        rhs_count: int,
+        rhs_kind: str = "",
+    ) -> dict[str, object]:
+        return {
+            "schema": "pyeidors-forward-ksp-session-telemetry-v1",
+            "backend": self.backend_name,
+            "ksp_type": self.ksp_type,
+            "pc_type": self.pc_type,
+            "factor_solver_type": self.factor_solver_type,
+            "solve_mat_type": self.solve_mat_type,
+            "structural_fingerprint": self.structural_fingerprint,
+            "structural_fingerprint_short": self.structural_fingerprint[:12],
+            "cache_hit": bool(cache_hit),
+            "session_reused": bool(session_reused),
+            "reuse_requested": bool(self.reuse_requested),
+            "reuse_applied": bool(self.reuse_applied),
+            "refresh_triggered": bool(self.last_refresh_triggered),
+            "refresh_reason": self.last_refresh_reason,
+            "solves_since_setup": int(self.solves_since_setup),
+            "total_setups": int(self.total_setups),
+            "total_solves": int(self.total_solves),
+            "last_iter_count": self.last_iter_count,
+            "setup_seconds": float(setup_seconds),
+            "rhs_count": int(rhs_count),
+            "rhs_kind": str(rhs_kind),
+        }
+
 
 def _hash_mesh_content(dolfinx_mesh) -> str:
     """Best-effort content hash for an in-memory DOLFINx mesh.
@@ -198,9 +268,9 @@ def _hash_mesh_content(dolfinx_mesh) -> str:
         geometry = getattr(dolfinx_mesh, "geometry", None)
         coords = getattr(geometry, "x", None) if geometry is not None else None
         if coords is not None:
-            coord_arr = np.ascontiguousarray(np.asarray(coords), dtype=np.float64)
+            coord_arr = np.asarray(coords, dtype=np.float64)
             if coord_arr.size:
-                hasher.update(coord_arr.tobytes())
+                update_digest_with_array_payload(hasher, coord_arr)
                 touched = True
         topology = getattr(dolfinx_mesh, "topology", None)
         if topology is not None:
@@ -220,13 +290,58 @@ def _hash_mesh_content(dolfinx_mesh) -> str:
                     conn_obj = None
             conn_arr = getattr(conn_obj, "array", None)
             if conn_arr is not None:
-                cells = np.ascontiguousarray(np.asarray(conn_arr), dtype=np.int64)
+                cells = np.asarray(conn_arr, dtype=np.int64)
                 if cells.size:
-                    hasher.update(cells.tobytes())
+                    update_digest_with_array_payload(hasher, cells)
                     touched = True
     except Exception:
         pass
     return hasher.hexdigest() if touched else ""
+
+
+def _has_nonzero_imaginary(values: np.ndarray) -> bool:
+    """Return True when values carry a meaningful imaginary component."""
+
+    return _array_has_nonzero_imaginary(values)
+
+
+def _coerce_scalar_array(
+    values,
+    scalar_dtype: np.dtype,
+    *,
+    name: str,
+    copy: bool = False,
+) -> np.ndarray:
+    """Coerce values to the active PETSc scalar dtype without dropping phase."""
+
+    dtype = np.dtype(scalar_dtype)
+    array = np.asarray(values)
+    if not np.issubdtype(dtype, np.complexfloating) and _has_nonzero_imaginary(array):
+        raise RuntimeError(
+            f"{name} contains complex values, but the active PETSc/DOLFINx "
+            f"scalar dtype is {dtype}. Enter `nix develop .#complex` "
+            "or `nix develop .#complex64` and retry."
+        )
+    if not np.issubdtype(dtype, np.complexfloating) and np.iscomplexobj(array):
+        array = np.real(array)
+    out = np.asarray(array, dtype=dtype)
+    if copy:
+        out = out.copy()
+    if not all_finite_values(out):
+        raise ValueError(f"{name} contains non-finite values")
+    return out
+
+
+def _hash_scalar_array(values, scalar_dtype: np.dtype) -> str:
+    """Hash an array with the active PETSc scalar dtype and shape metadata."""
+
+    array = np.ascontiguousarray(
+        _coerce_scalar_array(values, np.dtype(scalar_dtype), name="cache array")
+    )
+    digest = hashlib.sha256()
+    digest.update(f"{array.dtype}:{array.shape}:".encode("utf-8"))
+    update_digest_with_array_payload(digest, array)
+    return digest.hexdigest()
 
 
 class EITForwardModel:
@@ -246,7 +361,9 @@ class EITForwardModel:
         potential_order: int = 1,
     ):
         self.n_elec = n_elec
-        self.z = np.asarray(z, dtype=float)
+        self.scalar_dtype = petsc_scalar_dtype()
+        self.is_complex = bool(np.issubdtype(self.scalar_dtype, np.complexfloating))
+        self.z = self._normalize_contact_impedance(z)
         try:
             self.potential_order = int(potential_order)
         except (TypeError, ValueError) as exc:
@@ -274,6 +391,13 @@ class EITForwardModel:
             forward_backend,
             default=DEFAULT_FORWARD_BACKEND,
         )
+        if self.forward_backend == "cuda_structured" and self.is_complex:
+            raise ValueError(
+                "cuda_structured forward backend is real-only. "
+                "Use forward_backend='dolfinx' with petsc_device='cuda' in "
+                "`nix develop .#complex-cuda` or `nix develop .#complex64-cuda` "
+                "for complex admittivity GPU CEM."
+            )
         if self.forward_backend == "cuda_structured" and self.potential_order != 1:
             raise ValueError(
                 "potential_order > 1 is supported by the DOLFINx forward backend; "
@@ -307,6 +431,7 @@ class EITForwardModel:
             z=self.z,
             pattern_config=deepcopy(pattern_config),
             potential_order=self.potential_order,
+            scalar_dtype=self.scalar_dtype,
         )
         self._static_setup_lookup = {
             "hit": False,
@@ -325,6 +450,7 @@ class EITForwardModel:
         self._petsc_backend_info["potential_order"] = self.potential_order
         self._petsc_backend_info["potential_space_family"] = "Lagrange"
         self._petsc_backend_info["conductivity_order"] = 0
+        self._petsc_backend_info.update(runtime_scalar_summary())
         self._petsc_backend_info["static_setup_lookup"] = dict(
             self._static_setup_lookup
         )
@@ -433,6 +559,42 @@ class EITForwardModel:
         self.u = ufl.TrialFunction(self.V)
         self.phi = ufl.TestFunction(self.V)
         self.M = bundle.electrode_matrix
+
+    def _active_scalar_dtype(self) -> np.dtype:
+        """Return this model's PETSc scalar dtype, defaulting for unit stubs."""
+
+        return np.dtype(getattr(self, "scalar_dtype", np.float64))
+
+    def _active_scalar_is_complex(self) -> bool:
+        return bool(
+            getattr(
+                self,
+                "is_complex",
+                np.issubdtype(self._active_scalar_dtype(), np.complexfloating),
+            )
+        )
+
+    def _scalar_value(self, value):
+        return self._active_scalar_dtype().type(value)
+
+    def _as_scalar_array(self, values, *, name: str, copy: bool = False) -> np.ndarray:
+        return _coerce_scalar_array(
+            values,
+            self._active_scalar_dtype(),
+            name=name,
+            copy=copy,
+        )
+
+    def _normalize_contact_impedance(self, z: np.ndarray) -> np.ndarray:
+        impedance = self._as_scalar_array(z, name="contact impedance").reshape(-1)
+        if impedance.size != int(self.n_elec):
+            raise ValueError(
+                f"Contact impedance length ({impedance.size}) does not match "
+                f"electrode count ({self.n_elec})"
+            )
+        if np.any(np.isclose(np.abs(impedance), 0.0)):
+            raise ValueError("contact impedance values must be non-zero")
+        return np.ascontiguousarray(impedance, dtype=self._active_scalar_dtype())
 
     @staticmethod
     def _solver_token(value: object, default: str = "auto") -> str:
@@ -599,9 +761,15 @@ class EITForwardModel:
     def _resolve_pattern_matrix(self, current_patterns=None) -> np.ndarray:
         """Return stimulation matrix with shape ``(n_patterns, n_elec)``."""
         if current_patterns is None:
-            matrix = np.asarray(self.pattern_manager.stim_matrix, dtype=float)
+            matrix = self._as_scalar_array(
+                self.pattern_manager.stim_matrix,
+                name="stimulation matrix",
+            )
         else:
-            matrix = np.asarray(current_patterns, dtype=float)
+            matrix = self._as_scalar_array(
+                current_patterns,
+                name="current_patterns",
+            )
             if matrix.ndim != 2:
                 raise ValueError("current_patterns must be a 2D array")
             if matrix.shape[1] == self.n_elec:
@@ -670,12 +838,16 @@ class EITForwardModel:
     def _compute_electrode_boundary_measures(self):
         """Compute electrode boundary measure (2D length / 3D area)."""
         measures = {}
-        one = fem.Constant(self.mesh, 1.0)
+        one = fem.Constant(self.mesh, self._scalar_value(1.0))
         for tag in self.electrode_tags:
             measure_local = fem.assemble_scalar(fem.form(one * self.ds_electrodes(tag)))
             measure = self.mesh.comm.allreduce(measure_local, op=MPI.SUM)
-            measures[tag] = float(measure)
-            if np.isclose(measure, 0.0):
+            measure_real = np.real_if_close(measure)
+            if np.iscomplexobj(measure_real):
+                measure_real = np.real(measure_real)
+            measure_float = float(measure_real)
+            measures[tag] = measure_float
+            if np.isclose(measure_float, 0.0):
                 warnings.warn(
                     f"Electrode boundary tag {tag} has zero measure, check mesh markers",
                     RuntimeWarning,
@@ -695,7 +867,8 @@ class EITForwardModel:
         matrix = system_matrix.tocsr()
         indptr = matrix.indptr.astype(np.int32, copy=False)
         indices = matrix.indices.astype(np.int32, copy=False)
-        values = matrix.data.astype(np.float64, copy=False)
+        scalar_type = getattr(PETSc, "ScalarType", matrix.data.dtype)
+        values = np.asarray(matrix.data, dtype=np.dtype(scalar_type))
         A = PETSc.Mat().createAIJ(size=matrix.shape, csr=(indptr, indices, values))
         A.assemblyBegin()
         A.assemblyEnd()
@@ -709,8 +882,11 @@ class EITForwardModel:
     @staticmethod
     def _actionable_cuda_guidance() -> str:
         return (
-            "Enter `nix develop .#cuda`, verify with "
-            "`python scripts/diagnostics/probe_petsc_cuda.py --require cuda`, and retry."
+            "Enter `nix develop .#cuda` for real-valued CUDA, or "
+            "`nix develop .#complex-cuda` / `nix develop .#complex64-cuda` "
+            "for complex-admittivity CUDA. Verify with "
+            "`python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty`, "
+            "and retry."
         )
 
     def _resolve_mpi_backend_info(self) -> dict[str, object]:
@@ -823,11 +999,14 @@ class EITForwardModel:
             "forward_pc_session_solves": None,
             "forward_pc_session_total_setups": None,
             "forward_pc_last_iter_count": None,
+            "forward_ksp_session": {},
             "capability": {},
             "petsc_hypre_available": False,
             "petsc_amgx_available": False,
             "petsc_amgx_cuda_candidate": False,
             "petsc_hypre_cuda_blacklisted": False,
+            "petsc_scalar_type": str(self._active_scalar_dtype()),
+            "petsc_scalar_is_complex": self._active_scalar_is_complex(),
         }
         info.update(mpi_info)
 
@@ -956,8 +1135,8 @@ class EITForwardModel:
     @staticmethod
     def _vec_to_numpy(vec) -> np.ndarray:
         if hasattr(vec, "array"):
-            return np.asarray(vec.array, dtype=float)
-        return np.asarray(vec.getArray(readonly=True), dtype=float)
+            return np.asarray(vec.array)
+        return np.asarray(vec.getArray(readonly=True))
 
     @staticmethod
     def _ensure_mat_type(mat, mat_type):
@@ -1149,8 +1328,8 @@ class EITForwardModel:
         try:
             gauge_matrix = self._petsc_to_csr(mat).tolil()
             constraint_row, reference_col = self._cuda_gauge_rows()
-            gauge_matrix[constraint_row, :] = 0.0
-            gauge_matrix[constraint_row, reference_col] = 1.0
+            gauge_matrix[constraint_row, :] = self._scalar_value(0.0)
+            gauge_matrix[constraint_row, reference_col] = self._scalar_value(1.0)
             fixed = self._csr_to_petsc(gauge_matrix.tocsr())
             self._set_backend_diagnostic(
                 gpu_constraint_strategy="reference-electrode-row"
@@ -1168,18 +1347,22 @@ class EITForwardModel:
         if not self._gpu_gauge_fix_enabled():
             return rhs_matrix
         constraint_row, _reference_col = self._cuda_gauge_rows()
-        rhs_matrix[constraint_row, :] = 0.0
+        rhs_matrix[constraint_row, :] = self._scalar_value(0.0)
         return rhs_matrix
 
     def _recenter_cuda_gauge_solution(self, sol_matrix: np.ndarray) -> np.ndarray:
         if not self._gpu_gauge_fix_enabled():
             return sol_matrix
-        sol = np.asarray(sol_matrix, dtype=float).copy()
+        sol = self._as_scalar_array(
+            sol_matrix,
+            name="cuda gauge solution",
+            copy=True,
+        )
         electrode_block = sol[self.dofs : self.dofs + self.n_elec, :]
         offsets = electrode_block.mean(axis=0, keepdims=True)
         sol[: self.dofs, :] -= offsets
         sol[self.dofs : self.dofs + self.n_elec, :] -= offsets
-        sol[self.dofs + self.n_elec, :] = 0.0
+        sol[self.dofs + self.n_elec, :] = self._scalar_value(0.0)
         return sol
 
     def _make_petsc_dense_solver_bundle(self, system_matrix):
@@ -1250,6 +1433,17 @@ class EITForwardModel:
         fallback_reason: str,
         solve_start: float,
     ) -> np.ndarray:
+        rhs_count = (
+            int(np.asarray(rhs_matrix).shape[1])
+            if np.asarray(rhs_matrix).ndim > 1
+            else 1
+        )
+        skip_reason = self._cuda_dense_lu_fallback_skip_reason(rhs_count=rhs_count)
+        if skip_reason:
+            raise RuntimeError(
+                "PETSc CUDA dense LU fallback skipped: "
+                f"{skip_reason}. {self._actionable_cuda_guidance()}"
+            )
         if PETSc is None:
             raise RuntimeError("petsc4py is required for CUDA dense LU fallback")
         dense_type = self._get_requested_dense_mat_type()
@@ -1274,7 +1468,7 @@ class EITForwardModel:
         )
         ksp.setUp()
 
-        rhs = np.asarray(rhs_matrix, dtype=float)
+        rhs = self._as_scalar_array(rhs_matrix, name="rhs_matrix")
         sol_matrix = np.zeros_like(rhs)
         b = self._ensure_vec_type(
             solve_mat.createVecRight(), self._get_requested_petsc_vec_type()
@@ -1324,7 +1518,57 @@ class EITForwardModel:
         )
         return self._recenter_cuda_gauge_solution(sol_matrix)
 
-    def _cuda_cem_requires_direct_solve(self, session: ForwardKSPSession) -> bool:
+    def _cuda_dense_lu_fallback_skip_reason(self, *, rhs_count: int = 1) -> str:
+        backend_info = getattr(self, "_petsc_backend_info", {}) or {}
+        if str(backend_info.get("petsc_device_effective", "cpu")) != "cuda":
+            return ""
+        try:
+            n_rows = int(self.dofs) + int(self.n_elec) + 1
+        except Exception:
+            n_rows = 0
+        if n_rows <= 0:
+            return ""
+        try:
+            dtype = np.dtype(self._active_scalar_dtype())
+        except Exception:
+            dtype = petsc_scalar_dtype()
+        rhs_cols = max(1, int(rhs_count))
+        dense_bytes = int(n_rows) * int(n_rows) * int(dtype.itemsize)
+        rhs_bytes = int(n_rows) * rhs_cols * int(dtype.itemsize) * 2
+        # LU factorization and PETSc dense conversion hold several buffers.  A
+        # conservative multiplier prevents GUI-scale complex runs from trying a
+        # dense CUDA matrix that cannot plausibly fit in VRAM.
+        estimated_bytes = int(dense_bytes * 4 + rhs_bytes)
+        estimated_gib = estimated_bytes / float(1024**3)
+        limit_gib = float(
+            getattr(self.backend_config, "cuda_dense_fallback_max_gib", 2.0) or 2.0
+        )
+        self._set_backend_diagnostic(
+            cuda_dense_lu_fallback_estimated_gib=estimated_gib,
+            cuda_dense_lu_fallback_max_gib=limit_gib,
+            cuda_dense_lu_fallback_rows=int(n_rows),
+            cuda_dense_lu_fallback_rhs_count=rhs_cols,
+            cuda_dense_lu_fallback_scalar_dtype=str(dtype),
+        )
+        if estimated_gib > limit_gib:
+            reason = (
+                "cuda_dense_lu_estimated_memory_exceeds_limit"
+                f":{estimated_gib:.2f}GiB>{limit_gib:.2f}GiB"
+            )
+            self._set_backend_diagnostic(
+                cuda_dense_lu_fallback_skipped=True,
+                cuda_dense_lu_fallback_skip_reason=reason,
+            )
+            return reason
+        self._set_backend_diagnostic(
+            cuda_dense_lu_fallback_skipped=False,
+            cuda_dense_lu_fallback_skip_reason="",
+        )
+        return ""
+
+    def _cuda_cem_requires_direct_solve(
+        self, session: ForwardKSPSession, *, rhs_count: int = 1
+    ) -> bool:
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         if str(backend_info.get("petsc_device_effective", "cpu")) != "cuda":
             return False
@@ -1332,7 +1576,19 @@ class EITForwardModel:
             return False
         ksp_type = str(session.ksp_type or "").strip().lower()
         pc_type = str(session.pc_type or "").strip().lower()
-        return not (ksp_type == "preonly" and pc_type in {"lu", "cholesky", "qr"})
+        requires_direct = not (
+            ksp_type == "preonly" and pc_type in {"lu", "cholesky", "qr"}
+        )
+        if not requires_direct:
+            return False
+        skip_reason = self._cuda_dense_lu_fallback_skip_reason(rhs_count=rhs_count)
+        if skip_reason:
+            self._set_backend_diagnostic(
+                gpu_fallback_reason=f"cuda_dense_lu_fallback_skipped:{skip_reason}",
+                fallback_reason=f"cuda_dense_lu_fallback_skipped:{skip_reason}",
+            )
+            return False
+        return True
 
     def _assemble_electrode_matrix(self):
         b_form = 0
@@ -1345,26 +1601,26 @@ class EITForwardModel:
 
         B = fem_petsc.assemble_matrix(fem.form(b_form))
         B.assemble()
-        M = self._petsc_to_csr(B)
+        M = self._petsc_to_csr(B).astype(self._active_scalar_dtype(), copy=False)
         M.resize(self.dofs + self.n_elec + 1, self.dofs + self.n_elec + 1)
-        M_lil = lil_matrix(M)
+        M_lil = lil_matrix(M, dtype=self._active_scalar_dtype())
 
         for i, electrode_tag in enumerate(self.electrode_tags):
             c_form = (
                 (-self.boundary_scale_to_m / self.z[i])
-                * self.phi
+                * ufl.conj(self.phi)
                 * self.ds_electrodes(electrode_tag)
             )
             C_vec = fem_petsc.assemble_vector(fem.form(c_form))
             C_vec.assemble()
-            C_i = np.asarray(C_vec.array, dtype=float)
+            C_i = self._as_scalar_array(C_vec.array, name="electrode coupling vector")
 
             M_lil[self.dofs + i, : self.dofs] = C_i
             M_lil[: self.dofs, self.dofs + i] = C_i
             electrode_len_m = float(self.electrode_lengths_m[i])
             M_lil[self.dofs + i, self.dofs + i] = (1.0 / self.z[i]) * electrode_len_m
-            M_lil[self.dofs + self.n_elec, self.dofs + i] = 1.0
-            M_lil[self.dofs + i, self.dofs + self.n_elec] = 1.0
+            M_lil[self.dofs + self.n_elec, self.dofs + i] = self._scalar_value(1.0)
+            M_lil[self.dofs + i, self.dofs + self.n_elec] = self._scalar_value(1.0)
 
         return csr_matrix(M_lil)
 
@@ -1401,20 +1657,31 @@ class EITForwardModel:
         for i, electrode_tag in enumerate(self.electrode_tags):
             c_form = (
                 (-self.boundary_scale_to_m / self.z[i])
-                * self.phi
+                * ufl.conj(self.phi)
                 * self.ds_electrodes(electrode_tag)
             )
             c_vec = self._assemble_form_vector(fem.form(c_form), vec_kind=vec_type)
-            c_i = self._vec_to_numpy(c_vec)
-            nz = np.flatnonzero(c_i)
+            c_i = self._as_scalar_array(
+                self._vec_to_numpy(c_vec),
+                name="electrode coupling vector",
+            )
+            nz, nz_values = _nonzero_index_value_arrays(c_i)
             row = self.dofs + i
             if nz.size > 0:
-                full_matrix.setValues(row, nz.astype(np.int32), c_i[nz])
-                full_matrix.setValues(nz.astype(np.int32), row, c_i[nz])
+                full_matrix.setValues(row, nz, nz_values)
+                full_matrix.setValues(nz, row, nz_values)
             electrode_len_m = float(self.electrode_lengths_m[i])
             full_matrix.setValue(row, row, (1.0 / self.z[i]) * electrode_len_m)
-            full_matrix.setValue(self.dofs + self.n_elec, row, 1.0)
-            full_matrix.setValue(row, self.dofs + self.n_elec, 1.0)
+            full_matrix.setValue(
+                self.dofs + self.n_elec,
+                row,
+                self._scalar_value(1.0),
+            )
+            full_matrix.setValue(
+                row,
+                self.dofs + self.n_elec,
+                self._scalar_value(1.0),
+            )
             if hasattr(c_vec, "destroy"):
                 try:
                     c_vec.destroy()
@@ -1437,7 +1704,11 @@ class EITForwardModel:
                     electrode_matrix.setOption(
                         PETSc.Mat.Option.NEW_NONZERO_ALLOCATION_ERR, False
                     )
-                electrode_matrix.setValue(ground_row, ground_row, 0.0)
+                electrode_matrix.setValue(
+                    ground_row,
+                    ground_row,
+                    self._scalar_value(0.0),
+                )
             except Exception:
                 pass
             electrode_matrix = self._ensure_mat_type(electrode_matrix, mat_type)
@@ -1458,7 +1729,7 @@ class EITForwardModel:
             csr=(
                 full_indptr,
                 np.asarray(indices, dtype=np.int32),
-                np.asarray(values, dtype=np.float64),
+                np.asarray(values, dtype=self._active_scalar_dtype()),
             ),
             comm=self.mesh.comm,
         )
@@ -1475,8 +1746,8 @@ class EITForwardModel:
         if self._gpu_gauge_fix_enabled():
             scipy_full = self._create_full_matrix_scipy(sigma).tolil()
             constraint_row, reference_col = self._cuda_gauge_rows()
-            scipy_full[constraint_row, :] = 0.0
-            scipy_full[constraint_row, reference_col] = 1.0
+            scipy_full[constraint_row, :] = self._scalar_value(0.0)
+            scipy_full[constraint_row, reference_col] = self._scalar_value(1.0)
             full_matrix = self._csr_to_petsc(scipy_full.tocsr())
             self._set_backend_diagnostic(
                 gpu_constraint_strategy="reference-electrode-row"
@@ -1580,8 +1851,7 @@ class EITForwardModel:
         return self._create_full_matrix_scipy(sigma)
 
     def _sigma_fingerprint(self, sigma: fem.Function) -> str:
-        values = np.ascontiguousarray(sigma.x.array, dtype=np.float64)
-        return hashlib.sha256(values.tobytes()).hexdigest()
+        return _hash_scalar_array(sigma.x.array, self._active_scalar_dtype())
 
     def _resolve_mat_solve_mode(self) -> str:
         """Normalize mat_solve_mode from backend config to 'on', 'off', or 'auto'."""
@@ -1663,17 +1933,16 @@ class EITForwardModel:
             "backend": self.linear_backend,
             "forward_backend": self.forward_backend,
             "sigma_hash": sigma_hash,
+            "scalar_dtype": str(self._active_scalar_dtype()),
+            "scalar_is_complex": self._active_scalar_is_complex(),
             "n_elec": self.n_elec,
             "potential_order": int(getattr(self, "potential_order", 1)),
             "n_patterns": n_patterns,
-            "z_hash": hashlib.sha256(
-                np.ascontiguousarray(self.z, dtype=np.float64).tobytes()
-            ).hexdigest(),
-            "pattern_hash": hashlib.sha256(
-                np.ascontiguousarray(
-                    self.pattern_manager.stim_matrix, dtype=np.float64
-                ).tobytes()
-            ).hexdigest(),
+            "z_hash": _hash_scalar_array(self.z, self._active_scalar_dtype()),
+            "pattern_hash": _hash_scalar_array(
+                self.pattern_manager.stim_matrix,
+                self._active_scalar_dtype(),
+            ),
             "backend_config": {
                 "solver_preset": getattr(
                     self.backend_config, "solver_preset", "custom"
@@ -1751,11 +2020,14 @@ class EITForwardModel:
                 "artifact": "forward_factor",
             }
 
-        rhs_matrix = np.zeros((self.dofs + self.n_elec + 1, n_patterns), dtype=float)
+        rhs_matrix = np.zeros(
+            (self.dofs + self.n_elec + 1, n_patterns),
+            dtype=self._active_scalar_dtype(),
+        )
         rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
         rhs_matrix = self._apply_cuda_gauge_fix_rhs(rhs_matrix)
         sol_matrix = lu.solve(rhs_matrix)
-        return np.asarray(sol_matrix, dtype=float)
+        return self._as_scalar_array(sol_matrix, name="SciPy solve result")
 
     def _solve_full_rhs_with_scipy(
         self,
@@ -1792,8 +2064,10 @@ class EITForwardModel:
                 "artifact": "forward_factor",
             }
 
-        rhs = self._apply_cuda_gauge_fix_rhs(np.asarray(rhs_matrix, dtype=float).copy())
-        return np.asarray(lu.solve(rhs), dtype=float)
+        rhs = self._apply_cuda_gauge_fix_rhs(
+            self._as_scalar_array(rhs_matrix, name="rhs_matrix", copy=True)
+        )
+        return self._as_scalar_array(lu.solve(rhs), name="SciPy solve result")
 
     def _make_petsc_solver_bundle(self, system_matrix):
         if PETSc is None:
@@ -1986,6 +2260,8 @@ class EITForwardModel:
                 petsc_backend.get("petsc_device_effective", "cpu")
             ),
             "potential_order": int(getattr(self, "potential_order", 1)),
+            "scalar_dtype": str(self._active_scalar_dtype()),
+            "scalar_is_complex": self._active_scalar_is_complex(),
             "dofs": int(getattr(self, "dofs", 0)),
             "n_elec": int(getattr(self, "n_elec", 0)),
         }
@@ -2200,6 +2476,12 @@ class EITForwardModel:
             forward_pc_session_solves=int(session.solves_since_setup),
             forward_pc_session_total_setups=cumulative_setup_count,
             forward_pc_last_iter_count=session.last_iter_count,
+            forward_ksp_session=session.as_observability(
+                cache_hit=cache_hit,
+                session_reused=bool(session_reused),
+                setup_seconds=setup_seconds,
+                rhs_count=int(n_patterns),
+            ),
             ksp_type=session.ksp_type
             or getattr(getattr(self, "backend_config", None), "ksp_type", None),
             pc_type=session.pc_type
@@ -2219,7 +2501,10 @@ class EITForwardModel:
             forward_setup_seconds=setup_seconds,
         )
 
-        rhs_matrix = np.zeros((self.dofs + self.n_elec + 1, n_patterns), dtype=float)
+        rhs_matrix = np.zeros(
+            (self.dofs + self.n_elec + 1, n_patterns),
+            dtype=self._active_scalar_dtype(),
+        )
         rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
         rhs_matrix = self._apply_cuda_gauge_fix_rhs(rhs_matrix)
 
@@ -2271,7 +2556,7 @@ class EITForwardModel:
                 return None
 
         solve_t0 = time.perf_counter()
-        if self._cuda_cem_requires_direct_solve(session):
+        if self._cuda_cem_requires_direct_solve(session, rhs_count=n_patterns):
             self._dispose_forward_ksp_session(session)
             return self._solve_with_cuda_dense_lu_fallback(
                 A,
@@ -2283,7 +2568,10 @@ class EITForwardModel:
             try:
                 B = PETSc.Mat().createDense(
                     size=rhs_matrix.shape,
-                    array=np.asfortranarray(rhs_matrix, dtype=np.float64),
+                    array=np.asfortranarray(
+                        rhs_matrix,
+                        dtype=self._active_scalar_dtype(),
+                    ),
                     comm=self.mesh.comm,
                 )
                 B = self._ensure_mat_type(B, dense_mat_type)
@@ -2293,7 +2581,11 @@ class EITForwardModel:
                 )
                 X = self._ensure_mat_type(X, dense_mat_type)
                 ksp.matSolve(B, X)
-                sol = np.array(X.getDenseArray(), dtype=float, copy=True)
+                sol = np.array(
+                    X.getDenseArray(),
+                    dtype=self._active_scalar_dtype(),
+                    copy=True,
+                )
                 mat_iterations = _ksp_iteration_number(ksp)
                 mat_reason = _ksp_converged_reason(ksp)
                 if mat_reason is not None and mat_reason < 0:
@@ -2346,7 +2638,10 @@ class EITForwardModel:
                         try:
                             B = PETSc.Mat().createDense(
                                 size=rhs_matrix.shape,
-                                array=np.asfortranarray(rhs_matrix, dtype=np.float64),
+                                array=np.asfortranarray(
+                                    rhs_matrix,
+                                    dtype=self._active_scalar_dtype(),
+                                ),
                                 comm=self.mesh.comm,
                             )
                             B = self._ensure_mat_type(B, dense_mat_type)
@@ -2355,7 +2650,11 @@ class EITForwardModel:
                             )
                             X = self._ensure_mat_type(X, dense_mat_type)
                             dense_ksp.matSolve(B, X)
-                            sol = np.array(X.getDenseArray(), dtype=float, copy=True)
+                            sol = np.array(
+                                X.getDenseArray(),
+                                dtype=self._active_scalar_dtype(),
+                                copy=True,
+                            )
                             dense_iterations = _ksp_iteration_number(dense_ksp)
                             dense_reason = _ksp_converged_reason(dense_ksp)
                             if dense_reason is not None and dense_reason < 0:
@@ -2501,7 +2800,15 @@ class EITForwardModel:
             if n_patterns
             else None
         )
-        self._set_backend_diagnostic(forward_pc_last_iter_count=session.last_iter_count)
+        self._set_backend_diagnostic(
+            forward_pc_last_iter_count=session.last_iter_count,
+            forward_ksp_session=session.as_observability(
+                cache_hit=cache_hit,
+                session_reused=bool(session_reused),
+                setup_seconds=setup_seconds,
+                rhs_count=int(n_patterns),
+            ),
+        )
         return sol_matrix
 
     def _solve_full_rhs_with_petsc(
@@ -2513,7 +2820,7 @@ class EITForwardModel:
     ) -> np.ndarray:
         if PETSc is None:
             raise RuntimeError("petsc4py is not available for linear_backend='petsc'")
-        rhs = np.asarray(rhs_matrix, dtype=float)
+        rhs = self._as_scalar_array(rhs_matrix, name="rhs_matrix")
         if rhs.ndim == 1:
             rhs = rhs.reshape(-1, 1)
         full_size = self.dofs + self.n_elec + 1
@@ -2550,6 +2857,13 @@ class EITForwardModel:
             forward_pc_session_solves=int(session.solves_since_setup),
             forward_pc_session_total_setups=int(session.total_setups),
             forward_pc_last_iter_count=session.last_iter_count,
+            forward_ksp_session=session.as_observability(
+                cache_hit=cache_hit,
+                session_reused=bool(session_reused),
+                setup_seconds=setup_seconds,
+                rhs_count=n_rhs,
+                rhs_kind=str(rhs_kind),
+            ),
             ksp_type=session.ksp_type
             or getattr(getattr(self, "backend_config", None), "ksp_type", None),
             pc_type=session.pc_type
@@ -2587,7 +2901,7 @@ class EITForwardModel:
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
         iterations_per_rhs: list[int | None] = []
         reason = None
-        if self._cuda_cem_requires_direct_solve(session):
+        if self._cuda_cem_requires_direct_solve(session, rhs_count=n_rhs):
             self._dispose_forward_ksp_session(session)
             return self._solve_with_cuda_dense_lu_fallback(
                 A,
@@ -2649,7 +2963,16 @@ class EITForwardModel:
             forward_solve_seconds=float(time.perf_counter() - solve_t0),
         )
         session.record_solve(total_iterations if n_rhs else None)
-        self._set_backend_diagnostic(forward_pc_last_iter_count=session.last_iter_count)
+        self._set_backend_diagnostic(
+            forward_pc_last_iter_count=session.last_iter_count,
+            forward_ksp_session=session.as_observability(
+                cache_hit=cache_hit,
+                session_reused=bool(session_reused),
+                setup_seconds=setup_seconds,
+                rhs_count=n_rhs,
+                rhs_kind=str(rhs_kind),
+            ),
+        )
         return self._recenter_cuda_gauge_solution(sol_matrix)
 
     def solve_full_rhs(
@@ -2667,7 +2990,7 @@ class EITForwardModel:
         shares the forward KSP session so these auxiliary solves reuse the same
         matrix and preconditioner lifecycle as ordinary CEM forward solves.
         """
-        rhs = np.asarray(rhs_matrix, dtype=float)
+        rhs = self._as_scalar_array(rhs_matrix, name="rhs_matrix")
         if rhs.ndim == 1:
             rhs = rhs.reshape(-1, 1)
         full_size = self.dofs + self.n_elec + 1
@@ -2694,7 +3017,10 @@ class EITForwardModel:
                 **self._cuda_structured_backend.backend_diagnostics()
             )
             return self._cuda_structured_backend.solve_batch(
-                np.asarray(sigma.x.array, dtype=np.float64),
+                self._as_scalar_array(sigma.x.array, name="admittivity").astype(
+                    np.float64,
+                    copy=False,
+                ),
                 pattern_matrix,
             )
         if self.linear_backend == "scipy":
@@ -2708,10 +3034,13 @@ class EITForwardModel:
             )
 
         n_patterns = pattern_matrix.shape[0]
-        potential_block = np.asarray(sol_matrix[: self.dofs, :], dtype=float)
+        potential_block = self._as_scalar_array(
+            sol_matrix[: self.dofs, :],
+            name="potential solution",
+        )
         electrode_block = np.asarray(
             sol_matrix[self.dofs : self.dofs + self.n_elec, :].T,
-            dtype=float,
+            dtype=self._active_scalar_dtype(),
         )
         u_views = []
         for i in range(n_patterns):
@@ -2724,15 +3053,20 @@ class EITForwardModel:
     def fwd_solve(self, img: EITImage):
         """Forward solve interface for ``EITImage``."""
         sigma = fem.Function(self.V_sigma)
-        sigma.x.array[:] = img.get_conductivity()
+        admittivity = self._as_scalar_array(
+            img.get_conductivity(),
+            name="image admittivity",
+        ).reshape(-1)
+        sigma.x.array[:] = admittivity
         u_all, U_all = self.forward_solve(sigma)
         meas = self.pattern_manager.apply_meas_pattern(U_all)
+        data_type = "complex_simulated" if np.iscomplexobj(meas) else "simulated"
         data = EITData(
             meas=meas,
             stim_pattern=self.pattern_manager.stim_matrix,
             n_elec=self.n_elec,
             n_stim=self.pattern_manager.n_stim,
             n_meas=self.pattern_manager.n_meas_total,
-            type="simulated",
+            type=data_type,
         )
         return data, U_all

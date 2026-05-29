@@ -18,6 +18,44 @@ _TETRA_FACE_OFFSETS: tuple[tuple[int, int, int], ...] = (
     (0, 2, 3),
     (1, 2, 3),
 )
+_FINITE_SCAN_CHUNK_ITEMS = 1_048_576
+
+
+def _all_finite(values: np.ndarray) -> bool:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if not bool(chunk_mask.all()):
+            return False
+    return True
+
+
+def _finite_sum_count(values: np.ndarray) -> tuple[float, int]:
+    arr = np.asarray(values).reshape(-1)
+    chunk_items = max(1, int(_FINITE_SCAN_CHUNK_ITEMS))
+    work = np.empty(min(chunk_items, max(arr.size, 1)), dtype=bool)
+    total = 0.0
+    count = 0
+    for start in range(0, arr.size, chunk_items):
+        chunk = arr[start : start + chunk_items]
+        chunk_mask = work[: chunk.size]
+        np.isfinite(chunk, out=chunk_mask)
+        if not bool(chunk_mask.any()):
+            continue
+        total += float(np.sum(chunk, where=chunk_mask, initial=0.0))
+        count += int(np.count_nonzero(chunk_mask))
+    return total, count
+
+
+def _integer_cells(cell_connectivity: np.ndarray) -> np.ndarray:
+    cells = np.asarray(cell_connectivity)
+    if not np.issubdtype(cells.dtype, np.integer):
+        cells = np.asarray(cells, dtype=np.intp)
+    return cells
 
 
 def extract_boundary_triangles(
@@ -47,7 +85,7 @@ def extract_boundary_triangles(
         ``(F,) int32`` (or None) with the source-cell index for each
         triangle.
     """
-    cells = np.asarray(cell_connectivity, dtype=np.int64)
+    cells = _integer_cells(cell_connectivity)
     if cells.ndim != 2 or cells.shape[0] == 0:
         empty = np.empty((0, 3), dtype=np.int32)
         return (
@@ -75,15 +113,30 @@ def extract_boundary_triangles(
             face = (int(cell[offsets[0]]), int(cell[offsets[1]]), int(cell[offsets[2]]))
             key = tuple(sorted(face))
             faces[key] = None if key in faces else (face, cell_idx)
-    kept = [payload for payload in faces.values() if payload is not None]
-    if not kept:
+    kept_count = sum(1 for payload in faces.values() if payload is not None)
+    if kept_count <= 0:
         empty = np.empty((0, 3), dtype=np.int32)
         return (
             (empty, np.empty((0,), dtype=np.int32)) if return_sources else (empty, None)
         )
-    triangles = np.asarray([face for face, _ in kept], dtype=np.int32)
+
+    triangles = np.empty((kept_count, 3), dtype=np.int32)
     if return_sources:
-        sources = np.asarray([idx for _, idx in kept], dtype=np.int32)
+        sources = np.empty(kept_count, dtype=np.int32)
+    else:
+        sources = None
+    kept_idx = 0
+    for payload in faces.values():
+        if payload is None:
+            continue
+        face, cell_idx = payload
+        triangles[kept_idx] = face
+        if sources is not None:
+            sources[kept_idx] = int(cell_idx)
+        kept_idx += 1
+
+    if return_sources:
+        assert sources is not None
         return triangles, sources
     return triangles, None
 
@@ -98,28 +151,53 @@ def cell_to_node_average(
     happen at the mesh boundary after cell extraction) get the global
     mean so downstream triangulators don't trip on NaN.
 
-    Roughly 30–50× faster than the previous nested-Python-loop form
-    on a typical 10k-cell mesh (np.add.at is the standard idiom for
-    scatter-add accumulations).
+    Uses one scatter-add pass per local cell vertex.  This avoids
+    materialising the larger ``np.repeat(values, vertices_per_cell)``
+    temporary on large 3D display meshes.
     """
-    cells_i = np.asarray(cells, dtype=np.int64)
-    sigma = np.asarray(cell_values, dtype=np.float64).reshape(-1)
+    cells_i = np.asarray(cells)
+    if not np.issubdtype(cells_i.dtype, np.integer):
+        cells_i = np.asarray(cells_i, dtype=np.intp)
+    values = np.asarray(cell_values)
+    if np.iscomplexobj(values):
+        values = np.real(values)
+    if np.issubdtype(values.dtype, np.floating):
+        dtype = np.result_type(values.dtype, np.float32)
+        sigma = np.asarray(values, dtype=dtype).reshape(-1)
+    else:
+        sigma = np.asarray(values, dtype=np.float32).reshape(-1)
+        dtype = sigma.dtype
     if cells_i.ndim != 2 or sigma.size != cells_i.shape[0]:
         raise ValueError(
             f"cell_to_node_average: cells {cells_i.shape} vs values {sigma.shape}"
         )
 
-    flat_idx = cells_i.ravel()
-    repeats = np.repeat(sigma, cells_i.shape[1])
-    node_sum = np.zeros(n_nodes, dtype=np.float64)
-    node_count = np.zeros(n_nodes, dtype=np.float64)
-    np.add.at(node_sum, flat_idx, repeats)
-    np.add.at(node_count, flat_idx, 1.0)
+    node_sum = np.zeros(n_nodes, dtype=dtype)
+    node_count = np.zeros(n_nodes, dtype=dtype)
+    for local_idx in range(cells_i.shape[1]):
+        np.add.at(node_sum, cells_i[:, local_idx], sigma)
+        np.add.at(node_count, cells_i[:, local_idx], 1.0)
 
+    touched = node_count > 0
     with np.errstate(invalid="ignore", divide="ignore"):
-        node_values = np.where(node_count > 0, node_sum / node_count, np.nan)
-    if np.any(np.isnan(node_values)):
-        finite = node_values[np.isfinite(node_values)]
-        mean = float(finite.mean()) if finite.size else 0.0
-        node_values = np.where(np.isnan(node_values), mean, node_values)
+        node_values = np.divide(node_sum, node_count, out=node_sum, where=touched)
+    if not bool(touched.all()):
+        if _all_finite(sigma):
+            touched_count = int(np.count_nonzero(touched))
+            mean = (
+                float(np.sum(node_values, where=touched, initial=0.0))
+                / float(touched_count)
+                if touched_count
+                else 0.0
+            )
+            np.logical_not(touched, out=touched)
+            np.copyto(node_values, mean, where=touched)
+            return node_values
+        np.logical_not(touched, out=touched)
+        np.copyto(node_values, np.nan, where=touched)
+    np.isnan(node_values, out=touched)
+    if bool(touched.any()):
+        finite_sum, finite_count = _finite_sum_count(node_values)
+        mean = finite_sum / float(finite_count) if finite_count else 0.0
+        np.copyto(node_values, mean, where=touched)
     return node_values

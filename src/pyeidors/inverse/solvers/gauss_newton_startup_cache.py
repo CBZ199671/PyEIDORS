@@ -19,11 +19,10 @@ keep working untouched.
 
 from __future__ import annotations
 
-import hashlib
-
 import numpy as np
 from dolfinx import fem
 
+from ...cache.keys import hash_array_payload
 from ...cache.object_signature import (
     backend_signature_from_forward_model,
     model_signature_from_forward_model,
@@ -35,10 +34,20 @@ from ...femx import function_get_array
 def _startup_cache_payload(
     reconstructor, sigma_array: np.ndarray, jacobian_method: str
 ) -> dict[str, object]:
-    sigma_hash = hashlib.sha256(
-        np.ascontiguousarray(sigma_array, dtype=np.float64).tobytes()
-    ).hexdigest()
-    return {
+    sigma_raw = np.asarray(sigma_array)
+    if np.iscomplexobj(sigma_raw):
+        sigma_values = np.asarray(
+            sigma_raw,
+            dtype=np.complex64 if sigma_raw.dtype == np.complex64 else np.complex128,
+        )
+        sigma_hash = hash_array_payload(
+            sigma_values,
+            prefix=str(sigma_values.dtype).encode("utf-8") + b"\0",
+        )
+    else:
+        sigma_values = np.asarray(sigma_raw, dtype=np.float64)
+        sigma_hash = hash_array_payload(sigma_values)
+    payload = {
         "solver": "gn_absolute",
         "mode": str(getattr(reconstructor, "solver_mode", "strict")),
         "jacobian_method": str(jacobian_method),
@@ -80,6 +89,10 @@ def _startup_cache_payload(
             "lowrank_energy": float(getattr(reconstructor, "lowrank_energy", 0.995)),
         },
     }
+    if np.iscomplexobj(sigma_values):
+        payload["sigma_dtype"] = str(sigma_values.dtype)
+        payload["native_complex"] = True
+    return payload
 
 
 def _startup_cache_lookup(
@@ -114,7 +127,7 @@ def _startup_cache_lookup(
         cost=10.0,
         effort_seconds=6.0,
     )
-    cached = np.asarray(jacobian, dtype=np.float64)
+    cached = np.asarray(jacobian)
     if reconstructor.negate_jacobian:
         cached = -cached
     return cached, {

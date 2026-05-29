@@ -179,8 +179,8 @@ class AcquisitionController(QObject):
 
         real, imag, timestamp, frame_index = result
         frame = FrameData(
-            real=real.copy(),
-            imag=imag.copy(),
+            real=real,
+            imag=imag,
             timestamp=timestamp,
             frame_index=frame_index,
             metadata=dict(self._frame_metadata),

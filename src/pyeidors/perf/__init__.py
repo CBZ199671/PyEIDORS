@@ -1,92 +1,113 @@
-"""Performance capability helpers and policy contracts."""
+"""Performance capability helpers and policy contracts.
 
-from .capabilities import (
-    detect_performance_capabilities,
-    probe_petsc_cuda_runtime,
-    select_fast_linear_path,
-    select_fused_strategy,
-    select_preconditioner,
-)
-from .forward_solver_policy import (
-    AMGX_DOWNGRADE_REASON,
-    CUDA_GAMG_DEFAULT_REASON,
-    CUDA_HYPRE_BLACKLIST_REASON,
-    CUDA_HYPRE_BLACKLISTED_PRESETS,
-    CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON,
-    is_hypre_cuda_blacklisted_solver,
-    resolve_3d_cuda_forward_solver_policy,
-    resolve_3d_cuda_mat_solve_policy,
-)
-from .gpu_kernels import RMMatmulHandle, RMMatmulResult, prepare_rm_matmul, rm_matmul
-from .policy import (
-    ACCELERATION_PROFILE_GPU3D,
-    ACCELERATION_PROFILE_GPU3D_FUSED,
-    ACCELERATION_PROFILE_VALUES,
-    DEFAULT_3D_GEOMETRY_VERSION,
-    DEFAULT_3D_GENERATOR_REVISION,
-    DEFAULT_ABSOLUTE_STARTUP_CACHE,
-    DEFAULT_ACCELERATION_PROFILE,
-    DEFAULT_CHOLMOD_MAX_MEMORY_GIB,
-    DEFAULT_CHOLMOD_MAX_N,
-    DEFAULT_FORWARD_BACKEND,
-    DEFAULT_FORWARD_MAT_SOLVE,
-    DEFAULT_INEXACT_ETA0,
-    DEFAULT_INEXACT_ETA_MAX,
-    DEFAULT_INEXACT_ETA_MIN,
-    DEFAULT_INEXACT_FORCING,
-    DEFAULT_INEXACT_MODE,
-    DEFAULT_JACOBIAN_BLOCK_CANDIDATES,
-    DEFAULT_JACOBIAN_BLOCK_SIZE,
-    DEFAULT_JACOBIAN_BLOCK_TUNE,
-    DEFAULT_LINEAR_SOLVER,
-    DEFAULT_LINE_SEARCH_MODE_2D,
-    DEFAULT_LINE_SEARCH_MODE_3D,
-    DEFAULT_MESH_FAMILY,
-    DEFAULT_LOWRANK_ENERGY,
-    DEFAULT_LOWRANK_METHOD,
-    DEFAULT_LOWRANK_MODE,
-    DEFAULT_LOWRANK_RANK,
-    DEFAULT_PETSC_DEVICE,
-    DEFAULT_PRECONDITIONER,
-    DEFAULT_ROM_MODE,
-    DEFAULT_ROM_RANK_ADAPTIVE,
-    DEFAULT_ROM_RANK_GLOBAL,
-    DEFAULT_ROM_REFRESH_EVERY,
-    DEFAULT_ROM_SNAPSHOT_SOURCE,
-    DEFAULT_SOLVER_MODE_2D,
-    DEFAULT_SOLVER_MODE_3D,
-    EXPERIMENTAL_PERF_PROFILES,
-    FULL_PERF_PROFILES,
-    FORWARD_BACKEND_CUDA_STRUCTURED,
-    FORWARD_BACKEND_DOLFINX,
-    FORWARD_BACKEND_VALUES,
-    GEOMETRY_VERSION_GEOMV2,
-    GEOMETRY_VERSION_LEGACY,
-    LEGACY_3D_GENERATOR_REVISION,
-    MESH_FAMILY_HEX,
-    MESH_FAMILY_TETRA,
-    MESH_FAMILY_VALUES,
-    PETSC_DEVICE_AUTO,
-    PETSC_DEVICE_CPU,
-    PETSC_DEVICE_CUDA,
-    PETSC_DEVICE_VALUES,
-    PRIMARY_PERF_PROFILE,
-    QUICK_PERF_PROFILES,
-    SQUARE_TO_DISK_3D_GENERATOR_REVISION,
-    is_experimental_profile,
-    normalize_acceleration_profile,
-    normalize_forward_backend,
-    normalize_feature_mode,
-    normalize_mesh_family,
-    normalize_petsc_device,
-    parse_block_size_candidates,
-    prefers_3d_gpu_pipeline,
-    prefers_fused_3d_gpu_pipeline,
-    resolve_experimental_mode,
-    resolve_forward_mat_solve,
-    resolve_line_search_mode,
-    resolve_solver_mode,
-)
+Importing :mod:`pyeidors.perf` should stay cheap: many callers only need policy
+constants, while GPU kernel helpers pull SciPy/NumPy arrays and are hot-path
+only.
+"""
+
+from __future__ import annotations
+
+from importlib import import_module
+from typing import Any
+
+_EXPORT_GROUPS: dict[str, tuple[str, ...]] = {
+    ".capabilities": (
+        "detect_performance_capabilities",
+        "probe_petsc_cuda_runtime",
+        "select_fast_linear_path",
+        "select_fused_strategy",
+        "select_preconditioner",
+    ),
+    ".forward_solver_policy": (
+        "AMGX_DOWNGRADE_REASON",
+        "CUDA_GAMG_DEFAULT_REASON",
+        "CUDA_HYPRE_BLACKLIST_REASON",
+        "CUDA_HYPRE_BLACKLISTED_PRESETS",
+        "CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON",
+        "is_hypre_cuda_blacklisted_solver",
+        "resolve_3d_cuda_forward_solver_policy",
+        "resolve_3d_cuda_mat_solve_policy",
+    ),
+    ".gpu_kernels": (
+        "RMMatmulHandle",
+        "RMMatmulResult",
+        "prepare_rm_matmul",
+        "rm_matmul",
+    ),
+    ".policy": (
+        "ACCELERATION_PROFILE_GPU3D",
+        "ACCELERATION_PROFILE_GPU3D_FUSED",
+        "ACCELERATION_PROFILE_VALUES",
+        "DEFAULT_3D_GEOMETRY_VERSION",
+        "DEFAULT_3D_GENERATOR_REVISION",
+        "DEFAULT_ABSOLUTE_STARTUP_CACHE",
+        "DEFAULT_ACCELERATION_PROFILE",
+        "DEFAULT_CHOLMOD_MAX_MEMORY_GIB",
+        "DEFAULT_CHOLMOD_MAX_N",
+        "DEFAULT_FORWARD_BACKEND",
+        "DEFAULT_FORWARD_MAT_SOLVE",
+        "DEFAULT_INEXACT_ETA0",
+        "DEFAULT_INEXACT_ETA_MAX",
+        "DEFAULT_INEXACT_ETA_MIN",
+        "DEFAULT_INEXACT_FORCING",
+        "DEFAULT_INEXACT_MODE",
+        "DEFAULT_JACOBIAN_BLOCK_CANDIDATES",
+        "DEFAULT_JACOBIAN_BLOCK_SIZE",
+        "DEFAULT_JACOBIAN_BLOCK_TUNE",
+        "DEFAULT_LINEAR_SOLVER",
+        "DEFAULT_LINE_SEARCH_MODE_2D",
+        "DEFAULT_LINE_SEARCH_MODE_3D",
+        "DEFAULT_MESH_FAMILY",
+        "DEFAULT_LOWRANK_ENERGY",
+        "DEFAULT_LOWRANK_METHOD",
+        "DEFAULT_LOWRANK_MODE",
+        "DEFAULT_LOWRANK_RANK",
+        "DEFAULT_PETSC_DEVICE",
+        "DEFAULT_PRECONDITIONER",
+        "DEFAULT_ROM_MODE",
+        "DEFAULT_ROM_RANK_ADAPTIVE",
+        "DEFAULT_ROM_RANK_GLOBAL",
+        "DEFAULT_ROM_REFRESH_EVERY",
+        "DEFAULT_ROM_SNAPSHOT_SOURCE",
+        "DEFAULT_SOLVER_MODE_2D",
+        "DEFAULT_SOLVER_MODE_3D",
+        "EXPERIMENTAL_PERF_PROFILES",
+        "FULL_PERF_PROFILES",
+        "FORWARD_BACKEND_CUDA_STRUCTURED",
+        "FORWARD_BACKEND_DOLFINX",
+        "FORWARD_BACKEND_VALUES",
+        "GEOMETRY_VERSION_GEOMV2",
+        "GEOMETRY_VERSION_LEGACY",
+        "LEGACY_3D_GENERATOR_REVISION",
+        "MESH_FAMILY_HEX",
+        "MESH_FAMILY_TETRA",
+        "MESH_FAMILY_VALUES",
+        "PETSC_DEVICE_AUTO",
+        "PETSC_DEVICE_CPU",
+        "PETSC_DEVICE_CUDA",
+        "PETSC_DEVICE_VALUES",
+        "PRIMARY_PERF_PROFILE",
+        "QUICK_PERF_PROFILES",
+        "SQUARE_TO_DISK_3D_GENERATOR_REVISION",
+        "is_experimental_profile",
+        "normalize_acceleration_profile",
+        "normalize_forward_backend",
+        "normalize_feature_mode",
+        "normalize_mesh_family",
+        "normalize_petsc_device",
+        "parse_block_size_candidates",
+        "prefers_3d_gpu_pipeline",
+        "prefers_fused_3d_gpu_pipeline",
+        "resolve_experimental_mode",
+        "resolve_forward_mat_solve",
+        "resolve_line_search_mode",
+        "resolve_solver_mode",
+    ),
+}
+
+_EXPORT_MODULES = {
+    name: module_name for module_name, names in _EXPORT_GROUPS.items() for name in names
+}
 
 __all__ = [
     "DEFAULT_ABSOLUTE_STARTUP_CACHE",
@@ -174,3 +195,25 @@ __all__ = [
     "select_fused_strategy",
     "select_preconditioner",
 ]
+
+_SUBMODULE_NAMES = frozenset(
+    {"capabilities", "forward_solver_policy", "gpu_kernels", "policy"}
+)
+
+
+def __getattr__(name: str) -> Any:
+    module_name = _EXPORT_MODULES.get(name)
+    if module_name is not None:
+        module = import_module(module_name, __name__)
+        value = getattr(module, name)
+        globals()[name] = value
+        return value
+    if name in _SUBMODULE_NAMES:
+        module = import_module(f".{name}", __name__)
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
+def __dir__() -> list[str]:
+    return sorted(set(globals()) | set(__all__) | set(_SUBMODULE_NAMES))

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 from configparser import ConfigParser
-import hashlib
 import json
 import statistics
 import sys
@@ -25,6 +24,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+from pyeidors.cache import hash_array_payload
 from pyeidors.geometry._helpers import validate_mesh_data_tags
 from pyeidors.geometry.dolfinx_mesh_cache import (
     dolfinx_cache_metadata_path_for_mesh,
@@ -464,13 +464,11 @@ def pairs_sha256(indices: Iterable[int], values: Iterable[int]) -> str:
     value_array = np.asarray(list(values), dtype=np.int64).ravel()
     if index_array.size != value_array.size:
         raise ValueError("tag pair indices and values sizes differ")
+    pairs = np.empty((index_array.size, 2), dtype=np.int64)
     if index_array.size:
-        pairs = np.column_stack((index_array, value_array))
-    else:
-        pairs = np.empty((0, 2), dtype=np.int64)
-    return hashlib.sha256(
-        np.ascontiguousarray(pairs, dtype=np.int64).tobytes()
-    ).hexdigest()
+        pairs[:, 0] = index_array
+        pairs[:, 1] = value_array
+    return hash_array_payload(np.ascontiguousarray(pairs, dtype=np.int64))
 
 
 def normalize_association(value: dict[str, int]) -> dict[str, int]:

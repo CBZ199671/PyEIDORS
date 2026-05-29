@@ -9,8 +9,14 @@ from typing import Iterable, Literal
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 from .adc_quantization import effective_digits_from_rmse, rmse
-from .eit_digit_metrics import EITLinearizedModel, reconstruct_linearized_sigma
+from .eit_digit_metrics import (
+    EITLinearizedModel,
+    _fallback_parameter_points,
+    reconstruct_linearized_sigma,
+)
 from .holdout_point_audit import (
     HoldoutPointAuditRow,
     build_holdout_point_audit,
@@ -20,6 +26,8 @@ from ._sweep_core import ReconMetricRow, StructureMetricRow, SweepRow
 
 
 FitMethod = Literal["poly2", "poly3", "spline"]
+_INDEXED_RMSE_CHUNK_ITEMS = 1_048_576
+_MASKED_STRUCTURE_CHUNK_ITEMS = 1_048_576
 
 SUMMARY_FIELDS = [
     "recon_method",
@@ -186,7 +194,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.n
         raise ValueError(f"{name} must be a 1D vector")
     if arr.size == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 
@@ -197,7 +205,7 @@ def _as_float_matrix(values: np.ndarray, *, name: str) -> np.ndarray:
         raise ValueError(f"{name} must be a 2D matrix")
     if arr.shape[0] == 0 or arr.shape[1] == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 
@@ -207,6 +215,60 @@ def _relative_rmse(reference: np.ndarray, observed: np.ndarray) -> float:
     if ref_rms == 0.0:
         return math.nan
     return rmse(reference, observed) / ref_rms
+
+
+def _rmse_values_at_indices(
+    values: np.ndarray,
+    indices: np.ndarray,
+    *,
+    chunk_size: int = _INDEXED_RMSE_CHUNK_ITEMS,
+) -> float:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+    count = int(idx.size)
+    if count == 0:
+        return float("nan")
+    block_size = max(1, min(int(chunk_size), count))
+    work = np.empty(block_size, dtype=np.float64)
+    total = 0.0
+    for start in range(0, count, block_size):
+        stop = min(start + block_size, count)
+        chunk = idx[start:stop]
+        target = work[: chunk.size]
+        np.take(arr, chunk, out=target)
+        np.square(target, out=target)
+        total += float(np.sum(target, dtype=np.float64))
+    return float(math.sqrt(total / count))
+
+
+def _rmse_pair_at_indices(
+    reference: np.ndarray,
+    observed: np.ndarray,
+    indices: np.ndarray,
+    *,
+    chunk_size: int = _INDEXED_RMSE_CHUNK_ITEMS,
+) -> float:
+    ref = np.asarray(reference, dtype=np.float64).reshape(-1)
+    obs = np.asarray(observed, dtype=np.float64).reshape(-1)
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+    count = int(idx.size)
+    if count == 0:
+        return float("nan")
+    block_size = max(1, min(int(chunk_size), count))
+    work = np.empty(block_size, dtype=np.float64)
+    ref_work = np.empty(block_size, dtype=np.float64)
+    total = 0.0
+    for start in range(0, count, block_size):
+        stop = min(start + block_size, count)
+        chunk = idx[start:stop]
+        target = work[: chunk.size]
+        ref_target = ref_work[: chunk.size]
+        np.take(obs, chunk, out=target)
+        np.take(ref, chunk, out=ref_target)
+        target -= ref_target
+        np.square(target, out=target)
+        total += float(np.sum(target, dtype=np.float64))
+    return float(math.sqrt(total / count))
 
 
 def _validate_fit_methods(fit_methods: Iterable[str]) -> list[FitMethod]:
@@ -289,7 +351,7 @@ def _fit_values(
         raise ValueError("spline needs at least 4 training points")
     spline = CubicSpline(x_train, y_train, bc_type="natural", extrapolate=False)
     predicted = np.asarray(spline(x_holdout), dtype=float)
-    if not np.all(np.isfinite(predicted)):
+    if not all_finite_values(predicted):
         raise FloatingPointError("spline prediction produced non-finite values")
     return predicted
 
@@ -493,7 +555,7 @@ def _cell_areas(model: EITLinearizedModel, n_parameters: int) -> np.ndarray:
         areas[idx] = 0.5 * abs(
             float(np.dot(x, np.roll(y, -1)) - np.dot(y, np.roll(x, -1)))
         )
-    if np.any(areas <= 0.0):
+    if float(np.min(areas, initial=np.inf)) <= 0.0:
         return np.ones(int(n_parameters), dtype=float)
     return areas
 
@@ -507,11 +569,312 @@ def _parameter_points(model: EITLinearizedModel, n_parameters: int) -> np.ndarra
             and points.shape[1] >= 2
         ):
             return points[:, :2].copy()
-    side = int(math.ceil(math.sqrt(n_parameters)))
-    xs = (np.arange(side, dtype=float) + 0.5) / side
-    ys = (np.arange(side, dtype=float) + 0.5) / side
-    xx, yy = np.meshgrid(xs, ys[::-1], indexing="xy")
-    return np.column_stack([xx.ravel(), yy.ravel()])[:n_parameters]
+    return _fallback_parameter_points(n_parameters)
+
+
+def _weighted_centroid_covariance_2d(
+    coords: np.ndarray,
+    weights: np.ndarray,
+    *,
+    weight_sum: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    points = np.asarray(coords, dtype=float)
+    w = np.asarray(weights, dtype=float).reshape(-1)
+    if points.ndim != 2 or points.shape[1] < 2:
+        raise ValueError("coords must be a 2D array with at least two columns.")
+    if points.shape[0] != w.size:
+        raise ValueError("coords and weights must have matching row counts.")
+    total = float(np.sum(w)) if weight_sum is None else float(weight_sum)
+    if total <= 0.0:
+        raise ValueError("weights must have positive sum.")
+
+    xy = points[:, :2]
+    centroid = np.array(
+        [
+            float(np.dot(w, xy[:, 0])) / total,
+            float(np.dot(w, xy[:, 1])) / total,
+        ],
+        dtype=float,
+    )
+    dx = np.empty(w.size, dtype=float)
+    dy = np.empty(w.size, dtype=float)
+    work = np.empty(w.size, dtype=float)
+    np.subtract(xy[:, 0], centroid[0], out=dx)
+    np.subtract(xy[:, 1], centroid[1], out=dy)
+
+    np.square(dx, out=work)
+    cxx = float(np.dot(w, work)) / total
+    np.multiply(dx, dy, out=work)
+    cxy = float(np.dot(w, work)) / total
+    np.square(dy, out=work)
+    cyy = float(np.dot(w, work)) / total
+    covariance = np.array([[cxx, cxy], [cxy, cyy]], dtype=float)
+    return centroid, covariance
+
+
+def _combined_mask_chunk(
+    *,
+    include_mask: np.ndarray | None,
+    exclude_mask: np.ndarray | None,
+    start: int,
+    stop: int,
+    work: np.ndarray,
+    exclude_work: np.ndarray,
+) -> np.ndarray:
+    active = work[: stop - start]
+    if include_mask is None:
+        active.fill(True)
+    else:
+        active[:] = include_mask[start:stop]
+    if exclude_mask is not None:
+        excluded = exclude_work[: stop - start]
+        np.logical_not(exclude_mask[start:stop], out=excluded)
+        np.logical_and(active, excluded, out=active)
+    return active
+
+
+def _masked_area_sum(
+    areas: np.ndarray,
+    include_mask: np.ndarray | None,
+    *,
+    exclude_mask: np.ndarray | None = None,
+    chunk_size: int = _MASKED_STRUCTURE_CHUNK_ITEMS,
+) -> float:
+    area_arr = np.asarray(areas, dtype=float).reshape(-1)
+    include = (
+        None
+        if include_mask is None
+        else np.asarray(include_mask, dtype=bool).reshape(-1)
+    )
+    exclude = (
+        None
+        if exclude_mask is None
+        else np.asarray(exclude_mask, dtype=bool).reshape(-1)
+    )
+    if include is not None and include.size != area_arr.size:
+        raise ValueError("include_mask must match areas length.")
+    if exclude is not None and exclude.size != area_arr.size:
+        raise ValueError("exclude_mask must match areas length.")
+    if area_arr.size == 0:
+        return 0.0
+    block_size = max(1, min(int(chunk_size), int(area_arr.size)))
+    active_work = np.empty(block_size, dtype=bool)
+    exclude_work = np.empty(block_size, dtype=bool)
+    total = 0.0
+    for start in range(0, int(area_arr.size), block_size):
+        stop = min(start + block_size, int(area_arr.size))
+        active = _combined_mask_chunk(
+            include_mask=include,
+            exclude_mask=exclude,
+            start=start,
+            stop=stop,
+            work=active_work,
+            exclude_work=exclude_work,
+        )
+        if bool(active.any()):
+            total += float(np.sum(area_arr[start:stop], where=active, initial=0.0))
+    return total
+
+
+def _masked_abs_peak(
+    values: np.ndarray,
+    include_mask: np.ndarray | None = None,
+    *,
+    exclude_mask: np.ndarray | None = None,
+    chunk_size: int = _MASKED_STRUCTURE_CHUNK_ITEMS,
+) -> float:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    include = (
+        None
+        if include_mask is None
+        else np.asarray(include_mask, dtype=bool).reshape(-1)
+    )
+    exclude = (
+        None
+        if exclude_mask is None
+        else np.asarray(exclude_mask, dtype=bool).reshape(-1)
+    )
+    if include is not None and include.size != arr.size:
+        raise ValueError("include_mask must match values length.")
+    if exclude is not None and exclude.size != arr.size:
+        raise ValueError("exclude_mask must match values length.")
+    if arr.size == 0:
+        return 0.0
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    active_work = np.empty(block_size, dtype=bool)
+    exclude_work = np.empty(block_size, dtype=bool)
+    abs_work = np.empty(block_size, dtype=float)
+    peak = 0.0
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        active = _combined_mask_chunk(
+            include_mask=include,
+            exclude_mask=exclude,
+            start=start,
+            stop=stop,
+            work=active_work,
+            exclude_work=exclude_work,
+        )
+        if not bool(active.any()):
+            continue
+        abs_chunk = abs_work[: stop - start]
+        np.abs(arr[start:stop], out=abs_chunk)
+        peak = max(peak, float(np.max(abs_chunk, where=active, initial=0.0)))
+    return peak
+
+
+def _masked_square_area_sum(
+    values: np.ndarray,
+    areas: np.ndarray,
+    include_mask: np.ndarray | None = None,
+    *,
+    exclude_mask: np.ndarray | None = None,
+    chunk_size: int = _MASKED_STRUCTURE_CHUNK_ITEMS,
+) -> float:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    area_arr = np.asarray(areas, dtype=float).reshape(-1)
+    include = (
+        None
+        if include_mask is None
+        else np.asarray(include_mask, dtype=bool).reshape(-1)
+    )
+    exclude = (
+        None
+        if exclude_mask is None
+        else np.asarray(exclude_mask, dtype=bool).reshape(-1)
+    )
+    if area_arr.size != arr.size:
+        raise ValueError("values and areas must have matching length.")
+    if include is not None and include.size != arr.size:
+        raise ValueError("include_mask must match values length.")
+    if exclude is not None and exclude.size != arr.size:
+        raise ValueError("exclude_mask must match values length.")
+    if arr.size == 0:
+        return 0.0
+    block_size = max(1, min(int(chunk_size), int(arr.size)))
+    active_work = np.empty(block_size, dtype=bool)
+    exclude_work = np.empty(block_size, dtype=bool)
+    value_work = np.empty(block_size, dtype=float)
+    total = 0.0
+    for start in range(0, int(arr.size), block_size):
+        stop = min(start + block_size, int(arr.size))
+        active = _combined_mask_chunk(
+            include_mask=include,
+            exclude_mask=exclude,
+            start=start,
+            stop=stop,
+            work=active_work,
+            exclude_work=exclude_work,
+        )
+        if not bool(active.any()):
+            continue
+        values_chunk = value_work[: stop - start]
+        np.square(arr[start:stop], out=values_chunk)
+        np.multiply(values_chunk, area_arr[start:stop], out=values_chunk)
+        total += float(np.sum(values_chunk, where=active, initial=0.0))
+    return total
+
+
+def _masked_weighted_structure_stats_2d(
+    *,
+    points: np.ndarray,
+    areas: np.ndarray,
+    weights_raw: np.ndarray,
+    mask: np.ndarray,
+    chunk_size: int = _MASKED_STRUCTURE_CHUNK_ITEMS,
+) -> tuple[np.ndarray, np.ndarray, float]:
+    point_arr = np.asarray(points, dtype=float)
+    area_arr = np.asarray(areas, dtype=float).reshape(-1)
+    weight_raw_arr = np.asarray(weights_raw, dtype=float).reshape(-1)
+    mask_arr = np.asarray(mask, dtype=bool).reshape(-1)
+    if point_arr.ndim != 2 or point_arr.shape[1] < 2:
+        raise ValueError("points must be a 2D array with at least two columns.")
+    if (
+        point_arr.shape[0] != area_arr.size
+        or area_arr.size != weight_raw_arr.size
+        or mask_arr.size != area_arr.size
+    ):
+        raise ValueError("points, areas, weights_raw, and mask must align.")
+    if area_arr.size == 0:
+        raise ValueError("masked structure inputs must be non-empty.")
+    block_size = max(1, min(int(chunk_size), int(area_arr.size)))
+    weight_work = np.empty(block_size, dtype=float)
+    value_work = np.empty(block_size, dtype=float)
+
+    def first_pass(*, use_raw_weights: bool) -> tuple[float, float, float, float]:
+        weight_sum = 0.0
+        x_sum = 0.0
+        y_sum = 0.0
+        equivalent_area = 0.0
+        for start in range(0, int(area_arr.size), block_size):
+            stop = min(start + block_size, int(area_arr.size))
+            active = mask_arr[start:stop]
+            if not bool(active.any()):
+                continue
+            weights = weight_work[: stop - start]
+            if use_raw_weights:
+                np.multiply(
+                    weight_raw_arr[start:stop], area_arr[start:stop], out=weights
+                )
+            else:
+                weights[:] = area_arr[start:stop]
+            weight_sum += float(np.sum(weights, where=active, initial=0.0))
+            equivalent_area += float(
+                np.sum(area_arr[start:stop], where=active, initial=0.0)
+            )
+            values = value_work[: stop - start]
+            np.multiply(point_arr[start:stop, 0], weights, out=values)
+            x_sum += float(np.sum(values, where=active, initial=0.0))
+            np.multiply(point_arr[start:stop, 1], weights, out=values)
+            y_sum += float(np.sum(values, where=active, initial=0.0))
+        return weight_sum, x_sum, y_sum, equivalent_area
+
+    weight_sum, x_sum, y_sum, equivalent_area = first_pass(use_raw_weights=True)
+    use_raw_weights = True
+    if weight_sum <= 0.0:
+        weight_sum, x_sum, y_sum, equivalent_area = first_pass(use_raw_weights=False)
+        use_raw_weights = False
+    if weight_sum <= 0.0:
+        raise ValueError("masked structure weights must have positive sum.")
+
+    centroid = np.array([x_sum / weight_sum, y_sum / weight_sum], dtype=float)
+    cxx_sum = 0.0
+    cxy_sum = 0.0
+    cyy_sum = 0.0
+    dx_work = np.empty(block_size, dtype=float)
+    dy_work = np.empty(block_size, dtype=float)
+    for start in range(0, int(area_arr.size), block_size):
+        stop = min(start + block_size, int(area_arr.size))
+        active = mask_arr[start:stop]
+        if not bool(active.any()):
+            continue
+        weights = weight_work[: stop - start]
+        if use_raw_weights:
+            np.multiply(weight_raw_arr[start:stop], area_arr[start:stop], out=weights)
+        else:
+            weights[:] = area_arr[start:stop]
+        dx = dx_work[: stop - start]
+        dy = dy_work[: stop - start]
+        values = value_work[: stop - start]
+        np.subtract(point_arr[start:stop, 0], centroid[0], out=dx)
+        np.subtract(point_arr[start:stop, 1], centroid[1], out=dy)
+        np.square(dx, out=values)
+        np.multiply(values, weights, out=values)
+        cxx_sum += float(np.sum(values, where=active, initial=0.0))
+        np.multiply(dx, dy, out=values)
+        np.multiply(values, weights, out=values)
+        cxy_sum += float(np.sum(values, where=active, initial=0.0))
+        np.square(dy, out=values)
+        np.multiply(values, weights, out=values)
+        cyy_sum += float(np.sum(values, where=active, initial=0.0))
+    covariance = np.array(
+        [
+            [cxx_sum / weight_sum, cxy_sum / weight_sum],
+            [cxy_sum / weight_sum, cyy_sum / weight_sum],
+        ],
+        dtype=float,
+    )
+    return centroid, covariance, equivalent_area
 
 
 def _weighted_structure(
@@ -520,20 +883,18 @@ def _weighted_structure(
     points: np.ndarray,
     areas: np.ndarray,
     threshold: float,
-) -> tuple[np.ndarray, float, float, float, float, float]:
+) -> tuple[np.ndarray, float, float, float, float, float, float]:
     weights_raw = np.abs(values)
     mask = weights_raw >= threshold
-    if not np.any(mask):
+    if not bool(mask.any()):
         index = int(np.argmax(weights_raw))
         mask[index] = True
-    weights = weights_raw[mask] * areas[mask]
-    if float(np.sum(weights)) <= 0.0:
-        weights = areas[mask]
-    coords = points[mask, :2]
-    weight_sum = float(np.sum(weights))
-    centroid = np.sum(coords * weights[:, None], axis=0) / weight_sum
-    centered = coords - centroid
-    covariance = (centered * weights[:, None]).T @ centered / weight_sum
+    centroid, covariance, equivalent_area = _masked_weighted_structure_stats_2d(
+        points=points,
+        areas=areas,
+        weights_raw=weights_raw,
+        mask=mask,
+    )
     eigvals = np.sort(np.linalg.eigvalsh(covariance))
     minor_var = max(float(eigvals[0]), 0.0)
     major_var = max(float(eigvals[-1]), 0.0)
@@ -543,7 +904,6 @@ def _weighted_structure(
         eccentricity = math.sqrt(max(0.0, 1.0 - minor_var / major_var))
     major_axis = 4.0 * math.sqrt(major_var)
     minor_axis = 4.0 * math.sqrt(minor_var)
-    equivalent_area = float(np.sum(areas[mask]))
     return (
         mask,
         float(centroid[0]),
@@ -588,12 +948,11 @@ def _structure_metric_rows(
             areas=areas,
             threshold=threshold,
         )
-        outside = ~truth_mask
-        artifact_values = np.abs(contrast[outside])
-        artifact_active = mask & outside
-        artifact_area = float(np.sum(areas[artifact_active]))
-        artifact_energy = float(np.sum((contrast[outside] ** 2) * areas[outside]))
-        artifact_peak = float(np.max(artifact_values)) if artifact_values.size else 0.0
+        artifact_area = _masked_area_sum(areas, mask, exclude_mask=truth_mask)
+        artifact_energy = _masked_square_area_sum(
+            contrast, areas, exclude_mask=truth_mask
+        )
+        artifact_peak = _masked_abs_peak(contrast, exclude_mask=truth_mask)
         if recon_kind == "truth":
             artifact_area = 0.0
             artifact_energy = 0.0
@@ -714,8 +1073,9 @@ def run_holdout_fit_diff(
                 holdout_per_frame=3,
                 train_points_per_frame=train_points_per_frame,
                 holdout_voltage_rmse=math.nan,
-                diff_voltage_rmse=float(
-                    np.sqrt(np.mean(full_diff[holdout_indices] ** 2))
+                diff_voltage_rmse=_rmse_values_at_indices(
+                    full_diff,
+                    holdout_indices,
                 ),
                 sigma_true=sigma_true,
                 sigma_recon_full=sigma_recon_full,
@@ -767,8 +1127,10 @@ def run_holdout_fit_diff(
                 points_per_frame=points_per_frame,
                 holdout_per_frame=3,
                 train_points_per_frame=train_points_per_frame,
-                holdout_voltage_rmse=rmse(
-                    v_true[holdout_indices], fit_true[holdout_indices]
+                holdout_voltage_rmse=_rmse_pair_at_indices(
+                    v_true,
+                    fit_true,
+                    holdout_indices,
                 ),
                 diff_voltage_rmse=rmse(full_diff, fit_diff),
                 sigma_true=sigma_true,
@@ -957,6 +1319,19 @@ def _draw_field(
     )
 
 
+def _field_value_range(fields: list[tuple[str, np.ndarray]]) -> tuple[float, float]:
+    if not fields:
+        raise ValueError("fields must not be empty.")
+    first = np.asarray(fields[0][1], dtype=float)
+    sigma_min = float(np.min(first))
+    sigma_max = float(np.max(first))
+    for _, values in fields[1:]:
+        arr = np.asarray(values, dtype=float)
+        sigma_min = float(np.minimum(sigma_min, float(np.min(arr))))
+        sigma_max = float(np.maximum(sigma_max, float(np.max(arr))))
+    return sigma_min, sigma_max
+
+
 def _prediction_marker_offsets(methods: Iterable[str]) -> dict[str, float]:
     """Return small visual-only x offsets so overlapping prediction markers show."""
 
@@ -1087,11 +1462,7 @@ def plot_holdout_recon_compare(
         ("full_208", case.sigma_recon_full),
     ]
     fields.extend(case.sigma_recon_by_method.items())
-    sigma_values = np.concatenate(
-        [np.asarray(values, dtype=float) for _, values in fields]
-    )
-    sigma_min = float(np.min(sigma_values))
-    sigma_max = float(np.max(sigma_values))
+    sigma_min, sigma_max = _field_value_range(fields)
     errors = [
         np.asarray(values, dtype=float) - case.model.sigma_true
         for _, values in fields[1:]

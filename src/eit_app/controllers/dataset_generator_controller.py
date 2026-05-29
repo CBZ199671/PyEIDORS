@@ -12,6 +12,8 @@ from PySide6.QtCore import QObject, QThread, Signal
 
 from eit_app.controllers.forward_solver_controller import (
     _contact_impedance_vector,
+    _forward_mesh_geometry_arrays,
+    _forward_measurement_values,
     _paint_shape,
     _resolve_forward_runtime,
     _total_electrode_count,
@@ -55,7 +57,6 @@ class _DatasetGeneratorWorker(QObject):
             from pyeidors import EITSystem
             from pyeidors.data.structures import PatternConfig
             from pyeidors.electrodes.layout import effective_pattern_layout_for_3d_mesh
-            from pyeidors.femx import cell_midpoints
 
             forward_cfg = ForwardModelConfig.from_mapping(
                 self._request.forward_model_config
@@ -134,28 +135,17 @@ class _DatasetGeneratorWorker(QObject):
                 electrode_layout=forward_cfg.electrode_layout,
             )
 
-            fwd = system.fwd_model
-            centers = cell_midpoints(fwd.mesh)
-            n_elements = len(centers)
-
-            # Extract mesh geometry once
-            mesh = system.mesh
-            node_coords = mesh.geometry.x[:, : cfg.mesh_dimension].copy()
-            cells_conn = mesh.topology.connectivity(mesh.topology.dim, 0)
-            n_cells = mesh.topology.index_map(mesh.topology.dim).size_local
-            cell_connectivity = np.array(
-                [cells_conn.links(i) for i in range(n_cells)], dtype=np.int32
+            mesh = system.mesh if system.mesh is not None else system.fwd_model.mesh
+            centers, node_coords, cell_connectivity, n_elements = (
+                _forward_mesh_geometry_arrays(
+                    mesh,
+                    mesh_dimension=cfg.mesh_dimension,
+                )
             )
-            cell_vertices = (
-                node_coords[cell_connectivity]
-                if int(forward_cfg.mesh_dimension) == 3
-                else None
-            )
-
             # Compute homogeneous reference once
             sigma_homog = np.ones(n_elements, dtype=np.float64)
             data_homog = system.forward_solve(sigma_homog)
-            homog_voltages = data_homog.meas.copy()
+            homog_voltages = _forward_measurement_values(data_homog.meas)
 
             # Prepare output directory
             out_dir = Path(cfg.output_dir)
@@ -251,17 +241,17 @@ class _DatasetGeneratorWorker(QObject):
                         centers,
                         spec,
                         mesh_dimension=forward_cfg.mesh_dimension,
-                        cell_vertices=cell_vertices,
+                        node_coords=node_coords,
+                        cell_connectivity=cell_connectivity,
                     )
 
                 # Forward solve
                 data = system.forward_solve(sigma)
-                voltages = data.meas.copy()
-
-                # Add noise if requested
-                if cfg.noise_level > 0:
-                    noise_std = cfg.noise_level * np.std(voltages)
-                    voltages += noise_std * rng.standard_normal(voltages.shape)
+                voltages = _forward_measurement_values(
+                    data.meas,
+                    noise_level=cfg.noise_level,
+                    rng=rng,
+                )
 
                 # Save sample
                 write_dataset_sample_package(

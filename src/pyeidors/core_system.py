@@ -27,6 +27,10 @@ from .data.difference import (
     normalize_difference_orientation,
 )
 from .data.structures import EITData, EITImage, EITMesh, MeshConfig, PatternConfig
+from .forward.complex_support import (
+    petsc_scalar_dtype_name,
+    petsc_scalar_is_complex,
+)
 from .forward.eit_forward_model import EITForwardModel
 from .forward.process_setup_cache import (
     clear_process_forward_setup_cache,
@@ -35,7 +39,7 @@ from .forward.process_setup_cache import (
 from .geometry.mesh_loader import MeshLoader
 from .geometry.process_mesh_cache import clear_process_mesh_cache
 from .geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
-from .geometry.simple_mesh_generator import create_simple_eit_mesh
+from .geometry.optimized_mesh_generator import load_or_create_mesh
 from .inverse.contracts import SolverOutput
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from .inverse.regularization.smoothness import (
@@ -49,6 +53,7 @@ from .inverse.solvers.gauss_newton import GaussNewtonReconstructor
 from .inverse.solvers.gauss_newton_device import normalize_runtime_device
 from .physics import UnitCheckReport, run_unit_consistency_checks
 from .physics.current_drive import normalize_pattern_config_for_mesh
+from .utils.numeric_ops import has_nonzero_imaginary as _array_has_nonzero_imaginary
 from .perf.policy import (
     ACCELERATION_PROFILE_VALUES,
     DEFAULT_3D_GENERATOR_REVISION,
@@ -107,6 +112,39 @@ _VALID_DIFFERENCE_PRESETS = {
 _VALID_ABSOLUTE_PRESETS = {"eidors_abs_gn"}
 _VALID_DIFFERENCE_STEP_SIZE_MODES = {"off", "optimize", "fixed"}
 _VALID_BEST_HOMOG_MODES = {"off", "optimize", "on"}
+
+
+def _has_nonzero_imaginary(values: Any) -> bool:
+    return _array_has_nonzero_imaginary(values)
+
+
+def _real_or_complex_scalar(value: Any, *, name: str) -> float | complex:
+    array = np.asarray(value)
+    if array.size != 1:
+        raise ValueError(f"{name} must be scalar-like.")
+    scalar = array.reshape(-1)[0]
+    if _has_nonzero_imaginary(array):
+        return complex(scalar)
+    return float(np.real(scalar))
+
+
+def _real_or_complex_vector(
+    value: Any,
+    *,
+    size: int,
+    default: float,
+    name: str,
+) -> np.ndarray:
+    if value is None:
+        return np.full(size, default, dtype=float)
+    array = np.asarray(value)
+    if array.size == 1:
+        array = np.full(size, array.reshape(-1)[0], dtype=array.dtype)
+    array = array.reshape(-1)
+    if array.size != size:
+        raise ValueError(f"{name} length ({array.size}) does not match n_elec ({size})")
+    dtype = np.complex128 if _has_nonzero_imaginary(array) else float
+    return np.asarray(array, dtype=dtype)
 
 
 def _normalize_choice(
@@ -273,13 +311,17 @@ class EITSystem(CoreSystemFacadeMixin):
             geometry_scale_to_m=1.0,
         )
         self.mesh_config = mesh_config or MeshConfig(radius=1.0, refinement=8)
-        self.contact_impedance = (
-            np.full(n_elec, 0.01, dtype=float)
-            if contact_impedance is None
-            else np.asarray(contact_impedance, dtype=float)
+        self.contact_impedance = _real_or_complex_vector(
+            contact_impedance,
+            size=n_elec,
+            default=0.01,
+            name="contact_impedance",
         )
 
-        self.base_conductivity = float(base_conductivity)
+        self.base_conductivity = _real_or_complex_scalar(
+            base_conductivity,
+            name="base_conductivity",
+        )
         self.difference_mode = normalize_difference_mode(
             difference_mode,
             default=DEFAULT_DIFFERENCE_MODE,
@@ -293,10 +335,11 @@ class EITSystem(CoreSystemFacadeMixin):
         self.hyperparameter = (
             None if hyperparameter is None else float(max(0.0, hyperparameter))
         )
-        self.jacobian_background_conductivity = (
+        self.jacobian_background_conductivity = _real_or_complex_scalar(
             self.base_conductivity
             if jacobian_background_conductivity is None
-            else float(jacobian_background_conductivity)
+            else jacobian_background_conductivity,
+            name="jacobian_background_conductivity",
         )
         self.noser_exponent = float(noser_exponent)
         self.noser_floor = float(noser_floor)
@@ -441,17 +484,21 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_family: Optional[str] = None,
         geometry_version: Optional[str] = None,
         electrode_layout: Optional[str] = None,
+        initialize_inverse: bool = True,
     ) -> None:
         """Set up the system with an explicit mesh source."""
         if mesh is not None:
-            self.setup_with_mesh(mesh)
+            self.setup_with_mesh(mesh, initialize_inverse=initialize_inverse)
             return
         if mesh_source == "cache":
             resolved_gdim = int(
                 gdim if gdim is not None else dimension if dimension is not None else 2
             )
             self.setup_from_cache(
-                mesh_dir=mesh_dir, mesh_name=mesh_name, gdim=resolved_gdim
+                mesh_dir=mesh_dir,
+                mesh_name=mesh_name,
+                gdim=resolved_gdim,
+                initialize_inverse=initialize_inverse,
             )
             return
         if mesh_source == "generated":
@@ -462,6 +509,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 radius=radius,
                 mesh_size=mesh_size,
                 dimension=resolved_dim,
+                mesh_dir=mesh_dir,
                 height=height,
                 electrode_coverage=electrode_coverage,
                 electrode_height_ratio=electrode_height_ratio,
@@ -470,6 +518,7 @@ class EITSystem(CoreSystemFacadeMixin):
                 mesh_family=mesh_family,
                 geometry_version=geometry_version,
                 electrode_layout=electrode_layout,
+                initialize_inverse=initialize_inverse,
             )
             return
         raise ValueError(
@@ -478,7 +527,9 @@ class EITSystem(CoreSystemFacadeMixin):
             "or setup(mesh_source='generated', ...)."
         )
 
-    def setup_with_mesh(self, mesh: EITMesh) -> None:
+    def setup_with_mesh(
+        self, mesh: EITMesh, *, initialize_inverse: bool = True
+    ) -> None:
         if not isinstance(mesh, EITMesh):
             raise TypeError("EITSystem.setup_with_mesh expects an EITMesh instance")
         self.mesh = mesh
@@ -488,13 +539,15 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         self.pattern_config = normalized_pattern
         self._pattern_config_diagnostics = diagnostics
-        self._initialize_components()
+        self._initialize_components(initialize_inverse=initialize_inverse)
 
     def setup_from_cache(
         self,
         mesh_dir: str = "eit_meshes",
         mesh_name: Optional[str] = None,
         gdim: int = 2,
+        *,
+        initialize_inverse: bool = True,
     ) -> None:
         loader = MeshLoader(mesh_dir=mesh_dir, gdim=gdim)
         selected = (
@@ -506,7 +559,7 @@ class EITSystem(CoreSystemFacadeMixin):
             mesh_name,
             gdim,
         )
-        self.setup_with_mesh(selected)
+        self.setup_with_mesh(selected, initialize_inverse=initialize_inverse)
 
     def setup_generated_mesh(
         self,
@@ -514,6 +567,7 @@ class EITSystem(CoreSystemFacadeMixin):
         radius: Optional[float] = None,
         mesh_size: Optional[float] = None,
         dimension: int = 2,
+        mesh_dir: str = "eit_meshes",
         height: Optional[float] = None,
         electrode_coverage: Optional[float] = None,
         electrode_height_ratio: Optional[float] = None,
@@ -522,6 +576,7 @@ class EITSystem(CoreSystemFacadeMixin):
         mesh_family: Optional[str] = None,
         geometry_version: Optional[str] = None,
         electrode_layout: Optional[str] = None,
+        initialize_inverse: bool = True,
     ) -> None:
         if int(dimension) not in {2, 3}:
             raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
@@ -536,10 +591,16 @@ class EITSystem(CoreSystemFacadeMixin):
                 if electrode_coverage is None
                 else float(electrode_coverage)
             )
-            generated = create_simple_eit_mesh(
+            resolved_refinement = max(
+                2,
+                int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
+            )
+            generated = load_or_create_mesh(
+                mesh_dir=mesh_dir,
                 n_elec=self.n_elec,
+                dimension=2,
                 radius=resolved_radius,
-                mesh_size=resolved_mesh_size,
+                refinement=resolved_refinement,
                 electrode_coverage=resolved_coverage,
             )
         else:
@@ -599,7 +660,7 @@ class EITSystem(CoreSystemFacadeMixin):
             resolved_radius,
             resolved_mesh_size,
         )
-        self.setup_with_mesh(generated)
+        self.setup_with_mesh(generated, initialize_inverse=initialize_inverse)
 
     def _resolve_generated_3d_mesh_preferences(
         self,
@@ -614,10 +675,10 @@ class EITSystem(CoreSystemFacadeMixin):
             self, "forward_backend", DEFAULT_FORWARD_BACKEND
         )
         wants_easy_gpu = prefers_3d_gpu_pipeline(requested_profile)
+        complex_route = self._requires_dolfinx_complex_route()
         wants_structured_mesh = (
-            wants_easy_gpu
-            or requested_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
-        )
+            wants_easy_gpu and not complex_route
+        ) or requested_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
         if wants_structured_mesh and mesh_family is None:
             resolved_mesh_family = MESH_FAMILY_HEX
         else:
@@ -654,12 +715,27 @@ class EITSystem(CoreSystemFacadeMixin):
             .endswith(".msh")
         )
 
+    def _uses_complex_admittivity_values(self) -> bool:
+        return bool(
+            _has_nonzero_imaginary(self.contact_impedance)
+            or _has_nonzero_imaginary(self.base_conductivity)
+            or _has_nonzero_imaginary(self.jacobian_background_conductivity)
+        )
+
+    def _requires_dolfinx_complex_route(self) -> bool:
+        return bool(
+            self._uses_complex_admittivity_values() or petsc_scalar_is_complex()
+        )
+
     def _resolve_runtime_policy(self) -> dict[str, Any]:
         if self.mesh is None:
             raise RuntimeError("Cannot resolve runtime policy before mesh setup.")
 
         mesh_dim = int(self.mesh.topology.dim)
         structured_supported = self._supports_cuda_structured_backend()
+        complex_admittivity_requested = self._uses_complex_admittivity_values()
+        complex_petsc_runtime = petsc_scalar_is_complex()
+        complex_route = complex_admittivity_requested or complex_petsc_runtime
         requested_profile = getattr(
             self, "acceleration_profile", DEFAULT_ACCELERATION_PROFILE
         )
@@ -684,6 +760,17 @@ class EITSystem(CoreSystemFacadeMixin):
         fused_gpu_profile = prefers_fused_3d_gpu_pipeline(requested_profile)
 
         resolved_forward_backend = requested_forward_backend
+        forward_backend_fallback_reason = None
+        if (
+            complex_route
+            and resolved_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
+        ):
+            resolved_forward_backend = DEFAULT_FORWARD_BACKEND
+            forward_backend_fallback_reason = (
+                "cuda_structured_real_only_complex_admittivity"
+                if complex_admittivity_requested
+                else "cuda_structured_unavailable_in_complex_petsc_runtime"
+            )
         if (
             potential_order != 1
             and resolved_forward_backend == FORWARD_BACKEND_CUDA_STRUCTURED
@@ -697,6 +784,7 @@ class EITSystem(CoreSystemFacadeMixin):
             and resolved_forward_backend == DEFAULT_FORWARD_BACKEND
             and structured_supported
             and potential_order == 1
+            and not complex_route
         ):
             resolved_forward_backend = FORWARD_BACKEND_CUDA_STRUCTURED
 
@@ -761,12 +849,17 @@ class EITSystem(CoreSystemFacadeMixin):
         )
         return {
             "mesh_dim": mesh_dim,
+            "complex_admittivity_requested": complex_admittivity_requested,
+            "petsc_scalar_type": petsc_scalar_dtype_name(),
+            "petsc_scalar_is_complex": complex_petsc_runtime,
+            "complex_route_effective": complex_route,
             "acceleration_profile_requested": requested_profile,
             "acceleration_profile_effective": effective_profile,
             "structured_backend_supported": structured_supported,
             "potential_order": potential_order,
             "forward_backend_requested": requested_forward_backend,
             "forward_backend_effective": resolved_forward_backend,
+            "forward_backend_fallback_reason": forward_backend_fallback_reason,
             "petsc_device_requested": requested_petsc_device,
             "petsc_device_effective": resolved_petsc_device,
             "device_requested": requested_device,
@@ -785,7 +878,7 @@ class EITSystem(CoreSystemFacadeMixin):
             **mat_solve_policy,
         }
 
-    def _initialize_components(self) -> None:
+    def _initialize_components(self, *, initialize_inverse: bool = True) -> None:
         if self.mesh is None:
             raise RuntimeError("Cannot initialize EITSystem without mesh")
         runtime_policy = self._resolve_runtime_policy()
@@ -800,6 +893,8 @@ class EITSystem(CoreSystemFacadeMixin):
         resolved_backend_config["mat_solve_mode"] = runtime_policy[
             "forward_mat_solve_effective_policy"
         ]
+        potential_order = max(1, int(getattr(self, "potential_order", 1)))
+        self.potential_order = potential_order
         self.fwd_model = EITForwardModel(
             n_elec=self.n_elec,
             pattern_config=self.pattern_config,
@@ -810,12 +905,17 @@ class EITSystem(CoreSystemFacadeMixin):
             forward_backend=str(runtime_policy["forward_backend_effective"]),
             cache_manager=self.cache_manager,
             performance_mode=self.performance_mode,
-            potential_order=self.potential_order,
+            potential_order=potential_order,
         )
         self.fwd_model._set_backend_diagnostic(
             **self._pattern_config_diagnostics,
             **runtime_policy,
         )
+        if not initialize_inverse:
+            self.reconstructor = None
+            self._last_reconstructor_controls = {}
+            self._is_initialized = True
+            return
         jacobian_calculator = DirectJacobianCalculator(
             self.fwd_model,
             block_tune_mode=self.jacobian_block_tune,
@@ -1038,16 +1138,14 @@ class EITSystem(CoreSystemFacadeMixin):
         self.reconstructor.active_preset_name = str(config["preset_name"])
         self._active_inverse_preset_name = str(config["preset_name"])
 
-    def _require_initialized(self) -> None:
-        if (
-            not self._is_initialized
-            or self.fwd_model is None
-            or self.reconstructor is None
-        ):
+    def _require_initialized(self, *, require_reconstructor: bool = True) -> None:
+        if not self._is_initialized or self.fwd_model is None:
+            raise RuntimeError("System not initialized. Please call setup(...) first.")
+        if require_reconstructor and self.reconstructor is None:
             raise RuntimeError("System not initialized. Please call setup(...) first.")
 
     def forward_solve(self, conductivity: np.ndarray | EITImage | Any) -> EITData:
-        self._require_initialized()
+        self._require_initialized(require_reconstructor=False)
         image = conductivity_to_image(self.fwd_model, conductivity)
         data, _ = self.fwd_model.fwd_solve(image)
         return data

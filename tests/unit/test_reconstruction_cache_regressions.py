@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import inspect
 import os
 from pathlib import Path
 import sys
@@ -12,7 +14,9 @@ from PySide6.QtWidgets import QApplication
 from eit_app.controllers import reconstruction_controller as rc
 from eit_app.models.frame_model import FrameData
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
+from eit_app.ui.hardware.equipotential_plot_widget import EquipotentialPlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
+import eit_app.ui.simulation.metrics_panel as metrics_module
 from eit_app.ui.simulation.metrics_panel import MetricsPanel
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
@@ -23,6 +27,23 @@ def _get_app() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+def test_v255_array_pair_hash_streams_payloads_without_local_tobytes() -> None:
+    coords = np.arange(24, dtype=np.float32).reshape(8, 3)[::2]
+    cells = np.array([[0, 1, 2, 3], [1, 2, 3, 0]], dtype=np.int32)
+    expected = hashlib.sha256()
+    for array in (coords, cells):
+        arr = np.ascontiguousarray(np.asarray(array))
+        expected.update(str(arr.dtype).encode("utf-8"))
+        expected.update(str(arr.shape).encode("utf-8"))
+        expected.update(arr.tobytes())
+
+    assert rc._array_pair_hash(coords, cells) == expected.hexdigest()
+    source = inspect.getsource(rc._array_pair_hash)
+    assert ".tobytes(" not in source
+    assert "ascontiguousarray" not in source
+    assert "update_digest_with_array_payload" in source
 
 
 def test_reconstruction_widget_can_replace_colorbar_repeatedly() -> None:
@@ -43,7 +64,266 @@ def test_reconstruction_widget_can_replace_colorbar_repeatedly() -> None:
     widget.clear()
 
 
+def test_v356_equipotential_widget_passes_float32_to_render(monkeypatch) -> None:
+    _get_app()
+    widget = EquipotentialPlotWidget()
+    captured: dict[str, np.dtype] = {}
+
+    def _fake_render_pyvista(node_values, coords, cells):
+        captured["node_values"] = np.asarray(node_values).dtype
+        captured["coords"] = np.asarray(coords).dtype
+        captured["cells"] = np.asarray(cells).dtype
+        return True
+
+    monkeypatch.setattr(widget, "_render_pyvista", _fake_render_pyvista)
+    result = SimpleNamespace(
+        error_msg=None,
+        conductivity=np.array([1.0], dtype=np.float32),
+        node_coords=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=np.float32,
+        ),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+    )
+
+    try:
+        widget.update_reconstruction(result)
+
+        assert captured == {
+            "node_values": np.dtype(np.float32),
+            "coords": np.dtype(np.float32),
+            "cells": np.dtype(np.int32),
+        }
+    finally:
+        widget.close()
+
+
+def test_v357_reconstruction_widget_preserves_float32_payload(monkeypatch) -> None:
+    _get_app()
+    widget = ReconstructionWidget()
+    captured: dict[str, np.dtype] = {}
+
+    def _fake_prepare_static(coords, cells, n_elec, electrode_coverage):
+        del n_elec, electrode_coverage
+        captured["coords"] = np.asarray(coords).dtype
+        captured["cells"] = np.asarray(cells).dtype
+
+    def _fake_prepare_grid(coords):
+        captured["grid_coords"] = np.asarray(coords).dtype
+
+    def _fake_interpolate(node_values):
+        captured["node_values"] = np.asarray(node_values).dtype
+        return np.zeros((2, 2, 4), dtype=np.ubyte)
+
+    monkeypatch.setattr(widget, "_prepare_static_scene", _fake_prepare_static)
+    monkeypatch.setattr(widget, "_prepare_grid_cache", _fake_prepare_grid)
+    monkeypatch.setattr(widget, "_interpolate_to_rgba", _fake_interpolate)
+    result = SimpleNamespace(
+        error_msg=None,
+        conductivity=np.array([1.0, 2.0], dtype=np.float32),
+        node_coords=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            dtype=np.float32,
+        ),
+        cell_connectivity=np.array([[0, 1, 2], [0, 2, 3]], dtype=np.int32),
+        metadata={},
+    )
+
+    try:
+        widget.update_reconstruction(result)
+
+        assert captured == {
+            "coords": np.dtype(np.float32),
+            "cells": np.dtype(np.int32),
+            "grid_coords": np.dtype(np.float32),
+            "node_values": np.dtype(np.float32),
+        }
+    finally:
+        widget.close()
+
+
+def test_v268_reconstruction_widget_grid_cache_direct_fills_sample_points() -> None:
+    source = inspect.getsource(ReconstructionWidget._prepare_grid_cache)
+
+    assert "np.meshgrid" not in source
+    assert "np.tile" not in source
+    assert "np.repeat" not in source
+    assert "np.column_stack" not in source
+    assert "np.copyto" in source
+
+    _get_app()
+    widget = ReconstructionWidget()
+    widget._GRID_SIZE = 4
+    coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    widget._prepare_grid_cache(coords)
+
+    assert widget._grid_shape == (4, 4)
+    assert widget._grid_vertices.shape == (16, 3)
+    assert widget._grid_weights.shape == (16, 3)
+    assert widget._grid_valid_mask.shape == (16,)
+
+
+def test_v442_reconstruction_widget_grid_cache_direct_fills_barycentric_arrays() -> (
+    None
+):
+    source = inspect.getsource(ReconstructionWidget._prepare_grid_cache)
+
+    assert "simplex[valid_mask]" not in source
+    assert "sample_points[valid_mask]" not in source
+    assert "vertices[valid_mask]" not in source
+    assert "weights[valid_mask" not in source
+    assert "safe_simplex" in source
+    assert "np.take(delaunay.simplices, safe_simplex, axis=0, out=vertices)" in source
+    assert "np.copyto(weights, 0.0, where=invalid_mask[:, None])" in source
+
+    _get_app()
+    widget = ReconstructionWidget()
+    widget._GRID_SIZE = 4
+    coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    widget._prepare_grid_cache(coords)
+
+    assert widget._grid_vertices is not None
+    assert widget._grid_weights is not None
+    assert widget._grid_valid_mask is not None
+    assert widget._grid_invalid_mask is not None
+    assert widget._grid_vertices.shape == (16, 3)
+    assert widget._grid_weights.shape == (16, 3)
+    assert np.all(widget._grid_vertices[widget._grid_invalid_mask] == 0)
+    np.testing.assert_allclose(
+        widget._grid_weights[widget._grid_valid_mask].sum(axis=1),
+        np.ones(int(np.count_nonzero(widget._grid_valid_mask))),
+    )
+    np.testing.assert_allclose(widget._grid_weights[widget._grid_invalid_mask], 0.0)
+
+
+def test_v441_reconstruction_widget_interpolation_reuses_grid_buffers() -> None:
+    source = inspect.getsource(ReconstructionWidget._interpolate_to_rgba)
+
+    assert "self._grid_vertices[self._grid_valid_mask]" not in source
+    assert "self._grid_weights[self._grid_valid_mask]" not in source
+    assert "interpolated[self._grid_valid_mask]" not in source
+    assert "rgba[~self._grid_valid_mask" not in source
+    assert "np.take(node_values, self._grid_vertices, out=sample_values)" in source
+    assert 'casting="same_kind"' in source
+    assert "np.copyto(rgba[..., 3].reshape(-1), 0, where=invalid_mask)" in source
+    assert "dtype=np.float64" not in source
+
+    _get_app()
+    widget = ReconstructionWidget()
+    widget._grid_vertices = np.array([[0, 1, 2], [0, 0, 0]], dtype=np.int32)
+    widget._grid_weights = np.array(
+        [[0.2, 0.3, 0.5], [0.0, 0.0, 0.0]], dtype=np.float64
+    )
+    widget._grid_valid_mask = np.array([True, False], dtype=bool)
+    widget._grid_invalid_mask = np.array([False, True], dtype=bool)
+    widget._grid_shape = (1, 2)
+
+    rgba = widget._interpolate_to_rgba(np.array([1.0, 3.0, 5.0], dtype=np.float32))
+
+    assert rgba is not None
+    assert rgba.shape == (1, 2, 4)
+    assert rgba[0, 0, 3] == 255
+    assert rgba[0, 1, 3] == 0
+    assert widget._grid_sample_values is not None
+    assert widget._grid_sample_values.dtype == np.dtype(np.float32)
+    assert widget._grid_interpolated is not None
+    assert widget._grid_interpolated.dtype == np.dtype(np.float32)
+    assert widget._grid_abs_values is not None
+    assert widget._grid_abs_values.dtype == np.dtype(np.float32)
+    assert widget._grid_normalized is not None
+    assert widget._grid_normalized.dtype == np.dtype(np.float32)
+    first_sample_buffer = widget._grid_sample_values
+    first_interpolated_buffer = widget._grid_interpolated
+
+    rgba_second = widget._interpolate_to_rgba(
+        np.array([2.0, 4.0, 6.0], dtype=np.float32)
+    )
+    assert rgba_second is not None
+    assert widget._grid_sample_values is first_sample_buffer
+    assert widget._grid_interpolated is first_interpolated_buffer
+
+
+def test_v566_reconstruction_widget_defers_grid_work_buffers_until_dtype_known() -> (
+    None
+):
+    source = inspect.getsource(ReconstructionWidget._prepare_grid_cache)
+    interp_source = inspect.getsource(ReconstructionWidget._interpolate_to_rgba)
+
+    assert (
+        "self._grid_interpolated = np.empty(vertices.shape[0], dtype=np.float64)"
+        not in source
+    )
+    assert "self._grid_interpolated = None" in source
+    assert "dtype=node_values.dtype" in interp_source
+
+    _get_app()
+    widget = ReconstructionWidget()
+    widget._GRID_SIZE = 4
+    coords = np.array(
+        [
+            [0.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    widget._prepare_grid_cache(coords)
+
+    assert widget._grid_interpolated is None
+    assert widget._grid_abs_values is None
+    assert widget._grid_normalized is None
+
+    rgba = widget._interpolate_to_rgba(np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32))
+
+    assert rgba is not None
+    assert widget._grid_interpolated is not None
+    assert widget._grid_interpolated.dtype == np.dtype(np.float32)
+    assert widget._grid_abs_values is not None
+    assert widget._grid_abs_values.dtype == np.dtype(np.float32)
+    assert widget._grid_normalized is not None
+    assert widget._grid_normalized.dtype == np.dtype(np.float32)
+
+
+def test_v210_rm_artifact_geometry_preserves_float32_coords() -> None:
+    node_coords = np.array(
+        [[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+        dtype=np.float32,
+    )
+    cells = np.array([[0, 1, 2]], dtype=np.int32)
+
+    coords_out, cells_out = rc._rm_artifact_geometry(
+        {
+            "node_coords": node_coords,
+            "cell_connectivity": cells,
+        },
+        {},
+    )
+
+    assert coords_out.dtype == np.dtype(np.float32)
+    assert cells_out.dtype == np.dtype(np.int32)
+    np.testing.assert_allclose(coords_out, node_coords)
+    np.testing.assert_array_equal(cells_out, cells)
+
+
 def test_metrics_panel_compares_values_by_geometry_not_cell_order() -> None:
+    _get_app()
     _get_app()
     panel = MetricsPanel()
     node_coords = np.array(
@@ -70,6 +350,430 @@ def test_metrics_panel_compares_values_by_geometry_not_cell_order() -> None:
     assert panel._l2_label.text() == "0.0000"
     assert panel._corr_label.text() == "1.0000"
     assert panel._rmse_label.text() == "0.000000"
+
+
+def test_v197_metrics_panel_same_geometry_skips_nearest_resample(
+    monkeypatch,
+) -> None:
+    _get_app()
+    panel = MetricsPanel()
+    node_coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int32)
+
+    def _fail_resample(*_args, **_kwargs):
+        raise AssertionError("same mesh metrics must not build nearest-neighbor index")
+
+    monkeypatch.setattr(metrics_module, "_nearest_resample", _fail_resample)
+
+    panel.update_metrics(
+        np.array([1.0], dtype=np.float32),
+        np.array([1.0], dtype=np.float32),
+        ground_truth_node_coords=node_coords,
+        ground_truth_cell_connectivity=cells,
+        reconstructed_node_coords=node_coords.copy(),
+        reconstructed_cell_connectivity=cells.copy(),
+    )
+
+    assert panel._l2_label.text() == "0.0000"
+    assert panel._corr_label.text() == "0.0000"
+    assert panel._rmse_label.text() == "0.000000"
+
+
+def test_v197_metrics_samples_preserve_float32_int32_geometry_dtype() -> None:
+    node_coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=np.float32,
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int32)
+
+    positions, values = metrics_module._metric_samples(
+        np.array([1.0], dtype=np.float32),
+        node_coords=node_coords,
+        cell_connectivity=cells,
+    )
+
+    assert positions.dtype == np.float32
+    assert values.dtype == np.float32
+
+
+def test_v227_metrics_nearest_fallback_streams_targets() -> None:
+    resample_source = inspect.getsource(metrics_module._nearest_resample)
+    fallback_source = inspect.getsource(metrics_module._nearest_indices_bruteforce)
+
+    assert "_nearest_indices_bruteforce" in resample_source
+    assert "target_pos[target_finite, None" not in resample_source
+    assert "valid_source_pos[None" not in resample_source
+    assert "[:, None" not in fallback_source
+    assert "[None, :" not in fallback_source
+
+    source = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [10.0, 0.0, 0.0],
+            [0.0, 10.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    target = np.array(
+        [
+            [9.0, 1.0, 0.0],
+            [1.0, 9.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    idx = metrics_module._nearest_indices_bruteforce(source, target)
+    np.testing.assert_array_equal(idx, [1, 2])
+
+
+def test_v377_metrics_bruteforce_nearest_preserves_float32_work_buffers(
+    monkeypatch,
+) -> None:
+    fallback_source = inspect.getsource(metrics_module._nearest_indices_bruteforce)
+
+    assert "dtype=np.float64" not in fallback_source
+    assert "work_dtype = np.result_type" in fallback_source
+
+    source = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+            [0.0, 10.0],
+        ],
+        dtype=np.float32,
+    )
+    target = np.array(
+        [
+            [9.0, 1.0],
+            [1.0, 9.0],
+        ],
+        dtype=np.float32,
+    )
+    original_empty = metrics_module.np.empty
+    empty_calls: list[tuple[int | tuple[int, ...], np.dtype]] = []
+
+    def _capture_empty(shape, *args, dtype=None, **kwargs):
+        empty_calls.append((shape, np.dtype(dtype)))
+        return original_empty(shape, *args, dtype=dtype, **kwargs)
+
+    monkeypatch.setattr(metrics_module.np, "empty", _capture_empty)
+
+    idx = metrics_module._nearest_indices_bruteforce(source, target)
+
+    np.testing.assert_array_equal(idx, [1, 2])
+    work_dtypes = [dtype for shape, dtype in empty_calls if shape == source.shape[0]]
+    assert work_dtypes == [np.dtype(np.float32), np.dtype(np.float32)]
+
+    empty_calls.clear()
+    idx = metrics_module._nearest_indices_bruteforce(source, target.astype(np.float64))
+
+    np.testing.assert_array_equal(idx, [1, 2])
+    work_dtypes = [dtype for shape, dtype in empty_calls if shape == source.shape[0]]
+    assert work_dtypes == [np.dtype(np.float64), np.dtype(np.float64)]
+
+
+def test_v358_metrics_finite_pair_stats_stream_without_subset_copies(
+    monkeypatch,
+) -> None:
+    update_source = inspect.getsource(MetricsPanel.update_metrics)
+    helper_source = inspect.getsource(metrics_module._finite_pair_stats)
+
+    assert "gt[finite]" not in update_source
+    assert "rc[finite]" not in update_source
+    assert "np.corrcoef" not in update_source
+    assert "_finite_pair_stats(gt, rc)" in update_source
+    assert "ground_truth[finite]" not in helper_source
+    assert "reconstructed[finite]" not in helper_source
+
+    monkeypatch.setattr(metrics_module, "_METRIC_SCAN_CHUNK_ITEMS", 2)
+    truth = np.array([1.0, np.nan, 2.0, 4.0, np.inf], dtype=np.float32)
+    recon = np.array([1.5, 3.0, np.inf, 1.0, 2.0], dtype=np.float32)
+    finite = np.isfinite(truth) & np.isfinite(recon)
+    gt = truth[finite]
+    rc = recon[finite]
+
+    (
+        count,
+        diff_sq_sum,
+        gt_sq_sum,
+        gt_sum,
+        rc_sum,
+        rc_sq_sum,
+        cross_sum,
+    ) = metrics_module._finite_pair_stats(truth, recon)
+
+    assert count == int(np.count_nonzero(finite))
+    assert diff_sq_sum == pytest.approx(float(np.sum((gt - rc) ** 2)))
+    assert gt_sq_sum == pytest.approx(float(np.sum(gt**2)))
+    assert gt_sum == pytest.approx(float(np.sum(gt)))
+    assert rc_sum == pytest.approx(float(np.sum(rc)))
+    assert rc_sq_sum == pytest.approx(float(np.sum(rc**2)))
+    assert cross_sum == pytest.approx(float(np.sum(gt * rc)))
+
+    _get_app()
+    panel = MetricsPanel()
+    try:
+        panel.update_metrics(truth, recon)
+
+        assert panel._l2_label.text() == "0.7376"
+        assert panel._corr_label.text() == "-1.0000"
+        assert panel._rmse_label.text() == "2.150581"
+    finally:
+        panel.close()
+
+
+def test_v436_metrics_finite_pair_stats_reuses_chunk_bool_buffers(
+    monkeypatch,
+) -> None:
+    helper_source = inspect.getsource(metrics_module._finite_pair_stats)
+
+    assert "np.isfinite(gt_chunk) & np.isfinite(rc_chunk)" not in helper_source
+    assert "finite = np.empty(work_size, dtype=bool)" in helper_source
+    assert "finite_work = np.empty(work_size, dtype=bool)" in helper_source
+    assert "np.isfinite(gt_chunk, out=finite_chunk)" in helper_source
+    assert "np.isfinite(rc_chunk, out=finite_work_chunk)" in helper_source
+    assert "np.logical_and(finite_chunk, finite_work_chunk, out=finite_chunk)" in (
+        helper_source
+    )
+
+    monkeypatch.setattr(metrics_module, "_METRIC_SCAN_CHUNK_ITEMS", 2)
+    original_isfinite = metrics_module.np.isfinite
+    out_base_ids: list[int] = []
+
+    def _record_isfinite(values, *args, out=None, **kwargs):
+        if out is not None:
+            base = out.base if out.base is not None else out
+            out_base_ids.append(id(base))
+        return original_isfinite(values, *args, out=out, **kwargs)
+
+    monkeypatch.setattr(metrics_module.np, "isfinite", _record_isfinite)
+    truth = np.array([1.0, np.nan, 2.0, 4.0, np.inf], dtype=np.float32)
+    recon = np.array([1.5, 3.0, np.inf, 1.0, 2.0], dtype=np.float32)
+
+    stats = metrics_module._finite_pair_stats(truth, recon)
+
+    assert stats[0] == 2
+    assert len(set(out_base_ids)) == 2
+
+
+def test_v359_metrics_nearest_resample_uses_all_finite_fast_path(
+    monkeypatch,
+) -> None:
+    resample_source = inspect.getsource(metrics_module._nearest_resample)
+    mask_source = inspect.getsource(metrics_module._finite_row_mask_or_none)
+
+    assert "source_finite =" not in resample_source
+    assert "target_finite =" not in resample_source
+    assert "target_pos[target_finite]" not in resample_source
+    assert "_finite_row_mask_or_none(source_pos, source_values)" in resample_source
+    assert "_finite_row_mask_or_none(target_pos)" in resample_source
+    assert "return None" in mask_source
+
+    monkeypatch.setattr(metrics_module, "_METRIC_SCAN_CHUNK_ITEMS", 2)
+    source = np.array(
+        [
+            [0.0, 0.0],
+            [10.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    target = np.array(
+        [
+            [9.0, 0.0],
+            [1.0, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    values = np.array([1.0, 2.0], dtype=np.float32)
+
+    assert metrics_module._finite_row_mask_or_none(source, values) is None
+    mapped = metrics_module._nearest_resample(source, values, target)
+
+    assert mapped is not None
+    assert mapped.dtype == np.dtype(np.float32)
+    np.testing.assert_array_equal(mapped, np.array([2.0, 1.0], dtype=np.float32))
+
+    dirty_source = source.copy()
+    dirty_source[0, 0] = np.nan
+    source_mask = metrics_module._finite_row_mask_or_none(dirty_source, values)
+
+    assert source_mask is not None
+    assert source_mask.tolist() == [False, True]
+
+
+def test_v435_metrics_finite_row_scan_reuses_1d_chunk_buffers(monkeypatch) -> None:
+    mask_source = inspect.getsource(metrics_module._finite_row_mask_or_none)
+    chunk_source = inspect.getsource(metrics_module._finite_row_chunk_mask)
+
+    assert "np.isfinite(pos[start:stop]).all(axis=1)" not in mask_source
+    assert "np.isfinite(pos[tail_start:tail_stop]).all(axis=1)" not in mask_source
+    assert "row_work = np.empty" in mask_source
+    assert "axis_work = np.empty" in mask_source
+    assert "np.isfinite(pos[start:stop, axis], out=work)" in chunk_source
+    assert "np.logical_and(out, work, out=out)" in chunk_source
+
+    monkeypatch.setattr(metrics_module, "_METRIC_SCAN_CHUNK_ITEMS", 2)
+    original_chunk_mask = metrics_module._finite_row_chunk_mask
+    out_ids: list[int] = []
+    work_ids: list[int] = []
+
+    def _record_chunk_mask(*args, out, work, **kwargs):
+        out_ids.append(id(out.base if out.base is not None else out))
+        work_ids.append(id(work.base if work.base is not None else work))
+        return original_chunk_mask(*args, out=out, work=work, **kwargs)
+
+    monkeypatch.setattr(metrics_module, "_finite_row_chunk_mask", _record_chunk_mask)
+    positions = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 1.0, 1.0],
+            [np.nan, 2.0, 2.0],
+            [3.0, 3.0, 3.0],
+            [4.0, np.inf, 4.0],
+        ],
+        dtype=np.float32,
+    )
+    values = np.array([1.0, 2.0, 3.0, np.nan, 5.0], dtype=np.float32)
+
+    mask = metrics_module._finite_row_mask_or_none(positions, values)
+
+    assert mask is not None
+    assert mask.tolist() == [True, True, False, False, False]
+    assert len(set(out_ids)) == 1
+    assert len(set(work_ids)) == 1
+
+
+def test_v376_metrics_nearest_resample_direct_fills_all_finite_output(
+    monkeypatch,
+) -> None:
+    resample_source = inspect.getsource(metrics_module._nearest_resample)
+
+    assert "np.take(valid_source_values, idx_arr, out=mapped)" in resample_source
+    assert "mapped[:] = mapped_values" not in resample_source
+    assert "valid_source_values[np.asarray(idx" not in resample_source
+
+    source = np.array([[0.0], [1.0], [2.0]], dtype=np.float32)
+    target = np.array([[1.9], [0.1]], dtype=np.float32)
+    values = np.array([10.0, 20.0, 30.0], dtype=np.float32)
+    original_take = metrics_module.np.take
+    take_calls: list[tuple[bool, np.dtype]] = []
+
+    def _capture_take(a, indices, *args, out=None, **kwargs):
+        if np.asarray(a).shape == values.shape:
+            take_calls.append((out is not None, np.asarray(a).dtype))
+        return original_take(a, indices, *args, out=out, **kwargs)
+
+    monkeypatch.setattr(metrics_module.np, "take", _capture_take)
+
+    mapped = metrics_module._nearest_resample(source, values, target)
+
+    assert mapped is not None
+    assert mapped.dtype == np.dtype(np.float32)
+    np.testing.assert_array_equal(mapped, np.array([30.0, 10.0], dtype=np.float32))
+    assert take_calls == [(True, np.dtype(np.float32))]
+
+
+def test_v404_metrics_nearest_resample_direct_fills_masked_targets(
+    monkeypatch,
+) -> None:
+    resample_source = inspect.getsource(metrics_module._nearest_resample)
+    helper_source = inspect.getsource(metrics_module._fill_masked_resample_values)
+
+    assert "mapped_values =" not in resample_source
+    assert "mapped[target_mask]" not in resample_source
+    assert "_fill_masked_resample_values(" in resample_source
+    assert "for target_idx, is_valid in enumerate" in helper_source
+
+    source = np.array([[0.0], [1.0], [2.0]], dtype=np.float32)
+    target = np.array([[1.9], [np.nan], [0.1]], dtype=np.float32)
+    values = np.array([10.0, 20.0, 30.0], dtype=np.float32)
+    original_take = metrics_module.np.take
+
+    def _fail_take(a, *_args, **_kwargs):
+        if np.asarray(a).shape == values.shape:
+            raise AssertionError("masked target resample must direct-fill output")
+        return original_take(a, *_args, **_kwargs)
+
+    monkeypatch.setattr(metrics_module.np, "take", _fail_take)
+
+    mapped = metrics_module._nearest_resample(source, values, target)
+
+    assert mapped is not None
+    assert mapped.dtype == np.dtype(np.float32)
+    np.testing.assert_allclose(
+        mapped,
+        np.array([30.0, np.nan, 10.0], dtype=np.float32),
+    )
+
+
+def test_v434_metrics_nearest_resample_compacts_masked_rows_by_direct_fill(
+    monkeypatch,
+) -> None:
+    resample_source = inspect.getsource(metrics_module._nearest_resample)
+    source_helper = inspect.getsource(metrics_module._compact_source_samples)
+    row_helper = inspect.getsource(metrics_module._compact_rows_by_mask)
+
+    assert "source_pos[source_mask]" not in resample_source
+    assert "source_values[source_mask]" not in resample_source
+    assert "target_pos[target_mask]" not in resample_source
+    assert "_compact_source_samples(" in resample_source
+    assert "_compact_rows_by_mask(target_pos, target_mask)" in resample_source
+    assert "[mask_arr]" not in source_helper
+    assert "[mask_arr]" not in row_helper
+
+    original_source_compact = metrics_module._compact_source_samples
+    original_row_compact = metrics_module._compact_rows_by_mask
+    source_compacts: list[tuple[tuple[int, ...], np.dtype]] = []
+    row_compacts: list[tuple[tuple[int, ...], np.dtype]] = []
+
+    def _record_source_compact(positions, values, mask, *, value_dtype):
+        out_positions, out_values = original_source_compact(
+            positions,
+            values,
+            mask,
+            value_dtype=value_dtype,
+        )
+        source_compacts.append((out_positions.shape, out_values.dtype))
+        return out_positions, out_values
+
+    def _record_row_compact(rows, mask):
+        out = original_row_compact(rows, mask)
+        row_compacts.append((out.shape, out.dtype))
+        return out
+
+    monkeypatch.setattr(
+        metrics_module,
+        "_compact_source_samples",
+        _record_source_compact,
+    )
+    monkeypatch.setattr(metrics_module, "_compact_rows_by_mask", _record_row_compact)
+
+    source = np.array([[0.0], [1.0], [np.nan], [2.0]], dtype=np.float32)
+    target = np.array([[1.9], [np.nan], [0.1]], dtype=np.float32)
+    values = np.array([10.0, 20.0, 40.0, 30.0], dtype=np.float32)
+
+    mapped = metrics_module._nearest_resample(source, values, target)
+
+    assert source_compacts == [((3, 1), np.dtype(np.float32))]
+    assert row_compacts == [((2, 1), np.dtype(np.float32))]
+    assert mapped is not None
+    assert mapped.dtype == np.dtype(np.float32)
+    np.testing.assert_allclose(
+        mapped,
+        np.array([30.0, np.nan, 10.0], dtype=np.float32),
+    )
 
 
 def test_mesh_loader_default_mesh_skips_incompatible_3d_candidates(
@@ -614,6 +1318,176 @@ def test_v125_greit_2d_rec_model_geometry_uses_planar_quads() -> None:
     assert np.ptp(coords[cells[0]][:, 1]) == pytest.approx(0.45)
 
 
+def test_v223_center_cloud_geometry_preserves_float32_and_vector_cells() -> None:
+    hexa_source = inspect.getsource(rc._center_cloud_hexa_geometry)
+    quad_source = inspect.getsource(rc._center_cloud_quad_geometry)
+    rec_model_source = inspect.getsource(rc._greit_rec_model_geometry)
+
+    assert "centers[:, None" not in hexa_source
+    assert "centers_xy[:, None" not in quad_source
+    assert "for idx in range" not in hexa_source
+    assert "for idx in range" not in quad_source
+    assert "np.column_stack" not in rec_model_source
+    assert (
+        "padded = np.zeros((centers.shape[0], 3), dtype=np.float64)"
+        not in rec_model_source
+    )
+    assert "np.arange" in hexa_source
+    assert "np.arange" in quad_source
+
+    centers3d = np.asarray(
+        [
+            [-0.75, -0.75, 0.0],
+            [-0.25, -0.75, 0.0],
+        ],
+        dtype=np.float32,
+    )
+    coords3d, cells3d = rc._center_cloud_hexa_geometry(centers3d, {"radius": 1.0})
+    assert coords3d.dtype == np.dtype(np.float32)
+    assert cells3d.dtype == np.dtype(np.int32)
+    np.testing.assert_array_equal(
+        cells3d,
+        np.arange(centers3d.shape[0] * 8, dtype=np.int32).reshape(-1, 8),
+    )
+
+    coords2d, cells2d = rc._greit_rec_model_geometry(
+        centers3d,
+        n_parameters=centers3d.shape[0],
+        meta={"mesh_dimension": 2, "radius": 1.0},
+    )
+    assert coords2d.dtype == np.dtype(np.float32)
+    assert cells2d.dtype == np.dtype(np.int32)
+    np.testing.assert_array_equal(
+        cells2d,
+        np.arange(centers3d.shape[0] * 4, dtype=np.int32).reshape(-1, 4),
+    )
+    coords_from_xy, cells_from_xy = rc._greit_rec_model_geometry(
+        centers3d[:, :2],
+        n_parameters=centers3d.shape[0],
+        meta={"mesh_dimension": 3, "radius": 1.0},
+    )
+    assert coords_from_xy.dtype == np.dtype(np.float32)
+    assert cells_from_xy.dtype == np.dtype(np.int32)
+    assert coords_from_xy.shape[1] == 3
+
+
+def test_v477_reconstruction_controller_finite_and_complex_guards_are_bounded() -> None:
+    fit_source = inspect.getsource(rc._fit_jacobian_array)
+    contact_source = inspect.getsource(rc._contact_impedance_array)
+    hexa_source = inspect.getsource(rc._center_cloud_hexa_geometry)
+    quad_source = inspect.getsource(rc._center_cloud_quad_geometry)
+    training_fit_source = inspect.getsource(rc._greit_training_space_fit)
+    streaming_source = inspect.getsource(rc._stream_hdf5_rm_matmul)
+    cached_rm_source = inspect.getsource(rc._try_run_cached_rm_request)
+
+    assert "all_finite_values(arr)" in fit_source
+    assert "has_nonzero_imaginary(" in contact_source
+    assert "all_finite_values(centers)" in hexa_source
+    assert "all_finite_values(centers_xy)" in quad_source
+    assert "all_finite_values(fitted)" in training_fit_source
+    assert "all_finite_values(values)" in streaming_source
+    assert "all_finite_values(simulated_dv)" in cached_rm_source
+
+    for source in (
+        fit_source,
+        contact_source,
+        hexa_source,
+        quad_source,
+        training_fit_source,
+        streaming_source,
+        cached_rm_source,
+    ):
+        assert "np.any(np.abs(np.imag" not in source
+        assert "np.isfinite(arr).all()" not in source
+        assert "np.isfinite(centers).all()" not in source
+        assert "np.isfinite(centers_xy).all()" not in source
+        assert "np.isfinite(fitted).all()" not in source
+        assert "np.isfinite(values).all()" not in source
+        assert "np.isfinite(simulated_dv).all()" not in source
+
+
+def test_v493_single_step_sigma_update_uses_bounded_finite_scans() -> None:
+    limit_source = inspect.getsource(rc._limit_single_step_alpha_for_sigma_floor)
+    constrain_source = inspect.getsource(rc._constrain_single_step_sigma_update)
+    bounds_source = inspect.getsource(rc._voxel_bounds_from_meta)
+
+    assert "all_finite_values(sigma)" in limit_source
+    assert "all_finite_values(delta)" in limit_source
+    assert "min_alpha_for_value_floor(sigma, delta" in limit_source
+    assert "np.all(np.isfinite(sigma))" not in limit_source
+    assert "np.all(np.isfinite(delta))" not in limit_source
+    assert "sigma[negative_update]" not in limit_source
+    assert "delta[negative_update]" not in limit_source
+    assert "all_finite_values(sigma)" in constrain_source
+    assert "all_finite_values(delta)" in constrain_source
+    assert "all_finite_values(raw_sigma_est)" in constrain_source
+    assert "any_not_equal_values(sigma_est, raw_sigma_est)" in constrain_source
+    assert "np.all(np.isfinite(sigma))" not in constrain_source
+    assert "np.all(np.isfinite(delta))" not in constrain_source
+    assert "np.all(np.isfinite(raw_sigma_est))" not in constrain_source
+    assert "np.any(sigma_est != raw_sigma_est)" not in constrain_source
+    assert "all_finite_values(bounds)" in bounds_source
+    assert "np.all(np.isfinite(bounds))" not in bounds_source
+
+
+def test_v556_single_step_sigma_update_preserves_float32_dtype() -> None:
+    limit_source = inspect.getsource(rc._limit_single_step_alpha_for_sigma_floor)
+    constrain_source = inspect.getsource(rc._constrain_single_step_sigma_update)
+
+    assert "np.asarray(sigma_bg, dtype=np.float64)" not in limit_source
+    assert "np.asarray(delta_sigma, dtype=np.float64)" not in limit_source
+    assert "np.asarray(sigma_bg, dtype=np.float64)" not in constrain_source
+    assert "np.asarray(delta_sigma, dtype=np.float64)" not in constrain_source
+    assert "_real_sigma_update_array" in limit_source
+    assert "_real_sigma_update_array" in constrain_source
+
+    sigma = np.array([1.0, 1.0, 1.0], dtype=np.float32)
+    delta = np.array([-0.5, 0.25, -0.9], dtype=np.float32)
+
+    _alpha, display_delta, sigma_est, floor_applied = (
+        rc._constrain_single_step_sigma_update(
+            sigma,
+            delta,
+            1.0,
+            sigma_floor=0.25,
+        )
+    )
+
+    assert display_delta.dtype == np.dtype(np.float32)
+    assert sigma_est.dtype == np.dtype(np.float32)
+    assert floor_applied is False
+
+
+def test_v350_center_cloud_axis_spacing_reuses_sorted_unique_diffs() -> None:
+    hexa_source = inspect.getsource(rc._center_cloud_hexa_geometry)
+    quad_source = inspect.getsource(rc._center_cloud_quad_geometry)
+
+    assert "np.diff(np.sort(unique))" not in hexa_source
+    assert "np.diff(np.sort(unique))" not in quad_source
+    assert "diffs[np.isfinite" not in hexa_source
+    assert "diffs[np.isfinite" not in quad_source
+    assert "np.diff(unique)" in hexa_source
+    assert "np.diff(unique)" in quad_source
+
+    centers = np.asarray(
+        [
+            [-0.75, -0.75, 0.0],
+            [-0.25, -0.75, 0.0],
+            [0.25, -0.25, 0.0],
+            [0.75, -0.25, 0.0],
+        ],
+        dtype=np.float32,
+    )
+
+    coords3d, cells3d = rc._center_cloud_hexa_geometry(centers, {"radius": 1.0})
+    coords2d, cells2d = rc._center_cloud_quad_geometry(centers, {"radius": 1.0})
+
+    assert coords3d.dtype == np.dtype(np.float32)
+    assert coords2d.dtype == np.dtype(np.float32)
+    assert cells3d.shape == (centers.shape[0], 8)
+    assert cells2d.shape == (centers.shape[0], 4)
+
+
 def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -645,6 +1519,225 @@ def test_run_reconstruction_request_dispatches_to_single_step_cached_path(
     result = rc.run_reconstruction_request(request)
 
     assert result is sentinel
+
+
+def test_run_reconstruction_request_routes_complex_to_native_full_gn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0], dtype=np.float32),
+            imag=np.array([0.10, 0.20], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([1.5, 2.5], dtype=np.float32),
+            imag=np.array([0.30, 0.50], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "background_conductivity": "2+0.5j",
+            "contact_impedance": "0.01+0.002j",
+            "compute_dtype": "complex64",
+        },
+    )
+    captured: list[rc.ReconstructionRequest] = []
+    sentinel = rc.ReconstructionResult(
+        conductivity=np.array([2.0 + 0.5j], dtype=np.complex128),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=int),
+        metadata={"complex_reconstruction_mode": "native_complex_linearized_gn"},
+    )
+
+    monkeypatch.setattr(
+        rc,
+        "_run_single_step_cached_request",
+        lambda *_args, **_kwargs: pytest.fail(
+            "complex request must not split/fast-path"
+        ),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_run_full_gn_request",
+        lambda req, progress_cb=None: captured.append(req) or sentinel,
+    )
+
+    result = rc.run_reconstruction_request(request)
+
+    assert result is sentinel
+    assert captured == [request]
+    assert captured[0].use_part == "complex"
+
+
+def test_v134_complex_rm_route_uses_core_difference_preset_for_eit_system(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import pyeidors
+    from pyeidors.geometry import optimized_mesh_generator
+
+    rc.clear_reconstruction_system_cache()
+    captured: dict[str, object] = {}
+
+    class FakeEITSystem:
+        def __init__(self, **kwargs):
+            captured["system_kwargs"] = kwargs
+
+        def setup(self, mesh):
+            captured["mesh"] = mesh
+
+    sentinel = rc.ReconstructionResult(
+        conductivity=np.array([1.0 + 0.1j], dtype=np.complex64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=int),
+        metadata={"complex_reconstruction_mode": "native_complex_linearized_gn"},
+    )
+
+    def _fake_native_complex(**kwargs):
+        captured["native_meta"] = dict(kwargs["meta"])
+        return sentinel
+
+    monkeypatch.setattr(pyeidors, "EITSystem", FakeEITSystem)
+    monkeypatch.setattr(
+        optimized_mesh_generator,
+        "load_or_create_mesh",
+        lambda **_kwargs: object(),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_run_native_complex_linearized_difference",
+        _fake_native_complex,
+    )
+    monkeypatch.setattr(
+        rc,
+        "_run_single_step_cached_request",
+        lambda *_args, **_kwargs: pytest.fail(
+            "complex RM request must not enter real single-step fast path"
+        ),
+    )
+    n_meas = 208
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.linspace(1.0, 2.0, n_meas, dtype=np.float32),
+            imag=np.linspace(0.10, 0.20, n_meas, dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.linspace(1.5, 2.5, n_meas, dtype=np.float32),
+            imag=np.linspace(0.30, 0.50, n_meas, dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        method="gn-difference",
+        mesh_dimension=2,
+        mesh_refinement=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "difference_preset": "noser_rm",
+            "background_conductivity": "1+0.1j",
+            "contact_impedance": "0.01+0.002j",
+            "compute_dtype": "complex64",
+        },
+    )
+
+    result = rc.run_reconstruction_request(request)
+
+    assert result is sentinel
+    assert captured["system_kwargs"]["difference_preset"] == "eidors_one_step_noser"
+    assert captured["native_meta"]["difference_preset"] == "noser_rm"
+    assert captured["native_meta"]["difference_preset_requested"] == "noser_rm"
+    assert (
+        captured["native_meta"]["difference_preset_effective"]
+        == "eidors_one_step_noser"
+    )
+    rc.clear_reconstruction_system_cache()
+
+
+def test_v512_native_complex_controller_identity_regularization_stays_lazy() -> None:
+    source = inspect.getsource(rc._regularization_for_native_complex)
+
+    assert "np.eye(int(n_param)" not in source
+    assert rc._regularization_for_native_complex(SimpleNamespace(), 4) is None
+
+    diag = np.array([1.0, 2.0, 3.0], dtype=float)
+    resolved_diag = rc._regularization_for_native_complex(
+        SimpleNamespace(R_diag=diag), 3
+    )
+    np.testing.assert_allclose(resolved_diag, diag)
+    assert np.shares_memory(resolved_diag, diag)
+
+    matrix = np.diag([1.0, 2.0, 3.0])
+    assert (
+        rc._regularization_for_native_complex(SimpleNamespace(R_matrix=matrix), 3)
+        is matrix
+    )
+
+
+def test_native_complex_normal_step_uses_hermitian_coupled_system() -> None:
+    from pyeidors.inverse.solvers.gauss_newton_linear_system import (
+        solve_native_complex_normal_step,
+    )
+
+    jacobian = np.array(
+        [
+            [1.0 + 2.0j, 0.5 - 0.25j],
+            [0.25 + 0.5j, -1.0 + 0.75j],
+            [1.5 - 0.5j, 0.25 + 1.0j],
+        ],
+        dtype=np.complex128,
+    )
+    true_delta = np.array([0.2 + 0.3j, -0.1 + 0.4j], dtype=np.complex128)
+    measured_diff = jacobian @ true_delta
+    residual = -measured_diff
+
+    delta, meta = solve_native_complex_normal_step(
+        jacobian=jacobian,
+        residual=residual,
+        lambda_eff=0.0,
+        regularization=np.eye(2),
+    )
+
+    assert np.allclose(delta, true_delta)
+    assert meta["native_complex_linear_algebra"] is True
+    assert meta["transpose"] == "hermitian_conjugate"
+
+
+def test_direct_jacobian_numpy_assembly_preserves_complex_sensitivity() -> None:
+    from pyeidors.inverse.jacobian._core import assemble_jacobian_efficient_numpy
+
+    grad_u = np.array(
+        [
+            [1.0 + 0.5j, 2.0 - 0.25j],
+            [0.5 - 1.0j, -1.0 + 0.75j],
+        ],
+        dtype=np.complex128,
+    )
+    adjoint = np.array(
+        [
+            [[0.25 + 1.0j, 1.5 - 0.5j], [1.0 - 0.25j, 0.5 + 0.5j]],
+            [[-1.0 + 0.25j, 0.75 + 0.5j], [0.5 + 1.5j, -0.25 + 0.75j]],
+        ],
+        dtype=np.complex128,
+    )
+    areas = np.array([0.2, 0.4], dtype=np.float64)
+
+    jacobian, _elapsed = assemble_jacobian_efficient_numpy(
+        grad_u_all=[grad_u],
+        adjoint_gradients=[adjoint[0], adjoint[1]],
+        cell_areas=areas,
+        n_meas_per_stim=[2],
+        block_size=1,
+    )
+    expected = np.einsum("eg,meg->me", grad_u, adjoint, optimize=True) * areas
+
+    assert np.iscomplexobj(jacobian)
+    assert np.allclose(jacobian, expected)
 
 
 def test_single_step_cached_request_returns_absolute_sigma_for_display(
@@ -1148,6 +2241,494 @@ def test_single_step_cached_auto_built_rm_rebuilds_stale_fitless_artifact(
     assert result.metadata["rm_artifact_cache_status"] == "built"
     assert result.metadata["rm_fit_jacobian_cache_status"].startswith("built_")
     assert context_calls["count"] == 1
+
+
+def test_single_step_cached_auto_built_rm_skips_oversize_fit_jacobian_without_rebuild(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import build_one_step_rm, write_rm_artifact
+
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    reference = np.array([2.0, 4.0, 8.0], dtype=float)
+    target = np.array([3.0, 5.0, 10.0], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("oversize persisted fit Jacobian should not rebuild RM")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_fit_jacobian_max_bytes": 1,
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.04,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+        },
+    )
+    runtime = rc._prepare_single_step_cached_runtime(request)
+    artifact_path, _signature, _payload = rc._planned_one_step_rm_artifact_path(
+        request, runtime
+    )
+    rm = build_one_step_rm(
+        jacobian,
+        lambda_=0.2,
+        mode="noser",
+        form="measurement",
+    )
+    write_rm_artifact(
+        artifact_path,
+        rm,
+        metadata={
+            "algorithm": "one-step-noser",
+            "fit_jacobian_persisted": True,
+            "rm_build_route": "noser_rm",
+        },
+        node_coords=node_coords,
+        cell_connectivity=cells,
+        jacobian=jacobian,
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_sigma = 1.0 + rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, expected_sigma)
+    assert result.simulated is None
+    assert result.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert result.metadata["rm_fit_jacobian_cache_status"] == "artifact_too_large"
+    assert result.metadata["rm_fit_jacobian_available_but_skipped"] is True
+    assert result.metadata["rm_fit_jacobian_bytes"] == jacobian.nbytes
+    assert result.metadata["rm_fit_jacobian_max_bytes"] == 1
+
+
+def test_auto_build_skips_persisting_oversize_fit_jacobian_and_warm_hits(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import h5py
+
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    reference = np.array([2.0, 4.0, 8.0], dtype=float)
+    target = np.array([3.0, 5.0, 10.0], dtype=float)
+    jacobian = np.array(
+        [
+            [1.0, 0.2],
+            [0.1, 0.8],
+            [0.4, 0.3],
+        ],
+        dtype=float,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+    fake_ctx = {
+        "J": jacobian,
+        "display_node_coords": node_coords,
+        "display_cell_connectivity": cells,
+        "sigma_bg": np.ones(2, dtype=float),
+        "mesh": SimpleNamespace(coordinates=lambda: node_coords, cells=lambda: cells),
+    }
+    context_calls = {"count": 0}
+
+    def _fake_context(*_args, **_kwargs):
+        context_calls["count"] += 1
+        return fake_ctx
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _fake_context)
+    monkeypatch.setattr(
+        rc,
+        "_load_gn_difference_runner_module",
+        lambda: SimpleNamespace(build_shared_context=lambda **_kwargs: fake_ctx),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        regularization_alpha=0.1,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "rm_artifact_dir": str(tmp_path),
+            "rm_fit_jacobian_max_bytes": 1,
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_lambda": 0.04,
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "device": "cpu",
+        },
+    )
+
+    first = rc._run_single_step_cached_request(request)
+    artifact_path = Path(first.metadata["rm_artifact_path"])
+
+    assert first.simulated is None
+    assert first.metadata["rm_fit_jacobian_available_but_skipped"] is True
+    assert first.metadata["rm_fit_jacobian_bytes"] == jacobian.nbytes
+    with h5py.File(artifact_path, "r") as handle:
+        assert "jacobian" not in handle["arrays"]
+        metadata = handle.attrs["metadata_json"]
+        assert '"fit_jacobian_persisted": false' in str(metadata)
+        assert '"fit_jacobian_persist_skip_reason": "too_large"' in str(metadata)
+
+    monkeypatch.setattr(
+        rc,
+        "_ensure_single_step_cached_context",
+        lambda *_args, **_kwargs: pytest.fail("oversize fitless RM should warm-hit"),
+    )
+    warm = rc._run_single_step_cached_request(request)
+
+    assert warm.simulated is None
+    assert warm.metadata["rm_artifact_cache_status"] == "disk_hit"
+    assert warm.metadata["rm_fit_jacobian_cache_status"] == "artifact_too_large"
+    assert context_calls["count"] == 1
+
+
+def test_rm_artifact_process_cache_respects_byte_budget(tmp_path: Path) -> None:
+    from pyeidors.inverse import write_rm_artifact
+
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    rm = np.eye(3, dtype=np.float64)
+    artifact_path = write_rm_artifact(
+        tmp_path / "small_rm.h5",
+        rm,
+        metadata={"algorithm": "one-step-noser"},
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0, 3.0], dtype=float),
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([2.0, 3.0, 4.0], dtype=float),
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_artifact_path": str(artifact_path),
+            "rm_artifact_process_cache_max_bytes": 1,
+            "rm_streaming_matmul": "off",
+            "device": "cpu",
+        },
+    )
+
+    first = rc._run_single_step_cached_request(request)
+    second = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(first.conductivity, np.ones(3, dtype=float))
+    np.testing.assert_allclose(second.conductivity, np.ones(3, dtype=float))
+    assert first.metadata["rm_artifact_cache_hit"] is False
+    assert second.metadata["rm_artifact_cache_hit"] is False
+    assert first.metadata["rm_artifact_process_cache_stored"] is False
+    assert first.metadata["rm_artifact_process_cache_skip_reason"] == "entry_too_large"
+    assert first.metadata["rm_artifact_process_cache_bytes"] > 1
+    assert first.metadata["rm_artifact_process_cache_max_bytes"] == 1
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        assert not rc._RM_ARTIFACT_CACHE
+
+
+def test_hdf5_rm_streaming_matmul_avoids_full_rm_load(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import write_rm_artifact
+    from pyeidors.io import hdf5_artifacts
+
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.5],
+            [0.0, 2.0, 0.0],
+            [0.25, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    artifact_path = write_rm_artifact(
+        tmp_path / "streaming_rm.h5",
+        rm,
+        metadata={
+            "algorithm": "one-step-noser",
+            "rm_hdf5_streaming_chunk_bytes": 24,
+        },
+        node_coords=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_load_rm_artifact",
+        lambda *_args, **_kwargs: pytest.fail("streaming path loaded full RM"),
+    )
+    monkeypatch.setattr(
+        hdf5_artifacts.HDF5LazyDataset,
+        "__getitem__",
+        lambda *_args, **_kwargs: pytest.fail(
+            "streaming path should keep the HDF5 file open instead of __getitem__"
+        ),
+    )
+    reference = np.array([1.0, 2.0, 3.0], dtype=float)
+    target = np.array([2.0, 4.0, 6.0], dtype=float)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_artifact_path": str(artifact_path),
+            "rm_artifact_process_cache_max_bytes": 1,
+            "rm_streaming_chunk_bytes": 48,
+            "device": "cpu",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected = rm @ (target - reference)
+    np.testing.assert_allclose(result.conductivity, expected)
+    assert result.metadata["rm_streaming"] is True
+    assert result.metadata["online_hot_path"] == "rm_hdf5_streaming_matmul"
+    assert result.metadata["rm_artifact_process_cache_stored"] is False
+    assert result.metadata["rm_artifact_process_cache_skip_reason"] == "streaming_hdf5"
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["runtime"]["rm_streaming"] is True
+    assert diagnostics["rm_matmul"]["backend"] == "hdf5_chunked"
+    assert diagnostics["rm_matmul"]["rm_hdf5_dataset_chunks"] == (1, 3)
+    assert diagnostics["rm_matmul"]["rm_streaming_rows_per_chunk"] == 2
+    assert diagnostics["rm_matmul"]["rm_hdf5_file_open_mode"] == "single_open"
+    assert diagnostics["rm_matmul"]["rm_streaming_chunks"] == 2
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        assert not rc._RM_ARTIFACT_CACHE
+
+
+def test_hdf5_rm_cuda_request_streams_when_resident_budget_exceeded(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.inverse import write_rm_artifact
+
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.5],
+            [0.0, 2.0, 0.0],
+            [0.25, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    artifact_path = write_rm_artifact(
+        tmp_path / "cuda_budget_rm.h5",
+        rm,
+        metadata={"algorithm": "one-step-noser"},
+        node_coords=np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+    )
+    monkeypatch.setattr(
+        rc,
+        "_load_rm_artifact",
+        lambda *_args, **_kwargs: pytest.fail(
+            "CUDA budget fallback should not load the full RM"
+        ),
+    )
+    reference = np.array([1.0, 2.0, 3.0], dtype=float)
+    target = np.array([2.0, 4.0, 6.0], dtype=float)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=reference,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=target,
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_artifact_path": str(artifact_path),
+            "rm_device_resident_max_bytes": 1,
+            "rm_streaming_chunk_bytes": 48,
+            "device": "cuda",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(result.conductivity, rm @ (target - reference))
+    assert result.metadata["rm_streaming"] is True
+    assert result.metadata["rm_streaming_decision"] == "cuda_resident_budget_exceeded"
+    assert result.metadata["rm_device_resident_max_bytes"] == 1
+    diagnostics = result.metadata["solver_diagnostics"]
+    assert diagnostics["runtime"]["device_requested"] == "cuda"
+    assert diagnostics["runtime"]["device_effective"] == "cpu"
+    assert diagnostics["runtime"]["rm_streaming_decision"] == (
+        "cuda_resident_budget_exceeded"
+    )
+
+
+def test_hdf5_rm_streaming_keeps_greit_training_matrices_lazy(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from pyeidors.io import hdf5_artifacts
+    from pyeidors.io.hdf5_artifacts import write_hdf5_artifact
+
+    with rc._RM_ARTIFACT_CACHE_LOCK:
+        rc._RM_ARTIFACT_CACHE.clear()
+
+    rm = np.array(
+        [
+            [1.0, 0.0, 0.5],
+            [0.0, 2.0, 0.0],
+            [0.25, 0.0, 1.0],
+        ],
+        dtype=np.float64,
+    )
+    artifact_path = write_hdf5_artifact(
+        tmp_path / "streaming_greit_aux.h5",
+        {
+            "rm": rm,
+            "Y": np.arange(12, dtype=np.float64).reshape(3, 4),
+            "D": np.arange(12, dtype=np.float64).reshape(3, 4) / 10.0,
+            "node_coords": np.array(
+                [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+                dtype=np.float64,
+            ),
+            "cell_connectivity": np.array([[0, 1, 2]], dtype=np.int32),
+            "rec_model": np.arange(9, dtype=np.float64).reshape(3, 3),
+        },
+        {
+            "artifact_schema": "pyeidors-rm-hdf5-v1",
+            "algorithm": "one-step-noser",
+            "rm_shape": [3, 3],
+        },
+        schema="pyeidors-rm-hdf5-v1",
+    )
+    original_array = hdf5_artifacts.HDF5LazyDataset.__array__
+    loaded_aux: list[str] = []
+
+    def _guard_aux_array(self, dtype=None):
+        if self.info.name in {"Y", "D", "rec_model"}:
+            loaded_aux.append(self.info.name)
+            raise AssertionError(f"{self.info.name} should stay lazy")
+        return original_array(self, dtype=dtype)
+
+    monkeypatch.setattr(hdf5_artifacts.HDF5LazyDataset, "__array__", _guard_aux_array)
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0, 3.0], dtype=float),
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([2.0, 4.0, 6.0], dtype=float),
+            imag=np.zeros(3, dtype=float),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_artifact_path": str(artifact_path),
+            "rm_artifact_process_cache_max_bytes": 1,
+            "device": "cpu",
+        },
+    )
+
+    result = rc._run_single_step_cached_request(request)
+
+    np.testing.assert_allclose(result.conductivity, rm @ np.array([1.0, 2.0, 3.0]))
+    assert result.metadata["rm_streaming"] is True
+    assert loaded_aux == []
 
 
 @pytest.mark.parametrize(
@@ -2435,12 +4016,91 @@ def test_recover_nix_runtime_site_packages_restores_missing_runtime_paths(
 
 def test_clear_reconstruction_system_cache_clears_both_runtime_caches() -> None:
     rc._SYSTEM_CACHE[("system",)] = object()
+    rc._SYSTEM_CACHE_SIZES[("system",)] = 8
     rc._FAST_CONTEXT_CACHE[("fast",)] = object()
+    rc._FAST_CONTEXT_CACHE_SIZES[("fast",)] = 8
 
     rc.clear_reconstruction_system_cache()
 
     assert not rc._SYSTEM_CACHE
+    assert not rc._SYSTEM_CACHE_SIZES
     assert not rc._FAST_CONTEXT_CACHE
+    assert not rc._FAST_CONTEXT_CACHE_SIZES
+
+
+def test_v608_reconstruction_runtime_caches_skip_oversize_entries() -> None:
+    rc.clear_reconstruction_system_cache()
+    try:
+        system = SimpleNamespace(
+            mesh=None,
+            fwd_model=SimpleNamespace(z=np.ones(8, dtype=np.float64)),
+            _reconstruction_system_cache_max_bytes=1,
+        )
+        rc._put_cached_system(("system",), system)
+        assert ("system",) not in rc._SYSTEM_CACHE
+        assert ("system",) not in rc._SYSTEM_CACHE_SIZES
+
+        ctx = {
+            "operator_bundle": {"J": np.ones((4, 4), dtype=np.float64)},
+            "sigma_bg": np.ones(4, dtype=np.float64),
+            "single_step_context_cache_max_bytes": 1,
+        }
+        rc._put_cached_fast_context(("ctx",), ctx)
+        assert ("ctx",) not in rc._FAST_CONTEXT_CACHE
+        assert ("ctx",) not in rc._FAST_CONTEXT_CACHE_SIZES
+        assert ctx["single_step_context_process_cache_stored"] is False
+        assert ctx["single_step_context_process_cache_skip_reason"] == "entry_too_large"
+        assert ctx["single_step_context_process_cache_bytes"] > 1
+    finally:
+        rc.clear_reconstruction_system_cache()
+
+
+def test_v608_single_step_context_cache_eviction_uses_total_bytes() -> None:
+    rc.clear_reconstruction_system_cache()
+    try:
+        first = {
+            "operator_bundle": {"J": np.ones(8, dtype=np.float64)},
+            "single_step_context_cache_max_bytes": 96,
+        }
+        second = {
+            "operator_bundle": {"J": np.ones(8, dtype=np.float64)},
+            "single_step_context_cache_max_bytes": 96,
+        }
+
+        rc._put_cached_fast_context(("first",), first)
+        rc._put_cached_fast_context(("second",), second)
+
+        assert ("first",) not in rc._FAST_CONTEXT_CACHE
+        assert ("second",) in rc._FAST_CONTEXT_CACHE
+        assert set(rc._FAST_CONTEXT_CACHE_SIZES) == {("second",)}
+        assert second["single_step_context_process_cache_stored"] is True
+    finally:
+        rc.clear_reconstruction_system_cache()
+
+
+def test_v609_rm_fit_jacobian_process_cache_eviction_uses_total_bytes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+        rc._RM_FIT_JACOBIAN_CACHE.clear()
+        rc._RM_FIT_JACOBIAN_CACHE_SIZES.clear()
+    monkeypatch.setattr(rc, "_RM_FIT_JACOBIAN_CACHE_MAX_BYTES", 96)
+    try:
+        first = np.ones((1, 8), dtype=np.float64)
+        second = np.full((1, 8), 2.0, dtype=np.float64)
+
+        assert rc._put_rm_fit_jacobian_cache("first", first) == "stored"
+        assert rc._put_rm_fit_jacobian_cache("second", second) == "stored"
+
+        with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+            assert "first" not in rc._RM_FIT_JACOBIAN_CACHE
+            assert "second" in rc._RM_FIT_JACOBIAN_CACHE
+            assert set(rc._RM_FIT_JACOBIAN_CACHE_SIZES) == {"second"}
+            assert sum(rc._RM_FIT_JACOBIAN_CACHE_SIZES.values()) <= 96
+    finally:
+        with rc._RM_FIT_JACOBIAN_CACHE_LOCK:
+            rc._RM_FIT_JACOBIAN_CACHE.clear()
+            rc._RM_FIT_JACOBIAN_CACHE_SIZES.clear()
 
 
 def test_boundary_voltage_plot_keeps_recon_overlay_visible_for_tiny_fit() -> None:

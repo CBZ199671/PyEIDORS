@@ -15,6 +15,7 @@ from ...data.difference import (
     normalize_difference_mode,
     normalize_difference_orientation,
 )
+from ...utils.numeric_ops import has_nonzero_imaginary
 from ..contracts import SolverOutput
 from ..jacobian.direct_jacobian import DirectJacobianCalculator
 from ..regularization.smoothness import SmoothnessRegularization
@@ -78,6 +79,16 @@ def _validate_option(name: str, value: str, allowed: set[str]) -> None:
         raise ValueError(f"Unsupported {name}={value!r}. Expected one of: {options}.")
 
 
+def _real_or_complex_scalar(value: Any, *, name: str) -> float | complex:
+    array = np.asarray(value)
+    if array.size != 1:
+        raise ValueError(f"{name} must be scalar-like.")
+    scalar = array.reshape(-1)[0]
+    if has_nonzero_imaginary(array):
+        return complex(scalar)
+    return float(np.real(scalar))
+
+
 _is_rtr_prior_contract = _regularization_helpers._is_rtr_prior_contract
 
 
@@ -107,7 +118,7 @@ class GaussNewtonReconstructor:
         use_prior_term: bool = True,
         difference_mode: str = DEFAULT_DIFFERENCE_MODE,
         difference_orientation: str = DEFAULT_DIFFERENCE_ORIENTATION,
-        jacobian_background_conductivity: float = 1.0,
+        jacobian_background_conductivity: float | complex = 1.0,
         difference_step_size_mode: str = "off",
         difference_step_size_value: float | None = None,
         difference_step_size_bounds: tuple[float, float] = (0.0, 4.0),
@@ -174,7 +185,10 @@ class GaussNewtonReconstructor:
             difference_orientation,
             default=DEFAULT_DIFFERENCE_ORIENTATION,
         )
-        self.jacobian_background_conductivity = float(jacobian_background_conductivity)
+        self.jacobian_background_conductivity = _real_or_complex_scalar(
+            jacobian_background_conductivity,
+            name="jacobian_background_conductivity",
+        )
         self.difference_step_size_mode = str(difference_step_size_mode).strip().lower()
         self.difference_step_size_value = (
             None

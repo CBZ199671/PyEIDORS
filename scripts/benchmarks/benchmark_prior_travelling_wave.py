@@ -37,6 +37,7 @@ from scripts.benchmarks.benchmark_dynamic_validation import (
 
 
 SCHEMA = "pyeidors-prior-travelling-wave-benchmark-v1"
+_CHUNK_ITEMS = 1_048_576
 
 
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
@@ -238,9 +239,7 @@ def build_travelling_wave_fixture(
     times = np.linspace(0.0, 1.0, int(n_frames), dtype=np.float64)
     centers = 0.18 + 0.64 * times
     width = 0.07
-    truth = np.vstack(
-        [np.exp(-0.5 * ((positions - center) / width) ** 2) for center in centers]
-    )
+    truth = _travelling_wave_frames(positions, centers, width)
     truth /= np.maximum(np.max(truth, axis=1, keepdims=True), 1.0e-12)
     amplitude = 0.8 + 0.2 * np.sin(np.pi * times)
     truth *= amplitude.reshape(-1, 1)
@@ -276,20 +275,74 @@ def synthetic_measurement_jacobian(
     *,
     n_measurements: int,
 ) -> np.ndarray:
-    x = np.asarray(positions, dtype=np.float64).reshape(1, -1)
+    x = np.asarray(positions, dtype=np.float64).reshape(-1)
     sensor_centers = np.linspace(0.0, 1.0, int(n_measurements), dtype=np.float64)
     widths = 0.11 + 0.04 * ((np.arange(int(n_measurements)) % 3) / 2.0)
-    rows = []
+    out = np.empty((int(n_measurements), x.size), dtype=np.float64)
+    work = np.empty(x.size, dtype=np.float64)
     for idx, center in enumerate(sensor_centers):
-        left = np.exp(-0.5 * ((x - center) / widths[idx]) ** 2).reshape(-1)
+        row = out[idx, :]
+        np.subtract(x, center, out=row)
+        row /= float(widths[idx])
+        np.square(row, out=row)
+        row *= -0.5
+        np.exp(row, out=row)
         right_center = (center + 0.37) % 1.0
-        right = np.exp(-0.5 * ((x - right_center) / (widths[idx] * 1.2)) ** 2).reshape(
-            -1
-        )
-        row = left - 0.35 * right + 0.05
+        np.subtract(x, right_center, out=work)
+        work /= float(widths[idx] * 1.2)
+        np.square(work, out=work)
+        work *= -0.5
+        np.exp(work, out=work)
+        np.multiply(work, 0.35, out=work)
+        row -= work
+        row += 0.05
         row /= max(float(np.linalg.norm(row)), 1.0e-12)
-        rows.append(row)
-    return np.ascontiguousarray(np.vstack(rows), dtype=np.float64)
+    return np.ascontiguousarray(out, dtype=np.float64)
+
+
+def _travelling_wave_frames(
+    positions: np.ndarray,
+    centers: np.ndarray,
+    width: float,
+) -> np.ndarray:
+    x = np.asarray(positions, dtype=np.float64).reshape(-1)
+    center_values = np.asarray(centers, dtype=np.float64).reshape(-1)
+    out = np.empty((center_values.size, x.size), dtype=np.float64)
+    inv_width = 1.0 / float(width)
+    for row_idx, center in enumerate(center_values):
+        row = out[row_idx, :]
+        np.subtract(x, float(center), out=row)
+        row *= inv_width
+        np.square(row, out=row)
+        row *= -0.5
+        np.exp(row, out=row)
+    return out
+
+
+def _mean_abs_difference_where(
+    left: np.ndarray,
+    right: np.ndarray,
+    mask: np.ndarray,
+) -> float:
+    left_arr = np.asarray(left, dtype=np.float64).reshape(-1)
+    right_arr = np.asarray(right, dtype=np.float64).reshape(-1)
+    mask_arr = np.asarray(mask, dtype=bool).reshape(-1)
+    if left_arr.size != right_arr.size or left_arr.size != mask_arr.size:
+        raise ValueError("left, right, and mask sizes must match")
+    selected = int(np.count_nonzero(mask_arr))
+    if selected == 0:
+        return 0.0
+    chunk_items = min(int(left_arr.size), _CHUNK_ITEMS)
+    work = np.empty(chunk_items, dtype=np.float64)
+    total = 0.0
+    for start in range(0, int(left_arr.size), chunk_items):
+        stop = min(start + chunk_items, int(left_arr.size))
+        count = stop - start
+        target = work[:count]
+        np.subtract(left_arr[start:stop], right_arr[start:stop], out=target)
+        np.abs(target, out=target)
+        total += float(np.sum(target, where=mask_arr[start:stop]))
+    return total / float(selected)
 
 
 def build_prior_payloads(mesh: VoxelGrid, *, ridge: float) -> dict[str, dict[str, Any]]:
@@ -349,7 +402,11 @@ def fidelity_metrics(
     peak_time_truth = peak_time_trace(truth_arr, times)
     peak_time_recon = peak_time_trace(recon_arr, times)
     peak_mask = np.max(truth_arr, axis=0) >= 0.20 * float(np.max(truth_arr))
-    peak_delta = np.abs(peak_time_recon[peak_mask] - peak_time_truth[peak_mask])
+    peak_time_mean_abs_error = _mean_abs_difference_where(
+        peak_time_recon,
+        peak_time_truth,
+        peak_mask,
+    )
     spatial = spatial_metric_summary(
         truth_arr,
         recon_arr,
@@ -380,9 +437,7 @@ def fidelity_metrics(
         "speed_true": float(speed_truth),
         "speed_estimate": float(speed_recon),
         "speed_abs_error": float(abs(speed_recon - speed_truth)),
-        "peak_time_mean_abs_error": float(
-            np.mean(peak_delta) if peak_delta.size else 0.0
-        ),
+        "peak_time_mean_abs_error": float(peak_time_mean_abs_error),
         "spatial_metrics": spatial,
         "eidors_greit_figures_of_merit": dict(spatial),
         "eidors_noise_figure": noise_figure["noise_figure"],

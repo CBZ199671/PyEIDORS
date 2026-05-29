@@ -7,6 +7,7 @@ from typing import Any
 import numpy as np
 
 from .structures import EITData, EITImage
+from ..utils.numeric_ops import squared_distances_to_point
 
 
 def _center_vector(center: tuple[float, ...] | list[float], *, ndim: int) -> np.ndarray:
@@ -29,8 +30,7 @@ def _paint_circle(
         return
     ndim = min(centers.shape[1], 3)
     center_vec = _center_vector(center, ndim=ndim)
-    deltas = centers[:, :ndim] - center_vec[None, :]
-    dist2 = np.sum(deltas**2, axis=1)
+    dist2 = squared_distances_to_point(centers, center_vec, ndim=ndim)
     values[dist2 < float(radius) ** 2] = conductivity
 
 

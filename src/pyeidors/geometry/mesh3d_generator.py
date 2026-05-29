@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import List, Optional, Sequence, Tuple
 
 import numpy as np
-from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import (
@@ -34,6 +33,7 @@ from ._helpers import (
     assert_unique_physical_group_ownership,
     finalize_3d_cylinder_mesh,
 )
+from ._runtime import mpi_comm_world
 
 logger = logging.getLogger(__name__)
 
@@ -623,7 +623,12 @@ class _LegacyTetraCylinder3DMeshGenerator:
             gmsh.model.mesh.generate(3)
             gmsh.write(str(msh_path))
             assert_unique_physical_group_ownership(gmsh.model)
-            mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=3)
+            mesh_data = gmshio.model_to_mesh(
+                gmsh.model,
+                mpi_comm_world(),
+                rank=0,
+                gdim=3,
+            )
         finally:
             if initialized_here:
                 gmsh.finalize()
@@ -926,7 +931,12 @@ class _GeomV2TetraCylinder3DMeshGenerator:
             gmsh.model.mesh.generate(3)
             gmsh.write(str(msh_path))
             assert_unique_physical_group_ownership(gmsh.model)
-            mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=3)
+            mesh_data = gmshio.model_to_mesh(
+                gmsh.model,
+                mpi_comm_world(),
+                rank=0,
+                gdim=3,
+            )
         finally:
             if initialized_here:
                 gmsh.finalize()
@@ -1124,7 +1134,10 @@ class _GeomV2HexCylinder3DMeshGenerator:
             return block_id
 
         core_axis = np.linspace(-core_half, core_half, n_core + 1, dtype=np.float64)
-        x_core, y_core = np.meshgrid(core_axis, core_axis, indexing="xy")
+        x_core = np.empty((core_axis.size, core_axis.size), dtype=np.float64)
+        y_core = np.empty_like(x_core)
+        x_core[:, :] = core_axis.reshape(1, -1)
+        y_core[:, :] = core_axis.reshape(-1, 1)
         _add_block("core", x_core, y_core)
 
         eta = np.linspace(-1.0, 1.0, n_core + 1, dtype=np.float64)
@@ -1388,7 +1401,12 @@ class _GeomV2HexCylinder3DMeshGenerator:
             },
         )
 
-        mesh_data = gmshio.read_from_msh(str(msh_path), MPI.COMM_WORLD, rank=0, gdim=3)
+        mesh_data = gmshio.read_from_msh(
+            str(msh_path),
+            mpi_comm_world(),
+            rank=0,
+            gdim=3,
+        )
         return finalize_3d_cylinder_mesh(
             mesh_data,
             msh_path=msh_path,

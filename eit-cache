@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PY_BIN="${PYTHON:-$ROOT_DIR/.venv/bin/python}"
+if [[ ! -x "$PY_BIN" ]]; then
+  PY_BIN="python"
+fi
+
+args=()
+for arg in "$@"; do
+  args+=("$(printf '%q' "$arg")")
+done
+
+cmd="PYTHONPATH=$(printf '%q' "$ROOT_DIR/src") $(printf '%q' "$PY_BIN") -m pyeidors.cache.cli ${args[*]}"
+
+if [[ "${EIT_CACHE_SKIP_ENV_SYNC:-1}" == "1" ]]; then
+  export PYEIDORS_SHELL_HOOK_READY=1
+fi
+
+exec nix develop --command bash -lc "$cmd"

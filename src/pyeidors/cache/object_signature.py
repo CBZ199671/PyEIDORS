@@ -30,7 +30,7 @@ def _normalize_callable(func: Callable[..., Any]) -> dict[str, Any]:
 
 def _normalize_for_signature(obj: Any) -> Any:
     if isinstance(obj, np.ndarray):
-        array = np.ascontiguousarray(obj)
+        array = np.asarray(obj)
         return {
             "__ndarray__": True,
             "dtype": str(array.dtype),

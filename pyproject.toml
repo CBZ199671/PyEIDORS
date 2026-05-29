@@ -92,6 +92,7 @@ Repository = "https://github.com/CBZ199671/PyEIDORS.git"
 
 [project.scripts]
 eit-app = "eit_app.app:main"
+eit-cache = "pyeidors.cache.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -134,6 +135,7 @@ filterwarnings = ["error"]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require GPU",
+    "integration: marks integration tests excluded from the default quick suite",
     "fenicsx: marks tests that require FEniCSx/DOLFINx",
     "cuqi: marks tests that require CUQIpy",
     "gui: marks tests requiring PySide6 GUI",

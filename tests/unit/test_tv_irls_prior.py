@@ -2,16 +2,52 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
+import json
+
 import numpy as np
 import pytest
 from scipy import sparse
 
+import pyeidors.inverse.prior.tv_irls as tv_irls_module
 from pyeidors.inverse import VoxelGrid, build_one_step_rm
 from pyeidors.inverse.prior import (
     solve_tv_irls_frame,
     tv_irls_objective,
     tv_irls_prior_from_state,
 )
+
+
+def test_tv_irls_state_digest_streams_payload_without_tobytes_copy() -> None:
+    state = np.array([0.0, 1.5, -2.0, 3.25], dtype=float)
+    contiguous = np.ascontiguousarray(state, dtype=np.float64)
+    expected = hashlib.sha256(
+        str(contiguous.dtype).encode()
+        + b"|"
+        + json.dumps([int(v) for v in contiguous.shape]).encode()
+        + b"|"
+        + contiguous.tobytes()
+    ).hexdigest()
+
+    assert tv_irls_module._digest_array(state) == expected
+    source = inspect.getsource(tv_irls_module._digest_array)
+    assert "update_digest_with_array_payload" in source
+    assert ".tobytes(" not in source
+    assert "np.ascontiguousarray(np.asarray" not in source
+
+
+def test_tv_irls_initial_batch_broadcasts_vector_without_broadcast_to_copy() -> None:
+    initial = np.array([0.0, 1.0, 2.0], dtype=float)
+    batch = tv_irls_module._initial_batch(initial, n_frames=2)
+
+    assert batch is not None
+    np.testing.assert_allclose(batch, np.vstack([initial, initial]))
+    assert batch.flags.c_contiguous
+    assert not np.shares_memory(batch, initial)
+    source = inspect.getsource(tv_irls_module._initial_batch)
+    assert "broadcast_to" not in source
+    assert "np.copyto" in source
 
 
 def test_tv_irls_prior_matches_weighted_ltl_formula_and_changes_signature() -> None:
@@ -67,6 +103,56 @@ def test_solve_tv_irls_batch_rejects_nonfinite_frames_and_initial() -> None:
             mesh,
             initial=np.array([[0.0, 0.0, 0.0], [0.0, np.inf, 0.0]]),
         )
+
+
+def test_v294_tv_irls_batch_direct_fills_frame_rows(monkeypatch) -> None:
+    def fail_vstack(*_args, **_kwargs):
+        raise AssertionError("TV-IRLS batch values must not call np.vstack")
+
+    monkeypatch.setattr(tv_irls_module.np, "vstack", fail_vstack)
+    mesh = VoxelGrid.from_bounds([0.0], [3.0], shape=(3,))
+    jacobian = np.eye(3, dtype=float)
+    frames = np.array(
+        [[0.0, 1.0, 0.0], [0.2, 0.8, 0.1]],
+        dtype=float,
+    )
+
+    result = tv_irls_module.solve_tv_irls_batch(
+        jacobian,
+        frames,
+        mesh,
+        lambda_=0.05,
+        max_outer_iterations=2,
+        tolerance=0.0,
+    )
+
+    assert result.values.shape == frames.shape
+    assert result.metadata["n_frames"] == frames.shape[0]
+    assert "np.vstack" not in inspect.getsource(tv_irls_module.solve_tv_irls_batch)
+
+
+def test_v488_tv_irls_guards_use_bounded_finite_scans() -> None:
+    prior_source = inspect.getsource(tv_irls_module.tv_irls_prior_from_state)
+    diff_source = inspect.getsource(tv_irls_module._difference_operator)
+    state_source = inspect.getsource(tv_irls_module._state_vector)
+    measurement_source = inspect.getsource(tv_irls_module._measurement_vector)
+    frame_source = inspect.getsource(tv_irls_module._frame_batch)
+    initial_source = inspect.getsource(tv_irls_module._initial_batch)
+
+    assert "all_finite_values(gradient)" in prior_source
+    assert "all_finite_values(weights)" in prior_source
+    assert "np.isfinite(gradient).all()" not in prior_source
+    assert "np.isfinite(weights).all()" not in prior_source
+    assert "all_finite_values(difference.data)" in diff_source
+    assert "np.isfinite(difference.data).all()" not in diff_source
+    assert "all_finite_values(vector)" in state_source
+    assert "np.isfinite(vector).all()" not in state_source
+    assert "all_finite_values(vector)" in measurement_source
+    assert "np.isfinite(vector).all()" not in measurement_source
+    assert "all_finite_values(arr)" in frame_source
+    assert "np.isfinite(arr).all()" not in frame_source
+    assert "all_finite_values(arr)" in initial_source
+    assert "np.isfinite(arr).all()" not in initial_source
 
 
 def test_build_one_step_rm_accepts_tv_irls_prior_contract() -> None:

@@ -13,6 +13,8 @@ from typing import Callable, Iterable
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import add_scaled_diagonal_in_place, all_finite_values
+
 from .adc_quantization import (
     ADCInjectionConfig,
     effective_digits_from_rmse,
@@ -75,7 +77,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.n
         raise ValueError(f"{name} must be a 1D vector")
     if arr.size == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 
@@ -88,7 +90,7 @@ def _as_float_matrix(
         raise ValueError(f"{name} must be a 2D matrix")
     if arr.shape[0] == 0 or arr.shape[1] == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 
@@ -112,8 +114,11 @@ def _fallback_parameter_points(n_parameters: int) -> np.ndarray:
     side = int(math.ceil(math.sqrt(count)))
     xs = (np.arange(side, dtype=float) + 0.5) / side
     ys = (np.arange(side, dtype=float) + 0.5) / side
-    xx, yy = np.meshgrid(xs, ys[::-1], indexing="xy")
-    return np.column_stack([xx.ravel(), yy.ravel()])[:count]
+    points = np.empty((side * side, 2), dtype=float)
+    grid = points.reshape(side, side, 2)
+    grid[:, :, 0] = xs.reshape(1, -1)
+    grid[:, :, 1] = ys[::-1].reshape(-1, 1)
+    return points[:count]
 
 
 def sigma_true_from_anomaly_rule(
@@ -448,10 +453,11 @@ def inverse_surrogate(
     if not math.isfinite(ridge_value) or ridge_value < 0.0:
         raise ValueError("ridge must be non-negative and finite")
 
-    normal = sens.T @ sens
+    normal = np.array(sens.T @ sens, dtype=float, copy=True, order="C")
     rhs = sens.T @ voltage_vec
     if ridge_value > 0.0:
-        normal = normal + ridge_value * np.eye(normal.shape[0], dtype=float)
+        identity_diag = np.broadcast_to(1.0, normal.shape[0])
+        add_scaled_diagonal_in_place(normal, identity_diag, ridge_value)
     return np.linalg.solve(normal, rhs)
 
 
@@ -509,9 +515,10 @@ def inverse_measurement_rm(
     lam = float(lambda_)
     if lam < 0.0 or not np.isfinite(lam):
         raise ValueError("lambda_ must be finite and non-negative.")
-    lhs = np.asarray(sens @ sens.T, dtype=float)
+    lhs = np.array(sens @ sens.T, dtype=float, copy=True, order="C")
     if lam > 0.0:
-        lhs = lhs + (lam * lam) * np.eye(lhs.shape[0], dtype=float)
+        identity_diag = np.broadcast_to(1.0, lhs.shape[0])
+        add_scaled_diagonal_in_place(lhs, identity_diag, lam * lam)
     try:
         weights = np.linalg.solve(lhs, voltage_vec)
     except np.linalg.LinAlgError:

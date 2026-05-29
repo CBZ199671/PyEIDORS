@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
@@ -10,6 +11,7 @@ import pytest
 from scipy.io import loadmat
 
 from pyeidors.data.structures import EITMesh
+import pyeidors.interop.geometry_exchange as geometry_exchange_module
 from pyeidors.interop import (
     STANDARD_INTEROP_FORMAT,
     build_boundary_edges,
@@ -132,3 +134,37 @@ def test_build_mesh_from_exchange_mat_standard_payload(tmp_path: Path) -> None:
     np.testing.assert_allclose(
         np.asarray(payload["truth_elem_data"], dtype=float).reshape(-1), [1.0, 2.0]
     )
+
+
+def test_v300_boundary_edges_direct_fill_without_vstack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    out_mat = tmp_path / "exchange.mat"
+    save_exchange_mat(out_mat, make_standard_payload())
+    mesh, _payload = build_mesh_from_exchange_mat(out_mat)
+
+    def _fail_vstack(*_args, **_kwargs):
+        raise AssertionError("boundary edge assembly must not call np.vstack")
+
+    monkeypatch.setattr(geometry_exchange_module.np, "vstack", _fail_vstack)
+    source = inspect.getsource(geometry_exchange_module.build_boundary_edges)
+    assert "np.vstack" not in source
+
+    boundary_edges = geometry_exchange_module.build_boundary_edges(mesh)
+    assert boundary_edges.shape == (4, 2)
+    assert boundary_edges.dtype == np.int64
+
+
+def test_v501_geometry_exchange_index_guards_use_min_reductions() -> None:
+    electrode_source = inspect.getsource(
+        geometry_exchange_module._load_standard_electrode_node_lists
+    )
+    connectivity_source = inspect.getsource(
+        geometry_exchange_module._load_one_based_connectivity
+    )
+
+    assert "np.min(active_nodes, initial=1)" in electrode_source
+    assert "np.min(data, initial=1)" in connectivity_source
+    assert "np.any(active_nodes < 1)" not in electrode_source
+    assert "np.any(data < 1)" not in connectivity_source

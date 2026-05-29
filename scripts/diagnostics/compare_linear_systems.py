@@ -15,10 +15,17 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 from typing import Dict, Tuple
 
 import numpy as np
 import h5py
+
+ROOT = Path(__file__).resolve().parents[2]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.common.array_metrics import finite_pearson_correlation
 
 
 def load_measured_vector(path: Path, column: int) -> np.ndarray:
@@ -52,11 +59,7 @@ def analyze_solution(
     error = predicted - measured
     rmse = float(np.sqrt(np.mean(error**2)))
     mae = float(np.mean(np.abs(error)))
-    corr = (
-        float(np.corrcoef(predicted, measured)[0, 1])
-        if np.std(measured) > 0
-        else np.nan
-    )
+    corr = finite_pearson_correlation(predicted, measured)
     return {"tag": tag, "rmse": rmse, "mae": mae, "corr": corr}
 
 

@@ -17,6 +17,10 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.models.forward_model_config import (
+    format_complex_scalar,
+    parse_complex_scalar,
+)
 from eit_app.models.simulation_state import InhomogeneitySpec
 from eit_app.ui.theme import set_button_role, set_hint_text
 
@@ -50,7 +54,7 @@ _COLUMN_BASE_WIDTHS_2D = {
     2: 78,  # Y
     4: 82,  # length
     5: 82,  # width
-    7: 92,  # conductivity
+    7: 116,  # conductivity/admittivity
 }
 _COLUMN_BASE_WIDTHS_3D = {
     0: 108,  # shape
@@ -60,7 +64,7 @@ _COLUMN_BASE_WIDTHS_3D = {
     4: 70,  # length
     5: 70,  # width
     6: 70,  # height
-    7: 88,  # conductivity
+    7: 112,  # conductivity/admittivity
 }
 _COLUMN_EXTRA_WEIGHTS = {
     0: 1.2,
@@ -229,7 +233,7 @@ class _InhomogeneityTableModel(QAbstractTableModel):
         if col == 6:
             return spec.size_z * 2.0
         if col == 7:
-            return spec.conductivity
+            return format_complex_scalar(spec.conductivity, default=2.0)
         return None
 
     def setData(self, index: QModelIndex, value, role=Qt.ItemDataRole.EditRole) -> bool:
@@ -286,7 +290,10 @@ class _InhomogeneityTableModel(QAbstractTableModel):
                 else:
                     spec.size_z = size
             elif col == 7:
-                spec.conductivity = float(value)
+                spec.conductivity = parse_complex_scalar(
+                    value,
+                    default=spec.conductivity,
+                )
             else:
                 return False
         except (ValueError, TypeError):

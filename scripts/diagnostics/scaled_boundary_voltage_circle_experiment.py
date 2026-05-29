@@ -17,8 +17,12 @@ import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 SRC_PATH = PROJECT_ROOT / "src"
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
+
+from scripts.common.array_metrics import mean_where, safe_finite_pearson_correlation
 
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import EITData, MeshConfig, PatternConfig
@@ -149,16 +153,7 @@ def safe_float(value: Any) -> float:
 
 
 def safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
-    lhs = np.asarray(left, dtype=np.float64).reshape(-1)
-    rhs = np.asarray(right, dtype=np.float64).reshape(-1)
-    mask = np.isfinite(lhs) & np.isfinite(rhs)
-    lhs = lhs[mask]
-    rhs = rhs[mask]
-    if lhs.size < 2:
-        return float("nan")
-    if np.allclose(lhs, lhs[0]) or np.allclose(rhs, rhs[0]):
-        return 1.0 if np.allclose(lhs, rhs) else 0.0
-    return float(np.corrcoef(lhs, rhs)[0, 1])
+    return safe_finite_pearson_correlation(left, right)
 
 
 def center_of_mass(points: np.ndarray, weights: np.ndarray) -> np.ndarray | None:
@@ -274,16 +269,8 @@ def image_metrics(
     )
     background_mask = ~target_mask
     truth_contrast = float(target_sigma) - float(background_sigma)
-    recon_target_mean = (
-        float(np.mean(recon_delta[target_mask]))
-        if np.any(target_mask)
-        else float("nan")
-    )
-    recon_background_mean = (
-        float(np.mean(recon_delta[background_mask]))
-        if np.any(background_mask)
-        else float("nan")
-    )
+    recon_target_mean = mean_where(recon_delta, target_mask)
+    recon_background_mean = mean_where(recon_delta, background_mask)
     contrast_recovery = (
         float((recon_target_mean - recon_background_mean) / truth_contrast)
         if abs(truth_contrast) > 1e-12
@@ -335,16 +322,8 @@ def compare_reconstructions(
         np.linalg.norm(coords[:, :2] - target_center[:2][None, :], axis=1)
         <= target_radius
     )
-    original_target_mean = (
-        float(np.mean(original_delta[target_mask]))
-        if np.any(target_mask)
-        else float("nan")
-    )
-    scaled_target_mean = (
-        float(np.mean(scaled_delta[target_mask]))
-        if np.any(target_mask)
-        else float("nan")
-    )
+    original_target_mean = mean_where(original_delta, target_mask)
+    scaled_target_mean = mean_where(scaled_delta, target_mask)
     original_shape = threshold_metrics(
         coords=coords,
         truth_delta=original_delta,
@@ -619,10 +598,10 @@ def sample_to_grid(
 
     axis = np.linspace(-radius, radius, int(resolution))
     xg, yg = np.meshgrid(axis, axis)
-    query = np.column_stack([xg.ravel(), yg.ravel()])
+    query = _query_points_2d(xg, yg)
     sampled = griddata(coords[:, :2], values, query, method="linear")
-    if np.isnan(sampled).any():
-        missing = np.isnan(sampled)
+    missing = np.isnan(sampled)
+    if np.any(missing):
         sampled[missing] = griddata(
             coords[:, :2],
             values,
@@ -630,8 +609,41 @@ def sample_to_grid(
             method="nearest",
         )
     image = sampled.reshape(xg.shape)
-    image[(xg**2 + yg**2) > radius**2] = np.nan
+    _apply_outside_radius_nan(image, xg, yg, radius)
     return xg, yg, image
+
+
+def _query_points_2d(x_grid: np.ndarray, y_grid: np.ndarray) -> np.ndarray:
+    x_flat = np.asarray(x_grid).reshape(-1)
+    y_flat = np.asarray(y_grid).reshape(-1)
+    if x_flat.size != y_flat.size:
+        raise ValueError("x/y grid sizes must match")
+    query = np.empty((x_flat.size, 2), dtype=np.result_type(x_flat, y_flat, np.float64))
+    query[:, 0] = x_flat
+    query[:, 1] = y_flat
+    return query
+
+
+def _apply_outside_radius_nan(
+    image: np.ndarray,
+    x_grid: np.ndarray,
+    y_grid: np.ndarray,
+    radius: float,
+) -> None:
+    if image.shape != x_grid.shape or image.shape != y_grid.shape:
+        raise ValueError("image and grid shapes must match")
+    radius_sq = float(radius) * float(radius)
+    row_width = int(image.shape[1])
+    squared = np.empty(row_width, dtype=np.float64)
+    y_squared = np.empty(row_width, dtype=np.float64)
+    mask = np.empty(row_width, dtype=bool)
+    for row in range(int(image.shape[0])):
+        np.multiply(x_grid[row, :], x_grid[row, :], out=squared)
+        np.multiply(y_grid[row, :], y_grid[row, :], out=y_squared)
+        np.add(squared, y_squared, out=squared)
+        np.greater(squared, radius_sq, out=mask)
+        row_values = image[row, :]
+        row_values[mask] = np.nan
 
 
 def configure_matplotlib() -> None:

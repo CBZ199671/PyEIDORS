@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -210,6 +211,34 @@ def test_projection_and_warm_start_helper_branches():
     )
 
 
+def test_v403_sparse_map_warm_start_division_uses_where_masks() -> None:
+    subspace_source = inspect.getsource(sparse_map_module._linear_warm_start_subspace)
+    fullspace_source = inspect.getsource(sparse_map_module._linear_warm_start_fullspace)
+
+    assert "warm_start[mask]" not in subspace_source
+    assert "numerator[mask]" not in subspace_source
+    assert "s_k[mask]" not in subspace_source
+    assert "np.divide(numerator, s_k, out=warm_start, where=mask)" in subspace_source
+    assert "coeff[mask]" not in fullspace_source
+    assert "s[mask]" not in fullspace_source
+    assert "coeff[~mask]" not in fullspace_source
+    assert "np.divide(coeff, s, out=coeff, where=mask)" in fullspace_source
+    assert "np.multiply(coeff, mask, out=coeff)" in fullspace_source
+
+    warm_sub = sparse_map_module._linear_warm_start_subspace(
+        np.eye(3, dtype=float),
+        np.array([2.0, 0.0, 4.0], dtype=float),
+        np.array([4.0, 5.0, 12.0], dtype=float),
+    )
+    np.testing.assert_allclose(warm_sub, np.array([2.0, 0.0, 3.0], dtype=float))
+
+    warm_full = sparse_map_module._linear_warm_start_fullspace(
+        np.diag([2.0, 0.0, 4.0]),
+        np.array([4.0, 5.0, 12.0], dtype=float),
+    )
+    np.testing.assert_allclose(warm_full, np.array([2.0, 0.0, 3.0], dtype=float))
+
+
 def test_coarse_initialization_and_solve_sparse_map_paths():
     jac = np.array([[1.0, 2.0, 0.0, 0.0], [0.0, 1.0, 3.0, 4.0]], dtype=float)
     groups = [np.array([0, 1]), np.array([2, 3])]
@@ -390,6 +419,72 @@ def test_multilevel_and_block_refinement_fallback_paths(
         solution=np.zeros(0, dtype=float),
     )
     assert empty.size == 0
+
+
+def test_v513_sparse_map_refinement_diagonals_stay_in_place(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    multilevel_source = inspect.getsource(sparse_map_module.multilevel_correction)
+    block_source = inspect.getsource(sparse_map_module.block_refinement)
+    assert "lambda_reg * np.diag(group_sizes)" not in multilevel_source
+    assert "lambda_reg * np.eye(stop - start)" not in block_source
+    assert (
+        "add_scaled_diagonal_in_place(H, group_sizes, lambda_reg)" in multilevel_source
+    )
+    assert "add_scaled_diagonal_in_place(M, identity_diag, lambda_reg)" in block_source
+
+    jac = np.eye(4, dtype=float)
+    data = np.array([0.1, 0.2, 0.3, 0.4], dtype=float)
+    solution = np.zeros(4, dtype=float)
+    coarse_matrix = np.array(
+        [
+            [1.0, 0.0],
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 1.0],
+        ],
+        dtype=float,
+    )
+
+    def _fail_diag(*_args, **_kwargs):
+        raise AssertionError("coarse correction must not materialize np.diag")
+
+    def _fail_eye(*_args, **_kwargs):
+        raise AssertionError("block refinement must not materialize np.eye")
+
+    monkeypatch.setattr(sparse_map_module.np, "diag", _fail_diag)
+    monkeypatch.setattr(sparse_map_module.np, "eye", _fail_eye)
+
+    recon = _reconstructor()
+    recon.config.coarse_iterations = 1
+    recon._get_coarse_matrix = lambda _jacobian, _groups, _size: coarse_matrix
+
+    corrected = sparse_map_module.multilevel_correction(
+        recon,
+        jacobian=jac,
+        data_vector=data,
+        noise_sigma=1.0,
+        prior_scale=1.0,
+        solution=solution,
+        hierarchy=[(2, [np.array([0, 1]), np.array([2, 3])])],
+    )
+    assert corrected.shape == solution.shape
+    assert np.isfinite(corrected).all()
+
+    recon_block = _reconstructor()
+    recon_block.config.block_iterations = 1
+    recon_block.config.block_size = 2
+
+    refined = sparse_map_module.block_refinement(
+        recon_block,
+        jacobian=jac,
+        data_vector=data,
+        noise_sigma=1.0,
+        prior_scale=1.0,
+        solution=solution,
+    )
+    assert refined.shape == solution.shape
+    assert np.isfinite(refined).all()
 
 
 def test_multilevel_and_block_refinement_remaining_skip_branches(

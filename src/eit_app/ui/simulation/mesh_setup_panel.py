@@ -23,7 +23,10 @@ from eit_app.models.forward_model_config import (
     INTERACTIVE_3D_DEFAULT_HEIGHT,
     INTERACTIVE_3D_DEFAULT_RADIUS,
     INTERACTIVE_3D_DEFAULT_RINGS,
+    format_complex_scalar,
     max_electrode_height_ratio_for_rings,
+    parse_complex_scalar,
+    parse_complex_scalar_list,
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import set_hint_text, set_section_header
@@ -187,14 +190,17 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_electrode_layout = QLabel("")
         mesh_form.addRow(self._lbl_electrode_layout, self._electrode_layout_combo)
 
-        self._bg_cond_spin = QDoubleSpinBox()
-        self._bg_cond_spin.setRange(0.001, 100.0)
-        self._bg_cond_spin.setValue(1.0)
-        self._bg_cond_spin.setDecimals(3)
-        self._bg_cond_spin.setSuffix(" S/m")
-        self._bg_cond_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._bg_cond_edit = QLineEdit("1")
+        self._bg_cond_edit.setPlaceholderText("1 or 1+0.25j")
+        self._bg_cond_edit.editingFinished.connect(self._on_any_change)
         self._lbl_conductivity = QLabel("")
-        mesh_form.addRow(self._lbl_conductivity, self._bg_cond_spin)
+        mesh_form.addRow(self._lbl_conductivity, self._bg_cond_edit)
+
+        self._contact_impedance_edit = QLineEdit("0.01")
+        self._contact_impedance_edit.setPlaceholderText("0.01 or 0.01+0.002j")
+        self._contact_impedance_edit.editingFinished.connect(self._on_any_change)
+        self._lbl_contact_impedance = QLabel("")
+        mesh_form.addRow(self._lbl_contact_impedance, self._contact_impedance_edit)
 
         outer.addWidget(mesh_widget)
 
@@ -303,6 +309,50 @@ class MeshSetupPanel(QGroupBox):
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    @staticmethod
+    def _parse_complex_edit(
+        edit: QLineEdit,
+        *,
+        default: complex | float,
+    ) -> complex | float:
+        try:
+            value = parse_complex_scalar(edit.text(), default=default)
+        except (TypeError, ValueError):
+            edit.setProperty("invalid", True)
+            edit.setStyleSheet("border: 1px solid #b00020;")
+            return default
+        edit.setProperty("invalid", False)
+        edit.setStyleSheet("")
+        return value
+
+    @staticmethod
+    def _format_complex_edit_value(
+        value: object,
+        *,
+        default: complex | float,
+    ) -> str:
+        if isinstance(value, (list, tuple)):
+            return "; ".join(
+                format_complex_scalar(item, default=default) for item in value
+            )
+        return format_complex_scalar(value, default=default)
+
+    @staticmethod
+    def _parse_complex_list_edit(
+        edit: QLineEdit,
+        *,
+        default: complex | float,
+    ) -> complex | float | list[complex | float]:
+        try:
+            value = parse_complex_scalar_list(edit.text(), default=default)
+        except (TypeError, ValueError):
+            edit.setProperty("invalid", True)
+            edit.setStyleSheet("border: 1px solid #b00020;")
+            return default
+        edit.setProperty("invalid", False)
+        edit.setStyleSheet("")
+        return default if value is None else value
 
     @staticmethod
     def _electrodes_per_circumference(
@@ -438,7 +488,14 @@ class MeshSetupPanel(QGroupBox):
             "electrode_coverage": electrode_coverage,
             "electrode_area_m2_override": electrode_area_m2,
             "electrode_height_ratio": electrode_height_ratio,
-            "background_conductivity": self._bg_cond_spin.value(),
+            "background_conductivity": self._parse_complex_edit(
+                self._bg_cond_edit,
+                default=1.0,
+            ),
+            "contact_impedance": self._parse_complex_list_edit(
+                self._contact_impedance_edit,
+                default=0.01,
+            ),
             "measurement_protocol": str(
                 self._measurement_protocol_combo.currentData() or "eidors_full_3d"
             ),
@@ -462,7 +519,8 @@ class MeshSetupPanel(QGroupBox):
             self._electrode_length_spin,
             self._electrode_area_spin,
             self._electrode_layout_combo,
-            self._bg_cond_spin,
+            self._bg_cond_edit,
+            self._contact_impedance_edit,
             self._measurement_protocol_combo,
             self._custom_pattern_edit,
             self._stim_pattern_edit,
@@ -546,8 +604,17 @@ class MeshSetupPanel(QGroupBox):
                 config.get("electrode_area_m2_override"), default_area
             )
             self._electrode_area_spin.setValue(max(electrode_area, 1.0e-8))
-            self._bg_cond_spin.setValue(
-                float(config.get("background_conductivity", 1.0))
+            self._bg_cond_edit.setText(
+                self._format_complex_edit_value(
+                    config.get("background_conductivity", 1.0),
+                    default=1.0,
+                )
+            )
+            self._contact_impedance_edit.setText(
+                self._format_complex_edit_value(
+                    config.get("contact_impedance", 0.01),
+                    default=0.01,
+                )
             )
             self._select_combo_data(
                 self._measurement_protocol_combo,
@@ -799,6 +866,9 @@ class MeshSetupPanel(QGroupBox):
             1, t("sim.mesh.electrode_layout.zigzag")
         )
         self._lbl_conductivity.setText(t("sim.mesh.conductivity_label"))
+        self._bg_cond_edit.setToolTip(t("sim.mesh.complex_admittivity_tooltip"))
+        self._lbl_contact_impedance.setText(t("sim.mesh.contact_impedance_label"))
+        self._contact_impedance_edit.setToolTip(t("sim.mesh.complex_impedance_tooltip"))
         # Pattern section
         self._patterns_header.setText(t("sim.mesh.patterns_header"))
         self._patterns_hint.setText(t("sim.mesh.patterns_hint"))

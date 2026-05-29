@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -47,6 +49,45 @@ def test_t49_woodbury_large_path_matches_dense_calc_greit_rm() -> None:
         fast["noiselev"], dense.noiselev, rtol=1.0e-11, atol=1.0e-11
     )
     np.testing.assert_allclose(fast["RM"], dense.rm, rtol=1.0e-10, atol=1.0e-10)
+
+
+def test_v538_greit_parity_benchmark_direct_fills_dense_helpers() -> None:
+    module = _load_module()
+
+    batch_source = inspect.getsource(module._LinearForwardModel.fwd_solve_batch)
+    calc_source = inspect.getsource(module._calc_large_scalar_noise_components)
+    measurement_source = inspect.getsource(module._measurement_matrix)
+    fixture_source = inspect.getsource(module._case_from_fixture)
+    assert "np.column_stack" not in batch_source
+    assert "np.vstack" not in measurement_source
+    assert "np.eye" not in calc_source
+    assert "np.eye" not in fixture_source
+    assert "_stack_image_elem_data(images)" in batch_source
+    assert "_dense_identity" in calc_source
+    assert "_dense_identity" in fixture_source
+
+    identity = module._dense_identity(3)
+    np.testing.assert_allclose(identity, np.eye(3))
+    system = np.zeros((2, 2), dtype=np.float64)
+    out = module._add_diagonal_in_place(system, 2.5)
+    assert out is system
+    np.testing.assert_allclose(np.diag(system), np.array([2.5, 2.5]))
+    stacked = module._stack_image_elem_data(
+        [
+            SimpleNamespace(elem_data=np.array([1.0, 2.0])),
+            SimpleNamespace(elem_data=np.array([3.0, 4.0])),
+        ]
+    )
+    np.testing.assert_allclose(stacked, np.array([[1.0, 3.0], [2.0, 4.0]]))
+
+    centers = module._rec_centers_from_voxel_shape((2, 2, 1))
+    measurement = module._measurement_matrix(
+        centers,
+        n_measurements=5,
+        n_elec=8,
+        n_rings=2,
+    )
+    assert measurement.shape == (5, centers.shape[0])
 
 
 def test_t49_benchmark_writes_parity_report_and_hot_path_summary(

@@ -20,15 +20,15 @@ def _difference_step_size_objective(
     measured_vector: np.ndarray,
     alpha: float,
 ) -> float:
-    sigma = np.asarray(prior_sigma + float(alpha) * delta_sigma, dtype=np.float64)
+    sigma = np.asarray(prior_sigma + float(alpha) * delta_sigma)
     clip_values = getattr(reconstructor, "clip_values", None)
-    if clip_values is not None:
+    if clip_values is not None and not np.iscomplexobj(sigma):
         sigma = np.clip(sigma, clip_values[0], clip_values[1])
     image = EITImage(elem_data=sigma, fwd_model=reconstructor.fwd_model)
     simulated, _ = reconstructor.fwd_model.fwd_solve(image)
     simulated_vector = _project_simulated_measurements(reconstructor, simulated.meas)
-    residual = np.asarray(simulated_vector, dtype=np.float64) - measured_vector
-    return float(np.dot(residual, residual))
+    residual = np.asarray(simulated_vector) - np.asarray(measured_vector)
+    return float(np.vdot(residual, residual).real)
 
 
 def _apply_difference_step_size(
@@ -48,30 +48,30 @@ def _apply_difference_step_size(
     }
     if getattr(reconstructor, "_measurement_space_type", "real") != "difference":
         info["reason"] = "real_measurement_space"
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
     if mode == "off":
         info["reason"] = "disabled"
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
     if str(getattr(reconstructor, "active_preset_name", "")).strip().lower() not in {
         "eidors_one_step_noser",
         "eidors_demo3d_tv",
     }:
         info["reason"] = "preset_not_one_step"
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
 
     prior_raw = getattr(reconstructor, "_prior_data", None)
     if prior_raw is None:
         info["reason"] = "missing_prior"
-        return np.asarray(sigma_final, dtype=np.float64), info
-    prior_sigma = np.asarray(prior_raw, dtype=np.float64).reshape(-1)
+        return np.asarray(sigma_final), info
+    prior_sigma = np.asarray(prior_raw).reshape(-1)
     if prior_sigma.shape[0] != sigma_final.shape[0]:
         info["reason"] = "missing_prior"
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
 
-    delta_sigma = np.asarray(sigma_final - prior_sigma, dtype=np.float64)
+    delta_sigma = np.asarray(sigma_final - prior_sigma)
     if np.linalg.norm(delta_sigma) <= 1e-18:
         info["reason"] = "zero_delta"
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
 
     if mode == "fixed":
         alpha = float(
@@ -89,7 +89,7 @@ def _apply_difference_step_size(
         info["applied"] = True
         info["value"] = alpha
         info["objective"] = objective
-        return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
+        return np.asarray(prior_sigma + alpha * delta_sigma), info
 
     bounds = tuple(
         float(v)
@@ -126,13 +126,13 @@ def _apply_difference_step_size(
     except Exception as exc:
         info["reason"] = f"optimization_failed:{type(exc).__name__}"
         info["eval_count"] = int(calls["count"])
-        return np.asarray(sigma_final, dtype=np.float64), info
+        return np.asarray(sigma_final), info
 
     info["eval_count"] = int(calls["count"])
     info["applied"] = True
     info["value"] = alpha
     info["objective"] = objective
-    return np.asarray(prior_sigma + alpha * delta_sigma, dtype=np.float64), info
+    return np.asarray(prior_sigma + alpha * delta_sigma), info
 
 
 def _select_step_size(

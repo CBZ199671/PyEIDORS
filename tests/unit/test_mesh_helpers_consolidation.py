@@ -77,6 +77,29 @@ def test_build_mesh_cache_name_legacy_alias_matches_canonical() -> None:
     assert legacy == canonical == "mesh_32e_r1_ref8_cov0p4"
 
 
+def test_build_mesh_cache_name_includes_nondefault_geometry_dtype() -> None:
+    assert (
+        helpers.build_mesh_cache_name(
+            n_elec=16,
+            radius=1.0,
+            refinement=5,
+            electrode_coverage=0.5,
+            geometry_dtype="float32",
+        )
+        == "mesh_16e_r1_ref5_cov0p5_f32"
+    )
+    assert (
+        helpers.build_mesh_cache_name(
+            n_elec=16,
+            radius=1.0,
+            refinement=5,
+            electrode_coverage=0.5,
+            geometry_dtype="float64",
+        )
+        == "mesh_16e_r1_ref5_cov0p5"
+    )
+
+
 # ---------------------------------------------------------------------------
 # build_mesh_cache_name_3d: 3D cache filename includes mesh-family / version.
 # ---------------------------------------------------------------------------
@@ -136,6 +159,25 @@ def test_build_mesh_cache_name_3d_layout_normalization_round_trips() -> None:
     assert "ring_major" in ring_major
     assert "zigzag" in zigzag
     assert ring_major != zigzag
+
+
+def test_build_mesh_cache_name_3d_includes_nondefault_geometry_dtype() -> None:
+    name = helpers.build_mesh_cache_name_3d(
+        n_elec=16,
+        radius=1.0,
+        height=1.0,
+        refinement=2,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.5,
+        electrode_level_fractions=(0.5,),
+        z_center=0.0,
+        mesh_family="tetra",
+        geometry_version="legacy",
+        generator_revision="g3d1",
+        geometry_dtype="float32",
+    )
+
+    assert name.endswith("_f32")
 
 
 def test_build_mesh_cache_name_3d_legacy_alias_matches_canonical() -> None:

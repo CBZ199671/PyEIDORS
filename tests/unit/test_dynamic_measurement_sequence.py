@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import numpy as np
 import pytest
 
+import pyeidors.data.dynamic_sequence as dynamic_sequence_module
 from pyeidors.data.dynamic_sequence import (
     DYNAMIC_MEASUREMENT_SEQUENCE_SCHEMA,
     DynamicMeasurementSequence,
@@ -69,6 +71,46 @@ def test_dynamic_measurement_sequence_carries_frame_metadata_and_contracts() -> 
     assert frame_meta["measurement_weight_kind"] == "diagonal"
     assert frame_meta["frequency_hz"] == pytest.approx(1200.0)
     assert frame_meta["context_metadata"]["domain"] == "plant"
+
+
+def test_dynamic_bad_channel_mask_vector_broadcast_direct_fill() -> None:
+    source = inspect.getsource(dynamic_sequence_module._bad_channel_mask_frames)
+    assert "broadcast_to" not in source
+    assert "np.copyto" in source
+
+    mask = dynamic_sequence_module._bad_channel_mask_frames(
+        [False, True, False],
+        n_frames=2,
+        n_measurements=3,
+    )
+
+    assert mask.flags.c_contiguous
+    np.testing.assert_array_equal(
+        mask,
+        np.array([[False, True, False], [False, True, False]], dtype=bool),
+    )
+
+
+def test_v487_dynamic_sequence_numeric_guards_use_bounded_scans() -> None:
+    frame_source = inspect.getsource(dynamic_sequence_module._frame_batch)
+    timestamp_source = inspect.getsource(dynamic_sequence_module._timestamps)
+    dt_source = inspect.getsource(dynamic_sequence_module._dt)
+    weights_source = inspect.getsource(dynamic_sequence_module._measurement_weights)
+    frequency_source = inspect.getsource(dynamic_sequence_module._frequency_hz)
+
+    assert "all_finite_values(arr)" in frame_source
+    assert "np.isfinite(arr).all()" not in frame_source
+    assert "all_finite_values(values)" in timestamp_source
+    assert "np.isfinite(values).all()" not in timestamp_source
+    assert "all_finite_values(values)" in dt_source
+    assert "np.isfinite(values).all()" not in dt_source
+    assert "np.any(values < 0.0)" not in dt_source
+    assert "all_finite_values(arr)" in weights_source
+    assert "np.isfinite(arr).all()" not in weights_source
+    assert "np.any(arr < 0.0)" not in weights_source
+    assert "all_finite_values(values)" in frequency_source
+    assert "np.isfinite(values).all()" not in frequency_source
+    assert "np.any(values < 0.0)" not in frequency_source
 
 
 def test_dynamic_measurement_sequence_hdf5_roundtrip(tmp_path: Path) -> None:

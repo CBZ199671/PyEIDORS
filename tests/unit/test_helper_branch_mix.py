@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -266,6 +267,8 @@ def test_core_system_helpers_cover_conductivity_difference_images_and_info(
     assert diff.type == "difference"
     np.testing.assert_allclose(diff.reference_meas, ref.meas)
     np.testing.assert_allclose(diff.target_meas, data.meas)
+    assert np.shares_memory(diff.reference_meas, ref.meas)
+    assert np.shares_memory(diff.target_meas, data.meas)
     assert diff.difference_mode == "normalized"
     assert diff.difference_orientation == "reference_minus_target"
 
@@ -290,6 +293,10 @@ def test_core_system_helpers_cover_conductivity_difference_images_and_info(
     np.testing.assert_allclose(
         phantom.elem_data, np.array([2.0, 2.0, 1.0, 1.0], dtype=float)
     )
+    phantom_source = inspect.getsource(core_helpers.add_circular_phantom)
+    assert "center[None" not in phantom_source
+    assert "np.linalg.norm" not in phantom_source
+    assert "squared_distances_to_point" in phantom_source
 
     system = SimpleNamespace(
         n_elec=16,
@@ -339,9 +346,21 @@ def test_weight_helpers_cover_scaling_difference_and_strategy_selection():
         baseline, np.array([1.1, -0.9], dtype=float), 0.5
     )
     np.testing.assert_allclose(diff, np.array([0.5, 0.5], dtype=float))
+    source = inspect.getsource(weight_module.difference_with_baseline)
+    assert "np.where" not in source
+    assert "np.abs(np.asarray" not in source
+    assert "np.abs(diff, out=diff)" in source
+    assert "np.maximum(diff, float(floor), out=diff)" in source
     np.testing.assert_allclose(
         weight_module.difference_with_baseline(baseline, None, 0.5), baseline
     )
+    complex_diff = weight_module.difference_with_baseline(
+        np.array([1.0 + 1.0j, 2.0 + 0.0j], dtype=np.complex128),
+        np.array([2.0 + 1.0j, 2.0 + 4.0j], dtype=np.complex128),
+        0.5,
+    )
+    np.testing.assert_allclose(complex_diff, np.array([1.0, 4.0], dtype=np.float64))
+    assert complex_diff.dtype == np.dtype(np.float64)
 
     np.testing.assert_allclose(
         weight_module.build_weight_reference(

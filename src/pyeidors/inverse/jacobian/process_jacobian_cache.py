@@ -39,12 +39,20 @@ from typing import Any, Mapping
 
 import numpy as np
 
-from ...cache.process_lru import ProcessLRUCache, hash_json_payload
+from ...cache.process_lru import ProcessLRUCache, env_bytes_limit, hash_json_payload
 
 
 _PROCESS_JACOBIAN_CACHE_MAX_ITEMS = 4
+_PROCESS_JACOBIAN_CACHE_MAX_BYTES = 512 * 1024 * 1024
+
+_RESOLVED_PROCESS_JACOBIAN_CACHE_MAX_BYTES = env_bytes_limit(
+    "PYEIDORS_PROCESS_JACOBIAN_CACHE_MAX_BYTES",
+    "EIT_APP_PROCESS_JACOBIAN_CACHE_MAX_BYTES",
+    default=_PROCESS_JACOBIAN_CACHE_MAX_BYTES,
+)
 _PROCESS_JACOBIAN_CACHE: ProcessLRUCache[np.ndarray] = ProcessLRUCache(
-    max_items=_PROCESS_JACOBIAN_CACHE_MAX_ITEMS
+    max_items=_PROCESS_JACOBIAN_CACHE_MAX_ITEMS,
+    max_bytes=_RESOLVED_PROCESS_JACOBIAN_CACHE_MAX_BYTES,
 )
 
 
@@ -109,7 +117,7 @@ def build_process_jacobian_key(
 
 
 def get_process_cached_jacobian(key: str) -> np.ndarray | None:
-    """Return a copy-on-write view of the cached Jacobian, or ``None``."""
+    """Return the read-only cached Jacobian array, or ``None``."""
     cached = _PROCESS_JACOBIAN_CACHE.get(key)
     if cached is None:
         return None
@@ -118,7 +126,13 @@ def get_process_cached_jacobian(key: str) -> np.ndarray | None:
 
 def put_process_cached_jacobian(key: str, jacobian: np.ndarray) -> None:
     """Store a Jacobian under ``key`` (LRU evicts the oldest if full)."""
-    arr = np.ascontiguousarray(np.asarray(jacobian))
+    source = np.asarray(jacobian)
+    max_bytes = int(_RESOLVED_PROCESS_JACOBIAN_CACHE_MAX_BYTES)
+    if max_bytes <= 0 or int(source.nbytes) > max_bytes:
+        _PROCESS_JACOBIAN_CACHE.discard(key)
+        return
+    arr = np.ascontiguousarray(source)
+    arr.setflags(write=False)
     _PROCESS_JACOBIAN_CACHE.put(key, arr)
 
 
@@ -128,5 +142,5 @@ def clear_process_jacobian_cache() -> None:
 
 
 def process_jacobian_cache_stats() -> dict[str, int]:
-    """Return ``{"items": int, "max_items": int}``."""
+    """Return item and byte-budget stats for the process Jacobian cache."""
     return _PROCESS_JACOBIAN_CACHE.stats()

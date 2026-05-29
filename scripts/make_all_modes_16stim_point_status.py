@@ -39,7 +39,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def _electrode_points(n_elec: int) -> np.ndarray:
     angles = np.pi / 2.0 - 2.0 * np.pi * np.arange(n_elec, dtype=float) / n_elec
-    return np.column_stack([np.cos(angles), np.sin(angles)])
+    points = np.empty((int(n_elec), 2), dtype=np.float64)
+    np.cos(angles, out=points[:, 0])
+    np.sin(angles, out=points[:, 1])
+    return points
 
 
 def plot_16stim_point_status(

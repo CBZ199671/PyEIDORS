@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
 from pyeidors.data import temporal_filtering
+from pyeidors.data import _temporal_core as temporal_core_module
 from pyeidors.data._temporal_core import (
     as_frame_batch,
     positive_int,
@@ -41,6 +44,16 @@ def test_as_frame_batch_preserves_vector_and_batch_contracts() -> None:
     np.testing.assert_allclose(matrix_batch, np.array([[1.0, 3.0], [2.0, 4.0]]))
 
 
+def test_v554_as_frame_batch_preserves_float32_precision_budget() -> None:
+    frames = np.array([[1.0, 2.0], [3.0, 4.0]], dtype=np.float32).T
+
+    batch, was_vector = as_frame_batch(frames)
+
+    assert was_vector is False
+    assert batch.dtype == np.dtype(np.float32)
+    assert batch.flags.c_contiguous
+
+
 def test_temporal_core_preserves_validation_error_messages() -> None:
     with pytest.raises(ValueError, match="1D vector or 2D frame batch"):
         as_frame_batch(np.zeros((1, 1, 1), dtype=float))
@@ -56,3 +69,10 @@ def test_temporal_core_preserves_validation_error_messages() -> None:
     assert unit_interval(0.5, "alpha") == 0.5
     with pytest.raises(ValueError, match=r"alpha must be finite and in \[0, 1\]"):
         unit_interval(1.5, "alpha")
+
+
+def test_v484_temporal_core_frame_batch_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(temporal_core_module.as_frame_batch)
+
+    assert "all_finite_values(batch)" in source
+    assert "np.isfinite(batch).all()" not in source

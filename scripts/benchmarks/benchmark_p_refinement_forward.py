@@ -30,6 +30,7 @@ from pyeidors.femx import build_eit_mesh, cell_midpoints
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.forward.process_setup_cache import clear_process_forward_setup_cache
 from pyeidors.geometry.simple_mesh_generator import create_simple_eit_mesh
+from pyeidors.utils.numeric_ops import squared_distances_to_point
 
 try:
     from pyeidors.geometry.mesh3d_generator import (
@@ -140,13 +141,15 @@ def _conductivity(mesh, centers: np.ndarray, args: argparse.Namespace) -> np.nda
     coords = np.asarray(centers, dtype=np.float64)
     if int(mesh.topology.dim) == 2:
         center = np.asarray([args.anomaly_x, args.anomaly_y], dtype=np.float64)
-        distance = np.linalg.norm(coords[:, :2] - center[None, :], axis=1)
+        distance2 = squared_distances_to_point(coords, center, ndim=2)
     else:
         center = np.asarray(
             [args.anomaly_x, args.anomaly_y, args.anomaly_z], dtype=np.float64
         )
-        distance = np.linalg.norm(coords[:, :3] - center[None, :], axis=1)
-    sigma[distance <= float(args.anomaly_radius)] = float(args.anomaly_conductivity)
+        distance2 = squared_distances_to_point(coords, center, ndim=3)
+    sigma[distance2 <= float(args.anomaly_radius) ** 2] = float(
+        args.anomaly_conductivity
+    )
     return sigma
 
 

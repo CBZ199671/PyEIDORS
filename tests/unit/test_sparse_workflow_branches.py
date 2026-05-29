@@ -169,6 +169,10 @@ def test_sparse_absolute_uses_factory_fallback_and_metadata(
     assert result.metadata["solver_meta"] == "absolute"
     assert result.metadata["solver"] == "sparse_bayesian"
     assert result.metadata["shared"] == "solver"
+    assert np.shares_memory(
+        result.metadata["baseline_used"],
+        eit_system.create_homogeneous_image().elem_data,
+    )
     np.testing.assert_allclose(result.residual, np.array([0.7, 0.6], dtype=float))
 
 
@@ -243,6 +247,7 @@ def test_sparse_difference_type_guard_and_projection_fallback(
     np.testing.assert_allclose(
         result.metadata["reference_measured"], reference_data.meas
     )
+    assert np.shares_memory(result.metadata["reference_measured"], reference_data.meas)
     assert result.metadata["solver_meta"] == "difference"
     assert result.metadata["user_meta"] == "diff"
     assert result.metadata["shared"] == "solver"

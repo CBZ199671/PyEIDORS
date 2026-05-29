@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -113,9 +114,128 @@ def test_calc_perturb_limits_and_update_heuristics_cover_remaining_branches(
         x=np.array([4.5e6], dtype=float),
         dx=np.array([1e-8], dtype=float),
     )
+    assert "np.concatenate" not in inspect.getsource(calc_perturb_limits)
     assert scaled_perturb[0] == 0.0
     assert np.all(np.diff(scaled_perturb[1:]) > 0.0)
     assert scaled_perturb[-1] <= 1.0 + 1e-12
+
+
+def test_v439_calc_perturb_limits_reuses_mask_for_invalid_writes(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    copyto_calls: list[dict[str, object]] = []
+    original_copyto = line_search_module.np.copyto
+
+    def recording_copyto(dst, src, *args, **kwargs):
+        copyto_calls.append(
+            {
+                "shape": np.shape(dst),
+                "src": src,
+                "has_where": kwargs.get("where") is not None,
+            }
+        )
+        return original_copyto(dst, src, *args, **kwargs)
+
+    monkeypatch.setattr(line_search_module.np, "copyto", recording_copyto)
+
+    reconstructor = _reconstructor(
+        [np.array([0.0], dtype=float)], perturb=[0.0, 1e-3, 0.2, 2.0]
+    )
+    perturb = calc_perturb_limits(
+        reconstructor,
+        x=np.array([1.0, -1.0, 0.0, np.inf, 5.0], dtype=float),
+        dx=np.array([0.5, -0.25, 0.0, 1.0, np.nan], dtype=float),
+    )
+
+    assert perturb[0] == 0.0
+    assert perturb[-1] <= 1.0 + 1e-12
+    assert np.all(np.isfinite(perturb))
+    assert len(copyto_calls) >= 5
+    assert all(call["has_where"] for call in copyto_calls)
+
+    source = inspect.getsource(calc_perturb_limits)
+    upper_alpha_source = inspect.getsource(line_search_module._min_stable_upper_alpha)
+    lower_alpha_source = inspect.getsource(
+        line_search_module._max_machine_epsilon_alpha
+    )
+    assert "_min_stable_upper_alpha" in source
+    assert "limit_mask = np.empty" in upper_alpha_source
+    assert "np.copyto" in upper_alpha_source
+    assert "np.abs(x) / np.abs(dx)" not in source
+    assert "_max_machine_epsilon_alpha" in source
+    assert "np.broadcast_arrays" in lower_alpha_source
+    assert "np.abs(x_flat" in lower_alpha_source
+    assert "out=x_abs_chunk" in lower_alpha_source
+    assert "out=dx_abs_chunk" in lower_alpha_source
+    assert "np.divide" in lower_alpha_source
+    assert "au_pos[dx <= 0]" not in source
+    assert "au_pos[~np.isfinite(au_pos)]" not in source
+    assert "au_neg[dx >= 0]" not in source
+    assert "au_neg[~np.isfinite(au_neg)]" not in source
+    assert "al[~np.isfinite(al)]" not in source
+
+
+def test_v617_line_search_upper_alpha_limits_scan_in_chunks():
+    realmax = 100.0
+    x = np.array([0.0, 1.0, -2.0, np.inf, np.nan], dtype=np.float32)
+    dx = np.array([2.0, -4.0, 0.0, np.nan, 1.0], dtype=np.float32)
+
+    with np.errstate(divide="ignore", invalid="ignore", over="ignore"):
+        au_pos = (realmax - x) / dx
+        au_pos[dx <= 0] = np.inf
+        au_pos[~np.isfinite(au_pos)] = np.inf
+        au_neg = (-realmax - x) / dx
+        au_neg[dx >= 0] = np.inf
+        au_neg[~np.isfinite(au_neg)] = np.inf
+        expected = min(np.min(au_pos), np.min(au_neg))
+
+    observed = line_search_module._min_stable_upper_alpha(
+        x,
+        dx,
+        realmax=realmax,
+        chunk_size=2,
+    )
+
+    assert observed == pytest.approx(float(expected))
+
+
+def test_v615_line_search_lower_alpha_guard_scans_in_chunks():
+    eps_machine = np.finfo(np.float64).eps
+    x = np.array([4.5e6, -2.0, np.inf, np.nan, 0.0], dtype=np.float32)
+    dx = np.array([1e-8, -0.25, 1.0, 1.0, 0.0], dtype=np.float32)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        expected = eps_machine * np.abs(x) / np.abs(dx)
+        expected[~np.isfinite(expected)] = 0.0
+
+    observed = line_search_module._max_machine_epsilon_alpha(
+        x,
+        dx,
+        eps_machine=eps_machine,
+        chunk_size=2,
+    )
+
+    assert observed == pytest.approx(float(np.max(expected)))
+
+
+def test_v408_line_search_metric_summary_scans_without_index_arrays():
+    values = np.array([np.nan, 3.0, np.inf, 2.0], dtype=float)
+
+    best_idx, valid_count, last_valid_idx = line_search_module._finite_metric_summary(
+        values
+    )
+
+    assert best_idx == 3
+    assert valid_count == 2
+    assert last_valid_idx == 3
+    summary_source = inspect.getsource(line_search_module._finite_metric_summary)
+    line_search_source = inspect.getsource(line_search_module.line_search_torch)
+    update_source = inspect.getsource(line_search_module.update_perturb_eidors_style)
+    assert "np.where" not in summary_source
+    assert "np.argmin" not in summary_source
+    assert "np.where(np.isfinite(mlist))" not in line_search_source
+    assert "mlist[valid_idx]" not in line_search_source
+    assert "mlist[goodi]" not in update_source
 
 
 def test_line_search_torch_handles_inf_objective_break_and_no_valid_idx(

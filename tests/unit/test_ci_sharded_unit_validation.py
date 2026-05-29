@@ -45,6 +45,24 @@ def test_refactor_smoke_shard_has_no_cov_nix_command():
     assert command[-1] == "-q"
 
 
+def test_optional_shards_emit_required_pytest_opt_ins():
+    module = _load_module()
+    shards = {
+        shard.name: shard
+        for shard in module.select_shards(["gui", "hardware", "perf-cuda"])
+    }
+
+    gui_command = module.emitted_shell_command(shards["gui"])
+    hardware_command = module.emitted_shell_command(shards["hardware"])
+    cuda_command = module.emitted_shell_command(shards["perf-cuda"])
+
+    assert "--run-gui" in gui_command
+    assert "--run-slow" in gui_command
+    assert "--run-hardware" in hardware_command
+    assert "--run-gpu" in cuda_command
+    assert "--run-slow" in cuda_command
+
+
 def test_dry_run_command_quotes_pytest_args_with_spaces():
     module = _load_module()
     shard = module.select_shards(["fp-refactor-smoke"])[0]

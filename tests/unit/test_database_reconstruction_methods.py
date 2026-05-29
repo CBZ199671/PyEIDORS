@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import inspect
 import os
 from pathlib import Path
 from types import SimpleNamespace
@@ -14,6 +15,9 @@ from PySide6.QtWidgets import QApplication
 from eit_app.controllers.batch_reconstruction_controller import (
     BatchReconstructionRequest,
     _build_request,
+    _display_float_array,
+    _display_int_array,
+    _save_outputs,
 )
 from eit_app.models.frame_model import FrameData
 from eit_app.models.reconstruction_methods import (
@@ -126,6 +130,38 @@ def test_v118_batch_build_request_resolves_rm_route_to_controller_metadata(
     assert request.metadata["simulation_inverse_route"] == "curvature_rm"
     assert request.metadata["rm_regularization"] == "curvature"
     assert request.metadata["compute_precision"] == "float32"
+
+
+def test_v360_batch_output_save_preserves_display_payload_dtype() -> None:
+    source = inspect.getsource(_save_outputs)
+
+    assert "np.asarray(result.conductivity, dtype=float)" not in source
+    assert "np.asarray(result.node_coords, dtype=float)" not in source
+    assert "np.asarray(result.measured, dtype=float)" not in source
+    assert "np.asarray(result.simulated, dtype=float)" not in source
+    assert "_display_float_array(result.conductivity)" in source
+    assert "_display_int_array(result.cell_connectivity)" in source
+
+    values = np.array([1.0, 2.0], dtype=np.float32)
+    display_values = _display_float_array(values)
+
+    assert display_values.dtype == np.dtype(np.float32)
+    assert np.shares_memory(display_values, values)
+
+    complex_values = np.array([1.0 + 1.5j, 2.0 + 2.5j], dtype=np.complex64)
+    complex_display = _display_float_array(complex_values)
+
+    assert complex_display.dtype == np.dtype(np.float32)
+    np.testing.assert_array_equal(
+        complex_display,
+        np.array([1.0, 2.0], dtype=np.float32),
+    )
+
+    cells = np.array([[0, 1, 2]], dtype=np.int32)
+    display_cells = _display_int_array(cells)
+
+    assert display_cells.dtype == np.dtype(np.int32)
+    assert np.shares_memory(display_cells, cells)
 
 
 def test_v118_single_frame_dialog_hides_iterations_for_difference_methods() -> None:

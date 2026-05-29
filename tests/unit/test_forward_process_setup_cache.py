@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 
 from pyeidors.data.structures import PatternConfig
-from pyeidors.forward.eit_forward_model import _hash_mesh_content
+from pyeidors.forward.eit_forward_model import _hash_mesh_content, _hash_scalar_array
 from pyeidors.forward.process_setup_cache import build_process_forward_setup_key
 
 
@@ -122,3 +124,20 @@ def test_hash_mesh_content_detects_connectivity_change():
     mesh_b = _FakeMesh(coords, [[0, 1, 3], [1, 2, 3]])
 
     assert _hash_mesh_content(mesh_a) != _hash_mesh_content(mesh_b)
+
+
+def test_v258_forward_hash_helpers_stream_array_payloads() -> None:
+    values = np.arange(12, dtype=np.float64).reshape(3, 4)[:, ::2]
+    array = np.ascontiguousarray(values, dtype=np.float64)
+    expected = hashlib.sha256(
+        f"{array.dtype}:{array.shape}:".encode("utf-8") + array.tobytes()
+    ).hexdigest()
+
+    assert _hash_scalar_array(values, np.dtype(np.float64)) == expected
+    assert ".tobytes(" not in inspect.getsource(_hash_scalar_array)
+    assert ".tobytes(" not in inspect.getsource(_hash_mesh_content)
+    assert "np.ascontiguousarray(np.asarray" not in inspect.getsource(
+        _hash_mesh_content
+    )
+    assert "update_digest_with_array_payload" in inspect.getsource(_hash_scalar_array)
+    assert "update_digest_with_array_payload" in inspect.getsource(_hash_mesh_content)

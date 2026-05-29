@@ -37,17 +37,24 @@ from pyeidors.data.structures import PatternConfig
 from pyeidors.forward.process_setup_cache import (
     ForwardStaticSetupBundle,
     _PROCESS_FORWARD_SETUP_CACHE,
+    _forward_setup_bundle_size_bytes,
     build_process_forward_setup_key,
     clear_process_forward_setup_cache,
     get_process_forward_setup_bundle,
     process_forward_setup_cache_stats,
     put_process_forward_setup_bundle,
 )
+import pyeidors.forward.process_setup_cache as forward_setup_cache_module
 from pyeidors.geometry.process_mesh_cache import (
     _PROCESS_MESH_CACHE,
+    _mesh_cache_size_bytes,
     build_process_mesh_cache_key,
     clear_process_mesh_cache,
+    get_process_cached_mesh,
+    process_mesh_cache_stats,
+    put_process_cached_mesh,
 )
+import pyeidors.geometry.process_mesh_cache as mesh_cache_module
 
 
 def test_process_caches_share_processlru_machinery() -> None:
@@ -164,6 +171,26 @@ class _DummyValue:
     payload: int
 
 
+@dataclass
+class _DummyGeometry:
+    x: np.ndarray
+
+
+@dataclass
+class _DummyTags:
+    indices: np.ndarray
+    values: np.ndarray
+
+
+@dataclass
+class _DummyMesh:
+    geometry: _DummyGeometry
+    facet_tags: _DummyTags
+    cell_tags: _DummyTags | None = None
+    electrode_vertices: list[np.ndarray] | None = None
+    _derived_arrays: object | None = None
+
+
 def test_process_lru_cache_lru_eviction_and_get_promote_to_recent() -> None:
     cache: ProcessLRUCache[_DummyValue] = ProcessLRUCache(max_items=3)
     cache.put("a", _DummyValue(1))
@@ -178,6 +205,113 @@ def test_process_lru_cache_lru_eviction_and_get_promote_to_recent() -> None:
 
     cache.clear()
     assert cache.stats()["items"] == 0
+
+
+def test_v605_process_lru_cache_byte_budget_evicts_and_skips_oversize() -> None:
+    cache: ProcessLRUCache[_DummyValue] = ProcessLRUCache(
+        max_items=10,
+        max_bytes=10,
+        sizeof=lambda value: value.payload,
+    )
+    cache.put("a", _DummyValue(4))
+    cache.put("b", _DummyValue(4))
+    assert cache.get("a").payload == 4
+
+    cache.put("c", _DummyValue(4))
+
+    assert cache.get("b") is None
+    assert cache.get("a") is not None
+    assert cache.get("c") is not None
+    assert cache.stats() == {
+        "items": 2,
+        "max_items": 10,
+        "total_bytes": 8,
+        "max_bytes": 10,
+    }
+
+    cache.put("too-large", _DummyValue(11))
+    assert cache.get("too-large") is None
+    assert cache.stats()["total_bytes"] == 8
+
+    cache.discard("a")
+    assert cache.get("a") is None
+    assert cache.stats()["total_bytes"] == 4
+
+
+def test_v606_process_mesh_cache_skips_entries_above_byte_budget(monkeypatch) -> None:
+    clear_process_mesh_cache()
+    mesh = _DummyMesh(
+        geometry=_DummyGeometry(np.ones((4, 3), dtype=np.float64)),
+        facet_tags=_DummyTags(
+            indices=np.arange(4, dtype=np.int32),
+            values=np.arange(4, dtype=np.int32),
+        ),
+        electrode_vertices=[np.ones((2, 3), dtype=np.float32)],
+    )
+    key = "mesh-byte-budget-key"
+
+    try:
+        put_process_cached_mesh(key, mesh)
+        assert get_process_cached_mesh(key) is mesh
+
+        monkeypatch.setattr(
+            mesh_cache_module,
+            "_RESOLVED_PROCESS_MESH_CACHE_MAX_BYTES",
+            _mesh_cache_size_bytes(mesh) - 1,
+        )
+        put_process_cached_mesh(key, mesh)
+
+        assert get_process_cached_mesh(key) is None
+        stats = process_mesh_cache_stats()
+        assert stats["items"] == 0
+        assert "max_bytes" in stats
+    finally:
+        clear_process_mesh_cache()
+
+
+def _dummy_forward_setup_bundle() -> ForwardStaticSetupBundle:
+    return ForwardStaticSetupBundle(
+        ds_electrodes=None,
+        electrode_tags=(),
+        electrode_boundary_measures={},
+        geometry_scale_to_m=1.0,
+        mesh_tdim=2,
+        boundary_scale_to_m=1.0,
+        electrode_lengths_m=np.zeros(4, dtype=np.float64),
+        pattern_manager=None,
+        V=None,
+        V_sigma=None,
+        dofs=0,
+        electrode_matrix=__import__("scipy.sparse", fromlist=["csr_matrix"]).csr_matrix(
+            np.eye(4, dtype=np.float64)
+        ),
+    )
+
+
+def test_v607_process_forward_setup_cache_skips_entries_above_byte_budget(
+    monkeypatch,
+) -> None:
+    clear_process_forward_setup_cache()
+    key = "forward-setup-byte-budget-key"
+    bundle = _dummy_forward_setup_bundle()
+
+    try:
+        put_process_forward_setup_bundle(key, bundle)
+        assert get_process_forward_setup_bundle(key) is bundle
+
+        monkeypatch.setattr(
+            forward_setup_cache_module,
+            "_RESOLVED_PROCESS_FORWARD_SETUP_CACHE_MAX_BYTES",
+            _forward_setup_bundle_size_bytes(bundle) - 1,
+        )
+        put_process_forward_setup_bundle(key, bundle)
+
+        assert get_process_forward_setup_bundle(key) is None
+        stats = process_forward_setup_cache_stats()
+        assert stats["items"] == 0
+        assert "max_bytes" in stats
+    finally:
+        clear_process_forward_setup_cache()
 
 
 def test_process_lru_cache_rejects_non_positive_max_items() -> None:

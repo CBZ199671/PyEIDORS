@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -102,10 +103,155 @@ def test_selector_hash_filter_and_getter_branches(monkeypatch: pytest.MonkeyPatc
         manager._finite_summary(np.array([np.nan, np.inf], dtype=float))
         == "finite_count=0"
     )
+    complex_summary = manager._finite_summary(
+        np.array([1.0 + 1.0j, np.nan + 0.0j, 3.0 + 4.0j], dtype=np.complex128)
+    )
+    assert "finite_count=2" in complex_summary
+    assert "max=5.000000e+00" in complex_summary
+    source = inspect.getsource(StimMeasPatternManager._finite_summary)
+    assert "[np.isfinite" not in source
+    assert "np.abs(finite)" not in source
+
+    hash_source = inspect.getsource(StimMeasPatternManager._create_meas_hash)
+    assert "pos_hits = meas_mat > 0" in hash_source
+    assert "neg_hits = meas_mat < 0" in hash_source
+    assert "np.any(meas_mat > 0" not in hash_source
+    assert "np.any(meas_mat < 0" not in hash_source
 
     meas_mat = manager._make_meas_matrix(elec=1, ring=0)
     assert meas_mat.shape == (manager.tn_elec, manager.tn_elec)
     assert np.any(meas_mat[0] != 0.0)
+
+
+def test_v548_measurement_current_filter_direct_fills_row_mask() -> None:
+    source = inspect.getsource(StimMeasPatternManager._filter_measurements)
+    helper_source = inspect.getsource(patterns_module._rows_zero_at_columns)
+
+    assert "_rows_zero_at_columns(meas_mat, stim_indices)" in source
+    assert "_select_rows_by_mask(meas_mat, mask)" in source
+    assert "meas_mat[mask]" not in source
+    assert "np.any(meas_mat[:, stim_indices] != 0, axis=1)" not in source
+    assert "np.equal(mat[:, int(column)], 0, out=work)" in helper_source
+    assert "np.logical_and(mask, work, out=mask)" in helper_source
+
+    matrix = np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 2.0], [0.0, 0.0]], dtype=float)
+    np.testing.assert_array_equal(
+        patterns_module._rows_zero_at_columns(matrix, [0, 1]),
+        np.array([True, False, False, True]),
+    )
+    np.testing.assert_allclose(
+        patterns_module._select_rows_by_mask(
+            matrix,
+            np.array([True, False, False, True]),
+        ),
+        np.array([[0.0, 0.0], [0.0, 0.0]], dtype=float),
+    )
+
+
+def test_v498_apply_meas_pattern_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(StimMeasPatternManager.apply_meas_pattern)
+
+    assert "all_finite_values(voltages)" in source
+    assert "all_finite_values(measured)" in source
+    assert "np.isfinite(voltages).all()" not in source
+    assert "np.isfinite(measured).all()" not in source
+
+
+def test_v304_multiring_lengths_and_selector_direct_fill(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _fail_tile(*_args, **_kwargs):
+        raise AssertionError("multi-ring electrode lengths must not call np.tile")
+
+    manager = StimMeasPatternManager.__new__(StimMeasPatternManager)
+    manager.n_elec = 4
+    manager.n_rings = 2
+    manager.tn_elec = 8
+    manager.drive_mode = "line_current_density"
+
+    with monkeypatch.context() as patch_ctx:
+        patch_ctx.setattr(patterns_module.np, "tile", _fail_tile)
+        lengths = manager._resolve_electrode_lengths(
+            np.array([1.0, 2.0, 3.0, 4.0], dtype=np.float32)
+        )
+
+    np.testing.assert_allclose(
+        lengths,
+        np.array([1.0, 2.0, 3.0, 4.0, 1.0, 2.0, 3.0, 4.0], dtype=float),
+    )
+    assert lengths.dtype == np.float64
+
+    manager = StimMeasPatternManager.__new__(StimMeasPatternManager)
+    manager.config = SimpleNamespace(use_meas_current=False)
+    manager.n_stim = 2
+    manager._full_meas_matrices = [
+        np.array(
+            [
+                [1.0, -1.0, 0.0, 0.0],
+                [0.0, 1.0, -1.0, 0.0],
+                [0.0, 0.0, 1.0, -1.0],
+            ],
+            dtype=float,
+        ),
+        np.array(
+            [
+                [0.0, 1.0, -1.0, 0.0],
+                [1.0, 0.0, 0.0, -1.0],
+            ],
+            dtype=float,
+        ),
+    ]
+    manager.meas_matrices = [
+        manager._full_meas_matrices[0][[0, 2]],
+        manager._full_meas_matrices[1][[0]],
+    ]
+
+    manager._compute_measurement_selector()
+
+    np.testing.assert_array_equal(
+        manager.meas_selector,
+        np.array([True, False, True, True, False], dtype=bool),
+    )
+    assert "np.tile" not in inspect.getsource(
+        StimMeasPatternManager._resolve_electrode_lengths
+    )
+    assert "np.any(lengths <= 0.0)" not in inspect.getsource(
+        StimMeasPatternManager._resolve_electrode_lengths
+    )
+    assert "np.nonzero(lengths <= 0.0)" not in inspect.getsource(
+        StimMeasPatternManager._resolve_electrode_lengths
+    )
+    assert "np.concatenate" not in inspect.getsource(
+        StimMeasPatternManager._compute_measurement_selector
+    )
+
+
+def test_v297_cross_layer_measurement_matrix_direct_fills(monkeypatch) -> None:
+    def _fail_vstack(*_args, **_kwargs):
+        raise AssertionError("cross-layer measurement matrix must not call np.vstack")
+
+    monkeypatch.setattr(patterns_module.np, "vstack", _fail_vstack)
+    manager = StimMeasPatternManager.__new__(StimMeasPatternManager)
+    manager.measurement_protocol = "cross_layer_full"
+    manager.n_rings = 2
+    manager.tn_elec = 4
+    same_layer = np.array([[1.0, -1.0, 0.0, 0.0]], dtype=np.float32)
+    cross_layer = np.array(
+        [[0.0, 1.0, -1.0, 0.0], [0.0, 0.0, 1.0, -1.0]],
+        dtype=np.float64,
+    )
+    manager._make_meas_matrix_for_rings = lambda _elec, _rings: same_layer
+    manager._make_cross_layer_meas_matrix = lambda _elec: cross_layer
+
+    out = manager._make_meas_matrix_for_protocol(elec=0, ring=0)
+
+    np.testing.assert_allclose(out[:1], same_layer)
+    np.testing.assert_allclose(out[1:], cross_layer)
+    assert out.dtype == np.float64
+    assert out.flags.c_contiguous
+    assert "np.vstack" not in inspect.getsource(
+        StimMeasPatternManager._make_meas_matrix_for_protocol
+    )
 
 
 def test_opposite_patterns_and_positive_first_branch(monkeypatch: pytest.MonkeyPatch):

@@ -15,6 +15,7 @@ from scipy.optimize import minimize_scalar
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
+from ...utils.numeric_ops import has_nonzero_imaginary
 from ..contracts import SolverOutput
 from ..jacobian.linearized import JacobianLinearization, compute_sigma_fingerprint
 from ..jacobian.process_jacobian_cache import (
@@ -39,6 +40,64 @@ from .gauss_newton_weights import build_weight_reference
 from . import gauss_newton_linear_system as _linear_system
 from . import gauss_newton_startup_cache as _startup_cache
 from . import gauss_newton_step_size as _step_size
+
+
+def _diagnostic_real_or_complex_scalar(value) -> float | str:
+    array = np.asarray(value)
+    if array.size != 1:
+        return repr(value)
+    scalar = array.reshape(-1)[0]
+    if has_nonzero_imaginary(array):
+        z = complex(scalar)
+        return f"{z.real:g}{z.imag:+g}j"
+    return float(np.real(scalar))
+
+
+def _torch_dtype_for_values(*values) -> torch.dtype:
+    saw_complex64 = False
+    saw_complex128 = False
+    for value in values:
+        if value is None:
+            continue
+        arr = np.asarray(value)
+        if not np.iscomplexobj(arr):
+            continue
+        if arr.dtype == np.complex64:
+            saw_complex64 = True
+        else:
+            saw_complex128 = True
+    if saw_complex128:
+        return torch.complex128
+    if saw_complex64:
+        return torch.complex64
+    return torch.float64
+
+
+def _is_complex_array_like(value) -> bool:
+    try:
+        return bool(np.iscomplexobj(np.asarray(value)))
+    except Exception:
+        return False
+
+
+def _vdot_real_torch(lhs: torch.Tensor, rhs: torch.Tensor) -> float:
+    if lhs.is_complex() or rhs.is_complex():
+        return float(torch.vdot(lhs.reshape(-1), rhs.reshape(-1)).real.item())
+    return float(torch.dot(lhs.reshape(-1), rhs.reshape(-1)).item())
+
+
+def _hermitian_transpose(matrix: torch.Tensor) -> torch.Tensor:
+    if matrix.is_complex():
+        return matrix.conj().transpose(0, 1)
+    return matrix.t()
+
+
+def _clip_real_sigma(values: np.ndarray, clip_values) -> np.ndarray:
+    arr = np.asarray(values)
+    if clip_values is None or np.iscomplexobj(arr):
+        return arr
+    return np.clip(arr, clip_values[0], clip_values[1])
+
 
 # T77 phase 2 keeps these legacy runtime-level names patchable/importable.
 _JacobianActionBundle = _linear_system._JacobianActionBundle
@@ -336,7 +395,12 @@ def _to_runtime_tensor_cached(
         cache = {}
         reconstructor._runtime_tensor_cache = cache
     target = cache.get(name)
-    if target is None or tuple(target.shape) != tuple(source.shape):
+    if (
+        target is None
+        or tuple(target.shape) != tuple(source.shape)
+        or target.dtype != source.dtype
+        or target.device != source.device
+    ):
         target = source.clone()
         cache[name] = target
         return target
@@ -368,22 +432,22 @@ def ensure_measurement_weights(reconstructor, sigma_function: fem.Function) -> N
         floor=reconstructor.weight_floor,
     )
 
-    weights = reference_vector**2
-    weights = np.where(np.isfinite(weights), weights, 0.0)
-    weights = np.maximum(weights, reconstructor.weight_floor)
+    weights = np.abs(reference_vector)
+    np.square(weights, out=weights)
+    np.nan_to_num(weights, copy=False, nan=0.0, posinf=0.0, neginf=0.0)
+    np.maximum(weights, reconstructor.weight_floor, out=weights)
     median = np.median(weights)
     if median > 0:
-        weights = weights / median
+        weights /= median
 
     reconstructor._meas_weight_sqrt = _to_runtime_tensor(
         reconstructor,
         np.sqrt(weights),
     )
     if reconstructor.verbose:
-        finite_weights = weights[np.isfinite(weights)]
-        w_min = finite_weights.min() if finite_weights.size else float("nan")
-        w_max = finite_weights.max() if finite_weights.size else float("nan")
-        w_med = np.median(finite_weights) if finite_weights.size else float("nan")
+        w_min = float(np.min(weights)) if weights.size else float("nan")
+        w_max = float(np.max(weights)) if weights.size else float("nan")
+        w_med = float(np.median(weights)) if weights.size else float("nan")
         print(
             f"[INFO] measurement weights ({strategy}): min={w_min:.3e}, med={w_med:.3e}, max={w_max:.3e}"
         )
@@ -408,32 +472,23 @@ def _scale_jacobian_action(jacobian, scale: float):
     if isinstance(jacobian, JacobianLinearization):
         return replace(jacobian, sign=jacobian.sign * scale)
     if isinstance(jacobian, LinearOperator):
+        dtype = getattr(jacobian, "dtype", np.float64)
         return LinearOperator(
             jacobian.shape,
-            matvec=lambda x: scale * np.asarray(jacobian.matvec(x), dtype=np.float64),
-            rmatvec=lambda x: scale * np.asarray(jacobian.rmatvec(x), dtype=np.float64),
-            dtype=np.float64,
+            matvec=lambda x: scale * np.asarray(jacobian.matvec(x)),
+            rmatvec=lambda x: scale * np.asarray(jacobian.rmatvec(x)),
+            dtype=dtype,
         )
     if _is_jv_jtr_action(jacobian):
         shape = _jv_jtr_action_shape(jacobian)
+        dtype = getattr(jacobian, "dtype", np.float64)
         return LinearOperator(
             shape,
-            matvec=lambda x: (
-                scale
-                * np.asarray(
-                    jacobian.Jv(np.asarray(x, dtype=np.float64)), dtype=np.float64
-                )
-            ),
-            rmatvec=lambda x: (
-                scale
-                * np.asarray(
-                    jacobian.JTr(np.asarray(x, dtype=np.float64)),
-                    dtype=np.float64,
-                )
-            ),
-            dtype=np.float64,
+            matvec=lambda x: scale * np.asarray(jacobian.Jv(np.asarray(x))),
+            rmatvec=lambda x: scale * np.asarray(jacobian.JTr(np.asarray(x))),
+            dtype=dtype,
         )
-    return scale * np.asarray(jacobian, dtype=np.float64)
+    return scale * np.asarray(jacobian)
 
 
 def _persistent_jacobian_cache_key(
@@ -568,7 +623,7 @@ def _calculate_iteration_jacobian(
             get_process_cached_jacobian(cache_key) if cache_key is not None else None
         )
         if cached is not None:
-            jacobian = np.array(cached, copy=True)
+            jacobian = cached
             reconstructor._last_persistent_jacobian_lookup = (
                 _persistent_jacobian_lookup_state(hit=True, key=cache_key)
             )
@@ -583,9 +638,7 @@ def _calculate_iteration_jacobian(
             )
             stored = False
             if cache_key is not None and not _is_matrix_free_jacobian(jacobian):
-                put_process_cached_jacobian(
-                    cache_key, np.asarray(jacobian, dtype=np.float64)
-                )
+                put_process_cached_jacobian(cache_key, np.asarray(jacobian))
                 stored = True
             reconstructor._last_persistent_jacobian_lookup = (
                 _persistent_jacobian_lookup_state(stored=stored, key=cache_key)
@@ -605,13 +658,28 @@ def _init_sigma_function(
     if initial_conductivity is None:
         initial_conductivity = 1.0
     sigma_current = fem.Function(reconstructor.fwd_model.V_sigma)
+    sigma_storage = function_get_array(sigma_current)
     if np.isscalar(initial_conductivity):
+        if _is_complex_array_like(initial_conductivity) and not np.iscomplexobj(
+            sigma_storage
+        ):
+            raise RuntimeError(
+                "Complex conductivity requires a complex DOLFINx/PETSc scalar build."
+            )
+        dtype = np.result_type(
+            sigma_storage.dtype, np.asarray(initial_conductivity).dtype
+        )
         function_set_array(
             sigma_current,
-            np.full(reconstructor.n_elements, float(initial_conductivity), dtype=float),
+            np.full(reconstructor.n_elements, initial_conductivity, dtype=dtype),
         )
     else:
-        function_set_array(sigma_current, np.asarray(initial_conductivity).flatten())
+        values = np.asarray(initial_conductivity).reshape(-1)
+        if np.iscomplexobj(values) and not np.iscomplexobj(sigma_storage):
+            raise RuntimeError(
+                "Complex conductivity requires a complex DOLFINx/PETSc scalar build."
+            )
+        function_set_array(sigma_current, values)
     return sigma_current, initial_conductivity
 
 
@@ -621,13 +689,13 @@ def _prepare_prior(
     initial_conductivity: float | np.ndarray,
 ) -> torch.Tensor:
     if prior_data is not None:
-        reconstructor._prior_data = np.asarray(prior_data).flatten()
+        reconstructor._prior_data = np.asarray(prior_data).reshape(-1)
     elif np.isscalar(initial_conductivity):
         reconstructor._prior_data = np.full(
             reconstructor.n_elements, initial_conductivity
         )
     else:
-        reconstructor._prior_data = np.asarray(initial_conductivity).flatten()
+        reconstructor._prior_data = np.asarray(initial_conductivity).reshape(-1)
     return _to_runtime_tensor(reconstructor, reconstructor._prior_data)
 
 
@@ -663,6 +731,9 @@ def _estimate_best_homogeneous_conductivity(
     }
     if mode != "optimize":
         info["reason"] = "disabled"
+        return info
+    if np.iscomplexobj(measured_vector) or _is_complex_array_like(initial_conductivity):
+        info["reason"] = "complex_measurement"
         return info
     if getattr(reconstructor, "_measurement_space_type", "real") != "real":
         info["reason"] = "difference_measurement_space"
@@ -757,16 +828,17 @@ def _compute_objective(
     lambda_eff: float,
     iteration: int,
 ) -> tuple[float, float, float, torch.Tensor]:
-    meas_misfit = (
-        0.5 * torch.dot(weighted_residual_torch, weighted_residual_torch).item()
+    meas_misfit = 0.5 * _vdot_real_torch(
+        weighted_residual_torch,
+        weighted_residual_torch,
     )
     if reconstructor.R_torch is not None:
         RtR_de = torch.mv(reconstructor.R_torch, de_current)
-        prior_misfit = 0.5 * lambda_eff * torch.dot(de_current, RtR_de).item()
+        prior_misfit = 0.5 * lambda_eff * _vdot_real_torch(de_current, RtR_de)
     else:
         de_np = de_current.detach().cpu().numpy()
         rde_np = _apply_regularization_np(reconstructor, de_np)
-        prior_misfit = 0.5 * lambda_eff * float(np.dot(de_np, rde_np))
+        prior_misfit = 0.5 * lambda_eff * float(np.vdot(de_np, rde_np).real)
         RtR_de = _to_runtime_tensor_cached(reconstructor, "RtR_de_fast", rde_np)
     total_objective = meas_misfit + prior_misfit
     _require_scalar_finite("meas_misfit", meas_misfit, iteration)
@@ -812,13 +884,20 @@ def _solve_linear_system_torch_cg(
     safe_diag = torch.where(torch.abs(diag) > 1e-18, diag, torch.ones_like(diag))
     z = r / safe_diag
     p = z.clone()
-    rz_old = torch.dot(r, z)
+    rz_old = torch.vdot(r, z) if (r.is_complex() or z.is_complex()) else torch.dot(r, z)
     b_norm = float(torch.linalg.vector_norm(b).item())
     tol = max(float(atol), float(rtol) * max(b_norm, 1e-18))
     for _ in range(int(max_iter)):
         Ap = torch.mv(A, p)
-        denom = torch.dot(p, Ap)
-        if not torch.isfinite(denom) or torch.abs(denom) <= 1e-30:
+        denom = (
+            torch.vdot(p, Ap)
+            if (p.is_complex() or Ap.is_complex())
+            else torch.dot(p, Ap)
+        )
+        if (
+            not bool(torch.isfinite(denom).all().item())
+            or float(torch.abs(denom).item()) <= 1e-30
+        ):
             break
         alpha = rz_old / denom
         x = x + alpha * p
@@ -826,8 +905,10 @@ def _solve_linear_system_torch_cg(
         if float(torch.linalg.vector_norm(r).item()) <= tol:
             return x
         z = r / safe_diag
-        rz_new = torch.dot(r, z)
-        if not torch.isfinite(rz_new):
+        rz_new = (
+            torch.vdot(r, z) if (r.is_complex() or z.is_complex()) else torch.dot(r, z)
+        )
+        if not bool(torch.isfinite(rz_new).all().item()):
             break
         beta = rz_new / rz_old
         p = z + beta * p
@@ -948,6 +1029,16 @@ def run_reconstruction(
             f"Measurement data length mismatch: {len(meas_vector)} vs {reconstructor.n_measurements}"
         )
     _require_finite("measured_data", meas_vector)
+
+    runtime_dtype = _torch_dtype_for_values(
+        meas_vector,
+        initial_conductivity,
+        prior_data,
+        getattr(reconstructor, "jacobian_background_conductivity", None),
+    )
+    if getattr(reconstructor, "_torch_dtype", None) != runtime_dtype:
+        reconstructor._torch_dtype = runtime_dtype
+        reconstructor.R_torch = None
 
     meas_torch = _to_runtime_tensor(reconstructor, meas_vector)
     reconstructor._measured_vector = meas_vector.copy()
@@ -1151,9 +1242,7 @@ def run_reconstruction(
                     )
                     timing_totals["jacobian"] += perf_counter() - jacobian_start
                 else:
-                    measurement_jacobian_np = np.asarray(
-                        startup_jacobian_np, dtype=np.float64
-                    )
+                    measurement_jacobian_np = np.asarray(startup_jacobian_np)
                 prev_jacobian = measurement_jacobian_np
                 prev_jacobian_iter = iteration
             else:
@@ -1189,8 +1278,9 @@ def run_reconstruction(
                 else:
                     J_weighted_local = J_torch_local
 
-                JTJ_local = torch.mm(J_weighted_local.t(), J_weighted_local)
-                JTr_local = torch.mv(J_weighted_local.t(), weighted_residual_torch)
+                J_h_local = _hermitian_transpose(J_weighted_local)
+                JTJ_local = torch.mm(J_h_local, J_weighted_local)
+                JTr_local = torch.mv(J_h_local, weighted_residual_torch)
 
                 de_torch_local = de_current
                 A_local, b_local = _build_linear_system(
@@ -1217,12 +1307,8 @@ def run_reconstruction(
                     J_weighted_np = measurement_jacobian_np
                     measurement_weight_for_solver = meas_weight_np
                 else:
-                    J_weighted_np = (
-                        measurement_jacobian_np * meas_weight_np[:, None]
-                        if meas_weight_np is not None
-                        else measurement_jacobian_np
-                    )
-                    measurement_weight_for_solver = None
+                    J_weighted_np = measurement_jacobian_np
+                    measurement_weight_for_solver = meas_weight_np
                 de_current_np = de_current.detach().cpu().numpy()
                 linear_start = perf_counter()
                 try:
@@ -1362,11 +1448,7 @@ def run_reconstruction(
             if reconstructor.clip_values is not None:
                 function_set_array(
                     sigma_current,
-                    np.clip(
-                        sigma_array,
-                        reconstructor.clip_values[0],
-                        reconstructor.clip_values[1],
-                    ),
+                    _clip_real_sigma(sigma_array, reconstructor.clip_values),
                 )
                 sigma_array = function_get_array(sigma_current)
             _require_finite("sigma_array_clipped", sigma_array, iteration)
@@ -1453,14 +1535,13 @@ def run_reconstruction(
     )
     reconstructor._difference_step_size_info = difference_step_size_info
     if reconstructor.clip_values is not None:
-        sigma_final_array = np.clip(
+        sigma_final_array = _clip_real_sigma(
             sigma_final_array,
-            reconstructor.clip_values[0],
-            reconstructor.clip_values[1],
+            reconstructor.clip_values,
         )
     function_set_array(sigma_current, sigma_final_array)
     final_img = EITImage(
-        elem_data=sigma_final_array.copy(),
+        elem_data=sigma_final_array,
         fwd_model=reconstructor.fwd_model,
     )
     final_data_simulated, _ = reconstructor.fwd_model.fwd_solve(final_img)
@@ -1648,7 +1729,7 @@ def run_reconstruction(
             "difference_step_size": reconstructor._difference_step_size_info,
             "best_homog": reconstructor._best_homog_info,
             "preset_name": str(getattr(reconstructor, "active_preset_name", "")),
-            "jacobian_background_conductivity": float(
+            "jacobian_background_conductivity": _diagnostic_real_or_complex_scalar(
                 getattr(reconstructor, "jacobian_background_conductivity", 1.0)
             ),
             "measurement_space": {

@@ -159,6 +159,8 @@ def test_dynamic_sweep_can_include_propagation_aware_kalman_transition(
     assert transition.shape == (6, 6)
     assert np.count_nonzero(transition) > 0
     assert np.max(np.sum(transition, axis=1)) <= 1.0
+    assert module._strictly_increasing(np.array([0.0, 0.2, 0.5]), chunk_size=2)
+    assert not module._strictly_increasing(np.array([0.0, 0.2, 0.2]), chunk_size=2)
 
     payload = module.run_sweep(
         n_cells=8,

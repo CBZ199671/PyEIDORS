@@ -35,6 +35,7 @@ from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.geometry.simple_mesh_generator import create_simple_eit_mesh
+from pyeidors.utils.numeric_ops import squared_distances_to_point
 
 
 BACKGROUND_CONDUCTIVITY = 1.0
@@ -227,8 +228,8 @@ def _build_truth_values(
     anomalies = _actual_anomalies(system, dim=dim)
     for item in anomalies:
         center = np.asarray(item["center"], dtype=np.float64)
-        dist = np.linalg.norm(coords - center[None, :], axis=1)
-        values[dist <= float(item["radius"])] = float(item["conductivity"])
+        dist2 = squared_distances_to_point(coords, center, ndim=center.size)
+        values[dist2 <= float(item["radius"]) ** 2] = float(item["conductivity"])
     return values, anomalies
 
 

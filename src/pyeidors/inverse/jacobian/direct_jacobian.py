@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from time import perf_counter
 
 import numpy as np
@@ -18,12 +17,14 @@ from ...cache.object_signature import (
     model_signature_from_forward_model,
     pattern_signature_from_forward_model,
 )
+from ...cache.keys import hash_array_payload
 from ...femx import function_get_array
 from ..solvers.gauss_newton_device import (
     normalize_runtime_device,
     normalize_runtime_device_label,
 )
 from ._core import (
+    _complex_preserving_dtype,
     assemble_jacobian_efficient_numpy,
     assemble_jacobian_traditional,
     build_jacobian_geometry,
@@ -34,6 +35,14 @@ from ._core import (
 )
 from .base_jacobian import BaseJacobianCalculator
 from .linearized import JacobianLinearization, compute_sigma_fingerprint
+
+
+def _dense_identity(size: int) -> np.ndarray:
+    n = int(size)
+    out = np.zeros((n, n), dtype=np.float64)
+    if n:
+        out.reshape(-1)[:: n + 1] = 1.0
+    return out
 
 
 class DirectJacobianCalculator(BaseJacobianCalculator):
@@ -103,7 +112,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self._jacobian_block_backend: str = "numpy"
         self._jacobian_transfer_estimate: float = 0.0
         self._jacobian_cuda_threshold_hit: bool = False
-        self._cell_areas_cuda = None
+        self._cell_areas_cuda = {}
         self._setup_computation()
 
     def _setup_computation(self):
@@ -249,14 +258,28 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
         self._jacobian_cuda_threshold_hit = bool(threshold_hit)
         return bool(threshold_hit)
 
-    def _get_cell_areas_cuda(self):
+    def _get_cell_areas_cuda(self, torch_dtype=None):
         if torch is None:
             return None
-        if self._cell_areas_cuda is None:
-            self._cell_areas_cuda = torch.from_numpy(
+        if torch_dtype is None:
+            torch_dtype = torch.float64
+        cache = getattr(self, "_cell_areas_cuda", None)
+        if not isinstance(cache, dict):
+            cache = {}
+            self._cell_areas_cuda = cache
+        key = (str(self._runtime_cuda_device), str(torch_dtype))
+        if key not in cache:
+            cache[key] = torch.from_numpy(
                 np.asarray(self.cell_areas, dtype=np.float64)
-            ).to(self._runtime_cuda_device, dtype=torch.float64)
-        return self._cell_areas_cuda
+            ).to(self._runtime_cuda_device, dtype=torch_dtype)
+        return cache[key]
+
+    @staticmethod
+    def _torch_dtype_for_jacobian(values) -> "torch.dtype":
+        arr = np.asarray(values)
+        if np.iscomplexobj(arr):
+            return torch.complex64 if arr.dtype == np.complex64 else torch.complex128
+        return torch.float64
 
     def block_tuning_info(self) -> dict[str, object]:
         """Expose current Jacobian block-size tuning state for diagnostics."""
@@ -306,17 +329,35 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             self._last_block_tune_info = self.block_tuning_info()
             return jacobian
 
-        sigma_values = np.ascontiguousarray(function_get_array(sigma), dtype=np.float64)
+        sigma_array = function_get_array(sigma)
+        sigma_values = np.asarray(
+            sigma_array,
+            dtype=(
+                np.complex64
+                if np.asarray(sigma_array).dtype == np.complex64
+                else np.complex128
+            )
+            if np.iscomplexobj(sigma_array)
+            else np.float64,
+        )
         model_signature = model_signature_from_forward_model(self.fwd_model)
         pattern_signature = pattern_signature_from_forward_model(self.fwd_model)
         backend_signature = backend_signature_from_forward_model(self.fwd_model)
+        sigma_prefix = (
+            str(sigma_values.dtype).encode("utf-8") + b"\0"
+            if np.iscomplexobj(sigma_values)
+            else b""
+        )
         payload = {
             "method": method,
-            "sigma_hash": hashlib.sha256(sigma_values.tobytes()).hexdigest(),
+            "sigma_hash": hash_array_payload(sigma_values, prefix=sigma_prefix),
             "model_signature": model_signature,
             "pattern_signature": pattern_signature,
             "backend_signature": backend_signature,
         }
+        if np.iscomplexobj(sigma_values):
+            payload["sigma_dtype"] = str(sigma_values.dtype)
+            payload["native_complex"] = True
         jacobian, lookup = cache_manager.get_or_compute_semantic(
             artifact="jacobian",
             name="calc_jacobian",
@@ -343,7 +384,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     def linearize(
         self, sigma: fem.Function, method: str = "efficient"
     ) -> JacobianLinearization:
-        """Build a reusable ``Jv``/``J^T r`` sensitivity operator.
+        """Build a reusable ``Jv``/``J^H r`` sensitivity operator.
 
         ``method='efficient'`` follows the same EIDORS-style adjoint path used
         by :meth:`calculate`, but returns an operator instead of the dense
@@ -374,7 +415,7 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     def _calculate_traditional(self, sigma: fem.Function) -> np.ndarray:
         u_all, _ = self.fwd_model.forward_solve(sigma)
 
-        I2_all = np.eye(self.fwd_model.n_elec)
+        I2_all = _dense_identity(self.fwd_model.n_elec)
         bu_all, _ = self.fwd_model.forward_solve(sigma, I2_all)
 
         grad_u_all = self._compute_field_gradients(u_all)
@@ -429,8 +470,9 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
     ) -> np.ndarray:
         n_measurements = len(adjoint_gradients)
         n_elements = len(self.cell_areas)
-        jacobian = np.zeros((n_measurements, n_elements), dtype=float)
-        cell_areas_cuda = self._get_cell_areas_cuda()
+        value_dtype = _complex_preserving_dtype((*grad_u_all, *adjoint_gradients))
+        jacobian = np.zeros((n_measurements, n_elements), dtype=value_dtype)
+        cell_areas_cuda = None
 
         assembly_t0 = perf_counter()
         meas_idx = 0
@@ -438,27 +480,32 @@ class DirectJacobianCalculator(BaseJacobianCalculator):
             n_meas_this_stim = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
             adjoint_block = np.asarray(
                 adjoint_gradients[meas_idx : meas_idx + n_meas_this_stim],
-                dtype=float,
+                dtype=value_dtype,
             )
-            grad_u_arr = np.asarray(grad_u, dtype=float)
+            grad_u_arr = np.asarray(grad_u, dtype=value_dtype)
+            torch_dtype = self._torch_dtype_for_jacobian(grad_u_arr)
+            if cell_areas_cuda is None or cell_areas_cuda.dtype != torch_dtype:
+                cell_areas_cuda = self._get_cell_areas_cuda(torch_dtype)
             for start in range(0, n_elements, block_size):
                 end = min(start + block_size, n_elements)
                 grad_u_t = torch.from_numpy(
-                    np.ascontiguousarray(grad_u_arr[start:end, :], dtype=np.float64)
-                ).to(self._runtime_cuda_device, dtype=torch.float64)
+                    np.ascontiguousarray(grad_u_arr[start:end, :], dtype=value_dtype)
+                ).to(self._runtime_cuda_device, dtype=torch_dtype)
                 adjoint_block_t = torch.from_numpy(
                     np.ascontiguousarray(
-                        adjoint_block[:, start:end, :], dtype=np.float64
+                        adjoint_block[:, start:end, :], dtype=value_dtype
                     )
-                ).to(self._runtime_cuda_device, dtype=torch.float64)
+                ).to(self._runtime_cuda_device, dtype=torch_dtype)
                 sensitivity_t = torch.einsum("eg,meg->me", grad_u_t, adjoint_block_t)
                 out_t = sensitivity_t * cell_areas_cuda[start:end].unsqueeze(0)
                 jacobian[meas_idx : meas_idx + n_meas_this_stim, start:end] = (
                     out_t.cpu().numpy()
                 )
                 bytes_h2d = (
-                    grad_u_t.numel() + adjoint_block_t.numel() + out_t.numel()
-                ) * 8
+                    grad_u_t.numel() * grad_u_t.element_size()
+                    + adjoint_block_t.numel() * adjoint_block_t.element_size()
+                    + out_t.numel() * out_t.element_size()
+                )
                 self._jacobian_transfer_estimate += float(bytes_h2d)
 
             meas_idx += n_meas_this_stim

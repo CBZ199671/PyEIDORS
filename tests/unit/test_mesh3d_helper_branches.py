@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -353,6 +354,9 @@ def test_surface_selection_square_to_disk_and_hex_geometry_helpers(
     assert points_o.shape[1] == 3
     assert hexes_o.shape[1] == 8
     assert meta_o["block_topology"] == ["core", "east", "north", "west", "south"]
+    source = inspect.getsource(gen_o._structured_geometry_o_grid)
+    assert "np.meshgrid" not in source
+    assert "np.broadcast_to" not in source
 
     faces = gen_o._cell_faces(np.arange(8, dtype=np.int32))
     assert len(faces) == 6

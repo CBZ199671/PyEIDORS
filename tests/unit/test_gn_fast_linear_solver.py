@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -10,6 +11,7 @@ from scipy.sparse import diags
 from scipy.sparse.linalg import LinearOperator
 
 import pyeidors.inverse.solvers.gauss_newton_runtime as gn_runtime
+import pyeidors.inverse.solvers.gauss_newton_linear_system as gn_linear_system
 from pyeidors.inverse import CellMesh, DualMesh, DualMeshJacobianOperator, VoxelGrid
 from pyeidors.inverse.jacobian.linearized import JacobianLinearization
 from pyeidors.inverse.solvers.gauss_newton_runtime import _solve_linear_system_fast
@@ -31,6 +33,23 @@ def _dummy_reconstructor(
         fast_linear_path=fast_linear_path,
         cholmod_max_n=12000,
         cholmod_max_memory_gib=4.0,
+    )
+
+
+def test_v276_gn_snapshot_column_stack_helper_direct_fills_matrix() -> None:
+    columns = [
+        np.array([1.0, 2.0, 3.0], dtype=np.float32),
+        np.array([4.0, 5.0, 6.0], dtype=np.float64),
+        np.array([7, 8, 9], dtype=np.int32),
+    ]
+
+    actual = gn_linear_system._stack_columns_direct(columns)
+
+    np.testing.assert_allclose(actual, np.column_stack(columns))
+    assert actual.dtype == np.float64
+    assert actual.flags.c_contiguous
+    assert "np.column_stack" not in inspect.getsource(
+        gn_linear_system._stack_columns_direct
     )
 
 
@@ -103,6 +122,42 @@ def test_fast_solver_auto_woodbury_matches_dense_reference():
     )
     expected = _expected_solution(J, residual, de, lam)
     assert np.allclose(delta, expected, rtol=1e-6, atol=1e-8)
+
+
+def test_v231_woodbury_small_system_streams_column_blocks() -> None:
+    source = inspect.getsource(gn_linear_system._solve_linear_system_fast)
+    helper_source = inspect.getsource(
+        gn_linear_system._woodbury_small_system_from_dense
+    )
+
+    assert "J_weighted_dense_np * inv_diag[None" not in source
+    assert "_woodbury_small_system_from_dense" in source
+    assert "inv_diag[None" not in helper_source
+
+    J = np.array(
+        [
+            [0.8, -0.2, 0.5, 0.1],
+            [0.1, 0.7, -0.3, 0.2],
+            [0.6, 0.4, 0.2, -0.1],
+        ],
+        dtype=float,
+    )
+    inv_diag = np.array([0.5, 2.0, 1.5, 0.75], dtype=float)
+    streamed = gn_linear_system._woodbury_small_system_from_dense(
+        J,
+        inv_diag,
+        column_block_size=2,
+    )
+    expected = np.eye(J.shape[0], dtype=float) + (J * inv_diag) @ J.T
+    np.testing.assert_allclose(streamed, expected)
+
+
+def test_v250_gn_linear_system_cache_hashes_stream_payloads() -> None:
+    source = inspect.getsource(gn_linear_system)
+    assert "hash_array_payload" in source
+    assert ".tobytes(" not in source
+    assert "hash_array_payload(\n                    np.ascontiguousarray" not in source
+    assert "hash_array_payload(\n                np.ascontiguousarray" not in source
 
 
 def test_fast_solver_explicit_pcg_matches_dense_reference():
@@ -616,6 +671,163 @@ def test_matrix_free_noser_preconditioner_contract_clamps_positive_diag():
     assert "noser_diag_clamped" in str(meta["matrix_free_pc_reason"])
 
 
+def test_v407_sanitize_preconditioner_diag_uses_in_place_private_copy():
+    source = inspect.getsource(gn_runtime._sanitize_preconditioner_diag)
+    assert "np.where" not in source
+    assert "bad_mask" not in source
+    assert "_preconditioner_diag_needs_clamp" in source
+    assert "np.nan_to_num(" in source
+    assert "copy=False" in source
+    assert "np.maximum(arr, float(floor), out=arr)" in source
+
+    diag = np.array([0.0, np.nan, np.inf, -1.0, 4.0], dtype=float)
+    original = diag.copy()
+
+    sanitized, reason = gn_runtime._sanitize_preconditioner_diag(
+        diag,
+        n_param=5,
+        floor=1e-6,
+        source="test",
+    )
+
+    np.testing.assert_allclose(
+        sanitized,
+        np.array([1e-6, 1e-6, 1e-6, 1e-6, 4.0], dtype=float),
+    )
+    np.testing.assert_allclose(diag, original, equal_nan=True)
+    assert reason == "test_diag_clamped"
+
+
+def test_v616_preconditioner_diag_clamp_guard_scans_with_reusable_mask():
+    source = inspect.getsource(gn_linear_system._preconditioner_diag_needs_clamp)
+    assert "mask_work = np.empty" in source
+    assert "(~np.isfinite" not in source
+    assert "arr <= float(floor)" not in source
+
+    assert (
+        gn_linear_system._preconditioner_diag_needs_clamp(
+            np.array([1.0, 2.0, 3.0], dtype=float),
+            1e-6,
+            chunk_size=2,
+        )
+        is False
+    )
+    assert (
+        gn_linear_system._preconditioner_diag_needs_clamp(
+            np.array([1.0, np.nan, 3.0], dtype=float),
+            1e-6,
+            chunk_size=2,
+        )
+        is True
+    )
+    assert (
+        gn_linear_system._preconditioner_diag_needs_clamp(
+            np.array([1.0, 0.0, 3.0], dtype=float),
+            1e-6,
+            chunk_size=2,
+        )
+        is True
+    )
+
+
+def test_v490_gn_linear_system_uses_bounded_finite_guards():
+    require_source = inspect.getsource(gn_linear_system._require_finite)
+    native_source = inspect.getsource(gn_linear_system.solve_native_complex_normal_step)
+    diag_source = inspect.getsource(gn_linear_system._operator_diag_preconditioner)
+    custom_source = inspect.getsource(
+        gn_linear_system._build_matrix_free_custom_pc_operator
+    )
+    pmat_source = inspect.getsource(
+        gn_linear_system._build_matrix_free_pmat_inverse_operator
+    )
+    fast_source = inspect.getsource(gn_linear_system._solve_linear_system_fast)
+
+    assert "all_finite_values(arr)" in require_source
+    assert "np.isfinite(arr).all()" not in require_source
+    assert "np.abs(arr)" not in require_source
+    assert "_finite_summary(arr)" in require_source
+    assert "all_finite_values(delta)" in native_source
+    assert "np.isfinite(delta).all()" not in native_source
+    assert "all_finite_values(arr)" in diag_source
+    assert "np.isfinite(arr).all()" not in diag_source
+    assert "all_finite_values(probe)" in custom_source
+    assert "np.isfinite(probe).all()" not in custom_source
+    assert "all_finite_values(mat.data)" in pmat_source
+    assert "all_finite_values(dense)" in pmat_source
+    assert "all_finite_values(probe)" in pmat_source
+    assert "np.isfinite(mat.data).all()" not in pmat_source
+    assert "np.isfinite(dense).all()" not in pmat_source
+    assert "np.isfinite(probe).all()" not in pmat_source
+    assert "all_finite_values(delta_candidate)" in fast_source
+    assert "np.isfinite(delta_candidate).all()" not in fast_source
+
+
+def test_v506_gn_dense_diagonal_and_jitter_paths_avoid_eye_payloads():
+    helper_source = inspect.getsource(
+        gn_linear_system._dense_matrix_is_effectively_diagonal
+    )
+    fast_source = inspect.getsource(gn_linear_system._solve_linear_system_fast)
+    woodbury_source = inspect.getsource(
+        gn_linear_system._woodbury_small_system_from_dense
+    )
+
+    assert "dense - np.diag(diag_vec)" not in fast_source
+    assert "np.diag(dense)" not in fast_source
+    assert "dense.diagonal()" in fast_source
+    assert "off_diag =" not in fast_source
+    assert "jitter * np.eye" not in fast_source
+    assert "small = np.eye" not in woodbury_source
+    assert "_dense_identity_matrix(n_meas)" in woodbury_source
+    assert "_dense_matrix_is_effectively_diagonal(dense" in fast_source
+    assert "add_scaled_diagonal_in_place(" in fast_source
+    assert "np.abs(chunk, out=abs_chunk)" in helper_source
+
+    diagonal = np.diag([1.0, 2.0, 3.0])
+    nearly_diagonal = diagonal.copy()
+    nearly_diagonal[0, 2] = 5e-13
+    off_diagonal = diagonal.copy()
+    off_diagonal[0, 2] = 5e-3
+
+    assert gn_linear_system._dense_matrix_is_effectively_diagonal(diagonal)
+    assert gn_linear_system._dense_matrix_is_effectively_diagonal(nearly_diagonal)
+    assert not gn_linear_system._dense_matrix_is_effectively_diagonal(off_diagonal)
+    assert not gn_linear_system._dense_matrix_is_effectively_diagonal(
+        np.ones((2, 3), dtype=float)
+    )
+
+
+def test_v511_dense_pmat_shift_adds_diagonal_in_place():
+    source = inspect.getsource(
+        gn_linear_system._build_matrix_free_pmat_inverse_operator
+    )
+
+    assert "dense = dense + np.eye" not in source
+    assert "np.eye(n, dtype=np.float64) * shift" not in source
+    assert 'np.array(dense, dtype=np.float64, copy=True, order="C")' in source
+    assert "add_scaled_diagonal_in_place(" in source
+
+    pmat = np.diag([1.2, 1.8, 2.6])
+    original = pmat.copy()
+    recon = _dummy_reconstructor("auto", preconditioner="pmat")
+    recon.matrix_free_pmat_shift = 1.0e-3
+
+    op, meta, reason = gn_linear_system._build_matrix_free_pmat_inverse_operator(
+        pmat,
+        n_param=3,
+        attr="matrix_free_pmat",
+        reconstructor=recon,
+    )
+
+    assert reason is None
+    assert op is not None
+    assert meta["matrix_free_pmat_kind"] == "dense-cholesky"
+    np.testing.assert_allclose(pmat, original)
+    np.testing.assert_allclose(
+        op(np.array([1.2, 1.8, 2.6], dtype=float)),
+        np.array([1.2, 1.8, 2.6], dtype=float) / (np.diag(original) + 1.0e-3),
+    )
+
+
 def test_fast_solver_matrix_free_noser_and_prior_pc_metadata():
     J = np.array(
         [
@@ -928,6 +1140,50 @@ def test_fast_solver_jacobian_linearization_supports_weights_and_callable_regula
     assert meta["jacobian_shape"] == [3, 3]
     assert meta["dense_jacobian_materialized"] is False
     assert isinstance(meta["linear_iterations"], int)
+
+
+def test_v230_fast_solver_weighted_dense_avoids_materialized_weighted_jacobian():
+    source = inspect.getsource(gn_runtime.run_reconstruction)
+
+    assert "measurement_jacobian_np * meas_weight_np[:, None]" not in source
+
+    J = np.array(
+        [
+            [1.0, 0.25, -0.5],
+            [0.2, -0.8, 0.4],
+            [0.7, 0.3, 0.9],
+        ],
+        dtype=float,
+    )
+    weights = np.array([2.0, 0.5, 1.5], dtype=float)
+    residual = np.array([0.03, -0.02, 0.04], dtype=float)
+    weighted_residual = weights * residual
+    de = np.array([0.1, -0.05, 0.2], dtype=float)
+    lam = 0.07
+    reg_diag = np.array([1.0, 2.0, 3.0], dtype=float)
+    J_weighted = J * weights[:, None]
+    expected = np.linalg.solve(
+        J_weighted.T @ J_weighted + lam * np.diag(reg_diag),
+        -(J_weighted.T @ weighted_residual + lam * (reg_diag * de)),
+    )
+
+    recon = _dummy_reconstructor("auto", preconditioner="diag", fast_linear_path="pcg")
+    recon.R_matrix = lambda x: reg_diag * np.asarray(x, dtype=float)
+    recon.R_diag = reg_diag
+    delta, _, _ = _solve_linear_system_fast(
+        recon,
+        J_weighted_np=J,
+        measurement_weight_np=weights,
+        weighted_residual_np=weighted_residual,
+        de_current_np=de,
+        lambda_eff=lam,
+        iteration=4,
+    )
+
+    np.testing.assert_allclose(delta, expected, rtol=1e-5, atol=1e-7)
+    meta = getattr(recon, "_last_fast_linear_meta", {})
+    assert meta["jacobian_representation"] == "weighted_dense"
+    assert meta["dense_jacobian_materialized"] is False
 
 
 def test_fast_solver_cholmod_preconditioner_and_fallback(

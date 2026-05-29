@@ -147,10 +147,10 @@ Important for WSL2 and other fresh shells:
 - If `nix` itself is missing on WSL2, install Nix first; the repository does not support a 1:1 reproducible non-Nix bootstrap for DOLFINx.
 - If a plain WSL2 shell can `import pyeidors` but fails on `pyeidors.EITSystem` with NumPy/Torch/shared-library errors, that still counts as an unsupported runtime state; re-enter with `nix develop` before debugging deeper.
 - When the Linux manifest is exported from WSL2, it may record `platform.runtime_context.kind = wsl2` as informational provenance only; `verify_env_manifest.py` does not treat that field as a hard compatibility gate.
-- For CUDA on WSL2/NVIDIA, the only supported entry is `nix develop .#cuda`; do not treat the default CPU shell as a GPU runtime.
-- After entering `.#cuda`, run `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty` before enabling `--petsc-device auto|cuda` in benchmarks or CLI runs; use `--device auto|cuda` as the matching Torch/GN inverse runtime switch.
-- For the GUI, the supported launchers are `bash scripts/gui/run_eit_app.sh --cpu` and `bash scripts/gui/run_eit_app.sh --gpu`. Do not launch the GUI with `PYTHONPATH=src python -m eit_app.app`; that drops nix-provided FEniCSx runtime paths and can break realtime reconstruction imports.
-- On the Windows host, the supported launchers are `powershell -File .\scripts\gui\run_eit_app.ps1 -Profile cpu|gpu`, or the repository-root one-click wrappers `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd`.
+- For CUDA on WSL2/NVIDIA, supported dev shells are `.#cuda` for real-only CUDA and `.#complex64-cuda` / `.#complex-cuda` for complex-capable CUDA; do not treat the default CPU shell as a GPU runtime.
+- After entering a CUDA shell, run `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty` before enabling `--petsc-device auto|cuda` in benchmarks or CLI runs; use `--device auto|cuda` as the matching Torch/GN inverse runtime switch.
+- For the GUI, the supported default launcher is `bash scripts/gui/run_eit_app.sh` (`--auto`). It chooses `complex64-cuda` when GPU is visible and `complex64` otherwise; use `--precision complex128` for the complex128 profiles. Do not launch the GUI with `PYTHONPATH=src python -m eit_app.app`; that drops nix-provided FEniCSx runtime paths and can break realtime reconstruction imports.
+- On the Windows host, the supported launcher is `powershell -File .\scripts\gui\run_eit_app.ps1 -Profile auto`, or the repository-root one-click wrapper `EIT-GUI.cmd`. `EIT-GUI-CPU.cmd` / `EIT-GUI-GPU.cmd` remain compatibility wrappers for capability CPU/GPU launches.
 - For a lightweight preflight before the full stack is present, you can still inspect package detection with:
 
 ```bash

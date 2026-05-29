@@ -63,8 +63,13 @@ def plot_electrodes(
         segs = segments.get(tag, [])
         if not segs:
             continue
-        all_pts = np.vstack(segs)
-        centroid = all_pts.mean(axis=0)
+        total = np.zeros(2, dtype=np.float64)
+        count = 0
+        for seg in segs:
+            arr = np.asarray(seg, dtype=np.float64)
+            total += np.sum(arr[:, :2], axis=0)
+            count += int(arr.shape[0])
+        centroid = total / max(float(count), 1.0)
         length = lengths.get(tag, 0.0)
         ax.text(
             centroid[0],

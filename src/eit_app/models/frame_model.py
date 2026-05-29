@@ -35,24 +35,36 @@ class FrameData:
         """Extract measurement vector compatible with MeasurementDataset.
 
         Args:
-            use_part: "real", "imag", or "mag" (magnitude).
+            use_part: "real", "imag", "mag" (magnitude), or "complex".
 
         Returns:
-            1-D float64 array of length n_meas.
+            1-D array of length n_meas.
         """
         if use_part == "real":
             return self.real.copy()
         if use_part == "imag":
             return self.imag.copy()
         if use_part == "mag":
-            return np.abs(self.real + 1j * self.imag)
+            return np.hypot(self.real, self.imag)
+        if use_part == "complex":
+            real = np.asarray(self.real)
+            imag = np.asarray(self.imag)
+            out = np.empty(
+                real.shape, dtype=np.result_type(real.dtype, imag.dtype, np.complex64)
+            )
+            out.real = real
+            out.imag = imag
+            return out
         raise ValueError(
-            f"Unknown use_part: {use_part!r}. Expected 'real', 'imag', or 'mag'."
+            f"Unknown use_part: {use_part!r}. "
+            "Expected 'real', 'imag', 'mag', or 'complex'."
         )
 
     def amplitude(self) -> np.ndarray:
         """Compute calibrated amplitude: 2 * sqrt(R^2 + I^2) * 1.10."""
-        return 2.0 * np.sqrt(self.real**2 + self.imag**2) * 1.10
+        amplitude = np.hypot(self.real, self.imag)
+        amplitude *= 2.2
+        return amplitude
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a plain dict (for YAML sidecar writing)."""

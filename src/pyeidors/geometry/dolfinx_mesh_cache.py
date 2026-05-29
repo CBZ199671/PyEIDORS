@@ -18,8 +18,6 @@ from types import SimpleNamespace
 from typing import Any
 
 import numpy as np
-from dolfinx.io import XDMFFile
-from mpi4py import MPI
 
 from ..cache.disk_artifacts import (
     build_disk_artifact_manifest,
@@ -39,6 +37,7 @@ from .adios4dolfinx_checkpoint import (
     adios4dolfinx_available,
     write_adios4dolfinx_checkpoint,
 )
+from ._runtime import mpi_comm_world, xdmf_file_cls
 
 logger = logging.getLogger(__name__)
 
@@ -130,9 +129,17 @@ def _mesh_content_signature(mesh: Any) -> dict[str, Any] | None:
         return None
     return {
         "tdim": tdim,
+        "geometry_dtype": str(geometry.dtype),
         "geometry_hash": hash_array(geometry),
         "topology_hash": hash_array(topology),
     }
+
+
+def _mesh_geometry_dtype(mesh: Any) -> np.dtype | None:
+    try:
+        return np.asarray(mesh.geometry.x).dtype
+    except Exception:
+        return None
 
 
 def _physical_groups_for_manifest(
@@ -167,6 +174,7 @@ def _dolfinx_manifest_key_payload(
         "mesh_content_signature": (
             metadata.get("mesh_content_signature") or mesh_content_signature
         ),
+        "geometry_dtype": metadata.get("geometry_dtype"),
         "source_msh_signature": metadata.get("source_msh_signature"),
         "association_table": {
             str(name): int(tag) for name, tag in association_table.items()
@@ -303,9 +311,7 @@ def dolfinx_cache_is_fresh(mesh_file: str | Path) -> bool:
     return True
 
 
-def _read_meshtags_optional(
-    xdmf: XDMFFile, mesh: Any, *, name: str, dim: int
-) -> Any | None:
+def _read_meshtags_optional(xdmf: Any, mesh: Any, *, name: str, dim: int) -> Any | None:
     try:
         tdim = int(mesh.topology.dim)
         if dim < tdim:
@@ -329,6 +335,7 @@ def load_dolfinx_mesh_cache(
     gdim: int,
     required_names: list[str] | tuple[str, ...] = (),
     required_facet_names: list[str] | tuple[str, ...] = (),
+    expected_geometry_dtype: Any | None = None,
 ) -> DolfinxMeshCacheData | None:
     """Load a paired XDMF/HDF5 mesh cache, returning None if unavailable or stale."""
     mesh_path = Path(mesh_file)
@@ -341,7 +348,8 @@ def load_dolfinx_mesh_cache(
         return None
 
     try:
-        with XDMFFile(MPI.COMM_WORLD, xdmf_file, "r") as xdmf:
+        xdmf_file_type = xdmf_file_cls()
+        with xdmf_file_type(mpi_comm_world(), xdmf_file, "r") as xdmf:
             mesh = xdmf.read_mesh(name=str(metadata.get("mesh_name", MESH_NAME)))
             tdim = int(mesh.topology.dim)
             facet_tags = _read_meshtags_optional(
@@ -361,6 +369,17 @@ def load_dolfinx_mesh_cache(
             "Skipping DOLFINx mesh cache %s due to load failure: %s", xdmf_file, exc
         )
         return None
+    if expected_geometry_dtype is not None:
+        expected_dtype = np.dtype(expected_geometry_dtype)
+        actual_dtype = _mesh_geometry_dtype(mesh)
+        if actual_dtype is not None and actual_dtype != expected_dtype:
+            logger.debug(
+                "Skipping DOLFINx mesh cache %s because geometry dtype %s != %s",
+                xdmf_file,
+                actual_dtype,
+                expected_dtype,
+            )
+            return None
 
     physical_groups = _metadata_physical_groups(metadata)
     mesh_data = SimpleNamespace(physical_groups=physical_groups, facet_tags=facet_tags)
@@ -418,14 +437,14 @@ def _write_adios2_mesh_cache(mesh: Any, path: Path) -> bool:
         _clear_existing_adios2_path(path)
         try:
             writer = VTXWriter(
-                MPI.COMM_WORLD,
+                mpi_comm_world(),
                 path,
                 mesh,
                 engine="BPFile",
                 mesh_policy=VTXMeshPolicy.reuse,
             )
         except TypeError:
-            writer = VTXWriter(MPI.COMM_WORLD, path, mesh, engine="BPFile")
+            writer = VTXWriter(mpi_comm_world(), path, mesh, engine="BPFile")
         with writer:
             writer.write(0.0)
         return True
@@ -469,7 +488,8 @@ def write_dolfinx_mesh_cache(
             mesh_data.cell_tags.name = CELL_TAGS_NAME
 
         xdmf_file.parent.mkdir(parents=True, exist_ok=True)
-        with XDMFFile(MPI.COMM_WORLD, xdmf_file, "w") as xdmf:
+        xdmf_file_type = xdmf_file_cls()
+        with xdmf_file_type(mpi_comm_world(), xdmf_file, "w") as xdmf:
             xdmf.write_mesh(mesh)
             if getattr(mesh_data, "facet_tags", None) is not None:
                 xdmf.write_meshtags(mesh_data.facet_tags, mesh.geometry)
@@ -509,10 +529,12 @@ def write_dolfinx_mesh_cache(
             include_hash=True,
         )
         mesh_content_signature = _mesh_content_signature(mesh)
+        geometry_dtype = _mesh_geometry_dtype(mesh)
         metadata = {
             "version": DOLFINX_MESH_CACHE_VERSION,
             "format": "dolfinx-xdmf-hdf5",
             "gdim": int(gdim),
+            "geometry_dtype": None if geometry_dtype is None else str(geometry_dtype),
             "mesh_content_signature": mesh_content_signature,
             "mesh_name": MESH_NAME,
             "facet_tags_name": FACET_TAGS_NAME,
@@ -542,6 +564,7 @@ def write_dolfinx_mesh_cache(
             "format": metadata["format"],
             "gdim": int(gdim),
             "mesh_content_signature": mesh_content_signature,
+            "geometry_dtype": None if geometry_dtype is None else str(geometry_dtype),
             "source_msh_signature": source_signature,
             "association_table": association,
             "physical_groups": physical_groups,
@@ -569,14 +592,15 @@ def write_dolfinx_mesh_cache(
         if extra_metadata:
             metadata.update(_json_safe(extra_metadata))
 
-        if MPI.COMM_WORLD.rank == 0:
+        comm = mpi_comm_world()
+        if comm.rank == 0:
             tmp_file = metadata_file.with_suffix(metadata_file.suffix + ".tmp")
             tmp_file.write_text(
                 json.dumps(_json_safe(metadata), indent=2, sort_keys=True),
                 encoding="utf-8",
             )
             tmp_file.replace(metadata_file)
-        MPI.COMM_WORLD.barrier()
+        comm.barrier()
         return True
     except Exception as exc:
         logger.warning("Unable to write DOLFINx mesh cache for %s: %s", cache_base, exc)

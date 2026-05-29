@@ -2,10 +2,55 @@
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass, field
 
 import numpy as np
+
+from ...cache.keys import hash_array_payload
+from ...utils.numeric_ops import all_finite_values
+
+
+def _stack_columns_direct(
+    columns: list[np.ndarray] | tuple[np.ndarray, ...],
+) -> np.ndarray:
+    """Stack 1D columns into a C-order matrix by direct column assignment."""
+
+    if not columns:
+        return np.zeros((0, 0), dtype=np.float64)
+    first = np.asarray(columns[0], dtype=np.float64).reshape(-1)
+    out = np.empty((first.shape[0], len(columns)), dtype=np.float64)
+    out[:, 0] = first
+    for idx, column in enumerate(columns[1:], start=1):
+        arr = np.asarray(column, dtype=np.float64).reshape(-1)
+        if arr.shape[0] != out.shape[0]:
+            raise ValueError(
+                f"column {idx} length {arr.shape[0]} does not match {out.shape[0]}."
+            )
+        out[:, idx] = arr
+    return out
+
+
+def _unique_snapshot_blocks(blocks: list[np.ndarray], *, n_param: int) -> np.ndarray:
+    total_cols = sum(int(block.shape[1]) for block in blocks)
+    if total_cols <= 0:
+        return np.zeros((n_param, 0), dtype=np.float64)
+    out = np.empty((n_param, total_cols), dtype=np.float64)
+    seen_hashes: set[str] = set()
+    keep_count = 0
+    for block in blocks:
+        for col_idx in range(int(block.shape[1])):
+            column = np.asarray(block[:, col_idx], dtype=np.float64).reshape(-1)
+            digest = hash_array_payload(column)
+            if digest in seen_hashes:
+                continue
+            seen_hashes.add(digest)
+            out[:, keep_count] = column
+            keep_count += 1
+    if keep_count == 0:
+        return np.zeros((n_param, 0), dtype=np.float64)
+    if keep_count == total_cols:
+        return out
+    return np.ascontiguousarray(out[:, :keep_count], dtype=np.float64)
 
 
 @dataclass
@@ -18,7 +63,7 @@ class SnapshotBank:
 
     def add(self, snapshot: np.ndarray) -> None:
         vec = np.asarray(snapshot, dtype=np.float64).reshape(-1)
-        if vec.size == 0 or not np.isfinite(vec).all():
+        if vec.size == 0 or not all_finite_values(vec):
             return
         if self.normalize:
             norm = float(np.linalg.norm(vec))
@@ -33,13 +78,13 @@ class SnapshotBank:
             return np.zeros((0, 0), dtype=np.float64)
         dim = int(self._snapshots[-1].shape[0])
         cols = [v for v in self._snapshots if int(v.shape[0]) == dim]
-        return np.ascontiguousarray(np.column_stack(cols), dtype=np.float64)
+        return _stack_columns_direct(cols)
 
     def snapshot_hash(self) -> str:
         mat = self.matrix()
         if mat.size == 0:
             return "empty"
-        return hashlib.sha256(mat.tobytes()).hexdigest()
+        return hash_array_payload(mat)
 
 
 def _as_matrix(value: np.ndarray | None, *, n_param: int) -> np.ndarray:
@@ -96,18 +141,4 @@ def select_snapshot_matrix(
     if not blocks:
         return np.zeros((n_param, 0), dtype=np.float64)
 
-    stacked = np.ascontiguousarray(np.column_stack(blocks), dtype=np.float64)
-    # de-duplicate nearly identical snapshots
-    if stacked.shape[1] <= 1:
-        return stacked
-
-    keep_cols = [np.ascontiguousarray(stacked[:, 0], dtype=np.float64)]
-    seen_hashes: set[str] = {hashlib.sha256(keep_cols[0].tobytes()).hexdigest()}
-    for col_idx in range(1, stacked.shape[1]):
-        col = np.ascontiguousarray(stacked[:, col_idx], dtype=np.float64)
-        h = hashlib.sha256(col.tobytes()).hexdigest()
-        if h in seen_hashes:
-            continue
-        seen_hashes.add(h)
-        keep_cols.append(col)
-    return np.ascontiguousarray(np.column_stack(keep_cols), dtype=np.float64)
+    return _unique_snapshot_blocks(blocks, n_param=n_param)

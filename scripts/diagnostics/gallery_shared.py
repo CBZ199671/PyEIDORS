@@ -9,6 +9,8 @@ from typing import Any
 import numpy as np
 
 from pyeidors.io._json import json_ready as jsonable
+from pyeidors.utils.numeric_ops import squared_distances_to_point
+from scripts.common.array_metrics import mean_where, pearson_correlation
 from scripts.common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bundle
 
 
@@ -30,7 +32,7 @@ def safe_pearson(left: np.ndarray, right: np.ndarray) -> float:
         return float("nan")
     if np.allclose(left_arr, left_arr[0]) or np.allclose(right_arr, right_arr[0]):
         return 1.0 if np.allclose(left_arr, right_arr) else 0.0
-    return float(np.corrcoef(left_arr, right_arr)[0, 1])
+    return pearson_correlation(left_arr, right_arr)
 
 
 def truth_metrics(
@@ -50,24 +52,25 @@ def truth_metrics(
     for item in anomalies:
         center = np.asarray(item["center"], dtype=np.float64)
         radius = float(item["radius"])
-        roi = np.linalg.norm(coords - center[None, :], axis=1) <= radius
-        background_mask &= ~roi
-        truth_mean = float(np.mean(truth[roi]))
-        recon_mean = float(np.mean(recon[roi]))
-        bg_mean = (
-            float(np.mean(recon[background_mask]))
-            if np.any(background_mask)
-            else float(background_conductivity)
+        roi = squared_distances_to_point(coords, center, ndim=center.size) <= radius**2
+        truth_mean = mean_where(truth, roi, fallback=float(background_conductivity))
+        recon_mean = mean_where(recon, roi, fallback=float(background_conductivity))
+        np.logical_not(roi, out=roi)
+        np.logical_and(background_mask, roi, out=background_mask)
+        bg_mean = mean_where(
+            recon,
+            background_mask,
+            fallback=float(background_conductivity),
         )
         denom = truth_mean - float(background_conductivity)
         metrics[f"contrast_recovery_{item['label']}"] = (
             0.0 if abs(denom) <= 1e-12 else float((recon_mean - bg_mean) / denom)
         )
         metrics[f"roi_mean_{item['label']}"] = recon_mean
-    background_mean = (
-        float(np.mean(recon[background_mask]))
-        if np.any(background_mask)
-        else float(background_conductivity)
+    background_mean = mean_where(
+        recon,
+        background_mask,
+        fallback=float(background_conductivity),
     )
     metrics["background_bias"] = float(background_mean - float(background_conductivity))
     return metrics

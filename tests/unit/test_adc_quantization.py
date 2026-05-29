@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import math
 from pathlib import Path
 import subprocess
@@ -10,6 +11,7 @@ import sys
 
 import numpy as np
 
+import pyeidors.data.adc_quantization as adc_module
 from pyeidors.data.adc_quantization import (
     ADCInjectionConfig,
     adc_lsb,
@@ -27,6 +29,13 @@ from pyeidors.data.adc_quantization import (
 
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_v496_adc_voltage_vector_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(adc_module._as_float_vector)
+
+    assert "all_finite_values(arr)" in source
+    assert "np.all(np.isfinite(arr))" not in source
 
 
 def test_ideal_decimal_digits_and_lsb_follow_adc_formula() -> None:

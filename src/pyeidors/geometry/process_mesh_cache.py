@@ -17,14 +17,54 @@ same JSON separators (see :func:`pyeidors.cache.process_lru.hash_json_payload`).
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
 
-from ..cache.process_lru import ProcessLRUCache, hash_json_payload, path_signature
+import numpy as np
+
+from ..cache.process_lru import (
+    ProcessLRUCache,
+    env_bytes_limit,
+    hash_json_payload,
+    path_signature,
+)
 from ..data.structures import EITMesh
 
 _PROCESS_MESH_CACHE_MAX_ITEMS = 8
+_PROCESS_MESH_CACHE_MAX_BYTES = 512 * 1024 * 1024
+
+
+def _array_nbytes(value: Any) -> int:
+    if value is None:
+        return 0
+    try:
+        return int(np.asarray(value).nbytes)
+    except Exception:
+        return 0
+
+
+def _mesh_cache_size_bytes(mesh: EITMesh) -> int:
+    total = _array_nbytes(getattr(getattr(mesh, "geometry", None), "x", None))
+    for tag_name in ("facet_tags", "cell_tags"):
+        tags = getattr(mesh, tag_name, None)
+        total += _array_nbytes(getattr(tags, "indices", None))
+        total += _array_nbytes(getattr(tags, "values", None))
+    for vertices in getattr(mesh, "electrode_vertices", None) or ():
+        total += _array_nbytes(vertices)
+    derived = getattr(mesh, "_derived_arrays", None)
+    for name in ("node_coords", "cell_connectivity", "cell_centers", "cell_measures"):
+        total += _array_nbytes(getattr(derived, name, None))
+    return max(int(total), 1)
+
+
+_RESOLVED_PROCESS_MESH_CACHE_MAX_BYTES = env_bytes_limit(
+    "PYEIDORS_PROCESS_MESH_CACHE_MAX_BYTES",
+    "EIT_APP_PROCESS_MESH_CACHE_MAX_BYTES",
+    default=_PROCESS_MESH_CACHE_MAX_BYTES,
+)
 _PROCESS_MESH_CACHE: ProcessLRUCache[EITMesh] = ProcessLRUCache(
-    max_items=_PROCESS_MESH_CACHE_MAX_ITEMS
+    max_items=_PROCESS_MESH_CACHE_MAX_ITEMS,
+    max_bytes=_RESOLVED_PROCESS_MESH_CACHE_MAX_BYTES,
+    sizeof=_mesh_cache_size_bytes,
 )
 
 
@@ -42,6 +82,7 @@ def build_process_mesh_cache_key(
     sidecar_file: str | Path | None = None,
     extra_files: Sequence[str | Path] | None = None,
     mesh_name: str | None = None,
+    geometry_dtype: Any | None = None,
 ) -> str:
     mesh_path = Path(mesh_file)
     payload: dict[str, object] = {
@@ -50,6 +91,8 @@ def build_process_mesh_cache_key(
         "gdim": int(gdim),
         "mesh_name": str(mesh_name or mesh_path.stem),
     }
+    if geometry_dtype is not None:
+        payload["geometry_dtype"] = str(np.dtype(geometry_dtype))
     if n_elec is not None:
         payload["n_elec"] = int(n_elec)
     if association_file is not None:
@@ -74,8 +117,16 @@ def get_process_cached_mesh(key: str) -> EITMesh | None:
 
 
 def put_process_cached_mesh(key: str, mesh: EITMesh) -> None:
+    max_bytes = int(_RESOLVED_PROCESS_MESH_CACHE_MAX_BYTES)
+    if max_bytes <= 0 or _mesh_cache_size_bytes(mesh) > max_bytes:
+        _PROCESS_MESH_CACHE.discard(key)
+        return
     _PROCESS_MESH_CACHE.put(key, mesh)
 
 
 def clear_process_mesh_cache() -> None:
     _PROCESS_MESH_CACHE.clear()
+
+
+def process_mesh_cache_stats() -> dict[str, int]:
+    return _PROCESS_MESH_CACHE.stats()

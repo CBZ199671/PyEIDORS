@@ -11,15 +11,12 @@ contracts. Out of scope: actual replacement (no schema bump in T90).
 
 ## §2 Inventory baseline
 
-`grep -rn 'hashlib\.sha256(' src/pyeidors/ scripts/` → 49 sites total
-(43 in `src/pyeidors/`, 6 in `scripts/`).
+`grep -rn 'hashlib\.sha256(' src/pyeidors/ scripts/` → 34 sites total
+(28 in `src/pyeidors/`, 6 in `scripts/`).
 
-`grep -rn 'hashlib\.sha256(.*\.tobytes())' src/pyeidors/` → 10 single-line
-raw-`arr.tobytes()` digests. Multi-line raw-tobytes digests live at
-`forward/eit_forward_model.py:1475,1478`,
-`inverse/solvers/gauss_newton_linear_system.py:967,970,973,1495,1562,1677,1680`,
-`inverse/solvers/gauss_newton_startup_cache.py:38`. Adding multi-line
-hits the per-file totals are:
+`grep -rn 'hashlib\.sha256(.*\.tobytes())' src/pyeidors/` → 0 direct
+raw-`arr.tobytes()` digests. Current multi-line raw-tobytes digests in
+`src/pyeidors/` are none. Per-file totals are:
 
 | file | total `sha256(` | raw `arr.tobytes()` (single+multi) | role |
 |---|---|---|---|
@@ -27,53 +24,48 @@ hits the per-file totals are:
 | `cache/object_signature.py` | 2 | 0 | A canonical |
 | `cache/disk_artifacts.py` | 2 | 0 | C schema-locked + D file |
 | `cache/process_lru.py` | 1 | 0 | C schema-locked |
-| `forward/eit_forward_model.py` | 5 | 3 (1391, 1475, 1478) | B + C + D |
-| `forward/cuda_structured_backend.py` | 1 | 1 | B (in-memory) |
-| `inverse/jacobian/linearized.py` | 1 | 1 | B (V9 guard) |
-| `inverse/jacobian/direct_jacobian.py` | 1 | 1 | B (jacobian cache key) |
-| `inverse/solvers/sparse_bayesian_engine.py` | 1 | 1 | B (SVD reuse cache) |
-| `inverse/solvers/gauss_newton_linear_system.py` | 10 | 8 (967,970,973,987,1495,1562,1677,1680) | B + C |
-| `inverse/solvers/gauss_newton_startup_cache.py` | 1 | 1 | B (startup cache) |
-| `inverse/reduced/snapshot_bank.py` | 3 | 3 (42, 105, 108) | B (in-memory dedup) |
+| `forward/eit_forward_model.py` | 3 | 0 | C + D |
+| `forward/cuda_structured_backend.py` | 0 | 0 | migrated to `hash_array_payload` |
+| `inverse/jacobian/linearized.py` | 0 | 0 | migrated to `hash_array_payload` |
+| `inverse/jacobian/direct_jacobian.py` | 0 | 0 | migrated to `hash_array_payload` |
+| `inverse/solvers/sparse_bayesian_engine.py` | 0 | 0 | migrated to `hash_array_payload` |
+| `inverse/solvers/gauss_newton_linear_system.py` | 2 | 0 | migrated payload hashes to `hash_array_payload`; remaining C JSON digests |
+| `inverse/solvers/gauss_newton_startup_cache.py` | 0 | 0 | migrated to `hash_array_payload` |
+| `inverse/reduced/snapshot_bank.py` | 0 | 0 | migrated to `hash_array_payload` |
 | `inverse/prior/rtr.py` | 3 | 0 | C schema-locked |
 | `inverse/prior/tv_irls.py` | 1 | 0 | C schema-locked |
 | `inverse/reconstruction_matrix.py` | 2 | 0 | C V36 RM signature |
 | `inverse/greit.py` | 2 | 0 | C V62 GREIT signature |
-| `io/hdf5_artifacts.py` | 1 | 0 | C HDF5 metadata |
+| `inverse/greit_registry.py` | 1 | 0 | B migrated; remaining C GREIT registry |
+| `io/hdf5_artifacts.py` | 2 | 0 | C HDF5 metadata + streaming dataset payload digest |
+| `perf/capabilities.py` | 1 | 0 | C PETSc CUDA probe disk-cache key |
 
-Scripts/benchmarks (6 sites): `benchmark_difference_runtime.py:339`,
+Scripts/benchmarks/env (6 sites): `benchmark_difference_runtime.py:339`,
 `benchmark_mesh_io_formats.py:471`, `benchmark_greit_eidors_parity_48e.py:841`,
-`run_synthetic_parity.py:616`, `common/gn_difference_runner.py:1460`,
-`env/export_env_manifest.py:66`. All F (report-only) or D (file).
+`run_synthetic_parity.py:616`, `common/gn_difference_runner.py:1559`,
+`env/export_env_manifest.py:66`.
+All F (report-only) or D (file).
 
 ## §3 Classification
 
 - **A canonical** — already implements / is canonical helper. ⊥ migration.
   - `cache/keys.py:24,73,82,88,96` (`hash_array`, `build_cache_key`, `hash_path`)
   - `cache/keys.py:18`, `cache/object_signature.py:45,77`
-- **B migration candidate (raw `arr.tobytes()` cache key)** — embedding raw
-  digest into `cache_key` payload. Replacing with `hash_array` adds
-  dtype/shape prefix → digest changes → cache key changes → on-disk
-  artifacts invalidate. ! schema/version bump + golden refresh before
-  swap.
-  - `forward/eit_forward_model.py:1391` `_sigma_fingerprint` (transient)
-  - `forward/eit_forward_model.py:1475,1478` `z_hash`, `pattern_hash`
-    (embedded in model_signature payload, persisted via
-    `stable_signature_hash`)
-  - `forward/cuda_structured_backend.py:181` `_stable_hash` (process-local)
-  - `inverse/jacobian/linearized.py:39` `compute_sigma_fingerprint`
-    (V9 permissive guard, in-memory)
-  - `inverse/jacobian/direct_jacobian.py:315` `sigma_hash` →
-    `cache_manager.get_or_compute_semantic` artifact key
-  - `inverse/solvers/sparse_bayesian_engine.py:178` `baseline_hash` →
-    SVD reuse cache
-  - `inverse/solvers/gauss_newton_linear_system.py:967-987` sparse-csr
-    fingerprint (indptr/indices/data) + dense fallback
-  - `inverse/solvers/gauss_newton_linear_system.py:1495,1562,1677,1680`
-    ROM cache keys (snapshot_hash, jacobian_hash, basis_hash)
-  - `inverse/solvers/gauss_newton_startup_cache.py:38` startup `sigma_hash`
-  - `inverse/reduced/snapshot_bank.py:42,105,108` snapshot dedupe
-    (in-memory only — see §5 safe-now)
+- **B migration candidate (raw `arr.tobytes()` cache key)** — none remain in
+  `src/pyeidors/`; migrated candidates keep byte-stable legacy payload digests.
+- **B migrated with byte-stable streaming** — still hash the exact legacy
+  payload bytes, but feed them through `cache.keys.hash_array_payload` to avoid
+  a full `.tobytes()` copy.
+  - `inverse/jacobian/linearized.py:49-64` `compute_sigma_fingerprint`
+  - `inverse/jacobian/direct_jacobian.py:334-342` direct-Jacobian `sigma_hash`
+  - `inverse/solvers/gauss_newton_startup_cache.py:35-49` startup `sigma_hash`
+  - `inverse/solvers/gauss_newton_linear_system.py` sparse-csr
+    regularization fingerprint, dense regularization fallback, ROM
+    `snapshot_hash` / `jacobian_hash` / `basis_hash`
+  - `forward/cuda_structured_backend.py` `_stable_hash`
+  - `inverse/solvers/sparse_bayesian_engine.py` `baseline_hash`
+  - `inverse/reduced/snapshot_bank.py` snapshot matrix/column dedupe hashes
+  - `inverse/greit_registry.py` ndarray signature payload hash
 - **C schema-locked encoded-payload digests** — input is
   `json.dumps(payload, sort_keys=True).encode()` not ndarray.
   `hash_array` ! applicable; these stay on `hashlib.sha256(encoded)`.
@@ -87,6 +79,9 @@ Scripts/benchmarks (6 sites): `benchmark_difference_runtime.py:339`,
   - `forward/eit_forward_model.py:193` mesh streaming hasher
     (mixes coordinates + connectivity + association + electrode payload
     via `hasher.update` chain — not a single-array digest; ! file-style)
+  - `io/hdf5_artifacts.py` dataset digest helper streams HDF5 numeric payloads
+    with dtype/shape framing to preserve artifact checksum semantics without
+    full dataset materialization.
   - `scripts/env/export_env_manifest.py:66` env file digest
 - **E bytes wrappers** — `__bytes__` payload normalization within
   `_normalize`. Already canonical.
@@ -101,14 +96,14 @@ Scripts/benchmarks (6 sites): `benchmark_difference_runtime.py:339`,
 V76 forbids `id(obj)` memoization over mutable signature inputs. Audit
 of every B-class site:
 
-- All B-class digests derive from `arr.tobytes()` (content) — not `id`.
+- All B-class digests derive from array payload bytes (content) — not `id`.
+  Migrated sites use byte-stable `hash_array_payload`.
 - All cache-key payloads embed those digests in JSON before final
   `stable_signature_hash`/`build_cache_key` — content-safe.
-- Cholesky cache (`gauss_newton_linear_system.py:1147`) keys on JSON
-  payload containing the sparse-csr fingerprint at 967/970/973 →
-  content-safe.
-- ROM caches (1495/1562/1677/1680) embed `snapshot_hash` /
-  `jacobian_hash` / `basis_hash` from raw tobytes → content-safe.
+- Cholesky cache (`gauss_newton_linear_system.py:1385`) keys on JSON
+  payload containing streamed sparse-csr fingerprints → content-safe.
+- ROM caches embed streamed `snapshot_hash` / `jacobian_hash` /
+  `basis_hash` payload digests → content-safe.
 - T88 already added gate `tests/unit/test_cache_semantic_signature.py`
   + invariant V76 against id-only memoization regressions in
   `pyeidors.cache.object_signature`.
@@ -120,26 +115,32 @@ required from T90.
 
 ### Safe-now (no schema bump)
 
-1. `inverse/reduced/snapshot_bank.py:42,105,108` — in-memory dedup,
-   never persisted. Migrating to `hash_array` only changes per-call
-   set membership, not artifacts. Optional cleanup; can land in any
-   later code-fusion task without §V impact.
+1. Done under V248: sigma-hash sites in `linearized.py`,
+   `direct_jacobian.py`, and `gauss_newton_startup_cache.py` now use
+   `hash_array_payload`, preserving legacy real/complex digest bytes without
+   schema bump.
+2. Done under V250: `gauss_newton_linear_system.py` cache payload hashes now
+   use `hash_array_payload`, preserving legacy sparse/dense/ROM digest bytes
+   without schema bump.
+3. Done under V251: remaining raw array digest sites in
+   `cuda_structured_backend.py`, `snapshot_bank.py`,
+   `sparse_bayesian_engine.py`, and `greit_registry.py` now use
+   `hash_array_payload`, preserving legacy payload bytes without schema bump.
 
 ### Defer (require coordinated schema bump + golden refresh)
 
-2. All other B-class sites (forward `_sigma_fingerprint`/`z_hash`/
-   `pattern_hash`, jacobian/sparse/SVD/ROM/startup caches, sparse-csr
-   fingerprint trio at 967-973). Replacement changes the cache key
-   contract for `pyeidors.cache` artifacts — every saved
+4. Future replacement with `hash_array` would add dtype/shape prefixes to
+   these migrated legacy payload digests and therefore changes the cache key
+   contract for relevant `pyeidors.cache` artifacts — every saved
    `*-cache.h5` / `cache_manager` blob would invalidate on first read.
-   ! coordinate with `CacheKeyParts.schema_version` bump (`keys.py:50`,
+   ! coordinate with `CacheKeyParts.schema_version` bump (`keys.py:80`,
    currently `= 2`) + golden fixture refresh under
    `tests/fixtures/sweep_hdf5_tables/` + V36/V62 RM/GREIT signature
    re-baseline. Out of T90 scope.
 
 ### Leave (canonical)
 
-3. A/C/D/E/F — already canonical, schema-locked encoded payloads, file
+5. A/C/D/E/F — already canonical, schema-locked encoded payloads, file
    digests, byte wrappers, or report-only. No migration applies.
 
 ## §6 Gate

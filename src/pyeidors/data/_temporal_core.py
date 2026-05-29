@@ -6,11 +6,34 @@ from typing import Any
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
+
+def as_real_float_array(values: Any) -> np.ndarray:
+    """Return a real floating array while preserving float32 payloads."""
+
+    raw = np.asarray(values)
+    if raw.dtype.kind == "c":
+        dtype = (
+            np.float32
+            if raw.dtype.itemsize <= np.dtype(np.complex64).itemsize
+            else np.float64
+        )
+        return np.asarray(raw.real, dtype=dtype)
+    if raw.dtype.kind == "f":
+        dtype = (
+            np.float32
+            if raw.dtype.itemsize <= np.dtype(np.float32).itemsize
+            else np.float64
+        )
+        return np.asarray(raw, dtype=dtype)
+    return np.asarray(raw, dtype=np.float64)
+
 
 def as_frame_batch(values: Any) -> tuple[np.ndarray, bool]:
     """Return a contiguous ``(n_frames, n_values)`` batch and vector flag."""
 
-    array = np.asarray(values, dtype=np.float64)
+    array = as_real_float_array(values)
     if array.ndim == 1:
         batch = array.reshape(1, -1)
         was_vector = True
@@ -21,9 +44,9 @@ def as_frame_batch(values: Any) -> tuple[np.ndarray, bool]:
         raise ValueError("frames must be a 1D vector or 2D frame batch.")
     if 0 in batch.shape:
         raise ValueError("frames must be non-empty.")
-    if not np.isfinite(batch).all():
+    if not all_finite_values(batch):
         raise FloatingPointError("frames contain non-finite values.")
-    return np.ascontiguousarray(batch, dtype=np.float64), was_vector
+    return np.ascontiguousarray(batch), was_vector
 
 
 def positive_int(value: int, name: str) -> int:
@@ -44,4 +67,4 @@ def unit_interval(value: float, name: str) -> float:
     return resolved
 
 
-__all__ = ["as_frame_batch", "positive_int", "unit_interval"]
+__all__ = ["as_frame_batch", "as_real_float_array", "positive_int", "unit_interval"]

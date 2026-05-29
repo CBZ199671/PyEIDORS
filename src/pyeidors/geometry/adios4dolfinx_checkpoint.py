@@ -14,7 +14,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from mpi4py import MPI
+from ._runtime import mpi_comm_world
 
 logger = logging.getLogger(__name__)
 
@@ -131,7 +131,7 @@ def read_adios4dolfinx_checkpoint(
     try:
         mesh = adx.read_mesh(
             path,
-            comm=MPI.COMM_WORLD,
+            comm=mpi_comm_world(),
             engine=engine,
             read_from_partition=bool(read_from_partition),
         )

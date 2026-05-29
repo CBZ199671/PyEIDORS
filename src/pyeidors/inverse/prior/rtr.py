@@ -13,6 +13,9 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse.linalg import LinearOperator
 
+from pyeidors.cache.keys import update_digest_with_array_payload
+from pyeidors.utils.numeric_ops import all_finite_values
+
 
 RTR_PRIOR_SCHEMA = "pyeidors-rtr-prior-v1"
 RTR_PRIOR_HDF5_SCHEMA = "pyeidors-rtr-prior-hdf5-v1"
@@ -64,7 +67,7 @@ class RtRPrior:
             raise ValueError(
                 f"RtR output length {result.size} does not match {self.shape[0]}."
             )
-        if not np.isfinite(result).all():
+        if not all_finite_values(result):
             raise FloatingPointError("RtR apply produced non-finite values.")
         return np.ascontiguousarray(result, dtype=np.float64)
 
@@ -72,7 +75,7 @@ class RtRPrior:
         if sparse.issparse(self._payload):
             return np.asarray(self._payload.diagonal(), dtype=np.float64)
         if isinstance(self._payload, np.ndarray):
-            return np.asarray(np.diag(self._payload), dtype=np.float64)
+            return np.asarray(self._payload.diagonal(), dtype=np.float64)
         diag_hint = self.metadata.get("diag")
         if diag_hint is None:
             return None
@@ -81,7 +84,7 @@ class RtRPrior:
             raise ValueError(
                 f"RtR diag length {diag.size} does not match {self.shape[0]}."
             )
-        if not np.isfinite(diag).all():
+        if not all_finite_values(diag):
             raise FloatingPointError("RtR diag contains non-finite values.")
         return np.ascontiguousarray(diag, dtype=np.float64)
 
@@ -102,9 +105,13 @@ class RtRPrior:
         if not dense:
             return self.as_linear_operator()
         _check_dense_materialization(self.shape, max_dense_n=max_dense_n)
-        eye = np.eye(self.shape[1], dtype=np.float64)
-        cols = [self.apply(eye[:, idx]) for idx in range(self.shape[1])]
-        return np.column_stack(cols)
+        dense_matrix = np.empty(self.shape, dtype=np.float64)
+        basis = np.zeros(self.shape[1], dtype=np.float64)
+        for col in range(self.shape[1]):
+            basis[col] = 1.0
+            dense_matrix[:, col] = self.apply(basis)
+            basis[col] = 0.0
+        return np.ascontiguousarray(dense_matrix, dtype=np.float64)
 
     def as_rtr(
         self,
@@ -159,7 +166,7 @@ def as_rtr_prior(
                 raise ValueError(
                     f"RtR diagonal length {array.size} does not match {resolved_shape[0]}."
                 )
-            if not np.isfinite(array).all():
+            if not all_finite_values(array):
                 raise FloatingPointError("RtR diagonal contains non-finite values.")
             payload = sparse.diags(array, offsets=0, format="csr")
             kind = "diagonal_sparse"
@@ -168,7 +175,7 @@ def as_rtr_prior(
                 raise ValueError(
                     f"RtR matrix shape mismatch: expected {resolved_shape}, got {array.shape}."
                 )
-            if not np.isfinite(array).all():
+            if not all_finite_values(array):
                 raise FloatingPointError("RtR matrix contains non-finite values.")
             payload = np.ascontiguousarray(array, dtype=np.float64)
             kind = "dense"
@@ -318,7 +325,7 @@ def _validate_sparse_payload(matrix: sparse.spmatrix) -> None:
         raise ValueError(
             f"RtR sparse matrix must be non-empty square, got {matrix.shape}."
         )
-    if matrix.nnz and not np.isfinite(matrix.data).all():
+    if matrix.nnz and not all_finite_values(matrix.data):
         raise FloatingPointError("RtR sparse matrix contains non-finite values.")
 
 
@@ -326,7 +333,7 @@ def _as_vector(value: Any, *, name: str) -> np.ndarray:
     vector = np.asarray(value, dtype=np.float64).reshape(-1)
     if vector.size == 0:
         raise ValueError(f"{name} must be non-empty.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(vector, dtype=np.float64)
 
@@ -362,32 +369,32 @@ def _signature_for_payload(
     ).encode()
     if sparse.issparse(payload):
         mat = payload.tocsr()
-        encoded = (
-            semantic
-            + b"|"
-            + str(mat.dtype).encode()
-            + b"|"
-            + json.dumps(list(mat.shape)).encode()
-            + b"|"
-            + np.ascontiguousarray(mat.indptr, dtype=np.int64).tobytes()
-            + b"|"
-            + np.ascontiguousarray(mat.indices, dtype=np.int64).tobytes()
-            + b"|"
-            + np.ascontiguousarray(mat.data, dtype=np.float64).tobytes()
+        digest = hashlib.sha256()
+        digest.update(semantic)
+        digest.update(b"|")
+        digest.update(str(mat.dtype).encode())
+        digest.update(b"|")
+        digest.update(json.dumps(list(mat.shape)).encode())
+        digest.update(b"|")
+        update_digest_with_array_payload(digest, np.asarray(mat.indptr, dtype=np.int64))
+        digest.update(b"|")
+        update_digest_with_array_payload(
+            digest, np.asarray(mat.indices, dtype=np.int64)
         )
-        return hashlib.sha256(encoded).hexdigest()
+        digest.update(b"|")
+        update_digest_with_array_payload(digest, np.asarray(mat.data, dtype=np.float64))
+        return digest.hexdigest()
     if isinstance(payload, np.ndarray):
-        arr = np.ascontiguousarray(payload, dtype=np.float64)
-        encoded = (
-            semantic
-            + b"|"
-            + str(arr.dtype).encode()
-            + b"|"
-            + json.dumps(list(arr.shape)).encode()
-            + b"|"
-            + arr.tobytes()
-        )
-        return hashlib.sha256(encoded).hexdigest()
+        arr = np.asarray(payload, dtype=np.float64)
+        digest = hashlib.sha256()
+        digest.update(semantic)
+        digest.update(b"|")
+        digest.update(str(arr.dtype).encode())
+        digest.update(b"|")
+        digest.update(json.dumps(list(arr.shape)).encode())
+        digest.update(b"|")
+        update_digest_with_array_payload(digest, arr)
+        return digest.hexdigest()
     callable_id = _callable_identity(payload)
     payload_json = {
         "schema": RTR_PRIOR_SCHEMA,

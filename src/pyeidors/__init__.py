@@ -5,56 +5,80 @@ A modular EIT system based on DOLFINx, PyTorch, and CUQIpy.
 
 from __future__ import annotations
 
-from .utils.cuqi_imports import suppress_known_cuqi_import_warnings
+from typing import Any
 
 __version__ = "1.0.0"
 __author__ = "BingZhou Chen"
 
-# Check critical dependencies
-try:
-    import dolfinx  # noqa: F401
-
-    _DOLFINX_AVAILABLE = True
-except ImportError:
-    _DOLFINX_AVAILABLE = False
-
-try:
-    import torch
-
-    _TORCH_AVAILABLE = True
-    _CUDA_AVAILABLE = torch.cuda.is_available()
-    _MPS_AVAILABLE = bool(
-        getattr(torch.backends, "mps", None) and torch.backends.mps.is_available()
-    )
-except ImportError:
-    _TORCH_AVAILABLE = False
-    _CUDA_AVAILABLE = False
-    _MPS_AVAILABLE = False
-
-try:
-    with suppress_known_cuqi_import_warnings():
-        import cuqi  # noqa: F401
-
-    _CUQI_AVAILABLE = True
-except ImportError:
-    _CUQI_AVAILABLE = False
+_ENVIRONMENT_CACHE: dict[str, object] | None = None
+_PRIVATE_ENV_FLAGS = {
+    "_DOLFINX_AVAILABLE": "dolfinx_available",
+    "_TORCH_AVAILABLE": "torch_available",
+    "_CUDA_AVAILABLE": "cuda_available",
+    "_MPS_AVAILABLE": "mps_available",
+    "_CUQI_AVAILABLE": "cuqi_available",
+}
 
 
-# Environment info
+def _probe_dolfinx_available() -> bool:
+    try:
+        import dolfinx  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _probe_torch() -> dict[str, object]:
+    try:
+        import torch
+    except Exception:
+        return {
+            "torch_available": False,
+            "cuda_available": False,
+            "mps_available": False,
+        }
+
+    cuda_available = bool(torch.cuda.is_available())
+    mps_backend = getattr(torch.backends, "mps", None)
+    return {
+        "torch_available": True,
+        "cuda_available": cuda_available,
+        "mps_available": bool(mps_backend and mps_backend.is_available()),
+        "torch_version": torch.__version__,
+        "cuda_device_count": torch.cuda.device_count() if cuda_available else 0,
+    }
+
+
+def _probe_cuqi_available() -> bool:
+    try:
+        from .utils.cuqi_imports import suppress_known_cuqi_import_warnings
+
+        with suppress_known_cuqi_import_warnings():
+            import cuqi  # noqa: F401
+    except Exception:
+        return False
+    return True
+
+
+def _compute_environment() -> dict[str, object]:
+    global _ENVIRONMENT_CACHE
+    if _ENVIRONMENT_CACHE is not None:
+        return dict(_ENVIRONMENT_CACHE)
+
+    info: dict[str, object] = {
+        "dolfinx_available": _probe_dolfinx_available(),
+        **_probe_torch(),
+        "cuqi_available": _probe_cuqi_available(),
+    }
+    info.setdefault("torch_version", None)
+    info.setdefault("cuda_device_count", 0)
+    _ENVIRONMENT_CACHE = dict(info)
+    return info
+
+
 def check_environment() -> dict[str, object]:
     """Check runtime environment and available dependencies."""
-    info: dict[str, object] = {
-        "dolfinx_available": _DOLFINX_AVAILABLE,
-        "torch_available": _TORCH_AVAILABLE,
-        "cuda_available": _CUDA_AVAILABLE,
-        "mps_available": _MPS_AVAILABLE,
-        "cuqi_available": _CUQI_AVAILABLE,
-    }
-    if _TORCH_AVAILABLE:
-        info["torch_version"] = torch.__version__
-        info["cuda_device_count"] = torch.cuda.device_count() if _CUDA_AVAILABLE else 0
-
-    return info
+    return _compute_environment()
 
 
 def _runtime_import_error(exc: ImportError) -> ImportError:
@@ -69,7 +93,9 @@ def _runtime_import_error(exc: ImportError) -> ImportError:
     return ImportError(msg)
 
 
-def __getattr__(name: str) -> object:
+def __getattr__(name: str) -> Any:
+    if name in _PRIVATE_ENV_FLAGS:
+        return bool(_compute_environment()[_PRIVATE_ENV_FLAGS[name]])
     if name != "EITSystem":
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
@@ -81,7 +107,7 @@ def __getattr__(name: str) -> object:
 
 
 def __dir__() -> list[str]:
-    return sorted(set(globals()) | {"EITSystem"})
+    return sorted(set(globals()) | {"EITSystem"} | set(_PRIVATE_ENV_FLAGS))
 
 
 __all__ = ["EITSystem", "check_environment", "__version__"]

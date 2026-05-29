@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-import hashlib
 from pathlib import Path
 from typing import Any
 import warnings
@@ -24,12 +23,14 @@ try:  # pragma: no cover - optional in lean test stubs
 except Exception:  # pragma: no cover
     torch = None  # type: ignore[assignment]
 
+from ..cache.keys import hash_array_payload
 from ..geometry.mesh3d_generator import (
     STRUCTURED_SIDECAR_VERSION,
     load_structured_sidecar,
     structured_sidecar_path_for_mesh,
 )
 from ..perf.policy import DEFAULT_3D_GENERATOR_REVISION
+from ..utils.numeric_ops import all_finite_values
 
 CUDA_STRUCTURED_BACKEND_VERSION = "cuda-structured-v1"
 
@@ -62,7 +63,10 @@ def resolve_cuda_structured_runtime(
         )
     if _norm(scalar_type) != "real":
         raise ValueError(
-            "forward_backend='cuda_structured' currently supports real-valued conductivity only."
+            "forward_backend='cuda_structured' currently supports real-valued "
+            "conductivity only. For complex admittivity GPU CEM, use "
+            "forward_backend='dolfinx' with petsc_device='cuda' in "
+            "`nix develop .#complex-cuda` or `nix develop .#complex64-cuda`."
         )
     if int(mesh_comm_size) != 1:
         raise ValueError(
@@ -179,8 +183,8 @@ class CudaStructuredForwardBackend:
 
     @staticmethod
     def _stable_hash(values: np.ndarray) -> str:
-        arr = np.ascontiguousarray(values, dtype=np.float64)
-        return hashlib.sha256(arr.tobytes()).hexdigest()
+        arr = np.asarray(values, dtype=np.float64)
+        return hash_array_payload(arr)
 
     def _estimate_mg_levels(self) -> int:
         dims = []
@@ -361,7 +365,7 @@ class CudaStructuredForwardBackend:
         diag = np.asarray(top_left.diagonal(), dtype=np.float64)
         if (
             diag.size != self.model.dofs
-            or not np.all(np.isfinite(diag))
+            or not all_finite_values(diag)
             or float(np.min(diag)) <= 0.0
         ):
             raise RuntimeError(
@@ -372,9 +376,8 @@ class CudaStructuredForwardBackend:
         coupling_gpu = torch.as_tensor(
             self._coupling_columns, device=self.device, dtype=torch.float64
         )
-        diag_inv = torch.as_tensor(
-            (1.0 / diag)[:, None], device=self.device, dtype=torch.float64
-        )
+        diag_tensor = torch.as_tensor(diag, device=self.device, dtype=torch.float64)
+        diag_inv = torch.reciprocal(diag_tensor).reshape(-1, 1)
 
         response_basis_gpu, pcg_iterations = self._block_pcg(
             A_gpu,

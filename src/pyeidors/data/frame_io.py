@@ -31,7 +31,9 @@ def write_frame_csv(path: Path, real: np.ndarray, imag: np.ndarray) -> None:
         raise ValueError(
             f"real and imag shapes must match: {real.shape} vs {imag.shape}"
         )
-    data = np.column_stack([real, imag])
+    data = np.empty((real.size, 2), dtype=np.float64)
+    data[:, 0] = real
+    data[:, 1] = imag
     np.savetxt(Path(path), data, delimiter=",", fmt="%.15e")
 
 

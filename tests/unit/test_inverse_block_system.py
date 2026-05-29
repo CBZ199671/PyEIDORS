@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -200,6 +202,62 @@ def test_sigma_contact_normal_system_and_scipy_solve_match_dense_reference():
     np.testing.assert_allclose(result.solution, expected, rtol=1e-12, atol=1e-12)
     np.testing.assert_allclose(result.sigma_delta, expected[:2])
     np.testing.assert_allclose(result.contact_delta, expected[2:])
+
+
+def test_v305_sigma_contact_normal_rhs_direct_fills_without_concatenate():
+    j_sigma = np.array(
+        [
+            [1.0, 0.0],
+            [0.0, 1.0],
+            [1.0, 1.0],
+        ],
+        dtype=float,
+    )
+    j_contact = np.array([[2.0], [0.0], [1.0]], dtype=float)
+    residual = np.array([1.0, 2.0, 3.0], dtype=float)
+
+    system = assemble_sigma_contact_normal_system(j_sigma, j_contact, residual)
+
+    np.testing.assert_allclose(system.rhs, np.array([4.0, 5.0, 5.0], dtype=float))
+    assert system.rhs.flags.c_contiguous
+    assert "np.concatenate" not in inspect.getsource(
+        assemble_sigma_contact_normal_system
+    )
+
+
+def test_v481_block_system_finite_guards_use_bounded_scanner():
+    checked_functions = (
+        block_system._finite_vector,
+        block_system._as_csr_matrix,
+        block_system._regularization_to_csr,
+        block_system._measurement_weights_to_csr,
+        block_system.assemble_sigma_contact_normal_system,
+        block_system._solve_sigma_contact_with_petsc,
+        block_system._solve_sigma_contact_with_scipy,
+        block_system.build_electrode_movement_jacobian,
+        block_system.scale_contact_impedance_update,
+    )
+    old_payload_scans = (
+        "np.isfinite(arr).all()",
+        "np.isfinite(matrix.data).all()",
+        "np.isfinite(rhs).all()",
+        "np.isfinite(solution).all()",
+        "np.isfinite(out).all()",
+        "np.isfinite(baseline).all()",
+        "np.isfinite(perturbed).all()",
+        "np.isfinite(steps).all()",
+        "np.isfinite(z).all()",
+        "np.isfinite(delta).all()",
+        "np.isfinite(updated).all()",
+        "np.any(arr < 0.0)",
+        "np.any(steps == 0.0)",
+    )
+
+    for func in checked_functions:
+        source = inspect.getsource(func)
+        assert "all_finite_values(" in source
+        for old_payload_scan in old_payload_scans:
+            assert old_payload_scan not in source
 
 
 class _FakePC:

@@ -69,6 +69,19 @@ def test_prepare_jacobian_and_hierarchy_use_enabled_cache_manager(monkeypatch):
         "backend_signature_from_forward_model",
         lambda _fwd: "backend-sig",
     )
+    baseline_view = np.ones((4, 2), dtype=np.float64)[:, 0]
+    assert not baseline_view.flags.c_contiguous
+    expected_hash = sparse_module.hash_array_payload(
+        np.ascontiguousarray(baseline_view, dtype=np.float64)
+    )
+    original_hash = sparse_module.hash_array_payload
+    captured_hash: dict[str, np.ndarray] = {}
+
+    def _capture_hash(arr: np.ndarray) -> str:
+        captured_hash["arr"] = arr
+        return original_hash(arr)
+
+    monkeypatch.setattr(sparse_module, "hash_array_payload", _capture_hash)
 
     rec = sparse_module.SparseBayesianReconstructor.__new__(
         sparse_module.SparseBayesianReconstructor
@@ -92,10 +105,12 @@ def test_prepare_jacobian_and_hierarchy_use_enabled_cache_manager(monkeypatch):
     )
     rec.eit_system = SimpleNamespace(cache_manager=_EnabledCacheManager())
 
-    baseline = np.array([1.0, 1.0, 1.0, 1.0], dtype=float)
-    jac = rec._prepare_jacobian(baseline)
+    jac = rec._prepare_jacobian(baseline_view)
     np.testing.assert_allclose(jac, np.eye(3, 4, dtype=float))
-    np.testing.assert_allclose(rec._cached_baseline, baseline)
+    np.testing.assert_allclose(rec._cached_baseline, baseline_view)
+    assert original_hash(captured_hash["arr"]) == expected_hash
+    assert captured_hash["arr"] is baseline_view
+    assert not captured_hash["arr"].flags.c_contiguous
     assert rec.eit_system.cache_manager.semantic_calls == 1
     assert rec._cached_basis is None
     assert rec._cached_reduced_matrix is None

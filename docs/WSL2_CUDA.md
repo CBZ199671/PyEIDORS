@@ -1,21 +1,27 @@
 # WSL2 CUDA 开发与验证路径
 
-本仓库现在把 **CUDA 路径** 明确建模为一个独立、opt-in 的开发 shell：
+本仓库现在把 **CUDA 路径** 明确建模为独立 dev shell，但 GUI 默认入口会自动选择最宽能力路线：
 
 ```bash
 nix develop .#cuda
 ```
 
-默认 `nix develop` 仍然是 CPU 路径；只有 `.#cuda` profile 会尝试提供 CUDA 版 PETSc/DOLFINx 运行时，并把 Python 虚拟环境分离到 `.venv-cuda`，避免和默认 `.venv` 互相污染。
+默认 `nix develop` 仍然是实数 CPU 开发路径；`.#cuda` 是实数 CUDA，`.#complex64-cuda` / `.#complex-cuda` 是复数 CUDA。GUI 的 `auto` 启动器会优先进入复数能力 GPU 路线，让实数和复数输入共用同一个上位机入口。
 
 GUI 官方启动方式：
 
 ```bash
-bash scripts/gui/run_eit_app.sh --gpu
+bash scripts/gui/run_eit_app.sh
 ```
 
-这个启动器会自动进入 `nix develop .#cuda`、补齐 GUI 运行所需的
-`repo root + src + nix runtime` 路径，并在启动前执行 CUDA PETSc probe。
+这个启动器默认 `--auto`：
+
+- WSL2 能看到 NVIDIA GPU → `.#complex64-cuda`
+- 没有 GPU → `.#complex64`
+- 需要更高精度 → 加 `--precision complex128`
+- 只做专家级实数性能对比 → 用 `--real-gpu` 或 `--real-cpu`
+
+启动器会补齐 GUI 运行所需的 `repo root + src + nix runtime` 路径；需要强制启动前执行 CUDA PETSc probe 时加 `--probe-cuda`。
 
 ## 官方依据
 
@@ -36,7 +42,7 @@ bash scripts/gui/run_eit_app.sh --gpu
 
 1. DOLFINx Python 层可以把矩阵/向量创建委托给 PETSc 的指定 `kind`。
 2. 真正能不能用 `aijcusparse` / `cuda`，取决于 **PETSc 是否编译进 CUDA backend**。
-3. 因此“只改 Python 代码”不够；必须有一条单独的 CUDA 运行时入口。
+3. 因此“只改 Python 代码”不够；必须有 CUDA 运行时入口。GUI 默认使用复数能力 CUDA 作为 superset，避免用户手动判断 real/complex profile。
 
 ## 当前仓库里的 CUDA 开关
 

@@ -10,6 +10,8 @@ from typing import Iterable
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 from .adc_quantization import effective_digits_from_rmse, rmse
 from .bucket_domain_audit import (
     CircleBucketDomain,
@@ -20,6 +22,10 @@ from .eit_digit_metrics import ADJACENT_PATTERN, EITLinearizedModel
 from .holdout_fit_diff import (
     HoldoutFitDiffCase,
     HoldoutStructureMetricRow,
+    _masked_abs_peak,
+    _masked_area_sum,
+    _masked_square_area_sum,
+    _masked_weighted_structure_stats_2d,
     plot_holdout_fit_curves,
     plot_holdout_fit_summary,
     run_holdout_fit_diff,
@@ -34,6 +40,7 @@ from ._sweep_core import (
     write_sweep_table_artifacts,
 )
 from .voltage_digit_sweep import keep_significant_digits
+from ..utils.numeric_ops import squared_distances_to_point
 
 
 BUCKET_DENSE_SUMMARY_FIELDS = [
@@ -216,7 +223,10 @@ def _relative_rmse(reference: np.ndarray, observed: np.ndarray) -> float:
 
 def _electrode_center_points(bucket: CircleBucketDomain) -> np.ndarray:
     angles = np.radians([item.center_angle_deg for item in bucket.electrodes])
-    return bucket.bucket_radius * np.column_stack([np.cos(angles), np.sin(angles)])
+    points = np.empty((angles.size, 2), dtype=float)
+    points[:, 0] = bucket.bucket_radius * np.cos(angles)
+    points[:, 1] = bucket.bucket_radius * np.sin(angles)
+    return points
 
 
 def _source_gradient(
@@ -225,9 +235,23 @@ def _source_gradient(
     *,
     softening: float,
 ) -> np.ndarray:
-    diff = np.asarray(points, dtype=float) - np.asarray(electrode_point, dtype=float)
-    r2 = np.sum(diff * diff, axis=1) + float(softening) ** 2
-    return diff / (2.0 * math.pi * r2[:, None])
+    pts = np.asarray(points, dtype=float)
+    electrode = np.asarray(electrode_point, dtype=float).reshape(-1)
+    if pts.ndim != 2 or pts.shape[1] < 2 or electrode.size < 2:
+        raise ValueError("points and electrode_point must expose 2D coordinates")
+    gradient = np.empty((pts.shape[0], 2), dtype=float)
+    np.subtract(pts[:, 0], electrode[0], out=gradient[:, 0])
+    np.subtract(pts[:, 1], electrode[1], out=gradient[:, 1])
+    r2 = np.empty(pts.shape[0], dtype=float)
+    work = np.empty(pts.shape[0], dtype=float)
+    np.square(gradient[:, 0], out=r2)
+    np.square(gradient[:, 1], out=work)
+    r2 += work
+    r2 += float(softening) ** 2
+    r2 *= 2.0 * math.pi
+    gradient[:, 0] /= r2
+    gradient[:, 1] /= r2
+    return gradient
 
 
 def _source_potential(
@@ -236,8 +260,8 @@ def _source_potential(
     *,
     softening: float,
 ) -> np.ndarray:
-    diff = np.asarray(points, dtype=float) - np.asarray(electrode_point, dtype=float)
-    r2 = np.sum(diff * diff, axis=1) + float(softening) ** 2
+    r2 = squared_distances_to_point(points, electrode_point, ndim=2)
+    r2 += float(softening) ** 2
     return 0.5 * np.log(r2) / (2.0 * math.pi)
 
 
@@ -328,7 +352,7 @@ def _build_circle_bucket_reference_voltage(
     voltage = np.asarray(rows, dtype=float)
     if voltage.shape != (expected_count,):
         raise RuntimeError("circle bucket reference voltage shape mismatch")
-    if not np.all(np.isfinite(voltage)):
+    if not all_finite_values(voltage):
         raise RuntimeError("circle bucket reference voltage contains non-finite values")
     return voltage
 
@@ -348,8 +372,8 @@ def _build_circle_bucket_sensitivity(
     areas = bucket.cell_areas
     electrodes = _electrode_center_points(bucket)
     softening = max(bucket.mesh_h * 0.75, bucket.bucket_radius * 1e-3)
-    rows: list[np.ndarray] = []
-    for row in measurement_rows:
+    sensitivity = np.empty((expected_count, bucket.n_dofs), dtype=float)
+    for row_idx, row in enumerate(measurement_rows):
         stim_grad = _pair_gradient(
             centers,
             electrodes,
@@ -364,16 +388,14 @@ def _build_circle_bucket_sensitivity(
             e2=row.meas_e2,
             softening=softening,
         )
-        sensitivity_row = -np.einsum("ij,ij->i", stim_grad, meas_grad) * areas
-        rows.append(sensitivity_row)
-    sensitivity = np.vstack(rows).astype(float)
+        sensitivity[row_idx, :] = -np.einsum("ij,ij->i", stim_grad, meas_grad) * areas
     if normalize_rows:
         scales = np.linalg.norm(sensitivity, axis=1)
         good = scales > 0.0
         sensitivity[good, :] = sensitivity[good, :] / scales[good, None]
     if sensitivity.shape != (expected_count, bucket.n_dofs):
         raise RuntimeError("circle bucket sensitivity shape mismatch")
-    if not np.all(np.isfinite(sensitivity)):
+    if not all_finite_values(sensitivity):
         raise RuntimeError("circle bucket sensitivity contains non-finite values")
     return sensitivity
 
@@ -468,16 +490,14 @@ def _weighted_structure(
 ) -> tuple[np.ndarray, float, float, float, float, float, float]:
     weights_raw = np.abs(values)
     mask = weights_raw >= threshold
-    if not np.any(mask):
+    if not bool(mask.any()):
         mask[int(np.argmax(weights_raw))] = True
-    weights = weights_raw[mask] * areas[mask]
-    if float(np.sum(weights)) <= 0.0:
-        weights = areas[mask]
-    coords = points[mask, :2]
-    weight_sum = float(np.sum(weights))
-    centroid = np.sum(coords * weights[:, None], axis=0) / weight_sum
-    centered = coords - centroid
-    covariance = (centered * weights[:, None]).T @ centered / weight_sum
+    centroid, covariance, equivalent_area = _masked_weighted_structure_stats_2d(
+        points=points,
+        areas=areas,
+        weights_raw=weights_raw,
+        mask=mask,
+    )
     eigvals = np.sort(np.linalg.eigvalsh(covariance))
     minor_var = max(float(eigvals[0]), 0.0)
     major_var = max(float(eigvals[-1]), 0.0)
@@ -486,7 +506,6 @@ def _weighted_structure(
     )
     major_axis = 4.0 * math.sqrt(major_var)
     minor_axis = 4.0 * math.sqrt(minor_var)
-    equivalent_area = float(np.sum(areas[mask]))
     return (
         mask,
         float(centroid[0]),
@@ -523,12 +542,9 @@ def _structure_metrics(
         areas=areas,
         threshold=threshold,
     )
-    outside = ~truth_mask
-    artifact_values = np.abs(contrast[outside])
-    artifact_active = mask & outside
-    artifact_area = float(np.sum(areas[artifact_active]))
-    artifact_energy = float(np.sum((contrast[outside] ** 2) * areas[outside]))
-    artifact_peak = float(np.max(artifact_values)) if artifact_values.size else 0.0
+    artifact_area = _masked_area_sum(areas, mask, exclude_mask=truth_mask)
+    artifact_energy = _masked_square_area_sum(contrast, areas, exclude_mask=truth_mask)
+    artifact_peak = _masked_abs_peak(contrast, exclude_mask=truth_mask)
     error = np.asarray(sigma_recon, dtype=float) - sigma_true
     abs_error = np.abs(error)
     return _StructureMetrics(
@@ -1017,6 +1033,19 @@ def _tripcolor_field(
     return image
 
 
+def _field_value_range(fields: list[tuple[str, np.ndarray]]) -> tuple[float, float]:
+    if not fields:
+        raise ValueError("fields must not be empty.")
+    first = np.asarray(fields[0][1], dtype=float)
+    sigma_min = float(np.min(first))
+    sigma_max = float(np.max(first))
+    for _, values in fields[1:]:
+        arr = np.asarray(values, dtype=float)
+        sigma_min = float(np.minimum(sigma_min, float(np.min(arr))))
+        sigma_max = float(np.maximum(sigma_max, float(np.max(arr))))
+    return sigma_min, sigma_max
+
+
 def plot_bucket_dense_recon_compare(
     case: BucketDenseExperimentCase,
     output_path: Path,
@@ -1041,9 +1070,7 @@ def plot_bucket_dense_recon_compare(
         ("full_208", case.holdout_case.sigma_recon_full),
     ]
     fields.extend(case.holdout_case.sigma_recon_by_method.items())
-    sigma_values = np.concatenate([values for _, values in fields])
-    sigma_min = float(np.min(sigma_values))
-    sigma_max = float(np.max(sigma_values))
+    sigma_min, sigma_max = _field_value_range(fields)
     errors = [values - case.bucket.sigma_true for _, values in fields[1:]]
     error_lim = max(float(max(np.max(np.abs(error)) for error in errors)), 1e-12)
 
@@ -1242,9 +1269,7 @@ def plot_bucket_full256_compare_recon(
 
     fields: list[tuple[str, np.ndarray]] = [("truth", case.bucket.sigma_true)]
     fields.extend(case.sigma_recon_by_method.items())
-    sigma_values = np.concatenate([values for _, values in fields])
-    sigma_min = float(np.min(sigma_values))
-    sigma_max = float(np.max(sigma_values))
+    sigma_min, sigma_max = _field_value_range(fields)
     errors = [values - case.bucket.sigma_true for _, values in fields[1:]]
     error_lim = max(float(max(np.max(np.abs(error)) for error in errors)), 1e-12)
 
@@ -1315,9 +1340,7 @@ def plot_bucket_full256_compare_recon_with_full208_delta(
     fields: list[tuple[str, np.ndarray]] = [("truth", case.bucket.sigma_true)]
     fields.extend(case.sigma_recon_by_method.items())
     baseline = np.asarray(case.sigma_recon_by_method[baseline_method], dtype=float)
-    sigma_values = np.concatenate([values for _, values in fields])
-    sigma_min = float(np.min(sigma_values))
-    sigma_max = float(np.max(sigma_values))
+    sigma_min, sigma_max = _field_value_range(fields)
     truth_errors = [np.asarray(values) - case.bucket.sigma_true for _, values in fields]
     error_lim = max(
         float(max(np.max(np.abs(error)) for error in truth_errors[1:])),

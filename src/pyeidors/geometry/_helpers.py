@@ -7,6 +7,8 @@ from configparser import ConfigParser
 from pathlib import Path
 from typing import Any, Dict, Optional, Sequence
 
+import numpy as np
+
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION
@@ -33,16 +35,32 @@ def format_float_compact(value: float) -> str:
     return f"{float(value):.6f}".rstrip("0").rstrip(".").replace(".", "p")
 
 
+def geometry_dtype_cache_suffix(geometry_dtype: Any | None) -> str:
+    """Return a cache-name suffix for non-default mesh coordinate precision."""
+    if geometry_dtype is None:
+        return ""
+    dtype = np.dtype(geometry_dtype)
+    if dtype == np.dtype(np.float64):
+        return ""
+    if dtype == np.dtype(np.float32):
+        return "_f32"
+    return f"_{dtype.name.replace('.', 'p')}"
+
+
 def build_mesh_cache_name(
     n_elec: int,
     radius: float,
     refinement: int,
     electrode_coverage: float,
+    geometry_dtype: Any | None = None,
 ) -> str:
     """Cache-stable 2D mesh name keyed on ``(n_elec, radius, refinement, coverage)``."""
     radius_str = format_float_compact(radius)
     coverage_str = format_float_compact(electrode_coverage)
-    return f"mesh_{int(n_elec)}e_r{radius_str}_ref{int(refinement)}_cov{coverage_str}"
+    return (
+        f"mesh_{int(n_elec)}e_r{radius_str}_ref{int(refinement)}_cov{coverage_str}"
+        f"{geometry_dtype_cache_suffix(geometry_dtype)}"
+    )
 
 
 def build_mesh_cache_name_3d(
@@ -58,6 +76,7 @@ def build_mesh_cache_name_3d(
     geometry_version: str,
     generator_revision: str,
     electrode_layout: str = ELECTRODE_LAYOUT_RING_MAJOR,
+    geometry_dtype: Any | None = None,
 ) -> str:
     """Cache-stable 3D cylinder mesh name keyed on full geometry signature."""
     levels_str = "-".join(
@@ -74,6 +93,7 @@ def build_mesh_cache_name_3d(
         f"el{layout_str}_"
         f"cf{str(mesh_family).strip().lower()}_{str(geometry_version).strip().lower()}_"
         f"{str(generator_revision).strip().lower()}"
+        f"{geometry_dtype_cache_suffix(geometry_dtype)}"
     )
 
 

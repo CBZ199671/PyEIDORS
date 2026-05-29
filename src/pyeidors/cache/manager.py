@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 import threading
 from typing import Any, Callable
 
 from .keys import CacheKeyParts, build_cache_key
+from .index_fields import CACHE_INDEX_FIELD_NAMES, extract_cache_index_fields
 from .lifecycle import resolve_cache_directory
 from .object_signature import signature_of_cache_obj
 from .store_disk import DiskCacheStore
@@ -22,6 +25,38 @@ from .types import (
 
 _SHARED_PROCESS_STORES: dict[tuple[str, str], ProcessCacheStore] = {}
 _SHARED_PROCESS_STORES_LOCK = threading.Lock()
+
+
+@dataclass
+class _InflightComputeLock:
+    lock: threading.RLock
+    refs: int = 0
+
+
+_INFLIGHT_COMPUTE_LOCKS: dict[tuple[str, str], _InflightComputeLock] = {}
+_INFLIGHT_COMPUTE_LOCKS_GUARD = threading.Lock()
+
+
+@contextmanager
+def _singleflight_compute_lock(
+    key: tuple[str, str],
+):
+    with _INFLIGHT_COMPUTE_LOCKS_GUARD:
+        entry = _INFLIGHT_COMPUTE_LOCKS.get(key)
+        if entry is None:
+            entry = _InflightComputeLock(threading.RLock())
+            _INFLIGHT_COMPUTE_LOCKS[key] = entry
+        entry.refs += 1
+
+    entry.lock.acquire()
+    try:
+        yield
+    finally:
+        entry.lock.release()
+        with _INFLIGHT_COMPUTE_LOCKS_GUARD:
+            entry.refs -= 1
+            if entry.refs <= 0 and _INFLIGHT_COMPUTE_LOCKS.get(key) is entry:
+                _INFLIGHT_COMPUTE_LOCKS.pop(key, None)
 
 
 def _shared_process_store_key(
@@ -66,6 +101,7 @@ class CacheManager:
         self.policy = policy or CachePolicy()
         self.code_fingerprint = code_fingerprint
         self.requested_cache_dir = Path(cache_dir)
+        self._singleflight_namespace = str(self.requested_cache_dir.resolve())
         self.disk_lifecycle = normalize_cache_lifecycle(
             getattr(self.policy, "disk_lifecycle", "session")
         )
@@ -203,32 +239,22 @@ class CacheManager:
             return False
         return self._process is not None or self._disk is not None
 
-    def get_or_compute(
+    def _singleflight_key(self, cache_key: str) -> tuple[str, str]:
+        return (self._singleflight_namespace, cache_key)
+
+    def _lookup_cached_value(
         self,
         *,
+        cache_key: str,
         artifact: str,
-        payload: dict[str, Any],
-        compute_fn: Callable[[], Any],
-        namespace: str = "default",
-        name: str = "",
-        priority_boost: float = 0.0,
-        effort_seconds: float | None = None,
-        cost: float | None = None,
-        ttl_seconds: float | None = None,
-        persist: bool = True,
-    ) -> tuple[Any, CacheLookup]:
-        """Retrieve from cache or compute and populate layers."""
-
-        cache_key = self.build_key(artifact, payload, namespace=namespace)
-        effective_name = name or artifact
-        if not self._is_enabled_for(effective_name):
-            value = compute_fn()
-            return value, CacheLookup(
-                key=cache_key, hit=False, layer="disabled", artifact=artifact
-            )
-
-        effective_priority = float(priority_boost) + float(self._priority_boost)
-
+        effective_name: str,
+        namespace: str,
+        cost: float | None,
+        effort_seconds: float | None,
+        effective_priority: float,
+        persist: bool,
+        index_fields: dict[str, str | int | None],
+    ) -> tuple[Any, CacheLookup] | None:
         if self._process is not None:
             value = self._process.get(cache_key)
             if value is not None:
@@ -250,12 +276,28 @@ class CacheManager:
                         namespace=namespace,
                         effort=effort_seconds,
                         priority=effective_priority,
+                        index_fields=index_fields,
                     )
                 return value, CacheLookup(
                     key=cache_key, hit=True, layer="disk", artifact=artifact
                 )
+        return None
 
-        value = compute_fn()
+    def _store_computed_value(
+        self,
+        *,
+        cache_key: str,
+        value: Any,
+        artifact: str,
+        effective_name: str,
+        namespace: str,
+        cost: float | None,
+        effort_seconds: float | None,
+        effective_priority: float,
+        ttl_seconds: float | None,
+        persist: bool,
+        index_fields: dict[str, str | int | None],
+    ) -> None:
         use_cost = self._resolve_cost(artifact, value, cost)
         if self._process is not None:
             self._process.put(
@@ -267,6 +309,7 @@ class CacheManager:
                 namespace=namespace,
                 effort=effort_seconds,
                 priority=effective_priority,
+                index_fields=index_fields,
             )
         if persist and self._disk is not None:
             self._disk.put(
@@ -279,6 +322,78 @@ class CacheManager:
                 namespace=namespace,
                 effort=effort_seconds,
                 priority=effective_priority,
+                index_fields=index_fields,
+            )
+
+    def get_or_compute(
+        self,
+        *,
+        artifact: str,
+        payload: dict[str, Any],
+        compute_fn: Callable[[], Any],
+        namespace: str = "default",
+        name: str = "",
+        priority_boost: float = 0.0,
+        effort_seconds: float | None = None,
+        cost: float | None = None,
+        ttl_seconds: float | None = None,
+        persist: bool = True,
+    ) -> tuple[Any, CacheLookup]:
+        """Retrieve from cache or compute and populate layers."""
+
+        cache_key = self.build_key(artifact, payload, namespace=namespace)
+        index_fields = extract_cache_index_fields(payload)
+        effective_name = name or artifact
+        if not self._is_enabled_for(effective_name):
+            value = compute_fn()
+            return value, CacheLookup(
+                key=cache_key, hit=False, layer="disabled", artifact=artifact
+            )
+
+        effective_priority = float(priority_boost) + float(self._priority_boost)
+
+        cached = self._lookup_cached_value(
+            cache_key=cache_key,
+            artifact=artifact,
+            effective_name=effective_name,
+            namespace=namespace,
+            cost=cost,
+            effort_seconds=effort_seconds,
+            effective_priority=effective_priority,
+            persist=persist,
+            index_fields=index_fields,
+        )
+        if cached is not None:
+            return cached
+
+        with _singleflight_compute_lock(self._singleflight_key(cache_key)):
+            cached = self._lookup_cached_value(
+                cache_key=cache_key,
+                artifact=artifact,
+                effective_name=effective_name,
+                namespace=namespace,
+                cost=cost,
+                effort_seconds=effort_seconds,
+                effective_priority=effective_priority,
+                persist=persist,
+                index_fields=index_fields,
+            )
+            if cached is not None:
+                return cached
+
+            value = compute_fn()
+            self._store_computed_value(
+                cache_key=cache_key,
+                value=value,
+                artifact=artifact,
+                effective_name=effective_name,
+                namespace=namespace,
+                cost=cost,
+                effort_seconds=effort_seconds,
+                effective_priority=effective_priority,
+                ttl_seconds=ttl_seconds,
+                persist=persist,
+                index_fields=index_fields,
             )
         return value, CacheLookup(
             key=cache_key, hit=False, layer="compute", artifact=artifact
@@ -381,6 +496,8 @@ class CacheManager:
                 "layer": entry.get("layer"),
             },
         }
+        for field in CACHE_INDEX_FIELD_NAMES:
+            record["meta"][field] = entry.get(field)
         if value is not None:
             record["val"] = value
         return record
@@ -486,9 +603,10 @@ class CacheManager:
             effort = meta.get("effort")
             effort_value = float(effort) if effort is not None else None
             priority = float(meta.get("priority", 0.0))
+            index_fields = {field: meta.get(field) for field in CACHE_INDEX_FIELD_NAMES}
 
             if target_layers in {"process", "both"} and self._process is not None:
-                self._process.put(
+                if self._process.put(
                     key,
                     value,
                     artifact=artifact,
@@ -497,8 +615,9 @@ class CacheManager:
                     namespace=namespace,
                     effort=effort_value,
                     priority=priority,
-                )
-                installed += 1
+                    index_fields=index_fields,
+                ):
+                    installed += 1
             if target_layers in {"disk", "both"} and self._disk is not None:
                 ttl_seconds = meta.get("ttl_seconds")
                 self._disk.put(
@@ -511,6 +630,7 @@ class CacheManager:
                     namespace=namespace,
                     effort=effort_value,
                     priority=priority,
+                    index_fields=index_fields,
                 )
                 installed += 1
         return installed
@@ -521,15 +641,39 @@ class CacheManager:
         name: str | None = None,
         namespace: str | None = None,
         limit: int | None = None,
+        dtype: str | None = None,
+        backend: str | None = None,
+        device: str | None = None,
+        dim: int | None = None,
+        n_elec: int | None = None,
+        mesh_hash: str | None = None,
     ) -> list[dict[str, Any]]:
+        filters = {
+            "dtype": dtype,
+            "backend": backend,
+            "device": device,
+            "dim": dim,
+            "n_elec": n_elec,
+            "mesh_hash": mesh_hash,
+        }
         entries: list[dict[str, Any]] = []
         if self._process is not None:
             entries.extend(
-                self._process.list_entries(name=name, namespace=namespace, limit=None)
+                self._process.list_entries(
+                    name=name,
+                    namespace=namespace,
+                    limit=None,
+                    **filters,
+                )
             )
         if self._disk is not None:
             entries.extend(
-                self._disk.list_entries(name=name, namespace=namespace, limit=None)
+                self._disk.list_entries(
+                    name=name,
+                    namespace=namespace,
+                    limit=None,
+                    **filters,
+                )
             )
         entries.sort(key=lambda item: float(item.get("last_access", 0.0)), reverse=True)
         if limit is not None and limit > 0:
@@ -555,8 +699,17 @@ class CacheManager:
             stats.process_items = int(p["items"])
             stats.process_bytes = int(p["bytes"])
             stats.process_max_bytes = int(p["max_bytes"])
+            process_admission_rejections = int(p.get("admission_rejections", 0))
+            process_admission_rejected_bytes = int(p.get("admission_rejected_bytes", 0))
+            process_admission_rejection_reasons = dict(
+                p.get("admission_rejection_reasons", {})
+            )
             process_artifacts = dict(p.get("artifacts", {}))
             process_namespaces = dict(p.get("namespaces", {}))
+        else:
+            process_admission_rejections = 0
+            process_admission_rejected_bytes = 0
+            process_admission_rejection_reasons = {}
         if self._disk is not None:
             d = self._disk.stats()
             stats.disk_hits = int(d["hits"])
@@ -575,6 +728,11 @@ class CacheManager:
         payload["debug_names"] = sorted(self._debug_enabled_on)
         payload["process_artifacts"] = process_artifacts
         payload["process_namespaces"] = process_namespaces
+        payload["process_admission_rejections"] = process_admission_rejections
+        payload["process_admission_rejected_bytes"] = process_admission_rejected_bytes
+        payload["process_admission_rejection_reasons"] = (
+            process_admission_rejection_reasons
+        )
         payload["disk_artifacts"] = disk_artifacts
         payload["disk_namespaces"] = disk_namespaces
         payload["disk_cache_lifecycle"] = str(self.disk_lifecycle)

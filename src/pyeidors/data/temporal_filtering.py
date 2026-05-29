@@ -9,8 +9,11 @@ from typing import Any, Mapping
 
 import numpy as np
 
+from pyeidors.utils.numeric_ops import all_finite_values
+
 from ._temporal_core import (
     as_frame_batch as _as_frame_batch,
+    as_real_float_array as _as_real_float_array,
     positive_int as _positive_int,
     unit_interval as _unit_interval,
 )
@@ -70,7 +73,7 @@ def filter_measurement_frames(
             mode=mode,
             frame_count=previous_count + batch.shape[0],
             last_output=temporal_values[-1],
-            history_tail=np.empty((0, batch.shape[1]), dtype=np.float64),
+            history_tail=np.empty((0, batch.shape[1]), dtype=batch.dtype),
             sample_rate_hz=resolved_sample_rate,
         )
     elif mode == "moving_average":
@@ -96,7 +99,7 @@ def filter_measurement_frames(
             mode=mode,
             frame_count=previous_count + batch.shape[0],
             last_output=temporal_values[-1],
-            history_tail=np.empty((0, batch.shape[1]), dtype=np.float64),
+            history_tail=np.empty((0, batch.shape[1]), dtype=batch.dtype),
             sample_rate_hz=resolved_sample_rate,
         )
     else:  # pragma: no cover - protected by _normalize_temporal_mode
@@ -154,7 +157,7 @@ def filter_measurement_frames(
         }
     )
     result = MeasurementTemporalFilterResult(
-        values=np.ascontiguousarray(values_out, dtype=np.float64),
+        values=np.ascontiguousarray(values_out),
         metadata=metadata,
     )
     return result if return_metadata else result.values
@@ -170,24 +173,40 @@ def _moving_average(
     prior_tail = _state_history_tail(
         initial_state,
         n_measurements=batch.shape[1],
+        dtype=batch.dtype,
     )
     n_prior = prior_tail.shape[0]
     n_frames = batch.shape[0]
-    combined = np.concatenate([prior_tail, batch], axis=0) if n_prior else batch
-    n_combined = combined.shape[0]
-    out = np.empty_like(batch, dtype=np.float64)
+    n_combined = n_prior + n_frames
+    out = np.empty_like(batch)
     if n_frames > 0:
-        csum = np.empty((n_combined + 1, batch.shape[1]), dtype=np.float64)
+        csum = np.empty((n_combined + 1, batch.shape[1]), dtype=batch.dtype)
         csum[0] = 0.0
-        np.cumsum(combined, axis=0, dtype=np.float64, out=csum[1:])
-        indices = np.arange(n_prior, n_combined)
-        starts = np.maximum(0, indices + 1 - width)
-        denom = (indices + 1 - starts).astype(np.float64).reshape(-1, 1)
-        out = (csum[indices + 1] - csum[starts]) / denom
+        if n_prior:
+            np.cumsum(prior_tail, axis=0, dtype=batch.dtype, out=csum[1 : n_prior + 1])
+        if n_frames:
+            np.cumsum(batch, axis=0, dtype=batch.dtype, out=csum[n_prior + 1 :])
+            if n_prior:
+                csum[n_prior + 1 :] += csum[n_prior]
+        for out_idx, combined_idx in enumerate(range(n_prior, n_combined)):
+            start = max(0, combined_idx + 1 - width)
+            np.subtract(csum[combined_idx + 1], csum[start], out=out[out_idx])
+            out[out_idx] /= combined_idx + 1 - start
     tail_count = max(width - 1, 0)
     if tail_count == 0 or n_combined == 0:
-        return out, np.empty((0, batch.shape[1]), dtype=np.float64)
-    return out, np.ascontiguousarray(combined[-tail_count:], dtype=np.float64)
+        return out, np.empty((0, batch.shape[1]), dtype=batch.dtype)
+    available = min(tail_count, n_combined)
+    tail = np.empty((available, batch.shape[1]), dtype=batch.dtype)
+    start = n_combined - available
+    if start < n_prior:
+        prior_count = n_prior - start
+        tail[:prior_count] = prior_tail[start:n_prior]
+        if prior_count < available:
+            tail[prior_count:] = batch[: available - prior_count]
+    else:
+        batch_start = start - n_prior
+        tail[:] = batch[batch_start : batch_start + available]
+    return out, np.ascontiguousarray(tail)
 
 
 def _exponential_smooth(
@@ -197,13 +216,18 @@ def _exponential_smooth(
     initial_state: Mapping[str, Any],
 ) -> np.ndarray:
     alpha_value = _unit_interval(alpha, "exponential_alpha")
-    previous = _state_last_output(initial_state, n_measurements=batch.shape[1])
+    previous = _state_last_output(
+        initial_state,
+        n_measurements=batch.shape[1],
+        dtype=batch.dtype,
+    )
     if previous is None:
         previous = batch[0].copy()
-    out = np.empty_like(batch, dtype=np.float64)
+    out = np.empty_like(batch)
     for idx, frame in enumerate(batch):
-        current = alpha_value * frame + (1.0 - alpha_value) * previous
-        out[idx] = current
+        current = out[idx]
+        np.multiply(frame, alpha_value, out=current)
+        current += (1.0 - alpha_value) * previous
         previous = current
     return out
 
@@ -227,14 +251,14 @@ def _apply_hook(
             hook_metadata = dict(raw_metadata)
     else:
         raw_values = raw
-    out = np.asarray(raw_values, dtype=np.float64)
+    out = _as_real_float_array(raw_values)
     if out.shape != expected_shape:
         raise ValueError(
             f"temporal hook output shape {out.shape} does not match {expected_shape}."
         )
-    if not np.isfinite(out).all():
+    if not all_finite_values(out):
         raise FloatingPointError("temporal hook output contains non-finite values.")
-    return np.ascontiguousarray(out, dtype=np.float64), hook_metadata
+    return np.ascontiguousarray(out), hook_metadata
 
 
 def _normalize_temporal_mode(value: str | None) -> str:
@@ -289,37 +313,41 @@ def _state_history_tail(
     state: Mapping[str, Any],
     *,
     n_measurements: int,
+    dtype: np.dtype[Any],
 ) -> np.ndarray:
     raw = state.get("history_tail", ()) if state else ()
-    arr = np.asarray(raw, dtype=np.float64)
+    arr = np.asarray(_as_real_float_array(raw), dtype=dtype)
     if arr.size == 0:
-        return np.empty((0, int(n_measurements)), dtype=np.float64)
+        return np.empty((0, int(n_measurements)), dtype=dtype)
     if arr.ndim == 1:
         arr = arr.reshape(1, -1)
     if arr.ndim != 2 or arr.shape[1] != int(n_measurements):
         raise ValueError("initial_state history_tail has incompatible shape.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError(
             "initial_state history_tail contains non-finite values."
         )
-    return np.ascontiguousarray(arr, dtype=np.float64)
+    return np.ascontiguousarray(arr)
 
 
 def _state_last_output(
     state: Mapping[str, Any],
     *,
     n_measurements: int,
+    dtype: np.dtype[Any],
 ) -> np.ndarray | None:
     if not state or "last_output" not in state:
         return None
-    arr = np.asarray(state["last_output"], dtype=np.float64).reshape(-1)
+    arr = np.asarray(_as_real_float_array(state["last_output"]), dtype=dtype).reshape(
+        -1
+    )
     if arr.size != int(n_measurements):
         raise ValueError("initial_state last_output has incompatible length.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError(
             "initial_state last_output contains non-finite values."
         )
-    return np.ascontiguousarray(arr, dtype=np.float64)
+    return np.ascontiguousarray(arr)
 
 
 def _timestamps(value: Any | None, *, n_frames: int) -> tuple[float, ...] | None:
@@ -328,7 +356,7 @@ def _timestamps(value: Any | None, *, n_frames: int) -> tuple[float, ...] | None
     arr = np.asarray(value, dtype=np.float64).reshape(-1)
     if arr.size != int(n_frames):
         raise ValueError(f"timestamps length {arr.size} does not match {n_frames}.")
-    if not np.isfinite(arr).all():
+    if not all_finite_values(arr):
         raise FloatingPointError("timestamps contain non-finite values.")
     return tuple(float(v) for v in arr)
 

@@ -14,6 +14,7 @@ from pyeidors.inverse.greit import GREITRM, GREIT_RM_HDF5_SCHEMA, load_greit_rm
 
 GREIT_COMMON_CONFIG_WARMUP_SCHEMA = "pyeidors-greit-common-config-warmup-v1"
 GREIT_COMMON_CONFIG_ENV = "PYEIDORS_GREIT_COMMON_CONFIG_DIR"
+_DETERMINISTIC_FIXTURE_RM_SCRATCH_BYTES = 8 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -435,13 +436,38 @@ def _common_metadata(
 
 
 def _deterministic_fixture_rm(cfg: GREITCommonConfig) -> np.ndarray:
-    rows = np.arange(cfg.n_parameters, dtype=np.float64)[:, None] + 1.0
-    cols = np.arange(cfg.n_measurements, dtype=np.float64)[None, :] + 1.0
+    n_parameters = int(cfg.n_parameters)
+    n_measurements = int(cfg.n_measurements)
+    cols = np.arange(n_measurements, dtype=np.float64) + 1.0
+    cols_plus_offset = cols + 3.0
     scale = max(float(np.sqrt(cfg.n_measurements)), 1.0)
-    matrix = (
-        np.sin(rows * (cols + 3.0) * 0.00037) + np.cos((rows + 5.0) * cols * 0.00019)
-    ) / (2.0 * scale)
-    return np.ascontiguousarray(matrix, dtype=np.float64)
+    matrix = np.empty((n_parameters, n_measurements), dtype=np.float64, order="C")
+    rows_per_block = _deterministic_fixture_rm_rows_per_block(n_measurements)
+    scratch = np.empty((rows_per_block, n_measurements), dtype=np.float64, order="C")
+
+    for start in range(0, n_parameters, rows_per_block):
+        stop = min(start + rows_per_block, n_parameters)
+        row_values = np.arange(start, stop, dtype=np.float64) + 1.0
+        block = matrix[start:stop]
+        work = scratch[: stop - start]
+
+        np.multiply.outer(row_values, cols_plus_offset, out=block)
+        block *= 0.00037
+        np.sin(block, out=block)
+
+        np.multiply.outer(row_values + 5.0, cols, out=work)
+        work *= 0.00019
+        np.cos(work, out=work)
+
+        block += work
+        block /= 2.0 * scale
+    return matrix
+
+
+def _deterministic_fixture_rm_rows_per_block(n_measurements: int) -> int:
+    row_bytes = max(1, int(n_measurements)) * np.dtype(np.float64).itemsize
+    rows = int(_DETERMINISTIC_FIXTURE_RM_SCRATCH_BYTES) // row_bytes
+    return max(1, rows)
 
 
 def _validate_common_config_rm_shape(

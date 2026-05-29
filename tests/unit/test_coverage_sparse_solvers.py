@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import inspect
 from unittest import mock
 
 import numpy as np
@@ -45,6 +46,33 @@ class TestSparseProjection:
         result = _sum_group_columns(jac, groups)
         np.testing.assert_array_equal(result[0], [3, 11])
         np.testing.assert_array_equal(result[1], [7, 15])
+
+    def test_v280_get_coarse_matrix_direct_fills_grouped_columns(self, monkeypatch):
+        from pyeidors.inverse.solvers import sparse_projection
+
+        jac = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=float)
+        groups = [np.array([0, 1]), np.array([2, 3])]
+        expected = np.empty((2, 2), dtype=float)
+        expected[:, 0] = jac[:, groups[0]].sum(axis=1)
+        expected[:, 1] = jac[:, groups[1]].sum(axis=1)
+
+        direct = sparse_projection._build_grouped_coarse_matrix(jac, groups)
+        np.testing.assert_allclose(direct, expected)
+
+        def _fail_column_stack(*_args, **_kwargs):
+            raise AssertionError("coarse matrix columns must direct-fill")
+
+        monkeypatch.setattr(sparse_projection.np, "column_stack", _fail_column_stack)
+        cache = {}
+        coarse = sparse_projection.get_coarse_matrix(jac, groups, 2, cache)
+        np.testing.assert_allclose(coarse, expected)
+        assert cache[2] is coarse
+        assert "np.column_stack" not in inspect.getsource(
+            sparse_projection._build_grouped_coarse_matrix
+        )
+        assert "np.column_stack" not in inspect.getsource(
+            sparse_projection.get_coarse_matrix
+        )
 
     def test_init_power_vector_near_zero(self):
         from pyeidors.inverse.solvers.sparse_projection import _init_power_vector

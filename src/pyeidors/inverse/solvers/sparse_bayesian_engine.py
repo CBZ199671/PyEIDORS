@@ -14,12 +14,12 @@ monkey-patch the wrapper methods continue to work unchanged.
 
 from __future__ import annotations
 
-import hashlib
 from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
 
+from ...cache.keys import hash_array_payload
 from ...cache.object_signature import (
     backend_signature_from_forward_model,
     model_signature_from_forward_model,
@@ -172,10 +172,10 @@ class SparseBayesianReconstructor:
             and cache_manager.enabled
             and self.config.cache_jacobian
         ):
-            baseline = np.ascontiguousarray(baseline_values, dtype=np.float64)
+            baseline = np.asarray(baseline_values, dtype=np.float64)
             payload = {
                 "solver": "sparse_bayesian",
-                "baseline_hash": hashlib.sha256(baseline.tobytes()).hexdigest(),
+                "baseline_hash": hash_array_payload(baseline),
                 "n_elements": self.n_elements,
                 "n_measurements": self.n_measurements,
                 "subspace_rank": self.config.subspace_rank,

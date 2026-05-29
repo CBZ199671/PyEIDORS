@@ -6,7 +6,7 @@ dispatch between absolute (``"real"``) and difference EIT
 measurement spaces:
 
 * ``_extract_measured_vector`` — coerce ``EITData`` / ndarray input
-  into a 1-D float64 measurement vector.
+  into a 1-D measurement vector, preserving native complex phasors.
 * ``_configure_measurement_space`` — read ``measured_data`` and
   populate the per-iteration measurement-space state on the
   reconstructor (``_measurement_space_type`` / ``_difference_*_meas``
@@ -37,10 +37,19 @@ from ...data.difference import (
 )
 
 
+def _measurement_vector_dtype(values) -> np.dtype:
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        return np.dtype(np.complex64 if arr.dtype == np.complex64 else np.complex128)
+    return np.dtype(np.float64)
+
+
 def _extract_measured_vector(measured_data) -> np.ndarray:
     if hasattr(measured_data, "meas"):
-        return np.asarray(measured_data.meas, dtype=np.float64).reshape(-1)
-    return np.asarray(measured_data, dtype=np.float64).reshape(-1)
+        values = measured_data.meas
+    else:
+        values = measured_data
+    return np.asarray(values, dtype=_measurement_vector_dtype(values)).reshape(-1)
 
 
 def _configure_measurement_space(reconstructor, measured_data) -> None:
@@ -48,12 +57,17 @@ def _configure_measurement_space(reconstructor, measured_data) -> None:
     reference_meas_raw = getattr(measured_data, "reference_meas", None)
     target_meas_raw = getattr(measured_data, "target_meas", None)
     reference_meas = (
-        np.asarray(reference_meas_raw, dtype=np.float64).reshape(-1)
+        np.asarray(
+            reference_meas_raw,
+            dtype=_measurement_vector_dtype(reference_meas_raw),
+        ).reshape(-1)
         if reference_meas_raw is not None
         else None
     )
     target_meas = (
-        np.asarray(target_meas_raw, dtype=np.float64).reshape(-1)
+        np.asarray(
+            target_meas_raw, dtype=_measurement_vector_dtype(target_meas_raw)
+        ).reshape(-1)
         if target_meas_raw is not None
         else None
     )

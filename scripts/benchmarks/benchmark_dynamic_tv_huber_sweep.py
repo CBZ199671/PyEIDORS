@@ -39,6 +39,29 @@ from scripts.benchmarks.benchmark_dynamic_validation import (  # noqa: E402
 SCHEMA = "pyeidors-dynamic-t65-t66-t67-sweep-v1"
 
 
+def _strictly_increasing(values: np.ndarray, *, chunk_size: int = 1_048_576) -> bool:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size <= 1:
+        return True
+    block_size = max(2, min(int(chunk_size), int(arr.size)))
+    work = np.empty(block_size - 1, dtype=bool)
+    previous = float(arr[0])
+    for start in range(1, int(arr.size), block_size - 1):
+        stop = min(start + block_size - 1, int(arr.size))
+        chunk = arr[start:stop]
+        if chunk.size == 0:
+            continue
+        if float(chunk[0]) <= previous:
+            return False
+        if chunk.size > 1:
+            mask = work[: chunk.size - 1]
+            np.greater(chunk[1:], chunk[:-1], out=mask)
+            if not bool(mask.all()):
+                return False
+        previous = float(chunk[-1])
+    return True
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--n-cells", type=int, default=32)
@@ -524,7 +547,7 @@ def propagation_transition_matrix(
     pos = np.asarray(positions, dtype=np.float64).reshape(-1)
     if pos.size <= 1:
         raise ValueError("positions must contain at least two cells.")
-    if np.any(np.diff(pos) <= 0.0):
+    if not _strictly_increasing(pos):
         raise ValueError("positions must be strictly increasing.")
     vel = float(velocity)
     step = float(dt)

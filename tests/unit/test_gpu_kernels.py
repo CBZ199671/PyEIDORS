@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 
@@ -64,6 +66,25 @@ def test_rm_matmul_cpu_single_and_batch() -> None:
     assert batched.metadata["output_shape"] == (2, 2)
 
 
+def test_v485_rm_matmul_finite_guards_use_bounded_scanner() -> None:
+    checked_functions = (
+        gpu_kernels.rm_matmul,
+        gpu_kernels._as_rm_matrix,
+        gpu_kernels._as_delta_batch,
+    )
+    old_payload_scans = (
+        "np.isfinite(values).all()",
+        "np.isfinite(matrix).all()",
+        "np.isfinite(batch).all()",
+    )
+
+    for func in checked_functions:
+        source = inspect.getsource(func)
+        assert "all_finite_values(" in source
+        for old_payload_scan in old_payload_scans:
+            assert old_payload_scan not in source
+
+
 def test_rm_matmul_auto_falls_back_to_cpu_when_torch_cuda_missing(monkeypatch) -> None:
     monkeypatch.setattr(gpu_kernels, "torch", None)
     rm = np.eye(2)
@@ -118,6 +139,39 @@ def test_prepare_rm_matmul_reuses_cuda_matrix_tensor(monkeypatch) -> None:
     assert first.metadata["rm_tensor_reused"] is True
     assert first.metadata["rm_cache_key"] == "unit-rm"
     assert first.metadata["host_device_transfer"] == "delta_v_to_device+output_to_host"
+
+
+def test_prepare_rm_matmul_can_use_torch_compile(monkeypatch) -> None:
+    class _CompileFakeTorch(_FakeTorch):
+        compile_calls = 0
+        compiled_calls = 0
+
+        @staticmethod
+        def compile(fn, **kwargs):
+            assert kwargs["mode"] == "reduce-overhead"
+            assert kwargs["fullgraph"] is True
+            _CompileFakeTorch.compile_calls += 1
+
+            def _compiled(lhs, rhs):
+                _CompileFakeTorch.compiled_calls += 1
+                return fn(lhs, rhs)
+
+            return _compiled
+
+    monkeypatch.setattr(gpu_kernels, "torch", _CompileFakeTorch)
+    rm = np.array([[1.0, 2.0], [-1.0, 0.5]], dtype=float)
+    batch = np.array([[3.0, 4.0], [1.0, -2.0]], dtype=float)
+
+    handle = prepare_rm_matmul(rm, device="cuda", compile_mode="force")
+    result = rm_matmul(handle, batch, device="cuda", return_metadata=True)
+
+    np.testing.assert_allclose(result.values, batch @ rm.T)
+    assert _CompileFakeTorch.compile_calls == 1
+    assert _CompileFakeTorch.compiled_calls == 1
+    assert result.metadata["rm_matmul_compiled"] is True
+    assert result.metadata["rm_matmul_compile_mode"] == "force"
+    assert result.metadata["rm_matmul_compile_status"] == "compiled"
+    assert result.metadata["online_hot_path"] == "rm_torch_compile_matmul"
 
 
 def test_prepare_rm_matmul_records_cpu_dtype_policy() -> None:

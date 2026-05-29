@@ -18,6 +18,7 @@ from .eit_digit_metrics import (
     reconstruct_linearized_sigma,
 )
 from ._sweep_core import ReconMetricRow, SweepRow, run_sweep
+from pyeidors.utils.numeric_ops import all_finite_values
 
 
 DigitMethod = Literal["truncate", "round"]
@@ -55,7 +56,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.n
         raise ValueError(f"{name} must be a 1D vector")
     if arr.size == 0:
         raise ValueError(f"{name} must not be empty")
-    if not np.all(np.isfinite(arr)):
+    if not all_finite_values(arr):
         raise ValueError(f"{name} must be finite")
     return arr
 

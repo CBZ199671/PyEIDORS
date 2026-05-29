@@ -3,6 +3,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import hashlib
+import json
+import os
+from pathlib import Path
+import sys
 
 from .policy import FEATURE_MODE_AUTO, normalize_feature_mode
 
@@ -239,27 +244,176 @@ def _petsc_runtime_cache_key() -> tuple[object, ...]:
     )
 
 
+def _petsc_cuda_probe_disk_cache_enabled() -> bool:
+    raw = os.getenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE", "").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _petsc_cuda_probe_disk_cache_dir() -> Path:
+    override = os.getenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR", "").strip()
+    if override:
+        return Path(override).expanduser()
+    xdg_cache = os.getenv("XDG_CACHE_HOME", "").strip()
+    root = Path(xdg_cache).expanduser() if xdg_cache else Path.home() / ".cache"
+    return root / "pyeidors" / "capabilities"
+
+
+def _petsc_runtime_disk_cache_payload() -> dict[str, object]:
+    PETSc = _load_petsc_runtime()
+    if PETSc is None:
+        return {"petsc": None}
+    runtime_type = type(PETSc)
+    runtime_name = str(
+        getattr(
+            PETSc,
+            "__name__",
+            getattr(runtime_type, "__qualname__", runtime_type.__name__),
+        )
+    )
+    runtime_module = str(
+        getattr(PETSc, "__module__", getattr(runtime_type, "__module__", ""))
+    )
+    version = None
+    try:
+        version_fn = getattr(getattr(PETSc, "Sys", None), "getVersion", None)
+        if callable(version_fn):
+            version = version_fn()
+    except Exception:
+        version = None
+    return {
+        "schema": "petsc_cuda_runtime_probe_cache_v1",
+        "python_executable": sys.executable,
+        "python_version": sys.version,
+        "petsc_module": getattr(sys.modules.get("petsc4py"), "__file__", ""),
+        "petsc_runtime_module": runtime_module,
+        "petsc_runtime_name": runtime_name,
+        "petsc_version": repr(version),
+        "petsc_scalar_type": str(getattr(PETSc, "ScalarType", "")),
+        "mat_aijcusparse": _enum_name(
+            getattr(getattr(PETSc, "Mat", None), "Type", None), "AIJCUSPARSE"
+        ),
+        "vec_cuda": _enum_name(
+            getattr(getattr(PETSc, "Vec", None), "Type", None), "CUDA"
+        ),
+        "mat_densecuda": _enum_name(
+            getattr(getattr(PETSc, "Mat", None), "Type", None), "DENSECUDA"
+        ),
+        "has_mat_solve": bool(hasattr(getattr(PETSc, "KSP", None), "matSolve")),
+        "has_gamg": bool(_has_petsc_gamg()),
+        "has_hypre": bool(_has_petsc_hypre()),
+        "has_amgx": bool(_has_petsc_amgx()),
+    }
+
+
+def _petsc_runtime_disk_cache_key() -> str:
+    encoded = json.dumps(
+        _petsc_runtime_disk_cache_payload(),
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _read_petsc_cuda_probe_disk_cache(cache_key: str) -> dict[str, object] | None:
+    if not _petsc_cuda_probe_disk_cache_enabled():
+        return None
+    path = _petsc_cuda_probe_disk_cache_dir() / f"petsc_cuda_{cache_key}.json"
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if payload.get("schema") != "petsc_cuda_runtime_probe_cache_v1":
+        return None
+    if payload.get("key") != cache_key:
+        return None
+    result = payload.get("result")
+    if not isinstance(result, dict):
+        return None
+    cached = dict(result)
+    cached["probe_cache"] = {
+        "enabled": True,
+        "hit": True,
+        "layer": "disk",
+        "key": cache_key,
+        "path": str(path),
+    }
+    return cached
+
+
+def _write_petsc_cuda_probe_disk_cache(
+    cache_key: str,
+    result: dict[str, object],
+) -> dict[str, object]:
+    if not _petsc_cuda_probe_disk_cache_enabled():
+        result["probe_cache"] = {"enabled": False, "hit": False}
+        return result
+    cache_dir = _petsc_cuda_probe_disk_cache_dir()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"petsc_cuda_{cache_key}.json"
+    stored = {key: value for key, value in result.items() if key != "probe_cache"}
+    payload = {
+        "schema": "petsc_cuda_runtime_probe_cache_v1",
+        "key": cache_key,
+        "runtime": _petsc_runtime_disk_cache_payload(),
+        "result": stored,
+    }
+    tmp_path = path.with_suffix(".json.tmp")
+    try:
+        tmp_path.write_text(
+            json.dumps(payload, sort_keys=True, default=str),
+            encoding="utf-8",
+        )
+        tmp_path.replace(path)
+    except OSError:
+        result["probe_cache"] = {
+            "enabled": True,
+            "hit": False,
+            "stored": False,
+            "layer": "disk",
+            "key": cache_key,
+            "path": str(path),
+        }
+        return result
+    result["probe_cache"] = {
+        "enabled": True,
+        "hit": False,
+        "stored": True,
+        "layer": "disk",
+        "key": cache_key,
+        "path": str(path),
+    }
+    return result
+
+
 @lru_cache(maxsize=8)
 def _probe_petsc_cuda_runtime_cached(
     runtime_key: tuple[object, ...],
 ) -> dict[str, object]:
     del runtime_key
+    disk_key = _petsc_runtime_disk_cache_key()
+    cached = _read_petsc_cuda_probe_disk_cache(disk_key)
+    if cached is not None:
+        return cached
     PETSc = _load_petsc_runtime()
     if PETSc is None:
-        return {
-            "petsc_available": False,
-            "petsc_cuda": False,
-            "petsc_cuda_mat": False,
-            "petsc_cuda_vec": False,
-            "petsc_cuda_dense": False,
-            "petsc_hypre": False,
-            "petsc_amgx": False,
-            "petsc_amgx_cuda_candidate": False,
-            "mat_type_name": None,
-            "vec_type_name": None,
-            "dense_mat_type_name": None,
-            "errors": {"petsc": "petsc_unavailable"},
-        }
+        return _write_petsc_cuda_probe_disk_cache(
+            disk_key,
+            {
+                "petsc_available": False,
+                "petsc_cuda": False,
+                "petsc_cuda_mat": False,
+                "petsc_cuda_vec": False,
+                "petsc_cuda_dense": False,
+                "petsc_hypre": False,
+                "petsc_amgx": False,
+                "petsc_amgx_cuda_candidate": False,
+                "mat_type_name": None,
+                "vec_type_name": None,
+                "dense_mat_type_name": None,
+                "errors": {"petsc": "petsc_unavailable"},
+            },
+        )
 
     mat_type = _enum_name(
         getattr(getattr(PETSc, "Mat", None), "Type", None), "AIJCUSPARSE"
@@ -281,20 +435,23 @@ def _probe_petsc_cuda_runtime_cached(
     if dense_error:
         errors["dense"] = dense_error
 
-    return {
-        "petsc_available": True,
-        "petsc_cuda": bool(mat_ok and vec_ok),
-        "petsc_cuda_mat": bool(mat_ok),
-        "petsc_cuda_vec": bool(vec_ok),
-        "petsc_cuda_dense": bool(dense_ok),
-        "petsc_hypre": bool(_has_petsc_hypre()),
-        "petsc_amgx": bool(_has_petsc_amgx()),
-        "petsc_amgx_cuda_candidate": bool(_has_petsc_amgx() and mat_ok and vec_ok),
-        "mat_type_name": mat_type,
-        "vec_type_name": vec_type,
-        "dense_mat_type_name": dense_type,
-        "errors": errors,
-    }
+    return _write_petsc_cuda_probe_disk_cache(
+        disk_key,
+        {
+            "petsc_available": True,
+            "petsc_cuda": bool(mat_ok and vec_ok),
+            "petsc_cuda_mat": bool(mat_ok),
+            "petsc_cuda_vec": bool(vec_ok),
+            "petsc_cuda_dense": bool(dense_ok),
+            "petsc_hypre": bool(_has_petsc_hypre()),
+            "petsc_amgx": bool(_has_petsc_amgx()),
+            "petsc_amgx_cuda_candidate": bool(_has_petsc_amgx() and mat_ok and vec_ok),
+            "mat_type_name": mat_type,
+            "vec_type_name": vec_type,
+            "dense_mat_type_name": dense_type,
+            "errors": errors,
+        },
+    )
 
 
 def probe_petsc_cuda_runtime() -> dict[str, object]:

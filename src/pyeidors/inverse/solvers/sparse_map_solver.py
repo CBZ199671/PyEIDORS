@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 
 import numpy as np
 
-from ...utils.numeric_ops import safe_dot
+from ...utils.numeric_ops import add_scaled_diagonal_in_place, safe_dot
 
 
 def _resolve_projection(reconstructor, jacobian: np.ndarray):
@@ -65,7 +65,7 @@ def _linear_warm_start_subspace(
     )
     warm_start = np.zeros_like(numerator)
     mask = s_k > 1e-12
-    warm_start[mask] = numerator[mask] / s_k[mask]
+    np.divide(numerator, s_k, out=warm_start, where=mask)
     return warm_start
 
 
@@ -76,8 +76,8 @@ def _linear_warm_start_fullspace(
     U, s, Vt = np.linalg.svd(linear_matrix, full_matrices=False)
     coeff = safe_dot(U.T, data_vector, "solve_sparse_map.fullspace_coeff")
     mask = s > 1e-12
-    coeff[mask] /= s[mask]
-    coeff[~mask] = 0.0
+    np.divide(coeff, s, out=coeff, where=mask)
+    np.multiply(coeff, mask, out=coeff)
     return safe_dot(Vt.T, coeff, "solve_sparse_map.fullspace_warm_start")
 
 
@@ -276,7 +276,10 @@ def multilevel_correction(
                 continue
 
             hessian = safe_dot(A_c.T, A_c, "multilevel_correction.hessian")
-            H = inv_noise_var * hessian + lambda_reg * np.diag(group_sizes)
+            h_dtype = np.result_type(hessian.dtype, group_sizes.dtype, np.float64)
+            H = np.array(hessian, dtype=h_dtype, copy=True, order="C")
+            H *= inv_noise_var
+            add_scaled_diagonal_in_place(H, group_sizes, lambda_reg)
             rhs = -coarse_grad
             try:
                 delta = np.linalg.solve(H, rhs)
@@ -362,7 +365,11 @@ def block_refinement(
                 block_hessian = safe_dot(
                     J_block.T, J_block, "block_refinement.block_hessian"
                 )
-                M = inv_noise_var * block_hessian + lambda_reg * np.eye(stop - start)
+                m_dtype = np.result_type(block_hessian.dtype, np.float64)
+                M = np.array(block_hessian, dtype=m_dtype, copy=True, order="C")
+                M *= inv_noise_var
+                identity_diag = np.broadcast_to(1.0, stop - start)
+                add_scaled_diagonal_in_place(M, identity_diag, lambda_reg)
                 block_residual = safe_dot(
                     J_block.T, residual, "block_refinement.block_residual"
                 )

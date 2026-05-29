@@ -60,6 +60,7 @@ from pyeidors.perf.policy import (
     MESH_FAMILY_VALUES,
     parse_block_size_candidates,
 )
+from pyeidors.utils.numeric_ops import all_finite_values, squared_distances_to_point
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 if str(PROJECT_ROOT) not in sys.path:
@@ -283,9 +284,9 @@ def _build_phantom_sigma(system: EITSystem, *, background: float) -> np.ndarray:
     sigma_fn.x.array[:] = float(background)
     coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()
     center = np.array([0.35 * system.mesh.radius, 0.0, 0.0], dtype=float)
-    dist = np.linalg.norm(coords[:, :3] - center[None, :], axis=1)
+    dist2 = squared_distances_to_point(coords, center, ndim=3)
     sigma = function_get_array(sigma_fn).copy()
-    sigma[dist <= 0.22 * system.mesh.radius] = float(background) * 1.8
+    sigma[dist2 <= (0.22 * system.mesh.radius) ** 2] = float(background) * 1.8
     return sigma
 
 
@@ -594,9 +595,7 @@ def main() -> None:
                 timing=forward_timing,
             )
             forward_artifact["output_shape"] = list(electrode_voltages.shape)
-            forward_artifact["output_finite"] = bool(
-                np.all(np.isfinite(electrode_voltages))
-            )
+            forward_artifact["output_finite"] = all_finite_values(electrode_voltages)
             forward_artifact["returned_solution_count"] = int(len(u_all))
             stages.extend(
                 [forward_mesh_stage, forward_setup_stage, forward_solve_stage]

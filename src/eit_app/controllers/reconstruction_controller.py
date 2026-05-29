@@ -16,6 +16,8 @@ import logging
 import math
 from functools import lru_cache
 import os
+import subprocess
+import tempfile
 import threading
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -26,18 +28,33 @@ from typing import Any, Callable
 import numpy as np
 from PySide6.QtCore import QObject, QThread, Signal, Slot
 
-from eit_app.models.forward_model_config import drive_mode_for_mesh_dimension
+from eit_app.models.forward_model_config import (
+    drive_mode_for_mesh_dimension,
+    parse_complex_scalar,
+    parse_complex_scalar_list,
+)
 from eit_app.models.frame_model import FrameData
+from pyeidors.cache.keys import update_digest_with_array_payload
+from pyeidors.utils.numeric_ops import (
+    all_finite_values,
+    any_not_equal_values,
+    has_nonzero_imaginary,
+    min_alpha_for_value_floor,
+)
 
 log = logging.getLogger(__name__)
 
 _SYSTEM_CACHE_LOCK = threading.Lock()
 _SYSTEM_CACHE_MAX_ITEMS = 4
+_SYSTEM_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _SYSTEM_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+_SYSTEM_CACHE_SIZES: dict[tuple[Any, ...], int] = {}
 
 _FAST_CONTEXT_CACHE_LOCK = threading.Lock()
 _FAST_CONTEXT_CACHE_MAX_ITEMS = 4
+_FAST_CONTEXT_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _FAST_CONTEXT_CACHE: OrderedDict[tuple[Any, ...], Any] = OrderedDict()
+_FAST_CONTEXT_CACHE_SIZES: dict[tuple[Any, ...], int] = {}
 LINEARIZED_SINGLE_STEP_AUTO_MAX_MEASUREMENTS = 512
 _SINGLE_STEP_SIGNATURE_SCHEMA_VERSION = "single_step_signature_schema_v1"
 _SINGLE_STEP_JACOBIAN_CALCULATOR = "EidorsJacobianAdapter"
@@ -52,11 +69,13 @@ _ONE_STEP_RM_ALGORITHM_VERSION = "one_step_rm_auto_build_dense_jacobian_v7"
 _ONE_STEP_RM_CONTENT_CONTRACT = "one_step_rm_hdf5_dense_fit_jacobian_contract_v1"
 _RM_ARTIFACT_CACHE_LOCK = threading.Lock()
 _RM_ARTIFACT_CACHE_MAX_ITEMS = 4
+_RM_ARTIFACT_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _RM_ARTIFACT_CACHE: OrderedDict[tuple[Any, ...], dict[str, Any]] = OrderedDict()
 _RM_FIT_JACOBIAN_CACHE_LOCK = threading.Lock()
 _RM_FIT_JACOBIAN_CACHE_MAX_ITEMS = 2
 _RM_FIT_JACOBIAN_CACHE_MAX_BYTES = 512 * 1024 * 1024
 _RM_FIT_JACOBIAN_CACHE: OrderedDict[str, np.ndarray] = OrderedDict()
+_RM_FIT_JACOBIAN_CACHE_SIZES: dict[str, int] = {}
 _RM_ARTIFACT_META_KEYS = (
     "rm_artifact_path",
     "dual_model_rm_path",
@@ -80,6 +99,10 @@ _ONE_STEP_RM_ROUTE_REGULARIZATION = {
 }
 _AUTO_BUILD_RM_ROUTES = frozenset(_ONE_STEP_RM_ROUTE_REGULARIZATION)
 _GREIT_REGISTRY_ROUTES = frozenset({"greit", "greit_rm", "greit2d_rm", "greit3d_rm"})
+_EIT_SYSTEM_DIFFERENCE_PRESETS = frozenset(
+    {"eidors_demo3d_tv", "eidors_one_step_noser", "sphere_multistep_noser"}
+)
+_DEFAULT_EIT_SYSTEM_DIFFERENCE_PRESET = "eidors_one_step_noser"
 
 
 def build_difference_vector(*args, **kwargs):
@@ -177,8 +200,8 @@ def _validate_rm_artifact_measurement_dimension(
 ) -> None:
     if expected_n_measurements is None or int(expected_n_measurements) <= 0:
         return
-    rm = np.asarray(artifact["rm"])
-    artifact_columns = int(rm.shape[1])
+    rm_shape = _rm_artifact_matrix_shape(artifact)
+    artifact_columns = int(rm_shape[1])
     request_measurements = int(expected_n_measurements)
     if artifact_columns != request_measurements:
         raise ValueError(
@@ -206,6 +229,22 @@ def _normalize_rm_dtype_name(value: Any, default: str = "float64") -> str:
     return "float64"
 
 
+def _display_node_coords_array(values: Any) -> np.ndarray:
+    coords = np.asarray(values)
+    if np.iscomplexobj(coords):
+        coords = np.real(coords)
+    if np.issubdtype(np.asarray(coords).dtype, np.floating):
+        return np.asarray(coords)
+    return np.asarray(coords, dtype=np.float32)
+
+
+def _display_cell_connectivity_array(values: Any) -> np.ndarray:
+    cells = np.asarray(values)
+    if np.issubdtype(cells.dtype, np.integer) and cells.dtype == np.dtype(np.int32):
+        return cells
+    return np.asarray(cells, dtype=np.int32)
+
+
 def _rm_dtype_name_from_meta(meta: dict[str, Any]) -> str:
     for key in (
         "rm_dtype",
@@ -218,6 +257,367 @@ def _rm_dtype_name_from_meta(meta: dict[str, Any]) -> str:
         if value not in (None, ""):
             return _normalize_rm_dtype_name(value)
     return "float64"
+
+
+def _parse_bytes_limit(value: Any, *, default: int) -> int:
+    if value is None or value == "" or isinstance(value, bool):
+        return int(default)
+    if isinstance(value, (int, float)):
+        return int(max(0.0, float(value)))
+    text = str(value).strip().lower()
+    if not text:
+        return int(default)
+    units = {
+        "": 1,
+        "b": 1,
+        "k": 1024,
+        "kb": 1024,
+        "kib": 1024,
+        "m": 1024**2,
+        "mb": 1024**2,
+        "mib": 1024**2,
+        "g": 1024**3,
+        "gb": 1024**3,
+        "gib": 1024**3,
+    }
+    number = text
+    unit = ""
+    for suffix in sorted(units, key=len, reverse=True):
+        if suffix and text.endswith(suffix):
+            number = text[: -len(suffix)].strip()
+            unit = suffix
+            break
+    try:
+        return int(max(0.0, float(number)) * units[unit])
+    except (KeyError, ValueError):
+        return int(default)
+
+
+def _runtime_bytes_limit(
+    meta: dict[str, Any],
+    *,
+    keys: tuple[str, ...],
+    env_key: str,
+    default: int,
+) -> int:
+    for key in keys:
+        if key in meta:
+            return _parse_bytes_limit(meta.get(key), default=default)
+    return _parse_bytes_limit(os.environ.get(env_key), default=default)
+
+
+def _rm_fit_jacobian_max_bytes(meta: dict[str, Any]) -> int:
+    return _runtime_bytes_limit(
+        meta,
+        keys=("rm_fit_jacobian_max_bytes", "rm_fit_jacobian_cache_max_bytes"),
+        env_key="EIT_APP_RM_FIT_JACOBIAN_MAX_BYTES",
+        default=_RM_FIT_JACOBIAN_CACHE_MAX_BYTES,
+    )
+
+
+def _rm_artifact_process_cache_max_bytes(meta: dict[str, Any]) -> int:
+    return _runtime_bytes_limit(
+        meta,
+        keys=("rm_artifact_process_cache_max_bytes", "rm_artifact_cache_max_bytes"),
+        env_key="EIT_APP_RM_ARTIFACT_PROCESS_CACHE_MAX_BYTES",
+        default=_RM_ARTIFACT_CACHE_MAX_BYTES,
+    )
+
+
+def _rm_device_resident_max_bytes(meta: dict[str, Any]) -> int:
+    return _runtime_bytes_limit(
+        meta,
+        keys=(
+            "rm_device_resident_max_bytes",
+            "rm_cuda_resident_max_bytes",
+            "rm_gpu_resident_max_bytes",
+        ),
+        env_key="EIT_APP_RM_DEVICE_RESIDENT_MAX_BYTES",
+        default=_RM_ARTIFACT_CACHE_MAX_BYTES,
+    )
+
+
+def _reconstruction_system_cache_max_bytes(meta: dict[str, Any] | None = None) -> int:
+    return _runtime_bytes_limit(
+        meta or {},
+        keys=(
+            "reconstruction_system_cache_max_bytes",
+            "system_cache_max_bytes",
+        ),
+        env_key="EIT_APP_RECONSTRUCTION_SYSTEM_CACHE_MAX_BYTES",
+        default=_SYSTEM_CACHE_MAX_BYTES,
+    )
+
+
+def _single_step_context_cache_max_bytes(meta: dict[str, Any] | None = None) -> int:
+    return _runtime_bytes_limit(
+        meta or {},
+        keys=(
+            "single_step_context_cache_max_bytes",
+            "fast_context_cache_max_bytes",
+            "reconstruction_fast_context_cache_max_bytes",
+        ),
+        env_key="EIT_APP_SINGLE_STEP_CONTEXT_CACHE_MAX_BYTES",
+        default=_FAST_CONTEXT_CACHE_MAX_BYTES,
+    )
+
+
+def _array_like_nbytes(value: Any) -> int | None:
+    nbytes = getattr(value, "nbytes", None)
+    if nbytes is not None:
+        try:
+            return int(nbytes)
+        except (TypeError, ValueError):
+            return None
+    shape = getattr(value, "shape", None)
+    dtype = getattr(value, "dtype", None)
+    if shape is None or dtype is None:
+        return None
+    try:
+        count = 1
+        for dim in tuple(shape):
+            count *= int(dim)
+        return int(count * np.dtype(dtype).itemsize)
+    except (TypeError, ValueError):
+        return None
+
+
+def _array_like_shape(value: Any) -> tuple[int, ...] | None:
+    shape = getattr(value, "shape", None)
+    if shape is None:
+        return None
+    try:
+        return tuple(int(v) for v in tuple(shape))
+    except (TypeError, ValueError):
+        return None
+
+
+def _array_payload_nbytes(value: Any, seen: set[int] | None = None) -> int:
+    """Estimate resident bytes for array-like payloads without deep object walks."""
+
+    if value is None:
+        return 0
+    if seen is None:
+        seen = set()
+    value_id = id(value)
+    if value_id in seen:
+        return 0
+    seen.add(value_id)
+    nbytes = _array_like_nbytes(value)
+    if nbytes is not None:
+        return int(max(0, nbytes))
+    if isinstance(value, dict):
+        return sum(_array_payload_nbytes(v, seen) for v in value.values())
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return sum(_array_payload_nbytes(v, seen) for v in value)
+
+    total = 0
+    for attr in ("data", "indices", "indptr"):
+        part = getattr(value, attr, None)
+        if part is not None and part is not value:
+            total += _array_payload_nbytes(part, seen)
+
+    for attr in (
+        "grad_u_all",
+        "adjoint_gradients",
+        "_adjoint_blocks",
+        "cell_areas",
+        "sigma_values",
+        "u_all",
+        "meas_matrices",
+        "projection_weights",
+        "reg_diag",
+        "inv_reg_diag",
+        "precond_diag",
+        "lu",
+        "piv",
+    ):
+        part = getattr(value, attr, None)
+        if part is not None:
+            total += _array_payload_nbytes(part, seen)
+    return int(total)
+
+
+def _mesh_payload_nbytes(mesh: Any, seen: set[int] | None = None) -> int:
+    if mesh is None:
+        return 0
+    if seen is None:
+        seen = set()
+    mesh_id = id(mesh)
+    if mesh_id in seen:
+        return 0
+    seen.add(mesh_id)
+
+    total = 0
+    coordinates = getattr(mesh, "coordinates", None)
+    if callable(coordinates):
+        with contextlib.suppress(Exception):
+            total += _array_payload_nbytes(coordinates(), seen)
+    cells = getattr(mesh, "cells", None)
+    if callable(cells):
+        with contextlib.suppress(Exception):
+            total += _array_payload_nbytes(cells(), seen)
+
+    geometry = getattr(mesh, "geometry", None)
+    total += _array_payload_nbytes(getattr(geometry, "x", None), seen)
+    topology = getattr(mesh, "topology", None)
+    total += _array_payload_nbytes(getattr(topology, "connectivity", None), seen)
+
+    for attr in (
+        "cell_tags",
+        "facet_tags",
+        "electrode_vertices",
+        "_electrode_vertices",
+    ):
+        total += _array_payload_nbytes(getattr(mesh, attr, None), seen)
+    return int(total)
+
+
+def _pattern_manager_payload_nbytes(pattern_manager: Any, seen: set[int]) -> int:
+    total = 0
+    for attr in (
+        "stim_matrix",
+        "stim_patterns",
+        "meas_matrix",
+        "meas_matrices",
+        "n_meas_per_stim",
+        "inj_electrodes",
+        "inj_weights",
+        "_electrode_lengths_m",
+    ):
+        total += _array_payload_nbytes(getattr(pattern_manager, attr, None), seen)
+    return int(total)
+
+
+def _forward_model_payload_nbytes(fwd_model: Any, seen: set[int] | None = None) -> int:
+    if fwd_model is None:
+        return 0
+    if seen is None:
+        seen = set()
+    model_id = id(fwd_model)
+    if model_id in seen:
+        return 0
+    seen.add(model_id)
+
+    total = 0
+    total += _mesh_payload_nbytes(getattr(fwd_model, "mesh", None), seen)
+    total += _mesh_payload_nbytes(getattr(fwd_model, "eit_mesh", None), seen)
+    total += _pattern_manager_payload_nbytes(
+        getattr(fwd_model, "pattern_manager", None), seen
+    )
+    for attr in (
+        "z",
+        "electrode_lengths_m",
+        "electrode_areas_m2",
+        "electrode_boundary_measures",
+        "cell_volumes",
+        "cell_areas",
+    ):
+        total += _array_payload_nbytes(getattr(fwd_model, attr, None), seen)
+    return int(total)
+
+
+def _reconstruction_system_cache_entry_bytes(system: Any) -> int:
+    seen: set[int] = set()
+    total = 0
+    total += _mesh_payload_nbytes(getattr(system, "mesh", None), seen)
+    total += _forward_model_payload_nbytes(getattr(system, "fwd_model", None), seen)
+    for attr in ("reconstructor", "absolute_reconstructor", "difference_reconstructor"):
+        total += _array_payload_nbytes(getattr(system, attr, None), seen)
+    return int(total)
+
+
+def _fast_context_cache_entry_bytes(ctx: Any) -> int:
+    seen: set[int] = set()
+    if not isinstance(ctx, dict):
+        return _array_payload_nbytes(ctx, seen)
+    light_ctx = {
+        key: value
+        for key, value in ctx.items()
+        if key not in {"mesh", "fwd_model", "img_bg"}
+    }
+    total = _array_payload_nbytes(light_ctx, seen)
+    total += _mesh_payload_nbytes(ctx.get("mesh"), seen)
+    total += _forward_model_payload_nbytes(ctx.get("fwd_model"), seen)
+    return int(total)
+
+
+def _ordered_cache_total_bytes(
+    cache: OrderedDict[Any, Any],
+    sizes: dict[Any, int],
+) -> int:
+    return sum(int(max(0, sizes.get(key, 0))) for key in cache)
+
+
+def _put_bounded_ordered_cache(
+    cache: OrderedDict[Any, Any],
+    sizes: dict[Any, int],
+    key: Any,
+    value: Any,
+    *,
+    entry_bytes: int,
+    max_items: int,
+    max_bytes: int,
+) -> bool:
+    cache.pop(key, None)
+    sizes.pop(key, None)
+    entry_bytes = int(max(0, entry_bytes))
+    max_bytes = int(max(0, max_bytes))
+    if max_bytes <= 0 or entry_bytes > max_bytes:
+        return False
+    cache[key] = value
+    cache.move_to_end(key)
+    sizes[key] = entry_bytes
+    while len(cache) > int(max_items):
+        old_key, _ = cache.popitem(last=False)
+        sizes.pop(old_key, None)
+    while _ordered_cache_total_bytes(cache, sizes) > max_bytes:
+        if not cache:
+            break
+        oldest_key = next(iter(cache))
+        if oldest_key == key and len(cache) == 1:
+            break
+        old_key, _ = cache.popitem(last=False)
+        sizes.pop(old_key, None)
+    return key in cache
+
+
+def _rm_artifact_matrix_shape(artifact: dict[str, Any]) -> tuple[int, int]:
+    for key in ("rm", "rm_lazy_dataset"):
+        value = artifact.get(key)
+        if value is None:
+            continue
+        shape = _array_like_shape(value)
+        if shape is not None:
+            if len(shape) != 2 or 0 in shape:
+                raise ValueError(
+                    f"RM artifact matrix must be non-empty 2D, got {shape}."
+                )
+            return (int(shape[0]), int(shape[1]))
+    raw_shape = _parse_int_shape((artifact.get("metadata") or {}).get("rm_shape"))
+    if len(raw_shape) == 2 and 0 not in raw_shape:
+        return (int(raw_shape[0]), int(raw_shape[1]))
+    raise ValueError("RM artifact is missing matrix shape metadata.")
+
+
+def _rm_artifact_matrix_nbytes(artifact: dict[str, Any]) -> int:
+    for key in ("rm", "rm_lazy_dataset"):
+        value = artifact.get(key)
+        if value is None:
+            continue
+        nbytes = _array_like_nbytes(value)
+        if nbytes is not None:
+            return int(nbytes)
+    rows, cols = _rm_artifact_matrix_shape(artifact)
+    dtype = np.dtype(artifact.get("rm_dtype", "float64"))
+    return int(rows * cols * dtype.itemsize)
+
+
+@dataclass(frozen=True)
+class _RMFitJacobianReadResult:
+    array: np.ndarray | None
+    status: str
+    nbytes: int | None = None
 
 
 def _rm_fit_jacobian_cache_key(path: Path, signature: Any) -> str:
@@ -241,13 +641,26 @@ def _fit_jacobian_array(
         return None
     if arr.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
         arr = arr.astype(np.float64, copy=False)
-    if arr.ndim != 2 or 0 in arr.shape or not np.isfinite(arr).all():
+    if arr.ndim != 2 or 0 in arr.shape or not all_finite_values(arr):
         return None
     if expected_shape is not None and tuple(int(v) for v in arr.shape) != tuple(
         int(v) for v in expected_shape
     ):
         return None
     return np.ascontiguousarray(arr)
+
+
+def _real_sigma_update_array(value: Any) -> np.ndarray:
+    arr = np.asarray(value)
+    if np.iscomplexobj(arr):
+        arr = np.real(arr)
+    dtype = (
+        np.float32
+        if np.issubdtype(np.asarray(arr).dtype, np.floating)
+        and np.asarray(arr).dtype.itemsize <= 4
+        else np.float64
+    )
+    return np.ascontiguousarray(np.asarray(arr, dtype=dtype).reshape(-1))
 
 
 def _put_rm_fit_jacobian_cache(key: str, jacobian: np.ndarray) -> str:
@@ -257,11 +670,16 @@ def _put_rm_fit_jacobian_cache(key: str, jacobian: np.ndarray) -> str:
     if int(arr.nbytes) > _RM_FIT_JACOBIAN_CACHE_MAX_BYTES:
         return "too_large"
     with _RM_FIT_JACOBIAN_CACHE_LOCK:
-        _RM_FIT_JACOBIAN_CACHE[key] = arr
-        _RM_FIT_JACOBIAN_CACHE.move_to_end(key)
-        while len(_RM_FIT_JACOBIAN_CACHE) > _RM_FIT_JACOBIAN_CACHE_MAX_ITEMS:
-            _RM_FIT_JACOBIAN_CACHE.popitem(last=False)
-    return "stored"
+        stored = _put_bounded_ordered_cache(
+            _RM_FIT_JACOBIAN_CACHE,
+            _RM_FIT_JACOBIAN_CACHE_SIZES,
+            key,
+            arr,
+            entry_bytes=int(arr.nbytes),
+            max_items=_RM_FIT_JACOBIAN_CACHE_MAX_ITEMS,
+            max_bytes=_RM_FIT_JACOBIAN_CACHE_MAX_BYTES,
+        )
+    return "stored" if stored else "too_large"
 
 
 def _get_rm_fit_jacobian_cache(
@@ -276,6 +694,7 @@ def _get_rm_fit_jacobian_cache(
         arr = _fit_jacobian_array(cached, expected_shape=expected_shape)
         if arr is None:
             _RM_FIT_JACOBIAN_CACHE.pop(key, None)
+            _RM_FIT_JACOBIAN_CACHE_SIZES.pop(key, None)
             return None
         _RM_FIT_JACOBIAN_CACHE.move_to_end(key)
         return arr
@@ -286,8 +705,21 @@ def _read_rm_artifact_fit_jacobian(
     *,
     expected_shape: tuple[int, int] | None = None,
 ) -> np.ndarray | None:
+    return _read_rm_artifact_fit_jacobian_result(
+        path,
+        expected_shape=expected_shape,
+        max_bytes=_RM_FIT_JACOBIAN_CACHE_MAX_BYTES,
+    ).array
+
+
+def _read_rm_artifact_fit_jacobian_result(
+    path: Path,
+    *,
+    expected_shape: tuple[int, int] | None = None,
+    max_bytes: int,
+) -> _RMFitJacobianReadResult:
     if path.suffix.lower() not in {".h5", ".hdf5"}:
-        return None
+        return _RMFitJacobianReadResult(None, "unsupported_format")
     try:
         from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
 
@@ -300,11 +732,59 @@ def _read_rm_artifact_fit_jacobian(
         if raw is None:
             raw = artifact.arrays.get("fit_jacobian")
         if raw is None:
-            return None
-        return _fit_jacobian_array(raw, expected_shape=expected_shape)
+            metadata = dict(artifact.metadata or {})
+            if _fit_jacobian_metadata_declares_too_large(metadata):
+                return _RMFitJacobianReadResult(
+                    None,
+                    "too_large",
+                    _fit_jacobian_nbytes_from_metadata(metadata),
+                )
+            return _RMFitJacobianReadResult(None, "missing")
+        raw_shape = _array_like_shape(raw)
+        if expected_shape is not None and raw_shape is not None:
+            if tuple(raw_shape) != tuple(int(v) for v in expected_shape):
+                return _RMFitJacobianReadResult(
+                    None,
+                    "shape_mismatch",
+                    _array_like_nbytes(raw),
+                )
+        raw_nbytes = _array_like_nbytes(raw)
+        if raw_nbytes is not None and raw_nbytes > int(max(0, max_bytes)):
+            return _RMFitJacobianReadResult(None, "too_large", raw_nbytes)
+        arr = _fit_jacobian_array(raw, expected_shape=expected_shape)
+        if arr is None:
+            return _RMFitJacobianReadResult(None, "invalid", raw_nbytes)
+        return _RMFitJacobianReadResult(arr, "hit", int(arr.nbytes))
     except Exception as exc:
         log.debug("Could not restore RM fit Jacobian from %s: %s", path, exc)
-        return None
+        return _RMFitJacobianReadResult(None, "error")
+
+
+def _fit_jacobian_metadata_declares_too_large(metadata: dict[str, Any]) -> bool:
+    persisted = metadata.get("fit_jacobian_persisted")
+    if isinstance(persisted, bool):
+        persisted_false = not persisted
+    else:
+        persisted_false = str(persisted).strip().lower() in {"0", "false", "no", "off"}
+    reason = (
+        str(
+            metadata.get("fit_jacobian_persist_skip_reason")
+            or metadata.get("rm_fit_jacobian_persist_skip_reason")
+            or ""
+        )
+        .strip()
+        .lower()
+    )
+    return bool(persisted_false and reason in {"too_large", "entry_too_large"})
+
+
+def _fit_jacobian_nbytes_from_metadata(metadata: dict[str, Any]) -> int | None:
+    for key in ("rm_fit_jacobian_bytes", "fit_jacobian_bytes"):
+        try:
+            return int(metadata[key])
+        except (KeyError, TypeError, ValueError):
+            continue
+    return None
 
 
 def _stash_rm_fit_jacobian(
@@ -349,30 +829,66 @@ def _restore_rm_fit_jacobian(
         runtime.meta["rm_fit_jacobian_cache_status"] = "process_hit"
         return cached
 
-    artifact_jacobian = _read_rm_artifact_fit_jacobian(
+    max_bytes = _rm_fit_jacobian_max_bytes(runtime.meta)
+    runtime.meta["rm_fit_jacobian_max_bytes"] = int(max_bytes)
+    read_result = _read_rm_artifact_fit_jacobian_result(
         path,
         expected_shape=expected_shape,
+        max_bytes=max_bytes,
     )
+    if read_result.nbytes is not None:
+        runtime.meta["rm_fit_jacobian_bytes"] = int(read_result.nbytes)
+    artifact_jacobian = read_result.array
     if artifact_jacobian is not None:
         runtime.meta["_inmem_jacobian"] = artifact_jacobian
         cache_status = _put_rm_fit_jacobian_cache(cache_key, artifact_jacobian)
         runtime.meta["rm_fit_jacobian_cache_status"] = f"artifact_hit_{cache_status}"
         return artifact_jacobian
 
-    runtime.meta["rm_fit_jacobian_cache_status"] = "miss"
+    if read_result.status == "too_large":
+        runtime.meta["rm_fit_jacobian_cache_status"] = "artifact_too_large"
+        runtime.meta["rm_fit_jacobian_available_but_skipped"] = True
+    elif read_result.status == "missing":
+        runtime.meta["rm_fit_jacobian_cache_status"] = "miss"
+    else:
+        runtime.meta["rm_fit_jacobian_cache_status"] = f"artifact_{read_result.status}"
     return None
 
 
-def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float:
+def _contact_impedance_array(value: Any, default: complex = 0.01 + 0.0j) -> np.ndarray:
     if value is None or value == "":
-        return float(default)
-    try:
-        arr = np.asarray(value, dtype=float).reshape(-1)
-    except (TypeError, ValueError):
-        return float(default)
+        return np.asarray([default], dtype=np.complex128)
+    if isinstance(value, str):
+        try:
+            parsed = parse_complex_scalar_list(value)
+        except ValueError:
+            try:
+                parsed = [parse_complex_scalar(value)]
+            except ValueError:
+                parsed = [default]
+        arr = np.asarray(parsed, dtype=np.complex128).reshape(-1)
+    else:
+        try:
+            arr = np.asarray(value, dtype=np.complex128).reshape(-1)
+        except (TypeError, ValueError):
+            arr = np.asarray([default], dtype=np.complex128)
+    if arr.size == 0:
+        arr = np.asarray([default], dtype=np.complex128)
+    if not np.iscomplexobj(arr) or not has_nonzero_imaginary(
+        arr, tol=_COMPLEX_ZERO_TOL
+    ):
+        return np.asarray(np.real(arr), dtype=float).reshape(-1)
+    return arr
+
+
+def _contact_impedance_scalar(value: Any, default: float = 0.01) -> float | complex:
+    arr = _contact_impedance_array(value, complex(default, 0.0)).reshape(-1)
     if arr.size == 0:
         return float(default)
-    return float(arr[0])
+    scalar = arr[0]
+    if np.iscomplexobj(arr) and abs(complex(scalar).imag) > _COMPLEX_ZERO_TOL:
+        return complex(scalar)
+    return float(np.real(scalar))
 
 
 def _contact_impedance_vector_from_meta(
@@ -382,17 +898,24 @@ def _contact_impedance_vector_from_meta(
     total = max(int(total_electrodes), 1)
     if raw is None or raw == "":
         return np.full(total, 0.01, dtype=float)
-    arr = np.asarray(raw, dtype=float).reshape(-1)
+    arr = _contact_impedance_array(raw).reshape(-1)
+    dtype = np.complex128 if np.iscomplexobj(arr) else float
     if arr.size == 1:
-        return np.full(total, float(arr[0]), dtype=float)
+        return np.full(total, arr[0], dtype=dtype)
+    if arr.size == total:
+        return arr.astype(dtype, copy=False)
     if arr.size > 0 and total % arr.size == 0:
-        return np.tile(arr, total // arr.size).astype(float, copy=False)
+        out = np.empty(total, dtype=dtype)
+        for repeat_idx in range(total // arr.size):
+            start = repeat_idx * arr.size
+            out[start : start + arr.size] = arr
+        return out
     if arr.size != total:
         raise ValueError(
             "contact_impedance length mismatch: "
             f"expected {total} or a divisor of it, got {arr.size}."
         )
-    return arr.astype(float, copy=False)
+    return arr.astype(dtype, copy=False)
 
 
 def _single_step_semantic_signature(meta: dict[str, Any]) -> tuple[str, ...]:
@@ -436,28 +959,19 @@ def _limit_single_step_alpha_for_sigma_floor(
     if not np.isfinite(requested) or requested <= 0.0:
         return 0.0
 
-    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
-    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    sigma = _real_sigma_update_array(sigma_bg)
+    delta = np.asarray(_real_sigma_update_array(delta_sigma), dtype=sigma.dtype)
     if sigma.shape != delta.shape:
         raise ValueError(
             f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
-    if (
-        sigma.size == 0
-        or not np.all(np.isfinite(sigma))
-        or not np.all(np.isfinite(delta))
-    ):
+    if sigma.size == 0 or not all_finite_values(sigma) or not all_finite_values(delta):
         return 0.0
 
-    negative_update = delta < 0.0
-    if not bool(np.any(negative_update)):
+    max_alpha = min_alpha_for_value_floor(sigma, delta, float(sigma_floor))
+    if not np.isfinite(max_alpha):
         return requested
 
-    margin = sigma[negative_update] - float(sigma_floor)
-    if not bool(np.all(margin > 0.0)):
-        return 0.0
-
-    max_alpha = float(np.min(margin / (-delta[negative_update])))
     if not np.isfinite(max_alpha) or max_alpha <= 0.0:
         return 0.0
     interior_alpha = max_alpha * (1.0 - _SINGLE_STEP_SIGMA_STEP_MARGIN)
@@ -479,25 +993,30 @@ def _constrain_single_step_sigma_update(
         alpha,
         sigma_floor=sigma_floor,
     )
-    sigma = np.asarray(sigma_bg, dtype=np.float64).reshape(-1)
-    delta = np.asarray(delta_sigma, dtype=np.float64).reshape(-1)
+    sigma = _real_sigma_update_array(sigma_bg)
+    delta = np.asarray(_real_sigma_update_array(delta_sigma), dtype=sigma.dtype)
     if sigma.shape != delta.shape:
         raise ValueError(
             f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
-    if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
+    if not all_finite_values(sigma) or not all_finite_values(delta):
         raise RuntimeError(
             "single-step conductivity update contains non-finite values."
         )
 
-    raw_sigma_est = sigma + float(limited_alpha) * delta
-    if not np.all(np.isfinite(raw_sigma_est)):
+    raw_sigma_est = np.empty_like(sigma)
+    np.multiply(delta, float(limited_alpha), out=raw_sigma_est)
+    raw_sigma_est += sigma
+    if not all_finite_values(raw_sigma_est):
         raise RuntimeError("single-step conductivity estimate is non-finite.")
 
-    floor_value = np.nextafter(float(sigma_floor), np.inf)
+    floor_value = np.asarray(
+        np.nextafter(float(sigma_floor), np.inf), dtype=sigma.dtype
+    )
     sigma_est = np.maximum(raw_sigma_est, floor_value)
-    floor_applied = bool(np.any(sigma_est != raw_sigma_est))
-    display_delta = sigma_est - sigma
+    floor_applied = any_not_equal_values(sigma_est, raw_sigma_est)
+    display_delta = np.empty_like(sigma_est)
+    np.subtract(sigma_est, sigma, out=display_delta)
     return float(limited_alpha), display_delta, sigma_est, floor_applied
 
 
@@ -618,8 +1137,10 @@ def clear_reconstruction_system_cache() -> None:
     """Clear the in-process EITSystem cache used by realtime reconstruction."""
     with _SYSTEM_CACHE_LOCK:
         _SYSTEM_CACHE.clear()
+        _SYSTEM_CACHE_SIZES.clear()
     with _FAST_CONTEXT_CACHE_LOCK:
         _FAST_CONTEXT_CACHE.clear()
+        _FAST_CONTEXT_CACHE_SIZES.clear()
 
 
 @dataclass
@@ -664,6 +1185,201 @@ class _SingleStepCachedRuntimeConfig:
     cache_key: tuple[Any, ...]
 
 
+_COMPLEX_ZERO_TOL = 1.0e-12
+
+
+def _complex_scalar_from_value(value: Any, default: complex = 0.0 + 0.0j) -> complex:
+    if value is None:
+        return complex(default)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return complex(default)
+        try:
+            return complex(parse_complex_scalar(text))
+        except ValueError:
+            return complex(default)
+    try:
+        arr = np.asarray(value, dtype=np.complex128).reshape(-1)
+    except (TypeError, ValueError):
+        try:
+            return complex(value)
+        except (TypeError, ValueError):
+            return complex(default)
+    if arr.size == 0:
+        return complex(default)
+    return complex(arr[0])
+
+
+def _is_complex_measurement_request(req: ReconstructionRequest) -> bool:
+    if str(getattr(req, "use_part", "real")).strip().lower() == "complex":
+        return True
+    metadata = dict(getattr(req, "metadata", {}) or {})
+    mode = " ".join(
+        str(metadata.get(key, ""))
+        for key in (
+            "eit_value_mode",
+            "complex_measurement_mode",
+            "complex_reconstruction_dispatch",
+        )
+    ).lower()
+    return "complex" in mode and "split" not in mode
+
+
+def _is_native_complex_reconstruction_request(
+    req: ReconstructionRequest,
+    ref_vec: np.ndarray,
+    tgt_vec: np.ndarray,
+) -> bool:
+    return bool(
+        np.iscomplexobj(ref_vec)
+        or np.iscomplexobj(tgt_vec)
+        or _is_complex_measurement_request(req)
+    )
+
+
+def _eit_system_difference_preset_for_full_gn(
+    requested_preset: Any,
+    *,
+    native_complex: bool,
+) -> str:
+    requested = (
+        str(requested_preset or _DEFAULT_EIT_SYSTEM_DIFFERENCE_PRESET).strip().lower()
+    )
+    if requested in _EIT_SYSTEM_DIFFERENCE_PRESETS:
+        return requested
+    if native_complex:
+        return _DEFAULT_EIT_SYSTEM_DIFFERENCE_PRESET
+    return requested
+
+
+def _native_complex_dtype_from_request(
+    req: ReconstructionRequest,
+    ref_vec: np.ndarray,
+    tgt_vec: np.ndarray,
+) -> np.dtype:
+    meta = dict(getattr(req, "metadata", {}) or {})
+    dtype_hint = str(
+        meta.get("compute_dtype", meta.get("dtype", meta.get("precision", "")))
+    ).lower()
+    if "complex64" in dtype_hint:
+        return np.dtype(np.complex64)
+    if "complex128" in dtype_hint:
+        return np.dtype(np.complex128)
+    raw_dtype = np.result_type(np.asarray(ref_vec).dtype, np.asarray(tgt_vec).dtype)
+    if raw_dtype == np.complex64:
+        return np.dtype(np.complex64)
+    return np.dtype(np.complex128)
+
+
+def _regularization_for_native_complex(reconstructor, n_param: int):
+    matrix = getattr(reconstructor, "R_matrix", None)
+    if matrix is not None:
+        return matrix
+    diag = getattr(reconstructor, "R_diag", None)
+    if diag is not None:
+        arr = np.asarray(diag, dtype=np.float64).reshape(-1)
+        if arr.size == int(n_param):
+            return arr
+    return None
+
+
+def _run_native_complex_linearized_difference(
+    *,
+    req: ReconstructionRequest,
+    system,
+    ref_vec: np.ndarray,
+    tgt_vec: np.ndarray,
+    meta: dict[str, Any],
+    progress_cb: Callable[[str], None] | None = None,
+) -> ReconstructionResult:
+    def emit(message: str) -> None:
+        if progress_cb is not None:
+            progress_cb(message)
+
+    from pyeidors.data.structures import EITImage
+    from pyeidors.inverse.solvers.gauss_newton_linear_system import (
+        solve_native_complex_normal_step,
+    )
+    from dolfinx import fem
+
+    emit("Building native complex Jacobian...")
+    background = _complex_scalar_from_value(
+        meta.get("background_sigma", meta.get("background_conductivity", 1.0)),
+        1.0 + 0.0j,
+    )
+    complex_dtype = _native_complex_dtype_from_request(req, ref_vec, tgt_vec)
+    n_elements = int(fem.Function(system.fwd_model.V_sigma).x.array.size)
+    sigma_bg = np.full(n_elements, background, dtype=complex_dtype)
+    img_bg = EITImage(elem_data=sigma_bg, fwd_model=system.fwd_model)
+    jacobian = system.reconstructor.jacobian_calculator.calculate_from_image(img_bg)
+    if bool(getattr(system.reconstructor, "negate_jacobian", True)):
+        jacobian = -np.asarray(jacobian)
+    else:
+        jacobian = np.asarray(jacobian)
+
+    difference_mode = str(meta.get("difference_mode", "raw"))
+    difference_orientation = str(
+        meta.get("difference_orientation", "target_minus_reference")
+    )
+    measured_diff = build_difference_vector(
+        tgt_vec,
+        ref_vec,
+        mode=difference_mode,
+        orientation=difference_orientation,
+    )
+    residual = -np.asarray(measured_diff, dtype=np.result_type(measured_diff, jacobian))
+    lambda_eff = float(
+        meta.get(
+            "difference_lambda",
+            meta.get("lambda_eff", req.regularization_alpha),
+        )
+    )
+    try:
+        system.reconstructor.ensure_regularization_ready()
+    except Exception:
+        log.debug("Native complex path using identity regularization", exc_info=True)
+    regularization = _regularization_for_native_complex(
+        system.reconstructor,
+        int(jacobian.shape[1]),
+    )
+
+    emit("Solving native complex normal equation...")
+    delta_sigma, solve_meta = solve_native_complex_normal_step(
+        jacobian=jacobian,
+        residual=residual,
+        lambda_eff=lambda_eff,
+        regularization=regularization,
+    )
+    simulated_diff = np.asarray(jacobian @ delta_sigma)
+    mesh = system.mesh
+    coords = mesh.coordinates()
+    cells = mesh.cells()
+    result_meta = dict(meta)
+    result_meta.update(
+        {
+            "eit_value_mode": "complex_admittance",
+            "complex_reconstruction_mode": "native_complex_linearized_gn",
+            "complex_reconstruction_approximation": "single_step_linearized",
+            "complex_reconstruction_dispatch": "native_complex",
+            "reconstruction_runtime": "native_complex_linearized",
+            "native_complex_dtype": str(complex_dtype),
+            "conductivity_display_mode": "absolute_sigma",
+            "complex_background_admittance": background,
+            "native_complex_solver": solve_meta,
+        }
+    )
+    emit("Native complex reconstruction complete")
+    return ReconstructionResult(
+        conductivity=np.asarray(background + delta_sigma),
+        node_coords=coords,
+        cell_connectivity=cells,
+        measured=measured_diff,
+        simulated=simulated_diff,
+        metadata=result_meta,
+    )
+
+
 class _ReconstructionWorker(QObject):
     """Runs reconstruction in a background thread."""
 
@@ -676,9 +1392,21 @@ class _ReconstructionWorker(QObject):
         self._request: ReconstructionRequest | None = None
         self._eit_system = None  # lazy import pyeidors
         self._cancel_requested = False
+        self._backend_profile: str | None = None
 
     def cancel(self) -> None:
         self._cancel_requested = True
+        profile = self._backend_profile
+        if profile:
+            try:
+                from eit_app.backend_worker_pool import stop_persistent_backend_worker
+
+                stop_persistent_backend_worker(repo=_repo_root(), profile=profile)
+            except Exception:
+                log.debug(
+                    "Failed to stop persistent backend worker during cancellation",
+                    exc_info=True,
+                )
 
     @Slot()
     def run(self) -> None:
@@ -693,7 +1421,41 @@ class _ReconstructionWorker(QObject):
             if not self._cancel_requested:
                 self.progress.emit(message)
 
-        result = run_reconstruction_request(req, progress_cb=_progress)
+        try:
+            from eit_app.backend_routing import select_reconstruction_backend_route
+
+            route = select_reconstruction_backend_route(req)
+            if route.external:
+                self._backend_profile = route.profile
+                try:
+                    result = execute_reconstruction_request_in_backend(
+                        req,
+                        profile=route.profile,
+                        route_reason=route.reason,
+                        progress_cb=_progress,
+                        cancelled=lambda: self._cancel_requested,
+                    )
+                finally:
+                    self._backend_profile = None
+            else:
+                result = run_reconstruction_request(req, progress_cb=_progress)
+                result.metadata = {
+                    **dict(result.metadata or {}),
+                    "backend_worker_profile": route.profile,
+                    "backend_worker_route_reason": route.reason,
+                    "backend_worker_process_isolated": False,
+                }
+        except Exception as exc:
+            if self._cancel_requested:
+                return
+            log.exception("Reconstruction worker failed")
+            result = ReconstructionResult(
+                conductivity=np.array([]),
+                node_coords=np.array([]),
+                cell_connectivity=np.array([]),
+                error_msg=str(exc),
+                metadata=dict(getattr(req, "metadata", {}) or {}),
+            )
         if self._cancel_requested:
             return
         if result.error_msg:
@@ -711,11 +1473,27 @@ def _get_cached_system(cache_key: tuple[Any, ...]):
 
 
 def _put_cached_system(cache_key: tuple[Any, ...], system: Any) -> None:
+    max_bytes = _parse_bytes_limit(
+        getattr(system, "_reconstruction_system_cache_max_bytes", None),
+        default=_reconstruction_system_cache_max_bytes(),
+    )
+    entry_bytes = _reconstruction_system_cache_entry_bytes(system)
     with _SYSTEM_CACHE_LOCK:
-        _SYSTEM_CACHE.pop(cache_key, None)
-        _SYSTEM_CACHE[cache_key] = system
-        while len(_SYSTEM_CACHE) > _SYSTEM_CACHE_MAX_ITEMS:
-            _SYSTEM_CACHE.popitem(last=False)
+        stored = _put_bounded_ordered_cache(
+            _SYSTEM_CACHE,
+            _SYSTEM_CACHE_SIZES,
+            cache_key,
+            system,
+            entry_bytes=entry_bytes,
+            max_items=_SYSTEM_CACHE_MAX_ITEMS,
+            max_bytes=max_bytes,
+        )
+    if not stored:
+        log.info(
+            "Skipped reconstruction system process cache entry: bytes=%s max_bytes=%s",
+            entry_bytes,
+            max_bytes,
+        )
 
 
 def _get_cached_fast_context(cache_key: tuple[Any, ...]):
@@ -728,11 +1506,33 @@ def _get_cached_fast_context(cache_key: tuple[Any, ...]):
 
 
 def _put_cached_fast_context(cache_key: tuple[Any, ...], ctx: Any) -> None:
+    ctx_meta = ctx if isinstance(ctx, dict) else {}
+    max_bytes = _single_step_context_cache_max_bytes(ctx_meta)
+    entry_bytes = _fast_context_cache_entry_bytes(ctx)
+    if isinstance(ctx, dict):
+        ctx["single_step_context_process_cache_bytes"] = int(entry_bytes)
+        ctx["single_step_context_process_cache_max_bytes"] = int(max_bytes)
     with _FAST_CONTEXT_CACHE_LOCK:
-        _FAST_CONTEXT_CACHE.pop(cache_key, None)
-        _FAST_CONTEXT_CACHE[cache_key] = ctx
-        while len(_FAST_CONTEXT_CACHE) > _FAST_CONTEXT_CACHE_MAX_ITEMS:
-            _FAST_CONTEXT_CACHE.popitem(last=False)
+        stored = _put_bounded_ordered_cache(
+            _FAST_CONTEXT_CACHE,
+            _FAST_CONTEXT_CACHE_SIZES,
+            cache_key,
+            ctx,
+            entry_bytes=entry_bytes,
+            max_items=_FAST_CONTEXT_CACHE_MAX_ITEMS,
+            max_bytes=max_bytes,
+        )
+    if isinstance(ctx, dict):
+        ctx["single_step_context_process_cache_stored"] = bool(stored)
+        ctx["single_step_context_process_cache_skip_reason"] = (
+            "" if stored else "entry_too_large"
+        )
+    if not stored:
+        log.info(
+            "Skipped single-step context process cache entry: bytes=%s max_bytes=%s",
+            entry_bytes,
+            max_bytes,
+        )
 
 
 def _quiet_call(fn: Callable[[], Any]) -> Any:
@@ -1241,10 +2041,10 @@ def _greit_registry_dir_from_meta(meta: dict[str, Any]) -> Path:
 def _array_pair_hash(*arrays: Any) -> str:
     digest = hashlib.sha256()
     for array in arrays:
-        arr = np.ascontiguousarray(np.asarray(array))
+        arr = np.asarray(array)
         digest.update(str(arr.dtype).encode("utf-8"))
         digest.update(str(arr.shape).encode("utf-8"))
-        digest.update(arr.tobytes())
+        update_digest_with_array_payload(digest, arr)
     return digest.hexdigest()
 
 
@@ -1454,7 +2254,9 @@ def _ensure_auto_built_one_step_rm_artifact(
             path=artifact_path,
             signature=signature,
         )
-        if fit_jacobian is not None:
+        if fit_jacobian is not None or bool(
+            runtime.meta.get("rm_fit_jacobian_available_but_skipped", False)
+        ):
             runtime.meta["rm_artifact_path"] = str(artifact_path)
             runtime.meta["dual_model_rm_path"] = str(artifact_path)
             runtime.meta["rm_artifact_auto_built"] = False
@@ -1490,8 +2292,10 @@ def _ensure_auto_built_one_step_rm_artifact(
     weights = _measurement_weights_from_meta(runtime.meta, n_measurements=n_meas)
     hp = math.sqrt(max(float(runtime.lam), 0.0))
 
-    node_coords = np.asarray(ctx["display_node_coords"], dtype=np.float64)
-    cell_connectivity = np.asarray(ctx["display_cell_connectivity"], dtype=np.int32)
+    node_coords = _display_node_coords_array(ctx["display_node_coords"])
+    cell_connectivity = _display_cell_connectivity_array(
+        ctx["display_cell_connectivity"]
+    )
     regularization = None
     graph_weight = (
         str(runtime.meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
@@ -1527,6 +2331,9 @@ def _ensure_auto_built_one_step_rm_artifact(
         return_metadata=True,
     )
     mesh_hash = _array_pair_hash(node_coords, cell_connectivity)
+    fit_jacobian_max_bytes = _rm_fit_jacobian_max_bytes(runtime.meta)
+    fit_jacobian_bytes = int(jacobian.nbytes)
+    persist_fit_jacobian = fit_jacobian_bytes <= int(max(0, fit_jacobian_max_bytes))
     metadata = {
         "algorithm": f"one-step-{regularization_type}",
         "rm_build_route": route,
@@ -1566,7 +2373,10 @@ def _ensure_auto_built_one_step_rm_artifact(
         "one_step_rm_content_contract": str(
             runtime.meta.get("one_step_rm_content_contract", "")
         ),
-        "fit_jacobian_persisted": True,
+        "fit_jacobian_persisted": bool(persist_fit_jacobian),
+        "rm_fit_jacobian_bytes": fit_jacobian_bytes,
+        "rm_fit_jacobian_max_bytes": int(fit_jacobian_max_bytes),
+        "fit_jacobian_persist_skip_reason": "" if persist_fit_jacobian else "too_large",
         "rm_output_display_mode": str(
             runtime.meta.get("rm_output_display_mode", "absolute_sigma")
         ),
@@ -1592,19 +2402,25 @@ def _ensure_auto_built_one_step_rm_artifact(
         cell_connectivity=cell_connectivity,
         channel_mask=channel_mask,
         measurement_weights=weights,
-        jacobian=jacobian,
+        jacobian=jacobian if persist_fit_jacobian else None,
     )
     runtime.meta["rm_artifact_path"] = str(artifact_path)
     runtime.meta["dual_model_rm_path"] = str(artifact_path)
     runtime.meta["rm_artifact_auto_built"] = True
     runtime.meta["rm_artifact_cache_status"] = "built"
-    _stash_rm_fit_jacobian(
-        runtime,
-        path=artifact_path,
-        signature=signature,
-        jacobian=jacobian,
-        status_prefix="built",
-    )
+    runtime.meta["rm_fit_jacobian_bytes"] = fit_jacobian_bytes
+    runtime.meta["rm_fit_jacobian_max_bytes"] = int(fit_jacobian_max_bytes)
+    if persist_fit_jacobian:
+        _stash_rm_fit_jacobian(
+            runtime,
+            path=artifact_path,
+            signature=signature,
+            jacobian=jacobian,
+            status_prefix="built",
+        )
+    else:
+        runtime.meta["rm_fit_jacobian_cache_status"] = "built_too_large"
+        runtime.meta["rm_fit_jacobian_available_but_skipped"] = True
     return artifact_path
 
 
@@ -1780,6 +2596,86 @@ def _rm_shape_from_meta(meta: dict[str, Any]) -> tuple[int, ...]:
     return ()
 
 
+def _optional_lazy_artifact_array(
+    arrays: dict[str, Any],
+    key: str,
+    *,
+    dtype: Any,
+) -> np.ndarray | None:
+    raw = arrays.get(key)
+    if raw is None:
+        return None
+    arr = np.asarray(raw, dtype=dtype)
+    if arr.size == 0:
+        return None
+    return arr
+
+
+def _optional_lazy_artifact_handle(arrays: dict[str, Any], key: str) -> Any | None:
+    raw = arrays.get(key)
+    if raw is None:
+        return None
+    size = getattr(raw, "size", None)
+    if size is not None:
+        try:
+            if int(size) == 0:
+                return None
+        except (TypeError, ValueError):
+            pass
+    return raw
+
+
+def _load_hdf5_rm_artifact_lightweight(
+    path: Path, meta: dict[str, Any]
+) -> dict[str, Any]:
+    from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+
+    artifact = read_hdf5_artifact(path, lazy=True, verify_checksums=False)
+    arrays = dict(artifact.arrays)
+    rm = arrays.get("rm")
+    if rm is None:
+        rm = arrays.get("RM")
+    if rm is None:
+        raise ValueError(f"RM artifact is missing 'rm': {path}")
+    artifact_meta = dict(artifact.metadata)
+    voxel_shape = _parse_int_shape(arrays.get("voxel_shape")) or _rm_shape_from_meta(
+        meta
+    )
+    greit_y = _optional_lazy_artifact_handle(arrays, "y")
+    if greit_y is None:
+        greit_y = _optional_lazy_artifact_handle(arrays, "Y")
+    greit_d = _optional_lazy_artifact_handle(arrays, "d")
+    if greit_d is None:
+        greit_d = _optional_lazy_artifact_handle(arrays, "D")
+    node_coords = _optional_lazy_artifact_array(arrays, "node_coords", dtype=np.float64)
+    cell_connectivity = _optional_lazy_artifact_array(
+        arrays, "cell_connectivity", dtype=np.int32
+    )
+    rec_model = None
+    if node_coords is None or cell_connectivity is None:
+        rec_model = _optional_lazy_artifact_array(arrays, "rec_model", dtype=np.float64)
+    return {
+        "path": str(path),
+        "rm": None,
+        "rm_lazy_dataset": rm,
+        "rm_dtype": str(np.dtype(getattr(rm, "dtype", np.float64))),
+        "metadata": artifact_meta,
+        "voxel_shape": tuple(int(v) for v in voxel_shape),
+        "node_coords": node_coords,
+        "cell_connectivity": cell_connectivity,
+        "channel_mask": _optional_lazy_artifact_array(
+            arrays, "channel_mask", dtype=bool
+        ),
+        "measurement_weights": _optional_lazy_artifact_array(
+            arrays, "measurement_weights", dtype=np.float64
+        ),
+        "rec_model": rec_model,
+        "greit_y": greit_y,
+        "greit_d": greit_d,
+        "schema": artifact.schema,
+    }
+
+
 def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     suffix = path.suffix.lower()
     if suffix in {".h5", ".hdf5"}:
@@ -1844,7 +2740,38 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _rm_artifact_cache_key(path: Path, *, device: str, dtype: str) -> tuple[Any, ...]:
+def _rm_torch_compile_mode(meta: dict[str, Any]) -> str:
+    raw = str(
+        meta.get(
+            "rm_torch_compile",
+            meta.get(
+                "rm_matmul_compile",
+                os.environ.get("EIT_APP_RM_TORCH_COMPILE", "off"),
+            ),
+        )
+        or "off"
+    )
+    value = raw.strip().lower().replace("-", "_")
+    aliases = {
+        "1": "force",
+        "true": "force",
+        "yes": "force",
+        "on": "force",
+        "force": "force",
+        "always": "force",
+        "auto": "auto",
+        "0": "off",
+        "false": "off",
+        "no": "off",
+        "off": "off",
+        "never": "off",
+    }
+    return aliases.get(value, "off")
+
+
+def _rm_artifact_cache_key(
+    path: Path, *, device: str, dtype: str, compile_mode: str = "off"
+) -> tuple[Any, ...]:
     stat = path.stat()
     return (
         str(path.resolve()),
@@ -1852,7 +2779,208 @@ def _rm_artifact_cache_key(path: Path, *, device: str, dtype: str) -> tuple[Any,
         int(stat.st_size),
         str(device).strip().lower(),
         str(dtype).strip().lower(),
+        str(compile_mode).strip().lower(),
     )
+
+
+def _rm_artifact_cache_entry_bytes(entry: dict[str, Any]) -> int:
+    total = 0
+    for key in (
+        "rm",
+        "node_coords",
+        "cell_connectivity",
+        "channel_mask",
+        "measurement_weights",
+        "rec_model",
+        "greit_y",
+        "greit_d",
+    ):
+        value = entry.get(key)
+        nbytes = _array_like_nbytes(value)
+        if nbytes is not None:
+            total += int(nbytes)
+    return int(total)
+
+
+def _rm_artifact_cache_total_bytes() -> int:
+    return sum(
+        _rm_artifact_cache_entry_bytes(entry) for entry in _RM_ARTIFACT_CACHE.values()
+    )
+
+
+def _store_rm_artifact_process_cache(
+    key: tuple[Any, ...],
+    artifact: dict[str, Any],
+    *,
+    max_bytes: int,
+) -> bool:
+    entry_bytes = _rm_artifact_cache_entry_bytes(artifact)
+    artifact["rm_artifact_process_cache_bytes"] = int(entry_bytes)
+    artifact["rm_artifact_process_cache_max_bytes"] = int(max_bytes)
+    if entry_bytes > int(max(0, max_bytes)):
+        artifact["rm_artifact_process_cache_stored"] = False
+        artifact["rm_artifact_process_cache_skip_reason"] = "entry_too_large"
+        return False
+    with _RM_ARTIFACT_CACHE_LOCK:
+        _RM_ARTIFACT_CACHE[key] = dict(artifact)
+        _RM_ARTIFACT_CACHE.move_to_end(key)
+        while len(_RM_ARTIFACT_CACHE) > _RM_ARTIFACT_CACHE_MAX_ITEMS:
+            _RM_ARTIFACT_CACHE.popitem(last=False)
+        while _rm_artifact_cache_total_bytes() > int(max(0, max_bytes)):
+            if not _RM_ARTIFACT_CACHE:
+                break
+            oldest_key = next(iter(_RM_ARTIFACT_CACHE))
+            if oldest_key == key and len(_RM_ARTIFACT_CACHE) == 1:
+                break
+            _RM_ARTIFACT_CACHE.popitem(last=False)
+        stored = key in _RM_ARTIFACT_CACHE
+    artifact["rm_artifact_process_cache_stored"] = bool(stored)
+    artifact["rm_artifact_process_cache_skip_reason"] = "" if stored else "evicted"
+    return bool(stored)
+
+
+def _rm_artifact_array_for_shape(artifact: dict[str, Any]) -> Any:
+    rm = artifact.get("rm")
+    if rm is not None:
+        return rm
+    lazy = artifact.get("rm_lazy_dataset")
+    if lazy is not None:
+        return lazy
+    raise ValueError("RM artifact is missing matrix payload.")
+
+
+def _rm_streaming_mode(meta: dict[str, Any]) -> str:
+    raw = str(
+        meta.get(
+            "rm_streaming_matmul",
+            os.environ.get("EIT_APP_RM_STREAMING_MATMUL", "auto"),
+        )
+        or "auto"
+    )
+    value = raw.strip().lower().replace("-", "_")
+    aliases = {
+        "1": "force",
+        "true": "force",
+        "yes": "force",
+        "on": "force",
+        "force": "force",
+        "always": "force",
+        "auto": "auto",
+        "0": "off",
+        "false": "off",
+        "no": "off",
+        "off": "off",
+        "never": "off",
+    }
+    return aliases.get(value, "auto")
+
+
+def _rm_streaming_chunk_bytes(meta: dict[str, Any]) -> int:
+    return _runtime_bytes_limit(
+        meta,
+        keys=("rm_streaming_chunk_bytes", "rm_hdf5_streaming_chunk_bytes"),
+        env_key="EIT_APP_RM_STREAMING_CHUNK_BYTES",
+        default=8 * 1024 * 1024,
+    )
+
+
+def _rm_streaming_rows_per_chunk(
+    dataset: Any,
+    *,
+    rows: int,
+    cols: int,
+    dtype: np.dtype[Any],
+    chunk_bytes: int,
+) -> int:
+    row_bytes = max(1, int(cols) * max(1, int(dtype.itemsize)))
+    budget_rows = max(1, int(max(1, chunk_bytes) // row_bytes))
+    budget_rows = min(max(1, int(rows)), budget_rows)
+    dataset_chunks = getattr(dataset, "chunks", None)
+    if dataset_chunks is None:
+        return int(budget_rows)
+    try:
+        chunk_rows = int(dataset_chunks[0])
+        chunk_cols = int(dataset_chunks[1])
+    except (TypeError, ValueError, IndexError):
+        return int(budget_rows)
+    if chunk_rows <= 0 or chunk_cols != int(cols):
+        return int(budget_rows)
+    if chunk_rows * row_bytes > int(max(1, chunk_bytes)):
+        return int(budget_rows)
+    chunk_multiple = max(1, budget_rows // chunk_rows)
+    return int(min(max(1, int(rows)), chunk_multiple * chunk_rows))
+
+
+def _iter_rm_row_blocks(
+    dataset: Any,
+    *,
+    rows: int,
+    cols: int,
+    rows_per_chunk: int,
+    dtype: np.dtype[Any],
+) -> tuple[str, Any]:
+    info = getattr(dataset, "info", None)
+    path = getattr(info, "path", None)
+    name = getattr(info, "name", None)
+    if path is not None and name:
+        import h5py
+
+        def _single_open_blocks():
+            with h5py.File(path, "r") as handle:
+                source = handle["arrays"][str(name)]
+                for start in range(0, int(rows), int(rows_per_chunk)):
+                    stop = min(start + int(rows_per_chunk), int(rows))
+                    yield start, np.asarray(source[start:stop, :], dtype=dtype)
+
+        return "single_open", _single_open_blocks()
+
+    def _fallback_blocks():
+        for start in range(0, int(rows), int(rows_per_chunk)):
+            stop = min(start + int(rows_per_chunk), int(rows))
+            yield start, np.asarray(dataset[start:stop, :], dtype=dtype)
+
+    return "getitem_per_chunk", _fallback_blocks()
+
+
+def _should_stream_hdf5_rm_artifact(
+    artifact: dict[str, Any],
+    meta: dict[str, Any],
+    *,
+    device: str,
+    max_cache_bytes: int,
+) -> bool:
+    return _hdf5_rm_streaming_decision(
+        artifact,
+        meta,
+        device=device,
+        max_cache_bytes=max_cache_bytes,
+    )[0]
+
+
+def _hdf5_rm_streaming_decision(
+    artifact: dict[str, Any],
+    meta: dict[str, Any],
+    *,
+    device: str,
+    max_cache_bytes: int,
+) -> tuple[bool, str]:
+    if artifact.get("rm_lazy_dataset") is None:
+        return False, "not_hdf5_lazy"
+    mode = _rm_streaming_mode(meta)
+    if mode == "off":
+        return False, "disabled"
+    matrix_nbytes = _rm_artifact_matrix_nbytes(artifact)
+    if mode == "force":
+        return True, "forced"
+    requested_device = str(device or "auto").strip().lower()
+    if requested_device in {"cuda", "gpu", "torch-cuda"}:
+        device_resident_max_bytes = _rm_device_resident_max_bytes(meta)
+        if matrix_nbytes > int(max(0, device_resident_max_bytes)):
+            return True, "cuda_resident_budget_exceeded"
+        return False, "cuda_resident_preferred"
+    if matrix_nbytes > int(max(0, max_cache_bytes)):
+        return True, "process_cache_budget_exceeded"
+    return False, "within_process_cache_budget"
 
 
 def _load_cached_rm_artifact(
@@ -1863,11 +2991,21 @@ def _load_cached_rm_artifact(
     dtype: str,
     expected_n_measurements: int | None = None,
 ) -> dict[str, Any]:
-    from pyeidors.perf.gpu_kernels import prepare_rm_matmul
-
-    key = _rm_artifact_cache_key(path, device=device, dtype=dtype)
+    compile_mode = _rm_torch_compile_mode(meta)
+    key = _rm_artifact_cache_key(
+        path,
+        device=device,
+        dtype=dtype,
+        compile_mode=compile_mode,
+    )
+    max_cache_bytes = _rm_artifact_process_cache_max_bytes(meta)
     with _RM_ARTIFACT_CACHE_LOCK:
         cached = _RM_ARTIFACT_CACHE.get(key)
+        if cached is not None:
+            cached_bytes = _rm_artifact_cache_entry_bytes(cached)
+            if cached_bytes > int(max(0, max_cache_bytes)):
+                _RM_ARTIFACT_CACHE.pop(key, None)
+                cached = None
         if cached is not None:
             _validate_rm_artifact_measurement_dimension(
                 cached,
@@ -1878,7 +3016,42 @@ def _load_cached_rm_artifact(
             result = dict(cached)
             result["rm_artifact_cache_hit"] = True
             result["rm_artifact_cache_key"] = key
+            result["rm_artifact_process_cache_bytes"] = int(
+                _rm_artifact_cache_entry_bytes(cached)
+            )
+            result["rm_artifact_process_cache_max_bytes"] = int(max_cache_bytes)
+            result["rm_artifact_process_cache_stored"] = True
             return result
+
+    if path.suffix.lower() in {".h5", ".hdf5"}:
+        lightweight = _load_hdf5_rm_artifact_lightweight(path, meta)
+        _validate_rm_artifact_measurement_dimension(
+            lightweight,
+            path=path,
+            expected_n_measurements=expected_n_measurements,
+        )
+        should_stream, streaming_decision = _hdf5_rm_streaming_decision(
+            lightweight,
+            meta,
+            device=device,
+            max_cache_bytes=max_cache_bytes,
+        )
+        if should_stream:
+            lightweight["rm_artifact_cache_hit"] = False
+            lightweight["rm_artifact_cache_key"] = key
+            lightweight["rm_streaming"] = True
+            lightweight["rm_streaming_backend"] = "hdf5_chunked_cpu"
+            lightweight["rm_streaming_decision"] = streaming_decision
+            lightweight["rm_device_resident_max_bytes"] = int(
+                _rm_device_resident_max_bytes(meta)
+            )
+            lightweight["rm_artifact_process_cache_bytes"] = int(
+                _rm_artifact_matrix_nbytes(lightweight)
+            )
+            lightweight["rm_artifact_process_cache_max_bytes"] = int(max_cache_bytes)
+            lightweight["rm_artifact_process_cache_stored"] = False
+            lightweight["rm_artifact_process_cache_skip_reason"] = "streaming_hdf5"
+            return lightweight
 
     artifact = _load_rm_artifact(path, meta)
     rm_dtype = np.dtype(_normalize_rm_dtype_name(dtype))
@@ -1888,20 +3061,21 @@ def _load_cached_rm_artifact(
         path=path,
         expected_n_measurements=expected_n_measurements,
     )
+    from pyeidors.perf.gpu_kernels import prepare_rm_matmul
+
     artifact["rm_handle"] = prepare_rm_matmul(
         artifact["rm"],
         device=device,
         dtype=dtype,
         cache_key=str(path),
+        compile_mode=compile_mode,
     )
-    with _RM_ARTIFACT_CACHE_LOCK:
-        _RM_ARTIFACT_CACHE[key] = dict(artifact)
-        _RM_ARTIFACT_CACHE.move_to_end(key)
-        while len(_RM_ARTIFACT_CACHE) > _RM_ARTIFACT_CACHE_MAX_ITEMS:
-            _RM_ARTIFACT_CACHE.popitem(last=False)
+    _store_rm_artifact_process_cache(key, artifact, max_bytes=max_cache_bytes)
     result = dict(artifact)
     result["rm_artifact_cache_hit"] = False
     result["rm_artifact_cache_key"] = key
+    result["rm_streaming_decision"] = "device_resident_prepared"
+    result["rm_device_resident_max_bytes"] = int(_rm_device_resident_max_bytes(meta))
     return result
 
 
@@ -1911,7 +3085,7 @@ def _voxel_bounds_from_meta(meta: dict[str, Any]) -> tuple[np.ndarray, np.ndarra
         bounds = np.asarray(raw_bounds, dtype=np.float64)
         if (
             bounds.shape == (2, 3)
-            and np.all(np.isfinite(bounds))
+            and all_finite_values(bounds)
             and np.all(bounds[1] > bounds[0])
         ):
             return bounds[0], bounds[1]
@@ -1966,16 +3140,22 @@ def _center_cloud_hexa_geometry(
     centers: np.ndarray,
     meta: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    centers = np.asarray(centers, dtype=np.float64)
+    centers_raw = np.asarray(centers)
+    coord_dtype = (
+        np.float32
+        if np.issubdtype(centers_raw.dtype, np.floating)
+        and centers_raw.dtype.itemsize <= 4
+        else np.float64
+    )
+    centers = np.ascontiguousarray(centers_raw, dtype=coord_dtype)
     if centers.ndim != 2 or centers.shape[1] != 3 or centers.shape[0] == 0:
         return None
-    if not np.isfinite(centers).all():
+    if not all_finite_values(centers):
         return None
     axis_spacing: list[float] = []
     for axis in range(3):
         unique = np.unique(np.round(centers[:, axis], decimals=12))
-        diffs = np.diff(np.sort(unique))
-        diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        diffs = np.diff(unique)
         if diffs.size:
             axis_spacing.append(float(np.median(diffs)))
         else:
@@ -1993,9 +3173,9 @@ def _center_cloud_hexa_geometry(
             0.45 * (value if np.isfinite(value) and value > 0.0 else fallback_spacing)
             for value in axis_spacing
         ],
-        dtype=np.float64,
+        dtype=coord_dtype,
     )
-    half_axes = np.maximum(half_axes, np.finfo(np.float64).eps)
+    half_axes = np.maximum(half_axes, np.finfo(coord_dtype).eps)
     offsets = np.asarray(
         [
             [-half_axes[0], -half_axes[1], -half_axes[2]],
@@ -2007,13 +3187,12 @@ def _center_cloud_hexa_geometry(
             [half_axes[0], half_axes[1], half_axes[2]],
             [-half_axes[0], half_axes[1], half_axes[2]],
         ],
-        dtype=np.float64,
+        dtype=coord_dtype,
     )
-    coords = (centers[:, None, :] + offsets[None, :, :]).reshape(-1, 3)
-    cells = np.asarray(
-        [[8 * idx + offset for offset in range(8)] for idx in range(centers.shape[0])],
-        dtype=np.int32,
-    )
+    coords = np.empty((centers.shape[0] * 8, 3), dtype=coord_dtype)
+    for offset_idx, offset in enumerate(offsets):
+        np.add(centers, offset, out=coords[offset_idx::8])
+    cells = np.arange(centers.shape[0] * 8, dtype=np.int32).reshape(-1, 8)
     return coords, cells
 
 
@@ -2021,17 +3200,23 @@ def _center_cloud_quad_geometry(
     centers: np.ndarray,
     meta: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    centers = np.asarray(centers, dtype=np.float64)
+    centers_raw = np.asarray(centers)
+    coord_dtype = (
+        np.float32
+        if np.issubdtype(centers_raw.dtype, np.floating)
+        and centers_raw.dtype.itemsize <= 4
+        else np.float64
+    )
+    centers = np.ascontiguousarray(centers_raw, dtype=coord_dtype)
     if centers.ndim != 2 or centers.shape[1] < 2 or centers.shape[0] == 0:
         return None
     centers_xy = centers[:, :2]
-    if not np.isfinite(centers_xy).all():
+    if not all_finite_values(centers_xy):
         return None
     axis_spacing: list[float] = []
     for axis in range(2):
         unique = np.unique(np.round(centers_xy[:, axis], decimals=12))
-        diffs = np.diff(np.sort(unique))
-        diffs = diffs[np.isfinite(diffs) & (diffs > 0.0)]
+        diffs = np.diff(unique)
         if diffs.size:
             axis_spacing.append(float(np.median(diffs)))
         else:
@@ -2049,9 +3234,9 @@ def _center_cloud_quad_geometry(
             0.45 * (value if np.isfinite(value) and value > 0.0 else fallback_spacing)
             for value in axis_spacing
         ],
-        dtype=np.float64,
+        dtype=coord_dtype,
     )
-    half_axes = np.maximum(half_axes, np.finfo(np.float64).eps)
+    half_axes = np.maximum(half_axes, np.finfo(coord_dtype).eps)
     offsets = np.asarray(
         [
             [-half_axes[0], -half_axes[1]],
@@ -2059,16 +3244,12 @@ def _center_cloud_quad_geometry(
             [half_axes[0], half_axes[1]],
             [-half_axes[0], half_axes[1]],
         ],
-        dtype=np.float64,
+        dtype=coord_dtype,
     )
-    coords = (centers_xy[:, None, :] + offsets[None, :, :]).reshape(-1, 2)
-    cells = np.asarray(
-        [
-            [4 * idx + offset for offset in range(4)]
-            for idx in range(centers_xy.shape[0])
-        ],
-        dtype=np.int32,
-    )
+    coords = np.empty((centers_xy.shape[0] * 4, 2), dtype=coord_dtype)
+    for offset_idx, offset in enumerate(offsets):
+        np.add(centers_xy, offset, out=coords[offset_idx::4])
+    cells = np.arange(centers_xy.shape[0] * 4, dtype=np.int32).reshape(-1, 4)
     return coords, cells
 
 
@@ -2078,7 +3259,13 @@ def _greit_rec_model_geometry(
     n_parameters: int,
     meta: dict[str, Any],
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    raw = np.asarray(rec_model, dtype=np.float64)
+    raw_input = np.asarray(rec_model)
+    raw_dtype = (
+        np.float32
+        if np.issubdtype(raw_input.dtype, np.floating) and raw_input.dtype.itemsize <= 4
+        else np.float64
+    )
+    raw = np.ascontiguousarray(raw_input, dtype=raw_dtype)
     if raw.ndim != 2 or raw.shape[1] < 2 or raw.shape[0] == 0:
         return None
     if raw.shape[0] == int(n_parameters):
@@ -2090,9 +3277,9 @@ def _greit_rec_model_geometry(
     if int(meta.get("mesh_dimension", meta.get("dim", 3)) or 3) == 2:
         return _center_cloud_quad_geometry(centers, meta)
     if centers.shape[1] == 2:
-        centers = np.column_stack(
-            [centers, np.zeros((centers.shape[0],), dtype=np.float64)]
-        )
+        padded = np.zeros((centers.shape[0], 3), dtype=centers.dtype)
+        padded[:, :2] = centers
+        centers = padded
     elif centers.shape[1] > 3:
         centers = centers[:, :3]
     return _center_cloud_hexa_geometry(centers, meta)
@@ -2105,12 +3292,14 @@ def _rm_artifact_geometry(
     coords = artifact.get("node_coords")
     cells = artifact.get("cell_connectivity")
     if coords is not None and cells is not None:
-        return np.asarray(coords, dtype=np.float64), np.asarray(cells, dtype=np.int32)
+        return _display_node_coords_array(coords), _display_cell_connectivity_array(
+            cells
+        )
     rec_model = artifact.get("rec_model")
     if rec_model is not None:
         generated_from_rec = _greit_rec_model_geometry(
             rec_model,
-            n_parameters=int(np.asarray(artifact["rm"]).shape[0]),
+            n_parameters=int(_rm_artifact_matrix_shape(artifact)[0]),
             meta=meta,
         )
         if generated_from_rec is not None:
@@ -2159,11 +3348,11 @@ def _greit_artifact_unavailable_reason(
                 "GREIT artifact registry signature mismatch; refusing production "
                 f"{route}."
             )
-    rm = np.asarray(artifact["rm"])
-    if int(rm.shape[1]) != int(expected_n_measurements):
+    rm_shape = _rm_artifact_matrix_shape(artifact)
+    if int(rm_shape[1]) != int(expected_n_measurements):
         return _rm_artifact_measurement_mismatch_message(
             path=Path(str(artifact.get("path", "")) or "<artifact>"),
-            artifact_columns=int(rm.shape[1]),
+            artifact_columns=int(rm_shape[1]),
             request_measurements=int(expected_n_measurements),
         )
     return ""
@@ -2195,9 +3384,98 @@ def _greit_training_space_fit(
         fitted = np.asarray(y_matrix @ coeff, dtype=np.float64).reshape(-1)
     except np.linalg.LinAlgError:
         return None
-    if fitted.size != int(n_measurements) or not np.isfinite(fitted).all():
+    if fitted.size != int(n_measurements) or not all_finite_values(fitted):
         return None
     return fitted
+
+
+def _stream_hdf5_rm_matmul(
+    artifact: dict[str, Any],
+    delta_v: np.ndarray,
+    *,
+    channel_mask: Any | None,
+    measurement_weights: Any | None,
+    device_requested: str,
+    dtype: str,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, dict[str, Any]]:
+    dataset = artifact.get("rm_lazy_dataset")
+    if dataset is None:
+        raise ValueError("Streaming RM matmul requires an HDF5 lazy RM dataset.")
+    np_dtype = np.dtype(_normalize_rm_dtype_name(dtype))
+    rows, cols = _rm_artifact_matrix_shape(artifact)
+
+    from pyeidors.data.channels import apply_measurement_contract_to_vector
+
+    measurement, contract = apply_measurement_contract_to_vector(
+        delta_v,
+        channel_mask=channel_mask,
+        measurement_weights=measurement_weights,
+    )
+    measurement = np.asarray(measurement, dtype=np_dtype).reshape(-1)
+    if int(measurement.size) != int(cols):
+        raise ValueError(
+            f"delta_v measurement dimension {measurement.size} does not match "
+            f"RM columns {cols}."
+        )
+    chunk_bytes = _rm_streaming_chunk_bytes(meta)
+    rows_per_chunk = _rm_streaming_rows_per_chunk(
+        dataset,
+        rows=int(rows),
+        cols=int(cols),
+        dtype=np_dtype,
+        chunk_bytes=chunk_bytes,
+    )
+    dataset_chunks = getattr(dataset, "chunks", None)
+    values = np.empty(int(rows), dtype=np_dtype)
+    chunks = 0
+    file_open_mode, row_blocks = _iter_rm_row_blocks(
+        dataset,
+        rows=int(rows),
+        cols=int(cols),
+        rows_per_chunk=int(rows_per_chunk),
+        dtype=np_dtype,
+    )
+    for start, block in row_blocks:
+        stop = min(int(start) + int(rows_per_chunk), int(rows))
+        if block.ndim != 2 or block.shape[1] != int(cols):
+            raise ValueError(
+                f"RM HDF5 chunk has invalid shape {block.shape}; expected (*, {cols})."
+            )
+        values[start:stop] = block @ measurement
+        chunks += 1
+    if not all_finite_values(values):
+        raise FloatingPointError("Streaming RM matmul produced non-finite values.")
+    metadata = {
+        "backend": "hdf5_chunked",
+        "device_requested": str(device_requested or "auto"),
+        "device_effective": "cpu",
+        "fallback_reason": "streaming_hdf5_rm",
+        "batched": False,
+        "n_frames": 1,
+        "rm_shape": (int(rows), int(cols)),
+        "delta_v_shape": (1, int(cols)),
+        "output_shape": tuple(int(v) for v in values.shape),
+        "rm_dtype": _normalize_rm_dtype_name(dtype),
+        "rm_persistent": False,
+        "rm_tensor_reused": False,
+        "rm_prepare_mode": "streaming_hdf5",
+        "rm_matrix_resident": "hdf5",
+        "rm_cache_key": str(artifact.get("path", "")),
+        "host_device_transfer": "none",
+        "online_hot_path": "rm_hdf5_streaming_matmul",
+        "rm_streaming": True,
+        "rm_streaming_chunks": int(chunks),
+        "rm_streaming_chunk_bytes": int(chunk_bytes),
+        "rm_streaming_rows_per_chunk": int(rows_per_chunk),
+        "rm_hdf5_file_open_mode": str(file_open_mode),
+        "rm_hdf5_dataset_chunks": (
+            tuple(int(v) for v in dataset_chunks) if dataset_chunks else None
+        ),
+        "measurement_weight_kind": str(getattr(contract, "weight_kind", "")),
+        "bad_channel_count": int(getattr(contract, "bad_channel_count", 0)),
+    }
+    return values, metadata
 
 
 def _try_run_cached_rm_request(
@@ -2212,8 +3490,6 @@ def _try_run_cached_rm_request(
 
     if progress_cb is not None:
         progress_cb("Loading cached reconstruction matrix...")
-
-    from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
 
     device = str(runtime.meta.get("rm_device", runtime.meta.get("device", "auto")))
     dtype = _rm_dtype_name_from_meta(runtime.meta)
@@ -2258,17 +3534,32 @@ def _try_run_cached_rm_request(
         ),
         dtype=np_dtype,
     )
-    rm_result = reconstruct_difference_batch(
-        artifact.get("rm_handle", artifact["rm"]),
-        dv,
-        normalize=False,
-        channel_mask=artifact.get("channel_mask"),
-        measurement_weights=artifact.get("measurement_weights"),
-        device=device,
-        dtype=dtype,
-        return_metadata=True,
-    )
-    delta_conductivity = np.asarray(rm_result.values, dtype=np_dtype).reshape(-1)
+    if bool(artifact.get("rm_streaming", False)):
+        delta_values, rm_matmul_metadata = _stream_hdf5_rm_matmul(
+            artifact,
+            dv,
+            channel_mask=artifact.get("channel_mask"),
+            measurement_weights=artifact.get("measurement_weights"),
+            device_requested=device,
+            dtype=dtype,
+            meta=runtime.meta,
+        )
+    else:
+        from pyeidors.inverse.reconstruction_matrix import reconstruct_difference_batch
+
+        rm_result = reconstruct_difference_batch(
+            artifact.get("rm_handle", artifact["rm"]),
+            dv,
+            normalize=False,
+            channel_mask=artifact.get("channel_mask"),
+            measurement_weights=artifact.get("measurement_weights"),
+            device=device,
+            dtype=dtype,
+            return_metadata=True,
+        )
+        delta_values = rm_result.values
+        rm_matmul_metadata = dict(rm_result.metadata)
+    delta_conductivity = np.asarray(delta_values, dtype=np_dtype).reshape(-1)
     output_display_mode = str(runtime.meta.get("rm_output_display_mode", "")).lower()
     if output_display_mode == "absolute_sigma":
         conductivity = delta_conductivity + float(runtime.background_sigma)
@@ -2297,7 +3588,7 @@ def _try_run_cached_rm_request(
                 and jac.shape[0] == int(dv.size)
             ):
                 simulated_dv = np.asarray(jac @ delta_conductivity, dtype=np.float64)
-                if not np.isfinite(simulated_dv).all():
+                if not all_finite_values(simulated_dv):
                     simulated_dv = None
         except Exception:
             simulated_dv = None
@@ -2318,11 +3609,40 @@ def _try_run_cached_rm_request(
             "n_elec": int(runtime.meta["n_elec"]),
             "reconstruction_runtime": "single_step_cached",
             "single_step_operator_space": "rm",
-            "online_hot_path": "rm_matmul",
+            "online_hot_path": str(
+                rm_matmul_metadata.get("online_hot_path", "rm_matmul")
+            ),
             "rm_artifact_path": str(path),
-            "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
+            "rm_shape": tuple(int(v) for v in _rm_artifact_matrix_shape(artifact)),
+            "rm_nbytes": int(_rm_artifact_matrix_nbytes(artifact)),
+            "rm_streaming": bool(artifact.get("rm_streaming", False)),
+            "rm_streaming_decision": str(artifact.get("rm_streaming_decision", "")),
+            "rm_device_resident_max_bytes": int(
+                artifact.get("rm_device_resident_max_bytes", 0) or 0
+            ),
+            "rm_artifact_process_cache_bytes": int(
+                artifact.get("rm_artifact_process_cache_bytes", 0) or 0
+            ),
+            "rm_artifact_process_cache_max_bytes": int(
+                artifact.get("rm_artifact_process_cache_max_bytes", 0) or 0
+            ),
+            "rm_artifact_process_cache_stored": bool(
+                artifact.get("rm_artifact_process_cache_stored", False)
+            ),
+            "rm_artifact_process_cache_skip_reason": str(
+                artifact.get("rm_artifact_process_cache_skip_reason", "")
+            ),
             "rm_voxel_shape": tuple(int(v) for v in artifact.get("voxel_shape", ())),
-            "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
+            "rm_dtype": str(rm_matmul_metadata.get("rm_dtype", dtype)),
+            "rm_matmul_compile_mode": str(
+                rm_matmul_metadata.get("rm_matmul_compile_mode", "")
+            ),
+            "rm_matmul_compile_status": str(
+                rm_matmul_metadata.get("rm_matmul_compile_status", "")
+            ),
+            "rm_matmul_compiled": bool(
+                rm_matmul_metadata.get("rm_matmul_compiled", False)
+            ),
             "rm_artifact_cache_hit": bool(artifact.get("rm_artifact_cache_hit", False)),
             "rm_output_display_mode": output_display_mode or "delta_sigma",
             "difference_lambda": runtime.lam,
@@ -2331,35 +3651,68 @@ def _try_run_cached_rm_request(
                 "path": "single_step_cached_rm",
                 "strict_solver_backend_effective": "rm",
                 "runtime": {
-                    "online_hot_path": "rm_matmul",
+                    "online_hot_path": str(
+                        rm_matmul_metadata.get("online_hot_path", "rm_matmul")
+                    ),
                     "single_step_operator_space": "rm",
                     "forward_solve_count": 0,
                     "adjoint_solve_count": 0,
                     "jacobian_rebuild_count": 0,
                     "ksp_solve_count": 0,
                     "device_requested": str(
-                        rm_result.metadata.get("device_requested", device)
+                        rm_matmul_metadata.get("device_requested", device)
                     ),
                     "device_effective": str(
-                        rm_result.metadata.get("device_effective", "")
+                        rm_matmul_metadata.get("device_effective", "")
                     ),
-                    "rm_dtype": str(rm_result.metadata.get("rm_dtype", dtype)),
+                    "rm_dtype": str(rm_matmul_metadata.get("rm_dtype", dtype)),
+                    "rm_matmul_compile_mode": str(
+                        rm_matmul_metadata.get("rm_matmul_compile_mode", "")
+                    ),
+                    "rm_matmul_compile_status": str(
+                        rm_matmul_metadata.get("rm_matmul_compile_status", "")
+                    ),
+                    "rm_matmul_compiled": bool(
+                        rm_matmul_metadata.get("rm_matmul_compiled", False)
+                    ),
                     "rm_persistent": bool(
-                        rm_result.metadata.get("rm_persistent", False)
+                        rm_matmul_metadata.get("rm_persistent", False)
                     ),
                     "rm_tensor_reused": bool(
-                        rm_result.metadata.get("rm_tensor_reused", False)
+                        rm_matmul_metadata.get("rm_tensor_reused", False)
                     ),
                     "rm_prepare_mode": str(
-                        rm_result.metadata.get("rm_prepare_mode", "")
+                        rm_matmul_metadata.get("rm_prepare_mode", "")
                     ),
                     "host_device_transfer": str(
-                        rm_result.metadata.get("host_device_transfer", "")
+                        rm_matmul_metadata.get("host_device_transfer", "")
+                    ),
+                    "rm_streaming": bool(artifact.get("rm_streaming", False)),
+                    "rm_streaming_decision": str(
+                        artifact.get("rm_streaming_decision", "")
+                    ),
+                    "rm_device_resident_max_bytes": int(
+                        artifact.get("rm_device_resident_max_bytes", 0) or 0
                     ),
                     "rm_artifact_cache_hit": bool(
                         artifact.get("rm_artifact_cache_hit", False)
                     ),
-                    "rm_shape": tuple(int(v) for v in artifact["rm"].shape),
+                    "rm_shape": tuple(
+                        int(v) for v in _rm_artifact_matrix_shape(artifact)
+                    ),
+                    "rm_nbytes": int(_rm_artifact_matrix_nbytes(artifact)),
+                    "rm_artifact_process_cache_bytes": int(
+                        artifact.get("rm_artifact_process_cache_bytes", 0) or 0
+                    ),
+                    "rm_artifact_process_cache_max_bytes": int(
+                        artifact.get("rm_artifact_process_cache_max_bytes", 0) or 0
+                    ),
+                    "rm_artifact_process_cache_stored": bool(
+                        artifact.get("rm_artifact_process_cache_stored", False)
+                    ),
+                    "rm_artifact_process_cache_skip_reason": str(
+                        artifact.get("rm_artifact_process_cache_skip_reason", "")
+                    ),
                     "rm_artifact_path": str(path),
                 },
                 "cache_lookups": {
@@ -2378,7 +3731,7 @@ def _try_run_cached_rm_request(
                     }
                 },
                 "rm_metadata": dict(artifact.get("metadata", {}) or {}),
-                "rm_matmul": dict(rm_result.metadata),
+                "rm_matmul": dict(rm_matmul_metadata),
             },
         }
     )
@@ -2735,6 +4088,18 @@ def _single_step_runtime_diagnostics(ctx: dict[str, Any]) -> dict[str, Any]:
         "mesh_cache_hit": ctx.get("mesh_cache_hit"),
         "mesh_cache_layer": ctx.get("mesh_cache_layer"),
         "mesh_cache_name": ctx.get("mesh_cache_name"),
+        "single_step_context_process_cache_bytes": int(
+            ctx.get("single_step_context_process_cache_bytes", 0) or 0
+        ),
+        "single_step_context_process_cache_max_bytes": int(
+            ctx.get("single_step_context_process_cache_max_bytes", 0) or 0
+        ),
+        "single_step_context_process_cache_stored": bool(
+            ctx.get("single_step_context_process_cache_stored", False)
+        ),
+        "single_step_context_process_cache_skip_reason": str(
+            ctx.get("single_step_context_process_cache_skip_reason", "")
+        ),
         "cache_hit": cache_hit,
         "cache_hits": cache_hits,
     }
@@ -2788,6 +4153,7 @@ def _ensure_single_step_cached_context(
 ) -> dict[str, Any]:
     meta = runtime.meta
     ctx = _get_cached_fast_context(runtime.cache_key)
+    built_context = False
     if ctx is None:
         emit("Building cached single-step context...")
         ctx = _quiet_call(
@@ -2878,15 +4244,17 @@ def _ensure_single_step_cached_context(
                 ),
             )
         )
-        _put_cached_fast_context(runtime.cache_key, ctx)
+        built_context = True
     else:
         emit("Reusing cached single-step context...")
 
     mesh = ctx["mesh"]
     if "display_node_coords" not in ctx:
-        ctx["display_node_coords"] = np.asarray(mesh.coordinates(), dtype=np.float64)
+        ctx["display_node_coords"] = _display_node_coords_array(mesh.coordinates())
     if "display_cell_connectivity" not in ctx:
-        ctx["display_cell_connectivity"] = np.asarray(mesh.cells(), dtype=np.int32)
+        ctx["display_cell_connectivity"] = _display_cell_connectivity_array(
+            mesh.cells()
+        )
     ctx.setdefault(
         "jacobian_representation",
         str(meta.get("jacobian_representation", "dense")),
@@ -2894,6 +4262,11 @@ def _ensure_single_step_cached_context(
     ctx["jacobian_representation_reason"] = str(
         meta.get("jacobian_representation_reason", "")
     )
+    if built_context:
+        ctx["single_step_context_cache_max_bytes"] = (
+            _single_step_context_cache_max_bytes(meta)
+        )
+        _put_cached_fast_context(runtime.cache_key, ctx)
     return ctx
 
 
@@ -2915,6 +4288,11 @@ def _run_full_gn_request(
 
     ref_vec = req.reference_frame.to_measurement_vector(req.use_part)
     tgt_vec = req.target_frame.to_measurement_vector(req.use_part)
+    native_complex_request = _is_native_complex_reconstruction_request(
+        req,
+        np.asarray(ref_vec),
+        np.asarray(tgt_vec),
+    )
 
     meta = dict(req.metadata)
     meta.setdefault("n_elec", 16)
@@ -2966,9 +4344,21 @@ def _run_full_gn_request(
         meta, mesh_dim=int(req.mesh_dimension)
     )
     meta.update(runtime_options)
+    requested_difference_preset = str(
+        meta.get("difference_preset", _DEFAULT_EIT_SYSTEM_DIFFERENCE_PRESET)
+    )
+    system_difference_preset = _eit_system_difference_preset_for_full_gn(
+        requested_difference_preset,
+        native_complex=native_complex_request,
+    )
+    if system_difference_preset != requested_difference_preset.strip().lower():
+        meta.setdefault("difference_preset_requested", requested_difference_preset)
+        meta["difference_preset_effective"] = system_difference_preset
 
     emit("Building measurement datasets...")
-    data_type = req.use_part if req.use_part in {"real", "imag", "mag"} else "real"
+    data_type = (
+        req.use_part if req.use_part in {"real", "imag", "mag", "complex"} else "real"
+    )
     ref_ds = MeasurementDataset.from_metadata(
         measurements=ref_vec.reshape(1, -1),
         metadata=meta,
@@ -3020,7 +4410,7 @@ def _run_full_gn_request(
         _contact_impedance_scalar(meta.get("contact_impedance", 0.01)),
         float(req.regularization_alpha),
         repr(meta.get("hyperparameter")),
-        str(meta.get("difference_preset", "eidors_one_step_noser")),
+        system_difference_preset,
         str(meta.get("absolute_preset", "eidors_abs_gn")),
         str(meta["difference_mode"]),
         str(meta["difference_orientation"]),
@@ -3085,9 +4475,7 @@ def _run_full_gn_request(
             hyperparameter=hyperparameter,
             difference_mode=meta["difference_mode"],
             difference_orientation=meta["difference_orientation"],
-            difference_preset=str(
-                meta.get("difference_preset", "eidors_one_step_noser")
-            ),
+            difference_preset=system_difference_preset,
             absolute_preset=str(meta.get("absolute_preset", "eidors_abs_gn")),
             contact_impedance=_contact_impedance_vector_from_meta(
                 meta,
@@ -3128,6 +4516,11 @@ def _run_full_gn_request(
             electrode_layout=str(meta.get("electrode_layout", "ring_major")),
         )
         system.setup(mesh=mesh)
+        setattr(
+            system,
+            "_reconstruction_system_cache_max_bytes",
+            _reconstruction_system_cache_max_bytes(meta),
+        )
         _put_cached_system(cache_key, system)
     else:
         emit("Reusing cached reconstruction system...")
@@ -3138,6 +4531,16 @@ def _run_full_gn_request(
         system.reconstructor.max_iterations = max_iterations
         meta["max_iterations_requested"] = max_iterations
         meta["max_iterations_effective"] = max_iterations
+
+    if method == "gn-difference" and native_complex_request:
+        return _run_native_complex_linearized_difference(
+            req=req,
+            system=system,
+            ref_vec=np.asarray(ref_vec),
+            tgt_vec=np.asarray(tgt_vec),
+            meta=meta,
+            progress_cb=progress_cb,
+        )
 
     emit("Running reconstruction...")
     if method == "gn-absolute":
@@ -3254,12 +4657,8 @@ def _run_single_step_cached_request(
     from pyeidors.data.structures import EITImage
     from pyeidors.utils.numeric_ops import safe_dot
 
-    ref_vec = np.asarray(
-        req.reference_frame.to_measurement_vector(req.use_part), dtype=np.float64
-    )
-    tgt_vec = np.asarray(
-        req.target_frame.to_measurement_vector(req.use_part), dtype=np.float64
-    )
+    ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part))
+    tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part))
 
     emit("Running cached single-step reconstruction...")
     difference_mode = str(meta.get("difference_mode", "raw"))
@@ -3297,8 +4696,7 @@ def _run_single_step_cached_request(
         delta_sigma = _measurement_space_delta(operator_bundle=operator_bundle, rhs=dv)
     elif operator_space != "linearized":
         rhs = np.asarray(
-            safe_dot(operator_bundle["Jt"], dv, "eit_app.fast_recon.Jt_dv"),
-            dtype=np.float64,
+            safe_dot(operator_bundle["Jt"], dv, "eit_app.fast_recon.Jt_dv")
         )
         delta_sigma = _solve_linear_from_bundle(operator_bundle, rhs)
 
@@ -3414,6 +4812,164 @@ def run_reconstruction_request(
             error_msg=str(exc),
             metadata=dict(getattr(req, "metadata", {}) or {}),
         )
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[3]
+
+
+def execute_reconstruction_request_in_backend(
+    req: ReconstructionRequest,
+    *,
+    profile: str,
+    route_reason: str,
+    progress_cb: Callable[[str], None] | None = None,
+    cancelled: Callable[[], bool] | None = None,
+) -> ReconstructionResult:
+    """Run a reconstruction request in a profile-isolated backend process."""
+
+    def emit(message: str) -> None:
+        if progress_cb is not None:
+            progress_cb(message)
+
+    def check_cancelled() -> bool:
+        return bool(cancelled is not None and cancelled())
+
+    repo = _repo_root()
+    profile_name = str(profile or "default").strip() or "default"
+    with tempfile.TemporaryDirectory(prefix="pyeidors-gui-backend-") as tmp:
+        tmp_dir = Path(tmp)
+        input_path = tmp_dir / "reconstruction_request.h5"
+        output_path = tmp_dir / "reconstruction_result.h5"
+        from eit_app.backend_worker_protocol import (
+            read_reconstruction_result,
+            write_reconstruction_request,
+        )
+        from eit_app.backend_worker_runtime import (
+            backend_worker_command,
+            backend_worker_env,
+            backend_worker_profile_lock,
+        )
+
+        write_reconstruction_request(input_path, req)
+        from eit_app.backend_worker_pool import (
+            BackendWorkerTransportError,
+            persistent_backend_workers_enabled,
+            run_persistent_backend_worker_request,
+        )
+
+        if persistent_backend_workers_enabled():
+            try:
+                worker_meta = run_persistent_backend_worker_request(
+                    repo=repo,
+                    profile=profile_name,
+                    command="reconstruct",
+                    input_path=input_path,
+                    output_path=output_path,
+                    progress_cb=progress_cb,
+                )
+                result = read_reconstruction_result(output_path)
+                result.metadata = {
+                    **dict(result.metadata or {}),
+                    "backend_worker_profile": profile_name,
+                    "backend_worker_route_reason": route_reason,
+                    "backend_worker_process_isolated": True,
+                    "backend_worker_persistent": True,
+                    "backend_worker_launch_mode": worker_meta.launch_mode,
+                    "backend_worker_cache_home": str(worker_meta.cache_home),
+                    "backend_worker_pid": worker_meta.pid,
+                    "backend_worker_reused_process": worker_meta.reused_process,
+                    "backend_worker_stale_jit_locks_removed": (
+                        worker_meta.stale_jit_locks_removed
+                    ),
+                    "backend_worker_rss_bytes": getattr(worker_meta, "rss_bytes", 0),
+                    "backend_worker_rss_limit_bytes": getattr(
+                        worker_meta, "rss_limit_bytes", 0
+                    ),
+                    "backend_worker_recycled_after_request": (
+                        getattr(worker_meta, "recycled_after_request", False)
+                    ),
+                    "backend_worker_recycle_reason": getattr(
+                        worker_meta, "recycle_reason", ""
+                    ),
+                    "backend_worker_primed_runtime": getattr(
+                        worker_meta, "primed_runtime", False
+                    ),
+                    "backend_worker_prime_command": getattr(
+                        worker_meta, "prime_command", ""
+                    ),
+                    "backend_worker_prime_duration_ms": getattr(
+                        worker_meta, "prime_duration_ms", 0.0
+                    ),
+                }
+                emit("Backend reconstruction complete.")
+                return result
+            except BackendWorkerTransportError as exc:
+                if check_cancelled():
+                    raise InterruptedError from exc
+                emit(
+                    "Persistent backend worker unavailable; "
+                    f"falling back to one-shot worker: {exc}"
+                )
+        if check_cancelled():
+            raise InterruptedError
+
+        cmd, launch_mode = backend_worker_command(
+            profile=profile_name,
+            worker_args=[
+                "reconstruct",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+            ],
+        )
+        emit(
+            "Dispatching reconstruction to backend "
+            f"profile={profile_name} via {launch_mode} ({route_reason})..."
+        )
+        with backend_worker_profile_lock(repo, profile_name):
+            env, cache = backend_worker_env(repo=repo, profile=profile_name)
+            if cache.removed_stale_jit_locks:
+                emit(
+                    "Cleaned backend JIT cache: "
+                    f"{len(cache.removed_stale_jit_locks)} stale lock file(s)."
+                )
+            emit(f"Backend cache: {cache.xdg_cache_home}")
+            proc = subprocess.run(
+                cmd,
+                cwd=str(repo),
+                env=env,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+        if proc.stderr:
+            for line in proc.stderr.splitlines():
+                line = line.strip()
+                if line:
+                    emit(line)
+        if proc.returncode != 0:
+            details = (proc.stderr or proc.stdout or "").strip()
+            raise RuntimeError(
+                f"Backend worker profile={profile_name} failed with exit "
+                f"{proc.returncode}: {details}"
+            )
+        result = read_reconstruction_result(output_path)
+        result.metadata = {
+            **dict(result.metadata or {}),
+            "backend_worker_profile": profile_name,
+            "backend_worker_route_reason": route_reason,
+            "backend_worker_process_isolated": True,
+            "backend_worker_persistent": False,
+            "backend_worker_launch_mode": launch_mode,
+            "backend_worker_cache_home": str(cache.xdg_cache_home),
+            "backend_worker_stale_jit_locks_removed": len(
+                cache.removed_stale_jit_locks
+            ),
+        }
+        emit("Backend reconstruction complete.")
+        return result
 
 
 class ReconstructionController(QObject):

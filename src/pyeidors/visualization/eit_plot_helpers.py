@@ -262,8 +262,12 @@ def overlay_electrode_labels(ax, mesh, label_outset: float = 0.08):
     for idx, tag in enumerate(tags, start=1):
         if not tag_points[tag]:
             continue
-        pts = np.vstack(tag_points[tag])
-        centroid = pts.mean(axis=0)
+        point_sum = np.zeros(2, dtype=np.float64)
+        point_count = 0
+        for seg in tag_points[tag]:
+            point_sum += np.sum(seg, axis=0)
+            point_count += int(seg.shape[0])
+        centroid = point_sum / max(point_count, 1)
         direction = centroid - center[:2]
         norm = np.linalg.norm(direction)
         if norm < 1e-12:

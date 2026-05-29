@@ -4,6 +4,12 @@ This project uses sharded pytest commands for recoverable validation. The full
 `tests/unit` suite has timed out before without returning enough failure detail,
 so broad validation should run named shards and persist one log per shard.
 
+The plain local pytest entry point is intentionally a quick software gate:
+`uv run pytest -q` skips `slow`, `integration`, `gpu`, `gui`, and `hardware`
+tiers unless their explicit opt-in flags are passed. This keeps normal local
+validation bounded and prevents hardware-facing checks from running when no
+device is connected.
+
 Always invoke the runner through the FEniCSx/Nix environment:
 
 ```bash
@@ -45,6 +51,14 @@ The two shards can also be reviewed independently:
 ```bash
 nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --shard gui --timeout 300
 nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --shard hardware --timeout 300
+```
+
+Direct pytest opt-ins are also available when a shard is not needed:
+
+```bash
+uv run pytest --run-gui tests/unit/test_eit_app_gui_smoke.py -q --no-cov
+uv run pytest --run-hardware tests/unit/test_eit_app_serial_device.py -q --no-cov
+uv run pytest --run-integration --run-slow tests/integration -q --no-cov
 ```
 
 Forward extra pytest arguments with repeated `--pytest-arg`. Use the

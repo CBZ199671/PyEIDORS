@@ -20,6 +20,44 @@ from .linearized import (
 )
 
 
+def _numpy_dtype_for_torch_dtype(torch_dtype: torch.dtype) -> np.dtype:
+    if torch_dtype == torch.float32:
+        return np.dtype(np.float32)
+    if torch_dtype == torch.complex64:
+        return np.dtype(np.complex64)
+    if torch_dtype == torch.complex128:
+        return np.dtype(np.complex128)
+    return np.dtype(np.float64)
+
+
+def _stack_gradient_block_direct(
+    gradients: list[np.ndarray],
+    *,
+    start: int = 0,
+    count: int | None = None,
+    dtype: np.dtype | type | None = None,
+) -> np.ndarray:
+    resolved_count = len(gradients) - int(start) if count is None else int(count)
+    if resolved_count <= 0:
+        raise ValueError("gradient block must contain at least one row.")
+    if dtype is None:
+        dtype = np.result_type(
+            *[
+                np.asarray(gradients[int(start) + idx]).dtype
+                for idx in range(resolved_count)
+            ]
+        )
+    first = np.asarray(gradients[int(start)], dtype=dtype)
+    block = np.empty((resolved_count, *first.shape), dtype=dtype)
+    block[0, :, :] = first
+    for local_idx in range(1, resolved_count):
+        block[local_idx, :, :] = np.asarray(
+            gradients[int(start) + local_idx],
+            dtype=dtype,
+        )
+    return np.ascontiguousarray(block, dtype=dtype)
+
+
 class EidorsJacobianAdapter(BaseJacobianCalculator):
     """EIDORS-canonical adjoint Jacobian adapter (Path C, T75).
 
@@ -84,7 +122,25 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
             return torch.float32
         if dtype_str in {"float64", "fp64", "f64", "double", "torch.float64"}:
             return torch.float64
+        if dtype_str in {"complex64", "c64", "torch.complex64"}:
+            return torch.complex64
+        if dtype_str in {"complex128", "c128", "cdouble", "torch.complex128"}:
+            return torch.complex128
         raise ValueError(f"Unsupported torch dtype: {dtype}")
+
+    def _effective_torch_dtype(self, *arrays: np.ndarray) -> torch.dtype:
+        if self.torch_dtype in {torch.complex64, torch.complex128}:
+            return self.torch_dtype
+        complex_dtypes = [
+            np.asarray(array).dtype
+            for array in arrays
+            if np.iscomplexobj(np.asarray(array))
+        ]
+        if not complex_dtypes:
+            return self.torch_dtype
+        if all(dtype == np.dtype(np.complex64) for dtype in complex_dtypes):
+            return torch.complex64
+        return torch.complex128
 
     def _setup(self):
         self._geometry = build_jacobian_geometry(self.fwd_model)
@@ -116,7 +172,7 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
         return J
 
     def linearize(self, sigma: fem.Function, **kwargs) -> JacobianLinearization:
-        """Return EIDORS-style ``Jv``/``J^T r`` actions without dense ``J``."""
+        """Return EIDORS-style ``Jv``/``J^H r`` actions without dense ``J``."""
         u_all, _ = self.fwd_model.forward_solve(sigma)
         grad_u_all = self._compute_field_gradients(u_all)
 
@@ -141,18 +197,18 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
     def linearize_lazy(
         self, sigma: fem.Function, **kwargs
     ) -> LazyAdjointJacobianLinearization:
-        """Return lazy ``Jv``/``J^T r`` actions without per-measurement adjoints."""
+        """Return lazy ``Jv``/``J^H r`` actions without per-measurement adjoints."""
         u_all, _ = self.fwd_model.forward_solve(sigma)
         grad_u_all = self._compute_field_gradients(u_all)
         return LazyAdjointJacobianLinearization(
             fwd_model=self.fwd_model,
-            sigma_values=np.asarray(sigma.x.array, dtype=np.float64).copy(),
-            u_all=tuple(np.asarray(u, dtype=np.float64).copy() for u in u_all),
+            sigma_values=np.asarray(sigma.x.array).copy(),
+            u_all=tuple(np.asarray(u).copy() for u in u_all),
             grad_u_all=tuple(grad_u_all),
             cell_areas=np.asarray(self.cell_areas, dtype=np.float64),
             n_meas_per_stim=tuple(self.fwd_model.pattern_manager.n_meas_per_stim),
             meas_matrices=tuple(
-                np.asarray(matrix, dtype=np.float64)
+                np.asarray(matrix)
                 for matrix in self.fwd_model.pattern_manager.meas_matrices
             ),
             gradient_callback=self._compute_field_gradients,
@@ -209,24 +265,27 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
 
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
-        J_t = torch.zeros(
-            (n_meas, n_elem), device=self.torch_device, dtype=self.torch_dtype
+        torch_dtype = self._effective_torch_dtype(*grad_u_all, *grad_adj_all)
+        cell_areas_t = torch.from_numpy(self.cell_areas).to(
+            self.torch_device,
+            dtype=torch_dtype,
         )
+        J_t = torch.zeros((n_meas, n_elem), device=self.torch_device, dtype=torch_dtype)
 
         meas_idx = 0
         for stim_idx, grad_u in enumerate(grad_u_all):
             n_meas_this = self.fwd_model.pattern_manager.n_meas_per_stim[stim_idx]
-            grad_u_t = torch.from_numpy(grad_u).to(
-                self.torch_device, dtype=self.torch_dtype
-            )
-            adj_block = np.stack(
-                grad_adj_all[meas_idx : meas_idx + n_meas_this], axis=0
+            grad_u_t = torch.from_numpy(grad_u).to(self.torch_device, dtype=torch_dtype)
+            adj_block = _stack_gradient_block_direct(
+                grad_adj_all,
+                start=meas_idx,
+                count=n_meas_this,
             )
             adj_block_t = torch.from_numpy(adj_block).to(
-                self.torch_device, dtype=self.torch_dtype
+                self.torch_device, dtype=torch_dtype
             )
             sensitivity = (
-                -(adj_block_t * grad_u_t.unsqueeze(0)).sum(dim=2) * self.cell_areas_t
+                -(adj_block_t * grad_u_t.unsqueeze(0)).sum(dim=2) * cell_areas_t
             )
             J_t[meas_idx : meas_idx + n_meas_this, :] = sensitivity
             meas_idx += n_meas_this
@@ -237,9 +296,10 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
     ) -> np.ndarray:
         n_meas = self.fwd_model.pattern_manager.n_meas_total
         n_elem = len(self.cell_areas)
-        np_dtype = np.float32 if self.torch_dtype == torch.float32 else np.float64
+        torch_dtype = self._effective_torch_dtype(*grad_u_all, *grad_adj_all)
+        np_dtype = _numpy_dtype_for_torch_dtype(torch_dtype)
 
-        adj_block = np.stack(grad_adj_all, axis=0).astype(np_dtype, copy=False)
+        adj_block = _stack_gradient_block_direct(grad_adj_all, dtype=np_dtype)
         grad_u_block = np.zeros((n_meas, n_elem, adj_block.shape[2]), dtype=np_dtype)
 
         meas_idx = 0
@@ -251,10 +311,14 @@ class EidorsJacobianAdapter(BaseJacobianCalculator):
             meas_idx += n_meas_this
 
         grad_u_t = torch.from_numpy(grad_u_block).to(
-            self.torch_device, dtype=self.torch_dtype
+            self.torch_device, dtype=torch_dtype
         )
         adj_block_t = torch.from_numpy(adj_block).to(
-            self.torch_device, dtype=self.torch_dtype
+            self.torch_device, dtype=torch_dtype
         )
-        sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * self.cell_areas_t
+        cell_areas_t = torch.from_numpy(self.cell_areas).to(
+            self.torch_device,
+            dtype=torch_dtype,
+        )
+        sensitivity = -(adj_block_t * grad_u_t).sum(dim=2) * cell_areas_t
         return sensitivity.cpu().numpy()

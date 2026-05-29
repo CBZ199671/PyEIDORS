@@ -16,6 +16,7 @@ from typing import Any, Callable, Mapping
 
 import numpy as np
 
+from pyeidors.cache.keys import hash_array_payload
 from pyeidors.inverse.greit import (
     GREIT_EIDORS_HDF5_SCHEMA,
     GREITRM,
@@ -674,12 +675,12 @@ def _canonical_value(value: Any) -> Any:
             for key, val in sorted(value.items(), key=lambda item: str(item[0]))
         }
     if isinstance(value, np.ndarray):
-        arr = np.ascontiguousarray(value)
+        arr = np.asarray(value)
         return {
             "__ndarray__": True,
             "dtype": str(arr.dtype),
             "shape": [int(v) for v in arr.shape],
-            "sha256": hashlib.sha256(arr.tobytes()).hexdigest(),
+            "sha256": hash_array_payload(arr),
         }
     if isinstance(value, np.generic):
         return value.item()

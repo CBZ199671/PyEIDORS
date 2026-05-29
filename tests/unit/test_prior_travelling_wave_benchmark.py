@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import sys
@@ -55,8 +56,8 @@ def test_prior_travelling_wave_benchmark_reports_fidelity_and_signature_delta(
     assert saved["summary"]["signatures_distinct_from_laplace"]["curvature"] is True
     assert saved["summary"]["signatures_distinct_from_laplace"]["tv_irls"] is True
     assert saved["summary"]["matches_laplace_reconstruction"]["laplace"] is True
-    assert saved["summary"]["matches_laplace_reconstruction"]["graph_ltl"] is True
-    assert saved["summary"]["matches_laplace_reconstruction"]["curvature"] is True
+    assert saved["summary"]["matches_laplace_reconstruction"]["graph_ltl"] is False
+    assert saved["summary"]["matches_laplace_reconstruction"]["curvature"] is False
 
     laplace = saved["methods"]["laplace"]
     graph_ltl = saved["methods"]["graph_ltl"]
@@ -64,8 +65,8 @@ def test_prior_travelling_wave_benchmark_reports_fidelity_and_signature_delta(
     tv_irls = saved["methods"]["tv_irls"]
     assert laplace["RtR_signature_hash"] != graph_ltl["RtR_signature_hash"]
     assert graph_ltl["RtR_signature_hash"] == curvature["RtR_signature_hash"]
-    assert graph_ltl["matrix_delta_fro_vs_laplace"] == 0.0
-    assert curvature["matrix_delta_fro_vs_laplace"] == 0.0
+    assert graph_ltl["matrix_delta_fro_vs_laplace"] > 0.0
+    assert curvature["matrix_delta_fro_vs_laplace"] > 0.0
     assert tv_irls["RtR_signature_hash"] != laplace["RtR_signature_hash"]
     assert tv_irls["matrix_delta_fro_vs_laplace"] is None
     assert tv_irls["tv_irls_metadata"]["objective_monotone_all"] is True
@@ -106,3 +107,45 @@ def test_prior_travelling_wave_benchmark_validates_fixture_inputs() -> None:
             assert message in str(exc)
         else:  # pragma: no cover - assertion clarity
             raise AssertionError(f"expected ValueError containing {message!r}")
+
+
+def test_v535_prior_travelling_wave_direct_fills_frames_and_jacobian() -> None:
+    module = _load_module()
+
+    fixture_source = inspect.getsource(module.build_travelling_wave_fixture)
+    jacobian_source = inspect.getsource(module.synthetic_measurement_jacobian)
+    fidelity_source = inspect.getsource(module.fidelity_metrics)
+    assert "np.vstack" not in fixture_source
+    assert "np.vstack" not in jacobian_source
+    assert "peak_time_recon[peak_mask]" not in fidelity_source
+    assert "_travelling_wave_frames(positions, centers, width)" in fixture_source
+    assert "_mean_abs_difference_where(" in fidelity_source
+
+    positions = np.array([0.0, 0.5, 1.0], dtype=np.float64)
+    frames = module._travelling_wave_frames(
+        positions,
+        np.array([0.0, 1.0], dtype=np.float64),
+        0.5,
+    )
+    expected = np.vstack(
+        [
+            np.exp(-0.5 * ((positions - 0.0) / 0.5) ** 2),
+            np.exp(-0.5 * ((positions - 1.0) / 0.5) ** 2),
+        ]
+    )
+    np.testing.assert_allclose(frames, expected)
+
+    jacobian = module.synthetic_measurement_jacobian(
+        positions,
+        n_measurements=4,
+    )
+    assert jacobian.shape == (4, 3)
+    np.testing.assert_allclose(np.linalg.norm(jacobian, axis=1), 1.0)
+    np.testing.assert_allclose(
+        module._mean_abs_difference_where(
+            np.array([1.0, 4.0, 9.0]),
+            np.array([0.0, 1.0, 3.0]),
+            np.array([True, False, True]),
+        ),
+        3.5,
+    )

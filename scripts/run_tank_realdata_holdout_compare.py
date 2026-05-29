@@ -35,11 +35,15 @@ for path in [SRC_PATH, SCRIPTS_PATH]:
 
 from common.hdf5_outputs import GALLERY_ARRAYS_SCHEMA, write_output_bundle
 from common.io_utils import align_frames_polarity, load_csv_measurements
+from common.array_metrics import pearson_correlation
 from pyeidors.data.holdout_point_audit import build_holdout_point_audit
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
+from pyeidors.utils.numeric_ops import all_finite_values
+
+_CHUNK_ITEMS = 1_048_576
 
 
 SUMMARY_FIELDS = [
@@ -107,7 +111,7 @@ def _fit_values(
         return np.polyval(coeffs, x_holdout)
     spline = CubicSpline(x_train, y_train, bc_type="natural", extrapolate=False)
     predicted = np.asarray(spline(x_holdout), dtype=float)
-    if not np.all(np.isfinite(predicted)):
+    if not all_finite_values(predicted):
         raise FloatingPointError("spline prediction produced non-finite values")
     return predicted
 
@@ -151,6 +155,65 @@ def _solve_delta(jacobian: np.ndarray, rhs: np.ndarray, lam: float) -> np.ndarra
     return np.linalg.solve(np.asarray(lhs, dtype=float), rhs_vec)
 
 
+def _rmse_at_indices(values: np.ndarray, indices: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=float).reshape(-1)
+    idx = np.asarray(indices, dtype=np.intp).reshape(-1)
+    if idx.size == 0:
+        return math.nan
+    chunk_items = min(int(idx.size), _CHUNK_ITEMS)
+    work = np.empty(chunk_items, dtype=np.float64)
+    total = 0.0
+    for start in range(0, int(idx.size), chunk_items):
+        stop = min(start + chunk_items, int(idx.size))
+        count = stop - start
+        target = work[:count]
+        np.take(arr, idx[start:stop], out=target)
+        np.square(target, out=target)
+        total += float(np.sum(target))
+    return float(math.sqrt(total / float(idx.size)))
+
+
+def _max_abs_value(values: np.ndarray) -> float:
+    arr = np.asarray(values, dtype=np.float64).reshape(-1)
+    if arr.size == 0:
+        return 0.0
+    chunk_items = min(int(arr.size), _CHUNK_ITEMS)
+    work = np.empty(chunk_items, dtype=np.float64)
+    current = 0.0
+    for start in range(0, int(arr.size), chunk_items):
+        stop = min(start + chunk_items, int(arr.size))
+        count = stop - start
+        target = work[:count]
+        np.abs(arr[start:stop], out=target)
+        current = max(current, float(np.max(target)))
+    return current
+
+
+def _stack_two_frames(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    first_arr = np.asarray(first)
+    second_arr = np.asarray(second)
+    if first_arr.shape != second_arr.shape:
+        raise ValueError("frame shapes must match")
+    out = np.empty((2, first_arr.size), dtype=np.result_type(first_arr, second_arr))
+    out[0, :] = first_arr.reshape(-1)
+    out[1, :] = second_arr.reshape(-1)
+    return out
+
+
+def _stack_variant_vectors(variants: list[VariantResult], attr: str) -> np.ndarray:
+    if not variants:
+        return np.empty((0, 0), dtype=np.float64)
+    first = np.asarray(getattr(variants[0], attr), dtype=np.float64).reshape(-1)
+    out = np.empty((len(variants), first.size), dtype=np.float64)
+    out[0, :] = first
+    for row, variant in enumerate(variants[1:], start=1):
+        values = np.asarray(getattr(variant, attr), dtype=np.float64).reshape(-1)
+        if values.size != first.size:
+            raise ValueError(f"variant {variant.name} field {attr} size mismatch")
+        out[row, :] = values
+    return out
+
+
 def _forward_measurement(
     fwd_model: EITForwardModel, sigma_values: np.ndarray
 ) -> np.ndarray:
@@ -162,9 +225,7 @@ def _forward_measurement(
 
 
 def _metric_corr(a: np.ndarray, b: np.ndarray) -> float:
-    if float(np.std(a)) == 0.0 or float(np.std(b)) == 0.0:
-        return math.nan
-    return float(np.corrcoef(a, b)[0, 1])
+    return pearson_correlation(a, b)
 
 
 def _run_variant(
@@ -190,7 +251,7 @@ def _run_variant(
     pred_diff = pred_vi - base_meas
     residual = pred_diff - full_diff
     fit_residual = fit_diff - full_diff
-    fit_holdout_rmse = float(np.sqrt(np.mean(fit_residual[holdout_indices] ** 2)))
+    fit_holdout_rmse = _rmse_at_indices(fit_residual, holdout_indices)
     fit_diff_rmse = float(np.sqrt(np.mean(fit_residual**2)))
     if not fit_metrics_applicable:
         fit_holdout_rmse = math.nan
@@ -233,11 +294,11 @@ def _plot_reconstruction_comparison(
     points, cells = _mesh_cells(mesh)
     tri = mtri.Triangulation(points[:, 0], points[:, 1], cells)
     fields = [(item.name, item.delta_sigma) for item in variants]
-    values = np.concatenate([field for _, field in fields])
-    vmax = max(float(np.max(np.abs(values))), 1e-12)
+    vmax = max(max(_max_abs_value(field) for _, field in fields), 1e-12)
     full = variants[0].delta_sigma
-    diff_values = [item.delta_sigma - full for item in variants[1:]]
-    diff_lim = max(float(max(np.max(np.abs(v)) for v in diff_values)), 1e-12)
+    diff_lim = 1e-12
+    for item in variants[1:]:
+        diff_lim = max(diff_lim, _max_abs_value(item.delta_sigma - full))
     n_cols = len(variants)
     fig, axes = plt.subplots(
         2,
@@ -550,7 +611,9 @@ def main(argv: list[str] | None = None) -> int:
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
 
     base_forward, _ = fwd_model.fwd_solve(img_bg)
-    aligned, flipped = align_frames_polarity(np.vstack([vh, vi]), base_forward.meas)
+    aligned, flipped = align_frames_polarity(
+        _stack_two_frames(vh, vi), base_forward.meas
+    )
     vh, vi = aligned
     if flipped:
         print(f"[INFO] Polarity correction: flipped frame indices {flipped}")
@@ -660,9 +723,9 @@ def main(argv: list[str] | None = None) -> int:
             "holdout_indices": holdout_indices,
             "jacobian_shape": np.array(jacobian.shape, dtype=np.int64),
             "method_names": np.array([item.name for item in variants]),
-            "delta_sigma": np.vstack([item.delta_sigma for item in variants]),
-            "pred_diff": np.vstack([item.pred_diff for item in variants]),
-            "fit_diff": np.vstack([item.fit_diff for item in variants]),
+            "delta_sigma": _stack_variant_vectors(variants, "delta_sigma"),
+            "pred_diff": _stack_variant_vectors(variants, "pred_diff"),
+            "fit_diff": _stack_variant_vectors(variants, "fit_diff"),
             "lambda_": np.array(args.lam),
             "background_sigma": np.array(args.background_sigma),
             "pattern_amplitude": np.array(args.pattern_amplitude),

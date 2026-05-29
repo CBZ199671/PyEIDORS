@@ -14,19 +14,21 @@ EXPECTED_SHA256_PER_FILE: dict[str, int] = {
     "cache/keys.py": 6,
     "cache/object_signature.py": 2,
     "cache/process_lru.py": 1,
-    "forward/cuda_structured_backend.py": 1,
-    "forward/eit_forward_model.py": 5,
+    "forward/cuda_structured_backend.py": 0,
+    "forward/eit_forward_model.py": 3,
     "inverse/greit.py": 2,
-    "inverse/jacobian/direct_jacobian.py": 1,
-    "inverse/jacobian/linearized.py": 1,
+    "inverse/greit_registry.py": 1,
+    "inverse/jacobian/direct_jacobian.py": 0,
+    "inverse/jacobian/linearized.py": 0,
     "inverse/prior/rtr.py": 3,
     "inverse/prior/tv_irls.py": 1,
     "inverse/reconstruction_matrix.py": 2,
-    "inverse/reduced/snapshot_bank.py": 3,
-    "inverse/solvers/gauss_newton_linear_system.py": 10,
-    "inverse/solvers/gauss_newton_startup_cache.py": 1,
-    "inverse/solvers/sparse_bayesian_engine.py": 1,
-    "io/hdf5_artifacts.py": 1,
+    "inverse/reduced/snapshot_bank.py": 0,
+    "inverse/solvers/gauss_newton_linear_system.py": 2,
+    "inverse/solvers/gauss_newton_startup_cache.py": 0,
+    "inverse/solvers/sparse_bayesian_engine.py": 0,
+    "io/hdf5_artifacts.py": 2,
+    "perf/capabilities.py": 1,
 }
 
 EXPECTED_AUDIT_SECTIONS = (
@@ -79,3 +81,41 @@ def test_no_undocumented_files_added_sha256_calls() -> None:
         "new files added hashlib.sha256(); update T90 audit + baseline. "
         f"undocumented={undocumented!r}"
     )
+
+
+def test_sigma_hash_sites_use_streaming_payload_helper() -> None:
+    for relpath in (
+        "inverse/jacobian/direct_jacobian.py",
+        "inverse/jacobian/linearized.py",
+        "inverse/solvers/gauss_newton_startup_cache.py",
+    ):
+        text = (SRC_PYEIDORS / relpath).read_text(encoding="utf-8")
+        assert "hash_array_payload" in text
+        assert ".tobytes(" not in text
+        assert "hashlib.sha256(" not in text
+
+
+def test_gn_linear_system_cache_hashes_stream_payloads() -> None:
+    text = (
+        SRC_PYEIDORS / "inverse" / "solvers" / "gauss_newton_linear_system.py"
+    ).read_text(encoding="utf-8")
+    assert "hash_array_payload" in text
+    assert ".tobytes(" not in text
+
+
+def test_remaining_array_digest_sites_use_streaming_payload_helper() -> None:
+    for relpath in (
+        "forward/cuda_structured_backend.py",
+        "inverse/greit_registry.py",
+        "inverse/greit.py",
+        "inverse/prior/rtr.py",
+        "inverse/prior/tv_irls.py",
+        "inverse/reconstruction_matrix.py",
+        "inverse/reduced/snapshot_bank.py",
+        "inverse/solvers/sparse_bayesian_engine.py",
+    ):
+        text = (SRC_PYEIDORS / relpath).read_text(encoding="utf-8")
+        assert (
+            "hash_array_payload" in text or "update_digest_with_array_payload" in text
+        )
+        assert ".tobytes(" not in text

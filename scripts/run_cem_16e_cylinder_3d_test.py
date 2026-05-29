@@ -23,6 +23,7 @@ from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.utils.numeric_ops import squared_distances_to_point
 from common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
@@ -49,10 +50,8 @@ def _build_3d_phantom(
     image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
     sigma = np.asarray(image.elem_data, dtype=float).copy()
     coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
-    distances = np.linalg.norm(
-        coords[:, :3] - np.asarray(center, dtype=float)[None, :], axis=1
-    )
-    sigma[distances <= float(radius)] = float(phantom_conductivity)
+    distances2 = squared_distances_to_point(coords, center, ndim=3)
+    sigma[distances2 <= float(radius) ** 2] = float(phantom_conductivity)
     return EITImage(elem_data=sigma, fwd_model=eit_system.fwd_model)
 
 

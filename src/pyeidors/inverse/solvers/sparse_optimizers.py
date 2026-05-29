@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from ...utils.numeric_ops import safe_dot
+from ...utils.numeric_ops import add_scaled_diagonal_in_place, safe_dot
 from .sparse_projection import estimate_lipschitz_constant
 
 
@@ -144,7 +144,9 @@ def solve_irls(
     atb = safe_dot(A.T, b, "solve_irls.atb")
     for _ in range(config.linear_max_iterations):
         weights = 1.0 / np.sqrt(x * x + config.smoothing_beta)
-        M = ata + lambda_reg * np.diag(weights)
+        M_dtype = np.result_type(ata.dtype, weights.dtype, np.float64)
+        M = np.array(ata, dtype=M_dtype, copy=True, order="C")
+        add_scaled_diagonal_in_place(M, weights, lambda_reg)
         rhs = atb
         try:
             x_new = np.linalg.solve(M, rhs)

@@ -11,8 +11,9 @@ import sqlite3
 import tempfile
 import threading
 import time
-from typing import Any
+from typing import Any, Mapping
 
+from .index_fields import CACHE_INDEX_FIELD_NAMES, normalize_cache_index_fields
 from .types import compute_score_eff, compute_score_size
 
 
@@ -77,11 +78,23 @@ class DiskCacheStore:
                     score REAL NOT NULL DEFAULT 0.0,
                     created_at REAL NOT NULL,
                     last_access REAL NOT NULL,
-                    ttl_seconds REAL
+                    ttl_seconds REAL,
+                    dtype TEXT,
+                    backend TEXT,
+                    device TEXT,
+                    dim INTEGER,
+                    n_elec INTEGER,
+                    mesh_hash TEXT
                 )
                 """
             )
             self._ensure_schema_columns(conn)
+            conn.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_cache_entries_query_dims
+                ON cache_entries(dtype, backend, device, dim, n_elec, mesh_hash)
+                """
+            )
             conn.commit()
 
     def _ensure_schema_columns(self, conn: sqlite3.Connection) -> None:
@@ -122,6 +135,12 @@ class DiskCacheStore:
                 "score",
                 "ALTER TABLE cache_entries ADD COLUMN score REAL NOT NULL DEFAULT 0.0",
             ),
+            ("dtype", "ALTER TABLE cache_entries ADD COLUMN dtype TEXT"),
+            ("backend", "ALTER TABLE cache_entries ADD COLUMN backend TEXT"),
+            ("device", "ALTER TABLE cache_entries ADD COLUMN device TEXT"),
+            ("dim", "ALTER TABLE cache_entries ADD COLUMN dim INTEGER"),
+            ("n_elec", "ALTER TABLE cache_entries ADD COLUMN n_elec INTEGER"),
+            ("mesh_hash", "ALTER TABLE cache_entries ADD COLUMN mesh_hash TEXT"),
         )
         for column, statement in migrations:
             if column not in existing:
@@ -133,16 +152,20 @@ class DiskCacheStore:
         suffix = ".pkl.gz" if self.compress_payloads else ".pkl"
         return art_dir / f"{key}{suffix}"
 
-    def _serialize(self, value: Any) -> bytes:
-        payload = pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL)
+    def _dump_value_to_file(self, value: Any, file_path: Path) -> None:
         if self.compress_payloads:
-            return gzip.compress(payload, compresslevel=4)
-        return payload
+            with gzip.open(file_path, "wb", compresslevel=4) as handle:
+                pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
+            return
+        with file_path.open("wb") as handle:
+            pickle.dump(value, handle, protocol=pickle.HIGHEST_PROTOCOL)
 
-    def _deserialize(self, payload: bytes) -> Any:
+    def _load_value_from_file(self, file_path: Path) -> Any:
         if self.compress_payloads:
-            payload = gzip.decompress(payload)
-        return pickle.loads(payload)
+            with gzip.open(file_path, "rb") as handle:
+                return pickle.load(handle)
+        with file_path.open("rb") as handle:
+            return pickle.load(handle)
 
     def _is_expired(self, created_at: float, ttl_seconds: float | None) -> bool:
         ttl = self.default_ttl_seconds if ttl_seconds is None else ttl_seconds
@@ -174,8 +197,7 @@ class DiskCacheStore:
                     return None
 
                 try:
-                    payload = file.read_bytes()
-                    value = self._deserialize(payload)
+                    value = self._load_value_from_file(file)
                 except Exception:
                     self._remove_entry(conn, key, file)
                     conn.commit()
@@ -212,12 +234,9 @@ class DiskCacheStore:
         namespace: str = "default",
         effort: float | None = None,
         priority: float = 0.0,
+        index_fields: Mapping[str, Any] | None = None,
     ) -> bool:
         if self.read_only:
-            return False
-        try:
-            payload = self._serialize(value)
-        except Exception:
             return False
 
         target = self._entry_path(artifact, key)
@@ -225,7 +244,14 @@ class DiskCacheStore:
         fd, tmp_path = tempfile.mkstemp(prefix=f".{key}.", dir=str(target.parent))
         os.close(fd)
         tmp = Path(tmp_path)
-        tmp.write_bytes(payload)
+        try:
+            self._dump_value_to_file(value, tmp)
+        except Exception:
+            try:
+                tmp.unlink(missing_ok=True)
+            except Exception:
+                pass
+            return False
         os.replace(tmp, target)
         size = int(target.stat().st_size)
         now = time.time()
@@ -236,6 +262,7 @@ class DiskCacheStore:
             priority=float(priority),
         )
         score_size = compute_score_size(size)
+        index = normalize_cache_index_fields(index_fields)
 
         with self._lock:
             with self._session() as conn:
@@ -244,9 +271,10 @@ class DiskCacheStore:
                     INSERT INTO cache_entries(
                         cache_key, artifact, name, namespace, file_path, size_bytes, cost,
                         effort, priority, use_count, score_eff, score_size, score,
-                        created_at, last_access, ttl_seconds
+                        created_at, last_access, ttl_seconds, dtype, backend, device,
+                        dim, n_elec, mesh_hash
                     )
-                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(cache_key) DO UPDATE SET
                         artifact=excluded.artifact,
                         name=excluded.name,
@@ -262,7 +290,13 @@ class DiskCacheStore:
                         score=excluded.score,
                         created_at=excluded.created_at,
                         last_access=excluded.last_access,
-                        ttl_seconds=excluded.ttl_seconds
+                        ttl_seconds=excluded.ttl_seconds,
+                        dtype=excluded.dtype,
+                        backend=excluded.backend,
+                        device=excluded.device,
+                        dim=excluded.dim,
+                        n_elec=excluded.n_elec,
+                        mesh_hash=excluded.mesh_hash
                     """,
                     (
                         key,
@@ -281,6 +315,12 @@ class DiskCacheStore:
                         now,
                         now,
                         ttl_seconds,
+                        index["dtype"],
+                        index["backend"],
+                        index["device"],
+                        index["dim"],
+                        index["n_elec"],
+                        index["mesh_hash"],
                     ),
                 )
                 conn.commit()
@@ -436,8 +476,7 @@ class DiskCacheStore:
                     return None
                 file_path = Path(row[0])
         try:
-            payload = file_path.read_bytes()
-            return self._deserialize(payload)
+            return self._load_value_from_file(file_path)
         except Exception:
             return None
 
@@ -447,11 +486,18 @@ class DiskCacheStore:
         name: str | None = None,
         namespace: str | None = None,
         limit: int | None = None,
+        dtype: str | None = None,
+        backend: str | None = None,
+        device: str | None = None,
+        dim: int | None = None,
+        n_elec: int | None = None,
+        mesh_hash: str | None = None,
     ) -> list[dict[str, Any]]:
         query = """
             SELECT
                 cache_key, artifact, name, namespace, size_bytes, cost, effort,
-                priority, use_count, score_eff, score_size, score, created_at, last_access
+                priority, use_count, score_eff, score_size, score, created_at,
+                last_access, dtype, backend, device, dim, n_elec, mesh_hash
             FROM cache_entries
         """
         conditions: list[str] = []
@@ -462,6 +508,22 @@ class DiskCacheStore:
         if namespace is not None:
             conditions.append("namespace = ?")
             params.append(namespace)
+        index_filter = normalize_cache_index_fields(
+            {
+                "dtype": dtype,
+                "backend": backend,
+                "device": device,
+                "dim": dim,
+                "n_elec": n_elec,
+                "mesh_hash": mesh_hash,
+            }
+        )
+        for field in CACHE_INDEX_FIELD_NAMES:
+            value = index_filter.get(field)
+            if value is None:
+                continue
+            conditions.append(f"{field} = ?")
+            params.append(value)
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY last_access DESC"
@@ -489,6 +551,12 @@ class DiskCacheStore:
                 "created_at": float(row[12]),
                 "last_access": float(row[13]),
                 "layer": "disk",
+                "dtype": row[14],
+                "backend": row[15],
+                "device": row[16],
+                "dim": int(row[17]) if row[17] is not None else None,
+                "n_elec": int(row[18]) if row[18] is not None else None,
+                "mesh_hash": row[19],
             }
             for row in rows
         ]

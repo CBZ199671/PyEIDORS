@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import numpy as np
 import pytest
 
+import pyeidors.inverse.greit_registry as greit_registry_module
 from pyeidors.inverse import (
     GREIT_EIDORS_HDF5_SCHEMA,
     greit_artifact_signature,
@@ -284,6 +285,35 @@ def test_signature_payload_stores_hashes_for_large_arrays() -> None:
     assert payload["greit_rec_grid"]["imgsz"] == [2, 1, 1]
     assert payload["greit_rec_grid"]["mask"] == "cylindrical_fem_volume_v1"
     assert payload["target_size_semantics"] == "fraction_of_tank_radius"
+
+
+def test_v596_signature_payload_hashes_noncontiguous_array_views(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    array_view = np.arange(24, dtype=np.float64).reshape(8, 3)[:, 1]
+    assert not array_view.flags.c_contiguous
+    expected = greit_registry_module.hash_array_payload(
+        np.ascontiguousarray(array_view)
+    )
+    original_hash = greit_registry_module.hash_array_payload
+    captured: list[np.ndarray] = []
+
+    def _capture_hash(arr: np.ndarray) -> str:
+        captured.append(arr)
+        return original_hash(arr)
+
+    monkeypatch.setattr(greit_registry_module, "hash_array_payload", _capture_hash)
+
+    config = _base_config()
+    config["custom_stim_matrix"] = array_view
+    payload = greit_artifact_signature_payload(config)
+
+    assert payload["stim_pattern_hash"]
+    matching = [arr for arr in captured if arr is array_view]
+    assert len(matching) == 1
+    assert original_hash(matching[0]) == expected
+    assert matching[0].dtype == np.float64
+    assert not matching[0].flags.c_contiguous
 
 
 def test_matlab_eidors_backend_script_contains_official_calls(tmp_path) -> None:

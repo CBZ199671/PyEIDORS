@@ -9,8 +9,15 @@ from typing import Any
 import numpy as np
 from scipy import sparse
 
-from pyeidors.data._temporal_core import positive_int as _positive_int
+from pyeidors.data._temporal_core import (
+    as_real_float_array as _as_real_float_array,
+    positive_int as _positive_int,
+)
 from pyeidors.inverse.prior import graph_difference_operator
+from pyeidors.utils.numeric_ops import all_finite_values
+
+
+_ROI_CHUNK_ITEMS = 1_048_576
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,47 @@ class TVRefinementResult:
 
     def __array__(self, dtype=None) -> np.ndarray:
         return np.asarray(self.values, dtype=dtype)
+
+
+def _roi_relative_residual(
+    current: np.ndarray,
+    previous: np.ndarray,
+    roi: np.ndarray,
+    *,
+    chunk_size: int = _ROI_CHUNK_ITEMS,
+) -> float:
+    work_dtype = np.result_type(
+        _as_real_float_array(current).dtype,
+        _as_real_float_array(previous).dtype,
+        np.float32,
+    )
+    current_arr = np.asarray(_as_real_float_array(current), dtype=work_dtype).reshape(
+        -1
+    )
+    previous_arr = np.asarray(_as_real_float_array(previous), dtype=work_dtype).reshape(
+        -1
+    )
+    roi_arr = np.asarray(roi, dtype=bool).reshape(-1)
+    if current_arr.shape != previous_arr.shape or current_arr.shape != roi_arr.shape:
+        raise ValueError("current, previous, and roi must have matching lengths.")
+    if current_arr.size == 0:
+        return 0.0
+    block_size = max(1, min(int(chunk_size), int(current_arr.size)))
+    diff_work = np.empty(block_size, dtype=work_dtype)
+    numerator_sq = 0.0
+    denominator_sq = 0.0
+    for start in range(0, int(current_arr.size), block_size):
+        stop = min(start + block_size, int(current_arr.size))
+        active = roi_arr[start:stop]
+        if not bool(active.any()):
+            continue
+        diff = diff_work[: stop - start]
+        np.subtract(current_arr[start:stop], previous_arr[start:stop], out=diff)
+        np.square(diff, out=diff)
+        numerator_sq += float(np.sum(diff, where=active, initial=0.0))
+        np.square(previous_arr[start:stop], out=diff)
+        denominator_sq += float(np.sum(diff, where=active, initial=0.0))
+    return float(np.sqrt(numerator_sq)) / max(float(np.sqrt(denominator_sq)), 1.0)
 
 
 def refine_tv_pdhg(
@@ -58,7 +106,11 @@ def refine_tv_pdhg(
     max_it = _positive_int(max_iterations, "max_iterations")
     tol = _nonnegative_float(tolerance, "tolerance")
     theta = _nonnegative_float(over_relaxation, "over_relaxation")
-    D = graph_difference_operator(mesh, weight=graph_weight).tocsr()
+    D = (
+        graph_difference_operator(mesh, weight=graph_weight)
+        .astype(y.dtype, copy=False)
+        .tocsr()
+    )
     if D.shape[1] != y.size:
         raise ValueError(
             f"mesh cell count {D.shape[1]} does not match seed length {y.size}."
@@ -82,17 +134,17 @@ def refine_tv_pdhg(
     tau, sigma = _pdhg_steps(D)
     x = y.copy()
     x_bar = x.copy()
-    dual = np.zeros(D.shape[0], dtype=np.float64)
+    dual = np.zeros(D.shape[0], dtype=y.dtype)
     previous = np.empty_like(x)
     x_new = np.empty_like(x)
-    not_roi = ~roi
-    x_new[not_roi] = y[not_roi]
+    update = np.empty_like(x)
+    np.copyto(x_new, y)
     residual_history: list[float] = []
     tv_history: list[float] = [total_variation_norm(x, D)]
     stopped_reason = "max_iterations"
 
     for iteration in range(1, max_it + 1):
-        Dxbar = np.asarray(D @ x_bar, dtype=np.float64).reshape(-1)
+        Dxbar = np.asarray(D @ x_bar, dtype=y.dtype).reshape(-1)
         dual += sigma * Dxbar
         if weight == 0.0:
             dual.fill(0.0)
@@ -100,13 +152,14 @@ def refine_tv_pdhg(
             np.clip(dual, -float(weight), float(weight), out=dual)
 
         np.copyto(previous, x)
-        descent = np.asarray(D.T @ dual, dtype=np.float64).reshape(-1)
-        x_new[roi] = (x[roi] - tau * descent[roi] + tau * y[roi]) / (1.0 + tau)
+        descent = np.asarray(D.T @ dual, dtype=y.dtype).reshape(-1)
+        np.multiply(descent, tau, out=update)
+        np.subtract(x, update, out=update)
+        update += tau * y
+        update /= 1.0 + tau
+        np.copyto(x_new, update, where=roi)
 
-        roi_residual = float(
-            np.linalg.norm(x_new[roi] - previous[roi])
-            / max(float(np.linalg.norm(previous[roi])), 1.0)
-        )
+        roi_residual = _roi_relative_residual(x_new, previous, roi)
         residual_history.append(roi_residual)
         tv_history.append(total_variation_norm(x_new, D))
 
@@ -140,22 +193,22 @@ def total_variation_norm(values: Any, operator: Any) -> float:
     """Return anisotropic graph TV norm ``sum(abs(D @ values))``."""
 
     vector = _as_seed(values)
-    D = sparse.csr_matrix(operator, dtype=np.float64)
+    D = sparse.csr_matrix(operator, dtype=vector.dtype)
     if D.ndim != 2 or D.shape[1] != vector.size:
         raise ValueError("operator column count must match values length.")
-    diff = np.asarray(D @ vector, dtype=np.float64).reshape(-1)
-    if not np.isfinite(diff).all():
+    diff = np.asarray(D @ vector, dtype=vector.dtype).reshape(-1)
+    if not all_finite_values(diff):
         raise FloatingPointError("TV differences contain non-finite values.")
     return float(np.sum(np.abs(diff)))
 
 
 def _as_seed(values: Any) -> np.ndarray:
-    vector = np.asarray(values, dtype=np.float64).reshape(-1)
+    vector = _as_real_float_array(values).reshape(-1)
     if vector.size == 0:
         raise ValueError("seed must be non-empty.")
-    if not np.isfinite(vector).all():
+    if not all_finite_values(vector):
         raise FloatingPointError("seed contains non-finite values.")
-    return np.ascontiguousarray(vector, dtype=np.float64)
+    return np.ascontiguousarray(vector)
 
 
 def _as_roi_mask(values: Any | None, *, n: int) -> np.ndarray:

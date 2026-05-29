@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import importlib.util
+import inspect
 from pathlib import Path
 import sys
 
@@ -60,6 +61,36 @@ def test_consistency_metrics_apply_existing_dim_thresholds():
     assert metrics_2d["image_pass"] is True
     assert metrics_2d["image_rmse_threshold"] == 1e-6
     assert metrics_3d["image_rmse_threshold"] == 1.25e-6
+
+
+def test_v530_slice_query_points_direct_fill_without_column_stack():
+    module = _load_module()
+
+    for obj in (
+        module._query_points,
+        module._sample_2d_field,
+        module._sample_3d_slice,
+    ):
+        source = inspect.getsource(obj)
+        assert "np.column_stack" not in source
+    assert "np.full(x_grid.size" not in inspect.getsource(module._sample_3d_slice)
+
+    query = module._query_points(
+        3,
+        np.array([1.0, 2.0, 3.0]),
+        4.0,
+        np.array([5.0, 6.0, 7.0]),
+    )
+    np.testing.assert_allclose(
+        query,
+        np.array(
+            [
+                [1.0, 4.0, 5.0],
+                [2.0, 4.0, 6.0],
+                [3.0, 4.0, 7.0],
+            ]
+        ),
+    )
 
 
 def test_write_report_embeds_expected_figure_links(tmp_path: Path):

@@ -27,8 +27,8 @@
   "locks": {
     "nixpkgs_rev": "b665e98e4cb439b95f8faee197c76c6578197e55",
     "flake_lock_sha256": "a9c2141abfb46e5987b3014ee87f62e19b9503e8d53e60c16872613d3a66eb3e",
-    "uv_lock_sha256": "dafe8f22f4ba0fc782487f4fea2e15d984edcfb059dfaa988e6b9ac7e74e63dd",
-    "pyproject_sha256": "134258ec26f3bdc61f47beb6cfe5ae9c40bd06e98dcc9c601cbb10db8e15c773"
+    "uv_lock_sha256": "02961a3786e719cc7ff4a0a267b5136a7afbd211f4cc7d79b7b0d9c02e32190f",
+    "pyproject_sha256": "87713f2edbd90c1cb0d817b4bba10182414737cadb5297c7b9aa5d73748c45d2"
   },
   "packages": {
     "dolfinx": "0.10.0.post1",
@@ -38,5 +38,5 @@
     "scipy": "1.17.1",
     "pyeidors": "1.0.0"
   },
-  "generated_at_utc": "2026-03-06T14:11:19.494854+00:00"
+  "generated_at_utc": "2026-05-25T02:07:01.297063+00:00"
 }

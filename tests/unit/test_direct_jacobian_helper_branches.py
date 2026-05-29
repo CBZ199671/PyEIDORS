@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import inspect
 from types import SimpleNamespace
 
 import numpy as np
@@ -44,6 +45,9 @@ class _FakeTensor:
 
     def numel(self):
         return int(self.array.size)
+
+    def element_size(self):
+        return int(self.array.dtype.itemsize)
 
     def __getitem__(self, item):
         return _FakeTensor(self.array[item])
@@ -115,6 +119,64 @@ def _make_calc() -> DirectJacobianCalculator:
     )
     calc.V = SimpleNamespace(name="V")
     return calc
+
+
+def test_v594_direct_jacobian_cache_key_streams_noncontiguous_sigma(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calc = _make_calc()
+    sigma_view = np.arange(24, dtype=np.float64).reshape(8, 3)[:, 1]
+    assert not sigma_view.flags.c_contiguous
+    expected = direct_module.hash_array_payload(
+        np.ascontiguousarray(sigma_view, dtype=np.float64)
+    )
+    original_hash = direct_module.hash_array_payload
+    captured_hash: dict[str, np.ndarray] = {}
+    captured_payload: dict[str, object] = {}
+
+    def _capture_hash(arr: np.ndarray, *, prefix: bytes = b"") -> str:
+        captured_hash["arr"] = arr
+        return original_hash(arr, prefix=prefix)
+
+    class _CacheManager:
+        enabled = True
+
+        def get_or_compute_semantic(self, **kwargs):
+            captured_payload.update(kwargs["payload"])
+            return np.zeros((1, 1), dtype=np.float64), SimpleNamespace(
+                hit=False,
+                layer="miss",
+                artifact=kwargs["artifact"],
+                key="cache-key",
+            )
+
+    calc.fwd_model.cache_manager = _CacheManager()
+    monkeypatch.setattr(direct_module, "function_get_array", lambda _sigma: sigma_view)
+    monkeypatch.setattr(direct_module, "hash_array_payload", _capture_hash)
+    monkeypatch.setattr(
+        direct_module, "model_signature_from_forward_model", lambda _model: "model"
+    )
+    monkeypatch.setattr(
+        direct_module, "pattern_signature_from_forward_model", lambda _model: "pattern"
+    )
+    monkeypatch.setattr(
+        direct_module, "backend_signature_from_forward_model", lambda _model: "backend"
+    )
+
+    result = calc.calculate(SimpleNamespace(), method="efficient")
+
+    np.testing.assert_allclose(result, np.zeros((1, 1), dtype=np.float64))
+    assert captured_payload["sigma_hash"] == expected
+    assert captured_hash["arr"] is sigma_view
+    assert captured_hash["arr"].dtype == np.float64
+    assert not captured_hash["arr"].flags.c_contiguous
+
+
+def test_v546_direct_jacobian_traditional_identity_direct_fill() -> None:
+    source = inspect.getsource(DirectJacobianCalculator._calculate_traditional)
+    assert "np.eye" not in source
+    assert "_dense_identity(self.fwd_model.n_elec)" in source
+    np.testing.assert_allclose(direct_module._dense_identity(3), np.eye(3))
 
 
 def test_init_and_runtime_device_configuration_cover_validation(
@@ -430,4 +492,71 @@ def test_assembly_helpers_cover_cuda_and_traditional_paths(
     np.testing.assert_allclose(
         traditional,
         np.array([[3.75, 1.0], [1.5, 0.5]], dtype=float),
+    )
+
+
+def test_v287_traditional_jacobian_helpers_direct_fill(monkeypatch):
+    grad_u_all = [
+        np.array([[1.0, 2.0], [0.5, 1.0]], dtype=float),
+        np.array([[2.0, 0.0], [1.0, 0.5]], dtype=float),
+    ]
+    grad_bu_all = [
+        np.array([[0.5, 1.0], [1.0, 1.5]], dtype=float),
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
+    ]
+    cell_areas = np.array([1.5, 0.5], dtype=float)
+    expected_jacobian = np.array(
+        [
+            [3.75, 1.0],
+            [1.5, 0.5],
+            [1.5, 0.875],
+            [3.0, 0.25],
+        ],
+        dtype=float,
+    )
+    electrode_jacobian = np.array(
+        [
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [5.0, 6.0],
+            [7.0, 8.0],
+        ],
+        dtype=float,
+    )
+    meas_matrices = [
+        np.array([[1.0, 0.0], [0.0, 1.0]], dtype=float),
+        np.array([[1.0, -1.0]], dtype=float),
+    ]
+
+    def _fail_stack(*_args, **_kwargs):
+        raise AssertionError("Jacobian helpers must direct-fill output matrices")
+
+    monkeypatch.setattr(core_module.np, "vstack", _fail_stack)
+    monkeypatch.setattr(core_module.np, "column_stack", _fail_stack)
+
+    jacobian, _elapsed = core_module.assemble_jacobian_traditional(
+        grad_u_all,
+        grad_bu_all,
+        cell_areas,
+    )
+    np.testing.assert_allclose(jacobian, expected_jacobian)
+
+    measured = core_module.convert_electrode_to_measurement_jacobian(
+        electrode_jacobian,
+        n_stim=2,
+        n_elec=2,
+        meas_matrices=meas_matrices,
+    )
+    np.testing.assert_allclose(
+        measured,
+        np.array([[1.0, 2.0], [3.0, 4.0], [-2.0, -2.0]], dtype=float),
+    )
+    assert "np.vstack" not in inspect.getsource(
+        core_module.assemble_jacobian_traditional
+    )
+    assert "np.vstack" not in inspect.getsource(
+        core_module.convert_electrode_to_measurement_jacobian
+    )
+    assert "np.column_stack" not in inspect.getsource(
+        core_module._build_linear_gradient_cache
     )

@@ -432,6 +432,31 @@ def _draw_bucket_field(
     return image
 
 
+def _value_range(values: list[np.ndarray]) -> tuple[float, float]:
+    if not values:
+        raise ValueError("values must not be empty")
+    vmin = math.inf
+    vmax = -math.inf
+    for value in values:
+        arr = np.asarray(value, dtype=np.float64)
+        if arr.size == 0:
+            continue
+        vmin = min(vmin, float(np.min(arr)))
+        vmax = max(vmax, float(np.max(arr)))
+    if not math.isfinite(vmin) or not math.isfinite(vmax):
+        raise ValueError("values contain no finite entries")
+    return vmin, vmax
+
+
+def _max_abs_value(values: list[np.ndarray]) -> float:
+    limit = 0.0
+    for value in values:
+        arr = np.asarray(value, dtype=np.float64)
+        if arr.size:
+            limit = max(limit, float(np.max(np.abs(arr))))
+    return limit
+
+
 def plot_noise_recon_grid(
     bucket,
     sigma_by_snr: dict[str, dict[str, np.ndarray]],
@@ -463,13 +488,11 @@ def plot_noise_recon_grid(
             field = sigma_by_snr[snr][method]
             values.append(field - bucket.sigma_true if error else field)
     if error:
-        limit = max(float(np.max(np.abs(value))) for value in values)
+        limit = _max_abs_value(values)
         vmin, vmax, cmap = -limit, limit, "coolwarm"
         title = "Noise ladder recon error vs truth"
     else:
-        all_values = np.concatenate(values)
-        vmin = float(np.min(all_values))
-        vmax = float(np.max(all_values))
+        vmin, vmax = _value_range(values)
         cmap = "viridis"
         title = "Noise ladder reconstructed conductivity"
 

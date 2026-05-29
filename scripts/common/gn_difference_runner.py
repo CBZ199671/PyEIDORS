@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -26,7 +25,7 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     pyamg = None
 
-from pyeidors.cache import CacheManager, CachePolicy, hash_array
+from pyeidors.cache import CacheManager, CachePolicy, hash_array, hash_array_payload
 from pyeidors.cache.object_signature import (
     backend_signature_from_forward_model,
     model_signature_from_forward_model,
@@ -65,9 +64,16 @@ from pyeidors.inverse.reduced.pod_basis import (
 )
 from pyeidors.inverse.reduced.snapshot_bank import select_snapshot_matrix
 from pyeidors.inverse.solvers.gauss_newton_device import resolve_torch_device
-from pyeidors.utils.numeric_ops import safe_dot
+from pyeidors.utils.numeric_ops import (
+    add_scaled_diagonal_in_place,
+    all_finite_values,
+    any_not_equal_values,
+    min_alpha_for_value_floor,
+    safe_dot,
+)
 from pyeidors.visualization import create_visualizer
 
+from .array_metrics import pearson_correlation
 from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .mesh_utils import cell_to_node
 
@@ -93,6 +99,108 @@ SINGLE_STEP_JACOBIAN_MATH_CONVENTION = "eidors_adapter_difference_dv_dsigma_v4"
 SINGLE_STEP_PROJECTION_MATH_CONVENTION = "difference_projection_weights_v3"
 SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
 SINGLE_STEP_ALGORITHM_VERSION = "eidors_noser_single_step_v5"
+_COLUMN_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
+_ROW_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
+
+
+def _column_scaled_jjt(
+    matrix: np.ndarray,
+    column_scale: np.ndarray,
+    *,
+    label: str = "column_scaled_jjt",
+    chunk_target_bytes: int = _COLUMN_SCALED_GRAM_CHUNK_BYTES,
+) -> np.ndarray:
+    """Return ``matrix @ diag(column_scale) @ matrix.T`` in bounded chunks."""
+    mat = np.asarray(matrix, dtype=np.float64)
+    scale = np.asarray(column_scale, dtype=np.float64).reshape(-1)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if scale.size != mat.shape[1]:
+        raise ValueError(
+            f"column_scale length {scale.size} does not match {mat.shape[1]} columns."
+        )
+    result = np.zeros((mat.shape[0], mat.shape[0]), dtype=np.float64)
+    bytes_per_column = max(1, mat.shape[0] * np.dtype(np.float64).itemsize)
+    cols_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_column)
+    for start in range(0, mat.shape[1], cols_per_chunk):
+        stop = min(start + cols_per_chunk, mat.shape[1])
+        block = np.asarray(mat[:, start:stop], dtype=np.float64)
+        scaled = block * scale[start:stop]
+        result += np.asarray(safe_dot(scaled, block.T, label), dtype=np.float64)
+    return result
+
+
+def _row_scaled_jtj(
+    matrix: np.ndarray,
+    row_scale: np.ndarray,
+    *,
+    label: str = "row_scaled_jtj",
+    chunk_target_bytes: int = _ROW_SCALED_GRAM_CHUNK_BYTES,
+) -> np.ndarray:
+    """Return ``matrix.T @ diag(row_scale) @ matrix`` in bounded row chunks."""
+
+    mat = np.asarray(matrix, dtype=np.float64)
+    scale = np.asarray(row_scale, dtype=np.float64).reshape(-1)
+    if mat.ndim != 2:
+        raise ValueError("matrix must be 2D.")
+    if scale.size != mat.shape[0]:
+        raise ValueError(
+            f"row_scale length {scale.size} does not match {mat.shape[0]} rows."
+        )
+    result = np.zeros((mat.shape[1], mat.shape[1]), dtype=np.float64)
+    bytes_per_row = max(1, mat.shape[1] * np.dtype(np.float64).itemsize)
+    rows_per_chunk = max(1, int(chunk_target_bytes) // bytes_per_row)
+    for start in range(0, mat.shape[0], rows_per_chunk):
+        stop = min(start + rows_per_chunk, mat.shape[0])
+        block = np.asarray(mat[start:stop, :], dtype=np.float64)
+        scaled = block * scale[start:stop, None]
+        result += np.asarray(safe_dot(block.T, scaled, label), dtype=np.float64)
+    return result
+
+
+def _with_identity_shift(matrix: np.ndarray, shift: float) -> np.ndarray:
+    out = np.array(matrix, dtype=np.float64, copy=True, order="C")
+    if float(shift) != 0.0:
+        identity_diag = np.broadcast_to(np.float64(1.0), out.shape[0])
+        add_scaled_diagonal_in_place(out, identity_diag, float(shift))
+    return out
+
+
+def _with_diagonal_shift(
+    matrix: np.ndarray,
+    diagonal: np.ndarray,
+    shift: float,
+) -> np.ndarray:
+    out = np.array(matrix, dtype=np.float64, copy=True, order="C")
+    if float(shift) != 0.0:
+        diag = np.asarray(diagonal, dtype=np.float64).reshape(-1)
+        add_scaled_diagonal_in_place(out, diag, float(shift))
+    return out
+
+
+def _preconditioner_diagonal(system_matrix: np.ndarray) -> np.ndarray:
+    dense = np.asarray(system_matrix, dtype=np.float64)
+    return np.asarray(np.maximum(dense.diagonal(), 1e-12), dtype=np.float64)
+
+
+def _stack_columns_direct(
+    columns: list[np.ndarray] | tuple[np.ndarray, ...],
+) -> np.ndarray:
+    """Stack 1D columns into a C-order matrix by direct column assignment."""
+
+    if not columns:
+        return np.empty((0, 0), dtype=np.float64)
+    first = np.asarray(columns[0], dtype=np.float64).reshape(-1)
+    out = np.empty((first.shape[0], len(columns)), dtype=np.float64)
+    out[:, 0] = first
+    for idx, column in enumerate(columns[1:], start=1):
+        arr = np.asarray(column, dtype=np.float64).reshape(-1)
+        if arr.shape[0] != out.shape[0]:
+            raise ValueError(
+                f"column {idx} length {arr.shape[0]} does not match {out.shape[0]}."
+            )
+        out[:, idx] = arr
+    return out
 
 
 def _mesh_compatible_drive_mode(drive_mode: str | None, *, mesh_dim: int) -> str:
@@ -139,9 +247,7 @@ def _sigma_candidate_is_feasible(
 ) -> bool:
     arr = np.asarray(sigma_values, dtype=np.float64).reshape(-1)
     floor = _normalize_sigma_floor(sigma_floor)
-    return (
-        arr.size > 0 and bool(np.all(np.isfinite(arr))) and float(np.min(arr)) > floor
-    )
+    return arr.size > 0 and all_finite_values(arr) and float(np.min(arr)) > floor
 
 
 def _limit_step_size_for_sigma_floor(
@@ -164,23 +270,14 @@ def _limit_step_size_for_sigma_floor(
         raise ValueError(
             f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
-    if (
-        sigma.size == 0
-        or not np.all(np.isfinite(sigma))
-        or not np.all(np.isfinite(delta))
-    ):
+    if sigma.size == 0 or not all_finite_values(sigma) or not all_finite_values(delta):
         return 0.0
 
     floor = _normalize_sigma_floor(sigma_floor)
-    negative_update = delta < 0.0
-    if not bool(np.any(negative_update)):
+    max_alpha = min_alpha_for_value_floor(sigma, delta, floor)
+    if not np.isfinite(max_alpha):
         return requested
 
-    margin = sigma[negative_update] - floor
-    if not bool(np.all(margin > 0.0)):
-        return 0.0
-
-    max_alpha = float(np.min(margin / (-delta[negative_update])))
     if not np.isfinite(max_alpha) or max_alpha <= 0.0:
         return 0.0
     interior_alpha = max_alpha * (1.0 - SIGMA_STEP_MARGIN)
@@ -208,19 +305,19 @@ def _floored_sigma_update(
         raise ValueError(
             f"sigma_bg and delta_sigma shape mismatch: {sigma.shape} != {delta.shape}"
         )
-    if not np.all(np.isfinite(sigma)) or not np.all(np.isfinite(delta)):
+    if not all_finite_values(sigma) or not all_finite_values(delta):
         raise RuntimeError(
             "single-step conductivity update contains non-finite values."
         )
 
     floor = _normalize_sigma_floor(sigma_floor)
     raw_sigma_est = sigma + float(limited_alpha) * delta
-    if not np.all(np.isfinite(raw_sigma_est)):
+    if not all_finite_values(raw_sigma_est):
         raise RuntimeError("single-step conductivity estimate is non-finite.")
 
     floor_value = np.nextafter(floor, np.inf)
     sigma_est = np.maximum(raw_sigma_est, floor_value)
-    floor_applied = bool(np.any(sigma_est != raw_sigma_est))
+    floor_applied = any_not_equal_values(sigma_est, raw_sigma_est)
     display_delta = sigma_est - sigma
     return float(limited_alpha), display_delta, sigma_est, floor_applied
 
@@ -619,12 +716,10 @@ def _solve_linearized_lsmr(
 
     def _matvec(v: np.ndarray) -> np.ndarray:
         vec = np.asarray(v, dtype=np.float64).reshape(-1)
-        return np.concatenate(
-            [
-                _linearized_matvec(linearization, projection_weights, vec),
-                sqrt_lam * sqrt_reg * vec,
-            ]
-        )
+        out = np.empty(n_meas + n_param, dtype=np.float64)
+        out[:n_meas] = _linearized_matvec(linearization, projection_weights, vec)
+        out[n_meas:] = sqrt_lam * sqrt_reg * vec
+        return out
 
     def _rmatvec(w: np.ndarray) -> np.ndarray:
         arr = np.asarray(w, dtype=np.float64).reshape(-1)
@@ -643,9 +738,8 @@ def _solve_linearized_lsmr(
         rmatvec=_rmatvec,
         dtype=np.float64,
     )
-    rhs_aug = np.concatenate(
-        [np.asarray(rhs, dtype=np.float64).reshape(-1), np.zeros(n_param)]
-    )
+    rhs_aug = np.zeros(n_meas + n_param, dtype=np.float64)
+    rhs_aug[:n_meas] = np.asarray(rhs, dtype=np.float64).reshape(-1)
     result = lsmr(
         augmented,
         rhs_aug,
@@ -820,7 +914,7 @@ def _solve_linearized_delta(
             maxiter=maxiter,
         )
         method = "cg"
-        if (cg_info != 0 or not np.all(np.isfinite(x))) and strategy == "cg-lsmr":
+        if (cg_info != 0 or not all_finite_values(x)) and strategy == "cg-lsmr":
             x = _solve_linearized_lsmr(
                 linearization=linearization,
                 projection_weights=projection_weights,
@@ -834,7 +928,7 @@ def _solve_linearized_delta(
         "method": method,
         "strategy": strategy,
         "cg_info": int(cg_info),
-        "converged": bool(cg_info == 0 and np.all(np.isfinite(x))),
+        "converged": bool(cg_info == 0 and all_finite_values(x)),
         "maxiter": int(maxiter),
         "cgls_info": dict(cgls_info),
         "preconditioner_info": dict(
@@ -1035,10 +1129,9 @@ def _build_reduced_rm(
     r_diag = np.asarray(reg_diag, dtype=np.float64)
 
     ju = np.asarray(safe_dot(j_mat, b_mat, "gn_difference.rom.JU"), dtype=np.float64)
-    rb = np.asarray(r_diag[:, None] * b_mat, dtype=np.float64)
+    u_tru = _row_scaled_jtj(b_mat, r_diag, label="gn_difference.rom.UtRU")
     h_red = np.asarray(
-        safe_dot(ju.T, ju, "gn_difference.rom.JUtJU")
-        + float(lam) * safe_dot(b_mat.T, rb, "gn_difference.rom.UtRU"),
+        safe_dot(ju.T, ju, "gn_difference.rom.JUtJU") + float(lam) * u_tru,
         dtype=np.float64,
     )
     h_red = 0.5 * (h_red + h_red.T)
@@ -1556,9 +1649,7 @@ def build_shared_context(
         torch_dtype="float64",
         torch_batch_all=str(runtime_selection.effective) == "cuda",
     )
-    sigma_hash = hashlib.sha256(
-        np.ascontiguousarray(sigma_bg, dtype=np.float64).tobytes()
-    ).hexdigest()
+    sigma_hash = hash_array_payload(np.ascontiguousarray(sigma_bg, dtype=np.float64))
     jacobian_payload = {
         "solver": "gn_difference",
         "method": "adjoint",
@@ -2010,16 +2101,13 @@ def build_shared_context(
             payload={**operator_payload_base, "part": "H_FAST"},
             compute_fn=lambda: _timed(
                 "operator_A",
-                lambda: (
-                    np.asarray(
-                        safe_dot(
-                            jacobian * inv_reg_diag[None, :],
-                            jacobian_t,
-                            "gn_difference.operator.measurement_H",
-                        ),
-                        dtype=float,
-                    )
-                    + float(lam) * np.eye(jacobian.shape[0], dtype=float)
+                lambda: _with_identity_shift(
+                    _column_scaled_jjt(
+                        jacobian,
+                        inv_reg_diag,
+                        label="gn_difference.operator.measurement_H",
+                    ),
+                    float(lam),
                 ),
             ),
             persist=True,
@@ -2034,9 +2122,7 @@ def build_shared_context(
             payload={**operator_payload_base, "part": "PRECOND_FAST"},
             compute_fn=lambda: _timed(
                 "operator_precond",
-                lambda: np.asarray(
-                    np.maximum(np.diag(system_matrix), 1e-12), dtype=float
-                ),
+                lambda: _preconditioner_diagonal(system_matrix),
             ),
             persist=True,
             cost=2.0,
@@ -2055,16 +2141,13 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "H_STRICT_MEASUREMENT"},
                 compute_fn=lambda: _timed(
                     "operator_A",
-                    lambda: (
-                        np.asarray(
-                            safe_dot(
-                                jacobian * inv_reg_diag[None, :],
-                                jacobian_t,
-                                "gn_difference.operator.strict_measurement_H",
-                            ),
-                            dtype=float,
-                        )
-                        + float(lam) * np.eye(jacobian.shape[0], dtype=float)
+                    lambda: _with_identity_shift(
+                        _column_scaled_jjt(
+                            jacobian,
+                            inv_reg_diag,
+                            label="gn_difference.operator.strict_measurement_H",
+                        ),
+                        float(lam),
                     ),
                 ),
                 persist=True,
@@ -2082,9 +2165,7 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "PRECOND_STRICT_MEASUREMENT"},
                 compute_fn=lambda: _timed(
                     "operator_precond",
-                    lambda: np.asarray(
-                        np.maximum(np.diag(system_matrix), 1e-12), dtype=float
-                    ),
+                    lambda: _preconditioner_diagonal(system_matrix),
                 ),
                 persist=True,
                 cost=2.0,
@@ -2099,14 +2180,10 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "A"},
                 compute_fn=lambda: _timed(
                     "operator_A",
-                    lambda: (
-                        np.asarray(
-                            safe_dot(
-                                jacobian_t, jacobian, "gn_difference.operator.JtJ"
-                            ),
-                            dtype=float,
-                        )
-                        + float(lam) * np.diag(reg_diag)
+                    lambda: _with_diagonal_shift(
+                        safe_dot(jacobian_t, jacobian, "gn_difference.operator.JtJ"),
+                        reg_diag,
+                        float(lam),
                     ),
                 ),
                 persist=True,
@@ -2121,9 +2198,7 @@ def build_shared_context(
                 payload={**operator_payload_base, "part": "PRECOND_STRICT"},
                 compute_fn=lambda: _timed(
                     "operator_precond",
-                    lambda: np.asarray(
-                        np.maximum(np.diag(system_matrix), 1e-12), dtype=float
-                    ),
+                    lambda: _preconditioner_diagonal(system_matrix),
                 ),
                 persist=True,
                 cost=2.0,
@@ -2179,15 +2254,12 @@ def build_shared_context(
         "ratio_n_over_m": ratio_n_over_m,
     }
     if enable_rom:
-        synthetic_snapshots = np.ascontiguousarray(
-            np.column_stack(
-                [
-                    np.asarray(jacobian_t[:, 0], dtype=np.float64),
-                    np.asarray(np.mean(jacobian_t, axis=1), dtype=np.float64),
-                    np.asarray(inv_reg_diag, dtype=np.float64),
-                ]
-            ),
-            dtype=np.float64,
+        synthetic_snapshots = _stack_columns_direct(
+            [
+                np.asarray(jacobian_t[:, 0], dtype=np.float64),
+                np.asarray(np.mean(jacobian_t, axis=1), dtype=np.float64),
+                np.asarray(inv_reg_diag, dtype=np.float64),
+            ]
         )
         snapshot_payload = {
             **operator_payload_base,
@@ -2671,7 +2743,7 @@ def process_frames(
         )
         plt.close(fig)
 
-        corr_diff = np.corrcoef(meas_diff, pred_diff)[0, 1]
+        corr_diff = pearson_correlation(meas_diff, pred_diff)
         fig = plt.figure(figsize=(12, 5))
         idx = np.arange(len(meas_diff))
         ax = fig.add_subplot(1, 2, 1)

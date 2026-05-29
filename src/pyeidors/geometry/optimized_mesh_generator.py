@@ -10,10 +10,9 @@ from configparser import ConfigParser
 from dataclasses import dataclass
 from math import cos, pi, sin
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-from mpi4py import MPI
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
@@ -23,6 +22,7 @@ from ..perf.policy import (
     DEFAULT_MESH_FAMILY,
     normalize_mesh_family,
 )
+from ..utils.numeric_ops import all_finite_values
 from ._helpers import (
     add_named_physical_group,
     association_from_mesh_data,  # noqa: F401  re-exported for in-tree callers
@@ -57,6 +57,7 @@ from .process_mesh_cache import (
     get_process_cached_mesh,
     put_process_cached_mesh,
 )
+from ._runtime import mpi_comm_world, mpi_sum_op
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,33 @@ build_eit_mesh = None
 estimate_radius = None
 fem = None
 ufl = None
+
+
+def _active_geometry_dtype() -> np.dtype:
+    """Return DOLFINx's active real geometry dtype for this runtime."""
+    try:
+        import dolfinx
+
+        return np.dtype(getattr(dolfinx, "default_real_type", np.float64))
+    except Exception:
+        return np.dtype(np.float64)
+
+
+def _normalize_geometry_dtype(dtype: Any | None) -> np.dtype:
+    if dtype is None:
+        return _active_geometry_dtype()
+    return np.dtype(dtype)
+
+
+def _model_to_mesh_with_dtype(model, *, gdim: int, geometry_dtype: Any | None):
+    kwargs = {"rank": 0, "gdim": int(gdim)}
+    if geometry_dtype is not None:
+        kwargs["dtype"] = np.dtype(geometry_dtype).type
+    try:
+        return gmshio.model_to_mesh(model, mpi_comm_world(), **kwargs)
+    except TypeError:
+        kwargs.pop("dtype", None)
+        return gmshio.model_to_mesh(model, mpi_comm_world(), **kwargs)
 
 
 def _ensure_femx() -> None:
@@ -164,9 +192,16 @@ class OptimizedMeshConfig:
 class OptimizedMeshGenerator:
     """Optimized mesh generator with stable physical tagging."""
 
-    def __init__(self, config: OptimizedMeshConfig, electrodes: ElectrodePosition):
+    def __init__(
+        self,
+        config: OptimizedMeshConfig,
+        electrodes: ElectrodePosition,
+        *,
+        geometry_dtype: Any | None = None,
+    ):
         self.config = config
         self.electrodes = electrodes
+        self.geometry_dtype = _normalize_geometry_dtype(geometry_dtype)
         self.mesh_data: Dict[str, object] = {}
 
     def generate(
@@ -201,7 +236,11 @@ class OptimizedMeshGenerator:
             self._extract_electrode_vertices()
 
             assert_unique_physical_group_ownership(gmsh.model)
-            mesh_data = gmshio.model_to_mesh(gmsh.model, MPI.COMM_WORLD, rank=0, gdim=2)
+            mesh_data = _model_to_mesh_with_dtype(
+                gmsh.model,
+                gdim=2,
+                geometry_dtype=self.geometry_dtype,
+            )
         finally:
             if initialized_here:
                 gmsh.finalize()
@@ -389,6 +428,7 @@ def create_eit_mesh(
     electrode_coverage: float = 0.5,
     output_dir: str = None,
     mesh_name: Optional[str] = None,
+    geometry_dtype: Any | None = None,
 ):
     mesh_config = OptimizedMeshConfig(
         radius=radius,
@@ -404,7 +444,12 @@ def create_eit_mesh(
         anticlockwise=True,
     )
 
-    generator = OptimizedMeshGenerator(mesh_config, electrode_config)
+    generator_kwargs = {}
+    if geometry_dtype is not None:
+        generator_kwargs["geometry_dtype"] = geometry_dtype
+    generator = OptimizedMeshGenerator(
+        mesh_config, electrode_config, **generator_kwargs
+    )
     return generator.generate(
         output_dir=Path(output_dir) if output_dir else None, mesh_name=mesh_name
     )
@@ -441,7 +486,7 @@ def _facet_tags_cover_electrodes(
         tag = int(association[key])
         local_count = int(np.count_nonzero(tag_values == tag))
         try:
-            total_count = int(mesh.comm.allreduce(local_count, op=MPI.SUM))
+            total_count = int(mesh.comm.allreduce(local_count, op=mpi_sum_op()))
         except Exception:
             total_count = local_count
         if total_count <= 0:
@@ -477,7 +522,7 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
                 value_local = fem.assemble_scalar(
                     fem.form(one * ds(int(association[key])))
                 )
-                value = mesh.comm.allreduce(value_local, op=MPI.SUM)
+                value = mesh.comm.allreduce(value_local, op=mpi_sum_op())
                 measures.append(float(value))
         except Exception as exc:
             logger.warning(
@@ -489,7 +534,7 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
         arr = np.asarray(measures, dtype=float)
         if not bool(
             arr.size == int(n_elec)
-            and np.all(np.isfinite(arr))
+            and all_finite_values(arr)
             and float(np.min(arr)) > 0.0
         ):
             return False
@@ -533,12 +578,21 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
 
 
 def _load_cached_mesh(
-    mesh_dir: Path, mesh_name: str, *, gdim: int = 2, n_elec: int = 16
+    mesh_dir: Path,
+    mesh_name: str,
+    *,
+    gdim: int = 2,
+    n_elec: int = 16,
+    geometry_dtype: Any | None = None,
 ):
     msh_file = mesh_dir / f"{mesh_name}.msh"
     association_file = mesh_dir / f"{mesh_name}_association_table.ini"
 
-    cache_data = load_dolfinx_mesh_cache(msh_file, gdim=int(gdim))
+    cache_data = load_dolfinx_mesh_cache(
+        msh_file,
+        gdim=int(gdim),
+        expected_geometry_dtype=geometry_dtype,
+    )
     if cache_data is not None:
         _ensure_femx()
         metadata = cache_data.metadata
@@ -580,7 +634,10 @@ def _load_cached_mesh(
 
     try:
         mesh_data = gmshio.read_from_msh(
-            str(msh_file), MPI.COMM_WORLD, rank=0, gdim=int(gdim)
+            str(msh_file),
+            mpi_comm_world(),
+            rank=0,
+            gdim=int(gdim),
         )
     except Exception as exc:
         logger.warning(
@@ -695,6 +752,7 @@ def load_or_create_mesh(
         .lower()
         or DEFAULT_3D_GENERATOR_REVISION
     )
+    geometry_dtype = _normalize_geometry_dtype(params.pop("geometry_dtype", None))
     gdim = int(dimension)
     if gdim not in {2, 3}:
         raise ValueError(f"dimension must be 2 or 3, got {dimension!r}")
@@ -702,7 +760,13 @@ def load_or_create_mesh(
     if mesh_name:
         cache_name = mesh_name
     elif gdim == 2:
-        cache_name = _build_cache_name(n_elec, radius, refinement, electrode_coverage)
+        cache_name = _build_cache_name(
+            n_elec,
+            radius,
+            refinement,
+            electrode_coverage,
+            geometry_dtype=geometry_dtype,
+        )
     else:
         cache_name = _build_cache_name_3d(
             n_elec=n_elec,
@@ -717,6 +781,7 @@ def load_or_create_mesh(
             geometry_version=geometry_version,
             generator_revision=generator_revision,
             electrode_layout=electrode_layout,
+            geometry_dtype=geometry_dtype,
         )
 
     process_mesh_key: str | None = None
@@ -747,6 +812,7 @@ def load_or_create_mesh(
             gdim=gdim,
             n_elec=n_elec,
             mesh_name=cache_name,
+            geometry_dtype=geometry_dtype,
         )
         process_mesh = get_process_cached_mesh(process_mesh_key)
         if process_mesh is not None:
@@ -756,7 +822,13 @@ def load_or_create_mesh(
             setattr(process_mesh, "_pyeidors_mesh_cache_name", cache_name)
             return process_mesh
 
-    cached_mesh = _load_cached_mesh(mesh_dir_path, cache_name, gdim=gdim, n_elec=n_elec)
+    cached_mesh = _load_cached_mesh(
+        mesh_dir_path,
+        cache_name,
+        gdim=gdim,
+        n_elec=n_elec,
+        geometry_dtype=geometry_dtype,
+    )
     if cached_mesh is not None:
         logger.info("Loaded cached mesh: %s", cache_name)
         metadata_file = dolfinx_cache_metadata_path_for_mesh(msh_file)
@@ -783,6 +855,7 @@ def load_or_create_mesh(
             gdim=gdim,
             n_elec=n_elec,
             mesh_name=cache_name,
+            geometry_dtype=geometry_dtype,
         )
         put_process_cached_mesh(process_mesh_key, cached_mesh)
         setattr(cached_mesh, "_pyeidors_mesh_cache_hit", True)
@@ -802,6 +875,7 @@ def load_or_create_mesh(
             electrode_coverage=electrode_coverage,
             output_dir=str(mesh_dir_path),
             mesh_name=cache_name,
+            geometry_dtype=geometry_dtype,
         )
     else:
         created_mesh = create_cylinder_3d_eit_mesh(
@@ -848,6 +922,7 @@ def load_or_create_mesh(
             gdim=gdim,
             n_elec=n_elec,
             mesh_name=cache_name,
+            geometry_dtype=geometry_dtype,
         )
         put_process_cached_mesh(process_mesh_key, created_mesh)
     setattr(created_mesh, "_pyeidors_mesh_cache_hit", False)

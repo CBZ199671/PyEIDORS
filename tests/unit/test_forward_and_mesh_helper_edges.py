@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import configparser
+import inspect
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -395,6 +396,13 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
         opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_bad_sidecar, n_elec=2)
         is False
     )
+
+
+def test_v498_cached_3d_cem_validator_uses_bounded_finite_scan() -> None:
+    source = inspect.getsource(opt_mesh_module._cached_3d_cem_mesh_is_complete)
+
+    assert "all_finite_values(arr)" in source
+    assert "np.all(np.isfinite(arr))" not in source
 
 
 def test_clockwise_electrode_positions_and_cached_mesh_sidecar_fallbacks(

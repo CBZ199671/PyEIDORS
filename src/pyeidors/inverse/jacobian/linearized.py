@@ -5,7 +5,7 @@ the eager :class:`JacobianLinearization` and the lazy
 :class:`LazyAdjointJacobianLinearization` historically duplicated. Both
 classes now inherit from :class:`_LinearizationBase` which owns the
 shape properties, the permissive fingerprint check (V9), the
-``LinearOperator`` adapters, the ``J^T W J v + alpha R v`` normal-matvec
+``LinearOperator`` adapters, the ``J^H W J v + alpha R v`` normal-matvec
 helper and the PETSc Python matrix wrapper. Each subclass keeps its own
 storage layout (eager: stored adjoint gradients; lazy: ``fwd_model`` +
 on-demand adjoint solve) and overrides the abstract
@@ -15,7 +15,6 @@ The V73 sign defaults (eager ``+1.0``, lazy ``-1.0``) are unchanged.
 
 from __future__ import annotations
 
-import hashlib
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
@@ -24,8 +23,28 @@ import numpy as np
 from scipy.sparse import isspmatrix
 from scipy.sparse.linalg import LinearOperator
 
+from ...cache.keys import hash_array_payload
+
 RegularizationAction = Callable[[np.ndarray], np.ndarray] | LinearOperator | np.ndarray
 GradientCallback = Callable[[Sequence[np.ndarray]], Sequence[np.ndarray]]
+
+
+def _complex_preserving_dtype(*values) -> np.dtype:
+    dtypes = [
+        np.dtype(value)
+        if isinstance(value, (np.dtype, type))
+        else np.asarray(value).dtype
+        for value in values
+        if value is not None
+    ]
+    complex_dtypes = [
+        dtype for dtype in dtypes if np.issubdtype(dtype, np.complexfloating)
+    ]
+    if complex_dtypes:
+        if any(dtype != np.dtype(np.complex64) for dtype in complex_dtypes):
+            return np.dtype(np.complex128)
+        return np.dtype(np.complex64)
+    return np.dtype(np.float64)
 
 
 def compute_sigma_fingerprint(sigma_values) -> str:
@@ -35,8 +54,54 @@ def compute_sigma_fingerprint(sigma_values) -> str:
         array = getattr(values, "array", None)
         if array is not None:
             sigma_values = array
-    array = np.ascontiguousarray(np.asarray(sigma_values), dtype=np.float64).reshape(-1)
-    return hashlib.sha256(array.tobytes()).hexdigest()
+    raw = np.asarray(sigma_values)
+    if np.iscomplexobj(raw):
+        array = np.asarray(
+            raw,
+            dtype=np.complex64 if raw.dtype == np.complex64 else np.complex128,
+        )
+        return hash_array_payload(
+            array, prefix=str(array.dtype).encode("utf-8") + b"\0"
+        )
+    array = np.asarray(raw, dtype=np.float64)
+    return hash_array_payload(array)
+
+
+def _weighted_contrib_power_sum(
+    contrib: np.ndarray,
+    weights: np.ndarray,
+    cell_area_sq: np.ndarray,
+) -> np.ndarray:
+    return np.asarray(
+        np.einsum(
+            "me,me,m,e->e",
+            np.conjugate(contrib),
+            contrib,
+            np.asarray(weights, dtype=np.float64),
+            np.asarray(cell_area_sq, dtype=np.float64),
+            optimize=True,
+        ).real,
+        dtype=np.float64,
+    )
+
+
+def _stack_adjoint_gradient_block(
+    gradients: Sequence[np.ndarray],
+    *,
+    start: int,
+    count: int,
+    dtype: np.dtype,
+) -> np.ndarray:
+    if count <= 0:
+        raise ValueError("adjoint gradient block must contain at least one row.")
+    first = np.asarray(gradients[start], dtype=dtype)
+    block = np.empty((int(count), *first.shape), dtype=dtype)
+    block[0, :, :] = first
+    for local_idx in range(1, int(count)):
+        block[local_idx, :, :] = np.asarray(
+            gradients[int(start) + local_idx], dtype=dtype
+        )
+    return np.ascontiguousarray(block, dtype=dtype)
 
 
 class _LinearizationBase:
@@ -48,7 +113,7 @@ class _LinearizationBase:
     ``hessian_diag`` / ``_validate_shapes``. This base class holds the
     shape derivations, the V9 fingerprint check, the
     ``LinearOperator`` / PETSc Python matrix adapters and the
-    ``J^T W J v + alpha R v`` normal-matvec helper so the eager and
+    ``J^H W J v + alpha R v`` normal-matvec helper so the eager and
     lazy classes never re-implement them out of step.
 
     Subclasses MUST set the following attributes during ``__post_init__``:
@@ -119,7 +184,7 @@ class _LinearizationBase:
             self.shape,
             matvec=self.matvec,
             rmatvec=self.rmatvec,
-            dtype=np.float64,
+            dtype=getattr(self, "dtype", np.float64),
         )
 
     def normal_matvec(
@@ -130,7 +195,7 @@ class _LinearizationBase:
         alpha: float = 0.0,
         regularization: RegularizationAction | None = None,
     ) -> np.ndarray:
-        """Apply ``J^T W J v + alpha R v`` without dense ``J`` or ``H``."""
+        """Apply ``J^H W J v + alpha R v`` without dense ``J`` or ``H``."""
         projected = self.matvec(vector)
         if measurement_weights is not None:
             weights = np.asarray(measurement_weights, dtype=np.float64).reshape(-1)
@@ -144,7 +209,7 @@ class _LinearizationBase:
             out = out + float(alpha) * self._apply_regularization(
                 regularization, vector
             )
-        return np.asarray(out, dtype=np.float64)
+        return np.asarray(out)
 
     def as_normal_operator(
         self,
@@ -153,7 +218,7 @@ class _LinearizationBase:
         alpha: float = 0.0,
         regularization: RegularizationAction | None = None,
     ) -> LinearOperator:
-        """Return ``J^T W J + alpha R`` as a SciPy ``LinearOperator``."""
+        """Return ``J^H W J + alpha R`` as a SciPy ``LinearOperator``."""
         return LinearOperator(
             (self.n_parameters, self.n_parameters),
             matvec=lambda v: self.normal_matvec(
@@ -162,7 +227,7 @@ class _LinearizationBase:
                 alpha=alpha,
                 regularization=regularization,
             ),
-            dtype=np.float64,
+            dtype=getattr(self, "dtype", np.float64),
         )
 
     @staticmethod
@@ -170,15 +235,18 @@ class _LinearizationBase:
         regularization: RegularizationAction,
         vector: np.ndarray,
     ) -> np.ndarray:
-        vec = np.asarray(vector, dtype=np.float64)
+        vec = np.asarray(vector)
+        dtype = _complex_preserving_dtype(vec.dtype)
+        vec = np.asarray(vec, dtype=dtype)
         if isinstance(regularization, LinearOperator):
-            return np.asarray(regularization.matvec(vec), dtype=np.float64)
+            return np.asarray(regularization.matvec(vec), dtype=dtype)
         if callable(regularization):
-            return np.asarray(regularization(vec), dtype=np.float64)
+            return np.asarray(regularization(vec), dtype=dtype)
         if isspmatrix(regularization):
-            return np.asarray(regularization.dot(vec), dtype=np.float64)
-        matrix = np.asarray(regularization, dtype=np.float64)
-        return np.asarray(matrix @ vec, dtype=np.float64)
+            return np.asarray(regularization.dot(vec), dtype=dtype)
+        matrix_raw = np.asarray(regularization)
+        matrix = np.asarray(matrix_raw, dtype=np.result_type(dtype, matrix_raw.dtype))
+        return np.asarray(matrix @ vec, dtype=np.result_type(matrix.dtype, dtype))
 
     def as_petsc_mat(self, *, comm=None):
         """Return a PETSc Python matrix for ``J`` when petsc4py is available."""
@@ -200,7 +268,7 @@ class JacobianLinearization(_LinearizationBase):
     """Apply EIT Jacobian actions without materializing the dense Jacobian.
 
     The object stores forward and adjoint field gradients for one linearization
-    point and exposes ``Jv`` and ``J^T r`` operations. Existing dense workflows
+    point and exposes ``Jv`` and ``J^H r`` operations. Existing dense workflows
     can still call :meth:`to_dense`, but inverse solvers can use the operator
     actions directly.
 
@@ -218,12 +286,16 @@ class JacobianLinearization(_LinearizationBase):
     sigma_fingerprint: str = ""
 
     def __post_init__(self) -> None:
+        self.dtype = _complex_preserving_dtype(
+            *self.grad_u_all,
+            *self.adjoint_gradients,
+        )
         self.cell_areas = np.asarray(self.cell_areas, dtype=np.float64)
         self.grad_u_all = tuple(
-            np.asarray(g, dtype=np.float64) for g in self.grad_u_all
+            np.asarray(g, dtype=self.dtype) for g in self.grad_u_all
         )
         self.adjoint_gradients = tuple(
-            np.asarray(g, dtype=np.float64) for g in self.adjoint_gradients
+            np.asarray(g, dtype=self.dtype) for g in self.adjoint_gradients
         )
         self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
         self.sign = float(self.sign)
@@ -232,10 +304,14 @@ class JacobianLinearization(_LinearizationBase):
         blocks: list[np.ndarray] = []
         meas_idx = 0
         for n_meas in self.n_meas_per_stim:
-            stack = np.stack(
-                self.adjoint_gradients[meas_idx : meas_idx + n_meas], axis=0
+            blocks.append(
+                _stack_adjoint_gradient_block(
+                    self.adjoint_gradients,
+                    start=meas_idx,
+                    count=n_meas,
+                    dtype=self.dtype,
+                )
             )
-            blocks.append(np.ascontiguousarray(stack, dtype=np.float64))
             meas_idx += n_meas
         self._adjoint_blocks: tuple[np.ndarray, ...] = tuple(blocks)
 
@@ -257,13 +333,14 @@ class JacobianLinearization(_LinearizationBase):
 
     def matvec(self, vector: np.ndarray) -> np.ndarray:
         """Apply ``J v``."""
-        vec = np.asarray(vector, dtype=np.float64).reshape(-1)
+        dtype = _complex_preserving_dtype(self.dtype, vector)
+        vec = np.asarray(vector, dtype=dtype).reshape(-1)
         if vec.size != self.n_parameters:
             raise ValueError(
                 f"Expected vector length {self.n_parameters}, got {vec.size}."
             )
 
-        out = np.zeros(self.n_measurements, dtype=np.float64)
+        out = np.zeros(self.n_measurements, dtype=dtype)
         weighted_cell = self.cell_areas * vec
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
@@ -280,14 +357,15 @@ class JacobianLinearization(_LinearizationBase):
         return out
 
     def rmatvec(self, residual: np.ndarray) -> np.ndarray:
-        """Apply ``J^T r``."""
-        res = np.asarray(residual, dtype=np.float64).reshape(-1)
+        """Apply ``J^H r`` for complex data, reducing to ``J^T r`` for real data."""
+        dtype = _complex_preserving_dtype(self.dtype, residual)
+        res = np.asarray(residual, dtype=dtype).reshape(-1)
         if res.size != self.n_measurements:
             raise ValueError(
                 f"Expected residual length {self.n_measurements}, got {res.size}."
             )
 
-        out = np.zeros(self.n_parameters, dtype=np.float64)
+        out = np.zeros(self.n_parameters, dtype=dtype)
         meas_idx = 0
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
@@ -295,12 +373,12 @@ class JacobianLinearization(_LinearizationBase):
             weighted_adjoint = np.einsum(
                 "m,meg->eg",
                 res[meas_idx : meas_idx + n_meas],
-                adjoint_block,
+                np.conj(adjoint_block),
                 optimize=True,
             )
             out += self.sign * np.einsum(
                 "eg,eg,e->e",
-                grad_u,
+                np.conj(grad_u),
                 weighted_adjoint,
                 self.cell_areas,
                 optimize=True,
@@ -311,7 +389,7 @@ class JacobianLinearization(_LinearizationBase):
     def to_dense(self, *, block_size: int | None = None) -> np.ndarray:
         """Materialize the dense Jacobian for compatibility or debugging."""
         n_meas, n_param = self.shape
-        dense = np.zeros((n_meas, n_param), dtype=np.float64)
+        dense = np.zeros((n_meas, n_param), dtype=self.dtype)
         block = n_param if block_size is None else max(1, int(block_size))
 
         meas_idx = 0
@@ -320,16 +398,16 @@ class JacobianLinearization(_LinearizationBase):
             adjoint_block = self._adjoint_blocks[stim_idx]
             for start in range(0, n_param, block):
                 end = min(start + block, n_param)
-                dense[meas_idx : meas_idx + n_meas_this, start:end] = (
-                    self.sign
-                    * np.einsum(
-                        "eg,meg->me",
-                        grad_u[start:end, :],
-                        adjoint_block[:, start:end, :],
-                        optimize=True,
-                    )
-                    * self.cell_areas[None, start:end]
+                block_view = dense[meas_idx : meas_idx + n_meas_this, start:end]
+                np.einsum(
+                    "eg,meg->me",
+                    grad_u[start:end, :],
+                    adjoint_block[:, start:end, :],
+                    optimize=True,
+                    out=block_view,
                 )
+                block_view *= self.sign
+                block_view *= self.cell_areas[start:end]
             meas_idx += n_meas_this
         return dense
 
@@ -341,7 +419,7 @@ class JacobianLinearization(_LinearizationBase):
         regularization_diag: np.ndarray | None = None,
         floor: float = 0.0,
     ) -> np.ndarray:
-        """Return ``diag(J^T W J) [+ alpha * R_diag]`` without dense ``J``.
+        """Return ``diag(J^H W J) [+ alpha * R_diag]`` without dense ``J``.
 
         Useful as a free NOSER-style diagonal preconditioner for matrix-free
         Gauss-Newton solves. The contraction reuses the same ``grad_u_all`` /
@@ -362,7 +440,7 @@ class JacobianLinearization(_LinearizationBase):
             adjoint_block = self._adjoint_blocks[stim_idx]
             # Per (measurement m, element e) sensitivity before cell_area scaling.
             contrib = np.einsum("eg,meg->me", grad_u, adjoint_block, optimize=True)
-            contrib_sq = contrib * contrib
+            contrib_sq = np.real(np.conj(contrib) * contrib)
             if weights is not None:
                 contrib_sq = contrib_sq * weights[meas_idx : meas_idx + n_meas, None]
             diag += contrib_sq.sum(axis=0)
@@ -401,18 +479,21 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
     diag_chunk_size: int = 128
 
     def __post_init__(self) -> None:
-        self.sigma_values = np.ascontiguousarray(
-            np.asarray(self.sigma_values, dtype=np.float64).reshape(-1)
+        self.dtype = _complex_preserving_dtype(
+            self.sigma_values,
+            *self.u_all,
+            *self.grad_u_all,
         )
-        self.u_all = tuple(np.asarray(u, dtype=np.float64) for u in self.u_all)
+        self.sigma_values = np.ascontiguousarray(
+            np.asarray(self.sigma_values, dtype=self.dtype).reshape(-1)
+        )
+        self.u_all = tuple(np.asarray(u, dtype=self.dtype) for u in self.u_all)
         self.grad_u_all = tuple(
-            np.asarray(g, dtype=np.float64) for g in self.grad_u_all
+            np.asarray(g, dtype=self.dtype) for g in self.grad_u_all
         )
         self.cell_areas = np.asarray(self.cell_areas, dtype=np.float64)
         self.n_meas_per_stim = tuple(int(v) for v in self.n_meas_per_stim)
-        self.meas_matrices = tuple(
-            np.asarray(matrix, dtype=np.float64) for matrix in self.meas_matrices
-        )
+        self.meas_matrices = tuple(np.asarray(matrix) for matrix in self.meas_matrices)
         self.sign = float(self.sign)
         self.sigma_fingerprint = str(
             self.sigma_fingerprint or compute_sigma_fingerprint(self.sigma_values)
@@ -450,7 +531,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         sigma = self._make_sigma()
         fields, _ = self.fwd_model.forward_solve(sigma, patterns)
         gradients = tuple(
-            np.asarray(grad, dtype=np.float64)
+            np.asarray(grad, dtype=_complex_preserving_dtype(grad, self.dtype))
             for grad in self.gradient_callback(fields)
         )
         self.last_action_info = {
@@ -465,7 +546,10 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         import dolfinx.fem.petsc as fem_petsc
         import ufl
 
-        vec = np.asarray(vector, dtype=np.float64).reshape(-1)
+        vec = np.asarray(
+            vector,
+            dtype=_complex_preserving_dtype(vector, self.dtype),
+        ).reshape(-1)
         if vec.size != self.n_parameters:
             raise ValueError(
                 f"Expected vector length {self.n_parameters}, got {vec.size}."
@@ -474,10 +558,10 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         delta_sigma = fem.Function(self.fwd_model.V_sigma)
         delta_sigma.x.array[:] = vec
         full_size = self.fwd_model.dofs + self.fwd_model.n_elec + 1
-        rhs = np.zeros((full_size, len(self.u_all)), dtype=np.float64)
+        rhs = np.zeros((full_size, len(self.u_all)), dtype=vec.dtype)
         for stim_idx, u_values in enumerate(self.u_all):
             u_fun = fem.Function(self.fwd_model.V)
-            u_fun.x.array[:] = np.asarray(u_values, dtype=np.float64)
+            u_fun.x.array[:] = np.asarray(u_values, dtype=self.dtype)
             form = (
                 -ufl.inner(
                     delta_sigma * ufl.grad(u_fun),
@@ -487,9 +571,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
             )
             vec_petsc = fem_petsc.assemble_vector(fem.form(form))
             vec_petsc.assemble()
-            rhs[: self.fwd_model.dofs, stim_idx] = np.asarray(
-                vec_petsc.array, dtype=np.float64
-            )
+            rhs[: self.fwd_model.dofs, stim_idx] = np.asarray(vec_petsc.array)
             destroy = getattr(vec_petsc, "destroy", None)
             if callable(destroy):
                 try:
@@ -508,9 +590,9 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         )
         electrode_delta = np.asarray(
             sol[self.fwd_model.dofs : self.fwd_model.dofs + self.fwd_model.n_elec, :].T,
-            dtype=np.float64,
         )
-        out = np.zeros(self.n_measurements, dtype=np.float64)
+        out_dtype = _complex_preserving_dtype(electrode_delta, *self.meas_matrices)
+        out = np.zeros(self.n_measurements, dtype=out_dtype)
         meas_idx = 0
         for stim_idx, meas_matrix in enumerate(self.meas_matrices):
             n_meas = self.n_meas_per_stim[stim_idx]
@@ -521,33 +603,40 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
             "solve_count": int(len(self.u_all)),
             "mode": "lazy_sensitivity",
         }
-        return np.asarray(out, dtype=np.float64)
+        return np.asarray(out, dtype=out_dtype)
 
     def rmatvec(self, residual: np.ndarray) -> np.ndarray:
-        res = np.asarray(residual, dtype=np.float64).reshape(-1)
+        res = np.asarray(
+            residual,
+            dtype=_complex_preserving_dtype(residual, self.dtype),
+        ).reshape(-1)
         if res.size != self.n_measurements:
             raise ValueError(
                 f"Expected residual length {self.n_measurements}, got {res.size}."
             )
+        pattern_dtype = _complex_preserving_dtype(res, *self.meas_matrices)
         patterns = np.zeros(
             (len(self.n_meas_per_stim), self.fwd_model.n_elec),
-            dtype=np.float64,
+            dtype=pattern_dtype,
         )
         meas_idx = 0
         for stim_idx, meas_matrix in enumerate(self.meas_matrices):
             n_meas = self.n_meas_per_stim[stim_idx]
-            patterns[stim_idx, :] = meas_matrix.T @ res[meas_idx : meas_idx + n_meas]
+            patterns[stim_idx, :] = meas_matrix.T @ np.conj(
+                res[meas_idx : meas_idx + n_meas]
+            )
             meas_idx += n_meas
         adjoint_gradients = self._gradients_for_patterns(
             patterns,
             rhs_kind="adjoint_jtr",
         )
-        out = np.zeros(self.n_parameters, dtype=np.float64)
+        out_dtype = _complex_preserving_dtype(res, *self.grad_u_all, *adjoint_gradients)
+        out = np.zeros(self.n_parameters, dtype=out_dtype)
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             out += self.sign * np.einsum(
                 "eg,eg,e->e",
-                grad_u,
-                adjoint_gradients[stim_idx],
+                np.conj(grad_u),
+                np.conj(adjoint_gradients[stim_idx]),
                 self.cell_areas,
                 optimize=True,
             )
@@ -556,7 +645,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
             "solve_count": int(len(self.n_meas_per_stim)),
             "mode": "lazy_adjoint_combined",
         }
-        return np.asarray(out, dtype=np.float64)
+        return np.asarray(out, dtype=out_dtype)
 
     def hessian_diag(
         self,
@@ -653,12 +742,15 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
             block_weight = float(np.mean(np.abs(weights[meas_idx : meas_idx + n_meas])))
-            diag += block_weight * np.einsum(
-                "eg,eg,e->e",
-                grad_u,
-                grad_u,
-                self.cell_areas * self.cell_areas,
-                optimize=True,
+            diag += (
+                block_weight
+                * np.einsum(
+                    "eg,eg,e->e",
+                    np.conj(grad_u),
+                    grad_u,
+                    self.cell_areas * self.cell_areas,
+                    optimize=True,
+                ).real
             )
             meas_idx += n_meas
         return np.maximum(diag, 1e-100)
@@ -671,6 +763,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         diag = np.zeros(self.n_parameters, dtype=np.float64)
         meas_idx = 0
         chunk = max(1, int(self.diag_chunk_size))
+        cell_area_sq = self.cell_areas * self.cell_areas
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = self.n_meas_per_stim[stim_idx]
             meas_matrix = self.meas_matrices[stim_idx]
@@ -680,7 +773,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
                     meas_matrix[start:end, :],
                     rhs_kind="adjoint_diag",
                 )
-                adjoint_block = np.asarray(adjoint_gradients, dtype=np.float64)
+                adjoint_block = np.asarray(adjoint_gradients)
                 contrib = np.einsum(
                     "eg,meg->me",
                     grad_u,
@@ -688,12 +781,11 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
                     optimize=True,
                 )
                 block_weights = weights[meas_idx + start : meas_idx + end]
-                diag += (
-                    contrib
-                    * contrib
-                    * block_weights[:, None]
-                    * (self.cell_areas[None, :] ** 2)
-                ).sum(axis=0)
+                diag += _weighted_contrib_power_sum(
+                    contrib,
+                    block_weights,
+                    cell_area_sq,
+                )
             meas_idx += n_meas
         return np.maximum(diag, 1e-100)
 
@@ -716,6 +808,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
         solve_total = 0
         meas_idx = 0
         chunk = max(1, int(self.diag_chunk_size))
+        cell_area_sq = self.cell_areas * self.cell_areas
         for stim_idx, grad_u in enumerate(self.grad_u_all):
             n_meas = int(self.n_meas_per_stim[stim_idx])
             meas_matrix = self.meas_matrices[stim_idx]
@@ -746,7 +839,7 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
                     rhs_kind="adjoint_diag_sampled",
                 )
                 solve_total += int(selected.size)
-                adjoint_block = np.asarray(adjoint_gradients, dtype=np.float64)
+                adjoint_block = np.asarray(adjoint_gradients)
                 contrib = np.einsum(
                     "eg,meg->me",
                     grad_u,
@@ -754,12 +847,11 @@ class LazyAdjointJacobianLinearization(_LinearizationBase):
                     optimize=True,
                 )
                 selected_weights = block_weights[selected]
-                diag += scale * (
-                    contrib
-                    * contrib
-                    * selected_weights[:, None]
-                    * (self.cell_areas[None, :] ** 2)
-                ).sum(axis=0)
+                diag += scale * _weighted_contrib_power_sum(
+                    contrib,
+                    selected_weights,
+                    cell_area_sq,
+                )
             meas_idx += n_meas
         return np.maximum(diag, 1e-100), {
             "sampled_measurements": int(sampled_total),
@@ -776,8 +868,8 @@ class _PETScJacobianContext:
     @staticmethod
     def _vec_array(vec) -> np.ndarray:
         if hasattr(vec, "array"):
-            return np.asarray(vec.array, dtype=np.float64)
-        return np.asarray(vec.getArray(readonly=True), dtype=np.float64)
+            return np.asarray(vec.array)
+        return np.asarray(vec.getArray(readonly=True))
 
     def mult(self, _mat, x, y) -> None:
         result = self.linearization.matvec(self._vec_array(x))

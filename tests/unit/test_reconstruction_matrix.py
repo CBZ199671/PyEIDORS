@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import inspect
+
 import numpy as np
 import pytest
 from scipy import sparse
 
 from pyeidors.data.difference import normalize_time_difference
 from pyeidors.inverse import VoxelGrid
+from pyeidors.inverse import reconstruction_matrix as rm_module
 from pyeidors.inverse.prior import as_rtr_prior, graph_curvature_prior, graph_laplacian
 from pyeidors.inverse.reconstruction_matrix import (
     build_one_step_rm,
@@ -37,6 +40,33 @@ def test_build_one_step_rm_tikhonov_matches_dense_formula() -> None:
     assert result.metadata["form"] == "param"
     assert result.metadata["regularization_source"] == "identity"
     assert result.metadata["condition_estimate"] >= 1.0
+
+
+def test_v480_reconstruction_matrix_finite_guards_use_bounded_scanner() -> None:
+    checked_functions = (
+        rm_module._as_measurement_vector,
+        rm_module._as_rm_matrix,
+        rm_module._as_measurement_frames,
+        rm_module._as_jacobian,
+        rm_module._prior_to_dense_matrix,
+        rm_module._prior_diagonal,
+        rm_module._as_measurement_regularization,
+        rm_module.build_one_step_rm,
+        rm_module._matvec,
+    )
+
+    for func in checked_functions:
+        source = inspect.getsource(func)
+        assert "all_finite_values(" in source
+        for old_payload_scan in (
+            "np.isfinite(vector).all()",
+            "np.isfinite(matrix).all()",
+            "np.isfinite(frames).all()",
+            "np.isfinite(diag).all()",
+            "np.isfinite(rm).all()",
+            "np.isfinite(out).all()",
+        ):
+            assert old_payload_scan not in source
 
 
 def test_build_one_step_rm_noser_defaults_to_eidors_sqrt_diag_jtj() -> None:
@@ -393,6 +423,41 @@ def test_build_one_step_rm_measurement_form_accepts_measurement_regularization()
     assert rm.metadata["measurement_regularization_source"] == "provided"
 
 
+def test_v504_measurement_regularization_diagonal_uses_in_place_add() -> None:
+    regularization_source = inspect.getsource(rm_module._as_measurement_regularization)
+    build_source = inspect.getsource(rm_module.build_one_step_rm)
+
+    assert "np.eye(n_measurements" not in regularization_source
+    assert "np.diag(array) if array.ndim == 1" not in regularization_source
+    assert "add_scaled_diagonal_in_place(lhs, rn, lam * lam)" in build_source
+    assert "add_scaled_values_in_place(lhs, rn, lam * lam)" in build_source
+
+    jacobian = np.array([[1.0, 0.5, 0.0], [0.25, -1.0, 2.0]], dtype=float)
+    diagonal_rn = np.array([2.0, 3.0], dtype=float)
+    dense_rn = np.diag(diagonal_rn)
+    lam = 0.4
+
+    vector_rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        form="measurement",
+        measurement_regularization=diagonal_rn,
+        return_metadata=True,
+    )
+    dense_rm = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="tikhonov",
+        form="measurement",
+        measurement_regularization=dense_rn,
+        return_metadata=True,
+    )
+
+    np.testing.assert_allclose(vector_rm.rm, dense_rm.rm)
+    assert vector_rm.metadata["measurement_regularization_source"] == "provided"
+
+
 def test_build_one_step_rm_applies_bad_channels_and_weights_consistently() -> None:
     jacobian = np.array(
         [[1.0, 0.0], [5.0, 5.0], [0.0, 2.0]],
@@ -567,6 +632,79 @@ def test_reconstruct_difference_batch_matches_rowwise_contract_with_large_diagon
     np.testing.assert_allclose(result.values, expected_payload @ rm.T)
     assert result.metadata["forward_solve_count"] == 0
     assert result.metadata["ksp_solve_count"] == 0
+
+
+def test_v420_frame_contract_zeroes_bad_columns_without_boolean_lhs_indexing() -> None:
+    source = inspect.getsource(
+        rm_module._apply_measurement_contract_to_frames_with_metadata
+    )
+    helper_source = inspect.getsource(rm_module._zero_bad_measurement_columns_in_place)
+    assert "_zero_bad_measurement_columns_in_place" in source
+    assert "out[:, mask] = 0.0" not in source
+    assert "np.sqrt(weights).reshape" not in source
+    assert "np.sqrt(weights, out=weights)" in source
+    assert "for col_idx, is_bad in enumerate" in helper_source
+
+    frames = np.array([[1.0, 9.0, 2.0], [3.0, 10.0, 4.0]], dtype=float)
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 0.25], dtype=float)
+
+    payload = rm_module._apply_measurement_contract_to_frames(
+        frames,
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+
+    expected = frames.copy()
+    expected[:, 1] = 0.0
+    expected *= np.sqrt(np.array([4.0, 0.0, 0.25], dtype=float)).reshape(1, -1)
+    np.testing.assert_allclose(payload, expected)
+    np.testing.assert_allclose(frames[:, 1], np.array([9.0, 10.0]))
+    assert not np.shares_memory(payload, frames)
+
+
+def test_v555_frame_contract_and_rm_metadata_preserve_float32_batch_dtype() -> None:
+    source = inspect.getsource(
+        rm_module._apply_measurement_contract_to_frames_with_metadata
+    )
+    annotate_source = inspect.getsource(rm_module._annotate_online_hot_path_metadata)
+
+    assert "np.asarray(frames, dtype=np.float64).copy()" not in source
+    assert "np.ascontiguousarray(out, dtype=np.float64)" not in source
+    assert "np.ascontiguousarray(_as_real_float_array(frames)).copy()" not in source
+    assert 'np.array(_as_real_float_array(frames), copy=True, order="C")' in source
+    assert "dtype=out.dtype" in source
+    assert "dtype=np.float64" not in annotate_source
+    reference_source = inspect.getsource(rm_module._reference_frames)
+    assert 'np.copyto(frames, ref.reshape(1, -1), casting="no")' not in (
+        reference_source
+    )
+
+    frames = np.array([[1.0, 9.0, 2.0], [3.0, 10.0, 4.0]], dtype=np.float32)
+    rm = np.array([[1.0, 0.0, 2.0]], dtype=np.float32)
+    mask = np.array([False, True, False], dtype=bool)
+    weights = np.array([4.0, 9.0, 0.25], dtype=np.float32)
+
+    payload = rm_module._apply_measurement_contract_to_frames(
+        frames,
+        channel_mask=mask,
+        measurement_weights=weights,
+    )
+    result = reconstruct_difference_batch(
+        rm,
+        frames,
+        normalize=False,
+        channel_mask=mask,
+        measurement_weights=weights,
+        dtype="float32",
+        device="cpu",
+        return_metadata=True,
+    )
+
+    assert payload.dtype == np.dtype(np.float32)
+    assert payload.flags.c_contiguous
+    assert result.values.dtype == np.dtype(np.float32)
+    assert result.metadata["rm_dtype"] == "float32"
 
 
 def test_reconstruct_difference_batch_accepts_single_frame_vector() -> None:

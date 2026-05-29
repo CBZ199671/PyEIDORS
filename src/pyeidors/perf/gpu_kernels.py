@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import os
 from types import MappingProxyType
 from typing import Any
 
 import numpy as np
 from scipy import sparse
 
-from pyeidors.utils.numeric_ops import safe_dot
+from pyeidors.utils.numeric_ops import all_finite_values, safe_dot
 
 try:  # pragma: no cover - availability depends on active dev shell
     import torch
@@ -45,6 +46,10 @@ class RMMatmulHandle:
     dtype: str
     fallback_reason: str | None = None
     cache_key: str | None = None
+    compiled_matmul: Any | None = None
+    compile_mode: str = "off"
+    compile_status: str = "disabled"
+    compile_reason: str | None = None
 
     @property
     def shape(self) -> tuple[int, int]:
@@ -65,6 +70,10 @@ class RMMatmulHandle:
                 if self.matrix_tensor is not None
                 else "cpu",
                 "rm_cache_key": self.cache_key,
+                "rm_matmul_compile_mode": self.compile_mode,
+                "rm_matmul_compile_status": self.compile_status,
+                "rm_matmul_compile_reason": self.compile_reason,
+                "rm_matmul_compiled": self.compiled_matmul is not None,
             }
         )
 
@@ -78,6 +87,7 @@ def prepare_rm_matmul(
     device: str = "auto",
     dtype: str | np.dtype[Any] = "float64",
     cache_key: str | None = None,
+    compile_mode: str | None = None,
 ) -> RMMatmulHandle:
     """Prepare ``RM`` once for repeated online application.
 
@@ -88,8 +98,14 @@ def prepare_rm_matmul(
 
     requested = _normalize_device(device)
     np_dtype, dtype_name = _normalize_dtype(dtype)
+    resolved_compile_mode = _normalize_compile_mode(compile_mode)
     if isinstance(rm, RMMatmulHandle):
-        if _handle_matches(rm, requested=requested, dtype_name=dtype_name):
+        if _handle_matches(
+            rm,
+            requested=requested,
+            dtype_name=dtype_name,
+            compile_mode=resolved_compile_mode,
+        ):
             return rm
         matrix = _as_rm_matrix(rm.matrix, dtype=np_dtype)
     else:
@@ -100,6 +116,10 @@ def prepare_rm_matmul(
     if effective == "cuda":
         matrix_tensor = _torch_as_tensor(matrix, device="cuda", dtype=np_dtype)
         backend = "torch"
+    compiled_matmul, compile_status, compile_reason = _prepare_compiled_matmul(
+        effective_device=effective,
+        compile_mode=resolved_compile_mode,
+    )
     return RMMatmulHandle(
         matrix=matrix,
         matrix_tensor=matrix_tensor,
@@ -110,6 +130,10 @@ def prepare_rm_matmul(
         dtype=dtype_name,
         fallback_reason=fallback_reason,
         cache_key=cache_key,
+        compiled_matmul=compiled_matmul,
+        compile_mode=resolved_compile_mode,
+        compile_status=compile_status,
+        compile_reason=compile_reason,
     )
 
 
@@ -120,6 +144,7 @@ def rm_matmul(
     device: str = "auto",
     dtype: str | np.dtype[Any] = "float64",
     return_metadata: bool = False,
+    compile_mode: str | None = None,
 ) -> np.ndarray | RMMatmulResult:
     """Apply ``RM @ ΔV`` for one frame or a frame batch.
 
@@ -130,13 +155,22 @@ def rm_matmul(
 
     requested = _normalize_device(device)
     np_dtype, dtype_name = _normalize_dtype(dtype)
+    resolved_compile_mode = _normalize_compile_mode(compile_mode)
     reused_handle = isinstance(rm, RMMatmulHandle) and _handle_matches(
         rm,
         requested=requested,
         dtype_name=dtype_name,
+        compile_mode=resolved_compile_mode,
     )
     handle = (
-        rm if reused_handle else prepare_rm_matmul(rm, device=requested, dtype=np_dtype)
+        rm
+        if reused_handle
+        else prepare_rm_matmul(
+            rm,
+            device=requested,
+            dtype=np_dtype,
+            compile_mode=resolved_compile_mode,
+        )
     )
     batch, was_vector = _as_delta_batch(
         delta_v,
@@ -151,7 +185,7 @@ def rm_matmul(
     if was_vector:
         values = values.reshape(-1)
     values = np.asarray(values, dtype=np_dtype)
-    if not np.isfinite(values).all():
+    if not all_finite_values(values):
         raise FloatingPointError("RM matmul produced non-finite values.")
 
     metadata = MappingProxyType(
@@ -176,6 +210,13 @@ def rm_matmul(
             else "cpu",
             "rm_cache_key": handle.cache_key,
             "host_device_transfer": _host_device_transfer_label(handle),
+            "rm_matmul_compile_mode": handle.compile_mode,
+            "rm_matmul_compile_status": handle.compile_status,
+            "rm_matmul_compile_reason": handle.compile_reason,
+            "rm_matmul_compiled": handle.compiled_matmul is not None,
+            "online_hot_path": "rm_torch_compile_matmul"
+            if handle.compiled_matmul is not None
+            else "rm_matmul",
         }
     )
     if return_metadata:
@@ -192,7 +233,7 @@ def _as_rm_matrix(rm: Any, *, dtype: np.dtype[Any] | type = np.float64) -> np.nd
         raise ValueError("rm must be a 2D reconstruction matrix.")
     if 0 in matrix.shape:
         raise ValueError("rm must be non-empty.")
-    if not np.isfinite(matrix).all():
+    if not all_finite_values(matrix):
         raise FloatingPointError("rm contains non-finite values.")
     return np.ascontiguousarray(matrix, dtype=dtype)
 
@@ -219,7 +260,7 @@ def _as_delta_batch(
         )
     if batch.shape[0] == 0:
         raise ValueError("delta_v batch must contain at least one frame.")
-    if not np.isfinite(batch).all():
+    if not all_finite_values(batch):
         raise FloatingPointError("delta_v contains non-finite values.")
     return np.ascontiguousarray(batch, dtype=dtype), was_vector
 
@@ -231,6 +272,29 @@ def _normalize_device(device: str | None) -> str:
     if resolved not in {"auto", "cpu", "cuda"}:
         raise ValueError("device must be one of: 'auto', 'cpu', 'cuda'.")
     return resolved
+
+
+def _normalize_compile_mode(mode: str | None) -> str:
+    raw = str(
+        mode if mode is not None else os.environ.get("EIT_APP_RM_TORCH_COMPILE", "off")
+    )
+    value = raw.strip().lower().replace("-", "_")
+    aliases = {
+        "1": "force",
+        "true": "force",
+        "yes": "force",
+        "on": "force",
+        "force": "force",
+        "always": "force",
+        "auto": "auto",
+        "0": "off",
+        "false": "off",
+        "no": "off",
+        "off": "off",
+        "never": "off",
+        "": "off",
+    }
+    return aliases.get(value, "off")
 
 
 def _torch_cuda_available() -> bool:
@@ -266,12 +330,21 @@ def _handle_matches(
     *,
     requested: str,
     dtype_name: str,
+    compile_mode: str = "off",
 ) -> bool:
     if handle.dtype != dtype_name:
         return False
     if requested == "auto":
+        device_matches = True
+    else:
+        device_matches = (
+            handle.device_requested == requested or handle.device_effective == requested
+        )
+    if not device_matches:
+        return False
+    if compile_mode == "off" or handle.device_effective != "cuda":
         return True
-    return handle.device_requested == requested or handle.device_effective == requested
+    return handle.compile_mode == compile_mode
 
 
 def _torch_dtype(dtype: np.dtype[Any]):
@@ -286,6 +359,40 @@ def _torch_as_tensor(values: np.ndarray, *, device: str, dtype: np.dtype[Any]):
     if torch is None:
         raise RuntimeError("Torch is unavailable.")
     return torch.as_tensor(values, device=device, dtype=_torch_dtype(dtype))
+
+
+def _torch_rm_kernel(batch_t: Any, matrix_t: Any) -> Any:
+    if torch is None:
+        raise RuntimeError("Torch is unavailable.")
+    return torch.matmul(batch_t, matrix_t.T)
+
+
+def _prepare_compiled_matmul(
+    *,
+    effective_device: str,
+    compile_mode: str,
+) -> tuple[Any | None, str, str | None]:
+    if compile_mode == "off":
+        return None, "disabled", None
+    if effective_device != "cuda":
+        return None, "skipped", "non_cuda_device"
+    compile_fn = getattr(torch, "compile", None) if torch is not None else None
+    if not callable(compile_fn):
+        return None, "unavailable", "torch_compile_unavailable"
+    try:
+        compiled = compile_fn(
+            _torch_rm_kernel,
+            mode="reduce-overhead",
+            fullgraph=True,
+        )
+    except TypeError:
+        try:
+            compiled = compile_fn(_torch_rm_kernel)
+        except Exception as exc:  # pragma: no cover - backend-specific
+            return None, "failed", type(exc).__name__
+    except Exception as exc:  # pragma: no cover - backend-specific
+        return None, "failed", type(exc).__name__
+    return compiled, "compiled", None
 
 
 def _host_device_transfer_label(handle: RMMatmulHandle) -> str:
@@ -313,7 +420,8 @@ def _torch_rm_matmul(
     if matrix_t is None:
         matrix_t = _torch_as_tensor(handle.matrix, device=device, dtype=dtype)
     batch_t = _torch_as_tensor(batch, device=device, dtype=dtype)
-    out = torch.matmul(batch_t, matrix_t.T)
+    kernel = handle.compiled_matmul or _torch_rm_kernel
+    out = kernel(batch_t, matrix_t)
     return np.asarray(out.detach().cpu().numpy(), dtype=dtype)
 
 

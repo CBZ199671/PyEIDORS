@@ -47,6 +47,7 @@ TRANSLATIONS: dict[str, str] = {
     "menu.tools.difference": "&Difference\u2026",
     "menu.tools.batch_reconstruction": "&Batch Reconstruction\u2026",
     "menu.tools.reconstruction": "&Reconstruction\u2026",
+    "menu.tools.cache_telemetry": "&Cache Telemetry\u2026",
     "main.status.need_frames_for_difference": "Record at least 2 frames on the Hardware tab before using Difference.",
     "main.status.reconstruction_hint": "Switched to Database tab \u2014 select a reference and target frame, then click Reconstruct.",
     "main.status.recon_running": "Running {method}\u2026",
@@ -59,6 +60,20 @@ TRANSLATIONS: dict[str, str] = {
     "main.popup.recon_complete.informative": "Output folder:\n{folder}",
     "main.popup.recon_complete.open_folder": "Open Folder",
     "main.popup.recon_complete.close": "Close",
+    "cache.telemetry.title": "Cache Telemetry",
+    "cache.telemetry.refresh": "Refresh",
+    "cache.telemetry.gc": "Trim Cache",
+    "cache.telemetry.max_size": "Target",
+    "cache.telemetry.include_worker": "Worker cache",
+    "cache.telemetry.include_legacy": "Legacy arrays",
+    "cache.telemetry.idle": "Cache telemetry is ready.",
+    "cache.telemetry.refreshing": "Refreshing cache telemetry...",
+    "cache.telemetry.gc_running": "Trimming cache in the background...",
+    "cache.telemetry.summary": (
+        "Disk entries: {disk_items} ({disk_mib:.1f} MiB) | "
+        "Indexed: {indexed} | Workers: {workers} | "
+        "Scheduler active/pending: {active}/{pending}"
+    ),
     # ==================================================================
     # Loading / busy overlay messages (shared across plots)
     # ==================================================================
@@ -361,7 +376,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.electrode_layout_label": "3D numbering:",
     "sim.mesh.electrode_layout.ring_major": "Ring-major (EIDORS)",
     "sim.mesh.electrode_layout.zigzag": "Zigzag (legacy)",
-    "sim.mesh.conductivity_label": "Background \u03c3:",
+    "sim.mesh.conductivity_label": "Background γ/σ:",
+    "sim.mesh.contact_impedance_label": "Contact z:",
+    "sim.mesh.complex_admittivity_tooltip": "Accepts real or complex admittance, e.g. 1.0 or 1+0.25j S/m.",
+    "sim.mesh.complex_impedance_tooltip": "Accepts real or complex contact impedance, e.g. 0.01 or 0.01+0.002j Ω·m².",
     "sim.mesh.patterns_header": "Drive & measurement pattern",
     "sim.mesh.patterns_hint": "Controls how the forward solver builds stim/meas pairs. Inverse reconstruction reuses the same pattern — keep these in sync with your hardware board.",
     "sim.mesh.measurement_protocol_label": "3D protocol (drive -> measure):",
@@ -383,6 +401,14 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.custom_pattern_label": "Custom matrices JSON:",
     "sim.mesh.custom_pattern_placeholder": '{"stim_matrix": [[1, -1, 0, 0]], "meas_matrices": [[1, 0, -1, 0]]}',
     "sim.mesh.point_count_hint": "Expected boundary samples: {count}",
+    "sim.results.mode_real": "Real EIT",
+    "sim.results.mode_complex": "Complex admittance EIT",
+    "sim.results.channel_label": "View:",
+    "sim.results.channel.real": "Real Re",
+    "sim.results.channel.imag": "Imag Im",
+    "sim.results.channel.magnitude": "Magnitude |·|",
+    "sim.results.channel.phase": "Phase ∠",
+    "sim.results.channel.composite": "Composite",
     # ==================================================================
     # Simulation tab — Step 2 Inhomogeneities
     # ==================================================================
@@ -714,6 +740,12 @@ TRANSLATIONS: dict[str, str] = {
     "main.status.prewarming": "Pre-warming the realtime reconstruction context\u2026",
     "main.status.prewarm_done": "Realtime reconstruction context pre-warmed; subsequent captures will use the hot-start path.",
     "main.status.prewarm_failed": "Realtime reconstruction pre-warm failed; will retry when needed: {reason}",
+    "main.status.sim_backend_warm_start": "Pre-warming 3D backend worker ({profile})\u2026",
+    "main.status.sim_backend_warm_done": "3D backend worker pre-warmed: profile={profile}, pid={pid}, RSS={rss}, prime={prime_ms:.0f} ms, PETSc probe={probe}.",
+    "main.status.sim_backend_warm_failed": "3D backend worker pre-warm failed ({profile}): {reason}",
+    "main.status.sim_backend_setup_start": "Pre-warming 3D forward setup ({profile})\u2026",
+    "main.status.sim_backend_setup_done": "3D forward setup pre-warmed: profile={profile}, pid={pid}, RSS={rss}, setup={prime_ms:.0f} ms, PETSc probe={probe}.",
+    "main.status.sim_backend_setup_failed": "3D forward setup pre-warm failed ({profile}): {reason}",
     # Frame browser / reference / target
     "main.status.reference_updated": "Reference frame updated: #{index}",
     "main.status.reference_selected": "Reference frame selected: #{index}",

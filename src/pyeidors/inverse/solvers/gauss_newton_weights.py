@@ -13,15 +13,18 @@ def scale_baseline_to_measured(
     if measured_vector is None:
         return baseline_vector
 
-    x = np.asarray(baseline_vector, dtype=float)
-    y = np.asarray(measured_vector, dtype=float)
-    denom = float(np.dot(x, x))
+    x = np.asarray(baseline_vector)
+    y = np.asarray(
+        measured_vector,
+        dtype=np.result_type(x.dtype, np.asarray(measured_vector).dtype),
+    )
+    denom = float(np.vdot(x, x).real)
     if denom < 1e-18:
         return x
-    scale = float(np.dot(y, x) / denom)
+    scale = np.vdot(x, y) / denom
     if abs(scale) < 1e-12:
-        scale = 1.0 if scale >= 0 else -1.0
-    bias = float(y.mean() - scale * x.mean())
+        scale = 1.0
+    bias = y.mean() - scale * x.mean()
     return scale * x + bias
 
 
@@ -33,11 +36,17 @@ def difference_with_baseline(
     """Difference-magnitude weighting mode."""
     if measured_vector is None:
         return baseline_vector
-    diff = np.abs(
-        np.asarray(measured_vector, dtype=float)
-        - np.asarray(baseline_vector, dtype=float)
-    )
-    return np.where(diff > floor, diff, floor)
+    measured = np.asarray(measured_vector)
+    baseline = np.asarray(baseline_vector)
+    delta = np.subtract(measured, baseline)
+    if np.iscomplexobj(delta):
+        diff = np.empty(delta.shape, dtype=np.empty((), dtype=delta.dtype).real.dtype)
+        np.abs(delta, out=diff)
+    else:
+        diff = delta
+        np.abs(diff, out=diff)
+    np.maximum(diff, float(floor), out=diff)
+    return diff
 
 
 def build_weight_reference(
