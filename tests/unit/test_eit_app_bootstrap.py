@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+import pytest
+
 import eit_app.app as app_module
 from eit_app.ui.main_window import EITWorkstation
 
@@ -18,6 +20,7 @@ _QT_ENV_NAMES = (
     "WSL_DISTRO_NAME",
     "WSL_INTEROP",
     "WAYLAND_DISPLAY",
+    "XDG_RUNTIME_DIR",
     "DISPLAY",
 )
 
@@ -32,6 +35,7 @@ def test_v51_wslg_defaults_to_wayland_for_crisp_hidpi(monkeypatch):
     monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(app_module, "_wayland_display_available", lambda: True)
 
     app_module._configure_qt_platform_for_embedded_vtk()
 
@@ -46,11 +50,41 @@ def test_v51_wslg_xcb_requires_explicit_legacy_opt_in(monkeypatch):
     monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
     monkeypatch.setenv("DISPLAY", ":0")
     monkeypatch.setenv("EIT_APP_USE_QT_XCB", "1")
+    monkeypatch.setattr(app_module, "_x11_display_available", lambda: True)
 
     app_module._configure_qt_platform_for_embedded_vtk()
 
     assert os.environ["QT_QPA_PLATFORM"] == "xcb"
     assert os.environ["QT_X11_NO_MITSHM"] == "1"
+
+
+def test_v51_wslg_dead_wayland_falls_back_to_xcb(monkeypatch):
+    _clear_qt_env(monkeypatch)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(app_module, "_wayland_display_available", lambda: False)
+    monkeypatch.setattr(app_module, "_x11_display_available", lambda: True)
+
+    app_module._configure_qt_platform_for_embedded_vtk()
+
+    assert os.environ["QT_QPA_PLATFORM"] == "xcb"
+    assert os.environ["QT_X11_NO_MITSHM"] == "1"
+
+
+def test_v51_wslg_dead_display_exits_before_qt_abort(monkeypatch):
+    _clear_qt_env(monkeypatch)
+    monkeypatch.setenv("WSL_DISTRO_NAME", "Ubuntu-22.04")
+    monkeypatch.setenv("WAYLAND_DISPLAY", "wayland-0")
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(app_module, "_wayland_display_available", lambda: False)
+    monkeypatch.setattr(app_module, "_x11_display_available", lambda: False)
+
+    with pytest.raises(SystemExit) as exc_info:
+        app_module._configure_qt_platform_for_embedded_vtk()
+
+    assert "WSLg display is not reachable" in str(exc_info.value)
+    assert "wsl.exe --shutdown" in str(exc_info.value)
 
 
 def test_v51_explicit_qt_platform_is_preserved(monkeypatch):

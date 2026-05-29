@@ -38,6 +38,57 @@ def _running_under_wsl() -> bool:
         return False
 
 
+def _wayland_display_available() -> bool:
+    display = os.environ.get("WAYLAND_DISPLAY", "").strip()
+    if not display:
+        return False
+
+    candidates: list[Path] = []
+    display_path = Path(display)
+    if display_path.is_absolute():
+        candidates.append(display_path)
+    else:
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR", "").strip()
+        if runtime_dir:
+            candidates.append(Path(runtime_dir) / display)
+        candidates.append(Path("/mnt/wslg/runtime-dir") / display)
+
+    if candidates:
+        return any(path.exists() for path in candidates)
+
+    return True
+
+
+def _x11_display_available() -> bool:
+    display = os.environ.get("DISPLAY", "").strip()
+    if not display:
+        return False
+    if not display.startswith(":"):
+        return True
+
+    display_id = display[1:].split(".", 1)[0]
+    if not display_id:
+        return True
+    candidates = (
+        Path("/tmp/.X11-unix") / f"X{display_id}",
+        Path("/mnt/wslg/.X11-unix") / f"X{display_id}",
+    )
+    return any(path.exists() for path in candidates)
+
+
+def _wslg_display_unavailable(reason: str) -> SystemExit:
+    wayland_display = os.environ.get("WAYLAND_DISPLAY", "<unset>")
+    display = os.environ.get("DISPLAY", "<unset>")
+    return SystemExit(
+        "WSLg display is not reachable; cannot start the interactive Qt GUI. "
+        f"{reason} "
+        f"(WAYLAND_DISPLAY={wayland_display!r}, DISPLAY={display!r}). "
+        "Close WSL GUI apps, run `wsl.exe --shutdown` from Windows, then reopen "
+        "Ubuntu/WSL. For headless smoke checks only, run with "
+        "`QT_QPA_PLATFORM=offscreen`."
+    )
+
+
 def _configure_qt_platform_for_embedded_vtk() -> None:
     """Prefer native Wayland on WSLg for crisp HiDPI rendering.
 
@@ -68,8 +119,10 @@ def _configure_qt_platform_for_embedded_vtk() -> None:
     os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
     if _env_flag("EIT_APP_USE_QT_XCB") or _env_flag("EIT_APP_DISABLE_QT_WAYLAND"):
-        if not os.environ.get("DISPLAY"):
-            return
+        if not _x11_display_available():
+            raise _wslg_display_unavailable(
+                "Qt XCB was requested, but the X11 socket is unavailable."
+            )
         os.environ["QT_QPA_PLATFORM"] = "xcb"
         # Disable MIT-SHM: WSLg's XWayland doesn't support shared-memory
         # pixmaps and Qt's BadAccess complaints flood the journal otherwise.
@@ -79,7 +132,10 @@ def _configure_qt_platform_for_embedded_vtk() -> None:
         )
         return
 
-    if os.environ.get("WAYLAND_DISPLAY"):
+    wayland_available = _wayland_display_available()
+    x11_available = _x11_display_available()
+
+    if wayland_available:
         # The semicolon form lets Qt fall back to XCB if the Wayland plugin
         # is unavailable, while keeping Wayland first for crisp text.
         os.environ["QT_QPA_PLATFORM"] = "wayland;xcb"
@@ -89,12 +145,23 @@ def _configure_qt_platform_for_embedded_vtk() -> None:
         )
         return
 
-    if os.environ.get("DISPLAY"):
+    if os.environ.get("WAYLAND_DISPLAY"):
+        logging.getLogger(__name__).warning(
+            "WSLg WAYLAND_DISPLAY is set but no Wayland socket is reachable; "
+            "falling back to XCB if available"
+        )
+
+    if x11_available:
         os.environ["QT_QPA_PLATFORM"] = "xcb"
         os.environ.setdefault("QT_X11_NO_MITSHM", "1")
         logging.getLogger(__name__).info(
             "WSLg detected without WAYLAND_DISPLAY; falling back to Qt XCB platform"
         )
+        return
+
+    raise _wslg_display_unavailable(
+        "Neither the Wayland nor the X11 display socket is available."
+    )
 
 
 def main() -> int:
