@@ -132,7 +132,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Hardware tab — Step 1 Connection panel
     # ==================================================================
-    "hw.connection.title": "1. Link & Verify",
+    "hw.connection.title": "1. Link && Verify",
     "hw.connection.flow_hint": "Select the transport and verify the device link first.",
     "hw.connection.transport_label": "Transport:",
     "hw.connection.transport.serial": "Serial",
@@ -159,7 +159,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Hardware tab — Step 2 Control panel
     # ==================================================================
-    "hw.control.title": "2. Setup & Diagnostics",
+    "hw.control.title": "2. Setup && Diagnostics",
     "hw.control.power_header": "Measurement power",
     "hw.control.power_on_button": "Power ON",
     "hw.control.power_off_button": "Power OFF",
@@ -189,7 +189,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Hardware tab — Step 3 Acquisition panel
     # ==================================================================
-    "hw.acquisition.title": "3. Acquire & Record",
+    "hw.acquisition.title": "3. Acquire && Record",
     "hw.acquisition.flow_hint": "Prepare the save path and plan, then launch the acquisition run.",
     "hw.acquisition.record_header": "Recording setup",
     "hw.acquisition.save_to_label": "Save to:",
@@ -335,7 +335,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Simulation tab — Step labels and Run Guide footer
     # ==================================================================
-    "sim.step.mesh": "Step 1 \u00b7 Mesh & Electrodes",
+    "sim.step.mesh": "Step 1 \u00b7 Mesh && Electrodes",
     "sim.step.inhom": "Step 2 \u00b7 Inhomogeneities",
     "sim.step.inhom_2d": "Step 2 \u00b7 Inhomogeneity Areas",
     "sim.step.inhom_3d": "Step 2 \u00b7 Inhomogeneity Volumes",
@@ -349,7 +349,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Simulation tab — Step 1 Mesh & Electrodes
     # ==================================================================
-    "sim.mesh.title": "Mesh & Electrodes",
+    "sim.mesh.title": "Mesh && Electrodes",
     "sim.mesh.hint": "Configure the simulation mesh and electrode layout.",
     "sim.mesh.dim.2d": "2D",
     "sim.mesh.dim.3d": "3D",
@@ -562,7 +562,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Simulation tab — Right-side Metrics panel
     # ==================================================================
-    "sim.metrics.title": "Mesh & Metrics",
+    "sim.metrics.title": "Mesh && Metrics",
     "sim.metrics.truth_mesh_label": "Truth mesh:",
     "sim.metrics.recon_mesh_label": "Recon mesh:",
     "sim.metrics.mesh_value": "{nodes} nodes / {elements} elements",
@@ -580,9 +580,9 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Dataset Generator tab — Step labels
     # ==================================================================
-    "dataset.step.mesh": "Step 1 \u00b7 Mesh & Electrodes",
+    "dataset.step.mesh": "Step 1 \u00b7 Mesh && Electrodes",
     "dataset.step.ranges": "Step 2 \u00b7 Randomization Ranges",
-    "dataset.step.run": "Step 3 \u00b7 Output & Run",
+    "dataset.step.run": "Step 3 \u00b7 Output && Run",
     # ==================================================================
     # Dataset Generator tab — Central workspace blocks
     # ==================================================================
@@ -619,7 +619,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     # Dataset Generator tab — Step 3 Output & Run panel
     # ==================================================================
-    "dataset.run.title": "Output & Run",
+    "dataset.run.title": "Output && Run",
     "dataset.run.hint": "Choose where the dataset should be written, then start the batch job when the mesh and ranges look right.",
     "dataset.run.samples_label": "Samples:",
     "dataset.run.save_to_label": "Save to:",
@@ -957,7 +957,7 @@ TRANSLATIONS: dict[str, str] = {
     # Tab labels
     "dlg.interop.tabs.import": "Import from EIDORS",
     "dlg.interop.tabs.export": "Export to EIDORS",
-    "dlg.interop.tabs.profiles": "Profiles & Paths",
+    "dlg.interop.tabs.profiles": "Profiles && Paths",
     # Shared — path pick button
     "dlg.interop.path_pick_button": "Pick\u2026",
     # Manual status panel (top of Import tab)
@@ -993,12 +993,12 @@ TRANSLATIONS: dict[str, str] = {
     "dlg.interop.source.pick_capture_title": "Select bridge capture output directory",
     "dlg.interop.source.hint": "Three kinds of source are supported: user scripts, existing bridge projects, and legacy geometry .mat files.",
     # Step 3 — Capture & preview actions
-    "dlg.interop.actions.title": "Step 3 \u00b7 Capture & preview",
+    "dlg.interop.actions.title": "Step 3 \u00b7 Capture && preview",
     "dlg.interop.actions.preview_button": "Generate preview",
     "dlg.interop.actions.reload_button": "Reload last result",
     "dlg.interop.actions.no_preview_yet": "No migration preview yet.",
     # Step 4 — Preview & import
-    "dlg.interop.preview.title": "Step 4 \u00b7 Preview & import",
+    "dlg.interop.preview.title": "Step 4 \u00b7 Preview && import",
     "dlg.interop.preview.waiting": "Waiting for bridge package preview.",
     "dlg.interop.preview.source_col_header": "EIDORS source",
     "dlg.interop.preview.value_col_header": "Value",

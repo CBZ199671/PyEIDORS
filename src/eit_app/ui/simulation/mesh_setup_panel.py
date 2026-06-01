@@ -70,6 +70,10 @@ class MeshSetupPanel(QGroupBox):
         mesh_form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
         )
+        # Wrap the field below its label when the panel is too narrow to
+        # fit them side by side, so long English labels never force a
+        # horizontal scrollbar — vertical scrolling alone stays enough.
+        mesh_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
@@ -221,6 +225,7 @@ class MeshSetupPanel(QGroupBox):
         patterns_form.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
         )
+        patterns_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._measurement_protocol_combo = AutoCloseComboBox()
         self._measurement_protocol_combo.addItem("", "eidors_full_3d")

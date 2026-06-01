@@ -46,6 +46,9 @@ class DatasetRandomizationPanel(QGroupBox):
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        # Wrap the field below its label on narrow panels so long English
+        # labels never force a horizontal scrollbar (vertical scroll only).
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
@@ -302,6 +305,7 @@ class DatasetRunPanel(QGroupBox):
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
