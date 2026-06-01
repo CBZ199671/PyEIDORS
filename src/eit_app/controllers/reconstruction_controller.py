@@ -226,6 +226,10 @@ def _normalize_rm_dtype_name(value: Any, default: str = "float64") -> str:
         dtype = np.dtype(default)
     if dtype == np.dtype(np.float32):
         return "float32"
+    if dtype == np.dtype(np.complex64):
+        return "complex64"
+    if dtype == np.dtype(np.complex128):
+        return "complex128"
     return "float64"
 
 
@@ -639,7 +643,12 @@ def _fit_jacobian_array(
         arr = np.asarray(value)
     except (TypeError, ValueError):
         return None
-    if arr.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+    if arr.dtype not in (
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+        np.dtype(np.complex64),
+        np.dtype(np.complex128),
+    ):
         arr = arr.astype(np.float64, copy=False)
     if arr.ndim != 2 or 0 in arr.shape or not all_finite_values(arr):
         return None
@@ -1020,6 +1029,29 @@ def _constrain_single_step_sigma_update(
     return float(limited_alpha), display_delta, sigma_est, floor_applied
 
 
+def _meta_requests_complex_admittivity(meta: dict[str, Any]) -> bool:
+    hints = " ".join(
+        str(meta.get(key, ""))
+        for key in (
+            "eit_value_mode",
+            "complex_measurement_mode",
+            "complex_reconstruction_dispatch",
+            "compute_dtype",
+            "rm_dtype",
+            "rm_matmul_dtype",
+        )
+    ).lower()
+    if "complex" in hints:
+        return True
+    for key in ("background_sigma", "background_conductivity", "contact_impedance"):
+        value = meta.get(key)
+        if value in (None, ""):
+            continue
+        if abs(_complex_scalar_from_value(value).imag) > _COMPLEX_ZERO_TOL:
+            return True
+    return False
+
+
 def _resolve_reconstruction_runtime(
     meta: dict[str, Any], *, mesh_dim: int
 ) -> dict[str, Any]:
@@ -1033,6 +1065,9 @@ def _resolve_reconstruction_runtime(
     mesh_family = _auto("mesh_family", "tetra")
     forward_backend = _auto("forward_backend", "dolfinx")
     potential_order = max(1, int(meta.get("potential_order", 1) or 1))
+    complex_admittivity = _meta_requests_complex_admittivity(meta)
+    if complex_admittivity and forward_backend == "cuda_structured":
+        forward_backend = "dolfinx"
     if potential_order != 1 and forward_backend == "cuda_structured":
         raise ValueError(
             "potential_order > 1 requires the DOLFINx forward backend; "
@@ -1046,6 +1081,7 @@ def _resolve_reconstruction_runtime(
         int(mesh_dim) == 3
         and mesh_family == "hex"
         and potential_order == 1
+        and not complex_admittivity
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
     wants_3d_cuda = int(mesh_dim) == 3 and (
@@ -1177,8 +1213,8 @@ class _SingleStepCachedRuntimeConfig:
     mesh_dim: int
     refinement: int
     lam: float
-    background_sigma: float
-    contact_impedance: float
+    background_sigma: float | complex
+    contact_impedance: float | complex
     mesh_height: float
     electrode_height_ratio: float
     z_center: float
@@ -1209,6 +1245,31 @@ def _complex_scalar_from_value(value: Any, default: complex = 0.0 + 0.0j) -> com
     if arr.size == 0:
         return complex(default)
     return complex(arr[0])
+
+
+def _real_if_close_scalar(
+    value: Any, *, tol: float = _COMPLEX_ZERO_TOL
+) -> float | complex:
+    scalar = complex(value)
+    if abs(scalar.imag) <= tol:
+        return float(scalar.real)
+    return scalar
+
+
+def _background_scalar_from_meta(meta: dict[str, Any]) -> float | complex:
+    return _real_if_close_scalar(
+        _complex_scalar_from_value(
+            meta.get("background_sigma", meta.get("background_conductivity", 1.0)),
+            1.0 + 0.0j,
+        )
+    )
+
+
+def _scalar_for_array_dtype(value: Any, dtype: np.dtype) -> float | complex:
+    scalar = _real_if_close_scalar(value)
+    if np.issubdtype(dtype, np.complexfloating):
+        return np.asarray(complex(scalar), dtype=dtype).item()
+    return float(complex(scalar).real)
 
 
 def _is_complex_measurement_request(req: ReconstructionRequest) -> bool:
@@ -1808,7 +1869,9 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
 
 def _json_signature_value(value: Any) -> Any:
     if isinstance(value, np.generic):
-        return value.item()
+        return _json_signature_value(value.item())
+    if isinstance(value, complex):
+        return {"real": float(value.real), "imag": float(value.imag)}
     if isinstance(value, np.ndarray):
         return _json_signature_value(value.tolist())
     if isinstance(value, Path):
@@ -1978,7 +2041,7 @@ def _greit_registry_config_from_runtime(
             "channel_order": np.arange(n_meas, dtype=np.int64),
             "bad_channel_mask": channel_mask,
             "measurement_weights": weights,
-            "background_conductivity": float(runtime.background_sigma),
+            "background_conductivity": float(complex(runtime.background_sigma).real),
             "contact_impedance": runtime.contact_impedance,
             "normalize_measurements": str(
                 meta.get("difference_mode", "normalized")
@@ -2146,8 +2209,8 @@ def _planned_one_step_rm_signature(
             "custom_meas_matrices": meta.get("custom_meas_matrices"),
         },
         background={
-            "sigma0": float(runtime.background_sigma),
-            "z0": float(runtime.contact_impedance),
+            "sigma0": _json_signature_value(runtime.background_sigma),
+            "z0": _json_signature_value(runtime.contact_impedance),
         },
         difference_mode=str(meta.get("difference_mode", "raw")),
         bad_channel_mask=channel_mask,
@@ -2281,6 +2344,7 @@ def _ensure_auto_built_one_step_rm_artifact(
         runtime,
         emit=emit,
         build_shared_context=diff_runner.build_shared_context,
+        rm_build_only=True,
     )
     jacobian = np.asarray(ctx["J"], dtype=rm_dtype)
     if jacobian.ndim != 2 or 0 in jacobian.shape:
@@ -2722,7 +2786,12 @@ def _load_rm_artifact(path: Path, meta: dict[str, Any]) -> dict[str, Any]:
     if rm.ndim != 2 or 0 in rm.shape:
         raise ValueError(f"RM artifact matrix must be non-empty 2D, got {rm.shape}.")
     rm_array = np.asarray(rm)
-    if rm_array.dtype not in (np.dtype(np.float32), np.dtype(np.float64)):
+    if rm_array.dtype not in (
+        np.dtype(np.float32),
+        np.dtype(np.float64),
+        np.dtype(np.complex64),
+        np.dtype(np.complex128),
+    ):
         rm_array = rm_array.astype(np.float64, copy=False)
     return {
         "path": str(path),
@@ -3562,7 +3631,10 @@ def _try_run_cached_rm_request(
     delta_conductivity = np.asarray(delta_values, dtype=np_dtype).reshape(-1)
     output_display_mode = str(runtime.meta.get("rm_output_display_mode", "")).lower()
     if output_display_mode == "absolute_sigma":
-        conductivity = delta_conductivity + float(runtime.background_sigma)
+        conductivity = delta_conductivity + _scalar_for_array_dtype(
+            runtime.background_sigma,
+            np_dtype,
+        )
     else:
         conductivity = delta_conductivity
 
@@ -3587,7 +3659,7 @@ def _try_run_cached_rm_request(
                 and jac.shape[1] == delta_conductivity.size
                 and jac.shape[0] == int(dv.size)
             ):
-                simulated_dv = np.asarray(jac @ delta_conductivity, dtype=np.float64)
+                simulated_dv = np.asarray(jac @ delta_conductivity, dtype=np_dtype)
                 if not all_finite_values(simulated_dv):
                     simulated_dv = None
         except Exception:
@@ -3916,7 +3988,7 @@ def _prepare_single_step_cached_runtime(
     if not np.isfinite(lam) or lam <= 0.0:
         lam = 1.0e-2
     meta["difference_lambda"] = lam
-    background_sigma = float(meta.get("background_sigma", 1.0))
+    background_sigma = _background_scalar_from_meta(meta)
     contact_impedance = _contact_impedance_scalar(meta.get("contact_impedance", 0.01))
     mesh_height = float(meta.get("mesh_height", meta.get("height", 1.0)))
     electrode_height_ratio = float(meta.get("electrode_height_ratio", 0.2))
@@ -3997,6 +4069,31 @@ def _prepare_single_step_cached_runtime(
 def get_single_step_cached_cache_key(req: ReconstructionRequest) -> tuple[Any, ...]:
     """Return the effective cache key for a single-step cached request."""
     return _prepare_single_step_cached_runtime(req).cache_key
+
+
+def _has_explicit_rm_artifact_meta(meta: dict[str, Any]) -> bool:
+    return any(_meta_value_present(meta.get(key)) for key in _RM_ARTIFACT_META_KEYS)
+
+
+def _can_dispatch_single_step_cached(
+    req: ReconstructionRequest,
+    *,
+    method_lc: str,
+    runtime_path: str,
+) -> bool:
+    if method_lc != "gn-difference" or runtime_path != "single_step_cached":
+        return False
+    if str(req.use_part).strip().lower() == "real":
+        return True
+    if not _is_complex_measurement_request(req):
+        return False
+    meta = dict(req.metadata or {})
+    return bool(
+        _single_step_rm_route_requires_artifact(meta)
+        or _should_auto_build_rm_artifact(meta)
+        or _should_resolve_greit_registry(meta)
+        or _has_explicit_rm_artifact_meta(meta)
+    )
 
 
 def _cache_hit_summary(
@@ -4150,9 +4247,13 @@ def _ensure_single_step_cached_context(
     *,
     emit: Callable[[str], None],
     build_shared_context: Callable[..., Any],
+    rm_build_only: bool = False,
 ) -> dict[str, Any]:
     meta = runtime.meta
-    ctx = _get_cached_fast_context(runtime.cache_key)
+    context_cache_key = (
+        (*runtime.cache_key, "rm_build_only") if rm_build_only else runtime.cache_key
+    )
+    ctx = _get_cached_fast_context(context_cache_key)
     built_context = False
     if ctx is None:
         emit("Building cached single-step context...")
@@ -4242,6 +4343,8 @@ def _ensure_single_step_cached_context(
                 single_step_algorithm_version=str(
                     meta.get("single_step_algorithm_version")
                 ),
+                scalar_dtype=str(meta.get("rm_dtype", "")),
+                rm_build_only=bool(rm_build_only),
             )
         )
         built_context = True
@@ -4266,7 +4369,7 @@ def _ensure_single_step_cached_context(
         ctx["single_step_context_cache_max_bytes"] = (
             _single_step_context_cache_max_bytes(meta)
         )
-        _put_cached_fast_context(runtime.cache_key, ctx)
+        _put_cached_fast_context(context_cache_key, ctx)
     return ctx
 
 
@@ -4793,10 +4896,10 @@ def run_reconstruction_request(
             runtime_path,
             (req.metadata or {}).get("request_source"),
         )
-        if (
-            method_lc == "gn-difference"
-            and req.use_part == "real"
-            and runtime_path == "single_step_cached"
+        if _can_dispatch_single_step_cached(
+            req,
+            method_lc=method_lc,
+            runtime_path=runtime_path,
         ):
             log.info("[recon-dispatch] -> single_step_cached (fast path)")
             return _run_single_step_cached_request(req, progress_cb=progress_cb)

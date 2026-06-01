@@ -108,7 +108,7 @@ def channel_values(values: Any, channel: str) -> np.ndarray:
     if selected == MAGNITUDE_CHANNEL:
         return _display_float_array(np.abs(arr))
     if selected == PHASE_CHANNEL:
-        return _display_float_array(np.angle(arr))
+        return _display_float_array(np.degrees(np.angle(arr)))
     if selected == COMPOSITE_CHANNEL:
         # Scalar fallback for non-RGB renderers: phase-weighted magnitude.
         # It is not a replacement for separate Re/Im/|.|/phase views, but it

@@ -101,6 +101,62 @@ SINGLE_STEP_OPERATOR_MATH_CONVENTION = "noser_jtj_lambda_diag_jtj_v1"
 SINGLE_STEP_ALGORITHM_VERSION = "eidors_noser_single_step_v5"
 _COLUMN_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
 _ROW_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
+_COMPLEX_ZERO_TOL = 1.0e-12
+
+
+def _has_complex_component(*values: object) -> bool:
+    for value in values:
+        try:
+            arr = np.asarray(value)
+        except (TypeError, ValueError):
+            try:
+                scalar = complex(value)  # type: ignore[arg-type]
+            except (TypeError, ValueError):
+                continue
+            if abs(scalar.imag) > _COMPLEX_ZERO_TOL:
+                return True
+            continue
+        if np.iscomplexobj(arr) and np.any(np.abs(np.imag(arr)) > _COMPLEX_ZERO_TOL):
+            return True
+    return False
+
+
+def _optional_dtype(value: object) -> np.dtype | None:
+    if value in (None, ""):
+        return None
+    try:
+        return np.dtype(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _runtime_scalar_dtype(
+    dtype_hint: object,
+    *values: object,
+) -> np.dtype:
+    requested = _optional_dtype(dtype_hint)
+    if requested is not None and np.issubdtype(requested, np.complexfloating):
+        return requested
+    if _has_complex_component(*values):
+        if requested == np.dtype(np.float32):
+            return np.dtype(np.complex64)
+        return np.dtype(np.complex128)
+    return np.dtype(np.float64)
+
+
+def _signature_scalar_value(value: object) -> float | dict[str, float]:
+    try:
+        arr = np.asarray(value).reshape(-1)
+        scalar = arr[0] if arr.size else 0.0
+    except (TypeError, ValueError):
+        scalar = value
+    try:
+        z = complex(scalar)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return float(scalar)  # type: ignore[arg-type]
+    if abs(z.imag) <= _COMPLEX_ZERO_TOL:
+        return float(z.real)
+    return {"real": float(z.real), "imag": float(z.imag)}
 
 
 def _column_scaled_jjt(
@@ -393,7 +449,7 @@ def _difference_jacobian_weights(
 
 def _runtime_jacobian_from_eidors_adapter(jacobian: np.ndarray) -> np.ndarray:
     """Return the EIDORS adapter Jacobian in the runner's difference sign."""
-    return np.asarray(jacobian, dtype=np.float64)
+    return np.asarray(jacobian)
 
 
 def _runtime_projection_weights_from_eidors_adapter(
@@ -1383,6 +1439,8 @@ def build_shared_context(
     ),
     single_step_operator_math_convention: str = SINGLE_STEP_OPERATOR_MATH_CONVENTION,
     single_step_algorithm_version: str = SINGLE_STEP_ALGORITHM_VERSION,
+    scalar_dtype: str | np.dtype | type | None = None,
+    rm_build_only: bool = False,
 ) -> dict:
     context_start = time.perf_counter()
     build_seconds: dict[str, float] = {}
@@ -1444,6 +1502,12 @@ def build_shared_context(
     single_step_operator_math_convention = str(
         single_step_operator_math_convention or SINGLE_STEP_OPERATOR_MATH_CONVENTION
     )
+    value_dtype = _runtime_scalar_dtype(
+        scalar_dtype,
+        background_sigma,
+        contact_impedance,
+    )
+    has_complex_values = bool(np.issubdtype(value_dtype, np.complexfloating))
     jacobian_semantic_payload = _single_step_semantic_payload(
         signature_schema_version=single_step_signature_schema_version,
         jacobian_calculator=single_step_jacobian_calculator,
@@ -1565,7 +1629,11 @@ def build_shared_context(
         meas_direction=str(meas_direction),
         stim_first_positive=bool(stim_first_positive),
     )
-    z_contact = np.full(total_electrodes, contact_impedance, dtype=float)
+    z_contact = np.full(
+        total_electrodes,
+        contact_impedance,
+        dtype=value_dtype if has_complex_values else float,
+    )
     fwd_model = EITForwardModel(
         n_elec=total_electrodes,
         pattern_config=pattern_cfg,
@@ -1593,7 +1661,11 @@ def build_shared_context(
         fwd_model.V_sigma.dofmap.index_map.size_local
         * fwd_model.V_sigma.dofmap.index_map_bs
     )
-    sigma_bg = np.full(n_elem, background_sigma)
+    sigma_bg = np.full(
+        n_elem,
+        background_sigma,
+        dtype=value_dtype if has_complex_values else float,
+    )
     img_bg = EITImage(elem_data=sigma_bg, fwd_model=fwd_model)
     print(f"[INFO] Background conductivity: {background_sigma}")
 
@@ -1610,7 +1682,9 @@ def build_shared_context(
         "mesh_height": float(mesh_height),
         "electrode_height_ratio": float(electrode_height_ratio),
         "z_center": float(z_center),
-        "background_sigma": float(background_sigma),
+        "background_sigma": _signature_scalar_value(background_sigma),
+        "contact_impedance": _signature_scalar_value(contact_impedance),
+        "scalar_dtype": str(value_dtype),
         "mesh_family": str(mesh_family),
         "geometry_version": str(geometry_version),
         "potential_order": int(potential_order),
@@ -1621,7 +1695,10 @@ def build_shared_context(
 
     def _compute_base_meas() -> np.ndarray:
         base_forward, _ = fwd_model.fwd_solve(img_bg)
-        return np.asarray(base_forward.meas, dtype=np.float64)
+        return np.asarray(
+            base_forward.meas,
+            dtype=value_dtype if has_complex_values else np.float64,
+        )
 
     base_meas, base_meas_lookup = cache_manager.get_or_compute_semantic(
         artifact="diff_base_meas",
@@ -1634,7 +1711,10 @@ def build_shared_context(
         cost=4.0,
         effort_seconds=2.0,
     )
-    base_meas = np.asarray(base_meas, dtype=np.float64)
+    base_meas = np.asarray(
+        base_meas,
+        dtype=value_dtype if has_complex_values else np.float64,
+    )
 
     pattern_manager = fwd_model.pattern_manager
     n_stim = pattern_manager.n_stim
@@ -1649,7 +1729,7 @@ def build_shared_context(
         torch_dtype="float64",
         torch_batch_all=str(runtime_selection.effective) == "cuda",
     )
-    sigma_hash = hash_array_payload(np.ascontiguousarray(sigma_bg, dtype=np.float64))
+    sigma_hash = hash_array_payload(np.ascontiguousarray(sigma_bg))
     jacobian_payload = {
         "solver": "gn_difference",
         "method": "adjoint",
@@ -1660,6 +1740,7 @@ def build_shared_context(
         "electrode_height_ratio": float(electrode_height_ratio),
         "z_center": float(z_center),
         "sigma_hash": sigma_hash,
+        "scalar_dtype": str(value_dtype),
         "model_signature": model_signature_from_forward_model(fwd_model),
         "pattern_signature": pattern_signature_from_forward_model(fwd_model),
         "backend_signature": backend_signature_from_forward_model(fwd_model),
@@ -2010,6 +2091,138 @@ def build_shared_context(
         difference_mode=difference_mode,
         difference_orientation=difference_orientation,
     )
+    if rm_build_only:
+        perf_caps = detect_performance_capabilities()
+        return {
+            "mesh": mesh,
+            "fwd_model": fwd_model,
+            "cache_manager": cache_manager,
+            "cache_scope": cache_scope,
+            "single_step_semantic_signature": dict(operator_semantic_payload),
+            **operator_semantic_payload,
+            "mesh_dim": int(mesh_dim),
+            "mesh_height": float(mesh_height),
+            "electrode_height_ratio": float(electrode_height_ratio),
+            "z_center": float(z_center),
+            "sigma_bg": sigma_bg,
+            "img_bg": img_bg,
+            "base_meas": base_meas,
+            "difference_mode": str(difference_mode),
+            "difference_orientation": str(difference_orientation),
+            "n_stim": n_stim,
+            "n_meas_total": n_meas_total,
+            "n_meas_per_stim": n_meas_per_stim,
+            "J": np.ascontiguousarray(jacobian),
+            "jacobian_representation": jacobian_representation,
+            "operator_bundle": {
+                "mode": "rm_build_only",
+                "J": np.ascontiguousarray(jacobian),
+                "device_requested": str(runtime_selection.requested),
+                "device_effective": str(runtime_selection.effective),
+                "torch_device": str(runtime_selection.torch_device),
+            },
+            "strict_backend_info": {"effective": "rm_build_only"},
+            "solver_mode": solver_mode,
+            "linear_solver": linear_solver,
+            "preconditioner": preconditioner,
+            "linearized_solver_strategy": linearized_solver_strategy,
+            "linearized_maxiter": int(linearized_maxiter),
+            "lazy_preconditioner_mode": lazy_preconditioner_mode,
+            "lazy_diag_batch_max_measurements": int(lazy_diag_batch_max_measurements),
+            "rom_mode": rom_mode,
+            "rom_rank_global": int(rom_rank_global),
+            "rom_rank_adaptive": int(rom_rank_adaptive),
+            "rom_snapshot_source": rom_snapshot_source,
+            "lowrank_mode": lowrank_mode,
+            "lowrank_rank": int(lowrank_rank),
+            "lowrank_method": lowrank_method,
+            "lowrank_energy": float(lowrank_energy),
+            "forward_solver_preset": forward_solver_preset,
+            "forward_mat_solve": forward_mat_solve,
+            "forward_backend": forward_backend,
+            "mesh_family": mesh_family,
+            "geometry_version": geometry_version,
+            "potential_order": int(potential_order),
+            "petsc_device": petsc_device,
+            "petsc_backend_info": dict(petsc_backend_info),
+            "device_requested": str(runtime_selection.requested),
+            "device_effective": str(runtime_selection.effective),
+            "torch_device": str(runtime_selection.torch_device),
+            "mesh_cache_hit": mesh_cache_hit,
+            "mesh_cache_layer": mesh_cache_layer,
+            "mesh_cache_name": mesh_cache_name,
+            "execution_profile": (
+                "mixed"
+                if str(
+                    getattr(fwd_model, "_petsc_backend_info", {}).get(
+                        "petsc_device_effective", "cpu"
+                    )
+                )
+                == "cuda"
+                or str(runtime_selection.effective) == "cuda"
+                else "cpu"
+            ),
+            "stim_drive_mode": resolved_drive_mode,
+            "stim_drive_value": stim_drive_value,
+            "cache_build_seconds": dict(build_seconds),
+            "context_build_seconds": time.perf_counter() - context_start,
+            "performance_capabilities": perf_caps,
+            "cache_miss_reasons": {
+                CACHE_NAME_BASE_MEAS: _lookup_miss_reason(
+                    base_meas_lookup, family=CACHE_NAME_BASE_MEAS
+                ),
+                CACHE_NAME_JACOBIAN: _lookup_miss_reason(
+                    jacobian_lookup, family=CACHE_NAME_JACOBIAN
+                ),
+                CACHE_NAME_OPERATOR_JT: "rm_build_only",
+                CACHE_NAME_OPERATOR_NOSER: "rm_build_only",
+                CACHE_NAME_OPERATOR_A: "rm_build_only",
+                CACHE_NAME_OPERATOR_PRECOND: "rm_build_only",
+                CACHE_NAME_OPERATOR_LU: "rm_build_only",
+                CACHE_NAME_OPERATOR_REDUCED_RM: "rm_build_only",
+            },
+            "cache_lookups": {
+                "base_meas": _to_lookup_payload(base_meas_lookup),
+                "jacobian": _to_lookup_payload(jacobian_lookup),
+                "operator_jt": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "single_step_operator",
+                    "key": "",
+                },
+                "operator_noser": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "single_step_operator",
+                    "key": "",
+                },
+                "operator_A": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "single_step_operator",
+                    "key": "",
+                },
+                "operator_precond": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "single_step_operator",
+                    "key": "",
+                },
+                "operator_lu": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "single_step_operator",
+                    "key": "",
+                },
+                "operator_rom_reduced_rm": {
+                    "hit": False,
+                    "layer": "rm_build_only",
+                    "artifact": "rom_reduced_rm_diff",
+                    "key": "",
+                },
+                "forward_factor": dict(getattr(fwd_model, "_last_cache_lookup", {})),
+            },
+        }
 
     strict_backend_info = (
         _select_strict_solver_backend(

@@ -4951,7 +4951,9 @@ class EITWorkstation(QMainWindow):
         n_meas = len(result.boundary_voltages)
         meas_dtype = compute_dtype()
         compute_precision = current_precision()
-        compute_dtype_name = np.dtype(meas_dtype).name
+        scalar_compute_dtype = np.dtype(meas_dtype)
+        scalar_compute_dtype_name = scalar_compute_dtype.name
+        compute_dtype_name = scalar_compute_dtype_name
 
         def _split_measurement(values) -> tuple[np.ndarray, np.ndarray]:
             if values is None:
@@ -4971,6 +4973,12 @@ class EITWorkstation(QMainWindow):
             _has_abs_value_above(homog_imag, threshold=1.0e-12)
             or _has_abs_value_above(target_imag, threshold=1.0e-12)
         )
+        if has_complex_measurements:
+            compute_dtype_name = (
+                "complex64"
+                if scalar_compute_dtype == np.dtype(np.float32)
+                else "complex128"
+            )
         ref_frame = FrameData(
             real=homog_real,
             imag=homog_imag,
@@ -5311,7 +5319,10 @@ class EITWorkstation(QMainWindow):
                 {
                     "eit_value_mode": "complex_admittance",
                     "complex_measurement_mode": "native_real_imag",
-                    "complex_reconstruction_dispatch": "native_complex",
+                    "complex_reconstruction_dispatch": "one_step_rm"
+                    if route_kind == "rm"
+                    and reconstruction_runtime == "single_step_cached"
+                    else "native_complex",
                 }
             )
         if greit_common_config_id:

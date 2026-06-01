@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
@@ -19,12 +20,18 @@ from eit_app.i18n import t, translator
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.complex_channels import (
+    COMPOSITE_CHANNEL,
     DISPLAY_CHANNELS,
+    IMAG_CHANNEL,
+    MAGNITUDE_CHANNEL,
+    PHASE_CHANNEL,
     REAL_CHANNEL,
     channel_values,
     has_complex_component,
 )
 from eit_app.ui.conductivity_3d_widget import (
+    ANOMALY_MODE_ABSOLUTE,
+    ANOMALY_MODE_POSITIVE,
     Conductivity3DWidget,
     SUPPORTED_3D_CELL_VERTEX_COUNTS,
 )
@@ -36,6 +43,109 @@ from eit_app.ui.electrode_overlay import (
 
 if TYPE_CHECKING:
     from eit_app.controllers.forward_solver_controller import ForwardSolverResult
+
+
+_DISPLAY_SCAN_CHUNK_ITEMS = 1_048_576
+
+
+@dataclass(frozen=True)
+class _ScalarDisplayOptions:
+    colorbar_label: str
+    colormap: str
+    value_limits: tuple[float, float] | None
+
+
+def _finite_min_max_for_display(
+    *arrays: np.ndarray | None,
+) -> tuple[float, float] | None:
+    min_value = np.inf
+    max_value = -np.inf
+    seen = False
+    for array in arrays:
+        if array is None:
+            continue
+        values = np.asarray(array).reshape(-1)
+        for start in range(0, values.size, _DISPLAY_SCAN_CHUNK_ITEMS):
+            chunk = values[start : start + _DISPLAY_SCAN_CHUNK_ITEMS]
+            if chunk.size == 0:
+                continue
+            finite = np.isfinite(chunk)
+            if not finite.any():
+                continue
+            seen = True
+            min_value = min(
+                min_value,
+                float(np.min(chunk, where=finite, initial=np.inf)),
+            )
+            max_value = max(
+                max_value,
+                float(np.max(chunk, where=finite, initial=-np.inf)),
+            )
+    if not seen:
+        return None
+    return min_value, max_value
+
+
+def _padded_value_limits(low: float, high: float) -> tuple[float, float]:
+    if not all(np.isfinite(value) for value in (low, high)):
+        return 0.0, 1.0
+    if high > low:
+        return low, high
+    center = 0.5 * (low + high)
+    span = max(abs(center) * 0.05, 1.0e-6)
+    return center - span, center + span
+
+
+def _display_options_for_channel(
+    channel: str,
+    *arrays: np.ndarray | None,
+) -> _ScalarDisplayOptions:
+    """Return scalar display metadata for one pane and one channel.
+
+    In the simulation view this is derived from the ground-truth conductivity
+    and reused for the reconstruction pane.  A noisy inverse result may
+    overshoot badly; it should saturate against the expected physical scale
+    instead of stretching the colorbar away from user-entered values such as
+    1+2j / 2+3j.
+    """
+    if channel == PHASE_CHANNEL:
+        bounds = _finite_min_max_for_display(*arrays)
+        return _ScalarDisplayOptions(
+            colorbar_label="deg",
+            colormap="viridis",
+            value_limits=None if bounds is None else _padded_value_limits(*bounds),
+        )
+    if channel in {REAL_CHANNEL, IMAG_CHANNEL, MAGNITUDE_CHANNEL}:
+        bounds = _finite_min_max_for_display(*arrays)
+        return _ScalarDisplayOptions(
+            colorbar_label="S/m",
+            colormap="viridis",
+            value_limits=None if bounds is None else _padded_value_limits(*bounds),
+        )
+    if channel == COMPOSITE_CHANNEL:
+        bounds = _finite_min_max_for_display(*arrays)
+        return _ScalarDisplayOptions(
+            colorbar_label="S/m",
+            colormap="viridis",
+            value_limits=None if bounds is None else _padded_value_limits(*bounds),
+        )
+
+    bounds = _finite_min_max_for_display(*arrays)
+    return _ScalarDisplayOptions(
+        colorbar_label="S/m",
+        colormap="viridis",
+        value_limits=None if bounds is None else _padded_value_limits(*bounds),
+    )
+
+
+def _anomaly_mode_for_channel(channel: str) -> str:
+    if channel in {PHASE_CHANNEL, COMPOSITE_CHANNEL}:
+        return ANOMALY_MODE_ABSOLUTE
+    return ANOMALY_MODE_POSITIVE
+
+
+def _prefer_central_anomaly_region_for_channel(channel: str) -> bool:
+    return channel == PHASE_CHANNEL
 
 
 def _is_3d_payload(node_coords: np.ndarray, cell_connectivity: np.ndarray) -> bool:
@@ -114,15 +224,31 @@ class _ConductivityViewSlot(QWidget):
         node_coords: np.ndarray,
         cell_connectivity: np.ndarray,
         title: str | None = None,
+        *,
+        colorbar_label: str = "S/m",
+        colormap: str = "viridis",
+        value_limits: tuple[float, float] | None = None,
     ) -> None:
         if _is_3d_payload(node_coords, cell_connectivity):
             self._three_d.update_image(
-                conductivity, node_coords, cell_connectivity, title=title
+                conductivity,
+                node_coords,
+                cell_connectivity,
+                title=title,
+                colorbar_label=colorbar_label,
+                colormap=colormap,
+                value_limits=value_limits,
             )
             self._stack.setCurrentWidget(self._three_d)
         else:
             self._mpl.update_image(
-                conductivity, node_coords, cell_connectivity, title=title
+                conductivity,
+                node_coords,
+                cell_connectivity,
+                title=title,
+                colorbar_label=colorbar_label,
+                colormap=colormap,
+                value_limits=value_limits,
             )
             self._stack.setCurrentWidget(self._mpl)
         # Our sizeHint / minimumSizeHint overrides track the active
@@ -139,6 +265,12 @@ class _ConductivityViewSlot(QWidget):
         """
         self._mpl.set_electrode_geometry(geometry)
         self._three_d.set_electrode_geometry(geometry)
+
+    def set_anomaly_mode(self, mode: str) -> None:
+        self._three_d.set_anomaly_mode(mode)
+
+    def set_prefer_central_anomaly_region(self, enabled: bool) -> None:
+        self._three_d.set_prefer_central_anomaly_region(enabled)
 
     def clear(self) -> None:
         self._mpl.clear()
@@ -422,26 +554,49 @@ class SimulationResultsWidget(QWidget):
             return
         channel = self._display_channel()
         geometry = self._last_electrode_geometry
+        truth_values = channel_values(result.ground_truth_conductivity, channel)
+        payload = self._last_reconstruction_payload
+        reconstruction_values = (
+            None
+            if payload is None
+            else channel_values(payload["conductivity"], channel)
+        )
+        truth_display = _display_options_for_channel(channel, truth_values)
+        anomaly_mode = _anomaly_mode_for_channel(channel)
+        prefer_central_anomaly = _prefer_central_anomaly_region_for_channel(channel)
 
+        self._ground_truth_widget.set_anomaly_mode(anomaly_mode)
+        self._ground_truth_widget.set_prefer_central_anomaly_region(
+            prefer_central_anomaly
+        )
         self._ground_truth_widget.update_image(
-            channel_values(result.ground_truth_conductivity, channel),
+            truth_values,
             result.node_coords,
             result.cell_connectivity,
             title=self._channel_title("sim.results.ground_truth_title"),
+            colorbar_label=truth_display.colorbar_label,
+            colormap=truth_display.colormap,
+            value_limits=truth_display.value_limits,
         )
         self._ground_truth_widget.set_electrode_geometry(geometry)
 
         reconstructed_voltages = None
-        payload = self._last_reconstruction_payload
         if payload is None:
             self._reconstruction_widget.clear()
             self._reconstruction_widget.set_electrode_geometry(geometry)
         else:
+            self._reconstruction_widget.set_anomaly_mode(anomaly_mode)
+            self._reconstruction_widget.set_prefer_central_anomaly_region(
+                prefer_central_anomaly
+            )
             self._reconstruction_widget.update_image(
-                channel_values(payload["conductivity"], channel),
+                reconstruction_values,
                 np.asarray(payload["node_coords"]),
                 np.asarray(payload["cell_connectivity"]),
                 title=self._channel_title("sim.results.reconstruction_title"),
+                colorbar_label=truth_display.colorbar_label,
+                colormap=truth_display.colormap,
+                value_limits=truth_display.value_limits,
             )
             self._reconstruction_widget.set_electrode_geometry(geometry)
             reconstructed_voltages = payload.get("voltages")

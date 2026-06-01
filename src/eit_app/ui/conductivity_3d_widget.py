@@ -118,6 +118,8 @@ _ANOMALY_CROWDED_PEAK_CAP = 0.75
 _ANOMALY_SPATIAL_MIN_CANDIDATES = 8
 _ANOMALY_SPATIAL_RADIUS_FACTOR = 2.75
 _ANOMALY_COMPONENT_KEEP_FRACTION = 0.22
+_ANOMALY_CENTRAL_REGION_EDGE_WEIGHT = 0.08
+_ANOMALY_CENTRAL_REGION_PEAK_FRACTION = 0.30
 _FINITE_SCAN_CHUNK_ITEMS = 1_048_576
 _POINT_CLOUD_SAMPLE_CHUNK_ITEMS = 1_048_576
 _CELL_FACE_OFFSETS = {
@@ -264,6 +266,7 @@ def _cell_anomaly_mask(
     mode: str = ANOMALY_MODE_ABSOLUTE,
     *,
     cell_centers: np.ndarray | None = None,
+    prefer_central_region: bool = False,
 ) -> np.ndarray:
     values = _display_float_values(cell_sigma)
     if values.size == 0:
@@ -283,6 +286,20 @@ def _cell_anomaly_mask(
     floor = max(abs(median) * _INHOMOGENEITY_RELATIVE_FLOOR, 1.0e-6)
     if not np.isfinite(spread) or spread <= floor:
         return np.zeros(values.shape, dtype=bool)
+
+    if prefer_central_region and cell_centers is not None:
+        region_score = values - median
+        np.abs(region_score, out=region_score)
+        region_mask = _central_region_anomaly_mask(
+            region_score,
+            floor,
+            cell_centers,
+            all_finite=all_finite,
+            finite_mask=finite_values,
+        )
+        if np.any(region_mask):
+            return region_mask
+
     score = values - median
     if mode == ANOMALY_MODE_ABSOLUTE:
         np.abs(score, out=score)
@@ -325,6 +342,151 @@ def _cell_anomaly_mask(
     tolerance = max(1.0e-12, abs(threshold) * 1.0e-12)
     np.greater_equal(score, threshold - tolerance, out=mask)
     return _spatially_coherent_anomaly_mask(mask, score, cell_centers)
+
+
+def _central_region_anomaly_mask(
+    score: np.ndarray,
+    floor: float,
+    cell_centers: np.ndarray,
+    *,
+    all_finite: bool,
+    finite_mask: np.ndarray | None,
+) -> np.ndarray:
+    centers = np.asarray(cell_centers)
+    mask = np.zeros(score.shape, dtype=bool)
+    if centers.ndim != 2 or centers.shape[0] != score.size or centers.shape[1] < 3:
+        return mask
+    if score.size < _ANOMALY_SPATIAL_MIN_CANDIDATES:
+        return mask
+
+    xyz = centers[:, :3]
+    if not _all_finite_values(xyz):
+        return mask
+
+    domain_center = np.mean(xyz, axis=0)
+    distances = np.linalg.norm(xyz - domain_center, axis=1)
+    domain_radius = float(np.max(distances))
+    if not np.isfinite(domain_radius) or domain_radius <= 0.0:
+        return mask
+
+    centrality = np.clip(1.0 - distances / domain_radius, 0.0, 1.0)
+    weighted_score = score * (
+        _ANOMALY_CENTRAL_REGION_EDGE_WEIGHT
+        + (1.0 - _ANOMALY_CENTRAL_REGION_EDGE_WEIGHT) * centrality * centrality
+    )
+    candidate_count, peak, candidate_mask = _score_count_peak_above_floor(
+        weighted_score,
+        floor,
+        all_finite=all_finite,
+        finite_mask=finite_mask,
+        return_mask=True,
+    )
+    if candidate_count < _ANOMALY_SPATIAL_MIN_CANDIDATES:
+        return mask
+
+    threshold = max(floor, peak * _ANOMALY_CENTRAL_REGION_PEAK_FRACTION)
+    np.greater_equal(weighted_score, threshold, out=candidate_mask)
+    if not all_finite and finite_mask is not None:
+        np.logical_and(candidate_mask, finite_mask, out=candidate_mask)
+
+    return _center_preferred_component_mask(
+        candidate_mask,
+        weighted_score,
+        centers,
+    )
+
+
+def _center_preferred_component_mask(
+    mask: np.ndarray,
+    score: np.ndarray,
+    cell_centers: np.ndarray,
+) -> np.ndarray:
+    candidate_count = int(np.count_nonzero(mask))
+    coherent = np.zeros_like(mask, dtype=bool)
+    if candidate_count < _ANOMALY_SPATIAL_MIN_CANDIDATES:
+        return coherent
+
+    centers = np.asarray(cell_centers)
+    candidate_idx, candidate_centers = _candidate_indices_and_centers(
+        mask, centers, candidate_count
+    )
+    if not _all_finite_values(candidate_centers):
+        return coherent
+
+    try:
+        from scipy.spatial import cKDTree
+    except Exception:  # pragma: no cover - optional visualization refinement
+        return coherent
+
+    try:
+        tree = cKDTree(candidate_centers)
+        distances, _ = tree.query(candidate_centers, k=2)
+    except Exception:  # pragma: no cover - scipy edge case fallback
+        return coherent
+
+    nearest = np.asarray(distances[:, 1])
+    if not _nan_invalid_nearest_distances(nearest):
+        return coherent
+    radius = float(np.nanmedian(nearest) * _ANOMALY_SPATIAL_RADIUS_FACTOR)
+    if not np.isfinite(radius) or radius <= 0.0:
+        return coherent
+
+    neighbours = tree.query_ball_point(candidate_centers, radius)
+    seen = np.zeros(candidate_idx.size, dtype=bool)
+    components: list[np.ndarray] = []
+    for start in range(candidate_idx.size):
+        if seen[start]:
+            continue
+        stack = [start]
+        seen[start] = True
+        component: list[int] = []
+        while stack:
+            current = stack.pop()
+            component.append(current)
+            for nxt in neighbours[current]:
+                if not seen[nxt]:
+                    seen[nxt] = True
+                    stack.append(int(nxt))
+        components.append(np.asarray(component, dtype=np.int64))
+
+    if not components:
+        return coherent
+
+    score_values = _display_float_values(score)
+    domain_center = np.mean(centers[:, :3], axis=0)
+    domain_distances = np.linalg.norm(centers[:, :3] - domain_center, axis=1)
+    domain_radius = float(np.max(domain_distances))
+    if not np.isfinite(domain_radius) or domain_radius <= 0.0:
+        return coherent
+
+    best_idx = -1
+    best_priority = -np.inf
+    for component_idx, component in enumerate(components):
+        if component.size < 2:
+            continue
+        mass = 0.0
+        centroid = np.zeros(3, dtype=np.float64)
+        for local_idx in component:
+            global_idx = int(candidate_idx[int(local_idx)])
+            value = float(score_values[global_idx])
+            if not np.isnan(value):
+                mass += value
+            centroid += centers[global_idx, :3]
+        centroid /= float(component.size)
+        central_distance = float(np.linalg.norm(centroid - domain_center))
+        central_weight = max(0.0, 1.0 - central_distance / domain_radius)
+        priority = mass * max(central_weight * central_weight, 0.02)
+        if priority > best_priority:
+            best_priority = priority
+            best_idx = component_idx
+
+    if best_idx < 0 or not np.isfinite(best_priority) or best_priority <= 0.0:
+        return coherent
+
+    keep = np.zeros(candidate_idx.size, dtype=bool)
+    keep[components[best_idx]] = True
+    _apply_candidate_keep_mask(coherent, candidate_idx, keep)
+    return coherent
 
 
 def _spatially_coherent_anomaly_mask(
@@ -503,6 +665,37 @@ def _conductivity_color_limits(cell_sigma: np.ndarray) -> tuple[float, float]:
     if sigma_max - sigma_min < 2.0 * floor:
         return median - floor, median + floor
     return sigma_min, sigma_max
+
+
+def _sanitize_display_value_limits(
+    value_limits: tuple[float, float] | None,
+) -> tuple[float, float] | None:
+    if value_limits is None:
+        return None
+    low, high = (float(value_limits[0]), float(value_limits[1]))
+    if not np.isfinite(low) or not np.isfinite(high):
+        return None
+    if high > low:
+        return low, high
+    center = 0.5 * (low + high)
+    span = max(abs(center) * 0.05, 1.0e-6)
+    return center - span, center + span
+
+
+def _display_color_limits(
+    values: np.ndarray,
+    value_limits: tuple[float, float] | None,
+) -> tuple[float, float]:
+    sanitized = _sanitize_display_value_limits(value_limits)
+    if sanitized is not None:
+        return sanitized
+    return _conductivity_color_limits(values)
+
+
+def _matplotlib_colormap(name: str):
+    if name in colormaps:
+        return colormaps[name]
+    return colormaps["viridis"]
 
 
 def _cell_center_sigma(
@@ -791,6 +984,7 @@ def _point_cloud_sample_indices(
     *,
     anomaly_mode: str,
     max_points: int | None = None,
+    prefer_central_region: bool = False,
 ) -> np.ndarray:
     values = _display_float_values(cell_sigma)
     n_points = int(values.size)
@@ -806,7 +1000,12 @@ def _point_cloud_sample_indices(
 
     # Keep the full-data pass O(n); spatial coherence is applied later on the
     # sampled display set for highlight rendering.
-    anomaly_mask = _cell_anomaly_mask(values, anomaly_mode)
+    anomaly_mask = _cell_anomaly_mask(
+        values,
+        anomaly_mode,
+        cell_centers=center_values if prefer_central_region else None,
+        prefer_central_region=prefer_central_region,
+    )
     anomaly_count = int(np.count_nonzero(anomaly_mask))
     if anomaly_count >= limit:
         return _sample_true_indices(anomaly_mask, anomaly_count, limit)
@@ -1265,9 +1464,13 @@ class Conductivity3DWidget(QWidget):
         self._render_backend = "caption"
         self._display_mode = DISPLAY_MODE_VOLUME
         self._anomaly_mode = ANOMALY_MODE_POSITIVE
+        self._prefer_central_anomaly_region = False
         self._point_cloud_original_count = 0
         self._point_cloud_display_count = 0
         self._last_vtk_disabled_reason: str | None = None
+        self._colorbar_label = "S/m"
+        self._colormap = "viridis"
+        self._value_limits: tuple[float, float] | None = None
         self._title_font = FontProperties(family=_plot_font_families(), size=14)
         self._mpl3d_colorbar = None
         self._mpl3d_mesh_collection = None
@@ -1700,7 +1903,15 @@ class Conductivity3DWidget(QWidget):
         if self._last_image is None:
             return
         sigma, coords, cells, title = self._last_image
-        self.update_image(sigma, coords, cells, title=title)
+        self.update_image(
+            sigma,
+            coords,
+            cells,
+            title=title,
+            colorbar_label=self._colorbar_label,
+            colormap=self._colormap,
+            value_limits=self._value_limits,
+        )
 
     def _sync_display_mode_buttons(self) -> None:
         self._volume_mode_btn.setChecked(self._display_mode == DISPLAY_MODE_VOLUME)
@@ -1722,7 +1933,34 @@ class Conductivity3DWidget(QWidget):
         if self._last_image is None:
             return
         sigma, coords, cells, title = self._last_image
-        self.update_image(sigma, coords, cells, title=title)
+        self.update_image(
+            sigma,
+            coords,
+            cells,
+            title=title,
+            colorbar_label=self._colorbar_label,
+            colormap=self._colormap,
+            value_limits=self._value_limits,
+        )
+
+    def set_prefer_central_anomaly_region(self, enabled: bool) -> None:
+        """Prefer a large central coherent region over boundary extrema."""
+        prefer = bool(enabled)
+        if prefer == self._prefer_central_anomaly_region:
+            return
+        self._prefer_central_anomaly_region = prefer
+        if self._last_image is None:
+            return
+        sigma, coords, cells, title = self._last_image
+        self.update_image(
+            sigma,
+            coords,
+            cells,
+            title=title,
+            colorbar_label=self._colorbar_label,
+            colormap=self._colormap,
+            value_limits=self._value_limits,
+        )
 
     def _sync_anomaly_mode_buttons(self) -> None:
         self._positive_anomaly_btn.setChecked(
@@ -1784,6 +2022,10 @@ class Conductivity3DWidget(QWidget):
         node_coords: np.ndarray,
         cell_connectivity: np.ndarray,
         title: str | None = None,
+        *,
+        colorbar_label: str = "S/m",
+        colormap: str = "viridis",
+        value_limits: tuple[float, float] | None = None,
     ) -> None:
         """Render a 3D volume conductivity field."""
         cells = _display_cells_array(cell_connectivity)
@@ -1804,6 +2046,9 @@ class Conductivity3DWidget(QWidget):
 
         if title is not None:
             self.setTitle(title)
+        self._colorbar_label = colorbar_label
+        self._colormap = colormap
+        self._value_limits = _sanitize_display_value_limits(value_limits)
         self._last_image = (sigma, coords, cells, title)
         auto_points = (
             self._display_mode == DISPLAY_MODE_VOLUME
@@ -2219,6 +2464,8 @@ class Conductivity3DWidget(QWidget):
         sigma_min: float,
         sigma_max: float,
         opacity: float,
+        colorbar_label: str,
+        colormap: str,
         text_color: tuple[float, float, float],
         offscreen: bool,
     ) -> None:
@@ -2226,6 +2473,7 @@ class Conductivity3DWidget(QWidget):
             cell_sigma,
             centers,
             anomaly_mode=self._anomaly_mode,
+            prefer_central_region=self._prefer_central_anomaly_region,
         )
         display_centers, display_sigma = _point_cloud_display_arrays(
             centers,
@@ -2242,14 +2490,14 @@ class Conductivity3DWidget(QWidget):
         mesh_actor = plotter.add_mesh(
             cloud,
             scalars="sigma",
-            cmap="viridis",
+            cmap=colormap,
             clim=[sigma_min, sigma_max],
             opacity=opacity,
             render_points_as_spheres=True,
             point_size=_pyvista_point_size(display_centers.shape[0]),
             show_scalar_bar=True,
             scalar_bar_args={
-                "title": "S/m",
+                "title": colorbar_label,
                 "color": text_color,
                 "vertical": True,
                 "position_x": 0.88,
@@ -2269,6 +2517,7 @@ class Conductivity3DWidget(QWidget):
             display_sigma,
             self._anomaly_mode,
             cell_centers=display_centers,
+            prefer_central_region=self._prefer_central_anomaly_region,
         )
         highlight_centers, highlight_sigma = _point_cloud_highlight_arrays(
             display_centers,
@@ -2282,7 +2531,7 @@ class Conductivity3DWidget(QWidget):
         highlight_actor = plotter.add_mesh(
             highlight_cloud,
             scalars="sigma",
-            cmap="viridis",
+            cmap=colormap,
             clim=[sigma_min, sigma_max],
             opacity=1.0,
             render_points_as_spheres=True,
@@ -2322,7 +2571,7 @@ class Conductivity3DWidget(QWidget):
         else:
             scalar_kw = {"scalars": "sigma", "preference": "point"}
 
-        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
+        sigma_min, sigma_max = _display_color_limits(cell_sigma, self._value_limits)
 
         palette = plot_palette()
         width, height = self._offscreen_render_size()
@@ -2348,6 +2597,8 @@ class Conductivity3DWidget(QWidget):
                 sigma_min=sigma_min,
                 sigma_max=sigma_max,
                 opacity=opacity,
+                colorbar_label=self._colorbar_label,
+                colormap=self._colormap,
                 text_color=text_color,
                 offscreen=True,
             )
@@ -2383,13 +2634,13 @@ class Conductivity3DWidget(QWidget):
 
         self._offscreen_mesh_actor = plotter.add_mesh(
             grid,
-            cmap="viridis",
+            cmap=self._colormap,
             opacity=opacity,
             clim=[sigma_min, sigma_max],
             show_edges=False,
             show_scalar_bar=True,
             scalar_bar_args={
-                "title": "S/m",
+                "title": self._colorbar_label,
                 "color": text_color,
                 "vertical": True,
                 "position_x": 0.88,
@@ -2407,6 +2658,7 @@ class Conductivity3DWidget(QWidget):
                 cell_sigma,
                 self._anomaly_mode,
                 cell_centers=_cell_centers(coords, cells),
+                prefer_central_region=self._prefer_central_anomaly_region,
             )
             inhom_grid = _extract_cells_from_mask(grid, inhom_mask)
             if inhom_grid is not None and inhom_grid.n_cells > 0:
@@ -2414,7 +2666,7 @@ class Conductivity3DWidget(QWidget):
                     inhom_grid,
                     scalars="sigma",
                     preference="cell",
-                    cmap="viridis",
+                    cmap=self._colormap,
                     clim=[sigma_min, sigma_max],
                     opacity=1.0,
                     show_edges=False,
@@ -2549,10 +2801,10 @@ class Conductivity3DWidget(QWidget):
         )
         self._point_cloud_original_count = int(cell_sigma.size)
         self._point_cloud_display_count = int(display_sigma.size)
-        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
+        sigma_min, sigma_max = _display_color_limits(cell_sigma, self._value_limits)
 
         palette = plot_palette()
-        cmap = colormaps["viridis"]
+        cmap = _matplotlib_colormap(self._colormap)
         norm = Normalize(vmin=sigma_min, vmax=sigma_max)
         opacity = self._opacity_slider.value() / 100.0
         edge_color = (
@@ -2580,6 +2832,7 @@ class Conductivity3DWidget(QWidget):
             display_sigma,
             self._anomaly_mode,
             cell_centers=display_centers,
+            prefer_central_region=self._prefer_central_anomaly_region,
         )
         highlight_centers, highlight_sigma = _point_cloud_highlight_arrays(
             display_centers,
@@ -2616,7 +2869,9 @@ class Conductivity3DWidget(QWidget):
             scalar_mappable,
             cax=self._mpl3d_colorbar_ax,
         )
-        self._mpl3d_colorbar.set_label("S/m", color=palette.get("text", "#222"))
+        self._mpl3d_colorbar.set_label(
+            self._colorbar_label, color=palette.get("text", "#222")
+        )
         self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
 
     def _render_matplotlib_scene(
@@ -2677,10 +2932,10 @@ class Conductivity3DWidget(QWidget):
             for face_idx, face in enumerate(valid_faces):
                 face_values[face_idx] = _face_nanmean_value(point_sigma, face)
 
-        sigma_min, sigma_max = _conductivity_color_limits(face_values)
+        sigma_min, sigma_max = _display_color_limits(face_values, self._value_limits)
 
         palette = plot_palette()
-        cmap = colormaps["viridis"]
+        cmap = _matplotlib_colormap(self._colormap)
         norm = Normalize(vmin=sigma_min, vmax=sigma_max)
         opacity = self._opacity_slider.value() / 100.0
         face_vertices = _face_vertices_array(coords, valid_faces)
@@ -2708,6 +2963,7 @@ class Conductivity3DWidget(QWidget):
                 cell_sigma,
                 self._anomaly_mode,
                 cell_centers=_cell_centers(coords, cells),
+                prefer_central_region=self._prefer_central_anomaly_region,
             )
             highlight_vertices, highlight_values = _highlight_face_vertices_and_values(
                 coords, cells, cell_sigma, inhom_mask
@@ -2737,7 +2993,9 @@ class Conductivity3DWidget(QWidget):
             scalar_mappable,
             cax=self._mpl3d_colorbar_ax,
         )
-        self._mpl3d_colorbar.set_label("S/m", color=palette.get("text", "#222"))
+        self._mpl3d_colorbar.set_label(
+            self._colorbar_label, color=palette.get("text", "#222")
+        )
         self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
 
         self._stack.setCurrentWidget(self._mpl3d_host)
@@ -2775,7 +3033,7 @@ class Conductivity3DWidget(QWidget):
             # Node-centered sigma — VTK takes that natively.
             scalar_kw = {"scalars": "sigma", "preference": "point"}
 
-        sigma_min, sigma_max = _conductivity_color_limits(cell_sigma)
+        sigma_min, sigma_max = _display_color_limits(cell_sigma, self._value_limits)
         opacity = self._opacity_slider.value() / 100.0
         palette = plot_palette()
         text_color = _hex_to_rgb(palette.get("text", "#222"))
@@ -2789,6 +3047,8 @@ class Conductivity3DWidget(QWidget):
                 sigma_min=sigma_min,
                 sigma_max=sigma_max,
                 opacity=opacity,
+                colorbar_label=self._colorbar_label,
+                colormap=self._colormap,
                 text_color=text_color,
                 offscreen=False,
             )
@@ -2822,13 +3082,13 @@ class Conductivity3DWidget(QWidget):
         # cells whose conductivity differs from background.
         self._mesh_actor = plotter.add_mesh(
             grid,
-            cmap="viridis",
+            cmap=self._colormap,
             opacity=opacity,
             clim=[sigma_min, sigma_max],
             show_edges=False,
             show_scalar_bar=True,
             scalar_bar_args={
-                "title": "S/m",
+                "title": self._colorbar_label,
                 "color": text_color,
                 "vertical": True,
                 "position_x": 0.88,
@@ -2850,6 +3110,7 @@ class Conductivity3DWidget(QWidget):
                 cell_sigma,
                 self._anomaly_mode,
                 cell_centers=_cell_centers(coords, cells),
+                prefer_central_region=self._prefer_central_anomaly_region,
             )
             inhom_grid = _extract_cells_from_mask(grid, inhom_mask)
             if inhom_grid is not None and inhom_grid.n_cells > 0:
@@ -2857,7 +3118,7 @@ class Conductivity3DWidget(QWidget):
                     inhom_grid,
                     scalars="sigma",
                     preference="cell",
-                    cmap="viridis",
+                    cmap=self._colormap,
                     clim=[sigma_min, sigma_max],
                     opacity=1.0,
                     show_edges=False,

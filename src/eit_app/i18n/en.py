@@ -326,6 +326,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "hw.boundary.title": "Boundary Voltage Fit",
     "hw.boundary.y_label": "Voltage (V)",
+    "hw.boundary.phase_y_label": "Phase (deg)",
     "hw.boundary.x_label_dynamic": "Boundary Voltage Index (1-{count})",
     "hw.boundary.primary.measured": "Measured",
     "hw.boundary.primary.ground_truth": "Ground Truth",

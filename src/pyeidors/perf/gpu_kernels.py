@@ -322,7 +322,13 @@ def _normalize_dtype(dtype: str | np.dtype[Any]) -> tuple[np.dtype[Any], str]:
         return np.dtype(np.float64), "float64"
     if resolved == np.dtype(np.float32):
         return np.dtype(np.float32), "float32"
-    raise ValueError("dtype must be 'float64' or 'float32'.")
+    if resolved == np.dtype(np.complex128):
+        return np.dtype(np.complex128), "complex128"
+    if resolved == np.dtype(np.complex64):
+        return np.dtype(np.complex64), "complex64"
+    raise ValueError(
+        "dtype must be 'float64', 'float32', 'complex128', or 'complex64'."
+    )
 
 
 def _handle_matches(
@@ -352,6 +358,10 @@ def _torch_dtype(dtype: np.dtype[Any]):
         raise RuntimeError("Torch is unavailable.")
     if dtype == np.dtype(np.float32):
         return torch.float32
+    if dtype == np.dtype(np.complex64):
+        return torch.complex64
+    if dtype == np.dtype(np.complex128):
+        return torch.complex128
     return torch.float64
 
 

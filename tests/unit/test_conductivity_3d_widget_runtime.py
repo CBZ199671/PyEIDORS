@@ -835,6 +835,60 @@ def test_v120_3d_anomaly_mask_keeps_strongest_spatially_coherent_blob() -> None:
     assert np.flatnonzero(mask).tolist() == list(range(cluster.shape[0]))
 
 
+def test_v619_phase_region_focus_prefers_central_blob_over_boundary_spikes() -> None:
+    central = np.array(
+        [
+            [x, y, z]
+            for x in (-0.03, 0.0, 0.03)
+            for y in (-0.03, 0.0, 0.03)
+            for z in (-0.03, 0.0, 0.03)
+        ],
+        dtype=np.float64,
+    )
+    edge_clusters = np.array(
+        [
+            [sign, offset, z]
+            for sign in (-1.0, 1.0)
+            for offset in (-0.04, 0.04)
+            for z in (-0.04, 0.04)
+        ]
+        + [
+            [offset, sign, z]
+            for sign in (-1.0, 1.0)
+            for offset in (-0.04, 0.04)
+            for z in (-0.04, 0.04)
+        ],
+        dtype=np.float64,
+    )
+    background = np.array(
+        [
+            [x, y, z]
+            for x in np.linspace(-0.72, 0.72, 5)
+            for y in np.linspace(-0.72, 0.72, 5)
+            for z in (-0.08, 0.08)
+            if abs(x) > 0.18 or abs(y) > 0.18
+        ],
+        dtype=np.float64,
+    )
+    centers = np.vstack([central, edge_clusters, background])
+    values = np.full(centers.shape[0], 63.0, dtype=np.float64)
+    values[: central.shape[0]] = 60.7
+    edge_start = central.shape[0]
+    edge_stop = edge_start + edge_clusters.shape[0]
+    values[edge_start:edge_stop:2] = 56.0
+    values[edge_start + 1 : edge_stop : 2] = 70.0
+
+    expected = list(range(central.shape[0]))
+    for mode in (ANOMALY_MODE_POSITIVE, ANOMALY_MODE_NEGATIVE, ANOMALY_MODE_ABSOLUTE):
+        focused = _cell_anomaly_mask(
+            values,
+            mode,
+            cell_centers=centers,
+            prefer_central_region=True,
+        )
+        assert np.flatnonzero(focused).tolist() == expected
+
+
 def test_v107_3d_color_limits_do_not_amplify_near_constant_sigma_noise() -> None:
     near_constant = np.array([1.0, 1.003, 0.997, 1.004, 0.998], dtype=np.float64)
     visible_anomaly = np.array([1.0, 1.0, 1.0, 1.12, 1.0], dtype=np.float64)

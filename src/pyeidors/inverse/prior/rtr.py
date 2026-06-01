@@ -62,34 +62,42 @@ class RtRPrior:
             out = self._apply_fn(vec)
         else:  # pragma: no cover - constructor guards this
             raise RuntimeError("RtRPrior has no apply backend.")
-        result = np.asarray(out, dtype=np.float64).reshape(-1)
+        result = np.asarray(out).reshape(-1)
         if result.size != self.shape[0]:
             raise ValueError(
                 f"RtR output length {result.size} does not match {self.shape[0]}."
             )
         if not all_finite_values(result):
             raise FloatingPointError("RtR apply produced non-finite values.")
-        return np.ascontiguousarray(result, dtype=np.float64)
+        return np.ascontiguousarray(result)
 
     def diag(self) -> np.ndarray | None:
         if sparse.issparse(self._payload):
-            return np.asarray(self._payload.diagonal(), dtype=np.float64)
+            return np.asarray(self._payload.diagonal())
         if isinstance(self._payload, np.ndarray):
-            return np.asarray(self._payload.diagonal(), dtype=np.float64)
+            return np.asarray(self._payload.diagonal())
         diag_hint = self.metadata.get("diag")
         if diag_hint is None:
             return None
-        diag = np.asarray(diag_hint, dtype=np.float64).reshape(-1)
+        diag = np.asarray(diag_hint).reshape(-1)
         if diag.size != self.shape[0]:
             raise ValueError(
                 f"RtR diag length {diag.size} does not match {self.shape[0]}."
             )
         if not all_finite_values(diag):
             raise FloatingPointError("RtR diag contains non-finite values.")
-        return np.ascontiguousarray(diag, dtype=np.float64)
+        return np.ascontiguousarray(diag)
 
     def as_linear_operator(self) -> LinearOperator:
-        return LinearOperator(self.shape, matvec=self.apply, dtype=np.float64)
+        return LinearOperator(self.shape, matvec=self.apply, dtype=self.dtype)
+
+    @property
+    def dtype(self) -> np.dtype:
+        if sparse.issparse(self._payload):
+            return np.dtype(self._payload.dtype)
+        if isinstance(self._payload, np.ndarray):
+            return np.dtype(self._payload.dtype)
+        return np.dtype(np.float64)
 
     def as_RtR(
         self,
@@ -101,17 +109,17 @@ class RtRPrior:
             matrix = self._payload.tocsr()
             return matrix.toarray() if dense else matrix
         if isinstance(self._payload, np.ndarray):
-            return np.asarray(self._payload, dtype=np.float64)
+            return np.asarray(self._payload)
         if not dense:
             return self.as_linear_operator()
         _check_dense_materialization(self.shape, max_dense_n=max_dense_n)
-        dense_matrix = np.empty(self.shape, dtype=np.float64)
-        basis = np.zeros(self.shape[1], dtype=np.float64)
+        dense_matrix = np.empty(self.shape, dtype=self.dtype)
+        basis = np.zeros(self.shape[1], dtype=self.dtype)
         for col in range(self.shape[1]):
             basis[col] = 1.0
             dense_matrix[:, col] = self.apply(basis)
             basis[col] = 0.0
-        return np.ascontiguousarray(dense_matrix, dtype=np.float64)
+        return np.ascontiguousarray(dense_matrix)
 
     def as_rtr(
         self,
@@ -149,7 +157,7 @@ def as_rtr_prior(
         payload = sparse.identity(resolved_shape[0], format="csr", dtype=np.float64)
         kind = "identity_sparse"
     elif sparse.issparse(value):
-        payload = sparse.csr_matrix(value, dtype=np.float64)
+        payload = sparse.csr_matrix(value)
         _validate_sparse_payload(payload)
         kind = "sparse"
     elif isinstance(value, LinearOperator):
@@ -160,7 +168,7 @@ def as_rtr_prior(
         payload = None
         kind = "callable"
     else:
-        array = np.asarray(value, dtype=np.float64)
+        array = np.asarray(value)
         if array.ndim == 1:
             if array.size != resolved_shape[0]:
                 raise ValueError(
@@ -177,7 +185,7 @@ def as_rtr_prior(
                 )
             if not all_finite_values(array):
                 raise FloatingPointError("RtR matrix contains non-finite values.")
-            payload = np.ascontiguousarray(array, dtype=np.float64)
+            payload = np.ascontiguousarray(array)
             kind = "dense"
         else:
             raise ValueError("RtR payload must be 1D diagonal, 2D matrix, or operator.")
@@ -265,14 +273,14 @@ def load_rtr_prior_artifact(path: str | Path) -> RtRPrior:
         shape = tuple(int(v) for v in np.asarray(artifact.arrays["shape"]).reshape(-1))
         matrix = sparse.csr_matrix(
             (
-                np.asarray(artifact.arrays["data"], dtype=np.float64),
+                np.asarray(artifact.arrays["data"]),
                 np.asarray(artifact.arrays["indices"], dtype=np.int64),
                 np.asarray(artifact.arrays["indptr"], dtype=np.int64),
             ),
             shape=shape,
         )
     elif storage_kind == "dense":
-        matrix = np.asarray(artifact.arrays["matrix"], dtype=np.float64)
+        matrix = np.asarray(artifact.arrays["matrix"])
     else:
         raise ValueError(f"Unsupported RtR prior storage_kind {storage_kind!r}.")
     loaded = as_rtr_prior(matrix, metadata=metadata)
@@ -330,12 +338,12 @@ def _validate_sparse_payload(matrix: sparse.spmatrix) -> None:
 
 
 def _as_vector(value: Any, *, name: str) -> np.ndarray:
-    vector = np.asarray(value, dtype=np.float64).reshape(-1)
+    vector = np.asarray(value).reshape(-1)
     if vector.size == 0:
         raise ValueError(f"{name} must be non-empty.")
     if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
-    return np.ascontiguousarray(vector, dtype=np.float64)
+    return np.ascontiguousarray(vector)
 
 
 def _check_dense_materialization(
@@ -382,10 +390,10 @@ def _signature_for_payload(
             digest, np.asarray(mat.indices, dtype=np.int64)
         )
         digest.update(b"|")
-        update_digest_with_array_payload(digest, np.asarray(mat.data, dtype=np.float64))
+        update_digest_with_array_payload(digest, np.asarray(mat.data))
         return digest.hexdigest()
     if isinstance(payload, np.ndarray):
-        arr = np.asarray(payload, dtype=np.float64)
+        arr = np.asarray(payload)
         digest = hashlib.sha256()
         digest.update(semantic)
         digest.update(b"|")
@@ -424,7 +432,12 @@ def _json_ready(value: Any) -> Any:
     if isinstance(value, np.ndarray):
         return tuple(_json_ready(item) for item in value.tolist())
     if isinstance(value, np.generic):
-        return value.item()
+        item = value.item()
+        if isinstance(item, complex):
+            return {"real": float(item.real), "imag": float(item.imag)}
+        return item
+    if isinstance(value, complex):
+        return {"real": float(value.real), "imag": float(value.imag)}
     return value
 
 

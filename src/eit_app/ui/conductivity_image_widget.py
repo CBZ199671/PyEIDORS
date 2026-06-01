@@ -194,7 +194,16 @@ class ConductivityImageWidget(QWidget):
         # repaint without losing the conductivity field.  None means
         # "currently showing the placeholder".
         self._last_image: (
-            tuple[np.ndarray, np.ndarray, np.ndarray, str | None] | None
+            tuple[
+                np.ndarray,
+                np.ndarray,
+                np.ndarray,
+                str | None,
+                str,
+                str,
+                tuple[float, float] | None,
+            ]
+            | None
         ) = None
         self._last_caption: tuple[str, str] | None = (
             None  # (text, kind: 'placeholder'|'loading'|'error')
@@ -260,10 +269,26 @@ class ConductivityImageWidget(QWidget):
         # the user's data on screen across the mode flip instead of
         # collapsing back to the placeholder.
         if self._last_image is not None:
-            conductivity, node_coords, cell_connectivity, title = self._last_image
+            (
+                conductivity,
+                node_coords,
+                cell_connectivity,
+                title,
+                colorbar_label,
+                colormap,
+                value_limits,
+            ) = self._last_image
             # update_image() resets _last_image, so don't pass it back
             # in to avoid a recursion.
-            self.update_image(conductivity, node_coords, cell_connectivity, title=title)
+            self.update_image(
+                conductivity,
+                node_coords,
+                cell_connectivity,
+                title=title,
+                colorbar_label=colorbar_label,
+                colormap=colormap,
+                value_limits=value_limits,
+            )
         elif self._last_caption is not None:
             text, kind = self._last_caption
             self._draw_caption(text, kind)
@@ -308,6 +333,10 @@ class ConductivityImageWidget(QWidget):
         node_coords: np.ndarray,
         cell_connectivity: np.ndarray,
         title: str | None = None,
+        *,
+        colorbar_label: str = "S/m",
+        colormap: str = "viridis",
+        value_limits: tuple[float, float] | None = None,
     ) -> None:
         """Render a conductivity distribution on the mesh."""
         self._remove_colorbar()
@@ -341,6 +370,7 @@ class ConductivityImageWidget(QWidget):
             return
 
         display_conductivity = _display_conductivity_values(conductivity)
+        limits = value_limits
 
         if len(display_conductivity) == len(cell_connectivity):
             face_values = display_conductivity[source_cells]
@@ -348,17 +378,17 @@ class ConductivityImageWidget(QWidget):
                 node_values = cell_to_node_average(face_values, triangles, len(x))
             except ValueError:
                 tpc = self._ax.tripcolor(
-                    tri, face_values, shading="flat", cmap="viridis"
+                    tri, face_values, shading="flat", cmap=colormap
                 )
                 self._last_render_mode = "cell_flat"
             else:
                 tpc = self._ax.tripcolor(
-                    tri, node_values, shading="gouraud", cmap="viridis"
+                    tri, node_values, shading="gouraud", cmap=colormap
                 )
                 self._last_render_mode = "cell_to_node_gouraud"
         elif len(display_conductivity) == len(x):
             tpc = self._ax.tripcolor(
-                tri, display_conductivity, shading="gouraud", cmap="viridis"
+                tri, display_conductivity, shading="gouraud", cmap=colormap
             )
             self._last_render_mode = "node_gouraud"
         else:
@@ -367,6 +397,8 @@ class ConductivityImageWidget(QWidget):
                 f"cells={len(cell_connectivity)}, nodes={len(x)}"
             )
             return
+        if limits is not None:
+            tpc.set_clim(*limits)
 
         palette = plot_palette()
         display_title = title or self._default_title
@@ -386,7 +418,7 @@ class ConductivityImageWidget(QWidget):
         self._colorbar = self._figure.colorbar(
             tpc,
             cax=cax,
-            label="S/m",
+            label=colorbar_label,
         )
         self._colorbar.ax.set_facecolor(palette["panel_bg"])
         self._colorbar.ax.yaxis.label.set_fontname(self._serif)
@@ -399,7 +431,15 @@ class ConductivityImageWidget(QWidget):
             spine.set_color(palette["border"])
 
         # Cache so dark-mode toggles can re-render without losing data.
-        self._last_image = (conductivity, node_coords, cell_connectivity, title)
+        self._last_image = (
+            conductivity,
+            node_coords,
+            cell_connectivity,
+            title,
+            colorbar_label,
+            colormap,
+            limits,
+        )
         self._last_caption = None
 
         # Re-attach electrode overlay if the user has it enabled.  The

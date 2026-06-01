@@ -334,11 +334,52 @@ def _resolve_float_dtype(
         return np.dtype(np.float32)
     if resolved == np.dtype(np.float64):
         return np.dtype(np.float64)
+    if resolved == np.dtype(np.complex64):
+        return np.dtype(np.complex64)
+    if resolved == np.dtype(np.complex128):
+        return np.dtype(np.complex128)
     return np.dtype(np.float64)
 
 
+def _resolve_linear_algebra_dtype(
+    dtype: str | np.dtype[Any] | type | None,
+    *,
+    values: Any,
+) -> np.dtype[Any]:
+    requested = _resolve_float_dtype(dtype)
+    if not np.iscomplexobj(values):
+        return requested
+    if requested in {np.dtype(np.float32), np.dtype(np.complex64)}:
+        return np.dtype(np.complex64)
+    return np.dtype(np.complex128)
+
+
+def _resolve_apply_dtype(
+    dtype: str | np.dtype[Any] | type | None,
+    *values: Any,
+) -> np.dtype[Any]:
+    requested = _resolve_float_dtype(dtype)
+    if not any(np.iscomplexobj(value) for value in values):
+        return requested
+    if requested in {np.dtype(np.float32), np.dtype(np.complex64)}:
+        return np.dtype(np.complex64)
+    return np.dtype(np.complex128)
+
+
+def _as_numeric_float_array(values: Any) -> np.ndarray:
+    raw = np.asarray(values)
+    if np.issubdtype(raw.dtype, np.complexfloating):
+        dtype = (
+            np.complex64
+            if raw.dtype.itemsize <= np.dtype(np.complex64).itemsize
+            else np.complex128
+        )
+        return np.asarray(raw, dtype=dtype)
+    return _as_real_float_array(raw)
+
+
 def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
-    vector = np.asarray(values, dtype=np.float64)
+    vector = _as_numeric_float_array(values)
     if vector.ndim > 2:
         raise ValueError(f"{name} must be a 1D or column-vector measurement array.")
     vector = vector.reshape(-1)
@@ -346,7 +387,7 @@ def _as_measurement_vector(values: Any, *, name: str) -> np.ndarray:
         raise ValueError(f"{name} must be non-empty.")
     if not all_finite_values(vector):
         raise FloatingPointError(f"{name} contains non-finite values.")
-    return np.ascontiguousarray(vector, dtype=np.float64)
+    return np.ascontiguousarray(vector)
 
 
 def _as_rm_matrix(
@@ -511,7 +552,7 @@ def _load_legacy_npz_rm_artifact(path: Path) -> RMArtifact:
 
 
 def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]:
-    array = _as_real_float_array(values)
+    array = _as_numeric_float_array(values)
     if array.ndim == 1:
         frames = array.reshape(1, -1)
         was_vector = True
@@ -530,19 +571,19 @@ def _as_measurement_frames(values: Any, *, name: str) -> tuple[np.ndarray, bool]
 def _reference_frames(
     reference: Any, *, n_frames: int, n_measurements: int
 ) -> np.ndarray:
-    ref = np.asarray(reference, dtype=np.float64)
+    ref = _as_numeric_float_array(reference)
     if ref.ndim == 1:
         if ref.size != n_measurements:
             raise ValueError(
                 f"v_ref length {ref.size} does not match {n_measurements} measurements."
             )
-        return np.ascontiguousarray(ref.reshape(1, -1), dtype=np.float64)
+        return np.ascontiguousarray(ref.reshape(1, -1), dtype=ref.dtype)
     if ref.ndim == 2:
         if ref.shape != (n_frames, n_measurements):
             raise ValueError(
                 f"v_ref shape {ref.shape} does not match {(n_frames, n_measurements)}."
             )
-        return np.ascontiguousarray(ref, dtype=np.float64)
+        return np.ascontiguousarray(ref, dtype=ref.dtype)
     raise ValueError("v_ref must be a 1D reference vector or 2D frame batch.")
 
 
@@ -590,7 +631,7 @@ def _apply_measurement_contract_to_frames_with_metadata(
     n_measurements = int(frames.shape[1])
     mask = normalize_bad_channel_mask(channel_mask, n_measurements=n_measurements)
     bad_channel_count = int(np.count_nonzero(mask))
-    out = np.array(_as_real_float_array(frames), copy=True, order="C")
+    out = np.array(_as_numeric_float_array(frames), copy=True, order="C")
     if bad_channel_count:
         _zero_bad_measurement_columns_in_place(out, mask)
     weights, weight_kind = zero_bad_channel_weights(
@@ -770,9 +811,18 @@ def _noser_regularization(
     if exponent <= 0.0:
         raise ValueError("noser_exponent must be positive.")
     diag = np.sum(jacobian * jacobian, axis=0)
-    diag = np.maximum(diag, float(floor))
+    if np.iscomplexobj(diag):
+        diag = np.asarray(diag, dtype=jacobian.dtype)
+        diag[np.abs(diag) < float(floor)] = complex(float(floor), 0.0)
+    else:
+        diag = np.maximum(diag, float(floor))
     if exponent != 1.0:
         diag = diag ** float(exponent)
+    if np.iscomplexobj(diag):
+        # EIDORS' complex NOSER prior follows MATLAB's projected Jacobian
+        # convention; after importing the same physical Jacobian into NumPy,
+        # the matching RtR diagonal is the conjugate of sum(J.^2).^exponent.
+        diag = np.conj(diag)
     return diag
 
 
@@ -879,8 +929,10 @@ def build_one_step_rm(
     ``RM = P J.T (J P J.T + lambda_**2 Rn)^-1`` with ``P≈R^-1`` and
     identity ``Rn`` by default.
     ``mode="noser"`` defaults to the EIDORS-style
-    ``R = diag(J.T @ J)**0.5``; pass ``noser_exponent=1.0`` to reproduce the
-    legacy dense ``diag(J.T @ J)`` variant.
+    ``R = diag(J.T @ J)**0.5`` for real-valued Jacobians and the EIDORS
+    complex projected-Jacobian convention for complex-valued Jacobians; pass
+    ``noser_exponent=1.0`` to reproduce the legacy dense ``diag(J.T @ J)``
+    variant.
 
     ``channel_mask`` uses the data-channel contract where ``True`` marks a
     bad channel. ``measurement_weights`` is the symmetric precision matrix
@@ -906,7 +958,7 @@ def build_one_step_rm(
     lam = float(lambda_)
     if lam < 0.0 or not np.isfinite(lam):
         raise ValueError("lambda_ must be finite and non-negative.")
-    calc_dtype = _resolve_float_dtype(dtype)
+    calc_dtype = _resolve_linear_algebra_dtype(dtype, values=J)
 
     jac_raw = _as_jacobian(J, dtype=calc_dtype)
     jac, measurement_contract = apply_measurement_contract_to_jacobian(
@@ -915,6 +967,7 @@ def build_one_step_rm(
         measurement_weights=measurement_weights,
     )
     jac = np.ascontiguousarray(jac, dtype=calc_dtype)
+    jac_adjoint = np.ascontiguousarray(jac.conj().T, dtype=calc_dtype)
     reg_prior, regularization_source = _regularization_for_mode(
         jac,
         regularization,
@@ -930,12 +983,14 @@ def build_one_step_rm(
             dtype=calc_dtype,
         )
         diag = _prior_diagonal(reg_prior, dtype=calc_dtype)
-        if (
-            reg_prior.kind == "diagonal_sparse"
-            and diag is not None
-            and np.all(diag > 0.0)
-        ):
-            p_jt = jac.T / diag.reshape(-1, 1)
+        diag_real = np.real_if_close(diag, tol=1000) if diag is not None else None
+        diag_positive = bool(
+            diag_real is not None
+            and not np.iscomplexobj(diag_real)
+            and np.all(np.asarray(diag_real) > 0.0)
+        )
+        if reg_prior.kind == "diagonal_sparse" and diag is not None and diag_positive:
+            p_jt = jac_adjoint / np.asarray(diag_real, dtype=calc_dtype).reshape(-1, 1)
             prior_inverse_solver = "diagonal"
         else:
             reg = _prior_to_dense_matrix(
@@ -943,7 +998,7 @@ def build_one_step_rm(
                 name=resolved_mode,
                 dtype=calc_dtype,
             )
-            p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac.T)
+            p_jt, prior_inverse_solver = _solve_or_pinv(reg, jac_adjoint)
             p_jt = np.asarray(p_jt, dtype=calc_dtype)
         lhs = np.ascontiguousarray(jac @ p_jt, dtype=calc_dtype)
         if rn_kind == "diagonal":
@@ -957,8 +1012,8 @@ def build_one_step_rm(
         rn_source = "unused"
         prior_inverse_solver = "unused"
         reg = _prior_to_dense_matrix(reg_prior, name=resolved_mode, dtype=calc_dtype)
-        lhs = np.asarray(jac.T @ jac + (lam * lam) * reg, dtype=calc_dtype)
-        rm, solver = _solve_or_pinv(lhs, jac.T)
+        lhs = np.asarray(jac_adjoint @ jac + (lam * lam) * reg, dtype=calc_dtype)
+        rm, solver = _solve_or_pinv(lhs, jac_adjoint)
         inversion_dimension = "parameter"
     rm = np.asarray(rm, dtype=calc_dtype)
     if not all_finite_values(rm):
@@ -988,7 +1043,12 @@ def build_one_step_rm(
             "bad_channel_count": int(measurement_contract.bad_channel_count),
             "measurement_weight_kind": measurement_contract.weight_kind,
             "expects_measurement_contract": True,
-            "normal_equation_formula": "JtWJ_plus_hp2_RtR",
+            "normal_equation_formula": "JhWJ_plus_hp2_RtR"
+            if np.issubdtype(calc_dtype, np.complexfloating)
+            else "JtWJ_plus_hp2_RtR",
+            "adjoint_operator": "hermitian"
+            if np.issubdtype(calc_dtype, np.complexfloating)
+            else "transpose",
             "regularization_matrix_role": "RtR",
             "RtR_shape": tuple(int(v) for v in reg_prior.shape),
             "RtR_nnz": _prior_nnz(reg_prior),
@@ -1023,9 +1083,9 @@ def _matvec(rm: Any, vector: np.ndarray) -> np.ndarray:
             raise ValueError(
                 f"RM column count {matrix.shape[1]} does not match dv length {vector.size}."
             )
-        out = np.asarray(matrix @ vector, dtype=np.float64)
+        out = np.asarray(matrix @ vector, dtype=_resolve_apply_dtype(None, rm, vector))
     else:
-        matrix = np.asarray(rm, dtype=np.float64)
+        matrix = np.asarray(rm, dtype=_resolve_apply_dtype(None, rm, vector))
         if matrix.ndim != 2:
             raise ValueError("rm must be a 2D reconstruction matrix.")
         if matrix.shape[1] != vector.size:
@@ -1033,7 +1093,8 @@ def _matvec(rm: Any, vector: np.ndarray) -> np.ndarray:
                 f"RM column count {matrix.shape[1]} does not match dv length {vector.size}."
             )
         out = np.asarray(
-            safe_dot(matrix, vector, "reconstruction_matrix.apply"), dtype=np.float64
+            safe_dot(matrix, vector, "reconstruction_matrix.apply"),
+            dtype=matrix.dtype,
         )
     if not all_finite_values(out):
         raise FloatingPointError("RM application produced non-finite values.")
@@ -1070,7 +1131,8 @@ def reconstruct_difference(
         channel_mask=channel_mask,
         measurement_weights=measurement_weights,
     )
-    return np.asarray(rm_matmul(rm, measurement, device=device, dtype=dtype))
+    apply_dtype = _resolve_apply_dtype(dtype, rm, measurement)
+    return np.asarray(rm_matmul(rm, measurement, device=device, dtype=apply_dtype))
 
 
 def reconstruct_difference_batch(
@@ -1109,11 +1171,12 @@ def reconstruct_difference_batch(
         payload = measurement_batch.reshape(-1)
     else:
         payload = measurement_batch
+    apply_dtype = _resolve_apply_dtype(dtype, rm, payload)
     result = rm_matmul(
         rm,
         payload,
         device=device,
-        dtype=dtype,
+        dtype=apply_dtype,
         return_metadata=return_metadata,
     )
     if return_metadata:

@@ -1113,6 +1113,34 @@ def test_noser_rm_signature_ignores_device_backend_storage_axes() -> None:
     assert cpu_signature == cuda_signature
 
 
+def test_complex_rm_runtime_forces_dolfinx_over_real_only_cuda_structured(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(rc, "probe_petsc_cuda_runtime", lambda: {})
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        use_part="complex",
+        mesh_dimension=3,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_auto_build": True,
+            "mesh_family": "hex",
+            "acceleration_profile": "gpu3d",
+            "forward_backend": "cuda_structured",
+            "background_conductivity": "1+2j",
+            "contact_impedance": "0.01+0.05j",
+            "rm_dtype": "complex64",
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.meta["forward_backend"] == "dolfinx"
+    assert runtime.meta["petsc_device"] == "cuda"
+
+
 def test_one_step_rm_signature_tracks_effective_measurement_count() -> None:
     base_meta = {
         "reconstruction_runtime": "single_step_cached",
@@ -1573,51 +1601,81 @@ def test_run_reconstruction_request_routes_complex_to_native_full_gn(
     assert captured[0].use_part == "complex"
 
 
-def test_v134_complex_rm_route_uses_core_difference_preset_for_eit_system(
+def test_run_reconstruction_request_dispatches_complex_rm_to_single_step_cached(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    import pyeidors
-    from pyeidors.geometry import optimized_mesh_generator
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0], dtype=np.float32),
+            imag=np.array([0.10, 0.20], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([1.5, 2.5], dtype=np.float32),
+            imag=np.array([0.30, 0.50], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "background_conductivity": "1+2j",
+            "contact_impedance": "0.01+0.05j",
+            "rm_dtype": "complex64",
+        },
+    )
+    sentinel = rc.ReconstructionResult(
+        conductivity=np.array([1.0 + 2.0j], dtype=np.complex64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=int),
+        metadata={"reconstruction_runtime": "single_step_cached"},
+    )
 
-    rc.clear_reconstruction_system_cache()
+    monkeypatch.setattr(
+        rc,
+        "_run_single_step_cached_request",
+        lambda req, progress_cb=None: sentinel,
+    )
+
+    def _unexpected_full(*_args, **_kwargs):
+        raise AssertionError("complex RM requests must use the one-step RM path")
+
+    monkeypatch.setattr(rc, "_run_full_gn_request", _unexpected_full)
+
+    result = rc.run_reconstruction_request(request)
+
+    assert result is sentinel
+
+
+def test_v134_complex_rm_route_uses_one_step_rm_fast_path(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     captured: dict[str, object] = {}
-
-    class FakeEITSystem:
-        def __init__(self, **kwargs):
-            captured["system_kwargs"] = kwargs
-
-        def setup(self, mesh):
-            captured["mesh"] = mesh
-
     sentinel = rc.ReconstructionResult(
         conductivity=np.array([1.0 + 0.1j], dtype=np.complex64),
         node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=float),
         cell_connectivity=np.array([[0, 1, 2]], dtype=int),
-        metadata={"complex_reconstruction_mode": "native_complex_linearized_gn"},
+        metadata={"reconstruction_runtime": "single_step_cached"},
     )
 
-    def _fake_native_complex(**kwargs):
-        captured["native_meta"] = dict(kwargs["meta"])
+    def _fake_single_step(req, progress_cb=None):
+        captured["request"] = req
         return sentinel
 
-    monkeypatch.setattr(pyeidors, "EITSystem", FakeEITSystem)
-    monkeypatch.setattr(
-        optimized_mesh_generator,
-        "load_or_create_mesh",
-        lambda **_kwargs: object(),
-    )
-    monkeypatch.setattr(
-        rc,
-        "_run_native_complex_linearized_difference",
-        _fake_native_complex,
-    )
     monkeypatch.setattr(
         rc,
         "_run_single_step_cached_request",
-        lambda *_args, **_kwargs: pytest.fail(
-            "complex RM request must not enter real single-step fast path"
-        ),
+        _fake_single_step,
     )
+
+    def _unexpected_full(*_args, **_kwargs):
+        raise AssertionError("complex RM requests must use the one-step RM path")
+
+    monkeypatch.setattr(rc, "_run_full_gn_request", _unexpected_full)
     n_meas = 208
     request = rc.ReconstructionRequest(
         reference_frame=FrameData(
@@ -1649,14 +1707,9 @@ def test_v134_complex_rm_route_uses_core_difference_preset_for_eit_system(
     result = rc.run_reconstruction_request(request)
 
     assert result is sentinel
-    assert captured["system_kwargs"]["difference_preset"] == "eidors_one_step_noser"
-    assert captured["native_meta"]["difference_preset"] == "noser_rm"
-    assert captured["native_meta"]["difference_preset_requested"] == "noser_rm"
-    assert (
-        captured["native_meta"]["difference_preset_effective"]
-        == "eidors_one_step_noser"
-    )
-    rc.clear_reconstruction_system_cache()
+    assert captured["request"] is request
+    assert captured["request"].use_part == "complex"
+    assert captured["request"].metadata["simulation_inverse_route"] == "noser_rm"
 
 
 def test_v512_native_complex_controller_identity_regularization_stays_lazy() -> None:
@@ -1980,6 +2033,130 @@ def test_single_step_cached_request_uses_rm_artifact_hot_path(
     assert warm_diagnostics["runtime"]["rm_artifact_cache_hit"] is True
     assert warm_diagnostics["cache_lookups"]["rm_artifact"]["layer"] == "process"
     assert warm_diagnostics["rm_matmul"]["rm_prepare_mode"] == "reused_handle"
+
+
+def test_single_step_cached_complex_runtime_preserves_complex_scalars() -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.array([1.0, 2.0], dtype=np.float32),
+            imag=np.array([0.1, 0.2], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.array([1.5, 2.5], dtype=np.float32),
+            imag=np.array([0.3, 0.5], dtype=np.float32),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_auto_build": True,
+            "background_conductivity": "1+2j",
+            "contact_impedance": "0.01+0.05j",
+            "rm_dtype": "complex64",
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+    _signature, payload = rc._planned_one_step_rm_signature(request, runtime)
+
+    assert runtime.background_sigma == 1.0 + 2.0j
+    assert runtime.contact_impedance == 0.01 + 0.05j
+    assert runtime.meta["rm_dtype"] == "complex64"
+    assert payload["background"]["sigma0"] == {"real": 1.0, "imag": 2.0}
+    assert payload["background"]["z0"] == {"real": 0.01, "imag": 0.05}
+
+
+def test_single_step_cached_complex_rm_hot_path_adds_complex_background(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    reference = np.array([1.0 + 1.0j, 2.0 + 0.0j], dtype=np.complex128)
+    target = np.array([1.5 + 1.0j, 2.0 + 0.25j], dtype=np.complex128)
+    rm = np.array(
+        [
+            [1.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 0.0 + 1.0j],
+        ],
+        dtype=np.complex128,
+    )
+    jacobian = np.array(
+        [
+            [1.0 + 0.0j, 0.0 + 0.0j],
+            [0.0 + 0.0j, 0.0 + 1.0j],
+        ],
+        dtype=np.complex128,
+    )
+    node_coords = np.array(
+        [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2], [1, 3, 2]], dtype=np.int32)
+
+    from pyeidors.inverse import write_rm_artifact
+
+    artifact = tmp_path / "complex_one_step_rm.h5"
+    write_rm_artifact(
+        artifact,
+        rm=rm,
+        metadata={
+            "algorithm": "one-step-noser",
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+        },
+        node_coords=node_coords,
+        cell_connectivity=cells,
+        jacobian=jacobian,
+    )
+    request = rc.ReconstructionRequest(
+        reference_frame=FrameData(
+            real=np.real(reference),
+            imag=np.imag(reference),
+            timestamp=0.0,
+            frame_index=0,
+        ),
+        target_frame=FrameData(
+            real=np.real(target),
+            imag=np.imag(target),
+            timestamp=0.0,
+            frame_index=1,
+        ),
+        use_part="complex",
+        mesh_dimension=2,
+        metadata={
+            "reconstruction_runtime": "single_step_cached",
+            "simulation_inverse_route": "noser_rm",
+            "rm_route_requires_artifact": True,
+            "rm_output_display_mode": "absolute_sigma",
+            "difference_mode": "raw",
+            "difference_orientation": "target_minus_reference",
+            "dual_model_rm_path": str(artifact),
+            "device": "cpu",
+            "background_conductivity": "1+2j",
+            "contact_impedance": "0.01+0.05j",
+            "rm_dtype": "complex128",
+        },
+    )
+
+    def _unexpected_context(*_args, **_kwargs):
+        raise AssertionError("complex RM hot path must not build GN context/Jacobian.")
+
+    monkeypatch.setattr(rc, "_ensure_single_step_cached_context", _unexpected_context)
+
+    result = rc._run_single_step_cached_request(request)
+
+    expected_dv = target - reference
+    expected_delta = rm @ expected_dv
+    np.testing.assert_allclose(result.conductivity, (1.0 + 2.0j) + expected_delta)
+    np.testing.assert_allclose(result.measured, expected_dv)
+    np.testing.assert_allclose(result.simulated, jacobian @ expected_delta)
+    assert np.iscomplexobj(result.conductivity)
+    assert result.metadata["rm_dtype"] == "complex128"
+    assert result.metadata["single_step_operator_space"] == "rm"
 
 
 def test_single_step_cached_rm_artifact_rejects_measurement_count_mismatch(
@@ -3932,6 +4109,145 @@ def test_gn_difference_runner_3d_multiring_loads_ring_ordered_mesh(
     assert captured["n_elec"] == 16
     assert captured["dimension"] == 3
     assert captured["electrode_layout"] == "ring_major"
+
+
+def test_gn_difference_runner_complex_rm_build_only_preserves_complex_dtype(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import scripts.common.gn_difference_runner as diff_runner
+
+    captured: dict[str, object] = {}
+    node_coords = np.array(
+        [
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ],
+        dtype=float,
+    )
+    cells = np.array([[0, 1, 2, 3]], dtype=np.int32)
+    fake_mesh = SimpleNamespace(
+        coordinates=lambda: node_coords,
+        cells=lambda: cells,
+        _pyeidors_mesh_cache_hit=False,
+        _pyeidors_mesh_cache_layer="test",
+        _pyeidors_mesh_cache_name="complex-rm-test",
+    )
+
+    class _FakeIndexMap:
+        size_local = 2
+
+    class _FakeDofMap:
+        index_map = _FakeIndexMap()
+        index_map_bs = 1
+
+    class _FakeFunctionSpace:
+        dofmap = _FakeDofMap()
+
+    class _FakePatternManager:
+        n_stim = 1
+        n_meas_total = 2
+        n_meas_per_stim = [2]
+
+    class _FakeForwardModel:
+        def __init__(self, **kwargs):
+            captured["z"] = np.asarray(kwargs["z"])
+            self.V_sigma = _FakeFunctionSpace()
+            self.pattern_manager = _FakePatternManager()
+            self._petsc_backend_info = {"petsc_device_effective": "cpu"}
+            self._last_cache_lookup = {}
+
+        def fwd_solve(self, _img):
+            return (
+                SimpleNamespace(
+                    meas=np.array([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64)
+                ),
+                None,
+            )
+
+    class _FakeJacobianAdapter:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def calculate_from_image(self, _img):
+            return np.array(
+                [[1.0 + 0.5j, 2.0 - 1.0j], [0.25j, 3.0 + 0.75j]],
+                dtype=np.complex64,
+            )
+
+    class _FakeCacheManager:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def clear_name(self, *_args, **_kwargs):
+            return None
+
+        def get_or_compute_semantic(self, **kwargs):
+            return (
+                kwargs["compute_fn"](),
+                SimpleNamespace(
+                    hit=False,
+                    layer="compute",
+                    artifact=kwargs["artifact"],
+                    key=kwargs["name"],
+                ),
+            )
+
+        def stats(self):
+            return {}
+
+    monkeypatch.setattr(diff_runner, "CacheManager", _FakeCacheManager)
+    monkeypatch.setattr(diff_runner, "load_or_create_mesh", lambda **_kwargs: fake_mesh)
+    monkeypatch.setattr(diff_runner, "EITForwardModel", _FakeForwardModel)
+    monkeypatch.setattr(diff_runner, "EidorsJacobianAdapter", _FakeJacobianAdapter)
+    monkeypatch.setattr(
+        diff_runner, "model_signature_from_forward_model", lambda _f: "m"
+    )
+    monkeypatch.setattr(
+        diff_runner, "pattern_signature_from_forward_model", lambda _f: "p"
+    )
+    monkeypatch.setattr(
+        diff_runner, "backend_signature_from_forward_model", lambda _f: "b"
+    )
+    monkeypatch.setattr(diff_runner, "detect_performance_capabilities", lambda: {})
+    monkeypatch.setattr(
+        diff_runner,
+        "resolve_torch_device",
+        lambda *_args, **_kwargs: SimpleNamespace(
+            requested="cpu",
+            effective="cpu",
+            torch_device="cpu",
+        ),
+    )
+
+    ctx = diff_runner.build_shared_context(
+        mesh_dir=str(tmp_path),
+        mesh_name=None,
+        mesh_dim=3,
+        mesh_height=0.16,
+        electrode_height_ratio=0.2,
+        z_center=0.0,
+        refinement=2,
+        n_elec=8,
+        n_rings=2,
+        radius=0.18,
+        drive_mode="total_current",
+        drive_value=1.0e-5,
+        contact_impedance=0.01 + 0.05j,
+        background_sigma=1.0 + 2.0j,
+        solver_mode="fast",
+        scalar_dtype="complex64",
+        rm_build_only=True,
+    )
+
+    assert np.asarray(captured["z"]).dtype == np.dtype(np.complex64)
+    assert ctx["sigma_bg"].dtype == np.dtype(np.complex64)
+    assert ctx["base_meas"].dtype == np.dtype(np.complex64)
+    assert ctx["J"].dtype == np.dtype(np.complex64)
+    assert ctx["operator_bundle"]["mode"] == "rm_build_only"
+    np.testing.assert_allclose(ctx["sigma_bg"], np.array([1.0 + 2.0j] * 2))
 
 
 def test_load_gn_difference_runner_module_falls_back_to_repo_root(

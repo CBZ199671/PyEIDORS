@@ -76,7 +76,8 @@ class _DiagonalMatrix:
         return dense
 
     def __matmul__(self, other: Any) -> np.ndarray:
-        values = np.asarray(as_real_float_array(other), dtype=self.diagonal.dtype)
+        raw = _as_numeric_float_array(other)
+        values = np.asarray(raw, dtype=np.result_type(self.diagonal.dtype, raw.dtype))
         if values.ndim == 1:
             if values.shape[0] != self.diagonal.size:
                 raise ValueError("matrix dimension mismatch")
@@ -88,7 +89,8 @@ class _DiagonalMatrix:
         return np.asarray(self) @ values
 
     def __rmatmul__(self, other: Any) -> np.ndarray:
-        values = np.asarray(as_real_float_array(other), dtype=self.diagonal.dtype)
+        raw = _as_numeric_float_array(other)
+        values = np.asarray(raw, dtype=np.result_type(self.diagonal.dtype, raw.dtype))
         if values.ndim == 1:
             if values.shape[0] != self.diagonal.size:
                 raise ValueError("matrix dimension mismatch")
@@ -209,7 +211,7 @@ def zero_bad_channel_weights(
     """
 
     n = int(n_measurements)
-    resolved_dtype = np.dtype(np.float64 if dtype is None else dtype)
+    resolved_dtype = _real_float_dtype(np.float64 if dtype is None else dtype)
     mask = normalize_bad_channel_mask(channel_mask, n_measurements=n)
     if measurement_weights is None:
         weights = np.ones(n, dtype=resolved_dtype)
@@ -319,7 +321,7 @@ def apply_measurement_contract_to_vector(
 
 
 def _as_vector(values: Any, *, name: str) -> np.ndarray:
-    array = as_real_float_array(values)
+    array = _as_numeric_float_array(values)
     if array.ndim > 2:
         raise ValueError(f"{name} must be a 1D or column-vector array.")
     array = array.reshape(-1)
@@ -332,9 +334,9 @@ def _as_vector(values: Any, *, name: str) -> np.ndarray:
 
 def _as_2d_array(values: Any, *, name: str) -> np.ndarray:
     if sparse.issparse(values):
-        array = as_real_float_array(values.toarray())
+        array = _as_numeric_float_array(values.toarray())
     else:
-        array = as_real_float_array(values)
+        array = _as_numeric_float_array(values)
     if array.ndim != 2:
         raise ValueError(f"{name} must be a 2D array.")
     if 0 in array.shape:
@@ -342,6 +344,31 @@ def _as_2d_array(values: Any, *, name: str) -> np.ndarray:
     if not all_finite_values(array):
         raise FloatingPointError(f"{name} contains non-finite values.")
     return np.ascontiguousarray(array)
+
+
+def _real_float_dtype(dtype: Any) -> np.dtype:
+    resolved = np.dtype(dtype)
+    if np.issubdtype(resolved, np.complexfloating):
+        return (
+            np.dtype(np.float32)
+            if resolved == np.dtype(np.complex64)
+            else np.dtype(np.float64)
+        )
+    if resolved == np.dtype(np.float32):
+        return np.dtype(np.float32)
+    return np.dtype(np.float64)
+
+
+def _as_numeric_float_array(values: Any) -> np.ndarray:
+    raw = np.asarray(values)
+    if np.issubdtype(raw.dtype, np.complexfloating):
+        dtype = (
+            np.complex64
+            if raw.dtype.itemsize <= np.dtype(np.complex64).itemsize
+            else np.complex128
+        )
+        return np.asarray(raw, dtype=dtype)
+    return as_real_float_array(raw)
 
 
 def _sqrt_weight_transform(weights: np.ndarray) -> Any:

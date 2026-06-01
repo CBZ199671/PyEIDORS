@@ -333,6 +333,23 @@ export PYEIDORS_ENV_SYNC_QUIET_DRIFT="${PYEIDORS_ENV_SYNC_QUIET_DRIFT:-1}"
 export PYEIDORS_ENV_SYNC_QUIET_REPAIR="${PYEIDORS_ENV_SYNC_QUIET_REPAIR:-1}"
 export UV_NO_PROGRESS="${UV_NO_PROGRESS:-1}"
 
+# WSLg display path. Wayland (the WSLg default) renders both the Qt UI and the
+# DPR-aware PyVista offscreen 3D view at the display's real HiDPI scale, so text
+# and the point cloud stay crisp on scaled (e.g. 200%) displays. XWayland/xcb is
+# capped at 1x and looks blurry when Windows upscales it to a HiDPI panel.
+#
+# So on WSL keep the default Wayland platform for a crisp UI and route the 3D
+# viewers through the throttled, DPR-aware PyVista offscreen renderer instead of
+# the laggy native-rotation Matplotlib fallback. The offscreen path renders at
+# the full device-pixel resolution (crisp) and downsamples only while dragging.
+#
+# Prefer buttery native GPU VTK rotation over UI sharpness? Launch with
+# QT_QPA_PLATFORM=xcb for embedded VTK (UI will be blurry on HiDPI WSLg).
+if grep -qiE 'microsoft|wsl' /proc/version 2>/dev/null; then
+  : "${EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN:=1}"
+  export EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN
+fi
+
 BASH_PAYLOAD=$(cat <<EOF
 set -euo pipefail
 export EIT_APP_GUI_PROFILE=$(printf '%q' "$GUI_PROFILE")

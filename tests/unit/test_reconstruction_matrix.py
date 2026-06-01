@@ -80,6 +80,40 @@ def test_build_one_step_rm_noser_defaults_to_eidors_sqrt_diag_jtj() -> None:
     np.testing.assert_allclose(rm, expected)
 
 
+def test_build_one_step_rm_complex_uses_hermitian_adjoint_and_eidors_noser() -> None:
+    jacobian = np.array(
+        [
+            [1.0 + 0.5j, 2.0 - 0.25j],
+            [3.0 - 1.0j, 0.5 + 0.75j],
+            [0.25 + 2.0j, -1.0 + 0.5j],
+        ],
+        dtype=np.complex128,
+    )
+    lam = 0.1
+
+    result = build_one_step_rm(
+        jacobian,
+        lambda_=lam,
+        mode="noser",
+        return_metadata=True,
+    )
+
+    jac_h = jacobian.conj().T
+    noser = np.diag(np.conj(np.sum(jacobian * jacobian, axis=0) ** 0.5))
+    expected = np.linalg.solve(jac_h @ jacobian + lam**2 * noser, jac_h)
+    real_discarded = np.linalg.solve(
+        jacobian.real.T @ jacobian.real
+        + lam**2 * np.diag(np.sum(jacobian.real * jacobian.real, axis=0) ** 0.5),
+        jacobian.real.T,
+    )
+
+    assert result.rm.dtype == np.dtype(np.complex128)
+    assert result.metadata["adjoint_operator"] == "hermitian"
+    assert result.metadata["normal_equation_formula"] == "JhWJ_plus_hp2_RtR"
+    np.testing.assert_allclose(result.rm, expected)
+    assert not np.allclose(result.rm, real_discarded)
+
+
 def test_build_one_step_rm_preserves_requested_float32_dtype() -> None:
     jacobian = np.array([[1.0, 2.0], [3.0, 0.5], [0.0, 1.0]], dtype=np.float64)
     lam = 0.1
@@ -566,6 +600,19 @@ def test_reconstruct_difference_accepts_preprojected_dv_and_sparse_rm() -> None:
     )
 
 
+def test_reconstruct_difference_preserves_complex_rm_and_residual() -> None:
+    rm = np.array(
+        [[1.0 + 0.5j, 0.0, 2.0 - 1.0j], [0.25j, -1.0, 1.0 + 2.0j]],
+        dtype=np.complex128,
+    )
+    dv = np.array([0.25 - 0.5j, -0.5 + 0.25j, 2.0 + 1.0j], dtype=np.complex128)
+
+    out = reconstruct_difference(rm, dv, normalize=False, device="cpu")
+
+    assert out.dtype == np.dtype(np.complex128)
+    np.testing.assert_allclose(out, rm @ dv)
+
+
 def test_reconstruct_difference_batch_reuses_normalization_and_weight_contract() -> (
     None
 ):
@@ -672,7 +719,7 @@ def test_v555_frame_contract_and_rm_metadata_preserve_float32_batch_dtype() -> N
     assert "np.asarray(frames, dtype=np.float64).copy()" not in source
     assert "np.ascontiguousarray(out, dtype=np.float64)" not in source
     assert "np.ascontiguousarray(_as_real_float_array(frames)).copy()" not in source
-    assert 'np.array(_as_real_float_array(frames), copy=True, order="C")' in source
+    assert 'np.array(_as_numeric_float_array(frames), copy=True, order="C")' in source
     assert "dtype=out.dtype" in source
     assert "dtype=np.float64" not in annotate_source
     reference_source = inspect.getsource(rm_module._reference_frames)

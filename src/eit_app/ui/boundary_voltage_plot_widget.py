@@ -12,6 +12,7 @@ import pyqtgraph as pg
 from eit_app.i18n import t, translator
 from eit_app.ui.complex_channels import (
     COMPOSITE_CHANNEL,
+    PHASE_CHANNEL,
     REAL_CHANNEL,
     channel_values,
 )
@@ -244,6 +245,7 @@ class BoundaryVoltagePlotWidget(QWidget):
     ) -> None:
         """Update the simulation-oriented voltage comparison plot."""
         self._component = str(component or REAL_CHANNEL)
+        self._apply_y_axis_label()
         ground_truth = self._project_voltage_values(ground_truth).reshape(-1)
         reconstructed_arr = self._coerce_reconstructed_overlay(
             reconstructed,
@@ -287,6 +289,7 @@ class BoundaryVoltagePlotWidget(QWidget):
     ) -> None:
         """Update the hardware-oriented voltage fit plot."""
         self._component = str(component or REAL_CHANNEL)
+        self._apply_y_axis_label()
         measured = self._project_voltage_values(measured).reshape(-1)
         reconstructed_arr = self._coerce_reconstructed_overlay(
             reconstructed,
@@ -490,9 +493,7 @@ class BoundaryVoltagePlotWidget(QWidget):
 
     def _retranslate(self) -> None:
         """Refresh title, axis labels, empty-overlay, and legend labels."""
-        self._plot_widget.setLabel(
-            "left", t("hw.boundary.y_label"), **self._label_style
-        )
+        self._apply_y_axis_label()
         self._plot_widget.setTitle(
             f'<span style="color:{self._plot_text};'
             f"font-family:'{self._serif}';font-size:13pt;\">"
@@ -507,6 +508,14 @@ class BoundaryVoltagePlotWidget(QWidget):
         )
         # Bottom axis label is dynamic (depends on point count) — reapply.
         self._configure_index_axis(self._point_count)
+
+    def _apply_y_axis_label(self) -> None:
+        label_key = (
+            "hw.boundary.phase_y_label"
+            if _plot_component(self._component) == PHASE_CHANNEL
+            else "hw.boundary.y_label"
+        )
+        self._plot_widget.setLabel("left", t(label_key), **self._label_style)
 
     def _configure_index_axis(self, point_count: int) -> None:
         count = max(int(point_count), 1)

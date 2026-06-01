@@ -330,6 +330,7 @@ TRANSLATIONS: dict[str, str] = {
     # ==================================================================
     "hw.boundary.title": "\u8fb9\u754c\u7535\u538b\u62df\u5408",  # 边界电压拟合
     "hw.boundary.y_label": "\u7535\u538b (V)",  # 电压 (V)
+    "hw.boundary.phase_y_label": "\u76f8\u4f4d (deg)",  # 相位 (deg)
     "hw.boundary.x_label_dynamic": "\u8fb9\u754c\u7535\u538b\u5e8f\u53f7 (1-{count})",  # 边界电压序号 (1-{count})
     "hw.boundary.primary.measured": "\u5b9e\u6d4b",  # 实测
     "hw.boundary.primary.ground_truth": "\u771f\u503c",  # 真值

@@ -9,11 +9,15 @@ import eit_app.ui.boundary_voltage_plot_widget as boundary_voltage_module
 import eit_app.ui.conductivity_3d_widget as widget3d
 import eit_app.ui.conductivity_image_widget as image_widget
 import eit_app.ui.main_window as main_window_module
+import eit_app.ui.simulation.simulation_results_widget as sim_results_widget
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.conductivity_3d_widget import (
+    ANOMALY_MODE_ABSOLUTE,
+    ANOMALY_MODE_NEGATIVE,
     ANOMALY_MODE_POSITIVE,
     Conductivity3DWidget,
     DISPLAY_MODE_VOLUME,
+    _cell_anomaly_mask,
     _cell_centers,
     _extract_cells_from_mask,
     _face_cell_values,
@@ -691,6 +695,179 @@ def test_v337_channel_values_preserves_single_precision_display_dtype() -> None:
         COMPOSITE_CHANNEL,
     ):
         assert channel_values(complex_values, channel).dtype == np.dtype("float32")
+    np.testing.assert_allclose(
+        channel_values(np.array([1.0 + 1.0j], dtype=np.complex64), PHASE_CHANNEL),
+        np.array([45.0], dtype=np.float32),
+        rtol=1.0e-6,
+        atol=1.0e-6,
+    )
+
+
+def test_v619_phase_region_focus_prefers_central_blob_over_boundary_spikes() -> None:
+    central = np.array(
+        [
+            [x, y, z]
+            for x in (-0.03, 0.0, 0.03)
+            for y in (-0.03, 0.0, 0.03)
+            for z in (-0.03, 0.0, 0.03)
+        ],
+        dtype=np.float64,
+    )
+    edge_clusters = np.array(
+        [
+            [sign, offset, z]
+            for sign in (-1.0, 1.0)
+            for offset in (-0.04, 0.04)
+            for z in (-0.04, 0.04)
+        ]
+        + [
+            [offset, sign, z]
+            for sign in (-1.0, 1.0)
+            for offset in (-0.04, 0.04)
+            for z in (-0.04, 0.04)
+        ],
+        dtype=np.float64,
+    )
+    background = np.array(
+        [
+            [x, y, z]
+            for x in np.linspace(-0.72, 0.72, 5)
+            for y in np.linspace(-0.72, 0.72, 5)
+            for z in (-0.08, 0.08)
+            if abs(x) > 0.18 or abs(y) > 0.18
+        ],
+        dtype=np.float64,
+    )
+    centers = np.vstack([central, edge_clusters, background])
+    values = np.full(centers.shape[0], 63.0, dtype=np.float64)
+    values[: central.shape[0]] = 60.7
+    edge_start = central.shape[0]
+    edge_stop = edge_start + edge_clusters.shape[0]
+    values[edge_start:edge_stop:2] = 56.0
+    values[edge_start + 1 : edge_stop : 2] = 70.0
+
+    expected = list(range(central.shape[0]))
+    for mode in (ANOMALY_MODE_POSITIVE, ANOMALY_MODE_NEGATIVE, ANOMALY_MODE_ABSOLUTE):
+        focused = _cell_anomaly_mask(
+            values,
+            mode,
+            cell_centers=centers,
+            prefer_central_region=True,
+        )
+        assert np.flatnonzero(focused).tolist() == expected
+
+
+def test_v618_simulation_display_options_use_physical_channel_limits() -> None:
+    truth_real_display = sim_results_widget._display_options_for_channel(
+        REAL_CHANNEL,
+        np.array([1.0, 2.0], dtype=np.float32),
+    )
+    assert truth_real_display.colorbar_label == "S/m"
+    assert truth_real_display.colormap == "viridis"
+    assert truth_real_display.value_limits == (1.0, 2.0)
+
+    reconstruction_real_display = sim_results_widget._display_options_for_channel(
+        REAL_CHANNEL,
+        np.array([-5.0, 4.0], dtype=np.float32),
+    )
+    assert reconstruction_real_display.value_limits == (-5.0, 4.0)
+
+    imag_display = sim_results_widget._display_options_for_channel(
+        IMAG_CHANNEL,
+        np.array([2.0, 3.0], dtype=np.float32),
+    )
+    assert imag_display.colorbar_label == "S/m"
+    assert imag_display.colormap == "viridis"
+    assert imag_display.value_limits == (2.0, 3.0)
+
+    phase_display = sim_results_widget._display_options_for_channel(
+        PHASE_CHANNEL,
+        np.array([-0.2, 0.4], dtype=np.float32),
+        np.array([1.2, -2.1], dtype=np.float32),
+    )
+    assert phase_display.colorbar_label == "deg"
+    assert phase_display.colormap == "viridis"
+    np.testing.assert_allclose(
+        phase_display.value_limits,
+        (-2.1, 1.2),
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+
+    composite_display = sim_results_widget._display_options_for_channel(
+        COMPOSITE_CHANNEL,
+        np.array([0.7, 1.1], dtype=np.float32),
+    )
+    assert composite_display.colorbar_label == "S/m"
+    assert composite_display.colormap == "viridis"
+    np.testing.assert_allclose(
+        composite_display.value_limits,
+        (0.7, 1.1),
+        rtol=0.0,
+        atol=1.0e-6,
+    )
+    assert sim_results_widget._anomaly_mode_for_channel(PHASE_CHANNEL) == (
+        ANOMALY_MODE_ABSOLUTE
+    )
+    assert sim_results_widget._anomaly_mode_for_channel(COMPOSITE_CHANNEL) == (
+        ANOMALY_MODE_ABSOLUTE
+    )
+    assert sim_results_widget._anomaly_mode_for_channel(REAL_CHANNEL) == (
+        ANOMALY_MODE_POSITIVE
+    )
+    assert sim_results_widget._prefer_central_anomaly_region_for_channel(PHASE_CHANNEL)
+    assert not sim_results_widget._prefer_central_anomaly_region_for_channel(
+        COMPOSITE_CHANNEL
+    )
+    assert not sim_results_widget._prefer_central_anomaly_region_for_channel(
+        REAL_CHANNEL
+    )
+
+
+def test_v618_channel_colorbar_metadata_reaches_all_conductivity_renderers() -> None:
+    render_source = inspect.getsource(
+        sim_results_widget.SimulationResultsWidget._render_result_views
+    )
+    slot_source = inspect.getsource(
+        sim_results_widget._ConductivityViewSlot.update_image
+    )
+    image_source = inspect.getsource(image_widget.ConductivityImageWidget.update_image)
+    point_source = inspect.getsource(
+        Conductivity3DWidget._add_pyvista_point_cloud_actors
+    )
+    pyvista_source = inspect.getsource(
+        Conductivity3DWidget._render_pyvista_offscreen_scene
+    )
+    mpl_source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
+    embedded_source = inspect.getsource(Conductivity3DWidget._build_scene)
+
+    assert "_display_options_for_channel" in render_source
+    assert "truth_display = _display_options_for_channel(channel, truth_values)" in (
+        render_source
+    )
+    assert "colorbar_label=truth_display.colorbar_label" in render_source
+    assert "colormap=truth_display.colormap" in render_source
+    assert "value_limits=truth_display.value_limits" in render_source
+    assert "reconstruction_display" not in render_source
+    assert "colorbar_label=colorbar_label" in slot_source
+    assert "colormap=colormap" in slot_source
+    assert "value_limits=value_limits" in slot_source
+
+    assert "cmap=colormap" in image_source
+    assert "tpc.set_clim(*limits)" in image_source
+    assert "label=colorbar_label" in image_source
+
+    assert "cmap=colormap" in point_source
+    assert '"title": colorbar_label' in point_source
+    assert "_display_color_limits(cell_sigma, self._value_limits)" in pyvista_source
+    assert "cmap=self._colormap" in pyvista_source
+    assert '"title": self._colorbar_label' in pyvista_source
+    assert "_display_color_limits(face_values, self._value_limits)" in mpl_source
+    assert "_matplotlib_colormap(self._colormap)" in mpl_source
+    assert "self._colorbar_label" in mpl_source
+    assert "_display_color_limits(cell_sigma, self._value_limits)" in embedded_source
+    assert "cmap=self._colormap" in embedded_source
+    assert '"title": self._colorbar_label' in embedded_source
 
 
 def test_v338_complex_component_scan_avoids_full_finite_subset(monkeypatch) -> None:
