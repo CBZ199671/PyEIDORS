@@ -20,8 +20,15 @@ from eit_app.ui.mesh_helpers import _integer_cells, cell_to_node_average
 from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
 
 
-_IMAGE_AXES_RECT = (0.09, 0.14, 0.70, 0.74)
-_COLORBAR_AXES_RECT = (0.84, 0.22, 0.04, 0.58)
+# Horizontally centred image axes: the rect spans 0.19 → 0.81 so its
+# centre sits at 0.50.  An earlier left=0.09 / width=0.70 rect put the
+# centre at 0.44, which made the equal-aspect square (and the empty "No
+# data" placeholder frame) hug the left edge with a wide gap on the
+# right.  The colorbar lives in the right margin, clear of the square's
+# right edge (0.81) so it never overlaps even when the pane turns taller
+# than wide and the square becomes width-limited.
+_IMAGE_AXES_RECT = (0.19, 0.14, 0.62, 0.74)
+_COLORBAR_AXES_RECT = (0.85, 0.20, 0.035, 0.58)
 _IMAGE_SCAN_CHUNK_ITEMS = 1_048_576
 
 

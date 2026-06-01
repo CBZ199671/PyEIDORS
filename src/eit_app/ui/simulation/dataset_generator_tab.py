@@ -76,8 +76,13 @@ class _DatasetWorkspaceWidget(QWidget):
             set_hint_text(label)
             notes_layout.addWidget(label)
             self._note_labels.append(label)
-        notes_layout.addStretch()
-        layout.addWidget(self._notes_box, 1)
+        layout.addWidget(self._notes_box)
+        # Collapse the leftover vertical space into a single stretch at
+        # the bottom instead of letting the notes group-box absorb it
+        # (stretch=1 + an inner addStretch previously inflated notes into
+        # a large half-empty panel).  The three info boxes now sit
+        # compactly at the top with the slack pooled below.
+        layout.addStretch(1)
 
     # ── i18n ──
 

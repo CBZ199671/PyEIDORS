@@ -325,6 +325,13 @@ class DatabaseTab(QWidget):
         form.setSpacing(10)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
         form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        # The filter column is narrow (~240px).  With the default
+        # DontWrapRows policy QFormLayout shrinks the label column below
+        # its natural width, truncating long captions like "Stim amp
+        # (µA):" / "激励电流 (µA)：".  WrapLongRows keeps every label at
+        # full width and drops the field onto the next line when the row
+        # can't fit side-by-side, so captions never clip.
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._filter_name = QLineEdit()
         self._lbl_name = QLabel("")

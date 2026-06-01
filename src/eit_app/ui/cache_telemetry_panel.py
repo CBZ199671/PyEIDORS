@@ -55,13 +55,19 @@ class CacheTelemetryDialog(QDialog):
         self._include_legacy.setChecked(True)
 
         controls = QHBoxLayout()
+        # "Refresh" is a read-only action — keep it on the far left.
         controls.addWidget(self._refresh_btn)
-        controls.addWidget(self._gc_btn)
+        controls.addStretch(1)
+        # GC parameters (size cap + scope toggles) come first, then the
+        # destructive "Clear cache" button sits at the far right so the
+        # row reads set-options → execute instead of the previous
+        # execute → set-options ordering, which placed the button before
+        # the inputs it consumes.
         controls.addWidget(QLabel(t("cache.telemetry.max_size")))
         controls.addWidget(self._max_gib)
         controls.addWidget(self._include_worker)
         controls.addWidget(self._include_legacy)
-        controls.addStretch(1)
+        controls.addWidget(self._gc_btn)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self._summary)

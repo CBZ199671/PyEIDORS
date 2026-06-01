@@ -563,28 +563,6 @@ def test_batch_reconstruction_dialog_buttons_no_crash() -> None:
     assert not errors, f"Buttons crashed: {errors}"
 
 
-def test_difference_dialog_buttons_no_crash() -> None:
-    from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
-
-    # Dialog needs frame entries — feed empty list, just verify no crash on open
-    dlg = DifferenceDialog(frame_entries=[])
-    dlg.show()
-    _get_app().processEvents()
-
-    # Walk all buttons
-    errors: list[tuple[str, str]] = []
-    from contextlib import ExitStack
-
-    with ExitStack() as stack:
-        _patch_modal_dialogs(stack)
-        for btn in _walk_pushbuttons(dlg):
-            if _is_safe_to_click(btn):
-                _try_click(btn, f"diff_dlg.{btn.text()!r}", errors)
-
-    dlg.close()
-    assert not errors, f"Buttons crashed: {errors}"
-
-
 def test_interop_hub_dialog_buttons_no_crash() -> None:
     from eit_app.ui.dialogs.interop_hub_dialog import InteropHubDialog
 

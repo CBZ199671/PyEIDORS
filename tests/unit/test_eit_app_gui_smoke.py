@@ -848,99 +848,6 @@ def test_bilingual_tab_capture_produces_stable_png_pixmaps() -> None:
 
 
 @pytest.mark.gui
-def test_difference_dialog_opens_modeless_and_refreshes_frame_list() -> None:
-    """Phase 6: Difference dialog no longer blocks via exec().
-
-    - Opening via Tools → Difference uses show(), so the main window
-      stays interactive (isModal() must be False).
-    - A second open request must not stack a new window; it should
-      refresh the existing dialog's frame list and raise it.
-    - Closing the dialog clears the retained reference so a fresh
-      one can be opened next time.
-    """
-    window = EITWorkstation()
-    _show_window(window)
-    app = _get_app()
-    try:
-        # Seed two fake frames so the launcher doesn't early-return.
-        window._frame_browser.add_frame_entry(0, 0.0, "/tmp/f0.csv")
-        window._frame_browser.add_frame_entry(1, 0.1, "/tmp/f1.csv")
-        app.processEvents()
-
-        window._action_difference.trigger()
-        app.processEvents()
-        dialog = window._difference_dialog
-        assert dialog is not None
-        assert dialog.isVisible()
-        assert not dialog.isModal(), "Dialog must be modeless"
-        # Main window should still be accepting events.
-        assert window._tab_widget.isEnabled()
-
-        # Record a third frame while the dialog is still on screen and
-        # re-trigger the action — the existing dialog should refresh.
-        window._frame_browser.add_frame_entry(2, 0.2, "/tmp/f2.csv")
-        app.processEvents()
-        window._action_difference.trigger()
-        app.processEvents()
-        assert window._difference_dialog is dialog, (
-            "Re-opening must reuse the existing dialog"
-        )
-        # Combo should now show 3 items, not 2.
-        assert dialog._ref_combo.count() == 3
-
-        # Closing drops the single-instance slot.
-        dialog.reject()
-        app.processEvents()
-        # The finished-signal slot schedules deleteLater, so the
-        # Python-level attr is the clearest thing to assert.
-        assert window._difference_dialog is None
-    finally:
-        _close_window(window)
-
-
-@pytest.mark.gui
-def test_tools_menu_exposes_difference_batch_reconstruction_shortcuts() -> None:
-    """Tools menu must expose Difference (Ctrl+D), Batch (Ctrl+B), and
-    Reconstruction (Ctrl+R) entries with safe click handlers.
-
-    - Difference with 0 frames: no crash, status hint shown, Hardware
-      tab becomes active so the hint is actionable.
-    - Reconstruction from menu: jumps to Database tab (where the user
-      picks ref/tgt frames) and shows a hint.
-    - Batch launcher is verified only at the attribute level (it opens
-      a modal dialog whose exec() would block the test runner).
-    """
-    window = EITWorkstation()
-    _show_window(window)
-    try:
-        # Shortcut bindings are stable
-        assert window._action_difference.shortcut().toString() == "Ctrl+D"
-        assert window._action_batch_reconstruction.shortcut().toString() == "Ctrl+B"
-        assert window._action_reconstruction.shortcut().toString() == "Ctrl+R"
-
-        # Difference with no frames must not crash the app
-        window._action_difference.trigger()
-        _get_app().processEvents()
-        # Fell back to Hardware tab (index 0) so the status hint is
-        # actionable from there.
-        assert window._tab_widget.currentIndex() == 0
-        assert window._status_bar.currentMessage()  # non-empty hint
-
-        # Reconstruction menu launcher routes to the Database tab
-        window._action_reconstruction.trigger()
-        _get_app().processEvents()
-        assert window._tab_widget.currentWidget() is window._db_tab
-        assert window._status_bar.currentMessage()
-
-        # Batch launcher is wired (we just verify the connection exists;
-        # triggering it would call exec() on a modal dialog and freeze
-        # the offscreen test runner).
-        assert callable(window._open_batch_reconstruction_from_menu)
-    finally:
-        _close_window(window)
-
-
-@pytest.mark.gui
 def test_main_window_registers_keyboard_shortcuts() -> None:
     """Power users expect Ctrl+1..4 for tabs, F5 / Ctrl+Enter for solves.
 
@@ -2964,15 +2871,6 @@ def test_gui_interaction_regression_for_fps_recording_and_frame_browser(
         ),
         timeout=2.0,
     )
-
-    window._open_difference_dialog()
-    _get_app().processEvents()
-    dialog = window._difference_dialog
-    assert dialog is not None
-    assert dialog._ref_combo.currentIndex() == 0
-    assert dialog._tgt_combo.currentIndex() == 1
-    dialog.reject()
-    _get_app().processEvents()
 
     _click(window._acq_panel._stop_btn)
     assert _wait_until(lambda: window._acq_process is None, timeout=5.0)

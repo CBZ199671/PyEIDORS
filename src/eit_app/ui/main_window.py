@@ -758,12 +758,6 @@ class EITWorkstation(QMainWindow):
         self._rec_ctrl.set_database_controller(self._db_ctrl)
         self._batch_recon_ctrl = BatchReconstructionController(self)
         self._batch_dialog = None  # lazily created
-        # Phase 6: Difference dialog is modeless — retain a single
-        # instance reference so Python GC doesn't collect the dialog
-        # the moment _open_difference_dialog() returns, and so repeat
-        # Tools→Difference clicks raise the existing window instead
-        # of stacking a new one.
-        self._difference_dialog = None
         self._cache_telemetry_dialog = None
         self._fwd_ctrl = ForwardSolverController(self)
         self._fwd_prewarm_ctrl = ForwardSolverController(self)
@@ -1039,29 +1033,6 @@ class EITWorkstation(QMainWindow):
             lambda: self._on_precision_selected("float64")
         )
         self._precision_action_group.addAction(self._action_precision_float64)
-
-        self._menu_tools.addSeparator()
-
-        # Reconstruction workflow entries — each opens the corresponding
-        # dialog from a single, discoverable menu location rather than
-        # hiding behind a button deep inside a tab.  Keyboard shortcuts
-        # mirror the first letter of each dialog's name so they read
-        # naturally: D for Difference, B for Batch, R for Reconstruct.
-        self._action_difference = self._menu_tools.addAction("")
-        self._action_difference.setShortcut(QKeySequence("Ctrl+D"))
-        self._action_difference.triggered.connect(self._open_difference_dialog)
-
-        self._action_batch_reconstruction = self._menu_tools.addAction("")
-        self._action_batch_reconstruction.setShortcut(QKeySequence("Ctrl+B"))
-        self._action_batch_reconstruction.triggered.connect(
-            self._open_batch_reconstruction_from_menu
-        )
-
-        self._action_reconstruction = self._menu_tools.addAction("")
-        self._action_reconstruction.setShortcut(QKeySequence("Ctrl+R"))
-        self._action_reconstruction.triggered.connect(
-            self._open_reconstruction_from_menu
-        )
 
         self._menu_tools.addSeparator()
         self._action_cache_telemetry = self._menu_tools.addAction("")
@@ -1405,9 +1376,6 @@ class EITWorkstation(QMainWindow):
         self._action_precision_float64.setText(t("menu.tools.precision_float64"))
         self._action_precision_float32.setChecked(current_precision() == "float32")
         self._action_precision_float64.setChecked(current_precision() == "float64")
-        self._action_difference.setText(t("menu.tools.difference"))
-        self._action_batch_reconstruction.setText(t("menu.tools.batch_reconstruction"))
-        self._action_reconstruction.setText(t("menu.tools.reconstruction"))
         self._action_cache_telemetry.setText(t("menu.tools.cache_telemetry"))
 
         self._menu_language.setTitle(t("menu.language"))
@@ -3098,95 +3066,6 @@ class EITWorkstation(QMainWindow):
         )
         self._refresh_session_summary()
 
-    def _open_difference_dialog(self) -> None:
-        """Open the Difference dialog using current Hardware-tab frames.
-
-        Wired to the Tools → Difference menu entry (Ctrl+D).  The
-        dialog is modeless so the user can keep inspecting the frame
-        browser behind it.  Repeated invocations raise the existing
-        dialog and refresh its frame list rather than stacking a new
-        copy on top.
-
-        If fewer than 2 frames have been recorded the user sees a
-        status-bar hint instead of an empty dialog, and the Hardware
-        tab is brought forward so the hint is actionable.
-        """
-        from eit_app.ui.dialogs.difference_dialog import DifferenceDialog
-
-        entries = []
-        for row in range(self._frame_browser._model.rowCount()):
-            entry = self._frame_browser._model.get_entry(row)
-            if entry:
-                entries.append(entry)
-
-        if len(entries) < 2:
-            self._status_bar.showMessage(
-                t("main.status.need_frames_for_difference"), 5000
-            )
-            # Drop the user on the tab where they can actually fix it.
-            self._tab_widget.setCurrentWidget(self._hw_tab)
-            return
-
-        ref_index = self._entry_index(entries, self._selected_reference_entry)
-        tgt_index = self._entry_index(entries, self._selected_target_entry)
-        if tgt_index == ref_index:
-            tgt_index = None
-
-        # Single-instance guard: if the dialog is already on screen,
-        # refresh its frame list (new recordings may have arrived) and
-        # raise it instead of stacking a second window.
-        existing = getattr(self, "_difference_dialog", None)
-        if existing is not None:
-            existing.set_frame_entries(entries)
-            existing.show()
-            existing.raise_()
-            existing.activateWindow()
-            return
-
-        dialog = DifferenceDialog(
-            entries,
-            self,
-            default_ref_index=ref_index,
-            default_tgt_index=tgt_index,
-        )
-        dialog.reconstruction_requested.connect(self._on_reconstruction_config)
-        dialog.finished.connect(self._on_difference_dialog_finished)
-        # Retain the reference so Python GC doesn't collect the
-        # modeless dialog the moment this method returns.
-        self._difference_dialog = dialog
-        dialog.show()
-        dialog.raise_()
-        dialog.activateWindow()
-
-    @Slot(int)
-    def _on_difference_dialog_finished(self, _result: int) -> None:
-        """Clear the single-instance slot when the dialog closes."""
-        dialog = getattr(self, "_difference_dialog", None)
-        if dialog is not None:
-            dialog.deleteLater()
-        self._difference_dialog = None
-
-    def _open_batch_reconstruction_from_menu(self) -> None:
-        """Tools → Batch Reconstruction menu launcher.
-
-        Delegates to the existing _on_open_batch_dialog() slot with no
-        pre-selected session; the dialog itself exposes Browse buttons
-        so the user picks input/output folders interactively.
-        """
-        self._on_open_batch_dialog("")
-
-    def _open_reconstruction_from_menu(self) -> None:
-        """Tools → Reconstruction menu launcher.
-
-        The single-frame reconstruction dialog is tied to a specific
-        reference / target pair which the user selects in the Database
-        tab.  Rather than opening an empty dialog with Run disabled,
-        switch to the Database tab and surface a status-bar hint so
-        the user knows what to do next.
-        """
-        self._tab_widget.setCurrentWidget(self._db_tab)
-        self._status_bar.showMessage(t("main.status.reconstruction_hint"), 5000)
-
     def _open_cache_telemetry_panel(self) -> None:
         dialog = getattr(self, "_cache_telemetry_dialog", None)
         if dialog is None:
@@ -3303,86 +3182,6 @@ class EITWorkstation(QMainWindow):
             if entry.get("file_path") == selected.get("file_path"):
                 return index
         return 0
-
-    @Slot(dict)
-    def _on_reconstruction_config(self, config: dict) -> None:
-        ref_entry = config["ref_entry"]
-        tgt_entry = config["tgt_entry"]
-
-        try:
-            from pyeidors.data.frame_io import read_frame_csv
-
-            ref_real, ref_imag = read_frame_csv(ref_entry["file_path"])
-            tgt_real, tgt_imag = read_frame_csv(tgt_entry["file_path"])
-        except Exception as exc:
-            self._on_error(f"Failed to load frames: {exc}")
-            return
-
-        from eit_app.models.frame_model import FrameData
-
-        ref_frame = FrameData(
-            real=ref_real, imag=ref_imag, timestamp=0.0, frame_index=0
-        )
-        tgt_frame = FrameData(
-            real=tgt_real, imag=tgt_imag, timestamp=0.0, frame_index=1
-        )
-
-        rc = self._state.reconstruction_config
-        request = ReconstructionRequest(
-            reference_frame=ref_frame,
-            target_frame=tgt_frame,
-            use_part=config.get("use_part", rc.use_part),
-            method=rc.method,
-            regularization_alpha=rc.regularization_alpha,
-            max_iterations=rc.max_iterations,
-            mesh_dimension=rc.mesh_dimension,
-            mesh_refinement=rc.mesh_refinement,
-            metadata={
-                **self._measurement_layout_config(),
-                "difference_mode": config.get("mode", "raw"),
-                "difference_orientation": config.get(
-                    "orientation", "target_minus_reference"
-                ),
-                **self._hardware_reconstruction_drive_metadata(),
-                "geometry_scale_to_m": float(
-                    self._device_config.get("geometry_scale_to_m", 1.0)
-                ),
-                "radius": float(self._device_config.get("radius", 1.0)),
-                "contact_impedance": float(
-                    self._device_config.get("contact_impedance", 0.01)
-                ),
-                "electrode_length_m_override": self._device_config.get(
-                    "electrode_length_m_override"
-                ),
-                "electrode_coverage": float(
-                    self._device_config.get("electrode_coverage", 0.5)
-                ),
-                "request_source": "hardware_manual",
-            },
-        )
-        # Phase 4: advertise the reconstruction + equipotential +
-        # voltage fit plots as busy while the worker runs.
-        self._recon_widget.set_loading(True)
-        self._equipotential_widget.set_loading(True)
-        self._voltage_plot.set_loading(True)
-
-        def _start() -> None:
-            accepted = self._hw_recon_ctrl.reconstruct(request)
-            if not accepted:
-                self._recon_widget.set_loading(False)
-                self._equipotential_widget.set_loading(False)
-                self._voltage_plot.set_loading(False)
-
-        handle = self._submit_scheduled_ui_task(
-            key="reconstruction:hardware-manual",
-            name="hardware-manual-reconstruction",
-            priority=BackgroundTaskPriority.RECONSTRUCTION,
-            callback=_start,
-        )
-        if not handle.accepted:
-            self._recon_widget.set_loading(False)
-            self._equipotential_widget.set_loading(False)
-            self._voltage_plot.set_loading(False)
 
     @Slot(dict)
     def _on_db_reconstruct_requested(self, config: dict) -> None:
