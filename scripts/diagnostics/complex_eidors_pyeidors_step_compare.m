@@ -16,7 +16,7 @@ ensure_eidors_started(eidors_startup_path);
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(fileparts(script_dir));
 if nargin < 1 || isempty(out_root)
-    out_root = fullfile(repo_root, 'results', 'complex_eidors_pyeidors_step_compare');
+    out_root = fullfile(default_pyeidors_output_root(), 'complex_eidors_pyeidors_step_compare');
 end
 
 case_dir = fullfile(out_root, 'complex_3d_8x2_center_sphere');
@@ -145,6 +145,41 @@ save(fullfile(case_dir, 'eidors_result.mat'), ...
     'inverse_seconds', 'stage_status', '-v7');
 
 fprintf('[EIDORS] wrote %s\n', fullfile(case_dir, 'eidors_result.mat'));
+end
+
+function root = default_pyeidors_output_root()
+root = strtrim(getenv('PYEIDORS_OUTPUT_ROOT'));
+if ~isempty(root)
+    return;
+end
+data_root = strtrim(getenv('PYEIDORS_DATA_ROOT'));
+if ~isempty(data_root)
+    root = fullfile(data_root, 'outputs');
+    return;
+end
+xdg_data = strtrim(getenv('XDG_DATA_HOME'));
+if ~isempty(xdg_data)
+    root = fullfile(xdg_data, 'pyeidors', 'outputs');
+    return;
+end
+local_appdata = strtrim(getenv('LOCALAPPDATA'));
+if ~isempty(local_appdata)
+    root = fullfile(local_appdata, 'pyeidors', 'outputs');
+    return;
+end
+appdata = strtrim(getenv('APPDATA'));
+if ~isempty(appdata)
+    root = fullfile(appdata, 'pyeidors', 'outputs');
+    return;
+end
+home_dir = strtrim(getenv('HOME'));
+if isempty(home_dir)
+    home_dir = strtrim(getenv('USERPROFILE'));
+end
+if isempty(home_dir)
+    home_dir = pwd;
+end
+root = fullfile(home_dir, '.local', 'share', 'pyeidors', 'outputs');
 end
 
 function ensure_eidors_started(eidors_startup_path)

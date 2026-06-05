@@ -22,6 +22,7 @@ from ..perf.policy import (
     DEFAULT_MESH_FAMILY,
     normalize_mesh_family,
 )
+from ..runtime_paths import resolve_pyeidors_mesh_dir
 from ..utils.numeric_ops import all_finite_values
 from ._helpers import (
     add_named_physical_group,
@@ -721,7 +722,7 @@ def load_or_create_mesh(
     dimension: int = 2,
     **kwargs,
 ):
-    mesh_dir_path = Path(mesh_dir)
+    mesh_dir_path = resolve_pyeidors_mesh_dir(mesh_dir)
     mesh_dir_path.mkdir(parents=True, exist_ok=True)
 
     params = dict(kwargs)

@@ -27,6 +27,7 @@ from scripts.common.array_metrics import mean_where, safe_finite_pearson_correla
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import EITData, MeshConfig, PatternConfig
 from pyeidors.io._json import json_ready
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 
 
 BACKGROUND_SIGMA = 1.0
@@ -82,10 +83,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=PROJECT_ROOT
-        / "results"
-        / "diagnostics"
-        / "scaled_boundary_voltage_circle",
+        default=pyeidors_output_path("diagnostics", "scaled_boundary_voltage_circle"),
     )
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--domain-radius", type=float, default=DOMAIN_RADIUS)
@@ -394,9 +392,7 @@ def build_system(cfg: ExperimentConfig) -> EITSystem:
         performance_mode="safe",
         solver_mode="strict",
         cache_scope="both",
-        cache_dir=str(
-            PROJECT_ROOT / ".pyeidors_cache" / "diagnostics" / "scaled_boundary_voltage"
-        ),
+        cache_dir=str(pyeidors_cache_path("diagnostics", "scaled_boundary_voltage")),
     )
     system.setup(mesh_source="generated", dimension=2)
     if system.reconstructor is None:

@@ -52,6 +52,7 @@ from pyeidors.inverse import (
 )
 from pyeidors.perf.gpu_kernels import prepare_rm_matmul
 from pyeidors.io._json import json_ready as _jsonable
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _parse_args() -> argparse.Namespace:
@@ -59,7 +60,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("reports/runtime_benchmarks/dual_model_rm_v1_20260421"),
+        default=pyeidors_output_path("runtime_benchmarks", "dual_model_rm_v1_20260421"),
     )
     parser.add_argument("--coarse-shape", default="6,6,4")
     parser.add_argument("--fine-per-coarse", type=int, default=4)
@@ -79,24 +80,29 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--forward-reference",
         type=Path,
-        default=Path(
-            "reports/benchmarks/forward_spd_gamg_cuda_48e_repeat2_20260421.json"
+        default=pyeidors_output_path(
+            "benchmarks",
+            "forward_spd_gamg_cuda_48e_repeat2_20260421.json",
         ),
         help="Existing real forward-solver benchmark JSON to cite in the report.",
     )
     parser.add_argument(
         "--lazy-reference",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/lazy_48e_spd_gamg_cuda_b4_20260421/summary.json"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "lazy_48e_spd_gamg_cuda_b4_20260421",
+            "summary.json",
         ),
         help="Existing real 48e context/Jacobian benchmark JSON to cite in the report.",
     )
     parser.add_argument(
         "--previous-greit-reference",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/greit_48e_5936_rm_layer_20260421/summary.json"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "greit_48e_5936_rm_layer_20260421",
+            "summary.json",
         ),
         help="Previous GREIT RM-layer benchmark JSON used for hot-path speedup comparison.",
     )

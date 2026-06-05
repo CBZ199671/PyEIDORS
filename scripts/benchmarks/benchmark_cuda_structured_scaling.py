@@ -26,6 +26,7 @@ from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import ACCELERATION_PROFILE_GPU3D, DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_output_path
 from scripts.common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
@@ -62,7 +63,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("reports") / "cuda_structured_scaling.json",
+        default=pyeidors_output_path("cuda_structured_scaling.json"),
     )
     parser.add_argument("--gate", choices=["strict", "off"], default="strict")
     add_acceleration_profile_argument(

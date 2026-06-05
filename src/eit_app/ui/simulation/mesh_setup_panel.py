@@ -34,6 +34,11 @@ from eit_app.ui.theme import set_hint_text, set_section_header
 
 DEFAULT_ELECTRODE_COVERAGE = 0.5
 DEFAULT_3D_ELECTRODE_HEIGHT_RATIO = 0.2
+DEFAULT_2D_DRIVE_VALUE = 1.0
+DEFAULT_3D_DRIVE_VALUE_UA = 100.0
+MIN_2D_DRIVE_VALUE = 1.0e-6
+MIN_3D_DRIVE_VALUE_UA = 1.0e-6
+UAMP_TO_AMP = 1.0e-6
 
 
 class MeshSetupPanel(QGroupBox):
@@ -49,6 +54,7 @@ class MeshSetupPanel(QGroupBox):
         self._point_count_cache: int = 0
         self._electrode_length_user_overridden = False
         self._default_electrode_coverage = DEFAULT_ELECTRODE_COVERAGE
+        self._last_drive_dimension = 2
         self._build_ui()
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -226,6 +232,15 @@ class MeshSetupPanel(QGroupBox):
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
         )
         patterns_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+
+        self._drive_value_spin = QDoubleSpinBox()
+        self._drive_value_spin.setRange(MIN_2D_DRIVE_VALUE, 1.0e9)
+        self._drive_value_spin.setDecimals(6)
+        self._drive_value_spin.setSingleStep(1.0)
+        self._drive_value_spin.setValue(DEFAULT_2D_DRIVE_VALUE)
+        self._drive_value_spin.valueChanged.connect(lambda _: self._on_any_change())
+        self._lbl_drive_value = QLabel("")
+        patterns_form.addRow(self._lbl_drive_value, self._drive_value_spin)
 
         self._measurement_protocol_combo = AutoCloseComboBox()
         self._measurement_protocol_combo.addItem("", "eidors_full_3d")
@@ -473,6 +488,14 @@ class MeshSetupPanel(QGroupBox):
                 )
             electrode_area_m2 = None
             electrode_height_ratio = DEFAULT_3D_ELECTRODE_HEIGHT_RATIO
+        drive_mode = "total_current" if is_3d else "line_current_density"
+        drive_display_value = self._clamped_drive_display_value(
+            self._drive_value_spin.value(),
+            mesh_dimension=mesh_dimension,
+        )
+        drive_value = drive_display_value
+        if is_3d:
+            drive_value *= UAMP_TO_AMP
         return {
             "mesh_dimension": mesh_dimension,
             "mesh_refinement": self._refine_spin.value(),
@@ -510,6 +533,8 @@ class MeshSetupPanel(QGroupBox):
             "rotate_meas": self._rotate_meas_check.isChecked(),
             "use_meas_current": self._use_meas_current_check.isChecked(),
             "use_meas_current_next": int(self._extra_neighbors_spin.value()),
+            "drive_mode": drive_mode,
+            "drive_value": drive_value,
         }
 
     def set_config(self, config: dict) -> None:
@@ -526,6 +551,7 @@ class MeshSetupPanel(QGroupBox):
             self._electrode_layout_combo,
             self._bg_cond_edit,
             self._contact_impedance_edit,
+            self._drive_value_spin,
             self._measurement_protocol_combo,
             self._custom_pattern_edit,
             self._stim_pattern_edit,
@@ -621,6 +647,11 @@ class MeshSetupPanel(QGroupBox):
                     default=0.01,
                 )
             )
+            self._drive_value_spin.setValue(
+                self._drive_display_value_from_config(
+                    config, mesh_dimension=mesh_dimension
+                )
+            )
             self._select_combo_data(
                 self._measurement_protocol_combo,
                 str(config.get("measurement_protocol", "eidors_full_3d")),
@@ -637,10 +668,12 @@ class MeshSetupPanel(QGroupBox):
             self._extra_neighbors_spin.setValue(
                 int(config.get("use_meas_current_next", 0))
             )
+            self._last_drive_dimension = mesh_dimension
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
         self._refresh_mesh_family_enabled()
+        self._refresh_drive_value_units()
         self._refresh_protocol_enabled()
         self._on_any_change()
 
@@ -654,6 +687,10 @@ class MeshSetupPanel(QGroupBox):
         # geometry.  Custom electrode counts are preserved; only the default
         # 16x1/8x2 pair is auto-migrated when the user flips dimensions.
         is_3d = self._dim_combo.currentIndex() == 1
+        self._sync_drive_value_for_dimension_change(
+            previous_dimension=self._last_drive_dimension,
+            current_dimension=3 if is_3d else 2,
+        )
         current_elec = self._n_elec_spin.value()
         current_rings = self._n_rings_spin.value()
 
@@ -803,6 +840,104 @@ class MeshSetupPanel(QGroupBox):
         # leave the protocol greyed out and unselectable.
         self._refresh_protocol_enabled()
 
+    def _sync_drive_value_for_dimension_change(
+        self,
+        *,
+        previous_dimension: int,
+        current_dimension: int,
+    ) -> None:
+        previous = 3 if int(previous_dimension) == 3 else 2
+        current = 3 if int(current_dimension) == 3 else 2
+        if previous == current:
+            self._refresh_drive_value_units()
+            return
+
+        old_default = (
+            DEFAULT_3D_DRIVE_VALUE_UA if previous == 3 else DEFAULT_2D_DRIVE_VALUE
+        )
+        new_default = (
+            DEFAULT_3D_DRIVE_VALUE_UA if current == 3 else DEFAULT_2D_DRIVE_VALUE
+        )
+        if abs(float(self._drive_value_spin.value()) - old_default) <= 1.0e-9:
+            blocked = self._drive_value_spin.blockSignals(True)
+            try:
+                self._drive_value_spin.setValue(new_default)
+            finally:
+                self._drive_value_spin.blockSignals(blocked)
+        self._last_drive_dimension = current
+        self._refresh_drive_value_units()
+
+    @staticmethod
+    def _default_drive_display_value(*, mesh_dimension: int) -> float:
+        return (
+            DEFAULT_3D_DRIVE_VALUE_UA
+            if int(mesh_dimension) == 3
+            else DEFAULT_2D_DRIVE_VALUE
+        )
+
+    @staticmethod
+    def _minimum_drive_display_value(*, mesh_dimension: int) -> float:
+        return MIN_3D_DRIVE_VALUE_UA if int(mesh_dimension) == 3 else MIN_2D_DRIVE_VALUE
+
+    @staticmethod
+    def _clamped_drive_display_value(
+        value: float,
+        *,
+        mesh_dimension: int,
+    ) -> float:
+        default_value = MeshSetupPanel._default_drive_display_value(
+            mesh_dimension=mesh_dimension
+        )
+        try:
+            display_value = float(value)
+        except (TypeError, ValueError):
+            return default_value
+        if not math.isfinite(display_value) or display_value <= 0.0:
+            return default_value
+        return max(
+            display_value,
+            MeshSetupPanel._minimum_drive_display_value(mesh_dimension=mesh_dimension),
+        )
+
+    def _refresh_drive_value_units(self) -> None:
+        if not hasattr(self, "_drive_value_spin"):
+            return
+        if self._dim_combo.currentIndex() == 1:
+            self._lbl_drive_value.setText(t("sim.mesh.drive_value_3d_label"))
+            self._drive_value_spin.setSuffix(" uA")
+            self._drive_value_spin.setToolTip(t("sim.mesh.drive_value_3d_tooltip"))
+        else:
+            self._lbl_drive_value.setText(t("sim.mesh.drive_value_2d_label"))
+            self._drive_value_spin.setSuffix(" A/m")
+            self._drive_value_spin.setToolTip(t("sim.mesh.drive_value_2d_tooltip"))
+
+    @staticmethod
+    def _drive_display_value_from_config(
+        config: dict,
+        *,
+        mesh_dimension: int,
+    ) -> float:
+        if "drive_value" not in config:
+            return MeshSetupPanel._default_drive_display_value(
+                mesh_dimension=mesh_dimension
+            )
+        try:
+            drive_value = float(config.get("drive_value", DEFAULT_2D_DRIVE_VALUE))
+        except (TypeError, ValueError):
+            return MeshSetupPanel._default_drive_display_value(
+                mesh_dimension=mesh_dimension
+            )
+        if not math.isfinite(drive_value) or drive_value <= 0.0:
+            return MeshSetupPanel._default_drive_display_value(
+                mesh_dimension=mesh_dimension
+            )
+        if int(mesh_dimension) == 3:
+            drive_value /= UAMP_TO_AMP
+        return MeshSetupPanel._clamped_drive_display_value(
+            drive_value,
+            mesh_dimension=mesh_dimension,
+        )
+
     def _refresh_protocol_enabled(self) -> None:
         is_3d = self._dim_combo.currentIndex() == 1
         # Disable the protocol combo entirely in 2D mode — none of the
@@ -877,6 +1012,7 @@ class MeshSetupPanel(QGroupBox):
         # Pattern section
         self._patterns_header.setText(t("sim.mesh.patterns_header"))
         self._patterns_hint.setText(t("sim.mesh.patterns_hint"))
+        self._refresh_drive_value_units()
         self._lbl_measurement_protocol.setText(t("sim.mesh.measurement_protocol_label"))
         self._measurement_protocol_combo.setItemText(
             0, t("sim.mesh.measurement_protocol.eidors_full_3d")

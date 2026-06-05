@@ -6,7 +6,8 @@ Workflow:
 2) Construct adjacent drive/measurement patterns, contact impedance matching MATLAB example (1e-6).
 3) Generate random circular anomaly (random position, radius, contrast), forward solve for baseline/target voltages.
 4) Use modular Gauss-Newton reconstruction (NOSER regularization, default settings) to estimate conductivity.
-5) Compute simple metrics against ground truth/measurements, write results to results/demo_random_dolfinx/*.h5.
+5) Compute simple metrics against ground truth/measurements, write results under
+   the PyEidors output root in demo_random_dolfinx/*.h5.
 
 Run:
     python scripts/demos/demo_dolfinx_random_sim.py
@@ -32,6 +33,7 @@ from pyeidors.data.structures import PatternConfig, EITImage
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 from pyeidors.visualization import create_visualizer
 from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
 from scripts.demos._shared import (
@@ -46,7 +48,9 @@ def main() -> None:
 
     # 1) Load cached mesh (16 electrodes), avoiding gmsh dependency
     mesh = load_or_create_mesh(
-        mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16
+        mesh_dir=str(pyeidors_cache_path("eit_meshes")),
+        mesh_name="mesh_102070",
+        n_elec=16,
     )
 
     # 2) Build system (adjacent drive/measurement, normalized drive=1; contact impedance 1e-6)
@@ -115,7 +119,7 @@ def main() -> None:
     }
 
     # 7) Save results
-    out_dir = Path("results/demo_random_dolfinx")
+    out_dir = pyeidors_output_path("demo_random_dolfinx")
     out_dir.mkdir(parents=True, exist_ok=True)
     outputs_path = write_output_bundle(
         out_dir / "simulation_outputs.h5",

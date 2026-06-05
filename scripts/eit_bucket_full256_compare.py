@@ -14,6 +14,7 @@ from pyeidors.data.bucket_dense_experiments import (
     run_bucket_full256_compare_experiment,
     write_bucket_full256_compare_outputs,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _format_float(value: float | None) -> str:
@@ -111,27 +112,27 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_compare_summary_16e.csv"),
+        default=pyeidors_output_path("eit_bucket_full256_compare_summary_16e.csv"),
     )
     parser.add_argument(
         "--field-output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_compare_fields_16e.csv"),
+        default=pyeidors_output_path("eit_bucket_full256_compare_fields_16e.csv"),
     )
     parser.add_argument(
         "--report-output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_compare_summary_16e.md"),
+        default=pyeidors_output_path("eit_bucket_full256_compare_summary_16e.md"),
     )
     parser.add_argument(
         "--recon-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_compare_recon_16e.png"),
+        default=pyeidors_output_path("eit_bucket_full256_compare_recon_16e.png"),
     )
     parser.add_argument(
         "--metrics-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_compare_metrics_16e.png"),
+        default=pyeidors_output_path("eit_bucket_full256_compare_metrics_16e.png"),
     )
     parser.add_argument(
         "--recon-delta-plot-output",
@@ -145,7 +146,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--point-audit-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_full256_point_audit_16e.png"),
+        default=pyeidors_output_path("eit_bucket_full256_point_audit_16e.png"),
     )
     parser.add_argument(
         "--hdf5-output",

@@ -60,6 +60,7 @@ from pyeidors.perf.policy import (
     MESH_FAMILY_VALUES,
     parse_block_size_candidates,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 from pyeidors.utils.numeric_ops import all_finite_values, squared_distances_to_point
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -97,7 +98,7 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("reports") / "benchmark_3d_runtime.json",
+        default=pyeidors_output_path("benchmark_3d_runtime.json"),
     )
     parser.add_argument("--perf-report", type=Path, default=None)
     parser.add_argument("--profile-label", type=str, default="default")
@@ -699,7 +700,7 @@ def main() -> None:
                 lambda: gn_difference_runner.process_frames(
                     vh=vh,
                     vi=vi,
-                    output_dir=Path("reports") / "bench_diff_tmp",
+                    output_dir=pyeidors_output_path("bench_diff_tmp"),
                     ctx=warm_ctx,
                     step_size_calib=False,
                     step_size_min=1e-3,

@@ -11,6 +11,8 @@ from pathlib import Path
 
 from PIL import Image
 
+from pyeidors.runtime_paths import pyeidors_output_path
+
 SVG_NS = "http://www.w3.org/2000/svg"
 XLINK_NS = "http://www.w3.org/1999/xlink"
 
@@ -119,7 +121,9 @@ def main() -> None:
     parser.add_argument(
         "--output-prefix",
         type=Path,
-        default=Path("results/simulation_parity/run02/synthetic_combined"),
+        default=pyeidors_output_path(
+            "simulation_parity", "run02", "synthetic_combined"
+        ),
         help="Prefix for combined outputs (without extension)",
     )
     args = parser.parse_args()

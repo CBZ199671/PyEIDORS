@@ -89,6 +89,12 @@ def _wslg_display_unavailable(reason: str) -> SystemExit:
     )
 
 
+def _configure_qt_hidpi_defaults() -> None:
+    os.environ.setdefault("QT_AUTO_SCREEN_SCALE_FACTOR", "1")
+    os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
+
 def _configure_qt_platform_for_embedded_vtk() -> None:
     """Prefer native Wayland on WSLg for crisp HiDPI rendering.
 
@@ -106,17 +112,13 @@ def _configure_qt_platform_for_embedded_vtk() -> None:
     Outside WSL, Linux defaults follow whatever PySide6 picks (no env is
     set).  macOS / Windows are unaffected.
     """
+    _configure_qt_hidpi_defaults()
     # Honour anything the user has already pinned — we only fill the
     # blanks here, never override an explicit choice.
     if os.environ.get("QT_QPA_PLATFORM"):
         return
     if not _running_under_wsl():
         return
-
-    # Qt 6 is HiDPI-aware by default, but keeping fractional scale factors
-    # unrounded avoids subtle size mismatches on common 125% / 150% Windows
-    # display scales.
-    os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
     if _env_flag("EIT_APP_USE_QT_XCB") or _env_flag("EIT_APP_DISABLE_QT_WAYLAND"):
         if not _x11_display_available():

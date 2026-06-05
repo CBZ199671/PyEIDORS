@@ -11,6 +11,7 @@ from typing import Any, Mapping
 import numpy as np
 
 from pyeidors.inverse.greit import GREITRM, GREIT_RM_HDF5_SCHEMA, load_greit_rm
+from pyeidors.runtime_paths import resolve_pyeidors_cache_dir
 
 GREIT_COMMON_CONFIG_WARMUP_SCHEMA = "pyeidors-greit-common-config-warmup-v1"
 GREIT_COMMON_CONFIG_ENV = "PYEIDORS_GREIT_COMMON_CONFIG_DIR"
@@ -154,11 +155,11 @@ def greit_common_config_dir(path: str | Path | None = None) -> Path:
     """Resolve the common-config artifact directory."""
 
     if path is not None:
-        return Path(path).expanduser()
+        return resolve_pyeidors_cache_dir(path)
     env_value = os.environ.get(GREIT_COMMON_CONFIG_ENV)
     if env_value:
         return Path(env_value).expanduser()
-    return Path(".pyeidors_cache") / "greit_common_configs"
+    return resolve_pyeidors_cache_dir(default_parts=("greit_common_configs",))
 
 
 def greit_common_config_artifact_path(

@@ -15,7 +15,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 import eit_app.controllers.dataset_generator_controller as dataset_controller  # noqa: E402
 import eit_app.controllers.forward_solver_controller as fwd_controller  # noqa: E402
 from eit_app.controllers.forward_solver_controller import (  # noqa: E402
+    ForwardSolverRequest,
     _paint_shape,
+    _forward_request_requires_complex_admittivity,
     _resolve_forward_runtime,
 )
 from eit_app.controllers import reconstruction_controller as rc  # noqa: E402
@@ -62,6 +64,7 @@ from eit_app.ui.conductivity_3d_widget import (  # noqa: E402
     embedded_vtk_enabled,
     embedded_vtk_status,
     _point_cloud_sample_indices,
+    _pyvista_feature_outline,
     _sample_background_indices,
     _sample_true_indices,
     _should_skip_pyvista_offscreen,
@@ -113,8 +116,14 @@ def test_v203_anomaly_mask_preserves_float32_score(monkeypatch) -> None:
 def test_v203_point_cloud_sampling_passes_float32_to_anomaly_mask(monkeypatch) -> None:
     seen: list[np.dtype] = []
 
-    def _fake_anomaly_mask(cell_sigma, mode, *, cell_centers=None):
-        del mode, cell_centers
+    def _fake_anomaly_mask(
+        cell_sigma,
+        mode,
+        *,
+        cell_centers=None,
+        prefer_central_region=False,
+    ):
+        del mode, cell_centers, prefer_central_region
         arr = np.asarray(cell_sigma)
         seen.append(arr.dtype)
         mask = np.zeros(arr.shape, dtype=bool)
@@ -637,14 +646,7 @@ def test_v372_face_vertices_direct_fills_without_index_array() -> None:
 
 def test_v386_face_vertices_array_direct_fills_batch_without_per_face_arrays() -> None:
     helper_source = inspect.getsource(widget3d._face_vertices_array)
-    render_source = inspect.getsource(
-        widget3d.Conductivity3DWidget._render_matplotlib_scene
-    )
 
-    assert "face_vertices = [_face_vertices" not in render_source
-    assert "highlight_vertices.append(_face_vertices" not in render_source
-    assert "_face_vertices_array(coords, valid_faces)" in render_source
-    assert "_highlight_face_vertices_and_values(" in render_source
     assert "vertices = np.empty((len(faces), vertices_per_face, 3)" in helper_source
 
     coords = np.arange(18, dtype=np.float32).reshape(6, 3)
@@ -660,16 +662,7 @@ def test_v386_face_vertices_array_direct_fills_batch_without_per_face_arrays() -
 
 def test_v387_highlight_face_vertices_direct_fills_values_without_lists() -> None:
     helper_source = inspect.getsource(widget3d._highlight_face_vertices_and_values)
-    render_source = inspect.getsource(
-        widget3d.Conductivity3DWidget._render_matplotlib_scene
-    )
 
-    assert "highlight_faces:" not in render_source
-    assert "highlight_values = []" not in render_source
-    assert "highlight_faces.append" not in render_source
-    assert "highlight_values.append" not in render_source
-    assert "np.asarray(highlight_values" not in render_source
-    assert "np.flatnonzero(" not in render_source
     assert "active_count = int(np.count_nonzero(active_mask))" in helper_source
     assert "vertices = np.empty((max_faces, vertices_per_face, 3)" in helper_source
     assert "values = np.empty(max_faces, dtype=sigma_arr.dtype)" in helper_source
@@ -736,12 +729,7 @@ def test_v384_boundary_faces_direct_fills_sources_without_kept_list() -> None:
 
 def test_v385_valid_boundary_faces_reuses_all_valid_source_array() -> None:
     helper_source = inspect.getsource(widget3d._valid_boundary_faces_and_sources)
-    render_source = inspect.getsource(
-        widget3d.Conductivity3DWidget._render_matplotlib_scene
-    )
 
-    assert "valid_face_payload" not in render_source
-    assert "np.fromiter" not in render_source
     assert "valid_face_payload" not in helper_source
     assert "return faces, np.asarray(source_cells, dtype=np.intp)" in helper_source
 
@@ -1171,14 +1159,14 @@ def test_v101_paint_3d_sphere_uses_volume_fraction_for_coarse_hex_layers():
 def test_v285_hex_volume_sample_weights_are_precomputed() -> None:
     source = inspect.getsource(fwd_controller._cell_volume_sample_points)
     helper_source = inspect.getsource(fwd_controller._build_hex_sample_weights)
-    mpl_overlay_source = inspect.getsource(
-        Conductivity3DWidget._build_mpl3d_electrode_collection
+    electrode_polydata_source = inspect.getsource(
+        Conductivity3DWidget._build_electrode_polydata
     )
 
     assert "np.column_stack" not in source
     assert "_HEX_SAMPLE_WEIGHTS" in source
     assert "np.column_stack" not in helper_source
-    assert "np.column_stack" not in mpl_overlay_source
+    assert "np.column_stack" not in electrode_polydata_source
     assert fwd_controller._HEX_SAMPLE_WEIGHTS.shape == (64, 8)
     np.testing.assert_allclose(
         fwd_controller._HEX_SAMPLE_WEIGHTS.sum(axis=1),
@@ -1741,6 +1729,50 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert hex_cfg["petsc_device"] == "cuda"
 
 
+def test_v624_complex_gpu_forward_runtime_keeps_hex_on_dolfinx_petsc_cuda(
+    monkeypatch,
+):
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
+    monkeypatch.setattr(
+        "eit_app.controllers.forward_solver_controller.probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_hypre": True,
+            "petsc_amgx": False,
+            "probe_cache": {"hit": True, "layer": "disk"},
+        },
+    )
+    cfg = ForwardModelConfig(
+        mesh_dimension=3,
+        mesh_family="hex",
+        background_conductivity=1.0 + 0.2j,
+    )
+
+    runtime = _resolve_forward_runtime(cfg)
+
+    assert runtime["mesh_family"] == "hex"
+    assert runtime["forward_backend"] == "dolfinx"
+    assert runtime["petsc_device"] == "cuda"
+    assert runtime["device"] == "cuda"
+    assert runtime["complex_admittivity_requested"] is True
+
+
+def test_v624_complex_inhomogeneity_marks_forward_request_complex() -> None:
+    req = ForwardSolverRequest(
+        mesh_dimension=3,
+        background_conductivity=1.0,
+        inhomogeneities=[InhomogeneitySpec(shape="sphere", conductivity="2+0.25j")],
+        forward_model_config={
+            "mesh_dimension": 3,
+            "mesh_family": "hex",
+            "background_conductivity": 1.0,
+        },
+    )
+    cfg = ForwardModelConfig.from_mapping(req.forward_model_config)
+
+    assert _forward_request_requires_complex_admittivity(req, cfg) is True
+
+
 def test_v83_gpu_forward_runtime_keeps_2d_auto_petsc_on_cpu(monkeypatch):
     monkeypatch.setenv("EIT_APP_GUI_PROFILE", "gpu")
 
@@ -1927,10 +1959,10 @@ def test_3d_payload_stays_in_3d_widget_when_vtk_disabled(monkeypatch):
     slot = _ConductivityViewSlot("Conductivity")
     calls: list[tuple[str, str | None]] = []
 
-    def unexpected_mpl_update(_sigma, _coords, _cells, title=None):
+    def unexpected_mpl_update(_sigma, _coords, _cells, title=None, **_kwargs):
         raise AssertionError("3D volume data must not fall back to the 2D plot")
 
-    def fake_3d_update(_sigma, _coords, _cells, title=None):
+    def fake_3d_update(_sigma, _coords, _cells, title=None, **_kwargs):
         calls.append(("3d", title))
 
     monkeypatch.setattr(slot._mpl, "update_image", unexpected_mpl_update)
@@ -2036,6 +2068,76 @@ def test_pyvista_offscreen_backend_renders_point_cloud_mode(monkeypatch):
     widget.close()
 
 
+def test_v623_pyvista_surface_helper_supports_legacy_extract_surface_signature():
+    class _Surface:
+        def __init__(self) -> None:
+            self.feature_kwargs = None
+
+        def extract_feature_edges(self, **kwargs):
+            self.feature_kwargs = kwargs
+            return SimpleNamespace(n_points=1, source=self)
+
+    class _Grid:
+        def __init__(self) -> None:
+            self.calls: list[dict[str, object]] = []
+            self.surface = _Surface()
+
+        def extract_surface(self, **kwargs):
+            self.calls.append(dict(kwargs))
+            if "algorithm" in kwargs:
+                raise TypeError(
+                    "DataSetFilters.extract_surface() got an unexpected keyword "
+                    "argument 'algorithm'"
+                )
+            return self.surface
+
+    grid = _Grid()
+    outline = _pyvista_feature_outline(grid, feature_angle=30.0)
+
+    assert outline.n_points == 1
+    assert grid.calls == [{"algorithm": "dataset_surface"}, {}]
+    assert grid.surface.feature_kwargs == {
+        "boundary_edges": True,
+        "feature_edges": True,
+        "feature_angle": 30.0,
+        "non_manifold_edges": False,
+        "manifold_edges": False,
+    }
+
+
+def test_v623_pyvista_offscreen_exception_reports_without_gui_crash(monkeypatch):
+    _get_app()
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.delenv("EIT_APP_3D_PYVISTA_OFFSCREEN_NEGATIVE_CACHE", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    widget3d._clear_pyvista_offscreen_failure_cache()
+    widget = Conductivity3DWidget("Conductivity")
+    calls: list[str] = []
+
+    def fail_offscreen(_sigma, _coords, _cells):
+        calls.append("offscreen")
+        raise TypeError("legacy pyvista extract_surface signature")
+
+    monkeypatch.setattr(widget, "_render_pyvista_offscreen_scene", fail_offscreen)
+
+    try:
+        sigma, coords, cells = _tetra_payload()
+        widget.update_image(sigma, coords, cells, title="Truth")
+
+        assert calls == ["offscreen"]
+        assert widget._render_backend == "caption"
+        assert widget._stack.currentWidget() is widget._caption_label
+        assert (
+            "legacy pyvista extract_surface signature" in widget._caption_label.text()
+        )
+        assert "legacy pyvista extract_surface" in (
+            widget3d._pyvista_offscreen_failure_reason() or ""
+        )
+    finally:
+        widget3d._clear_pyvista_offscreen_failure_cache()
+        widget.close()
+
+
 def test_v332_pyvista_offscreen_failure_cache_skips_retry(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
@@ -2050,19 +2152,16 @@ def test_v332_pyvista_offscreen_failure_cache_skips_retry(monkeypatch):
         widget3d._mark_pyvista_offscreen_failure("unit offscreen failure")
         return False
 
-    def fake_matplotlib(_sigma, _coords, _cells):
-        calls.append("mpl3d")
-        widget._render_backend = "mpl3d"
-
     monkeypatch.setattr(widget, "_render_pyvista_offscreen_scene", fail_offscreen)
-    monkeypatch.setattr(widget, "_render_matplotlib_scene", fake_matplotlib)
 
     try:
         sigma, coords, cells = _tetra_payload()
         widget.update_image(sigma, coords, cells, title="Truth")
         widget.update_image(sigma, coords, cells, title="Truth")
 
-        assert calls == ["offscreen", "mpl3d", "mpl3d"]
+        assert calls == ["offscreen"]
+        assert widget._render_backend == "caption"
+        assert "unit offscreen failure" in widget._caption_label.text()
     finally:
         widget3d._clear_pyvista_offscreen_failure_cache()
         widget.close()
@@ -2206,10 +2305,10 @@ def test_3d_payload_uses_vtk_widget_when_forced(monkeypatch):
     slot = _ConductivityViewSlot("Conductivity")
     calls: list[tuple[str, str | None]] = []
 
-    def unexpected_mpl_update(_sigma, _coords, _cells, title=None):
+    def unexpected_mpl_update(_sigma, _coords, _cells, title=None, **_kwargs):
         raise AssertionError("Matplotlib fallback should not run when VTK is forced")
 
-    def fake_vtk_update(_sigma, _coords, _cells, title=None):
+    def fake_vtk_update(_sigma, _coords, _cells, title=None, **_kwargs):
         calls.append(("vtk", title))
 
     monkeypatch.setattr(slot._mpl, "update_image", unexpected_mpl_update)
@@ -2230,10 +2329,10 @@ def test_hex_3d_payload_uses_vtk_widget_when_forced(monkeypatch):
     slot = _ConductivityViewSlot("Conductivity")
     calls: list[tuple[str, tuple[int, int], str | None]] = []
 
-    def unexpected_mpl_update(_sigma, _coords, _cells, title=None):
+    def unexpected_mpl_update(_sigma, _coords, _cells, title=None, **_kwargs):
         raise AssertionError("Hex volume data must use the 3D VTK widget")
 
-    def fake_vtk_update(_sigma, _coords, cells, title=None):
+    def fake_vtk_update(_sigma, _coords, cells, title=None, **_kwargs):
         calls.append(("vtk", tuple(cells.shape), title))
 
     monkeypatch.setattr(slot._mpl, "update_image", unexpected_mpl_update)
@@ -2407,6 +2506,35 @@ def test_v148_large_3d_payload_auto_switches_to_point_cloud(monkeypatch):
     widget.close()
 
 
+def test_v629_manual_volume_mode_overrides_large_payload_auto_points(monkeypatch):
+    _get_app()
+    monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
+    monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("EIT_APP_3D_AUTO_POINTS_CELLS", "1")
+    widget = Conductivity3DWidget("Conductivity")
+    calls: list[str] = []
+
+    def fake_offscreen_render(_sigma, _coords, _cells):
+        calls.append(widget.display_mode())
+        widget._render_backend = "pyvista_offscreen"
+        return True
+
+    monkeypatch.setattr(
+        widget,
+        "_render_pyvista_offscreen_scene",
+        fake_offscreen_render,
+    )
+
+    sigma, coords, cells = _tetra_payload()
+    widget.update_image(sigma, coords, cells, title="Truth")
+    widget.set_display_mode(DISPLAY_MODE_VOLUME)
+
+    assert calls == [DISPLAY_MODE_POINTS, DISPLAY_MODE_VOLUME]
+    assert widget._volume_mode_btn.isChecked()
+    assert not widget._points_mode_btn.isChecked()
+    widget.close()
+
+
 def test_progressive_volume_upgrade_can_follow_auto_point_cloud(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
@@ -2438,7 +2566,7 @@ def test_progressive_volume_upgrade_can_follow_auto_point_cloud(monkeypatch):
     widget.close()
 
 
-def test_v189_large_point_cloud_skips_pyvista_offscreen(monkeypatch):
+def test_v189_large_point_cloud_still_uses_pyvista_offscreen(monkeypatch):
     _get_app()
     monkeypatch.delenv("EIT_APP_ENABLE_EMBEDDED_VTK", raising=False)
     monkeypatch.setenv("QT_QPA_PLATFORM", "offscreen")
@@ -2447,21 +2575,18 @@ def test_v189_large_point_cloud_skips_pyvista_offscreen(monkeypatch):
     widget = Conductivity3DWidget("Conductivity")
     calls: list[str] = []
 
-    def fail_offscreen(_sigma, _coords, _cells):
-        raise AssertionError("large point clouds should bypass PyVista offscreen")
-
-    def fake_matplotlib(_sigma, _coords, _cells):
+    def fake_offscreen(_sigma, _coords, _cells):
         calls.append(widget.display_mode())
-        widget._render_backend = "mpl3d"
+        widget._render_backend = "pyvista_offscreen"
+        return True
 
-    monkeypatch.setattr(widget, "_render_pyvista_offscreen_scene", fail_offscreen)
-    monkeypatch.setattr(widget, "_render_matplotlib_scene", fake_matplotlib)
+    monkeypatch.setattr(widget, "_render_pyvista_offscreen_scene", fake_offscreen)
 
     sigma, coords, cells = _tetra_payload()
     widget.update_image(sigma, coords, cells, title="Truth")
 
     assert calls == [DISPLAY_MODE_POINTS]
-    assert widget._render_backend == "mpl3d"
+    assert widget._render_backend == "pyvista_offscreen"
     widget.close()
 
 
@@ -2471,21 +2596,21 @@ def test_v189_pyvista_offscreen_skip_can_be_disabled(monkeypatch):
     assert not _should_skip_pyvista_offscreen(1_000_000, DISPLAY_MODE_POINTS)
 
 
-def test_v252_default_large_point_cloud_bypasses_pyvista_offscreen(monkeypatch):
+def test_v252_default_large_point_cloud_does_not_bypass_pyvista_offscreen(monkeypatch):
     monkeypatch.delenv("EIT_APP_3D_PYVISTA_OFFSCREEN_MAX_CELLS", raising=False)
 
     assert not _should_skip_pyvista_offscreen(11_999, DISPLAY_MODE_POINTS)
-    assert _should_skip_pyvista_offscreen(12_000, DISPLAY_MODE_POINTS)
+    assert not _should_skip_pyvista_offscreen(12_000, DISPLAY_MODE_POINTS)
     assert not _should_skip_pyvista_offscreen(12_000, DISPLAY_MODE_VOLUME)
 
 
-def test_v568_wslg_wayland_skips_pyvista_offscreen_by_default(monkeypatch):
+def test_v568_wslg_wayland_does_not_skip_pyvista_offscreen(monkeypatch):
     reason = "WSLg embedded VTK requires QT_QPA_PLATFORM=xcb"
 
     monkeypatch.setattr(widget3d, "_running_under_wsl", lambda: True)
     monkeypatch.delenv("EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN", raising=False)
 
-    assert _should_skip_pyvista_offscreen_for_reason(
+    assert not _should_skip_pyvista_offscreen_for_reason(
         1,
         DISPLAY_MODE_VOLUME,
         reason,
@@ -2799,6 +2924,8 @@ def test_v188_pyvista_point_cloud_actor_uses_sampled_points(monkeypatch):
         sigma_min=1.0,
         sigma_max=2.0,
         opacity=0.45,
+        colorbar_label="S/m",
+        colormap="viridis",
         text_color=(0.0, 0.0, 0.0),
         offscreen=True,
     )
@@ -2850,49 +2977,28 @@ def test_v114_3d_controls_use_compact_two_row_layout(language: str) -> None:
         set_language(previous_language, persist=False)
 
 
-def test_matplotlib_point_cloud_mode_renders_cell_center_collection():
+def test_v628_3d_widget_does_not_create_matplotlib_canvas():
+    _get_app()
+    widget = Conductivity3DWidget("Conductivity")
+    try:
+        assert widget._mpl3d_host is None
+        assert widget._mpl3d_canvas is None
+        for index in range(widget._stack.count()):
+            assert widget._stack.widget(index) is not widget._mpl3d_host
+    finally:
+        widget.close()
+
+
+def test_v628_matplotlib_3d_scene_entry_is_disabled():
     _get_app()
     widget = Conductivity3DWidget("Conductivity")
     widget.set_display_mode(DISPLAY_MODE_POINTS)
-
-    sigma, coords, cells = _inhomogeneous_tetra_payload()
-    widget._render_matplotlib_scene(sigma, coords, cells)
-
-    assert widget._render_backend == "mpl3d"
-    assert widget._stack.currentWidget() is widget._mpl3d_host
-    assert widget._mpl3d_mesh_collection is not None
-    assert widget._mpl3d_mesh_facecolors is None
-    assert widget._mpl3d_highlight_collection is not None
-    widget.close()
-
-
-def test_v355_matplotlib_surface_preserves_float32_cell_values(monkeypatch):
-    _get_app()
-    widget = Conductivity3DWidget("Conductivity")
-    sigma, coords, cells = _inhomogeneous_tetra_payload()
-    sigma = sigma.astype(np.float32)
-    coords = coords.astype(np.float32)
-    cells = cells.astype(np.int32)
-    seen_face_dtypes: list[np.dtype] = []
-    seen_cell_dtypes: list[np.dtype] = []
-
-    def _fake_color_limits(face_values):
-        seen_face_dtypes.append(np.asarray(face_values).dtype)
-        return 1.0, 2.0
-
-    def _fake_anomaly_mask(cell_sigma, mode, *, cell_centers=None):
-        del mode, cell_centers
-        arr = np.asarray(cell_sigma)
-        seen_cell_dtypes.append(arr.dtype)
-        return np.zeros(arr.shape, dtype=bool)
-
-    monkeypatch.setattr(widget3d, "_conductivity_color_limits", _fake_color_limits)
-    monkeypatch.setattr(widget3d, "_cell_anomaly_mask", _fake_anomaly_mask)
-
     try:
+        sigma, coords, cells = _inhomogeneous_tetra_payload()
         widget._render_matplotlib_scene(sigma, coords, cells)
 
-        assert seen_face_dtypes == [np.dtype(np.float32)]
-        assert seen_cell_dtypes == [np.dtype(np.float32)]
+        assert widget._render_backend == "caption"
+        assert widget._stack.currentWidget() is widget._caption_label
+        assert "Matplotlib 3D rendering is disabled" in widget._caption_label.text()
     finally:
         widget.close()

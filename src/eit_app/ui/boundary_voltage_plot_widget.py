@@ -154,6 +154,13 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_primary = self._plot_widget.plot(
             pen=pg.mkPen("#4ecdc4", width=2.0), name=self._primary_label()
         )
+        self._curve_primary_markers = self._plot_widget.plot(
+            pen=None,
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=pg.mkBrush("#4ecdc4"),
+            symbolPen=pg.mkPen("#ffffff", width=0.8),
+        )
         self._curve_reconstructed_outline = self._plot_widget.plot(
             pen=pg.mkPen((255, 255, 255, 215), width=4.2),
         )
@@ -164,15 +171,17 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed_markers = self._plot_widget.plot(
             pen=None,
             symbol="o",
-            symbolSize=6,
+            symbolSize=4,
             symbolBrush=pg.mkBrush("#ff6b6b"),
-            symbolPen=pg.mkPen("#ffffff", width=1.1),
+            symbolPen=pg.mkPen("#ffffff", width=0.8),
         )
         self._curve_reconstructed_outline.setZValue(2)
         self._curve_primary.setZValue(3)
-        self._curve_reconstructed.setZValue(4)
-        self._curve_reconstructed_markers.setZValue(5)
+        self._curve_primary_markers.setZValue(4)
+        self._curve_reconstructed.setZValue(5)
+        self._curve_reconstructed_markers.setZValue(6)
         self._curve_reconstructed_outline.setVisible(False)
+        self._curve_primary_markers.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
 
         plot_host = _PlotHost()
@@ -259,6 +268,8 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._empty_overlay.hide()
         self._curve_primary.setData(x, ground_truth)
         self._curve_primary.setVisible(True)
+        self._curve_primary_markers.setData(x, ground_truth)
+        self._curve_primary_markers.setVisible(True)
         self._set_reconstructed_overlay(
             x, reconstructed_arr, expected_size=len(ground_truth)
         )
@@ -303,6 +314,8 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._empty_overlay.hide()
         self._curve_primary.setData(x, measured)
         self._curve_primary.setVisible(True)
+        self._curve_primary_markers.setData(x, measured)
+        self._curve_primary_markers.setVisible(True)
         self._set_reconstructed_overlay(
             x,
             reconstructed_arr,
@@ -314,9 +327,11 @@ class BoundaryVoltagePlotWidget(QWidget):
         """Clear all curves."""
         empty = np.array([])
         self._curve_primary.setData(empty, empty)
+        self._curve_primary_markers.setData(empty, empty)
         self._curve_reconstructed_outline.setData(empty, empty)
         self._curve_reconstructed.setData(empty, empty)
         self._curve_reconstructed_markers.setData(empty, empty)
+        self._curve_primary_markers.setVisible(False)
         self._curve_reconstructed_outline.setVisible(False)
         self._curve_reconstructed.setVisible(False)
         self._curve_reconstructed_markers.setVisible(False)
@@ -428,13 +443,7 @@ class BoundaryVoltagePlotWidget(QWidget):
         self._curve_reconstructed.setData(x, reconstructed_arr)
         self._curve_reconstructed.setVisible(True)
 
-        marker_step = max(1, int(np.ceil(reconstructed_arr.size / 18.0)))
-        marker_idx = np.arange(0, reconstructed_arr.size, marker_step, dtype=np.int32)
-        if marker_idx.size == 0 or marker_idx[-1] != reconstructed_arr.size - 1:
-            marker_idx = np.append(marker_idx, reconstructed_arr.size - 1)
-        self._curve_reconstructed_markers.setData(
-            x[marker_idx], reconstructed_arr[marker_idx]
-        )
+        self._curve_reconstructed_markers.setData(x, reconstructed_arr)
         self._curve_reconstructed_markers.setVisible(True)
 
     def _hide_reconstructed_overlay(self) -> None:

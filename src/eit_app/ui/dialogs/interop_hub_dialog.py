@@ -47,6 +47,7 @@ from eit_app.ui.theme import (
     set_hint_text,
     set_subtle_value,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 ExportSnapshotProvider = Callable[[], dict[str, dict[str, Any]]]
@@ -58,6 +59,14 @@ SmokeValidateCallback = Callable[[LoadedBridgePackage], str]
 # the active UI language, but these ids stay constant so callers can keep
 # addressing the same row across language switches.
 _STATUS_ROW_IDS = ("matlab", "startup", "source", "bridge_package")
+
+
+def _default_interop_capture_dir() -> Path:
+    return pyeidors_output_path("interop")
+
+
+def _default_interop_export_dir() -> Path:
+    return pyeidors_output_path("interop_export")
 
 
 class InteropHubDialog(QDialog):
@@ -273,9 +282,7 @@ class InteropHubDialog(QDialog):
         )
 
         self._capture_output_edit = QLineEdit()
-        self._capture_output_edit.setText(
-            str((Path.cwd() / "data" / "interop").resolve())
-        )
+        self._capture_output_edit.setText(str(_default_interop_capture_dir().resolve()))
         self._lbl_capture = QLabel("")
         source_layout.addRow(
             self._lbl_capture,
@@ -445,9 +452,7 @@ class InteropHubDialog(QDialog):
         form.addRow(self._lbl_export_source, self._export_source_combo)
 
         self._export_dir_edit = QLineEdit()
-        self._export_dir_edit.setText(
-            str((Path.cwd() / "data" / "interop_export").resolve())
-        )
+        self._export_dir_edit.setText(str(_default_interop_export_dir().resolve()))
         self._lbl_export_output = QLabel("")
         form.addRow(
             self._lbl_export_output,

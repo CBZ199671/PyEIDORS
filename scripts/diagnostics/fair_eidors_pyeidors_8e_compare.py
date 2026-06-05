@@ -53,9 +53,10 @@ from pyeidors.interop.geometry_exchange import (
 )
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.reconstruction_matrix import build_one_step_rm
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
-OUT_ROOT = ROOT / "results" / "eidors_fair_8e_layers"
+OUT_ROOT = pyeidors_output_path("eidors_fair_8e_layers")
 
 
 @dataclass(frozen=True)

@@ -132,6 +132,7 @@ class SimulationTab(QWidget):
     def _sync_inhomogeneity_context(self) -> None:
         mesh_cfg = self._mesh_panel.get_config()
         mesh_dim = int(mesh_cfg.get("mesh_dimension", 2))
+        self._inverse_panel.set_source_mesh_dimension(mesh_dim)
         self._inhom_editor.set_domain_context(
             mesh_dimension=mesh_dim,
             radius=float(mesh_cfg.get("radius", 1.0)),
@@ -150,6 +151,7 @@ class SimulationTab(QWidget):
         height: float,
         z_center: float = 0.0,
     ) -> None:
+        self._inverse_panel.set_source_mesh_dimension(mesh_dimension)
         self._inhom_editor.set_domain_context(
             mesh_dimension=mesh_dimension,
             radius=radius,

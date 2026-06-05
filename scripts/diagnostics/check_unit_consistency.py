@@ -28,6 +28,7 @@ if str(SRC_PATH) not in sys.path:
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
@@ -36,7 +37,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh-source", choices=["cache", "generated"], default="cache"
     )
-    parser.add_argument("--mesh-dir", type=str, default="eit_meshes")
+    parser.add_argument(
+        "--mesh-dir", type=str, default=str(pyeidors_cache_path("eit_meshes"))
+    )
     parser.add_argument("--mesh-name", type=str, default=None)
     parser.add_argument("--n-elec", type=int, default=16)
     parser.add_argument("--radius", type=float, default=1.0)

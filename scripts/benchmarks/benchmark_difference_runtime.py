@@ -41,6 +41,7 @@ from pyeidors.femx import function_get_array, function_set_array, mesh_num_verti
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 _COLUMN_SCALED_GRAM_CHUNK_BYTES = 8 * 1024 * 1024
@@ -254,7 +255,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=Path("eit_meshes"),
+        default=pyeidors_cache_path("eit_meshes"),
         help="Directory containing cached meshes.",
     )
     parser.add_argument("--n-elec", type=int, default=16, help="Number of electrodes.")

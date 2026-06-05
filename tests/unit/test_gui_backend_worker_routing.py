@@ -3,6 +3,7 @@ from __future__ import annotations
 import io
 import inspect
 import json
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -27,6 +28,7 @@ from eit_app.backend_worker_protocol import (
     write_reconstruction_result,
 )
 from eit_app.backend_worker_runtime import (
+    backend_worker_command,
     backend_worker_env,
     prepare_inprocess_backend_runtime,
 )
@@ -90,6 +92,57 @@ def test_v136_complex_3d_forward_uses_current_profile_inprocess(monkeypatch) -> 
     assert "target_profile_matches_current_runtime" in route.reason
 
 
+def test_v624_packaged_profile_command_wins_over_direct_profile_mismatch(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_LAUNCH_MODE", "direct")
+    monkeypatch.setenv(
+        "EIT_APP_BACKEND_WORKER_COMMAND_CUDA",
+        "/nix/store/pyeidors-cuda/bin/eit-backend-worker",
+    )
+
+    cmd, launch_mode = backend_worker_command(
+        profile="cuda",
+        worker_args=["forward", "--input", "in.h5", "--output", "out.h5"],
+    )
+
+    assert launch_mode == "profile_command"
+    assert cmd == [
+        "/nix/store/pyeidors-cuda/bin/eit-backend-worker",
+        "forward",
+        "--input",
+        "in.h5",
+        "--output",
+        "out.h5",
+    ]
+
+
+def test_v624_real_3d_cpu_forward_routes_from_complex_gui_to_default_worker(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64")
+    monkeypatch.setenv("EIT_APP_GUI_PROFILE", "cpu")
+    request = ForwardSolverRequest(
+        mesh_dimension=3,
+        mesh_refinement=0.1,
+        background_conductivity=1.0,
+        inhomogeneities=[InhomogeneitySpec(conductivity=2.0)],
+        forward_model_config={
+            "mesh_dimension": 3,
+            "mesh_refinement": 0.1,
+            "background_conductivity": 1.0,
+            "acceleration_profile": "default",
+        },
+    )
+
+    route = select_forward_backend_route(request)
+
+    assert route.profile == "default"
+    assert route.external is True
+    assert route.reason.startswith("real_input_uses_real_petsc_runtime")
+
+
 def test_v475_backend_routing_complex_scan_uses_shared_bounded_helper() -> None:
     source = inspect.getsource(backend_routing_module._has_nonzero_imag)
 
@@ -97,7 +150,7 @@ def test_v475_backend_routing_complex_scan_uses_shared_bounded_helper() -> None:
     assert "np.any(np.abs(np.imag" not in source
 
 
-def test_v139_real_2d_forward_uses_inprocess_fast_path_from_complex_gui(
+def test_v624_real_2d_forward_routes_from_complex_gui_to_default_worker(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
@@ -117,8 +170,8 @@ def test_v139_real_2d_forward_uses_inprocess_fast_path_from_complex_gui(
     route = select_forward_backend_route(request)
 
     assert route.profile == "default"
-    assert route.external is False
-    assert "safe_2d_real_inprocess_fast_path" in route.reason
+    assert route.external is True
+    assert "real_2d_prefers_real_profile_isolation" in route.reason
 
 
 def test_v139_process_mode_can_force_2d_forward_external_worker(monkeypatch) -> None:
@@ -266,6 +319,30 @@ def test_v137_backend_worker_uses_current_python_when_profile_matches(
     assert "nix" not in captured["cmd"]
     assert captured["env"]["EIT_APP_GUI_RUNTIME_PROFILE"] == "cuda"
     assert result.forward_model_config["backend_worker_launch_mode"] == "current_python"
+
+
+def test_v591_backend_worker_env_propagates_installed_site_packages(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    cache_root = tmp_path / "backend-cache"
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(cache_root))
+    monkeypatch.setenv("PYTHONPATH", "/tmp/original-pythonpath")
+    installed_site = tmp_path / "nix-store" / "python3.13" / "site-packages"
+    installed_site.mkdir(parents=True)
+    monkeypatch.syspath_prepend(str(installed_site))
+    repo = tmp_path / "installed-app"
+    repo.mkdir()
+
+    env, _cache = backend_worker_env(repo=repo, profile="default")
+
+    pythonpath = env["PYTHONPATH"].split(os.pathsep)
+    assert str(repo) in pythonpath
+    assert str(installed_site) in pythonpath
+    assert "/tmp/original-pythonpath" in pythonpath
+    assert pythonpath.index(str(installed_site)) < pythonpath.index(
+        "/tmp/original-pythonpath"
+    )
 
 
 def test_v138_forward_uses_persistent_worker_pool_by_default(

@@ -41,6 +41,7 @@ from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
+from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.utils.numeric_ops import all_finite_values
 
 _CHUNK_ITEMS = 1_048_576
@@ -560,7 +561,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--pattern-amplitude", type=float, default=5e-5)
     parser.add_argument("--measurement-gain", type=float, default=1.0)
     parser.add_argument("--mesh-name", type=str, default="mesh_16e_r0p025_ref10_cov0p5")
-    parser.add_argument("--mesh-dir", type=str, default="eit_meshes")
+    parser.add_argument(
+        "--mesh-dir", type=str, default=str(pyeidors_cache_path("eit_meshes"))
+    )
     parser.add_argument("--radius", type=float, default=0.025)
     parser.add_argument("--electrode-coverage", type=float, default=0.5)
     parser.add_argument("--contact-impedance", type=float, default=1e-6)

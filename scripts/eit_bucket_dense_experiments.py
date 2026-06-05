@@ -14,6 +14,7 @@ from pyeidors.data.bucket_dense_experiments import (
     run_bucket_dense_experiments,
     write_bucket_dense_outputs,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _format_float(value: float | None) -> str:
@@ -122,42 +123,42 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_summary_16e.csv"),
+        default=pyeidors_output_path("eit_bucket_dense_summary_16e.csv"),
     )
     parser.add_argument(
         "--field-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_fields_16e.csv"),
+        default=pyeidors_output_path("eit_bucket_dense_fields_16e.csv"),
     )
     parser.add_argument(
         "--report-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_summary_16e.md"),
+        default=pyeidors_output_path("eit_bucket_dense_summary_16e.md"),
     )
     parser.add_argument(
         "--domain-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_domain_audit_16e.png"),
+        default=pyeidors_output_path("eit_bucket_dense_domain_audit_16e.png"),
     )
     parser.add_argument(
         "--recon-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_recon_compare_16e.png"),
+        default=pyeidors_output_path("eit_bucket_dense_recon_compare_16e.png"),
     )
     parser.add_argument(
         "--summary-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_summary_16e.png"),
+        default=pyeidors_output_path("eit_bucket_dense_summary_16e.png"),
     )
     parser.add_argument(
         "--curve-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_fit_curves_16e.png"),
+        default=pyeidors_output_path("eit_bucket_dense_fit_curves_16e.png"),
     )
     parser.add_argument(
         "--holdout-summary-plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_dense_holdout_summary_16e.png"),
+        default=pyeidors_output_path("eit_bucket_dense_holdout_summary_16e.png"),
     )
     parser.add_argument(
         "--hdf5-output",
@@ -174,7 +175,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--coarse-voltage-csv",
         type=_parse_optional_path,
-        default=Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+        default=pyeidors_output_path("eit_voltage_digit_sweep_16e.csv"),
     )
     parser.add_argument(
         "--coarse-holdout-csv",

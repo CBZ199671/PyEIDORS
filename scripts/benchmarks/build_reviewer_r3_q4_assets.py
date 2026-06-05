@@ -25,6 +25,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from benchmark_reviewer_case import GPU_SCOPE_NOTE, get_git_commit  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_cache_path  # noqa: E402
 
 TASK = "absolute_gn"
 FRAMEWORK = "pyeidors"
@@ -49,7 +50,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=REPO_ROOT / "eit_meshes",
+        default=pyeidors_cache_path("eit_meshes"),
         help="Directory containing cached meshes.",
     )
     parser.add_argument(

@@ -43,6 +43,18 @@ from eit_app.ui.dialogs.reconstruction_settings_panel import (
     metadata_from_session_folder,
 )
 from eit_app.ui.theme import set_button_role
+from pyeidors.runtime_paths import pyeidors_output_path
+
+
+def _default_batch_results_dir() -> Path:
+    """Return the user-writable default batch reconstruction output root."""
+
+    base = pyeidors_output_path("batch_reconstructions")
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return base
 
 
 class BatchReconstructionDialog(QDialog):
@@ -190,12 +202,7 @@ class BatchReconstructionDialog(QDialog):
         if self._default_output:
             self._output_edit.setText(str(self._default_output))
         else:
-            # Fall back to <app>/results for convenience
-            default_root = Path.cwd() / "results"
-            try:
-                default_root.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
+            default_root = _default_batch_results_dir()
             self._output_edit.setText(str(default_root))
         self._output_browse_btn = QPushButton("")
         set_button_role(self._output_browse_btn, "subtle")
@@ -420,7 +427,7 @@ class BatchReconstructionDialog(QDialog):
         path = QFileDialog.getExistingDirectory(
             self,
             t("dlg.batch.file_dialog.output"),
-            self._output_edit.text() or str(Path.home()),
+            self._output_edit.text() or str(_default_batch_results_dir()),
         )
         if path:
             self._output_edit.setText(path)

@@ -21,6 +21,7 @@ from pyeidors.data.factor_sweep import (
     plot_factor_sweep,
     run_factor_sweep,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _format_float(value: float | None) -> str:
@@ -263,19 +264,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_factor_sweep_16e.csv"),
+        default=pyeidors_output_path("eit_factor_sweep_16e.csv"),
         help="CSV output path.",
     )
     parser.add_argument(
         "--report-output",
         type=Path,
-        default=Path("outputs/eit_factor_sweep_16e.md"),
+        default=pyeidors_output_path("eit_factor_sweep_16e.md"),
         help="Markdown report output path.",
     )
     parser.add_argument(
         "--plot-output",
         type=Path,
-        default=Path("outputs/eit_factor_sweep_16e.png"),
+        default=pyeidors_output_path("eit_factor_sweep_16e.png"),
         help="PNG plot output path.",
     )
     parser.add_argument(

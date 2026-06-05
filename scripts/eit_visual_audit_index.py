@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from pyeidors.data.visual_audit import run_visual_audit
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -20,7 +21,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-dir",
         type=Path,
-        default=Path("outputs"),
+        default=pyeidors_output_path(),
         help="Directory containing existing experiment outputs.",
     )
     parser.add_argument(

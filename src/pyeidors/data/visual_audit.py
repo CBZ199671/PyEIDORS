@@ -8,6 +8,8 @@ from pathlib import Path
 import textwrap
 from typing import Iterable
 
+from pyeidors.runtime_paths import pyeidors_output_path
+
 
 AUDIT_INDEX_FIELDS = [
     "task_id",
@@ -574,14 +576,16 @@ def plot_visual_audit_index(
 
 def run_visual_audit(
     *,
-    output_dir: Path = Path("outputs"),
+    output_dir: Path | None = None,
     audit_output_dir: Path | None = None,
     slugs: Iterable[str] | None = None,
     dpi: int = 160,
 ) -> VisualAuditRun:
     """Generate all T24 visual audit CSV, Markdown, and PNG outputs."""
 
-    base = Path(output_dir)
+    base = (
+        pyeidors_output_path("visual_audit") if output_dir is None else Path(output_dir)
+    )
     audit_dir = base if audit_output_dir is None else Path(audit_output_dir)
     audit_dir.mkdir(parents=True, exist_ok=True)
     experiments = _selected_manifest(default_visual_audit_manifest(), slugs)

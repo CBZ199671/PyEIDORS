@@ -81,7 +81,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_no_data": "\u6682\u65e0 3D \u6570\u636e",  # 暂无 3D 数据
     "sim.results.viewer3d_loading": "\u6e32\u67d3 3D \u573a\u4e2d\u2026",  # 渲染 3D 场中…
     "sim.results.viewer3d_unavailable": "\u672a\u5b89\u88c5 PyVista / VTK\uff0c\u65e0\u6cd5\u663e\u793a 3D \u7f51\u683c",  # 未安装 PyVista / VTK，无法显示 3D 网格
-    "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6539\u7528\u5b89\u5168\u5185\u7f6e 3D \u6e32\u67d3\u5668\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；改用安全内置 3D 渲染器。
+    "sim.results.viewer3d_embedded_disabled": "\u5f53\u524d\u8fd0\u884c\u73af\u5883\u5df2\u7981\u7528\u5d4c\u5165\u5f0f PyVista / VTK\uff0c\u4ee5\u907f\u514d Qt/OpenGL \u5d29\u6e83\uff1b\u6709 3D \u6570\u636e\u65f6\u5c06\u5c1d\u8bd5 PyVista \u79bb\u5c4f\u6e32\u67d3\u3002",  # 当前运行环境已禁用嵌入式 PyVista / VTK，以避免 Qt/OpenGL 崩溃；有 3D 数据时将尝试 PyVista 离屏渲染。
     "sim.results.viewer3d_bad_mesh": "\u7f51\u683c\u4e0d\u662f\u652f\u6301\u7684\u4e09\u7ef4\u56db\u9762\u4f53/\u516d\u9762\u4f53\u4f53\u7f51\u683c",  # 网格不是支持的三维四面体/六面体体网格
     "sim.results.viewer3d_size_mismatch": "\u7535\u5bfc\u7387\u957f\u5ea6\u4e0e\u7f51\u683c\u4e0d\u5339\u914d",  # 电导率长度与网格不匹配
     "sim.results.viewer3d_display": "\u663e\u793a",  # 显示
@@ -382,6 +382,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.complex_impedance_tooltip": "可输入实数或复接触阻抗，例如 0.01 或 0.01+0.002j Ω·m²。",
     "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",  # 激励与测量模式
     "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。
+    "sim.mesh.drive_value_2d_label": "2D 激励线电流密度：",
+    "sim.mesh.drive_value_2d_tooltip": "二维模型使用线电流密度 A/m；边界电压会随该值线性缩放。",
+    "sim.mesh.drive_value_3d_label": "3D 总激励电流：",
+    "sim.mesh.drive_value_3d_tooltip": "三维模型使用总注入电流，界面单位为 uA，内部按 A 传给求解器。",
     "sim.mesh.measurement_protocol_label": "3D 协议（激励→测量）：",
     "sim.mesh.measurement_protocol.eidors_full_3d": "同层激励 → 全层测量（标准 3D）",
     "sim.mesh.measurement_protocol.layer_local_2p5d": "逐层 2D → 切片/插值 3D（2.5D）",
@@ -493,6 +497,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.method.noser_rm.tooltip": "NOSER RM \u9ed8\u8ba4\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 \u7c97\u9006\u6a21\u578b artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # NOSER RM 默认路由：冷构建或复用 HDF5 粗逆模型 artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.laplace_rm.tooltip": "Laplace RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-Laplacian artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Laplace RM 平滑路由：冷构建或复用 HDF5 graph-Laplacian artifact，然后用 RM @ dv 热路径重构。
     "sim.inverse.method.curvature_rm.tooltip": "Curvature RM \u5e73\u6ed1\u8def\u7531\uff1a\u51b7\u6784\u5efa\u6216\u590d\u7528 HDF5 graph-LtL artifact\uff0c\u7136\u540e\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # Curvature RM 平滑路由：冷构建或复用 HDF5 graph-LtL artifact，然后用 RM @ dv 热路径重构。
+    "sim.inverse.method.pseudo3d_noser_rm.tooltip": "\u4f2a\u4e09\u7ef4\u8def\u7531\uff1a\u5148\u5c06\u7535\u6781\u5e03\u5c40\u6298\u53e0\u4e3a 2D NOSER RM \u5dee\u5206\u91cd\u6784\uff0c\u518d\u628a 2D \u7535\u5bfc\u7387\u56fe\u6324\u51fa\u4e3a 3D \u56db\u9762\u4f53\u663e\u793a\u7f51\u683c\uff1b\u5b83\u4e0d\u662f\u771f\u6b63\u7684 3D CEM \u9006\u95ee\u9898\u6c42\u89e3\u3002",  # 伪三维路线：先将电极布局折叠为 2D NOSER RM 差分重构，再把 2D 电导率图挤出为 3D 四面体显示网格；它不是真正的 3D CEM 逆问题求解。
     "sim.inverse.method.greit.tooltip": "GREIT \u8def\u7531\uff1a\u6839\u636e\u5f53\u524d 2D/3D \u7f51\u683c\u3001\u7535\u6781\u3001\u534f\u8bae\u548c\u9ad8\u7ea7\u8bad\u7ec3\u53c2\u6570\u6784\u5efa/\u590d\u7528 HDF5 artifact\uff0c\u518d\u7528 RM @ dv \u70ed\u8def\u5f84\u91cd\u6784\u3002",  # GREIT 路由：根据当前 2D/3D 网格、电极、协议和高级训练参数构建/复用 HDF5 artifact，再用 RM @ dv 热路径重构。
     "sim.inverse.method.greit3d_rm.tooltip": "GREIT \u65e7\u540d\u517c\u5bb9\u8def\u7531\uff1bGUI \u73b0\u5728\u7edf\u4e00\u663e\u793a\u4e3a greit\u3002",  # GREIT 旧名兼容路由；GUI 现在统一显示为 greit。
     "sim.inverse.method.absolute_gn.tooltip": "\u7edd\u5bf9\u6210\u50cf\uff1a\u76f4\u63a5\u4ece\u76ee\u6807\u8fb9\u754c\u7535\u538b\u4f30\u8ba1\u7edd\u5bf9\u7535\u5bfc\u7387\uff0c\u4e0d\u4f9d\u8d56\u53c2\u8003\u5e27\uff1b\u8fed\u4ee3 full GN \u51b7\u8def\u5f84\uff0c\u9002\u5408\u5c0f\u7f51\u683c\u5bf9\u7167\u3002",  # 绝对成像：直接从目标边界电压估计绝对电导率，不依赖参考帧；迭代 full GN 冷路径，适合小网格对照。

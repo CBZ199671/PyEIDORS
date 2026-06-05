@@ -32,6 +32,7 @@ from pyeidors.inverse import (
     solve_batch_spatiotemporal_gn,
 )
 from pyeidors.io._json import json_ready as _json_ready
+from pyeidors.runtime_paths import pyeidors_output_path
 from pyeidors.utils.numeric_ops import all_finite_values
 
 
@@ -60,7 +61,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("reports/runtime_benchmarks/dynamic_validation.json"),
+        default=pyeidors_output_path("runtime_benchmarks", "dynamic_validation.json"),
     )
     parser.add_argument(
         "--output-md",

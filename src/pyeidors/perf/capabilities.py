@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import sys
 
+from ..runtime_paths import pyeidors_cache_path
 from .policy import FEATURE_MODE_AUTO, normalize_feature_mode
 
 MPI_SINGLE_RANK_FALLBACK_REASON = "mpi_size_gt_1_not_supported_phase2_single_rank_only"
@@ -253,9 +254,7 @@ def _petsc_cuda_probe_disk_cache_dir() -> Path:
     override = os.getenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR", "").strip()
     if override:
         return Path(override).expanduser()
-    xdg_cache = os.getenv("XDG_CACHE_HOME", "").strip()
-    root = Path(xdg_cache).expanduser() if xdg_cache else Path.home() / ".cache"
-    return root / "pyeidors" / "capabilities"
+    return pyeidors_cache_path("capabilities")
 
 
 def _petsc_runtime_disk_cache_payload() -> dict[str, object]:

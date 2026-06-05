@@ -13,6 +13,7 @@ from dolfinx.io import gmsh as gmshio
 from ..data.structures import EITMesh
 from ..femx import build_eit_mesh, estimate_radius
 from ..perf.policy import LEGACY_3D_GENERATOR_REVISION  # noqa: F401  re-exported for in-tree callers
+from ..runtime_paths import resolve_pyeidors_mesh_dir
 from ._helpers import (
     infer_generator_revision,
     infer_geometry_version,
@@ -45,7 +46,7 @@ class MeshLoader:
     """Load cached EIT meshes, preferring DOLFINx-native XDMF caches."""
 
     def __init__(self, mesh_dir: str = "eit_meshes", gdim: int = 2):
-        self.mesh_dir = Path(mesh_dir)
+        self.mesh_dir = resolve_pyeidors_mesh_dir(mesh_dir)
         self.gdim = int(gdim)
         if self.gdim not in {2, 3}:
             raise ValueError(f"gdim must be 2 or 3, got {gdim!r}")

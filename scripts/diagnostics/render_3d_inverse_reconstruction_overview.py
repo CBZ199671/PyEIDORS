@@ -47,6 +47,7 @@ from pyeidors.geometry.mesh3d_generator import (
 )
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 from pyeidors.utils.numeric_ops import squared_distances_to_point
 
 from common.acceleration_profiles import (
@@ -55,7 +56,7 @@ from common.acceleration_profiles import (
 )
 from common.hdf5_outputs import DIAGNOSTICS_ARRAYS_SCHEMA, write_output_bundle
 
-DEFAULT_OUTPUT_DIR = REPO_ROOT / "results" / "figures_3d_inverse_demo"
+DEFAULT_OUTPUT_DIR = pyeidors_output_path("figures_3d_inverse_demo")
 
 
 def _configure_times_new_roman() -> None:
@@ -446,7 +447,7 @@ def run_case(
 
     setup_start = perf_counter()
     mesh = load_or_create_mesh(
-        mesh_dir=str(REPO_ROOT / "eit_meshes"),
+        mesh_dir=str(pyeidors_cache_path("eit_meshes")),
         n_elec=n_elec,
         dimension=3,
         radius=radius,

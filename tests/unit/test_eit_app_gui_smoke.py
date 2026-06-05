@@ -29,6 +29,7 @@ from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 from eit_app.ui.main_window import EITWorkstation
 from pyeidors.data.frame_io import read_frame_yaml, read_session_metadata
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 
 def _get_app() -> QApplication:
@@ -976,6 +977,7 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     from eit_app.ui.simulation.inverse_problem_panel import (
         SIMULATION_INVERSE_METHODS,
         InverseProblemPanel,
+        simulation_inverse_methods_for_mesh_dimension,
     )
 
     app = _get_app()
@@ -984,11 +986,12 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     app.processEvents()
 
     methods = [inv._method_combo.itemText(i) for i in range(inv._method_combo.count())]
-    assert methods == SIMULATION_INVERSE_METHODS
+    assert methods == simulation_inverse_methods_for_mesh_dimension(2)
     assert "eidors_one_step_noser" not in methods
     assert "eidors_abs_gn" not in methods
     assert "eidors_demo3d_tv" not in methods
     assert "absolute_gn" in methods
+    assert "pseudo3d_noser_rm" not in methods
     assert inv.get_config()["method"] == "noser_rm"
     assert inv._method_combo.toolTip()
 
@@ -1003,9 +1006,49 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     assert inv.get_config()["method"] == "noser_rm"
     assert "RM" in inv._method_combo.toolTip()
 
+    inv.set_source_mesh_dimension(3)
+    methods = [inv._method_combo.itemText(i) for i in range(inv._method_combo.count())]
+    assert methods == SIMULATION_INVERSE_METHODS
+    assert "pseudo3d_noser_rm" in methods
+
+    inv.set_config({"method": "pseudo3d"})
+    assert inv.get_config()["method"] == "pseudo3d_noser_rm"
+    assert "Pseudo" in inv._method_combo.toolTip()
+
     inv.close()
     inv.deleteLater()
     app.processEvents()
+
+
+@pytest.mark.gui
+def test_simulation_pseudo3d_route_visible_only_for_3d_forward_mesh() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    panel = window._sim_tab.inverse_problem_panel
+    methods = [
+        panel._method_combo.itemText(i) for i in range(panel._method_combo.count())
+    ]
+    assert "pseudo3d_noser_rm" not in methods
+
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
+    _get_app().processEvents()
+    methods = [
+        panel._method_combo.itemText(i) for i in range(panel._method_combo.count())
+    ]
+    assert "pseudo3d_noser_rm" in methods
+    panel.set_config({"method": "pseudo3d_noser_rm"})
+    assert panel.get_config()["method"] == "pseudo3d_noser_rm"
+
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(0)
+    _get_app().processEvents()
+    methods = [
+        panel._method_combo.itemText(i) for i in range(panel._method_combo.count())
+    ]
+    assert "pseudo3d_noser_rm" not in methods
+    assert panel.get_config()["method"] == "noser_rm"
+
+    _close_window(window)
 
 
 @pytest.mark.gui
@@ -3116,6 +3159,8 @@ def test_simulation_forward_config_2d_default_uses_coverage_not_length_override(
     assert cfg.n_rings == 1
     assert cfg.electrode_length_m_override is None
     assert cfg.electrode_coverage == pytest.approx(0.5)
+    assert cfg.drive_mode == "line_current_density"
+    assert cfg.drive_value == pytest.approx(1.0)
     assert (
         window._sim_tab.mesh_setup_panel.get_config()["electrode_length_m_override"]
         is None
@@ -3146,6 +3191,7 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     assert cfg.radius == pytest.approx(0.18)
     assert cfg.height == pytest.approx(0.16)
     assert cfg.drive_mode == "total_current"
+    assert cfg.drive_value == pytest.approx(100.0e-6)
     assert cfg.electrode_length_m_override == pytest.approx(
         2.0 * np.pi * 0.18 * 0.5 / 8.0
     )
@@ -3156,6 +3202,62 @@ def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     )
     assert cfg.electrode_height_ratio == pytest.approx(0.2, rel=1.0e-5)
     assert tuple(cfg.electrode_level_fractions) == (0.25, 0.75)
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_drive_current_reaches_forward_request() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    mesh_panel = window._sim_tab.mesh_setup_panel
+    mesh_panel._dim_combo.setCurrentIndex(1)
+    mesh_panel._drive_value_spin.setValue(250.0)
+    _get_app().processEvents()
+
+    cfg = window._current_sim_forward_model_config()
+    request = window._build_sim_forward_request(request_source="test")
+
+    assert cfg.drive_mode == "total_current"
+    assert cfg.drive_value == pytest.approx(250.0e-6)
+    assert request.forward_model_config["drive_mode"] == "total_current"
+    assert request.forward_model_config["drive_value"] == pytest.approx(250.0e-6)
+
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_v626_simulation_drive_value_clamps_zero_before_forward_request() -> None:
+    window = EITWorkstation()
+    _show_window(window)
+
+    mesh_panel = window._sim_tab.mesh_setup_panel
+    mesh_panel.set_config({"mesh_dimension": 3, "drive_value": 0.0})
+    _get_app().processEvents()
+
+    cfg = window._current_sim_forward_model_config()
+    request = window._build_sim_forward_request(request_source="test")
+
+    assert cfg.drive_mode == "total_current"
+    assert cfg.drive_value == pytest.approx(100.0e-6)
+    assert request.forward_model_config["drive_mode"] == "total_current"
+    assert request.forward_model_config["drive_value"] == pytest.approx(100.0e-6)
+
+    mesh_panel.set_config({"mesh_dimension": 2, "drive_value": 0.0})
+    _get_app().processEvents()
+
+    cfg_2d = window._current_sim_forward_model_config()
+    assert cfg_2d.drive_mode == "line_current_density"
+    assert cfg_2d.drive_value == pytest.approx(1.0)
+
+    dataset_mesh_panel = window._dataset_tab.mesh_setup_panel
+    dataset_mesh_panel.set_config({"mesh_dimension": 3, "drive_value": 0.0})
+    _get_app().processEvents()
+
+    dataset_cfg = window._current_dataset_forward_model_config()
+    assert dataset_cfg.drive_mode == "total_current"
+    assert dataset_cfg.drive_value == pytest.approx(100.0e-6)
 
     _close_window(window)
 
@@ -3284,6 +3386,11 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
         return True
 
     monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
 
     window._on_run_sim_inverse()
 
@@ -3348,6 +3455,11 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
         "reconstruct",
         lambda request: captured.append(request) or True,
     )
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
 
     window._on_run_sim_inverse()
 
@@ -3403,6 +3515,11 @@ def test_simulation_inverse_preserves_complex_forward_measurements(
         "reconstruct",
         lambda request: captured.append(request) or True,
     )
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
 
     window._on_run_sim_inverse()
 
@@ -3452,6 +3569,11 @@ def test_simulation_2d_rm_routes_use_normalized_difference_mode(
         window._sim_recon_ctrl,
         "reconstruct",
         lambda request: captured.append(request) or True,
+    )
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
     )
 
     window._on_run_sim_inverse()
@@ -3575,9 +3697,12 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
     """3D RM-based routes must build/apply normalized dv and J."""
     window = EITWorkstation()
     _show_window(window)
+    monkeypatch.setattr(
+        window, "_schedule_sim_forward_prewarm", lambda *args, **kwargs: None
+    )
 
     n_meas = 208
-    window._last_fwd_result = ForwardSolverResult(
+    forward_result = ForwardSolverResult(
         boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
         homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
         ground_truth_conductivity=np.ones(1, dtype=np.float64),
@@ -3589,6 +3714,7 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
     # Switch the simulation tab to the 3D mesh so is_3d_difference fires.
     window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
     _get_app().processEvents()
+    window._last_fwd_result = forward_result
     window._sim_tab.inverse_problem_panel.set_config(
         {
             "method": method,
@@ -3602,6 +3728,11 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
         "reconstruct",
         lambda request: captured.append(request) or True,
     )
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
 
     window._on_run_sim_inverse()
 
@@ -3610,6 +3741,78 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
     assert request.metadata["simulation_inverse_route"] == method
     assert request.metadata["difference_mode"] == "normalized"
     assert request.metadata["mesh_dimension"] == 3
+
+    window._sim_state.inverse_running = False
+    _close_window(window)
+
+
+@pytest.mark.gui
+def test_simulation_pseudo3d_route_uses_layered_2d_inverse_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = EITWorkstation()
+    _show_window(window)
+    monkeypatch.setattr(
+        window, "_schedule_sim_forward_prewarm", lambda *args, **kwargs: None
+    )
+
+    n_meas = 208
+    forward_result = ForwardSolverResult(
+        boundary_voltages=np.linspace(1.0, 2.0, n_meas, dtype=np.float64),
+        homogeneous_voltages=np.linspace(0.8, 1.8, n_meas, dtype=np.float64),
+        ground_truth_conductivity=np.ones(1, dtype=np.float64),
+        node_coords=np.array([[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]], dtype=np.float64),
+        cell_connectivity=np.array([[0, 1, 2]], dtype=np.int32),
+        n_elements=1,
+        n_measurements=n_meas,
+    )
+    window._sim_tab.mesh_setup_panel._dim_combo.setCurrentIndex(1)
+    _get_app().processEvents()
+    window._last_fwd_result = forward_result
+    window._sim_tab.inverse_problem_panel.set_config(
+        {
+            "method": "pseudo3d_noser_rm",
+            "regularization_alpha": 1.0,
+            "max_iterations": 10,
+        }
+    )
+    captured: list[object] = []
+    monkeypatch.setattr(
+        window._sim_recon_ctrl,
+        "reconstruct",
+        lambda request: captured.append(request) or True,
+    )
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
+
+    window._on_run_sim_inverse()
+
+    assert len(captured) == 1
+    request = captured[0]
+    assert request.mesh_dimension == 2
+    assert request.metadata["simulation_inverse_route"] == "pseudo3d_noser_rm"
+    assert request.metadata["simulation_inverse_route_kind"] == "rm"
+    assert request.metadata["rm_regularization"] == "noser"
+    assert request.metadata["difference_mode"] == "normalized"
+    assert request.metadata["mesh_dimension"] == 2
+    assert request.metadata["n_elec"] == 8
+    assert request.metadata["n_rings"] == 1
+    assert request.metadata["pseudo3d_output"] is True
+    assert request.metadata["pseudo3d_layered_output"] is True
+    assert request.metadata["pseudo3d_source_mesh_dimension"] == 3
+    assert request.metadata["pseudo3d_source_n_elec"] == 8
+    assert request.metadata["pseudo3d_source_n_rings"] == 2
+    assert request.metadata["pseudo3d_layer_count"] == 2
+    assert request.metadata["pseudo3d_layer_n_elec"] == 8
+    assert request.metadata["pseudo3d_display_mesh_dimension"] == 3
+    assert request.metadata["petsc_device"] == "cpu"
+    assert request.metadata["device"] == "cpu"
+    assert request.metadata["rm_device"] == "cpu"
+    assert request.metadata["forward_backend"] == "dolfinx"
+    assert request.metadata["acceleration_profile"] == "default"
 
     window._sim_state.inverse_running = False
     _close_window(window)
@@ -3681,7 +3884,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
         expected_form = "measurement" if method == "noser_rm" else "param"
         assert request.metadata["rm_form"] == expected_form
         assert request.metadata["rm_inverse_mesh_size"] <= request.metadata["mesh_size"]
-        assert request.metadata["rm_artifact_dir"] == ".pyeidors_cache/gui_rm"
+        assert request.metadata["rm_artifact_dir"] == str(pyeidors_cache_path("gui_rm"))
         assert request.regularization_alpha == pytest.approx(1.0e-2)
         assert request.metadata["difference_lambda"] == pytest.approx(1.0e-2)
         assert request.metadata["hyperparameter_ui_name"] == "lambda_eff"
@@ -4416,6 +4619,11 @@ def test_simulation_inverse_uses_config_stored_with_forward_result(
         return True
 
     monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
 
     window._on_run_sim_inverse()
 
@@ -4469,6 +4677,11 @@ def test_simulation_inverse_request_propagates_compute_precision(
         return True
 
     monkeypatch.setattr(window._sim_recon_ctrl, "reconstruct", _capture_reconstruct)
+    monkeypatch.setattr(
+        window,
+        "_submit_scheduled_ui_task",
+        lambda **kwargs: kwargs["callback"]() or SimpleNamespace(accepted=True),
+    )
     try:
         window._on_run_sim_inverse()
 

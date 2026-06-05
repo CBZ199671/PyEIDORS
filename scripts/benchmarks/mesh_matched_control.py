@@ -25,6 +25,7 @@ from pyeidors import EITSystem  # noqa: E402
 from pyeidors.data.structures import EITImage, PatternConfig  # noqa: E402
 from pyeidors.data.synthetic_data import create_custom_phantom  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_cache_path  # noqa: E402
 
 from benchmark_difference_runtime import (  # noqa: E402
     build_single_step_namespace,
@@ -59,7 +60,9 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-csv", type=Path, required=True)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
     parser.add_argument("--scenario", choices=["low_z", "high_z"], default="low_z")
     parser.add_argument("--matched-refinement", type=int, default=5)
     parser.add_argument("--finer-refinement", type=int, default=10)

@@ -20,6 +20,7 @@ from pyeidors.data.voltage_digit_sweep import (
     plot_voltage_digit_sweep,
     run_voltage_digit_sweep_from_backend,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 SUMMARY_FIELDS = [
@@ -173,19 +174,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+        default=pyeidors_output_path("eit_voltage_digit_sweep_16e.csv"),
         help="Summary CSV output path.",
     )
     parser.add_argument(
         "--field-output",
         type=Path,
-        default=Path("outputs/eit_voltage_digit_fields_16e.csv"),
+        default=pyeidors_output_path("eit_voltage_digit_fields_16e.csv"),
         help="Per-cell conductivity error CSV output path.",
     )
     parser.add_argument(
         "--plot-output",
         type=Path,
-        default=Path("outputs/eit_voltage_digit_sweep_16e.png"),
+        default=pyeidors_output_path("eit_voltage_digit_sweep_16e.png"),
         help="PNG plot output path.",
     )
     parser.add_argument(

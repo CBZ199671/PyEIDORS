@@ -16,6 +16,7 @@ from typing import Any
 from .manager import CacheManager
 from .types import CachePolicy
 from .index_fields import CACHE_INDEX_FIELD_NAMES
+from pyeidors.runtime_paths import pyeidors_cache_path, resolve_pyeidors_cache_dir
 
 
 _SIZE_RE = re.compile(r"^\s*(?P<num>\d+(?:\.\d+)?)\s*(?P<unit>[kmgt]?i?b?)?\s*$", re.I)
@@ -266,7 +267,7 @@ def _backend_worker_v1_root(repo: Path) -> Path:
     root = (
         Path(override).expanduser()
         if override
-        else repo / ".pyeidors_cache" / "gui_backend_worker"
+        else pyeidors_cache_path("gui_backend_worker")
     )
     return root / "v1"
 
@@ -612,8 +613,11 @@ def doctor_cache(
             os.getenv("EIT_APP_BACKEND_WORKER_STALE_JIT_LOCK_SECONDS", "60")
         ),
     )
-    mesh_derived = _count_hdf5_artifacts(Path(cache_dir), subdir="mesh_derived")
-    legacy = _count_legacy_arrays(repo_path / ".pyeidors_cache")
+    mesh_derived = _count_hdf5_artifacts(
+        resolve_pyeidors_cache_dir(cache_dir),
+        subdir="mesh_derived",
+    )
+    legacy = _count_legacy_arrays(pyeidors_cache_path())
     import_health = summarize_import_health(repo=repo_path)
     gui_array_geometry = summarize_gui_array_geometry_cache()
     warnings: list[str] = []
@@ -690,7 +694,7 @@ def gc_cache(
     legacy_cleanup = None
     if include_legacy_arrays:
         legacy_cleanup = _remove_legacy_arrays(
-            Path(repo) / ".pyeidors_cache",
+            pyeidors_cache_path(),
             dry_run=bool(dry_run),
         )
     return {

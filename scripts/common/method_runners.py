@@ -46,6 +46,7 @@ from pyeidors.perf import (
     resolve_line_search_mode,
     resolve_solver_mode,
 )
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 from . import gn_absolute_runner
 from . import gn_difference_runner
@@ -293,7 +294,7 @@ def run_gn_absolute_cases(
                 max_iter=int(args.max_iter if args.max_iter is not None else 15),
                 contact_impedance=_default(args.contact_impedance, 1e-5),
                 cache_scope=str(getattr(args, "cache_scope", "both")),
-                cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
+                cache_dir=str(getattr(args, "cache_dir", pyeidors_cache_path("v2"))),
                 **runtime_kwargs,
             )
 
@@ -377,7 +378,7 @@ def run_gn_difference_cases(
         background_sigma=_default(args.background_sigma, 1.0),
         lam=_default(args.lam, 0.1),
         cache_scope=str(getattr(args, "cache_scope", "both")),
-        cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
+        cache_dir=str(getattr(args, "cache_dir", pyeidors_cache_path("v2"))),
         cache_clear_names=list(getattr(args, "cache_clear_name", []) or []),
         solver_mode=resolved_solver_mode,
         linear_solver=str(getattr(args, "linear_solver", "auto")),
@@ -557,7 +558,7 @@ def run_sparse_bayes_difference_cases(
         contact_impedance=contact_impedance,
         base_conductivity=_default(args.background_sigma, 1.0),
         cache_scope=str(getattr(args, "cache_scope", "both")),
-        cache_dir=str(getattr(args, "cache_dir", ".pyeidors_cache/v2")),
+        cache_dir=str(getattr(args, "cache_dir", pyeidors_cache_path("v2"))),
     )
     mesh = sparse_bayes_runner.load_or_create_mesh(
         mesh_dir=str(args.mesh_dir),

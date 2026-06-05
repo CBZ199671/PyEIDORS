@@ -21,6 +21,7 @@ from .types import (
     CacheStats,
     normalize_cache_lifecycle,
 )
+from pyeidors.runtime_paths import resolve_pyeidors_cache_dir
 
 
 _SHARED_PROCESS_STORES: dict[tuple[str, str], ProcessCacheStore] = {}
@@ -100,7 +101,7 @@ class CacheManager:
         self.scope: CacheScope = scope
         self.policy = policy or CachePolicy()
         self.code_fingerprint = code_fingerprint
-        self.requested_cache_dir = Path(cache_dir)
+        self.requested_cache_dir = resolve_pyeidors_cache_dir(cache_dir)
         self._singleflight_namespace = str(self.requested_cache_dir.resolve())
         self.disk_lifecycle = normalize_cache_lifecycle(
             getattr(self.policy, "disk_lifecycle", "session")

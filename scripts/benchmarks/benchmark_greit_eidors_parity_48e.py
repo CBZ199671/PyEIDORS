@@ -40,6 +40,7 @@ from pyeidors.inverse import (
     write_greit_metrics_artifact,
 )
 from pyeidors.io.hdf5_artifacts import read_hdf5_artifact
+from pyeidors.runtime_paths import pyeidors_output_path
 
 from scripts.diagnostics.compare_greit_eidors_parity import (
     compare_greit_eidors_parity,
@@ -49,8 +50,8 @@ from scripts.diagnostics.eidors_greit_fixture import FIXTURE_SCHEMA, REQUIRED_EX
 
 
 REPORT_SCHEMA = "pyeidors-greit-eidors-parity-48e-v1-benchmark"
-DEFAULT_OUTPUT_DIR = (
-    Path("reports") / "runtime_benchmarks" / "greit_eidors_parity_48e_5936_t49_20260426"
+DEFAULT_OUTPUT_DIR = pyeidors_output_path(
+    "runtime_benchmarks", "greit_eidors_parity_48e_5936_t49_20260426"
 )
 
 

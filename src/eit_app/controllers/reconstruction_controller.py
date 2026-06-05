@@ -30,11 +30,13 @@ from PySide6.QtCore import QObject, QThread, Signal, Slot
 
 from eit_app.models.forward_model_config import (
     drive_mode_for_mesh_dimension,
+    electrode_level_fractions_for_rings,
     parse_complex_scalar,
     parse_complex_scalar_list,
 )
 from eit_app.models.frame_model import FrameData
 from pyeidors.cache.keys import update_digest_with_array_payload
+from pyeidors.runtime_paths import pyeidors_cache_path, resolve_pyeidors_cache_dir
 from pyeidors.utils.numeric_ops import (
     all_finite_values,
     any_not_equal_values,
@@ -87,6 +89,7 @@ _RM_ARTIFACT_META_KEYS = (
 )
 _PRODUCTION_RM_ROUTE_TASKS = {
     "noser_rm": "T100",
+    "pseudo3d_noser_rm": "T100",
     "laplace_rm": "T101",
     "curvature_rm": "T101",
     "greit": "T105",
@@ -94,6 +97,7 @@ _PRODUCTION_RM_ROUTE_TASKS = {
 }
 _ONE_STEP_RM_ROUTE_REGULARIZATION = {
     "noser_rm": "noser",
+    "pseudo3d_noser_rm": "noser",
     "laplace_rm": "laplace",
     "curvature_rm": "curvature",
 }
@@ -247,6 +251,728 @@ def _display_cell_connectivity_array(values: Any) -> np.ndarray:
     if np.issubdtype(cells.dtype, np.integer) and cells.dtype == np.dtype(np.int32):
         return cells
     return np.asarray(cells, dtype=np.int32)
+
+
+def _triangulate_pseudo3d_cells(
+    cell_connectivity: Any,
+    conductivity: Any,
+) -> tuple[np.ndarray, np.ndarray]:
+    cells = _display_cell_connectivity_array(cell_connectivity)
+    sigma = np.asarray(conductivity).reshape(-1)
+    if cells.ndim != 2 or cells.shape[0] == 0:
+        raise ValueError("pseudo-3D extrusion requires a non-empty 2D cell array.")
+    if cells.shape[1] == 3:
+        return cells, sigma
+    if cells.shape[1] != 4:
+        raise ValueError(
+            "pseudo-3D extrusion supports triangular or quadrilateral 2D cells, "
+            f"got {cells.shape[1]} vertices per cell."
+        )
+    triangles = np.empty((cells.shape[0] * 2, 3), dtype=np.int32)
+    triangles[0::2, 0] = cells[:, 0]
+    triangles[0::2, 1] = cells[:, 1]
+    triangles[0::2, 2] = cells[:, 2]
+    triangles[1::2, 0] = cells[:, 0]
+    triangles[1::2, 1] = cells[:, 2]
+    triangles[1::2, 2] = cells[:, 3]
+    if sigma.size == cells.shape[0]:
+        sigma = np.repeat(sigma, 2)
+    return triangles, sigma
+
+
+def _pseudo3d_display_layers(meta: dict[str, Any]) -> int:
+    raw = meta.get("pseudo3d_display_layers", meta.get("pseudo3d_layers", 5))
+    try:
+        layers = int(raw)
+    except (TypeError, ValueError):
+        layers = 5
+    return max(layers, 2)
+
+
+def _pseudo3d_display_height(meta: dict[str, Any]) -> float:
+    radius = 1.0
+    try:
+        radius = max(float(meta.get("radius", 1.0)), 1.0e-9)
+    except (TypeError, ValueError):
+        radius = 1.0
+    for key in ("pseudo3d_display_height", "height", "mesh_height"):
+        value = meta.get(key)
+        if value in (None, ""):
+            continue
+        try:
+            height = float(value)
+        except (TypeError, ValueError):
+            continue
+        if np.isfinite(height) and height > 0.0:
+            return height
+    return 2.0 * radius
+
+
+def _pseudo3d_layer_count(meta: dict[str, Any]) -> int:
+    raw = meta.get(
+        "pseudo3d_layer_count",
+        meta.get("pseudo3d_source_n_rings", meta.get("n_rings", 1)),
+    )
+    try:
+        layers = int(raw)
+    except (TypeError, ValueError):
+        layers = 1
+    return max(layers, 1)
+
+
+def _pseudo3d_source_layer_z_values(
+    *,
+    meta: dict[str, Any],
+    n_layers: int,
+    height: float,
+    z_center: float,
+    dtype: np.dtype,
+) -> np.ndarray:
+    levels_raw = meta.get("electrode_level_fractions")
+    fractions: list[float] | None = None
+    if isinstance(levels_raw, str):
+        try:
+            fractions = [
+                float(part)
+                for part in levels_raw.replace(";", ",").split(",")
+                if part.strip()
+            ]
+        except ValueError:
+            fractions = None
+    elif isinstance(levels_raw, (list, tuple, np.ndarray)):
+        try:
+            fractions = [float(value) for value in levels_raw]
+        except (TypeError, ValueError):
+            fractions = None
+    if fractions is None or len(fractions) != int(n_layers):
+        fractions = list(electrode_level_fractions_for_rings(int(n_layers)))
+    if len(fractions) != int(n_layers):
+        fractions = np.linspace(0.0, 1.0, int(n_layers)).tolist()
+    fraction_arr = np.asarray(fractions, dtype=dtype).reshape(-1)
+    return np.asarray(z_center + (fraction_arr - 0.5) * height, dtype=dtype)
+
+
+def _interpolate_layer_values_along_z(
+    *,
+    source_z: np.ndarray,
+    display_z: np.ndarray,
+    layer_values: np.ndarray,
+) -> np.ndarray:
+    values = np.asarray(layer_values)
+    if values.ndim != 2 or values.shape[0] == 0:
+        raise ValueError("pseudo-3D interpolation requires layer-major values.")
+    if values.shape[0] == 1:
+        return np.repeat(values, display_z.size, axis=0)
+
+    z_src = np.asarray(source_z, dtype=np.float64).reshape(-1)
+    z_dst = np.asarray(display_z, dtype=np.float64).reshape(-1)
+    if z_src.size != values.shape[0]:
+        raise ValueError("pseudo-3D layer z count does not match layer values.")
+    order = np.argsort(z_src)
+    z_src = z_src[order]
+    values = values[order]
+    if float(np.ptp(z_src)) <= 0.0:
+        z_src = np.linspace(-0.5, 0.5, values.shape[0], dtype=np.float64)
+
+    out = np.empty((z_dst.size, values.shape[1]), dtype=values.dtype)
+    if np.iscomplexobj(values):
+        for col in range(values.shape[1]):
+            out[:, col] = np.interp(z_dst, z_src, values[:, col].real) + 1j * np.interp(
+                z_dst,
+                z_src,
+                values[:, col].imag,
+            )
+    else:
+        for col in range(values.shape[1]):
+            out[:, col] = np.interp(z_dst, z_src, values[:, col])
+    return out
+
+
+def _extrude_2d_result_to_pseudo3d(
+    *,
+    conductivity: Any,
+    node_coords: Any,
+    cell_connectivity: Any,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    coords_raw = np.asarray(node_coords)
+    coord_dtype = (
+        np.float32
+        if np.issubdtype(coords_raw.dtype, np.floating)
+        and coords_raw.dtype.itemsize <= 4
+        else np.float64
+    )
+    coords2 = np.asarray(coords_raw, dtype=coord_dtype)
+    if coords2.ndim != 2 or coords2.shape[0] == 0 or coords2.shape[1] < 2:
+        raise ValueError("pseudo-3D extrusion requires 2D node coordinates.")
+    triangles, sigma2 = _triangulate_pseudo3d_cells(cell_connectivity, conductivity)
+    n_nodes = int(coords2.shape[0])
+    if np.any(triangles < 0) or np.any(triangles >= n_nodes):
+        raise ValueError("pseudo-3D extrusion received out-of-range cell indices.")
+
+    layers = _pseudo3d_display_layers(meta)
+    slabs = layers - 1
+    height = _pseudo3d_display_height(meta)
+    try:
+        z_center = float(meta.get("z_center", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        z_center = 0.0
+    z_values = np.linspace(
+        z_center - 0.5 * height,
+        z_center + 0.5 * height,
+        layers,
+        dtype=coord_dtype,
+    )
+    coords3 = np.empty((layers * n_nodes, 3), dtype=coord_dtype)
+    for layer_idx, z_value in enumerate(z_values):
+        start = layer_idx * n_nodes
+        stop = start + n_nodes
+        coords3[start:stop, 0] = coords2[:, 0]
+        coords3[start:stop, 1] = coords2[:, 1]
+        coords3[start:stop, 2] = z_value
+
+    n_tri = int(triangles.shape[0])
+    tets = np.empty((slabs * n_tri * 3, 4), dtype=np.int32)
+    cursor = 0
+    for slab_idx in range(slabs):
+        lower = slab_idx * n_nodes
+        upper = (slab_idx + 1) * n_nodes
+        a0 = triangles[:, 0] + lower
+        b0 = triangles[:, 1] + lower
+        c0 = triangles[:, 2] + lower
+        a1 = triangles[:, 0] + upper
+        b1 = triangles[:, 1] + upper
+        c1 = triangles[:, 2] + upper
+        block = tets[cursor : cursor + n_tri * 3]
+        block[0::3, 0] = a0
+        block[0::3, 1] = b0
+        block[0::3, 2] = c0
+        block[0::3, 3] = a1
+        block[1::3, 0] = b0
+        block[1::3, 1] = b1
+        block[1::3, 2] = c1
+        block[1::3, 3] = a1
+        block[2::3, 0] = b0
+        block[2::3, 1] = c0
+        block[2::3, 2] = c1
+        block[2::3, 3] = a1
+        cursor += n_tri * 3
+
+    if sigma2.size == n_tri:
+        sigma3 = np.repeat(np.tile(sigma2, slabs), 3)
+    elif sigma2.size == n_nodes:
+        sigma3 = np.tile(sigma2, layers)
+    else:
+        sigma3 = np.asarray(sigma2)
+
+    extrusion_meta = {
+        "pseudo3d_extruded": True,
+        "pseudo3d_display_layers": int(layers),
+        "pseudo3d_display_height": float(height),
+        "pseudo3d_source_cell_count": int(n_tri),
+        "pseudo3d_source_node_count": int(n_nodes),
+        "pseudo3d_tetra_cell_count": int(tets.shape[0]),
+        "pseudo3d_node_count": int(coords3.shape[0]),
+    }
+    return sigma3, coords3, tets, extrusion_meta
+
+
+def _extrude_layered_2d_results_to_pseudo3d(
+    *,
+    conductivity_layers: Any,
+    node_coords: Any,
+    cell_connectivity: Any,
+    meta: dict[str, Any],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, dict[str, Any]]:
+    coords_raw = np.asarray(node_coords)
+    coord_dtype = (
+        np.float32
+        if np.issubdtype(coords_raw.dtype, np.floating)
+        and coords_raw.dtype.itemsize <= 4
+        else np.float64
+    )
+    coords2 = np.asarray(coords_raw, dtype=coord_dtype)
+    if coords2.ndim != 2 or coords2.shape[0] == 0 or coords2.shape[1] < 2:
+        raise ValueError("pseudo-3D layered extrusion requires 2D node coordinates.")
+
+    cells = _display_cell_connectivity_array(cell_connectivity)
+    if cells.ndim != 2 or cells.shape[0] == 0:
+        raise ValueError(
+            "pseudo-3D layered extrusion requires a non-empty 2D cell array."
+        )
+    if cells.shape[1] == 3:
+        triangles = cells
+    elif cells.shape[1] == 4:
+        triangles = np.empty((cells.shape[0] * 2, 3), dtype=np.int32)
+        triangles[0::2, 0] = cells[:, 0]
+        triangles[0::2, 1] = cells[:, 1]
+        triangles[0::2, 2] = cells[:, 2]
+        triangles[1::2, 0] = cells[:, 0]
+        triangles[1::2, 1] = cells[:, 2]
+        triangles[1::2, 2] = cells[:, 3]
+    else:
+        raise ValueError(
+            "pseudo-3D layered extrusion supports triangular or quadrilateral 2D "
+            f"cells, got {cells.shape[1]} vertices per cell."
+        )
+
+    n_nodes = int(coords2.shape[0])
+    if np.any(triangles < 0) or np.any(triangles >= n_nodes):
+        raise ValueError(
+            "pseudo-3D layered extrusion received out-of-range cell indices."
+        )
+
+    raw_layers = np.asarray(conductivity_layers)
+    if raw_layers.ndim == 1:
+        raw_layers = raw_layers.reshape(1, -1)
+    elif raw_layers.ndim > 2:
+        raw_layers = raw_layers.reshape(raw_layers.shape[0], -1)
+    if raw_layers.ndim != 2 or raw_layers.shape[0] < 2:
+        raise ValueError("pseudo-3D layered extrusion requires at least two 2D layers.")
+
+    n_source_layers = int(raw_layers.shape[0])
+    n_cells = int(cells.shape[0])
+    n_tri = int(triangles.shape[0])
+    value_count = int(raw_layers.shape[1])
+    nodal_values = False
+    if value_count == n_nodes:
+        layer_values = raw_layers
+        nodal_values = True
+    elif value_count == n_tri:
+        layer_values = raw_layers
+    elif cells.shape[1] == 4 and value_count == n_cells:
+        layer_values = np.repeat(raw_layers, 2, axis=1)
+    elif cells.shape[1] == 3 and value_count == n_cells:
+        layer_values = raw_layers
+    else:
+        raise ValueError(
+            "pseudo-3D layered conductivity size mismatch: expected per-node, "
+            f"per-cell, or per-triangle values; got {value_count}."
+        )
+
+    display_layers = max(_pseudo3d_display_layers(meta), n_source_layers)
+    slabs = display_layers - 1
+    height = _pseudo3d_display_height(meta)
+    try:
+        z_center = float(meta.get("z_center", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        z_center = 0.0
+    z_values = np.linspace(
+        z_center - 0.5 * height,
+        z_center + 0.5 * height,
+        display_layers,
+        dtype=coord_dtype,
+    )
+    source_z = _pseudo3d_source_layer_z_values(
+        meta=meta,
+        n_layers=n_source_layers,
+        height=height,
+        z_center=z_center,
+        dtype=np.dtype(coord_dtype),
+    )
+
+    coords3 = np.empty((display_layers * n_nodes, 3), dtype=coord_dtype)
+    for layer_idx, z_value in enumerate(z_values):
+        start = layer_idx * n_nodes
+        stop = start + n_nodes
+        coords3[start:stop, 0] = coords2[:, 0]
+        coords3[start:stop, 1] = coords2[:, 1]
+        coords3[start:stop, 2] = z_value
+
+    tets = np.empty((slabs * n_tri * 3, 4), dtype=np.int32)
+    cursor = 0
+    for slab_idx in range(slabs):
+        lower = slab_idx * n_nodes
+        upper = (slab_idx + 1) * n_nodes
+        a0 = triangles[:, 0] + lower
+        b0 = triangles[:, 1] + lower
+        c0 = triangles[:, 2] + lower
+        a1 = triangles[:, 0] + upper
+        b1 = triangles[:, 1] + upper
+        c1 = triangles[:, 2] + upper
+        block = tets[cursor : cursor + n_tri * 3]
+        block[0::3, 0] = a0
+        block[0::3, 1] = b0
+        block[0::3, 2] = c0
+        block[0::3, 3] = a1
+        block[1::3, 0] = b0
+        block[1::3, 1] = b1
+        block[1::3, 2] = c1
+        block[1::3, 3] = a1
+        block[2::3, 0] = b0
+        block[2::3, 1] = c0
+        block[2::3, 2] = c1
+        block[2::3, 3] = a1
+        cursor += n_tri * 3
+
+    sigma_at_display_layers = _interpolate_layer_values_along_z(
+        source_z=source_z,
+        display_z=z_values,
+        layer_values=np.asarray(layer_values),
+    )
+    if nodal_values:
+        sigma3 = sigma_at_display_layers.reshape(-1)
+    else:
+        slab_sigma = 0.5 * (
+            sigma_at_display_layers[:-1, :] + sigma_at_display_layers[1:, :]
+        )
+        sigma3 = np.repeat(slab_sigma.reshape(-1), 3)
+
+    extrusion_meta = {
+        "pseudo3d_extruded": True,
+        "pseudo3d_layered_extruded": True,
+        "pseudo3d_interpolation": "linear_z_between_2d_layers",
+        "pseudo3d_display_layers": int(display_layers),
+        "pseudo3d_display_height": float(height),
+        "pseudo3d_source_layer_count": int(n_source_layers),
+        "pseudo3d_source_layer_z": [float(value) for value in source_z],
+        "pseudo3d_display_layer_z": [float(value) for value in z_values],
+        "pseudo3d_source_cell_count": int(n_tri),
+        "pseudo3d_source_node_count": int(n_nodes),
+        "pseudo3d_tetra_cell_count": int(tets.shape[0]),
+        "pseudo3d_node_count": int(coords3.shape[0]),
+    }
+    return sigma3, coords3, tets, extrusion_meta
+
+
+def _maybe_apply_pseudo3d_result(result: ReconstructionResult) -> ReconstructionResult:
+    meta = dict(result.metadata or {})
+    if not _flag_enabled(meta.get("pseudo3d_output", False)):
+        return result
+    if result.error_msg:
+        return result
+    try:
+        if _flag_enabled(meta.get("pseudo3d_layered_output", False)):
+            sigma3, coords3, cells3, extrusion_meta = (
+                _extrude_layered_2d_results_to_pseudo3d(
+                    conductivity_layers=result.conductivity,
+                    node_coords=result.node_coords,
+                    cell_connectivity=result.cell_connectivity,
+                    meta=meta,
+                )
+            )
+        else:
+            sigma3, coords3, cells3, extrusion_meta = _extrude_2d_result_to_pseudo3d(
+                conductivity=result.conductivity,
+                node_coords=result.node_coords,
+                cell_connectivity=result.cell_connectivity,
+                meta=meta,
+            )
+    except Exception as exc:
+        updated_meta = dict(meta)
+        updated_meta["pseudo3d_extrusion_error"] = str(exc)
+        return ReconstructionResult(
+            conductivity=result.conductivity,
+            node_coords=result.node_coords,
+            cell_connectivity=result.cell_connectivity,
+            measured=result.measured,
+            simulated=result.simulated,
+            error_msg=result.error_msg,
+            metadata=updated_meta,
+        )
+    meta.update(extrusion_meta)
+    meta["mesh_dimension"] = 3
+    meta["conductivity_display_mode"] = str(
+        meta.get("conductivity_display_mode", "absolute_sigma")
+    )
+    return ReconstructionResult(
+        conductivity=sigma3,
+        node_coords=coords3,
+        cell_connectivity=cells3,
+        measured=result.measured,
+        simulated=result.simulated,
+        error_msg=result.error_msg,
+        metadata=meta,
+    )
+
+
+def _pseudo3d_layer_measurement_indices(
+    meta: dict[str, Any],
+    *,
+    expected_measurements: int | None = None,
+) -> list[np.ndarray]:
+    source_n_elec = max(
+        int(meta.get("pseudo3d_source_n_elec", meta.get("n_elec", 16))), 1
+    )
+    source_n_rings = max(
+        int(meta.get("pseudo3d_source_n_rings", meta.get("n_rings", 1))),
+        1,
+    )
+    if source_n_rings < 2:
+        raise ValueError(
+            "pseudo-3D layered reconstruction requires at least two rings."
+        )
+
+    source_geometry = dict(meta.get("pseudo3d_source_geometry") or {})
+    from pyeidors.data.structures import PatternConfig
+    from pyeidors.electrodes.patterns import StimMeasPatternManager
+
+    pattern_config = PatternConfig(
+        n_elec=source_n_elec,
+        n_rings=source_n_rings,
+        stim_pattern=meta.get("stim_pattern", "{ad}"),
+        meas_pattern=meta.get("meas_pattern", "{ad}"),
+        electrode_layout=str(
+            source_geometry.get(
+                "electrode_layout",
+                meta.get("electrode_layout", "ring_major"),
+            )
+        ),
+        measurement_protocol=str(
+            source_geometry.get(
+                "measurement_protocol",
+                meta.get("measurement_protocol", "eidors_full_3d"),
+            )
+        ),
+        custom_stim_matrix=meta.get("custom_stim_matrix"),
+        custom_meas_matrices=meta.get("custom_meas_matrices"),
+        drive_mode=str(meta.get("drive_mode", "line_current_density")),
+        drive_value=float(meta.get("drive_value", 1.0) or 1.0),
+        geometry_scale_to_m=float(meta.get("geometry_scale_to_m", 1.0) or 1.0),
+        electrode_length_m_override=meta.get("electrode_length_m_override"),
+        use_meas_current=_flag_enabled(meta.get("use_meas_current", False)),
+        use_meas_current_next=int(meta.get("use_meas_current_next", 0) or 0),
+        rotate_meas=_flag_enabled(meta.get("rotate_meas", True)),
+        stim_direction=str(meta.get("stim_direction", "ccw")),
+        meas_direction=str(meta.get("meas_direction", "ccw")),
+        stim_first_positive=_flag_enabled(meta.get("stim_first_positive", False)),
+    )
+    manager = StimMeasPatternManager(pattern_config)
+    total = int(manager.n_meas_total)
+    if expected_measurements is not None and int(expected_measurements) != total:
+        raise ValueError(
+            "pseudo-3D source measurement count mismatch: "
+            f"expected {total}, got {int(expected_measurements)}."
+        )
+
+    layer_indices: list[list[int]] = [[] for _ in range(source_n_rings)]
+    for stim_idx, (start_idx, stim_row, meas_mat) in enumerate(
+        zip(manager.meas_start_indices, manager.stim_matrix, manager.meas_matrices)
+    ):
+        del stim_idx
+        stim_electrodes = np.flatnonzero(np.abs(stim_row) > 0.0)
+        stim_rings = {int(electrode // source_n_elec) for electrode in stim_electrodes}
+        if len(stim_rings) != 1:
+            continue
+        ring = next(iter(stim_rings))
+        if ring < 0 or ring >= source_n_rings:
+            continue
+        for row_idx, meas_row in enumerate(np.asarray(meas_mat)):
+            meas_electrodes = np.flatnonzero(np.abs(meas_row) > 0.0)
+            meas_rings = {
+                int(electrode // source_n_elec) for electrode in meas_electrodes
+            }
+            if meas_rings == {ring}:
+                layer_indices[ring].append(int(start_idx) + int(row_idx))
+
+    arrays = [np.asarray(indices, dtype=np.int64) for indices in layer_indices]
+    missing = [idx + 1 for idx, indices in enumerate(arrays) if indices.size == 0]
+    if missing:
+        raise ValueError(
+            "pseudo-3D layered reconstruction could not find same-ring "
+            f"measurements for layer(s): {missing}."
+        )
+    return arrays
+
+
+def _subset_frame_data_for_indices(
+    frame: FrameData,
+    indices: np.ndarray,
+    *,
+    metadata: dict[str, Any],
+) -> FrameData:
+    idx = np.asarray(indices, dtype=np.int64).reshape(-1)
+    real = np.asarray(frame.real)
+    imag = np.asarray(frame.imag)
+    if idx.size == 0:
+        raise ValueError("pseudo-3D layer measurement subset is empty.")
+    if real.size <= int(np.max(idx)) or imag.size <= int(np.max(idx)):
+        raise ValueError("pseudo-3D layer measurement index exceeds frame length.")
+    return FrameData(
+        real=np.asarray(real[idx]).copy(),
+        imag=np.asarray(imag[idx]).copy(),
+        timestamp=frame.timestamp,
+        frame_index=frame.frame_index,
+        metadata={**dict(frame.metadata or {}), **metadata},
+    )
+
+
+def _pseudo3d_layer_request_metadata(
+    meta: dict[str, Any],
+    *,
+    layer_index: int,
+    indices: np.ndarray,
+) -> dict[str, Any]:
+    source_n_elec = max(
+        int(meta.get("pseudo3d_source_n_elec", meta.get("n_elec", 16))), 1
+    )
+    layer_meta = dict(meta)
+    for key in _RM_ARTIFACT_META_KEYS:
+        layer_meta.pop(key, None)
+    layer_meta.update(
+        {
+            "pseudo3d_output": False,
+            "pseudo3d_layered_output": False,
+            "pseudo3d_parent_output": True,
+            "pseudo3d_layer_index": int(layer_index),
+            "pseudo3d_layer_source_ring": int(layer_index),
+            "pseudo3d_layer_measurement_indices": [
+                int(value) for value in np.asarray(indices).reshape(-1)
+            ],
+            "mesh_dimension": 2,
+            "n_elec": int(source_n_elec),
+            "n_rings": 1,
+            "electrode_layout": "ring_major",
+            "measurement_protocol": "eidors_full_3d",
+            "drive_mode": "line_current_density",
+            "drive_value": 1.0,
+            "petsc_device": "cpu",
+            "device": "cpu",
+            "rm_device": "cpu",
+            "forward_backend": "dolfinx",
+            "forward_solver_preset": "auto",
+            "forward_mat_solve": "off",
+            "acceleration_profile": "default",
+            "reconstruction_runtime": "single_step_cached",
+        }
+    )
+    return layer_meta
+
+
+def _run_pseudo3d_layered_request(
+    req: ReconstructionRequest,
+    *,
+    progress_cb: Callable[[str], None] | None = None,
+) -> ReconstructionResult:
+    def emit(message: str) -> None:
+        if progress_cb is not None:
+            progress_cb(message)
+
+    meta = dict(req.metadata or {})
+    full_count = _request_measurement_count(req)
+    layer_indices = _pseudo3d_layer_measurement_indices(
+        meta,
+        expected_measurements=full_count if full_count > 0 else None,
+    )
+    layer_results: list[ReconstructionResult] = []
+    layer_conductivities: list[np.ndarray] = []
+    base_coords: np.ndarray | None = None
+    base_cells: np.ndarray | None = None
+    source_n_elec = max(
+        int(meta.get("pseudo3d_source_n_elec", meta.get("n_elec", 16))), 1
+    )
+
+    for layer_index, indices in enumerate(layer_indices):
+        emit(
+            "Running pseudo-3D layer "
+            f"{layer_index + 1}/{len(layer_indices)} 2D reconstruction..."
+        )
+        layer_meta = _pseudo3d_layer_request_metadata(
+            meta,
+            layer_index=layer_index,
+            indices=indices,
+        )
+        frame_meta = {
+            "pseudo3d_layer_index": int(layer_index),
+            "pseudo3d_parent_measurement_count": int(full_count),
+        }
+        layer_req = ReconstructionRequest(
+            reference_frame=_subset_frame_data_for_indices(
+                req.reference_frame,
+                indices,
+                metadata=frame_meta,
+            ),
+            target_frame=_subset_frame_data_for_indices(
+                req.target_frame,
+                indices,
+                metadata=frame_meta,
+            ),
+            use_part=req.use_part,
+            method=req.method,
+            regularization_alpha=req.regularization_alpha,
+            max_iterations=req.max_iterations,
+            mesh_dimension=2,
+            mesh_refinement=req.mesh_refinement,
+            metadata=layer_meta,
+        )
+        layer_result = _run_single_step_cached_request(
+            layer_req,
+            progress_cb=progress_cb,
+        )
+        if layer_result.error_msg:
+            error_meta = dict(meta)
+            error_meta.update(
+                {
+                    "pseudo3d_layered_execution_error_layer": int(layer_index),
+                    "pseudo3d_layered_execution_error": layer_result.error_msg,
+                }
+            )
+            return ReconstructionResult(
+                conductivity=np.array([]),
+                node_coords=np.array([]),
+                cell_connectivity=np.array([]),
+                error_msg=f"Pseudo-3D layer {layer_index + 1} failed: "
+                f"{layer_result.error_msg}",
+                metadata=error_meta,
+            )
+        layer_results.append(layer_result)
+        layer_conductivities.append(np.asarray(layer_result.conductivity).reshape(-1))
+        coords = np.asarray(layer_result.node_coords)
+        cells = np.asarray(layer_result.cell_connectivity)
+        if base_coords is None:
+            base_coords = coords
+            base_cells = cells
+        elif (
+            base_coords.shape != coords.shape
+            or base_cells is None
+            or base_cells.shape != cells.shape
+            or not np.array_equal(base_cells, cells)
+            or not np.allclose(base_coords, coords, equal_nan=True)
+        ):
+            raise ValueError("pseudo-3D layer inverse meshes do not match.")
+
+    if base_coords is None or base_cells is None or not layer_conductivities:
+        raise ValueError("pseudo-3D layered reconstruction produced no layer results.")
+
+    conductivity_lengths = {values.size for values in layer_conductivities}
+    if len(conductivity_lengths) != 1:
+        raise ValueError("pseudo-3D layer conductivity vector lengths do not match.")
+    conductivity_layers = np.stack(layer_conductivities, axis=0)
+    ref_vec = np.asarray(req.reference_frame.to_measurement_vector(req.use_part))
+    tgt_vec = np.asarray(req.target_frame.to_measurement_vector(req.use_part))
+    measured_diff = build_difference_vector(
+        tgt_vec,
+        ref_vec,
+        mode=str(meta.get("difference_mode", "raw")),
+        orientation=str(meta.get("difference_orientation", "target_minus_reference")),
+    )
+    combined_meta = dict(meta)
+    combined_meta.update(
+        {
+            "pseudo3d_layered_executed": True,
+            "pseudo3d_layer_count": int(len(layer_indices)),
+            "pseudo3d_layer_n_elec": int(source_n_elec),
+            "pseudo3d_layer_measurement_counts": [
+                int(indices.size) for indices in layer_indices
+            ],
+            "pseudo3d_layer_measurement_indices": [
+                [int(value) for value in indices] for indices in layer_indices
+            ],
+            "pseudo3d_layer_result_count": int(len(layer_results)),
+            "pseudo3d_voltage_fit_scope": "full_source_measured_layer_local_inverse",
+        }
+    )
+    emit("Interpolating pseudo-3D layer reconstructions...")
+    return _maybe_apply_pseudo3d_result(
+        ReconstructionResult(
+            conductivity=conductivity_layers,
+            node_coords=base_coords,
+            cell_connectivity=base_cells,
+            measured=measured_diff,
+            simulated=None,
+            metadata=combined_meta,
+        )
+    )
 
 
 def _rm_dtype_name_from_meta(meta: dict[str, Any]) -> str:
@@ -1660,8 +2386,37 @@ def _recover_nix_runtime_site_packages(missing_name: str) -> tuple[str, ...]:
 
 @lru_cache(maxsize=1)
 def _load_gn_difference_runner_module():
-    """Load the realtime GN helper module even when only `src/` is on sys.path."""
-    module_name = "scripts.common.gn_difference_runner"
+    """Load the realtime GN helper module from the installed package first."""
+    packaged_name = "pyeidors.realtime.gn_difference_runner"
+    legacy_name = "scripts.common.gn_difference_runner"
+
+    try:
+        return _import_gn_difference_runner_candidate(
+            packaged_name,
+            allow_repo_scripts=False,
+        )
+    except ModuleNotFoundError as exc:
+        if not _module_missing_self(exc, packaged_name):
+            raise
+    return _import_gn_difference_runner_candidate(
+        legacy_name,
+        allow_repo_scripts=True,
+    )
+
+
+def _module_missing_self(exc: ModuleNotFoundError, module_name: str) -> bool:
+    missing_name = str(getattr(exc, "name", "") or "")
+    return bool(
+        missing_name
+        and (missing_name == module_name or module_name.startswith(f"{missing_name}."))
+    )
+
+
+def _import_gn_difference_runner_candidate(
+    module_name: str,
+    *,
+    allow_repo_scripts: bool,
+):
     repo_root = Path(__file__).resolve().parents[3]
     module_path = repo_root / "scripts" / "common" / "gn_difference_runner.py"
     repo_root_str = str(repo_root)
@@ -1671,7 +2426,11 @@ def _load_gn_difference_runner_module():
             return importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
             missing_name = str(getattr(exc, "name", "") or "")
-            if missing_name in {"scripts", "scripts.common", module_name}:
+            if allow_repo_scripts and missing_name in {
+                "scripts",
+                "scripts.common",
+                module_name,
+            }:
                 if not module_path.exists():
                     raise
                 if repo_root_str not in sys.path:
@@ -1849,6 +2608,12 @@ def _resolve_rm_artifact_path(meta: dict[str, Any]) -> Path | None:
         if path.exists():
             return path
         if not path.is_absolute():
+            cache_relative = resolve_pyeidors_cache_dir(path)
+            if cache_relative != path and cache_relative.exists():
+                return cache_relative
+            runtime_relative = pyeidors_cache_path(path)
+            if runtime_relative.exists():
+                return runtime_relative
             repo_relative = Path(__file__).resolve().parents[3] / path
             if repo_relative.exists():
                 return repo_relative
@@ -1897,12 +2662,15 @@ def _stable_json_digest(value: Any) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _repo_relative_or_absolute_path(path: Any, *, default: str) -> Path:
+def _cache_relative_or_absolute_path(path: Any, *, default: str) -> Path:
     raw = str(path or default).strip() or default
     candidate = Path(raw).expanduser()
     if candidate.is_absolute():
         return candidate
-    return Path(__file__).resolve().parents[3] / candidate
+    cache_relative = resolve_pyeidors_cache_dir(candidate)
+    if cache_relative != candidate:
+        return cache_relative
+    return pyeidors_cache_path(candidate)
 
 
 def _flag_enabled(value: Any) -> bool:
@@ -2095,7 +2863,7 @@ def _greit_registry_config_from_runtime(
 
 
 def _greit_registry_dir_from_meta(meta: dict[str, Any]) -> Path:
-    return _repo_relative_or_absolute_path(
+    return _cache_relative_or_absolute_path(
         meta.get("greit_registry_dir", meta.get("rm_artifact_dir")),
         default=".pyeidors_cache/greit_artifacts",
     )
@@ -2280,7 +3048,7 @@ def _planned_one_step_rm_artifact_path(
     runtime: _SingleStepCachedRuntimeConfig,
 ) -> tuple[Path, str, dict[str, Any]]:
     signature, payload = _planned_one_step_rm_signature(req, runtime)
-    artifact_dir = _repo_relative_or_absolute_path(
+    artifact_dir = _cache_relative_or_absolute_path(
         runtime.meta.get("rm_artifact_dir"),
         default=".pyeidors_cache/gui_rm",
     )
@@ -4896,15 +5664,22 @@ def run_reconstruction_request(
             runtime_path,
             (req.metadata or {}).get("request_source"),
         )
+        if _flag_enabled((req.metadata or {}).get("pseudo3d_layered_output", False)):
+            log.info("[recon-dispatch] -> pseudo3d_layered")
+            return _run_pseudo3d_layered_request(req, progress_cb=progress_cb)
         if _can_dispatch_single_step_cached(
             req,
             method_lc=method_lc,
             runtime_path=runtime_path,
         ):
             log.info("[recon-dispatch] -> single_step_cached (fast path)")
-            return _run_single_step_cached_request(req, progress_cb=progress_cb)
+            return _maybe_apply_pseudo3d_result(
+                _run_single_step_cached_request(req, progress_cb=progress_cb)
+            )
         log.info("[recon-dispatch] -> full_gn (iterative path)")
-        return _run_full_gn_request(req, progress_cb=progress_cb)
+        return _maybe_apply_pseudo3d_result(
+            _run_full_gn_request(req, progress_cb=progress_cb)
+        )
 
     except Exception as exc:
         log.exception("Reconstruction failed")
@@ -4950,6 +5725,7 @@ def execute_reconstruction_request_in_backend(
         )
         from eit_app.backend_worker_runtime import (
             backend_worker_command,
+            clean_profile_command_env,
             backend_worker_env,
             backend_worker_profile_lock,
         )
@@ -5033,6 +5809,8 @@ def execute_reconstruction_request_in_backend(
         )
         with backend_worker_profile_lock(repo, profile_name):
             env, cache = backend_worker_env(repo=repo, profile=profile_name)
+            if launch_mode == "profile_command":
+                clean_profile_command_env(env)
             if cache.removed_stale_jit_locks:
                 emit(
                     "Cleaned backend JIT cache: "

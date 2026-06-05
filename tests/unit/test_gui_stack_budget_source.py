@@ -49,20 +49,22 @@ from eit_app.ui.hardware.reconstruction_widget import (
 from eit_app.ui.main_window import EITWorkstation
 
 
-def test_v285_mpl3d_electrode_patch_generation_avoids_column_stack() -> None:
-    source = inspect.getsource(Conductivity3DWidget._build_mpl3d_electrode_collection)
+def test_v285_pyvista_electrode_polydata_avoids_column_stack() -> None:
+    source = inspect.getsource(Conductivity3DWidget._build_electrode_polydata)
 
     assert "np.column_stack" not in source
 
 
-def test_v370_mpl3d_electrode_patch_polygons_use_float32_direct_fill() -> None:
-    source = inspect.getsource(Conductivity3DWidget._build_mpl3d_electrode_collection)
+def test_v370_3d_electrode_overlay_has_no_matplotlib_polygon_fallback() -> None:
+    source = inspect.getsource(Conductivity3DWidget)
+    polydata_source = inspect.getsource(Conductivity3DWidget._build_electrode_polydata)
 
+    assert "_build_mpl3d_electrode_collection" not in source
+    assert "Poly3DCollection" not in source
     assert "dtype=np.float64" not in source
     assert "dtype=float" not in source
-    assert "np.array(" not in source
-    assert "quad = np.empty((4, 3), dtype=np.float32)" in source
-    assert "polys.append(quad)" in source
+    assert "np.array(" not in polydata_source
+    assert "pv.PolyData(points, face_buffer.ravel())" in polydata_source
 
 
 def test_v308_point_cloud_sampling_direct_fills_selected_indices() -> None:
@@ -327,20 +329,16 @@ def test_v389_point_cloud_highlight_direct_fills_from_mask() -> None:
     pyvista_source = inspect.getsource(
         Conductivity3DWidget._add_pyvista_point_cloud_actors
     )
-    mpl_source = inspect.getsource(
-        Conductivity3DWidget._render_matplotlib_point_cloud_scene
-    )
+    widget_source = inspect.getsource(Conductivity3DWidget)
 
     assert "display_centers[inhom_mask" not in pyvista_source
-    assert "display_centers[inhom_mask" not in mpl_source
     assert "display_sigma[inhom_mask" not in pyvista_source
-    assert "display_sigma[inhom_mask" not in mpl_source
+    assert "_render_matplotlib_point_cloud_scene" not in widget_source
     assert "np.flatnonzero" not in helper_source
     assert "np.take(" not in helper_source
     assert "active_count = int(np.count_nonzero(active_mask))" in helper_source
     assert "highlight_centers = np.empty(" in helper_source
     assert pyvista_source.count("_point_cloud_highlight_arrays(") == 1
-    assert mpl_source.count("_point_cloud_highlight_arrays(") == 1
 
     centers = np.arange(18, dtype=np.float32).reshape(6, 3)
     sigma = np.linspace(0.0, 1.0, 6, dtype=np.float32)
@@ -358,14 +356,11 @@ def test_v389_point_cloud_highlight_direct_fills_from_mask() -> None:
     assert highlight_sigma.dtype == np.dtype(np.float32)
 
 
-def test_v355_matplotlib_surface_uses_dtype_preserving_face_values() -> None:
-    source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
+def test_v355_3d_display_uses_dtype_preserving_face_value_helper() -> None:
+    render_source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
     helper_source = inspect.getsource(_face_cell_values)
 
-    assert "sigma.astype(float" not in source
-    assert "dtype=float" not in source
-    assert "face_values = np.take(cell_sigma, source_indices)" not in source
-    assert "_face_cell_values(cell_sigma, source_indices)" in source
+    assert "_show_pyvista_offscreen_unavailable" in render_source
     assert "np.take(values, source_indices, out=out)" in helper_source
     highlight_source = inspect.getsource(_highlight_face_vertices_and_values)
     assert "dtype=sigma_arr.dtype" in highlight_source
@@ -377,27 +372,28 @@ def test_v355_matplotlib_surface_uses_dtype_preserving_face_values() -> None:
     assert face_values.dtype == np.dtype(np.float32)
 
 
-def test_v371_matplotlib_point_face_values_avoid_indexed_nanmean() -> None:
-    source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
+def test_v371_point_face_values_avoid_indexed_nanmean() -> None:
+    source = inspect.getsource(widget3d._face_nanmean_value)
 
-    assert "np.nanmean(point_sigma[np.asarray(face" not in source
-    assert "_face_nanmean_value(point_sigma, face)" in source
-
-
-def test_v372_matplotlib_surface_face_vertices_avoid_index_arrays() -> None:
-    source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
-
-    assert "coords[np.asarray(face" not in source
-    assert "_face_vertices_array(coords, valid_faces)" in source
+    assert "point_values[" in source
+    assert "np.asarray(face" not in source
+    assert "np.nanmean" not in source
 
 
-def test_v369_matplotlib_surface_reuses_facecolor_buffers() -> None:
-    source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
+def test_v372_surface_face_vertices_avoid_index_arrays() -> None:
+    source = inspect.getsource(widget3d._face_vertices)
+
+    assert "np.asarray(face" not in source
+    assert "coords_arr[" in source
+
+
+def test_v369_3d_widget_has_no_mpl3d_facecolor_cache() -> None:
+    source = inspect.getsource(Conductivity3DWidget)
 
     assert "self._mpl3d_mesh_facecolors = colors.copy()" not in source
     assert "self._mpl3d_highlight_facecolors = highlight_colors.copy()" not in source
-    assert "self._mpl3d_mesh_facecolors = colors" in source
-    assert "self._mpl3d_highlight_facecolors = highlight_colors" in source
+    assert "_mpl3d_mesh_facecolors" not in source
+    assert "_mpl3d_highlight_facecolors" not in source
 
 
 def test_v356_equipotential_update_preserves_float32_inputs() -> None:
@@ -631,7 +627,7 @@ def test_v559_equipotential_pyvista_points_preserve_coord_dtype() -> None:
     )
 
 
-def test_v332_offscreen_failure_cache_bypasses_retry_without_qt(monkeypatch) -> None:
+def test_v332_offscreen_failure_cache_shows_caption_without_qt(monkeypatch) -> None:
     calls: list[str] = []
 
     class _DummyWidget:
@@ -646,8 +642,8 @@ def test_v332_offscreen_failure_cache_bypasses_retry_without_qt(monkeypatch) -> 
             calls.append("offscreen")
             return True
 
-        def _render_matplotlib_scene(self, _sigma, _coords, _cells) -> None:
-            calls.append("mpl3d")
+        def _show_pyvista_offscreen_unavailable(self, reason) -> None:
+            calls.append(f"caption:{reason}")
 
     monkeypatch.delenv("EIT_APP_3D_PYVISTA_OFFSCREEN_NEGATIVE_CACHE", raising=False)
     widget3d._clear_pyvista_offscreen_failure_cache()
@@ -661,22 +657,20 @@ def test_v332_offscreen_failure_cache_bypasses_retry_without_qt(monkeypatch) -> 
             reason="embedded disabled",
         )
 
-        assert calls == ["discard", "mpl3d"]
+        assert calls == ["discard", "caption:unit failure"]
     finally:
         widget3d._clear_pyvista_offscreen_failure_cache()
 
 
-def test_v568_wslg_offscreen_skip_uses_reason_gate() -> None:
+def test_v568_wslg_offscreen_does_not_use_reason_skip_gate() -> None:
     render_source = inspect.getsource(Conductivity3DWidget._render_without_embedded_vtk)
     helper_source = inspect.getsource(
         widget3d._should_skip_pyvista_offscreen_for_reason
     )
 
-    assert "_should_skip_pyvista_offscreen_for_reason" in render_source
-    assert "WSLg embedded VTK requires" in helper_source
-    assert "_PYVISTA_OFFSCREEN_WSLG_ENV" in inspect.getsource(
-        widget3d._wslg_pyvista_offscreen_enabled
-    )
+    assert "_should_skip_pyvista_offscreen_for_reason" not in render_source
+    assert "return False" in helper_source
+    assert "WSLg embedded VTK requires" not in helper_source
 
 
 def test_v337_channel_values_preserves_single_precision_display_dtype() -> None:
@@ -838,7 +832,6 @@ def test_v618_channel_colorbar_metadata_reaches_all_conductivity_renderers() -> 
     pyvista_source = inspect.getsource(
         Conductivity3DWidget._render_pyvista_offscreen_scene
     )
-    mpl_source = inspect.getsource(Conductivity3DWidget._render_matplotlib_scene)
     embedded_source = inspect.getsource(Conductivity3DWidget._build_scene)
 
     assert "_display_options_for_channel" in render_source
@@ -862,9 +855,6 @@ def test_v618_channel_colorbar_metadata_reaches_all_conductivity_renderers() -> 
     assert "_display_color_limits(cell_sigma, self._value_limits)" in pyvista_source
     assert "cmap=self._colormap" in pyvista_source
     assert '"title": self._colorbar_label' in pyvista_source
-    assert "_display_color_limits(face_values, self._value_limits)" in mpl_source
-    assert "_matplotlib_colormap(self._colormap)" in mpl_source
-    assert "self._colorbar_label" in mpl_source
     assert "_display_color_limits(cell_sigma, self._value_limits)" in embedded_source
     assert "cmap=self._colormap" in embedded_source
     assert '"title": self._colorbar_label' in embedded_source

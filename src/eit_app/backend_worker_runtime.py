@@ -12,6 +12,14 @@ import sys
 import time
 from typing import Iterator
 
+from pyeidors.runtime_paths import (
+    pyeidors_cache_path,
+    pyeidors_cache_root,
+    pyeidors_data_root,
+    pyeidors_output_root,
+    pyeidors_runtime_root,
+)
+
 
 @dataclass(frozen=True)
 class BackendWorkerCache:
@@ -33,7 +41,7 @@ def backend_worker_cache_root(repo: Path) -> Path:
     override = os.getenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", "").strip()
     if override:
         return Path(override).expanduser()
-    return Path(repo) / ".pyeidors_cache" / "gui_backend_worker"
+    return pyeidors_cache_path("gui_backend_worker")
 
 
 def backend_worker_profile_root(repo: Path, profile: str) -> Path:
@@ -219,6 +227,22 @@ def prepare_inprocess_backend_runtime(
         or "default"
     )
     cache = prepare_backend_worker_cache(repo, profile_name)
+    runtime_root = pyeidors_runtime_root()
+    cache_root = pyeidors_cache_root()
+    data_root = pyeidors_data_root()
+    output_root = pyeidors_output_root()
+    os.environ.setdefault("PYEIDORS_RUNTIME_ROOT", str(runtime_root))
+    os.environ.setdefault("PYEIDORS_CACHE_ROOT", str(cache_root))
+    os.environ.setdefault("PYEIDORS_DATA_ROOT", str(data_root))
+    os.environ.setdefault("PYEIDORS_OUTPUT_ROOT", str(output_root))
+    os.environ.setdefault(
+        "PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR",
+        str(cache_root / "greit_artifacts"),
+    )
+    os.environ.setdefault(
+        "PYEIDORS_GREIT_COMMON_CONFIG_DIR",
+        str(cache_root / "greit_common_configs"),
+    )
     os.environ["XDG_CACHE_HOME"] = str(cache.xdg_cache_home)
     os.environ.setdefault("PYEIDORS_PETSC_CUDA_PROBE_CACHE", "1")
     os.environ.setdefault(
@@ -232,6 +256,53 @@ def prepare_inprocess_backend_runtime(
             _old_value, description = options["cache_dir"]
             options["cache_dir"] = (cache.xdg_cache_home / "fenics", description)
     return cache
+
+
+def _is_python_package_path(path: Path) -> bool:
+    return path.name in {"site-packages", "dist-packages"}
+
+
+def _backend_pythonpath_entries(repo: Path) -> tuple[str, ...]:
+    entries: list[str] = []
+    for candidate in (Path(repo) / "src", Path(repo)):
+        if candidate.exists():
+            entries.append(str(candidate))
+
+    for entry in sys.path:
+        if not entry:
+            continue
+        path = Path(entry)
+        if not path.is_absolute():
+            continue
+        try:
+            if not path.exists():
+                continue
+        except OSError:
+            continue
+        if _is_python_package_path(path):
+            entries.append(str(path))
+
+    unique: list[str] = []
+    seen: set[str] = set()
+    for entry in entries:
+        if entry in seen:
+            continue
+        seen.add(entry)
+        unique.append(entry)
+    return tuple(unique)
+
+
+def _prepend_pythonpath(env: dict[str, str], entries: tuple[str, ...]) -> None:
+    merged: list[str] = []
+    seen: set[str] = set()
+    existing = [entry for entry in env.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    for entry in (*entries, *existing):
+        if entry in seen:
+            continue
+        seen.add(entry)
+        merged.append(entry)
+    if merged:
+        env["PYTHONPATH"] = os.pathsep.join(merged)
 
 
 @contextmanager
@@ -266,11 +337,12 @@ def backend_worker_env(
     """Build subprocess environment and attach the persistent profile cache."""
 
     cache = prepare_backend_worker_cache(repo, profile)
-    py_path = f"{Path(repo) / 'src'}:{Path(repo)}"
     env = dict(os.environ)
-    env["PYTHONPATH"] = (
-        f"{py_path}:{env['PYTHONPATH']}" if env.get("PYTHONPATH") else py_path
-    )
+    runtime_root = pyeidors_runtime_root()
+    cache_root = pyeidors_cache_root()
+    data_root = pyeidors_data_root()
+    output_root = pyeidors_output_root()
+    _prepend_pythonpath(env, _backend_pythonpath_entries(repo))
     env["UV_NO_PROGRESS"] = env.get("UV_NO_PROGRESS", "1")
     env["PYEIDORS_ENV_SYNC_CACHE"] = env.get("PYEIDORS_ENV_SYNC_CACHE", "1")
     env["PYEIDORS_ENV_SYNC_CACHE_TTL_SECONDS"] = env.get(
@@ -285,6 +357,30 @@ def backend_worker_env(
     env["PYEIDORS_ENV_SYNC_QUIET_REPAIR"] = env.get(
         "PYEIDORS_ENV_SYNC_QUIET_REPAIR",
         "1",
+    )
+    env["PYEIDORS_RUNTIME_ROOT"] = env.get(
+        "PYEIDORS_RUNTIME_ROOT",
+        str(runtime_root),
+    )
+    env["PYEIDORS_CACHE_ROOT"] = env.get(
+        "PYEIDORS_CACHE_ROOT",
+        str(cache_root),
+    )
+    env["PYEIDORS_DATA_ROOT"] = env.get(
+        "PYEIDORS_DATA_ROOT",
+        str(data_root),
+    )
+    env["PYEIDORS_OUTPUT_ROOT"] = env.get(
+        "PYEIDORS_OUTPUT_ROOT",
+        str(output_root),
+    )
+    env["PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR"] = env.get(
+        "PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR",
+        str(cache_root / "greit_artifacts"),
+    )
+    env["PYEIDORS_GREIT_COMMON_CONFIG_DIR"] = env.get(
+        "PYEIDORS_GREIT_COMMON_CONFIG_DIR",
+        str(cache_root / "greit_common_configs"),
     )
     env["XDG_CACHE_HOME"] = str(cache.xdg_cache_home)
     env["PYEIDORS_PETSC_CUDA_PROBE_CACHE"] = env.get(
@@ -306,6 +402,24 @@ def backend_worker_env(
     return env, cache
 
 
+def clean_profile_command_env(env: dict[str, str]) -> None:
+    """Let a packaged profile worker provide its own wrapped Python path."""
+    env.pop("PYTHONPATH", None)
+    env["PYTHONNOUSERSITE"] = "1"
+
+
+def _profile_command_env_name(profile: str) -> str:
+    key = _safe_profile_key(profile).replace("-", "_").replace(".", "_")
+    return f"EIT_APP_BACKEND_WORKER_COMMAND_{key.upper()}"
+
+
+def _profile_command(profile: str) -> list[str] | None:
+    raw = os.getenv(_profile_command_env_name(profile), "").strip()
+    if not raw:
+        return None
+    return shlex.split(raw)
+
+
 def backend_worker_command(
     *,
     profile: str,
@@ -320,9 +434,14 @@ def backend_worker_command(
     current_profile = (
         os.getenv("EIT_APP_GUI_RUNTIME_PROFILE", "default").strip() or "default"
     )
-    if launch_mode in {"direct", "current-python"} or (
-        launch_mode in {"", "auto"} and profile_name == current_profile
-    ):
+    if profile_name != current_profile:
+        packaged_command = _profile_command(profile_name)
+        if packaged_command:
+            return [*packaged_command, *worker_args], "profile_command"
+
+    if (
+        launch_mode in {"direct", "current-python"} and profile_name == current_profile
+    ) or (launch_mode in {"", "auto"} and profile_name == current_profile):
         return (
             [sys.executable, "-m", "eit_app.backend_worker", *worker_args],
             "current_python",

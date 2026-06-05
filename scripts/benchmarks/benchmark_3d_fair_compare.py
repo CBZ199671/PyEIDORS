@@ -30,6 +30,7 @@ from pyeidors.perf.policy import (
     QUICK_PERF_PROFILES,
     is_experimental_profile,
 )
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
@@ -44,12 +45,12 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("reports") / "perf" / "fair_compare_latest.json",
+        default=pyeidors_output_path("perf", "fair_compare_latest.json"),
     )
     parser.add_argument(
         "--output-md",
         type=Path,
-        default=Path("reports") / "perf" / "fair_compare_latest.md",
+        default=pyeidors_output_path("perf", "fair_compare_latest.md"),
     )
     parser.add_argument(
         "--repeat",
@@ -63,9 +64,13 @@ def _parse_args() -> argparse.Namespace:
         default="1,2",
         help="Comma-separated refinement levels for full mode.",
     )
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
     parser.add_argument(
-        "--cache-root", type=Path, default=Path(".pyeidors_cache") / "fair_compare"
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
+    parser.add_argument(
+        "--cache-root",
+        type=Path,
+        default=pyeidors_cache_path("fair_compare"),
     )
     add_acceleration_profile_argument(
         parser,

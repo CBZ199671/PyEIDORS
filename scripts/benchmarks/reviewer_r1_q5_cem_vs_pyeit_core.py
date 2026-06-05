@@ -25,6 +25,7 @@ from pyeidors import EITSystem  # noqa: E402
 from pyeidors.data.structures import EITImage, PatternConfig  # noqa: E402
 from pyeidors.data.synthetic_data import create_custom_phantom  # noqa: E402
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_cache_path  # noqa: E402
 
 from benchmark_difference_runtime import (  # noqa: E402
     build_single_step_namespace,
@@ -57,7 +58,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--source-dir", type=Path, default=fairness_dir / "r1c5_sources"
     )
-    parser.add_argument("--mesh-dir", type=Path, default=REPO_ROOT / "eit_meshes")
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
     parser.add_argument(
         "--mesh-level", choices=["coarse", "medium", "fine"], default="medium"
     )

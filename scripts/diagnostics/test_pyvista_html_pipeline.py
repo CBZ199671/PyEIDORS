@@ -25,13 +25,14 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
+from pyeidors.runtime_paths import pyeidors_output_path
 from scripts.common.hdf5_outputs import read_output_bundle
 
-DEFAULT_INPUT = (
-    REPO_ROOT / "results" / "figures_3d_inverse_demo" / "inverse_3d_overview_data.h5"
+DEFAULT_INPUT = pyeidors_output_path(
+    "figures_3d_inverse_demo", "inverse_3d_overview_data.h5"
 )
-DEFAULT_OUTPUT_DIR = (
-    REPO_ROOT / "results" / "figures_3d_inverse_demo" / "pyvista_html_test"
+DEFAULT_OUTPUT_DIR = pyeidors_output_path(
+    "figures_3d_inverse_demo", "pyvista_html_test"
 )
 
 

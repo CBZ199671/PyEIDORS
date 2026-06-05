@@ -17,6 +17,604 @@
       forAllSystems = lib.genAttrs systems;
     in
     {
+      packages = forAllSystems (
+        system:
+        let
+          nixpkgsPath = nixpkgs.outPath;
+          pkgs = import nixpkgs { inherit system; };
+          python = pkgs.python313;
+          py = python.pkgs;
+          hasPy = pyFor: name: builtins.hasAttr name pyFor;
+          pyOpt = pyFor: name: if hasPy pyFor name then [ (builtins.getAttr name pyFor) ] else [ ];
+          pyeidorsVersion = (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.version;
+          pyeidorsSource = lib.cleanSourceWith {
+            src = ./.;
+            filter =
+              path: type:
+              let
+                root = toString ./.;
+                rel = lib.removePrefix "${root}/" (toString path);
+              in
+              rel == "pyproject.toml"
+              || rel == "README.md"
+              || rel == "LICENSE"
+              || rel == "src"
+              || (
+                lib.hasPrefix "src/" rel
+                && !(lib.hasInfix "/__pycache__/" rel)
+                && !(lib.hasSuffix ".pyc" rel)
+                && !(lib.hasSuffix ".pyo" rel)
+                && !(lib.hasPrefix "src/pyeidors.egg-info/" rel)
+                && !(lib.hasPrefix "src/hello." rel)
+              );
+          };
+          mkLinuxGuiLibs = pkgsFor: [
+            pkgsFor.glib
+            pkgsFor.dbus
+            pkgsFor.wayland
+            pkgsFor.fontconfig
+            pkgsFor.freetype
+            pkgsFor.expat
+            pkgsFor.xorg.libX11
+            pkgsFor.xorg.libXau
+            pkgsFor.xorg.libXdmcp
+            pkgsFor.xorg.libXext
+            pkgsFor.xorg.libXrender
+            pkgsFor.xorg.libXt
+            pkgsFor.xorg.libSM
+            pkgsFor.xorg.libICE
+            pkgsFor.xorg.libxcb
+            pkgsFor.xorg.xcbutil
+            pkgsFor.xorg.xcbutilcursor
+            pkgsFor.xorg.xcbutilimage
+            pkgsFor.xorg.xcbutilkeysyms
+            pkgsFor.xorg.xcbutilrenderutil
+            pkgsFor.xorg.xcbutilwm
+            pkgsFor.libGL
+            pkgsFor.libGLU
+            pkgsFor.libxkbcommon
+            pkgsFor.mesa
+          ];
+          mkFenicsDolfinx = pyFor: petsc4pyPkg: (pyFor."fenics-dolfinx".override {
+            petsc4py = petsc4pyPkg;
+          }).overridePythonAttrs (
+            old: {
+              nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyFor.cmake ];
+              doCheck = false;
+              doInstallCheck = false;
+            }
+          );
+          fenicsDolfinx = mkFenicsDolfinx py py.petsc4py;
+          petsc4pyComplex = py.petsc4py.override {
+            scalarType = "complex";
+            withHypre = false;
+          };
+          petsc4pyComplexSingle = py.petsc4py.override {
+            scalarType = "complex";
+            precision = "single";
+            withHypre = false;
+            withSuperLuDist = false;
+            withFftw = false;
+            withSuitesparse = false;
+          };
+          fenicsDolfinxComplex = mkFenicsDolfinx py petsc4pyComplex;
+          fenicsDolfinxComplexSingle = mkFenicsDolfinx py petsc4pyComplexSingle;
+
+          linuxCudaSupported = system == "x86_64-linux";
+          pkgsCuda = if linuxCudaSupported then import nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              cudaSupport = true;
+            };
+            overlays = [
+              (_final: _prev: {
+                ucx = pkgs.ucx;
+                ucc = pkgs.ucc;
+                openmpi = pkgs.openmpi;
+              })
+            ];
+          } else null;
+          pythonCuda = if linuxCudaSupported then pkgsCuda.python313 else null;
+          pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
+          mkCudaPetsc = { scalarType ? null, precision ? null }:
+            if linuxCudaSupported then
+              (pkgsCuda.petsc.override ({
+                mpi = pkgsCuda.openmpi;
+                python3Packages = pyCuda;
+                pythonSupport = true;
+              } // lib.optionalAttrs (scalarType != null) {
+                inherit scalarType;
+                withHypre = false;
+                withSuperLuDist = false;
+                withFftw = false;
+                withSuitesparse = false;
+              } // lib.optionalAttrs (precision != null) {
+                inherit precision;
+              })).overrideAttrs (old: {
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgsCuda.cudaPackages.cuda_nvcc ];
+                buildInputs = (old.buildInputs or [ ]) ++ [
+                  pkgsCuda.cudaPackages.cuda_cudart
+                  pkgsCuda.cudaPackages.libcublas
+                  pkgsCuda.cudaPackages.libcusolver
+                  pkgsCuda.cudaPackages.libcusparse
+                ];
+                configureFlags = (old.configureFlags or [ ]) ++ [
+                  "--with-cuda=1"
+                  "--with-cudac=${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                  "--with-cuda-dir=${pkgsCuda.cudaPackages.cudatoolkit}"
+                  "--with-cublas=1"
+                  "--with-cusparse=1"
+                  "--with-cusolver=1"
+                ];
+                doInstallCheck = false;
+                postInstall = lib.replaceStrings [ "--replace-fail" ] [ "--replace" ] (old.postInstall or "");
+              })
+            else null;
+          cudaPetsc = mkCudaPetsc { };
+          cudaPetscComplex = mkCudaPetsc { scalarType = "complex"; };
+          cudaPetscComplexSingle = mkCudaPetsc { scalarType = "complex"; precision = "single"; };
+          cudaPetsc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetsc else null;
+          cudaPetscComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplex else null;
+          cudaPetscComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexSingle else null;
+          mkCudaSlepc = petscPkg: if linuxCudaSupported then (
+            pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/sl/slepc/package.nix" {
+              python3Packages = pyCuda;
+              petsc = petscPkg;
+              pythonSupport = true;
+            }
+          ).overrideAttrs (old: {
+            doInstallCheck = false;
+            doCheck = false;
+          }) else null;
+          cudaSlepc = mkCudaSlepc cudaPetsc;
+          cudaSlepcComplex = mkCudaSlepc cudaPetscComplex;
+          cudaSlepcComplexSingle = mkCudaSlepc cudaPetscComplexSingle;
+          cudaSlepc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepc else null;
+          cudaSlepcComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplex else null;
+          cudaSlepcComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexSingle else null;
+          mkCudaDolfinx = petscPkg: slepcPkg:
+            if linuxCudaSupported then pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
+              python3Packages = pyCuda;
+              petsc = petscPkg;
+              slepc = slepcPkg;
+            } else null;
+          cudaDolfinx = mkCudaDolfinx cudaPetsc cudaSlepc;
+          cudaDolfinxComplex = mkCudaDolfinx cudaPetscComplex cudaSlepcComplex;
+          cudaDolfinxComplexSingle = mkCudaDolfinx cudaPetscComplexSingle cudaSlepcComplexSingle;
+          mkCudaFenicsDolfinx = dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
+            if linuxCudaSupported then (
+              pyCuda.callPackage "${nixpkgsPath}/pkgs/development/python-modules/fenics-dolfinx/default.nix" {
+                dolfinx = dolfinxPkg;
+                petsc4py = petsc4pyPkg;
+                slepc4py = slepc4pyPkg;
+              }
+            ).overridePythonAttrs (
+              old: {
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pyCuda.cmake ];
+                doCheck = false;
+                doInstallCheck = false;
+              }
+            ) else null;
+          cudaFenicsDolfinx = mkCudaFenicsDolfinx cudaDolfinx cudaPetsc4py cudaSlepc4py;
+          cudaFenicsDolfinxComplex = mkCudaFenicsDolfinx cudaDolfinxComplex cudaPetscComplex4py cudaSlepcComplex4py;
+          cudaFenicsDolfinxComplexSingle = mkCudaFenicsDolfinx cudaDolfinxComplexSingle cudaPetscComplexSingle4py cudaSlepcComplexSingle4py;
+
+          mkRuntimePython = { pkgsFor, pyFor }:
+            let
+              h5pyMpi = pyFor.h5py.override {
+                hdf5 = pkgsFor.hdf5-mpi;
+                mpi4py = pyFor.mpi4py;
+              };
+              h5netcdfMpi = (pyFor.h5netcdf.override {
+                h5py = h5pyMpi;
+              }).overridePythonAttrs (
+                old: {
+                  doCheck = false;
+                  nativeCheckInputs = [ ];
+                }
+              );
+              meshioMpi = (pyFor.meshio.override {
+                h5py = h5pyMpi;
+              }).overridePythonAttrs (
+                old: {
+                  doCheck = false;
+                  nativeCheckInputs = [ ];
+                }
+              );
+              arvizRuntime = (pyFor.arviz.override {
+                h5netcdf = h5netcdfMpi;
+              }).overridePythonAttrs (
+                old: {
+                  doCheck = false;
+                  nativeCheckInputs = [ ];
+                }
+              );
+              versioneer026 = pyFor.buildPythonPackage rec {
+                pname = "versioneer";
+                version = "0.26";
+                pyproject = true;
+
+                src = pkgsFor.fetchPypi {
+                  inherit pname version;
+                  hash = "sha256-hPxymqKW0dJmRaj2LxeAGYhf9vmhBzsppKIoJwrFJXs=";
+                };
+
+                build-system = [ pyFor.setuptools ];
+                dependencies = [ pyFor.tomli ];
+                doCheck = false;
+                pythonImportsCheck = [ "versioneer" ];
+              };
+              cuqipy = pyFor.buildPythonPackage rec {
+                pname = "cuqipy";
+                version = "1.5.0";
+                pyproject = true;
+
+                src = pkgsFor.fetchPypi {
+                  inherit pname version;
+                  hash = "sha256-EBl7lX4kyWqRSkUUiGJFy5xxjIZm2JhQ/Jme9xS7GGQ=";
+                };
+
+                build-system = [
+                  pyFor.setuptools
+                  versioneer026
+                ];
+
+                dependencies = [
+                  arvizRuntime
+                  pyFor.matplotlib
+                  pyFor.numpy
+                  pyFor.scipy
+                  pyFor.tqdm
+                ];
+
+                pythonRelaxDeps = [ "numpy" ];
+                doCheck = false;
+                pythonImportsCheck = [ "cuqi" ];
+              };
+              pyvistaqt = pyFor.buildPythonPackage rec {
+                pname = "pyvistaqt";
+                version = "0.11.4";
+                pyproject = true;
+
+                src = pkgsFor.fetchPypi {
+                  inherit pname version;
+                  hash = "sha256-srySrDTiu9cpxV+ydxloTUtRilk/zpyHdiECDQULS9U=";
+                };
+
+                build-system = [
+                  pyFor.setuptools
+                  pyFor.setuptools-scm
+                ];
+
+                dependencies = [
+                  pyFor.pyvista
+                  pyFor.qtpy
+                ];
+
+                doCheck = false;
+                pythonImportsCheck = [ "pyvistaqt" ];
+              };
+            in
+            {
+              inherit h5pyMpi meshioMpi cuqipy pyvistaqt;
+            };
+          backendWorkerCommandEnvName = profile:
+            "EIT_APP_BACKEND_WORKER_COMMAND_${lib.toUpper (lib.replaceStrings [ "-" "." ] [ "_" "_" ] profile)}";
+
+          mkPyeidors = {
+            pkgsFor,
+            pyFor,
+            profile,
+            fenicsDolfinxPkg,
+            petsc4pyPkg,
+            cuda ? false,
+            petscPkg ? null,
+            slepcPkg ? null,
+            scalarEnv ? null,
+            precisionEnv ? null,
+            backendWorkerCommands ? { },
+          }:
+            let
+              runtime = mkRuntimePython { inherit pkgsFor pyFor; };
+              profileSuffix = if profile == "default" then "" else "-${profile}";
+              packageName = if profile == "default" then "pyeidors" else "pyeidors${profileSuffix}";
+              cudaRuntimeLibs = lib.optionals cuda [
+                pkgsFor.cudaPackages.cuda_cudart
+                pkgsFor.cudaPackages.libcublas
+                pkgsFor.cudaPackages.libcusolver
+                pkgsFor.cudaPackages.libcusparse
+                pkgsFor.cudaPackages.libnvjitlink
+              ];
+            in
+            pyFor.buildPythonApplication {
+              pname = packageName;
+              version = pyeidorsVersion;
+              pyproject = true;
+
+              src = pyeidorsSource;
+
+              build-system = [
+                pyFor.setuptools
+                pyFor.wheel
+              ];
+
+              dependencies = [
+                fenicsDolfinxPkg
+                pyFor."fenics-basix"
+                pyFor."fenics-ffcx"
+                pyFor."fenics-ufl"
+                pyFor.mpi4py
+                petsc4pyPkg
+
+                pyFor.numpy
+                pyFor.scipy
+                pyFor.matplotlib
+                pyFor.pandas
+                runtime.h5pyMpi
+                pyFor.pyyaml
+                runtime.meshioMpi
+                pyFor.gmsh
+
+                pyFor.pyside6
+                pyFor.pyqtgraph
+                pyFor.pyserial
+                pyFor.pyvista
+                runtime.pyvistaqt
+
+                pyFor.torch
+                runtime.cuqipy
+              ] ++ pyOpt pyFor "pyamg" ++ pyOpt pyFor "scikit-sparse" ++ pyOpt pyFor "scikitsparse";
+
+              doCheck = false;
+              pythonImportsCheck = [
+                "dolfinx"
+                "pyeidors"
+                "eit_app"
+                "PySide6.QtCore"
+                "pyqtgraph"
+                "pyvista"
+                "pyvistaqt"
+                "torch"
+                "cuqi"
+              ];
+
+              makeWrapperArgs = [
+                "--set-default"
+                "PYTHONNOUSERSITE"
+                "1"
+                "--set-default"
+                "PYEIDORS_ENV_PROFILE"
+                profile
+                "--set-default"
+                "EIT_APP_GUI_RUNTIME_PROFILE"
+                profile
+                "--set-default"
+                "EIT_APP_GUI_PROFILE"
+                (if cuda then "gpu" else "cpu")
+                "--set-default"
+                "EIT_APP_BACKEND_WORKER_LAUNCH_MODE"
+                "auto"
+                "--set-default"
+                "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"
+                "1"
+                "--prefix"
+                "PATH"
+                ":"
+                (lib.makeBinPath (
+                  [
+                    pkgsFor.gmsh
+                    pkgsFor.openmpi
+                    pkgsFor.fontconfig.bin
+                  ] ++ lib.optionals cuda [
+                    pkgsFor.cudaPackages.cuda_nvcc
+                    pkgsFor.cudaPackages.cudatoolkit
+                  ]
+                ))
+              ] ++ lib.concatLists (lib.mapAttrsToList
+                (workerProfile: workerPackage: [
+                  "--set-default"
+                  (backendWorkerCommandEnvName workerProfile)
+                  "${workerPackage}/bin/eit-backend-worker"
+                ])
+                backendWorkerCommands) ++ lib.optionals (scalarEnv != null) [
+                "--set-default"
+                "PYEIDORS_PETSC_SCALAR_TYPE"
+                scalarEnv
+              ] ++ lib.optionals (precisionEnv != null) [
+                "--set-default"
+                "EIT_APP_GUI_PRECISION"
+                precisionEnv
+              ] ++ lib.optionals cuda [
+                "--set-default"
+                "CUDA_HOME"
+                "${pkgsFor.cudaPackages.cudatoolkit}"
+                "--set-default"
+                "CUDA_PATH"
+                "${pkgsFor.cudaPackages.cudatoolkit}"
+                "--set-default"
+                "CUDACXX"
+                "${pkgsFor.cudaPackages.cuda_nvcc}/bin/nvcc"
+                "--set-default"
+                "PETSC_DIR"
+                "${petscPkg}"
+                "--set-default"
+                "SLEPC_DIR"
+                "${slepcPkg}"
+                "--set-default"
+                "PYEIDORS_PETSC_DEVICE_DEFAULT"
+                "cuda"
+                ''--run 'export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"' ''
+                "--prefix"
+                "PATH"
+                ":"
+                "/usr/lib/wsl/lib"
+              ] ++ lib.optionals pkgsFor.stdenv.isLinux [
+                "--prefix"
+                "LD_LIBRARY_PATH"
+                ":"
+                (lib.makeLibraryPath ([ pkgsFor.stdenv.cc.cc pkgsFor.zlib pkgsFor.zstd ] ++ mkLinuxGuiLibs pkgsFor ++ cudaRuntimeLibs))
+                "--set"
+                "LIBGL_DRIVERS_PATH"
+                "${pkgsFor.mesa}/lib/dri"
+              ] ++ lib.optionals (pkgsFor.stdenv.isLinux && cuda) [
+                "--prefix"
+                "LD_LIBRARY_PATH"
+                ":"
+                "/usr/lib/wsl/lib"
+              ] ++ lib.optionals pkgsFor.stdenv.isLinux [
+                ''--run 'export PYEIDORS_RUNTIME_ROOT="''${PYEIDORS_RUNTIME_ROOT:-''${XDG_CACHE_HOME:-$HOME/.cache}/pyeidors}"' ''
+                ''--run 'export PYEIDORS_CACHE_ROOT="''${PYEIDORS_CACHE_ROOT:-$PYEIDORS_RUNTIME_ROOT/.pyeidors_cache}"' ''
+                ''--run 'export PYEIDORS_DATA_ROOT="''${PYEIDORS_DATA_ROOT:-''${XDG_DATA_HOME:-$HOME/.local/share}/pyeidors}"' ''
+                ''--run 'export PYEIDORS_OUTPUT_ROOT="''${PYEIDORS_OUTPUT_ROOT:-$PYEIDORS_DATA_ROOT/outputs}"' ''
+                ''--run 'export PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR="''${PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR:-$PYEIDORS_CACHE_ROOT/greit_artifacts}"' ''
+                ''--run 'export PYEIDORS_GREIT_COMMON_CONFIG_DIR="''${PYEIDORS_GREIT_COMMON_CONFIG_DIR:-$PYEIDORS_CACHE_ROOT/greit_common_configs}"' ''
+                ''--run 'export EIT_APP_BACKEND_WORKER_CACHE_DIR="''${EIT_APP_BACKEND_WORKER_CACHE_DIR:-$PYEIDORS_CACHE_ROOT/gui_backend_worker}"' ''
+                ''--run 'mkdir -p "$PYEIDORS_RUNTIME_ROOT" "$PYEIDORS_CACHE_ROOT" "$PYEIDORS_DATA_ROOT" "$PYEIDORS_OUTPUT_ROOT" "$PYEIDORS_GREIT_ARTIFACT_REGISTRY_DIR" "$PYEIDORS_GREIT_COMMON_CONFIG_DIR" "$EIT_APP_BACKEND_WORKER_CACHE_DIR"' ''
+              ];
+
+              meta = with lib; {
+                description = "PyEIDORS ${profile} FEniCSx runtime and GUI packaged as a Nix application";
+                homepage = "https://github.com/CBZ199671/PyEIDORS";
+                license = licenses.mit;
+                mainProgram = "eit-app";
+                platforms = platforms.linux ++ platforms.darwin;
+              };
+            };
+
+          pyeidors = mkPyeidors {
+            pkgsFor = pkgs;
+            pyFor = py;
+            profile = "default";
+            fenicsDolfinxPkg = fenicsDolfinx;
+            petsc4pyPkg = py.petsc4py;
+          };
+          pyeidorsComplex = mkPyeidors {
+            pkgsFor = pkgs;
+            pyFor = py;
+            profile = "complex";
+            fenicsDolfinxPkg = fenicsDolfinxComplex;
+            petsc4pyPkg = petsc4pyComplex;
+            scalarEnv = "complex";
+            precisionEnv = "complex128";
+            backendWorkerCommands = {
+              default = pyeidors;
+            };
+          };
+          pyeidorsComplex64 = mkPyeidors {
+            pkgsFor = pkgs;
+            pyFor = py;
+            profile = "complex64";
+            fenicsDolfinxPkg = fenicsDolfinxComplexSingle;
+            petsc4pyPkg = petsc4pyComplexSingle;
+            scalarEnv = "complex64";
+            precisionEnv = "complex64";
+            backendWorkerCommands = {
+              default = pyeidors;
+            };
+          };
+          pyeidorsCuda = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCuda;
+            pyFor = pyCuda;
+            profile = "cuda";
+            fenicsDolfinxPkg = cudaFenicsDolfinx;
+            petsc4pyPkg = cudaPetsc4py;
+            cuda = true;
+            petscPkg = cudaPetsc;
+            slepcPkg = cudaSlepc;
+            backendWorkerCommands = {
+              default = pyeidors;
+            };
+          } else null;
+          pyeidorsComplexCuda = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCuda;
+            pyFor = pyCuda;
+            profile = "complex-cuda";
+            fenicsDolfinxPkg = cudaFenicsDolfinxComplex;
+            petsc4pyPkg = cudaPetscComplex4py;
+            cuda = true;
+            petscPkg = cudaPetscComplex;
+            slepcPkg = cudaSlepcComplex;
+            scalarEnv = "complex";
+            precisionEnv = "complex128";
+            backendWorkerCommands = {
+              default = pyeidors;
+              cuda = pyeidorsCuda;
+            };
+          } else null;
+          pyeidorsComplex64Cuda = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCuda;
+            pyFor = pyCuda;
+            profile = "complex64-cuda";
+            fenicsDolfinxPkg = cudaFenicsDolfinxComplexSingle;
+            petsc4pyPkg = cudaPetscComplexSingle4py;
+            cuda = true;
+            petscPkg = cudaPetscComplexSingle;
+            slepcPkg = cudaSlepcComplexSingle;
+            scalarEnv = "complex64";
+            precisionEnv = "complex64";
+            backendWorkerCommands = {
+              default = pyeidors;
+              cuda = pyeidorsCuda;
+            };
+          } else null;
+        in
+        {
+          inherit pyeidors;
+          pyeidors-default = pyeidors;
+          pyeidors-complex = pyeidorsComplex;
+          pyeidors-complex64 = pyeidorsComplex64;
+          default = pyeidors;
+        } // lib.optionalAttrs linuxCudaSupported {
+          pyeidors-cuda = pyeidorsCuda;
+          pyeidors-complex-cuda = pyeidorsComplexCuda;
+          pyeidors-complex64-cuda = pyeidorsComplex64Cuda;
+        }
+      );
+
+      apps = forAllSystems (
+        system:
+        let
+          packagesForSystem = self.packages.${system};
+          mkApp = packageName: programName: description: {
+            type = "app";
+            program = "${builtins.getAttr packageName packagesForSystem}/bin/${programName}";
+            meta.description = description;
+          };
+          hasPackage = name: builtins.hasAttr name packagesForSystem;
+        in
+        {
+          default = mkApp "pyeidors" "eit-app" "Launch the PyEIDORS default real-valued CPU GUI";
+          eit-app = mkApp "pyeidors" "eit-app" "Launch the PyEIDORS default real-valued CPU GUI";
+          eit-cache = mkApp "pyeidors" "eit-cache" "Manage and warm PyEIDORS default real-valued CPU caches";
+          eit-app-default = mkApp "pyeidors" "eit-app" "Launch the PyEIDORS default real-valued CPU GUI";
+          eit-cache-default = mkApp "pyeidors" "eit-cache" "Manage and warm PyEIDORS default real-valued CPU caches";
+          eit-app-real-cpu = mkApp "pyeidors" "eit-app" "Launch the PyEIDORS real-valued CPU GUI";
+          eit-cache-real-cpu = mkApp "pyeidors" "eit-cache" "Manage and warm PyEIDORS real-valued CPU caches";
+          eit-app-complex = mkApp "pyeidors-complex" "eit-app" "Launch the PyEIDORS complex128 CPU GUI";
+          eit-cache-complex = mkApp "pyeidors-complex" "eit-cache" "Manage and warm PyEIDORS complex128 CPU caches";
+          eit-app-complex128-cpu = mkApp "pyeidors-complex" "eit-app" "Launch the PyEIDORS complex128 CPU GUI";
+          eit-cache-complex128-cpu = mkApp "pyeidors-complex" "eit-cache" "Manage and warm PyEIDORS complex128 CPU caches";
+          eit-app-complex64 = mkApp "pyeidors-complex64" "eit-app" "Launch the PyEIDORS complex64 CPU GUI";
+          eit-cache-complex64 = mkApp "pyeidors-complex64" "eit-cache" "Manage and warm PyEIDORS complex64 CPU caches";
+          eit-app-complex64-cpu = mkApp "pyeidors-complex64" "eit-app" "Launch the PyEIDORS complex64 CPU GUI";
+          eit-cache-complex64-cpu = mkApp "pyeidors-complex64" "eit-cache" "Manage and warm PyEIDORS complex64 CPU caches";
+        } // lib.optionalAttrs (hasPackage "pyeidors-cuda") {
+          eit-app-cuda = mkApp "pyeidors-cuda" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI";
+          eit-cache-cuda = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
+          eit-app-real-gpu = mkApp "pyeidors-cuda" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI";
+          eit-cache-real-gpu = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
+          eit-app-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
+          eit-cache-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
+          eit-app-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
+          eit-cache-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
+          eit-app-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
+          eit-cache-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches";
+          eit-app-complex64-gpu = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
+          eit-cache-complex64-gpu = mkApp "pyeidors-complex64-cuda" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches";
+        }
+      );
+
       devShells = forAllSystems (
         system:
         let

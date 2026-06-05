@@ -4,6 +4,7 @@ import hashlib
 import inspect
 import os
 from pathlib import Path
+import subprocess
 import sys
 from types import MappingProxyType, SimpleNamespace
 
@@ -15,6 +16,7 @@ from eit_app.controllers import reconstruction_controller as rc
 from eit_app.models.frame_model import FrameData
 from eit_app.ui.boundary_voltage_plot_widget import BoundaryVoltagePlotWidget
 from eit_app.ui.hardware.equipotential_plot_widget import EquipotentialPlotWidget
+from eit_app.ui.hardware.live_plot_widget import LivePlotWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
 import eit_app.ui.simulation.metrics_panel as metrics_module
 from eit_app.ui.simulation.metrics_panel import MetricsPanel
@@ -4254,7 +4256,8 @@ def test_load_gn_difference_runner_module_falls_back_to_repo_root(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     rc._load_gn_difference_runner_module.cache_clear()
-    module_name = "scripts.common.gn_difference_runner"
+    packaged_name = "pyeidors.realtime.gn_difference_runner"
+    legacy_name = "scripts.common.gn_difference_runner"
     repo_root = Path(rc.__file__).resolve().parents[3]
     sentinel = SimpleNamespace(name="gn-diff-runner")
     calls: list[tuple[str, list[str]]] = []
@@ -4262,9 +4265,13 @@ def test_load_gn_difference_runner_module_falls_back_to_repo_root(
 
     def _fake_import(name: str):
         calls.append((name, list(sys.path)))
-        if name != module_name:
+        if name == packaged_name:
+            exc = ModuleNotFoundError(f"No module named {packaged_name!r}")
+            exc.name = packaged_name
+            raise exc
+        if name != legacy_name:
             raise AssertionError(f"Unexpected import: {name}")
-        if len(calls) == 1:
+        if len([call for call, _ in calls if call == legacy_name]) == 1:
             exc = ModuleNotFoundError("No module named 'scripts'")
             exc.name = "scripts"
             raise exc
@@ -4283,8 +4290,37 @@ def test_load_gn_difference_runner_module_falls_back_to_repo_root(
         rc._load_gn_difference_runner_module.cache_clear()
 
     assert loaded is sentinel
-    assert [name for name, _ in calls] == [module_name, module_name]
-    assert str(repo_root) in calls[1][1]
+    assert [name for name, _ in calls] == [packaged_name, legacy_name, legacy_name]
+    assert str(repo_root) in calls[2][1]
+
+
+def test_v621_gn_difference_runner_loader_uses_packaged_runtime_without_repo_scripts(
+    tmp_path: Path,
+) -> None:
+    script = """
+from eit_app.controllers import reconstruction_controller as rc
+
+rc._load_gn_difference_runner_module.cache_clear()
+module = rc._load_gn_difference_runner_module()
+if module.__name__ != "pyeidors.realtime.gn_difference_runner":
+    raise SystemExit(f"unexpected runner module: {module.__name__}")
+    """
+    env = os.environ.copy()
+    repo_root = Path(__file__).resolve().parents[2]
+    existing_pythonpath = [
+        entry
+        for entry in env.get("PYTHONPATH", "").split(os.pathsep)
+        if entry and Path(entry).resolve() != repo_root
+    ]
+    env["PYTHONPATH"] = os.pathsep.join([str(repo_root / "src"), *existing_pythonpath])
+    subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
 
 
 def test_recover_nix_runtime_site_packages_restores_missing_runtime_paths(
@@ -4428,14 +4464,51 @@ def test_boundary_voltage_plot_keeps_recon_overlay_visible_for_tiny_fit() -> Non
     widget.update_hardware_voltages(measured, reconstructed)
 
     assert widget._curve_primary.isVisible() is True
+    assert widget._curve_primary_markers.isVisible() is True
     assert widget._curve_reconstructed_outline.isVisible() is True
     assert widget._curve_reconstructed.isVisible() is True
     assert widget._curve_reconstructed_markers.isVisible() is True
+    primary_marker_x, primary_marker_y = widget._curve_primary_markers.getData()
     marker_x, marker_y = widget._curve_reconstructed_markers.getData()
+    assert primary_marker_x is not None and primary_marker_y is not None
     assert marker_x is not None and marker_y is not None
-    assert len(marker_x) >= 2
+    assert len(primary_marker_x) == measured.size
+    assert len(marker_x) == reconstructed.size
+    np.testing.assert_allclose(primary_marker_x, np.arange(1, measured.size + 1))
+    np.testing.assert_allclose(primary_marker_y, measured)
+    np.testing.assert_allclose(marker_y, reconstructed)
     assert float(marker_x[0]) == pytest.approx(1.0)
     assert float(marker_x[-1]) == pytest.approx(208.0)
+
+
+def test_live_plot_marks_every_real_and_imag_channel_point() -> None:
+    _get_app()
+    widget = LivePlotWidget()
+    frame = FrameData(
+        real=np.linspace(-1.0, 1.0, 9, dtype=float),
+        imag=np.linspace(2.0, -2.0, 9, dtype=float),
+        timestamp=1.0,
+        frame_index=0,
+    )
+
+    widget.update_frame(frame)
+
+    real_marker_x, real_marker_y = widget._curve_real_markers.getData()
+    imag_marker_x, imag_marker_y = widget._curve_imag_markers.getData()
+    expected_x = np.arange(1, frame.real.size + 1, dtype=float)
+    assert real_marker_x is not None and real_marker_y is not None
+    assert imag_marker_x is not None and imag_marker_y is not None
+    assert widget._curve_real_markers.isVisible() is True
+    assert widget._curve_imag_markers.isVisible() is False
+    np.testing.assert_allclose(real_marker_x, expected_x)
+    np.testing.assert_allclose(real_marker_y, frame.real)
+    np.testing.assert_allclose(imag_marker_x, expected_x)
+    np.testing.assert_allclose(imag_marker_y, frame.imag)
+
+    widget._show_imag.setChecked(True)
+    _get_app().processEvents()
+
+    assert widget._curve_imag_markers.isVisible() is True
 
 
 def test_boundary_voltage_plot_truth_is_not_hidden_by_recon_outline() -> None:

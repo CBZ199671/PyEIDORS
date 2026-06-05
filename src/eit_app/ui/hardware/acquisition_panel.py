@@ -24,6 +24,7 @@ from eit_app.ui.theme import (
     set_section_header,
     set_subtle_value,
 )
+from pyeidors.runtime_paths import pyeidors_data_path
 
 
 class AcquisitionPanel(QGroupBox):
@@ -256,10 +257,7 @@ class AcquisitionPanel(QGroupBox):
 
     @staticmethod
     def default_output_dir() -> Path:
-        project_measurements = (Path.cwd() / "data" / "measurements").resolve()
-        if project_measurements.parent.exists():
-            return project_measurements
-        return (Path.cwd() / "eit_recordings").resolve()
+        return pyeidors_data_path("measurements").resolve()
 
     def set_acquiring(self, active: bool) -> None:
         """Update UI state for acquisition running/stopped."""

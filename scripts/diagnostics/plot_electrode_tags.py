@@ -4,7 +4,7 @@ Visualize electrode indices and lengths on the mesh for quick verification of CE
 
 Example:
   python scripts/diagnostics/plot_electrode_tags.py --mesh-name mesh_102070 \
-      --output results/electrode_visualization/mesh_102070.png
+      --output "$PYEIDORS_OUTPUT_ROOT/electrode_visualization/mesh_102070.png"
 """
 
 import argparse
@@ -18,6 +18,7 @@ from dolfinx import fem
 from mpi4py import MPI
 
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 
 
 def collect_electrode_segments(mesh, tags: List[int]) -> Dict[int, List[np.ndarray]]:
@@ -95,7 +96,10 @@ def plot_electrodes(
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
-        "--mesh-dir", type=Path, default=Path("eit_meshes"), help="Mesh directory"
+        "--mesh-dir",
+        type=Path,
+        default=pyeidors_cache_path("eit_meshes"),
+        help="Mesh directory",
     )
     parser.add_argument(
         "--mesh-name",
@@ -119,7 +123,7 @@ def main():
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("results/electrode_visualization/electrodes.png"),
+        default=pyeidors_output_path("electrode_visualization", "electrodes.png"),
         help="Output PNG path",
     )
     args = parser.parse_args()

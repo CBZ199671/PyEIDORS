@@ -19,6 +19,7 @@ from eit_app.backend_worker_runtime import (
     backend_worker_command,
     backend_worker_env,
     backend_worker_profile_root,
+    clean_profile_command_env,
     looks_like_ffcx_jit_timeout,
     repair_ffcx_jit_timeout_cache,
 )
@@ -249,6 +250,8 @@ class _PersistentBackendWorker:
             profile=self.profile,
             worker_args=["serve"],
         )
+        if launch_mode == "profile_command":
+            clean_profile_command_env(env)
         try:
             proc = subprocess.Popen(
                 cmd,

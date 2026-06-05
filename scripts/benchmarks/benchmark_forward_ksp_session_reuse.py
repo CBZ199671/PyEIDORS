@@ -18,7 +18,7 @@ Example
     python scripts/benchmarks/benchmark_forward_ksp_session_reuse.py \\
         --mesh-dim 3 --n-elec 16 --n-iter 8 \\
         --solver-preset 3d_gamg --petsc-device cpu \\
-        --out-dir reports/runtime_benchmarks/forward_ksp_session_reuse_t4_$(date +%Y%m%d)
+        --out-dir "$PYEIDORS_OUTPUT_ROOT/runtime_benchmarks/forward_ksp_session_reuse_t4_$(date +%Y%m%d)"
 """
 
 from __future__ import annotations

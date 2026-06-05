@@ -20,6 +20,7 @@ if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
 from pyeidors.io._json import json_ready as _json_ready  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_output_path  # noqa: E402
 
 
 SCHEMA = "pyeidors-dynamic-eidors-metric-review-v1"
@@ -46,15 +47,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/dynamic_eidors_metric_review_20260426.json"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "dynamic_eidors_metric_review_20260426.json",
         ),
     )
     parser.add_argument(
         "--output-md",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/dynamic_eidors_metric_review_20260426.md"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "dynamic_eidors_metric_review_20260426.md",
         ),
     )
     return parser.parse_args(argv)

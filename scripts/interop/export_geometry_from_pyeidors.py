@@ -21,6 +21,7 @@ from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.interop import (
     STANDARD_INTEROP_FORMAT,
     build_boundary_edges,
@@ -41,7 +42,9 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--scenario", choices=["low_z", "high_z"], default="low_z")
     parser.add_argument("--n-elec", type=int, default=16)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
     parser.add_argument("--electrode-coverage", type=float, default=0.5)
     return parser.parse_args()
 

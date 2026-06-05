@@ -23,6 +23,11 @@ from PySide6.QtWidgets import (
     QTabWidget,
     QWidget,
 )
+from pyeidors.runtime_paths import (
+    pyeidors_cache_path,
+    pyeidors_data_path,
+    pyeidors_output_path,
+)
 
 from eit_app.acquisition.acquisition_process import AcquisitionProcess
 from eit_app.acquisition.ring_buffer import FrameRingBuffer
@@ -75,7 +80,11 @@ from eit_app.models.simulation_state import (
     DatasetGeneratorConfig,
     SimulationState,
 )
-from eit_app.models.reconstruction_methods import prepare_database_reconstruction_method
+from eit_app.models.reconstruction_methods import (
+    PSEUDO3D_NOSER_RM_METHOD,
+    prepare_database_reconstruction_method,
+    pseudo3d_noser_rm_metadata,
+)
 from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.cache_telemetry_panel import CacheTelemetryDialog
@@ -174,11 +183,34 @@ _ONE_STEP_LAMBDA_EFF_ROUTES = {
     "noser_rm",
     "laplace_rm",
     "curvature_rm",
+    PSEUDO3D_NOSER_RM_METHOD,
     "debug_fine_mesh_noser",
 }
-_CUSTOM_RM_LAMBDA_EFF_ROUTES = {"noser_rm", "laplace_rm", "curvature_rm"}
+_CUSTOM_RM_LAMBDA_EFF_ROUTES = {
+    "noser_rm",
+    "laplace_rm",
+    "curvature_rm",
+    PSEUDO3D_NOSER_RM_METHOD,
+}
 _GREIT_SIMULATION_ROUTES = {"greit", "greit_rm", "greit2d_rm", "greit3d_rm"}
-_GREIT_COMMON_CONFIG_DIR = ".pyeidors_cache/greit_common_configs"
+
+
+def _greit_common_config_dir() -> str:
+    return str(pyeidors_cache_path("greit_common_configs"))
+
+
+def _gui_rm_artifact_dir() -> str:
+    return str(pyeidors_cache_path("gui_rm"))
+
+
+def _greit_registry_dir() -> str:
+    return str(pyeidors_cache_path("greit_artifacts"))
+
+
+def _cache_manager_dir() -> Path:
+    return pyeidors_cache_path("v2")
+
+
 _GREIT_COMMON_CONFIG_SCOPE = {
     "greit_official_fixture_scope": "requires registered EIDORS parity artifact",
     "greit_5936_protocol_scope": "production route rejects deterministic fixtures",
@@ -1215,15 +1247,12 @@ class EITWorkstation(QMainWindow):
         self._on_open_session_folder(target)
 
     def _open_default_output_folder(self) -> None:
-        """File menu → open the reconstruction-output root in the OS file
-        manager.  Picks the project's ``data/reconstructions`` if present,
-        otherwise the recordings root so the menu item never fails on a
-        fresh install.
-        """
+        """File menu → open the user-writable output/data root."""
+
         candidates = [
-            Path.cwd() / "data" / "reconstructions",
-            Path.cwd() / "data" / "measurements",
-            Path.cwd() / "eit_recordings",
+            pyeidors_output_path("reconstructions"),
+            pyeidors_data_path("measurements"),
+            pyeidors_data_path("recordings"),
             Path.home(),
         ]
         target: Path | None = None
@@ -2672,18 +2701,11 @@ class EITWorkstation(QMainWindow):
     @staticmethod
     def _default_db_path() -> Path:
         """Return a platform-appropriate path for the frame database."""
-        import os
 
         override = os.environ.get("EIT_APP_DB_PATH")
         if override:
             return Path(override).expanduser()
-        if os.name == "nt":
-            base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
-        else:
-            base = Path(
-                os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share")
-            )
-        return base / "PyEidors" / "eit_frames.db"
+        return pyeidors_data_path("eit_frames.db")
 
     def _trigger_backfill(self) -> None:
         """Scan data/measurements/ and backfill the SQLite DB on startup."""
@@ -3100,7 +3122,7 @@ class EITWorkstation(QMainWindow):
                 report = {
                     "doctor": doctor_cache(
                         repo=repo,
-                        cache_dir=repo / ".pyeidors_cache" / "v2",
+                        cache_dir=_cache_manager_dir(),
                         repair_jit=False,
                     ),
                     "background_scheduler": self._background_scheduler.snapshot(),
@@ -3143,7 +3165,7 @@ class EITWorkstation(QMainWindow):
                 repo = _repo_root()
                 gc_report = gc_cache(
                     repo=repo,
-                    cache_dir=repo / ".pyeidors_cache" / "v2",
+                    cache_dir=_cache_manager_dir(),
                     max_bytes=int(options.get("max_bytes", 8 * 1024**3)),
                     include_worker_cache=bool(
                         options.get("include_worker_cache", False)
@@ -3157,7 +3179,7 @@ class EITWorkstation(QMainWindow):
                     "gc": gc_report,
                     "doctor": doctor_cache(
                         repo=repo,
-                        cache_dir=repo / ".pyeidors_cache" / "v2",
+                        cache_dir=_cache_manager_dir(),
                         repair_jit=False,
                     ),
                     "background_scheduler": self._background_scheduler.snapshot(),
@@ -3293,7 +3315,9 @@ class EITWorkstation(QMainWindow):
             method=prepared_method.method,
             regularization_alpha=prepared_method.regularization_alpha,
             max_iterations=prepared_method.max_iterations,
-            mesh_dimension=mesh_dimension,
+            mesh_dimension=int(
+                prepared_method.metadata.get("mesh_dimension", mesh_dimension)
+            ),
             mesh_refinement=mesh_refinement,
             metadata=prepared_method.metadata,
         )
@@ -3475,10 +3499,10 @@ class EITWorkstation(QMainWindow):
         )
 
         src = Path(session_dir) if session_dir else None
-        # Suggest a default output directory: <app>/results/{session_name}
+        # Suggest a default output directory under the user-writable output root.
         default_out = None
         if src is not None and src.exists():
-            results_root = Path.cwd() / "results"
+            results_root = pyeidors_output_path("results")
             try:
                 results_root.mkdir(parents=True, exist_ok=True)
             except Exception:
@@ -3665,6 +3689,11 @@ class EITWorkstation(QMainWindow):
             rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
             use_meas_current=bool(mesh_cfg.get("use_meas_current", False)),
             use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
+            drive_mode=mesh_cfg.get(
+                "drive_mode",
+                "total_current" if is_3d else "line_current_density",
+            ),
+            drive_value=float(mesh_cfg.get("drive_value", 1.0)),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
                 if is_3d
@@ -4171,6 +4200,11 @@ class EITWorkstation(QMainWindow):
             rotate_meas=bool(mesh_cfg.get("rotate_meas", True)),
             use_meas_current=bool(mesh_cfg.get("use_meas_current", False)),
             use_meas_current_next=int(mesh_cfg.get("use_meas_current_next", 0)),
+            drive_mode=mesh_cfg.get(
+                "drive_mode",
+                "total_current" if is_3d else "line_current_density",
+            ),
+            drive_value=float(mesh_cfg.get("drive_value", 1.0)),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
                 if is_3d
@@ -4797,6 +4831,8 @@ class EITWorkstation(QMainWindow):
         # Legacy eidors-style strings are accepted only as saved-config
         # aliases, then normalized so they cannot silently select a stale path.
         route = normalize_simulation_inverse_method(str(inv_cfg.get("method", "")))
+        if route == PSEUDO3D_NOSER_RM_METHOD and int(forward_cfg.mesh_dimension) != 3:
+            route = "noser_rm"
         alpha_input = float(inv_cfg["regularization_alpha"])
         difference_preset = "eidors_one_step_noser"
         absolute_preset = "eidors_abs_gn"
@@ -4836,6 +4872,14 @@ class EITWorkstation(QMainWindow):
             difference_preset = "curvature_rm"
             route_kind = "rm"
             rm_regularization = "curvature"
+            rm_route_requires_artifact = True
+            rm_auto_build = True
+        elif route == PSEUDO3D_NOSER_RM_METHOD:
+            resolved_method = "gn-difference"
+            reconstruction_runtime = "single_step_cached"
+            difference_preset = "noser_rm"
+            route_kind = "rm"
+            rm_regularization = "noser"
             rm_route_requires_artifact = True
             rm_auto_build = True
         elif route in _GREIT_SIMULATION_ROUTES:
@@ -4901,7 +4945,7 @@ class EITWorkstation(QMainWindow):
                     "greit_registry_signature": greit_registry_signature,
                     "greit_registry_signature_payload": greit_registry_signature_payload,
                     "greit_registry_auto_resolve": True,
-                    "greit_registry_dir": ".pyeidors_cache/greit_artifacts",
+                    "greit_registry_dir": _greit_registry_dir(),
                     "greit_builder_backend": "native",
                     "greit_builder_semantic_version": "native-greit-finite-target-v2",
                     "greit_desired_image_mode": greit_desired_image_mode,
@@ -4947,11 +4991,18 @@ class EITWorkstation(QMainWindow):
 
         mesh_size = float(forward_cfg.mesh_refinement)
         rm_inverse_mesh_size = None
-        if route in {"noser_rm", "laplace_rm", "curvature_rm"}:
+        if route in {
+            "noser_rm",
+            "laplace_rm",
+            "curvature_rm",
+            PSEUDO3D_NOSER_RM_METHOD,
+        }:
             rm_inverse_mesh_size = default_rm_inverse_mesh_size(
                 mesh_size,
                 float(forward_cfg.radius),
-                mesh_dimension=int(forward_cfg.mesh_dimension),
+                mesh_dimension=2
+                if route == PSEUDO3D_NOSER_RM_METHOD
+                else int(forward_cfg.mesh_dimension),
             )
         is_3d_difference = (
             int(forward_cfg.mesh_dimension) == 3 and resolved_method == "gn-difference"
@@ -5096,15 +5147,17 @@ class EITWorkstation(QMainWindow):
             "rm_regularization": rm_regularization,
             "rm_form": {
                 "noser_rm": "measurement",
+                PSEUDO3D_NOSER_RM_METHOD: "measurement",
                 "laplace_rm": "param",
                 "curvature_rm": "param",
                 "greit": "measurement",
                 "greit3d_rm": "measurement",
             }.get(route, ""),
             "rm_output_display_mode": "absolute_sigma"
-            if route in {"noser_rm", "laplace_rm", "curvature_rm"}
+            if route
+            in {"noser_rm", "laplace_rm", "curvature_rm", PSEUDO3D_NOSER_RM_METHOD}
             else "",
-            "rm_artifact_dir": ".pyeidors_cache/gui_rm",
+            "rm_artifact_dir": _gui_rm_artifact_dir(),
             "reconstruction_runtime": reconstruction_runtime,
             "jacobian_representation": "auto",
             "linearized_solver_strategy": "auto",
@@ -5126,7 +5179,7 @@ class EITWorkstation(QMainWindow):
             )
         if greit_common_config_id:
             metadata["greit_common_config"] = greit_common_config_id
-            metadata["greit_common_config_dir"] = _GREIT_COMMON_CONFIG_DIR
+            metadata["greit_common_config_dir"] = _greit_common_config_dir()
             metadata["greit_common_config_auto_warm"] = greit_common_config_auto_warm
             metadata["rm_form"] = "measurement"
         if route_kind == "rm":
@@ -5135,6 +5188,8 @@ class EITWorkstation(QMainWindow):
             metadata["difference_lambda"] = difference_lambda
         if rm_inverse_mesh_size is not None:
             metadata["rm_inverse_mesh_size"] = rm_inverse_mesh_size
+        if route == PSEUDO3D_NOSER_RM_METHOD:
+            metadata = pseudo3d_noser_rm_metadata(metadata)
         request = ReconstructionRequest(
             reference_frame=ref_frame,
             target_frame=tgt_frame,
@@ -5142,7 +5197,9 @@ class EITWorkstation(QMainWindow):
             method=resolved_method,
             regularization_alpha=alpha_input,
             max_iterations=inv_cfg["max_iterations"],
-            mesh_dimension=forward_cfg.mesh_dimension,
+            mesh_dimension=int(
+                metadata.get("mesh_dimension", forward_cfg.mesh_dimension)
+            ),
             mesh_refinement=mesh_size,
             metadata=metadata,
         )

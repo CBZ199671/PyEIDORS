@@ -90,7 +90,25 @@ class LivePlotWidget(QWidget):
 
         # Data curves — localized display names applied in _retranslate()
         self._curve_real = self._plot_widget.plot(pen=pg.mkPen("#f4d35e", width=2.2))
+        self._curve_real_markers = self._plot_widget.plot(
+            pen=None,
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=pg.mkBrush("#f4d35e"),
+            symbolPen=pg.mkPen("#ffffff", width=0.8),
+        )
         self._curve_imag = self._plot_widget.plot(pen=pg.mkPen("#4ecdc4", width=1.9))
+        self._curve_imag_markers = self._plot_widget.plot(
+            pen=None,
+            symbol="o",
+            symbolSize=4,
+            symbolBrush=pg.mkBrush("#4ecdc4"),
+            symbolPen=pg.mkPen("#ffffff", width=0.8),
+        )
+        self._curve_real.setZValue(3)
+        self._curve_real_markers.setZValue(4)
+        self._curve_imag.setZValue(5)
+        self._curve_imag_markers.setZValue(6)
         self._legend_frame = PlotLegendOverlay(
             [
                 LegendEntry(
@@ -119,6 +137,7 @@ class LivePlotWidget(QWidget):
 
         # Initial visibility
         self._curve_imag.setVisible(False)
+        self._curve_imag_markers.setVisible(False)
 
         translator().language_changed.connect(self._retranslate)
         self._retranslate()
@@ -197,8 +216,12 @@ class LivePlotWidget(QWidget):
             self._empty_overlay.setStyleSheet(empty_placeholder_stylesheet())
 
     def _on_visibility_changed(self, _checked: bool) -> None:
-        self._curve_real.setVisible(self._show_real.isChecked())
-        self._curve_imag.setVisible(self._show_imag.isChecked())
+        show_real = self._show_real.isChecked()
+        show_imag = self._show_imag.isChecked()
+        self._curve_real.setVisible(show_real)
+        self._curve_real_markers.setVisible(show_real)
+        self._curve_imag.setVisible(show_imag)
+        self._curve_imag_markers.setVisible(show_imag)
         if self._last_frame is not None:
             self._refresh_curves(self._last_frame)
 
@@ -209,10 +232,16 @@ class LivePlotWidget(QWidget):
         self._configure_index_axis(n)
 
         self._curve_real.setData(self._x, frame.real)
+        self._curve_real_markers.setData(self._x, frame.real)
         self._curve_imag.setData(self._x, frame.imag)
+        self._curve_imag_markers.setData(self._x, frame.imag)
 
-        self._curve_real.setVisible(self._show_real.isChecked())
-        self._curve_imag.setVisible(self._show_imag.isChecked())
+        show_real = self._show_real.isChecked()
+        show_imag = self._show_imag.isChecked()
+        self._curve_real.setVisible(show_real)
+        self._curve_real_markers.setVisible(show_real)
+        self._curve_imag.setVisible(show_imag)
+        self._curve_imag_markers.setVisible(show_imag)
 
     def clear(self) -> None:
         """Clear all curves."""
@@ -221,7 +250,11 @@ class LivePlotWidget(QWidget):
         self._overlay_state = "empty"
         empty = np.array([])
         self._curve_real.setData(empty, empty)
+        self._curve_real_markers.setData(empty, empty)
         self._curve_imag.setData(empty, empty)
+        self._curve_imag_markers.setData(empty, empty)
+        self._curve_real_markers.setVisible(False)
+        self._curve_imag_markers.setVisible(False)
         self._configure_index_axis(self._expected_point_count)
         self._apply_overlay_text()
         self._empty_overlay.show()

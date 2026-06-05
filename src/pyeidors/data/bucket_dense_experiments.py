@@ -6,10 +6,11 @@ from dataclasses import dataclass, replace
 import csv
 import math
 from pathlib import Path
-from typing import Iterable
+from typing import Any, Iterable
 
 import numpy as np
 
+from pyeidors.runtime_paths import pyeidors_output_path
 from pyeidors.utils.numeric_ops import all_finite_values
 
 from .adc_quantization import effective_digits_from_rmse, rmse
@@ -41,6 +42,16 @@ from ._sweep_core import (
 )
 from .voltage_digit_sweep import keep_significant_digits
 from ..utils.numeric_ops import squared_distances_to_point
+
+_DEFAULT_COARSE_VOLTAGE_CSV = object()
+
+
+def _resolve_coarse_voltage_csv(path: Any) -> Path | None:
+    if path is _DEFAULT_COARSE_VOLTAGE_CSV:
+        return pyeidors_output_path("eit_voltage_digit_sweep_16e.csv")
+    if path is None:
+        return None
+    return Path(path)
 
 
 BUCKET_DENSE_SUMMARY_FIELDS = [
@@ -1126,7 +1137,7 @@ def plot_bucket_dense_summary(
     case: BucketDenseExperimentCase,
     output_path: Path,
     *,
-    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_voltage_csv: Path | None | object = _DEFAULT_COARSE_VOLTAGE_CSV,
     coarse_holdout_csv: Path | None = None,
     coarse_structure_csv: Path | None = None,
     dpi: int = 200,
@@ -1148,6 +1159,7 @@ def plot_bucket_dense_summary(
         row for row in case.summaries if row.experiment == "voltage_digit_sweep"
     ]
     holdout_rows = [row for row in case.summaries if row.experiment == "holdout_far3"]
+    coarse_voltage_csv = _resolve_coarse_voltage_csv(coarse_voltage_csv)
     coarse_voltage = _read_csv_rows(coarse_voltage_csv) if coarse_voltage_csv else []
     coarse_holdout = _read_csv_rows(coarse_holdout_csv) if coarse_holdout_csv else []
     coarse_structure = (
@@ -1515,7 +1527,7 @@ def format_bucket_full256_compare_report(case: BucketFull256CompareCase) -> str:
 def format_bucket_dense_report(
     case: BucketDenseExperimentCase,
     *,
-    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_voltage_csv: Path | None | object = _DEFAULT_COARSE_VOLTAGE_CSV,
     coarse_holdout_csv: Path | None = None,
 ) -> str:
     """Format a Chinese dense-bucket comparison report."""
@@ -1532,6 +1544,7 @@ def format_bucket_dense_report(
     row_normalized = bool(
         positive_norms.size and np.allclose(positive_norms, 1.0, rtol=1e-6, atol=1e-9)
     )
+    coarse_voltage_csv = _resolve_coarse_voltage_csv(coarse_voltage_csv)
     coarse_voltage = _read_csv_rows(coarse_voltage_csv) if coarse_voltage_csv else []
     coarse_holdout = _read_csv_rows(coarse_holdout_csv) if coarse_holdout_csv else []
     coarse_note = (
@@ -1573,7 +1586,7 @@ def write_bucket_dense_outputs(
     summary_plot_output: Path,
     curve_plot_output: Path,
     holdout_summary_plot_output: Path,
-    coarse_voltage_csv: Path | None = Path("outputs/eit_voltage_digit_sweep_16e.csv"),
+    coarse_voltage_csv: Path | None | object = _DEFAULT_COARSE_VOLTAGE_CSV,
     coarse_holdout_csv: Path | None = None,
     coarse_structure_csv: Path | None = None,
     hdf5_output: Path | None = None,

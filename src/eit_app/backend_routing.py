@@ -122,7 +122,7 @@ def _can_use_inprocess_fast_path(
             if current.startswith("complex"):
                 return True, "safe_2d_complex_current_runtime_fast_path"
             return False, "complex_2d_requires_complex_runtime"
-        return True, "safe_2d_real_inprocess_fast_path"
+        return False, "real_2d_prefers_real_profile_isolation"
     return False, "profile_isolation_required"
 
 

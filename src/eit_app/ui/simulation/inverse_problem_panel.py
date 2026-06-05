@@ -24,11 +24,13 @@ SIMULATION_INVERSE_METHODS = [
     "noser_rm",
     "laplace_rm",
     "curvature_rm",
+    "pseudo3d_noser_rm",
     "greit",
     "absolute_gn",
     "debug_fine_mesh_noser",
     "debug_full_gn",
 ]
+_PSEUDO3D_METHODS = {"pseudo3d_noser_rm"}
 _GREIT_METHODS = {"greit"}
 _LEGACY_METHOD_ALIASES = {
     "eidors_one_step_noser": "debug_fine_mesh_noser",
@@ -39,12 +41,17 @@ _LEGACY_METHOD_ALIASES = {
     "greit_rm": "greit",
     "greit2d_rm": "greit",
     "greit3d_rm": "greit",
+    "pseudo3d": "pseudo3d_noser_rm",
+    "pseudo_3d": "pseudo3d_noser_rm",
+    "pseudo3d_noser": "pseudo3d_noser_rm",
+    "pseudo_3d_noser": "pseudo3d_noser_rm",
 }
 _METHOD_TOOLTIP_KEYS = {
     "debug_fine_mesh_noser": "sim.inverse.method.debug_fine_mesh_noser.tooltip",
     "noser_rm": "sim.inverse.method.noser_rm.tooltip",
     "laplace_rm": "sim.inverse.method.laplace_rm.tooltip",
     "curvature_rm": "sim.inverse.method.curvature_rm.tooltip",
+    "pseudo3d_noser_rm": "sim.inverse.method.pseudo3d_noser_rm.tooltip",
     "greit": "sim.inverse.method.greit.tooltip",
     "absolute_gn": "sim.inverse.method.absolute_gn.tooltip",
     "debug_full_gn": "sim.inverse.method.debug_full_gn.tooltip",
@@ -54,11 +61,17 @@ _LOCKED_LAMBDA_EFF_METHODS = {
     "noser_rm",
     "laplace_rm",
     "curvature_rm",
+    "pseudo3d_noser_rm",
     "debug_fine_mesh_noser",
 }
 _ARTIFACT_HYPERPARAM_METHODS = set(_GREIT_METHODS)
 _ITERATION_CONTROL_METHODS = {"absolute_gn"}
-_CUSTOM_LAMBDA_EFF_METHODS = {"noser_rm", "laplace_rm", "curvature_rm"}
+_CUSTOM_LAMBDA_EFF_METHODS = {
+    "noser_rm",
+    "laplace_rm",
+    "curvature_rm",
+    "pseudo3d_noser_rm",
+}
 _DEFAULT_GREIT_DESIRED_IMAGE_MODE = "gauss"
 _DEFAULT_GREIT_WEIGHT_STRATEGY = "fixed"
 _DEFAULT_GREIT_TARGET_SIZE = 0.20
@@ -82,6 +95,19 @@ def normalize_simulation_inverse_method(method: str) -> str:
     return _LEGACY_METHOD_ALIASES.get(key, key)
 
 
+def simulation_inverse_methods_for_mesh_dimension(mesh_dimension: int) -> list[str]:
+    """Return simulation inverse routes that make sense for the source mesh."""
+
+    source_dimension = 3 if int(mesh_dimension) == 3 else 2
+    if source_dimension == 3:
+        return list(SIMULATION_INVERSE_METHODS)
+    return [
+        method
+        for method in SIMULATION_INVERSE_METHODS
+        if method not in _PSEUDO3D_METHODS
+    ]
+
+
 class InverseProblemPanel(QGroupBox):
     """Controls for running inverse reconstruction on simulated data."""
 
@@ -91,6 +117,7 @@ class InverseProblemPanel(QGroupBox):
     def __init__(self, parent: QWidget | None = None) -> None:
         # Title assigned by _retranslate() so it follows the UI language.
         super().__init__("", parent)
+        self._source_mesh_dimension = 2
         self._editable_alpha_value = 1.0
         self._custom_lambda_eff_value = CANONICAL_SINGLE_STEP_LAMBDA_EFF
         self._running = False
@@ -111,7 +138,7 @@ class InverseProblemPanel(QGroupBox):
 
         self._method_combo = AutoCloseComboBox()
         # Method identifiers are invariant algorithm codes; no translation.
-        self._method_combo.addItems(SIMULATION_INVERSE_METHODS)
+        self._populate_method_combo(preferred_method="noser_rm")
         self._method_combo.currentIndexChanged.connect(
             lambda _index: self._update_method_state()
         )
@@ -294,6 +321,8 @@ class InverseProblemPanel(QGroupBox):
             method = normalize_simulation_inverse_method(
                 str(config.get("method", self._method_combo.currentText()))
             )
+            if method not in self._available_methods():
+                method = self._fallback_method()
             index = self._method_combo.findText(method)
             if index >= 0:
                 self._method_combo.setCurrentIndex(index)
@@ -346,6 +375,19 @@ class InverseProblemPanel(QGroupBox):
         finally:
             for widget, blocked in zip(widgets, blockers):
                 widget.blockSignals(blocked)
+        self._update_method_state()
+
+    def set_source_mesh_dimension(self, mesh_dimension: int) -> None:
+        """Constrain route choices to the current simulation forward dimension."""
+
+        source_dimension = 3 if int(mesh_dimension) == 3 else 2
+        if source_dimension == self._source_mesh_dimension:
+            return
+        self._source_mesh_dimension = source_dimension
+        current_method = normalize_simulation_inverse_method(
+            self._method_combo.currentText()
+        )
+        self._populate_method_combo(preferred_method=current_method)
         self._update_method_state()
 
     def set_status(self, text: str) -> None:
@@ -410,6 +452,29 @@ class InverseProblemPanel(QGroupBox):
         if not checked and method in _CUSTOM_LAMBDA_EFF_METHODS:
             self._custom_lambda_eff_value = float(self._alpha_spin.value())
         self._update_method_state()
+
+    def _available_methods(self) -> list[str]:
+        return simulation_inverse_methods_for_mesh_dimension(
+            self._source_mesh_dimension
+        )
+
+    def _fallback_method(self) -> str:
+        methods = self._available_methods()
+        return "noser_rm" if "noser_rm" in methods else methods[0]
+
+    def _populate_method_combo(self, *, preferred_method: str) -> None:
+        methods = self._available_methods()
+        selected_method = (
+            preferred_method if preferred_method in methods else self._fallback_method()
+        )
+        blocked = self._method_combo.blockSignals(True)
+        try:
+            self._method_combo.clear()
+            self._method_combo.addItems(methods)
+            index = self._method_combo.findText(selected_method)
+            self._method_combo.setCurrentIndex(max(index, 0))
+        finally:
+            self._method_combo.blockSignals(blocked)
 
     def _update_method_state(self) -> None:
         self._update_method_tooltip()

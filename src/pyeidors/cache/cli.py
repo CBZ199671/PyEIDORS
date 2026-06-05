@@ -20,6 +20,7 @@ from .ops import (
     summarize_backend_worker_caches,
     warm_backend_worker,
 )
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 
 DEFAULT_REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -57,7 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=DEFAULT_REPO_ROOT / ".pyeidors_cache" / "v2",
+        default=pyeidors_cache_path("v2"),
         help="Persistent cache root to inspect/manage.",
     )
     parser.add_argument("--name", action="append", default=[], help="Cache family name")

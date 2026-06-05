@@ -22,6 +22,7 @@ if str(SRC_PATH) not in sys.path:
 
 from common import gn_difference_runner as runner  # noqa: E402
 from pyeidors.io._json import json_ready as _jsonable  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_output_path  # noqa: E402
 
 
 def _build_context(label: str, kwargs: dict) -> tuple[dict, dict]:
@@ -111,7 +112,7 @@ def main() -> int:
     bench_dir = (
         Path(args.output_dir)
         if args.output_dir
-        else REPO_ROOT / "reports" / "runtime_benchmarks" / f"lazy_48e_cuda_{stamp}"
+        else pyeidors_output_path("runtime_benchmarks", f"lazy_48e_cuda_{stamp}")
     )
     bench_dir.mkdir(parents=True, exist_ok=True)
 

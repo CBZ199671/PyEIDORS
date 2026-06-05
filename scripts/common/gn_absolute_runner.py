@@ -46,6 +46,7 @@ from pyeidors.perf.policy import (
     normalize_mesh_family,
 )
 from pyeidors.physics.current_drive import normalize_pattern_config_for_mesh
+from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.visualization import EITVisualizer
 
 from .array_metrics import pearson_correlation
@@ -53,7 +54,7 @@ from .hdf5_outputs import RECONSTRUCTION_ARRAYS_SCHEMA, write_output_bundle
 from .io_utils import align_measurement_polarity
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_MESH_DIR = REPO_ROOT / "eit_meshes"
+DEFAULT_MESH_DIR = pyeidors_cache_path("eit_meshes")
 
 
 def _configure_reconstructor(
@@ -158,7 +159,7 @@ def run_absolute_reconstruction(
     max_iter: int,
     contact_impedance: float,
     cache_scope: str = "both",
-    cache_dir: str = ".pyeidors_cache/v2",
+    cache_dir: str | Path | None = None,
     solver_mode: str = "strict",
     linear_solver: str = "auto",
     jacobian_update_every: int = 1,
@@ -258,6 +259,9 @@ def run_absolute_reconstruction(
         electrode_layout=electrode_layout,
     )
 
+    resolved_cache_dir = (
+        cache_dir if cache_dir is not None else pyeidors_cache_path("v2")
+    )
     system = EITSystem(
         n_elec=total_electrodes,
         pattern_config=pattern_config,
@@ -268,7 +272,7 @@ def run_absolute_reconstruction(
         regularization_alpha=1.0,
         noser_exponent=0.5,
         cache_scope=cache_scope,
-        cache_dir=cache_dir,
+        cache_dir=resolved_cache_dir,
         solver_mode=solver_mode,
         linear_solver=linear_solver,
         jacobian_update_every=jacobian_update_every,

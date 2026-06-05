@@ -80,7 +80,7 @@ TRANSLATIONS: dict[str, str] = {
     "sim.results.viewer3d_no_data": "No 3D data yet",
     "sim.results.viewer3d_loading": "Rendering 3D scene\u2026",
     "sim.results.viewer3d_unavailable": "PyVista / VTK is not installed; 3D mesh cannot be displayed.",
-    "sim.results.viewer3d_embedded_disabled": "Embedded PyVista / VTK is disabled in this runtime to avoid Qt/OpenGL crashes. Using the safe built-in 3D renderer instead.",
+    "sim.results.viewer3d_embedded_disabled": "Embedded PyVista / VTK is disabled in this runtime to avoid Qt/OpenGL crashes. 3D scenes will use PyVista offscreen when available.",
     "sim.results.viewer3d_bad_mesh": "Mesh is not a supported 3D tetra/hex volume grid",
     "sim.results.viewer3d_size_mismatch": "Conductivity length does not match the mesh",
     "sim.results.viewer3d_display": "View",
@@ -378,6 +378,10 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.complex_impedance_tooltip": "Accepts real or complex contact impedance, e.g. 0.01 or 0.01+0.002j Ω·m².",
     "sim.mesh.patterns_header": "Drive & measurement pattern",
     "sim.mesh.patterns_hint": "Controls how the forward solver builds stim/meas pairs. Inverse reconstruction reuses the same pattern — keep these in sync with your hardware board.",
+    "sim.mesh.drive_value_2d_label": "2D drive line current:",
+    "sim.mesh.drive_value_2d_tooltip": "The 2D model uses line current density in A/m; boundary voltages scale linearly with this value.",
+    "sim.mesh.drive_value_3d_label": "3D total drive current:",
+    "sim.mesh.drive_value_3d_tooltip": "The 3D model uses total injected current. The UI shows uA and passes amperes to the solver.",
     "sim.mesh.measurement_protocol_label": "3D protocol (drive -> measure):",
     "sim.mesh.measurement_protocol.eidors_full_3d": "In-layer drive -> all-layer meas (standard 3D)",
     "sim.mesh.measurement_protocol.layer_local_2p5d": "Per-layer 2D -> sliced/interpolated 3D (2.5D)",
@@ -541,6 +545,11 @@ TRANSLATIONS: dict[str, str] = {
     "sim.inverse.method.curvature_rm.tooltip": (
         "Curvature RM smooth route: cold-build or reuse an HDF5 graph-LtL "
         "artifact, then reconstruct with the RM @ dv hot path."
+    ),
+    "sim.inverse.method.pseudo3d_noser_rm.tooltip": (
+        "Pseudo-3D route: collapse the electrode layout to a 2D NOSER RM "
+        "difference reconstruction, then extrude the 2D conductivity map into "
+        "a 3D tetrahedral display mesh. This is not a true 3D CEM inverse solve."
     ),
     "sim.inverse.method.greit.tooltip": (
         "GREIT route: builds or reuses an HDF5 artifact from the current 2D/3D "

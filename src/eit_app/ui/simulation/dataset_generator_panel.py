@@ -27,6 +27,7 @@ from eit_app.ui.theme import (
     set_section_header,
     set_subtle_value,
 )
+from pyeidors.runtime_paths import pyeidors_data_path
 
 
 class DatasetRandomizationPanel(QGroupBox):
@@ -496,4 +497,4 @@ class DatasetGeneratorPanel(QObject):
 
     @staticmethod
     def default_output_dir() -> Path:
-        return (Path.cwd() / "data" / "datasets").resolve()
+        return pyeidors_data_path("datasets").resolve()

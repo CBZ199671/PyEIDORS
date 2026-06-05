@@ -9,6 +9,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from pyeidors.cache import CacheManager, CachePolicy
 from pyeidors.cache import cli as cache_cli
@@ -31,6 +32,20 @@ def _touch_old(path: Path) -> None:
     os.utime(path, (old, old))
 
 
+@pytest.fixture(autouse=True)
+def _isolate_runtime_cache_root(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("PYEIDORS_CACHE_ROOT", str(tmp_path / ".pyeidors_cache"))
+    monkeypatch.delenv("PYEIDORS_CACHE_REQUESTED_ROOT", raising=False)
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", raising=False)
+
+
+def _set_runtime_cache_root(monkeypatch, tmp_path: Path) -> Path:
+    root = tmp_path / ".pyeidors_cache"
+    monkeypatch.setenv("PYEIDORS_CACHE_ROOT", str(root))
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", raising=False)
+    return root
+
+
 def test_parse_size_bytes_accepts_decimal_and_binary_units() -> None:
     assert parse_size_bytes("20GB") == 20 * 1000**3
     assert parse_size_bytes("2GiB") == 2 * 1024**3
@@ -38,10 +53,13 @@ def test_parse_size_bytes_accepts_decimal_and_binary_units() -> None:
     assert parse_size_bytes(123) == 123
 
 
-def test_backend_worker_cache_summary_detects_stale_ffcx_locks(tmp_path: Path) -> None:
+def test_backend_worker_cache_summary_detects_stale_ffcx_locks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    cache_root = _set_runtime_cache_root(monkeypatch, tmp_path)
     source = (
-        tmp_path
-        / ".pyeidors_cache"
+        cache_root
         / "gui_backend_worker"
         / "v1"
         / "complex64-cuda"
@@ -51,8 +69,7 @@ def test_backend_worker_cache_summary_detects_stale_ffcx_locks(tmp_path: Path) -
     )
     _touch_old(source)
     probe = (
-        tmp_path
-        / ".pyeidors_cache"
+        cache_root
         / "gui_backend_worker"
         / "v1"
         / "complex64-cuda"
@@ -99,9 +116,9 @@ def test_cache_doctor_can_repair_stale_ffcx_locks(
     monkeypatch,
 ) -> None:
     monkeypatch.setenv("EIT_APP_BACKEND_WORKER_STALE_JIT_LOCK_SECONDS", "0")
+    cache_root = _set_runtime_cache_root(monkeypatch, tmp_path)
     source = (
-        tmp_path
-        / ".pyeidors_cache"
+        cache_root
         / "gui_backend_worker"
         / "v1"
         / "cuda"
@@ -303,9 +320,9 @@ def test_warm_backend_worker_can_repair_jit_and_report_profile_cache(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    cache_root = _set_runtime_cache_root(monkeypatch, tmp_path)
     source = (
-        tmp_path
-        / ".pyeidors_cache"
+        cache_root
         / "gui_backend_worker"
         / "v1"
         / "cuda"
@@ -316,9 +333,7 @@ def test_warm_backend_worker_can_repair_jit_and_report_profile_cache(
     _touch_old(source)
 
     def _fake_warm(*, repo, profile, progress_cb=None):
-        profile_root = (
-            Path(repo) / ".pyeidors_cache" / "gui_backend_worker" / "v1" / str(profile)
-        )
+        profile_root = cache_root / "gui_backend_worker" / "v1" / str(profile)
         cache_home = profile_root / "xdg-cache"
         cache_home.mkdir(parents=True, exist_ok=True)
         if progress_cb is not None:
@@ -361,10 +376,10 @@ def test_v331_warm_backend_worker_caps_progress_messages(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
+    cache_root = _set_runtime_cache_root(monkeypatch, tmp_path)
+
     def _fake_warm(*, repo, profile, progress_cb=None):
-        profile_root = (
-            Path(repo) / ".pyeidors_cache" / "gui_backend_worker" / "v1" / str(profile)
-        )
+        profile_root = cache_root / "gui_backend_worker" / "v1" / str(profile)
         cache_home = profile_root / "xdg-cache"
         cache_home.mkdir(parents=True, exist_ok=True)
         if progress_cb is not None:

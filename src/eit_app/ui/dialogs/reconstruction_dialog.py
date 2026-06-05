@@ -46,13 +46,15 @@ from eit_app.models.reconstruction_methods import (
 )
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.theme import card_palette, set_button_role
+from pyeidors.runtime_paths import pyeidors_output_path
 
 log = logging.getLogger(__name__)
 
 
 def _default_results_dir() -> Path:
-    """Return the default output directory: <app cwd>/results, created if missing."""
-    base = Path.cwd() / "results"
+    """Return the user-writable default reconstruction output directory."""
+
+    base = pyeidors_output_path("reconstructions")
     try:
         base.mkdir(parents=True, exist_ok=True)
     except Exception:
@@ -360,7 +362,7 @@ class ReconstructionDialog(QDialog):
         path = QFileDialog.getExistingDirectory(
             self,
             t("hw.acquisition.file_dialog_title"),
-            self._dir_edit.text() or str(Path.home()),
+            self._dir_edit.text() or str(_default_results_dir()),
         )
         if path:
             self._dir_edit.setText(path)

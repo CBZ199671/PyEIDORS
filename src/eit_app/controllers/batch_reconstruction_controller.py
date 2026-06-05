@@ -279,7 +279,9 @@ def _build_request(
         method=prepared.method,
         regularization_alpha=prepared.regularization_alpha,
         max_iterations=prepared.max_iterations,
-        mesh_dimension=batch.mesh_dimension,
+        mesh_dimension=int(
+            prepared.metadata.get("mesh_dimension", batch.mesh_dimension)
+        ),
         mesh_refinement=batch.mesh_refinement,
         metadata=prepared.metadata,
     )

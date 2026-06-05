@@ -39,6 +39,7 @@ from pyeidors.inverse.regularization.smoothness import NOSERRegularization  # no
 from pyeidors.inverse.solvers.gauss_newton import (
     ModularGaussNewtonReconstructor,
 )  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_cache_path  # noqa: E402
 
 from benchmark_difference_runtime import (  # noqa: E402
     build_single_step_namespace,
@@ -78,7 +79,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--repeats", type=int, default=10)
     parser.add_argument("--n-frames", type=int, default=1)
     parser.add_argument("--n-elec", type=int, default=16)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
     parser.add_argument("--difference-hyperparameter", type=float, default=None)
     parser.add_argument("--absolute-lambda", type=float, default=1e-2)
     parser.add_argument("--absolute-max-iter", type=int, default=15)

@@ -3,7 +3,7 @@ function manifest = capture_eidors_greit_fixture(varargin)
 %
 % Usage from MATLAB after EIDORS is on the path:
 %
-%   capture_eidors_greit_fixture('out_dir', 'reports/eidors_greit_fixtures')
+%   capture_eidors_greit_fixture('out_dir', fullfile(getenv('PYEIDORS_OUTPUT_ROOT'), 'eidors_greit_fixtures'))
 %   capture_eidors_greit_fixture('case_id', 'tiny_3d_cylinder')
 %
 % Optional name/value arguments:
@@ -67,7 +67,7 @@ end
 
 function opts = parse_capture_options(varargin)
 opts = struct();
-opts.out_dir = fullfile('reports', 'eidors_greit_fixtures');
+opts.out_dir = fullfile(default_pyeidors_output_root(), 'eidors_greit_fixtures');
 opts.case_id = 'all';
 opts.eidors_startup = '';
 opts.overwrite = false;
@@ -92,6 +92,42 @@ for idx = 1:2:numel(varargin)
             error('capture_eidors_greit_fixture:args', 'Unknown option "%s".', name);
     end
 end
+end
+
+
+function root = default_pyeidors_output_root()
+root = strtrim(getenv('PYEIDORS_OUTPUT_ROOT'));
+if ~isempty(root)
+    return;
+end
+data_root = strtrim(getenv('PYEIDORS_DATA_ROOT'));
+if ~isempty(data_root)
+    root = fullfile(data_root, 'outputs');
+    return;
+end
+xdg_data = strtrim(getenv('XDG_DATA_HOME'));
+if ~isempty(xdg_data)
+    root = fullfile(xdg_data, 'pyeidors', 'outputs');
+    return;
+end
+local_appdata = strtrim(getenv('LOCALAPPDATA'));
+if ~isempty(local_appdata)
+    root = fullfile(local_appdata, 'pyeidors', 'outputs');
+    return;
+end
+appdata = strtrim(getenv('APPDATA'));
+if ~isempty(appdata)
+    root = fullfile(appdata, 'pyeidors', 'outputs');
+    return;
+end
+home_dir = strtrim(getenv('HOME'));
+if isempty(home_dir)
+    home_dir = strtrim(getenv('USERPROFILE'));
+end
+if isempty(home_dir)
+    home_dir = pwd;
+end
+root = fullfile(home_dir, '.local', 'share', 'pyeidors', 'outputs');
 end
 
 

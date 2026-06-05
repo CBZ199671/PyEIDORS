@@ -49,3 +49,34 @@ def test_v131_complex_cuda_shells_select_complex_dolfinx_petsc_profiles():
     assert 'export PYEIDORS_PETSC_SCALAR_TYPE="complex64"' in text
     assert "cudaPetscComplexSingle" in text
     assert "cudaFenicsDolfinxComplexSingle" in text
+
+
+def test_v622_nix_apps_match_dev_launcher_wslg_pyvista_offscreen_default():
+    flake_text = _flake_text()
+    launcher_text = (REPO_ROOT / "scripts" / "gui" / "run_eit_app.sh").read_text(
+        encoding="utf-8"
+    )
+
+    assert "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN:=1" in launcher_text
+    assert '"EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"' in flake_text
+    assert '"1"\n                "--prefix"\n                "PATH"' in flake_text
+
+
+def test_v624_complex_nix_apps_expose_real_worker_profile_commands():
+    text = _flake_text()
+
+    assert '"EIT_APP_BACKEND_WORKER_LAUNCH_MODE"' in text
+    assert '"auto"' in text
+    assert "backendWorkerCommandEnvName" in text
+    assert '"EIT_APP_BACKEND_WORKER_COMMAND_' in text
+    assert '"${workerPackage}/bin/eit-backend-worker"' in text
+    assert "cuda = pyeidorsCuda;" in text
+    assert "backendWorkerCommands = {\n              default = pyeidors;" in text
+    assert (
+        'profile = "cuda";\n            fenicsDolfinxPkg = cudaFenicsDolfinx;' in text
+    )
+    assert (
+        "pyeidorsCuda = if linuxCudaSupported then mkPyeidors" in text
+        and "backendWorkerCommands = {\n              default = pyeidors;\n            };\n          } else null;\n          pyeidorsComplexCuda"
+        in text
+    )

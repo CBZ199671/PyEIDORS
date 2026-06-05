@@ -31,6 +31,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from pyeidors.perf import ACCELERATION_PROFILE_GPU3D
+from pyeidors.runtime_paths import pyeidors_output_path
 from scripts.common.acceleration_profiles import (
     add_acceleration_profile_argument,
     resolve_3d_mesh_contract,
@@ -50,9 +51,7 @@ from scripts.diagnostics.gallery_shared import (
 BACKGROUND_CONDUCTIVITY = 1.0
 REAL_PHANTOM_HIGH = 1.6
 REAL_PHANTOM_LOW = 0.65
-DEFAULT_OUTPUT_DIR = (
-    PROJECT_ROOT / "results" / "diagnostics" / "reconstruction_gallery_real"
-)
+DEFAULT_OUTPUT_DIR = pyeidors_output_path("diagnostics", "reconstruction_gallery_real")
 _MEASUREMENT_REL_TOL = 1e-6
 _IMAGE_REL_TOL = 5e-5
 _IMAGE_RMSE_TOL = {2: 1e-6, 3: 1.25e-6}

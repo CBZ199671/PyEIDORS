@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "pyeidors"
-version = "1.0.0"
+version = "2.0.0"
 description = "PyEIDORS - A FEniCSx-based Framework for Forward and Inverse Problems in Electrical Impedance Tomography (EIT)"
 readme = "README.md"
 requires-python = ">=3.13,<3.14"
@@ -92,6 +92,7 @@ Repository = "https://github.com/CBZ199671/PyEIDORS.git"
 
 [project.scripts]
 eit-app = "eit_app.app:main"
+eit-backend-worker = "eit_app.backend_worker:main"
 eit-cache = "pyeidors.cache.cli:main"
 
 [tool.setuptools.packages.find]

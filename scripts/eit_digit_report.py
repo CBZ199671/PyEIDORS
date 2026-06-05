@@ -13,6 +13,7 @@ from pyeidors.data.digit_report import (
     read_eit_digit_cases,
     write_report_files,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _expand(values: list | None, *, count: int, default, name: str) -> list:
@@ -78,13 +79,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-md",
         type=Path,
-        default=Path("outputs/eit_digit_report.md"),
+        default=pyeidors_output_path("eit_digit_report.md"),
         help="Markdown report path.",
     )
     parser.add_argument(
         "--output-csv",
         type=Path,
-        default=Path("outputs/eit_digit_report.csv"),
+        default=pyeidors_output_path("eit_digit_report.csv"),
         help="Combined CSV report path.",
     )
     parser.add_argument(

@@ -46,9 +46,10 @@ from pyeidors.inverse.reconstruction_matrix import (
     _noser_regularization,
     build_one_step_rm,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
-OUT_ROOT = ROOT / "results" / "complex_eidors_pyeidors_step_compare"
+OUT_ROOT = pyeidors_output_path("complex_eidors_pyeidors_step_compare")
 
 
 @dataclass(frozen=True)

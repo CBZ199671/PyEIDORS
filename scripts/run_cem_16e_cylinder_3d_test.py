@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from pathlib import Path
 
 # Runtime stability guard for PETSc/Torch mixed workloads.
 os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
@@ -23,6 +22,7 @@ from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.utils.numeric_ops import squared_distances_to_point
 from common.acceleration_profiles import (
     add_acceleration_profile_argument,
@@ -66,7 +66,7 @@ def run_test(
         acceleration_profile=acceleration_profile,
     )
     mesh = load_or_create_mesh(
-        mesh_dir=str(Path("eit_meshes")),
+        mesh_dir=str(pyeidors_cache_path("eit_meshes")),
         n_elec=n_elec,
         dimension=3,
         radius=radius,

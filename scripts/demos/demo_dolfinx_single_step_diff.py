@@ -36,6 +36,7 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
 from pyeidors.inverse.regularization.smoothness import NOSERRegularization
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 from pyeidors.visualization import create_visualizer
 from scripts.common.hdf5_outputs import DEMO_ARRAYS_SCHEMA, write_output_bundle
 from scripts.demos._shared import (
@@ -49,7 +50,9 @@ def main() -> None:
     rng = np.random.default_rng(20241116)
     # 1) Mesh and patterns
     mesh = load_or_create_mesh(
-        mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16
+        mesh_dir=str(pyeidors_cache_path("eit_meshes")),
+        mesh_name="mesh_102070",
+        n_elec=16,
     )
     pattern_cfg = PatternConfig(
         n_elec=16,
@@ -125,7 +128,7 @@ def main() -> None:
     }
 
     # 6) Visualization
-    out_dir = Path("results/demo_single_step_diff")
+    out_dir = pyeidors_output_path("demo_single_step_diff")
     out_dir.mkdir(parents=True, exist_ok=True)
 
     viz = create_visualizer()

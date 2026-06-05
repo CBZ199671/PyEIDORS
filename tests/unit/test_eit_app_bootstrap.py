@@ -12,6 +12,8 @@ from eit_app.ui.main_window import EITWorkstation
 
 _QT_ENV_NAMES = (
     "QT_QPA_PLATFORM",
+    "QT_AUTO_SCREEN_SCALE_FACTOR",
+    "QT_ENABLE_HIGHDPI_SCALING",
     "QT_SCALE_FACTOR_ROUNDING_POLICY",
     "QT_X11_NO_MITSHM",
     "EIT_APP_USE_QT_WAYLAND",
@@ -40,6 +42,8 @@ def test_v51_wslg_defaults_to_wayland_for_crisp_hidpi(monkeypatch):
     app_module._configure_qt_platform_for_embedded_vtk()
 
     assert os.environ["QT_QPA_PLATFORM"].split(";", 1)[0] == "wayland"
+    assert os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] == "1"
+    assert os.environ["QT_ENABLE_HIGHDPI_SCALING"] == "1"
     assert os.environ["QT_SCALE_FACTOR_ROUNDING_POLICY"] == "PassThrough"
     assert "QT_X11_NO_MITSHM" not in os.environ
 
@@ -97,6 +101,8 @@ def test_v51_explicit_qt_platform_is_preserved(monkeypatch):
     app_module._configure_qt_platform_for_embedded_vtk()
 
     assert os.environ["QT_QPA_PLATFORM"] == "offscreen"
+    assert os.environ["QT_AUTO_SCREEN_SCALE_FACTOR"] == "1"
+    assert os.environ["QT_ENABLE_HIGHDPI_SCALING"] == "1"
 
 
 def test_v99_bogus_wslg_screen_geometry_does_not_collapse_main_window():

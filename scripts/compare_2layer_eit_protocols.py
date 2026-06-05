@@ -24,6 +24,8 @@ import numpy as np
 from scipy import sparse
 from scipy.sparse import linalg as spla
 
+from pyeidors.runtime_paths import pyeidors_output_path
+
 
 EPS = 1.0e-12
 
@@ -721,7 +723,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="outputs/two_layer_protocol_comparison",
+        default=str(pyeidors_output_path("two_layer_protocol_comparison")),
         help="Directory for figures, tables, and numbering CSV files.",
     )
     parser.add_argument("--xy-count", type=int, default=23)

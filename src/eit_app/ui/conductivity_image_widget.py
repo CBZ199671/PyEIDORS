@@ -16,6 +16,7 @@ from eit_app.ui.electrode_overlay import (
     default_arc_segments,
 )
 from eit_app.ui.fonts import plot_font_families, serif_font_family
+from eit_app.ui.matplotlib_dpi import sync_matplotlib_canvas_dpi
 from eit_app.ui.mesh_helpers import _integer_cells, cell_to_node_average
 from eit_app.ui.theme import plot_palette, set_hint_text, subscribe_theme_mode
 
@@ -231,6 +232,7 @@ class ConductivityImageWidget(QWidget):
         self._figure.set_layout_engine(None)
         self._figure.patch.set_facecolor(palette["panel_bg"])
         self._canvas = FigureCanvasQTAgg(self._figure)
+        sync_matplotlib_canvas_dpi(self._canvas, self)
         layout.addWidget(self._canvas, 1)
 
         # Bottom controls strip — only one toggle today, but kept in its
@@ -453,6 +455,7 @@ class ConductivityImageWidget(QWidget):
         # ax.clear() above wiped the previous LineCollection.
         self._redraw_electrodes()
 
+        sync_matplotlib_canvas_dpi(self._canvas, self)
         self._canvas.draw()
 
     def set_electrode_geometry(self, geometry: ElectrodeGeometry | None) -> None:
@@ -680,4 +683,10 @@ class ConductivityImageWidget(QWidget):
         # Cache so the theme-mode listener can repaint.
         self._last_image = None
         self._last_caption = (text, kind)
+        sync_matplotlib_canvas_dpi(self._canvas, self)
         self._canvas.draw()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802 (Qt API)
+        super().resizeEvent(event)
+        if sync_matplotlib_canvas_dpi(self._canvas, self):
+            self._canvas.draw_idle()

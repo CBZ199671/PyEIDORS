@@ -15,10 +15,10 @@ Two non-obvious design points worth keeping in mind for future
 maintenance:
 
 1.  ``QtInteractor`` remains the preferred display path for real 3D
-    simulation output on native desktop runtimes.  WSLg/Wayland defaults to
-    the Matplotlib 3D fallback because first-use PyVista offscreen startup can
-    block the GUI for tens of seconds; users can opt back into PyVista
-    offscreen with ``EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN=1``.
+    simulation output on native desktop runtimes.  When embedded VTK is
+    unsafe (for example WSLg/Wayland), the widget uses PyVista offscreen.
+    If PyVista/VTK cannot render, the GUI shows an explicit unavailable
+    caption instead of drawing a Matplotlib 3D substitute.
 
 2.  When enabled, ``QtInteractor`` is constructed only after the host
     widget is shown and owns a native child window.  Initialising VTK
@@ -41,13 +41,6 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
-from matplotlib import colormaps
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
-from matplotlib.cm import ScalarMappable
-from matplotlib.colors import Normalize
-from matplotlib.figure import Figure
-from matplotlib.font_manager import FontProperties
-from mpl_toolkits.mplot3d.art3d import Poly3DCollection
 from PySide6.QtCore import QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import (
@@ -70,7 +63,6 @@ from eit_app.ui.electrode_overlay import (
     ElectrodeGeometry,
     default_patch_quads,
 )
-from eit_app.ui.fonts import plot_font_families
 from eit_app.ui.theme import (
     plot_palette,
     set_button_role,
@@ -106,9 +98,6 @@ ANOMALY_MODE_ABSOLUTE = "absolute"
 ANOMALY_MODES = frozenset(
     {ANOMALY_MODE_POSITIVE, ANOMALY_MODE_NEGATIVE, ANOMALY_MODE_ABSOLUTE}
 )
-_MPL_FONT_FALLBACKS = ("DejaVu Serif", "DejaVu Sans")
-_MPL3D_AX_POSITION = (0.04, 0.08, 0.78, 0.84)
-_MPL3D_COLORBAR_POSITION = (0.86, 0.18, 0.035, 0.62)
 _INHOMOGENEITY_RELATIVE_FLOOR = 0.02
 _ANOMALY_PEAK_FRACTION = 0.35
 _ANOMALY_MAD_SIGMA = 3.0
@@ -692,12 +681,6 @@ def _display_color_limits(
     return _conductivity_color_limits(values)
 
 
-def _matplotlib_colormap(name: str):
-    if name in colormaps:
-        return colormaps[name]
-    return colormaps["viridis"]
-
-
 def _cell_center_sigma(
     sigma: np.ndarray,
     cells: np.ndarray,
@@ -750,8 +733,23 @@ def _pyvista_point_size(n_cells: int) -> float:
     return float(np.clip(1100.0 / max(np.sqrt(max(n_cells, 1)), 1.0), 4.0, 14.0))
 
 
-def _matplotlib_point_size(n_cells: int) -> float:
-    return float(np.clip(4500.0 / max(float(max(n_cells, 1)) ** 0.62, 1.0), 5.0, 32.0))
+def _pyvista_surface(dataset):
+    try:
+        return dataset.extract_surface(algorithm="dataset_surface")
+    except TypeError as exc:
+        if "algorithm" not in str(exc):
+            raise
+        return dataset.extract_surface()
+
+
+def _pyvista_feature_outline(dataset, *, feature_angle: float):
+    return _pyvista_surface(dataset).extract_feature_edges(
+        boundary_edges=True,
+        feature_edges=True,
+        feature_angle=feature_angle,
+        non_manifold_edges=False,
+        manifold_edges=False,
+    )
 
 
 def _env_flag(name: str) -> bool:
@@ -823,10 +821,8 @@ def _pyvista_offscreen_max_cells() -> int:
 
 
 def _should_skip_pyvista_offscreen(n_cells: int, display_mode: str) -> bool:
-    if display_mode != DISPLAY_MODE_POINTS:
-        return False
-    threshold = _pyvista_offscreen_max_cells()
-    return threshold > 0 and int(n_cells) >= threshold
+    del n_cells, display_mode
+    return False
 
 
 def _wslg_pyvista_offscreen_enabled() -> bool:
@@ -839,14 +835,7 @@ def _should_skip_pyvista_offscreen_for_reason(
     display_mode: str,
     reason: str,
 ) -> bool:
-    if _should_skip_pyvista_offscreen(n_cells, display_mode):
-        return True
-    if (
-        _running_under_wsl()
-        and "WSLg embedded VTK requires" in str(reason)
-        and not _wslg_pyvista_offscreen_enabled()
-    ):
-        return True
+    del n_cells, display_mode, reason
     return False
 
 
@@ -1102,21 +1091,6 @@ def _extract_cells_from_mask(grid, inhom_mask: np.ndarray):
         return grid.extract_cells(inhom_indices)
 
 
-def _plot_font_families() -> list[str]:
-    families = plot_font_families()
-    for family in _MPL_FONT_FALLBACKS:
-        if family not in families:
-            families.append(family)
-    try:
-        from matplotlib import font_manager
-
-        known = {font.name for font in font_manager.fontManager.ttflist}
-    except Exception:
-        known = set()
-    available = [family for family in families if not known or family in known]
-    return available or list(_MPL_FONT_FALLBACKS)
-
-
 def _running_under_wsl() -> bool:
     if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
         return True
@@ -1132,8 +1106,9 @@ def embedded_vtk_status() -> tuple[bool, str]:
     The FEniCSx-recommended PyVista path is available on native desktop
     runtimes, but WSLg/X11 has repeatedly crashed the whole process from
     inside VTK's native window setup (``BadWindow / X_ConfigureWindow``).
-    That class of failure cannot be caught by Python, so WSL defaults to
-    the safe Matplotlib 3D backend unless explicitly forced.
+    That class of failure cannot be caught by Python, so WSL keeps the
+    embedded interactor disabled unless XCB is forced.  The caller may
+    still use PyVista offscreen for a real VTK-rendered 3D image.
     """
     if _env_flag("EIT_APP_DISABLE_EMBEDDED_VTK"):
         return False, "disabled by EIT_APP_DISABLE_EMBEDDED_VTK"
@@ -1458,7 +1433,6 @@ class Conductivity3DWidget(QWidget):
         self._wire_actor = None
         self._electrode_actor = None
         self._offscreen_electrode_actor = None
-        self._mpl3d_electrode_collection = None
         self._electrode_geometry: ElectrodeGeometry | None = None
 
         self._render_backend = "caption"
@@ -1471,23 +1445,8 @@ class Conductivity3DWidget(QWidget):
         self._colorbar_label = "S/m"
         self._colormap = "viridis"
         self._value_limits: tuple[float, float] | None = None
-        self._title_font = FontProperties(family=_plot_font_families(), size=14)
-        self._mpl3d_colorbar = None
-        self._mpl3d_mesh_collection = None
-        self._mpl3d_highlight_collection = None
-        self._mpl3d_mesh_facecolors: np.ndarray | None = None
-        self._mpl3d_highlight_facecolors: np.ndarray | None = None
-        # Cached "fresh-render" view bounds for the matplotlib 3D
-        # backend so the reset-view button can restore the data extent
-        # the user saw on first render, not just the camera angle.
-        self._mpl3d_initial_bounds: (
-            tuple[
-                tuple[float, float],
-                tuple[float, float],
-                tuple[float, float],
-            ]
-            | None
-        ) = None
+        self._mpl3d_host = None
+        self._mpl3d_canvas = None
         self._offscreen_plotter = None
         self._offscreen_mesh_actor = None
         self._offscreen_highlight_actor = None
@@ -1590,21 +1549,6 @@ class Conductivity3DWidget(QWidget):
         self._offscreen_label.zoomed.connect(self._on_offscreen_zoomed)
         self._offscreen_layout.addWidget(self._offscreen_label)
         self._stack.addWidget(self._offscreen_host)
-
-        self._mpl3d_host = QWidget()
-        self._mpl3d_layout = QVBoxLayout(self._mpl3d_host)
-        self._mpl3d_layout.setContentsMargins(0, 0, 0, 0)
-        palette = plot_palette()
-        self._mpl3d_figure = Figure(figsize=(5, 4))
-        self._mpl3d_figure.patch.set_facecolor(palette["panel_bg"])
-        self._mpl3d_canvas = FigureCanvasQTAgg(self._mpl3d_figure)
-        self._mpl3d_layout.addWidget(self._mpl3d_canvas)
-        self._mpl3d_ax = self._mpl3d_figure.add_axes(
-            _MPL3D_AX_POSITION, projection="3d"
-        )
-        self._mpl3d_colorbar_ax = self._mpl3d_figure.add_axes(_MPL3D_COLORBAR_POSITION)
-        self._mpl3d_colorbar_ax.set_visible(False)
-        self._stack.addWidget(self._mpl3d_host)
 
         # _InteractorHost defers its ``realized`` signal until the
         # widget is actually shown for the first time AND Qt has had
@@ -1899,6 +1843,8 @@ class Conductivity3DWidget(QWidget):
             return
 
         self._display_mode = mode
+        if mode == DISPLAY_MODE_VOLUME:
+            self._suppress_auto_points_once = True
         self._sync_display_mode_buttons()
         if self._last_image is None:
             return
@@ -1982,14 +1928,6 @@ class Conductivity3DWidget(QWidget):
         reason: str,
     ) -> None:
         offscreen_failure = _pyvista_offscreen_failure_reason()
-        skip_offscreen = (
-            offscreen_failure is not None
-            or _should_skip_pyvista_offscreen_for_reason(
-                cells.shape[0],
-                self._display_mode,
-                reason,
-            )
-        )
         log_reason = (
             f"{reason}; PyVista offscreen disabled after previous failure: "
             f"{offscreen_failure}"
@@ -1998,8 +1936,8 @@ class Conductivity3DWidget(QWidget):
         )
         if log_reason != self._last_vtk_disabled_reason:
             action = (
-                "using Matplotlib point-cloud fallback"
-                if skip_offscreen
+                "showing 3D unavailable caption"
+                if offscreen_failure is not None
                 else "trying PyVista offscreen"
             )
             log.info(
@@ -2010,11 +1948,45 @@ class Conductivity3DWidget(QWidget):
             self._last_vtk_disabled_reason = log_reason
         self._pending_render = None
         self._discard_actors()
-        if skip_offscreen:
-            self._render_matplotlib_scene(sigma, coords, cells)
+        if offscreen_failure is not None:
+            self._show_pyvista_offscreen_unavailable(offscreen_failure)
             return
-        if not self._render_pyvista_offscreen_scene(sigma, coords, cells):
-            self._render_matplotlib_scene(sigma, coords, cells)
+        try:
+            rendered_offscreen = self._render_pyvista_offscreen_scene(
+                sigma,
+                coords,
+                cells,
+            )
+        except Exception as exc:  # pragma: no cover - graphics runtime edge case
+            log.warning(
+                "PyVista offscreen renderer failed; 3D view unavailable: %s",
+                exc,
+            )
+            _mark_pyvista_offscreen_failure(exc)
+            self._discard_offscreen_plotter()
+            self._show_pyvista_offscreen_unavailable(str(exc))
+            return
+        if not rendered_offscreen:
+            self._show_pyvista_offscreen_unavailable(
+                _pyvista_offscreen_failure_reason() or reason
+            )
+
+    def _show_pyvista_offscreen_unavailable(self, reason: str | None) -> None:
+        text = t("sim.results.viewer3d_unavailable")
+        if reason:
+            text = f"{text}\n{reason}"
+        self._show_caption(text, kind="error")
+
+    def _render_matplotlib_scene(
+        self,
+        sigma: np.ndarray,
+        coords: np.ndarray,
+        cells: np.ndarray,
+    ) -> None:
+        del sigma, coords, cells
+        self._show_pyvista_offscreen_unavailable(
+            "Matplotlib 3D rendering is disabled for conductivity volume views."
+        )
 
     def update_image(
         self,
@@ -2168,12 +2140,6 @@ class Conductivity3DWidget(QWidget):
             except Exception:  # pragma: no cover — VTK quirk
                 pass
         self._offscreen_electrode_actor = None
-        if self._mpl3d_electrode_collection is not None:
-            try:
-                self._mpl3d_electrode_collection.remove()
-            except (AttributeError, ValueError):
-                pass
-            self._mpl3d_electrode_collection = None
 
     def _refresh_electrode_actors(self) -> None:
         """Build cached electrode geometry on the currently active backend.
@@ -2189,16 +2155,12 @@ class Conductivity3DWidget(QWidget):
             self._build_vtk_electrode_actor(geometry)
         elif self._render_backend == "pyvista_offscreen":
             self._build_offscreen_electrode_actor(geometry)
-        elif self._render_backend == "mpl3d":
-            self._build_mpl3d_electrode_collection(geometry)
 
     def _render_active_backend_if_visible(self) -> None:
         if self._render_backend == "vtk" and self._plotter is not None:
             self._plotter.render()
         elif self._render_backend == "pyvista_offscreen":
             self._refresh_offscreen_pixmap()
-        elif self._render_backend == "mpl3d":
-            self._mpl3d_canvas.draw_idle()
 
     def _build_vtk_electrode_actor(self, geometry: ElectrodeGeometry) -> None:
         if self._plotter is None:
@@ -2272,51 +2234,6 @@ class Conductivity3DWidget(QWidget):
         face_buffer[:, 1:] = triangles
         return pv.PolyData(points, face_buffer.ravel())
 
-    def _build_mpl3d_electrode_collection(self, geometry: ElectrodeGeometry) -> None:
-        if self._mpl3d_electrode_collection is not None:
-            try:
-                self._mpl3d_electrode_collection.remove()
-            except (AttributeError, ValueError):
-                pass
-            self._mpl3d_electrode_collection = None
-        if not geometry.is_3d() or not geometry.patches:
-            return
-        palette = plot_palette()
-        color = palette.get("highlight", "#f39c12")
-        polys: list[np.ndarray] = []
-        for patch in geometry.patches:
-            n_theta = 6
-            thetas = np.linspace(patch.theta_start, patch.theta_end, n_theta)
-            cos_t = np.cos(thetas)
-            sin_t = np.sin(thetas)
-            lower = np.empty((n_theta, 3), dtype=np.float32)
-            lower[:, 0] = geometry.radius * cos_t
-            lower[:, 1] = geometry.radius * sin_t
-            lower[:, 2] = patch.z_lower
-            upper = np.empty((n_theta, 3), dtype=np.float32)
-            upper[:, 0] = lower[:, 0]
-            upper[:, 1] = lower[:, 1]
-            upper[:, 2] = patch.z_upper
-            for i in range(n_theta - 1):
-                quad = np.empty((4, 3), dtype=np.float32)
-                quad[0] = lower[i]
-                quad[1] = lower[i + 1]
-                quad[2] = upper[i + 1]
-                quad[3] = upper[i]
-                polys.append(quad)
-        if not polys:
-            return
-        collection = Poly3DCollection(
-            polys,
-            facecolors=color,
-            edgecolors=color,
-            linewidths=0.6,
-            alpha=0.9,
-        )
-        self._mpl3d_ax.add_collection3d(collection)
-        collection.set_visible(bool(self._electrode_check.isChecked()))
-        self._mpl3d_electrode_collection = collection
-
     def _on_electrode_toggled(self, checked: bool) -> None:
         # Cache hit on every toggle — actors already built by
         # set_electrode_geometry / build_scene; just flip visibility.
@@ -2326,17 +2243,6 @@ class Conductivity3DWidget(QWidget):
             if self._offscreen_electrode_actor is not None:
                 self._offscreen_electrode_actor.SetVisibility(bool(checked))
             self._refresh_offscreen_pixmap()
-            return
-        if self._render_backend == "mpl3d":
-            if (
-                self._mpl3d_electrode_collection is None
-                and checked
-                and self._electrode_geometry is not None
-            ):
-                self._build_mpl3d_electrode_collection(self._electrode_geometry)
-            if self._mpl3d_electrode_collection is not None:
-                self._mpl3d_electrode_collection.set_visible(bool(checked))
-            self._mpl3d_canvas.draw_idle()
             return
         if self._render_backend == "vtk":
             if (
@@ -2676,15 +2582,7 @@ class Conductivity3DWidget(QWidget):
                     bool(self._highlight_check.isChecked())
                 )
 
-        outline = grid.extract_surface(
-            algorithm="dataset_surface"
-        ).extract_feature_edges(
-            boundary_edges=True,
-            feature_edges=True,
-            feature_angle=30.0,
-            non_manifold_edges=False,
-            manifold_edges=False,
-        )
+        outline = _pyvista_feature_outline(grid, feature_angle=30.0)
         if outline.n_points > 0:
             self._offscreen_wire_actor = plotter.add_mesh(
                 outline,
@@ -2709,304 +2607,6 @@ class Conductivity3DWidget(QWidget):
             self._discard_offscreen_plotter()
             return False
         return True
-
-    def _remove_mpl3d_colorbar(self) -> None:
-        self._mpl3d_colorbar_ax.clear()
-        self._mpl3d_colorbar_ax.set_visible(False)
-        self._mpl3d_colorbar = None
-
-    def _apply_mpl3d_chrome(self) -> None:
-        palette = plot_palette()
-        text = palette.get("text", "#222")
-        border = palette.get("border", "#888")
-        axes_bg = palette.get("axes_bg", "#ffffff")
-        self._mpl3d_figure.patch.set_facecolor(palette.get("panel_bg", "#ffffff"))
-        self._mpl3d_ax.set_position(_MPL3D_AX_POSITION)
-        self._mpl3d_colorbar_ax.set_position(_MPL3D_COLORBAR_POSITION)
-        self._mpl3d_ax.set_facecolor(axes_bg)
-        self._mpl3d_ax.tick_params(colors=text, labelsize=8)
-        for axis in (self._mpl3d_ax.xaxis, self._mpl3d_ax.yaxis, self._mpl3d_ax.zaxis):
-            axis.label.set_color(text)
-            axis.label.set_fontfamily(_plot_font_families())
-            axis.pane.set_facecolor((*_hex_to_rgb(axes_bg), 0.18))
-            axis.pane.set_edgecolor(border)
-        for label in (
-            self._mpl3d_ax.get_xticklabels()
-            + self._mpl3d_ax.get_yticklabels()
-            + self._mpl3d_ax.get_zticklabels()
-        ):
-            label.set_color(text)
-            label.set_fontfamily(_plot_font_families())
-
-    def _apply_mpl3d_bounds_and_labels(
-        self,
-        coords: np.ndarray,
-        *,
-        elev: float,
-        azim: float,
-    ) -> None:
-        points = coords[:, :3]
-        mins = np.nanmin(points, axis=0)
-        maxs = np.nanmax(points, axis=0)
-        spans = np.maximum(maxs - mins, 1.0e-9)
-        center = (mins + maxs) * 0.5
-        radius = float(np.nanmax(spans) * 0.56)
-        if radius <= 0.0 or not np.isfinite(radius):
-            radius = 1.0
-        xlim = (center[0] - radius, center[0] + radius)
-        ylim = (center[1] - radius, center[1] + radius)
-        zlim = (center[2] - radius, center[2] + radius)
-        self._mpl3d_ax.set_xlim(*xlim)
-        self._mpl3d_ax.set_ylim(*ylim)
-        self._mpl3d_ax.set_zlim(*zlim)
-        # Cache so the reset-view button can restore the original extent.
-        self._mpl3d_initial_bounds = (xlim, ylim, zlim)
-        try:
-            self._mpl3d_ax.set_box_aspect(tuple(spans))
-        except Exception:  # pragma: no cover — older matplotlib fallback
-            pass
-        self._mpl3d_ax.view_init(elev=elev, azim=azim)
-
-        palette = plot_palette()
-        self._mpl3d_ax.set_title(
-            self._default_title,
-            fontproperties=self._title_font,
-            color=palette.get("text", "#222"),
-            pad=8,
-        )
-        self._mpl3d_ax.set_xlabel("X")
-        self._mpl3d_ax.set_ylabel("Y")
-        self._mpl3d_ax.set_zlabel("Z")
-
-    def _render_matplotlib_point_cloud_scene(
-        self,
-        sigma: np.ndarray,
-        coords: np.ndarray,
-        cells: np.ndarray,
-        *,
-        elev: float,
-        azim: float,
-    ) -> None:
-        cell_sigma, _scalar_mode = _cell_center_sigma(sigma, cells)
-        centers = _cell_centers(coords, cells)
-        sample_idx = _point_cloud_sample_indices(
-            cell_sigma,
-            centers,
-            anomaly_mode=self._anomaly_mode,
-        )
-        display_centers, display_sigma = _point_cloud_display_arrays(
-            centers,
-            cell_sigma,
-            sample_idx,
-        )
-        self._point_cloud_original_count = int(cell_sigma.size)
-        self._point_cloud_display_count = int(display_sigma.size)
-        sigma_min, sigma_max = _display_color_limits(cell_sigma, self._value_limits)
-
-        palette = plot_palette()
-        cmap = _matplotlib_colormap(self._colormap)
-        norm = Normalize(vmin=sigma_min, vmax=sigma_max)
-        opacity = self._opacity_slider.value() / 100.0
-        edge_color = (
-            palette.get("border", "#888") if self._wire_check.isChecked() else "none"
-        )
-        mesh = self._mpl3d_ax.scatter(
-            display_centers[:, 0],
-            display_centers[:, 1],
-            display_centers[:, 2],
-            c=display_sigma,
-            cmap=cmap,
-            norm=norm,
-            s=_matplotlib_point_size(display_centers.shape[0]),
-            alpha=opacity,
-            edgecolors=edge_color,
-            linewidths=0.2,
-            depthshade=True,
-        )
-        self._mpl3d_mesh_collection = mesh
-        self._mpl3d_mesh_facecolors = None
-        self._mpl3d_highlight_collection = None
-        self._mpl3d_highlight_facecolors = None
-
-        inhom_mask = _cell_anomaly_mask(
-            display_sigma,
-            self._anomaly_mode,
-            cell_centers=display_centers,
-            prefer_central_region=self._prefer_central_anomaly_region,
-        )
-        highlight_centers, highlight_sigma = _point_cloud_highlight_arrays(
-            display_centers,
-            display_sigma,
-            inhom_mask,
-        )
-        if highlight_sigma.size > 0:
-            highlight = self._mpl3d_ax.scatter(
-                highlight_centers[:, 0],
-                highlight_centers[:, 1],
-                highlight_centers[:, 2],
-                c=highlight_sigma,
-                cmap=cmap,
-                norm=norm,
-                s=max(
-                    _matplotlib_point_size(display_centers.shape[0]) * 1.8,
-                    16.0,
-                ),
-                alpha=1.0,
-                edgecolors=palette["highlight"],
-                linewidths=0.45,
-                depthshade=True,
-            )
-            highlight.set_visible(bool(self._highlight_check.isChecked()))
-            self._mpl3d_highlight_collection = highlight
-
-        self._apply_mpl3d_bounds_and_labels(coords, elev=elev, azim=azim)
-
-        scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
-        scalar_mappable.set_array(cell_sigma)
-        self._mpl3d_colorbar_ax.clear()
-        self._mpl3d_colorbar_ax.set_visible(True)
-        self._mpl3d_colorbar = self._mpl3d_figure.colorbar(
-            scalar_mappable,
-            cax=self._mpl3d_colorbar_ax,
-        )
-        self._mpl3d_colorbar.set_label(
-            self._colorbar_label, color=palette.get("text", "#222")
-        )
-        self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
-
-    def _render_matplotlib_scene(
-        self,
-        sigma: np.ndarray,
-        coords: np.ndarray,
-        cells: np.ndarray,
-    ) -> None:
-        """Render the volume as a real 3D Matplotlib scene.
-
-        This is intentionally *not* the old XY projection.  It draws
-        boundary faces in a 3D Axes and, for cell-centered inhomogeneous
-        fields, also draws the internal anomalous cells through the
-        transparent shell so the result remains spatially inspectable
-        without touching VTK's native window layer.
-        """
-        self._remove_mpl3d_colorbar()
-        elev = getattr(self._mpl3d_ax, "elev", 22.0)
-        azim = getattr(self._mpl3d_ax, "azim", -45.0)
-        self._mpl3d_ax.clear()
-        self._apply_mpl3d_chrome()
-
-        if self._display_mode == DISPLAY_MODE_POINTS:
-            self._render_matplotlib_point_cloud_scene(
-                sigma,
-                coords,
-                cells,
-                elev=elev,
-                azim=azim,
-            )
-            self._stack.setCurrentWidget(self._mpl3d_host)
-            self._controls.show()
-            self._render_backend = "mpl3d"
-            self._mpl3d_electrode_collection = None
-            if self._electrode_geometry is not None:
-                self._build_mpl3d_electrode_collection(self._electrode_geometry)
-            self._mpl3d_canvas.draw_idle()
-            return
-
-        faces, source_cells = _boundary_faces(cells)
-        valid_faces, source_indices = _valid_boundary_faces_and_sources(
-            faces, source_cells, len(coords)
-        )
-        if not valid_faces:
-            self._show_caption(t("sim.results.viewer3d_bad_mesh"), kind="error")
-            return
-
-        n_cells = cells.shape[0]
-        if sigma.shape[0] == n_cells:
-            scalar_mode = "cell"
-            cell_sigma = _display_float_values(sigma)
-            face_values = _face_cell_values(cell_sigma, source_indices)
-        else:
-            scalar_mode = "point"
-            point_sigma = _display_float_values(sigma)
-            cell_sigma = _cell_mean_values(point_sigma, cells)
-            face_values = np.empty(len(valid_faces), dtype=cell_sigma.dtype)
-            for face_idx, face in enumerate(valid_faces):
-                face_values[face_idx] = _face_nanmean_value(point_sigma, face)
-
-        sigma_min, sigma_max = _display_color_limits(face_values, self._value_limits)
-
-        palette = plot_palette()
-        cmap = _matplotlib_colormap(self._colormap)
-        norm = Normalize(vmin=sigma_min, vmax=sigma_max)
-        opacity = self._opacity_slider.value() / 100.0
-        face_vertices = _face_vertices_array(coords, valid_faces)
-        colors = cmap(norm(face_values))
-        colors[:, 3] = opacity
-        edge_color = (
-            palette.get("border", "#888") if self._wire_check.isChecked() else "none"
-        )
-
-        mesh = Poly3DCollection(
-            face_vertices,
-            facecolors=colors,
-            edgecolors=edge_color,
-            linewidths=0.35,
-            alpha=None,
-        )
-        self._mpl3d_ax.add_collection3d(mesh)
-        self._mpl3d_mesh_collection = mesh
-        self._mpl3d_mesh_facecolors = colors
-        self._mpl3d_highlight_collection = None
-        self._mpl3d_highlight_facecolors = None
-
-        if scalar_mode == "cell":
-            inhom_mask = _cell_anomaly_mask(
-                cell_sigma,
-                self._anomaly_mode,
-                cell_centers=_cell_centers(coords, cells),
-                prefer_central_region=self._prefer_central_anomaly_region,
-            )
-            highlight_vertices, highlight_values = _highlight_face_vertices_and_values(
-                coords, cells, cell_sigma, inhom_mask
-            )
-            if highlight_values.size:
-                highlight_colors = cmap(norm(highlight_values))
-                highlight_colors[:, 3] = max(0.82, opacity)
-                highlight = Poly3DCollection(
-                    highlight_vertices,
-                    facecolors=highlight_colors,
-                    edgecolors=palette["highlight"],
-                    linewidths=0.45,
-                    alpha=None,
-                )
-                self._mpl3d_ax.add_collection3d(highlight)
-                highlight.set_visible(bool(self._highlight_check.isChecked()))
-                self._mpl3d_highlight_collection = highlight
-                self._mpl3d_highlight_facecolors = highlight_colors
-
-        self._apply_mpl3d_bounds_and_labels(coords, elev=elev, azim=azim)
-
-        scalar_mappable = ScalarMappable(norm=norm, cmap=cmap)
-        scalar_mappable.set_array(face_values)
-        self._mpl3d_colorbar_ax.clear()
-        self._mpl3d_colorbar_ax.set_visible(True)
-        self._mpl3d_colorbar = self._mpl3d_figure.colorbar(
-            scalar_mappable,
-            cax=self._mpl3d_colorbar_ax,
-        )
-        self._mpl3d_colorbar.set_label(
-            self._colorbar_label, color=palette.get("text", "#222")
-        )
-        self._mpl3d_colorbar.ax.tick_params(colors=palette.get("text", "#222"))
-
-        self._stack.setCurrentWidget(self._mpl3d_host)
-        self._controls.show()
-        self._render_backend = "mpl3d"
-        # Re-attach cached electrode patches if available — ax.clear()
-        # earlier wiped the previous Poly3DCollection.
-        self._mpl3d_electrode_collection = None
-        if self._electrode_geometry is not None:
-            self._build_mpl3d_electrode_collection(self._electrode_geometry)
-        self._mpl3d_canvas.draw_idle()
 
     def _build_scene(
         self,
@@ -3130,15 +2730,7 @@ class Conductivity3DWidget(QWidget):
 
         # Wireframe overlay: feature edges of the boundary surface,
         # gives the bulk shape a clean silhouette at low opacity.
-        outline = grid.extract_surface(
-            algorithm="dataset_surface"
-        ).extract_feature_edges(
-            boundary_edges=True,
-            feature_edges=True,
-            feature_angle=30.0,
-            non_manifold_edges=False,
-            manifold_edges=False,
-        )
+        outline = _pyvista_feature_outline(grid, feature_angle=30.0)
         if outline.n_points > 0:
             self._wire_actor = plotter.add_mesh(
                 outline,
@@ -3161,35 +2753,6 @@ class Conductivity3DWidget(QWidget):
     # Interactive controls — actor mutation only, never a full rebuild
     # ------------------------------------------------------------------
 
-    def _apply_mpl3d_opacity(self, opacity: float) -> None:
-        if (
-            self._mpl3d_mesh_collection is not None
-            and self._mpl3d_mesh_facecolors is not None
-        ):
-            self._mpl3d_mesh_facecolors[:, 3] = opacity
-            self._mpl3d_mesh_collection.set_facecolors(self._mpl3d_mesh_facecolors)
-        elif self._mpl3d_mesh_collection is not None:
-            self._mpl3d_mesh_collection.set_alpha(opacity)
-        if (
-            self._mpl3d_highlight_collection is not None
-            and self._mpl3d_highlight_facecolors is not None
-        ):
-            self._mpl3d_highlight_facecolors[:, 3] = max(0.82, opacity)
-            self._mpl3d_highlight_collection.set_facecolors(
-                self._mpl3d_highlight_facecolors
-            )
-        elif self._mpl3d_highlight_collection is not None:
-            self._mpl3d_highlight_collection.set_alpha(1.0)
-
-    def _apply_mpl3d_wire_visibility(self, checked: bool) -> None:
-        palette = plot_palette()
-        edge_color = palette.get("border", "#888") if checked else "none"
-        if self._mpl3d_mesh_collection is not None:
-            self._mpl3d_mesh_collection.set_edgecolor(edge_color)
-        if self._mpl3d_highlight_collection is not None:
-            highlight_edge = palette["highlight"] if checked else "none"
-            self._mpl3d_highlight_collection.set_edgecolor(highlight_edge)
-
     def _on_opacity_changed(self, value: int) -> None:
         opacity = value / 100.0
         self._opacity_value.setText(f"{opacity:.2f}")
@@ -3197,10 +2760,6 @@ class Conductivity3DWidget(QWidget):
             if self._offscreen_mesh_actor is not None:
                 self._offscreen_mesh_actor.GetProperty().SetOpacity(opacity)
             self._refresh_offscreen_pixmap()
-            return
-        if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._apply_mpl3d_opacity(opacity)
-            self._mpl3d_canvas.draw_idle()
             return
         if self._mesh_actor is None or self._plotter is None:
             return
@@ -3213,11 +2772,6 @@ class Conductivity3DWidget(QWidget):
                 self._offscreen_highlight_actor.SetVisibility(bool(checked))
             self._refresh_offscreen_pixmap()
             return
-        if self._render_backend == "mpl3d" and self._last_image is not None:
-            if self._mpl3d_highlight_collection is not None:
-                self._mpl3d_highlight_collection.set_visible(bool(checked))
-            self._mpl3d_canvas.draw_idle()
-            return
         if self._highlight_actor is None or self._plotter is None:
             return
         self._highlight_actor.SetVisibility(bool(checked))
@@ -3229,10 +2783,6 @@ class Conductivity3DWidget(QWidget):
                 self._offscreen_wire_actor.SetVisibility(bool(checked))
             self._refresh_offscreen_pixmap()
             return
-        if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._apply_mpl3d_wire_visibility(bool(checked))
-            self._mpl3d_canvas.draw_idle()
-            return
         if self._wire_actor is None or self._plotter is None:
             return
         self._wire_actor.SetVisibility(bool(checked))
@@ -3241,13 +2791,10 @@ class Conductivity3DWidget(QWidget):
     def _reset_camera(self) -> None:
         """Reset both data extent AND viewing angle across all backends.
 
-        Each backend stores its camera state differently — this used
-        to silently no-op for users on the matplotlib 3D fallback (the
-        old code only called view_init but left their pan / zoom in
-        place) and only half-reset for PyVista (reset_camera fits the
-        actors but does not restore an isometric orientation).  Now
-        every backend restores both the data range and a known
-        canonical view direction.
+        Each backend stores its camera state differently.  PyVista's
+        reset_camera fits the actors but does not restore an isometric
+        orientation by itself, so the button restores both the data
+        range and a known canonical view direction.
         """
         if self._render_backend == "pyvista_offscreen":
             if self._offscreen_plotter is not None:
@@ -3260,15 +2807,6 @@ class Conductivity3DWidget(QWidget):
                 except Exception:  # pragma: no cover — VTK quirk
                     pass
                 self._refresh_offscreen_pixmap()
-            return
-        if self._render_backend == "mpl3d":
-            self._mpl3d_ax.view_init(elev=22.0, azim=-45.0)
-            if self._mpl3d_initial_bounds is not None:
-                xlim, ylim, zlim = self._mpl3d_initial_bounds
-                self._mpl3d_ax.set_xlim(*xlim)
-                self._mpl3d_ax.set_ylim(*ylim)
-                self._mpl3d_ax.set_zlim(*zlim)
-            self._mpl3d_canvas.draw_idle()
             return
         if self._plotter is not None:
             self._plotter.reset_camera()
@@ -3326,11 +2864,6 @@ class Conductivity3DWidget(QWidget):
     def _show_caption(self, text: str, *, kind: str) -> None:
         self._render_backend = "caption"
         self._discard_offscreen_plotter()
-        self._remove_mpl3d_colorbar()
-        self._mpl3d_mesh_collection = None
-        self._mpl3d_highlight_collection = None
-        self._mpl3d_mesh_facecolors = None
-        self._mpl3d_highlight_facecolors = None
         palette = plot_palette()
         color = {
             "placeholder": palette.get("caption", "#888"),
@@ -3351,9 +2884,6 @@ class Conductivity3DWidget(QWidget):
     def _on_theme_mode_changed(self, _mode: str) -> None:
         if self._render_backend == "pyvista_offscreen" and self._last_image is not None:
             self._render_pyvista_offscreen_scene(*self._last_image[:3])
-            return
-        if self._render_backend == "mpl3d" and self._last_image is not None:
-            self._render_matplotlib_scene(*self._last_image[:3])
             return
         if self._plotter is not None:
             palette = plot_palette()

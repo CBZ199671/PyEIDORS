@@ -416,9 +416,13 @@ function Invoke-LlmDemoCase {
 }
 
 function Invoke-CrossGenerationStudies {
-    $pyeidorsForward = "results/simulation_parity/softwarex_cross_pyeidors_source/synthetic_forward_data.csv"
-    $pyeidorsMetrics = "results/simulation_parity/softwarex_cross_pyeidors_source/metrics.json"
-    $cmdPyForward = "nix develop --command python scripts/run_synthetic_parity.py --output-root results/simulation_parity/softwarex_cross_pyeidors_source --mode both --save-forward-csv --difference-solver single-step --step-size-calibration --gn-max-iterations 15 --background 1.0 --contact-impedance 1e-6 --phantom-center 0.3 0.2 --phantom-radius 0.2 --phantom-contrast 2.0"
+    $pyeidorsSourceRoot = Join-Path $fairnessRoot "pyeidors_source"
+    New-Item -ItemType Directory -Force -Path $pyeidorsSourceRoot | Out-Null
+    $pyeidorsSourceRootWsl = Convert-ToWslPath -Path $pyeidorsSourceRoot
+    $pyeidorsForward = Join-Path $pyeidorsSourceRoot "synthetic_forward_data.csv"
+    $pyeidorsForwardWsl = "$pyeidorsSourceRootWsl/synthetic_forward_data.csv"
+    $pyeidorsMetricsWsl = "$pyeidorsSourceRootWsl/metrics.json"
+    $cmdPyForward = "nix develop --command python scripts/run_synthetic_parity.py --output-root $pyeidorsSourceRootWsl --mode both --save-forward-csv --difference-solver single-step --step-size-calibration --gn-max-iterations 15 --background 1.0 --contact-impedance 1e-6 --phantom-center 0.3 0.2 --phantom-radius 0.2 --phantom-contrast 2.0"
     $exitCode = Invoke-WslRepoCommand -Command $cmdPyForward
     if ($exitCode -ne 0) { return $exitCode }
 
@@ -446,7 +450,7 @@ function Invoke-CrossGenerationStudies {
         source_framework = "pyeidors"
         n_elec = 16
         commit = $commit
-        input_csv = "D:\workspace\PyEIDORS\results\simulation_parity\softwarex_cross_pyeidors_source\synthetic_forward_data.csv"
+        input_csv = $pyeidorsForward
         output_json = $eidorsOnPyOutput
     }
     Write-JsonFile -Path $eidorsOnPyConfig -Data $eidorsOnPyCfg
@@ -455,7 +459,7 @@ function Invoke-CrossGenerationStudies {
 
     foreach ($framework in @("pyeidors", "pyeit")) {
         $pyOut = "docs/benchmarks/reviewer_suite/fairness/raw_cross/${framework}_from_pyeidors.json"
-        $cmd = "nix develop --command python $pythonCrossCase --framework $framework --source-framework pyeidors --input-csv $pyeidorsForward --source-metrics-json $pyeidorsMetrics --output-json $pyOut --mesh-level medium --scenario low_z"
+        $cmd = "nix develop --command python $pythonCrossCase --framework $framework --source-framework pyeidors --input-csv $pyeidorsForwardWsl --source-metrics-json $pyeidorsMetricsWsl --output-json $pyOut --mesh-level medium --scenario low_z"
         $exitCode = Invoke-WslRepoCommand -Command $cmd
         if ($exitCode -ne 0) { return $exitCode }
     }

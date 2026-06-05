@@ -27,7 +27,6 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
-DEFAULT_DATA_DIR = ROOT / "results" / "eidors_same_pyeidors_mesh"
 
 from scripts.common.array_metrics import finite_pearson_correlation
 
@@ -35,6 +34,9 @@ from pyeidors import EITSystem
 from pyeidors.data.difference import build_difference_vector
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
+from pyeidors.runtime_paths import pyeidors_output_path
+
+DEFAULT_DATA_DIR = pyeidors_output_path("eidors_same_pyeidors_mesh")
 
 
 @dataclass(frozen=True)

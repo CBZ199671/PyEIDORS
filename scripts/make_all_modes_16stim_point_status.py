@@ -18,6 +18,7 @@ from pyeidors.data.holdout_point_audit import (
     drive_removed_frame_indices,
     far3_frame_indices,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -31,7 +32,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_bucket_all_modes_16stim_point_status.png"),
+        default=pyeidors_output_path("eit_bucket_all_modes_16stim_point_status.png"),
     )
     parser.add_argument("--dpi", type=int, default=220)
     return parser.parse_args(argv)

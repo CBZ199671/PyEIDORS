@@ -24,6 +24,7 @@ from pyeidors.inverse.greit import (
     build_native_greit_training_pipeline,
     load_greit_rm,
 )
+from pyeidors.runtime_paths import resolve_pyeidors_cache_dir
 
 GREIT_ARTIFACT_REGISTRY_SCHEMA = "pyeidors-greit-artifact-registry-v1"
 GREIT_ARTIFACT_SIGNATURE_SCHEMA = "pyeidors-greit-artifact-signature-v1"
@@ -53,13 +54,13 @@ def greit_registry_dir(path: str | Path | None = None) -> Path:
     """Resolve the on-disk GREIT registry directory."""
 
     if path is not None:
-        return Path(path).expanduser()
+        return resolve_pyeidors_cache_dir(path)
     import os
 
     env_value = os.environ.get(GREIT_REGISTRY_ENV)
     if env_value:
         return Path(env_value).expanduser()
-    return Path(".pyeidors_cache") / "greit_artifacts"
+    return resolve_pyeidors_cache_dir(default_parts=("greit_artifacts",))
 
 
 def greit_registry_manifest_path(path: str | Path | None = None) -> Path:

@@ -15,6 +15,7 @@ from pyeidors.data.adc_quantization import (
     ADCQuantizationSummary,
     summarize_adc_sweep,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 CSV_FIELDS = [
@@ -139,7 +140,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/adc_quant.csv"),
+        default=pyeidors_output_path("adc_quant.csv"),
         help="CSV output path.",
     )
     return parser.parse_args(argv)

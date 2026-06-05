@@ -27,6 +27,7 @@ from scripts.common.array_metrics import mean_where, safe_finite_pearson_correla
 from pyeidors.core_system import EITSystem
 from pyeidors.data.structures import MeshConfig, PatternConfig
 from pyeidors.io._json import json_ready
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 
 BACKGROUND_SIGMA = 1.0
@@ -342,10 +343,7 @@ def build_system(n_elec: int, cfg: ExperimentConfig) -> EITSystem:
         linear_solver="auto",
         cache_scope="both",
         cache_dir=str(
-            PROJECT_ROOT
-            / ".pyeidors_cache"
-            / "diagnostics"
-            / "electrode_count_small_domain"
+            pyeidors_cache_path("diagnostics", "electrode_count_small_domain")
         ),
     )
     system.setup(mesh_source="generated", dimension=2)

@@ -8,6 +8,7 @@ from pathlib import Path
 import sys
 
 from pyeidors.data.digit_plot import plot_digit_report_csv
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
@@ -17,13 +18,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--input-csv",
         type=Path,
-        default=Path("outputs/eit_digit_report.csv"),
+        default=pyeidors_output_path("eit_digit_report.csv"),
         help="Combined CSV from scripts/eit_digit_report.py.",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_digit_plot.png"),
+        default=pyeidors_output_path("eit_digit_plot.png"),
         help="PNG output path.",
     )
     parser.add_argument(

@@ -103,9 +103,9 @@ highlight index vector.
 3D electrode overlay patch geometry direct-fills both point coordinates and
 triangle indices into final arrays, avoiding tuple-list staging before PyVista
 polydata construction.
-The Matplotlib 3D fallback electrode collection also stays on `float32`
-direct-filled polygon buffers instead of widening lower/upper patch coordinates
-and rebuilding each quad through `np.array(..., dtype=float)`.
+The 3D conductivity widget no longer provides a Matplotlib 3D electrode
+fallback; electrode overlays use PyVista polydata built from direct-filled patch
+and face buffers.
 Conductivity color limits and anomaly-mask setup scan finite status in bounded
 chunks; the common all-finite 3D payload path does not allocate a full finite
 boolean mask, while NaN/Inf payloads still materialize one mask for the legacy
@@ -461,16 +461,16 @@ comprehension staging before the final int32 arrays.
 The shared boundary-triangle helper uses the same direct-fill pattern for tetra
 meshes, so surface/fallback renderers avoid kept-list staging before final int32
 triangle/source arrays.
-The Matplotlib 3D boundary-face extractor also direct-fills retained face and
+The shared 3D boundary-face helper also direct-fills retained face and
 source-cell outputs after shared-face filtering, avoiding another kept payload
-list before fallback surface rendering.
-For valid generated meshes, the fallback surface renderer now reuses those face
-and source-cell outputs directly and only builds filtered arrays after an
+list before surface-helper output.
+For valid generated meshes, the valid-face helper reuses those face and
+source-cell outputs directly and only builds filtered arrays after an
 out-of-range face index is detected.
-Boundary and highlight fallback surface vertices are filled as one contiguous
+Boundary and highlight surface-helper vertices are filled as one contiguous
 face-vertex array per collection, rather than allocating one small vertex array
 per rendered face.
-Anomaly highlight fallback rendering also direct-fills highlight face vertices
+Anomaly highlight helper output also direct-fills highlight face vertices
 and scalar values together, avoiding separate `highlight_faces` and
 `highlight_values` staging lists before color mapping.
 It consumes the anomaly bool mask directly and counts active cells for
@@ -479,13 +479,12 @@ preallocation, so large highlighted regions no longer allocate a full
 Boundary-voltage reconstructed overlay curves likewise keep projected real
 floating dtype through the final `setData` handoff instead of widening to
 `float64`.
-Matplotlib 3D surface fallback keeps cell-centered `float32` sigma through
-boundary-face colors, anomaly masking, and highlight color values, so the
-non-VTK rendering path no longer widens a full cell vector just to draw.
-The same fallback reuses the freshly generated boundary/highlight facecolor
-arrays for opacity toggles instead of copying the RGBA buffers into separate
-widget caches.
-For point-data surface fallback, boundary face values are computed by direct
+Shared 3D display helpers keep cell-centered `float32` sigma through
+boundary-face values, anomaly masking, and highlight value helpers, so display
+bookkeeping no longer widens a full cell vector just to draw.
+The 3D conductivity widget no longer keeps Matplotlib facecolor caches; opacity
+toggles mutate PyVista actors or offscreen actors.
+For point-data surface helpers, boundary face values are computed by direct
 per-index accumulation, avoiding a tiny index array and value subset allocation
 for every rendered face before the `nanmean`.
 Boundary and highlight face vertices use the same direct-fill pattern, creating
@@ -710,7 +709,7 @@ directly, avoiding an intermediate dense diagonal matrix before the final
 transform payload.
 RM frame-batch diagonal weighting square-roots the private masked weight copy
 in-place before scaling frames, avoiding a per-apply sqrt vector allocation.
-Matplotlib 3D cell-scalar surface rendering gathers boundary face values into a
+The 3D cell-scalar face-value helper gathers boundary face values into a
 preallocated dtype-preserving output via `np.take(..., out=...)`, avoiding an
 extra gather-result allocation on large boundary surfaces.
 3D point-cloud display sampling similarly gathers centers and sigma into
@@ -1190,13 +1189,13 @@ Measurement pattern filtering now direct-fills kept rows instead of using
 `meas_mat[mask]` advanced indexing during stimulation-current exclusion.
 3D conductivity display payloads preserve float32/int32 zero-copy inputs but
 downcast float64/complex128 display-only coordinates and conductivity values to
-float32 before PyVista/Matplotlib scene construction, halving the common first
+float32 before PyVista scene construction, halving the common first
 3D view resident payload without changing solver-side arrays.
 On WSLg/Wayland, embedded VTK remains disabled for native-window safety and the
-viewer now skips PyVista offscreen by default, going straight to the Matplotlib
-3D fallback to avoid first-view VTK startup stalls. Set
-`EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN=1` to restore the older PyVista offscreen
-attempt path for machines where it is known to be fast.
+viewer now tries PyVista offscreen for real 3D rendering. If PyVista offscreen
+cannot render, the widget shows an explicit unavailable caption instead of a
+Matplotlib 3D substitute. `EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN` is no longer
+required to enable the PyVista offscreen attempt path.
 Forward-result geometry extraction still detaches arrays from the DOLFINx mesh
 before sending them to the GUI/backend protocol, but cell-center computation now
 uses one `n_cells` work vector instead of an `n_cells×dim` coordinate temporary.

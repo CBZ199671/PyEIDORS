@@ -14,6 +14,7 @@ from pyeidors.io.hdf5_artifacts import (
     read_hdf5_artifact,
     write_large_cache_hdf5_artifact,
 )
+from pyeidors.runtime_paths import resolve_pyeidors_cache_dir
 
 
 MESH_DERIVED_SCHEMA = "pyeidors-mesh-derived-hdf5-v1"
@@ -112,7 +113,9 @@ def mesh_derived_cache_path(
 ) -> Path:
     """Return the canonical HDF5 path for a derived mesh signature."""
 
-    return Path(cache_dir) / "mesh_derived" / f"{str(signature)}.h5"
+    return (
+        resolve_pyeidors_cache_dir(cache_dir) / "mesh_derived" / f"{str(signature)}.h5"
+    )
 
 
 def build_mesh_derived_arrays(

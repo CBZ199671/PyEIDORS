@@ -11,7 +11,7 @@ This script serves two roles:
 Example usage (paper-matching absolute + difference):
 
     python scripts/run_synthetic_parity.py \
-      --output-root results/simulation_parity/run01 \
+      --output-root "$PYEIDORS_OUTPUT_ROOT/simulation_parity/run01" \
       --mode both --save-forward-csv \
       --difference-solver single-step --step-size-calibration \
       --gn-regularization 1e-11 \
@@ -20,7 +20,7 @@ Example usage (paper-matching absolute + difference):
 Example usage comparing against EIDORS voltages:
 
     python scripts/run_synthetic_parity.py \
-      --output-root results/simulation_parity/eidors_cmp \
+      --output-root "$PYEIDORS_OUTPUT_ROOT/simulation_parity/eidors_cmp" \
       --eidors-csv external/eidors_diff_voltages.csv
 """
 
@@ -58,6 +58,7 @@ from pyeidors.femx import function_get_array, function_set_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
 from pyeidors.visualization import EITVisualizer, create_visualizer
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 from scripts.common.array_metrics import pearson_correlation
@@ -277,13 +278,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-root",
         type=Path,
-        default=Path("results/simulation_parity"),
+        default=pyeidors_output_path("simulation_parity"),
         help="Directory where metrics, figures and CSV files will be stored.",
     )
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=Path("eit_meshes"),
+        default=pyeidors_cache_path("eit_meshes"),
         help="Directory containing cached meshes (passed to load_or_create_mesh).",
     )
     parser.add_argument(

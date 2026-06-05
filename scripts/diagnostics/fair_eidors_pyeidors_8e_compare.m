@@ -20,13 +20,48 @@ end
 script_dir = fileparts(mfilename('fullpath'));
 repo_root = fileparts(fileparts(script_dir));
 if nargin < 1 || isempty(out_root)
-    out_root = fullfile(repo_root, 'results', 'eidors_fair_8e_layers');
+    out_root = fullfile(default_pyeidors_output_root(), 'eidors_fair_8e_layers');
 end
 
 cases = {'2d_8e', '3d_8x2', '3d_8x3'};
 for idx = 1:numel(cases)
     run_case(fullfile(out_root, cases{idx}));
 end
+end
+
+function root = default_pyeidors_output_root()
+root = strtrim(getenv('PYEIDORS_OUTPUT_ROOT'));
+if ~isempty(root)
+    return;
+end
+data_root = strtrim(getenv('PYEIDORS_DATA_ROOT'));
+if ~isempty(data_root)
+    root = fullfile(data_root, 'outputs');
+    return;
+end
+xdg_data = strtrim(getenv('XDG_DATA_HOME'));
+if ~isempty(xdg_data)
+    root = fullfile(xdg_data, 'pyeidors', 'outputs');
+    return;
+end
+local_appdata = strtrim(getenv('LOCALAPPDATA'));
+if ~isempty(local_appdata)
+    root = fullfile(local_appdata, 'pyeidors', 'outputs');
+    return;
+end
+appdata = strtrim(getenv('APPDATA'));
+if ~isempty(appdata)
+    root = fullfile(appdata, 'pyeidors', 'outputs');
+    return;
+end
+home_dir = strtrim(getenv('HOME'));
+if isempty(home_dir)
+    home_dir = strtrim(getenv('USERPROFILE'));
+end
+if isempty(home_dir)
+    home_dir = pwd;
+end
+root = fullfile(home_dir, '.local', 'share', 'pyeidors', 'outputs');
 end
 
 function run_case(case_dir)

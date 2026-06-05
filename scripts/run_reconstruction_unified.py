@@ -58,6 +58,7 @@ from pyeidors.perf import (
     resolve_line_search_mode,
     resolve_solver_mode,
 )
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 LOGGER = logging.getLogger("reconstruction_unified")
 
@@ -176,7 +177,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=REPO_ROOT / "eit_meshes",
+        default=pyeidors_cache_path("eit_meshes"),
         help="Mesh cache directory",
     )
     parser.add_argument(
@@ -511,7 +512,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--cache-dir",
         type=Path,
-        default=REPO_ROOT / ".pyeidors_cache" / "v2",
+        default=pyeidors_cache_path("v2"),
         help="Cache root. Disk cache defaults to terminal-session lifecycle and is cleaned when the active dev shell exits.",
     )
     parser.add_argument(

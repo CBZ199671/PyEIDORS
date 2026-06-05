@@ -29,6 +29,7 @@ from pyeidors.inverse import (
     reconstruct_difference_batch,
     solve_tv_irls_batch,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 from scripts.benchmarks.benchmark_dynamic_validation import (
     eidors_noise_figure,
     eidors_solution_error,
@@ -55,7 +56,9 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path("reports/runtime_benchmarks/prior_travelling_wave.json"),
+        default=pyeidors_output_path(
+            "runtime_benchmarks", "prior_travelling_wave.json"
+        ),
     )
     return parser.parse_args(argv)
 

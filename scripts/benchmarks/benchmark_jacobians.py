@@ -25,11 +25,14 @@ from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.forward.eit_forward_model import EITForwardModel
 from pyeidors.inverse.jacobian.direct_jacobian import DirectJacobianCalculator
 from pyeidors.inverse.jacobian.adjoint_jacobian import EidorsJacobianAdapter
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 
 def benchmark():
     mesh = load_or_create_mesh(
-        mesh_dir="eit_meshes", mesh_name="mesh_102070", n_elec=16
+        mesh_dir=str(pyeidors_cache_path("eit_meshes")),
+        mesh_name="mesh_102070",
+        n_elec=16,
     )
     pattern_cfg = PatternConfig(
         n_elec=16,

@@ -18,6 +18,7 @@ if str(PROJECT_ROOT) not in sys.path:
 if str(SRC_PATH) not in sys.path:
     sys.path.insert(0, str(SRC_PATH))
 
+from pyeidors.runtime_paths import pyeidors_output_path
 from scripts.benchmarks.benchmark_greit_eidors_parity_48e import run_benchmark
 from scripts.diagnostics.compare_greit_eidors_parity import compare_greit_eidors_parity
 from scripts.diagnostics.eidors_greit_fixture import validate_fixture_hdf5
@@ -25,11 +26,9 @@ from scripts.diagnostics.eidors_greit_fixture import validate_fixture_hdf5
 
 GATE_SCHEMA = "pyeidors-greit-eidors-official-fixture-gate-v1"
 DEFAULT_CASE_ID = "reduced_48e_5936"
-DEFAULT_FIXTURE_DIR = Path("reports") / "eidors_greit_fixtures"
-DEFAULT_OUTPUT_DIR = (
-    Path("reports")
-    / "runtime_benchmarks"
-    / "greit_eidors_parity_48e_5936_t49_official_20260426"
+DEFAULT_FIXTURE_DIR = pyeidors_output_path("eidors_greit_fixtures")
+DEFAULT_OUTPUT_DIR = pyeidors_output_path(
+    "runtime_benchmarks", "greit_eidors_parity_48e_5936_t49_official_20260426"
 )
 
 

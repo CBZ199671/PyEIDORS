@@ -43,6 +43,7 @@ from pyeidors.data.frame_io import (
     read_session_metadata,
     scan_frame_dir,
 )
+from pyeidors.runtime_paths import pyeidors_cache_path
 
 
 def parse_args() -> argparse.Namespace:
@@ -56,7 +57,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=Path("eit_meshes"),
+        default=pyeidors_cache_path("eit_meshes"),
         help="Mesh cache 目录。",
     )
     parser.add_argument(

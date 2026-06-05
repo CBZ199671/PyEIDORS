@@ -29,12 +29,15 @@ from pyeidors.data.synthetic_data import create_custom_phantom
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.runtime_paths import pyeidors_cache_path
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--mesh-dir", type=Path, default=Path("eit_meshes"))
+    parser.add_argument(
+        "--mesh-dir", type=Path, default=pyeidors_cache_path("eit_meshes")
+    )
     parser.add_argument("--refinement", type=int, default=12)
     parser.add_argument("--radius", type=float, default=1.0)
     parser.add_argument("--electrode-coverage", type=float, default=0.5)

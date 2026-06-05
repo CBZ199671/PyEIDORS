@@ -30,6 +30,7 @@ from pyeidors.inverse import (  # noqa: E402
     solve_spatiotemporal_tv_huber,
 )
 from pyeidors.io._json import json_ready as _json_ready  # noqa: E402
+from pyeidors.runtime_paths import pyeidors_output_path  # noqa: E402
 from scripts.benchmarks.benchmark_dynamic_validation import (  # noqa: E402
     build_travelling_wave_fixture,
     dynamic_fidelity_metrics,
@@ -95,15 +96,17 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output-json",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/dynamic_t65_t66_t67_sweep_20260426.json"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "dynamic_t65_t66_t67_sweep_20260426.json",
         ),
     )
     parser.add_argument(
         "--output-md",
         type=Path,
-        default=Path(
-            "reports/runtime_benchmarks/dynamic_t65_t66_t67_sweep_20260426.md"
+        default=pyeidors_output_path(
+            "runtime_benchmarks",
+            "dynamic_t65_t66_t67_sweep_20260426.md",
         ),
     )
     return parser.parse_args(argv)

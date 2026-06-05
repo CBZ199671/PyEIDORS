@@ -107,6 +107,58 @@ class ForwardSolverRequest:
     forward_model_config: dict[str, Any] = field(default_factory=dict)
 
 
+def _value_has_nonzero_imag(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, dict):
+        return any(_value_has_nonzero_imag(item) for item in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_value_has_nonzero_imag(item) for item in value)
+    try:
+        arr = np.asarray(value)
+    except Exception:
+        try:
+            return abs(complex(value).imag) > 1.0e-12
+        except Exception:
+            return False
+    if arr.size == 0:
+        return False
+    if np.iscomplexobj(arr):
+        return bool(np.any(np.abs(np.imag(arr)) > 1.0e-12))
+    if arr.dtype.kind in {"O", "S", "U"}:
+        for item in arr.flat:
+            try:
+                if abs(complex(item).imag) > 1.0e-12:
+                    return True
+            except Exception:
+                continue
+    return False
+
+
+def _forward_config_requires_complex_admittivity(
+    forward_cfg: ForwardModelConfig,
+) -> bool:
+    return bool(
+        _value_has_nonzero_imag(forward_cfg.background_conductivity)
+        or _value_has_nonzero_imag(forward_cfg.contact_impedance)
+        or _value_has_nonzero_imag(forward_cfg.custom_stim_matrix)
+        or _value_has_nonzero_imag(forward_cfg.custom_meas_matrices)
+    )
+
+
+def _forward_request_requires_complex_admittivity(
+    req: ForwardSolverRequest,
+    forward_cfg: ForwardModelConfig | None = None,
+) -> bool:
+    cfg = forward_cfg if forward_cfg is not None else _forward_config_from_request(req)
+    return bool(
+        _forward_config_requires_complex_admittivity(cfg)
+        or any(
+            _value_has_nonzero_imag(spec.conductivity) for spec in req.inhomogeneities
+        )
+    )
+
+
 def _cell_volume_sample_points(cell_vertices: np.ndarray) -> np.ndarray | None:
     """Return deterministic interior sample points for supported 3D cells."""
     vertices_raw = np.asarray(cell_vertices)
@@ -735,6 +787,14 @@ def _configure_forward_system_from_request(
     )
 
     phase_started = time.perf_counter()
+    try:
+        setattr(
+            forward_cfg,
+            "_complex_admittivity_requested",
+            _forward_request_requires_complex_admittivity(req, forward_cfg),
+        )
+    except Exception:
+        pass
     runtime = _resolve_forward_runtime(forward_cfg)
     _finish_timing_phase(
         timings_ms,
@@ -853,7 +913,11 @@ def _setup_generated_forward_system(
     )
 
 
-def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
+def _resolve_forward_runtime(
+    forward_cfg: ForwardModelConfig,
+    *,
+    complex_admittivity_requested: bool | None = None,
+) -> dict[str, Any]:
     mesh_dim = int(forward_cfg.mesh_dimension)
     gui_profile = os.getenv("EIT_APP_GUI_PROFILE", "").strip().lower()
 
@@ -865,6 +929,13 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
     mesh_family = _auto(forward_cfg.mesh_family, "tetra")
     forward_backend = _auto(forward_cfg.forward_backend, "dolfinx")
     potential_order = max(1, int(getattr(forward_cfg, "potential_order", 1)))
+    if complex_admittivity_requested is None:
+        complex_admittivity_requested = bool(
+            getattr(forward_cfg, "_complex_admittivity_requested", False)
+            or _forward_config_requires_complex_admittivity(forward_cfg)
+        )
+    if complex_admittivity_requested and forward_backend == "cuda_structured":
+        forward_backend = "dolfinx"
     if potential_order != 1 and forward_backend == "cuda_structured":
         raise ValueError(
             "potential_order > 1 requires the DOLFINx forward backend; "
@@ -878,6 +949,7 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         mesh_dim == 3
         and mesh_family == "hex"
         and potential_order == 1
+        and not complex_admittivity_requested
         and (wants_gpu_request or forward_backend == "cuda_structured")
     )
     wants_3d_cuda = mesh_dim == 3 and (
@@ -973,6 +1045,7 @@ def _resolve_forward_runtime(forward_cfg: ForwardModelConfig) -> dict[str, Any]:
         "mesh_family": mesh_family,
         "potential_order": potential_order,
         "acceleration_profile": acceleration_profile,
+        "complex_admittivity_requested": bool(complex_admittivity_requested),
     }
 
 
@@ -1389,6 +1462,7 @@ def execute_forward_request_in_backend(
         )
         from eit_app.backend_worker_runtime import (
             backend_worker_command,
+            clean_profile_command_env,
             backend_worker_env,
             backend_worker_profile_lock,
         )
@@ -1483,6 +1557,8 @@ def execute_forward_request_in_backend(
         )
         with backend_worker_profile_lock(repo, profile_name):
             env, cache = backend_worker_env(repo=repo, profile=profile_name)
+            if launch_mode == "profile_command":
+                clean_profile_command_env(env)
             env["EIT_APP_BACKEND_PROFILE_LOCK_HELD"] = "1"
             if cache.removed_stale_jit_locks:
                 emit(

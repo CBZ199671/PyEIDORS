@@ -45,6 +45,7 @@ from pyeidors.data.frame_io import (
     scan_frame_dir,
 )
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.runtime_paths import pyeidors_cache_path
 from pyeidors.utils.numeric_ops import safe_dot
 from scripts.common.gn_difference_runner import (
     STRICT_SOLVER_BACKEND_MEASUREMENT,
@@ -66,7 +67,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--mesh-dir",
         type=Path,
-        default=Path("eit_meshes"),
+        default=pyeidors_cache_path("eit_meshes"),
         help="Mesh cache directory.",
     )
     parser.add_argument(

@@ -16,6 +16,7 @@ from pyeidors.data.bucket_domain_audit import (
     format_bucket_domain_report,
     plot_bucket_domain_audit,
 )
+from pyeidors.runtime_paths import pyeidors_output_path
 
 
 def _write_csv(path: Path, rows: list[BucketDomainAuditRow]) -> None:
@@ -129,19 +130,19 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--output",
         type=Path,
-        default=Path("outputs/eit_bucket_domain_audit_16e.csv"),
+        default=pyeidors_output_path("eit_bucket_domain_audit_16e.csv"),
         help="Domain/electrode audit CSV path.",
     )
     parser.add_argument(
         "--plot-output",
         type=Path,
-        default=Path("outputs/eit_bucket_domain_audit_16e.png"),
+        default=pyeidors_output_path("eit_bucket_domain_audit_16e.png"),
         help="Domain/electrode audit PNG path.",
     )
     parser.add_argument(
         "--report-output",
         type=Path,
-        default=Path("outputs/eit_bucket_domain_audit_16e.md"),
+        default=pyeidors_output_path("eit_bucket_domain_audit_16e.md"),
         help="Short markdown audit report path.",
     )
     parser.add_argument(
