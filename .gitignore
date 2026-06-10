@@ -14,6 +14,7 @@ dist/
 
 # Virtual environments
 .venv/
+.venv*/
 venv/
 
 # Keep repository env scripts/manifests tracked:
@@ -88,6 +89,7 @@ archived/
 scripts/archived/
 
 # Generated experiment artifacts
+output/
 outputs/
 
 # Measurements (private by default; allowlist paper/demo inputs below)
@@ -141,6 +143,7 @@ results/corn_stem_imaging/**
 jitfailure-*/
 
 # Local analysis / papers / temp exports
+tmp/
 SoftwareX-PyEidors-Paper/
 temp_abs_result/
 tank_cols.png
