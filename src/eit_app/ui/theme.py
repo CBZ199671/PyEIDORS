@@ -6,7 +6,7 @@ import base64
 import weakref
 
 from PySide6.QtCore import QSettings
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 
@@ -139,6 +139,13 @@ def set_theme_mode(
     if persist:
         QSettings("PyEIDORS", "EITWorkstation").setValue(_MODE_SETTINGS_KEY, mode)
     if apply_stylesheet:
+        # The stylesheet only covers widgets it explicitly selects; plain
+        # container QWidgets, QSplitter bodies, and group-box title
+        # margins erase themselves with the QPalette Window color.  Keep
+        # the palette in lockstep with the mode so those regions don't
+        # stay platform-default light (#efefef) and bleed through layout
+        # gaps as bright bands in dark mode.
+        _apply_mode_palette(app, mode)
         app.setStyleSheet(_build_stylesheet(mode))
     live_listeners: list[_ThemeModeListener] = []
     for listener_ref in list(_mode_listeners):
@@ -151,6 +158,56 @@ def set_theme_mode(
             continue
         live_listeners.append(listener_ref)
     _mode_listeners[:] = live_listeners
+
+
+# Captured the first time set_theme_mode runs so switching back to light
+# restores the exact platform-default palette instead of a hand-rolled one.
+_BASE_LIGHT_PALETTE: QPalette | None = None
+
+
+def _build_dark_palette() -> QPalette:
+    """QPalette mirror of the dark QSS color system.
+
+    Covers the paint paths QSS never reaches: plain QWidget erase fills,
+    QSplitter bodies, group-box title margins, and any widget that asks
+    the palette directly.
+    """
+    palette = QPalette()
+    window = QColor("#1a1f26")
+    base = QColor("#222831")
+    text = QColor("#dbe1ea")
+    disabled = QColor("#5e6876")
+    palette.setColor(QPalette.ColorRole.Window, window)
+    palette.setColor(QPalette.ColorRole.WindowText, text)
+    palette.setColor(QPalette.ColorRole.Base, base)
+    palette.setColor(QPalette.ColorRole.AlternateBase, QColor("#262d38"))
+    palette.setColor(QPalette.ColorRole.Text, text)
+    palette.setColor(QPalette.ColorRole.PlaceholderText, disabled)
+    palette.setColor(QPalette.ColorRole.Button, QColor("#2a313a"))
+    palette.setColor(QPalette.ColorRole.ButtonText, text)
+    palette.setColor(QPalette.ColorRole.BrightText, QColor("#ffffff"))
+    palette.setColor(QPalette.ColorRole.ToolTipBase, base)
+    palette.setColor(QPalette.ColorRole.ToolTipText, text)
+    palette.setColor(QPalette.ColorRole.Highlight, QColor("#1e4870"))
+    palette.setColor(QPalette.ColorRole.HighlightedText, QColor("#ecf4fb"))
+    palette.setColor(QPalette.ColorRole.Link, QColor("#5ca8e0"))
+    for role in (
+        QPalette.ColorRole.WindowText,
+        QPalette.ColorRole.Text,
+        QPalette.ColorRole.ButtonText,
+    ):
+        palette.setColor(QPalette.ColorGroup.Disabled, role, disabled)
+    return palette
+
+
+def _apply_mode_palette(app: QApplication, mode: str) -> None:
+    global _BASE_LIGHT_PALETTE
+    if _BASE_LIGHT_PALETTE is None:
+        _BASE_LIGHT_PALETTE = QPalette(app.palette())
+    if mode == "dark":
+        app.setPalette(_build_dark_palette())
+    else:
+        app.setPalette(QPalette(_BASE_LIGHT_PALETTE))
 
 
 def init_theme_mode_from_settings() -> str:

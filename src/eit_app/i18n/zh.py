@@ -624,7 +624,7 @@ TRANSLATIONS: dict[str, str] = {
     "db.sessions.col.started": "\u5f00\u59cb\u65f6\u95f4",  # 开始时间
     "db.sessions.col.n_elec": "\u7535\u6781\u6570",  # 电极数
     "db.sessions.col.frequency": "\u9891\u7387",  # 频率
-    "db.sessions.col.stim": "\u6fc0\u52b1 (uA)",  # 激励 (uA)
+    "db.sessions.col.stim": "\u6fc0\u52b1 (µA)",  # 激励 (µA)
     "db.sessions.col.gain": "\u589e\u76ca",  # 增益
     "db.sessions.col.frames": "\u5e27\u6570",  # 帧数
     "db.sessions.open_folder_button": "\u6253\u5f00\u6587\u4ef6\u5939",  # 打开文件夹

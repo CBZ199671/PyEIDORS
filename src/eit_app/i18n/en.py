@@ -690,7 +690,7 @@ TRANSLATIONS: dict[str, str] = {
     "db.sessions.col.started": "Started",
     "db.sessions.col.n_elec": "N_elec",
     "db.sessions.col.frequency": "Frequency",
-    "db.sessions.col.stim": "Stim (uA)",
+    "db.sessions.col.stim": "Stim (µA)",
     "db.sessions.col.gain": "Gain",
     "db.sessions.col.frames": "Frames",
     "db.sessions.open_folder_button": "Open Folder",
