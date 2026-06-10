@@ -183,6 +183,7 @@ class ReconstructionSettingsPanel(QWidget):
         layout = QFormLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._mesh_dimension = AutoCloseComboBox()
         self._mesh_dimension.addItem("2D", 2)
@@ -253,6 +254,7 @@ class ReconstructionSettingsPanel(QWidget):
         layout = QFormLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._stim_pattern = self._editable_combo(["{ad}", "{op}", "{mono}"])
         self._stim_pattern_label = QLabel("")
@@ -311,6 +313,7 @@ class ReconstructionSettingsPanel(QWidget):
         layout = QFormLayout(tab)
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(8)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._solver_mode = self._editable_combo(["auto", "fast", "strict"])
         self._solver_mode_label = QLabel("")

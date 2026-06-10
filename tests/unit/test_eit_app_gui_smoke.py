@@ -328,7 +328,10 @@ def test_v127_database_reconstruction_uses_advanced_settings(
     )
 
     try:
-        assert captured
+        # The database reconstruction request is dispatched through the
+        # background scheduler and bounced back to the UI thread, so spin
+        # the event loop until the controller actually receives it.
+        assert _wait_until(lambda: captured, timeout=5.0)
         request = captured[0]
         assert request.mesh_dimension == 3
         assert request.mesh_refinement == 0.12
@@ -540,6 +543,35 @@ def test_every_pushbutton_in_ui_package_has_a_role_tag() -> None:
     )
 
 
+def test_every_qformlayout_in_ui_package_wraps_long_rows() -> None:
+    """Lint-style check: narrow panels wrap form rows instead of scrolling."""
+    import re
+    from pathlib import Path
+
+    ui_dir = Path(__file__).resolve().parents[2] / "src" / "eit_app" / "ui"
+    missing: list[str] = []
+    total = 0
+    for py_file in ui_dir.rglob("*.py"):
+        text = py_file.read_text(encoding="utf-8")
+        form_count = len(re.findall(r"\bQFormLayout\(", text))
+        if form_count == 0:
+            continue
+        total += form_count
+        wrap_count = text.count(
+            "setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)"
+        )
+        if wrap_count < form_count:
+            missing.append(
+                f"{py_file.relative_to(ui_dir.parent.parent.parent)}: "
+                f"{wrap_count}/{form_count} wrapped"
+            )
+
+    assert not missing, (
+        f"Found {len(missing)} UI file(s) with unwrapped QFormLayout "
+        f"(total forms: {total}):\n  " + "\n  ".join(missing)
+    )
+
+
 @pytest.mark.gui
 def test_live_recon_voltage_widgets_expose_tri_state_overlay() -> None:
     """Phase 4: four plot widgets must accept set_loading(True/False)
@@ -684,7 +716,9 @@ def test_simulation_metrics_panel_reports_mesh_sizes() -> None:
             ground_truth_cell_connectivity=cells,
         )
 
-        assert panel.title() == "Mesh & Metrics"
+        # Raw title carries the Qt-escaped "&&" so the rendered text shows
+        # a literal ampersand instead of a mnemonic underline.
+        assert panel.title() == "Mesh && Metrics"
         assert panel._truth_mesh_label.text() == "5 nodes / 4 elements"
         assert panel._recon_mesh_label.text() == "\u2014"
 
@@ -2489,6 +2523,7 @@ def test_realtime_auto_reconstruction_waits_for_prewarm_and_uses_latest_pending_
     window._on_start_acquisition()
     _get_app().processEvents()
 
+    assert _wait_until(lambda: prewarm_requests, timeout=5.0)
     assert len(prewarm_requests) == 1
     assert prewarm_requests[0].metadata["warmup_only"] is True
     assert prewarm_requests[0].metadata["request_source"] == "hardware_auto_prewarm"
@@ -2534,6 +2569,7 @@ def test_realtime_auto_reconstruction_waits_for_prewarm_and_uses_latest_pending_
     window._recon_prewarm_ctrl.reconstruction_done.emit(warm_result)
     _get_app().processEvents()
 
+    assert _wait_until(lambda: live_requests, timeout=5.0)
     assert len(live_requests) == 1
     assert live_requests[0].reference_frame is first_frame
     assert live_requests[0].target_frame is third_frame
@@ -3394,6 +3430,7 @@ def test_simulation_inverse_request_uses_forward_mesh_size_for_single_step(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "gn-difference"
@@ -3463,6 +3500,7 @@ def test_simulation_2d_single_step_uses_canonical_noser_lambda(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.metadata["difference_mode"] == "raw"
@@ -3523,6 +3561,7 @@ def test_simulation_inverse_preserves_complex_forward_measurements(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.use_part == "complex"
@@ -3578,6 +3617,7 @@ def test_simulation_2d_rm_routes_use_normalized_difference_mode(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.metadata["simulation_inverse_route"] == method
@@ -3736,6 +3776,7 @@ def test_simulation_3d_rm_routes_use_normalized_difference_mode(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.metadata["simulation_inverse_route"] == method
@@ -3790,6 +3831,7 @@ def test_simulation_pseudo3d_route_uses_layered_2d_inverse_requests(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.mesh_dimension == 2
@@ -3865,6 +3907,7 @@ def test_simulation_rm_routes_record_artifact_requirement(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "gn-difference"
@@ -3975,6 +4018,7 @@ def test_simulation_rm_route_v117_custom_lambda_rebuilds_distinct_artifact(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "gn-difference"
@@ -4091,6 +4135,7 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.metadata["simulation_inverse_route"] == "noser_rm"
@@ -4135,7 +4180,9 @@ def test_simulation_default_noser_rm_hot_path_updates_gui_without_fragmentation(
     recon_widget = recon_slot._mpl
     assert recon_slot._stack.currentWidget() is recon_widget
     assert recon_widget._last_image is not None
-    last_sigma, last_coords, last_cells, _title = recon_widget._last_image
+    # _last_image carries extra display fields (colorbar label, colormap,
+    # value limits) beyond the four leading entries checked here.
+    last_sigma, last_coords, last_cells, _title = recon_widget._last_image[:4]
     np.testing.assert_allclose(last_sigma, expected_sigma)
     np.testing.assert_allclose(last_coords, node_coords)
     np.testing.assert_array_equal(last_cells, cells)
@@ -4222,6 +4269,7 @@ def test_simulation_greit3d_route_uses_registry_without_broad_claim(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert "greit_common_config" not in request.metadata
@@ -4305,6 +4353,7 @@ def test_simulation_greit3d_route_uses_advanced_registry_params(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     registry_config = request.metadata["greit_registry_config"]
@@ -4378,6 +4427,7 @@ def test_simulation_greit_route_supports_2d_and_eidors_nf1_strategy(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     registry_config = request.metadata["greit_registry_config"]
@@ -4442,6 +4492,7 @@ def test_simulation_greit3d_route_2160_adad_gets_distinct_registry_signature(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.metadata["simulation_inverse_route"] == "greit"
@@ -4493,6 +4544,7 @@ def test_simulation_debug_full_gn_route_stays_explicit_debug_cold_path(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "gn-difference"
@@ -4544,6 +4596,7 @@ def test_simulation_absolute_gn_route_v116_uses_absolute_runtime(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.method == "gn-absolute"
@@ -4627,6 +4680,7 @@ def test_simulation_inverse_uses_config_stored_with_forward_result(
 
     window._on_run_sim_inverse()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert request.mesh_refinement == pytest.approx(0.1)
@@ -4715,6 +4769,7 @@ def test_simulation_forward_request_records_input_signature(
 
     window._on_run_forward()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     signature = request.forward_model_config.get("simulation_input_signature")
@@ -4748,6 +4803,7 @@ def test_v140_simulation_forward_prewarm_uses_same_request_builder(
 
     window._run_sim_forward_prewarm()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     request = captured[0]
     assert (
@@ -5041,6 +5097,7 @@ def test_v148_3d_simulation_prewarm_solve_mode_keeps_full_prewarm(
 
     window._run_sim_forward_prewarm()
 
+    assert _wait_until(lambda: captured, timeout=5.0)
     assert len(captured) == 1
     assert captured[0].mesh_dimension == 3
     assert window._fwd_prewarm_busy is True

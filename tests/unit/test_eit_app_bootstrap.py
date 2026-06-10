@@ -105,6 +105,39 @@ def test_v51_explicit_qt_platform_is_preserved(monkeypatch):
     assert os.environ["QT_ENABLE_HIGHDPI_SCALING"] == "1"
 
 
+def test_v98_about_to_quit_closes_main_window() -> None:
+    class _FakeSignal:
+        def __init__(self) -> None:
+            self._slot = None
+
+        def connect(self, slot) -> None:  # noqa: ANN001 - Qt signal shape
+            self._slot = slot
+
+        def emit(self) -> None:
+            assert self._slot is not None
+            self._slot()
+
+    class _FakeApp:
+        def __init__(self) -> None:
+            self.aboutToQuit = _FakeSignal()
+
+    class _FakeWindow:
+        def __init__(self) -> None:
+            self.close_calls = 0
+
+        def close(self) -> bool:
+            self.close_calls += 1
+            return True
+
+    fake_app = _FakeApp()
+    fake_window = _FakeWindow()
+
+    app_module._connect_about_to_quit_cleanup(fake_app, fake_window)
+    fake_app.aboutToQuit.emit()
+
+    assert fake_window.close_calls == 1
+
+
 def test_v99_bogus_wslg_screen_geometry_does_not_collapse_main_window():
     size = EITWorkstation._bounded_initial_size(
         preferred_w=1360,

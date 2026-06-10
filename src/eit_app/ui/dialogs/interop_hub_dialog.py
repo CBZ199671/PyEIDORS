@@ -228,6 +228,7 @@ class InteropHubDialog(QDialog):
         env_layout = QFormLayout(self._env_box)
         env_layout.setContentsMargins(12, 12, 12, 12)
         env_layout.setSpacing(8)
+        env_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._env_combo = QComboBox()
         self._env_combo.currentIndexChanged.connect(self._sync_environment_fields)
@@ -268,6 +269,7 @@ class InteropHubDialog(QDialog):
         source_layout = QFormLayout(self._source_box)
         source_layout.setContentsMargins(12, 12, 12, 12)
         source_layout.setSpacing(8)
+        source_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self._source_edit = QLineEdit()
         self._source_edit.textChanged.connect(self._refresh_source_status)
         self._lbl_source = QLabel("")
@@ -440,6 +442,7 @@ class InteropHubDialog(QDialog):
         form = QFormLayout(self._export_form_box)
         form.setContentsMargins(12, 12, 12, 12)
         form.setSpacing(8)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self._export_source_combo = QComboBox()
         for key in (
             "dlg.interop.export.source.simulation",
@@ -518,6 +521,7 @@ class InteropHubDialog(QDialog):
         profile_form = QFormLayout(self._profile_form_box)
         profile_form.setContentsMargins(12, 12, 12, 12)
         profile_form.setSpacing(8)
+        profile_form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self._profile_name_edit = QLineEdit()
         self._profile_matlab_edit = QLineEdit()
         self._profile_startup_edit = QLineEdit()

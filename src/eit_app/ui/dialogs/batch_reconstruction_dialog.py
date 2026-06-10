@@ -181,6 +181,7 @@ class BatchReconstructionDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._input_edit = QLineEdit()
         if self._default_input:
@@ -225,6 +226,7 @@ class BatchReconstructionDialog(QDialog):
         layout.setSpacing(8)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._algo_combo = AutoCloseComboBox()
         for option in DATABASE_RECONSTRUCTION_METHODS:

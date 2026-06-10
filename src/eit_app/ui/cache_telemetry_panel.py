@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 )
 
 from eit_app.i18n import t, translator
+from eit_app.ui.theme import set_button_role
 
 
 class CacheTelemetryDialog(QDialog):
@@ -39,9 +40,11 @@ class CacheTelemetryDialog(QDialog):
 
         self._refresh_btn = QPushButton()
         self._refresh_btn.clicked.connect(self.refresh_requested.emit)
+        set_button_role(self._refresh_btn, "subtle")
 
         self._gc_btn = QPushButton()
         self._gc_btn.clicked.connect(self._emit_gc_requested)
+        set_button_role(self._gc_btn, "danger")
 
         self._max_gib = QSpinBox()
         self._max_gib.setRange(1, 1024)

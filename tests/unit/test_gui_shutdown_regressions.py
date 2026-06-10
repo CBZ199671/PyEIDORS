@@ -74,6 +74,35 @@ class _CancellableWorker:
         self.deleted = True
 
 
+def test_device_controller_atexit_callback_shuts_down_worker_thread(
+    monkeypatch,
+) -> None:
+    from eit_app.controllers import device_controller as module
+
+    _get_app()
+    registered: list[object] = []
+    unregistered: list[object] = []
+    monkeypatch.setattr(
+        module.atexit, "register", lambda callback: registered.append(callback)
+    )
+    monkeypatch.setattr(
+        module.atexit,
+        "unregister",
+        lambda callback: unregistered.append(callback),
+    )
+    controller = module.DeviceController()
+    try:
+        assert len(registered) == 1
+        assert controller._thread.isRunning()
+
+        registered[0]()
+
+        assert not controller._thread.isRunning()
+        assert unregistered == registered
+    finally:
+        controller.shutdown()
+
+
 def test_conductivity_widget_hides_unremovable_electrode_artist() -> None:
     _get_app()
     widget = ConductivityImageWidget()

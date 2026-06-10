@@ -90,6 +90,7 @@ class DatasetSummaryPanel(QGroupBox):
 
         form = QFormLayout()
         form.setSpacing(8)
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         layout.addLayout(form)
 
         for key, _title_key in self._FIELDS:

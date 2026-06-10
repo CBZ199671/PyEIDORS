@@ -29,6 +29,14 @@ def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
 
+def _connect_about_to_quit_cleanup(
+    app: QApplication,
+    window: EITWorkstation,
+) -> None:
+    """Run the main-window shutdown path even when app quit bypasses closeEvent."""
+    app.aboutToQuit.connect(window.close)
+
+
 def _running_under_wsl() -> bool:
     if os.environ.get("WSL_DISTRO_NAME") or os.environ.get("WSL_INTEROP"):
         return True
@@ -285,6 +293,7 @@ def main() -> int:
 
     logger = logging.getLogger(__name__)
     window = EITWorkstation()
+    _connect_about_to_quit_cleanup(app, window)
     logger.info(
         "Main window constructed: size=%s geometry=%s",
         (window.width(), window.height()),

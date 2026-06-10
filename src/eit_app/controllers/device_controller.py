@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import atexit
 import logging
 from typing import Any
 
@@ -138,6 +139,10 @@ class DeviceController(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
+        self._shutdown_complete = False
+        self._atexit_shutdown = self.shutdown
+        atexit.register(self._atexit_shutdown)
+
         self._thread = QThread()
         self._worker = _DeviceWorker()
         self._worker.moveToThread(self._thread)
@@ -177,6 +182,12 @@ class DeviceController(QObject):
 
         self._thread.start()
         self.request_profile_update.emit(self._transport_type, dict(self._config))
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     def set_connection_profile(
         self, transport_type: str, config: dict[str, Any]
@@ -301,10 +312,30 @@ class DeviceController(QObject):
         return completed["ok"]
 
     def shutdown(self) -> None:
-        if self._thread.isRunning():
+        if getattr(self, "_shutdown_complete", False):
+            return
+        self._shutdown_complete = True
+
+        callback = getattr(self, "_atexit_shutdown", None)
+        if callback is not None:
+            try:
+                atexit.unregister(callback)
+            except Exception:
+                pass
+            self._atexit_shutdown = None
+
+        try:
+            is_running = self._thread.isRunning()
+        except RuntimeError:
+            return
+
+        if is_running:
             try:
                 self.suspend_session(timeout_ms=1500)
             except Exception:
                 pass
-        self._thread.quit()
-        self._thread.wait(3000)
+        try:
+            self._thread.quit()
+            self._thread.wait(3000)
+        except RuntimeError:
+            pass

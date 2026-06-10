@@ -130,6 +130,7 @@ class InverseProblemPanel(QGroupBox):
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(8)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)
@@ -166,6 +167,7 @@ class InverseProblemPanel(QGroupBox):
         greit_layout.setFieldGrowthPolicy(
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
         )
+        greit_layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._greit_desired_combo = AutoCloseComboBox()
         for mode, key in _GREIT_DESIRED_IMAGE_MODES:

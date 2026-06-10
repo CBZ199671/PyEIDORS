@@ -312,7 +312,9 @@ def test_interop_hub_open_does_not_auto_detect_environments_and_has_no_diagnosti
     assert [dialog._tabs.tabText(index) for index in range(dialog._tabs.count())] == [
         "Import from EIDORS",
         "Export to EIDORS",
-        "Profiles & Paths",
+        # Raw tab text carries the Qt-escaped "&&" so the rendered label
+        # shows a literal ampersand instead of a mnemonic underline.
+        "Profiles && Paths",
     ]
 
     dialog.close()

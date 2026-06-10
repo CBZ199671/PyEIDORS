@@ -31,6 +31,7 @@ class ForwardProblemPanel(QGroupBox):
         layout = QFormLayout(self)
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(8)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._hint = QLabel("")
         self._hint.setWordWrap(True)

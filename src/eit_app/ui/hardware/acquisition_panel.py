@@ -58,6 +58,7 @@ class AcquisitionPanel(QGroupBox):
         layout.setHorizontalSpacing(8)
         layout.setVerticalSpacing(6)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
         self._layout = layout
 
         self._flow_hint = QLabel("")

@@ -389,6 +389,7 @@ class MetricsPanel(QGroupBox):
         layout = QFormLayout(self)
         layout.setContentsMargins(10, 14, 10, 8)
         layout.setSpacing(6)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._truth_mesh_label = QLabel("\u2014")
         set_subtle_value(self._truth_mesh_label)

@@ -8,6 +8,22 @@ import os
 import sys
 from pathlib import Path
 
+# Pin BLAS/OpenMP pools to a single thread BEFORE NumPy/SciPy load
+# OpenBLAS.  The GUI process does the same at startup via
+# eit_app.runtime_threads.configure_realtime_thread_env(); without it the
+# offscreen GUI tests can deadlock inside OpenBLAS blas_thread_init when
+# the Qt main thread and a worker QThread race the pool bring-up
+# (observed: pytest hung >15 min in exec_blas/exec_blas_async).
+# setdefault keeps any explicitly exported value in charge.
+for _key in (
+    "OMP_NUM_THREADS",
+    "OPENBLAS_NUM_THREADS",
+    "MKL_NUM_THREADS",
+    "NUMEXPR_NUM_THREADS",
+    "BLIS_NUM_THREADS",
+):
+    os.environ.setdefault(_key, "1")
+
 import numpy as np
 import pytest
 

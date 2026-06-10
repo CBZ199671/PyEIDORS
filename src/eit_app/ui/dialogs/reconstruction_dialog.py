@@ -166,6 +166,7 @@ class ReconstructionDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         # Pull chip surface colors from the palette so dark mode applies.
         # The dialog is short-lived and re-instantiated on each open
@@ -200,6 +201,7 @@ class ReconstructionDialog(QDialog):
         layout.setSpacing(10)
         layout.setContentsMargins(14, 20, 14, 14)
         layout.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow)
+        layout.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
         self._algo_combo = AutoCloseComboBox()
         for option in DATABASE_RECONSTRUCTION_METHODS:
