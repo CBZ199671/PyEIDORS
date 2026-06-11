@@ -99,9 +99,11 @@ def main() -> None:
         im_err = axes[2].tripcolor(triangulation, error, cmap="hot", shading="gouraud")
 
     images = [im_true, im_recon, im_err]
-    for ax, title in zip(axes, ["Truth", "Reconstruction", "Absolute error"]):
+    for ax, title in zip(
+        axes, ["Truth", "Reconstruction", "Absolute error"], strict=True
+    ):
         ax.set_title(title)
-    for ax, image in zip(axes, images):
+    for ax, image in zip(axes, images, strict=True):
         ax.set_aspect("equal")
         ax.set_xticks([])
         ax.set_yticks([])

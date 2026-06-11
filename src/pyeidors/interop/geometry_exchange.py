@@ -67,7 +67,7 @@ def export_forward_csv(path: Path, baseline: np.ndarray, phantom: np.ndarray) ->
             fieldnames=["meas_homogeneous", "meas_phantom", "difference"],
         )
         writer.writeheader()
-        for vh, vi in zip(baseline, phantom):
+        for vh, vi in zip(baseline, phantom, strict=True):
             writer.writerow(
                 {
                     "meas_homogeneous": float(vh),
@@ -151,7 +151,9 @@ def build_boundary_edges(mesh) -> np.ndarray:
         raise ValueError("Mesh is missing facet-to-vertex connectivity")
 
     edges: list[np.ndarray] = []
-    for facet_idx, marker in zip(boundary_markers.indices, boundary_markers.values):
+    for facet_idx, marker in zip(
+        boundary_markers.indices, boundary_markers.values, strict=True
+    ):
         if int(marker) == 0:
             continue
         edge = (
@@ -203,7 +205,7 @@ def _load_standard_electrode_node_lists(
     )
     counts = np.asarray(payload["electrode_node_counts"], dtype=np.int64).reshape(-1)
     node_lists = []
-    for row, count in zip(electrode_nodes, counts):
+    for row, count in zip(electrode_nodes, counts, strict=True):
         active_nodes = np.asarray(row[: int(count)], dtype=np.int64).reshape(-1)
         if int(np.min(active_nodes, initial=1)) < 1:
             raise ValueError("'electrode_nodes' must use one-based node ids")

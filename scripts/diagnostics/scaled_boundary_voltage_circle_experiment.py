@@ -725,7 +725,7 @@ def save_case_plot(path: Path, payload: dict[str, Any], cfg: ExperimentConfig) -
         ),
         (delta_grid, "Scaled - original", np.nanmax(np.abs(delta_grid))),
     ]
-    for ax, (image, title, vlim) in zip(axes.flat[:4], image_specs):
+    for ax, (image, title, vlim) in zip(axes.flat[:4], image_specs, strict=True):
         vlim = float(vlim)
         if not math.isfinite(vlim) or vlim <= 0.0:
             vlim = 1.0

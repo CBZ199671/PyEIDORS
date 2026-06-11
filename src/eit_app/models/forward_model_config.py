@@ -46,7 +46,9 @@ def max_non_overlapping_electrode_height_ratio(
     levels = sorted(float(value) for value in electrode_level_fractions)
     if len(levels) < 2:
         return ELECTRODE_HEIGHT_RATIO_WINDOW_MARGIN
-    min_gap = min(right - left for left, right in zip(levels[:-1], levels[1:]))
+    min_gap = min(
+        right - left for left, right in zip(levels[:-1], levels[1:], strict=True)
+    )
     return max(min(float(min_gap) * ELECTRODE_HEIGHT_RATIO_WINDOW_MARGIN, 1.0), 1e-6)
 
 

@@ -187,7 +187,12 @@ class _BatchWorker(QObject):
                         target=tgt_frame,
                     )
 
-                    def _silent_progress(msg: str) -> None:
+                    def _silent_progress(
+                        msg: str,
+                        *,
+                        idx: int = idx,
+                        total: int = total,
+                    ) -> None:
                         # keep worker logs quiet during batch; per-job messages
                         # are too noisy for the GUI
                         log.debug("batch recon [%d/%d]: %s", idx + 1, total, msg)

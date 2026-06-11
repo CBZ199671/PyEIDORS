@@ -124,7 +124,7 @@ def test_build_mesh_from_exchange_mat_standard_payload(tmp_path: Path) -> None:
     assert electrode_counts.tolist() == [2, 2, 2, 2]
     assert {
         tuple(sorted(row[:count].tolist()))
-        for row, count in zip(electrode_nodes, electrode_counts)
+        for row, count in zip(electrode_nodes, electrode_counts, strict=True)
     } == {
         (1, 2),
         (2, 3),

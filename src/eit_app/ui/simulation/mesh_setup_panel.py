@@ -670,7 +670,7 @@ class MeshSetupPanel(QGroupBox):
             )
             self._last_drive_dimension = mesh_dimension
         finally:
-            for widget, blocked in zip(widgets, blockers):
+            for widget, blocked in zip(widgets, blockers, strict=True):
                 widget.blockSignals(blocked)
         self._refresh_mesh_family_enabled()
         self._refresh_drive_value_units()
@@ -719,7 +719,7 @@ class MeshSetupPanel(QGroupBox):
                 self._n_elec_spin.setValue(target_elec)
                 self._n_rings_spin.setValue(target_rings)
             finally:
-                for widget, blocked in zip(widgets, blockers):
+                for widget, blocked in zip(widgets, blockers, strict=True):
                     widget.blockSignals(blocked)
         # Auto-swap the radius default when the user toggles dimensions
         # between the canonical 1.0 m unit-disc and the 3D tank radius.

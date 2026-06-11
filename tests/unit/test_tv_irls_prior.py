@@ -198,7 +198,8 @@ def test_solve_tv_irls_frame_has_monotone_objective_and_stale_rm_tokens() -> Non
     assert result.metadata["method"] == "tv-irls"
     assert result.metadata["objective_monotone"] is True
     assert all(
-        right <= left + 1.0e-10 for left, right in zip(objectives, objectives[1:])
+        right <= left + 1.0e-10
+        for left, right in zip(objectives, objectives[1:], strict=False)
     )
     assert result.metadata["tv_pdhg_postprocess_separate"] is True
     assert (

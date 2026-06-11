@@ -586,7 +586,7 @@ def save_overview_plot(
             )
             images.append(recon_grid)
             titles.append(f"{n_elec} electrodes")
-        for col, (image, title) in enumerate(zip(images, titles)):
+        for col, (image, title) in enumerate(zip(images, titles, strict=True)):
             ax = axes[row, col]
             im = ax.imshow(
                 image,

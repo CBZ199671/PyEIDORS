@@ -195,7 +195,7 @@ class StimMeasPatternManager:
                 inj_weights=self.inj_weights,
                 electrode_lengths_m=self._electrode_lengths_m,
             )
-            for idx, current in zip(inj_indices, stim_currents):
+            for idx, current in zip(inj_indices, stim_currents, strict=True):
                 stim_vec[idx] = current
 
             # Measurement matrix
@@ -352,7 +352,7 @@ class StimMeasPatternManager:
             (self.n_meas_total, self.n_stim * self.tn_elec), dtype=float
         )
         for i, (start_idx, meas_mat) in enumerate(
-            zip(self.meas_start_indices, self.meas_matrices)
+            zip(self.meas_start_indices, self.meas_matrices, strict=True)
         ):
             n_meas = meas_mat.shape[0]
             row_slice = slice(start_idx, start_idx + n_meas)

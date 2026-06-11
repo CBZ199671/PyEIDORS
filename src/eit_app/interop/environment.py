@@ -243,7 +243,7 @@ def _path_affinity(left: str | Path, right: str | Path) -> int:
     left_parts = [part for part in _normalized_path_key(left).split("/") if part]
     right_parts = [part for part in _normalized_path_key(right).split("/") if part]
     score = 0
-    for lhs, rhs in zip(left_parts, right_parts):
+    for lhs, rhs in zip(left_parts, right_parts, strict=False):
         if lhs != rhs:
             break
         score += 2

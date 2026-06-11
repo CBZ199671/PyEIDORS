@@ -1265,7 +1265,15 @@ def run_reconstruction(
                 meas_weight_np = None
                 weighted_residual_np = residual_torch.detach().cpu().numpy()
 
-            def _solve_strict_path() -> tuple[torch.Tensor, float, float]:
+            def _solve_strict_path(
+                *,
+                measurement_jacobian_np=measurement_jacobian_np,
+                weighted_residual_torch=weighted_residual_torch,
+                de_current=de_current,
+                lambda_eff=lambda_eff,
+                iteration=iteration,
+                RtR_de=RtR_de,
+            ) -> tuple[torch.Tensor, float, float]:
                 J_torch_local = _to_runtime_tensor_cached(
                     reconstructor,
                     "measurement_jacobian",

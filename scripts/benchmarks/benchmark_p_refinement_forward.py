@@ -457,7 +457,7 @@ def _plot_tradeoff(out_dir: Path, rows: list[dict[str, Any]]) -> None:
         color="#d62728",
         label="Solve seconds",
     )
-    for order, dof in zip(orders, dofs):
+    for order, dof in zip(orders, dofs, strict=True):
         ax_err.annotate(
             f"{int(dof)} dofs",
             xy=(order, errors[order == orders][0]),

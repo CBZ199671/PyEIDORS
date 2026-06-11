@@ -111,7 +111,7 @@ class SimulationTab(QWidget):
             "sim.runguide.step2",
             "sim.runguide.step3",
         )
-        for label, key in zip(self._runguide_step_labels, step_keys):
+        for label, key in zip(self._runguide_step_labels, step_keys, strict=True):
             label.setText(t(key))
         self._runguide_hint.setText(t("sim.runguide.hint"))
 

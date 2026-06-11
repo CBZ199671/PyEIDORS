@@ -452,7 +452,7 @@ class ControlPanel(QGroupBox):
             )
             self._contact_impedance_spin.setValue(float(layout["contact_impedance"]))
         finally:
-            for widget, blocked in zip(widgets, blockers):
+            for widget, blocked in zip(widgets, blockers, strict=True):
                 widget.blockSignals(blocked)
         self._update_layout_hint(layout, mea_mode=mea_mode)
 

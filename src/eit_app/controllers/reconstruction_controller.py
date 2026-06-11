@@ -735,7 +735,12 @@ def _pseudo3d_layer_measurement_indices(
 
     layer_indices: list[list[int]] = [[] for _ in range(source_n_rings)]
     for stim_idx, (start_idx, stim_row, meas_mat) in enumerate(
-        zip(manager.meas_start_indices, manager.stim_matrix, manager.meas_matrices)
+        zip(
+            manager.meas_start_indices,
+            manager.stim_matrix,
+            manager.meas_matrices,
+            strict=True,
+        )
     ):
         del stim_idx
         stim_electrodes = np.flatnonzero(np.abs(stim_row) > 0.0)

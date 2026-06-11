@@ -228,7 +228,7 @@ def coarse_initialization(
     coarse_vec = np.asarray(coarse_estimate.to_numpy(), dtype=float)
 
     fine = np.zeros(reconstructor.n_elements, dtype=float)
-    for value, idx in zip(coarse_vec, groups):
+    for value, idx in zip(coarse_vec, groups, strict=True):
         fine[idx] = value
     return fine
 

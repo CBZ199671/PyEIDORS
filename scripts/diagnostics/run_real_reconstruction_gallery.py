@@ -441,7 +441,7 @@ def _render_3d_overview(
             1e-9,
         )
     )
-    diff_slices = [gpu - cpu for cpu, gpu in zip(cpu_slices, gpu_slices)]
+    diff_slices = [gpu - cpu for cpu, gpu in zip(cpu_slices, gpu_slices, strict=True)]
     diff_limit = float(
         max(max(np.nanmax(np.abs(field)) for field in diff_slices), 1e-9)
     )

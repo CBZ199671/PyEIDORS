@@ -160,7 +160,7 @@ class Cylinder3DMeshConfig:
         sorted_windows = sorted(_electrode_vertical_windows(self), key=lambda w: w[0])
         if any(
             right[0] - left[1] <= 1e-10
-            for left, right in zip(sorted_windows[:-1], sorted_windows[1:])
+            for left, right in zip(sorted_windows[:-1], sorted_windows[1:], strict=True)
         ):
             raise ValueError(
                 "electrode windows overlap; reduce electrode_height_ratio or "
@@ -417,7 +417,7 @@ def _z_stage_intervals(config: Cylinder3DMeshConfig) -> list[tuple[float, float]
     breaks = _build_z_stage_breakpoints(config)
     return [
         (start, stop)
-        for start, stop in zip(breaks[:-1], breaks[1:])
+        for start, stop in zip(breaks[:-1], breaks[1:], strict=True)
         if stop - start > 1e-12
     ]
 
@@ -1003,7 +1003,7 @@ class _GeomV2HexCylinder3DMeshGenerator:
         )
 
         levels = [intervals[0][0]]
-        for (z_start, z_stop), n_interval in zip(intervals, counts):
+        for (z_start, z_stop), n_interval in zip(intervals, counts, strict=True):
             segment = np.linspace(z_start, z_stop, n_interval + 1, dtype=np.float64)[1:]
             levels.extend(segment.tolist())
         return np.asarray(levels, dtype=np.float64)

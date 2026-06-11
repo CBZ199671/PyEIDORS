@@ -470,7 +470,7 @@ def reconstruct_protocol(
 
 def to_volume(values: np.ndarray, grid: Grid) -> np.ndarray:
     volume = np.full(grid.shape, np.nan, dtype=np.float64)
-    for value, (ix, iy, iz) in zip(values, grid.ijk):
+    for value, (ix, iy, iz) in zip(values, grid.ijk, strict=True):
         volume[int(ix), int(iy), int(iz)] = float(value)
     return volume
 
@@ -510,7 +510,9 @@ def save_comparison_figure(
     if axes.ndim == 1:
         axes = axes.reshape(1, -1)
     images = []
-    for row_idx, (target_z, slice_title) in enumerate(zip(slice_targets, slice_titles)):
+    for row_idx, (target_z, slice_title) in enumerate(
+        zip(slice_targets, slice_titles, strict=True)
+    ):
         z_idx = closest_z_index(grid, target_z)
         panels = [truth_vol[:, :, z_idx].T] + [
             volume[:, :, z_idx].T for volume in result_volumes
@@ -523,7 +525,7 @@ def save_comparison_figure(
             )
             for item in results
         ]
-        for col_idx, (panel, title) in enumerate(zip(panels, titles)):
+        for col_idx, (panel, title) in enumerate(zip(panels, titles, strict=True)):
             ax = axes[row_idx, col_idx]
             image = ax.imshow(
                 panel,

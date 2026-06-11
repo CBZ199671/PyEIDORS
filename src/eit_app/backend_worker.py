@@ -146,7 +146,7 @@ def _serve(_args: argparse.Namespace) -> int:
             send({"id": request_id, "type": "done", "status": "ok"})
             return 0
 
-        def progress(text: str) -> None:
+        def progress(text: str, *, request_id: str = request_id) -> None:
             send({"id": request_id, "type": "progress", "message": str(text)})
 
         try:

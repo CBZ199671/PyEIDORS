@@ -631,7 +631,11 @@ def _run_profiles(
                 }
             )
 
-        def _metric_list(name: str) -> list[float]:
+        def _metric_list(
+            name: str,
+            *,
+            run_records: list[dict[str, Any]] = run_records,
+        ) -> list[float]:
             return [float(run["metrics"][name]) for run in run_records]
 
         median_metrics = {

@@ -375,7 +375,7 @@ class InverseProblemPanel(QGroupBox):
             )
             self._iter_spin.setValue(int(config.get("max_iterations", 10)))
         finally:
-            for widget, blocked in zip(widgets, blockers):
+            for widget, blocked in zip(widgets, blockers, strict=True):
                 widget.blockSignals(blocked)
         self._update_method_state()
 

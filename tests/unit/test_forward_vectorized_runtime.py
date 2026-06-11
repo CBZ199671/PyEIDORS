@@ -17,7 +17,7 @@ def test_measurement_projection_matches_manual_loop(eit_system):
 
     expected = np.zeros(manager.n_meas_total, dtype=float)
     for i, (start_idx, meas_mat) in enumerate(
-        zip(manager.meas_start_indices, manager.meas_matrices)
+        zip(manager.meas_start_indices, manager.meas_matrices, strict=True)
     ):
         n_meas = meas_mat.shape[0]
         expected[start_idx : start_idx + n_meas] = meas_mat @ voltages[i]

@@ -260,7 +260,7 @@ class DatasetRandomizationPanel(QGroupBox):
             self._bg_max.setValue(float(config.get("background_conductivity_max", 1.2)))
             self._noise_spin.setValue(float(config.get("noise_level", 0.0)))
         finally:
-            for widget, blocked in zip(widgets, blockers):
+            for widget, blocked in zip(widgets, blockers, strict=True):
                 widget.blockSignals(blocked)
         self.config_changed.emit()
 
@@ -388,7 +388,7 @@ class DatasetRunPanel(QGroupBox):
             self._n_samples_spin.setValue(int(config.get("n_samples", 1000)))
             self._dir_edit.setText(str(config.get("output_dir", "")).strip())
         finally:
-            for widget, blocked in zip(widgets, blockers):
+            for widget, blocked in zip(widgets, blockers, strict=True):
                 widget.blockSignals(blocked)
         self.config_changed.emit()
 

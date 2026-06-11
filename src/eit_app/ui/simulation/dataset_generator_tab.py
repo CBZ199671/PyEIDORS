@@ -98,12 +98,14 @@ class _DatasetWorkspaceWidget(QWidget):
                 "dataset.artifacts.item2",
                 "dataset.artifacts.item3",
             ),
+            strict=True,
         ):
             label.setText(t(key))
         self._notes_box.setTitle(t("dataset.notes.title"))
         for label, key in zip(
             self._note_labels,
             ("dataset.notes.item1", "dataset.notes.item2", "dataset.notes.item3"),
+            strict=True,
         ):
             label.setText(t(key))
 

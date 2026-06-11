@@ -783,7 +783,14 @@ def main() -> None:
                 solver_space="measurement",
             )
 
-            def _solve_with_delta(delta: np.ndarray) -> Tuple[float, np.ndarray]:
+            def _solve_with_delta(
+                delta: np.ndarray,
+                *,
+                system=system,
+                baseline_image=baseline_image,
+                diff_target=diff_target,
+                baseline_meas=baseline_meas,
+            ) -> Tuple[float, np.ndarray]:
                 if args.step_size_calibration:
                     step = optimize_step_size(
                         system,

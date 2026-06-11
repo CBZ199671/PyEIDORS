@@ -432,11 +432,13 @@ def tag_signature(tags: Any | None) -> dict[str, Any]:
         "dim": None if getattr(tags, "dim", None) is None else int(tags.dim),
         "count": int(indices.size),
         "value_counts": {
-            str(int(value)): int(count) for value, count in zip(unique, counts)
+            str(int(value)): int(count)
+            for value, count in zip(unique, counts, strict=True)
         },
         "pairs_sha256": pairs_sha256(indices, values),
         "pairs_sample": [
-            [int(index), int(value)] for index, value in zip(indices[:16], values[:16])
+            [int(index), int(value)]
+            for index, value in zip(indices[:16], values[:16], strict=True)
         ],
     }
 

@@ -125,6 +125,19 @@ extend-exclude = '''
 "tests/**/*.py" = ["E402"]
 "src/eit_app/app.py" = ["E402"]
 "src/pyeidors/inverse/solvers/gauss_newton_runtime.py" = ["E402"]
+# Qt model/view overrides intentionally mirror Qt's QModelIndex() default args.
+"src/eit_app/ui/database/database_tab.py" = ["B008"]
+"src/eit_app/ui/hardware/frame_browser_widget.py" = ["B008"]
+"src/eit_app/ui/simulation/inhomogeneity_editor.py" = ["B008"]
+# These modules intentionally dispatch through validated dynamic attribute names.
+"scripts/benchmarks/benchmark_difference_runtime.py" = ["B010"]
+"scripts/common/acceleration_profiles.py" = ["B010"]
+"src/eit_app/controllers/forward_solver_controller.py" = ["B010"]
+"src/eit_app/controllers/reconstruction_controller.py" = ["B010"]
+"src/pyeidors/cache/object_signature.py" = ["B010"]
+"src/pyeidors/geometry/optimized_mesh_generator.py" = ["B010"]
+"src/pyeidors/inverse/greit.py" = ["B009"]
+"tests/unit/test_misc_entrypoint_facade_branches.py" = ["B009"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -290,7 +290,7 @@ def render_runtime_figure(
         axes[1].set_ylabel("GPU speedup vs CPU")
         axes[1].set_xticks(sweep_iterations)
         axes[1].grid(False)
-        for xi, yi in zip(sweep_iterations, sweep_speedups):
+        for xi, yi in zip(sweep_iterations, sweep_speedups, strict=True):
             axes[1].annotate(
                 f"{yi:.2f}x",
                 (xi, yi),

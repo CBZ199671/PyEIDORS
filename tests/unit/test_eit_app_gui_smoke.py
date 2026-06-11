@@ -3330,6 +3330,7 @@ def test_simulation_forward_config_clamps_dense_3d_ring_area_before_mesh_build()
         for left, right in zip(
             cfg.electrode_level_fractions[:-1],
             cfg.electrode_level_fractions[1:],
+            strict=True,
         )
     )
     assert cfg.electrode_area_m2_override == pytest.approx(

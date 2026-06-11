@@ -37,7 +37,7 @@ def collect_electrode_segments(mesh, tags: List[int]) -> Dict[int, List[np.ndarr
     if f2v is None:
         return segments
 
-    for facet_idx, tag_value in zip(facet_tags.indices, facet_tags.values):
+    for facet_idx, tag_value in zip(facet_tags.indices, facet_tags.values, strict=True):
         tag = int(tag_value)
         if tag in segments:
             vs = f2v.links(int(facet_idx))

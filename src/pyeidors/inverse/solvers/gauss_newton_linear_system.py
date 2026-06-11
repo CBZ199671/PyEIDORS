@@ -2183,13 +2183,15 @@ def _solve_linear_system_fast(
                         namespace="absolute",
                         cache_obj=op_payload,
                         payload=op_payload,
-                        compute_fn=lambda: build_reduced_operator(
-                            jacobian=J_weighted_dense_np,
-                            basis=stage_basis,
-                            regularization_apply=lambda vec: _apply_regularization_np(
-                                reconstructor, vec
-                            ),
-                            lambda_eff=float(lambda_eff),
+                        compute_fn=lambda stage_basis=stage_basis: (
+                            build_reduced_operator(
+                                jacobian=J_weighted_dense_np,
+                                basis=stage_basis,
+                                regularization_apply=lambda vec: (
+                                    _apply_regularization_np(reconstructor, vec)
+                                ),
+                                lambda_eff=float(lambda_eff),
+                            )
                         ),
                         persist=True,
                         cost=6.0,

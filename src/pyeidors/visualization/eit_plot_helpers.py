@@ -242,7 +242,7 @@ def overlay_electrode_labels(ax, mesh, label_outset: float = 0.08):
     if f2v is None:
         raise RuntimeError("Cannot read facet->vertex connectivity")
 
-    for facet_idx, tag in zip(facet_tags.indices, facet_tags.values):
+    for facet_idx, tag in zip(facet_tags.indices, facet_tags.values, strict=True):
         tag_int = int(tag)
         if tag_int in tag_points:
             vertices = f2v.links(int(facet_idx))
