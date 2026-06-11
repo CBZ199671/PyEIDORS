@@ -298,6 +298,8 @@ def test_forward_only_initialization_skips_inverse_components(monkeypatch):
 
 
 def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
+    monkeypatch.setattr(core_module, "petsc_scalar_is_complex", lambda: False)
+    monkeypatch.setattr(core_module, "petsc_scalar_dtype_name", lambda: "float64")
     system = EITSystem(
         n_elec=16,
         pattern_config=PatternConfig(n_elec=16),
@@ -392,7 +394,19 @@ def test_v632_setup_generated_3d_mesh_routes_through_disk_cache(monkeypatch):
     assert call["z_center"] == 0.08
 
 
-def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():
+def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh(monkeypatch):
+    monkeypatch.setattr(core_module, "petsc_scalar_is_complex", lambda: False)
+    monkeypatch.setattr(core_module, "petsc_scalar_dtype_name", lambda: "float64")
+    monkeypatch.setattr(
+        core_module,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "densecuda",
+        },
+    )
     system = EITSystem(
         n_elec=16,
         pattern_config=PatternConfig(n_elec=16),
