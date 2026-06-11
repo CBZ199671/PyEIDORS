@@ -2386,62 +2386,14 @@ def _recover_nix_runtime_site_packages(missing_name: str) -> tuple[str, ...]:
 
 @lru_cache(maxsize=1)
 def _load_gn_difference_runner_module():
-    """Load the realtime GN helper module from the installed package first."""
-    packaged_name = "pyeidors.realtime.gn_difference_runner"
-    legacy_name = "scripts.common.gn_difference_runner"
-
-    try:
-        return _import_gn_difference_runner_candidate(
-            packaged_name,
-            allow_repo_scripts=False,
-        )
-    except ModuleNotFoundError as exc:
-        if not _module_missing_self(exc, packaged_name):
-            raise
-    return _import_gn_difference_runner_candidate(
-        legacy_name,
-        allow_repo_scripts=True,
-    )
-
-
-def _module_missing_self(exc: ModuleNotFoundError, module_name: str) -> bool:
-    missing_name = str(getattr(exc, "name", "") or "")
-    return bool(
-        missing_name
-        and (missing_name == module_name or module_name.startswith(f"{missing_name}."))
-    )
-
-
-def _import_gn_difference_runner_candidate(
-    module_name: str,
-    *,
-    allow_repo_scripts: bool,
-):
-    repo_root = Path(__file__).resolve().parents[3]
-    module_path = repo_root / "scripts" / "common" / "gn_difference_runner.py"
-    repo_root_str = str(repo_root)
+    """Load the packaged realtime GN helper module."""
+    module_name = "pyeidors.realtime.gn_difference_runner"
 
     for _attempt in range(4):
         try:
             return importlib.import_module(module_name)
         except ModuleNotFoundError as exc:
             missing_name = str(getattr(exc, "name", "") or "")
-            if allow_repo_scripts and missing_name in {
-                "scripts",
-                "scripts.common",
-                module_name,
-            }:
-                if not module_path.exists():
-                    raise
-                if repo_root_str not in sys.path:
-                    sys.path.insert(0, repo_root_str)
-                    log.info(
-                        "Added repository root to sys.path for realtime reconstruction imports: %s",
-                        repo_root_str,
-                    )
-                importlib.invalidate_caches()
-                sys.modules.pop(module_name, None)
-                continue
             recovered = _recover_nix_runtime_site_packages(missing_name)
             if recovered:
                 importlib.invalidate_caches()

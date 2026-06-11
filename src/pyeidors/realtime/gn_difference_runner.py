@@ -145,6 +145,20 @@ def _runtime_scalar_dtype(
     return np.dtype(np.float64)
 
 
+def _runtime_value_array(
+    values: object,
+    *,
+    has_complex_values: bool,
+    value_dtype: np.dtype,
+) -> np.ndarray:
+    if has_complex_values:
+        return np.asarray(values, dtype=value_dtype)
+    arr = np.asarray(values)
+    if np.iscomplexobj(arr):
+        return np.asarray(np.real(arr), dtype=np.float64)
+    return np.asarray(arr, dtype=np.float64)
+
+
 def _signature_scalar_value(value: object) -> float | dict[str, float]:
     try:
         arr = np.asarray(value).reshape(-1)
@@ -1699,9 +1713,10 @@ def build_shared_context(
 
     def _compute_base_meas() -> np.ndarray:
         base_forward, _ = fwd_model.fwd_solve(img_bg)
-        return np.asarray(
+        return _runtime_value_array(
             base_forward.meas,
-            dtype=value_dtype if has_complex_values else np.float64,
+            has_complex_values=has_complex_values,
+            value_dtype=value_dtype,
         )
 
     base_meas, base_meas_lookup = cache_manager.get_or_compute_semantic(
@@ -1715,9 +1730,10 @@ def build_shared_context(
         cost=4.0,
         effort_seconds=2.0,
     )
-    base_meas = np.asarray(
+    base_meas = _runtime_value_array(
         base_meas,
-        dtype=value_dtype if has_complex_values else np.float64,
+        has_complex_values=has_complex_values,
+        value_dtype=value_dtype,
     )
 
     pattern_manager = fwd_model.pattern_manager
@@ -2094,6 +2110,11 @@ def build_shared_context(
         reference_meas=base_meas,
         difference_mode=difference_mode,
         difference_orientation=difference_orientation,
+    )
+    jacobian = _runtime_value_array(
+        jacobian,
+        has_complex_values=has_complex_values,
+        value_dtype=value_dtype,
     )
     if rm_build_only:
         perf_caps = detect_performance_capabilities()
@@ -2917,15 +2938,23 @@ def process_frames(
     forward_start = time.perf_counter()
     pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
     stage_timings["forward_validate"] += time.perf_counter() - forward_start
-    pred_diff = build_difference_vector(
+    has_complex_values = bool(
+        np.iscomplexobj(ctx["sigma_bg"]) or np.iscomplexobj(ctx["base_meas"])
+    )
+    pred_meas = _runtime_value_array(
         pred_vi.meas,
+        has_complex_values=has_complex_values,
+        value_dtype=np.asarray(ctx["sigma_bg"]).dtype,
+    )
+    pred_diff = build_difference_vector(
+        pred_meas,
         ctx["base_meas"],
         mode=difference_mode,
         orientation=difference_orientation,
     )
     meas_diff = dv
 
-    res = pred_vi.meas - vi
+    res = pred_meas - vi
     rmse_abs = float(np.sqrt(np.mean(res**2)))
 
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -2987,9 +3016,9 @@ def process_frames(
 
         fig = plt.figure(figsize=(10, 4))
         ax1 = fig.add_subplot(1, 2, 1)
-        ax1.scatter(vi, pred_vi.meas, s=10, alpha=0.7)
-        vmin = min(vi.min(), pred_vi.meas.min())
-        vmax = max(vi.max(), pred_vi.meas.max())
+        ax1.scatter(vi, pred_meas, s=10, alpha=0.7)
+        vmin = min(vi.min(), pred_meas.min())
+        vmax = max(vi.max(), pred_meas.max())
         ax1.plot([vmin, vmax], [vmin, vmax], "r--")
         ax1.set_title("Measured vs Predicted (abs, real)")
         ax1.grid(alpha=0.3)
@@ -2998,7 +3027,7 @@ def process_frames(
         ax2 = fig.add_subplot(1, 2, 2)
         idx = np.arange(len(vi))
         ax2.plot(idx, vi, "b-", lw=1.0, label="Measured target")
-        ax2.plot(idx, pred_vi.meas, "r--", lw=1.0, label="Predicted")
+        ax2.plot(idx, pred_meas, "r--", lw=1.0, label="Predicted")
         ax2.legend()
         ax2.grid(alpha=0.3)
         fig.tight_layout()
@@ -3014,7 +3043,7 @@ def process_frames(
             "dv": meas_diff,
             "pred_diff": pred_diff,
             "vi": vi,
-            "pred_vi": pred_vi.meas,
+            "pred_vi": pred_meas,
             "lambda_": lam,
             "rmse_abs": rmse_abs,
             "step_size_alpha": alpha,

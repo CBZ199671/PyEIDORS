@@ -7,11 +7,13 @@ from pathlib import Path
 from types import SimpleNamespace
 import textwrap
 import time
+import warnings
 
 import numpy as np
 
 from pyeidors.cache.object_signature import (
     backend_signature_from_forward_model,
+    model_signature_from_forward_model,
     pattern_signature_from_forward_model,
     signature_of_cache_obj,
     stable_signature_hash,
@@ -171,3 +173,38 @@ def test_pattern_and_backend_signatures_track_in_place_mutations():
     backend_before = backend_signature_from_forward_model(backend_model)
     backend_config.ksp_type = "cg"
     assert backend_signature_from_forward_model(backend_model) != backend_before
+
+
+def test_v76_model_signature_preserves_complex_contact_impedance() -> None:
+    real_like = SimpleNamespace(
+        n_elec=2,
+        potential_order=1,
+        z=np.array([1e-6 + 0j, 2e-6 + 0j], dtype=np.complex64),
+        geometry_scale_to_m=1.0,
+        eit_mesh=None,
+    )
+    complex_z = SimpleNamespace(
+        n_elec=2,
+        potential_order=1,
+        z=np.array([1e-6 + 1e-7j, 2e-6 + 0j], dtype=np.complex64),
+        geometry_scale_to_m=1.0,
+        eit_mesh=None,
+    )
+    changed_complex_z = SimpleNamespace(
+        n_elec=2,
+        potential_order=1,
+        z=np.array([1e-6 + 2e-7j, 2e-6 + 0j], dtype=np.complex64),
+        geometry_scale_to_m=1.0,
+        eit_mesh=None,
+    )
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", np.exceptions.ComplexWarning)
+        real_like_signature = model_signature_from_forward_model(real_like)
+        complex_signature = model_signature_from_forward_model(complex_z)
+        changed_complex_signature = model_signature_from_forward_model(
+            changed_complex_z
+        )
+
+    assert complex_signature != real_like_signature
+    assert changed_complex_signature != complex_signature

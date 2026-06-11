@@ -66,7 +66,7 @@ def test_v548_remaining_script_comparison_guards_use_bounded_helpers() -> None:
     assert "_strictly_increasing(pos)" in dynamic_sweep_text
     assert "np.any(np.diff(pos) <= 0.0)" not in dynamic_sweep_text
 
-    gn_text = (REPO_ROOT / "scripts/common/gn_difference_runner.py").read_text(
+    gn_text = (REPO_ROOT / "src/pyeidors/realtime/gn_difference_runner.py").read_text(
         encoding="utf-8"
     )
     assert "all_finite_values(raw_sigma_est)" in gn_text
@@ -76,7 +76,7 @@ def test_v548_remaining_script_comparison_guards_use_bounded_helpers() -> None:
 
 
 def test_v549_remaining_np_all_isfinite_guards_use_bounded_helpers() -> None:
-    gn_text = (REPO_ROOT / "scripts/common/gn_difference_runner.py").read_text(
+    gn_text = (REPO_ROOT / "src/pyeidors/realtime/gn_difference_runner.py").read_text(
         encoding="utf-8"
     )
     assert "all_finite_values(arr)" in gn_text
@@ -97,7 +97,7 @@ def test_v549_remaining_np_all_isfinite_guards_use_bounded_helpers() -> None:
 
 
 def test_v550_gn_difference_sigma_floor_step_uses_chunked_limit_helper() -> None:
-    gn_text = (REPO_ROOT / "scripts/common/gn_difference_runner.py").read_text(
+    gn_text = (REPO_ROOT / "src/pyeidors/realtime/gn_difference_runner.py").read_text(
         encoding="utf-8"
     )
     assert "min_alpha_for_value_floor(sigma, delta, floor)" in gn_text
@@ -298,7 +298,7 @@ def test_v523_common_script_correlation_avoids_corrcoef() -> None:
         encoding="utf-8"
     )
     difference_source = (
-        REPO_ROOT / "scripts/common/gn_difference_runner.py"
+        REPO_ROOT / "src/pyeidors/realtime/gn_difference_runner.py"
     ).read_text(encoding="utf-8")
 
     assert "np.corrcoef" not in absolute_source

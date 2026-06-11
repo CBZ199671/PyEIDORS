@@ -60,6 +60,21 @@ def _normalize_for_signature(obj: Any) -> Any:
     return obj
 
 
+def _numeric_array_for_signature(
+    value: Any,
+    *,
+    real_dtype: np.dtype | type = np.float64,
+) -> np.ndarray:
+    """Normalize numeric payloads without discarding meaningful imaginary parts."""
+
+    array = np.asarray(value)
+    if np.iscomplexobj(array):
+        if np.any(np.imag(array) != 0):
+            return array
+        return np.asarray(np.real(array), dtype=real_dtype)
+    return np.asarray(array, dtype=real_dtype)
+
+
 def signature_of_cache_obj(cache_obj: Any) -> dict[str, Any]:
     """Return a normalized signature payload for cache object dependencies."""
     return {"cache_obj": _normalize_for_signature(cache_obj)}
@@ -266,7 +281,7 @@ def model_signature_from_forward_model(fwd_model: Any) -> str:
     payload = {
         "n_elec": int(fwd_model.n_elec),
         "potential_order": int(getattr(fwd_model, "potential_order", 1)),
-        "z": np.asarray(fwd_model.z, dtype=np.float64),
+        "z": _numeric_array_for_signature(fwd_model.z),
         "geometry_scale_to_m": float(getattr(fwd_model, "geometry_scale_to_m", 1.0)),
         "mesh": mesh_payload,
     }

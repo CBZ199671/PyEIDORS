@@ -4252,48 +4252,6 @@ def test_gn_difference_runner_complex_rm_build_only_preserves_complex_dtype(
     np.testing.assert_allclose(ctx["sigma_bg"], np.array([1.0 + 2.0j] * 2))
 
 
-def test_load_gn_difference_runner_module_falls_back_to_repo_root(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    rc._load_gn_difference_runner_module.cache_clear()
-    packaged_name = "pyeidors.realtime.gn_difference_runner"
-    legacy_name = "scripts.common.gn_difference_runner"
-    repo_root = Path(rc.__file__).resolve().parents[3]
-    sentinel = SimpleNamespace(name="gn-diff-runner")
-    calls: list[tuple[str, list[str]]] = []
-    original_sys_path = list(sys.path)
-
-    def _fake_import(name: str):
-        calls.append((name, list(sys.path)))
-        if name == packaged_name:
-            exc = ModuleNotFoundError(f"No module named {packaged_name!r}")
-            exc.name = packaged_name
-            raise exc
-        if name != legacy_name:
-            raise AssertionError(f"Unexpected import: {name}")
-        if len([call for call, _ in calls if call == legacy_name]) == 1:
-            exc = ModuleNotFoundError("No module named 'scripts'")
-            exc.name = "scripts"
-            raise exc
-        return sentinel
-
-    monkeypatch.setattr(rc.importlib, "import_module", _fake_import)
-    sys.path[:] = [
-        entry
-        for entry in original_sys_path
-        if Path(entry or ".").resolve() != repo_root
-    ]
-    try:
-        loaded = rc._load_gn_difference_runner_module()
-    finally:
-        sys.path[:] = original_sys_path
-        rc._load_gn_difference_runner_module.cache_clear()
-
-    assert loaded is sentinel
-    assert [name for name, _ in calls] == [packaged_name, legacy_name, legacy_name]
-    assert str(repo_root) in calls[2][1]
-
-
 def test_v621_gn_difference_runner_loader_uses_packaged_runtime_without_repo_scripts(
     tmp_path: Path,
 ) -> None:

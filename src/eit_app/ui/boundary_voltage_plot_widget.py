@@ -275,22 +275,6 @@ class BoundaryVoltagePlotWidget(QWidget):
         )
         self._apply_y_range(ground_truth, reconstructed_arr)
 
-    def update_voltages(
-        self,
-        simulated: np.ndarray,
-        reconstructed: np.ndarray | None = None,
-        homogeneous: np.ndarray | None = None,
-        *,
-        component: str = REAL_CHANNEL,
-    ) -> None:
-        """Backward-compatible wrapper for legacy simulation call sites."""
-        _ = homogeneous
-        self.update_simulation_voltages(
-            simulated,
-            reconstructed,
-            component=component,
-        )
-
     def update_hardware_voltages(
         self,
         measured: np.ndarray,
