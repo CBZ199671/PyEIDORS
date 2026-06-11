@@ -35,7 +35,7 @@ from eit_app.models.forward_model_config import (
     parse_complex_scalar_list,
 )
 from eit_app.models.frame_model import FrameData
-from pyeidors.cache.keys import update_digest_with_array_payload
+from pyeidors.cache.keys import hash_array_payload, update_digest_with_array_payload
 from pyeidors.runtime_paths import pyeidors_cache_path, resolve_pyeidors_cache_dir
 from pyeidors.utils.numeric_ops import (
     all_finite_values,
@@ -4539,6 +4539,32 @@ def _try_run_cached_rm_request(
     )
 
 
+_STEP_SIZE_CALIB_POLICIES = {"always", "cached_reference"}
+
+
+def _default_step_size_calib_policy(meta: dict[str, Any]) -> str:
+    # Live hardware streaming reuses one reference frame across many target
+    # frames, so the per-frame scipy calibration (each evaluation is a full
+    # fwd_solve) dominates the realtime budget; calibrate once per reference
+    # there and keep per-frame calibration for manual/database routes.
+    source = str(meta.get("request_source", "")).strip().lower()
+    return "cached_reference" if source == "hardware_auto_live" else "always"
+
+
+def _step_size_calib_policy(meta: dict[str, Any]) -> str:
+    policy = str(meta.get("step_size_calib_policy", "always")).strip().lower()
+    if policy not in _STEP_SIZE_CALIB_POLICIES:
+        raise ValueError(
+            "step_size_calib_policy must be always|cached_reference, "
+            f"got {meta.get('step_size_calib_policy')!r}."
+        )
+    return policy
+
+
+def _step_size_reference_signature(ref_vec: np.ndarray) -> str:
+    return hash_array_payload(np.ascontiguousarray(np.asarray(ref_vec)))
+
+
 def _prepare_single_step_cached_runtime(
     req: ReconstructionRequest,
 ) -> _SingleStepCachedRuntimeConfig:
@@ -4566,6 +4592,11 @@ def _prepare_single_step_cached_runtime(
     meta.setdefault("difference_mode", "raw")
     meta.setdefault("difference_orientation", "target_minus_reference")
     meta.setdefault("step_size_calib", True)
+    meta.setdefault(
+        "step_size_calib_policy",
+        _default_step_size_calib_policy(meta),
+    )
+    meta.setdefault("step_size_recalib_interval", 0)
     meta.setdefault("step_size_min", 1.0e-6)
     meta.setdefault("step_size_max", 1.0)
     meta.setdefault("step_size_maxiter", 64)
@@ -5525,28 +5556,59 @@ def _run_single_step_cached_request(
 
     sigma_floor = _single_step_sigma_floor(meta)
     alpha = 1.0
+    alpha_source = "disabled"
     if bool(meta.get("step_size_calib", True)):
-        try:
-            alpha = float(
-                _calibrate_step_size(
-                    fwd_model=ctx["fwd_model"],
-                    sigma_bg=ctx["sigma_bg"],
-                    delta_sigma=delta_sigma,
-                    dv=dv,
-                    base_meas=ctx["base_meas"],
-                    step_size_min=float(meta.get("step_size_min", 1.0e-6)),
-                    step_size_max=float(meta.get("step_size_max", 1.0)),
-                    step_size_maxiter=int(meta.get("step_size_maxiter", 64)),
-                    difference_mode=difference_mode,
-                    difference_orientation=difference_orientation,
-                    sigma_floor=sigma_floor,
+        calib_policy = _step_size_calib_policy(meta)
+        ref_signature: str | None = None
+        cached_alpha: float | None = None
+        if calib_policy == "cached_reference":
+            ref_signature = _step_size_reference_signature(ref_vec)
+            recalib_interval = int(meta.get("step_size_recalib_interval", 0) or 0)
+            alpha_cache = ctx.get("step_size_alpha_cache")
+            if (
+                isinstance(alpha_cache, dict)
+                and alpha_cache.get("ref_signature") == ref_signature
+            ):
+                frames_since_calib = int(alpha_cache.get("frames_since_calib", 0)) + 1
+                if recalib_interval <= 0 or frames_since_calib < recalib_interval:
+                    cached_alpha = float(alpha_cache["alpha"])
+                    alpha_cache["frames_since_calib"] = frames_since_calib
+        if cached_alpha is not None:
+            alpha = cached_alpha
+            alpha_source = "cached"
+        else:
+            alpha_source = "calibrated"
+            try:
+                alpha = float(
+                    _calibrate_step_size(
+                        fwd_model=ctx["fwd_model"],
+                        sigma_bg=ctx["sigma_bg"],
+                        delta_sigma=delta_sigma,
+                        dv=dv,
+                        base_meas=ctx["base_meas"],
+                        step_size_min=float(meta.get("step_size_min", 1.0e-6)),
+                        step_size_max=float(meta.get("step_size_max", 1.0)),
+                        step_size_maxiter=int(meta.get("step_size_maxiter", 64)),
+                        difference_mode=difference_mode,
+                        difference_orientation=difference_orientation,
+                        sigma_floor=sigma_floor,
+                    )
                 )
-            )
-        except Exception as exc:
-            log.debug("Realtime step-size calibration failed: %s", exc)
-            alpha = 1.0
-        if not np.isfinite(alpha) or alpha <= 0.0:
-            alpha = 1.0
+            except Exception as exc:
+                log.debug("Realtime step-size calibration failed: %s", exc)
+                alpha = 1.0
+                alpha_source = "fallback"
+            if not np.isfinite(alpha) or alpha <= 0.0:
+                alpha = 1.0
+                alpha_source = "fallback"
+            if calib_policy == "cached_reference":
+                # Cache the fallback alpha too: retrying a failing calibration
+                # on every live frame would reintroduce the per-frame cost.
+                ctx["step_size_alpha_cache"] = {
+                    "ref_signature": ref_signature,
+                    "alpha": float(alpha),
+                    "frames_since_calib": 0,
+                }
 
     alpha_requested = float(alpha)
     alpha, _display_delta, sigma_est, sigma_floor_applied = (
@@ -5557,14 +5619,16 @@ def _run_single_step_cached_request(
             sigma_floor=sigma_floor,
         )
     )
-    img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
-    pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
-    pred_diff = build_difference_vector(
-        pred_vi.meas,
-        ctx["base_meas"],
-        mode=difference_mode,
-        orientation=difference_orientation,
-    )
+    pred_diff = None
+    if not _flag_enabled(meta.get("single_step_skip_simulated", False)):
+        img_est = EITImage(elem_data=sigma_est, fwd_model=ctx["fwd_model"])
+        pred_vi, _ = ctx["fwd_model"].fwd_solve(img_est)
+        pred_diff = build_difference_vector(
+            pred_vi.meas,
+            ctx["base_meas"],
+            mode=difference_mode,
+            orientation=difference_orientation,
+        )
 
     result_meta = dict(meta)
     result_meta.update(
@@ -5575,6 +5639,7 @@ def _run_single_step_cached_request(
             "effective_refinement": runtime.refinement,
             "conductivity_display_mode": "absolute_sigma",
             "step_size_alpha": alpha,
+            "step_size_alpha_source": alpha_source,
             "step_size_alpha_requested": alpha_requested,
             "step_size_alpha_limited": bool(alpha < alpha_requested),
             "sigma_floor": sigma_floor,

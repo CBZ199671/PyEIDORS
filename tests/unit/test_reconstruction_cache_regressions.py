@@ -3962,6 +3962,223 @@ def test_single_step_cached_request_scales_absolute_display_by_calibrated_alpha(
     assert result.metadata["step_size_alpha"] == pytest.approx(0.25)
 
 
+def _make_measurement_frame(real_values: list[float], index: int) -> FrameData:
+    real = np.asarray(real_values, dtype=float)
+    return FrameData(
+        real=real,
+        imag=np.zeros_like(real),
+        timestamp=0.0,
+        frame_index=index,
+    )
+
+
+def _make_alpha_policy_ctx(delta_sigma: np.ndarray, base_meas: np.ndarray) -> dict:
+    import scripts.common.gn_difference_runner as diff_runner
+
+    class _StubForwardModel:
+        def fwd_solve(self, image):
+            assert image.elem_data is not None
+            return SimpleNamespace(meas=base_meas + 1.0), None
+
+    return {
+        "mesh": object(),
+        "display_node_coords": np.array(
+            [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0]],
+            dtype=float,
+        ),
+        "display_cell_connectivity": np.array([[0, 1, 2]], dtype=int),
+        "operator_bundle": {
+            "strict_solver_backend_effective": diff_runner.STRICT_SOLVER_BACKEND_MEASUREMENT,
+        },
+        "sigma_bg": np.ones_like(delta_sigma),
+        "fwd_model": _StubForwardModel(),
+        "base_meas": base_meas,
+        "cache_build_seconds": {},
+        "cache_miss_reasons": {},
+        "cache_manager": None,
+    }
+
+
+def _patch_alpha_policy_runtime(
+    monkeypatch: pytest.MonkeyPatch,
+    ctx: dict,
+    delta_sigma: np.ndarray,
+    calibrate_calls: list[dict],
+    *,
+    alpha: float = 0.25,
+) -> None:
+    import scripts.common.gn_difference_runner as diff_runner
+
+    def _fake_calibrate(**kwargs):
+        calibrate_calls.append(kwargs)
+        return alpha
+
+    monkeypatch.setattr(rc, "_get_cached_fast_context", lambda _cache_key: ctx)
+    monkeypatch.setattr(rc, "_put_cached_fast_context", lambda _cache_key, _ctx: None)
+    monkeypatch.setattr(
+        diff_runner,
+        "_measurement_space_delta",
+        lambda operator_bundle, rhs: delta_sigma,
+    )
+    monkeypatch.setattr(diff_runner, "_calibrate_step_size", _fake_calibrate)
+
+
+def _make_alpha_policy_request(
+    reference: FrameData,
+    target: FrameData,
+    **meta_overrides: object,
+) -> "rc.ReconstructionRequest":
+    metadata: dict[str, object] = {"reconstruction_runtime": "single_step_cached"}
+    metadata.update(meta_overrides)
+    return rc.ReconstructionRequest(
+        reference_frame=reference,
+        target_frame=target,
+        metadata=metadata,
+    )
+
+
+def test_single_step_cached_live_request_reuses_calibrated_alpha_per_reference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delta_sigma = np.array([0.5, -0.5], dtype=float)
+    base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
+    ctx = _make_alpha_policy_ctx(delta_sigma, base_meas)
+    calibrate_calls: list[dict] = []
+    _patch_alpha_policy_runtime(monkeypatch, ctx, delta_sigma, calibrate_calls)
+
+    reference = _make_measurement_frame([1.0, 2.0, 3.0], 0)
+    first = rc._run_single_step_cached_request(
+        _make_alpha_policy_request(
+            reference,
+            _make_measurement_frame([1.5, 2.5, 3.5], 1),
+            request_source="hardware_auto_live",
+        )
+    )
+    second = rc._run_single_step_cached_request(
+        _make_alpha_policy_request(
+            reference,
+            _make_measurement_frame([2.0, 3.0, 4.0], 2),
+            request_source="hardware_auto_live",
+        )
+    )
+
+    assert len(calibrate_calls) == 1
+    assert first.metadata["step_size_calib_policy"] == "cached_reference"
+    assert first.metadata["step_size_alpha_source"] == "calibrated"
+    assert first.metadata["step_size_alpha"] == pytest.approx(0.25)
+    assert second.metadata["step_size_alpha_source"] == "cached"
+    assert second.metadata["step_size_alpha"] == pytest.approx(0.25)
+
+
+def test_single_step_cached_live_request_recalibrates_when_reference_changes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delta_sigma = np.array([0.5, -0.5], dtype=float)
+    base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
+    ctx = _make_alpha_policy_ctx(delta_sigma, base_meas)
+    calibrate_calls: list[dict] = []
+    _patch_alpha_policy_runtime(monkeypatch, ctx, delta_sigma, calibrate_calls)
+
+    target = _make_measurement_frame([1.5, 2.5, 3.5], 2)
+    results = [
+        rc._run_single_step_cached_request(
+            _make_alpha_policy_request(
+                _make_measurement_frame(reference, index),
+                target,
+                request_source="hardware_auto_live",
+            )
+        )
+        for index, reference in enumerate(
+            ([1.0, 2.0, 3.0], [9.0, 9.0, 9.0]),
+        )
+    ]
+
+    assert len(calibrate_calls) == 2
+    assert [r.metadata["step_size_alpha_source"] for r in results] == [
+        "calibrated",
+        "calibrated",
+    ]
+
+
+def test_single_step_cached_live_request_recalibrates_after_interval(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delta_sigma = np.array([0.5, -0.5], dtype=float)
+    base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
+    ctx = _make_alpha_policy_ctx(delta_sigma, base_meas)
+    calibrate_calls: list[dict] = []
+    _patch_alpha_policy_runtime(monkeypatch, ctx, delta_sigma, calibrate_calls)
+
+    reference = _make_measurement_frame([1.0, 2.0, 3.0], 0)
+    sources = []
+    for index in range(3):
+        result = rc._run_single_step_cached_request(
+            _make_alpha_policy_request(
+                reference,
+                _make_measurement_frame([1.5 + index, 2.5, 3.5], index + 1),
+                request_source="hardware_auto_live",
+                step_size_recalib_interval=2,
+            )
+        )
+        sources.append(result.metadata["step_size_alpha_source"])
+
+    assert sources == ["calibrated", "cached", "calibrated"]
+    assert len(calibrate_calls) == 2
+
+
+def test_single_step_cached_request_default_policy_calibrates_every_frame(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delta_sigma = np.array([0.5, -0.5], dtype=float)
+    base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
+    ctx = _make_alpha_policy_ctx(delta_sigma, base_meas)
+    calibrate_calls: list[dict] = []
+    _patch_alpha_policy_runtime(monkeypatch, ctx, delta_sigma, calibrate_calls)
+
+    reference = _make_measurement_frame([1.0, 2.0, 3.0], 0)
+    for index in range(2):
+        result = rc._run_single_step_cached_request(
+            _make_alpha_policy_request(
+                reference,
+                _make_measurement_frame([1.5 + index, 2.5, 3.5], index + 1),
+            )
+        )
+        assert result.metadata["step_size_calib_policy"] == "always"
+        assert result.metadata["step_size_alpha_source"] == "calibrated"
+
+    assert len(calibrate_calls) == 2
+    assert "step_size_alpha_cache" not in ctx
+
+
+def test_single_step_cached_request_skip_simulated_avoids_fwd_solve(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    delta_sigma = np.array([0.5, -0.5], dtype=float)
+    base_meas = np.array([1.0, 2.0, 3.0], dtype=float)
+    ctx = _make_alpha_policy_ctx(delta_sigma, base_meas)
+
+    class _NoSolveForwardModel:
+        def fwd_solve(self, image):
+            raise AssertionError("fwd_solve must be skipped")
+
+    ctx["fwd_model"] = _NoSolveForwardModel()
+    calibrate_calls: list[dict] = []
+    _patch_alpha_policy_runtime(monkeypatch, ctx, delta_sigma, calibrate_calls)
+
+    result = rc._run_single_step_cached_request(
+        _make_alpha_policy_request(
+            _make_measurement_frame([1.0, 2.0, 3.0], 0),
+            _make_measurement_frame([1.5, 2.5, 3.5], 1),
+            step_size_calib=False,
+            single_step_skip_simulated=True,
+        )
+    )
+
+    assert result.error_msg is None
+    assert result.simulated is None
+    assert np.allclose(result.conductivity, np.ones_like(delta_sigma) + delta_sigma)
+
+
 def test_single_step_cached_request_warmup_only_primes_context_without_solving(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
