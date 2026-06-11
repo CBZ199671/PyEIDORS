@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import shutil
-import subprocess
 from string import ascii_uppercase
 from pathlib import Path
 
@@ -20,7 +18,6 @@ from PySide6.QtWidgets import (
 
 from eit_app.i18n import t
 from eit_app.interop.environment import (
-    _is_windows_style_path,
     running_in_wsl,
     running_on_windows,
     to_posix_path,
@@ -353,47 +350,3 @@ def pick_visual_path(
     if Path(resolved).exists():
         return resolved
     return dialog.directory().absolutePath()
-
-
-def pick_wsl_path(
-    parent: QWidget | None,
-    *,
-    title: str,
-    mode: str,
-    filter_spec: str = "All files (*)",
-    initial_path: str = "",
-) -> str:
-    return pick_visual_path(
-        parent,
-        title=title,
-        mode=mode,
-        filter_spec=filter_spec,
-        initial_path=initial_path,
-    )
-
-
-def open_path_in_system(path: str) -> bool:
-    raw = str(path).strip()
-    if not raw:
-        return False
-    try:
-        if _is_windows_style_path(raw):
-            subprocess.Popen(["explorer.exe", to_windows_path(raw)])
-            return True
-        target = Path(to_posix_path(raw))
-        for command in ("xdg-open", "gio"):
-            resolved = shutil.which(command)
-            if not resolved:
-                continue
-            if command == "gio":
-                subprocess.Popen([resolved, "open", str(target)])
-            else:
-                subprocess.Popen([resolved, str(target)])
-            return True
-        windows_target = to_windows_path(target)
-        if windows_target:
-            subprocess.Popen(["explorer.exe", windows_target])
-            return True
-        return False
-    except Exception:
-        return False

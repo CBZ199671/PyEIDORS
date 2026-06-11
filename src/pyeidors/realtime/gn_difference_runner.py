@@ -1011,18 +1011,6 @@ def _solve_linearized_delta(
     return np.asarray(x, dtype=np.float64)
 
 
-def _make_linear_solver(A: np.ndarray) -> Optional[Callable[[np.ndarray], np.ndarray]]:
-    try:
-        lu, piv = lu_factor(A)
-    except Exception:
-        return None
-
-    def _solve(b: np.ndarray) -> np.ndarray:
-        return lu_solve((lu, piv), b)
-
-    return _solve
-
-
 def _factorize_matrix(A: np.ndarray) -> dict:
     try:
         lu, piv = lu_factor(A)

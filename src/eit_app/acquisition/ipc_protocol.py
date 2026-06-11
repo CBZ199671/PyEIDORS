@@ -1,8 +1,6 @@
 """IPC message types for acquisition process communication."""
 
-from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any
 
 
 class AcquisitionCommand(Enum):
@@ -20,9 +18,3 @@ class AcquisitionStatus(Enum):
     STOPPING = 3
     ERROR = 4
     SHUTDOWN = 5
-
-
-@dataclass
-class IPCMessage:
-    command: AcquisitionCommand
-    payload: dict[str, Any] = field(default_factory=dict)

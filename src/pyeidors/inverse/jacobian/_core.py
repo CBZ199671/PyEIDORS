@@ -6,12 +6,12 @@ Path C progressive fusion (T75):
   and measurement-to-current pattern construction that
   ``DirectJacobianCalculator`` and ``EidorsJacobianAdapter`` historically
   duplicated.
-* Stage 2 adds the shared adjoint-fields solve and the pure-numpy
-  assembly / electrode-to-measurement mapping / block-size calibration
-  helpers consumed by the direct calculator. ``DirectJacobianCalculator``
-  is now a thin façade that owns the cache integration, the runtime
-  device tracking and the CUDA assembly orchestration; everything else
-  flows through this module.
+* Stage 2 adds the pure-numpy assembly /
+  electrode-to-measurement mapping / block-size calibration helpers
+  consumed by the direct calculator. ``DirectJacobianCalculator`` is now a
+  thin façade that owns the cache integration, the runtime device tracking
+  and the CUDA assembly orchestration; everything else flows through this
+  module.
 
 Nothing in this module changes the V73 Jacobian sign contract or the
 production GN runtime. Both calculators keep their current public
@@ -226,18 +226,6 @@ def measurement_to_current_patterns(fwd_model) -> np.ndarray:
         meas_idx += n_meas_this_stim
 
     return current_patterns
-
-
-def compute_adjoint_fields_efficient(
-    fwd_model,
-    sigma,
-    geometry: JacobianGeometry,
-) -> list[np.ndarray]:
-    """Solve the adjoint problem for measurement-current patterns and return per-meas gradients."""
-
-    adjoint_patterns = measurement_to_current_patterns(fwd_model)
-    adjoint_fields, _ = fwd_model.forward_solve(sigma, adjoint_patterns)
-    return compute_field_gradients(adjoint_fields, geometry)
 
 
 def assemble_jacobian_efficient_numpy(

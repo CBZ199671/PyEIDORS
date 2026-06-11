@@ -7,14 +7,11 @@ checkpoint artifacts when the third-party package is installed.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
 import importlib
 import importlib.util
 import logging
 from pathlib import Path
 from typing import Any
-
-from ._runtime import mpi_comm_world
 
 logger = logging.getLogger(__name__)
 
@@ -23,17 +20,6 @@ ADIOS4DOLFINX_ENGINE_ENV = "PYEIDORS_ADIOS4DOLFINX_ENGINE"
 ADIOS4DOLFINX_DEFAULT_ENGINE = "BP4"
 FACET_TAGS_NAME = "facet_tags"
 CELL_TAGS_NAME = "cell_tags"
-
-
-@dataclass(frozen=True)
-class Adios4DolfinxCheckpoint:
-    """Payload loaded from an ADIOS4DOLFINx checkpoint."""
-
-    mesh: Any
-    facet_tags: Any | None
-    cell_tags: Any | None
-    checkpoint_file: str
-    engine: str
 
 
 def adios4dolfinx_checkpoint_path_for_mesh(mesh_file: str | Path) -> Path:
@@ -111,49 +97,4 @@ def write_adios4dolfinx_checkpoint(
             checkpoint_file,
             exc,
         )
-        return None
-
-
-def read_adios4dolfinx_checkpoint(
-    checkpoint_file: str | Path,
-    *,
-    engine: str = ADIOS4DOLFINX_DEFAULT_ENGINE,
-    read_from_partition: bool = True,
-) -> Adios4DolfinxCheckpoint | None:
-    """Read an ADIOS4DOLFINx mesh checkpoint when the optional package exists."""
-    if not adios4dolfinx_available():
-        return None
-    path = Path(checkpoint_file)
-    if not path.exists():
-        return None
-
-    adx = _load_adios4dolfinx()
-    try:
-        mesh = adx.read_mesh(
-            path,
-            comm=mpi_comm_world(),
-            engine=engine,
-            read_from_partition=bool(read_from_partition),
-        )
-
-        def _read_tags(name: str):
-            try:
-                tags = adx.read_meshtags(path, mesh, meshtag_name=name, engine=engine)
-                try:
-                    tags.name = name
-                except Exception:
-                    pass
-                return tags
-            except Exception:
-                return None
-
-        return Adios4DolfinxCheckpoint(
-            mesh=mesh,
-            facet_tags=_read_tags(FACET_TAGS_NAME),
-            cell_tags=_read_tags(CELL_TAGS_NAME),
-            checkpoint_file=str(path),
-            engine=engine,
-        )
-    except Exception as exc:
-        logger.warning("Unable to read ADIOS4DOLFINx checkpoint %s: %s", path, exc)
         return None

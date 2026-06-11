@@ -25,7 +25,6 @@ _SETTINGS_KEY = "compute/precision"
 _DEFAULT_PRECISION = "float32"
 _VALID = ("float32", "float64")
 
-_listeners: list = []
 _current: str = _DEFAULT_PRECISION
 
 
@@ -40,7 +39,7 @@ def compute_dtype() -> np.dtype:
 
 
 def set_precision(mode: str, *, persist: bool = True) -> None:
-    """Switch the active precision and notify subscribers."""
+    """Switch the active precision."""
     global _current
     mode = mode if mode in _VALID else _DEFAULT_PRECISION
     if mode == _current:
@@ -48,11 +47,6 @@ def set_precision(mode: str, *, persist: bool = True) -> None:
     _current = mode
     if persist:
         QSettings("PyEIDORS", "EITWorkstation").setValue(_SETTINGS_KEY, mode)
-    for listener in list(_listeners):
-        try:
-            listener(mode)
-        except Exception:  # pragma: no cover — best effort
-            pass
 
 
 def init_precision_from_settings() -> str:
@@ -64,9 +58,3 @@ def init_precision_from_settings() -> str:
     text = str(stored) if stored in _VALID else _DEFAULT_PRECISION
     _current = text
     return text
-
-
-def subscribe_precision(listener) -> None:
-    """Register a ``callable(mode: str)`` invoked on every precision switch."""
-    if listener not in _listeners:
-        _listeners.append(listener)

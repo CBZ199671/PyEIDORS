@@ -68,11 +68,6 @@ _PROCESS_MESH_CACHE: ProcessLRUCache[EITMesh] = ProcessLRUCache(
 )
 
 
-def _path_signature(path: str | Path) -> str:
-    """Backward-compat alias for :func:`pyeidors.cache.process_lru.path_signature`."""
-    return path_signature(path)
-
-
 def build_process_mesh_cache_key(
     *,
     mesh_file: str | Path,

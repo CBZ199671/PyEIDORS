@@ -176,21 +176,6 @@ def build_voltage_amp_set(level_1: int, level_2: int | None = None) -> bytes:
     return build_frame(Command.VOLTAGE_AMP_SET, bytes([level_1, level_2]))
 
 
-def build_sweep_set(
-    sti_1: int,
-    sti_2: int,
-    mea_1: int,
-    mea_2: int,
-    amp_level: int,
-) -> bytes:
-    return build_frame(
-        Command.SWEEP_SET,
-        bytes(
-            [sti_1 & 0xFF, sti_2 & 0xFF, mea_1 & 0xFF, mea_2 & 0xFF, amp_level & 0xFF]
-        ),
-    )
-
-
 def build_single_point_test(hz: int) -> bytes:
     return build_frame(Command.SINGLE_POINT_TEST, _encode_freq_word(hz))
 

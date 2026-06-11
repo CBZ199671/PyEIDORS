@@ -93,19 +93,6 @@ def to_posix_path(path: str | Path) -> str:
         return raw
 
 
-def _run_powershell_json(script: str) -> Any:
-    binary = _powershell_binary()
-    if not binary:
-        return None
-    _, text, _ = _run_powershell_capture(script)
-    if not text:
-        return None
-    try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        return None
-
-
 def _decode_process_bytes(raw: bytes) -> str:
     if not raw:
         return ""
@@ -194,17 +181,6 @@ def _guess_host_os_from_path(path: str | Path) -> str:
     if _is_windows_style_path(raw):
         return "windows"
     return "linux"
-
-
-def _guess_runtime_kind(matlab_command: str, matlab_host_os: str = "") -> str:
-    host_os = matlab_host_os or _guess_host_os_from_path(matlab_command)
-    if host_os == "windows" and running_in_wsl():
-        return "wsl-bridged"
-    if host_os == "windows":
-        return "windows-host"
-    if host_os == "linux":
-        return "linux-native"
-    return ""
 
 
 def matlab_command_for_execution(environment: EidorsEnvironment) -> str:

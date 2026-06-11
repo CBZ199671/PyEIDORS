@@ -20,7 +20,6 @@ from .eit_digit_metrics import (
 from .holdout_point_audit import (
     HoldoutPointAuditRow,
     build_holdout_point_audit,
-    plot_holdout_point_audit,
 )
 from ._sweep_core import ReconMetricRow, StructureMetricRow, SweepRow
 
@@ -1182,45 +1181,6 @@ def run_holdout_fit_diff(
     )
 
 
-def populate_point_rows_with_voltages(
-    *,
-    point_rows: Iterable[HoldoutPointAuditRow],
-    model: EITLinearizedModel,
-    fit_voltage: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
-) -> list[HoldoutPointAuditRow]:
-    """Attach model voltages to the audit rows without changing point statuses."""
-
-    v_ref = _as_float_vector(model.voltage_reference, name="model.voltage_reference")
-    v_true = _as_float_vector(model.voltage_true, name="model.voltage_true")
-    points_per_frame = int(v_true.size // int(model.n_elec or 16))
-    fit_ref = fit_true = None
-    if fit_voltage is not None:
-        fit_ref, fit_true, _ = fit_voltage
-    enriched: list[HoldoutPointAuditRow] = []
-    for row in point_rows:
-        if row.frame_index_13 is None:
-            enriched.append(row)
-            continue
-        idx = _row_global_208_index(row, points_per_frame)
-        enriched.append(
-            replace(
-                row,
-                voltage_reference=float(v_ref[idx]),
-                voltage_anomaly=float(v_true[idx]),
-                voltage_diff=float(v_true[idx] - v_ref[idx]),
-                fit_voltage_reference=None if fit_ref is None else float(fit_ref[idx]),
-                fit_voltage_anomaly=None if fit_true is None else float(fit_true[idx]),
-                fit_voltage_diff=None
-                if fit_ref is None or fit_true is None
-                else float(fit_true[idx] - fit_ref[idx]),
-                fit_residual=None
-                if fit_true is None
-                else float(fit_true[idx] - v_true[idx]),
-            )
-        )
-    return enriched
-
-
 def format_holdout_fit_report(case: HoldoutFitDiffCase) -> str:
     """Format a Chinese summary report for holdout comparison."""
 
@@ -1555,19 +1515,3 @@ def plot_holdout_fit_summary(
     fig.savefig(output, dpi=int(dpi), bbox_inches="tight")
     plt.close(fig)
     return output
-
-
-def write_holdout_point_audit_plot(
-    case: HoldoutFitDiffCase,
-    output_path: Path,
-    *,
-    dpi: int = 200,
-) -> Path:
-    """Wrapper that renders the point audit plot from a holdout case."""
-
-    return plot_holdout_point_audit(
-        case.point_rows,
-        output_path,
-        n_elec=int(case.model.n_elec or 16),
-        dpi=dpi,
-    )

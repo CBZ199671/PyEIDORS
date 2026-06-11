@@ -308,18 +308,6 @@ def _pseudo3d_display_height(meta: dict[str, Any]) -> float:
     return 2.0 * radius
 
 
-def _pseudo3d_layer_count(meta: dict[str, Any]) -> int:
-    raw = meta.get(
-        "pseudo3d_layer_count",
-        meta.get("pseudo3d_source_n_rings", meta.get("n_rings", 1)),
-    )
-    try:
-        layers = int(raw)
-    except (TypeError, ValueError):
-        layers = 1
-    return max(layers, 1)
-
-
 def _pseudo3d_source_layer_z_values(
     *,
     meta: dict[str, Any],
@@ -1433,18 +1421,6 @@ def _get_rm_fit_jacobian_cache(
             return None
         _RM_FIT_JACOBIAN_CACHE.move_to_end(key)
         return arr
-
-
-def _read_rm_artifact_fit_jacobian(
-    path: Path,
-    *,
-    expected_shape: tuple[int, int] | None = None,
-) -> np.ndarray | None:
-    return _read_rm_artifact_fit_jacobian_result(
-        path,
-        expected_shape=expected_shape,
-        max_bytes=_RM_FIT_JACOBIAN_CACHE_MAX_BYTES,
-    ).array
 
 
 def _read_rm_artifact_fit_jacobian_result(
@@ -2647,10 +2623,6 @@ def _one_step_rm_regularization(meta: dict[str, Any]) -> str:
     return str(meta.get("rm_regularization", "")).strip().lower()
 
 
-def _is_noser_rm_route(meta: dict[str, Any]) -> bool:
-    return _simulation_inverse_route(meta) == "noser_rm"
-
-
 def _is_auto_built_one_step_rm_route(meta: dict[str, Any]) -> bool:
     return _simulation_inverse_route(meta) in _AUTO_BUILD_RM_ROUTES
 
@@ -3628,16 +3600,6 @@ def _store_rm_artifact_process_cache(
     return bool(stored)
 
 
-def _rm_artifact_array_for_shape(artifact: dict[str, Any]) -> Any:
-    rm = artifact.get("rm")
-    if rm is not None:
-        return rm
-    lazy = artifact.get("rm_lazy_dataset")
-    if lazy is not None:
-        return lazy
-    raise ValueError("RM artifact is missing matrix payload.")
-
-
 def _rm_streaming_mode(meta: dict[str, Any]) -> str:
     raw = str(
         meta.get(
@@ -3729,21 +3691,6 @@ def _iter_rm_row_blocks(
             yield start, np.asarray(dataset[start:stop, :], dtype=dtype)
 
     return "getitem_per_chunk", _fallback_blocks()
-
-
-def _should_stream_hdf5_rm_artifact(
-    artifact: dict[str, Any],
-    meta: dict[str, Any],
-    *,
-    device: str,
-    max_cache_bytes: int,
-) -> bool:
-    return _hdf5_rm_streaming_decision(
-        artifact,
-        meta,
-        device=device,
-        max_cache_bytes=max_cache_bytes,
-    )[0]
 
 
 def _hdf5_rm_streaming_decision(

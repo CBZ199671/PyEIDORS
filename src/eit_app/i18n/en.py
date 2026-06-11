@@ -471,7 +471,6 @@ TRANSLATIONS: dict[str, str] = {
         "When enabled, the entered \u03bb_eff builds/loads a separate RM artifact; "
         "the first run is a cold build and will be noticeably slower."
     ),
-    "sim.inverse.artifact_weight_label": "Artifact weight:",
     "sim.inverse.artifact_weight_tooltip": (
         "GREIT weighting is stored in the HDF5 artifact; this value is not "
         "used as \u03b1."
@@ -555,9 +554,6 @@ TRANSLATIONS: dict[str, str] = {
         "GREIT route: builds or reuses an HDF5 artifact from the current 2D/3D "
         "mesh, electrodes, protocol, and advanced training parameters, then "
         "reconstructs with the RM @ dv hot path."
-    ),
-    "sim.inverse.method.greit3d_rm.tooltip": (
-        "Legacy GREIT route name; the GUI now shows the unified greit method."
     ),
     "sim.inverse.method.absolute_gn.tooltip": (
         "Absolute imaging: estimates absolute conductivity directly from the "

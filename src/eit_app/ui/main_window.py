@@ -396,57 +396,6 @@ def _record_forward_visualization_timing(
     result.forward_model_config["gui_forward_visualization_update_ms"] = elapsed
 
 
-def _greit_common_config_id_for_forward_config(
-    forward_cfg: ForwardModelConfig,
-    *,
-    n_measurements: int | None = None,
-) -> str:
-    def _layout_key(value: object) -> str:
-        text = str(value or "").strip().lower().replace("_", "-")
-        if text in {"ring-major", "ring_major", "cylindrical-rings"}:
-            return "ring-major"
-        return text
-
-    if int(forward_cfg.mesh_dimension) != 3:
-        return ""
-    total_electrodes = int(forward_cfg.total_electrodes())
-    if total_electrodes in {16, 32, 48}:
-        config_id = f"{total_electrodes}e"
-        try:
-            from pyeidors.inverse.greit_warmup import greit_common_config
-
-            common_cfg = greit_common_config(config_id)
-            expected_n_measurements = int(common_cfg.n_measurements)
-        except Exception:
-            return config_id if not n_measurements else ""
-        if int(common_cfg.n_rings) != int(forward_cfg.n_rings):
-            return ""
-        if _layout_key(common_cfg.electrode_layout) != _layout_key(
-            forward_cfg.electrode_layout
-        ):
-            return ""
-        if not math.isclose(
-            float(common_cfg.radius),
-            float(forward_cfg.radius),
-            rel_tol=0.0,
-            abs_tol=1.0e-9,
-        ):
-            return ""
-        if not math.isclose(
-            float(common_cfg.height),
-            float(forward_cfg.height),
-            rel_tol=0.0,
-            abs_tol=1.0e-9,
-        ):
-            return ""
-        observed_n_measurements = int(n_measurements or 0)
-        if observed_n_measurements <= 0:
-            observed_n_measurements = int(forward_cfg.point_count())
-        if observed_n_measurements == expected_n_measurements:
-            return config_id
-    return ""
-
-
 def _greit_default_imgsz_for_forward_config(
     forward_cfg: ForwardModelConfig,
 ) -> tuple[int, int, int]:

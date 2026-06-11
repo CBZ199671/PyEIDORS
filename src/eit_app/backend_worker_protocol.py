@@ -301,22 +301,6 @@ def _read_frame(group: h5py.Group) -> FrameData:
     )
 
 
-def reconstruction_request_to_payload(
-    request: ReconstructionRequest,
-) -> dict[str, Any]:
-    return {
-        "reference_frame": frame_to_payload(request.reference_frame),
-        "target_frame": frame_to_payload(request.target_frame),
-        "use_part": str(request.use_part),
-        "method": str(request.method),
-        "regularization_alpha": float(request.regularization_alpha),
-        "max_iterations": int(request.max_iterations),
-        "mesh_dimension": int(request.mesh_dimension),
-        "mesh_refinement": float(request.mesh_refinement),
-        "metadata": _encode_json_value(request.metadata),
-    }
-
-
 def reconstruction_request_from_payload(
     payload: dict[str, Any],
 ) -> ReconstructionRequest:

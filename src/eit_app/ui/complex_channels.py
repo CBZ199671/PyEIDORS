@@ -115,12 +115,3 @@ def channel_values(values: Any, channel: str) -> np.ndarray:
         # gives one compact map where both amplitude and phase can move pixels.
         return _composite_channel_values(arr)
     return _display_float_array(np.real(arr))
-
-
-def channel_is_complex_only(channel: str) -> bool:
-    return str(channel or "").strip().lower() in {
-        IMAG_CHANNEL,
-        MAGNITUDE_CHANNEL,
-        PHASE_CHANNEL,
-        COMPOSITE_CHANNEL,
-    }

@@ -9,34 +9,8 @@ import numpy as np
 
 from eit_app.measurement_layout import measurement_layout_from_config
 
-from .base_transport import AbstractHardwareDevice, AbstractTransport, RawFrame
+from .base_transport import AbstractHardwareDevice, RawFrame
 from .types import AcquisitionMode
-
-
-class SimulatorTransport(AbstractTransport):
-    """In-memory transport that echoes nothing (used by SimulatorDevice)."""
-
-    def __init__(self) -> None:
-        self._open = False
-
-    def open(self) -> None:
-        self._open = True
-
-    def close(self) -> None:
-        self._open = False
-
-    def write(self, data: bytes) -> None:
-        pass  # swallow outgoing bytes
-
-    def read(self, size: int, timeout: float = 2.0) -> bytes:
-        return b""
-
-    def read_until(self, terminator: bytes, timeout: float = 2.0) -> bytes:
-        return b""
-
-    @property
-    def is_open(self) -> bool:
-        return self._open
 
 
 class SimulatorDevice(AbstractHardwareDevice):

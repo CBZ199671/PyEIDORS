@@ -83,11 +83,8 @@ _AUTO_POINTS_CELLS_ENV = "EIT_APP_3D_AUTO_POINTS_CELLS"
 _POINT_CLOUD_MAX_POINTS_ENV = "EIT_APP_3D_POINT_CLOUD_MAX_POINTS"
 _PROGRESSIVE_VOLUME_UPGRADE_ENV = "EIT_APP_3D_PROGRESSIVE_VOLUME_UPGRADE"
 _PROGRESSIVE_VOLUME_DELAY_MS_ENV = "EIT_APP_3D_PROGRESSIVE_VOLUME_DELAY_MS"
-_PYVISTA_OFFSCREEN_MAX_CELLS_ENV = "EIT_APP_3D_PYVISTA_OFFSCREEN_MAX_CELLS"
 _PYVISTA_OFFSCREEN_NEGATIVE_CACHE_ENV = "EIT_APP_3D_PYVISTA_OFFSCREEN_NEGATIVE_CACHE"
-_PYVISTA_OFFSCREEN_WSLG_ENV = "EIT_APP_3D_WSLG_PYVISTA_OFFSCREEN"
 _DEFAULT_AUTO_POINTS_CELLS = 12000
-_DEFAULT_PYVISTA_OFFSCREEN_MAX_CELLS = _DEFAULT_AUTO_POINTS_CELLS
 SUPPORTED_3D_CELL_VERTEX_COUNTS = frozenset({4, 8})
 DISPLAY_MODE_VOLUME = "volume"
 DISPLAY_MODE_POINTS = "points"
@@ -808,26 +805,9 @@ def _progressive_volume_delay_ms() -> int:
     )
 
 
-def _pyvista_offscreen_max_cells() -> int:
-    raw = os.environ.get(_PYVISTA_OFFSCREEN_MAX_CELLS_ENV, "").strip().lower()
-    if raw in {"0", "false", "no", "off", "none", "disabled"}:
-        return 0
-    return _env_int(
-        _PYVISTA_OFFSCREEN_MAX_CELLS_ENV,
-        _DEFAULT_PYVISTA_OFFSCREEN_MAX_CELLS,
-        lower=0,
-        upper=2_000_000,
-    )
-
-
 def _should_skip_pyvista_offscreen(n_cells: int, display_mode: str) -> bool:
     del n_cells, display_mode
     return False
-
-
-def _wslg_pyvista_offscreen_enabled() -> bool:
-    raw = os.environ.get(_PYVISTA_OFFSCREEN_WSLG_ENV, "").strip().lower()
-    return raw in _TRUE_ENV_VALUES
 
 
 def _should_skip_pyvista_offscreen_for_reason(
@@ -871,14 +851,6 @@ def _evenly_spaced_range(size: int, max_count: int) -> np.ndarray:
     if size <= max_count:
         return np.arange(size, dtype=np.int64)
     return np.linspace(0, size - 1, num=max_count, dtype=np.int64)
-
-
-def _evenly_spaced_subset(indices: np.ndarray, max_count: int) -> np.ndarray:
-    indices = np.asarray(indices, dtype=np.int64).reshape(-1)
-    if max_count <= 0 or indices.size <= max_count:
-        return indices
-    positions = _evenly_spaced_range(indices.size, max_count)
-    return indices[positions]
 
 
 def _sample_background_indices(

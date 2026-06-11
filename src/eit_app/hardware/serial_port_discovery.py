@@ -4,12 +4,9 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 from dataclasses import dataclass
 from pathlib import Path
-
-_COM_NAME_RE = re.compile(r"COM(\d+)", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -32,17 +29,6 @@ def running_in_wsl() -> bool:
         )
     except OSError:
         return False
-
-
-def wsl_device_for_windows_port(port_name: str) -> str | None:
-    """Map a Windows COM name to its WSL ttyS counterpart when possible."""
-    match = _COM_NAME_RE.fullmatch(port_name.strip())
-    if match is None:
-        return None
-    com_number = int(match.group(1))
-    if com_number < 1:
-        return None
-    return f"/dev/ttyS{com_number - 1}"
 
 
 def resolve_serial_port_name(port_name: str) -> str:
