@@ -306,7 +306,7 @@ def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
     )
     generated_calls = []
     monkeypatch.setattr(
-        "pyeidors.core_system.create_cylinder_3d_eit_mesh",
+        "pyeidors.core_system.load_or_create_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
     monkeypatch.setattr(
@@ -317,6 +317,7 @@ def test_setup_generated_mesh_prefers_hex_for_gpu3d_profile(monkeypatch):
 
     system.setup_generated_mesh(dimension=3, initialize_inverse=False)
 
+    assert generated_calls[0]["dimension"] == 3
     assert generated_calls[0]["mesh_family"] == "hex"
     assert generated_calls[0]["geometry_version"] == "geomv2"
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
@@ -331,7 +332,7 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
     )
     generated_calls = []
     monkeypatch.setattr(
-        "pyeidors.core_system.create_cylinder_3d_eit_mesh",
+        "pyeidors.core_system.load_or_create_mesh",
         lambda **kwargs: generated_calls.append(kwargs) or "generated-3d-mesh",
     )
     monkeypatch.setattr(
@@ -345,10 +346,50 @@ def test_setup_generated_mesh_uses_eidors_ring_order_for_multi_ring_3d(monkeypat
         electrode_level_fractions=(0.25, 0.75),
     )
 
+    assert generated_calls[0]["dimension"] == 3
     assert generated_calls[0]["n_elec"] == 16
     assert generated_calls[0]["electrode_layout"] == "ring_major"
     assert generated_calls[1]["mesh"] == "generated-3d-mesh"
     assert generated_calls[1]["initialize_inverse"] is True
+
+
+def test_v632_setup_generated_3d_mesh_routes_through_disk_cache(monkeypatch):
+    system = _new_system()
+    system.mesh_config.radius = 0.18
+    system.mesh_config.mesh_size = 0.045
+
+    cache_calls = []
+    monkeypatch.setattr(
+        "pyeidors.core_system.load_or_create_mesh",
+        lambda **kwargs: cache_calls.append(kwargs) or "cached-3d-mesh",
+    )
+    setup_calls = []
+    monkeypatch.setattr(
+        system,
+        "setup_with_mesh",
+        lambda mesh, **kwargs: setup_calls.append(mesh),
+    )
+
+    system.setup_generated_mesh(
+        dimension=3,
+        mesh_dir="custom_meshes",
+        height=0.16,
+        electrode_coverage=0.5,
+        electrode_height_ratio=0.2,
+        z_center=0.08,
+    )
+
+    assert setup_calls == ["cached-3d-mesh"]
+    call = cache_calls[0]
+    assert call["mesh_dir"] == "custom_meshes"
+    assert call["dimension"] == 3
+    assert call["n_elec"] == 16
+    assert call["radius"] == 0.18
+    assert call["height"] == 0.16
+    assert call["refinement"] == 2
+    assert call["electrode_coverage"] == 0.5
+    assert call["electrode_height_ratio"] == 0.2
+    assert call["z_center"] == 0.08
 
 
 def test_runtime_policy_promotes_gpu3d_on_supported_structured_mesh():

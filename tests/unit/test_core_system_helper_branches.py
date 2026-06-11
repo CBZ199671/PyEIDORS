@@ -190,7 +190,7 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(
     generated_calls: list[dict[str, object]] = []
     monkeypatch.setattr(
         core_module,
-        "create_cylinder_3d_eit_mesh",
+        "load_or_create_mesh",
         lambda **kwargs: generated_calls.append(dict(kwargs)) or "mesh3d",
     )
     captured_mesh = {}
@@ -204,6 +204,7 @@ def test_setup_generated_mesh_3d_and_initialize_components_branches(
     system.setup_generated_mesh(dimension=3, radius=0.4, mesh_size=0.04)
     assert captured_mesh["mesh"] == "mesh3d"
     assert captured_mesh["initialize_inverse"] is True
+    assert generated_calls[0]["dimension"] == 3
     assert generated_calls[0]["height"] == 0.3
     assert generated_calls[0]["electrode_height_ratio"] == 0.2
     assert generated_calls[0]["electrode_level_fractions"] == (0.25, 0.75)

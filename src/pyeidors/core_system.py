@@ -38,7 +38,6 @@ from .forward.process_setup_cache import (
 )
 from .geometry.mesh_loader import MeshLoader
 from .geometry.process_mesh_cache import clear_process_mesh_cache
-from .geometry.mesh3d_generator import create_cylinder_3d_eit_mesh
 from .geometry.optimized_mesh_generator import load_or_create_mesh
 from .inverse.contracts import SolverOutput
 from .inverse.jacobian.direct_jacobian import DirectJacobianCalculator
@@ -640,8 +639,10 @@ class EITSystem(CoreSystemFacadeMixin):
                 2,
                 int(round(resolved_radius / max(resolved_mesh_size, 1e-6) / 2)),
             )
-            generated = create_cylinder_3d_eit_mesh(
+            generated = load_or_create_mesh(
+                mesh_dir=mesh_dir,
                 n_elec=self.n_elec,
+                dimension=3,
                 radius=resolved_radius,
                 height=resolved_height,
                 refinement=resolved_refinement,
