@@ -74,7 +74,7 @@ def test_compare_manifests_reports_platform_and_version_mismatch():
 def test_default_manifest_path_uses_detected_platform(monkeypatch):
     monkeypatch.setattr(verifier, "current_platform_id", lambda: "linux-x86_64")
     path = verifier.default_manifest_path(Path("/repo"))
-    assert path == Path("/repo/env/manifests/linux-x86_64.lock.json")
+    assert path == Path("/repo/env/manifests/linux-x86_64-complex64-cuda.lock.json")
 
 
 def test_platform_details_uses_override_mapping(monkeypatch):

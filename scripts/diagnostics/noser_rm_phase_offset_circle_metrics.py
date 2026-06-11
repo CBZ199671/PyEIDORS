@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import h5py
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -1042,6 +1043,7 @@ def main() -> int:
         json.dumps(json_ready(settings), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
+    arrays_path = output_dir / "noser_rm_phase_metric_arrays.h5"
     summary_payload = {
         "summary": summary,
         "config": json_ready(asdict(cfg)),
@@ -1068,28 +1070,31 @@ def main() -> int:
                 output_dir / "metric_delta_vs_angle_zoom_0_5deg.png"
             ),
             "per_angle_dir": str(per_angle_dir),
-            "arrays_npz": str(output_dir / "noser_rm_phase_metric_arrays.npz"),
+            "arrays_h5": str(arrays_path),
         },
     }
     (output_dir / "summary.json").write_text(
         json.dumps(summary_payload, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    np.savez_compressed(
-        output_dir / "noser_rm_phase_metric_arrays.npz",
-        angles_deg=np.asarray(cfg.angles_deg, dtype=np.float64),
-        sigma=np.stack(sigmas, axis=0),
-        strength=np.stack(strengths, axis=0),
-        truth_sigma=truth_sigma,
-        truth_strength=truth_strength,
-        truth_mask=truth_mask,
-        node_coords=coords,
-        cell_connectivity=cells,
-        cell_areas=areas,
-        reference_voltage=reference_voltage,
-        target_voltage=target_voltage,
-        shifted_voltage=np.stack(shifted_voltages, axis=0),
-    )
+    with h5py.File(arrays_path, "w") as handle:
+        for name, values in {
+            "angles_deg": np.asarray(cfg.angles_deg, dtype=np.float64),
+            "sigma": np.stack(sigmas, axis=0),
+            "strength": np.stack(strengths, axis=0),
+            "truth_sigma": truth_sigma,
+            "truth_strength": truth_strength,
+            "truth_mask": truth_mask,
+            "node_coords": coords,
+            "cell_connectivity": cells,
+            "cell_areas": areas,
+            "reference_voltage": reference_voltage,
+            "target_voltage": target_voltage,
+            "shifted_voltage": np.stack(shifted_voltages, axis=0),
+        }.items():
+            array = np.asarray(values)
+            kwargs = {"compression": "gzip"} if array.ndim else {}
+            handle.create_dataset(name, data=array, **kwargs)
     print(json.dumps(summary, ensure_ascii=False, indent=2), flush=True)
     print(f"Metrics: {metrics_path}", flush=True)
     return 0

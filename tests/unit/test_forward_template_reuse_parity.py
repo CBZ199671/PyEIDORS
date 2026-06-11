@@ -51,7 +51,10 @@ def _build_model(mesh, *, template_reuse: bool) -> EITForwardModel:
         z=np.full(8, 1e-5, dtype=float),
         mesh=mesh,
         linear_backend="petsc",
-        backend_config={"forward_template_reuse": template_reuse},
+        backend_config={
+            "forward_template_reuse": template_reuse,
+            "petsc_device": "cpu",
+        },
     )
 
 
@@ -61,7 +64,7 @@ def _full_matrix_dense(mat) -> np.ndarray:
     dense = np.zeros((int(nrows), int(ncols)), dtype=np.float64)
     for r in range(int(nrows)):
         for k in range(int(indptr[r]), int(indptr[r + 1])):
-            dense[r, int(indices[k])] += float(data[k])
+            dense[r, int(indices[k])] += float(np.real_if_close(data[k]))
     return dense
 
 

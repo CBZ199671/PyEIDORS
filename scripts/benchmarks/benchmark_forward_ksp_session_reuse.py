@@ -543,7 +543,7 @@ def main(argv: list[str] | None = None) -> int:
     sigma_sequence: np.ndarray | None = None
     sigma_hash = ""
     sigma_shape: list[int] = []
-    for k_regime, regime in enumerate(regimes):
+    for regime in regimes:
         clear_process_forward_setup_cache()
         result = _run_regime(
             eit_mesh,

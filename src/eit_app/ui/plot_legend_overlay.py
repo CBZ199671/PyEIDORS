@@ -310,11 +310,8 @@ class PlotLegendOverlay(QFrame):
     def _on_theme_mode_changed(self, _mode: str) -> None:
         """Re-apply card + child-row colors on theme-mode flip."""
         self._apply_card_stylesheet()
-        for label in self._indicator_labels.values():
-            # Call on the parent row (which owns _apply_legend_text_color)
-            pass
-        # Iterate rows for both indicator and interactive variants and
-        # re-invoke their color helpers.
+        # Indicator rows own _apply_legend_text_color; button rows refresh
+        # through their checked-state appearance helper.
         for row in self.findChildren(_LegendIndicatorRow):
             row._apply_legend_text_color()
         for button in self._buttons.values():

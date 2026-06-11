@@ -15,7 +15,7 @@ from scipy.optimize import minimize_scalar
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array, function_set_array
-from ...utils.numeric_ops import has_nonzero_imaginary
+from ...utils.numeric_ops import has_nonzero_imaginary, real_array_if_zero_imaginary
 from ..contracts import SolverOutput
 from ..jacobian.linearized import JacobianLinearization, compute_sigma_fingerprint
 from ..jacobian.process_jacobian_cache import (
@@ -376,10 +376,13 @@ def _select_step_size(
 def _to_runtime_tensor(reconstructor, values) -> torch.Tensor:
     if isinstance(values, np.ndarray) and not values.flags.writeable:
         values = values.copy()
+    target_dtype = reconstructor._torch_dtype
+    if target_dtype in {torch.float16, torch.float32, torch.float64}:
+        values = real_array_if_zero_imaginary(values, name="runtime tensor input")
     return torch.as_tensor(
         values,
         device=reconstructor.device,
-        dtype=reconstructor._torch_dtype,
+        dtype=target_dtype,
     )
 
 

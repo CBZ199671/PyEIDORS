@@ -74,7 +74,7 @@ def run_official_fixture_gate(
         )
         _write_gate_outputs(out_dir, payload)
         if strict:
-            raise SystemExit(2)
+            raise SystemExit(2) from exc
         return payload
 
     n_measurements = _fixture_measurement_count(fixture_validation)

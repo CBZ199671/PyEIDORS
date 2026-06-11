@@ -25,6 +25,7 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import matplotlib.tri as mtri
+import h5py
 import numpy as np
 from matplotlib import font_manager
 
@@ -922,6 +923,7 @@ def main() -> int:
     metrics_path = output_dir / "metrics.csv"
     write_metrics_csv(metrics_path, rows)
     verdict = classify_failure_angle(rows)
+    arrays_path = output_dir / "phase_sweep_arrays.h5"
     summary = {
         "config": json_ready(asdict(cfg)),
         "forward": {
@@ -941,27 +943,30 @@ def main() -> int:
             "applied_voltage_phase_offsets": str(
                 output_dir / "applied_voltage_phase_offsets.png"
             ),
-            "arrays_npz": str(output_dir / "phase_sweep_arrays.npz"),
+            "arrays_h5": str(arrays_path),
         },
     }
     (output_dir / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    np.savez_compressed(
-        output_dir / "phase_sweep_arrays.npz",
-        angles_deg=np.asarray(cfg.angles_deg, dtype=np.float64),
-        truth_sigma=truth_sigma,
-        baseline_sigma=baseline_sigma,
-        shifted_sigma=np.stack(shifted_sigmas, axis=0),
-        reference_voltage=reference_voltage,
-        target_voltage=target_voltage,
-        shifted_voltage=np.stack(shifted_voltages, axis=0),
-        truth_node_coords=truth_coords,
-        truth_cell_connectivity=truth_cells,
-        recon_node_coords=recon_coords,
-        recon_cell_connectivity=recon_cells,
-    )
+    with h5py.File(arrays_path, "w") as handle:
+        for name, values in {
+            "angles_deg": np.asarray(cfg.angles_deg, dtype=np.float64),
+            "truth_sigma": truth_sigma,
+            "baseline_sigma": baseline_sigma,
+            "shifted_sigma": np.stack(shifted_sigmas, axis=0),
+            "reference_voltage": reference_voltage,
+            "target_voltage": target_voltage,
+            "shifted_voltage": np.stack(shifted_voltages, axis=0),
+            "truth_node_coords": truth_coords,
+            "truth_cell_connectivity": truth_cells,
+            "recon_node_coords": recon_coords,
+            "recon_cell_connectivity": recon_cells,
+        }.items():
+            array = np.asarray(values)
+            kwargs = {"compression": "gzip"} if array.ndim else {}
+            handle.create_dataset(name, data=array, **kwargs)
     print(json.dumps(summary["result"], ensure_ascii=False, indent=2), flush=True)
     print(f"Metrics: {metrics_path}", flush=True)
     return 0

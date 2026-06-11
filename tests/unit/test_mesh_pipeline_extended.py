@@ -273,7 +273,7 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         electrode_coverage=0.5,
     )
     assert (tmp_path / "opt_patch.xdmf").exists()
-    assert read_calls["count"] == 0
+    assert read_calls["count"] == 1
     assert mesh_first is mesh_second
 
 

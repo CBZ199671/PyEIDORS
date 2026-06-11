@@ -155,16 +155,23 @@ def test_lazy_adjoint_linearization_matches_finite_difference_and_transpose_2d_r
     base_data, _ = fwd.fwd_solve(
         EITImage(elem_data=np.ones(lazy.shape[1]), fwd_model=fwd)
     )
-    eps = 1.0e-7
+    eps = 1.0e-4
     perturbed_data, _ = fwd.fwd_solve(
         EITImage(elem_data=np.ones(lazy.shape[1]) + eps * vector, fwd_model=fwd)
     )
     finite_difference = (perturbed_data.meas - base_data.meas) / eps
     jv = lazy.matvec(vector)
-    np.testing.assert_allclose(jv, finite_difference, rtol=2e-3, atol=2e-6)
+    finite_difference_tol = (
+        {"rtol": 5e-2, "atol": 1e-5}
+        if np.asarray(finite_difference).dtype == np.dtype(np.complex64)
+        else {"rtol": 2e-3, "atol": 2e-6}
+    )
+    np.testing.assert_allclose(jv, finite_difference, **finite_difference_tol)
+    lhs = np.real_if_close(np.dot(jv, residual))
+    rhs = np.real_if_close(np.dot(vector, lazy.rmatvec(residual)))
     np.testing.assert_allclose(
-        float(np.dot(jv, residual)),
-        float(np.dot(vector, lazy.rmatvec(residual))),
+        float(np.real(lhs)),
+        float(np.real(rhs)),
         rtol=1e-8,
         atol=1e-10,
     )

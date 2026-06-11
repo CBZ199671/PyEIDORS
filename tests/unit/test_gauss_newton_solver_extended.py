@@ -63,7 +63,7 @@ class _LinearForwardModel:
         if self._seq is not None and self._call_count <= len(self._seq):
             meas = self._seq[self._call_count - 1]
         else:
-            sigma = np.asarray(image.elem_data, dtype=float).ravel()
+            sigma = np.real_if_close(np.asarray(image.elem_data)).astype(float).ravel()
             meas = np.dot(self._jacobian, sigma) + self._bias
         return SimpleNamespace(meas=np.asarray(meas, dtype=float)), None
 
@@ -204,9 +204,15 @@ def test_reconstruct_difference_modes_project_residual_and_jacobian(
             jacobian_method="efficient",
         )
         sigma_est = out.conductivity.x.array.copy()
-        assert np.allclose(sigma_est, sigma_true, atol=1e-10)
+        sigma_dtype = np.asarray(sigma_est).dtype
+        value_atol = (
+            1e-6
+            if sigma_dtype in {np.dtype(np.float32), np.dtype(np.complex64)}
+            else 1e-10
+        )
+        assert np.allclose(sigma_est, sigma_true, atol=value_atol)
         assert out.simulated_measurement is not None
-        assert np.allclose(out.simulated_measurement, measured.meas, atol=1e-10)
+        assert np.allclose(out.simulated_measurement, measured.meas, atol=value_atol)
 
 
 def test_measurement_weight_strategies_and_baseline_storage(eit_system, monkeypatch):

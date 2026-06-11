@@ -851,6 +851,7 @@ class EITForwardModel:
                 warnings.warn(
                     f"Electrode boundary tag {tag} has zero measure, check mesh markers",
                     RuntimeWarning,
+                    stacklevel=2,
                 )
         return measures
 

@@ -18,6 +18,7 @@ import matplotlib
 matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
+import h5py
 import numpy as np
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -852,6 +853,7 @@ def run_sweep() -> dict[str, Any]:
             "tolerance_fractions": cfg.tolerance_fractions,
         },
     }
+    arrays_path = output_dir / "noser_rm_amplitude_phase_channel_arrays.h5"
     outputs = {
         "phase_dir": str(phase_dir),
         "amplitude_dir": str(amplitude_dir),
@@ -865,7 +867,7 @@ def run_sweep() -> dict[str, Any]:
         "applied_voltage_perturbation_size": str(
             output_dir / "applied_voltage_perturbation_size.png"
         ),
-        "arrays_npz": str(output_dir / "noser_rm_amplitude_phase_channel_arrays.npz"),
+        "arrays_h5": str(arrays_path),
     }
     summary = {
         "config": json_ready(asdict(cfg)),
@@ -910,23 +912,26 @@ def run_sweep() -> dict[str, Any]:
         json.dumps(json_ready(summary), ensure_ascii=False, indent=2),
         encoding="utf-8",
     )
-    np.savez_compressed(
-        output_dir / "noser_rm_amplitude_phase_channel_arrays.npz",
-        phase_angles_deg=np.asarray(cfg.angles_deg, dtype=np.float64),
-        amplitude_factors=np.asarray(cfg.amplitude_factors, dtype=np.float64),
-        phase_sigma=np.stack(phase_sigmas, axis=0),
-        amplitude_sigma=np.stack(amplitude_sigmas, axis=0),
-        truth_sigma=truth_sigma,
-        baseline_sigma=baseline_sigma,
-        truth_mask=truth_mask,
-        node_coords=coords,
-        cell_connectivity=cells,
-        cell_areas=areas,
-        reference_voltage=reference_voltage,
-        target_voltage=target_voltage,
-        phase_voltage=np.stack(phase_voltages, axis=0),
-        amplitude_voltage=np.stack(amplitude_voltages, axis=0),
-    )
+    with h5py.File(arrays_path, "w") as handle:
+        for name, values in {
+            "phase_angles_deg": np.asarray(cfg.angles_deg, dtype=np.float64),
+            "amplitude_factors": np.asarray(cfg.amplitude_factors, dtype=np.float64),
+            "phase_sigma": np.stack(phase_sigmas, axis=0),
+            "amplitude_sigma": np.stack(amplitude_sigmas, axis=0),
+            "truth_sigma": truth_sigma,
+            "baseline_sigma": baseline_sigma,
+            "truth_mask": truth_mask,
+            "node_coords": coords,
+            "cell_connectivity": cells,
+            "cell_areas": areas,
+            "reference_voltage": reference_voltage,
+            "target_voltage": target_voltage,
+            "phase_voltage": np.stack(phase_voltages, axis=0),
+            "amplitude_voltage": np.stack(amplitude_voltages, axis=0),
+        }.items():
+            array = np.asarray(values)
+            kwargs = {"compression": "gzip"} if array.ndim else {}
+            handle.create_dataset(name, data=array, **kwargs)
     print(json.dumps(json_ready(outputs), ensure_ascii=False, indent=2), flush=True)
     return summary
 

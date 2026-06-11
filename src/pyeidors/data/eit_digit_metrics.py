@@ -13,7 +13,11 @@ from typing import Callable, Iterable
 
 import numpy as np
 
-from pyeidors.utils.numeric_ops import add_scaled_diagonal_in_place, all_finite_values
+from pyeidors.utils.numeric_ops import (
+    add_scaled_diagonal_in_place,
+    all_finite_values,
+    real_array_if_zero_imaginary,
+)
 
 from .adc_quantization import (
     ADCInjectionConfig,
@@ -72,7 +76,7 @@ class EITLinearizedModel:
 
 
 def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
+    arr = real_array_if_zero_imaginary(values, name=name)
     if arr.ndim != 1:
         raise ValueError(f"{name} must be a 1D vector")
     if arr.size == 0:
@@ -85,7 +89,7 @@ def _as_float_vector(values: Iterable[float] | np.ndarray, *, name: str) -> np.n
 def _as_float_matrix(
     values: Iterable[Iterable[float]] | np.ndarray, *, name: str
 ) -> np.ndarray:
-    arr = np.asarray(values, dtype=float)
+    arr = real_array_if_zero_imaginary(values, name=name)
     if arr.ndim != 2:
         raise ValueError(f"{name} must be a 2D matrix")
     if arr.shape[0] == 0 or arr.shape[1] == 0:
@@ -411,9 +415,9 @@ def build_pyeidors_fem_linearized_model(
             "PyEIDORS FEM measurement count mismatch: "
             f"expected {int(expected_measurements)}, got {actual_measurements}"
         )
-    sensitivity = np.asarray(
+    sensitivity = real_array_if_zero_imaginary(
         EidorsJacobianAdapter(fwd_model).calculate(sigma_ref_fun),
-        dtype=float,
+        name="fem sensitivity",
     )
     if sensitivity.shape != (voltage_reference.size, sigma_reference.size):
         raise RuntimeError(

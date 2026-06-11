@@ -3746,7 +3746,8 @@ def _bounded_minimize(
     f1 = float(objective(x1))
     f2 = float(objective(x2))
     iterations = 0
-    for iterations in range(1, int(maxiter) + 1):
+    for iteration in range(1, int(maxiter) + 1):
+        iterations = iteration
         if abs(hi - lo) <= tolerance:
             break
         if f1 > f2:
@@ -4244,12 +4245,12 @@ def _rec_model_array(model: Any | None) -> np.ndarray | None:
         return None
     try:
         return _as_xyz_points(_cell_centers(model), name="rec_model")
-    except (TypeError, ValueError, FloatingPointError):
+    except (TypeError, ValueError, FloatingPointError) as exc:
         array = np.asarray(model, dtype=np.float64)
         if array.size == 0:
             return None
         if not _all_finite_values(array):
-            raise FloatingPointError("rec_model contains non-finite values.")
+            raise FloatingPointError("rec_model contains non-finite values.") from exc
         if array.ndim == 2 and array.shape[1] >= 2:
             return _as_xyz_points(array, name="rec_model")
         return np.ascontiguousarray(array, dtype=np.float64)

@@ -7,6 +7,7 @@ import pytest
 import ufl
 from dolfinx import fem
 from mpi4py import MPI
+from petsc4py import PETSc
 
 from pyeidors.geometry.mesh3d_generator import (
     GMSH_AVAILABLE,
@@ -40,7 +41,7 @@ def test_create_cylinder_3d_mesh_tags_and_measures(tmp_path):
         assert f"electrode_{idx}" in association
 
     ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-    one = fem.Constant(mesh.mesh, 1.0)
+    one = fem.Constant(mesh.mesh, PETSc.ScalarType(1.0))
     measures = []
     for idx in range(1, 17):
         tag = association[f"electrode_{idx}"]
@@ -48,7 +49,7 @@ def test_create_cylinder_3d_mesh_tags_and_measures(tmp_path):
             fem.assemble_scalar(fem.form(one * ds(tag))),
             op=MPI.SUM,
         )
-        measures.append(float(value))
+        measures.append(float(np.real_if_close(value)))
 
     arr = np.asarray(measures, dtype=float)
     assert np.all(np.isfinite(arr))
@@ -87,7 +88,7 @@ def test_geomv2_tetra_electrode_measure_tracks_height_ratio(tmp_path):
 
     def _mean_electrode_measure(mesh):
         ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-        one = fem.Constant(mesh.mesh, 1.0)
+        one = fem.Constant(mesh.mesh, PETSc.ScalarType(1.0))
         values = []
         for idx in range(1, 17):
             tag = mesh.association_table[f"electrode_{idx}"]
@@ -95,7 +96,7 @@ def test_geomv2_tetra_electrode_measure_tracks_height_ratio(tmp_path):
                 fem.assemble_scalar(fem.form(one * ds(tag))),
                 op=MPI.SUM,
             )
-            values.append(float(value))
+            values.append(float(np.real_if_close(value)))
         return float(np.mean(values))
 
     assert _mean_electrode_measure(mesh_large) > _mean_electrode_measure(mesh_small)
@@ -118,7 +119,7 @@ def test_geomv2_tetra_zigzag_layout_resolves_all_electrodes(tmp_path):
     )
 
     ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-    one = fem.Constant(mesh.mesh, 1.0)
+    one = fem.Constant(mesh.mesh, PETSc.ScalarType(1.0))
     measures = []
     for idx in range(1, 17):
         tag = mesh.association_table[f"electrode_{idx}"]
@@ -126,7 +127,7 @@ def test_geomv2_tetra_zigzag_layout_resolves_all_electrodes(tmp_path):
             fem.assemble_scalar(fem.form(one * ds(tag))),
             op=MPI.SUM,
         )
-        measures.append(float(value))
+        measures.append(float(np.real_if_close(value)))
 
     arr = np.asarray(measures, dtype=float)
     assert np.all(np.isfinite(arr))

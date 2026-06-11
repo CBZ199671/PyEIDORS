@@ -91,7 +91,7 @@ def test_v374_volume_fraction_streaming_preserves_float32_coords(monkeypatch):
     def _capture_empty(shape, dtype=float, *args, **kwargs):
         if tuple(shape) == (1, 3):
             seen_sample_dtypes.append(np.dtype(dtype))
-        return original_empty(shape, dtype=dtype, *args, **kwargs)
+        return original_empty(shape, *args, dtype=dtype, **kwargs)
 
     def _inside_fn(samples):
         assert np.asarray(samples).dtype == np.dtype(np.float32)

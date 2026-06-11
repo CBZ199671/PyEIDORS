@@ -57,6 +57,23 @@ def has_nonzero_imaginary(
     return False
 
 
+def real_array_if_zero_imaginary(
+    values: Any,
+    *,
+    dtype=np.float64,
+    name: str = "values",
+    tol: float | None = None,
+) -> np.ndarray:
+    """Return a real ndarray, allowing complex inputs only when imag == 0."""
+
+    array = np.asarray(values)
+    if np.iscomplexobj(array):
+        if has_nonzero_imaginary(array, tol=tol):
+            raise TypeError(f"{name} contains nonzero imaginary components.")
+        array = np.real(array)
+    return np.asarray(array, dtype=dtype)
+
+
 def any_equal_values(
     values: Any,
     target: Any,

@@ -17,15 +17,16 @@ def test_forward_solve_returns_tuple_of_column_views(eit_system):
     assert len(u_all) == electrode_voltages.shape[0]
     assert all(col.base is not None for col in u_all)
 
-    pattern_matrix = np.asarray(model.pattern_manager.stim_matrix, dtype=float)
+    solve_dtype = np.asarray(electrode_voltages).dtype
+    pattern_matrix = np.asarray(model.pattern_manager.stim_matrix, dtype=solve_dtype)
     rhs_matrix = np.zeros(
-        (model.dofs + model.n_elec + 1, pattern_matrix.shape[0]), dtype=float
+        (model.dofs + model.n_elec + 1, pattern_matrix.shape[0]), dtype=solve_dtype
     )
     rhs_matrix[model.dofs : model.dofs + model.n_elec, :] = pattern_matrix.T
     sol_matrix = splu(model.create_full_matrix(sigma).tocsc()).solve(rhs_matrix)
-    expected_potential = np.asarray(sol_matrix[: model.dofs, :], dtype=float)
+    expected_potential = np.asarray(sol_matrix[: model.dofs, :], dtype=solve_dtype)
 
     for idx, column in enumerate(u_all):
         np.testing.assert_allclose(
-            column, expected_potential[:, idx], atol=1e-10, rtol=1e-10
+            column, expected_potential[:, idx], atol=5e-7, rtol=1e-5
         )

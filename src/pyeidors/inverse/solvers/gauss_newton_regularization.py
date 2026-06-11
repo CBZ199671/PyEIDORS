@@ -11,7 +11,7 @@ from scipy.sparse.linalg import LinearOperator
 
 from ..prior import RtRPrior
 from ..regularization.base_regularization import BaseRegularization
-from ...utils.numeric_ops import all_finite_values
+from ...utils.numeric_ops import all_finite_values, real_array_if_zero_imaginary
 
 
 def _is_rtr_prior_contract(value: Any) -> bool:
@@ -70,14 +70,20 @@ def ensure_regularization_ready(reconstructor) -> None:
         reconstructor.R_matrix = matrix
         reconstructor.R_linear_operator = matrix.as_linear_operator()
         probe = np.ones(reconstructor.n_elements, dtype=np.float64)
-        check = np.asarray(matrix.apply(probe), dtype=np.float64)
+        check = real_array_if_zero_imaginary(
+            matrix.apply(probe), name="Regularization RtRPrior apply"
+        )
         if not all_finite_values(check):
             raise FloatingPointError(
                 "Regularization RtRPrior produces non-finite values."
             )
         diag = matrix.diag()
         reconstructor.R_diag = (
-            None if diag is None else np.asarray(diag, dtype=np.float64).reshape(-1)
+            None
+            if diag is None
+            else real_array_if_zero_imaginary(
+                diag, name="Regularization RtRPrior diag"
+            ).reshape(-1)
         )
         if reconstructor.R_diag is not None and not all_finite_values(
             reconstructor.R_diag
@@ -93,7 +99,9 @@ def ensure_regularization_ready(reconstructor) -> None:
                     "matrix-free RtRPrior is not supported."
                 )
             else:
-                dense = np.asarray(dense_like, dtype=np.float64)
+                dense = real_array_if_zero_imaginary(
+                    dense_like, name="Regularization RtRPrior dense view"
+                )
             if not all_finite_values(dense):
                 raise FloatingPointError(
                     "Regularization RtRPrior dense view contains non-finite values."
@@ -136,12 +144,14 @@ def ensure_regularization_ready(reconstructor) -> None:
             diag = matrix.diagonal()
         else:
             diag = matrix.tocsr().diagonal()
-        reconstructor.R_diag = np.asarray(diag, dtype=np.float64)
+        reconstructor.R_diag = real_array_if_zero_imaginary(
+            diag, name="Regularization sparse matrix diagonal"
+        )
         if needs_dense_tensor:
-            dense = matrix.toarray()
-            reconstructor.R_torch = torch.from_numpy(
-                np.asarray(dense, dtype=np.float64)
-            ).to(
+            dense = real_array_if_zero_imaginary(
+                matrix.toarray(), name="Regularization sparse matrix dense view"
+            )
+            reconstructor.R_torch = torch.from_numpy(dense).to(
                 reconstructor.device,
                 dtype=reconstructor._torch_dtype,
             )
@@ -151,7 +161,9 @@ def ensure_regularization_ready(reconstructor) -> None:
 
     if isinstance(matrix, LinearOperator):
         probe = np.ones(reconstructor.n_elements, dtype=np.float64)
-        check = np.asarray(matrix.matvec(probe), dtype=np.float64)
+        check = real_array_if_zero_imaginary(
+            matrix.matvec(probe), name="Regularization LinearOperator"
+        )
         if not all_finite_values(check):
             raise FloatingPointError(
                 "Regularization LinearOperator produces non-finite values."
@@ -165,14 +177,16 @@ def ensure_regularization_ready(reconstructor) -> None:
             )
         return
 
-    dense = np.asarray(matrix, dtype=np.float64)
+    dense = real_array_if_zero_imaginary(matrix, name="Regularization matrix")
     if not all_finite_values(dense):
         min_val, max_val = _finite_min_max(dense)
         raise FloatingPointError(
             "Regularization matrix contains non-finite values: "
             f"finite_min={min_val:.6e}, finite_max={max_val:.6e}."
         )
-    reconstructor.R_diag = np.asarray(dense.diagonal(), dtype=np.float64)
+    reconstructor.R_diag = real_array_if_zero_imaginary(
+        dense.diagonal(), name="Regularization matrix diagonal"
+    )
     if needs_dense_tensor:
         reconstructor.R_torch = torch.from_numpy(dense).to(
             reconstructor.device,

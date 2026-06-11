@@ -8,6 +8,7 @@ import torch
 from ...data.difference import project_measurement_vector
 from ...data.structures import EITImage
 from ...femx import function_get_array
+from ...utils.numeric_ops import real_array_if_zero_imaginary
 
 
 def _max_machine_epsilon_alpha(
@@ -153,7 +154,12 @@ def line_search_torch(
             mlist[i] = np.inf
             continue
 
-        data_test_torch = torch.from_numpy(data_test.meas).to(
+        data_test_values = data_test.meas
+        if reconstructor._torch_dtype in {torch.float16, torch.float32, torch.float64}:
+            data_test_values = real_array_if_zero_imaginary(
+                data_test_values, name="line-search simulated measurements"
+            )
+        data_test_torch = torch.from_numpy(np.asarray(data_test_values)).to(
             reconstructor.device,
             dtype=reconstructor._torch_dtype,
         )
@@ -172,6 +178,10 @@ def line_search_torch(
                 reconstructor.difference_orientation,
             ),
         )
+        if reconstructor._torch_dtype in {torch.float16, torch.float32, torch.float64}:
+            data_test_projected = real_array_if_zero_imaginary(
+                data_test_projected, name="line-search projected measurements"
+            )
         data_test_projected_torch = torch.from_numpy(data_test_projected).to(
             reconstructor.device,
             dtype=reconstructor._torch_dtype,
@@ -191,7 +201,16 @@ def line_search_torch(
             and prior_torch is not None
             and lambda_eff is not None
         ):
-            sigma_test_torch = torch.from_numpy(sigma_test_np).to(
+            sigma_test_values = sigma_test_np
+            if reconstructor._torch_dtype in {
+                torch.float16,
+                torch.float32,
+                torch.float64,
+            }:
+                sigma_test_values = real_array_if_zero_imaginary(
+                    sigma_test_values, name="line-search trial conductivity"
+                )
+            sigma_test_torch = torch.from_numpy(np.asarray(sigma_test_values)).to(
                 reconstructor.device,
                 dtype=reconstructor._torch_dtype,
             )

@@ -17,6 +17,7 @@ from ..femx import (
     mesh_num_cells,
     mesh_num_vertices,
 )
+from ..utils.numeric_ops import real_array_if_zero_imaginary
 
 
 def raw_mesh(mesh):
@@ -48,6 +49,9 @@ def num_vertices(mesh) -> int:
 
 
 def interpolate_cell_to_node(mesh, cell_values):
+    cell_values = real_array_if_zero_imaginary(
+        cell_values, name="cell conductivity values"
+    )
     node_values = np.zeros(num_vertices(mesh))
     node_counts = np.zeros(num_vertices(mesh))
     for cell_idx, cell in enumerate(cells(mesh)):

@@ -143,7 +143,7 @@ def refine_tv_pdhg(
     tv_history: list[float] = [total_variation_norm(x, D)]
     stopped_reason = "max_iterations"
 
-    for iteration in range(1, max_it + 1):
+    for _ in range(1, max_it + 1):
         Dxbar = np.asarray(D @ x_bar, dtype=y.dtype).reshape(-1)
         dual += sigma * Dxbar
         if weight == 0.0:
