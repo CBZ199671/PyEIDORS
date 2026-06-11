@@ -74,6 +74,35 @@ def _petsc_vec_to_numpy(vec) -> np.ndarray:
     raise TypeError("Unsupported PETSc Vec wrapper in matrix-free CG helper.")
 
 
+def _linear_operator_input_for_petsc(op: LinearOperator, vec) -> np.ndarray:
+    """Adapt PETSc complex work vectors to the SciPy operator's declared dtype."""
+    values = _petsc_vec_to_numpy(vec)
+    op_dtype = np.dtype(getattr(op, "dtype", values.dtype) or values.dtype)
+    if np.issubdtype(op_dtype, np.floating) and np.iscomplexobj(values):
+        imag = np.imag(values)
+        if np.any(np.abs(imag) > 1.0e-12):
+            raise TypeError(
+                "real-valued matrix-free PETSc operator received nonzero "
+                "imaginary work-vector components"
+            )
+        return np.asarray(np.real(values), dtype=op_dtype)
+    return np.asarray(values, dtype=op_dtype)
+
+
+def _as_dtype_preserving_zero_imag(values, dtype) -> np.ndarray:
+    target_dtype = np.dtype(dtype)
+    array = np.asarray(values)
+    if np.issubdtype(target_dtype, np.floating) and np.iscomplexobj(array):
+        imag = np.imag(array)
+        if np.any(np.abs(imag) > 1.0e-12):
+            raise TypeError(
+                "cannot cast complex matrix-free PETSc result with nonzero "
+                "imaginary components to a real dtype"
+            )
+        return np.asarray(np.real(array), dtype=target_dtype)
+    return np.asarray(array, dtype=target_dtype)
+
+
 def _dense_identity_matrix(n: int) -> np.ndarray:
     size = int(n)
     dense = np.zeros((size, size), dtype=np.float64)
@@ -100,7 +129,9 @@ class _PETScMatrixFreeHessianContext:
         self._op = op
 
     def mult(self, _mat, x, y) -> None:
-        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)))
+        result = np.asarray(
+            self._op.matvec(_linear_operator_input_for_petsc(self._op, x))
+        )
         y.getArray(readonly=False)[:] = result
 
 
@@ -113,7 +144,9 @@ class _PETScMatrixFreePCContext:
         self._op = op
 
     def apply(self, _pc, x, y) -> None:
-        result = np.asarray(self._op.matvec(_petsc_vec_to_numpy(x)))
+        result = np.asarray(
+            self._op.matvec(_linear_operator_input_for_petsc(self._op, x))
+        )
         y.getArray(readonly=False)[:] = result
 
 
@@ -1744,7 +1777,9 @@ def _solve_linear_system_fast(
                     reason = petsc_fallback or "pcg_not_converged"
                     return None, path, choice, reason
                 return (
-                    np.asarray(delta_arr, dtype=_complex_preserving_dtype(rhs.dtype)),
+                    _as_dtype_preserving_zero_imag(
+                        delta_arr, _complex_preserving_dtype(rhs.dtype)
+                    ),
                     path,
                     choice,
                     fallback,

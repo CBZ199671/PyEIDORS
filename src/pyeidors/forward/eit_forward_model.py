@@ -2809,7 +2809,7 @@ class EITForwardModel:
                 rhs_count=int(n_patterns),
             ),
         )
-        return sol_matrix
+        return self._recenter_cuda_gauge_solution(sol_matrix)
 
     def _solve_full_rhs_with_petsc(
         self,

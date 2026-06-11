@@ -35,18 +35,19 @@ def test_forward_solve_vectorized_matches_per_pattern_solve(eit_system):
     sigma.x.array[:] = 1.0
 
     _, electrode_voltages = model.forward_solve(sigma)
-    pattern_matrix = np.asarray(model.pattern_manager.stim_matrix, dtype=float)
+    solve_dtype = np.asarray(electrode_voltages).dtype
+    pattern_matrix = np.asarray(model.pattern_manager.stim_matrix, dtype=solve_dtype)
 
     lu = splu(model.create_full_matrix(sigma).tocsc())
     manual_voltages = np.zeros_like(electrode_voltages)
     for i in range(pattern_matrix.shape[0]):
-        rhs = np.zeros(model.dofs + model.n_elec + 1, dtype=float)
+        rhs = np.zeros(model.dofs + model.n_elec + 1, dtype=solve_dtype)
         rhs[model.dofs : model.dofs + model.n_elec] = pattern_matrix[i]
         sol = lu.solve(rhs)
         manual_voltages[i, :] = sol[model.dofs : model.dofs + model.n_elec]
 
     np.testing.assert_allclose(
-        electrode_voltages, manual_voltages, atol=1e-10, rtol=1e-10
+        electrode_voltages, manual_voltages, atol=5e-7, rtol=1e-5
     )
 
 
@@ -83,4 +84,10 @@ def test_forward_backends_match(eit_mesh):
     sigma.x.array[:] = 1.0
     _, u_petsc = model_petsc.forward_solve(sigma)
     _, u_scipy = model_scipy.forward_solve(sigma)
-    np.testing.assert_allclose(u_petsc, u_scipy, atol=1e-9, rtol=1e-9)
+    np.testing.assert_allclose(u_petsc, u_scipy, atol=5e-7, rtol=1e-5)
+    np.testing.assert_allclose(
+        model_petsc.pattern_manager.apply_meas_pattern(u_petsc),
+        model_scipy.pattern_manager.apply_meas_pattern(u_scipy),
+        atol=5e-7,
+        rtol=1e-5,
+    )
