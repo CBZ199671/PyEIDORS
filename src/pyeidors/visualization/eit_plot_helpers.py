@@ -11,6 +11,7 @@ from matplotlib.colors import LinearSegmentedColormap
 from matplotlib.ticker import FuncFormatter, ScalarFormatter
 from mpi4py import MPI
 
+from ..forward.complex_support import petsc_scalar_dtype
 from ..femx import (
     mesh_cell_vertices,
     mesh_coordinates,
@@ -18,6 +19,14 @@ from ..femx import (
     mesh_num_vertices,
 )
 from ..utils.numeric_ops import real_array_if_zero_imaginary
+
+
+def _fem_unit_constant(domain):
+    return fem.Constant(domain, np.asarray(1.0, dtype=petsc_scalar_dtype())[()])
+
+
+def _real_scalar(value: Any, *, name: str) -> float:
+    return float(real_array_if_zero_imaginary(value, name=name).reshape(()))
 
 
 def raw_mesh(mesh):
@@ -253,12 +262,13 @@ def overlay_electrode_labels(ax, mesh, label_outset: float = 0.08):
             tag_points[tag_int].append(coords[vertices][:, :2])
 
     ds = ufl.Measure("ds", domain=mesh_obj, subdomain_data=facet_tags)
-    one = fem.Constant(mesh_obj, 1.0)
+    one = _fem_unit_constant(mesh_obj)
     _lengths = {
-        tag: float(
+        tag: _real_scalar(
             mesh_obj.comm.allreduce(
                 fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
-            )
+            ),
+            name=f"electrode {tag} length",
         )
         for tag in tags
     }

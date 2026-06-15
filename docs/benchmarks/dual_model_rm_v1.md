@@ -30,7 +30,7 @@ benchmark 使用一个确定性的 synthetic linearized CEM-like Jacobian，用�
 ## 可复现实验命令
 
 ```bash
-nix develop -c uv run python scripts/benchmarks/benchmark_dual_model_rm_v1.py \
+nix develop .#complex64-cuda -c python scripts/benchmarks/benchmark_dual_model_rm_v1.py \
   --output-dir reports/runtime_benchmarks/dual_model_rm_v1_20260421 \
   --coarse-shape 6,6,4 \
   --fine-per-coarse 4 \
@@ -40,7 +40,7 @@ nix develop -c uv run python scripts/benchmarks/benchmark_dual_model_rm_v1.py \
 ```
 
 ```bash
-nix develop -c uv run python scripts/benchmarks/benchmark_dual_model_rm_v1.py \
+nix develop .#complex64-cuda -c python scripts/benchmarks/benchmark_dual_model_rm_v1.py \
   --output-dir reports/runtime_benchmarks/dual_model_rm_v1_20260421_batch8192 \
   --coarse-shape 6,6,4 \
   --fine-per-coarse 4 \

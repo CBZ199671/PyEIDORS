@@ -7,4 +7,4 @@ REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 cd "${REPO_ROOT}"
 
 exec nix --option warn-dirty false develop -c \
-  uv run python scripts/diagnostics/compare_3d_eidors_alignment.py "$@"
+  python scripts/diagnostics/compare_3d_eidors_alignment.py "$@"

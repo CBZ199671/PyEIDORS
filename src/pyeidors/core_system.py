@@ -832,6 +832,7 @@ class EITSystem(CoreSystemFacadeMixin):
             mesh_dim=mesh_dim,
             petsc_device=resolved_petsc_device,
             forward_backend=resolved_forward_backend,
+            mesh_family=getattr(self.mesh, "mesh_family", ""),
             capability=capability,
             prefer_amgx=True,
         )

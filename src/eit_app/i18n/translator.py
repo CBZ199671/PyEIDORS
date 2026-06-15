@@ -110,10 +110,6 @@ class Translator(QObject):
         """Current active language code (``"zh"`` or ``"en"``)."""
         return self._language
 
-    @property
-    def supported_languages(self) -> tuple[str, ...]:
-        return _SUPPORTED
-
     def init_from_settings(self) -> None:
         """Load the saved language preference from :class:`QSettings`.
 

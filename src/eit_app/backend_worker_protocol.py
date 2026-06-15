@@ -258,16 +258,6 @@ def read_forward_result(path: str | Path) -> ForwardSolverResult:
         )
 
 
-def frame_to_payload(frame: FrameData) -> dict[str, Any]:
-    return {
-        "real": _encode_json_value(frame.real),
-        "imag": _encode_json_value(frame.imag),
-        "timestamp": float(frame.timestamp),
-        "frame_index": int(frame.frame_index),
-        "metadata": _encode_json_value(frame.metadata),
-    }
-
-
 def frame_from_payload(payload: dict[str, Any]) -> FrameData:
     from eit_app.models.frame_model import FrameData
 

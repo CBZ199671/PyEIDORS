@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "project": "pyeidors",
+  "profile": {
+    "environment": "nix",
+    "entrypoint": "nix develop .#complex64-cuda",
+    "lock_check": "nix flake lock --no-update-lock-file",
+    "name": "complex64-cuda"
+  },
+  "platform": {
+    "id": "linux-x86_64",
+    "system": "linux",
+    "machine": "x86_64",
+    "runtime_context": {
+      "kind": "wsl2"
+    }
+  },
+  "python": {
+    "version": "3.13.8",
+    "implementation": "CPython"
+  },
+  "locks": {
+    "nixpkgs_rev": "b665e98e4cb439b95f8faee197c76c6578197e55",
+    "flake_nix_sha256": "742aff530fd4b99daf1b4e6a7dd84c15f42cf4a4ffa06a9fe19f3134af42ef67",
+    "flake_lock_sha256": "a9c2141abfb46e5987b3014ee87f62e19b9503e8d53e60c16872613d3a66eb3e",
+    "pyproject_sha256": "1b2a1aa6432f00e85cc6cb5abd9ca3392b45093a09f528c01a8595ee6e0a5997",
+    "uv_lock_sha256": "a3fcadccd26cf76053004cb2cb932b8bb17797ad28b7179eabedde67d227bb38"
+  },
+  "packages": {
+    "dolfinx": "0.10.0.post1",
+    "torch": "2.9.0",
+    "cuqi": "1.5.0",
+    "numpy": "2.3.3",
+    "scipy": "1.16.2",
+    "pyeidors": "2.0.0",
+    "pyqtgraph": "0.13.7",
+    "pyside6": "6.10.0"
+  },
+  "generated_at_utc": "2026-06-14T11:38:34.653288+00:00"
+}

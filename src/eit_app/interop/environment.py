@@ -157,14 +157,6 @@ def _run_command_capture(
     )
 
 
-def _ensure_list(value: Any) -> list[Any]:
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
 def _runtime_label(runtime_kind: str) -> str:
     labels = {
         "wsl-bridged": "WSL 桥接",

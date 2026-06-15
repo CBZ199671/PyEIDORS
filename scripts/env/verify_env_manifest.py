@@ -48,18 +48,13 @@ def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[
     )
     _cmp_field(diffs, "project", actual.get("project"), expected.get("project"))
 
-    _cmp_field(
-        diffs,
-        "profile.extras",
-        actual.get("profile", {}).get("extras"),
-        expected.get("profile", {}).get("extras"),
-    )
-    _cmp_field(
-        diffs,
-        "profile.sync_flags",
-        actual.get("profile", {}).get("sync_flags"),
-        expected.get("profile", {}).get("sync_flags"),
-    )
+    for profile_key in ("environment", "entrypoint"):
+        _cmp_field(
+            diffs,
+            f"profile.{profile_key}",
+            actual.get("profile", {}).get(profile_key),
+            expected.get("profile", {}).get(profile_key),
+        )
     _cmp_field(
         diffs,
         "profile.lock_check",
@@ -104,8 +99,8 @@ def compare_manifests(actual: Dict[str, Any], expected: Dict[str, Any]) -> List[
 
     for lock_key in (
         "nixpkgs_rev",
+        "flake_nix_sha256",
         "flake_lock_sha256",
-        "uv_lock_sha256",
         "pyproject_sha256",
     ):
         _cmp_field(
@@ -174,7 +169,9 @@ def main() -> None:
         for item in diffs:
             print(f"  - {item}", file=sys.stderr)
         print(
-            "[env-verify] repair command: scripts/env/sync_locked_env.sh --repair",
+            "[env-verify] regenerate manifest: "
+            "python scripts/env/export_env_manifest.py --output "
+            f"{manifest_path}",
             file=sys.stderr,
         )
         raise SystemExit(1)

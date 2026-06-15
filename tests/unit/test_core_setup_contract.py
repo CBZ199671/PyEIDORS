@@ -563,6 +563,7 @@ def test_runtime_policy_downgrades_missing_amgx_to_spd_gamg(monkeypatch):
         pattern_config=PatternConfig(n_elec=16),
         contact_impedance=np.full(16, 1e-5, dtype=float),
         acceleration_profile="gpu3d",
+        petsc_device="cuda",
         linear_backend_config={"solver_preset": "cuda_amgx"},
     )
     system.mesh = SimpleNamespace(
@@ -576,16 +577,15 @@ def test_runtime_policy_downgrades_missing_amgx_to_spd_gamg(monkeypatch):
     policy = system._resolve_runtime_policy()
 
     assert policy["forward_solver_preset_requested"] == "cuda_amgx"
-    assert policy["forward_solver_preset_effective"] == "spd_gamg"
+    assert policy["forward_solver_preset_effective"] == "3d_gamg"
     assert (
         policy["forward_solver_policy_reason"]
-        == "amgx_unavailable_downgraded_to_spd_gamg"
+        == "tetra_amgx_unavailable_downgraded_to_3d_gamg"
     )
     assert policy["petsc_amgx_available"] is False
     assert policy["forward_mat_solve_effective_policy"] == "off"
     assert (
-        policy["forward_mat_solve_policy_reason"]
-        == "cuda_spd_gamg_matsolve_disabled_b6"
+        policy["forward_mat_solve_policy_reason"] == "cuda_gamg_matsolve_disabled_b658"
     )
 
 
@@ -603,6 +603,7 @@ def test_runtime_policy_blacklists_hypre_cuda_to_spd_gamg(monkeypatch):
         pattern_config=PatternConfig(n_elec=16),
         contact_impedance=np.full(16, 1e-5, dtype=float),
         acceleration_profile="gpu3d",
+        petsc_device="cuda",
         linear_backend_config={"solver_preset": "spd_hypre"},
     )
     system.mesh = SimpleNamespace(
@@ -615,8 +616,11 @@ def test_runtime_policy_blacklists_hypre_cuda_to_spd_gamg(monkeypatch):
 
     policy = system._resolve_runtime_policy()
 
-    assert policy["forward_solver_preset_effective"] == "spd_gamg"
-    assert policy["forward_solver_policy_reason"] == "hypre_cuda_blacklisted_sigsegv_b4"
+    assert policy["forward_solver_preset_effective"] == "3d_gamg"
+    assert (
+        policy["forward_solver_policy_reason"]
+        == "tetra_hypre_cuda_blacklisted_to_3d_gamg"
+    )
     assert policy["petsc_hypre_cuda_blacklisted"] is True
     assert policy["forward_mat_solve_effective_policy"] == "off"
 
@@ -635,6 +639,7 @@ def test_runtime_policy_preserves_explicit_cuda_matsolve_on(monkeypatch):
         pattern_config=PatternConfig(n_elec=16),
         contact_impedance=np.full(16, 1e-5, dtype=float),
         acceleration_profile="gpu3d",
+        petsc_device="cuda",
         linear_backend_config={
             "solver_preset": "spd_gamg",
             "mat_solve_mode": "on",

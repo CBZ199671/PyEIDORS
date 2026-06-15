@@ -8,7 +8,9 @@ from mpi4py import MPI
 
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import build_eit_mesh
+from pyeidors.forward.complex_support import petsc_scalar_dtype
 from pyeidors.forward.eit_forward_model import EITForwardModel
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
 
 def _build_square_eit_mesh(side_length: float):
@@ -27,12 +29,13 @@ def _build_square_eit_mesh(side_length: float):
     for i, facet in enumerate(boundary_facets):
         centroids[i, :] = coords[f2v.links(int(facet))].mean(axis=0)
 
-    x = centroids[:, 0]
-    y = centroids[:, 1]
-    eps = 1e-10 * max(side_length, 1.0)
+    scale = float(side_length)
+    x = np.round(centroids[:, 0] / scale, decimals=7)
+    y = np.round(centroids[:, 1] / scale, decimals=7)
+    eps = 1e-10
     t = np.zeros_like(x)
     xmin, ymin = 0.0, 0.0
-    xmax, ymax = float(side_length), float(side_length)
+    xmax, ymax = 1.0, 1.0
     left = np.isclose(x, xmin, atol=eps)
     top = (~left) & np.isclose(y, ymax, atol=eps)
     right = (~left) & (~top) & np.isclose(x, xmax, atol=eps)
@@ -42,9 +45,8 @@ def _build_square_eit_mesh(side_length: float):
     t[right] = 2.0 + (ymax - y[right]) / (ymax - ymin)
     t[bottom] = 3.0 + (xmax - x[bottom]) / (xmax - xmin)
     seg = 4.0 / 16
-    tags = (np.floor(np.clip(t, 0.0, 4.0 - 1e-12) / seg).astype(np.int32) + 2).astype(
-        np.int32
-    )
+    bin_t = np.clip(t + 1e-12, 0.0, 4.0 - 1e-12)
+    tags = (np.floor(bin_t / seg).astype(np.int32) + 2).astype(np.int32)
     order = np.argsort(boundary_facets)
     facet_tags = dmesh.meshtags(mesh, fdim, boundary_facets[order], tags[order])
     association = {f"electrode_{i + 1}": i + 2 for i in range(16)}
@@ -75,7 +77,7 @@ def _solve_voltage(side_length: float, geometry_scale_to_m: float) -> np.ndarray
     )
     sigma = np.ones(n_elem, dtype=float)
     data, _ = model.fwd_solve(EITImage(elem_data=sigma, fwd_model=model))
-    return np.asarray(data.meas, dtype=float)
+    return real_array_if_zero_imaginary(data.meas, name="forward measurements")
 
 
 def test_same_object_mm_cm_m_invariance():
@@ -92,6 +94,11 @@ def test_same_object_mm_cm_m_invariance():
 
     rel_l2_cm = float(np.linalg.norm(v_cm - v_m) / np.linalg.norm(v_m))
     rel_l2_mm = float(np.linalg.norm(v_mm - v_m) / np.linalg.norm(v_m))
+    rel_l2_tol = (
+        1e-4
+        if petsc_scalar_dtype() in {np.dtype(np.float32), np.dtype(np.complex64)}
+        else 1e-6
+    )
 
     assert 0.99 <= ratio_cm <= 1.01, (
         f"cm/m amplitude ratio out of range: {ratio_cm:.12f}; "
@@ -101,5 +108,9 @@ def test_same_object_mm_cm_m_invariance():
         f"mm/m amplitude ratio out of range: {ratio_mm:.12f}; "
         f"amp_m={amp_m:.6e}, amp_mm={amp_mm:.6e}"
     )
-    assert rel_l2_cm <= 1e-6, f"cm/m vector relative L2 too large: {rel_l2_cm:.3e}"
-    assert rel_l2_mm <= 1e-6, f"mm/m vector relative L2 too large: {rel_l2_mm:.3e}"
+    assert rel_l2_cm <= rel_l2_tol, (
+        f"cm/m vector relative L2 too large: {rel_l2_cm:.3e}"
+    )
+    assert rel_l2_mm <= rel_l2_tol, (
+        f"mm/m vector relative L2 too large: {rel_l2_mm:.3e}"
+    )

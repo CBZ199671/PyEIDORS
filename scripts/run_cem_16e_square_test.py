@@ -34,7 +34,9 @@ from mpi4py import MPI
 from pyeidors import EITSystem
 from pyeidors.data.structures import PatternConfig
 from pyeidors.femx import build_eit_mesh, function_get_array
+from pyeidors.forward.complex_support import petsc_scalar_dtype
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 from scripts.common.acceleration_profiles import add_acceleration_profile_argument
 
 try:  # pragma: no cover - thread cap is a runtime stability measure
@@ -108,6 +110,14 @@ def create_square_eit_mesh(n_elec: int = 16, nx: int = 64, ny: int = 64):
     return eit_mesh
 
 
+def _fem_unit_constant(domain):
+    return fem.Constant(domain, np.asarray(1.0, dtype=petsc_scalar_dtype())[()])
+
+
+def _real_scalar(value, *, name: str) -> float:
+    return float(real_array_if_zero_imaginary(value, name=name).reshape(()))
+
+
 def run_test(
     *,
     skip_inverse: bool = False,
@@ -143,12 +153,13 @@ def run_test(
     eit_system.setup(mesh=mesh)
 
     ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-    one = fem.Constant(mesh.mesh, 1.0)
+    one = _fem_unit_constant(mesh.mesh)
     electrode_measures = [
-        float(
+        _real_scalar(
             mesh.comm.allreduce(
                 fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
-            )
+            ),
+            name=f"electrode {tag} measure",
         )
         for tag in range(2, 2 + n_elec)
     ]
@@ -200,7 +211,9 @@ def run_test(
     )
     recon_sigma = function_get_array(recon_result.conductivity).copy()
 
-    true_sigma = phantom_img.elem_data
+    true_sigma = real_array_if_zero_imaginary(
+        phantom_img.elem_data, name="phantom conductivity"
+    )
     rel_err = np.linalg.norm(recon_sigma - true_sigma) / np.linalg.norm(true_sigma)
 
     print(f"Reconstruction range: [{recon_sigma.min():.6f}, {recon_sigma.max():.6f}]")

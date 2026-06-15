@@ -330,16 +330,16 @@ def _regularization_matrix_for_native_complex(
     if regularization is None:
         return _dense_identity_matrix(int(n_param))
     if isspmatrix(regularization):
-        return np.asarray(regularization.toarray(), dtype=np.float64)
+        return _as_dtype_preserving_zero_imag(regularization.toarray(), np.float64)
     if isinstance(regularization, LinearOperator):
         n = int(n_param)
         dense = np.empty((n, n), dtype=np.float64)
         unit = np.zeros(n, dtype=np.float64)
         for idx in range(n):
             unit[idx] = 1.0
-            column = np.asarray(regularization.matvec(unit), dtype=np.float64).reshape(
-                -1
-            )
+            column = _as_dtype_preserving_zero_imag(
+                regularization.matvec(unit), np.float64
+            ).reshape(-1)
             if column.shape[0] != n:
                 raise ValueError(
                     "LinearOperator regularization matvec returned "
@@ -354,9 +354,9 @@ def _regularization_matrix_for_native_complex(
     if callable(as_rtr):
         explicit = as_rtr(dense=True)
         if isspmatrix(explicit):
-            return np.asarray(explicit.toarray(), dtype=np.float64)
-        return np.asarray(explicit, dtype=np.float64)
-    arr = np.asarray(regularization, dtype=np.float64)
+            return _as_dtype_preserving_zero_imag(explicit.toarray(), np.float64)
+        return _as_dtype_preserving_zero_imag(explicit, np.float64)
+    arr = _as_dtype_preserving_zero_imag(regularization, np.float64)
     if arr.ndim == 1:
         if arr.size != int(n_param):
             raise ValueError(
@@ -1444,7 +1444,7 @@ def _solve_linear_system_fast(
             return f"linear_operator:{reg.shape[0]}x{reg.shape[1]}"
         if callable(reg):
             return f"callable:{type(reg).__module__}.{type(reg).__qualname__}:{n_param}"
-        dense = np.asarray(reg, dtype=np.float64)
+        dense = _as_dtype_preserving_zero_imag(reg, np.float64)
         return hash_array_payload(dense)
 
     def _regularization_meta() -> dict[str, object]:
@@ -1464,7 +1464,7 @@ def _solve_linear_system_fast(
             pass
         elif reg_sparse is not None:
             reg_csr = reg_sparse.tocsr()
-            diag_vec = np.asarray(reg_csr.diagonal(), dtype=np.float64)
+            diag_vec = _as_dtype_preserving_zero_imag(reg_csr.diagonal(), np.float64)
             coo = reg_csr.tocoo(copy=False)
             is_diag = bool(coo.nnz <= n_param and np.all(coo.row == coo.col))
             symmetric = False

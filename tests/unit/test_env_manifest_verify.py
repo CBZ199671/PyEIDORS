@@ -21,9 +21,9 @@ def _manifest_base() -> dict:
         "schema_version": 1,
         "project": "pyeidors",
         "profile": {
-            "extras": ["torch", "cuqi", "dev"],
-            "sync_flags": ["--frozen"],
-            "lock_check": "uv lock --check",
+            "environment": "nix",
+            "entrypoint": "nix develop",
+            "lock_check": "nix flake lock --no-update-lock-file",
         },
         "platform": {
             "id": "macos-aarch64",
@@ -48,6 +48,8 @@ def _manifest_base() -> dict:
             "numpy": "2.2.3",
             "scipy": "1.16.2",
             "pyeidors": "1.0.0",
+            "pyqtgraph": "0.13.7",
+            "pyside6": "6.9.1",
         },
     }
 
@@ -73,6 +75,14 @@ def test_compare_manifests_reports_platform_and_version_mismatch():
 
 def test_default_manifest_path_uses_detected_platform(monkeypatch):
     monkeypatch.setattr(verifier, "current_platform_id", lambda: "linux-x86_64")
+    monkeypatch.delenv(exporter.PROFILE_ENV_VAR, raising=False)
+    path = verifier.default_manifest_path(Path("/repo"))
+    assert path == Path("/repo/env/manifests/linux-x86_64.lock.json")
+
+
+def test_default_manifest_path_appends_profile_from_env(monkeypatch):
+    monkeypatch.setattr(verifier, "current_platform_id", lambda: "linux-x86_64")
+    monkeypatch.setenv(exporter.PROFILE_ENV_VAR, "complex64-cuda")
     path = verifier.default_manifest_path(Path("/repo"))
     assert path == Path("/repo/env/manifests/linux-x86_64-complex64-cuda.lock.json")
 
@@ -101,9 +111,7 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text(
-        "[project]\nname='pyeidors'\n", encoding="utf-8"
-    )
+    (tmp_path / "flake.nix").write_text("flake-nix", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname='pyeidors'\n", encoding="utf-8"
     )
@@ -115,23 +123,28 @@ def test_build_manifest_collects_lock_and_profile_fields(tmp_path: Path, monkeyp
         "numpy": "2.2.3",
         "scipy": "1.16.2",
         "pyeidors": "1.0.0",
+        "PySide6": "6.9.1",
+        "pyqtgraph": "0.13.7",
     }
 
     def _fake_package_version(module_name: str, dist_name: str | None = None) -> str:
         return versions[module_name]
 
+    monkeypatch.delenv(exporter.PROFILE_ENV_VAR, raising=False)
     monkeypatch.setattr(exporter, "package_version", _fake_package_version)
     monkeypatch.setattr(exporter, "runtime_context_kind", lambda: "wsl2")
 
     manifest = exporter.build_manifest(tmp_path, platform_id="linux-x86_64")
-    assert manifest["profile"]["extras"] == ["torch", "cuqi", "dev"]
-    assert manifest["profile"]["sync_flags"] == ["--frozen"]
-    assert manifest["profile"]["lock_check"] == "uv lock --check"
+    assert manifest["profile"]["environment"] == "nix"
+    assert manifest["profile"]["entrypoint"] == "nix develop"
+    assert manifest["profile"]["lock_check"] == "nix flake lock --no-update-lock-file"
     assert manifest["platform"]["id"] == "linux-x86_64"
     assert manifest["platform"]["system"] == "linux"
     assert manifest["platform"]["runtime_context"]["kind"] == "wsl2"
     assert manifest["locks"]["nixpkgs_rev"] == "deadbeef"
+    assert "flake_nix_sha256" in manifest["locks"]
     assert manifest["packages"]["cuqi"] == "1.5.0"
+    assert manifest["packages"]["pyside6"] == "6.9.1"
 
 
 def test_default_manifest_path_uses_profile_suffix(monkeypatch):
@@ -146,6 +159,7 @@ def test_build_manifest_adds_profile_name_for_nondefault(tmp_path: Path, monkeyp
         encoding="utf-8",
     )
     (tmp_path / "uv.lock").write_text("uv-lock", encoding="utf-8")
+    (tmp_path / "flake.nix").write_text("flake-nix", encoding="utf-8")
     (tmp_path / "pyproject.toml").write_text(
         "[project]\nname='pyeidors'\n", encoding="utf-8"
     )
@@ -157,6 +171,8 @@ def test_build_manifest_adds_profile_name_for_nondefault(tmp_path: Path, monkeyp
         "numpy": "2.2.3",
         "scipy": "1.16.2",
         "pyeidors": "1.0.0",
+        "PySide6": "6.9.1",
+        "pyqtgraph": "0.13.7",
     }
 
     monkeypatch.setattr(

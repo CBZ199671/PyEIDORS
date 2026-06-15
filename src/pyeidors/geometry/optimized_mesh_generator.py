@@ -16,6 +16,7 @@ import numpy as np
 
 from ..data.structures import EITMesh
 from ..electrodes.layout import ELECTRODE_LAYOUT_RING_MAJOR, normalize_electrode_layout
+from ..forward.complex_support import petsc_scalar_dtype
 from ..perf.policy import (
     DEFAULT_3D_GENERATOR_REVISION,
     DEFAULT_3D_GEOMETRY_VERSION,
@@ -23,7 +24,7 @@ from ..perf.policy import (
     normalize_mesh_family,
 )
 from ..runtime_paths import resolve_pyeidors_mesh_dir
-from ..utils.numeric_ops import all_finite_values
+from ..utils.numeric_ops import all_finite_values, real_array_if_zero_imaginary
 from ._helpers import (
     add_named_physical_group,
     association_from_mesh_data,  # noqa: F401  re-exported for in-tree callers
@@ -76,6 +77,14 @@ def _active_geometry_dtype() -> np.dtype:
         return np.dtype(getattr(dolfinx, "default_real_type", np.float64))
     except Exception:
         return np.dtype(np.float64)
+
+
+def _fem_unit_constant(domain) -> Any:
+    return fem.Constant(domain, np.asarray(1.0, dtype=petsc_scalar_dtype())[()])
+
+
+def _real_scalar(value: Any, *, name: str) -> float:
+    return float(real_array_if_zero_imaginary(value, name=name).reshape(()))
 
 
 def _normalize_geometry_dtype(dtype: Any | None) -> np.dtype:
@@ -517,14 +526,14 @@ def _cached_3d_cem_mesh_is_complete(mesh: EITMesh, *, n_elec: int) -> bool:
         try:
             _ensure_femx()
             ds = ufl.Measure("ds", domain=mesh.mesh, subdomain_data=mesh.facet_tags)
-            one = fem.Constant(mesh.mesh, 1.0)
+            one = _fem_unit_constant(mesh.mesh)
             measures = []
             for key in electrode_keys:
                 value_local = fem.assemble_scalar(
                     fem.form(one * ds(int(association[key])))
                 )
                 value = mesh.comm.allreduce(value_local, op=mpi_sum_op())
-                measures.append(float(value))
+                measures.append(_real_scalar(value, name=f"electrode {key} measure"))
         except Exception as exc:
             logger.warning(
                 "Skipping cached 3D mesh %s due to CEM validation failure: %s",

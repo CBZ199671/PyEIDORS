@@ -17,9 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 
-PROFILE_EXTRAS = ["torch", "cuqi", "dev"]
-PROFILE_SYNC_FLAGS = ["--frozen"]
-PROFILE_LOCK_CHECK = "uv lock --check"
+PROFILE_LOCK_CHECK = "nix flake lock --no-update-lock-file"
 DEFAULT_PROFILE_NAME = "default"
 PROFILE_ENV_VAR = "PYEIDORS_ENV_PROFILE"
 PLATFORM_MAP = {
@@ -158,18 +156,20 @@ def package_version(module_name: str, dist_name: Optional[str] = None) -> str:
 
 def collect_package_versions() -> Dict[str, str]:
     required = (
-        ("dolfinx", None),
-        ("torch", None),
-        ("cuqi", "CUQIpy"),
-        ("numpy", None),
-        ("scipy", None),
-        ("pyeidors", None),
+        ("dolfinx", "dolfinx", None),
+        ("torch", "torch", None),
+        ("cuqi", "cuqi", "CUQIpy"),
+        ("numpy", "numpy", None),
+        ("scipy", "scipy", None),
+        ("pyeidors", "pyeidors", None),
+        ("pyqtgraph", "pyqtgraph", None),
+        ("pyside6", "PySide6", "PySide6"),
     )
     packages: Dict[str, str] = {}
     missing: list[str] = []
-    for module_name, dist_name in required:
+    for package_key, module_name, dist_name in required:
         try:
-            packages[module_name] = package_version(module_name, dist_name)
+            packages[package_key] = package_version(module_name, dist_name)
         except Exception as exc:
             missing.append(f"{module_name}: {exc}")
     if missing:
@@ -185,6 +185,7 @@ def build_manifest(
     root: Path, platform_id: Optional[str] = None, profile_name: Optional[str] = None
 ) -> Dict[str, Any]:
     flake_lock = root / "flake.lock"
+    flake_nix = root / "flake.nix"
     uv_lock = root / "uv.lock"
     pyproject = root / "pyproject.toml"
 
@@ -196,8 +197,10 @@ def build_manifest(
     packages = collect_package_versions()
 
     profile_payload = {
-        "extras": PROFILE_EXTRAS,
-        "sync_flags": PROFILE_SYNC_FLAGS,
+        "environment": "nix",
+        "entrypoint": "nix develop"
+        if resolved_profile == DEFAULT_PROFILE_NAME
+        else f"nix develop .#{resolved_profile}",
         "lock_check": PROFILE_LOCK_CHECK,
     }
     if resolved_profile != DEFAULT_PROFILE_NAME:
@@ -214,9 +217,10 @@ def build_manifest(
         },
         "locks": {
             "nixpkgs_rev": read_nixpkgs_rev(flake_lock),
+            "flake_nix_sha256": sha256_file(flake_nix),
             "flake_lock_sha256": sha256_file(flake_lock),
-            "uv_lock_sha256": sha256_file(uv_lock),
             "pyproject_sha256": sha256_file(pyproject),
+            "uv_lock_sha256": sha256_file(uv_lock) if uv_lock.exists() else None,
         },
         "packages": packages,
         "generated_at_utc": datetime.now(timezone.utc).isoformat(),

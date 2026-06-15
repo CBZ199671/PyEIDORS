@@ -73,7 +73,6 @@ class SimulationState(QObject):
     forward_running_changed = Signal(bool)
     inverse_running_changed = Signal(bool)
     dataset_running_changed = Signal(bool)
-    dataset_progress_changed = Signal(int, int)  # current, total
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)

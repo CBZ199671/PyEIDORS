@@ -43,9 +43,7 @@ fenicsx = [
     "gmsh>=4.11",
 ]
 torch = [
-    "torch~=2.10.0",        # PyTorch and related packages
-    "torchvision~=0.25.0",
-    "torchaudio~=2.10.0",
+    "torch~=2.10.0",
 ]
 cuqi = [
     "CUQIpy~=1.5.0",
@@ -56,11 +54,8 @@ performance = [
 ]
 # Development dependencies
 dev = [
-    "pytest>=6.2.0", 
+    "pytest>=6.2.0",
     "pytest-cov>=3.0.0",
-    "black>=22.0.0", 
-    "flake8>=4.0.0",
-    "pre-commit>=2.15.0"
 ]
 # Documentation dependencies
 docs = [
@@ -71,7 +66,6 @@ docs = [
 ]
 # Visualization extras
 viz = [
-    "mayavi>=4.7.0",
     "pyvista>=0.37.0",
     "vtk>=9.0.0"
 ]
@@ -102,24 +96,6 @@ where = ["src"]
 pyeidors = ["*.yaml", "*.yml", "data/*"]
 eit_app = ["assets/*.svg", "assets/*.png"]
 
-[tool.black]
-line-length = 88
-target-version = ['py38', 'py39', 'py310']
-include = '\.pyi?$'
-extend-exclude = '''
-/(
-  # directories
-  \.eggs
-  | \.git
-  | \.hg
-  | \.mypy_cache
-  | \.tox
-  | \.venv
-  | build
-  | dist
-)/
-'''
-
 [tool.ruff.lint.per-file-ignores]
 "scripts/**/*.py" = ["E402"]
 "tests/**/*.py" = ["E402"]
@@ -145,7 +121,10 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --cov=src/pyeidors --cov-report=html --cov-report=term-missing --cov-fail-under=87"
-filterwarnings = ["error"]
+filterwarnings = [
+    "error",
+    "ignore:Exception ignored.*proc/cpuinfo.*:pytest.PytestUnraisableExceptionWarning",
+]
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",
     "gpu: marks tests that require GPU",
@@ -156,7 +135,5 @@ markers = [
     "hardware: marks tests requiring physical EIT hardware",
 ]
 
-[tool.flake8]
-max-line-length = 88
-extend-ignore = ["E203", "W503"]
-exclude = [".git", "__pycache__", "docs/source/conf.py", "old", "build", "dist"]
+[tool.coverage.report]
+precision = 2

@@ -24,21 +24,19 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 ## Quick Start
 
-PyEIDORS uses **Nix + uv** as the primary development path for FEniCSx:
+PyEIDORS uses **pure Nix** as the primary development and distribution path for FEniCSx:
 
 ```bash
 git clone https://github.com/CBZ199671/PyEIDORS.git
 cd PyEIDORS
-nix develop
-scripts/env/sync_locked_env.sh --check
+nix develop .#complex64-cuda
 python scripts/env/verify_env_manifest.py
-python -c "import dolfinx, torch, cuqi, pyeidors"
+python -c "import dolfinx, torch, cuqi, pyeidors, pyqtgraph; from PySide6.QtCore import Qt"
 ```
 
 WSL2 note: treat `nix develop` as the bootstrap step.
-In a fresh WSL2 shell, do not assume `.venv/bin/python` alone can load the full
-FEniCSx/Torch runtime; if you hit shared-library or import errors, re-enter the
-repository with `nix develop` and retry.
+In a fresh WSL2 shell, do not use `.venv/bin/python` or `uv run` as the default
+runtime. Re-enter the repository with `nix develop .#complex64-cuda` and retry.
 
 For the opt-in CUDA path on WSL2/NVIDIA, use `nix develop .#cuda`, verify the
 runtime with `python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty`,
@@ -500,7 +498,7 @@ For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
 
 - **File Structure**: `FILE_ORGANIZATION.md`
 - **Branching Policy**: `docs/BRANCHING_POLICY.md`
-- **Nix + uv (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
+- **Nix (FEniCSx) Setup**: `docs/NIX_FENICSX.md`
 - **WSL2 CUDA Workflow**: `docs/WSL2_CUDA.md`
 - **Data Specs**: `docs/MEASUREMENT_DATA_SPEC.md`
 - **Electrode Setup**: `docs/ELECTRODE_Y_AXIS_POSITIONING.md`
@@ -508,42 +506,44 @@ For the active CUDA shell / probe / benchmark workflow, see `docs/WSL2_CUDA.md`.
 
 ## Environment Note
 
-The primary maintained developer workflow is **Nix + uv** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
+The primary maintained developer workflow is **pure Nix** with FEniCSx (DOLFINx), documented in `docs/NIX_FENICSX.md`.
 On WSL2, the locked Linux manifest may record `platform.runtime_context.kind = wsl2`
 as informational provenance; this documents the shell context that produced the
 manifest and is not a separate verification gate.
-Optional performance extras (`pyamg`, `scikit-sparse`) can be installed via:
+Optional uv-based performance extras are a legacy/local maintenance path and are
+not part of the default user runtime. Use them only when explicitly working on
+that route:
 
 ```bash
+PYEIDORS_ENABLE_UV_SYNC=1 \
 ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
 ```
 
-Docker content from the old runtime has been removed; use the locked Nix + uv environment for reproducibility.
+Docker content from the old runtime has been removed; use the locked Nix environment for reproducibility.
 
 ### Locked Environment Contract (1:1 Repro)
 
-PyEIDORS now ships a locked two-layer environment contract:
+PyEIDORS now ships a locked Nix environment contract:
 
-- System layer: `flake.lock` (Nix, including DOLFINx/FEniCSx stack).
-- Python layer: `uv.lock` + fixed profile extras `torch,cuqi,dev`.
+- Nix layer: `flake.nix` + `flake.lock` pin the Python interpreter and runtime package closure, including DOLFINx/FEniCSx, Torch, CUQI, Qt/PySide6, and pyqtgraph.
+- Manifest layer: `env/manifests/<platform>-<profile>.lock.json` records the active Nix profile, lock hashes, Python version, and required package versions.
 
 Entering `nix develop` automatically does:
 
-1. `.venv` bootstrap/rebuild (Python 3.13, system-site-packages enabled).
-2. `scripts/env/sync_locked_env.sh --check`.
-3. On drift, automatic `scripts/env/sync_locked_env.sh --repair`.
-4. Import sanity checks for `dolfinx, torch, cuqi, numpy, scipy, pyeidors`.
+1. Select the Nix-provided Python/runtime packages for the chosen profile.
+2. Set `PYEIDORS_ACTIVE_ENV=nix` and add repository `src/` to `PYTHONPATH`.
+3. Leave `VIRTUAL_ENV` unset so no `.venv*` shadows the Nix profile.
+4. Import-check `dolfinx, torch, cuqi, numpy, scipy, pyeidors, pyqtgraph, PySide6`.
 
 Manual commands:
 
 ```bash
-scripts/env/sync_locked_env.sh --print-profile
-scripts/env/sync_locked_env.sh --check
-scripts/env/sync_locked_env.sh --repair
 python scripts/env/verify_env_manifest.py
+python scripts/env/export_env_manifest.py --output env/manifests/linux-x86_64-complex64-cuda.lock.json
 ```
 
 Platform lock manifests:
 
 - `env/manifests/macos-aarch64.lock.json`
 - `env/manifests/linux-x86_64.lock.json`
+- `env/manifests/linux-x86_64-complex64-cuda.lock.json`

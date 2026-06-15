@@ -116,7 +116,7 @@ Added:
 Example:
 
 ```bash
-nix develop .#cuda -c uv run python scripts/benchmarks/benchmark_lazy_48e_cuda_runtime.py \
+nix develop .#complex64-cuda -c python scripts/benchmarks/benchmark_lazy_48e_cuda_runtime.py \
   --linearized-maxiter 20 \
   --linearized-solver-strategy cg_only \
   --lazy-preconditioner-mode auto
@@ -223,7 +223,7 @@ Result: 69 passed.
 Full default software sharded unit baseline:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --all --timeout 300
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --all --timeout 300
 ```
 
 Result:

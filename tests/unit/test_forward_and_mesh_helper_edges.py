@@ -304,13 +304,21 @@ def test_cached_3d_mesh_validator_shortcuts_and_sidecar_success(
         mesh_file=None,
     )
     monkeypatch.setattr(
-        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
+        opt_mesh_module,
+        "ufl",
+        SimpleNamespace(Measure=lambda *args, **kwargs: lambda tag: float(tag)),
     )
     monkeypatch.setattr(
-        opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)
+        opt_mesh_module,
+        "fem",
+        SimpleNamespace(
+            Constant=lambda _mesh, value: opt_mesh_module._real_scalar(
+                value, name="unit constant"
+            ),
+            form=lambda expr: expr,
+            assemble_scalar=lambda expr: expr,
+        ),
     )
-    monkeypatch.setattr(opt_mesh_module.fem, "form", lambda expr: expr)
-    monkeypatch.setattr(opt_mesh_module.fem, "assemble_scalar", lambda expr: expr)
     assert (
         opt_mesh_module._cached_3d_cem_mesh_is_complete(mesh_hex_missing_file, n_elec=2)
         is False
@@ -343,12 +351,21 @@ def test_cached_3d_validator_handles_nonfinite_measures_and_sidecar_validation_f
     monkeypatch: pytest.MonkeyPatch,
 ):
     monkeypatch.setattr(
-        opt_mesh_module.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
+        opt_mesh_module,
+        "ufl",
+        SimpleNamespace(Measure=lambda *args, **kwargs: lambda tag: float(tag)),
     )
     monkeypatch.setattr(
-        opt_mesh_module.fem, "Constant", lambda _mesh, value: float(value)
+        opt_mesh_module,
+        "fem",
+        SimpleNamespace(
+            Constant=lambda _mesh, value: opt_mesh_module._real_scalar(
+                value, name="unit constant"
+            ),
+            form=lambda expr: expr,
+            assemble_scalar=lambda expr: expr,
+        ),
     )
-    monkeypatch.setattr(opt_mesh_module.fem, "form", lambda expr: expr)
 
     mesh_bad_measure = SimpleNamespace(
         topology=SimpleNamespace(dim=3),

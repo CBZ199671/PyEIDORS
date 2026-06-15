@@ -269,9 +269,6 @@ class ReconstructionDialog(QDialog):
 
     # ---- Event handlers ----
 
-    def _update_reference_visibility(self, *args) -> None:
-        self._update_algorithm_state()
-
     def _update_algorithm_state(self, *args) -> None:
         method = self._current_method()
         needs_ref = database_method_requires_reference(method)

@@ -1,5 +1,5 @@
 {
-  "environment": "Nix + uv (FEniCSx/DOLFINx)",
+  "environment": "Pure Nix (FEniCSx/DOLFINx)",
   "environment_doc": "docs/NIX_FENICSX.md",
   "repository_root": "repository root",
   "code_commit": "993c7fa13b6e91058a298c2761bac1eef224e403",

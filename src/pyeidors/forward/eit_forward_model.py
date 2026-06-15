@@ -2070,6 +2070,90 @@ class EITForwardModel:
         )
         return self._as_scalar_array(lu.solve(rhs), name="SciPy solve result")
 
+    def _cuda_dense_lu_memory_skip_reason(self, exc: Exception) -> str:
+        marker = "cuda_dense_lu_estimated_memory_exceeds_limit"
+        backend_info = getattr(self, "_petsc_backend_info", {}) or {}
+        skip_reason = str(backend_info.get("cuda_dense_lu_fallback_skip_reason") or "")
+        if marker in skip_reason:
+            return skip_reason
+        message = str(exc)
+        if marker in message:
+            return message
+        return ""
+
+    def _run_cpu_scipy_fallback(
+        self,
+        solve_fn,
+        *,
+        fallback_reason: str,
+        solve_start: float,
+    ) -> np.ndarray:
+        original_info = dict(getattr(self, "_petsc_backend_info", {}) or {})
+        temp_info = dict(original_info)
+        temp_info["petsc_device_effective"] = "cpu"
+        temp_info["gpu_fallback_reason"] = f"cpu_scipy_fallback:{fallback_reason}"
+        temp_info["fallback_reason"] = f"cpu_scipy_fallback:{fallback_reason}"
+        temp_info["forward_cpu_scipy_fallback_attempted"] = True
+        self._petsc_backend_info = temp_info
+
+        succeeded = False
+        try:
+            result = solve_fn()
+            succeeded = True
+            return result
+        finally:
+            current_info = dict(getattr(self, "_petsc_backend_info", {}) or {})
+            restored_info = dict(current_info)
+            restored_info.update(original_info)
+            restored_info.update(
+                {
+                    "gpu_fallback_reason": f"cpu_scipy_fallback:{fallback_reason}",
+                    "fallback_reason": f"cpu_scipy_fallback:{fallback_reason}",
+                    "forward_cpu_scipy_fallback_attempted": True,
+                    "forward_cpu_scipy_fallback": succeeded,
+                    "cuda_scipy_fallback": succeeded,
+                    "cuda_scipy_fallback_reason": fallback_reason,
+                    "forward_mat_solve_effective": "vec-loop",
+                    "forward_solve_seconds": float(time.perf_counter() - solve_start),
+                }
+            )
+            if succeeded:
+                restored_info["forward_factor_backend"] = "scipy-splu"
+            self._petsc_backend_info = restored_info
+
+    def _solve_with_cpu_scipy_fallback(
+        self,
+        sigma: fem.Function,
+        pattern_matrix: np.ndarray,
+        *,
+        fallback_reason: str,
+        solve_start: float,
+    ) -> np.ndarray:
+        return self._run_cpu_scipy_fallback(
+            lambda: self._solve_with_scipy(sigma, pattern_matrix),
+            fallback_reason=fallback_reason,
+            solve_start=solve_start,
+        )
+
+    def _solve_full_rhs_with_cpu_scipy_fallback(
+        self,
+        sigma: fem.Function,
+        rhs_matrix: np.ndarray,
+        *,
+        rhs_kind: str,
+        fallback_reason: str,
+        solve_start: float,
+    ) -> np.ndarray:
+        return self._run_cpu_scipy_fallback(
+            lambda: self._solve_full_rhs_with_scipy(
+                sigma,
+                rhs_matrix,
+                rhs_kind=rhs_kind,
+            ),
+            fallback_reason=fallback_reason,
+            solve_start=solve_start,
+        )
+
     def _make_petsc_solver_bundle(self, system_matrix):
         if PETSc is None:
             raise RuntimeError("petsc4py is required for linear_backend='petsc'")
@@ -2767,11 +2851,32 @@ class EITForwardModel:
                             solve_start=solve_t0,
                         )
                     except Exception as fallback_exc:
-                        raise RuntimeError(
-                            "PETSc CUDA solve failed with a negative convergence "
-                            f"reason ({reason}) and dense LU fallback failed "
-                            f"({fallback_exc}). {self._actionable_cuda_guidance()}"
-                        ) from fallback_exc
+                        skip_reason = self._cuda_dense_lu_memory_skip_reason(
+                            fallback_exc
+                        )
+                        cpu_fallback_reason = (
+                            f"petsc_ksp_failed:{reason};dense_lu_skipped:{skip_reason}"
+                            if skip_reason
+                            else (
+                                f"petsc_ksp_failed:{reason};"
+                                f"dense_lu_failed:{fallback_exc}"
+                            )
+                        )
+                        try:
+                            return self._solve_with_cpu_scipy_fallback(
+                                sigma,
+                                pattern_matrix,
+                                fallback_reason=cpu_fallback_reason,
+                                solve_start=solve_t0,
+                            )
+                        except Exception as cpu_fallback_exc:
+                            raise RuntimeError(
+                                "PETSc CUDA solve failed with a negative convergence "
+                                f"reason ({reason}), dense LU fallback failed "
+                                f"({fallback_exc}), and CPU SciPy fallback failed "
+                                f"({cpu_fallback_exc}). "
+                                f"{self._actionable_cuda_guidance()}"
+                            ) from cpu_fallback_exc
                 self._set_backend_diagnostic(
                     fallback_reason=f"petsc_ksp_failed:{reason}",
                     forward_ksp_solve_count=int(i + 1),
@@ -2829,6 +2934,7 @@ class EITForwardModel:
             raise ValueError(
                 f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
             )
+        rhs_for_cpu_scipy = rhs.copy()
         rhs = self._apply_cuda_gauge_fix_rhs(rhs.copy())
         n_rhs = int(rhs.shape[1])
 
@@ -2943,6 +3049,20 @@ class EITForwardModel:
                             solve_start=solve_t0,
                         )
                     except Exception as fallback_exc:
+                        skip_reason = self._cuda_dense_lu_memory_skip_reason(
+                            fallback_exc
+                        )
+                        if skip_reason:
+                            return self._solve_full_rhs_with_cpu_scipy_fallback(
+                                sigma,
+                                rhs_for_cpu_scipy,
+                                rhs_kind=rhs_kind,
+                                fallback_reason=(
+                                    f"full_rhs_petsc_ksp_failed:{reason};"
+                                    f"dense_lu_skipped:{skip_reason}"
+                                ),
+                                solve_start=solve_t0,
+                            )
                         raise RuntimeError(
                             "PETSc CUDA full RHS solve failed with a negative "
                             f"convergence reason ({reason}) and dense LU fallback "

@@ -80,7 +80,7 @@ When `-RenderPlots` is enabled, the bridge also emits:
 
 ## Environment Split
 
-- Python / PyEIDORS side: executed in WSL2 through the Nix + uv environment
+- Python / PyEIDORS side: executed in WSL2 through the pure Nix environment
 - MATLAB / EIDORS side: executed on the Windows host
 - File exchange side: repository-local `.mat`, `.csv`, and `.json` artifacts
 

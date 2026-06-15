@@ -361,8 +361,18 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.family_label": "3D \u5355\u5143\u7c7b\u578b\uff1a",  # 3D 单元类型：
     "sim.mesh.family.tetra": "\u56db\u9762\u4f53\uff084 \u8282\u70b9\uff09",  # 四面体（4 节点）
     "sim.mesh.family.hex": "\u516d\u9762\u4f53\uff088 \u8282\u70b9\uff0cGPU \u5feb\u901f\uff09",  # 六面体（8 节点，GPU 快速）
-    "sim.mesh.size_label": "\u7f51\u683c\u5c3a\u5bf8\uff1a",  # 网格尺寸：
-    "sim.mesh.refinement_tooltip": "\u6570\u503c\u8d8a\u5c0f\uff0c\u7f51\u683c\u8d8a\u7ec6\uff08\u5355\u5143\u66f4\u591a\uff09",  # 数值越小，网格越细（单元更多）
+    "sim.mesh.size_label": "网格细度：",
+    "sim.mesh.refinement_tooltip": "用粗/中/细/很细控制待测域直径分段数；默认约 D/18。内部会换算为生成尺度 h 和整数细化参数，实际单元尺寸以生成后边长/直径统计为准。",
+    "sim.mesh.density_mark.coarse": "粗",
+    "sim.mesh.density_mark.medium": "中",
+    "sim.mesh.density_mark.fine": "细",
+    "sim.mesh.density_mark.very_fine": "很细",
+    "sim.mesh.density_summary": "D/{density} · h≈{target:.3f} m · refinement≈{refinement} · 预估元素数≈{cells}",
+    "sim.mesh.density_advanced_toggle": "高级输入",
+    "sim.mesh.density_advanced_label": "细度数值：",
+    "sim.mesh.density_spin_suffix": " 段",
+    "sim.mesh.density_advanced_tooltip": "待测域直径 D 的目标分段数；数值越大，网格越细。",
+    "sim.mesh.density_warning": "高细度会显著增加单元数和求解时间，3D 尤其明显。",
     "sim.mesh.radius_label": "\u534a\u5f84\uff1a",  # 半径：
     "sim.mesh.radius_tooltip": "2D \u5706\u5f62\u57df / 3D \u5706\u67f1\u4f53\u7684\u534a\u5f84\uff0c\u5355\u4f4d\u4e3a\u7c73 (m)",  # 2D 圆形域 / 3D 圆柱体的半径，单位为米 (m)
     "sim.mesh.height_label": "\u9ad8\u5ea6\uff1a",  # 高度：

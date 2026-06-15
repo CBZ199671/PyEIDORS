@@ -27,6 +27,7 @@ from eit_app.controllers.reconstruction_controller import ReconstructionResult
 from eit_app.ui.auto_close_combo_box import AutoCloseComboBox
 from eit_app.ui.conductivity_image_widget import ConductivityImageWidget
 from eit_app.ui.hardware.reconstruction_widget import ReconstructionWidget
+from eit_app.ui.forward_prewarm import _backend_worker_probe_summary
 from eit_app.ui.main_window import EITWorkstation
 from pyeidors.data.frame_io import read_frame_yaml, read_session_metadata
 from pyeidors.runtime_paths import pyeidors_cache_path
@@ -955,6 +956,11 @@ def test_forward_inverse_panels_toggle_busy_indicator_on_set_running() -> None:
     assert fwd._busy_bar.isHidden()
     assert fwd._solve_btn.isEnabled()
     assert fwd._noise_spin.isEnabled()
+    assert fwd._status_label.wordWrap()
+    assert fwd._status_label.minimumWidth() == 0
+    assert (
+        fwd._status_label.sizePolicy().horizontalPolicy() == QSizePolicy.Policy.Ignored
+    )
 
     fwd.set_running(True)
     app.processEvents()
@@ -3209,6 +3215,143 @@ def test_simulation_forward_config_2d_default_uses_coverage_not_length_override(
 
 
 @pytest.mark.gui
+def test_v652_v654_simulation_mesh_density_tracks_domain_and_aligns_ticks() -> None:
+    from PySide6.QtWidgets import QStyle, QStyleOptionSlider
+
+    from eit_app.i18n import current_language, set_language
+
+    previous_language = current_language()
+    set_language("en", persist=False)
+    window = EITWorkstation()
+    _show_window(window)
+    window._tab_widget.setCurrentIndex(1)
+    _get_app().processEvents()
+    second: EITWorkstation | None = None
+    try:
+        mesh_panel = window._sim_tab.mesh_setup_panel
+        cfg = window._current_sim_forward_model_config()
+        assert cfg.mesh_refinement == pytest.approx(2.0 / 18.0, abs=6.0e-4)
+        assert mesh_panel._mesh_density_spin.value() == 18
+        assert "D/18" in mesh_panel._mesh_density_summary.text()
+        assert "refinement" in mesh_panel._mesh_density_summary.text()
+        assert "estimated elements" in mesh_panel._mesh_density_summary.text()
+        for idx, label in enumerate(mesh_panel._density_mark_labels._labels):
+            opt = QStyleOptionSlider()
+            mesh_panel._mesh_density_slider.initStyleOption(opt)
+            opt.sliderPosition = mesh_panel._mesh_density_slider.minimum() + idx
+            opt.sliderValue = opt.sliderPosition
+            handle = mesh_panel._mesh_density_slider.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider,
+                opt,
+                QStyle.SubControl.SC_SliderHandle,
+                mesh_panel._mesh_density_slider,
+            )
+            label_center = mesh_panel._mesh_density_slider.mapFromGlobal(
+                label.mapToGlobal(label.rect().center())
+            ).x()
+            assert label_center == pytest.approx(handle.center().x(), abs=2)
+
+        mesh_panel._radius_spin.setValue(0.5)
+        _get_app().processEvents()
+        cfg = window._current_sim_forward_model_config()
+        assert cfg.radius == pytest.approx(0.5)
+        assert cfg.mesh_refinement == pytest.approx(1.0 / 18.0, abs=6.0e-4)
+
+        mesh_panel._mesh_density_slider.setValue(3)
+        mesh_panel._radius_spin.setValue(0.8)
+        _get_app().processEvents()
+        cfg = window._current_sim_forward_model_config()
+        assert cfg.radius == pytest.approx(0.8)
+        assert mesh_panel._mesh_density_spin.value() == 32
+        assert cfg.mesh_refinement == pytest.approx(1.6 / 32.0, abs=6.0e-4)
+
+        mesh_panel._mesh_density_advanced_check.setChecked(True)
+        _get_app().processEvents()
+        assert not mesh_panel._mesh_density_spin.isHidden()
+        assert not mesh_panel._mesh_density_warning.isHidden()
+        mesh_panel._mesh_density_spin.setValue(20)
+        _get_app().processEvents()
+        cfg = window._current_sim_forward_model_config()
+        assert cfg.mesh_refinement == pytest.approx(1.6 / 20.0, abs=6.0e-4)
+
+        second = EITWorkstation()
+        _show_window(second)
+        second_panel = second._sim_tab.mesh_setup_panel
+        second_panel._dim_combo.setCurrentIndex(1)
+        _get_app().processEvents()
+        cfg_3d = second._current_sim_forward_model_config()
+        assert cfg_3d.radius == pytest.approx(0.18)
+        assert cfg_3d.mesh_refinement == pytest.approx((2.0 * 0.18) / 18.0, abs=6.0e-4)
+
+        second_panel.set_config(
+            {
+                "mesh_dimension": 3,
+                "radius": 0.72,
+                "height": 0.44,
+                "mesh_refinement": 0.05,
+            }
+        )
+        _get_app().processEvents()
+        cfg_imported = second._current_sim_forward_model_config()
+        assert cfg_imported.radius == pytest.approx(0.72)
+        assert cfg_imported.mesh_refinement == pytest.approx(0.05)
+    finally:
+        if second is not None:
+            _close_window(second)
+        _close_window(window)
+        set_language(previous_language, persist=False)
+
+
+def test_v655_simulation_hex_density_estimate_matches_structured_grid() -> None:
+    from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel
+
+    assert (
+        MeshSetupPanel._estimated_cell_count(
+            mesh_dimension=3,
+            radius=0.18,
+            height=0.16,
+            density=33,
+            refinement=8,
+            mesh_family="hex",
+            n_electrodes=8,
+            n_rings=2,
+        )
+        == 100_224
+    )
+
+
+def test_v656_simulation_gmsh_density_estimates_match_default_meshes() -> None:
+    from eit_app.ui.simulation.mesh_setup_panel import MeshSetupPanel
+
+    assert (
+        MeshSetupPanel._estimated_cell_count(
+            mesh_dimension=2,
+            radius=1.0,
+            height=0.0,
+            density=18,
+            refinement=5,
+            mesh_family="tetra",
+            n_electrodes=16,
+            n_rings=1,
+        )
+        == 2_034
+    )
+    assert (
+        MeshSetupPanel._estimated_cell_count(
+            mesh_dimension=3,
+            radius=0.18,
+            height=0.16,
+            density=18,
+            refinement=4,
+            mesh_family="tetra",
+            n_electrodes=8,
+            n_rings=2,
+        )
+        == 31_208
+    )
+
+
+@pytest.mark.gui
 def test_simulation_forward_config_preserves_3d_multiring_layout() -> None:
     window = EITWorkstation()
     _show_window(window)
@@ -5023,7 +5166,7 @@ def test_v317_3d_simulation_backend_warmup_reports_status_and_metadata(
 
 
 def test_v329_backend_worker_probe_summary_accepts_setup_metadata() -> None:
-    summary = main_window_module._backend_worker_probe_summary(
+    summary = _backend_worker_probe_summary(
         {
             "petsc_cuda": True,
             "petsc_cuda_probe_cache": {"hit": False, "layer": "disk"},

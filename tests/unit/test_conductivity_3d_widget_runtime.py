@@ -1712,13 +1712,13 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_device"] == "cuda"
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
-    assert tetra["forward_solver_preset"] == "spd_gamg"
+    assert tetra["forward_solver_preset"] == "3d_gamg"
     assert tetra["petsc_amgx_available"] is False
     assert tetra["petsc_cuda_probe_cache_hit"] is True
     assert tetra["petsc_cuda_probe_cache"]["layer"] == "disk"
     assert tetra["forward_mat_solve"] == "off"
     assert (
-        tetra["forward_mat_solve_policy_reason"] == "cuda_spd_gamg_matsolve_disabled_b6"
+        tetra["forward_mat_solve_policy_reason"] == "cuda_gamg_matsolve_disabled_b658"
     )
 
     hex_cfg = _resolve_forward_runtime(
@@ -1727,6 +1727,8 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert hex_cfg["mesh_family"] == "hex"
     assert hex_cfg["forward_backend"] == "cuda_structured"
     assert hex_cfg["petsc_device"] == "cuda"
+    assert hex_cfg["forward_solver_preset"] == "auto"
+    assert hex_cfg["forward_mat_solve"] == "auto"
 
 
 def test_v624_complex_gpu_forward_runtime_keeps_hex_on_dolfinx_petsc_cuda(

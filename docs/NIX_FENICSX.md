@@ -1,16 +1,16 @@
-# PyEIDORS: Nix + uv FEniCSx environment
+# PyEIDORS: pure Nix FEniCSx environment
 
 This document defines the maintained environment setup for running PyEIDORS with FEniCSx on macOS (including Apple Silicon) and Linux, without Docker and without Conda.
 
 ## Strategy
 
-PyEIDORS uses a two-layer lock strategy bound to this repository:
+PyEIDORS uses a Nix-first lock strategy bound to this repository:
 
-- System layer: `flake.lock` pins Nix packages (including DOLFINx/FEniCSx stack).
-- Python layer: `uv.lock` pins Python packages, synchronized by `uv`.
+- Runtime layer: `flake.nix` and `flake.lock` pin the Nix Python package closure, including DOLFINx/FEniCSx, Torch, CUQI, Qt/PySide6, pyqtgraph, PETSc/SLEPc, MPI, HDF5, and CUDA variants.
+- Manifest layer: `env/manifests/<platform>-<profile>.lock.json` records the active Nix profile, lock hashes, Python version, and package versions verified in that profile.
 - Python major/minor is fixed to `3.13` in the dev shell contract.
-- Standard profile extras are fixed as: `torch`, `cuqi`, `dev`.
 - Official entrypoint is `nix develop` (non-Nix path is not guaranteed 1:1 reproducible).
+- `uv` is an opt-in legacy/local maintenance path only; it is not the default runtime route.
 
 ## Facts checked on 2026-03-02
 
@@ -125,25 +125,26 @@ CONF
 From the repository root:
 
 ```bash
-nix develop
+nix develop .#complex64-cuda
 ```
 
-Recommended one-time environment bootstrap after entering the shell:
+The dev shell itself is the runtime bootstrap. It must be able to verify the core stack immediately:
 
 ```bash
-scripts/env/bootstrap_dev_env.sh --recommended --repair
+python scripts/env/verify_env_manifest.py
+python -c "import dolfinx, torch, cuqi, pyeidors, pyqtgraph; from PySide6.QtCore import Qt"
 ```
 
-Minimal bootstrap (required dependencies only):
+Legacy `uv` environment repair is opt-in only:
 
 ```bash
-scripts/env/bootstrap_dev_env.sh --minimal --repair
+PYEIDORS_ENABLE_UV_SYNC=1 scripts/env/sync_locked_env.sh --repair
 ```
 
 Important for WSL2 and other fresh shells:
 
-- `scripts/env/sync_locked_env.sh --check` is a validation command, not the bootstrap step.
-- If it reports `python interpreter not found: .venv/bin/python`, start with `nix develop`.
+- `python` inside `nix develop .#complex64-cuda` is the supported runtime interpreter.
+- `.venv*` and `uv run` are not default runtime entrypoints.
 - If `nix` itself is missing on WSL2, install Nix first; the repository does not support a 1:1 reproducible non-Nix bootstrap for DOLFINx.
 - If a plain WSL2 shell can `import pyeidors` but fails on `pyeidors.EITSystem` with NumPy/Torch/shared-library errors, that still counts as an unsupported runtime state; re-enter with `nix develop` before debugging deeper.
 - When the Linux manifest is exported from WSL2, it may record `platform.runtime_context.kind = wsl2` as informational provenance only; `verify_env_manifest.py` does not treat that field as a hard compatibility gate.
@@ -162,34 +163,26 @@ supported way to run the GUI or any full reconstruction workflow.
 
 The `shellHook` in `flake.nix` will:
 
-1. Set uv to use Nix-provided Python.
-2. Create `.venv` on first run (or rebuild when Python major/minor changes).
-3. Use `--system-site-packages` so `.venv` can import Nix-provided DOLFINx packages.
-4. Activate `.venv` automatically.
-5. Run `scripts/env/sync_locked_env.sh --check`.
-6. If drift is detected, auto-run `scripts/env/sync_locked_env.sh --repair`.
-7. Fail fast if repair still fails, with explicit manual recovery command.
-8. Initialize a terminal-scoped cache session under `.pyeidors_cache/v2/.sessions/<session-id>` and clear that shell-owned cache automatically on shell exit, signal termination, or `deactivate`.
+1. Set `UV_PYTHON` to the Nix-provided Python for legacy tooling.
+2. Unset `VIRTUAL_ENV` / `VIRTUAL_ENV_PROMPT` so `.venv*` cannot shadow the Nix profile.
+3. Set `PYEIDORS_ACTIVE_ENV=nix` and add repository `src/` to `PYTHONPATH`.
+4. Import-check `dolfinx, torch, cuqi, numpy, scipy, pyeidors, pyqtgraph, PySide6`.
+5. Initialize a terminal-scoped cache session under `.pyeidors_cache/v2/.sessions/<session-id>` and clear that shell-owned cache automatically on shell exit, signal termination, or `deactivate`.
 
-CPU and CUDA shells follow the same cache-lifecycle rule: each terminal gets its own runtime disk cache, terminals do not share session cache, and closing one shell only cleans that shell's cache. Bare `.venv/bin/python` outside the shell hook falls back to the older process-scoped lifecycle and is not the supported long-running workflow.
+CPU and CUDA shells follow the same cache-lifecycle rule: each terminal gets its own runtime disk cache, terminals do not share session cache, and closing one shell only cleans that shell's cache. Bare `.venv/bin/python` outside the shell hook is not the supported long-running workflow.
 
 ### Optional performance extras
 
-PyEIDORS keeps the default profile minimal (`torch`, `cuqi`, `dev`) and exposes
-optional acceleration extras through uv:
+PyEIDORS keeps the default user runtime in Nix. Optional acceleration extras can
+still be explored through the legacy uv maintenance route:
 
 - `pyamg>=5.2`
 - `scikit-sparse>=0.4.12`
 
-Recommended bootstrap with performance extras:
-
-```bash
-scripts/env/bootstrap_dev_env.sh --recommended --repair
-```
-
 If you only want to add them to an existing shell environment, enable them explicitly:
 
 ```bash
+PYEIDORS_ENABLE_UV_SYNC=1 \
 ENABLE_PERFORMANCE_EXTRAS=1 scripts/env/sync_locked_env.sh --repair
 ```
 
@@ -211,7 +204,7 @@ VECLIB_MAXIMUM_THREADS=1 \
 NUMEXPR_NUM_THREADS=1 \
 ENABLE_PERFORMANCE_EXTRAS=1 \
 /nix/var/nix/profiles/default/bin/nix --extra-experimental-features 'nix-command flakes' develop -c \
-uv run python scripts/benchmarks/benchmark_3d_fair_compare.py --benchmark-phase quick
+python scripts/benchmarks/benchmark_3d_fair_compare.py --benchmark-phase quick
 ```
 
 Recommended interpretation for the fused 3D profiles:
@@ -225,10 +218,6 @@ Recommended interpretation for the fused 3D profiles:
 `sksparse` availability depends on SuiteSparse support in the current platform
 toolchain; absence is non-fatal and PyEIDORS will fall back to PETSc/SciPy paths.
 
-In the maintained WSL2/Linux `nix develop` flow, this repository now keeps
-environment sync in `--inexact` mode by default so that recommended optional
-packages already installed in `.venv` are not removed on the next shell entry.
-
 Nix note:
 
 - `flake.nix` now includes `pkgs.suitesparse` in the dev shell.
@@ -238,10 +227,8 @@ Nix note:
 ## Validation commands
 
 ```bash
-scripts/env/sync_locked_env.sh --print-profile
-scripts/env/sync_locked_env.sh --check
 python scripts/env/verify_env_manifest.py
-python -c "import dolfinx, torch, cuqi, numpy, scipy, pyeidors"
+python -c "import dolfinx, torch, cuqi, numpy, scipy, pyeidors, pyqtgraph; from PySide6.QtCore import Qt"
 ```
 
 CUDA profile validation:
@@ -338,20 +325,19 @@ cat flake.lock
 nix flake update
 ```
 
-### 2) Corrupted `.venv` or import mismatch
+### 2) Stale `.venv` shadows the Nix runtime
 
 ```bash
-rm -rf .venv
-nix develop
-scripts/env/sync_locked_env.sh --repair
+unset VIRTUAL_ENV VIRTUAL_ENV_PROMPT
+nix develop .#complex64-cuda
+python scripts/env/verify_env_manifest.py
 ```
 
 ### 3) `import pyeidors` fails while `import dolfinx` works
 
-This is not expected after lock sync. Re-run:
+This is not expected inside the Nix profile. Re-run:
 
 ```bash
-scripts/env/sync_locked_env.sh --repair
 python scripts/env/verify_env_manifest.py
 ```
 
@@ -359,34 +345,32 @@ python scripts/env/verify_env_manifest.py
 
 Symptoms:
 
-- `.venv/bin/python -c "import pyeidors; print(pyeidors.check_environment())"` works, but
-- `.venv/bin/python -c "import pyeidors; pyeidors.EITSystem"` fails with a shared-library or runtime import error.
+- plain-shell `python -c "import pyeidors; print(pyeidors.check_environment())"` works, but
+- full-stack imports fail with a shared-library or runtime import error.
 
 Fix:
 
 ```bash
-nix develop
-scripts/env/sync_locked_env.sh --check
+nix develop .#complex64-cuda
 python scripts/env/verify_env_manifest.py
 ```
 
 This repository only treats the `nix develop` shell as the supported full-runtime entrypoint for WSL2/Linux.
 
-### 4) Lock drift (`uv.lock` / profile mismatch)
+### 4) Manifest/profile drift
 
 Symptoms:
 
-- `scripts/env/sync_locked_env.sh --check` fails.
 - `python scripts/env/verify_env_manifest.py` reports mismatch keys.
 
 Fix:
 
 ```bash
-scripts/env/sync_locked_env.sh --repair
+python scripts/env/export_env_manifest.py --output env/manifests/linux-x86_64-complex64-cuda.lock.json
 python scripts/env/verify_env_manifest.py
 ```
 
-### 5) Network/index issue during sync
+### 5) Network/index issue during optional uv sync
 
 `--repair` may fail due to network/index transient failures. Keep the original error and retry once with your local proxy wrapper for that failing command only (do not enable global proxy permanently).
 
@@ -395,20 +379,20 @@ python scripts/env/verify_env_manifest.py
 When changing environment inputs, keep this order:
 
 1. Update `flake.lock` (if needed).
-2. Update `uv.lock` in Nix shell (`uv lock --python .venv/bin/python --upgrade`).
-3. Re-export manifests:
+2. Update `flake.nix` package closure if the runtime package set changed.
+3. Re-export manifests from the matching Nix profile:
    - `python scripts/env/export_env_manifest.py --output env/manifests/macos-aarch64.lock.json --platform-id macos-aarch64`
    - `python scripts/env/export_env_manifest.py --output env/manifests/linux-x86_64.lock.json --platform-id linux-x86_64`
+   - `python scripts/env/export_env_manifest.py --output env/manifests/linux-x86_64-complex64-cuda.lock.json --profile complex64-cuda`
 4. Verify:
-   - `scripts/env/sync_locked_env.sh --check`
    - `python scripts/env/verify_env_manifest.py`
 
 Rules:
 
-- Do not do ad-hoc `pip install` without writing back to lock files.
-- Any PR touching `pyproject.toml`, `flake.nix`, or `uv.lock` must update manifests and pass CI env guard.
+- Do not do ad-hoc `pip install` for the supported runtime.
+- Any PR touching `pyproject.toml`, `flake.nix`, or `flake.lock` must update manifests and pass CI env guard.
 
 ## Scope boundary
 
-- This document covers the supported runtime path: **FEniCSx-only** + Nix + uv.
+- This document covers the supported runtime path: **FEniCSx-only** + pure Nix.
 - Docker content from the old runtime has been removed; `docs/DOCKER.md` records the current status.

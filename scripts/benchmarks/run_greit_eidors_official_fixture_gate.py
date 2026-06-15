@@ -195,8 +195,8 @@ def _matlab_capture_command(*, fixture_dir: Path, case_id: str) -> str:
 
 def _rerun_command(*, fixture_path: Path, output_dir: Path) -> str:
     return (
-        'nix develop --command bash -lc "'
-        "uv run python scripts/benchmarks/run_greit_eidors_official_fixture_gate.py "
+        'nix develop .#complex64-cuda --command bash -lc "'
+        "python scripts/benchmarks/run_greit_eidors_official_fixture_gate.py "
         f"--fixture {fixture_path.as_posix()} "
         f"--output-dir {output_dir.as_posix()} "
         '--strict"'

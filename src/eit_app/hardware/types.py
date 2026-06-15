@@ -88,11 +88,6 @@ STIM_AMP_VALUES_UA: dict[int, int] = {
     7: 10000,
 }
 
-STIM_AMP_LEVELS: dict[int, str] = {
-    level: f"{value}uA" if value < 1000 else f"{value // 1000}mA"
-    for level, value in STIM_AMP_VALUES_UA.items()
-}
-
 # Voltage amplifier gain factors used to remove the selected hardware gain.
 # Keep these one-to-one with the upper-computer gain labels.
 VOLTAGE_AMP_FACTORS: tuple[float, ...] = (

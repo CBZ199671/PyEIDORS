@@ -2,16 +2,20 @@
 
 import math
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QDoubleSpinBox,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -39,6 +43,89 @@ DEFAULT_3D_DRIVE_VALUE_UA = 100.0
 MIN_2D_DRIVE_VALUE = 1.0e-6
 MIN_3D_DRIVE_VALUE_UA = 1.0e-6
 UAMP_TO_AMP = 1.0e-6
+DEFAULT_MESH_DIAMETER_DIVISIONS = 18
+MESH_DENSITY_PRESETS = (12, 18, 24, 32)
+MESH_DENSITY_MIN = 8
+MESH_DENSITY_MAX = 64
+MESH_DENSITY_LABEL_EDGE_PAD = 24
+MESH_2D_GMSH_ELEMENT_COUNTS_BY_REFINEMENT = {
+    2: 1162,
+    3: 1510,
+    4: 1806,
+    5: 2034,
+    6: 2650,
+    8: 3326,
+}
+MESH_3D_TETRA_GMSH_ELEMENT_COUNTS_BY_REFINEMENT = {
+    2: 3962,
+    3: 9382,
+    4: 31208,
+    5: 34748,
+}
+MESH_TARGET_LENGTH_MIN_M = 0.01
+MESH_TARGET_LENGTH_MAX_M = 1.0
+
+
+class _SliderTickLabels(QWidget):
+    """Label row whose text centers follow the QSlider handle centers."""
+
+    def __init__(
+        self, slider: QSlider, count: int, parent: QWidget | None = None
+    ) -> None:
+        super().__init__(parent)
+        self._slider = slider
+        self._labels = [QLabel("", self) for _ in range(int(count))]
+        self._slider.installEventFilter(self)
+        for label in self._labels:
+            label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
+        self.setMinimumHeight(22)
+
+    def set_texts(self, texts: tuple[str, ...] | list[str]) -> None:
+        for label, text in zip(self._labels, texts, strict=True):
+            label.setText(text)
+        self._position_labels()
+
+    def sizeHint(self) -> QSize:
+        height = max((label.sizeHint().height() for label in self._labels), default=18)
+        return QSize(1, height + 4)
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001 - Qt override signature
+        super().resizeEvent(event)
+        self._position_labels()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001 - Qt override signature
+        super().showEvent(event)
+        QTimer.singleShot(0, self._position_labels)
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: ANN001 - Qt override signature
+        if watched is self._slider and event.type() in {
+            QEvent.Type.Move,
+            QEvent.Type.Resize,
+            QEvent.Type.Show,
+        }:
+            QTimer.singleShot(0, self._position_labels)
+        return super().eventFilter(watched, event)
+
+    def _position_labels(self) -> None:
+        if not self._labels or self.width() <= 0:
+            return
+        for idx, label in enumerate(self._labels):
+            opt = QStyleOptionSlider()
+            self._slider.initStyleOption(opt)
+            opt.sliderPosition = self._slider.minimum() + idx
+            opt.sliderValue = opt.sliderPosition
+            handle = self._slider.style().subControlRect(
+                QStyle.ComplexControl.CC_Slider,
+                opt,
+                QStyle.SubControl.SC_SliderHandle,
+                self._slider,
+            )
+            center_x = self.mapFromGlobal(self._slider.mapToGlobal(handle.center())).x()
+            width = label.sizeHint().width()
+            left = int(round(center_x - width / 2.0))
+            left = max(0, min(left, max(self.width() - width, 0)))
+            label.setGeometry(left, 0, width, self.height())
 
 
 class MeshSetupPanel(QGroupBox):
@@ -52,6 +139,7 @@ class MeshSetupPanel(QGroupBox):
         # Title assigned by _retranslate() below so it follows the UI language.
         super().__init__("", parent)
         self._point_count_cache: int = 0
+        self._mesh_target_length_user_overridden = False
         self._electrode_length_user_overridden = False
         self._default_electrode_coverage = DEFAULT_ELECTRODE_COVERAGE
         self._last_drive_dimension = 2
@@ -133,14 +221,80 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_height = QLabel("")
         mesh_form.addRow(self._lbl_height, self._height_spin)
 
-        self._refine_spin = QDoubleSpinBox()
-        self._refine_spin.setRange(0.01, 1.0)
-        self._refine_spin.setValue(0.1)
+        self._lbl_size = QLabel("")
+
+        density_widget = QWidget()
+        density_layout = QVBoxLayout(density_widget)
+        density_layout.setContentsMargins(0, 0, 0, 0)
+        density_layout.setSpacing(4)
+
+        self._mesh_density_slider = QSlider(Qt.Orientation.Horizontal)
+        self._mesh_density_slider.setRange(0, len(MESH_DENSITY_PRESETS) - 1)
+        self._mesh_density_slider.setTickPosition(QSlider.TickPosition.TicksBelow)
+        self._mesh_density_slider.setTickInterval(1)
+        self._mesh_density_slider.setSingleStep(1)
+        self._mesh_density_slider.setPageStep(1)
+        self._mesh_density_slider.setValue(
+            MESH_DENSITY_PRESETS.index(DEFAULT_MESH_DIAMETER_DIVISIONS)
+        )
+        self._mesh_density_slider.valueChanged.connect(
+            self._on_mesh_density_slider_changed
+        )
+        slider_wrapper = QWidget()
+        slider_wrapper_layout = QHBoxLayout(slider_wrapper)
+        slider_wrapper_layout.setContentsMargins(
+            MESH_DENSITY_LABEL_EDGE_PAD,
+            0,
+            MESH_DENSITY_LABEL_EDGE_PAD,
+            0,
+        )
+        slider_wrapper_layout.addWidget(self._mesh_density_slider)
+        density_layout.addWidget(slider_wrapper)
+
+        self._density_mark_labels = _SliderTickLabels(
+            self._mesh_density_slider,
+            len(MESH_DENSITY_PRESETS),
+        )
+        density_layout.addWidget(self._density_mark_labels)
+        mesh_form.addRow(self._lbl_size, density_widget)
+
+        self._mesh_density_summary = QLabel("")
+        self._mesh_density_summary.setWordWrap(True)
+        set_hint_text(self._mesh_density_summary)
+        mesh_form.addRow(self._mesh_density_summary)
+
+        self._mesh_density_advanced_check = QCheckBox("")
+        self._mesh_density_advanced_check.toggled.connect(
+            lambda _: self._refresh_mesh_density_advanced_visible()
+        )
+        mesh_form.addRow(self._mesh_density_advanced_check)
+
+        self._mesh_density_spin = QSpinBox()
+        self._mesh_density_spin.setRange(MESH_DENSITY_MIN, MESH_DENSITY_MAX)
+        self._mesh_density_spin.setValue(DEFAULT_MESH_DIAMETER_DIVISIONS)
+        self._mesh_density_spin.valueChanged.connect(self._on_mesh_density_spin_changed)
+        self._lbl_mesh_density_advanced = QLabel("")
+        mesh_form.addRow(self._lbl_mesh_density_advanced, self._mesh_density_spin)
+
+        self._mesh_density_warning = QLabel("")
+        self._mesh_density_warning.setWordWrap(True)
+        set_hint_text(self._mesh_density_warning)
+        mesh_form.addRow(self._mesh_density_warning)
+
+        self._refine_spin = QDoubleSpinBox(self)
+        self._refine_spin.setRange(MESH_TARGET_LENGTH_MIN_M, MESH_TARGET_LENGTH_MAX_M)
+        self._refine_spin.setValue(
+            self._mesh_target_length_m(
+                radius=self._radius_spin.value(),
+                density=DEFAULT_MESH_DIAMETER_DIVISIONS,
+            )
+        )
         self._refine_spin.setDecimals(3)
         self._refine_spin.setSingleStep(0.01)
-        self._refine_spin.valueChanged.connect(lambda _: self._on_any_change())
-        self._lbl_size = QLabel("")
-        mesh_form.addRow(self._lbl_size, self._refine_spin)
+        self._refine_spin.setSuffix(" m")
+        self._refine_spin.setVisible(False)
+        self._refine_spin.valueChanged.connect(self._on_mesh_target_length_changed)
+        self._refresh_mesh_density_advanced_visible()
 
         self._n_elec_spin = QSpinBox()
         self._n_elec_spin.setRange(4, 64)
@@ -432,6 +586,150 @@ class MeshSetupPanel(QGroupBox):
             electrode_length_m * max(float(height), 1.0e-12) * max_ratio, 1.0e-12
         )
 
+    @staticmethod
+    def _clamped_mesh_density(value: object) -> int:
+        try:
+            density = int(round(float(value)))
+        except (TypeError, ValueError):
+            density = DEFAULT_MESH_DIAMETER_DIVISIONS
+        return max(MESH_DENSITY_MIN, min(density, MESH_DENSITY_MAX))
+
+    @staticmethod
+    def _nearest_mesh_density_preset_index(density: int) -> int:
+        target = int(density)
+        distances = [abs(value - target) for value in MESH_DENSITY_PRESETS]
+        return int(min(range(len(distances)), key=distances.__getitem__))
+
+    @staticmethod
+    def _mesh_target_length_m(*, radius: float, density: int) -> float:
+        try:
+            radius_m = float(radius)
+        except (TypeError, ValueError):
+            radius_m = 1.0
+        if not math.isfinite(radius_m) or radius_m <= 0.0:
+            radius_m = 1.0
+        density_i = MeshSetupPanel._clamped_mesh_density(density)
+        target_m = 2.0 * radius_m / max(float(density_i), 1.0)
+        return min(
+            max(target_m, MESH_TARGET_LENGTH_MIN_M),
+            MESH_TARGET_LENGTH_MAX_M,
+        )
+
+    @staticmethod
+    def _mesh_density_from_target_length(*, radius: float, target_length: float) -> int:
+        try:
+            radius_m = float(radius)
+            target_m = float(target_length)
+        except (TypeError, ValueError):
+            return DEFAULT_MESH_DIAMETER_DIVISIONS
+        if (
+            not math.isfinite(radius_m)
+            or not math.isfinite(target_m)
+            or radius_m <= 0.0
+            or target_m <= 0.0
+        ):
+            return DEFAULT_MESH_DIAMETER_DIVISIONS
+        return MeshSetupPanel._clamped_mesh_density((2.0 * radius_m) / target_m)
+
+    @staticmethod
+    def _default_mesh_target_length_m(*, radius: float) -> float:
+        return MeshSetupPanel._mesh_target_length_m(
+            radius=radius,
+            density=DEFAULT_MESH_DIAMETER_DIVISIONS,
+        )
+
+    @staticmethod
+    def _mesh_refinement_from_target(*, radius: float, target_length: float) -> int:
+        try:
+            raw = float(radius) / max(float(target_length), 1.0e-12) / 2.0
+        except (TypeError, ValueError):
+            raw = DEFAULT_MESH_DIAMETER_DIVISIONS / 4.0
+        if not math.isfinite(raw):
+            raw = DEFAULT_MESH_DIAMETER_DIVISIONS / 4.0
+        return max(2, int(round(raw)))
+
+    @staticmethod
+    def _estimated_cell_count(
+        *,
+        mesh_dimension: int,
+        radius: float,
+        height: float,
+        density: int,
+        refinement: int,
+        mesh_family: str,
+        n_electrodes: int,
+        n_rings: int,
+    ) -> int:
+        refinement_i = max(2, int(refinement))
+        density_f = float(max(int(density), 1))
+        if int(mesh_dimension) == 2:
+            base = MeshSetupPanel._interpolated_refinement_count(
+                MESH_2D_GMSH_ELEMENT_COUNTS_BY_REFINEMENT,
+                refinement_i,
+            )
+            electrode_factor = max(float(n_electrodes), 1.0) / 16.0
+            return max(8, int(round(base * (0.85 + 0.15 * electrode_factor))))
+
+        radius_f = max(float(radius), 1.0e-9)
+        height_f = max(float(height), 1.0e-9)
+        if str(mesh_family).strip().lower() == "hex":
+            n_core = max(8, 4 * refinement_i + 4)
+            n_ring = max(6, 2 * refinement_i + 4)
+            base_cells = n_core * n_core + 4 * n_core * n_ring
+            z_spacing = max(radius_f / max(refinement_i * 2.0, 1.0), 1.0e-12)
+            z_layers = max(
+                6,
+                refinement_i * 3,
+                int(math.ceil(height_f / z_spacing)),
+            )
+            return max(16, int(base_cells * z_layers))
+
+        if str(mesh_family).strip().lower() == "tetra":
+            base = MeshSetupPanel._interpolated_refinement_count(
+                MESH_3D_TETRA_GMSH_ELEMENT_COUNTS_BY_REFINEMENT,
+                refinement_i,
+            )
+            default_aspect = 0.16 / (2.0 * 0.18)
+            aspect = max(height_f / max(2.0 * radius_f, 1.0e-9), 0.05)
+            aspect_factor = max(aspect / default_aspect, 0.1) ** 0.85
+            total_electrodes = max(int(n_electrodes), 1) * max(int(n_rings), 1)
+            electrode_factor = 0.9 + 0.1 * (float(total_electrodes) / 16.0)
+            return max(16, int(round(base * aspect_factor * electrode_factor)))
+
+        aspect = max(height_f / max(2.0 * radius_f, 1.0e-9), 0.05)
+        estimate = (math.pi / 4.0) * aspect * (density_f**3) * 4.5
+        return max(16, int(round(estimate)))
+
+    @staticmethod
+    def _interpolated_refinement_count(
+        table: dict[int, int],
+        refinement: int,
+    ) -> float:
+        if not table:
+            return 0.0
+        refinement_i = int(refinement)
+        if refinement_i in table:
+            return float(table[refinement_i])
+        keys = sorted(table)
+        if refinement_i <= keys[0]:
+            left, right = keys[0], keys[1]
+        elif refinement_i >= keys[-1]:
+            left, right = keys[-2], keys[-1]
+        else:
+            left = max(key for key in keys if key < refinement_i)
+            right = min(key for key in keys if key > refinement_i)
+        slope = (float(table[right]) - float(table[left])) / float(right - left)
+        return float(table[left]) + slope * float(refinement_i - left)
+
+    @staticmethod
+    def _format_compact_count(count: int) -> str:
+        value = int(max(count, 0))
+        if value >= 1_000_000:
+            return f"{value / 1_000_000:.1f}M"
+        if value >= 1_000:
+            return f"{value / 1_000:.1f}k"
+        return str(value)
+
     def get_config(self) -> dict:
         stim_pattern = self._stim_pattern_edit.text().strip() or "{ad}"
         meas_pattern = self._meas_pattern_edit.text().strip() or stim_pattern
@@ -543,6 +841,9 @@ class MeshSetupPanel(QGroupBox):
             self._mesh_family_combo,
             self._radius_spin,
             self._height_spin,
+            self._mesh_density_slider,
+            self._mesh_density_advanced_check,
+            self._mesh_density_spin,
             self._refine_spin,
             self._n_elec_spin,
             self._n_rings_spin,
@@ -563,6 +864,11 @@ class MeshSetupPanel(QGroupBox):
         blockers = [widget.blockSignals(True) for widget in widgets]
         try:
             mesh_dimension = int(config.get("mesh_dimension", 2))
+            explicit_mesh_target_length = config.get("mesh_refinement") not in (
+                None,
+                "",
+            )
+            self._mesh_target_length_user_overridden = explicit_mesh_target_length
             explicit_2d_length = (
                 mesh_dimension == 2
                 and "electrode_length_m_override" in config
@@ -595,7 +901,25 @@ class MeshSetupPanel(QGroupBox):
             self._height_spin.setValue(
                 float(config.get("height", INTERACTIVE_3D_DEFAULT_HEIGHT))
             )
-            self._refine_spin.setValue(float(config.get("mesh_refinement", 0.1)))
+            if explicit_mesh_target_length:
+                target_length = self._first_float(
+                    config.get("mesh_refinement"),
+                    self._default_mesh_target_length_m(
+                        radius=float(self._radius_spin.value())
+                    ),
+                )
+                self._refine_spin.setValue(target_length)
+                self._sync_mesh_density_controls_from_target_length(target_length)
+            else:
+                self._mesh_density_spin.setValue(DEFAULT_MESH_DIAMETER_DIVISIONS)
+                self._mesh_density_slider.setValue(
+                    MESH_DENSITY_PRESETS.index(DEFAULT_MESH_DIAMETER_DIVISIONS)
+                )
+                self._refine_spin.setValue(
+                    self._default_mesh_target_length_m(
+                        radius=float(self._radius_spin.value())
+                    )
+                )
             self._n_elec_spin.setValue(
                 int(config.get("n_electrodes", config.get("n_elec", 16)))
             )
@@ -753,7 +1077,37 @@ class MeshSetupPanel(QGroupBox):
             self._electrode_length_user_overridden = True
         self._on_any_change()
 
+    def _on_mesh_density_slider_changed(self, value: int) -> None:
+        density = MESH_DENSITY_PRESETS[int(value)]
+        blocked = self._mesh_density_spin.blockSignals(True)
+        try:
+            self._mesh_density_spin.setValue(density)
+        finally:
+            self._mesh_density_spin.blockSignals(blocked)
+        self._mesh_target_length_user_overridden = False
+        self._on_any_change()
+
+    def _on_mesh_density_spin_changed(self, value: int) -> None:
+        density = self._clamped_mesh_density(value)
+        blocked = self._mesh_density_slider.blockSignals(True)
+        try:
+            self._mesh_density_slider.setValue(
+                self._nearest_mesh_density_preset_index(density)
+            )
+        finally:
+            self._mesh_density_slider.blockSignals(blocked)
+        self._mesh_target_length_user_overridden = False
+        self._on_any_change()
+
+    def _on_mesh_target_length_changed(self, _value: float) -> None:
+        self._mesh_target_length_user_overridden = True
+        self._sync_mesh_density_controls_from_target_length(
+            float(self._refine_spin.value())
+        )
+        self._on_any_change()
+
     def _on_any_change(self) -> None:
+        self._sync_mesh_target_length_spin()
         self._sync_default_2d_electrode_length_spin()
         self._refresh_protocol_enabled()
         self._clamp_3d_electrode_area_spin()
@@ -763,6 +1117,101 @@ class MeshSetupPanel(QGroupBox):
         self._point_count_cache = int(layout.get("points_per_frame", 0))
         self._refresh_point_count_label()
         self.config_changed.emit()
+
+    def _sync_mesh_density_controls_from_target_length(
+        self, target_length: float
+    ) -> None:
+        if not hasattr(self, "_mesh_density_spin"):
+            return
+        density = self._mesh_density_from_target_length(
+            radius=float(self._radius_spin.value()),
+            target_length=target_length,
+        )
+        spin_blocked = self._mesh_density_spin.blockSignals(True)
+        slider_blocked = self._mesh_density_slider.blockSignals(True)
+        try:
+            self._mesh_density_spin.setValue(density)
+            self._mesh_density_slider.setValue(
+                self._nearest_mesh_density_preset_index(density)
+            )
+        finally:
+            self._mesh_density_spin.blockSignals(spin_blocked)
+            self._mesh_density_slider.blockSignals(slider_blocked)
+
+    def _sync_mesh_target_length_spin(self) -> None:
+        if not hasattr(self, "_refine_spin"):
+            return
+        if self._mesh_target_length_user_overridden:
+            self._refresh_mesh_density_summary()
+            return
+        target = self._mesh_target_length_m(
+            radius=float(self._radius_spin.value()),
+            density=int(self._mesh_density_spin.value()),
+        )
+        blocked = self._refine_spin.blockSignals(True)
+        try:
+            if abs(float(self._refine_spin.value()) - target) > 1.0e-9:
+                self._refine_spin.setValue(target)
+        finally:
+            self._refine_spin.blockSignals(blocked)
+        self._refresh_mesh_density_summary()
+
+    def _refresh_mesh_density_advanced_visible(self) -> None:
+        if not hasattr(self, "_mesh_density_spin"):
+            return
+        advanced = self._mesh_density_advanced_check.isChecked()
+        self._lbl_mesh_density_advanced.setVisible(advanced)
+        self._mesh_density_spin.setVisible(advanced)
+        self._mesh_density_warning.setVisible(advanced)
+        self._refresh_mesh_density_summary()
+
+    def _refresh_mesh_density_summary(self) -> None:
+        if not hasattr(self, "_mesh_density_summary"):
+            return
+        radius = float(self._radius_spin.value())
+        target_length = float(self._refine_spin.value())
+        density = self._mesh_density_from_target_length(
+            radius=radius,
+            target_length=target_length,
+        )
+        mesh_dimension = 3 if self._dim_combo.currentIndex() == 1 else 2
+        height = float(self._height_spin.value()) if mesh_dimension == 3 else 0.0
+        mesh_family = (
+            str(self._mesh_family_combo.currentData() or "hex")
+            if mesh_dimension == 3
+            else "tetra"
+        )
+        refinement = self._mesh_refinement_from_target(
+            radius=radius,
+            target_length=target_length,
+        )
+        estimated_cells = self._estimated_cell_count(
+            mesh_dimension=mesh_dimension,
+            radius=radius,
+            height=height,
+            density=density,
+            refinement=refinement,
+            mesh_family=mesh_family,
+            n_electrodes=int(getattr(self, "_n_elec_spin", None).value())
+            if hasattr(self, "_n_elec_spin")
+            else 16,
+            n_rings=int(getattr(self, "_n_rings_spin", None).value())
+            if hasattr(self, "_n_rings_spin")
+            else 1,
+        )
+        self._mesh_density_summary.setText(
+            t(
+                "sim.mesh.density_summary",
+                density=density,
+                target=target_length,
+                refinement=refinement,
+                cells=self._format_compact_count(estimated_cells),
+            )
+        )
+        self._mesh_density_warning.setText(t("sim.mesh.density_warning"))
+        self._mesh_density_warning.setVisible(
+            self._mesh_density_advanced_check.isChecked()
+        )
 
     def _sync_default_2d_electrode_length_spin(self) -> None:
         if (
@@ -991,7 +1440,22 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_height.setText(t("sim.mesh.height_label"))
         self._height_spin.setToolTip(t("sim.mesh.height_tooltip"))
         self._lbl_size.setText(t("sim.mesh.size_label"))
+        self._mesh_density_slider.setToolTip(t("sim.mesh.refinement_tooltip"))
         self._refine_spin.setToolTip(t("sim.mesh.refinement_tooltip"))
+        self._density_mark_labels.set_texts(
+            (
+                t("sim.mesh.density_mark.coarse"),
+                t("sim.mesh.density_mark.medium"),
+                t("sim.mesh.density_mark.fine"),
+                t("sim.mesh.density_mark.very_fine"),
+            )
+        )
+        self._mesh_density_advanced_check.setText(t("sim.mesh.density_advanced_toggle"))
+        self._lbl_mesh_density_advanced.setText(t("sim.mesh.density_advanced_label"))
+        self._mesh_density_spin.setSuffix(t("sim.mesh.density_spin_suffix"))
+        self._mesh_density_spin.setToolTip(t("sim.mesh.density_advanced_tooltip"))
+        self._mesh_density_warning.setText(t("sim.mesh.density_warning"))
+        self._refresh_mesh_density_summary()
         self._lbl_electrodes.setText(t("sim.mesh.electrodes_label"))
         self._lbl_rings.setText(t("sim.mesh.rings_label"))
         self._lbl_electrode_length.setText(t("sim.mesh.electrode_length_label"))

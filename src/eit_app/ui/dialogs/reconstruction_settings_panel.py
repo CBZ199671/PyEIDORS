@@ -401,9 +401,6 @@ class ReconstructionSettingsPanel(QWidget):
             else t("dlg.recon_settings.toggle_show")
         )
 
-    def set_expanded(self, expanded: bool) -> None:
-        self._set_expanded(expanded)
-
     def load_metadata(self, metadata: dict[str, Any]) -> None:
         self._metadata = dict(metadata or {})
         meta = self._metadata

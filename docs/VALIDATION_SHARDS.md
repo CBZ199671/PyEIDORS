@@ -5,7 +5,7 @@ This project uses sharded pytest commands for recoverable validation. The full
 so broad validation should run named shards and persist one log per shard.
 
 The plain local pytest entry point is intentionally a quick software gate:
-`uv run pytest -q` skips `slow`, `integration`, `gpu`, `gui`, and `hardware`
+`python -m pytest -q` skips `slow`, `integration`, `gpu`, `gui`, and `hardware`
 tiers unless their explicit opt-in flags are passed. This keeps normal local
 validation bounded and prevents hardware-facing checks from running when no
 device is connected.
@@ -13,26 +13,26 @@ device is connected.
 Always invoke the runner through the FEniCSx/Nix environment:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --list
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --list
 ```
 
 Print the exact default broad commands without running them. This includes GUI and
 focused smoke coverage, but still skips hardware unless explicitly opted in:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --dry-run
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --dry-run
 ```
 
 Run the focused FEniCSx/PETSc refactor smoke shard:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --shard fp-refactor-smoke
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --shard fp-refactor-smoke
 ```
 
 Run all category shards and keep going shard by shard:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --all --timeout 300
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --all --timeout 300
 ```
 
 By default, broad selections (`--run`, `--dry-run`, and `--all`) include the
@@ -43,29 +43,29 @@ protocol, simulator/factory, and device discovery tests run only when explicitly
 requested:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --all --include-hardware --timeout 300
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --all --include-hardware --timeout 300
 ```
 
 The two shards can also be reviewed independently:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --shard gui --timeout 300
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --run --shard hardware --timeout 300
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --shard gui --timeout 300
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --run --shard hardware --timeout 300
 ```
 
 Direct pytest opt-ins are also available when a shard is not needed:
 
 ```bash
-uv run pytest --run-gui tests/unit/test_eit_app_gui_smoke.py -q --no-cov
-uv run pytest --run-hardware tests/unit/test_eit_app_serial_device.py -q --no-cov
-uv run pytest --run-integration --run-slow tests/integration -q --no-cov
+nix develop .#complex64-cuda -c python -m pytest --run-gui tests/unit/test_eit_app_gui_smoke.py -q --no-cov
+nix develop .#complex64-cuda -c python -m pytest --run-hardware tests/unit/test_eit_app_serial_device.py -q --no-cov
+nix develop .#complex64-cuda -c python -m pytest --run-integration --run-slow tests/integration -q --no-cov
 ```
 
 Forward extra pytest arguments with repeated `--pytest-arg`. Use the
 `--pytest-arg=<value>` form for dash-prefixed pytest options:
 
 ```bash
-nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --dry-run --shard fp-refactor-smoke --pytest-arg=-k --pytest-arg "solver and not slow"
+nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --dry-run --shard fp-refactor-smoke --pytest-arg=-k --pytest-arg "solver and not slow"
 ```
 
 The runner writes local logs and `summary.json` under

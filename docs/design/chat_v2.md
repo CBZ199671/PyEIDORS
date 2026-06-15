@@ -480,7 +480,7 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 ## Quick Start
 
-0. **Install Nix and uv**:
+0. **Install Nix**:
    - Use the locked setup in `docs/NIX_FENICSX.md`.
    - On WSL2/Linux, run commands from the repository root.
 
@@ -493,13 +493,12 @@ SoftwareX manuscript in preparation; citation info will be added after acceptanc
 
 2. **Enter the maintained environment**:
    ```bash
-   nix develop
-   uv sync
+   nix develop .#complex64-cuda
    ```
 
    For the CUDA shell:
    ```bash
-   nix develop .#cuda
+   nix develop .#complex64-cuda
    ```
 
 3. **Validate the package**:
@@ -733,12 +732,10 @@ PyEIDORS is developed in the research environment of 455 Lab, College of Informa
 
 ## Current Environment Setup
 
-The maintained workflow is Nix + uv with FEniCSx/DOLFINx. See `docs/NIX_FENICSX.md` for CPU, CUDA, validation, and troubleshooting commands. Docker content from the old runtime has been removed and should not be used as the installation path.
+The maintained workflow is pure Nix with FEniCSx/DOLFINx. See `docs/NIX_FENICSX.md` for CPU, CUDA, validation, and troubleshooting commands. Docker content from the old runtime has been removed and should not be used as the installation path.
 
 ```bash
-nix develop
-uv sync
-python -m pytest -q
+nix develop .#complex64-cuda --command python -m pytest -q
 ```
 
 For the GUI, use the project launchers:

@@ -38,7 +38,8 @@ def test_refactor_smoke_shard_has_no_cov_nix_command():
     shard = module.select_shards(["fp-refactor-smoke"])[0]
     command = module.emitted_shell_command(shard)
 
-    assert command[:5] == ["nix", "develop", "-c", "uv", "run"]
+    assert command[:6] == ["nix", "develop", ".#complex64-cuda", "-c", "python", "-m"]
+    assert "uv" not in command
     assert "--no-cov" in command
     assert "tests/unit/test_forward_solver_presets.py" in command
     assert "tests/unit/test_jacobian_linearization.py" in command

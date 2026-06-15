@@ -88,12 +88,19 @@ from eit_app.models.reconstruction_methods import (
 from eit_app.ui.database.database_tab import DatabaseTab
 from eit_app.ui.hardware.hardware_tab import HardwareTab
 from eit_app.ui.cache_telemetry_panel import CacheTelemetryDialog
+from eit_app.ui.forward_prewarm import (
+    backend_forward_setup_warm_key,
+    sim_forward_prewarm_mode,
+    simulation_backend_warm_report as _simulation_backend_warm_report,
+    simulation_signature_value,
+)
 from eit_app.ui.simulation.inverse_problem_panel import (
     normalize_simulation_inverse_method,
 )
 from eit_app.ui.simulation.dataset_generator_tab import DatasetGeneratorTab
 from eit_app.ui.simulation.simulation_tab import SimulationTab
 from eit_app.ui.status_bar import EITStatusBar
+from eit_app.ui.forward_timing import _record_forward_visualization_timing
 from eit_app.models.precision import current_precision, set_precision
 from eit_app.ui.theme import current_theme_mode, set_theme_mode
 
@@ -239,69 +246,6 @@ def _format_status_bytes(value: object) -> str:
     return f"{size:.1f} {units[unit_index]}"
 
 
-def _backend_worker_probe_summary(metadata: object) -> dict[str, object]:
-    if not isinstance(metadata, dict):
-        return {
-            "petsc_cuda": None,
-            "cache_hit": None,
-            "cache_layer": "",
-            "status_text": "--",
-        }
-    nested_probe = metadata.get("petsc_cuda_probe")
-    if isinstance(nested_probe, dict):
-        probe_cache = nested_probe.get("probe_cache")
-        petsc_cuda = nested_probe.get("petsc_cuda")
-    else:
-        probe_cache = metadata.get("petsc_cuda_probe_cache")
-        petsc_cuda = metadata.get("petsc_cuda")
-    if not isinstance(probe_cache, dict):
-        probe_cache = {}
-    cache_hit_raw = probe_cache.get("hit")
-    cache_hit = bool(cache_hit_raw) if cache_hit_raw is not None else None
-    cache_layer = str(probe_cache.get("layer", "") or "")
-    if cache_hit is None:
-        status_text = "--"
-    else:
-        hit_label = "hit" if cache_hit else "miss"
-        status_text = f"{hit_label}/{cache_layer}" if cache_layer else hit_label
-    return {
-        "petsc_cuda": petsc_cuda if isinstance(petsc_cuda, bool) else None,
-        "cache_hit": cache_hit,
-        "cache_layer": cache_layer,
-        "status_text": status_text,
-    }
-
-
-def _simulation_backend_warm_report(
-    meta: object,
-    *,
-    profile: str,
-    warm_key: str,
-    setup_prime: bool,
-) -> dict[str, object]:
-    prime_metadata = dict(getattr(meta, "prime_metadata", {}) or {})
-    probe_summary = _backend_worker_probe_summary(prime_metadata)
-    return {
-        "profile": str(getattr(meta, "profile", profile)),
-        "pid": int(getattr(meta, "pid", 0) or 0),
-        "rss_bytes": int(getattr(meta, "rss_bytes", 0) or 0),
-        "rss_limit_bytes": int(getattr(meta, "rss_limit_bytes", 0) or 0),
-        "primed_runtime": bool(getattr(meta, "primed_runtime", False)),
-        "prime_command": str(getattr(meta, "prime_command", "") or ""),
-        "prime_duration_ms": float(getattr(meta, "prime_duration_ms", 0.0) or 0.0),
-        "prime_metadata": prime_metadata,
-        "petsc_cuda_probe_cache_hit": probe_summary["cache_hit"],
-        "petsc_cuda_probe_cache_layer": probe_summary["cache_layer"],
-        "petsc_cuda_probe_status": probe_summary["status_text"],
-        "petsc_cuda_available": probe_summary["petsc_cuda"],
-        "request_duration_ms": float(getattr(meta, "request_duration_ms", 0.0) or 0.0),
-        "setup_prime": bool(setup_prime),
-        "warm_key": warm_key,
-        "recycled_after_request": bool(getattr(meta, "recycled_after_request", False)),
-        "recycle_reason": str(getattr(meta, "recycle_reason", "") or ""),
-    }
-
-
 def _runtime_diagnostics_enabled() -> bool:
     value = os.getenv(_RUNTIME_DIAGNOSTICS_ENV, "").strip().lower()
     return value in {"1", "true", "yes", "on", "dev"}
@@ -374,26 +318,6 @@ def _format_runtime_diagnostics(
         parts.append(f"pc={lazy_pc}")
     parts.append(f"cache={cache_label}")
     return " | " + ", ".join(parts) if parts else ""
-
-
-def _record_forward_visualization_timing(
-    result: ForwardSolverResult,
-    *,
-    visual_ms: float,
-) -> None:
-    if not isinstance(result.forward_model_config, dict):
-        return
-    elapsed = max(0.0, float(visual_ms))
-    timings = dict(result.forward_model_config.get("forward_timing_ms") or {})
-    timings["gui_visualization_update"] = elapsed
-    phase_order = list(
-        result.forward_model_config.get("forward_timing_phase_order") or []
-    )
-    if "gui_visualization_update" not in phase_order:
-        phase_order.append("gui_visualization_update")
-    result.forward_model_config["forward_timing_ms"] = timings
-    result.forward_model_config["forward_timing_phase_order"] = phase_order
-    result.forward_model_config["gui_forward_visualization_update_ms"] = elapsed
 
 
 def _greit_default_imgsz_for_forward_config(
@@ -3145,15 +3069,6 @@ class EITWorkstation(QMainWindow):
             fn=_gc,
         )
 
-    @staticmethod
-    def _entry_index(entries: list[dict], selected: dict | None) -> int:
-        if not selected:
-            return 0
-        for index, entry in enumerate(entries):
-            if entry.get("file_path") == selected.get("file_path"):
-                return index
-        return 0
-
     @Slot(dict)
     def _on_db_reconstruct_requested(self, config: dict) -> None:
         """User triggered a reconstruction from the Database tab."""
@@ -3682,24 +3597,7 @@ class EITWorkstation(QMainWindow):
 
     @staticmethod
     def _simulation_signature_value(value):
-        if isinstance(value, np.generic):
-            return EITWorkstation._simulation_signature_value(value.item())
-        if isinstance(value, np.ndarray):
-            return EITWorkstation._simulation_signature_value(value.tolist())
-        if isinstance(value, complex):
-            return mapping_complex_value(value)
-        if isinstance(value, Path):
-            return str(value)
-        if isinstance(value, dict):
-            return {
-                str(key): EITWorkstation._simulation_signature_value(val)
-                for key, val in sorted(value.items(), key=lambda item: str(item[0]))
-            }
-        if isinstance(value, (list, tuple)):
-            return [EITWorkstation._simulation_signature_value(item) for item in value]
-        if isinstance(value, (str, int, float, bool)) or value is None:
-            return value
-        return repr(value)
+        return simulation_signature_value(value)
 
     @staticmethod
     def _inhomogeneity_signature_payload(specs) -> list[dict[str, object]]:
@@ -3743,52 +3641,11 @@ class EITWorkstation(QMainWindow):
         request: ForwardSolverRequest,
         setup_prime: bool,
     ) -> str:
-        profile_name = str(profile or "default").strip() or "default"
-        if not setup_prime:
-            return profile_name
-        config = dict(request.forward_model_config or {})
-        volatile_or_non_setup_keys = {
-            "background_conductivity",
-            "noise_level",
-            "request_source",
-            "simulation_input_signature",
-            "simulation_input_signature_payload",
-        }
-
-        def _setup_config(payload: dict[str, object]) -> dict[str, object]:
-            return {
-                str(key): value
-                for key, value in payload.items()
-                if str(key) not in volatile_or_non_setup_keys
-                and str(key) != "inhomogeneities"
-                and not str(key).startswith("inhomogeneities_")
-            }
-
-        setup_payload = {
-            "schema": "simulation_forward_setup_prime_v1",
-            "profile": profile_name,
-            "mesh_dimension": int(request.mesh_dimension),
-            "mesh_refinement": float(request.mesh_refinement),
-            "n_electrodes": int(request.n_electrodes),
-            "background_is_complex": bool(
-                np.iscomplexobj(np.asarray(request.background_conductivity))
-            ),
-            "forward_model_config": _setup_config(config),
-        }
-        signature_payload = config.get("simulation_input_signature_payload")
-        if isinstance(signature_payload, dict):
-            signature_config = signature_payload.get("forward_model_config")
-            if isinstance(signature_config, dict):
-                setup_payload["forward_model_config"] = _setup_config(
-                    dict(signature_config)
-                )
-        canonical = EITWorkstation._simulation_signature_value(setup_payload)
-        encoded = json.dumps(
-            canonical,
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode("utf-8")
-        return f"{profile_name}:setup:{hashlib.sha256(encoded).hexdigest()[:16]}"
+        return backend_forward_setup_warm_key(
+            profile=profile,
+            request=request,
+            setup_prime=setup_prime,
+        )
 
     @staticmethod
     def _forward_result_simulation_signature(
@@ -3840,16 +3697,7 @@ class EITWorkstation(QMainWindow):
         return max(0, min(value, 5000))
 
     def _sim_forward_prewarm_mode(self, *, mesh_dimension: int) -> str:
-        if int(mesh_dimension) != 3:
-            return "solve"
-        raw = os.getenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "setup").strip().lower()
-        if raw in {"0", "false", "no", "off", "none", "disabled"}:
-            return "off"
-        if raw in {"1", "true", "yes", "on", "solve", "full"}:
-            return "solve"
-        if raw in {"setup", "forward_setup", "jit", "prime", "setup_prime"}:
-            return "setup"
-        return "worker"
+        return sim_forward_prewarm_mode(mesh_dimension=mesh_dimension)
 
     @Slot()
     def _schedule_initial_sim_forward_prewarm(self) -> None:

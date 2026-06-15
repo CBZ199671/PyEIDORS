@@ -12,6 +12,16 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
+def _subprocess_env() -> dict[str, str]:
+    env = os.environ.copy()
+    src_path = str(REPO_ROOT / "src")
+    existing = [entry for entry in env.get("PYTHONPATH", "").split(os.pathsep) if entry]
+    env["PYTHONPATH"] = os.pathsep.join(
+        [src_path, *(entry for entry in existing if entry != src_path)]
+    )
+    return env
+
+
 def test_top_level_pyeidors_facade_stays_narrow() -> None:
     import pyeidors
 
@@ -48,8 +58,7 @@ if not callable(mod.check_environment):
 if "_TORCH_AVAILABLE" not in dir(mod):
     raise SystemExit("private env compatibility flag missing from dir()")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -115,8 +124,7 @@ heavy_loaded = [
 if heavy_loaded:
     raise SystemExit(f"eager forward imports: {heavy_loaded}")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -144,8 +152,7 @@ if mod.petsc_scalar_dtype() != np.dtype(np.complex64):
 if "petsc4py" in sys.modules:
     raise SystemExit("fake PETSc scalar query loaded petsc4py")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -189,8 +196,7 @@ if "pyeidors.data.structures" not in sys.modules:
 if "pyeidors.data.factor_sweep" in sys.modules:
     raise SystemExit("core data export loaded factor_sweep")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -233,8 +239,7 @@ from pyeidors.perf import capabilities
 if capabilities.__name__ != "pyeidors.perf.capabilities":
     raise SystemExit("submodule import failed")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -269,8 +274,7 @@ heavy_loaded = [
 if heavy_loaded:
     raise SystemExit(f"eager visualization imports: {heavy_loaded}")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -304,8 +308,7 @@ from pyeidors.io import hdf5_artifacts
 if hdf5_artifacts.__name__ != "pyeidors.io.hdf5_artifacts":
     raise SystemExit("io submodule import failed")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -336,8 +339,7 @@ if heavy_loaded:
 if "helpers" not in dir(femx):
     raise SystemExit("femx helpers submodule missing from dir")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -373,8 +375,7 @@ if heavy_loaded:
 if "geometry_exchange" not in dir(interop):
     raise SystemExit("interop geometry_exchange submodule missing from dir")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -420,8 +421,7 @@ if CacheManager.__name__ != "CacheManager":
 if "pyeidors.cache.manager" not in sys.modules:
     raise SystemExit("lazy cache export did not import manager")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -465,8 +465,7 @@ if "pyeidors.physics.unit_consistency" not in sys.modules:
 if "pyeidors.physics.current_drive" in sys.modules:
     raise SystemExit("unit consistency export loaded current_drive")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -506,8 +505,7 @@ if layout.__name__ != "pyeidors.electrodes.layout":
 if "pyeidors.electrodes.patterns" in sys.modules:
     raise SystemExit("layout submodule loaded pattern manager")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -559,8 +557,7 @@ if "pyeidors.inverse.solvers.gauss_newton" in sys.modules:
 if "pyeidors.inverse.jacobian.direct_jacobian" in sys.modules:
     raise SystemExit("lightweight jacobian export loaded direct calculator")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -606,8 +603,7 @@ if sparse_projection.__name__ != "pyeidors.inverse.solvers.sparse_projection":
 if "pyeidors.inverse.solvers.gauss_newton_engine" in sys.modules:
     raise SystemExit("light solver submodule import loaded GN engine")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -655,8 +651,7 @@ if base_regularization.__name__ != "pyeidors.inverse.regularization.base_regular
 if "pyeidors.inverse.regularization.smoothness" in sys.modules:
     raise SystemExit("base regularization submodule loaded smoothness")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -703,8 +698,7 @@ if laplace.__name__ != "pyeidors.inverse.prior.laplace":
 if "pyeidors.inverse.prior.tv_irls" in sys.modules:
     raise SystemExit("laplace submodule import loaded tv_irls")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -749,8 +743,7 @@ if temporal.__name__ != "pyeidors.inverse.postprocess.temporal":
 if "pyeidors.inverse.postprocess.tv" in sys.modules:
     raise SystemExit("temporal submodule import loaded tv")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -797,8 +790,7 @@ if inexact_controller.__name__ != "pyeidors.inverse.reduced.inexact_controller":
 if "pyeidors.inverse.reduced.reduced_gn_step" in sys.modules:
     raise SystemExit("inexact controller import loaded reduced_gn_step")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -830,8 +822,7 @@ from pyeidors.inverse.matrix_free import dual_mesh
 if dual_mesh.__name__ != "pyeidors.inverse.matrix_free.dual_mesh":
     raise SystemExit("matrix-free submodule import failed")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,
@@ -873,8 +864,7 @@ if heavy_loaded:
 if "base" not in dir(workflows):
     raise SystemExit("workflow submodule name missing from dir")
 """
-    env = os.environ.copy()
-    env["PYTHONPATH"] = str(REPO_ROOT / "src")
+    env = _subprocess_env()
     subprocess.run(
         [sys.executable, "-c", script],
         env=env,

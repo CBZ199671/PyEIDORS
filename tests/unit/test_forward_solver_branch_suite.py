@@ -981,11 +981,28 @@ def test_solve_with_petsc_covers_cuda_dense_unavailable_dense_fallback_failure_a
         "petsc_device_effective": "cuda",
         "capability": {},
     }
-    with pytest.raises(
-        RuntimeError, match="PETSc CUDA solve failed with a negative convergence reason"
-    ):
-        EITForwardModel._solve_with_petsc(
-            model,
-            sigma=None,
-            pattern_matrix=np.array([[1.0, -1.0]], dtype=float),
-        )
+    monkeypatch.setattr(
+        model,
+        "_solve_with_cuda_dense_lu_fallback",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            RuntimeError("dense LU failed")
+        ),
+    )
+    cpu_fallback: dict[str, str] = {}
+
+    def _cpu_fallback(_sigma, pattern_matrix, *, fallback_reason, solve_start):
+        del solve_start
+        cpu_fallback["reason"] = str(fallback_reason)
+        return np.full((5, pattern_matrix.shape[0]), 7.0, dtype=float)
+
+    monkeypatch.setattr(model, "_solve_with_cpu_scipy_fallback", _cpu_fallback)
+    sol_negative_reason = EITForwardModel._solve_with_petsc(
+        model,
+        sigma=None,
+        pattern_matrix=np.array([[1.0, -1.0]], dtype=float),
+    )
+    assert sol_negative_reason.shape == (5, 1)
+    assert np.all(sol_negative_reason == 7.0)
+    assert cpu_fallback["reason"].startswith(
+        "petsc_ksp_failed:-9;dense_lu_failed:dense LU failed"
+    )

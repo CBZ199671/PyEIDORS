@@ -334,7 +334,8 @@ def safe_dot(lhs: Any, rhs: Any, op_name: str) -> np.ndarray | float:
 
     lhs_array = _as_finite_array(lhs, f"{op_name}.lhs")
     rhs_array = _as_finite_array(rhs, f"{op_name}.rhs")
-    result = np.dot(lhs_array, rhs_array)
+    with np.errstate(over="ignore", invalid="ignore"):
+        result = np.dot(lhs_array, rhs_array)
     result_array = np.asarray(result)
     if not all_finite_values(result_array):
         raise FloatingPointError(

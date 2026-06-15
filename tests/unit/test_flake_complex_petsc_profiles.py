@@ -38,17 +38,25 @@ def test_v131_complex_cuda_shells_select_complex_dolfinx_petsc_profiles():
     text = _flake_text()
 
     assert '"complex-cuda" = pkgsCuda.mkShell {' in text
+    complex_cuda_block = text.split('"complex-cuda" = pkgsCuda.mkShell {', 1)[1].split(
+        "shellHook =", 1
+    )[0]
     assert 'envProfile = "complex-cuda";' in text
     assert 'export PYEIDORS_PETSC_SCALAR_TYPE="complex"' in text
     assert 'export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"' in text
     assert "cudaPetscComplex" in text
     assert "cudaFenicsDolfinxComplex" in text
+    assert "pkgsCuda.nodejs" in complex_cuda_block
 
     assert '"complex64-cuda" = pkgsCuda.mkShell {' in text
+    complex64_cuda_block = text.split('"complex64-cuda" = pkgsCuda.mkShell {', 1)[
+        1
+    ].split("shellHook =", 1)[0]
     assert 'envProfile = "complex64-cuda";' in text
     assert 'export PYEIDORS_PETSC_SCALAR_TYPE="complex64"' in text
     assert "cudaPetscComplexSingle" in text
     assert "cudaFenicsDolfinxComplexSingle" in text
+    assert "pkgsCuda.nodejs" in complex64_cuda_block
 
 
 def test_v622_nix_apps_match_dev_launcher_wslg_pyvista_offscreen_default():

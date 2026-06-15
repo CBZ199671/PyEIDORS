@@ -48,6 +48,9 @@ from eit_app.models.frame_model import FrameData
 from eit_app.models.simulation_state import InhomogeneitySpec
 
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+
+
 def test_v136_real_3d_forward_routes_from_complex_gui_to_real_cuda_worker(
     monkeypatch,
 ) -> None:
@@ -116,6 +119,22 @@ def test_v624_packaged_profile_command_wins_over_direct_profile_mismatch(
         "--output",
         "out.h5",
     ]
+
+
+def test_v638_backend_worker_nix_develop_does_not_wrap_uv(monkeypatch) -> None:
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_COMMAND_CUDA", raising=False)
+
+    cmd, launch_mode = backend_worker_command(
+        profile="cuda",
+        worker_args=["forward", "--input", "in.h5", "--output", "out.h5"],
+    )
+
+    assert launch_mode == "nix_develop"
+    assert cmd[:5] == ["nix", "--option", "warn-dirty", "false", "develop"]
+    assert ".#cuda" in cmd
+    assert cmd[-1].startswith("python -m eit_app.backend_worker ")
+    assert "uv run" not in cmd[-1]
 
 
 def test_v624_real_3d_cpu_forward_routes_from_complex_gui_to_default_worker(
@@ -250,6 +269,9 @@ def test_v136_backend_worker_runner_uses_selected_nix_profile(
         "develop",
     ]
     assert ".#cuda" in captured["cmd"]
+    shell_command = captured["cmd"][-1]
+    assert shell_command.startswith("python -m eit_app.backend_worker ")
+    assert "uv run" not in shell_command
     assert captured["env"]["EIT_APP_GUI_RUNTIME_PROFILE"] == "cuda"
     assert captured["env"]["EIT_APP_GUI_PROFILE"] == "gpu"
     assert captured["env"]["PYEIDORS_ENV_SYNC_CACHE"] == "1"
@@ -447,7 +469,7 @@ def test_v319_forward_timing_metadata_schema(monkeypatch) -> None:
 
 
 def test_v319_record_forward_visualization_timing_metadata() -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_timing as forward_timing_module
 
     result = ForwardSolverResult(
         boundary_voltages=np.array([1.0], dtype=np.float32),
@@ -462,7 +484,7 @@ def test_v319_record_forward_visualization_timing_metadata() -> None:
         },
     )
 
-    main_window_module._record_forward_visualization_timing(result, visual_ms=12.5)
+    forward_timing_module._record_forward_visualization_timing(result, visual_ms=12.5)
 
     assert result.forward_model_config["forward_timing_ms"][
         "gui_visualization_update"
@@ -474,6 +496,85 @@ def test_v319_record_forward_visualization_timing_metadata() -> None:
         "gui_visualization_update"
         in result.forward_model_config["forward_timing_phase_order"]
     )
+
+
+def test_v639_gui_helper_imports_stay_lightweight() -> None:
+    code = (
+        "import sys\n"
+        "import eit_app.ui.forward_timing\n"
+        "import eit_app.ui.forward_prewarm\n"
+        "for name in ('pyqtgraph', 'OpenGL', 'eit_app.ui.main_window'):\n"
+        "    if name in sys.modules:\n"
+        "        raise SystemExit(f'unexpected heavy import: {name}')\n"
+    )
+
+    completed = subprocess.run(
+        [sys.executable, "-c", code],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_v650_gui_helper_modules_are_git_tracked_for_nix_flake_source() -> None:
+    if not (REPO_ROOT / ".git").exists():
+        pytest.skip("requires Git checkout to verify flake source tracking")
+
+    for rel_path in (
+        "src/eit_app/ui/forward_prewarm.py",
+        "src/eit_app/ui/forward_timing.py",
+    ):
+        completed = subprocess.run(
+            ["git", "ls-files", "--error-unmatch", rel_path],
+            cwd=REPO_ROOT,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+
+        assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
+def test_v651_simulation_mesh_density_copy_avoids_exact_size_claim() -> None:
+    from eit_app.i18n.en import TRANSLATIONS as EN_TRANSLATIONS
+    from eit_app.i18n.zh import TRANSLATIONS as ZH_TRANSLATIONS
+
+    assert ZH_TRANSLATIONS["sim.mesh.size_label"] == "网格细度："
+    assert "网格尺寸" not in ZH_TRANSLATIONS["sim.mesh.size_label"]
+    assert "特征长度" not in ZH_TRANSLATIONS["sim.mesh.size_label"]
+    assert EN_TRANSLATIONS["sim.mesh.size_label"] == "Mesh density:"
+    assert "Mesh size" not in EN_TRANSLATIONS["sim.mesh.size_label"]
+    assert "Target length" not in EN_TRANSLATIONS["sim.mesh.size_label"]
+
+    zh_tooltip = ZH_TRANSLATIONS["sim.mesh.refinement_tooltip"]
+    en_tooltip = EN_TRANSLATIONS["sim.mesh.refinement_tooltip"]
+    assert "粗/中/细/很细" in zh_tooltip
+    assert "D/18" in zh_tooltip
+    assert "生成尺度 h" in zh_tooltip
+    assert "细化参数" in zh_tooltip
+    assert "边长/直径统计" in zh_tooltip
+    assert "domain diameter D" in en_tooltip
+    assert "generation scale h" in en_tooltip
+    assert "integer refinement" in en_tooltip
+    assert "D/18" in en_tooltip
+    assert "edge-length or diameter statistics" in en_tooltip
+
+    assert ZH_TRANSLATIONS["sim.mesh.density_summary"].startswith("D/{density}")
+    assert "refinement" in ZH_TRANSLATIONS["sim.mesh.density_summary"]
+    assert "预估元素数" in ZH_TRANSLATIONS["sim.mesh.density_summary"]
+    assert "estimated elements" in EN_TRANSLATIONS["sim.mesh.density_summary"]
+    assert ZH_TRANSLATIONS["sim.mesh.density_advanced_toggle"] == "高级输入"
+    assert "求解时间" in ZH_TRANSLATIONS["sim.mesh.density_warning"]
+
+    source = (REPO_ROOT / "src/eit_app/ui/simulation/mesh_setup_panel.py").read_text(
+        encoding="utf-8"
+    )
+    assert "QSlider" in source
+    assert "_SliderTickLabels" in source
+    assert "_mesh_density_spin" in source
+    assert "_mesh_density_warning" in source
 
 
 def test_v326_forward_mesh_geometry_arrays_stream_connectivity_once() -> None:
@@ -765,7 +866,7 @@ def test_v320_prime_forward_setup_worker_pool_helper_dispatches_command(
 
 
 def test_v322_setup_prime_warm_key_tracks_setup_not_inhomogeneity() -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_prewarm as forward_prewarm_module
 
     setup_config = {
         "mesh_dimension": 3,
@@ -817,17 +918,17 @@ def test_v322_setup_prime_warm_key_tracks_setup_not_inhomogeneity() -> None:
             forward_model_config=forward_config,
         )
 
-    key_a = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_a = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(inhomogeneity_size=0.1),
         setup_prime=True,
     )
-    key_b = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_b = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(inhomogeneity_size=0.3, signature="sig-b"),
         setup_prime=True,
     )
-    key_c = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_c = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(
             inhomogeneity_size=0.3,
@@ -841,7 +942,7 @@ def test_v322_setup_prime_warm_key_tracks_setup_not_inhomogeneity() -> None:
     assert key_a == key_b
     assert key_a != key_c
     assert (
-        main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+        forward_prewarm_module.backend_forward_setup_warm_key(
             profile="cuda",
             request=_request(inhomogeneity_size=0.1),
             setup_prime=False,
@@ -851,7 +952,7 @@ def test_v322_setup_prime_warm_key_tracks_setup_not_inhomogeneity() -> None:
 
 
 def test_v322_setup_prime_warm_key_fallback_ignores_volatile_fields() -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_prewarm as forward_prewarm_module
 
     stable_config = {
         "mesh_dimension": 3,
@@ -874,7 +975,7 @@ def test_v322_setup_prime_warm_key_fallback_ignores_volatile_fields() -> None:
             forward_model_config=forward_config,
         )
 
-    key_a = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_a = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(
             background_conductivity=1.0,
@@ -885,7 +986,7 @@ def test_v322_setup_prime_warm_key_fallback_ignores_volatile_fields() -> None:
         ),
         setup_prime=True,
     )
-    key_b = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_b = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(
             background_conductivity=2.0,
@@ -896,7 +997,7 @@ def test_v322_setup_prime_warm_key_fallback_ignores_volatile_fields() -> None:
         ),
         setup_prime=True,
     )
-    key_c = main_window_module.EITWorkstation._backend_forward_setup_warm_key(
+    key_c = forward_prewarm_module.backend_forward_setup_warm_key(
         profile="cuda",
         request=_request(measurement_protocol="adjacent"),
         setup_prime=True,
@@ -907,33 +1008,27 @@ def test_v322_setup_prime_warm_key_fallback_ignores_volatile_fields() -> None:
 
 
 def test_v610_3d_prewarm_mode_defaults_to_setup(monkeypatch) -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_prewarm as forward_prewarm_module
 
     monkeypatch.delenv("EIT_APP_FORWARD_PREWARM_3D_MODE", raising=False)
-    mode = main_window_module.EITWorkstation._sim_forward_prewarm_mode(
-        object(),
-        mesh_dimension=3,
-    )
+    mode = forward_prewarm_module.sim_forward_prewarm_mode(mesh_dimension=3)
 
     assert mode == "setup"
 
 
 def test_v148_3d_prewarm_mode_keeps_explicit_worker(monkeypatch) -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_prewarm as forward_prewarm_module
 
     monkeypatch.setenv("EIT_APP_FORWARD_PREWARM_3D_MODE", "worker")
-    mode = main_window_module.EITWorkstation._sim_forward_prewarm_mode(
-        object(),
-        mesh_dimension=3,
-    )
+    mode = forward_prewarm_module.sim_forward_prewarm_mode(mesh_dimension=3)
 
     assert mode == "worker"
 
 
 def test_v329_simulation_backend_warm_report_surfaces_petsc_probe() -> None:
-    import eit_app.ui.main_window as main_window_module
+    import eit_app.ui.forward_prewarm as forward_prewarm_module
 
-    report = main_window_module._simulation_backend_warm_report(
+    report = forward_prewarm_module.simulation_backend_warm_report(
         SimpleNamespace(
             profile="cuda",
             pid=4321,

@@ -391,16 +391,27 @@ def test_gauss_newton_device_helpers_cover_normalization_disable_tf32_and_failur
     assert device_module.normalize_runtime_device_label("cuda:1") == "cuda"
     assert device_module.normalize_runtime_device_label("mps:0") == "mps"
 
-    monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", True)
-    monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", True)
+    has_new_tf32_api = hasattr(
+        torch.backends.cuda.matmul, "fp32_precision"
+    ) and hasattr(torch.backends.cudnn, "fp32_precision")
+    if has_new_tf32_api:
+        monkeypatch.setattr(torch.backends.cuda.matmul, "fp32_precision", "tf32")
+        monkeypatch.setattr(torch.backends.cudnn, "fp32_precision", "tf32")
+    else:
+        monkeypatch.setattr(torch.backends.cuda.matmul, "allow_tf32", True)
+        monkeypatch.setattr(torch.backends.cudnn, "allow_tf32", True)
     monkeypatch.setattr(
         torch,
         "set_float32_matmul_precision",
         lambda _value: (_ for _ in ()).throw(RuntimeError("bad")),
     )
     device_module._disable_tf32()
-    assert torch.backends.cuda.matmul.allow_tf32 is False
-    assert torch.backends.cudnn.allow_tf32 is False
+    if has_new_tf32_api:
+        assert torch.backends.cuda.matmul.fp32_precision == "ieee"
+        assert torch.backends.cudnn.fp32_precision == "ieee"
+    else:
+        assert torch.backends.cuda.matmul.allow_tf32 is False
+        assert torch.backends.cudnn.allow_tf32 is False
 
     monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
     auto_cuda = device_module.resolve_torch_device(

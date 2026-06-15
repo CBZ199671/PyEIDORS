@@ -5,7 +5,7 @@ The project-level pytest config enables coverage by default. This runner is for
 focused validation gates, so every generated pytest command includes --no-cov.
 Invoke the runner itself through the Nix shell, for example:
 
-    nix develop -c uv run python scripts/ci/run_sharded_unit_tests.py --list
+    nix develop .#complex64-cuda -c python scripts/ci/run_sharded_unit_tests.py --list
 """
 
 from __future__ import annotations
@@ -300,9 +300,10 @@ def emitted_shell_command(
     return [
         "nix",
         "develop",
+        ".#complex64-cuda",
         "-c",
-        "uv",
-        "run",
+        "python",
+        "-m",
         *PYTEST_BASE_ARGS,
         *_pytest_opt_in_args_for_shard(shard),
         *shard.relative_files,

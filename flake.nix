@@ -1,5 +1,5 @@
 {
-  description = "PyEIDORS development shells with FEniCSx (DOLFINx) via Nix + uv";
+  description = "PyEIDORS pure Nix development shells with FEniCSx (DOLFINx)";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
@@ -620,6 +620,7 @@
         let
           nixpkgsPath = nixpkgs.outPath;
           pkgs = import nixpkgs { inherit system; };
+          pyeidorsPackages = self.packages.${system};
           python = pkgs.python313;
           py = python.pkgs;
           linuxGuiLibs = [
@@ -800,6 +801,7 @@
               export HDF5_DIR="${pkgsFor.hdf5}"
               export PYEIDORS_ENV_PROFILE="${envProfile}"
               export PYEIDORS_ACTIVE_VENV="${venvDir}"
+              export PYEIDORS_NIX_PYTHON="$UV_PYTHON"
               export PYEIDORS_ENV_SYNC_INEXACT="''${PYEIDORS_ENV_SYNC_INEXACT:-1}"
               ${extraPrelude}
 
@@ -850,7 +852,7 @@ PY
                 export LDFLAGS="''${_darwin_linker_fix[0]}"
                 export LDSHARED="''${_darwin_linker_fix[1]}"
                 if [ "''${_darwin_linker_fix[2]}" -gt 0 ]; then
-                  echo "[nix+uv] Darwin linker flags sanitized: removed ''${_darwin_linker_fix[2]} invalid -L entries."
+                  echo "[nix] Darwin linker flags sanitized: removed ''${_darwin_linker_fix[2]} invalid -L entries."
                 fi
               fi
 
@@ -858,28 +860,17 @@ PY
                 export LD_LIBRARY_PATH="${lib.makeLibraryPath ([ pkgsFor.stdenv.cc.cc pkgsFor.zlib pkgsFor.zstd ] ++ extraLinuxRuntimeLibs)}${extraLinuxLibraryPath}''${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
               fi
 
-              nix_python_mm="$($UV_PYTHON -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
-
-              recreate_venv=0
-              if [ ! -d "$PYEIDORS_ACTIVE_VENV" ]; then
-                recreate_venv=1
-              elif [ -x "$PYEIDORS_ACTIVE_VENV/bin/python" ]; then
-                venv_python_mm="$($PYEIDORS_ACTIVE_VENV/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")' 2>/dev/null || true)"
-                if [ -z "$venv_python_mm" ] || [ "$venv_python_mm" != "$nix_python_mm" ]; then
-                  echo "[nix+uv] Rebuilding $PYEIDORS_ACTIVE_VENV because Python version changed ($PYEIDORS_ACTIVE_VENV=$venv_python_mm, nix=$nix_python_mm)."
-                  recreate_venv=1
-                fi
-              else
-                recreate_venv=1
+              unset VIRTUAL_ENV
+              unset VIRTUAL_ENV_PROMPT
+              export PYEIDORS_ACTIVE_ENV="nix"
+              if [ -d "$PWD/src" ]; then
+                case ":''${PYTHONPATH:-}:" in
+                  *":$PWD/src:"*) ;;
+                  *)
+                    export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
+                    ;;
+                esac
               fi
-
-              if [ "$recreate_venv" -eq 1 ]; then
-                rm -rf "$PYEIDORS_ACTIVE_VENV"
-                echo "[nix+uv] Creating $PYEIDORS_ACTIVE_VENV with access to Nix site-packages..."
-                uv venv --python "$UV_PYTHON" --system-site-packages "$PYEIDORS_ACTIVE_VENV"
-              fi
-
-              source "$PYEIDORS_ACTIVE_VENV/bin/activate"
 
               if [ -f scripts/env/cache_session.sh ]; then
                 # shellcheck disable=SC1091
@@ -887,38 +878,61 @@ PY
                 pyeidors_cache_session_init ".pyeidors_cache/v2"
               fi
 
-              venv_site="$($PYEIDORS_ACTIVE_VENV/bin/python - <<'PY'
-import site
-paths = site.getsitepackages()
-print(paths[0] if paths else "")
-PY
-)"
-              if [ -n "$venv_site" ]; then
-                case ":''${PYTHONPATH:-}:" in
-                  *":$venv_site:"*) ;;
-                  *)
-                    export PYTHONPATH="$venv_site''${PYTHONPATH:+:$PYTHONPATH}"
-                    ;;
-                esac
-              fi
-
               if [ -z "''${PYEIDORS_SHELL_HOOK_READY:-}" ]; then
-                if [ -x scripts/env/sync_locked_env.sh ]; then
-                  echo "[nix+uv] Checking locked Python environment profile (torch+cuqi+dev+eit-app)..."
+                if [ "''${PYEIDORS_ENABLE_UV_SYNC:-0}" = "1" ] && [ -x scripts/env/sync_locked_env.sh ]; then
+                  echo "[nix+uv legacy] Checking locked Python environment profile (torch+cuqi+dev+eit-app)..."
                   if ! scripts/env/sync_locked_env.sh --check; then
                     if [ "''${PYEIDORS_GUI_LAUNCH:-0}" = "1" ]; then
-                      echo "[nix+uv] Refreshing locked Python environment profile..."
+                      echo "[nix+uv legacy] Refreshing locked Python environment profile..."
                     else
-                      echo "[nix+uv] Drift detected. Attempting automatic repair..."
+                      echo "[nix+uv legacy] Drift detected. Attempting automatic repair..."
                     fi
                     if ! scripts/env/sync_locked_env.sh --repair; then
-                      echo "[nix+uv] ERROR: environment repair failed."
-                      echo "[nix+uv] Manual repair command: scripts/env/sync_locked_env.sh --repair"
+                      echo "[nix+uv legacy] ERROR: environment repair failed."
+                      echo "[nix+uv legacy] Manual repair command: scripts/env/sync_locked_env.sh --repair"
                       exit 1
                     fi
                   fi
                 else
-                  echo "[nix+uv] WARNING: scripts/env/sync_locked_env.sh not found; skipping env sync."
+                  "$UV_PYTHON" - <<'PY'
+import importlib
+import sys
+import warnings
+
+warnings.filterwarnings(
+    action="ignore",
+    category=UserWarning,
+    message=r"pkg_resources is deprecated as an API",
+    module=r"(pkg_resources(\..*)?|setuptools\._vendor\.pkg_resources(\..*)?|cuqi(\..*)?)",
+)
+warnings.filterwarnings(
+    action="ignore",
+    category=PendingDeprecationWarning,
+    message=r"Importing from numpy\.matlib is deprecated",
+    module=r"(numpy\.matlib(\..*)?|cuqi(\..*)?)",
+)
+
+required = ("dolfinx", "torch", "cuqi", "numpy", "scipy", "pyeidors", "pyqtgraph")
+missing = []
+for name in required:
+    try:
+        importlib.import_module(name)
+    except Exception as exc:
+        missing.append(f"{name}: {exc}")
+
+try:
+    from PySide6.QtCore import Qt  # noqa: F401
+except Exception as exc:
+    missing.append(f"PySide6.QtCore: {exc}")
+
+if missing:
+    print("[nix] ERROR: core dependency import check failed:", file=sys.stderr)
+    for item in missing:
+        print(f"  - {item}", file=sys.stderr)
+    raise SystemExit(1)
+
+print("[nix] Core dependency import checks passed: dolfinx, torch, cuqi, numpy, scipy, pyeidors, PySide6.QtCore, pyqtgraph")
+PY
                 fi
 
                 if [ "''${ENABLE_PERFORMANCE_EXTRAS:-0}" = "1" ]; then
@@ -942,7 +956,7 @@ if status["sksparse"] == "available":
         cholmod = "missing"
 
 print(
-    f"[nix+uv] Optional performance extras status: "
+    f"[nix] Optional performance extras status: "
     f"pyamg={status['pyamg']}, sksparse={status['sksparse']}, cholmod={cholmod}"
     + " (missing extras do not block the core environment)"
 )
@@ -952,19 +966,19 @@ PY
                 fi
 
                 if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
-                  echo "[nix+uv] CUDA profile ready. Verify PETSc CUDA backend with:"
+                  echo "[nix] CUDA profile ready. Verify PETSc CUDA backend with:"
                   echo "  python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty"
                 fi
 
                 if [ "$PYEIDORS_ENV_PROFILE" = "complex" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
-                  echo "[nix+uv] Complex PETSc profile ready. Verify scalar type with:"
+                  echo "[nix] Complex PETSc profile ready. Verify scalar type with:"
                   echo "  python - <<'PY'"
                   echo "from petsc4py import PETSc; import numpy as np; print(np.dtype(PETSc.ScalarType))"
                   echo "PY"
                 fi
 
-                echo "[nix+uv] Dev shell ready ($PYEIDORS_ENV_PROFILE)."
-                echo "[nix+uv] Core dependency import checks completed during shell entry."
+                echo "[nix] Dev shell ready ($PYEIDORS_ENV_PROFILE)."
+                echo "[nix] Pure Nix runtime active; uv sync is opt-in via PYEIDORS_ENABLE_UV_SYNC=1."
                 export PYEIDORS_SHELL_HOOK_READY=1
               fi
             '';
@@ -973,7 +987,9 @@ PY
           default = pkgs.mkShell {
             packages = [
               pkgs.uv
+              pkgs.nodejs
               python
+              pyeidorsPackages.pyeidors
               pkgs.openmpi
               pkgs.hdf5
               pkgs.gmsh
@@ -1008,9 +1024,6 @@ PY
             ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
               py.pytest
               py."pytest-cov"
-              py.black
-              py.flake8
-              pkgs.pre-commit
             ];
 
             shellHook = mkShellHook {
@@ -1032,7 +1045,9 @@ PY
           complex = pkgs.mkShell {
             packages = [
               pkgs.uv
+              pkgs.nodejs
               python
+              pyeidorsPackages.pyeidors-complex
               pkgs.openmpi
               pkgs.hdf5
               pkgs.gmsh
@@ -1068,9 +1083,6 @@ PY
             ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
               py.pytest
               py."pytest-cov"
-              py.black
-              py.flake8
-              pkgs.pre-commit
             ];
 
             shellHook = mkShellHook {
@@ -1095,7 +1107,9 @@ PY
           cuda = pkgsCuda.mkShell {
             packages = [
               pkgsCuda.uv
+              pkgsCuda.nodejs
               pythonCuda
+              pyeidorsPackages.pyeidors-cuda
               pkgsCuda.openmpi
               pkgsCuda.hdf5
               pkgsCuda.gmsh
@@ -1141,9 +1155,6 @@ PY
             ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
               pyCuda.pytest
               pyCuda."pytest-cov"
-              pyCuda.black
-              pyCuda.flake8
-              pkgsCuda.pre-commit
             ];
 
             shellHook = mkShellHook {
@@ -1177,7 +1188,9 @@ PY
           "complex-cuda" = pkgsCuda.mkShell {
             packages = [
               pkgsCuda.uv
+              pkgsCuda.nodejs
               pythonCuda
+              pyeidorsPackages.pyeidors-complex-cuda
               pkgsCuda.openmpi
               pkgsCuda.hdf5
               pkgsCuda.gmsh
@@ -1223,9 +1236,6 @@ PY
             ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
               pyCuda.pytest
               pyCuda."pytest-cov"
-              pyCuda.black
-              pyCuda.flake8
-              pkgsCuda.pre-commit
             ];
 
             shellHook = mkShellHook {
@@ -1260,7 +1270,9 @@ PY
           "complex64-cuda" = pkgsCuda.mkShell {
             packages = [
               pkgsCuda.uv
+              pkgsCuda.nodejs
               pythonCuda
+              pyeidorsPackages.pyeidors-complex64-cuda
               pkgsCuda.openmpi
               pkgsCuda.hdf5
               pkgsCuda.gmsh
@@ -1306,9 +1318,6 @@ PY
             ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
               pyCuda.pytest
               pyCuda."pytest-cov"
-              pyCuda.black
-              pyCuda.flake8
-              pkgsCuda.pre-commit
             ];
 
             shellHook = mkShellHook {
@@ -1343,7 +1352,9 @@ PY
           complex64 = pkgs.mkShell {
             packages = [
               pkgs.uv
+              pkgs.nodejs
               python
+              pyeidorsPackages.pyeidors-complex64
               pkgs.openmpi
               pkgs.hdf5
               pkgs.gmsh
@@ -1379,9 +1390,6 @@ PY
             ] ++ pyOpt "pyamg" ++ pyOpt "scikit-sparse" ++ pyOpt "scikitsparse" ++ [
               py.pytest
               py."pytest-cov"
-              py.black
-              py.flake8
-              pkgs.pre-commit
             ];
 
             shellHook = mkShellHook {

@@ -486,10 +486,6 @@ class InhomogeneityEditor(QGroupBox):
     def get_inhomogeneities(self) -> list[InhomogeneitySpec]:
         return self._model.get_specs()
 
-    def set_inhomogeneities(self, specs: list[InhomogeneitySpec]) -> None:
-        self._model.set_specs(specs)
-        self._update_boundary_warning()
-
     def set_domain_context(
         self,
         *,

@@ -185,7 +185,7 @@ def backend_signature_from_forward_model(fwd_model: Any) -> str:
             petsc_dense_mat_type, comm_size=comm_size
         )
         if gpu_constraint_strategy is None:
-            gpu_constraint_strategy = "electrode-zero"
+            gpu_constraint_strategy = "reference-electrode-row"
     payload = {
         "linear_backend": str(fwd_model.linear_backend),
         "forward_backend": str(getattr(fwd_model, "forward_backend", "dolfinx")),

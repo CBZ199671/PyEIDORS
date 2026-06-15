@@ -10,6 +10,10 @@ from pyeidors.perf.capabilities import (
     select_fused_strategy,
     select_preconditioner,
 )
+from pyeidors.perf.forward_solver_policy import (
+    resolve_3d_cuda_forward_solver_policy,
+    resolve_3d_cuda_mat_solve_policy,
+)
 
 
 def test_select_preconditioner_auto_priority_order():
@@ -20,6 +24,43 @@ def test_select_preconditioner_auto_priority_order():
         "petsc_gamg": True,
     }
     assert select_preconditioner("auto", caps) == "cholmod"
+
+
+def test_tetra_cuda_auto_solver_policy_uses_fgmres_gamg_before_amgx() -> None:
+    capability = {"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": False}
+
+    tetra = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        capability=capability,
+    )
+    assert tetra["forward_solver_preset_effective"] == "3d_gamg"
+    assert tetra["forward_solver_policy_reason"] == "tetra_cuda_3d_gamg_default"
+
+    matsolve = resolve_3d_cuda_mat_solve_policy(
+        requested_mat_solve="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        solver_preset=tetra["forward_solver_preset_effective"],
+    )
+    assert matsolve["forward_mat_solve_effective_policy"] == "off"
+    assert (
+        matsolve["forward_mat_solve_policy_reason"]
+        == "cuda_gamg_matsolve_disabled_b658"
+    )
+
+    legacy_unknown_family = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        capability=capability,
+    )
+    assert legacy_unknown_family["forward_solver_preset_effective"] == "spd_gamg"
 
 
 def test_select_preconditioner_auto_fallback_chain():

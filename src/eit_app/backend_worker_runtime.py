@@ -447,7 +447,7 @@ def backend_worker_command(
             "current_python",
         )
 
-    worker_cmd = "uv run python -m eit_app.backend_worker " + " ".join(
+    worker_cmd = "python -m eit_app.backend_worker " + " ".join(
         shlex.quote(str(arg)) for arg in worker_args
     )
     cmd = ["nix", "--option", "warn-dirty", "false", "develop"]

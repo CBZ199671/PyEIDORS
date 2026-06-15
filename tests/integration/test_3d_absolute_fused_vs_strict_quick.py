@@ -12,6 +12,7 @@ from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
 from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
 
 @pytest.mark.skipif(not GMSH_AVAILABLE, reason="gmsh python bindings not available")
@@ -82,8 +83,12 @@ def test_absolute_3d_fused_vs_strict_quick(tmp_path: Path):
     strict_out = strict.inverse_solve(data=target_data, reference_data=baseline_data)
     fused_out = fused.inverse_solve(data=target_data, reference_data=baseline_data)
 
-    strict_arr = function_get_array(strict_out.conductivity).copy()
-    fused_arr = function_get_array(fused_out.conductivity).copy()
+    strict_arr = real_array_if_zero_imaginary(
+        function_get_array(strict_out.conductivity), name="strict conductivity"
+    ).copy()
+    fused_arr = real_array_if_zero_imaginary(
+        function_get_array(fused_out.conductivity), name="fused conductivity"
+    ).copy()
     rmse = float(np.sqrt(np.mean((strict_arr - fused_arr) ** 2)))
     assert np.isfinite(rmse)
     assert rmse <= 2.5

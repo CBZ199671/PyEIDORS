@@ -109,7 +109,6 @@ class AppState(QObject):
     connection_status_changed = Signal(str)
     acquisition_mode_changed = Signal(str)
     power_status_changed = Signal(str)
-    fps_changed = Signal(float)
     frame_count_changed = Signal(int)
     recording_active_changed = Signal(bool)
     recording_status_changed = Signal(str)
@@ -120,7 +119,6 @@ class AppState(QObject):
         self._connection_status = ConnectionStatus.DISCONNECTED
         self._acquisition_mode = AcquisitionMode.IDLE
         self._power_status = PowerStatus.UNKNOWN
-        self._fps: float = 0.0
         self._frame_count: int = 0
         self._recording_active: bool = False
         self._recording_status = RecordingStatus.OFF
@@ -156,14 +154,6 @@ class AppState(QObject):
         if self._power_status != status:
             self._power_status = status
             self.power_status_changed.emit(status.value)
-
-    @property
-    def fps(self) -> float:
-        return self._fps
-
-    def set_fps(self, fps: float) -> None:
-        self._fps = fps
-        self.fps_changed.emit(fps)
 
     @property
     def frame_count(self) -> int:

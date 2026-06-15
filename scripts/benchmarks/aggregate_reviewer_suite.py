@@ -440,7 +440,7 @@ def build_environment_rows(df: pd.DataFrame) -> tuple[dict[str, Any], pd.DataFra
         "torch": import_version("torch"),
         "pyeit": import_version("pyeit"),
         "gpu_scope_note": "GPU acceleration currently benefits inverse/tensor operations; forward PDE assembly remains on the DOLFINx/CPU side.",
-        "environment": "Nix + uv (FEniCSx/DOLFINx)",
+        "environment": "Pure Nix (FEniCSx/DOLFINx)",
         "environment_doc": "docs/NIX_FENICSX.md",
         "eidors_startup": r"run('D:\\Program Files\\MATLAB\\R2023b\\toolbox\\eidors-v3.12-ng\\eidors\\startup.m')",
         "mesh_levels": ["coarse", "medium", "fine"],

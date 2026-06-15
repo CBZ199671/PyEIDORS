@@ -355,10 +355,6 @@ class FrameDatabase:
         cur = self._conn.execute(sql, params)
         return [dict(r) for r in cur.fetchall()]
 
-    def delete_session(self, session_id: int) -> None:
-        self._conn.execute("DELETE FROM sessions WHERE id = ?", (int(session_id),))
-        self._conn.commit()
-
     def _update_session_frequency_range(
         self, session_id: int, frame_frequency_hz: Any
     ) -> None:
@@ -456,13 +452,3 @@ class FrameDatabase:
         cur = self._conn.execute("SELECT * FROM frames WHERE id = ?", (int(frame_id),))
         row = cur.fetchone()
         return dict(row) if row else None
-
-    def count_sessions(self) -> int:
-        cur = self._conn.execute("SELECT COUNT(*) AS c FROM sessions")
-        row = cur.fetchone()
-        return int(row["c"]) if row else 0
-
-    def count_frames(self) -> int:
-        cur = self._conn.execute("SELECT COUNT(*) AS c FROM frames")
-        row = cur.fetchone()
-        return int(row["c"]) if row else 0

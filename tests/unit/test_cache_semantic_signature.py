@@ -122,7 +122,7 @@ def test_backend_signature_is_stable_across_cuda_petsc_alias_resolution():
             "petsc_mat_type": "seqaijcusparse",
             "petsc_vec_type": "cuda",
             "petsc_dense_mat_type": "seqdensecuda",
-            "gpu_constraint_strategy": "electrode-zero",
+            "gpu_constraint_strategy": "reference-electrode-row",
             "forward_backend_effective": "dolfinx",
         },
     )

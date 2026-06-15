@@ -5,9 +5,8 @@ Use this checklist before running absolute or difference experiments with physic
 ## Quick command
 
 ```bash
-nix --extra-experimental-features "nix-command flakes" develop -c \
-  /Users/tom/workspace/PyEIDORS/.venv/bin/python \
-  scripts/diagnostics/check_unit_consistency.py \
+nix --extra-experimental-features "nix-command flakes" develop .#complex64-cuda -c \
+  python scripts/diagnostics/check_unit_consistency.py \
   --mesh-source cache \
   --mesh-dir eit_meshes \
   --drive-mode line_current_density \

@@ -17,8 +17,18 @@ import ufl
 from dolfinx import fem
 from mpi4py import MPI
 
+from pyeidors.forward.complex_support import petsc_scalar_dtype
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
+
+
+def _fem_unit_constant(domain):
+    return fem.Constant(domain, np.asarray(1.0, dtype=petsc_scalar_dtype())[()])
+
+
+def _real_scalar(value, *, name: str) -> float:
+    return float(real_array_if_zero_imaginary(value, name=name).reshape(()))
 
 
 def collect_electrode_segments(mesh, tags: List[int]) -> Dict[int, List[np.ndarray]]:
@@ -144,7 +154,7 @@ def main():
     mesh_obj = mesh.mesh if hasattr(mesh, "mesh") else mesh
     facet_tags = mesh.facet_tags
     ds = ufl.Measure("ds", domain=mesh_obj, subdomain_data=facet_tags)
-    one = fem.Constant(mesh_obj, 1.0)
+    one = _fem_unit_constant(mesh_obj)
     assoc = mesh.association_table
 
     # Prefer filtering by "electrode_*" key names, ignoring gaps/domain
@@ -165,10 +175,11 @@ def main():
 
     electrode_tags = sorted(set(electrode_tags))
     lengths = {
-        tag: float(
+        tag: _real_scalar(
             mesh.comm.allreduce(
                 fem.assemble_scalar(fem.form(one * ds(tag))), op=MPI.SUM
-            )
+            ),
+            name=f"electrode {tag} length",
         )
         for tag in electrode_tags
     }

@@ -10,9 +10,11 @@ import pytest
 from pyeidors import EITSystem
 from pyeidors.data.structures import EITImage, PatternConfig
 from pyeidors.femx import function_get_array
+from pyeidors.forward.complex_support import petsc_scalar_dtype
 from pyeidors.geometry.mesh3d_generator import GMSH_AVAILABLE
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf.capabilities import detect_performance_capabilities
+from pyeidors.utils.numeric_ops import real_array_if_zero_imaginary
 
 
 def _build_system(mesh, *, solver_mode: str, preconditioner: str = "auto") -> EITSystem:
@@ -77,16 +79,33 @@ def test_absolute_3d_fast_vs_strict(tmp_path: Path):
     strict = strict_system.inverse_solve(data=target_data, reference_data=baseline_data)
     fast = fast_system.inverse_solve(data=target_data, reference_data=baseline_data)
 
-    strict_arr = function_get_array(strict.conductivity).copy()
-    fast_arr = function_get_array(fast.conductivity).copy()
+    strict_arr = real_array_if_zero_imaginary(
+        function_get_array(strict.conductivity), name="strict conductivity"
+    ).copy()
+    fast_arr = real_array_if_zero_imaginary(
+        function_get_array(fast.conductivity), name="fast conductivity"
+    ).copy()
     rmse = float(np.sqrt(np.mean((strict_arr - fast_arr) ** 2)))
-    assert rmse <= 1e-6
+    rmse_tol = (
+        1e-4
+        if petsc_scalar_dtype() in {np.dtype(np.float32), np.dtype(np.complex64)}
+        else 1e-6
+    )
+    assert rmse <= rmse_tol
     backend = fast.diagnostics.get("backend_info", {})
     assert isinstance(backend, dict)
     fast_path = str(backend.get("fast_solver_path", ""))
     fallback_reason = str(backend.get("fallback_reason", ""))
     selected_path = str(backend.get("fast_linear_path_selected", ""))
     assert fast_path or fallback_reason
-    assert selected_path in {"woodbury", "pcg", "cholmod-direct", "strict", "fused", ""}
+    assert selected_path in {
+        "woodbury",
+        "pcg",
+        "cholmod-direct",
+        "strict",
+        "fused",
+        "native-complex",
+        "",
+    }
     if caps.get("cholmod", False) and selected_path == "pcg":
         assert ("cholmod" in fast_path.lower()) or bool(fallback_reason)

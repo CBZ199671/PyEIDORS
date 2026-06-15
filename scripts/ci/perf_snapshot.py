@@ -9,6 +9,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 from pathlib import Path
 from statistics import median
@@ -67,7 +68,7 @@ def main() -> int:
         shutil.rmtree(mode_dir)
     mode_dir.mkdir(parents=True, exist_ok=True)
 
-    python = str(Path(".venv/bin/python"))
+    python = os.environ.get("PYEIDORS_NIX_PYTHON") or sys.executable
     env = os.environ.copy()
     env.setdefault("PYTHONHASHSEED", "0")
     env.setdefault("OMP_NUM_THREADS", "1")

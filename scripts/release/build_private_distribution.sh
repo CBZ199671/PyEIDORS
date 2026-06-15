@@ -158,11 +158,15 @@ echo "[release] preparing PyEIDORS $VERSION pure Nix source package"
 if [ "$RUN_TESTS" = "1" ]; then
   echo "[release] running format/lint/regression checks"
   nix "${NIX_FLAGS[@]}" develop --command bash -lc \
-    "uv run ruff format --check src/eit_app/backend_worker_runtime.py tests/unit/test_gui_backend_worker_routing.py && \
-     uv run ruff check src/eit_app/backend_worker_runtime.py tests/unit/test_gui_backend_worker_routing.py && \
-     uv run pytest tests/unit/test_gui_backend_worker_routing.py::test_v591_backend_worker_env_propagates_installed_site_packages -q --no-cov"
+    "if command -v ruff >/dev/null 2>&1; then \
+       ruff format --check src/eit_app/backend_worker_runtime.py tests/unit/test_gui_backend_worker_routing.py && \
+       ruff check src/eit_app/backend_worker_runtime.py tests/unit/test_gui_backend_worker_routing.py; \
+     else \
+       echo '[release] ruff not found in PATH; skipping maintainer-only lint gate'; \
+     fi && \
+     python -m pytest tests/unit/test_gui_backend_worker_routing.py::test_v591_backend_worker_env_propagates_installed_site_packages -q --no-cov"
 else
-  echo "[release] RUN_TESTS=0, skipping uv-based checks"
+  echo "[release] RUN_TESTS=0, skipping checks"
 fi
 
 echo "[release] checking flake metadata"

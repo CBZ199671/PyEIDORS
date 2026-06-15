@@ -25,7 +25,6 @@ class ResolvedTorchDevice:
 RUNTIME_DEVICE_AUTO = "auto"
 RUNTIME_DEVICE_CPU = "cpu"
 RUNTIME_DEVICE_CUDA = "cuda"
-RUNTIME_DEVICE_VALUES = (RUNTIME_DEVICE_AUTO, RUNTIME_DEVICE_CPU, RUNTIME_DEVICE_CUDA)
 
 
 def normalize_runtime_device(
@@ -57,12 +56,31 @@ def normalize_runtime_device_label(
 
 
 def _disable_tf32() -> None:
+    def _set_fp32_precision(backend: object, value: str) -> bool:
+        if backend is None or not hasattr(backend, "fp32_precision"):
+            return False
+        try:
+            setattr(backend, "fp32_precision", value)
+        except Exception:
+            return False
+        return True
+
     cuda_backend = getattr(torch.backends, "cuda", None)
-    if cuda_backend is not None and hasattr(cuda_backend, "matmul"):
-        cuda_backend.matmul.allow_tf32 = False
+    matmul_backend = getattr(cuda_backend, "matmul", None)
+    if not _set_fp32_precision(matmul_backend, "ieee") and matmul_backend is not None:
+        try:
+            matmul_backend.allow_tf32 = False
+        except Exception:
+            pass
     cudnn_backend = getattr(torch.backends, "cudnn", None)
-    if cudnn_backend is not None:
-        cudnn_backend.allow_tf32 = False
+    conv_backend = getattr(cudnn_backend, "conv", None)
+    cudnn_updated = _set_fp32_precision(conv_backend, "ieee")
+    cudnn_updated = _set_fp32_precision(cudnn_backend, "ieee") or cudnn_updated
+    if not cudnn_updated and cudnn_backend is not None:
+        try:
+            cudnn_backend.allow_tf32 = False
+        except Exception:
+            pass
     set_precision = getattr(torch, "set_float32_matmul_precision", None)
     if callable(set_precision):
         try:

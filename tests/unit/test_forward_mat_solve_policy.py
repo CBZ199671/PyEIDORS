@@ -234,6 +234,114 @@ def test_v135_large_cuda_complex_cem_uses_vec_loop_not_dense_fallback(monkeypatc
     )
 
 
+def test_v657_cuda_ksp_memory_skipped_dense_fallback_uses_cpu_scipy(
+    monkeypatch,
+):
+    model, ksp = _make_model(
+        mat_solve_mode="off",
+        mesh_tdim=3,
+        solve_mat_type="aijcusparse",
+    )
+    model.dofs = 20000
+    model.n_elec = 16
+    model.backend_config.cuda_dense_fallback_max_gib = 0.01
+    ksp.solve_converged_reason = -10
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    seen: dict[str, object] = {}
+
+    def _fake_scipy(_sigma, pattern_matrix):
+        seen["effective_device_during_fallback"] = model.get_backend_diagnostics()[
+            "petsc_device_effective"
+        ]
+        seen["pattern_shape"] = tuple(pattern_matrix.shape)
+        return np.full(
+            (model.dofs + model.n_elec + 1, pattern_matrix.shape[0]),
+            7.0,
+            dtype=float,
+        )
+
+    monkeypatch.setattr(model, "_solve_with_scipy", _fake_scipy)
+
+    pattern_matrix = np.ones((2, model.n_elec), dtype=float)
+    sol = model._solve_with_petsc(sigma=None, pattern_matrix=pattern_matrix)
+
+    assert ksp.solve_calls == 1
+    assert sol.shape == (model.dofs + model.n_elec + 1, pattern_matrix.shape[0])
+    assert seen == {
+        "effective_device_during_fallback": "cpu",
+        "pattern_shape": tuple(pattern_matrix.shape),
+    }
+    diag = model.get_backend_diagnostics()
+    assert diag["petsc_device_effective"] == "cuda"
+    assert diag["cuda_scipy_fallback"] is True
+    assert diag["forward_cpu_scipy_fallback"] is True
+    assert diag["forward_factor_backend"] == "scipy-splu"
+    assert "petsc_ksp_failed:-10" in str(diag["fallback_reason"])
+    assert "cuda_dense_lu_estimated_memory_exceeds_limit" in str(
+        diag["fallback_reason"]
+    )
+
+
+def test_v657_full_rhs_cpu_scipy_fallback_uses_ungauged_rhs(monkeypatch):
+    model, ksp = _make_model(
+        mat_solve_mode="off",
+        mesh_tdim=3,
+        solve_mat_type="aijcusparse",
+    )
+    model.dofs = 20000
+    model.n_elec = 16
+    model.backend_config.cuda_dense_fallback_max_gib = 0.01
+    ksp.solve_converged_reason = -10
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "capability": {"petsc_cuda_dense": True},
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+
+    constraint_row = model.dofs + model.n_elec
+    rhs = np.ones((model.dofs + model.n_elec + 1, 2), dtype=float)
+    rhs[constraint_row, :] = 12.0
+    seen: dict[str, object] = {}
+
+    def _fake_full_rhs_scipy(_sigma, rhs_matrix, *, rhs_kind):
+        seen["effective_device_during_fallback"] = model.get_backend_diagnostics()[
+            "petsc_device_effective"
+        ]
+        seen["constraint_rhs"] = tuple(rhs_matrix[constraint_row, :])
+        seen["rhs_kind"] = rhs_kind
+        return np.full_like(rhs_matrix, 5.0)
+
+    monkeypatch.setattr(model, "_solve_full_rhs_with_scipy", _fake_full_rhs_scipy)
+
+    sol = model._solve_full_rhs_with_petsc(
+        sigma=None,
+        rhs_matrix=rhs,
+        rhs_kind="custom-test",
+    )
+
+    assert ksp.solve_calls == 1
+    assert sol.shape == rhs.shape
+    assert seen == {
+        "effective_device_during_fallback": "cpu",
+        "constraint_rhs": (12.0, 12.0),
+        "rhs_kind": "custom-test",
+    }
+    diag = model.get_backend_diagnostics()
+    assert diag["cuda_scipy_fallback"] is True
+    assert diag["forward_cpu_scipy_fallback"] is True
+    assert "full_rhs_petsc_ksp_failed:-10" in str(diag["fallback_reason"])
+    assert "cuda_dense_lu_estimated_memory_exceeds_limit" in str(
+        diag["fallback_reason"]
+    )
+
+
 def test_forward_mat_solve_mode_auto_prefers_mat_solve_for_3d(monkeypatch):
     model, ksp = _make_model(mat_solve_mode="auto", mesh_tdim=3)
     monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)

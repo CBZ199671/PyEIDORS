@@ -48,7 +48,10 @@ from pyeidors.geometry.mesh3d_generator import (
 from pyeidors.geometry.optimized_mesh_generator import load_or_create_mesh
 from pyeidors.perf import DEFAULT_ACCELERATION_PROFILE
 from pyeidors.runtime_paths import pyeidors_cache_path, pyeidors_output_path
-from pyeidors.utils.numeric_ops import squared_distances_to_point
+from pyeidors.utils.numeric_ops import (
+    real_array_if_zero_imaginary,
+    squared_distances_to_point,
+)
 
 from common.acceleration_profiles import (
     add_acceleration_profile_argument,
@@ -57,6 +60,11 @@ from common.acceleration_profiles import (
 from common.hdf5_outputs import DIAGNOSTICS_ARRAYS_SCHEMA, write_output_bundle
 
 DEFAULT_OUTPUT_DIR = pyeidors_output_path("figures_3d_inverse_demo")
+
+
+def _real_array(values, *, name: str, copy: bool = False) -> np.ndarray:
+    array = real_array_if_zero_imaginary(values, name=name)
+    return np.array(array, dtype=np.float64, copy=True) if copy else array
 
 
 def _configure_times_new_roman() -> None:
@@ -97,7 +105,7 @@ def _build_3d_phantom(
     radius: float,
 ) -> EITImage:
     image = eit_system.create_homogeneous_image(conductivity=base_conductivity)
-    sigma = np.asarray(image.elem_data, dtype=float).copy()
+    sigma = _real_array(image.elem_data, name="phantom base conductivity", copy=True)
     coords = eit_system.fwd_model.V_sigma.tabulate_dof_coordinates()
     distances2 = squared_distances_to_point(coords, center, ndim=3)
     sigma[distances2 <= float(radius) ** 2] = float(phantom_conductivity)
@@ -179,12 +187,13 @@ def _three_column_points(
 def _choose_threshold(
     values: np.ndarray, *, baseline: float, truth_mode: bool
 ) -> float:
-    vmax = float(np.max(values))
+    value_arr = _real_array(values, name="threshold values").reshape(-1)
+    vmax = float(np.max(value_arr))
     if truth_mode:
         return baseline + 0.55 * (vmax - baseline)
     return max(
         baseline + 0.60 * (vmax - baseline),
-        float(np.percentile(values, 97.5)),
+        float(np.percentile(value_arr, 97.5)),
     )
 
 
@@ -204,7 +213,7 @@ def _compute_shape_metrics(
     *,
     threshold: float,
 ) -> dict[str, float]:
-    value_arr = np.asarray(values, dtype=float).reshape(-1)
+    value_arr = _real_array(values, name="shape metric values").reshape(-1)
     coord_arr = np.asarray(coords, dtype=float)
     mask = np.isfinite(value_arr)
     np.greater_equal(value_arr, float(threshold), out=mask, where=mask)
@@ -254,8 +263,8 @@ def _apply_cylindrical_nan_mask_in_place(
 
 
 def _pearson_correlation(left: np.ndarray, right: np.ndarray) -> float:
-    left_arr = np.asarray(left, dtype=float).reshape(-1)
-    right_arr = np.asarray(right, dtype=float).reshape(-1)
+    left_arr = _real_array(left, name="correlation left").reshape(-1)
+    right_arr = _real_array(right, name="correlation right").reshape(-1)
     if left_arr.size <= 1 or left_arr.size != right_arr.size:
         return float("nan")
     left_centered = np.array(left_arr, dtype=np.float64, copy=True)
@@ -272,8 +281,8 @@ def _pearson_correlation(left: np.ndarray, right: np.ndarray) -> float:
 
 
 def _rmse(left: np.ndarray, right: np.ndarray) -> float:
-    work = np.array(left, dtype=np.float64, copy=True)
-    work -= np.asarray(right, dtype=np.float64)
+    work = _real_array(left, name="rmse left", copy=True).reshape(-1)
+    work -= _real_array(right, name="rmse right").reshape(-1)
     np.square(work, out=work)
     return float(math.sqrt(float(np.mean(work))))
 
@@ -283,7 +292,7 @@ def _mean_where(values: np.ndarray, mask: np.ndarray) -> float:
     count = int(np.count_nonzero(mask_arr))
     if count == 0:
         return float("nan")
-    value_arr = np.asarray(values, dtype=float)
+    value_arr = _real_array(values, name="masked mean values")
     total = np.sum(value_arr, where=mask_arr, initial=0.0, dtype=np.float64)
     return float(total / count)
 
@@ -298,13 +307,19 @@ def _compute_regular_volume_payload(
     resolution: tuple[int, int, int],
     smooth_sigma: float,
 ) -> dict[str, np.ndarray]:
+    coord_arr = np.asarray(coords, dtype=float)
+    value_arr = _real_array(values, name="regular volume values")
     nx, ny, nz = resolution
     x_centers = np.linspace(-radius, radius, nx)
     y_centers = np.linspace(-radius, radius, ny)
     z_centers = np.linspace(z_center - 0.5 * height, z_center + 0.5 * height, nz)
     Xc, Yc, Zc = np.meshgrid(x_centers, y_centers, z_centers, indexing="ij")
     volume = griddata(
-        coords, values, (Xc, Yc, Zc), method="linear", fill_value=float(np.min(values))
+        coord_arr,
+        value_arr,
+        (Xc, Yc, Zc),
+        method="linear",
+        fill_value=float(np.min(value_arr)),
     )
     if smooth_sigma > 0.0:
         volume = gaussian_filter(volume, sigma=smooth_sigma)
@@ -339,7 +354,7 @@ def _build_regular_volume(
     resolution_tuple = tuple(int(v) for v in resolution)
     payload = _compute_regular_volume_payload(
         coords=np.asarray(coords, dtype=float),
-        values=np.asarray(values, dtype=float),
+        values=_real_array(values, name="regular volume values"),
         radius=float(radius),
         height=float(height),
         z_center=float(z_center),
@@ -349,7 +364,7 @@ def _build_regular_volume(
     x_edges = np.asarray(payload["x_edges"], dtype=float)
     y_edges = np.asarray(payload["y_edges"], dtype=float)
     z_edges = np.asarray(payload["z_edges"], dtype=float)
-    volume = np.asarray(payload["volume"], dtype=float)
+    volume = _real_array(payload["volume"], name="regular volume payload")
     Xe, Ye, Ze = np.meshgrid(x_edges, y_edges, z_edges, indexing="ij")
     return Xe, Ye, Ze, volume
 
@@ -538,17 +553,23 @@ def run_case(
     wall_time_breakdown["solve_elapsed_sec"] = perf_counter() - solve_start
 
     postprocess_start = perf_counter()
-    truth_sigma = np.asarray(phantom_img.elem_data, dtype=float).copy()
-    recon_sigma = function_get_array(recon.conductivity).copy()
+    truth_sigma = _real_array(
+        phantom_img.elem_data, name="truth conductivity", copy=True
+    )
+    recon_sigma = _real_array(
+        function_get_array(recon.conductivity),
+        name="reconstruction conductivity",
+        copy=True,
+    )
     coords = system.fwd_model.V_sigma.tabulate_dof_coordinates()[:, :3]
 
     cond_rmse = _rmse(recon_sigma, truth_sigma)
     cond_corr = _pearson_correlation(truth_sigma, recon_sigma)
     pred_img = EITImage(elem_data=recon_sigma, fwd_model=system.fwd_model)
     pred_data = system.forward_solve(pred_img)
-    vh = np.asarray(reference_data.meas, dtype=float).copy()
-    vi = np.asarray(phantom_data.meas, dtype=float).copy()
-    pred_vi = np.asarray(pred_data.meas, dtype=float).copy()
+    vh = _real_array(reference_data.meas, name="reference voltages", copy=True)
+    vi = _real_array(phantom_data.meas, name="phantom voltages", copy=True)
+    pred_vi = _real_array(pred_data.meas, name="predicted voltages", copy=True)
     dv_raw = build_difference_vector(
         vi,
         vh,
@@ -634,8 +655,10 @@ def run_case(
             z_edges,
             indexing="ij",
         )
-        truth_volume = np.asarray(truth_volume_payload["volume"], dtype=float)
-        recon_volume = np.asarray(recon_volume_payload["volume"], dtype=float)
+        truth_volume = _real_array(truth_volume_payload["volume"], name="truth volume")
+        recon_volume = _real_array(
+            recon_volume_payload["volume"], name="reconstruction volume"
+        )
 
         fig = plt.figure(figsize=(11.6, 5.6), facecolor="white")
         ax_truth = fig.add_subplot(1, 2, 1, projection="3d")

@@ -941,6 +941,7 @@ def _resolve_forward_runtime(
             "potential_order > 1 requires the DOLFINx forward backend; "
             "cuda_structured currently supports only P1."
         )
+    requested_petsc_device = _auto(forward_cfg.petsc_device, "auto")
     wants_gpu_request = gui_profile == "gpu" or requested_profile in {
         "gpu3d",
         "gpu3d_fused",
@@ -970,7 +971,10 @@ def _resolve_forward_runtime(
         # same CEM/Jacobian convention.
         forward_backend = "dolfinx"
 
-    petsc_device = _auto(forward_cfg.petsc_device, "cuda" if wants_3d_cuda else "cpu")
+    if requested_petsc_device == "auto":
+        petsc_device = "cuda" if wants_3d_cuda else "cpu"
+    else:
+        petsc_device = requested_petsc_device
     capability: dict[str, Any] = {}
     if mesh_dim == 3 and petsc_device == "cuda":
         try:
@@ -987,6 +991,7 @@ def _resolve_forward_runtime(
         mesh_dim=mesh_dim,
         petsc_device=petsc_device,
         forward_backend=forward_backend,
+        mesh_family=mesh_family,
         capability=capability,
         prefer_amgx=True,
     )

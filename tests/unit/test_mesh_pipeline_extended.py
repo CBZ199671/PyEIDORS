@@ -273,8 +273,11 @@ def test_optimized_generator_and_cache_functions(tmp_path, monkeypatch):
         electrode_coverage=0.5,
     )
     assert (tmp_path / "opt_patch.xdmf").exists()
+    # Clearing the process cache forces one disk reload; the second call should
+    # then reuse the freshly repopulated process cache.
     assert read_calls["count"] == 1
     assert mesh_first is mesh_second
+    assert getattr(mesh_second, "_pyeidors_mesh_cache_layer", None) == "process"
 
 
 def test_mesh_loader_sidecar_overrides_cached_metadata(tmp_path: Path, monkeypatch):

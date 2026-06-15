@@ -331,9 +331,6 @@ class BatchReconstructionDialog(QDialog):
         self._open_output_btn.clicked.connect(self._on_open_output_folder)
         self._update_run_enabled()
 
-    def _update_reference_requirement(self, *args) -> None:
-        self._update_algorithm_state()
-
     def _update_algorithm_state(self, *args) -> None:
         method = self._current_method()
         needs_ref = database_method_requires_reference(method)

@@ -55,7 +55,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--environment-label",
-        default="Nix + uv (FEniCSx/DOLFINx)",
+        default="Pure Nix (FEniCSx/DOLFINx)",
         help="Environment label recorded in benchmark_environment.json.",
     )
     parser.add_argument(
@@ -378,33 +378,33 @@ def write_benchmark_environment(
 
 def write_reproducibility_commands(output_dir: Path) -> None:
     commands = [
-        "# Run from the repository root in the Nix + uv environment",
-        "nix develop --command python scripts/benchmarks/build_reviewer_r3_q4_assets.py",
+        "# Run from the repository root in the pure Nix environment",
+        "nix develop .#complex64-cuda --command python scripts/benchmarks/build_reviewer_r3_q4_assets.py",
         "",
         "# Main CPU/GPU summary cases",
         (
-            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop .#complex64-cuda --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level medium --scenario low_z "
             "--device cpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
             "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_cpu_iter5_legacy_dense.json"
         ),
         (
-            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop .#complex64-cuda --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level medium --scenario low_z "
             "--device gpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
             "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_medium_low_z_gpu_iter5_legacy_dense.json"
         ),
         (
-            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop .#complex64-cuda --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level fine --scenario low_z "
             "--device cpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "
             "--output-json docs/benchmarks/reviewer_r3_q4/raw/summary/pyeidors_absolute_gn_fine_low_z_cpu_iter5_legacy_dense.json"
         ),
         (
-            "nix develop --command python scripts/benchmarks/benchmark_reviewer_case.py "
+            "nix develop .#complex64-cuda --command python scripts/benchmarks/benchmark_reviewer_case.py "
             "--framework pyeidors --task absolute_gn --mesh-level fine --scenario low_z "
             "--device gpu --warmups 1 --repeats 3 --n-frames 1 --mesh-dir eit_meshes "
             "--absolute-lambda 1e-2 --absolute-max-iter 5 --gn-path legacy_dense "

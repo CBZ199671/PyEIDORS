@@ -132,7 +132,11 @@ def test_overlay_electrode_labels_handles_empty_segments_and_zero_norm(
     monkeypatch.setattr(
         helper.ufl, "Measure", lambda *args, **kwargs: lambda tag: float(tag)
     )
-    monkeypatch.setattr(helper.fem, "Constant", lambda _mesh, value: float(value))
+    monkeypatch.setattr(
+        helper.fem,
+        "Constant",
+        lambda _mesh, value: helper._real_scalar(value, name="unit constant"),
+    )
     monkeypatch.setattr(helper.fem, "form", lambda expr: expr)
     monkeypatch.setattr(helper.fem, "assemble_scalar", lambda expr: expr)
 
