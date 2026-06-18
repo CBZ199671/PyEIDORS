@@ -2441,11 +2441,13 @@ def default_rm_inverse_mesh_size(
     if int(mesh_dimension) == 3:
         # A one-step 3D RM reconstruction has fewer voltage measurements than
         # cell parameters, so keep the hidden default moderate unless the user
-        # explicitly overrides ``rm_inverse_mesh_size``.  The previous radius/3
-        # default was visibly too coarse in the GUI; radius/8 roughly maps to
-        # refinement 4 for the interactive 3D cylinder while still avoiding an
-        # inverse mesh finer than the configured forward mesh size.
-        target = radius_f / 8.0
+        # explicitly overrides ``rm_inverse_mesh_size``.  The earlier radius/8
+        # cap was still too coarse for very-fine 3D hybrid/full protocols: the
+        # forward solve could carry cross-layer information that the inverse
+        # mesh had already averaged away.  radius/12 preserves a bounded RM
+        # size while allowing those very-fine runs to keep one more useful
+        # spatial scale.
+        target = radius_f / 12.0
         return float(max(requested, max(target, 1.0e-6)))
     else:
         target = radius_f / 10.0

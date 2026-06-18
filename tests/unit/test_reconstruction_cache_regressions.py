@@ -825,8 +825,11 @@ def test_v106_default_3d_rm_inverse_mesh_size_is_moderately_refined() -> None:
     assert size == pytest.approx(0.1)
     assert rc._compute_effective_refinement(0.18, 0.1, mesh_size=size) == 2
     finer_size = rc.default_rm_inverse_mesh_size(0.02, 0.18, mesh_dimension=3)
-    assert finer_size == pytest.approx(0.0225)
+    assert finer_size == pytest.approx(0.02)
     assert rc._compute_effective_refinement(0.18, 0.02, mesh_size=finer_size) == 4
+    very_fine_size = rc.default_rm_inverse_mesh_size(0.01, 0.18, mesh_dimension=3)
+    assert very_fine_size == pytest.approx(0.015)
+    assert rc._compute_effective_refinement(0.18, 0.01, mesh_size=very_fine_size) == 6
 
 
 def test_3d_rm_auto_build_runtime_uses_moderately_refined_inverse_mesh() -> None:
@@ -848,8 +851,8 @@ def test_3d_rm_auto_build_runtime_uses_moderately_refined_inverse_mesh() -> None
 
     runtime = rc._prepare_single_step_cached_runtime(request)
 
-    assert runtime.meta["rm_inverse_mesh_size"] == pytest.approx(0.0225)
-    assert runtime.meta["effective_inverse_mesh_size"] == pytest.approx(0.0225)
+    assert runtime.meta["rm_inverse_mesh_size"] == pytest.approx(0.02)
+    assert runtime.meta["effective_inverse_mesh_size"] == pytest.approx(0.02)
     assert runtime.refinement == 4
 
 
