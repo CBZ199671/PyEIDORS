@@ -91,6 +91,25 @@ def test_v132_gui_launcher_keeps_explicit_real_gpu_escape_hatch():
     assert "nix_profile=cuda" in output
 
 
+def test_nix_live_build_monitor_defaults_to_cuda_amgx_profile():
+    monitor = (
+        Path(__file__).resolve().parents[2]
+        / "scripts"
+        / "release"
+        / "build_nix_live.sh"
+    )
+    text = monitor.read_text(encoding="utf-8")
+
+    assert 'ATTR="${1:-pyeidors-cuda-amgx}"' in text
+    assert "PyEIDORS Nix live build" in text
+    assert "--print-build-logs" in text
+    assert "Hot Compile Processes" in text
+    assert "warnings/errors" in text
+    assert "NIX_LIVE_INTERVAL" in text
+    assert "NIX_LIVE_KEEP_FAILED" in text
+    assert "--keep-failed" in text
+
+
 def test_benchmark_3d_runtime_parser_accepts_acceleration_profile(monkeypatch):
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
     monkeypatch.setattr(
@@ -121,6 +140,11 @@ def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(
             "on",
             "--forward-solver-preset",
             "3d_gamg",
+            "--forward-petsc-option",
+            "ksp_rtol=1e-6",
+            "--forward-petsc-option=-pc_amgx_solver=AMG",
+            "--store-forward-output",
+            "on",
         ],
     )
 
@@ -128,6 +152,11 @@ def test_benchmark_3d_runtime_parser_accepts_forward_solver_artifact_options(
 
     assert args.forward_only == "on"
     assert args.forward_solver_preset == "3d_gamg"
+    assert args.store_forward_output == "on"
+    assert module._parse_key_value_options(args.forward_petsc_option) == {
+        "ksp_rtol": "1e-6",
+        "pc_amgx_solver": "AMG",
+    }
 
 
 def test_benchmark_3d_runtime_builds_forward_solver_artifact(monkeypatch):
@@ -153,6 +182,9 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact(monkeypatch):
         backend_info={
             "forward_rhs_count": 8,
             "solver_preset": "3d_gamg",
+            "solver_route_family": "3d_gamg",
+            "solver_route_status": "standard",
+            "solver_route_caveat": "",
             "ksp_type": "fgmres",
             "pc_type": "gamg",
             "pc_gamg_type": "agg",
@@ -202,6 +234,9 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact(monkeypatch):
     assert artifact["n_dofs"] == 109
     assert artifact["n_patterns"] == 8
     assert artifact["solver_preset"] == "3d_gamg"
+    assert artifact["solver_route_family"] == "3d_gamg"
+    assert artifact["solver_route_status"] == "standard"
+    assert artifact["solver_route_caveat"] == ""
     assert artifact["ksp_type"] == "fgmres"
     assert artifact["pc_type"] == "gamg"
     assert artifact["pc_subtype"] == "agg"
@@ -233,6 +268,17 @@ def test_benchmark_3d_runtime_builds_forward_solver_artifact(monkeypatch):
     assert artifact["jacobian_backend"] == "matrix-free"
 
 
+def test_benchmark_3d_runtime_array_payload_preserves_complex_values() -> None:
+    module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
+
+    payload = module._array_payload([[1.0 + 2.0j, 3.0 - 4.0j]])
+
+    assert payload["shape"] == [1, 2]
+    assert payload["dtype"] == "complex128"
+    assert payload["real"] == [1.0, 3.0]
+    assert payload["imag"] == [2.0, -4.0]
+
+
 def test_benchmark_3d_runtime_forward_artifact_reports_amgx_cuda_capability():
     module = _load_script_module("scripts", "benchmarks", "benchmark_3d_runtime.py")
     args = Namespace(
@@ -247,7 +293,10 @@ def test_benchmark_3d_runtime_forward_artifact_reports_amgx_cuda_capability():
         backend_info={
             "forward_rhs_count": 8,
             "solver_preset": "cuda_amgx",
-            "ksp_type": "cg",
+            "solver_route_family": "real_amgx",
+            "solver_route_status": "real_gpu_candidate",
+            "solver_route_caveat": "",
+            "ksp_type": "fgmres",
             "pc_type": "amgx",
             "petsc_mat_type": "aijcusparse",
             "petsc_vec_type": "cuda",
@@ -275,7 +324,9 @@ def test_benchmark_3d_runtime_forward_artifact_reports_amgx_cuda_capability():
     )
 
     assert artifact["solver_preset"] == "cuda_amgx"
-    assert artifact["ksp_type"] == "cg"
+    assert artifact["solver_route_family"] == "real_amgx"
+    assert artifact["solver_route_status"] == "real_gpu_candidate"
+    assert artifact["ksp_type"] == "fgmres"
     assert artifact["pc_type"] == "amgx"
     assert artifact["forward_amg_backend"] == "amgx"
     assert artifact["petsc_device_effective"] == "cuda"

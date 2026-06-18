@@ -749,6 +749,16 @@ def _pyvista_feature_outline(dataset, *, feature_angle: float):
     )
 
 
+def _reset_plotter_to_canonical_camera(plotter) -> None:
+    """Fit visible actors and restore the same isometric viewing direction."""
+
+    plotter.reset_camera()
+    try:
+        plotter.view_isometric()
+    except Exception:  # pragma: no cover - optional PyVista backend method
+        pass
+
+
 def _env_flag(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_ENV_VALUES
 
@@ -2480,7 +2490,7 @@ class Conductivity3DWidget(QWidget):
                 text_color=text_color,
                 offscreen=True,
             )
-            plotter.reset_camera()
+            _reset_plotter_to_canonical_camera(plotter)
             self._stack.setCurrentWidget(self._offscreen_host)
             self._controls.show()
             self._render_backend = "pyvista_offscreen"
@@ -2565,7 +2575,7 @@ class Conductivity3DWidget(QWidget):
             )
             self._offscreen_wire_actor.SetVisibility(bool(self._wire_check.isChecked()))
 
-        plotter.reset_camera()
+        _reset_plotter_to_canonical_camera(plotter)
         self._stack.setCurrentWidget(self._offscreen_host)
         self._controls.show()
         self._render_backend = "pyvista_offscreen"
@@ -2624,7 +2634,7 @@ class Conductivity3DWidget(QWidget):
                 text_color=text_color,
                 offscreen=False,
             )
-            plotter.reset_camera()
+            _reset_plotter_to_canonical_camera(plotter)
             plotter.render()
             return
 
@@ -2718,7 +2728,7 @@ class Conductivity3DWidget(QWidget):
         if self._electrode_geometry is not None:
             self._build_vtk_electrode_actor(self._electrode_geometry)
 
-        plotter.reset_camera()
+        _reset_plotter_to_canonical_camera(plotter)
         plotter.render()
 
     # ------------------------------------------------------------------
@@ -2770,22 +2780,11 @@ class Conductivity3DWidget(QWidget):
         """
         if self._render_backend == "pyvista_offscreen":
             if self._offscreen_plotter is not None:
-                self._offscreen_plotter.reset_camera()
-                # Bring the orientation back to isometric so a click
-                # always lands on the same canonical view, no matter
-                # how the user has dragged the scene.
-                try:
-                    self._offscreen_plotter.view_isometric()
-                except Exception:  # pragma: no cover — VTK quirk
-                    pass
+                _reset_plotter_to_canonical_camera(self._offscreen_plotter)
                 self._refresh_offscreen_pixmap()
             return
         if self._plotter is not None:
-            self._plotter.reset_camera()
-            try:
-                self._plotter.view_isometric()
-            except Exception:  # pragma: no cover — VTK quirk
-                pass
+            _reset_plotter_to_canonical_camera(self._plotter)
             self._plotter.render()
 
     def _on_offscreen_dragged(self, dx: float, dy: float) -> None:

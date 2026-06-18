@@ -27,13 +27,15 @@ SIMULATION_INVERSE_METHODS = [
     "pseudo3d_noser_rm",
     "greit",
     "absolute_gn",
+]
+SIMULATION_DEBUG_INVERSE_METHODS = [
     "debug_fine_mesh_noser",
     "debug_full_gn",
 ]
 _PSEUDO3D_METHODS = {"pseudo3d_noser_rm"}
 _GREIT_METHODS = {"greit"}
 _LEGACY_METHOD_ALIASES = {
-    "eidors_one_step_noser": "debug_fine_mesh_noser",
+    "eidors_one_step_noser": "noser_rm",
     "eidors_abs_gn": "absolute_gn",
     "gn-absolute": "absolute_gn",
     "gn_absolute": "absolute_gn",
@@ -95,17 +97,18 @@ def normalize_simulation_inverse_method(method: str) -> str:
     return _LEGACY_METHOD_ALIASES.get(key, key)
 
 
-def simulation_inverse_methods_for_mesh_dimension(mesh_dimension: int) -> list[str]:
+def simulation_inverse_methods_for_mesh_dimension(
+    mesh_dimension: int, *, include_debug: bool = False
+) -> list[str]:
     """Return simulation inverse routes that make sense for the source mesh."""
 
     source_dimension = 3 if int(mesh_dimension) == 3 else 2
+    methods = list(SIMULATION_INVERSE_METHODS)
+    if include_debug:
+        methods.extend(SIMULATION_DEBUG_INVERSE_METHODS)
     if source_dimension == 3:
-        return list(SIMULATION_INVERSE_METHODS)
-    return [
-        method
-        for method in SIMULATION_INVERSE_METHODS
-        if method not in _PSEUDO3D_METHODS
-    ]
+        return methods
+    return [method for method in methods if method not in _PSEUDO3D_METHODS]
 
 
 class InverseProblemPanel(QGroupBox):
@@ -323,8 +326,15 @@ class InverseProblemPanel(QGroupBox):
             method = normalize_simulation_inverse_method(
                 str(config.get("method", self._method_combo.currentText()))
             )
-            if method not in self._available_methods():
+            include_debug = method in SIMULATION_DEBUG_INVERSE_METHODS
+            if method not in self._available_methods(include_debug=include_debug):
                 method = self._fallback_method()
+                include_debug = False
+            if self._method_combo.findText(method) < 0:
+                self._populate_method_combo(
+                    preferred_method=method,
+                    include_debug=include_debug,
+                )
             index = self._method_combo.findText(method)
             if index >= 0:
                 self._method_combo.setCurrentIndex(index)
@@ -455,17 +465,20 @@ class InverseProblemPanel(QGroupBox):
             self._custom_lambda_eff_value = float(self._alpha_spin.value())
         self._update_method_state()
 
-    def _available_methods(self) -> list[str]:
+    def _available_methods(self, *, include_debug: bool = False) -> list[str]:
         return simulation_inverse_methods_for_mesh_dimension(
-            self._source_mesh_dimension
+            self._source_mesh_dimension,
+            include_debug=include_debug,
         )
 
     def _fallback_method(self) -> str:
         methods = self._available_methods()
         return "noser_rm" if "noser_rm" in methods else methods[0]
 
-    def _populate_method_combo(self, *, preferred_method: str) -> None:
-        methods = self._available_methods()
+    def _populate_method_combo(
+        self, *, preferred_method: str, include_debug: bool = False
+    ) -> None:
+        methods = self._available_methods(include_debug=include_debug)
         selected_method = (
             preferred_method if preferred_method in methods else self._fallback_method()
         )

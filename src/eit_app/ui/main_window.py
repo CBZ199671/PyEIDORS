@@ -3558,6 +3558,9 @@ class EITWorkstation(QMainWindow):
                 "total_current" if is_3d else "line_current_density",
             ),
             drive_value=float(mesh_cfg.get("drive_value", 1.0)),
+            complex_gpu_high_accuracy=bool(
+                mesh_cfg.get("complex_gpu_high_accuracy", False)
+            ),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
                 if is_3d
@@ -4002,6 +4005,9 @@ class EITWorkstation(QMainWindow):
                 "total_current" if is_3d else "line_current_density",
             ),
             drive_value=float(mesh_cfg.get("drive_value", 1.0)),
+            complex_gpu_high_accuracy=bool(
+                mesh_cfg.get("complex_gpu_high_accuracy", False)
+            ),
             electrode_level_fractions=(
                 electrode_level_fractions_for_rings(int(mesh_cfg.get("n_rings", 1)))
                 if is_3d
@@ -4221,6 +4227,7 @@ class EITWorkstation(QMainWindow):
                     "rotate_meas": bool(config.rotate_meas),
                     "use_meas_current": bool(config.use_meas_current),
                     "use_meas_current_next": int(config.use_meas_current_next),
+                    "complex_gpu_high_accuracy": bool(config.complex_gpu_high_accuracy),
                 }
             )
             self._sim_tab.forward_problem_panel.set_noise_level(config.noise_level)
@@ -4259,6 +4266,7 @@ class EITWorkstation(QMainWindow):
                     "rotate_meas": bool(config.rotate_meas),
                     "use_meas_current": bool(config.use_meas_current),
                     "use_meas_current_next": int(config.use_meas_current_next),
+                    "complex_gpu_high_accuracy": bool(config.complex_gpu_high_accuracy),
                 }
             )
             self._dataset_tab.dataset_generator_panel.set_config(

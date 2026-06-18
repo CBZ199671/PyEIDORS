@@ -835,6 +835,7 @@ class EITSystem(CoreSystemFacadeMixin):
             mesh_family=getattr(self.mesh, "mesh_family", ""),
             capability=capability,
             prefer_amgx=True,
+            complex_admittivity_requested=complex_admittivity_requested,
         )
         mat_solve_policy = resolve_3d_cuda_mat_solve_policy(
             requested_mat_solve=requested_mat_solve,

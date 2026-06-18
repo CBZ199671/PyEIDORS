@@ -11,10 +11,17 @@ CUDA_HYPRE_BLACKLIST_REASON = "hypre_cuda_blacklisted_sigsegv_b4"
 AMGX_DOWNGRADE_REASON = "amgx_unavailable_downgraded_to_spd_gamg"
 CUDA_GAMG_DEFAULT_REASON = "3d_cuda_spd_gamg_default"
 TETRA_CUDA_GAMG_DEFAULT_REASON = "tetra_cuda_3d_gamg_default"
+TETRA_REAL_AMGX_DEFAULT_REASON = "tetra_real_cuda_amgx_default"
+COMPLEX_CUDA_NATIVE_GAMG_DEFAULT_REASON = "complex_cuda_native_gamg_default"
+COMPLEX_CUDA_BLOCK_REAL_AMGX_DEFAULT_REASON = "complex_cuda_block_real_amgx_default"
+TETRA_COMPLEX_BLOCK_REAL_AMGX_DEFAULT_REASON = (
+    COMPLEX_CUDA_BLOCK_REAL_AMGX_DEFAULT_REASON
+)
 TETRA_AMGX_DOWNGRADE_REASON = "tetra_amgx_unavailable_downgraded_to_3d_gamg"
 TETRA_HYPRE_BLACKLIST_REASON = "tetra_hypre_cuda_blacklisted_to_3d_gamg"
 CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON = "cuda_spd_gamg_matsolve_disabled_b6"
 CUDA_GAMG_MATSOLVE_DISABLED_REASON = "cuda_gamg_matsolve_disabled_b658"
+CUDA_AMGX_MATSOLVE_DISABLED_REASON = "cuda_amgx_matsolve_disabled_mainline"
 
 
 def _token(value: Any, default: str = "auto") -> str:
@@ -42,6 +49,8 @@ def resolve_3d_cuda_forward_solver_policy(
     mesh_family: Any = "auto",
     capability: dict[str, Any] | None = None,
     prefer_amgx: bool = True,
+    complex_admittivity_requested: bool = False,
+    complex_high_accuracy: bool = False,
 ) -> dict[str, Any]:
     """Resolve high-level 3D CUDA forward solver preset.
 
@@ -56,6 +65,8 @@ def resolve_3d_cuda_forward_solver_policy(
     cap = dict(capability or {})
     amgx_available = bool(cap.get("petsc_amgx", False))
     hypre_available = bool(cap.get("petsc_hypre", False))
+    complex_requested = bool(complex_admittivity_requested)
+    strict_complex = bool(complex_high_accuracy)
 
     effective = requested
     reason = ""
@@ -65,13 +76,21 @@ def resolve_3d_cuda_forward_solver_policy(
     tetra_cuda = active and family == "tetra"
 
     if active:
-        if tetra_cuda and requested in {"", "auto"}:
-            effective = "3d_gamg"
-            reason = TETRA_CUDA_GAMG_DEFAULT_REASON
-            warning = (
-                "3D tetra PETSc CUDA uses fgmres+gamg by default; "
-                "spd_gamg/cg is experimental for tetra CEM systems."
-            )
+        if requested in {"", "auto"} and complex_requested:
+            if strict_complex:
+                effective = "complex_block_real_amgx"
+                reason = COMPLEX_CUDA_BLOCK_REAL_AMGX_DEFAULT_REASON
+            else:
+                effective = "3d_gamg"
+                reason = COMPLEX_CUDA_NATIVE_GAMG_DEFAULT_REASON
+        elif tetra_cuda and requested in {"", "auto"}:
+            if prefer_amgx and amgx_available:
+                effective = "cuda_amgx"
+                reason = TETRA_REAL_AMGX_DEFAULT_REASON
+            else:
+                effective = "3d_gamg"
+                reason = TETRA_AMGX_DOWNGRADE_REASON
+                warning = "PETSc AmgX unavailable; using 3d_gamg CUDA instead."
         elif requested in {"", "auto"}:
             if prefer_amgx and amgx_available:
                 effective = "cuda_amgx"
@@ -140,13 +159,25 @@ def resolve_3d_cuda_mat_solve_policy(
     reason = ""
     warning = ""
     active = int(mesh_dim) == 3 and device == "cuda" and backend == "dolfinx"
-    if active and requested == "auto" and solver in {"spd_gamg", "3d_gamg", "3d_amg"}:
+    if (
+        active
+        and requested == "auto"
+        and solver
+        in {
+            "spd_gamg",
+            "3d_gamg",
+            "3d_amg",
+            "cuda_amgx",
+            "complex_block_real_amgx",
+        }
+    ):
         effective = "off"
-        reason = (
-            CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON
-            if solver == "spd_gamg"
-            else CUDA_GAMG_MATSOLVE_DISABLED_REASON
-        )
+        if solver == "spd_gamg":
+            reason = CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON
+        elif solver in {"cuda_amgx", "complex_block_real_amgx"}:
+            reason = CUDA_AMGX_MATSOLVE_DISABLED_REASON
+        else:
+            reason = CUDA_GAMG_MATSOLVE_DISABLED_REASON
         warning = (
             f"PETSc KSPMatSolve is disabled for {solver} CUDA; using vector RHS loop."
         )
@@ -163,11 +194,16 @@ __all__ = [
     "AMGX_DOWNGRADE_REASON",
     "CUDA_GAMG_DEFAULT_REASON",
     "CUDA_GAMG_MATSOLVE_DISABLED_REASON",
+    "CUDA_AMGX_MATSOLVE_DISABLED_REASON",
+    "COMPLEX_CUDA_NATIVE_GAMG_DEFAULT_REASON",
+    "COMPLEX_CUDA_BLOCK_REAL_AMGX_DEFAULT_REASON",
     "CUDA_HYPRE_BLACKLIST_REASON",
     "CUDA_HYPRE_BLACKLISTED_PRESETS",
     "CUDA_SPD_GAMG_MATSOLVE_DISABLED_REASON",
     "TETRA_AMGX_DOWNGRADE_REASON",
     "TETRA_CUDA_GAMG_DEFAULT_REASON",
+    "TETRA_COMPLEX_BLOCK_REAL_AMGX_DEFAULT_REASON",
+    "TETRA_REAL_AMGX_DEFAULT_REASON",
     "TETRA_HYPRE_BLACKLIST_REASON",
     "is_hypre_cuda_blacklisted_solver",
     "resolve_3d_cuda_forward_solver_policy",

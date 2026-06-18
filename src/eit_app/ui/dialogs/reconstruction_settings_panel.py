@@ -27,6 +27,14 @@ from eit_app.ui.theme import set_button_role
 
 
 _OPTIONAL_FLOAT_EPS = 1.0e-15
+FORWARD_SOLVER_PRESET_CHOICES = [
+    "auto",
+    "direct",
+    "3d_gamg",
+    "spd_gamg",
+    "cuda_amgx",
+    "complex_block_real_amgx",
+]
 
 
 def _decode_json_mapping(value: Any) -> dict[str, Any]:
@@ -350,7 +358,7 @@ class ReconstructionSettingsPanel(QWidget):
         )
 
         self._forward_solver_preset = self._editable_combo(
-            ["auto", "direct", "3d_gamg", "3d_hypre", "spd_gamg", "spd_hypre"]
+            FORWARD_SOLVER_PRESET_CHOICES
         )
         self._forward_solver_preset_label = QLabel("")
         layout.addRow(self._forward_solver_preset_label, self._forward_solver_preset)

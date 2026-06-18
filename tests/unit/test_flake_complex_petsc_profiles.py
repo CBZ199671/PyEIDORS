@@ -78,13 +78,80 @@ def test_v624_complex_nix_apps_expose_real_worker_profile_commands():
     assert "backendWorkerCommandEnvName" in text
     assert '"EIT_APP_BACKEND_WORKER_COMMAND_' in text
     assert '"${workerPackage}/bin/eit-backend-worker"' in text
+    assert '"PYEIDORS_BLOCK_REAL_AMGX_WORKER_COMMAND"' in text
+    assert '"${workerPackage}/bin/pyeidors-block-real-amgx"' in text
     assert "cuda = pyeidorsCuda;" in text
     assert "backendWorkerCommands = {\n              default = pyeidors;" in text
     assert (
         'profile = "cuda";\n            fenicsDolfinxPkg = cudaFenicsDolfinx;' in text
     )
+    assert "pyeidorsCuda = if linuxCudaSupported then mkPyeidors" in text
+    cuda_block = text.split(
+        "pyeidorsCuda = if linuxCudaSupported then mkPyeidors",
+        1,
+    )[1].split("} else null;", 1)[0]
+    assert "backendWorkerCommands = {\n              default = pyeidors;" in cuda_block
+
+
+def test_cuda_amgx_profile_is_explicit_real_double_nix_route():
+    text = _flake_text()
+
+    assert 'amgxGitCommit = "4d1bda0016c42bbe9c0470ca976f10cf6774fd8a";' in text
+    assert 'amgxGitUrl = "https://github.com/NVIDIA/AMGX.git";' in text
     assert (
-        "pyeidorsCuda = if linuxCudaSupported then mkPyeidors" in text
-        and "backendWorkerCommands = {\n              default = pyeidors;\n            };\n          } else null;\n          pyeidorsComplexCuda"
+        'amgxSourceHash = "sha256-XKyGG1wsG37qlSTukZMl8BKyi248SCQKHdlgVYfnR6A=";'
         in text
     )
+    assert "fetchSubmodules = true;" in text
+    assert "amgxSourceArchive = if linuxCudaSupported then pkgsCuda.runCommand" in text
+    assert "chmod -R u+rwX,go+rX" in text
+    assert "cuda_nvtx.include}/include/nvToolsExt.h" in text
+    assert "libcurand.include}/include/curand*.h" in text
+    assert text.count('"${pkgsCuda.openmpi}/lib/libmpi.so"') >= 6
+    assert "target_link_libraries(amgxsh CUDA::cublas" in text
+    assert "target_link_libraries(amgx_tests_launcher amgxsh" in text
+    assert (
+        "lib.optionals withAmgx [\n                  pkgsCuda.cudaPackages.cuda_nvtx"
+        in text
+    )
+    assert "pkgsCuda.cudaPackages.libcurand" in text
+    assert "cudaPetscAmgx = mkCudaPetsc { withAmgx = true; };" in text
+    assert 'profile = "cuda-amgx";' in text
+    assert "pyeidors-cuda-amgx = pyeidorsCudaAmgx;" in text
+    assert 'eit-app-cuda-amgx = mkApp "pyeidors-cuda-amgx"' in text
+    assert '"cuda-amgx" = pkgsCuda.mkShell {' in text
+    assert "--download-amgx=${amgxSourceArchive}" in text
+    assert '"--with-64-bit-indices=0"' in text
+    assert '"--with-cxx-dialect=17"' in text
+    assert '"--with-cuda-dialect=17"' in text
+    assert (
+        'assert !withAmgx || allowComplexAmgx || scalarType == null || scalarType == "real";'
+        in text
+    )
+    assert (
+        'assert !withAmgx || allowComplexAmgx || precision == null || precision == "double";'
+        in text
+    )
+    assert "Verify PCAMGX with a setup/solve smoke" in text
+    assert "opts['pc_amgx_smoother'] = 'JACOBI_L1'" in text
+    assert "opts['pc_amgx_exact_coarse_solve'] = '0'" in text
+    assert "pc.setType('amgx'); print(pc.getType())" not in text
+
+
+def test_native_complex_amgx_profile_is_complex128_only_experiment():
+    text = _flake_text()
+
+    assert "allowComplexAmgx ? false" in text
+    assert "AMGX_mode_dZZI" in text
+    assert "AMGX_mode_dCCI" in text
+    assert "PetscOptionsReal" in text
+    assert "cudaPetscComplexAmgx = mkCudaPetsc {" in text
+    assert "allowComplexAmgx = true;" in text
+    assert 'profile = "complex-cuda-amgx";' in text
+    assert "pyeidors-complex-cuda-amgx = pyeidorsComplexCudaAmgx;" in text
+    assert 'eit-app-complex-cuda-amgx = mkApp "pyeidors-complex-cuda-amgx"' in text
+    assert '"complex-cuda-amgx" = pkgsCuda.mkShell {' in text
+    assert 'export PYEIDORS_PETSC_SCALAR_TYPE="complex"' in text
+    assert 'export PYEIDORS_PETSC_AMGX_ENABLED="1"' in text
+    assert "complex64-cuda-amgx" not in text
+    assert "cudaPetscComplexSingleAmgx" not in text

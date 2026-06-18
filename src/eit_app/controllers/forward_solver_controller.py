@@ -994,6 +994,10 @@ def _resolve_forward_runtime(
         mesh_family=mesh_family,
         capability=capability,
         prefer_amgx=True,
+        complex_admittivity_requested=complex_admittivity_requested,
+        complex_high_accuracy=bool(
+            getattr(forward_cfg, "complex_gpu_high_accuracy", False)
+        ),
     )
     mat_solve_policy = resolve_3d_cuda_mat_solve_policy(
         requested_mat_solve=_auto(
@@ -1481,7 +1485,7 @@ def execute_forward_request_in_backend(
             run_persistent_backend_worker_request,
         )
 
-        if persistent_backend_workers_enabled():
+        if persistent_backend_workers_enabled(profile_name):
             try:
                 worker_meta = run_persistent_backend_worker_request(
                     repo=repo,

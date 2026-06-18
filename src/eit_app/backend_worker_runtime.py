@@ -244,17 +244,13 @@ def prepare_inprocess_backend_runtime(
         str(cache_root / "greit_common_configs"),
     )
     os.environ["XDG_CACHE_HOME"] = str(cache.xdg_cache_home)
-    os.environ.setdefault("PYEIDORS_PETSC_CUDA_PROBE_CACHE", "1")
-    os.environ.setdefault(
-        "PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR",
-        str(cache.xdg_cache_home / "pyeidors-capabilities"),
-    )
     module = sys.modules.get("dolfinx.jit")
+    options = None
     if module is not None:
         options = getattr(module, "DOLFINX_DEFAULT_JIT_OPTIONS", None)
-        if isinstance(options, dict) and "cache_dir" in options:
-            _old_value, description = options["cache_dir"]
-            options["cache_dir"] = (cache.xdg_cache_home / "fenics", description)
+    if isinstance(options, dict) and "cache_dir" in options:
+        _old_value, description = options["cache_dir"]
+        options["cache_dir"] = (cache.xdg_cache_home / "fenics", description)
     return cache
 
 
@@ -392,10 +388,19 @@ def backend_worker_env(
         str(cache.xdg_cache_home / "pyeidors-capabilities"),
     )
     env["EIT_APP_GUI_RUNTIME_PROFILE"] = cache.profile
+    gpu_profiles = {
+        "cuda",
+        "cuda-amgx",
+        "complex-cuda",
+        "complex64-cuda",
+        "complex-cuda-amgx",
+    }
     env["EIT_APP_GUI_PROFILE"] = (
-        "gpu" if cache.profile.endswith("-cuda") or cache.profile == "cuda" else "cpu"
+        "gpu"
+        if cache.profile.endswith("-cuda") or cache.profile in gpu_profiles
+        else "cpu"
     )
-    if cache.profile in {"complex", "complex-cuda"}:
+    if cache.profile in {"complex", "complex-cuda", "complex-cuda-amgx"}:
         env["EIT_APP_GUI_PRECISION"] = "complex128"
     elif cache.profile in {"complex64", "complex64-cuda"}:
         env["EIT_APP_GUI_PRECISION"] = "complex64"

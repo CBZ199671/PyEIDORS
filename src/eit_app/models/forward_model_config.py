@@ -155,6 +155,19 @@ def _mapping_complex_value(value: Any) -> Any:
     return value
 
 
+def _parse_bool(value: Any, default: bool = False) -> bool:
+    if value in (None, ""):
+        return bool(default)
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"1", "true", "yes", "y", "on"}:
+            return True
+        if text in {"0", "false", "no", "n", "off"}:
+            return False
+        return bool(default)
+    return bool(value)
+
+
 def mapping_complex_value(value: Any) -> Any:
     """Return a JSON-friendly scalar/list while preserving complex values."""
 
@@ -231,6 +244,7 @@ class ForwardModelConfig:
     device: str = "auto"
     forward_backend: str = "dolfinx"
     acceleration_profile: str = "default"
+    complex_gpu_high_accuracy: bool = False
 
     notes: list[str] = field(default_factory=list)
 
@@ -351,6 +365,13 @@ class ForwardModelConfig:
             device=str(raw.get("device", "auto")),
             forward_backend=str(raw.get("forward_backend", "dolfinx")),
             acceleration_profile=str(raw.get("acceleration_profile", "default")),
+            complex_gpu_high_accuracy=_parse_bool(
+                raw.get(
+                    "complex_gpu_high_accuracy",
+                    raw.get("complex_high_accuracy", False),
+                ),
+                False,
+            ),
             notes=[str(item) for item in raw.get("notes", [])],
         )
 
@@ -403,6 +424,7 @@ class ForwardModelConfig:
             "device": self.device,
             "forward_backend": self.forward_backend,
             "acceleration_profile": self.acceleration_profile,
+            "complex_gpu_high_accuracy": bool(self.complex_gpu_high_accuracy),
             "notes": list(self.notes),
         }
 

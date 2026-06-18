@@ -390,6 +390,9 @@ TRANSLATIONS: dict[str, str] = {
     "sim.mesh.contact_impedance_label": "接触阻抗 z：",
     "sim.mesh.complex_admittivity_tooltip": "可输入实数或复导纳，例如 1.0 或 1+0.25j S/m。",
     "sim.mesh.complex_impedance_tooltip": "可输入实数或复接触阻抗，例如 0.01 或 0.01+0.002j Ω·m²。",
+    "sim.mesh.complex_high_accuracy_toggle": "复值高精度",
+    "sim.mesh.complex_high_accuracy_tooltip": "仅影响 3D GPU 复值正问题；开启后使用 block-real AmgX 严格残差路线。",
+    "sim.mesh.complex_high_accuracy_hint": "高精度会慢很多。关闭时复值 GPU 使用原生 complex64 CUDA fgmres+gamg；实值 GPU 始终默认使用 AmgX。",
     "sim.mesh.patterns_header": "\u6fc0\u52b1\u4e0e\u6d4b\u91cf\u6a21\u5f0f",  # 激励与测量模式
     "sim.mesh.patterns_hint": "\u63a7\u5236\u6b63\u95ee\u9898\u6c42\u89e3\u5668\u5982\u4f55\u751f\u6210\u6fc0\u52b1/\u6d4b\u91cf\u5bf9\u3002\u9006\u95ee\u9898\u91cd\u6784\u590d\u7528\u540c\u4e00\u6a21\u5f0f\u2014\u2014\u8bf7\u4e0e\u786c\u4ef6\u677f\u4fdd\u6301\u4e00\u81f4\u3002",  # 控制正问题求解器如何生成激励/测量对。逆问题重构复用同一模式——请与硬件板保持一致。
     "sim.mesh.drive_value_2d_label": "2D 激励线电流密度：",

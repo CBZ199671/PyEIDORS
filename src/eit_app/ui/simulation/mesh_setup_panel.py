@@ -366,6 +366,18 @@ class MeshSetupPanel(QGroupBox):
         self._lbl_contact_impedance = QLabel("")
         mesh_form.addRow(self._lbl_contact_impedance, self._contact_impedance_edit)
 
+        self._complex_high_accuracy_check = QCheckBox("")
+        self._complex_high_accuracy_check.setChecked(False)
+        self._complex_high_accuracy_check.toggled.connect(
+            lambda _: self._on_any_change()
+        )
+        mesh_form.addRow("", self._complex_high_accuracy_check)
+
+        self._complex_high_accuracy_hint = QLabel("")
+        self._complex_high_accuracy_hint.setWordWrap(True)
+        set_hint_text(self._complex_high_accuracy_hint)
+        mesh_form.addRow("", self._complex_high_accuracy_hint)
+
         outer.addWidget(mesh_widget)
 
         # ── Drive & measurement pattern section ────────────────────────
@@ -483,6 +495,19 @@ class MeshSetupPanel(QGroupBox):
             return float(value)
         except (TypeError, ValueError):
             return float(default)
+
+    @staticmethod
+    def _config_bool(value: object, default: bool = False) -> bool:
+        if value in (None, ""):
+            return bool(default)
+        if isinstance(value, str):
+            text = value.strip().lower()
+            if text in {"1", "true", "yes", "y", "on"}:
+                return True
+            if text in {"0", "false", "no", "n", "off"}:
+                return False
+            return bool(default)
+        return bool(value)
 
     @staticmethod
     def _parse_complex_edit(
@@ -833,6 +858,7 @@ class MeshSetupPanel(QGroupBox):
             "use_meas_current_next": int(self._extra_neighbors_spin.value()),
             "drive_mode": drive_mode,
             "drive_value": drive_value,
+            "complex_gpu_high_accuracy": self._complex_high_accuracy_check.isChecked(),
         }
 
     def set_config(self, config: dict) -> None:
@@ -852,6 +878,7 @@ class MeshSetupPanel(QGroupBox):
             self._electrode_layout_combo,
             self._bg_cond_edit,
             self._contact_impedance_edit,
+            self._complex_high_accuracy_check,
             self._drive_value_spin,
             self._measurement_protocol_combo,
             self._custom_pattern_edit,
@@ -970,6 +997,9 @@ class MeshSetupPanel(QGroupBox):
                     config.get("contact_impedance", 0.01),
                     default=0.01,
                 )
+            )
+            self._complex_high_accuracy_check.setChecked(
+                self._config_bool(config.get("complex_gpu_high_accuracy", False))
             )
             self._drive_value_spin.setValue(
                 self._drive_display_value_from_config(
@@ -1278,6 +1308,9 @@ class MeshSetupPanel(QGroupBox):
             self._electrode_length_spin.setEnabled(not enabled)
             self._lbl_electrode_area.setEnabled(enabled)
             self._electrode_area_spin.setEnabled(enabled)
+        if hasattr(self, "_complex_high_accuracy_check"):
+            self._complex_high_accuracy_check.setEnabled(enabled)
+            self._complex_high_accuracy_hint.setEnabled(enabled)
         if not hasattr(self, "_lbl_electrode_layout"):
             return
         self._lbl_electrode_layout.setEnabled(enabled)
@@ -1473,6 +1506,15 @@ class MeshSetupPanel(QGroupBox):
         self._bg_cond_edit.setToolTip(t("sim.mesh.complex_admittivity_tooltip"))
         self._lbl_contact_impedance.setText(t("sim.mesh.contact_impedance_label"))
         self._contact_impedance_edit.setToolTip(t("sim.mesh.complex_impedance_tooltip"))
+        self._complex_high_accuracy_check.setText(
+            t("sim.mesh.complex_high_accuracy_toggle")
+        )
+        self._complex_high_accuracy_check.setToolTip(
+            t("sim.mesh.complex_high_accuracy_tooltip")
+        )
+        self._complex_high_accuracy_hint.setText(
+            t("sim.mesh.complex_high_accuracy_hint")
+        )
         # Pattern section
         self._patterns_header.setText(t("sim.mesh.patterns_header"))
         self._patterns_hint.setText(t("sim.mesh.patterns_hint"))

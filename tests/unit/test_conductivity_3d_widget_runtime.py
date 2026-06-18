@@ -65,6 +65,7 @@ from eit_app.ui.conductivity_3d_widget import (  # noqa: E402
     embedded_vtk_status,
     _point_cloud_sample_indices,
     _pyvista_feature_outline,
+    _reset_plotter_to_canonical_camera,
     _sample_background_indices,
     _sample_true_indices,
     _should_skip_pyvista_offscreen,
@@ -84,6 +85,24 @@ def _get_app() -> QApplication:
     if app is None:
         app = QApplication([])
     return app
+
+
+def test_3d_camera_reset_uses_canonical_isometric_view() -> None:
+    class _FakePlotter:
+        def __init__(self) -> None:
+            self.calls: list[str] = []
+
+        def reset_camera(self) -> None:
+            self.calls.append("reset_camera")
+
+        def view_isometric(self) -> None:
+            self.calls.append("view_isometric")
+
+    plotter = _FakePlotter()
+
+    _reset_plotter_to_canonical_camera(plotter)
+
+    assert plotter.calls == ["reset_camera", "view_isometric"]
 
 
 def test_v104_3d_highlight_ignores_near_constant_absolute_sigma_noise() -> None:
@@ -1600,6 +1619,34 @@ def test_mesh_setup_panel_exposes_tetra_and_hex_3d_families():
         panel.close()
 
 
+def test_mesh_setup_panel_exposes_complex_gpu_high_accuracy_toggle():
+    _get_app()
+    panel = MeshSetupPanel()
+    try:
+        panel.set_config(
+            {
+                "mesh_dimension": 3,
+                "mesh_family": "tetra",
+                "complex_gpu_high_accuracy": True,
+            }
+        )
+        cfg_3d = panel.get_config()
+        assert cfg_3d["complex_gpu_high_accuracy"] is True
+        assert panel._complex_high_accuracy_check.isEnabled()
+
+        panel.set_config(
+            {
+                "mesh_dimension": 2,
+                "complex_gpu_high_accuracy": "false",
+            }
+        )
+        cfg_2d = panel.get_config()
+        assert cfg_2d["complex_gpu_high_accuracy"] is False
+        assert not panel._complex_high_accuracy_check.isEnabled()
+    finally:
+        panel.close()
+
+
 def test_mesh_setup_panel_exposes_2d_length_and_3d_area_geometry():
     _get_app()
     panel = MeshSetupPanel()
@@ -1699,7 +1746,7 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
         lambda: {
             "petsc_cuda": True,
             "petsc_hypre": True,
-            "petsc_amgx": False,
+            "petsc_amgx": True,
             "probe_cache": {"hit": True, "layer": "disk"},
         },
     )
@@ -1712,13 +1759,15 @@ def test_gpu_forward_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_device"] == "cuda"
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
-    assert tetra["forward_solver_preset"] == "3d_gamg"
-    assert tetra["petsc_amgx_available"] is False
+    assert tetra["forward_solver_preset"] == "cuda_amgx"
+    assert tetra["forward_solver_policy_reason"] == "tetra_real_cuda_amgx_default"
+    assert tetra["petsc_amgx_available"] is True
     assert tetra["petsc_cuda_probe_cache_hit"] is True
     assert tetra["petsc_cuda_probe_cache"]["layer"] == "disk"
     assert tetra["forward_mat_solve"] == "off"
     assert (
-        tetra["forward_mat_solve_policy_reason"] == "cuda_gamg_matsolve_disabled_b658"
+        tetra["forward_mat_solve_policy_reason"]
+        == "cuda_amgx_matsolve_disabled_mainline"
     )
 
     hex_cfg = _resolve_forward_runtime(
@@ -1757,6 +1806,19 @@ def test_v624_complex_gpu_forward_runtime_keeps_hex_on_dolfinx_petsc_cuda(
     assert runtime["petsc_device"] == "cuda"
     assert runtime["device"] == "cuda"
     assert runtime["complex_admittivity_requested"] is True
+    assert runtime["forward_solver_preset"] == "3d_gamg"
+    assert runtime["forward_solver_policy_reason"] == "complex_cuda_native_gamg_default"
+    assert runtime["forward_mat_solve"] == "off"
+
+    cfg.complex_gpu_high_accuracy = True
+    strict_runtime = _resolve_forward_runtime(cfg)
+
+    assert strict_runtime["forward_solver_preset"] == "complex_block_real_amgx"
+    assert (
+        strict_runtime["forward_solver_policy_reason"]
+        == "complex_cuda_block_real_amgx_default"
+    )
+    assert strict_runtime["forward_mat_solve"] == "off"
 
 
 def test_v624_complex_inhomogeneity_marks_forward_request_complex() -> None:
@@ -1796,7 +1858,7 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
         lambda: {
             "petsc_cuda": True,
             "petsc_hypre": True,
-            "petsc_amgx": False,
+            "petsc_amgx": True,
         },
     )
 
@@ -1809,15 +1871,13 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
     assert tetra["petsc_device"] == "cuda"
     assert tetra["device"] == "cuda"
     assert tetra["acceleration_profile"] == "gpu3d"
-    assert tetra["forward_solver_preset"] == "spd_gamg"
-    assert (
-        tetra["forward_solver_policy_reason"]
-        == "amgx_unavailable_downgraded_to_spd_gamg"
-    )
-    assert tetra["petsc_amgx_available"] is False
+    assert tetra["forward_solver_preset"] == "cuda_amgx"
+    assert tetra["forward_solver_policy_reason"] == "tetra_real_cuda_amgx_default"
+    assert tetra["petsc_amgx_available"] is True
     assert tetra["forward_mat_solve"] == "off"
     assert (
-        tetra["forward_mat_solve_policy_reason"] == "cuda_spd_gamg_matsolve_disabled_b6"
+        tetra["forward_mat_solve_policy_reason"]
+        == "cuda_amgx_matsolve_disabled_mainline"
     )
 
     requested_amgx = _resolve_reconstruction_runtime(
@@ -1825,7 +1885,8 @@ def test_gpu_reconstruction_runtime_keeps_tetra_and_hex_distinct(monkeypatch):
         mesh_dim=3,
     )
     assert requested_amgx["forward_solver_preset_requested"] == "cuda_amgx"
-    assert requested_amgx["forward_solver_preset"] == "spd_gamg"
+    assert requested_amgx["forward_solver_preset"] == "cuda_amgx"
+    assert requested_amgx["forward_solver_policy_reason"] == ""
     assert requested_amgx["forward_mat_solve"] == "off"
 
     explicit_matsolve = _resolve_reconstruction_runtime(
@@ -2369,6 +2430,7 @@ def test_3d_widget_builds_pyvista_hex_grid():
         def __init__(self) -> None:
             self.meshes = []
             self.render_count = 0
+            self.view_isometric_count = 0
 
         def add_mesh(self, mesh, *args, **kwargs):
             self.meshes.append((mesh, kwargs))
@@ -2379,6 +2441,9 @@ def test_3d_widget_builds_pyvista_hex_grid():
 
         def reset_camera(self):
             pass
+
+        def view_isometric(self):
+            self.view_isometric_count += 1
 
         def render(self):
             self.render_count += 1
@@ -2395,6 +2460,7 @@ def test_3d_widget_builds_pyvista_hex_grid():
     assert int(grid.celltypes[0]) == int(pv.CellType.HEXAHEDRON)
     assert kwargs["preference"] == "cell"
     assert fake_plotter.render_count == 1
+    assert fake_plotter.view_isometric_count == 1
     widget.close()
 
 
@@ -2419,6 +2485,7 @@ def test_3d_widget_point_cloud_mode_builds_cell_center_polydata():
         def __init__(self) -> None:
             self.meshes = []
             self.render_count = 0
+            self.view_isometric_count = 0
 
         def add_mesh(self, mesh, *args, **kwargs):
             self.meshes.append((mesh, kwargs))
@@ -2429,6 +2496,9 @@ def test_3d_widget_point_cloud_mode_builds_cell_center_polydata():
 
         def reset_camera(self):
             pass
+
+        def view_isometric(self):
+            self.view_isometric_count += 1
 
         def render(self):
             self.render_count += 1
@@ -2449,6 +2519,7 @@ def test_3d_widget_point_cloud_mode_builds_cell_center_polydata():
     assert kwargs["render_points_as_spheres"] is True
     assert kwargs["point_size"] >= 4.0
     assert fake_plotter.render_count == 1
+    assert fake_plotter.view_isometric_count == 1
     widget.close()
 
 

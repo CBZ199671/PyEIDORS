@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pyeidors.perf.capabilities as perf_caps
 from pyeidors.perf.capabilities import (
     probe_mpi_runtime,
@@ -26,8 +28,8 @@ def test_select_preconditioner_auto_priority_order():
     assert select_preconditioner("auto", caps) == "cholmod"
 
 
-def test_tetra_cuda_auto_solver_policy_uses_fgmres_gamg_before_amgx() -> None:
-    capability = {"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": False}
+def test_tetra_cuda_auto_solver_policy_prefers_real_amgx() -> None:
+    capability = {"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": True}
 
     tetra = resolve_3d_cuda_forward_solver_policy(
         requested_solver_preset="auto",
@@ -37,8 +39,8 @@ def test_tetra_cuda_auto_solver_policy_uses_fgmres_gamg_before_amgx() -> None:
         mesh_family="tetra",
         capability=capability,
     )
-    assert tetra["forward_solver_preset_effective"] == "3d_gamg"
-    assert tetra["forward_solver_policy_reason"] == "tetra_cuda_3d_gamg_default"
+    assert tetra["forward_solver_preset_effective"] == "cuda_amgx"
+    assert tetra["forward_solver_policy_reason"] == "tetra_real_cuda_amgx_default"
 
     matsolve = resolve_3d_cuda_mat_solve_policy(
         requested_mat_solve="auto",
@@ -50,7 +52,55 @@ def test_tetra_cuda_auto_solver_policy_uses_fgmres_gamg_before_amgx() -> None:
     assert matsolve["forward_mat_solve_effective_policy"] == "off"
     assert (
         matsolve["forward_mat_solve_policy_reason"]
-        == "cuda_gamg_matsolve_disabled_b658"
+        == "cuda_amgx_matsolve_disabled_mainline"
+    )
+
+    complex_tetra = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        capability={"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": False},
+        complex_admittivity_requested=True,
+    )
+    assert complex_tetra["forward_solver_preset_effective"] == "3d_gamg"
+    assert (
+        complex_tetra["forward_solver_policy_reason"]
+        == "complex_cuda_native_gamg_default"
+    )
+
+    strict_complex_tetra = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        capability={"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": True},
+        complex_admittivity_requested=True,
+        complex_high_accuracy=True,
+    )
+    assert (
+        strict_complex_tetra["forward_solver_preset_effective"]
+        == "complex_block_real_amgx"
+    )
+    assert (
+        strict_complex_tetra["forward_solver_policy_reason"]
+        == "complex_cuda_block_real_amgx_default"
+    )
+
+    missing_amgx = resolve_3d_cuda_forward_solver_policy(
+        requested_solver_preset="auto",
+        mesh_dim=3,
+        petsc_device="cuda",
+        forward_backend="dolfinx",
+        mesh_family="tetra",
+        capability={"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": False},
+    )
+    assert missing_amgx["forward_solver_preset_effective"] == "3d_gamg"
+    assert (
+        missing_amgx["forward_solver_policy_reason"]
+        == "tetra_amgx_unavailable_downgraded_to_3d_gamg"
     )
 
     legacy_unknown_family = resolve_3d_cuda_forward_solver_policy(
@@ -58,7 +108,7 @@ def test_tetra_cuda_auto_solver_policy_uses_fgmres_gamg_before_amgx() -> None:
         mesh_dim=3,
         petsc_device="cuda",
         forward_backend="dolfinx",
-        capability=capability,
+        capability={"petsc_cuda": True, "petsc_hypre": True, "petsc_amgx": False},
     )
     assert legacy_unknown_family["forward_solver_preset_effective"] == "spd_gamg"
 
@@ -334,6 +384,161 @@ class _FakeMPIComm:
         return self._rank
 
 
+class _RecordingPetscOptions(dict):
+    def __init__(self):
+        super().__init__()
+        self.writes: dict[str, str] = {}
+
+    def __setitem__(self, key, value):
+        self.writes[str(key)] = str(value)
+        super().__setitem__(key, value)
+
+
+class _ProbeVec:
+    def __init__(self, size: int = 0, norm_value: float = 1.0):
+        self.size = size
+        self.kind = None
+        self.norm_value = norm_value
+
+    def createSeq(self, size):
+        self.size = int(size)
+        return self
+
+    def setType(self, kind):
+        self.kind = kind
+
+    def set(self, _value):
+        return None
+
+    def assemblyBegin(self):
+        return None
+
+    def assemblyEnd(self):
+        return None
+
+    def duplicate(self):
+        return _ProbeVec(self.size)
+
+    def norm(self):
+        return self.norm_value
+
+    def axpy(self, _alpha, _other):
+        self.norm_value = 0.0
+
+    def destroy(self):
+        return None
+
+
+class _ProbeMat:
+    def createAIJ(self, shape, nnz=None):
+        self.shape = shape
+        self.nnz = nnz
+        self.kind = None
+        self.values = {}
+        return self
+
+    def setType(self, kind):
+        self.kind = kind
+
+    def setUp(self):
+        return None
+
+    def __setitem__(self, key, value):
+        self.values[key] = value
+
+    def assemblyBegin(self):
+        return None
+
+    def assemblyEnd(self):
+        return None
+
+    def mult(self, _x, residual):
+        residual.norm_value = 1.0
+
+    def destroy(self):
+        return None
+
+
+class _ProbePC:
+    def setType(self, kind):
+        self.kind = kind
+
+
+class _ProbeKSP:
+    def __init__(self):
+        self.pc = _ProbePC()
+        self.ksp_type = None
+        self.prefix = None
+
+    def create(self):
+        return self
+
+    def setOptionsPrefix(self, prefix):
+        self.prefix = prefix
+
+    def setOperators(self, _mat):
+        return None
+
+    def setType(self, kind):
+        self.ksp_type = kind
+
+    def getPC(self):
+        return self.pc
+
+    def setTolerances(self, **_kwargs):
+        return None
+
+    def setFromOptions(self):
+        return None
+
+    def solve(self, _b, x):
+        x.norm_value = 1.0
+
+    def destroy(self):
+        return None
+
+
+def test_petsc_amgx_smoke_uses_complex_safe_options_for_complex_scalar() -> None:
+    options = _RecordingPetscOptions()
+    ksp = _ProbeKSP()
+    fake_petsc = SimpleNamespace(
+        ScalarType=complex,
+        Options=lambda: options,
+        Mat=_ProbeMat,
+        Vec=_ProbeVec,
+        KSP=lambda: ksp,
+    )
+
+    ok, error = perf_caps._probe_petsc_amgx_setup_solve(fake_petsc)
+
+    assert ok is True, error
+    assert ksp.ksp_type == "fgmres"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_amg_method"] == "AGGREGATION"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_selector"] == "SIZE_8"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_smoother"] == "BLOCK_JACOBI"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_coarse_solver"] == "NOSOLVER"
+
+
+def test_petsc_amgx_smoke_keeps_real_jacobi_l1_probe() -> None:
+    options = _RecordingPetscOptions()
+    ksp = _ProbeKSP()
+    fake_petsc = SimpleNamespace(
+        ScalarType=float,
+        Options=lambda: options,
+        Mat=_ProbeMat,
+        Vec=_ProbeVec,
+        KSP=lambda: ksp,
+    )
+
+    ok, error = perf_caps._probe_petsc_amgx_setup_solve(fake_petsc)
+
+    assert ok is True, error
+    assert ksp.ksp_type == "cg"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_smoother"] == "JACOBI_L1"
+    assert options.writes["pyeidors_amgx_probe_pc_amgx_exact_coarse_solve"] == "0"
+    assert "pyeidors_amgx_probe_pc_amgx_selector" not in options.writes
+
+
 def test_probe_petsc_cuda_runtime_rejects_unknown_type_symbols(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()
@@ -356,6 +561,11 @@ def test_probe_petsc_cuda_runtime_accepts_working_types(monkeypatch):
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()
     monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_amgx_setup_solve",
+        lambda _petsc: (True, None),
+    )
 
     probe = probe_petsc_cuda_runtime()
 
@@ -365,7 +575,27 @@ def test_probe_petsc_cuda_runtime_accepts_working_types(monkeypatch):
     assert probe["petsc_cuda_vec"] is True
     assert probe["petsc_hypre"] is True
     assert probe["petsc_amgx"] is True
+    assert probe["petsc_amgx_smoke"] is True
     assert probe["petsc_amgx_cuda_candidate"] is True
+
+
+def test_probe_petsc_cuda_runtime_rejects_broken_amgx_smoke(monkeypatch):
+    perf_caps.probe_petsc_cuda_runtime.cache_clear()
+    perf_caps.detect_performance_capabilities.cache_clear()
+    monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_amgx_setup_solve",
+        lambda _petsc: (False, "Incorrect amgx configuration provided."),
+    )
+
+    probe = probe_petsc_cuda_runtime()
+
+    assert probe["petsc_cuda"] is True
+    assert probe["petsc_amgx"] is True
+    assert probe["petsc_amgx_smoke"] is False
+    assert probe["petsc_amgx_cuda_candidate"] is False
+    assert "Incorrect amgx configuration" in probe["errors"]["amgx"]
 
 
 def test_v325_probe_petsc_cuda_runtime_uses_opt_in_disk_cache(monkeypatch, tmp_path):
@@ -374,6 +604,11 @@ def test_v325_probe_petsc_cuda_runtime_uses_opt_in_disk_cache(monkeypatch, tmp_p
     perf_caps.probe_petsc_cuda_runtime.cache_clear()
     perf_caps.detect_performance_capabilities.cache_clear()
     monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_amgx_setup_solve",
+        lambda _petsc: (True, None),
+    )
 
     first = probe_petsc_cuda_runtime()
 
@@ -405,6 +640,11 @@ def test_probe_petsc_cuda_runtime_cache_tracks_runtime_identity(monkeypatch):
     probe_fail = probe_petsc_cuda_runtime()
 
     monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_amgx_setup_solve",
+        lambda _petsc: (True, None),
+    )
     probe_working = probe_petsc_cuda_runtime()
 
     assert probe_fail["petsc_cuda"] is False
@@ -441,6 +681,11 @@ def test_detect_performance_capabilities_cache_tracks_runtime_identity(monkeypat
     caps_fail = perf_caps.detect_performance_capabilities()
 
     monkeypatch.setattr(perf_caps, "_load_petsc_runtime", lambda: _WorkingCudaPETSc)
+    monkeypatch.setattr(
+        perf_caps,
+        "_probe_petsc_amgx_setup_solve",
+        lambda _petsc: (True, None),
+    )
     caps_working = perf_caps.detect_performance_capabilities()
 
     assert caps_fail["petsc_cuda"] is False

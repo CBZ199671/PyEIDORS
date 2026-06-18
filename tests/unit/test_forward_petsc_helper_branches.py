@@ -195,7 +195,7 @@ def test_apply_ksp_options_database_scopes_and_cleans_project_options(
         pc_type="gamg",
         pc_hypre_type="boomeramg",
         pc_gamg_type="agg",
-        pc_factor_mat_solver_type="mumps",
+        pc_factor_mat_solver_type="superlu_dist",
         petsc_options={"ksp_error_if_not_converged": True},
     )
     options = _FakeOptions()

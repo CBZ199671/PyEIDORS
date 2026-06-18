@@ -57,13 +57,6 @@ DATABASE_RECONSTRUCTION_METHODS: tuple[ReconstructionMethodOption, ...] = (
         custom_lambda_eff=True,
     ),
     ReconstructionMethodOption(
-        "Fine-mesh NOSER · Difference (baseline)",
-        "debug_fine_mesh_noser",
-        requires_reference=True,
-        uses_iterations=False,
-        locked_lambda_eff=True,
-    ),
-    ReconstructionMethodOption(
         "Gauss-Newton · Absolute (iterative)",
         "gn-absolute",
         requires_reference=False,
@@ -117,7 +110,7 @@ class PreparedReconstructionMethod:
 def normalize_database_reconstruction_method(method: str) -> str:
     key = str(method or "").strip().lower()
     aliases = {
-        "eidors_one_step_noser": "debug_fine_mesh_noser",
+        "eidors_one_step_noser": "noser_rm",
         "gn_absolute": "gn-absolute",
         "absolute_gn": "gn-absolute",
         "noser": "noser_rm",

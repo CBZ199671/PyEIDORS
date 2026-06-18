@@ -396,9 +396,19 @@ _POOL_LOCK = threading.RLock()
 _POOL: dict[tuple[str, str], _PersistentBackendWorker] = {}
 
 
-def persistent_backend_workers_enabled() -> bool:
-    raw = os.getenv("EIT_APP_BACKEND_WORKER_PERSISTENT", "1").strip().lower()
+def _profile_allows_persistent_worker(profile: str | None) -> bool:
+    profile_name = str(profile or "").strip().lower()
+    if "amgx" not in profile_name:
+        return True
+    raw = os.getenv("EIT_APP_BACKEND_WORKER_PERSISTENT_AMGX", "1").strip().lower()
     return raw not in {"0", "false", "no", "off"}
+
+
+def persistent_backend_workers_enabled(profile: str | None = None) -> bool:
+    raw = os.getenv("EIT_APP_BACKEND_WORKER_PERSISTENT", "1").strip().lower()
+    return raw not in {"0", "false", "no", "off"} and _profile_allows_persistent_worker(
+        profile
+    )
 
 
 def _worker_warm_prime_enabled() -> bool:
@@ -443,7 +453,12 @@ def run_persistent_backend_worker_request(
     output_path: Path,
     progress_cb: Callable[[str], None] | None = None,
 ) -> WorkerRunMetadata:
-    key = (str(Path(repo).resolve()), str(profile or "default").strip() or "default")
+    profile_name = str(profile or "default").strip() or "default"
+    if not persistent_backend_workers_enabled(profile_name):
+        raise BackendWorkerTransportError(
+            f"persistent backend worker disabled for profile={profile_name}"
+        )
+    key = (str(Path(repo).resolve()), profile_name)
     repo_path = Path(repo)
     for attempt in range(2):
         with _POOL_LOCK:
@@ -505,9 +520,10 @@ def warm_persistent_backend_worker(
 ) -> WorkerRunMetadata | None:
     """Warm a profile worker process without executing a forward/recon request."""
 
-    if not persistent_backend_workers_enabled():
+    profile_name = str(profile or "default").strip() or "default"
+    if not persistent_backend_workers_enabled(profile_name):
         return None
-    key = (str(Path(repo).resolve()), str(profile or "default").strip() or "default")
+    key = (str(Path(repo).resolve()), profile_name)
     with _POOL_LOCK:
         worker = _POOL.get(key)
         if worker is None:
@@ -532,11 +548,12 @@ def prime_persistent_backend_worker_forward_setup(
 ) -> WorkerRunMetadata | None:
     """Warm a worker by building compatible forward static setup only."""
 
-    if not persistent_backend_workers_enabled():
+    profile_name = str(profile or "default").strip() or "default"
+    if not persistent_backend_workers_enabled(profile_name):
         return None
     return run_persistent_backend_worker_request(
         repo=Path(repo),
-        profile=str(profile or "default").strip() or "default",
+        profile=profile_name,
         command="prime_forward_setup",
         input_path=Path(input_path),
         output_path=Path(input_path).with_suffix(".prime.out"),

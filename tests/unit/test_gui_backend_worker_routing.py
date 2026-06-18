@@ -71,9 +71,9 @@ def test_v136_real_3d_forward_routes_from_complex_gui_to_real_cuda_worker(
 
     route = select_forward_backend_route(request)
 
-    assert route.profile == "cuda"
+    assert route.profile == "cuda-amgx"
     assert route.external is True
-    assert route.reason.startswith("real_input_uses_real_petsc_runtime")
+    assert route.reason.startswith("real_input_uses_real_amgx_petsc_runtime")
 
 
 def test_v136_complex_3d_forward_uses_current_profile_inprocess(monkeypatch) -> None:
@@ -441,6 +441,164 @@ def test_v138_forward_uses_persistent_worker_pool_by_default(
     assert result.forward_model_config["backend_worker_prime_duration_ms"] == 3.5
     assert result.forward_model_config["backend_worker_request_duration_ms"] == 12.0
     assert result.forward_model_config["backend_worker_result_read_ms"] >= 0.0
+
+
+def test_v666_amgx_profiles_keep_persistent_worker_by_default(monkeypatch) -> None:
+    import eit_app.backend_worker_pool as worker_pool
+
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_PERSISTENT", raising=False)
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_PERSISTENT_AMGX", raising=False)
+
+    assert worker_pool.persistent_backend_workers_enabled("cuda") is True
+    assert worker_pool.persistent_backend_workers_enabled("complex64-cuda") is True
+    assert worker_pool.persistent_backend_workers_enabled("cuda-amgx") is True
+    assert worker_pool.persistent_backend_workers_enabled("complex-cuda-amgx") is True
+
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_PERSISTENT_AMGX", "0")
+    assert worker_pool.persistent_backend_workers_enabled("cuda-amgx") is False
+
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_PERSISTENT", "0")
+    assert worker_pool.persistent_backend_workers_enabled("cuda-amgx") is False
+
+
+def test_v666_forward_cuda_amgx_uses_persistent_worker_by_default(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_PERSISTENT", raising=False)
+    monkeypatch.delenv("EIT_APP_BACKEND_WORKER_PERSISTENT_AMGX", raising=False)
+    captured: dict[str, object] = {}
+
+    def fake_run_persistent_backend_worker_request(
+        *, repo, profile, command, input_path, output_path, progress_cb
+    ):
+        captured.update(
+            {
+                "repo": repo,
+                "profile": profile,
+                "command": command,
+                "input_path": input_path,
+                "output_path": output_path,
+                "progress_cb": progress_cb,
+            }
+        )
+        assert read_forward_request(input_path).background_conductivity == 1.0
+        write_forward_result(
+            output_path,
+            ForwardSolverResult(
+                boundary_voltages=np.array([1.0], dtype=np.float32),
+                ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+                node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+                cell_connectivity=np.array([[0]], dtype=np.int32),
+                n_elements=1,
+                n_measurements=1,
+                forward_model_config={},
+            ),
+        )
+        return SimpleNamespace(
+            launch_mode="profile_command",
+            cache_home=Path(tmp_path / "cache" / "v1" / "cuda-amgx" / "xdg-cache"),
+            pid=23456,
+            reused_process=True,
+            stale_jit_locks_removed=0,
+            primed_runtime=True,
+            prime_command="prime_runtime",
+            prime_duration_ms=4.5,
+            request_duration_ms=10.0,
+        )
+
+    monkeypatch.setattr(
+        "eit_app.backend_worker_pool.run_persistent_backend_worker_request",
+        fake_run_persistent_backend_worker_request,
+    )
+
+    def fail_subprocess_run(*_args, **_kwargs):
+        raise AssertionError("cuda-amgx should use the persistent backend worker")
+
+    monkeypatch.setattr(
+        "eit_app.controllers.forward_solver_controller.subprocess.run",
+        fail_subprocess_run,
+    )
+
+    result = execute_forward_request_in_backend(
+        ForwardSolverRequest(mesh_dimension=3, background_conductivity=1.0),
+        profile="cuda-amgx",
+        route_reason="real_input_uses_real_amgx_petsc_runtime",
+    )
+
+    assert captured["profile"] == "cuda-amgx"
+    assert captured["command"] == "forward"
+    assert result.forward_model_config["backend_worker_profile"] == "cuda-amgx"
+    assert result.forward_model_config["backend_worker_persistent"] is True
+    assert result.forward_model_config["backend_worker_reused_process"] is True
+    assert result.forward_model_config["backend_worker_pid"] == 23456
+    assert result.forward_model_config["backend_worker_process_isolated"] is True
+
+
+def test_v666_forward_cuda_amgx_can_disable_persistent_worker(
+    monkeypatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_PERSISTENT_AMGX", "0")
+    captured: dict[str, object] = {}
+
+    def fail_persistent_backend_worker_request(*_args, **_kwargs):
+        raise AssertionError("cuda-amgx persistent worker was explicitly disabled")
+
+    monkeypatch.setattr(
+        "eit_app.backend_worker_pool.run_persistent_backend_worker_request",
+        fail_persistent_backend_worker_request,
+    )
+
+    def fake_run(cmd, *, cwd, env, text, capture_output, check):
+        captured.update(
+            {
+                "cmd": list(cmd),
+                "cwd": cwd,
+                "env": dict(env),
+                "text": text,
+                "capture_output": capture_output,
+                "check": check,
+            }
+        )
+        shell_command = list(cmd)[-1]
+        output_path = shell_command.split("--output ", 1)[1].strip().split()[0]
+        request_path = shell_command.split("--input ", 1)[1].split(" --output", 1)[0]
+        request = read_forward_request(request_path)
+        assert request.background_conductivity == 1.0
+        write_forward_result(
+            output_path,
+            ForwardSolverResult(
+                boundary_voltages=np.array([1.0], dtype=np.float32),
+                ground_truth_conductivity=np.array([1.0], dtype=np.float32),
+                node_coords=np.array([[0.0, 0.0]], dtype=np.float64),
+                cell_connectivity=np.array([[0]], dtype=np.int32),
+                n_elements=1,
+                n_measurements=1,
+                forward_model_config={},
+            ),
+        )
+        return SimpleNamespace(returncode=0, stderr="[backend-worker] ok\n", stdout="")
+
+    monkeypatch.setattr(
+        "eit_app.controllers.forward_solver_controller.subprocess.run",
+        fake_run,
+    )
+
+    result = execute_forward_request_in_backend(
+        ForwardSolverRequest(mesh_dimension=3, background_conductivity=1.0),
+        profile="cuda-amgx",
+        route_reason="real_input_uses_real_amgx_petsc_runtime",
+    )
+
+    assert ".#cuda-amgx" in captured["cmd"]
+    assert captured["env"]["EIT_APP_GUI_RUNTIME_PROFILE"] == "cuda-amgx"
+    assert result.forward_model_config["backend_worker_profile"] == "cuda-amgx"
+    assert result.forward_model_config["backend_worker_persistent"] is False
 
 
 def test_v319_forward_timing_metadata_schema(monkeypatch) -> None:
@@ -1082,9 +1240,9 @@ def test_v136_real_3d_reconstruction_routes_from_complex_gui_to_real_cuda_worker
 
     route = select_reconstruction_backend_route(request)
 
-    assert route.profile == "cuda"
+    assert route.profile == "cuda-amgx"
     assert route.external is True
-    assert route.reason.startswith("real_input_uses_real_petsc_runtime")
+    assert route.reason.startswith("real_input_uses_real_amgx_petsc_runtime")
 
 
 def test_v136_complex_reconstruction_stays_on_complex_cuda_profile(
@@ -2129,6 +2287,18 @@ def test_v137_backend_worker_cache_is_profile_scoped_and_prunes_stale_jit_locks(
     assert ready_with_module.with_suffix("").exists()
 
 
+def test_v666_backend_worker_env_marks_cuda_amgx_as_gpu(monkeypatch, tmp_path):
+    monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(tmp_path / "cache"))
+    repo = tmp_path / "repo"
+    repo.mkdir()
+
+    env, cache = backend_worker_env(repo=repo, profile="cuda-amgx")
+
+    assert cache.profile == "cuda-amgx"
+    assert env["EIT_APP_GUI_RUNTIME_PROFILE"] == "cuda-amgx"
+    assert env["EIT_APP_GUI_PROFILE"] == "gpu"
+
+
 def test_v590_backend_worker_jit_cleanup_indexes_compiled_modules(tmp_path) -> None:
     import eit_app.backend_worker_runtime as runtime
 
@@ -2157,6 +2327,8 @@ def test_v139_inprocess_runtime_uses_project_profile_jit_cache(
     cache_root = tmp_path / "backend-cache"
     monkeypatch.setenv("EIT_APP_BACKEND_WORKER_CACHE_DIR", str(cache_root))
     monkeypatch.setenv("EIT_APP_GUI_RUNTIME_PROFILE", "complex64-cuda")
+    monkeypatch.delenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE", raising=False)
+    monkeypatch.delenv("PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR", raising=False)
     repo = tmp_path / "repo"
     repo.mkdir()
 
@@ -2165,6 +2337,8 @@ def test_v139_inprocess_runtime_uses_project_profile_jit_cache(
     expected = cache_root / "v1" / "complex64-cuda" / "xdg-cache"
     assert cache.xdg_cache_home == expected
     assert cache.xdg_cache_home.exists()
+    assert "PYEIDORS_PETSC_CUDA_PROBE_CACHE" not in os.environ
+    assert "PYEIDORS_PETSC_CUDA_PROBE_CACHE_DIR" not in os.environ
 
 
 def test_v145_inprocess_forward_uses_profile_lock(monkeypatch, tmp_path) -> None:

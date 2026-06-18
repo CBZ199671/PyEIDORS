@@ -819,14 +819,38 @@ def test_effective_refinement_accepts_simulation_mesh_size_without_inflation() -
     assert rc._compute_effective_refinement(1.0, 10.0, mesh_size=0.1) == 5
 
 
-def test_v106_default_3d_rm_inverse_mesh_size_stays_coarse() -> None:
+def test_v106_default_3d_rm_inverse_mesh_size_is_moderately_refined() -> None:
     size = rc.default_rm_inverse_mesh_size(0.1, 0.18, mesh_dimension=3)
 
     assert size == pytest.approx(0.1)
     assert rc._compute_effective_refinement(0.18, 0.1, mesh_size=size) == 2
-    assert rc.default_rm_inverse_mesh_size(
-        0.02, 0.18, mesh_dimension=3
-    ) == pytest.approx(0.06)
+    finer_size = rc.default_rm_inverse_mesh_size(0.02, 0.18, mesh_dimension=3)
+    assert finer_size == pytest.approx(0.0225)
+    assert rc._compute_effective_refinement(0.18, 0.02, mesh_size=finer_size) == 4
+
+
+def test_3d_rm_auto_build_runtime_uses_moderately_refined_inverse_mesh() -> None:
+    request = rc.ReconstructionRequest(
+        reference_frame=_make_frame(0),
+        target_frame=_make_frame(1),
+        mesh_dimension=3,
+        mesh_refinement=0.02,
+        metadata={
+            "mesh_dimension": 3,
+            "mesh_size": 0.02,
+            "radius": 0.18,
+            "n_elec": 8,
+            "n_rings": 2,
+            "simulation_inverse_route": "noser_rm",
+            "rm_auto_build": True,
+        },
+    )
+
+    runtime = rc._prepare_single_step_cached_runtime(request)
+
+    assert runtime.meta["rm_inverse_mesh_size"] == pytest.approx(0.0225)
+    assert runtime.meta["effective_inverse_mesh_size"] == pytest.approx(0.0225)
+    assert runtime.refinement == 4
 
 
 def test_single_step_cached_runtime_uses_3d_multiring_fast_defaults() -> None:
@@ -1207,6 +1231,50 @@ def test_one_step_rm_signature_tracks_effective_measurement_count() -> None:
     assert sig_2160 != sig_5936
     assert payload_2160["stim_meas_protocol"]["n_measurements"] == 2160
     assert payload_5936["stim_meas_protocol"]["n_measurements"] == 5936
+
+
+def test_one_step_rm_signature_tracks_3d_mesh_geometry_fields() -> None:
+    base_meta = {
+        "reconstruction_runtime": "single_step_cached",
+        "simulation_inverse_route": "noser_rm",
+        "rm_auto_build": True,
+        "mesh_size": 0.02,
+        "rm_inverse_mesh_size": 0.02,
+        "difference_mode": "normalized",
+        "difference_orientation": "target_minus_reference",
+        "n_elec": 8,
+        "n_rings": 2,
+        "radius": 0.18,
+        "height": 0.16,
+        "z_center": 0.0,
+        "electrode_level_fractions": (0.25, 0.75),
+        "potential_order": 1,
+        "mesh_family": "tetra",
+        "geometry_version": "geomv2",
+        "electrode_layout": "ring_major",
+    }
+
+    def signature_for(overrides: dict[str, object]) -> tuple[str, dict[str, object]]:
+        request = rc.ReconstructionRequest(
+            reference_frame=_make_frame(0),
+            target_frame=_make_frame(1),
+            mesh_dimension=3,
+            metadata={**base_meta, **overrides},
+        )
+        return rc._planned_one_step_rm_signature(
+            request,
+            rc._prepare_single_step_cached_runtime(request),
+        )
+
+    base_signature, base_payload = signature_for({})
+
+    assert signature_for({"z_center": 0.01})[0] != base_signature
+    assert signature_for({"electrode_level_fractions": (0.2, 0.8)})[0] != base_signature
+    assert signature_for({"potential_order": 2})[0] != base_signature
+    assert base_payload["electrode_geometry"]["electrode_level_fractions"] == [
+        0.25,
+        0.75,
+    ]
 
 
 def test_smooth_rm_signature_tracks_graph_prior_semantics_not_storage_axes() -> None:

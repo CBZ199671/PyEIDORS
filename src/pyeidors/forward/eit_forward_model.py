@@ -49,6 +49,49 @@ from ..perf.policy import DEFAULT_FORWARD_BACKEND, normalize_forward_backend
 from ..physics.current_drive import resolve_electrode_lengths_m
 
 
+_NATIVE_AMGX_PRESETS = frozenset({"amgx", "cuda_amgx", "complex_cuda_amgx"})
+_COMPLEX_BLOCK_REAL_AMGX_PRESETS = frozenset({"complex_block_real_amgx"})
+_EXPLICIT_AMGX_PRESETS = _NATIVE_AMGX_PRESETS | _COMPLEX_BLOCK_REAL_AMGX_PRESETS
+_NATIVE_COMPLEX_AMGX_CAVEAT = (
+    "native complex PETSc PCAMGX is experimental for complex-admittance EIT; "
+    "benchmarks found numerical differences versus CPU direct reference, so use "
+    "it only for controlled parity experiments."
+)
+_COMPLEX_BLOCK_REAL_AMGX_CAVEAT = (
+    "complex block-real AmgX solves the exported complex CEM system as a real "
+    "2x2 block system in the real cuda-amgx runtime; use it for strict residual "
+    "checks because large-grid benchmarks show it can be much slower than native "
+    "complex64 CUDA GAMG."
+)
+
+
+def _solver_route_metadata(solver_preset: str) -> dict[str, object]:
+    preset = EITForwardModel._solver_token(solver_preset)
+    if preset in _COMPLEX_BLOCK_REAL_AMGX_PRESETS:
+        return {
+            "solver_route_family": "complex_block_real_amgx",
+            "solver_route_status": "strict_accuracy_complex_gpu",
+            "solver_route_caveat": _COMPLEX_BLOCK_REAL_AMGX_CAVEAT,
+        }
+    if preset == "complex_cuda_amgx":
+        return {
+            "solver_route_family": "native_complex_amgx",
+            "solver_route_status": "experimental_known_numeric_delta",
+            "solver_route_caveat": _NATIVE_COMPLEX_AMGX_CAVEAT,
+        }
+    if preset in {"amgx", "cuda_amgx"}:
+        return {
+            "solver_route_family": "real_amgx",
+            "solver_route_status": "real_gpu_candidate",
+            "solver_route_caveat": "",
+        }
+    return {
+        "solver_route_family": preset or "auto",
+        "solver_route_status": "standard",
+        "solver_route_caveat": "",
+    }
+
+
 def _nonzero_index_value_arrays(
     values: np.ndarray,
     *,
@@ -628,16 +671,6 @@ class EITForwardModel:
             "direct": {"ksp_type": "preonly", "pc_type": "lu"},
             "legacy_direct": {"ksp_type": "preonly", "pc_type": "lu"},
             "debug_direct": {"ksp_type": "preonly", "pc_type": "lu"},
-            "mumps": {
-                "ksp_type": "preonly",
-                "pc_type": "lu",
-                "pc_factor_mat_solver_type": "mumps",
-            },
-            "debug_mumps": {
-                "ksp_type": "preonly",
-                "pc_type": "lu",
-                "pc_factor_mat_solver_type": "mumps",
-            },
             "3d_gamg": {
                 "ksp_type": "fgmres",
                 "pc_type": "gamg",
@@ -686,13 +719,55 @@ class EITForwardModel:
                 "pc_hypre_type": "boomeramg",
             },
             "amgx": {
-                "ksp_type": "cg",
+                "ksp_type": "fgmres",
                 "pc_type": "amgx",
+                "petsc_options": {
+                    "pc_amgx_smoother": "JACOBI_L1",
+                    "pc_amgx_exact_coarse_solve": "0",
+                    "pc_amgx_presweeps": "2",
+                    "pc_amgx_postsweeps": "2",
+                    "pc_amgx_coarse_solver": "NOSOLVER",
+                },
             },
             "cuda_amgx": {
-                "ksp_type": "cg",
+                "ksp_type": "fgmres",
                 "pc_type": "amgx",
                 "petsc_device": "cuda",
+                "petsc_options": {
+                    "pc_amgx_smoother": "JACOBI_L1",
+                    "pc_amgx_exact_coarse_solve": "0",
+                    "pc_amgx_presweeps": "2",
+                    "pc_amgx_postsweeps": "2",
+                    "pc_amgx_coarse_solver": "NOSOLVER",
+                },
+            },
+            "complex_cuda_amgx": {
+                "ksp_type": "fgmres",
+                "pc_type": "amgx",
+                "petsc_device": "cuda",
+                "petsc_options": {
+                    "pc_amgx_amg_method": "AGGREGATION",
+                    "pc_amgx_selector": "SIZE_8",
+                    "pc_amgx_smoother": "BLOCK_JACOBI",
+                    "pc_amgx_exact_coarse_solve": "0",
+                    "pc_amgx_presweeps": "2",
+                    "pc_amgx_postsweeps": "2",
+                    "pc_amgx_coarse_solver": "NOSOLVER",
+                },
+            },
+            "complex_block_real_amgx": {
+                "ksp_type": "fgmres",
+                "pc_type": "gamg",
+                "pc_gamg_type": "agg",
+                "petsc_device": "cuda",
+                "petsc_options": {
+                    "block_real_amgx_profile": "real_jacobi_l1",
+                    "block_real_amgx_ksp_type": "bcgs",
+                    "block_real_amgx_rtol": "1e-6",
+                    "block_real_amgx_atol": "1e-12",
+                    "block_real_amgx_max_it": "4000",
+                    "block_real_amgx_max_relative_residual": "1e-6",
+                },
             },
         }
         if preset not in presets:
@@ -1050,6 +1125,7 @@ class EITForwardModel:
         solver_preset = self._solver_token(
             getattr(self.backend_config, "solver_preset", "")
         )
+        info.update(_solver_route_metadata(solver_preset))
         if (
             requested in {"auto", "cuda"}
             and bool(capability.get("petsc_cuda", False))
@@ -1065,13 +1141,15 @@ class EITForwardModel:
                 "(pc_type='hypre' / spd_hypre+cuda). Use spd_gamg with "
                 "petsc_device='cuda', or force petsc_device='cpu' for Hypre."
             )
-        if (pc_type == "amgx" or solver_preset == "cuda_amgx") and not bool(
-            capability.get("petsc_amgx", False)
+        amgx_requested = pc_type == "amgx" or solver_preset in _NATIVE_AMGX_PRESETS
+        if amgx_requested and not bool(
+            capability.get("petsc_amgx_cuda_candidate", False)
         ):
             raise RuntimeError(
-                "当前 PETSc 未启用 AmgX (PETSc PCAMGX unavailable); "
-                "rebuild PETSc with AmgX support or choose spd_gamg "
-                "(Hypre CUDA is blacklisted after B4)."
+                "当前 PETSc PCAMGX 不能作为 CUDA 求解候选 "
+                "(PETSc PCAMGX CUDA smoke unavailable); rebuild PETSc with "
+                "AmgX support, or choose spd_gamg (Hypre CUDA is blacklisted "
+                "after B4)."
             )
         cuda_available = bool(capability.get("petsc_cuda", False))
         if requested == "cpu":
@@ -1577,6 +1655,27 @@ class EITForwardModel:
             return False
         ksp_type = str(session.ksp_type or "").strip().lower()
         pc_type = str(session.pc_type or "").strip().lower()
+        solver_preset = self._solver_token(
+            backend_info.get(
+                "solver_preset",
+                getattr(self.backend_config, "solver_preset", ""),
+            )
+        )
+        capability = backend_info.get("capability", {})
+        capability = capability if isinstance(capability, dict) else {}
+        amgx_cuda_candidate = bool(
+            backend_info.get(
+                "petsc_amgx_cuda_candidate",
+                capability.get("petsc_amgx_cuda_candidate", False),
+            )
+        )
+        if (
+            pc_type == "amgx" or solver_preset in _EXPLICIT_AMGX_PRESETS
+        ) and amgx_cuda_candidate:
+            self._set_backend_diagnostic(
+                cuda_cem_direct_fallback_suppressed="pcamgx_explicit"
+            )
+            return False
         requires_direct = not (
             ksp_type == "preonly" and pc_type in {"lu", "cholesky", "qr"}
         )
@@ -1590,6 +1689,173 @@ class EITForwardModel:
             )
             return False
         return True
+
+    def _is_complex_block_real_amgx_route(self) -> bool:
+        return (
+            self._solver_token(
+                getattr(getattr(self, "backend_config", None), "solver_preset", "")
+            )
+            in _COMPLEX_BLOCK_REAL_AMGX_PRESETS
+        )
+
+    def _is_native_pcamgx_route(self) -> bool:
+        cfg = getattr(self, "backend_config", None)
+        solver_preset = self._solver_token(getattr(cfg, "solver_preset", ""))
+        pc_type = self._solver_token(getattr(cfg, "pc_type", ""), "")
+        return pc_type == "amgx" or solver_preset in _NATIVE_AMGX_PRESETS
+
+    def _complex_block_real_matrix_and_rhs(
+        self, sigma: fem.Function, rhs_matrix: np.ndarray
+    ) -> tuple[csr_matrix, np.ndarray, str]:
+        matrix = self._create_full_matrix_scipy(sigma).tocsr()
+        rhs = self._as_scalar_array(rhs_matrix, name="rhs_matrix", copy=True)
+        if rhs.ndim == 1:
+            rhs = rhs.reshape(-1, 1)
+        gauge = ""
+        if self._gpu_gauge_fix_enabled():
+            gauge_matrix = matrix.tolil()
+            constraint_row, reference_col = self._cuda_gauge_rows()
+            gauge_matrix[constraint_row, :] = self._scalar_value(0.0)
+            gauge_matrix[constraint_row, reference_col] = self._scalar_value(1.0)
+            matrix = gauge_matrix.tocsr()
+            rhs = self._apply_cuda_gauge_fix_rhs(rhs)
+            gauge = "reference-electrode-row"
+            self._set_backend_diagnostic(
+                gpu_constraint_strategy="reference-electrode-row"
+            )
+        return matrix, rhs, gauge
+
+    def _solve_full_rhs_with_complex_block_real_amgx(
+        self,
+        sigma: fem.Function,
+        rhs_matrix: np.ndarray,
+        *,
+        rhs_kind: str = "custom",
+    ) -> np.ndarray:
+        if not self._active_scalar_is_complex():
+            raise RuntimeError(
+                "complex_block_real_amgx requires a complex PETSc assembly runtime; "
+                "real-valued GPU solves should use cuda_amgx."
+            )
+        rhs_preview = np.asarray(rhs_matrix)
+        n_rhs = 1 if rhs_preview.ndim == 1 else int(rhs_preview.shape[1])
+        setup_t0 = time.perf_counter()
+        matrix, rhs, gauge = self._complex_block_real_matrix_and_rhs(sigma, rhs_matrix)
+        setup_seconds = float(time.perf_counter() - setup_t0)
+        solve_t0 = time.perf_counter()
+        from .block_real_amgx import solve_complex_system_with_external_block_real_amgx
+
+        petsc_options = dict(getattr(self.backend_config, "petsc_options", {}) or {})
+
+        def _block_real_float_option(key: str, default: float) -> float:
+            try:
+                return float(petsc_options.get(key, default))
+            except (TypeError, ValueError):
+                return float(default)
+
+        def _block_real_int_option(key: str, default: int) -> int:
+            try:
+                return int(petsc_options.get(key, default))
+            except (TypeError, ValueError):
+                return int(default)
+
+        block_real_rtol = _block_real_float_option("block_real_amgx_rtol", 1.0e-6)
+        block_real_atol = _block_real_float_option("block_real_amgx_atol", 1.0e-12)
+        block_real_max_it = max(
+            4000,
+            _block_real_int_option("block_real_amgx_max_it", 4000),
+        )
+        block_real_max_relative_residual = _block_real_float_option(
+            "block_real_amgx_max_relative_residual",
+            1.0e-6,
+        )
+        block_real_ksp_type = str(
+            petsc_options.get("block_real_amgx_ksp_type", "bcgs") or "bcgs"
+        )
+        solution, report = solve_complex_system_with_external_block_real_amgx(
+            matrix,
+            rhs,
+            potential_dofs=int(self.dofs),
+            n_elec=int(self.n_elec),
+            gauge=gauge,
+            ksp_type=block_real_ksp_type,
+            rtol=block_real_rtol,
+            atol=block_real_atol,
+            max_it=block_real_max_it,
+            max_relative_residual=block_real_max_relative_residual,
+        )
+        solve_seconds = float(time.perf_counter() - solve_t0)
+        solver = report.get("solver", {}) if isinstance(report, dict) else {}
+        iterations = [
+            int(value)
+            for value in (solver.get("iterations_per_rhs", []) or [])
+            if value is not None
+        ]
+        reasons = [
+            int(value)
+            for value in (solver.get("converged_reasons", []) or [])
+            if value is not None
+        ]
+        residual = 0.0
+        if isinstance(report, dict):
+            residual = float(
+                (report.get("complex_true_residual", {}) or {}).get("relative_max", 0.0)
+                or 0.0
+            )
+        self._set_backend_diagnostic(
+            forward_factor_backend="external-complex-block-real-amgx",
+            forward_rhs_kind=str(rhs_kind),
+            forward_rhs_count=n_rhs,
+            forward_setup_seconds=setup_seconds,
+            forward_solve_seconds=solve_seconds,
+            forward_mat_solve_effective="vec-loop",
+            forward_ksp_mat_solve_count=0,
+            forward_ksp_solve_count=n_rhs,
+            forward_ksp_iterations_per_rhs=iterations,
+            forward_ksp_iterations_total=sum(iterations),
+            forward_ksp_converged_reason=reasons[-1] if reasons else None,
+            forward_ksp_converged=all(reason > 0 for reason in reasons)
+            if reasons
+            else None,
+            petsc_solve_mat_type=str(solver.get("mat_type", "")),
+            petsc_vec_type=str(solver.get("vec_type", "")),
+            ksp_type=str(solver.get("ksp_type", "fgmres")),
+            pc_type=str(solver.get("pc_type", "amgx")),
+            solver_route_family="complex_block_real_amgx",
+            solver_route_status="strict_accuracy_complex_gpu",
+            solver_route_caveat=_COMPLEX_BLOCK_REAL_AMGX_CAVEAT,
+            block_real_amgx_run_dir=str(report.get("run_dir", ""))
+            if isinstance(report, dict)
+            else "",
+            block_real_amgx_external_worker_persistent=bool(
+                report.get("external_worker_persistent", False)
+            )
+            if isinstance(report, dict)
+            else False,
+            block_real_amgx_external_worker_transport_error=str(
+                report.get("external_worker_transport_error", "")
+            )
+            if isinstance(report, dict)
+            else "",
+            block_real_amgx_true_relative_residual_max=residual,
+        )
+        return self._recenter_cuda_gauge_solution(
+            np.asarray(solution, dtype=self._active_scalar_dtype())
+        )
+
+    def _solve_with_complex_block_real_amgx(
+        self, sigma: fem.Function, pattern_matrix: np.ndarray
+    ) -> np.ndarray:
+        rhs_matrix = np.zeros(
+            (self.dofs + self.n_elec + 1, pattern_matrix.shape[0]),
+            dtype=self._active_scalar_dtype(),
+        )
+        rhs_matrix[self.dofs : self.dofs + self.n_elec, :] = pattern_matrix.T
+        return self._solve_full_rhs_with_complex_block_real_amgx(
+            sigma,
+            rhs_matrix,
+            rhs_kind="forward_patterns",
+        )
 
     def _assemble_electrode_matrix(self):
         b_form = 0
@@ -2168,11 +2434,19 @@ class EITForwardModel:
         )
         requested_ksp_type = self.backend_config.ksp_type
         requested_pc_type = self.backend_config.pc_type
+        solver_preset = self._solver_token(
+            getattr(self.backend_config, "solver_preset", "")
+        )
+        explicit_amgx_request = (
+            self._solver_token(requested_pc_type, "") == "amgx"
+            or solver_preset in _EXPLICIT_AMGX_PRESETS
+        )
         reuse_requested = bool(
             getattr(self.backend_config, "reuse_preconditioner", True)
         )
         setup_attempts = 0
         reuse_applied_by_ksp: dict[int, bool] = {}
+        last_setup_error: Exception | None = None
 
         def _configure(ksp_obj, mat_obj, *, factor_backend=None):
             reuse_applied_by_ksp[id(ksp_obj)] = False
@@ -2207,6 +2481,17 @@ class EITForwardModel:
             nonlocal setup_attempts
             setup_attempts += 1
             ksp_obj.setUp()
+
+        def _destroy_failed_candidate(*objects) -> None:
+            for obj in objects:
+                if obj is None:
+                    continue
+                destroy = getattr(obj, "destroy", None)
+                if callable(destroy):
+                    try:
+                        destroy()
+                    except Exception:
+                        pass
 
         def _bundle_from(
             ksp_obj, solve_mat_obj, *, backend_name, factor_solver_type=None
@@ -2251,6 +2536,7 @@ class EITForwardModel:
         direct_pc = requested_pc_type in {"lu", "cholesky"}
         if cuda_enabled and direct_pc:
             for candidate in ("cusparse", "cuda"):
+                ksp = None
                 try:
                     ksp = PETSc.KSP().create(self.mesh.comm)
                     _configure(ksp, A, factor_backend=candidate)
@@ -2261,10 +2547,13 @@ class EITForwardModel:
                         backend_name=f"petsc-ksp-{candidate}-{requested_pc_type}",
                         factor_solver_type=candidate,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    last_setup_error = exc
+                    _destroy_failed_candidate(ksp)
             dense_type = self._get_requested_dense_mat_type()
             if dense_type is not None:
+                ksp = None
+                solve_mat = None
                 try:
                     solve_mat = self._ensure_mat_type(A.copy(), dense_type)
                     if hasattr(solve_mat, "assemble"):
@@ -2278,9 +2567,13 @@ class EITForwardModel:
                         backend_name=f"petsc-ksp-{str(dense_type).lower()}-{requested_pc_type}",
                         factor_solver_type=None,
                     )
-                except Exception:
-                    pass
+                except Exception as exc:
+                    last_setup_error = exc
+                    _destroy_failed_candidate(ksp)
+                    if solve_mat is not A:
+                        _destroy_failed_candidate(solve_mat)
         else:
+            ksp = None
             try:
                 ksp = PETSc.KSP().create(self.mesh.comm)
                 _configure(ksp, A)
@@ -2288,8 +2581,21 @@ class EITForwardModel:
                 return _bundle_from(
                     ksp, A, backend_name="petsc-ksp", factor_solver_type=None
                 )
-            except Exception:
-                pass
+            except Exception as exc:
+                last_setup_error = exc
+                _destroy_failed_candidate(ksp)
+
+        if explicit_amgx_request:
+            reason = "explicit_pcamgx_setup_failed_refused_fallback"
+            self._set_backend_diagnostic(
+                gpu_fallback_reason=reason,
+                fallback_reason=reason,
+            )
+            raise RuntimeError(
+                "Explicit PETSc PCAMGX setup failed; refusing gmres/none or "
+                "dense-direct fallback because explicit PCAMGX preset / "
+                "pc_type='amgx' must use AmgX."
+            ) from last_setup_error
 
         ksp = PETSc.KSP().create(self.mesh.comm)
         ksp.setOperators(A)
@@ -2424,6 +2730,13 @@ class EITForwardModel:
     ) -> bool:
         if session is None:
             return False
+        if self._is_native_pcamgx_route():
+            # PETSc PCAMGX keeps solve state inside the PC object and can raise
+            # "AmgX solve state initialisation already called" when the same
+            # KSP/PC session is set up against a new conductivity matrix.  Keep
+            # the persistent backend worker hot, but rebuild native PCAMGX
+            # KSP/PC bundles per sigma.
+            return False
         if session.structural_fingerprint != fingerprint:
             return False
         # Dense CUDA fallback bundles rebuild fresh; session reuse only safe
@@ -2530,6 +2843,9 @@ class EITForwardModel:
         return session.as_bundle(), session, False
 
     def _solve_with_petsc(self, sigma: fem.Function, pattern_matrix: np.ndarray):
+        if self._is_complex_block_real_amgx_route():
+            return self._solve_with_complex_block_real_amgx(sigma, pattern_matrix)
+
         n_patterns = pattern_matrix.shape[0]
         sigma_hash = self._sigma_fingerprint(sigma)
         _ = sigma_hash  # retained for future signature-based invalidation hooks
@@ -2606,6 +2922,16 @@ class EITForwardModel:
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         requested_device = str(backend_info.get("petsc_device_requested", "auto"))
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
+        solver_preset = self._solver_token(
+            getattr(getattr(self, "backend_config", None), "solver_preset", "")
+        )
+        explicit_amgx_request = (
+            self._solver_token(
+                getattr(getattr(self, "backend_config", None), "pc_type", ""), ""
+            )
+            == "amgx"
+            or solver_preset in _EXPLICIT_AMGX_PRESETS
+        )
         capability = (
             backend_info.get("capability")
             if isinstance(backend_info.get("capability"), dict)
@@ -2843,6 +3169,20 @@ class EITForwardModel:
                         forward_solve_seconds=float(time.perf_counter() - solve_t0),
                     )
                     self._dispose_forward_ksp_session(session)
+                    if explicit_amgx_request:
+                        fallback_reason = (
+                            f"explicit_pcamgx_solve_failed_refused_fallback:{reason}"
+                        )
+                        self._set_backend_diagnostic(
+                            gpu_fallback_reason=fallback_reason,
+                            fallback_reason=fallback_reason,
+                        )
+                        raise RuntimeError(
+                            "Explicit PETSc PCAMGX solve failed with a negative "
+                            f"convergence reason ({reason}); refusing dense-direct "
+                            "or CPU fallback because explicit PCAMGX preset / "
+                            "pc_type='amgx' must use AmgX."
+                        )
                     try:
                         return self._solve_with_cuda_dense_lu_fallback(
                             A,
@@ -2934,6 +3274,12 @@ class EITForwardModel:
             raise ValueError(
                 f"full RHS row count mismatch: expected {full_size}, got {rhs.shape[0]}"
             )
+        if self._is_complex_block_real_amgx_route():
+            return self._solve_full_rhs_with_complex_block_real_amgx(
+                sigma,
+                rhs,
+                rhs_kind=rhs_kind,
+            )
         rhs_for_cpu_scipy = rhs.copy()
         rhs = self._apply_cuda_gauge_fix_rhs(rhs.copy())
         n_rhs = int(rhs.shape[1])
@@ -3006,6 +3352,16 @@ class EITForwardModel:
         b_array = b.getArray(readonly=False)
         backend_info = getattr(self, "_petsc_backend_info", {}) or {}
         effective_device = str(backend_info.get("petsc_device_effective", "cpu"))
+        solver_preset = self._solver_token(
+            getattr(getattr(self, "backend_config", None), "solver_preset", "")
+        )
+        explicit_amgx_request = (
+            self._solver_token(
+                getattr(getattr(self, "backend_config", None), "pc_type", ""), ""
+            )
+            == "amgx"
+            or solver_preset in _EXPLICIT_AMGX_PRESETS
+        )
         iterations_per_rhs: list[int | None] = []
         reason = None
         if self._cuda_cem_requires_direct_solve(session, rhs_count=n_rhs):
@@ -3041,6 +3397,21 @@ class EITForwardModel:
                 )
                 self._dispose_forward_ksp_session(session)
                 if effective_device == "cuda":
+                    if explicit_amgx_request:
+                        fallback_reason = (
+                            f"explicit_pcamgx_solve_failed_refused_fallback:{reason}"
+                        )
+                        self._set_backend_diagnostic(
+                            gpu_fallback_reason=fallback_reason,
+                            fallback_reason=fallback_reason,
+                        )
+                        raise RuntimeError(
+                            "Explicit PETSc PCAMGX full RHS solve failed with a "
+                            f"negative convergence reason ({reason}); refusing "
+                            "dense-direct or CPU fallback because "
+                            "explicit PCAMGX preset / pc_type='amgx' must use "
+                            "AmgX."
+                        )
                     try:
                         return self._solve_with_cuda_dense_lu_fallback(
                             A,

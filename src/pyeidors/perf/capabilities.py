@@ -18,6 +18,7 @@ MPI_SINGLE_RANK_GUIDANCE = (
     "use single-rank execution until distributed PETSc/DOLFINx production "
     "paths have mpiexec smoke coverage."
 )
+PETSC_CUDA_RUNTIME_PROBE_CACHE_SCHEMA = "petsc_cuda_runtime_probe_cache_v2"
 
 
 def _load_petsc_runtime():
@@ -77,6 +78,107 @@ def _has_petsc_hypre() -> bool:
 
 def _has_petsc_amgx() -> bool:
     return _has_petsc_pc_type("AMGX")
+
+
+def _probe_petsc_amgx_setup_solve(PETSc) -> tuple[bool, str | None]:
+    """Verify PCAMGX can set up and solve a tiny CUDA system.
+
+    PETSc 3.24's AMGX defaults can be rejected by AMGX 2.4.0.  The smoke
+    uses scalar-type-specific options validated for this runtime instead of
+    treating the mere presence of ``PC.Type.AMGX`` as a usable solver path.
+    """
+
+    objects = []
+    scalar_name = str(getattr(PETSc, "ScalarType", "")).lower()
+    complex_scalar = "complex" in scalar_name
+    prefix = "pyeidors_amgx_probe_"
+    probe_options = (
+        {
+            "pc_amgx_amg_method": "AGGREGATION",
+            "pc_amgx_selector": "SIZE_8",
+            "pc_amgx_smoother": "BLOCK_JACOBI",
+            "pc_amgx_exact_coarse_solve": "0",
+            "pc_amgx_presweeps": "2",
+            "pc_amgx_postsweeps": "2",
+            "pc_amgx_coarse_solver": "NOSOLVER",
+        }
+        if complex_scalar
+        else {
+            "pc_amgx_smoother": "JACOBI_L1",
+            "pc_amgx_exact_coarse_solve": "0",
+        }
+    )
+    option_keys = [f"{prefix}{key}" for key in probe_options]
+    options = None
+    try:
+        options = PETSc.Options()
+        for key, value in probe_options.items():
+            options[f"{prefix}{key}"] = value
+
+        size = 16 if complex_scalar else 2
+        A = PETSc.Mat().createAIJ([size, size], nnz=3)
+        objects.append(A)
+        try:
+            A.setType("aijcusparse")
+        except Exception:
+            pass
+        A.setUp()
+        for row in range(size):
+            A[row, row] = 4.0 + (0.2j if complex_scalar else 0.0)
+            if row > 0:
+                A[row, row - 1] = -1.0 + (0.05j if complex_scalar else 0.0)
+            if row < size - 1:
+                A[row, row + 1] = -1.0 + (-0.05j if complex_scalar else 0.0)
+        A.assemblyBegin()
+        A.assemblyEnd()
+
+        b = PETSc.Vec().createSeq(size)
+        objects.append(b)
+        try:
+            b.setType("cuda")
+        except Exception:
+            pass
+        b.set(1.0 + (0.1j if complex_scalar else 0.0))
+        b.assemblyBegin()
+        b.assemblyEnd()
+
+        x = b.duplicate()
+        objects.append(x)
+
+        ksp = PETSc.KSP().create()
+        objects.append(ksp)
+        ksp.setOptionsPrefix(prefix)
+        ksp.setOperators(A)
+        ksp.setType("fgmres" if complex_scalar else "cg")
+        ksp.getPC().setType("amgx")
+        ksp.setTolerances(rtol=1e-10, max_it=20)
+        ksp.setFromOptions()
+        ksp.solve(b, x)
+        residual = b.duplicate()
+        objects.append(residual)
+        A.mult(x, residual)
+        residual.axpy(-1.0, b)
+        b_norm = b.norm()
+        relres = residual.norm() / b_norm if b_norm else residual.norm()
+        if relres != relres or relres > 1e-6:
+            return False, f"AMGX smoke residual too high: {relres:.3g}"
+        return True, None
+    except Exception as exc:
+        return False, str(exc)
+    finally:
+        if options is not None:
+            for key in option_keys:
+                try:
+                    del options[key]
+                except Exception:
+                    pass
+        for obj in reversed(objects):
+            destroy = getattr(obj, "destroy", None)
+            if callable(destroy):
+                try:
+                    destroy()
+                except Exception:
+                    pass
 
 
 def _load_mpi_comm_world():
@@ -280,7 +382,7 @@ def _petsc_runtime_disk_cache_payload() -> dict[str, object]:
     except Exception:
         version = None
     return {
-        "schema": "petsc_cuda_runtime_probe_cache_v1",
+        "schema": PETSC_CUDA_RUNTIME_PROBE_CACHE_SCHEMA,
         "python_executable": sys.executable,
         "python_version": sys.version,
         "petsc_module": getattr(sys.modules.get("petsc4py"), "__file__", ""),
@@ -322,7 +424,7 @@ def _read_petsc_cuda_probe_disk_cache(cache_key: str) -> dict[str, object] | Non
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return None
-    if payload.get("schema") != "petsc_cuda_runtime_probe_cache_v1":
+    if payload.get("schema") != PETSC_CUDA_RUNTIME_PROBE_CACHE_SCHEMA:
         return None
     if payload.get("key") != cache_key:
         return None
@@ -352,7 +454,7 @@ def _write_petsc_cuda_probe_disk_cache(
     path = cache_dir / f"petsc_cuda_{cache_key}.json"
     stored = {key: value for key, value in result.items() if key != "probe_cache"}
     payload = {
-        "schema": "petsc_cuda_runtime_probe_cache_v1",
+        "schema": PETSC_CUDA_RUNTIME_PROBE_CACHE_SCHEMA,
         "key": cache_key,
         "runtime": _petsc_runtime_disk_cache_payload(),
         "result": stored,
@@ -407,6 +509,7 @@ def _probe_petsc_cuda_runtime_cached(
                 "petsc_hypre": False,
                 "petsc_amgx": False,
                 "petsc_amgx_cuda_candidate": False,
+                "petsc_amgx_smoke": False,
                 "mat_type_name": None,
                 "vec_type_name": None,
                 "dense_mat_type_name": None,
@@ -434,6 +537,16 @@ def _probe_petsc_cuda_runtime_cached(
     if dense_error:
         errors["dense"] = dense_error
 
+    amgx_symbol_available = bool(_has_petsc_amgx())
+    amgx_available = amgx_symbol_available
+    amgx_smoke_ok = False
+    amgx_error = None
+    if mat_ok and vec_ok:
+        amgx_smoke_ok, amgx_error = _probe_petsc_amgx_setup_solve(PETSc)
+        amgx_available = bool(amgx_available or amgx_smoke_ok)
+    if amgx_error:
+        errors["amgx"] = amgx_error
+
     return _write_petsc_cuda_probe_disk_cache(
         disk_key,
         {
@@ -443,8 +556,11 @@ def _probe_petsc_cuda_runtime_cached(
             "petsc_cuda_vec": bool(vec_ok),
             "petsc_cuda_dense": bool(dense_ok),
             "petsc_hypre": bool(_has_petsc_hypre()),
-            "petsc_amgx": bool(_has_petsc_amgx()),
-            "petsc_amgx_cuda_candidate": bool(_has_petsc_amgx() and mat_ok and vec_ok),
+            "petsc_amgx": amgx_available,
+            "petsc_amgx_smoke": bool(amgx_smoke_ok),
+            "petsc_amgx_cuda_candidate": bool(
+                amgx_available and mat_ok and vec_ok and amgx_smoke_ok
+            ),
             "mat_type_name": mat_type,
             "vec_type_name": vec_type,
             "dense_mat_type_name": dense_type,
@@ -481,7 +597,7 @@ def _detect_performance_capabilities_cached(
         "petsc_mat_solve": _has_petsc_mat_solve(),
         "petsc_gamg": _has_petsc_gamg(),
         "petsc_hypre": _has_petsc_hypre(),
-        "petsc_amgx": _has_petsc_amgx(),
+        "petsc_amgx": bool(cuda_probe.get("petsc_amgx", False)),
         "petsc_amgx_cuda_candidate": bool(
             cuda_probe.get("petsc_amgx_cuda_candidate", False)
         ),

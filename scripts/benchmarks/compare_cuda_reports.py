@@ -9,6 +9,8 @@ import math
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 
 def _load(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
@@ -56,6 +58,68 @@ def _backend(report: dict[str, Any]) -> dict[str, Any]:
         if isinstance(payload, dict):
             return payload
     return {}
+
+
+def _forward_solver_benchmark(report: dict[str, Any]) -> dict[str, Any]:
+    payload = report.get("forward_solver_benchmark")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _decode_array_payload(payload: Any) -> np.ndarray | None:
+    if not isinstance(payload, dict):
+        return None
+    shape = payload.get("shape")
+    if not isinstance(shape, list):
+        return None
+    if "real" in payload or "imag" in payload:
+        real = np.asarray(payload.get("real", []), dtype=np.float64)
+        imag = np.asarray(payload.get("imag", []), dtype=np.float64)
+        if real.shape != imag.shape:
+            return None
+        return (real + 1j * imag).reshape(tuple(int(v) for v in shape))
+    if "values" in payload:
+        return np.asarray(payload.get("values", []), dtype=np.float64).reshape(
+            tuple(int(v) for v in shape)
+        )
+    return None
+
+
+def _relative_l2(reference: np.ndarray, candidate: np.ndarray) -> float:
+    denom = float(np.linalg.norm(reference.reshape(-1)))
+    if denom == 0.0:
+        denom = np.finfo(np.float64).eps
+    return float(np.linalg.norm((candidate - reference).reshape(-1)) / denom)
+
+
+def _forward_output_parity(
+    cpu_report: dict[str, Any],
+    gpu_report: dict[str, Any],
+) -> dict[str, Any]:
+    cpu_forward = _forward_solver_benchmark(cpu_report)
+    gpu_forward = _forward_solver_benchmark(gpu_report)
+    cpu_values = _decode_array_payload(cpu_forward.get("electrode_voltages"))
+    gpu_values = _decode_array_payload(gpu_forward.get("electrode_voltages"))
+    if cpu_values is None or gpu_values is None:
+        return {"available": False, "reason": "missing_forward_electrode_voltages"}
+    if cpu_values.shape != gpu_values.shape:
+        return {
+            "available": False,
+            "reason": "shape_mismatch",
+            "cpu_shape": list(cpu_values.shape),
+            "gpu_shape": list(gpu_values.shape),
+        }
+    diff = gpu_values - cpu_values
+    abs_diff = np.abs(diff.reshape(-1))
+    return {
+        "available": True,
+        "relative_l2": _relative_l2(cpu_values, gpu_values),
+        "max_abs": float(np.max(abs_diff)) if abs_diff.size else 0.0,
+        "mean_abs": float(np.mean(abs_diff)) if abs_diff.size else 0.0,
+        "rms_abs": float(np.sqrt(np.mean(abs_diff**2))) if abs_diff.size else 0.0,
+        "cpu_dtype": str(cpu_values.dtype),
+        "gpu_dtype": str(gpu_values.dtype),
+        "shape": list(cpu_values.shape),
+    }
 
 
 def _forward_probe_seconds(report: dict[str, Any]) -> float:
@@ -227,6 +291,9 @@ def main() -> None:
         "gpu_mesh_info": gpu.get("mesh_info"),
         "cpu_backend": _backend(cpu),
         "gpu_backend": _backend(gpu),
+        "cpu_forward_solver_benchmark": _forward_solver_benchmark(cpu),
+        "gpu_forward_solver_benchmark": _forward_solver_benchmark(gpu),
+        "forward_output_parity": _forward_output_parity(cpu, gpu),
     }
 
     if args.output_json is not None:

@@ -200,6 +200,22 @@ def _parse_args() -> argparse.Namespace:
         help="Forward PETSc solver_preset passed to EITForwardModel.",
     )
     parser.add_argument(
+        "--store-forward-output",
+        choices=["off", "on"],
+        default="off",
+        help="Store forward-only electrode voltages in JSON for strict parity comparisons.",
+    )
+    parser.add_argument(
+        "--forward-petsc-option",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Extra PETSc option for the forward KSP, without leading '-'. "
+            "May be repeated, e.g. --forward-petsc-option pc_amgx_solver=AMG."
+        ),
+    )
+    parser.add_argument(
         "--petsc-device",
         choices=["auto", "cpu", "cuda"],
         default=DEFAULT_PETSC_DEVICE,
@@ -316,6 +332,39 @@ def _as_int_list(value: Any) -> list[int | None]:
     return []
 
 
+def _array_payload(values: Any) -> dict[str, Any]:
+    arr = np.asarray(values)
+    payload: dict[str, Any] = {
+        "shape": list(arr.shape),
+        "dtype": str(arr.dtype),
+    }
+    flat = arr.reshape(-1)
+    if np.iscomplexobj(arr):
+        payload["real"] = np.asarray(flat.real, dtype=np.float64).tolist()
+        payload["imag"] = np.asarray(flat.imag, dtype=np.float64).tolist()
+    else:
+        payload["values"] = np.asarray(flat, dtype=np.float64).tolist()
+    return payload
+
+
+def _parse_key_value_options(
+    items: list[str] | tuple[str, ...] | None,
+) -> dict[str, str]:
+    options: dict[str, str] = {}
+    for item in items or ():
+        raw = str(item).strip()
+        if not raw:
+            continue
+        if "=" not in raw:
+            raise ValueError(f"Expected PETSc option as KEY=VALUE, got {raw!r}.")
+        key, value = raw.split("=", 1)
+        key = key.strip().lstrip("-")
+        if not key:
+            raise ValueError(f"Expected non-empty PETSc option key in {raw!r}.")
+        options[key] = value.strip()
+    return options
+
+
 def _first_nonempty(*values: Any) -> Any:
     for value in values:
         if value not in (None, "", [], {}):
@@ -372,6 +421,9 @@ def _build_forward_solver_benchmark_artifact(
             backend_info.get("solver_preset")
             or getattr(args, "forward_solver_preset", "auto")
         ),
+        "solver_route_family": backend_info.get("solver_route_family"),
+        "solver_route_status": backend_info.get("solver_route_status"),
+        "solver_route_caveat": backend_info.get("solver_route_caveat"),
         "ksp_type": backend_info.get("ksp_type"),
         "pc_type": backend_info.get("pc_type"),
         "pc_subtype": pc_subtype,
@@ -457,6 +509,7 @@ def _build_forward_solver_benchmark_artifact(
 
 def main() -> None:
     args = _parse_args()
+    forward_petsc_options = _parse_key_value_options(args.forward_petsc_option)
     apply_acceleration_profile_overrides(args, mesh_dim=3)
     if int(args.repeat) <= 0:
         raise ValueError("--repeat must be a positive integer.")
@@ -555,6 +608,7 @@ def main() -> None:
                         "solver_preset": str(args.forward_solver_preset),
                         "mat_solve_mode": str(args.forward_mat_solve),
                         "petsc_device": str(args.petsc_device),
+                        "petsc_options": dict(forward_petsc_options),
                     },
                     performance_mode="aggressive",
                     forward_backend=str(args.forward_backend),
@@ -597,6 +651,10 @@ def main() -> None:
             )
             forward_artifact["output_shape"] = list(electrode_voltages.shape)
             forward_artifact["output_finite"] = all_finite_values(electrode_voltages)
+            if str(args.store_forward_output) == "on":
+                forward_artifact["electrode_voltages"] = _array_payload(
+                    electrode_voltages
+                )
             forward_artifact["returned_solution_count"] = int(len(u_all))
             stages.extend(
                 [forward_mesh_stage, forward_setup_stage, forward_solve_stage]
@@ -795,6 +853,7 @@ def main() -> None:
                         "solver_preset": str(args.forward_solver_preset),
                         "mat_solve_mode": str(args.forward_mat_solve),
                         "petsc_device": str(args.petsc_device),
+                        "petsc_options": dict(forward_petsc_options),
                     },
                 )
                 system.setup(mesh=mesh)
@@ -1296,6 +1355,8 @@ def main() -> None:
             "forward_mat_solve": str(args.forward_mat_solve),
             "forward_only": str(args.forward_only),
             "forward_solver_preset": str(args.forward_solver_preset),
+            "store_forward_output": str(args.store_forward_output),
+            "forward_petsc_options": dict(forward_petsc_options),
             "petsc_device": str(args.petsc_device),
             "device": str(args.device),
             "forward_backend": str(args.forward_backend),

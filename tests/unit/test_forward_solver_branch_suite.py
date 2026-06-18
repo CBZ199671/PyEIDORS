@@ -150,6 +150,7 @@ class _FakeKSP:
         self.solve_value = 3.0
         self.mat_solve_value = 2.0
         self.raise_on_matsolve = False
+        self.destroyed = False
 
     def create(self, _comm):
         return self
@@ -191,6 +192,9 @@ class _FakeKSP:
 
     def getConvergedReason(self):
         return self.converged_reason
+
+    def destroy(self):
+        self.destroyed = True
 
 
 class _FakePETSc:
@@ -691,6 +695,248 @@ def test_make_petsc_solver_bundle_covers_reuse_monitor_and_cuda_dense_setup_fail
     assert bundle_gmres["ksp_type"] == "gmres"
     assert bundle_gmres["ksp_setup_count"] == 4
     assert bundle_gmres["reuse_preconditioner"] is True
+
+
+def test_v660_failed_petsc_solver_bundle_candidates_are_destroyed_before_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    model = _make_model()
+    model._petsc_backend_info = {"petsc_device_effective": "cuda"}
+
+    failed_cusparse = _FakeKSP(fail_setup=True)
+    failed_cuda = _FakeKSP(fail_setup=True)
+    failed_dense = _FakeKSP(fail_setup=True)
+    fallback = _FakeKSP()
+    candidates = [failed_cusparse, failed_cuda, failed_dense, fallback]
+
+    def _next_ksp():
+        return candidates.pop(0)
+
+    converted = _FakeMat(size=(5, 5))
+    dense_attempt = _FakeMat(size=(5, 5))
+    converted.copy = lambda: dense_attempt
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(Mat=_FakePETSc.Mat, KSP=_next_ksp),
+    )
+    monkeypatch.setattr(model, "_get_requested_dense_mat_type", lambda: "densecuda")
+    monkeypatch.setattr(
+        model, "_ensure_mat_type", lambda mat, mat_type: (mat.setType(mat_type), mat)[1]
+    )
+
+    bundle = EITForwardModel._make_petsc_solver_bundle(model, converted)
+
+    assert bundle["backend"] == "petsc-ksp-gmres+none"
+    assert bundle["ksp"] is fallback
+    assert failed_cusparse.destroyed is True
+    assert failed_cuda.destroyed is True
+    assert failed_dense.destroyed is True
+    assert dense_attempt.destroyed is True
+    assert fallback.destroyed is False
+
+
+@pytest.mark.parametrize("solver_preset", ["cuda_amgx", "complex_cuda_amgx"])
+def test_v661_explicit_amgx_setup_failure_refuses_gmres_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    solver_preset: str,
+):
+    model = _make_model()
+    model.backend_config = SimpleNamespace(
+        solver_preset=solver_preset,
+        ksp_type="fgmres",
+        pc_type="amgx",
+        rtol=1e-10,
+        atol=1e-12,
+        max_it=200,
+        reuse_preconditioner=True,
+        monitor=False,
+        mat_solve_mode="off",
+        use_mat_solve=False,
+        petsc_device="cuda",
+    )
+    model._petsc_backend_info = {
+        "petsc_device_effective": "cuda",
+        "petsc_amgx_cuda_candidate": True,
+        "capability": {"petsc_amgx_cuda_candidate": True},
+    }
+    failed_amgx = _FakeKSP(fail_setup=True)
+    gmres_fallback = _FakeKSP()
+    candidates = [failed_amgx, gmres_fallback]
+
+    def _next_ksp():
+        return candidates.pop(0)
+
+    monkeypatch.setattr(
+        forward_module,
+        "PETSc",
+        SimpleNamespace(Mat=_FakePETSc.Mat, KSP=_next_ksp),
+    )
+
+    with pytest.raises(RuntimeError, match="Explicit PETSc PCAMGX setup failed"):
+        EITForwardModel._make_petsc_solver_bundle(model, _FakeMat(size=(5, 5)))
+
+    assert failed_amgx.destroyed is True
+    assert candidates == [gmres_fallback]
+    assert (
+        model.get_backend_diagnostics()["gpu_fallback_reason"]
+        == "explicit_pcamgx_setup_failed_refused_fallback"
+    )
+
+
+@pytest.mark.parametrize("solver_preset", ["cuda_amgx", "complex_cuda_amgx"])
+def test_v662_explicit_amgx_solve_failure_refuses_dense_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    solver_preset: str,
+):
+    model = _make_model()
+    model.backend_config = SimpleNamespace(
+        solver_preset=solver_preset,
+        ksp_type="fgmres",
+        pc_type="amgx",
+        rtol=1e-10,
+        atol=1e-12,
+        max_it=200,
+        reuse_preconditioner=True,
+        monitor=False,
+        mat_solve_mode="off",
+        use_mat_solve=False,
+        petsc_device="cuda",
+    )
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "petsc_amgx_cuda_candidate": True,
+        "capability": {
+            "petsc_amgx_cuda_candidate": True,
+            "petsc_cuda_dense": True,
+        },
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+    monkeypatch.setattr(model, "_sigma_fingerprint", lambda _sigma: "sig")
+    monkeypatch.setattr(model, "_base_cache_payload", lambda **_kwargs: {})
+    monkeypatch.setattr(model, "_apply_cuda_gauge_fix_rhs", lambda rhs: rhs)
+    monkeypatch.setattr(model, "_get_requested_dense_mat_type", lambda: "densecuda")
+    monkeypatch.setattr(model, "_get_requested_petsc_vec_type", lambda: None)
+    monkeypatch.setattr(
+        model, "_create_full_matrix_petsc", lambda _sigma: _FakeMat(size=(5, 5))
+    )
+    monkeypatch.setattr(model, "_should_use_mat_solve", lambda _n: False)
+
+    failed_amgx = _FakeKSP()
+    failed_amgx.converged_reason = -9
+    monkeypatch.setattr(
+        model,
+        "_make_petsc_solver_bundle",
+        lambda _A: {
+            "A": _FakeMat(size=(5, 5), mat_type="seqaijcusparse"),
+            "solve_A": _FakeMat(size=(5, 5), mat_type="seqaijcusparse"),
+            "ksp": failed_amgx,
+            "backend": "petsc-ksp",
+            "ksp_type": "fgmres",
+            "pc_type": "amgx",
+            "solve_mat_type": "seqaijcusparse",
+        },
+    )
+
+    fallback_called = {"dense": False}
+
+    def _dense_fallback(*_args, **_kwargs):
+        fallback_called["dense"] = True
+        raise AssertionError("explicit PCAMGX must not use dense fallback")
+
+    monkeypatch.setattr(model, "_solve_with_cuda_dense_lu_fallback", _dense_fallback)
+
+    with pytest.raises(RuntimeError, match="Explicit PETSc PCAMGX solve failed"):
+        EITForwardModel._solve_with_petsc(
+            model,
+            sigma=None,
+            pattern_matrix=np.array([[1.0, -1.0]], dtype=float),
+        )
+
+    assert fallback_called["dense"] is False
+    reason = model.get_backend_diagnostics()["gpu_fallback_reason"]
+    assert reason == "explicit_pcamgx_solve_failed_refused_fallback:-9"
+
+
+@pytest.mark.parametrize("solver_preset", ["cuda_amgx", "complex_cuda_amgx"])
+def test_v662_explicit_amgx_full_rhs_solve_failure_refuses_dense_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+    solver_preset: str,
+):
+    model = _make_model()
+    model.backend_config = SimpleNamespace(
+        solver_preset=solver_preset,
+        ksp_type="fgmres",
+        pc_type="amgx",
+        rtol=1e-10,
+        atol=1e-12,
+        max_it=200,
+        reuse_preconditioner=True,
+        monitor=False,
+        mat_solve_mode="off",
+        use_mat_solve=False,
+        petsc_device="cuda",
+    )
+    model._petsc_backend_info = {
+        "petsc_device_requested": "cuda",
+        "petsc_device_effective": "cuda",
+        "petsc_amgx_cuda_candidate": True,
+        "capability": {
+            "petsc_amgx_cuda_candidate": True,
+            "petsc_cuda_dense": True,
+        },
+    }
+    monkeypatch.setattr(forward_module, "PETSc", _FakePETSc)
+    monkeypatch.setattr(model, "_apply_cuda_gauge_fix_rhs", lambda rhs: rhs)
+    monkeypatch.setattr(model, "_get_requested_petsc_vec_type", lambda: None)
+    monkeypatch.setattr(
+        model, "_create_full_matrix_petsc", lambda _sigma: _FakeMat(size=(5, 5))
+    )
+
+    failed_amgx = _FakeKSP()
+    failed_amgx.converged_reason = -10
+    monkeypatch.setattr(
+        model,
+        "_make_petsc_solver_bundle",
+        lambda _A: {
+            "A": _FakeMat(size=(5, 5), mat_type="seqaijcusparse"),
+            "solve_A": _FakeMat(size=(5, 5), mat_type="seqaijcusparse"),
+            "ksp": failed_amgx,
+            "backend": "petsc-ksp",
+            "ksp_type": "fgmres",
+            "pc_type": "amgx",
+            "solve_mat_type": "seqaijcusparse",
+        },
+    )
+
+    fallback_called = {"dense": False, "cpu": False}
+
+    def _dense_fallback(*_args, **_kwargs):
+        fallback_called["dense"] = True
+        raise AssertionError("explicit PCAMGX must not use dense fallback")
+
+    def _cpu_fallback(*_args, **_kwargs):
+        fallback_called["cpu"] = True
+        raise AssertionError("explicit PCAMGX must not use CPU fallback")
+
+    monkeypatch.setattr(model, "_solve_with_cuda_dense_lu_fallback", _dense_fallback)
+    monkeypatch.setattr(model, "_solve_full_rhs_with_cpu_scipy_fallback", _cpu_fallback)
+
+    with pytest.raises(
+        RuntimeError,
+        match="Explicit PETSc PCAMGX full RHS solve failed",
+    ):
+        EITForwardModel._solve_full_rhs_with_petsc(
+            model,
+            sigma=None,
+            rhs_matrix=np.ones((5, 1), dtype=float),
+            rhs_kind="test",
+        )
+
+    assert fallback_called == {"dense": False, "cpu": False}
+    reason = model.get_backend_diagnostics()["gpu_fallback_reason"]
+    assert reason == "explicit_pcamgx_solve_failed_refused_fallback:-10"
 
 
 def test_solve_with_petsc_and_forward_interfaces_cover_mat_solve_fallbacks_and_errors(

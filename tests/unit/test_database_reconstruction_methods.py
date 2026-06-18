@@ -50,7 +50,7 @@ def test_v118_database_method_catalog_exposes_rm_and_absolute_routes() -> None:
     methods = [option.method for option in DATABASE_RECONSTRUCTION_METHODS]
     assert methods[:3] == ["noser_rm", "laplace_rm", "curvature_rm"]
     assert PSEUDO3D_NOSER_RM_METHOD in methods
-    assert "debug_fine_mesh_noser" in methods
+    assert "debug_fine_mesh_noser" not in methods
     assert "gn-absolute" in methods
     assert not database_method_uses_iterations("noser_rm")
     assert not database_method_uses_iterations("laplace_rm")

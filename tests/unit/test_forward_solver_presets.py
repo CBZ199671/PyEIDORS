@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from pyeidors.forward.eit_forward_model import EITForwardModel, LinearBackendConfig
+from pyeidors.forward.eit_forward_model import (
+    EITForwardModel,
+    LinearBackendConfig,
+    _solver_route_metadata,
+)
 
 
 def _model_with_dim(mesh_dim: int):
@@ -46,15 +50,65 @@ def test_explicit_hypre_preset_sets_boomeramg() -> None:
     assert config.pc_hypre_type == "boomeramg"
 
 
-def test_cuda_amgx_preset_requests_cuda_cg_amgx() -> None:
+def test_cuda_amgx_preset_requests_cuda_fgmres_amgx() -> None:
     config = EITForwardModel._resolve_linear_backend_config(
         _model_with_dim(3),
         LinearBackendConfig.from_dict({"solver_preset": "cuda_amgx"}),
     )
 
-    assert config.ksp_type == "cg"
+    assert config.ksp_type == "fgmres"
     assert config.pc_type == "amgx"
     assert config.petsc_device == "cuda"
+    assert config.petsc_options["pc_amgx_smoother"] == "JACOBI_L1"
+    assert config.petsc_options["pc_amgx_exact_coarse_solve"] == "0"
+    assert config.petsc_options["pc_amgx_presweeps"] == "2"
+    assert config.petsc_options["pc_amgx_postsweeps"] == "2"
+    assert config.petsc_options["pc_amgx_coarse_solver"] == "NOSOLVER"
+
+
+def test_complex_cuda_amgx_preset_uses_native_complex_safe_options() -> None:
+    config = EITForwardModel._resolve_linear_backend_config(
+        _model_with_dim(3),
+        LinearBackendConfig.from_dict({"solver_preset": "complex_cuda_amgx"}),
+    )
+
+    assert config.ksp_type == "fgmres"
+    assert config.pc_type == "amgx"
+    assert config.petsc_device == "cuda"
+    assert config.petsc_options["pc_amgx_amg_method"] == "AGGREGATION"
+    assert config.petsc_options["pc_amgx_selector"] == "SIZE_8"
+    assert config.petsc_options["pc_amgx_smoother"] == "BLOCK_JACOBI"
+    assert config.petsc_options["pc_amgx_exact_coarse_solve"] == "0"
+    assert config.petsc_options["pc_amgx_presweeps"] == "2"
+    assert config.petsc_options["pc_amgx_postsweeps"] == "2"
+    assert config.petsc_options["pc_amgx_coarse_solver"] == "NOSOLVER"
+
+
+def test_complex_cuda_amgx_route_metadata_marks_numeric_delta_experiment() -> None:
+    meta = _solver_route_metadata("complex_cuda_amgx")
+
+    assert meta["solver_route_family"] == "native_complex_amgx"
+    assert meta["solver_route_status"] == "experimental_known_numeric_delta"
+    assert "numerical differences versus CPU direct reference" in str(
+        meta["solver_route_caveat"]
+    )
+
+
+def test_complex_block_real_amgx_route_metadata_marks_strict_accuracy() -> None:
+    config = EITForwardModel._resolve_linear_backend_config(
+        _model_with_dim(3),
+        LinearBackendConfig.from_dict({"solver_preset": "complex_block_real_amgx"}),
+    )
+    meta = _solver_route_metadata("complex_block_real_amgx")
+
+    assert config.solver_preset == "complex_block_real_amgx"
+    assert config.petsc_device == "cuda"
+    assert config.petsc_options["block_real_amgx_profile"] == "real_jacobi_l1"
+    assert config.petsc_options["block_real_amgx_ksp_type"] == "bcgs"
+    assert config.petsc_options["block_real_amgx_rtol"] == "1e-6"
+    assert config.petsc_options["block_real_amgx_max_relative_residual"] == "1e-6"
+    assert meta["solver_route_family"] == "complex_block_real_amgx"
+    assert meta["solver_route_status"] == "strict_accuracy_complex_gpu"
 
 
 def test_explicit_ksp_pc_are_not_overridden_by_auto_preset() -> None:
@@ -103,20 +157,6 @@ _CANONICAL_PRESET_MATRIX: dict[str, dict[str, str | None]] = {
         "pc_gamg_type": None,
         "pc_hypre_type": None,
         "pc_factor_mat_solver_type": None,
-    },
-    "mumps": {
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_gamg_type": None,
-        "pc_hypre_type": None,
-        "pc_factor_mat_solver_type": "mumps",
-    },
-    "debug_mumps": {
-        "ksp_type": "preonly",
-        "pc_type": "lu",
-        "pc_gamg_type": None,
-        "pc_hypre_type": None,
-        "pc_factor_mat_solver_type": "mumps",
     },
     "3d_gamg": {
         "ksp_type": "fgmres",
@@ -168,16 +208,30 @@ _CANONICAL_PRESET_MATRIX: dict[str, dict[str, str | None]] = {
         "pc_factor_mat_solver_type": None,
     },
     "amgx": {
-        "ksp_type": "cg",
+        "ksp_type": "fgmres",
         "pc_type": "amgx",
         "pc_gamg_type": None,
         "pc_hypre_type": None,
         "pc_factor_mat_solver_type": None,
     },
     "cuda_amgx": {
-        "ksp_type": "cg",
+        "ksp_type": "fgmres",
         "pc_type": "amgx",
         "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "complex_cuda_amgx": {
+        "ksp_type": "fgmres",
+        "pc_type": "amgx",
+        "pc_gamg_type": None,
+        "pc_hypre_type": None,
+        "pc_factor_mat_solver_type": None,
+    },
+    "complex_block_real_amgx": {
+        "ksp_type": "fgmres",
+        "pc_type": "gamg",
+        "pc_gamg_type": "agg",
         "pc_hypre_type": None,
         "pc_factor_mat_solver_type": None,
     },
@@ -223,6 +277,18 @@ def test_unknown_preset_still_raises_with_sorted_choices() -> None:
             f"error text missing canonical preset {name!r}; update resolver "
             "to list every supported preset."
         )
+
+
+def test_retired_mumps_presets_are_not_supported() -> None:
+    """Retired 3D complex-CEM MUMPS routes must not re-enter preset surface."""
+    import pytest
+
+    for name in ("mumps", "debug_mumps"):
+        with pytest.raises(ValueError, match="Unsupported PETSc solver_preset"):
+            EITForwardModel._resolve_linear_backend_config(
+                _model_with_dim(3),
+                LinearBackendConfig.from_dict({"solver_preset": name}),
+            )
 
 
 def test_auto_dispatch_matches_canonical_decision() -> None:

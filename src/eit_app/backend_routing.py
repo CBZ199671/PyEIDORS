@@ -145,8 +145,12 @@ def _route_for_traits(
         )
         reason = "complex_input_requires_complex_petsc_runtime"
     else:
-        profile = "cuda" if wants_gpu else "default"
-        reason = "real_input_uses_real_petsc_runtime"
+        profile = "cuda-amgx" if wants_gpu else "default"
+        reason = (
+            "real_input_uses_real_amgx_petsc_runtime"
+            if wants_gpu
+            else "real_input_uses_real_petsc_runtime"
+        )
 
     current = _current_profile()
     fast_path_ok, fast_path_reason = _can_use_inprocess_fast_path(

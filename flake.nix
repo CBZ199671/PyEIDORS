@@ -15,6 +15,9 @@
         "x86_64-linux"
       ];
       forAllSystems = lib.genAttrs systems;
+      amgxGitCommit = "4d1bda0016c42bbe9c0470ca976f10cf6774fd8a";
+      amgxGitUrl = "https://github.com/NVIDIA/AMGX.git";
+      amgxSourceHash = "sha256-XKyGG1wsG37qlSTukZMl8BKyi248SCQKHdlgVYfnR6A=";
     in
     {
       packages = forAllSystems (
@@ -117,7 +120,46 @@
           } else null;
           pythonCuda = if linuxCudaSupported then pkgsCuda.python313 else null;
           pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
-          mkCudaPetsc = { scalarType ? null, precision ? null }:
+          amgxSource = if linuxCudaSupported then pkgsCuda.fetchgit {
+            url = amgxGitUrl;
+            rev = amgxGitCommit;
+            hash = amgxSourceHash;
+            fetchSubmodules = true;
+          } else null;
+          amgxSourceArchive = if linuxCudaSupported then pkgsCuda.runCommand
+            "AMGX-${lib.substring 0 7 amgxGitCommit}.tar.gz"
+            { nativeBuildInputs = [ pkgsCuda.gnutar pkgsCuda.gzip ]; }
+            ''
+              cp -R --no-preserve=mode,ownership ${amgxSource} "$TMPDIR/AMGX-${amgxGitCommit}"
+              chmod -R u+rwX,go+rX "$TMPDIR/AMGX-${amgxGitCommit}"
+              cp ${pkgsCuda.cudaPackages.cuda_nvtx.include}/include/nvToolsExt.h \
+                "$TMPDIR/AMGX-${amgxGitCommit}/include/nvToolsExt.h"
+              cp ${pkgsCuda.cudaPackages.libcurand.include}/include/curand*.h \
+                "$TMPDIR/AMGX-${amgxGitCommit}/include/"
+              substituteInPlace "$TMPDIR/AMGX-${amgxGitCommit}/CMakeLists.txt" \
+                --replace-fail 'target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)' \
+                  'target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread "${pkgsCuda.openmpi}/lib/libmpi.so")' \
+                --replace-fail 'target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)' \
+                  'target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread "${pkgsCuda.openmpi}/lib/libmpi.so")'
+              substituteInPlace "$TMPDIR/AMGX-${amgxGitCommit}/src/CMakeLists.txt" \
+                --replace-fail 'target_link_libraries(amgx_tests_launcher amgxsh ''${libs_all} OpenMP::OpenMP_C)' \
+                  'target_link_libraries(amgx_tests_launcher amgxsh ''${libs_all} OpenMP::OpenMP_C "${pkgsCuda.openmpi}/lib/libmpi.so")'
+              tar -C "$TMPDIR" \
+                --owner=0 \
+                --group=0 \
+                --numeric-owner \
+                -czf "$out" AMGX-${amgxGitCommit}
+            ''
+          else null;
+          cmakeForPetscExternalPackages = if linuxCudaSupported then pkgsCuda.runCommand "cmake-for-petsc-external-packages" { } ''
+            mkdir -p "$out/bin"
+            for tool in cmake ctest cpack; do
+              ln -s "${pkgsCuda.cmake}/bin/$tool" "$out/bin/$tool"
+            done
+          '' else null;
+          mkCudaPetsc = { scalarType ? null, precision ? null, withAmgx ? false, allowComplexAmgx ? false }:
+            assert !withAmgx || allowComplexAmgx || scalarType == null || scalarType == "real";
+            assert !withAmgx || allowComplexAmgx || precision == null || precision == "double";
             if linuxCudaSupported then
               (pkgsCuda.petsc.override ({
                 mpi = pkgsCuda.openmpi;
@@ -132,12 +174,43 @@
               } // lib.optionalAttrs (precision != null) {
                 inherit precision;
               })).overrideAttrs (old: {
-                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgsCuda.cudaPackages.cuda_nvcc ];
+                postPatch = (old.postPatch or "") + lib.optionalString (withAmgx && allowComplexAmgx) ''
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '  PetscScalar      strength_threshold;' '  PetscReal        strength_threshold;' \
+                    --replace-fail '  PetscScalar jacobi_relaxation_factor;' '  PetscReal jacobi_relaxation_factor;' \
+                    --replace-fail '  PetscScalar gs_symmetric;' '  PetscReal gs_symmetric;' \
+                    --replace-fail '    PetscCall(PetscOptionsScalar("-pc_amgx_jacobi_relaxation_factor", "AmgX AMG Jacobi Relaxation Factor", "", amgx->jacobi_relaxation_factor, &amgx->jacobi_relaxation_factor, NULL));' '    PetscCall(PetscOptionsReal("-pc_amgx_jacobi_relaxation_factor", "AmgX AMG Jacobi Relaxation Factor", "", amgx->jacobi_relaxation_factor, &amgx->jacobi_relaxation_factor, NULL));' \
+                    --replace-fail '    PetscCall(PetscOptionsScalar("-pc_amgx_gs_symmetric", "AmgX AMG Gauss Seidel Symmetric", "", amgx->gs_symmetric, &amgx->gs_symmetric, NULL));' '    PetscCall(PetscOptionsReal("-pc_amgx_gs_symmetric", "AmgX AMG Gauss Seidel Symmetric", "", amgx->gs_symmetric, &amgx->gs_symmetric, NULL));' \
+                    --replace-fail '  PetscCall(PetscOptionsScalar("-pc_amgx_strength_threshold", "AmgX AMG Strength Threshold", "", amgx->strength_threshold, &amgx->strength_threshold, NULL));' '  PetscCall(PetscOptionsReal("-pc_amgx_strength_threshold", "AmgX AMG Strength Threshold", "", amgx->strength_threshold, &amgx->strength_threshold, NULL));'
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '    PetscCallAmgX(AMGX_matrix_create(&amgx->A, amgx->rsrc, AMGX_mode_dDDI));' '#if defined(PETSC_USE_COMPLEX) && defined(PETSC_USE_REAL_SINGLE)
+                    const AMGX_Mode amgxMode = AMGX_mode_dCCI;
+                  #elif defined(PETSC_USE_COMPLEX)
+                    const AMGX_Mode amgxMode = AMGX_mode_dZZI;
+                  #elif defined(PETSC_USE_REAL_SINGLE)
+                    const AMGX_Mode amgxMode = AMGX_mode_dFFI;
+                  #else
+                    const AMGX_Mode amgxMode = AMGX_mode_dDDI;
+                  #endif
+                    PetscCallAmgX(AMGX_matrix_create(&amgx->A, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_vector_create(&amgx->sol, amgx->rsrc, AMGX_mode_dDDI));' '    PetscCallAmgX(AMGX_vector_create(&amgx->sol, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_vector_create(&amgx->rhs, amgx->rsrc, AMGX_mode_dDDI));' '    PetscCallAmgX(AMGX_vector_create(&amgx->rhs, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_solver_create(&amgx->solver, amgx->rsrc, AMGX_mode_dDDI, amgx->cfg));' '    PetscCallAmgX(AMGX_solver_create(&amgx->solver, amgx->rsrc, amgxMode, amgx->cfg));'
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '  PetscCheck(AmgXControlMap::Selectors.count(option) == 1, PETSC_COMM_SELF, PETSC_ERR_PLIB, "Selector %s not registered for AmgX.", option);' '  PetscCheck(AmgXControlMap::Selectors.count(option) == 1, PETSC_COMM_SELF, PETSC_ERR_PLIB, "Selector %s not registered for AmgX.", option);
+                  amgx->selector = AmgXControlMap::Selectors.at(option);'
+                '';
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                  pkgsCuda.cudaPackages.cuda_nvcc
+                ] ++ lib.optional withAmgx cmakeForPetscExternalPackages;
                 buildInputs = (old.buildInputs or [ ]) ++ [
                   pkgsCuda.cudaPackages.cuda_cudart
                   pkgsCuda.cudaPackages.libcublas
                   pkgsCuda.cudaPackages.libcusolver
                   pkgsCuda.cudaPackages.libcusparse
+                ] ++ lib.optionals withAmgx [
+                  pkgsCuda.cudaPackages.cuda_nvtx
+                  pkgsCuda.cudaPackages.libcurand
                 ];
                 configureFlags = (old.configureFlags or [ ]) ++ [
                   "--with-cuda=1"
@@ -146,16 +219,29 @@
                   "--with-cublas=1"
                   "--with-cusparse=1"
                   "--with-cusolver=1"
+                ] ++ lib.optionals withAmgx [
+                  "--download-amgx=${amgxSourceArchive}"
+                  "--with-64-bit-indices=0"
+                  "--with-cxx-dialect=17"
+                  "--with-cuda-dialect=17"
                 ];
                 doInstallCheck = false;
                 postInstall = lib.replaceStrings [ "--replace-fail" ] [ "--replace" ] (old.postInstall or "");
               })
             else null;
           cudaPetsc = mkCudaPetsc { };
+          cudaPetscAmgx = mkCudaPetsc { withAmgx = true; };
           cudaPetscComplex = mkCudaPetsc { scalarType = "complex"; };
+          cudaPetscComplexAmgx = mkCudaPetsc {
+            scalarType = "complex";
+            withAmgx = true;
+            allowComplexAmgx = true;
+          };
           cudaPetscComplexSingle = mkCudaPetsc { scalarType = "complex"; precision = "single"; };
           cudaPetsc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetsc else null;
+          cudaPetscAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscAmgx else null;
           cudaPetscComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplex else null;
+          cudaPetscComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexAmgx else null;
           cudaPetscComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexSingle else null;
           mkCudaSlepc = petscPkg: if linuxCudaSupported then (
             pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/sl/slepc/package.nix" {
@@ -168,10 +254,14 @@
             doCheck = false;
           }) else null;
           cudaSlepc = mkCudaSlepc cudaPetsc;
+          cudaSlepcAmgx = mkCudaSlepc cudaPetscAmgx;
           cudaSlepcComplex = mkCudaSlepc cudaPetscComplex;
+          cudaSlepcComplexAmgx = mkCudaSlepc cudaPetscComplexAmgx;
           cudaSlepcComplexSingle = mkCudaSlepc cudaPetscComplexSingle;
           cudaSlepc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepc else null;
+          cudaSlepcAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcAmgx else null;
           cudaSlepcComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplex else null;
+          cudaSlepcComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexAmgx else null;
           cudaSlepcComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexSingle else null;
           mkCudaDolfinx = petscPkg: slepcPkg:
             if linuxCudaSupported then pkgsCuda.callPackage "${nixpkgsPath}/pkgs/by-name/do/dolfinx/package.nix" {
@@ -180,7 +270,9 @@
               slepc = slepcPkg;
             } else null;
           cudaDolfinx = mkCudaDolfinx cudaPetsc cudaSlepc;
+          cudaDolfinxAmgx = mkCudaDolfinx cudaPetscAmgx cudaSlepcAmgx;
           cudaDolfinxComplex = mkCudaDolfinx cudaPetscComplex cudaSlepcComplex;
+          cudaDolfinxComplexAmgx = mkCudaDolfinx cudaPetscComplexAmgx cudaSlepcComplexAmgx;
           cudaDolfinxComplexSingle = mkCudaDolfinx cudaPetscComplexSingle cudaSlepcComplexSingle;
           mkCudaFenicsDolfinx = dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
             if linuxCudaSupported then (
@@ -197,7 +289,9 @@
               }
             ) else null;
           cudaFenicsDolfinx = mkCudaFenicsDolfinx cudaDolfinx cudaPetsc4py cudaSlepc4py;
+          cudaFenicsDolfinxAmgx = mkCudaFenicsDolfinx cudaDolfinxAmgx cudaPetscAmgx4py cudaSlepcAmgx4py;
           cudaFenicsDolfinxComplex = mkCudaFenicsDolfinx cudaDolfinxComplex cudaPetscComplex4py cudaSlepcComplex4py;
+          cudaFenicsDolfinxComplexAmgx = mkCudaFenicsDolfinx cudaDolfinxComplexAmgx cudaPetscComplexAmgx4py cudaSlepcComplexAmgx4py;
           cudaFenicsDolfinxComplexSingle = mkCudaFenicsDolfinx cudaDolfinxComplexSingle cudaPetscComplexSingle4py cudaSlepcComplexSingle4py;
 
           mkRuntimePython = { pkgsFor, pyFor }:
@@ -416,6 +510,10 @@
                   "--set-default"
                   (backendWorkerCommandEnvName workerProfile)
                   "${workerPackage}/bin/eit-backend-worker"
+                ] ++ lib.optionals (workerProfile == "cuda-amgx") [
+                  "--set-default"
+                  "PYEIDORS_BLOCK_REAL_AMGX_WORKER_COMMAND"
+                  "${workerPackage}/bin/pyeidors-block-real-amgx"
                 ])
                 backendWorkerCommands) ++ lib.optionals (scalarEnv != null) [
                 "--set-default"
@@ -526,6 +624,20 @@
               default = pyeidors;
             };
           } else null;
+          pyeidorsCudaAmgx = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCuda;
+            pyFor = pyCuda;
+            profile = "cuda-amgx";
+            fenicsDolfinxPkg = cudaFenicsDolfinxAmgx;
+            petsc4pyPkg = cudaPetscAmgx4py;
+            cuda = true;
+            petscPkg = cudaPetscAmgx;
+            slepcPkg = cudaSlepcAmgx;
+            backendWorkerCommands = {
+              default = pyeidors;
+              cuda = pyeidorsCuda;
+            };
+          } else null;
           pyeidorsComplexCuda = if linuxCudaSupported then mkPyeidors {
             pkgsFor = pkgsCuda;
             pyFor = pyCuda;
@@ -540,6 +652,24 @@
             backendWorkerCommands = {
               default = pyeidors;
               cuda = pyeidorsCuda;
+              cuda-amgx = pyeidorsCudaAmgx;
+            };
+          } else null;
+          pyeidorsComplexCudaAmgx = if linuxCudaSupported then mkPyeidors {
+            pkgsFor = pkgsCuda;
+            pyFor = pyCuda;
+            profile = "complex-cuda-amgx";
+            fenicsDolfinxPkg = cudaFenicsDolfinxComplexAmgx;
+            petsc4pyPkg = cudaPetscComplexAmgx4py;
+            cuda = true;
+            petscPkg = cudaPetscComplexAmgx;
+            slepcPkg = cudaSlepcComplexAmgx;
+            scalarEnv = "complex";
+            precisionEnv = "complex128";
+            backendWorkerCommands = {
+              default = pyeidors;
+              cuda = pyeidorsCudaAmgx;
+              cuda-amgx = pyeidorsCudaAmgx;
             };
           } else null;
           pyeidorsComplex64Cuda = if linuxCudaSupported then mkPyeidors {
@@ -556,6 +686,7 @@
             backendWorkerCommands = {
               default = pyeidors;
               cuda = pyeidorsCuda;
+              cuda-amgx = pyeidorsCudaAmgx;
             };
           } else null;
         in
@@ -567,7 +698,9 @@
           default = pyeidors;
         } // lib.optionalAttrs linuxCudaSupported {
           pyeidors-cuda = pyeidorsCuda;
+          pyeidors-cuda-amgx = pyeidorsCudaAmgx;
           pyeidors-complex-cuda = pyeidorsComplexCuda;
+          pyeidors-complex-cuda-amgx = pyeidorsComplexCudaAmgx;
           pyeidors-complex64-cuda = pyeidorsComplex64Cuda;
         }
       );
@@ -604,10 +737,14 @@
           eit-cache-cuda = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
           eit-app-real-gpu = mkApp "pyeidors-cuda" "eit-app" "Launch the PyEIDORS real-valued CUDA GUI";
           eit-cache-real-gpu = mkApp "pyeidors-cuda" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA caches";
+          eit-app-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-app" "Launch the PyEIDORS real-valued CUDA AmgX GUI";
+          eit-cache-cuda-amgx = mkApp "pyeidors-cuda-amgx" "eit-cache" "Manage and warm PyEIDORS real-valued CUDA AmgX caches";
           eit-app-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
           eit-cache-complex-cuda = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
           eit-app-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-app" "Launch the PyEIDORS complex128 CUDA GUI";
           eit-cache-complex128-gpu = mkApp "pyeidors-complex-cuda" "eit-cache" "Manage and warm PyEIDORS complex128 CUDA caches";
+          eit-app-complex-cuda-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-app" "Launch the PyEIDORS experimental complex128 CUDA AmgX GUI";
+          eit-cache-complex-cuda-amgx = mkApp "pyeidors-complex-cuda-amgx" "eit-cache" "Manage and warm PyEIDORS experimental complex128 CUDA AmgX caches";
           eit-app-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
           eit-cache-complex64-cuda = mkApp "pyeidors-complex64-cuda" "eit-cache" "Manage and warm PyEIDORS complex64 CUDA caches";
           eit-app-complex64-gpu = mkApp "pyeidors-complex64-cuda" "eit-app" "Launch the PyEIDORS complex64 CUDA GUI";
@@ -699,7 +836,46 @@
           pyCuda = if linuxCudaSupported then pythonCuda.pkgs else null;
           hasCudaPy = name: linuxCudaSupported && builtins.hasAttr name pyCuda;
           pyCudaOpt = name: if hasCudaPy name then [ (builtins.getAttr name pyCuda) ] else [ ];
-          mkCudaPetsc = { scalarType ? null, precision ? null }:
+          amgxSource = if linuxCudaSupported then pkgsCuda.fetchgit {
+            url = amgxGitUrl;
+            rev = amgxGitCommit;
+            hash = amgxSourceHash;
+            fetchSubmodules = true;
+          } else null;
+          amgxSourceArchive = if linuxCudaSupported then pkgsCuda.runCommand
+            "AMGX-${lib.substring 0 7 amgxGitCommit}.tar.gz"
+            { nativeBuildInputs = [ pkgsCuda.gnutar pkgsCuda.gzip ]; }
+            ''
+              cp -R --no-preserve=mode,ownership ${amgxSource} "$TMPDIR/AMGX-${amgxGitCommit}"
+              chmod -R u+rwX,go+rX "$TMPDIR/AMGX-${amgxGitCommit}"
+              cp ${pkgsCuda.cudaPackages.cuda_nvtx.include}/include/nvToolsExt.h \
+                "$TMPDIR/AMGX-${amgxGitCommit}/include/nvToolsExt.h"
+              cp ${pkgsCuda.cudaPackages.libcurand.include}/include/curand*.h \
+                "$TMPDIR/AMGX-${amgxGitCommit}/include/"
+              substituteInPlace "$TMPDIR/AMGX-${amgxGitCommit}/CMakeLists.txt" \
+                --replace-fail 'target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)' \
+                  'target_link_libraries(amgx CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread "${pkgsCuda.openmpi}/lib/libmpi.so")' \
+                --replace-fail 'target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread)' \
+                  'target_link_libraries(amgxsh CUDA::cublas CUDA::cusparse CUDA::cusolver CUDA::nvToolsExt m pthread "${pkgsCuda.openmpi}/lib/libmpi.so")'
+              substituteInPlace "$TMPDIR/AMGX-${amgxGitCommit}/src/CMakeLists.txt" \
+                --replace-fail 'target_link_libraries(amgx_tests_launcher amgxsh ''${libs_all} OpenMP::OpenMP_C)' \
+                  'target_link_libraries(amgx_tests_launcher amgxsh ''${libs_all} OpenMP::OpenMP_C "${pkgsCuda.openmpi}/lib/libmpi.so")'
+              tar -C "$TMPDIR" \
+                --owner=0 \
+                --group=0 \
+                --numeric-owner \
+                -czf "$out" AMGX-${amgxGitCommit}
+            ''
+          else null;
+          cmakeForPetscExternalPackages = if linuxCudaSupported then pkgsCuda.runCommand "cmake-for-petsc-external-packages" { } ''
+            mkdir -p "$out/bin"
+            for tool in cmake ctest cpack; do
+              ln -s "${pkgsCuda.cmake}/bin/$tool" "$out/bin/$tool"
+            done
+          '' else null;
+          mkCudaPetsc = { scalarType ? null, precision ? null, withAmgx ? false, allowComplexAmgx ? false }:
+            assert !withAmgx || allowComplexAmgx || scalarType == null || scalarType == "real";
+            assert !withAmgx || allowComplexAmgx || precision == null || precision == "double";
             if linuxCudaSupported then
               (pkgsCuda.petsc.override ({
                 mpi = pkgsCuda.openmpi;
@@ -714,12 +890,43 @@
               } // lib.optionalAttrs (precision != null) {
                 inherit precision;
               })).overrideAttrs (old: {
-                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [ pkgsCuda.cudaPackages.cuda_nvcc ];
+                postPatch = (old.postPatch or "") + lib.optionalString (withAmgx && allowComplexAmgx) ''
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '  PetscScalar      strength_threshold;' '  PetscReal        strength_threshold;' \
+                    --replace-fail '  PetscScalar jacobi_relaxation_factor;' '  PetscReal jacobi_relaxation_factor;' \
+                    --replace-fail '  PetscScalar gs_symmetric;' '  PetscReal gs_symmetric;' \
+                    --replace-fail '    PetscCall(PetscOptionsScalar("-pc_amgx_jacobi_relaxation_factor", "AmgX AMG Jacobi Relaxation Factor", "", amgx->jacobi_relaxation_factor, &amgx->jacobi_relaxation_factor, NULL));' '    PetscCall(PetscOptionsReal("-pc_amgx_jacobi_relaxation_factor", "AmgX AMG Jacobi Relaxation Factor", "", amgx->jacobi_relaxation_factor, &amgx->jacobi_relaxation_factor, NULL));' \
+                    --replace-fail '    PetscCall(PetscOptionsScalar("-pc_amgx_gs_symmetric", "AmgX AMG Gauss Seidel Symmetric", "", amgx->gs_symmetric, &amgx->gs_symmetric, NULL));' '    PetscCall(PetscOptionsReal("-pc_amgx_gs_symmetric", "AmgX AMG Gauss Seidel Symmetric", "", amgx->gs_symmetric, &amgx->gs_symmetric, NULL));' \
+                    --replace-fail '  PetscCall(PetscOptionsScalar("-pc_amgx_strength_threshold", "AmgX AMG Strength Threshold", "", amgx->strength_threshold, &amgx->strength_threshold, NULL));' '  PetscCall(PetscOptionsReal("-pc_amgx_strength_threshold", "AmgX AMG Strength Threshold", "", amgx->strength_threshold, &amgx->strength_threshold, NULL));'
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '    PetscCallAmgX(AMGX_matrix_create(&amgx->A, amgx->rsrc, AMGX_mode_dDDI));' '#if defined(PETSC_USE_COMPLEX) && defined(PETSC_USE_REAL_SINGLE)
+                    const AMGX_Mode amgxMode = AMGX_mode_dCCI;
+                  #elif defined(PETSC_USE_COMPLEX)
+                    const AMGX_Mode amgxMode = AMGX_mode_dZZI;
+                  #elif defined(PETSC_USE_REAL_SINGLE)
+                    const AMGX_Mode amgxMode = AMGX_mode_dFFI;
+                  #else
+                    const AMGX_Mode amgxMode = AMGX_mode_dDDI;
+                  #endif
+                    PetscCallAmgX(AMGX_matrix_create(&amgx->A, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_vector_create(&amgx->sol, amgx->rsrc, AMGX_mode_dDDI));' '    PetscCallAmgX(AMGX_vector_create(&amgx->sol, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_vector_create(&amgx->rhs, amgx->rsrc, AMGX_mode_dDDI));' '    PetscCallAmgX(AMGX_vector_create(&amgx->rhs, amgx->rsrc, amgxMode));' \
+                    --replace-fail '    PetscCallAmgX(AMGX_solver_create(&amgx->solver, amgx->rsrc, AMGX_mode_dDDI, amgx->cfg));' '    PetscCallAmgX(AMGX_solver_create(&amgx->solver, amgx->rsrc, amgxMode, amgx->cfg));'
+                  substituteInPlace src/ksp/pc/impls/amgx/amgx.cxx \
+                    --replace-fail '  PetscCheck(AmgXControlMap::Selectors.count(option) == 1, PETSC_COMM_SELF, PETSC_ERR_PLIB, "Selector %s not registered for AmgX.", option);' '  PetscCheck(AmgXControlMap::Selectors.count(option) == 1, PETSC_COMM_SELF, PETSC_ERR_PLIB, "Selector %s not registered for AmgX.", option);
+                  amgx->selector = AmgXControlMap::Selectors.at(option);'
+                '';
+                nativeBuildInputs = (old.nativeBuildInputs or [ ]) ++ [
+                  pkgsCuda.cudaPackages.cuda_nvcc
+                ] ++ lib.optional withAmgx cmakeForPetscExternalPackages;
                 buildInputs = (old.buildInputs or [ ]) ++ [
                   pkgsCuda.cudaPackages.cuda_cudart
                   pkgsCuda.cudaPackages.libcublas
                   pkgsCuda.cudaPackages.libcusolver
                   pkgsCuda.cudaPackages.libcusparse
+                ] ++ lib.optionals withAmgx [
+                  pkgsCuda.cudaPackages.cuda_nvtx
+                  pkgsCuda.cudaPackages.libcurand
                 ];
                 configureFlags = (old.configureFlags or [ ]) ++ [
                   "--with-cuda=1"
@@ -728,16 +935,29 @@
                   "--with-cublas=1"
                   "--with-cusparse=1"
                   "--with-cusolver=1"
+                ] ++ lib.optionals withAmgx [
+                  "--download-amgx=${amgxSourceArchive}"
+                  "--with-64-bit-indices=0"
+                  "--with-cxx-dialect=17"
+                  "--with-cuda-dialect=17"
                 ];
                 doInstallCheck = false;
                 postInstall = lib.replaceStrings [ "--replace-fail" ] [ "--replace" ] (old.postInstall or "");
               })
             else null;
           cudaPetsc = mkCudaPetsc { };
+          cudaPetscAmgx = mkCudaPetsc { withAmgx = true; };
           cudaPetscComplex = mkCudaPetsc { scalarType = "complex"; };
+          cudaPetscComplexAmgx = mkCudaPetsc {
+            scalarType = "complex";
+            withAmgx = true;
+            allowComplexAmgx = true;
+          };
           cudaPetscComplexSingle = mkCudaPetsc { scalarType = "complex"; precision = "single"; };
           cudaPetsc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetsc else null;
+          cudaPetscAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscAmgx else null;
           cudaPetscComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplex else null;
+          cudaPetscComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexAmgx else null;
           cudaPetscComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaPetscComplexSingle else null;
 
           mkCudaSlepc = petscPkg: if linuxCudaSupported then (
@@ -751,10 +971,14 @@
             doCheck = false;
           }) else null;
           cudaSlepc = mkCudaSlepc cudaPetsc;
+          cudaSlepcAmgx = mkCudaSlepc cudaPetscAmgx;
           cudaSlepcComplex = mkCudaSlepc cudaPetscComplex;
+          cudaSlepcComplexAmgx = mkCudaSlepc cudaPetscComplexAmgx;
           cudaSlepcComplexSingle = mkCudaSlepc cudaPetscComplexSingle;
           cudaSlepc4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepc else null;
+          cudaSlepcAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcAmgx else null;
           cudaSlepcComplex4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplex else null;
+          cudaSlepcComplexAmgx4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexAmgx else null;
           cudaSlepcComplexSingle4py = if linuxCudaSupported then pyCuda.toPythonModule cudaSlepcComplexSingle else null;
 
           mkCudaDolfinx = petscPkg: slepcPkg:
@@ -764,7 +988,9 @@
               slepc = slepcPkg;
             } else null;
           cudaDolfinx = mkCudaDolfinx cudaPetsc cudaSlepc;
+          cudaDolfinxAmgx = mkCudaDolfinx cudaPetscAmgx cudaSlepcAmgx;
           cudaDolfinxComplex = mkCudaDolfinx cudaPetscComplex cudaSlepcComplex;
+          cudaDolfinxComplexAmgx = mkCudaDolfinx cudaPetscComplexAmgx cudaSlepcComplexAmgx;
           cudaDolfinxComplexSingle = mkCudaDolfinx cudaPetscComplexSingle cudaSlepcComplexSingle;
 
           mkCudaFenicsDolfinx = dolfinxPkg: petsc4pyPkg: slepc4pyPkg:
@@ -782,7 +1008,9 @@
               }
             ) else null;
           cudaFenicsDolfinx = mkCudaFenicsDolfinx cudaDolfinx cudaPetsc4py cudaSlepc4py;
+          cudaFenicsDolfinxAmgx = mkCudaFenicsDolfinx cudaDolfinxAmgx cudaPetscAmgx4py cudaSlepcAmgx4py;
           cudaFenicsDolfinxComplex = mkCudaFenicsDolfinx cudaDolfinxComplex cudaPetscComplex4py cudaSlepcComplex4py;
+          cudaFenicsDolfinxComplexAmgx = mkCudaFenicsDolfinx cudaDolfinxComplexAmgx cudaPetscComplexAmgx4py cudaSlepcComplexAmgx4py;
           cudaFenicsDolfinxComplexSingle = mkCudaFenicsDolfinx cudaDolfinxComplexSingle cudaPetscComplexSingle4py cudaSlepcComplexSingle4py;
 
           mkShellHook = {
@@ -965,9 +1193,22 @@ PY
                   echo "$perf_status"
                 fi
 
-                if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
+                if [ "$PYEIDORS_ENV_PROFILE" = "cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "cuda-amgx" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
                   echo "[nix] CUDA profile ready. Verify PETSc CUDA backend with:"
                   echo "  python scripts/diagnostics/probe_petsc_cuda.py --require cuda --pretty"
+                fi
+
+                if [ "$PYEIDORS_ENV_PROFILE" = "cuda-amgx" ]; then
+                  echo "[nix] AmgX PETSc profile ready. Verify PCAMGX with a setup/solve smoke:"
+                  echo "  python - <<'PY'"
+                  echo "from petsc4py import PETSc"
+                  echo "opts = PETSc.Options(); opts['pc_amgx_smoother'] = 'JACOBI_L1'; opts['pc_amgx_exact_coarse_solve'] = '0'"
+                  echo "A = PETSc.Mat().createAIJ([2, 2], nnz=2); A.setValues([0, 1], [0, 1], [[4.0, 1.0], [1.0, 3.0]]); A.assemblyBegin(); A.assemblyEnd()"
+                  echo "b = PETSc.Vec().createSeq(2); b.setValues([0, 1], [1.0, 2.0]); b.assemblyBegin(); b.assemblyEnd(); x = b.duplicate()"
+                  echo "ksp = PETSc.KSP().create(); ksp.setOperators(A); ksp.setType('cg'); ksp.getPC().setType('amgx'); ksp.setFromOptions(); ksp.solve(b, x)"
+                  echo "print(ksp.getPC().getType(), ksp.getConvergedReason(), x.getArray())"
+                  echo "ksp.destroy(); A.destroy(); b.destroy(); x.destroy()"
+                  echo "PY"
                 fi
 
                 if [ "$PYEIDORS_ENV_PROFILE" = "complex" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex-cuda" ] || [ "$PYEIDORS_ENV_PROFILE" = "complex64-cuda" ]; then
@@ -1182,6 +1423,88 @@ PY
                   export PATH="/usr/lib/wsl/lib:$PATH"
                 fi
               '';
+              };
+            };
+
+          "cuda-amgx" = pkgsCuda.mkShell {
+            packages = [
+              pkgsCuda.uv
+              pkgsCuda.nodejs
+              pythonCuda
+              pyeidorsPackages.pyeidors-cuda-amgx
+              pkgsCuda.openmpi
+              pkgsCuda.hdf5
+              pkgsCuda.gmsh
+              pkgsCuda.pkg-config
+              pkgsCuda.cmake
+              pkgsCuda.ninja
+              pkgsCuda.gfortran
+              pkgsCuda.openblas
+              pkgsCuda.suitesparse
+              pkgsCuda.zstd
+              pkgsCuda.glib
+              pkgsCuda.dbus
+              pkgsCuda.fontconfig
+              pkgsCuda.freetype
+              pkgsCuda.liberation_ttf
+              pkgsCuda.expat
+              pkgsCuda.cudaPackages.cuda_nvcc
+              pkgsCuda.cudaPackages.cudatoolkit
+              pkgsCuda.cudaPackages.cuda_cudart
+              pkgsCuda.cudaPackages.libcublas
+              pkgsCuda.cudaPackages.libcusolver
+              pkgsCuda.cudaPackages.libcusparse
+              pkgsCuda.cudaPackages.libnvjitlink
+
+              cudaPetscAmgx
+              cudaPetscAmgx4py
+              cudaSlepcAmgx
+              cudaSlepcAmgx4py
+              cudaFenicsDolfinxAmgx
+              pyCuda."fenics-basix"
+              pyCuda."fenics-ffcx"
+              pyCuda."fenics-ufl"
+              pyCuda.mpi4py
+
+              pyCuda.numpy
+              pyCuda.scipy
+              pyCuda.matplotlib
+              pyCuda.pandas
+              pyCuda.h5py
+              pyCuda.pyyaml
+              pyCuda.meshio
+              pyCuda.gmsh
+            ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
+              pyCuda.pytest
+              pyCuda."pytest-cov"
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgsCuda;
+              pythonFor = pythonCuda;
+              envProfile = "cuda-amgx";
+              venvDir = ".venv-cuda-amgx";
+              extraLinuxRuntimeLibs = linuxGuiLibs ++ [
+                pkgsCuda.cudaPackages.cuda_cudart
+                pkgsCuda.cudaPackages.libcublas
+                pkgsCuda.cudaPackages.libcusolver
+                pkgsCuda.cudaPackages.libcusparse
+                pkgsCuda.cudaPackages.libnvjitlink
+              ];
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export CUDA_HOME="${pkgsCuda.cudaPackages.cudatoolkit}"
+                export CUDA_PATH="$CUDA_HOME"
+                export CUDACXX="${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                export PETSC_DIR="${cudaPetscAmgx}"
+                export SLEPC_DIR="${cudaSlepcAmgx}"
+                export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
+                export PYEIDORS_PETSC_AMGX_ENABLED="1"
+                export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
             };
           };
 
@@ -1259,6 +1582,89 @@ PY
                 export PETSC_DIR="${cudaPetscComplex}"
                 export SLEPC_DIR="${cudaSlepcComplex}"
                 export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
+                export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
+                if [ -d /usr/lib/wsl/lib ]; then
+                  export PATH="/usr/lib/wsl/lib:$PATH"
+                fi
+              '';
+            };
+          };
+
+          "complex-cuda-amgx" = pkgsCuda.mkShell {
+            packages = [
+              pkgsCuda.uv
+              pkgsCuda.nodejs
+              pythonCuda
+              pyeidorsPackages.pyeidors-complex-cuda-amgx
+              pkgsCuda.openmpi
+              pkgsCuda.hdf5
+              pkgsCuda.gmsh
+              pkgsCuda.pkg-config
+              pkgsCuda.cmake
+              pkgsCuda.ninja
+              pkgsCuda.gfortran
+              pkgsCuda.openblas
+              pkgsCuda.suitesparse
+              pkgsCuda.zstd
+              pkgsCuda.glib
+              pkgsCuda.dbus
+              pkgsCuda.fontconfig
+              pkgsCuda.freetype
+              pkgsCuda.liberation_ttf
+              pkgsCuda.expat
+              pkgsCuda.cudaPackages.cuda_nvcc
+              pkgsCuda.cudaPackages.cudatoolkit
+              pkgsCuda.cudaPackages.cuda_cudart
+              pkgsCuda.cudaPackages.libcublas
+              pkgsCuda.cudaPackages.libcusolver
+              pkgsCuda.cudaPackages.libcusparse
+              pkgsCuda.cudaPackages.libnvjitlink
+
+              cudaPetscComplexAmgx
+              cudaPetscComplexAmgx4py
+              cudaSlepcComplexAmgx
+              cudaSlepcComplexAmgx4py
+              cudaFenicsDolfinxComplexAmgx
+              pyCuda."fenics-basix"
+              pyCuda."fenics-ffcx"
+              pyCuda."fenics-ufl"
+              pyCuda.mpi4py
+
+              pyCuda.numpy
+              pyCuda.scipy
+              pyCuda.matplotlib
+              pyCuda.pandas
+              pyCuda.h5py
+              pyCuda.pyyaml
+              pyCuda.meshio
+              pyCuda.gmsh
+            ] ++ pyCudaOpt "pyamg" ++ pyCudaOpt "scikit-sparse" ++ pyCudaOpt "scikitsparse" ++ [
+              pyCuda.pytest
+              pyCuda."pytest-cov"
+            ];
+
+            shellHook = mkShellHook {
+              pkgsFor = pkgsCuda;
+              pythonFor = pythonCuda;
+              envProfile = "complex-cuda-amgx";
+              venvDir = ".venv-complex-cuda-amgx";
+              extraLinuxRuntimeLibs = linuxGuiLibs ++ [
+                pkgsCuda.cudaPackages.cuda_cudart
+                pkgsCuda.cudaPackages.libcublas
+                pkgsCuda.cudaPackages.libcusolver
+                pkgsCuda.cudaPackages.libcusparse
+                pkgsCuda.cudaPackages.libnvjitlink
+              ];
+              extraLinuxLibraryPath = ":/usr/lib/wsl/lib";
+              extraPrelude = ''
+                export PYEIDORS_PETSC_SCALAR_TYPE="complex"
+                export CUDA_HOME="${pkgsCuda.cudaPackages.cudatoolkit}"
+                export CUDA_PATH="$CUDA_HOME"
+                export CUDACXX="${pkgsCuda.cudaPackages.cuda_nvcc}/bin/nvcc"
+                export PETSC_DIR="${cudaPetscComplexAmgx}"
+                export SLEPC_DIR="${cudaSlepcComplexAmgx}"
+                export PYEIDORS_PETSC_DEVICE_DEFAULT="cuda"
+                export PYEIDORS_PETSC_AMGX_ENABLED="1"
                 export PETSC_OPTIONS="-use_gpu_aware_mpi 0 -nox_warning''${PETSC_OPTIONS:+ $PETSC_OPTIONS}"
                 if [ -d /usr/lib/wsl/lib ]; then
                   export PATH="/usr/lib/wsl/lib:$PATH"

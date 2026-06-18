@@ -99,3 +99,16 @@ def test_forward_model_config_round_trips_potential_order_aliases():
 
     assert config.potential_order == 3
     assert config.to_mapping()["potential_order"] == 3
+
+
+def test_forward_model_config_round_trips_complex_gpu_high_accuracy():
+    config = ForwardModelConfig.from_mapping({"complex_gpu_high_accuracy": "true"})
+
+    assert config.complex_gpu_high_accuracy is True
+    assert config.to_mapping()["complex_gpu_high_accuracy"] is True
+    assert (
+        ForwardModelConfig.from_mapping(
+            {"complex_gpu_high_accuracy": "false"}
+        ).complex_gpu_high_accuracy
+        is False
+    )

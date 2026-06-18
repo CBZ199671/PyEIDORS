@@ -493,6 +493,7 @@ def test_resolve_petsc_backend_info_cuda_amgx_requires_pcamgx(monkeypatch):
             "petsc_cuda_vec": True,
             "petsc_cuda_dense": True,
             "petsc_amgx": False,
+            "petsc_amgx_cuda_candidate": False,
             "mat_type_name": "aijcusparse",
             "vec_type_name": "cuda",
             "dense_mat_type_name": "densecuda",
@@ -507,8 +508,88 @@ def test_resolve_petsc_backend_info_cuda_amgx_requires_pcamgx(monkeypatch):
     else:  # pragma: no cover - defensive
         raise AssertionError("Expected RuntimeError for missing PETSc PCAMGX")
 
-    assert "当前 PETSc 未启用 AmgX" in message
-    assert "PCAMGX unavailable" in message
+    assert "当前 PETSc PCAMGX 不能作为 CUDA 求解候选" in message
+    assert "PCAMGX CUDA smoke unavailable" in message
+
+
+def test_resolve_petsc_backend_info_cuda_amgx_requires_smoke_candidate(
+    monkeypatch,
+):
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.linear_backend = "petsc"
+    model.backend_config = SimpleNamespace(
+        petsc_device="cuda",
+        solver_preset="cuda_amgx",
+        pc_type="amgx",
+    )
+    monkeypatch.setattr(forward_module, "PETSc", object())
+    monkeypatch.setattr(
+        perf_caps,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_cuda_mat": True,
+            "petsc_cuda_vec": True,
+            "petsc_cuda_dense": True,
+            "petsc_amgx": True,
+            "petsc_amgx_smoke": False,
+            "petsc_amgx_cuda_candidate": False,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "densecuda",
+            "errors": {"amgx": "Incorrect amgx configuration provided."},
+        },
+    )
+
+    with pytest.raises(RuntimeError) as excinfo:
+        EITForwardModel._resolve_petsc_backend_info(model)
+
+    message = str(excinfo.value)
+    assert "PCAMGX CUDA smoke unavailable" in message
+
+
+def test_resolve_petsc_backend_info_block_real_amgx_skips_native_pcamgx_gate(
+    monkeypatch,
+):
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.linear_backend = "petsc"
+    model.forward_backend = "dolfinx"
+    model.scalar_dtype = np.dtype(np.complex64)
+    model.is_complex = True
+    model.mesh = SimpleNamespace(comm=None)
+    model.backend_config = SimpleNamespace(
+        petsc_device="cuda",
+        solver_preset="complex_block_real_amgx",
+        pc_type="gamg",
+        pc_hypre_type=None,
+        pc_gamg_type="agg",
+        pc_factor_mat_solver_type=None,
+        reuse_preconditioner=True,
+        forward_pc_refresh_policy="auto",
+    )
+    monkeypatch.setattr(forward_module, "PETSc", object())
+    monkeypatch.setattr(
+        perf_caps,
+        "probe_petsc_cuda_runtime",
+        lambda: {
+            "petsc_cuda": True,
+            "petsc_cuda_mat": True,
+            "petsc_cuda_vec": True,
+            "petsc_cuda_dense": False,
+            "petsc_amgx": False,
+            "petsc_amgx_cuda_candidate": False,
+            "mat_type_name": "aijcusparse",
+            "vec_type_name": "cuda",
+            "dense_mat_type_name": "",
+            "errors": {},
+        },
+    )
+
+    info = EITForwardModel._resolve_petsc_backend_info(model)
+
+    assert info["petsc_device_effective"] == "cuda"
+    assert info["solver_route_family"] == "complex_block_real_amgx"
+    assert info["solver_route_status"] == "strict_accuracy_complex_gpu"
 
 
 def test_resolve_petsc_backend_info_blacklists_hypre_cuda(monkeypatch):
@@ -597,6 +678,65 @@ def test_gpu_gauge_fix_enabled_tracks_effective_cuda_backend():
 
     model._petsc_backend_info = {"petsc_device_effective": "cuda"}
     assert EITForwardModel._gpu_gauge_fix_enabled(model) is True
+
+
+def test_cuda_cem_direct_fallback_allows_explicit_pcamgx_candidate():
+    model = EITForwardModel.__new__(EITForwardModel)
+    model.backend_config = SimpleNamespace(solver_preset="cuda_amgx")
+    model._petsc_backend_info = {
+        "petsc_device_effective": "cuda",
+        "solver_preset": "cuda_amgx",
+        "petsc_amgx_cuda_candidate": True,
+        "capability": {"petsc_amgx_cuda_candidate": True},
+    }
+    session = SimpleNamespace(ksp_type="fgmres", pc_type="amgx")
+
+    assert (
+        EITForwardModel._cuda_cem_requires_direct_solve(
+            model,
+            session,
+            rhs_count=8,
+        )
+        is False
+    )
+
+    assert (
+        model.get_backend_diagnostics()["cuda_cem_direct_fallback_suppressed"]
+        == "pcamgx_explicit"
+    )
+
+
+def test_native_pcamgx_does_not_reuse_forward_ksp_session():
+    model = EITForwardModel.__new__(EITForwardModel)
+    matrix = object()
+    session = SimpleNamespace(
+        structural_fingerprint="same",
+        current_A=matrix,
+        current_solve_A=matrix,
+    )
+
+    model.backend_config = SimpleNamespace(solver_preset="cuda_amgx", pc_type="amgx")
+    assert (
+        EITForwardModel._forward_session_structurally_compatible(
+            model,
+            session,
+            "same",
+        )
+        is False
+    )
+
+    model.backend_config = SimpleNamespace(
+        solver_preset="complex_block_real_amgx",
+        pc_type="gamg",
+    )
+    assert (
+        EITForwardModel._forward_session_structurally_compatible(
+            model,
+            session,
+            "same",
+        )
+        is True
+    )
 
 
 def test_ensure_electrode_matrix_is_lazy():

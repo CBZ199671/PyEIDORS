@@ -1036,7 +1036,7 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     assert inv._method_combo.toolTip()
 
     inv.set_config({"method": "eidors_one_step_noser"})
-    assert inv.get_config()["method"] == "debug_fine_mesh_noser"
+    assert inv.get_config()["method"] == "noser_rm"
 
     inv.set_config({"method": "eidors_abs_gn"})
     assert inv.get_config()["method"] == "absolute_gn"
@@ -1050,10 +1050,19 @@ def test_simulation_inverse_panel_uses_spec_route_labels() -> None:
     methods = [inv._method_combo.itemText(i) for i in range(inv._method_combo.count())]
     assert methods == SIMULATION_INVERSE_METHODS
     assert "pseudo3d_noser_rm" in methods
+    assert "debug_fine_mesh_noser" not in methods
+    assert "debug_full_gn" not in methods
 
     inv.set_config({"method": "pseudo3d"})
     assert inv.get_config()["method"] == "pseudo3d_noser_rm"
     assert "Pseudo" in inv._method_combo.toolTip()
+
+    inv.set_config({"method": "debug_full_gn"})
+    assert inv.get_config()["method"] == "debug_full_gn"
+    debug_methods = [
+        inv._method_combo.itemText(i) for i in range(inv._method_combo.count())
+    ]
+    assert "debug_full_gn" in debug_methods
 
     inv.close()
     inv.deleteLater()

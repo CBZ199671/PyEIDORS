@@ -1818,8 +1818,11 @@ def _resolve_reconstruction_runtime(
         mesh_dim=int(mesh_dim),
         petsc_device=petsc_device,
         forward_backend=forward_backend,
+        mesh_family=mesh_family,
         capability=capability,
         prefer_amgx=True,
+        complex_admittivity_requested=complex_admittivity,
+        complex_high_accuracy=bool(meta.get("complex_gpu_high_accuracy", False)),
     )
     mat_solve_policy = resolve_3d_cuda_mat_solve_policy(
         requested_mat_solve=_auto(
@@ -2436,12 +2439,13 @@ def default_rm_inverse_mesh_size(
         requested = 0.1
     radius_f = max(float(radius), 1.0e-9)
     if int(mesh_dimension) == 3:
-        # A one-step 3D RM reconstruction has far fewer voltage
-        # measurements than cell parameters.  Auto-refining the inverse
-        # mesh makes NOSER chase boundary artifacts, so keep the hidden
-        # default deliberately coarse unless the user explicitly overrides
-        # ``rm_inverse_mesh_size``.
-        target = radius_f / 3.0
+        # A one-step 3D RM reconstruction has fewer voltage measurements than
+        # cell parameters, so keep the hidden default moderate unless the user
+        # explicitly overrides ``rm_inverse_mesh_size``.  The previous radius/3
+        # default was visibly too coarse in the GUI; radius/8 roughly maps to
+        # refinement 4 for the interactive 3D cylinder while still avoiding an
+        # inverse mesh finer than the configured forward mesh size.
+        target = radius_f / 8.0
         return float(max(requested, max(target, 1.0e-6)))
     else:
         target = radius_f / 10.0
@@ -2839,17 +2843,23 @@ def _planned_one_step_rm_signature(
     rm_form = _one_step_rm_form(meta, regularization_type)
     rm_dtype_name = _rm_dtype_name_from_meta(meta)
     graph_weight = str(meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
+    potential_order = max(1, int(meta.get("potential_order", 1) or 1))
+    electrode_level_fractions = meta.get("electrode_level_fractions", (0.25, 0.75))
     forward_mesh_payload = {
         "mesh_dimension": runtime.mesh_dim,
         "forward_mesh_size": meta.get("mesh_size", req.mesh_refinement),
         "mesh_family": meta.get("mesh_family"),
         "geometry_version": meta.get("geometry_version"),
+        "generator_revision": meta.get("generator_revision"),
         "radius": meta.get("radius"),
         "height": meta.get("height", meta.get("mesh_height")),
+        "z_center": meta.get("z_center", 0.0),
+        "potential_order": potential_order,
         "electrode_coverage": meta.get("electrode_coverage"),
         "electrode_length_m_override": meta.get("electrode_length_m_override"),
         "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
         "electrode_height_ratio": meta.get("electrode_height_ratio"),
+        "electrode_level_fractions": electrode_level_fractions,
     }
     inverse_mesh_payload = {
         "mesh_dimension": runtime.mesh_dim,
@@ -2857,12 +2867,16 @@ def _planned_one_step_rm_signature(
         "effective_refinement": runtime.refinement,
         "mesh_family": meta.get("mesh_family"),
         "geometry_version": meta.get("geometry_version"),
+        "generator_revision": meta.get("generator_revision"),
         "radius": meta.get("radius"),
         "height": meta.get("height", meta.get("mesh_height")),
+        "z_center": meta.get("z_center", 0.0),
+        "potential_order": potential_order,
         "electrode_coverage": meta.get("electrode_coverage"),
         "electrode_length_m_override": meta.get("electrode_length_m_override"),
         "electrode_area_m2_override": meta.get("electrode_area_m2_override"),
         "electrode_height_ratio": meta.get("electrode_height_ratio"),
+        "electrode_level_fractions": electrode_level_fractions,
     }
     inverse_mesh_hash = _stable_json_digest(inverse_mesh_payload)
     payload = rm_signature_payload(
@@ -2884,6 +2898,7 @@ def _planned_one_step_rm_signature(
             "electrode_height_ratio": float(
                 meta.get("electrode_height_ratio", runtime.electrode_height_ratio)
             ),
+            "electrode_level_fractions": electrode_level_fractions,
         },
         stim_meas_protocol={
             "n_measurements": n_meas,
@@ -3061,6 +3076,10 @@ def _ensure_auto_built_one_step_rm_artifact(
     graph_weight = (
         str(runtime.meta.get("rm_graph_weight", "unit")).strip().lower() or "unit"
     )
+    potential_order = max(1, int(runtime.meta.get("potential_order", 1) or 1))
+    electrode_level_fractions = runtime.meta.get(
+        "electrode_level_fractions", (0.25, 0.75)
+    )
     if regularization_type in {"laplace", "curvature", "graph_ltl"}:
         from pyeidors.inverse import CellMesh
         from pyeidors.inverse.prior import graph_laplacian, graph_ltl_prior
@@ -3149,6 +3168,21 @@ def _ensure_auto_built_one_step_rm_artifact(
         "mesh_dimension": int(runtime.mesh_dim),
         "effective_refinement": int(runtime.refinement),
         "inverse_mesh_size": runtime.meta.get("rm_inverse_mesh_size"),
+        "mesh_family": str(runtime.meta.get("mesh_family", "tetra")),
+        "geometry_version": str(runtime.meta.get("geometry_version", "geomv2")),
+        "generator_revision": str(runtime.meta.get("generator_revision", "")),
+        "radius": runtime.meta.get("radius"),
+        "height": runtime.meta.get("height", runtime.meta.get("mesh_height")),
+        "z_center": float(runtime.meta.get("z_center", 0.0)),
+        "potential_order": potential_order,
+        "electrode_layout": str(runtime.meta.get("electrode_layout", "ring_major")),
+        "electrode_coverage": runtime.meta.get("electrode_coverage"),
+        "electrode_length_m_override": runtime.meta.get("electrode_length_m_override"),
+        "electrode_area_m2_override": runtime.meta.get("electrode_area_m2_override"),
+        "electrode_height_ratio": runtime.meta.get("electrode_height_ratio"),
+        "electrode_level_fractions": list(electrode_level_fractions)
+        if isinstance(electrode_level_fractions, (list, tuple))
+        else electrode_level_fractions,
         "rm_graph_weight": graph_weight
         if regularization_type in {"laplace", "curvature", "graph_ltl"}
         else "",
@@ -5706,7 +5740,7 @@ def execute_reconstruction_request_in_backend(
             run_persistent_backend_worker_request,
         )
 
-        if persistent_backend_workers_enabled():
+        if persistent_backend_workers_enabled(profile_name):
             try:
                 worker_meta = run_persistent_backend_worker_request(
                     repo=repo,
