@@ -251,7 +251,20 @@ GPU 用户还需要确认 Linux/WSL2 中能看到 NVIDIA 驱动：
 nvidia-smi
 \`\`\`
 
-GTX 1660 属于当前预编译 GPU 包支持范围，可以使用 GPU 入口。GTX 1050 Ti 不在当前预编译 GPU 包范围内，请使用 CPU 入口。
+当前 GPU 包使用 CUDA 12.8.1，已经编译以下 CUDA compute capability：
+
+| 已编译目标 | NVIDIA 架构 | 常见代表显卡 |
+|---|---|---|
+| \`sm_75\` | Turing | GTX 1660 / 1660 Super / 1660 Ti、RTX 2060 / 2070 / 2080、Tesla T4 |
+| \`sm_80\` | Ampere | A100 |
+| \`sm_86\` | Ampere | RTX 3050 / 3060 / 3070 / 3080 / 3090、RTX A2000 / A4000 / A5000 / A6000、A10 / A40 / A2 |
+| \`sm_89\` | Ada | RTX 4060 / 4070 / 4080 / 4090、L4 / L40、RTX 6000 Ada |
+| \`sm_90\` | Hopper | H100 / H200 / GH200 |
+| \`sm_100\` | Blackwell | B200 / GB200 |
+| \`sm_120\` | Blackwell | RTX 50 系等 GB20x/Blackwell 消费级显卡 |
+| \`compute_120\` | PTX 前向兼容 | 为后续 Blackwell 同族或更新驱动 JIT 留出的 PTX 目标 |
+
+GTX 1660 属于 \`sm_75\`，可以使用 GPU 入口。GTX 1050 Ti 属于 \`sm_61\`，不在当前预编译 GPU 包范围内，请使用 CPU 入口。
 
 ### 1. 导入本地 binary cache
 

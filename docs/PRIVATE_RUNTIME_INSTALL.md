@@ -41,6 +41,29 @@ GPU 用户额外需要：
 - GTX 1660 属于 `sm_75`，可以使用当前 GPU 包。
 - GTX 1050 Ti 属于 `sm_61`，当前预编译 GPU 包不支持；请使用 CPU 通用入口 `nix run .#eit-app-complex64`。
 
+### 当前 GPU 包已编译的显卡架构
+
+下表是当前 fast-install GPU 包中已经编译进去的 CUDA compute capability。显卡型号列只列常见代表，不是完整清单；同一 compute capability 的其他 NVIDIA 显卡通常也可以使用。
+
+| 已编译目标 | NVIDIA 架构 | 常见代表显卡 |
+|---|---|---|
+| `sm_75` | Turing | GTX 1660 / 1660 Super / 1660 Ti、RTX 2060 / 2070 / 2080、Tesla T4 |
+| `sm_80` | Ampere | A100 |
+| `sm_86` | Ampere | RTX 3050 / 3060 / 3070 / 3080 / 3090、RTX A2000 / A4000 / A5000 / A6000、A10 / A40 / A2 |
+| `sm_89` | Ada | RTX 4060 / 4070 / 4080 / 4090、L4 / L40、RTX 6000 Ada |
+| `sm_90` | Hopper | H100 / H200 / GH200 |
+| `sm_100` | Blackwell | B200 / GB200 |
+| `sm_120` | Blackwell | RTX 50 系等 GB20x/Blackwell 消费级显卡 |
+| `compute_120` | PTX 前向兼容 | 为后续 Blackwell 同族或更新驱动 JIT 留出的 PTX 目标 |
+
+未编译进当前 GPU 包的常见老显卡：
+
+| 未编译目标 | 常见代表显卡 | 建议 |
+|---|---|---|
+| `sm_61` | GTX 1050 Ti、GTX 1060、GTX 1070、GTX 1080 | 使用 CPU 入口 `nix run .#eit-app-complex64` |
+| `sm_50` / `sm_52` | 部分 Maxwell / GTX 900 系 | 使用 CPU 入口 |
+| `sm_70` | V100 / Titan V | 当前包未预编译；默认使用 CPU 入口，或由发布者另行编译专用 GPU 包 |
+
 ## 先选运行路线
 
 推荐先按有没有 NVIDIA GPU 选择入口：
